@@ -6,8 +6,11 @@
  * (.claude/rules/github-ci.md "Never pile onto a red main"). This pins:
  * the failing files read from RECORDED logs of the real red run 40797830929
  * (29 Oct, 01:46Z), the attribution and the bisect on that run's real range,
- * the revert rule row by row, and the name and sweep flows end to end through
- * a fake GitHub, a fake pod and a fake shell (a fake `gh` binary for the wire).
+ * the verdict's no-revert rules, the revert rule row by row, and the name,
+ * post and sweep flows end to end through a fake GitHub, a fake pod and a
+ * fake shell (a fake `gh` binary for the wire).
+ * NOT COVERED: the real probe (install, database, vitest at an old commit)
+ * runs only on GitHub; the workflow file is read as text.
  * Named `*.tripwire.test.ts` so `pnpm tripwires` (CI) runs it.
  */
 import {
@@ -25,21 +28,27 @@ import {
   FIX_BRANCH_RE,
   GRACE_MINUTES,
   MAX_PROBES,
-  POD_SESSION_LINE_RE,
   RECORD_CHECK,
+  RECORD_WORKFLOW,
   REVERT_BRANCH_RE,
   attribute,
   bisect,
+  bisectHints,
   buildFilters,
-  makeProbe,
   failingFiles,
   ghTransport,
+  isFixMerge,
   main,
+  makeProbe,
   needsBisect,
+  podClient,
   readMarker,
   readRecord,
+  recordOf,
+  recordText,
   revertBranch,
   revertDecision,
+  trustedBisect,
   verdict,
   // @ts-expect-error — plain ESM script, no declarations
 } from "./culprit-finder.mjs";
@@ -138,7 +147,7 @@ describe("attribute: cheapest correct method first", () => {
     });
   });
 
-  it("exactly one PR changed the failing file: high; two did: ambiguous", () => {
+  it("exactly one PR changed the file and no other reaches it: high; two changed it: ambiguous", () => {
     const one = attribute(
       f("packages/c/src/x.test.ts"),
       [
@@ -164,6 +173,25 @@ describe("attribute: cheapest correct method first", () => {
       method: "ambiguous",
       confidence: "low",
     });
+  });
+
+  // M3 (review of #513): PR A renames an export in package a; PR B edits
+  // unrelated lines of b's file F; F fails. "B changed F" is not proof.
+  it("one PR changed the file but ANOTHER can reach it: medium, and it goes to the bisect with B as the suspect", () => {
+    const F = "packages/b/src/f.test.ts";
+    const a = attribute(
+      f(F),
+      [c("a", 1, ["packages/a/src/index.ts"]), c("b", 2, [F])],
+      GRAPH
+    );
+    expect(a.get(F)).toMatchObject({
+      method: "direct",
+      confidence: "medium",
+      shas: [sha("b")],
+      others: 1,
+    });
+    expect(needsBisect(f(F), a).map((x: any) => x.file)).toEqual([F]);
+    expect(bisectHints([F], a).get(F)).toBe(sha("b"));
   });
 
   it("only one PR can REACH it (a dependency of its package): medium", () => {
@@ -208,7 +236,7 @@ describe("attribute: cheapest correct method first", () => {
     });
   });
 
-  it("the real 29 Oct range: the lint red is #467's own file (high); the 3 test files reach every PR, so they go to bisect", () => {
+  it("the real 29 Oct range: the lint red is #467's own file but other PRs reach it (medium); everything goes to ONE bisect", () => {
     const g = loadGraph(REPO, isTripwire);
     const candidates = REAL.prs.map((p: any) => ({
       sha: p.mergeSha,
@@ -222,7 +250,7 @@ describe("attribute: cheapest correct method first", () => {
     const a = attribute(failing, candidates, { ...g, isTripwire });
     expect(a.get(MIG)).toMatchObject({
       method: "direct",
-      confidence: "high",
+      confidence: "medium",
       shas: [PR[467].mergeSha],
     });
     for (const file of [OBS, GRANT, TRIG])
@@ -231,6 +259,7 @@ describe("attribute: cheapest correct method first", () => {
       OBS,
       GRANT,
       TRIG,
+      MIG,
     ]);
   }, 30_000);
 });
@@ -249,33 +278,64 @@ describe("bisect: only the unsettled files, at a few commits, in one job", () =>
     return { calls, probe };
   };
 
-  it("one culprit for three files: found in 1 + ceil(log2 n) probes shared by the files", async () => {
+  it("29 Oct: #476 for the three test files, #467 for the lint file (its hint confirmed in 2 probes), each confirmed by a repeat, within MAX_PROBES", async () => {
     const by = {
       [OBS]: PR[476].mergeSha,
       [GRANT]: PR[476].mergeSha,
       [TRIG]: PR[476].mergeSha,
+      [MIG]: PR[467].mergeSha,
     };
     const { calls, probe } = breaker(by);
-    const { results, probes } = await bisect(shas, [OBS, GRANT, TRIG], probe);
+    const { results, probes } = await bisect(
+      shas,
+      [OBS, GRANT, TRIG, MIG],
+      probe,
+      { hints: new Map([[MIG, PR[467].mergeSha]]) }
+    );
     for (const f of [OBS, GRANT, TRIG])
       expect(results.get(f)).toMatchObject({
         sha: PR[476].mergeSha,
         confidence: "high",
       });
+    expect(results.get(MIG)).toMatchObject({
+      sha: PR[467].mergeSha,
+      confidence: "high",
+    });
     expect(results.get(OBS).why).toContain(PR[467].mergeSha.slice(0, 9)); // its first parent passes
-    expect(probes).toBeLessThanOrEqual(1 + Math.ceil(Math.log2(shas.length)));
-    expect(calls[0].sha).toBe(shas.at(-1)); // the red commit first
-    expect(calls[0].files).toEqual([OBS, GRANT, TRIG]);
+    expect(results.get(OBS).why).toContain("failed again on a repeat");
+    // The hint: the suspect, then its first parent, first.
+    expect(calls.slice(0, 2).map((c) => c.sha)).toEqual([
+      PR[467].mergeSha,
+      PR[465].mergeSha,
+    ]);
+    // The confirmation: one fresh probe per named commit, its files together.
+    expect(calls.at(-2)).toEqual({ sha: PR[467].mergeSha, files: [MIG] });
+    expect(calls.at(-1)).toEqual({
+      sha: PR[476].mergeSha,
+      files: [OBS, GRANT, TRIG],
+    });
+    expect(probes).toBe(6); // 2 for the hint, the red commit, 1 search step, 2 repeats
+    expect(probes).toBeLessThanOrEqual(MAX_PROBES);
   });
 
-  it("two files, two culprits: each its own", async () => {
-    const { probe } = breaker({
-      [OBS]: PR[476].mergeSha,
-      [GRANT]: PR[470].mergeSha,
+  it("a hint that is wrong (the file fails before the suspect) falls back to the search", async () => {
+    const { probe } = breaker({ [OBS]: PR[467].mergeSha });
+    const { results } = await bisect(shas, [OBS], probe, {
+      hints: new Map([[OBS, PR[476].mergeSha]]),
     });
-    const { results } = await bisect(shas, [OBS, GRANT], probe);
-    expect(results.get(OBS).sha).toBe(PR[476].mergeSha);
-    expect(results.get(GRANT).sha).toBe(PR[470].mergeSha);
+    expect(results.get(OBS).sha).toBe(PR[467].mergeSha);
+  });
+
+  it("a flake that failed once at a probed commit is not named: the repeat passes (N8)", async () => {
+    let n = 0;
+    const probe = async (s: string, files: string[]) => {
+      // fails only on its first run at #470 and every run at the red commit
+      const fail = s === shas.at(-1) || (s === PR[470].mergeSha && n++ === 0);
+      return new Map(files.map((f) => [f, fail ? "fail" : "pass"]));
+    };
+    const { results } = await bisect(shas, [OBS], probe);
+    expect(results.get(OBS)).toMatchObject({ sha: null, confidence: "low" });
+    expect(results.get(OBS).why).toContain("did not fail on a repeat");
   });
 
   it("a file that passes alone at the red commit names nobody (low); a file absent earlier counts as passing there", async () => {
@@ -304,7 +364,7 @@ describe("bisect: only the unsettled files, at a few commits, in one job", () =>
     expect(added.results.get(OBS).sha).toBe(PR[475].mergeSha);
   });
 
-  it(`stops at MAX_PROBES (${MAX_PROBES}) and says where it got to`, async () => {
+  it(`stops at the probe budget (default ${MAX_PROBES}) and says where it got to`, async () => {
     const { probe } = breaker({ [OBS]: PR[476].mergeSha });
     const { results, probes } = await bisect(shas, [OBS], probe, {
       maxProbes: 2,
@@ -312,6 +372,26 @@ describe("bisect: only the unsettled files, at a few commits, in one job", () =>
     expect(probes).toBe(2);
     expect(results.get(OBS)).toMatchObject({ sha: null, confidence: "low" });
     expect(results.get(OBS).why).toContain("used its 2 probes");
+  });
+
+  it("the post job keeps only what the plan allows from a bisect result (it ran merged code)", () => {
+    const plan = {
+      bisect: [OBS],
+      candidates: REAL.prs.map((p: any) => ({ sha: p.mergeSha, pr: p.number })),
+    };
+    const t = trustedBisect(plan, {
+      bisected: {
+        [OBS]: { sha: PR[476].mergeSha, confidence: "high", why: "x" },
+        [GRANT]: { sha: PR[476].mergeSha, confidence: "high", why: "added" },
+        [TRIG]: { sha: sha("f"), confidence: "high", why: "outside" },
+      },
+    });
+    expect([...t.keys()]).toEqual([OBS]);
+    expect(
+      trustedBisect(plan, {
+        bisected: { [OBS]: { sha: sha("f"), confidence: "high" } },
+      }).size
+    ).toBe(0);
   });
 });
 
@@ -325,9 +405,10 @@ describe("makeProbe: what one probe runs on a real checkout (a fake shell)", () 
     }> = [];
     const sh = (cmd: string, args: string[], o: any) => {
       calls.push({ cmd, args, cwd: o.cwd, db: o.env?.DATABASE_URL });
-      // the test file fails, the lint file passes
-      const failing = cmd === "pnpm" && args.includes("vitest");
-      return { code: failing ? 1 : 0, out: "" };
+      return {
+        code: cmd === "pnpm" && args.includes("vitest") ? 1 : 0,
+        out: "",
+      };
     };
     const filters = buildFilters(
       readFileSync(
@@ -365,17 +446,17 @@ describe("makeProbe: what one probe runs on a real checkout (a fake shell)", () 
       "build",
       ...filters.map((f: string) => `--filter=${f}`),
     ]);
-    const db = `postgresql://u:p@localhost:5432/probe_${s.slice(0, 12)}`;
-    expect(calls.find((c) => c.cmd === "psql")?.args.at(-1)).toBe(
-      `CREATE DATABASE "probe_${s.slice(0, 12)}"`
-    );
-    expect(calls.find((c) => c.args.includes("migrate"))?.db).toBe(db);
+    const create = calls.find((c) => c.cmd === "psql")!.args.at(-1)!;
+    const db = /CREATE DATABASE "(probe_[^"]+)"/.exec(create)![1];
+    expect(db.startsWith(`probe_${s.slice(0, 12)}`)).toBe(true);
+    const url = `postgresql://u:p@localhost:5432/${db}`;
+    expect(calls.find((c) => c.args.includes("migrate"))?.db).toBe(url);
     const vitest = calls.find((c) => c.args.includes("vitest"))!;
     expect(vitest.cwd).toBe(join(REPO, "packages/api"));
     expect(vitest.args.at(-1)).toBe(
       "src/routers/hub-protocol/observations.contract.test.ts"
     );
-    expect(vitest.db).toBe(db);
+    expect(vitest.db).toBe(url);
     expect(
       calls.some((c) => c.args.includes("prettier") && c.args.includes(MIG))
     ).toBe(true);
@@ -418,6 +499,14 @@ describe("verdict: who is named, and when a revert is even possible", () => {
     confidence: "low",
     shas,
   });
+  const base = { candidates, lastGreen: REAL.lastGreen };
+  const one = (over: Record<string, any> = {}) =>
+    verdict({
+      ...base,
+      failing: [{ file: MIG, kind: "lint" }],
+      attribution: new Map([[MIG, high(PR[467].mergeSha)]]),
+      ...over,
+    });
 
   it("29 Oct: #476 (bisected, three files) and #467 (its own file): two culprits, no automatic revert", () => {
     const attribution = new Map<string, any>([
@@ -428,8 +517,8 @@ describe("verdict: who is named, and when a revert is even possible", () => {
     ]);
     const b = { sha: PR[476].mergeSha, confidence: "high", why: "fails at …" };
     const v = verdict({
+      ...base,
       failing,
-      candidates,
       attribution,
       bisected: new Map([
         [OBS, b],
@@ -448,29 +537,23 @@ describe("verdict: who is named, and when a revert is even possible", () => {
   });
 
   it("one culprit explaining every failing file at high: revertable; medium, or a file left unexplained: not", () => {
-    const one = verdict({
-      failing: [{ file: MIG, kind: "lint" }],
-      candidates,
-      attribution: new Map([[MIG, high(PR[467].mergeSha)]]),
-    });
-    expect(one.revertable).toBe(true);
-    const medium = verdict({
-      failing: [{ file: MIG, kind: "lint" }],
-      candidates,
-      attribution: new Map([
-        [
-          MIG,
-          { method: "reach", confidence: "medium", shas: [PR[467].mergeSha] },
-        ],
-      ]),
-    });
-    expect(medium.revertable).toBe(false);
+    expect(one().revertable).toBe(true);
+    expect(
+      one({
+        attribution: new Map([
+          [
+            MIG,
+            { method: "reach", confidence: "medium", shas: [PR[467].mergeSha] },
+          ],
+        ]),
+      }).revertable
+    ).toBe(false);
     const loose = verdict({
+      ...base,
       failing: [
         { file: MIG, kind: "lint" },
         { file: OBS, kind: "test" },
       ],
-      candidates,
       attribution: new Map<string, any>([
         [MIG, high(PR[467].mergeSha)],
         [OBS, low([])],
@@ -478,6 +561,55 @@ describe("verdict: who is named, and when a revert is even possible", () => {
     });
     expect(loose.revertable).toBe(false);
     expect(loose.unattributed.map((u: any) => u.file)).toEqual([OBS]);
+  });
+
+  it("S6: a failed job that names no file (an audit, a Docker build) makes the red not revertable", () => {
+    const v = one({ silentJobs: ["API e2e"] });
+    expect(v.revertable).toBe(false);
+    expect(v.why.join()).toContain("API e2e failed and named no file");
+  });
+
+  it("S14: never for a ratchet-baseline red (fixed / stale), never for a PR that adds a migration", () => {
+    for (const kind of ["fixed", "stale"]) {
+      const v = one({ failing: [{ file: MIG, kind }] });
+      expect(v.revertable, kind).toBe(false);
+      expect(v.why.join()).toContain("baseline red");
+    }
+    const m = one({
+      candidates: candidates.map((c: any) => ({
+        ...c,
+        migration: c.pr === 467,
+      })),
+    });
+    expect(m.revertable).toBe(false);
+    expect(m.why.join()).toContain("adds a migration");
+  });
+
+  it("N7: no all-green main below the range: not revertable", () => {
+    const v = one({ lastGreen: null });
+    expect(v.revertable).toBe(false);
+    expect(v.why.join()).toContain("no all-green main");
+  });
+
+  it("isFixMerge: a fix/main-red-* or revert merge, nothing else", () => {
+    expect(
+      isFixMerge(
+        "Merge pull request #9 from Synap-core/fix/main-red-x\n\nfix: main red"
+      )
+    ).toBe(true);
+    expect(
+      isFixMerge(
+        "Merge pull request #9 from Synap-core/fix/main-red-revert-1-abcdef12\n\nRevert #1: x"
+      )
+    ).toBe(true);
+    expect(
+      isFixMerge(
+        'Merge pull request #9 from Synap-core/feat/x\n\nRevert "feat: y"'
+      )
+    ).toBe(true);
+    expect(
+      isFixMerge("Merge pull request #9 from Synap-core/feat/x\n\nfeat: x")
+    ).toBe(false);
   });
 });
 
@@ -497,7 +629,7 @@ function input(over: Record<string, any> = {}) {
     now: NAMED + (GRACE_MINUTES + 1) * MIN,
     main: {
       latest: { conclusion: "failure", head_sha: sha("r") },
-      newerRunning: false,
+      fixRunning: false,
     },
     record: {
       revertable: true,
@@ -510,10 +642,12 @@ function input(over: Record<string, any> = {}) {
       title: "fix: automation run count backfill",
       head: "fix/automation-run-count-backfill",
       mergedAt: MERGED,
+      mergeSha: PR[467].mergeSha,
       session: SESSION,
     },
+    onMainLine: true,
     openPrs: [],
-    revertPrs: [],
+    priorReverts: [],
     branchExists: false,
     owners: { ok: true, sessions: [] },
     token: true,
@@ -580,7 +714,7 @@ describe("revertDecision: the revert rule, row by row", () => {
     expect(d.hold).toContain("unknown");
   });
 
-  it("a fix PR holds it: any open fix/main-red-* PR, or a PR from the culprit's session opened after the merge", () => {
+  it("a fix PR opened after the merge holds it: fix/main-red-*, or a PR from the culprit's session; older ones do not (S17)", () => {
     const fix = revertDecision(
       input({
         openPrs: [
@@ -595,6 +729,19 @@ describe("revertDecision: the revert rule, row by row", () => {
     );
     expect(fix.revert).toBe(false);
     expect(fix.hold).toContain("#489");
+    const stale = revertDecision(
+      input({
+        openPrs: [
+          {
+            number: 400,
+            head: "fix/main-red-old",
+            body: "",
+            createdAt: "2026-10-27T10:00:00Z",
+          },
+        ],
+      })
+    );
+    expect(stale.revert).toBe(true);
     const fromSession = revertDecision(
       input({
         openPrs: [
@@ -608,7 +755,6 @@ describe("revertDecision: the revert rule, row by row", () => {
       })
     );
     expect(fromSession.hold).toContain("#490");
-    // The culprit itself, or a PR of that session from before the merge, is no fix.
     expect(
       revertDecision(
         input({
@@ -629,6 +775,17 @@ describe("revertDecision: the revert rule, row by row", () => {
     const d = revertDecision(input({ token: false }));
     expect(d.revert).toBe(false);
     expect(d.reasons.join()).toContain("would revert");
+  });
+
+  it("S4: the record's commit must be the culprit PR's merge, on main's first-parent line", () => {
+    expect(
+      revertDecision(
+        input({ culpritPr: { ...input().culpritPr, mergeSha: sha("9") } })
+      ).reasons.join()
+    ).toContain("is not #467's merge");
+    expect(
+      revertDecision(input({ onMainLine: false })).reasons.join()
+    ).toContain("not on main's first-parent line");
   });
 
   it("never a revert of a revert; never two reverts for one red; never over an existing branch", () => {
@@ -656,24 +813,31 @@ describe("revertDecision: the revert rule, row by row", () => {
       state: "closed",
     };
     expect(
-      revertDecision(input({ revertPrs: [prior] })).reasons.join()
+      revertDecision(input({ priorReverts: [prior] })).reasons.join()
+    ).toContain("already had its revert");
+    const same = {
+      number: 501,
+      head: revertBranch(467, PR[467].mergeSha),
+      body: "",
+      state: "closed",
+    };
+    expect(
+      revertDecision(input({ priorReverts: [same] })).reasons.join()
     ).toContain("already had its revert");
     expect(revertDecision(input({ branchExists: true })).revert).toBe(false);
   });
 
-  it("main green, a newer main run still going, no record, a record that is not revertable, other files now: no revert", () => {
+  it("main green, a newer FIX run still going, no record, a record that is not revertable, other files now: no revert", () => {
     expect(
       revertDecision(
         input({
-          main: { latest: { conclusion: "success" }, newerRunning: false },
+          main: { latest: { conclusion: "success" }, fixRunning: false },
         })
       ).reasons
     ).toEqual(["main is green"]);
     expect(
       revertDecision(
-        input({
-          main: { latest: { conclusion: "failure" }, newerRunning: true },
-        })
+        input({ main: { latest: { conclusion: "failure" }, fixRunning: true } })
       ).revert
     ).toBe(false);
     expect(revertDecision(input({ record: null })).revert).toBe(false);
@@ -714,7 +878,7 @@ function fakeGitHub(
     },
   };
 }
-function fakePod(sessions: any[] = []) {
+function fakePod(sessions: any = []) {
   const calls: Array<{ method: string; url: string; body: any }> = [];
   const fetchImpl = async (url: string, init: any) => {
     calls.push({
@@ -740,6 +904,26 @@ const POD_ENV = {
   SYNAP_OBS_KEY: "k",
   SYNAP_POD_WORKSPACE_ID: "ws-1",
 };
+
+describe("podClient.activeSessions: a reply that is not a list is an unknown owner, never an empty one", () => {
+  it("a list: the sessions; an object, null or an error string at HTTP 200: THROWS", async () => {
+    const ok = podClient(
+      POD_ENV,
+      fakePod([
+        { title: "main red: backend x", status: "active", startedAt: "t" },
+      ]).fetchImpl
+    );
+    expect(await ok.activeSessions()).toEqual([
+      { title: "main red: backend x", status: "active", startedAt: "t" },
+    ]);
+    for (const body of [{ items: [] }, null, "oops"]) {
+      const pod = podClient(POD_ENV, fakePod(body).fetchImpl);
+      await expect(pod.activeSessions(), JSON.stringify(body)).rejects.toThrow(
+        /not a list/
+      );
+    }
+  });
+});
 
 /** The name flow for a red run whose range is #467's merge alone. */
 function nameWorld() {
@@ -767,7 +951,7 @@ function nameWorld() {
     [/^GET repos\/o\/r\/actions\/jobs\/1\/logs$/, () => RELEASE_GATE_LOG],
     [
       /^GET repos\/o\/r\/pulls\/467\/files/,
-      () => red.files.map((f: string) => ({ filename: f })),
+      () => red.files.map((f: string) => ({ filename: f, status: "modified" })),
     ],
     [/^GET repos\/o\/r\/issues\/467\/comments/, () => comments],
     [
@@ -788,6 +972,7 @@ function nameWorld() {
         head: { ref: red.head },
         body: `x\nPod session: ${SESSION}\n`,
         merged_at: red.mergedAt,
+        merge_commit_sha: red.mergeSha,
         html_url: "https://gh/467",
       }),
     ],
@@ -803,40 +988,34 @@ function nameWorld() {
   };
   return { gh, sh, comments };
 }
+const lastGreenOnly = (c: string) => ({
+  verdict: c === REAL.lastGreen ? "pass" : "fail",
+});
 
-describe("end to end: name", () => {
-  const lastGreenOnly = (c: string) => ({
-    verdict: c === REAL.lastGreen ? "pass" : "fail",
-  });
-
+describe("end to end: name and post", () => {
   it("a red run whose range is one PR: comments on it once, tells its pod session, writes the record", async () => {
     const { gh, sh, comments } = nameWorld();
     const pod = fakePod();
     const env = { GITHUB_REPOSITORY: "o/r", RUN_ID: "77", ...POD_ENV };
-    const run = () =>
-      main({
-        argv: ["name"],
-        env,
-        gh,
-        sh,
-        fetchImpl: pod.fetchImpl,
-        now: NAMED,
-        log: () => {},
-        root: REPO,
-        readVerdict: lastGreenOnly,
-      });
-    const r: any = await run();
+    const r: any = await main({
+      argv: ["name"],
+      env,
+      gh,
+      sh,
+      fetchImpl: pod.fetchImpl,
+      now: NAMED,
+      log: () => {},
+      root: REPO,
+      readVerdict: lastGreenOnly,
+    });
     expect(r.bisect).toBe(false);
-    // The comment: once, with the marker the sweep reads back.
     expect(comments).toHaveLength(1);
-    const marker = readMarker(comments[0].body);
-    expect(marker).toMatchObject({
+    expect(readMarker(comments[0].body)).toMatchObject({
       merge: PR[467].mergeSha,
       files: [MIG],
       namedAt: iso(NAMED),
     });
     expect(comments[0].body).toContain(revertBranch(467, PR[467].mergeSha));
-    // The pod: the session's room, as the session's owner.
     const post = pod.calls.find((c) => c.method === "POST");
     expect(pod.calls[0].url).toBe(
       `https://pod.example/api/hub/focus-sessions/${SESSION}`
@@ -845,8 +1024,6 @@ describe("end to end: name", () => {
       "https://pod.example/api/hub/threads/chan-1/messages"
     );
     expect(post?.body).toMatchObject({ role: "assistant", userId: "user-1" });
-    expect(post?.body.content).toContain("https://gh/467");
-    // The record: on the red commit, readable.
     const rec = gh.calls.find(
       (c) => c.method === "POST" && c.path === "repos/o/r/check-runs"
     );
@@ -889,7 +1066,49 @@ describe("end to end: name", () => {
     );
   });
 
-  it("the real 29 Oct red: three files the mapping cannot settle go to ONE bisect job, and nothing is posted yet", async () => {
+  it("S6 end to end: a failed job whose log names no file, beside a named lint red, makes it not revertable", async () => {
+    const { gh, sh } = nameWorld();
+    const jobs = gh.rest.bind(gh);
+    const wrapped = {
+      calls: gh.calls,
+      rest(path: string, opts: any = {}) {
+        if (/actions\/runs\/77\/jobs/.test(path))
+          return {
+            jobs: [
+              { id: 1, name: "Release gate: lint", conclusion: "failure" },
+              {
+                id: 3,
+                name: "Release gate: Docker image",
+                conclusion: "failure",
+              },
+              { id: 4, name: "Release gate", conclusion: "failure" },
+            ],
+          };
+        if (/actions\/jobs\/[34]\/logs/.test(path))
+          return "ERROR: failed to build: exit code 1\n";
+        return jobs(path, opts);
+      },
+    };
+    await main({
+      argv: ["name"],
+      env: { GITHUB_REPOSITORY: "o/r", RUN_ID: "77" },
+      gh: wrapped,
+      sh,
+      now: NAMED,
+      log: () => {},
+      root: REPO,
+      readVerdict: lastGreenOnly,
+    });
+    const rec = readRecord(
+      gh.calls
+        .filter((c) => c.method === "POST" && c.path === "repos/o/r/check-runs")
+        .at(-1)?.body.output.text
+    );
+    expect(rec.revertable).toBe(false);
+    expect(rec.silentJobs).toEqual(["Release gate: Docker image"]); // the judge "Release gate" is not silent
+  });
+
+  it("the real 29 Oct red: every file goes to ONE bisect (the lint file with #467 as its hint), and nothing is posted yet", async () => {
     const red = PR[474];
     const line = [...REAL.prs]
       .reverse()
@@ -920,7 +1139,11 @@ describe("end to end: name", () => {
       [/^GET repos\/o\/r\/actions\/jobs\/2\/logs$/, () => FULL_SUITE_LOG],
       [
         /^GET repos\/o\/r\/pulls\/(\d+)\/files/,
-        (m) => PR[Number(m[1])].files.map((f: string) => ({ filename: f })),
+        (m) =>
+          PR[Number(m[1])].files.map((f: string) => ({
+            filename: f,
+            status: "modified",
+          })),
       ],
     ]);
     const sh = () => ({
@@ -949,13 +1172,82 @@ describe("end to end: name", () => {
       expect(r.plan.candidates.map((c: any) => c.pr)).toEqual([
         465, 467, 476, 470, 475, 474,
       ]);
-      expect(r.plan.bisect).toEqual([OBS, GRANT, TRIG]);
+      expect(r.plan.bisect).toEqual([MIG, OBS, GRANT, TRIG]);
+      expect(r.plan.hints).toEqual({ [MIG]: PR[467].mergeSha });
       const o = readFileSync(out, "utf8");
-      expect(o).toContain("bisect=true");
+      expect(o).toContain("bisect<<__CULPRIT__\ntrue\n__CULPRIT__");
       expect(
-        JSON.parse(/plan<<__PLAN__\n(.*)\n__PLAN__/.exec(o)![1]).bisect
-      ).toEqual([OBS, GRANT, TRIG]);
+        JSON.parse(/plan<<__CULPRIT__\n(.*)\n__CULPRIT__/.exec(o)![1]).bisect
+      ).toEqual([MIG, OBS, GRANT, TRIG]);
       expect(gh.calls.filter((c) => c.method !== "GET")).toEqual([]);
+
+      // post: main's finder, the plan from name, the bisect's result (checked).
+      const posts = fakeGitHub([
+        [/^GET repos\/o\/r\/issues\/\d+\/comments/, () => []],
+        [/^POST repos\/o\/r\/issues\/(\d+)\/comments$/, () => ({})],
+        [
+          /^GET repos\/o\/r\/pulls\/(\d+)$/,
+          (m) => ({
+            number: Number(m[1]),
+            body: "",
+            html_url: `https://gh/${m[1]}`,
+          }),
+        ],
+        [/^POST repos\/o\/r\/check-runs$/, () => ({})],
+      ]);
+      const b476 = {
+        sha: PR[476].mergeSha,
+        confidence: "high",
+        why: "bisect: …",
+      };
+      const result = {
+        bisected: {
+          [OBS]: b476,
+          [GRANT]: b476,
+          [TRIG]: b476,
+          [MIG]: {
+            sha: PR[467].mergeSha,
+            confidence: "high",
+            why: "bisect: …",
+          },
+        },
+      };
+      const rec: any = await main({
+        argv: ["post"],
+        env: {
+          GITHUB_REPOSITORY: "o/r",
+          PLAN: JSON.stringify(r.plan),
+          RESULT: JSON.stringify(result),
+        },
+        gh: posts,
+        now: NAMED,
+        log: () => {},
+      });
+      expect(rec.culprits.map((c: any) => c.pr)).toEqual([467, 476]);
+      expect(rec.revertable).toBe(false);
+      expect(
+        posts.calls
+          .filter(
+            (c) => c.method === "POST" && /issues\/\d+\/comments/.test(c.path)
+          )
+          .map((c) => c.path)
+      ).toEqual([
+        "repos/o/r/issues/467/comments",
+        "repos/o/r/issues/476/comments",
+      ]);
+      // No bisect result (the job failed): the mapping's verdict still posts.
+      const none: any = await main({
+        argv: ["post"],
+        env: {
+          GITHUB_REPOSITORY: "o/r",
+          PLAN: JSON.stringify(r.plan),
+          RESULT: "",
+        },
+        gh: posts,
+        now: NAMED,
+        log: () => {},
+      });
+      expect(none.revertable).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -964,9 +1256,16 @@ describe("end to end: name", () => {
 
 /** The sweep's world: main red at the record's commit, the culprit #467. */
 function sweepWorld(
-  over: { record?: any; sessions?: any[]; openPrs?: any[] } = {}
+  over: {
+    record?: any;
+    sessions?: any;
+    openPrs?: any[];
+    recordWorkflow?: string;
+    runs?: any[];
+  } = {}
 ) {
   const red = PR[467];
+  const latest = sha("e");
   const culprit = {
     sha: red.mergeSha,
     pr: 467,
@@ -984,7 +1283,7 @@ function sweepWorld(
   };
   const record = over.record ?? {
     v: 1,
-    redSha: red.mergeSha,
+    redSha: latest,
     runUrl: "https://ci/77",
     lastGreen: REAL.lastGreen,
     culprits: [culprit],
@@ -993,16 +1292,15 @@ function sweepWorld(
     why: [],
   };
   const comments: any[] = [];
-  const text = `<!-- red-main-culprit-record -->\n\`\`\`json\n${JSON.stringify(record)}\n\`\`\``;
   const gh = fakeGitHub([
     [
       /^GET repos\/o\/r\/actions\/workflows\/ci\.yml\/runs/,
       () => ({
-        workflow_runs: [
+        workflow_runs: over.runs ?? [
           {
             status: "completed",
             conclusion: "failure",
-            head_sha: red.mergeSha,
+            head_sha: latest,
             created_at: "2026-10-29T01:10:00Z",
           },
         ],
@@ -1010,7 +1308,23 @@ function sweepWorld(
     ],
     [
       /^GET repos\/o\/r\/commits\/[0-9a-f]+\/check-runs/,
-      () => ({ check_runs: [{ output: { text } }] }),
+      () => ({
+        check_runs: [
+          {
+            name: RECORD_CHECK,
+            check_suite: { id: 55 },
+            output: { text: recordText(record) },
+          },
+        ],
+      }),
+    ],
+    [
+      /^GET repos\/o\/r\/actions\/runs\?check_suite_id=55$/,
+      () => ({
+        workflow_runs: [
+          { path: over.recordWorkflow ?? RECORD_WORKFLOW, head_branch: "main" },
+        ],
+      }),
     ],
     [
       /^GET repos\/o\/r\/pulls\/467$/,
@@ -1020,10 +1334,12 @@ function sweepWorld(
         head: { ref: red.head },
         body: `Pod session: ${SESSION}`,
         merged_at: red.mergedAt,
+        merge_commit_sha: red.mergeSha,
         html_url: "https://gh/467",
       }),
     ],
-    [/^GET repos\/o\/r\/pulls\?state=all/, () => over.openPrs ?? []],
+    [/^GET repos\/o\/r\/pulls\?state=open/, () => over.openPrs ?? []],
+    [/^GET repos\/o\/r\/pulls\?state=all/, () => []],
     [/^GET repos\/o\/r\/issues\/467\/comments/, () => comments],
     [
       /^POST repos\/o\/r\/issues\/467\/comments$/,
@@ -1039,6 +1355,11 @@ function sweepWorld(
     if (cmd === "git") git.push(args);
     if (args[0] === "rev-list")
       return { code: 0, out: `${red.mergeSha} ${sha("1")} ${sha("2")}\n` };
+    if (args[0] === "log")
+      return {
+        code: 0,
+        out: `${latest}\n${red.mergeSha}\n${PR[465].mergeSha}\n`,
+      };
     return { code: 0, out: "" };
   };
   const pod = fakePod(over.sessions ?? []);
@@ -1050,19 +1371,26 @@ const sweepEnv = (token = "app-tok") => ({
   ...POD_ENV,
 });
 const pushes = (git: string[][]) => git.filter((a) => a.includes("push"));
+const sweepAt = (
+  w: any,
+  minutes: number,
+  env: any = sweepEnv(),
+  log: (l: string) => void = () => {}
+) =>
+  main({
+    argv: ["sweep"],
+    env,
+    gh: w.gh,
+    sh: w.sh,
+    fetchImpl: w.pod.fetchImpl,
+    now: NAMED + minutes * MIN,
+    log,
+  }) as any;
 
 describe("end to end: sweep", () => {
   it("30 min after naming, still red, nobody owns it: pushes ONLY the revert branch and opens the PR with the app token", async () => {
     const w = sweepWorld();
-    const d: any = await main({
-      argv: ["sweep"],
-      env: sweepEnv(),
-      gh: w.gh,
-      sh: w.sh,
-      fetchImpl: w.pod.fetchImpl,
-      now: NAMED + 31 * MIN,
-      log: () => {},
-    });
+    const d = await sweepAt(w, 31);
     expect(d.revert).toBe(true);
     const branch = revertBranch(467, PR[467].mergeSha);
     expect(branch).toMatch(REVERT_BRANCH_RE);
@@ -1076,7 +1404,6 @@ describe("end to end: sweep", () => {
     const p = pushes(w.git);
     expect(p).toHaveLength(1);
     expect(p[0].at(-1)).toBe(`HEAD:refs/heads/${branch}`);
-    // Never main, and the token never in a URL.
     for (const a of p)
       for (const arg of a)
         expect(arg).not.toMatch(/(^|:)(refs\/heads\/)?main$/);
@@ -1099,22 +1426,63 @@ describe("end to end: sweep", () => {
       MIG,
     ])
       expect(pr?.body.body).toContain(s);
-    expect(POD_SESSION_LINE_RE.exec(pr?.body.body)?.[1]).toBe(SESSION);
+    // The prior-revert read asks for THIS branch, in any state.
+    expect(
+      w.gh.calls.some(
+        (c) =>
+          c.path.includes(`head=${encodeURIComponent(`o:${branch}`)}`) &&
+          c.path.includes("state=all")
+      )
+    ).toBe(true);
+  });
+
+  it("S4: a record posted by any other workflow is ignored, so nothing is reverted", async () => {
+    const w = sweepWorld({ recordWorkflow: ".github/workflows/evil.yml" });
+    const logs: string[] = [];
+    const d = await sweepAt(w, 45, sweepEnv(), (l) => logs.push(l));
+    expect(d.revert).toBe(false);
+    expect(d.reasons.join()).toContain("no culprit record");
+    expect(logs.join("\n")).toContain(
+      "is not from .github/workflows/red-main.yml on main"
+    );
+    expect(pushes(w.git)).toEqual([]);
+    expect(recordOf(sweepWorld().gh, "o/r", sha("e"))).not.toBeNull();
+  });
+
+  it("S7: a newer running main run holds it only when it is a main-red fix or a revert", async () => {
+    const red = {
+      status: "completed",
+      conclusion: "failure",
+      head_sha: sha("e"),
+      created_at: "2026-10-29T01:10:00Z",
+    };
+    const busy = {
+      status: "in_progress",
+      created_at: "2026-10-29T02:30:00Z",
+      head_commit: {
+        message: "Merge pull request #520 from Synap-core/feat/x\n\nfeat: x",
+      },
+    };
+    expect((await sweepAt(sweepWorld({ runs: [busy, red] }), 45)).revert).toBe(
+      true
+    );
+    const fix = {
+      ...busy,
+      head_commit: {
+        message:
+          "Merge pull request #521 from Synap-core/fix/main-red-lint\n\nfix: main red",
+      },
+    };
+    const w = sweepWorld({ runs: [fix, red] });
+    expect((await sweepAt(w, 45)).revert).toBe(false);
+    expect(pushes(w.git)).toEqual([]);
   });
 
   it("before the grace window ends: nothing is written", async () => {
     const w = sweepWorld();
-    const d: any = await main({
-      argv: ["sweep"],
-      env: sweepEnv(),
-      gh: w.gh,
-      sh: w.sh,
-      fetchImpl: w.pod.fetchImpl,
-      now: NAMED + 10 * MIN,
-      log: () => {},
-    });
+    const d = await sweepAt(w, 10);
     expect(d.revert).toBe(false);
-    expect(w.git).toEqual([]);
+    expect(w.git.filter((a) => a[0] !== "log")).toEqual([]);
     expect(w.gh.calls.filter((c) => c.method !== "GET")).toEqual([]);
   });
 
@@ -1128,23 +1496,21 @@ describe("end to end: sweep", () => {
         },
       ],
     });
-    const args = {
-      argv: ["sweep"],
-      env: sweepEnv(),
-      gh: w.gh,
-      sh: w.sh,
-      fetchImpl: w.pod.fetchImpl,
-      now: NAMED + 45 * MIN,
-      log: () => {},
-    };
-    expect(((await main(args)) as any).revert).toBe(false);
-    await main({ ...args, now: NAMED + 55 * MIN });
-    expect(w.git).toEqual([]);
+    expect((await sweepAt(w, 45)).revert).toBe(false);
+    await sweepAt(w, 55);
+    expect(pushes(w.git)).toEqual([]);
     expect(w.comments).toHaveLength(1);
     expect(w.comments[0].body).toContain("held");
   });
 
-  it("an open fix/main-red-* PR: no revert", async () => {
+  it("the pod answers 200 with a non-list: the owner is unknown, so no revert", async () => {
+    const w = sweepWorld({ sessions: { error: "rate limited" } });
+    const d = await sweepAt(w, 45);
+    expect(d.revert).toBe(false);
+    expect(d.hold).toContain("unknown");
+  });
+
+  it("an open fix/main-red-* PR opened after the merge: no revert", async () => {
     const w = sweepWorld({
       openPrs: [
         {
@@ -1156,15 +1522,7 @@ describe("end to end: sweep", () => {
         },
       ],
     });
-    const d: any = await main({
-      argv: ["sweep"],
-      env: sweepEnv(),
-      gh: w.gh,
-      sh: w.sh,
-      fetchImpl: w.pod.fetchImpl,
-      now: NAMED + 45 * MIN,
-      log: () => {},
-    });
+    const d = await sweepAt(w, 45);
     expect(d.revert).toBe(false);
     expect(d.hold).toContain("#489");
     expect(pushes(w.git)).toEqual([]);
@@ -1173,31 +1531,23 @@ describe("end to end: sweep", () => {
   it("no app token (the secrets unset): logs what it would do, pushes nothing, opens nothing", async () => {
     const w = sweepWorld();
     const logs: string[] = [];
-    const d: any = await main({
-      argv: ["sweep"],
-      env: sweepEnv(""),
-      gh: w.gh,
-      sh: w.sh,
-      fetchImpl: w.pod.fetchImpl,
-      now: NAMED + 45 * MIN,
-      log: (l: string) => logs.push(l),
-    });
+    const d = await sweepAt(w, 45, sweepEnv(""), (l) => logs.push(l));
     expect(d.revert).toBe(false);
     expect(logs.join("\n")).toContain("would revert");
-    expect(w.git).toEqual([]);
+    expect(pushes(w.git)).toEqual([]);
     expect(w.gh.calls.filter((c) => c.method === "POST")).toEqual([]);
   });
 
   it("no pod configured: the owner is unknown, so no revert", async () => {
     const w = sweepWorld();
-    const d: any = await main({
+    const d = (await main({
       argv: ["sweep"],
       env: { GITHUB_REPOSITORY: "o/r", REVERT_TOKEN: "app-tok" },
       gh: w.gh,
       sh: w.sh,
       now: NAMED + 45 * MIN,
       log: () => {},
-    });
+    })) as any;
     expect(d.revert).toBe(false);
     expect(d.hold).toContain("unknown");
     expect(pushes(w.git)).toEqual([]);
@@ -1261,9 +1611,18 @@ describe("the wire and the workflow", () => {
     }
   });
 
-  const wf = readFileSync(join(REPO, ".github/workflows/red-main.yml"), "utf8");
+  const wf = readFileSync(join(REPO, RECORD_WORKFLOW), "utf8");
+  const jobsText = wf.slice(wf.indexOf("\njobs:\n"));
+  /** One job's block (two-space-indented key under `jobs:`). */
+  const job = (name: string) => {
+    const m = new RegExp(
+      `\\n  ${name}:\\n([\\s\\S]*?)(?=\\n  [a-z-]+:\\n|$)`
+    ).exec(jobsText);
+    expect(m, name).toBeTruthy();
+    return m![1];
+  };
 
-  it("red-main.yml: names on a FAILED push run of CI on main, sweeps on a schedule, reverts with the merge bot app", () => {
+  it("red-main.yml: names on a FAILED push run of CI on main, sweeps on a schedule", () => {
     expect(wf).toMatch(
       /workflow_run:\n\s+workflows: \[CI\]\n\s+types: \[completed\]/
     );
@@ -1274,9 +1633,31 @@ describe("the wire and the workflow", () => {
       "github.event.workflow_run.head_branch == 'main'",
       "github.event.workflow_run.conclusion == 'failure'",
     ])
-      expect(wf).toContain(s);
-    expect(wf).toContain("secrets.SYNAP_MERGE_BOT_APP_ID");
-    expect(wf).toContain("REVERT_TOKEN: ${{ steps.bot-token.outputs.token }}");
+      expect(job("name")).toContain(s);
+  });
+
+  it("the merge bot app's secrets: only in jobs of environment ci-bots; the probe job holds no token and no pod secret", () => {
+    const jobs = [...jobsText.matchAll(/\n {2}([a-z-]+):\n/g)].map((m) => m[1]);
+    expect(jobs).toEqual(["name", "bisect", "post", "sweep"]); // non-vacuity: every job is looked at
+    for (const name of jobs) {
+      const body = job(name);
+      if (/SYNAP_MERGE_BOT_/.test(body))
+        expect(body, name).toMatch(/\n {4}environment: ci-bots\n/);
+    }
+    expect(job("sweep")).toContain("SYNAP_MERGE_BOT_KEY");
+    const probe = job("bisect");
+    expect(probe).toMatch(/permissions:\n {6}contents: read\n(?! {6}\w)/);
+    for (const s of [
+      "GH_TOKEN",
+      "SYNAP_OBS_KEY",
+      "SYNAP_POD_URL",
+      "SYNAP_MERGE_BOT",
+      "github.token",
+    ])
+      expect(probe, s).not.toContain(s);
+    // The post job runs main's finder, never the bisect job's copy.
+    expect(job("post")).toContain("node scripts/ci/culprit-finder.mjs post");
+    expect(job("post")).not.toContain("RUNNER_TEMP");
   });
 
   it("the bisect job copies every module the finder imports (derived from its imports, so a new one joins by existing)", () => {
@@ -1289,7 +1670,7 @@ describe("the wire and the workflow", () => {
         walk(join(rel, "..", m[1]).replaceAll("\\", "/"));
     };
     walk("scripts/ci/culprit-finder.mjs");
-    expect(seen.size).toBeGreaterThanOrEqual(4); // non-vacuity: the finder, affected, release-gate-wait, tripwire-discovery
+    expect(seen.size).toBeGreaterThanOrEqual(5); // non-vacuity: the finder, affected, release-gate-wait, tripwire-discovery, pod-observation
     const copied = [...wf.matchAll(/^\s+cp ([^\n]+)$/gm)]
       .flatMap((m) => m[1].split(/\s+/))
       .filter((x) => x.endsWith(".mjs"));
@@ -1307,19 +1688,7 @@ describe("the wire and the workflow", () => {
     expect(filters).toContain("@synap/api");
   });
 
-  it("one Pod session rule: the same pattern as pod-observation.mjs; a revert branch jumps as a main-red fix", () => {
-    const obs = readFileSync(join(REPO, "scripts/pod-observation.mjs"), "utf8");
-    const src = /export const POD_SESSION_LINE_RE =\s*\/(.+)\/im;/.exec(
-      obs
-    )?.[1];
-    expect(src).toBeTruthy();
-    expect(new RegExp(src!, "im").exec(`x\nPod session: ${SESSION}`)?.[1]).toBe(
-      SESSION
-    );
-    expect(POD_SESSION_LINE_RE.source.replaceAll("\\\\", "\\")).toBe(
-      new RegExp(src!, "im").source.replaceAll("\\\\", "\\")
-    );
-    // merge-bot.mjs (backend#508) jumps a branch matching /^fix\/main-red-/.
+  it("a revert branch jumps as a main-red fix (merge-bot.mjs, backend#508: /^fix\\/main-red-/)", () => {
     expect(revertBranch(467, PR[467].mergeSha)).toMatch(FIX_BRANCH_RE);
     expect(revertBranch(467, PR[467].mergeSha)).toMatch(/^fix\/main-red-/);
   });

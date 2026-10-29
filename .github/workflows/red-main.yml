@@ -2,40 +2,24 @@ name: Red main
 
 # When backend main goes red, name the PR that did it and tell its pod
 # session; when nobody fixes it within 30 min, open a revert PR that jumps the
-# merge queue (founder decision 0b4db9f7, 2026-10-29 ~13:10Z). The rules, and
-# why each one: scripts/ci/culprit-finder.mjs. Tripwire:
-# scripts/ci/culprit-finder.tripwire.test.ts.
+# merge queue (founder decision 0b4db9f7). The rules live once, in
+# scripts/ci/culprit-finder.mjs (header, verdict(), revertDecision()).
+# Tripwire: scripts/ci/culprit-finder.tripwire.test.ts.
 #
-#   name    a push run of CI on main that ended `failure`: reads the failing
-#           files of its failed jobs, maps them to the PRs since the last
-#           all-green main, comments on the culprit PR, posts to its pod
-#           session, and records the verdict as the check run
-#           "Red main: culprit" on the red commit. What the mapping cannot
-#           settle goes to `bisect`.
-#   bisect  ONE job: re-runs only the unsettled failing files at a few
-#           commits of the range (a binary search), then posts the verdict.
-#   sweep   every 10 min: opens the revert PR when the record names exactly
-#           one high-confidence culprit, 30 min have passed, main is still red
-#           on the same files, and nobody owns the fix. It never merges, never
-#           enqueues (the merge bot does, with jump, for `fix/main-red-*`),
-#           never pushes to main.
+#   name    a push run of CI on main that ended `failure`
+#   bisect  only when the mapping leaves a file unsettled: re-runs those files
+#           at a few commits. Runs merged code, so it holds NO token and NO pod
+#           or bot secret, and its result is checked by `post`.
+#   post    main's own finder posts the verdict after the bisect
+#   sweep   every 10 min: the revert, in environment ci-bots (main only), which
+#           holds the merge bot app's secrets. A push or a PR made with
+#           GITHUB_TOKEN would start no CI, so the revert needs that app.
 #
-# Not a required check, and it adds no PR CI: a CI run of a PR skips every job
-# here by its `if:` (no runner). The sweep is a ~20 s job.
-#
-# Secrets and variables, each optional (fail-safe without):
-#   SYNAP_MERGE_BOT_APP_ID / SYNAP_MERGE_BOT_KEY  the "Synap Merge Bot" app
-#       (merge-bot.yml): pushes the revert branch and opens the PR. A push or a
-#       PR made with GITHUB_TOKEN starts no CI, so the revert would never get
-#       its checks. Without them the sweep logs what it would do.
-#   SYNAP_POD_URL / SYNAP_OBS_KEY  the pod (pod-observations.yml's pair); the
-#       key needs hub-protocol.read AND hub-protocol.write here.
-#   vars.SYNAP_POD_WORKSPACE_ID  the space whose sessions are read for a
-#       `main red: backend …` owner. Without the pod, no session is told and
-#       the owner is UNKNOWN, which holds every revert (never read as nobody).
-#
-# workflow_run and schedule run the DEFAULT BRANCH's copy of this file and of
-# the script; no PR's code runs here. Try it with "Run workflow" (dry run).
+# A CI run of a PR skips every job here by its `if:` (no runner). Without the
+# bot secrets the sweep logs what it would do; without the pod
+# (SYNAP_POD_URL, SYNAP_OBS_KEY with hub-protocol.read + write,
+# vars.SYNAP_POD_WORKSPACE_ID) no session is told and every revert is held.
+# workflow_run and schedule run the DEFAULT BRANCH's copy of this file.
 
 on:
   workflow_run:
@@ -119,12 +103,11 @@ jobs:
     if: ${{ needs.name.outputs.bisect == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 75
+    # No token and no pod or bot secret: the probes run merged commits' code.
     permissions:
       contents: read
-      actions: read
-      checks: write
-      issues: write
-      pull-requests: read
+    outputs:
+      result: ${{ steps.probe.outputs.result }}
 
     # The probes run the failing tests, which read a migrated database: one
     # fresh database per probe (scripts/ci/culprit-finder.mjs makeProbe).
@@ -155,8 +138,10 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/finder/scripts/ci"
           cp scripts/ci/culprit-finder.mjs scripts/ci/affected.mjs scripts/ci/release-gate-wait.mjs "$RUNNER_TEMP/finder/scripts/ci/"
-          cp scripts/tripwire-discovery.mjs "$RUNNER_TEMP/finder/scripts/"
+          cp scripts/tripwire-discovery.mjs scripts/pod-observation.mjs "$RUNNER_TEMP/finder/scripts/"
 
+      # The read-only Reader App lays out the private siblings the
+      # cross-repo tests read (as every ci.yml job that installs).
       - name: Monorepo layout + dependencies
         uses: ./.github/actions/monorepo-setup
         with:
@@ -164,7 +149,6 @@ jobs:
           app-key: ${{ secrets.SYNAP_READER_APP_KEY }}
           cross-repo-token: ${{ secrets.CROSS_REPO_TOKEN }}
 
-      # No token here: the probes run merged commits' tests.
       - name: Probe the range
         id: probe
         continue-on-error: true
@@ -172,18 +156,37 @@ jobs:
         run: node "$RUNNER_TEMP/finder/scripts/ci/culprit-finder.mjs" bisect
         env:
           PLAN: ${{ needs.name.outputs.plan }}
-          RESULT_FILE: ${{ runner.temp }}/culprit-result.json
           CULPRIT_ROOT: ${{ github.workspace }}
           DATABASE_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres
 
-      # Always: a bisect that did not finish still posts the mapping's verdict.
+  post:
+    name: Post the verdict
+    needs: [name, bisect]
+    # Also when the bisect failed or timed out: the mapping's verdict posts.
+    if: ${{ !cancelled() && needs.name.outputs.bisect == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      checks: write
+      issues: write
+      pull-requests: read
+    steps:
+      # The DEFAULT branch's finder, never the bisect job's copy.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: ".node-version"
+
       - name: Post the verdict
-        if: ${{ !cancelled() }}
-        run: node "$RUNNER_TEMP/finder/scripts/ci/culprit-finder.mjs" post
+        run: node scripts/ci/culprit-finder.mjs post
         env:
           GH_TOKEN: ${{ github.token }}
           PLAN: ${{ needs.name.outputs.plan }}
-          RESULT_FILE: ${{ runner.temp }}/culprit-result.json
+          RESULT: ${{ needs.bisect.outputs.result }}
           SYNAP_POD_URL: ${{ secrets.SYNAP_POD_URL }}
           SYNAP_OBS_KEY: ${{ secrets.SYNAP_OBS_KEY }}
           SYNAP_POD_WORKSPACE_ID: ${{ vars.SYNAP_POD_WORKSPACE_ID }}
@@ -194,6 +197,8 @@ jobs:
     if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'sweep') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The merge bot app's secrets live only here (main only).
+    environment: ci-bots
     permissions:
       contents: read
       actions: read

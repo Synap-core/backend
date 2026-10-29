@@ -5,108 +5,48 @@
  * "When backend main goes red, name the culprit PR and post to its pod
  * session; after 30 min with no fix from that session, the bot opens a
  * revert PR and it jumps the merge queue").
- * ===========================================================================
  *
  * ── WHY ──────────────────────────────────────────────────────────────────────
  * A PR runs only the tests of what it can break; main's post-merge run is the
  * first to run everything (ci.yml, "One trunk, three CI tiers"). On 29 Oct
  * five PRs merged at 01:00Z, run 40797830929 went red at 01:46Z, and main
- * stayed red until #489 landed at 09:54Z: ~9 h, 33 PR runs with 0 green. The
- * culprits (#467: a lint error in its own test file; #476: three test files
- * that read the inbound tables it added) were knowable at 01:46Z.
- * Prior art (pod document cd1bf4e9, Google TAP and Build Cop): "the most
- * effective tool the Build Cop has is the rollback".
+ * stayed red until 09:54Z. The culprits (#467, a lint error in its own test
+ * file; #476, three test files that read the tables it added) were knowable
+ * at 01:46Z. Prior art (pod document cd1bf4e9, Google TAP and Build Cop):
+ * "the most effective tool the Build Cop has is the rollback".
  *
- * ── THREE MODES ──────────────────────────────────────────────────────────────
- * name    on a red push run of CI on main (.github/workflows/red-main.yml,
- *         workflow_run). Reads the FAILING FILES of the run's failed jobs
- *         (failingFiles: the test ratchet's [new-failure] / [fixed] /
- *         [stale-baseline] lists, eslint and prettier files, tsc errors), the
- *         first-parent commits since the last all-green main
- *         (release-gate-wait.mjs culpritRange), and each commit's PR and its
- *         changed files. Then attribute(), cheapest correct method first:
- *           1. the range holds ONE commit → it is the culprit (high);
- *           2. exactly one PR of the range changed the failing file (high);
- *           3. exactly one PR can REACH the file through the affected graph
- *              (scripts/ci/affected.mjs: its packages, their dependents, the
- *              test files that read them by path; a tripwire is reached by
- *              every PR, since it reads across the tree) (medium);
- *           4. otherwise ambiguous.
- *         Every failing file a test, lint or type check can re-run that is not
- *         `high` goes to `bisect` (one job). If none does, it records and
- *         posts the verdict at once.
- * bisect  ONE job (installs once): re-runs ONLY the unresolved failing files
- *         at chosen commits of the range, a binary search per file over the
- *         first-parent line (lastGreen passes, the red commit fails), every
- *         probe running every unresolved file so files share probes; at most
- *         MAX_PROBES probes. A file that passes alone at the red commit is
- *         `low` ("did not fail when run alone"), never a culprit.
- * sweep   every 10 min. Reverts at most ONE culprit per red, only when
- *         revertDecision() says so (THE REVERT RULE below).
+ * ── MODES (.github/workflows/red-main.yml) ───────────────────────────────────
+ * name    a push run of CI on main ended `failure`: failingFiles() of its
+ *         failed jobs, the first-parent commits since the last all-green main
+ *         (release-gate-wait.mjs culpritRange), each commit's PR and files,
+ *         then attribute(). Posts at once when every re-runnable file is
+ *         settled at `high`; else hands a plan to `bisect`.
+ * bisect  ONE job, no token: bisect() re-runs only the unsettled files at a
+ *         few commits of the range. Its result is untrusted data.
+ * post    main's own finder: checks the bisect result against the plan, then
+ *         verdict() and postVerdict().
+ * sweep   every 10 min: revertDecision() (THE REVERT RULE), then openRevert().
  *
- * A verdict is posted three ways: a comment on each culprit PR (once per
- * culprit merge: a hidden marker carries the files and the time it was
- * first named), a message in the culprit's pod session room (the
- * `Pod session:` line of its body) when the pod is configured, and a
- * check run RECORD_CHECK on the red commit whose text holds the record as
- * JSON (what `sweep` reads). Not a required check.
+ * A verdict is posted as a comment on each culprit PR (once per culprit
+ * merge: a hidden marker carries its files and when it was first named), a
+ * message in the culprit's pod session room (the `Pod session:` line), posted
+ * as the pod key's owner, and the check run RECORD_CHECK on the red commit,
+ * whose text holds the record as JSON. The sweep reads a record only from a
+ * check suite of a red-main.yml run on main (recordOf).
  *
- * ── THE REVERT RULE (revertDecision) ─────────────────────────────────────────
- * The sweep opens a revert PR only when ALL hold:
- *   - main's newest finished push run is red, no newer push run is still
- *     running (it may be the fix), and that run has a record;
- *   - the record names exactly ONE culprit, a merged PR, at confidence
- *     `high`, and every failing file of the run is attributed to it (a revert
- *     that cannot green main is not revert-first: with two culprits, or a
- *     file nothing explains, it posts and a person decides);
- *   - the culprit is not itself a revert (title `Revert …` or a
- *     `fix/main-red-revert-*` branch): never revert a revert;
- *   - it was first named GRACE_MINUTES (30) ago or more, and the files it
- *     was named for still fail (the same red, not a new one);
- *   - NOBODY OWNS THE FIX (the one-owner rule, .claude/rules/github-ci.md
- *     "Never pile onto a red main"): no open PR on a `fix/main-red-*` branch;
- *     no open PR whose body names the culprit's pod session and that was
- *     opened after the culprit merged; and the pod lists no ACTIVE session
- *     titled `main red: backend …` started after the culprit merged. A pod
- *     that is not configured or cannot be read is an UNKNOWN owner, and an
- *     unknown owner holds the revert (a failed read is never "nobody");
- *   - this red has had no revert PR yet (any state: a closed one is a person
- *     saying no), and the revert branch does not exist;
- *   - the bot's app token is present (secrets SYNAP_MERGE_BOT_APP_ID /
- *     SYNAP_MERGE_BOT_KEY, the "Synap Merge Bot" app of merge-bot.yml).
- *     Without it: log what it would do, exit 0.
- * GRACE AND AN OWNER: the window starts when the culprit is first named. An
- * owner who shows up (a `main red: backend` session, a `fix/main-red-*` PR,
- * a PR from the culprit's session) holds the revert for as long as it is
- * open, with no deadline: the bot says so once on the culprit PR and never
- * fights it. When the owner closes without main going green, the next sweep
- * reverts (the window has passed).
- *
- * The revert: `git revert -m 1 <merge sha>` (no -m for a one-parent commit)
- * on `origin/main`, pushed as `fix/main-red-revert-<pr>-<sha8>` (the merge
- * bot's `fix/main-red-*` rule puts it at the front of the queue), and a READY
- * PR whose body carries the culprit, the evidence, the failing files, the
- * culprit's `Pod session:` line and "Revert-first: founder decision
- * 0b4db9f7". A conflict aborts the revert and says so once. It never pushes
- * to main, never merges, never enqueues (the merge bot does).
- *
- * Env: GITHUB_REPOSITORY, GH_TOKEN (reads; issues/checks writes), RUN_ID
- * (name), PLAN / PLAN_FILE (bisect), REVERT_TOKEN (sweep: the app token),
- * SYNAP_POD_URL + SYNAP_OBS_KEY (a pod Hub key with hub-protocol.read and
- * .write) + SYNAP_POD_WORKSPACE_ID (the space whose sessions are listed for
- * an owner), CULPRIT_DRY_RUN=true (judge and log, write nothing).
- * Transport: the `gh` CLI and global fetch, injected, so the tripwire drives
- * it with fakes. Node built-ins only (the name and sweep jobs do not install).
+ * Env: GITHUB_REPOSITORY, GH_TOKEN, RUN_ID (name), PLAN and RESULT (bisect,
+ * post), REVERT_TOKEN (sweep: the merge bot app's token), SYNAP_POD_URL +
+ * SYNAP_OBS_KEY + SYNAP_POD_WORKSPACE_ID (the pod), CULPRIT_ROOT (the
+ * checkout, when the script runs from a copy), CULPRIT_DRY_RUN=true.
+ * Transport: the `gh` CLI, global fetch and a shell, all injected (the
+ * tripwire drives them with fakes). Node built-ins only.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  appendFileSync,
-  existsSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { podSessionFromBody } from "../pod-observation.mjs";
+import { isTripwire } from "../tripwire-discovery.mjs";
 import {
   TEST_FILE,
   loadGraph,
@@ -120,7 +60,6 @@ import {
   decide,
   githubReader,
 } from "./release-gate-wait.mjs";
-import { isTripwire } from "../tripwire-discovery.mjs";
 
 /** The founder decision this automates (pod decision entity). */
 export const FOUNDER_DECISION = "0b4db9f7";
@@ -128,43 +67,52 @@ export const FOUNDER_DECISION = "0b4db9f7";
 export const GRACE_MINUTES = 30;
 /** The check run that carries a red commit's record (not a required check). */
 export const RECORD_CHECK = "Red main: culprit";
+/** The workflow allowed to write a record. */
+export const RECORD_WORKFLOW = ".github/workflows/red-main.yml";
 /** A revert branch: the merge bot's `fix/main-red-*` rule makes it jump. */
 export const REVERT_BRANCH_RE = /^fix\/main-red-revert-(\d+)-([0-9a-f]{8})$/;
 /** A branch that fixes main red (an owner at work), revert branches included. */
 export const FIX_BRANCH_RE = /^fix\/main-red-/i;
 /** The one owner of a red main (.claude/rules/github-ci.md). */
 export const OWNER_TITLE_RE = /^\s*main red:\s*backend\b/i;
+/** A migration is forward-only: a PR that adds one is never auto-reverted. */
+export const MIGRATION_RE = /^packages\/database\/migrations\//;
+/** Failed jobs that fail BECAUSE another job failed: they need not name a file. */
+export const JUDGE_JOBS = new Set(["Full suite", "Release gate"]);
 /** At most this many probes (checkouts) in one bisect job. */
 export const MAX_PROBES = 8;
 /** First-parent commits looked at for the last all-green main. */
 export const RANGE_LIMIT = 30;
 
-const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
-/** Same rule as POD_SESSION_LINE_RE (packages/types dev-loop.ts, pod-observation.mjs). */
-export const POD_SESSION_LINE_RE = new RegExp(
-  `^\\W*pod session\\W*:?\\s*\\W*(${UUID})`,
-  "im"
-);
 const MARK = "red-main-culprit";
 const HELD_MARK = "red-main-held";
 const CONFLICT_MARK = "red-main-revert-conflict";
+const REVERTED_MARK = "red-main-reverted";
 /** The revert PR body line that ties it to one red (its last green main). */
 const RED_BASE_LINE = "Red-main-base:";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const at = (iso) => (iso ? Date.parse(iso) : NaN);
+const short = (s) => String(s ?? "").slice(0, 9);
 
 // ── pure: reading the run ───────────────────────────────────────────────────
-
-/** The `Pod session:` id of a PR body, or null. */
-export function podSessionOf(body) {
-  const m = POD_SESSION_LINE_RE.exec(String(body ?? ""));
-  return m ? m[1].toLowerCase() : null;
-}
 
 /** The PR number of a GitHub merge commit subject, or null. */
 export function prOfSubject(subject) {
   const m = /^Merge pull request #(\d+) from /.exec(String(subject ?? ""));
   return m ? Number(m[1]) : null;
+}
+
+/** A merge that fixes main red: a `fix/main-red-*` branch (reverts included) or a `Revert` title. */
+export function isFixMerge(message) {
+  const [subject, , title] = String(message ?? "").split("\n");
+  return (
+    /^Merge pull request #\d+ from [^/\s]+\/fix\/main-red-/i.test(
+      subject ?? ""
+    ) ||
+    /^Revert\b/i.test(subject ?? "") ||
+    /^Revert\b/i.test(title ?? "")
+  );
 }
 
 /** A job log line without the runner's timestamp (and BOM). */
@@ -185,13 +133,13 @@ const RATCHET_KIND = {
  *   lint   an eslint file with an `error`, or a prettier `[warn]` file
  *   type   a file with a `error TS` (repo-relative; a turbo `pkg:task:` prefix
  *          resolves a package-relative path through `dirsByName`)
- * Only what the log NAMES; a red job that names no file adds nothing.
+ * Only what the log NAMES; a red job that names no file adds nothing (and is
+ * a `silent` job: readFailing).
  */
 export function failingFiles(log, { dirsByName = new Map() } = {}) {
   const out = new Map();
   const add = (file, kind) => {
-    if (!file || out.has(file)) return;
-    out.set(file, kind);
+    if (file && !out.has(file)) out.set(file, kind);
   };
   let section = null;
   let eslintFile = null;
@@ -251,14 +199,13 @@ const neutralPath = (f) =>
  * their dependents and the test files that read them. A tripwire reads across
  * the tree, so every change reaches it.
  */
-export function reaches(prFiles, file, { graph, refs, isTripwire }) {
+export function reaches(prFiles, file, { graph, refs, isTripwire: trip }) {
   const files = (prFiles ?? []).filter((f) => !neutralPath(f));
   if (files.length === 0) return false;
-  if (isTripwire?.(file)) return true;
+  if (trip?.(file)) return true;
   const t = selectTier(files, { graph, refs });
   if (t.scope === "full") return true;
-  const dirs = [...graph.keys()];
-  const pkg = packageOf(file, dirs);
+  const pkg = packageOf(file, [...graph.keys()]);
   return (pkg != null && t.dirs.includes(pkg)) || t.tests.includes(file);
 }
 
@@ -268,9 +215,15 @@ export const BISECTABLE = new Set(["test", "lint", "type"]);
 /**
  * Per failing file, which candidate commit made it fail, by the cheapest
  * correct method. `candidates` oldest first: [{ sha, pr, files }] (files =
- * the PR's changed paths, null when unread). Returns Map file →
- *   { method: "range"|"direct"|"reach"|"ambiguous"|"none",
- *     confidence: "high"|"medium"|"low", shas: [candidate shas] }
+ * the PR's changed paths, null when unread: such a PR reaches everything).
+ * Returns Map file → { method, confidence, shas }:
+ *   range      one commit in the range: it (high)
+ *   direct     exactly one PR changed the file: high only when NO OTHER
+ *              candidate can reach the file, else medium (a rename in one PR
+ *              breaks a file another PR only touched: the bisect decides)
+ *   reach      no PR changed it and exactly one can reach it (medium)
+ *   ambiguous  several PRs changed it, or several reach it (low)
+ *   none       nothing in the range reaches it: a flake or the environment
  */
 export function attribute(failing, candidates, deps) {
   const out = new Map();
@@ -284,27 +237,24 @@ export function attribute(failing, candidates, deps) {
       continue;
     }
     const direct = candidates.filter((c) => c.files?.includes(file));
+    const reach = candidates.filter(
+      (c) => c.files == null || reaches(c.files, file, deps)
+    );
     if (direct.length === 1) {
+      const others = reach.filter((c) => c.sha !== direct[0].sha).length;
       out.set(file, {
         method: "direct",
-        confidence: "high",
+        confidence: others === 0 ? "high" : "medium",
         shas: [direct[0].sha],
+        others,
       });
-      continue;
-    }
-    if (direct.length > 1) {
+    } else if (direct.length > 1)
       out.set(file, {
         method: "ambiguous",
         confidence: "low",
         shas: direct.map((c) => c.sha),
       });
-      continue;
-    }
-    // A PR whose files are unread reaches everything: never a false "only one".
-    const reach = candidates.filter(
-      (c) => c.files == null || reaches(c.files, file, deps)
-    );
-    if (reach.length === 1)
+    else if (reach.length === 1)
       out.set(file, {
         method: "reach",
         confidence: "medium",
@@ -328,20 +278,36 @@ export function needsBisect(failing, attribution) {
   );
 }
 
+/** A suspect per file for the bisect to confirm first (a medium attribution). */
+export function bisectHints(files, attribution) {
+  return new Map(
+    files
+      .map((f) => [f, attribution.get(f)])
+      .filter(([, a]) => a?.confidence === "medium" && a.shas.length === 1)
+      .map(([f, a]) => [f, a.shas[0]])
+  );
+}
+
 /**
- * Binary search per file over `shas` (oldest first; the commit before
- * shas[0] is the last all-green main, taken as passing). `probe(sha, files)`
- * runs `files` at `sha` and returns Map file → "pass"|"fail"|"absent"|"error".
- * Every probe runs every file not yet known at that commit, so files share
- * probes. The red commit (last sha) is probed first: a file that passes there
- * alone does not reproduce. Returns { results: Map file → { sha|null,
- * confidence, why }, probes }.
+ * Find, per file, the first commit of `shas` (oldest first) at which it fails.
+ * The commit before shas[0] is the last all-green main, taken as passing.
+ * `probe(sha, files)` runs `files` at `sha` → Map file → "pass" | "fail" |
+ * "absent" | "error". Probes are cached and shared: each runs every file not
+ * yet known at that commit.
+ *   1. A file with a hint (a medium suspect): two probes, the suspect (fails?)
+ *      and its first parent (passes?). Else, or with no hint:
+ *   2. the red commit first (a file passing there alone does not reproduce),
+ *      then a binary search.
+ *   3. CONFIRM: one fresh probe at each named commit, its files together. A
+ *      file that does not fail again is a flake (low), never a culprit.
+ * At most `maxProbes` probes in all. Returns { results: Map file → { sha |
+ * null, confidence, why }, probes }.
  */
 export async function bisect(
   shas,
   files,
   probe,
-  { maxProbes = MAX_PROBES } = {}
+  { maxProbes = MAX_PROBES, hints = new Map() } = {}
 ) {
   const seen = new Map(); // sha → Map(file → result)
   let probes = 0;
@@ -357,68 +323,122 @@ export async function bisect(
     seen.set(sha, m);
     return m.get(file);
   };
+  const passes = (r) => r === "pass" || r === "absent";
+  const found = new Map(); // file → { idx, why }
   const results = new Map();
-  for (const file of files) {
+  const low = (file, why) =>
+    results.set(file, { sha: null, confidence: "low", why });
+  // Hinted files first: their two probes also serve the searches.
+  const order = [...files].sort(
+    (a, b) => Number(hints.has(b)) - Number(hints.has(a))
+  );
+  for (const file of order) {
+    const hint = hints.has(file) ? shas.indexOf(hints.get(file)) : -1;
+    if (hint >= 0) {
+      const a = await result(shas[hint], file);
+      const b = hint === 0 ? "pass" : await result(shas[hint - 1], file);
+      if (a === "fail" && passes(b)) {
+        found.set(file, {
+          idx: hint,
+          why: `fails at ${short(shas[hint])}, passes at ${hint === 0 ? "the last all-green main" : `${short(shas[hint - 1])} (its first parent on main)`}`,
+        });
+        continue;
+      }
+    }
     const tip = shas.length - 1;
     const atTip = await result(shas[tip], file);
     if (atTip !== "fail") {
-      results.set(file, {
-        sha: null,
-        confidence: "low",
-        why:
-          atTip === "budget"
-            ? `not probed: the bisect used its ${maxProbes} probes`
-            : `did not fail when run alone at the red commit (${atTip})`,
-      });
+      low(
+        file,
+        atTip === "budget"
+          ? `not probed: the bisect used its ${maxProbes} probes`
+          : `did not fail when run alone at the red commit (${atTip})`
+      );
       continue;
     }
-    let lo = -1; // passes (the last all-green main, or a probed pass)
-    let hi = tip; // fails
+    let lo = -1;
+    let hi = tip;
     let stuck = null;
     while (hi - lo > 1) {
       const mid = Math.floor((lo + hi) / 2);
       const r = await result(shas[mid], file);
       if (r === "fail") hi = mid;
-      else if (r === "pass" || r === "absent") lo = mid;
+      else if (passes(r)) lo = mid;
       else {
         stuck = r;
         break;
       }
     }
-    results.set(
-      file,
-      stuck
-        ? {
-            sha: null,
-            confidence: "low",
-            why:
-              stuck === "budget"
-                ? `narrowed to ${shas
-                    .slice(lo + 1, hi + 1)
-                    .map((s) => s.slice(0, 9))
-                    .join(", ")}: the bisect used its ${maxProbes} probes`
-                : `a probe could not run the file (${stuck})`,
-          }
-        : {
-            sha: shas[hi],
-            confidence: "high",
-            why:
-              lo === -1
-                ? `fails at ${shas[hi].slice(0, 9)}, passed at the last all-green main`
-                : `fails at ${shas[hi].slice(0, 9)}, passes at ${shas[lo].slice(0, 9)} (its first parent on main)`,
-          }
-    );
+    if (stuck) {
+      low(
+        file,
+        stuck === "budget"
+          ? `narrowed to ${shas
+              .slice(lo + 1, hi + 1)
+              .map(short)
+              .join(", ")}: the bisect used its ${maxProbes} probes`
+          : `a probe could not run the file (${stuck})`
+      );
+      continue;
+    }
+    found.set(file, {
+      idx: hi,
+      why: `fails at ${short(shas[hi])}, passes at ${lo === -1 ? "the last all-green main" : `${short(shas[lo])} (its first parent on main)`}`,
+    });
+  }
+  // 3. Confirm: a fresh run at each named commit (a flake failing once at
+  // a probed commit would otherwise name it).
+  const byIdx = new Map();
+  for (const [file, f] of found)
+    byIdx.set(f.idx, [...(byIdx.get(f.idx) ?? []), file]);
+  for (const [idx, group] of byIdx) {
+    if (probes >= maxProbes) {
+      for (const file of group)
+        low(
+          file,
+          `${found.get(file).why}; not confirmed: the bisect used its ${maxProbes} probes`
+        );
+      continue;
+    }
+    probes++;
+    const again = await probe(shas[idx], group);
+    for (const file of group) {
+      const r = again.get(file) ?? "error";
+      if (r === "fail")
+        results.set(file, {
+          sha: shas[idx],
+          confidence: "high",
+          why: `bisect: ${found.get(file).why}, and failed again on a repeat`,
+        });
+      else
+        low(
+          file,
+          `${found.get(file).why}, but did not fail on a repeat (${r}): a flake?`
+        );
+    }
   }
   return { results, probes };
 }
 
 /**
- * The verdict: culprits grouped by PR. `attribution` = attribute(); `bisected`
- * = bisect().results (or null). Returns { culprits: [{ sha, pr, confidence,
- * files: [{file, kind, confidence, why}] }], unattributed: [{file, kind, why}],
- * revertable: bool, why: [strings] }.
+ * The verdict: culprits grouped by PR, and whether a revert can even be
+ * considered. Input: failing, candidates [{sha, pr, migration?}],
+ * attribution, bisected (Map | null), lastGreen, silentJobs ([job names]).
+ * Returns { culprits: [{ sha, pr, confidence, files }], unattributed,
+ * revertable, why }. Revertable needs ALL of: an all-green main below the
+ * range; no failed job that names no file; exactly one culprit, a PR merge,
+ * at high confidence, explaining every failing file; no ratchet-baseline red
+ * among its files (a revert would undo a test fix); it adds no migration
+ * (forward-only: a person decides).
  */
-export function verdict({ failing, candidates, attribution, bisected = null }) {
+export function verdict({
+  failing,
+  candidates,
+  attribution,
+  bisected = null,
+  lastGreen = null,
+  silentJobs = [],
+}) {
   const bySha = new Map(candidates.map((c) => [c.sha, c]));
   const groups = new Map();
   const unattributed = [];
@@ -427,23 +447,23 @@ export function verdict({ failing, candidates, attribution, bisected = null }) {
     const a = attribution.get(f.file);
     const b = bisected?.get(f.file);
     let sha = null;
-    let confidence = "low";
-    let why = "";
+    let confidence;
+    let why;
     if (a?.confidence === "high") {
       sha = a.shas[0];
       confidence = "high";
       why =
         a.method === "range"
           ? "the only commit since the last all-green main"
-          : "the only PR in the range that changed this file";
+          : "the only PR in the range that changed this file, and no other can reach it";
     } else if (b?.sha) {
       sha = b.sha;
       confidence = b.confidence;
-      why = `bisect: ${b.why}`;
+      why = b.why;
     } else if (a?.confidence === "medium") {
       sha = a.shas[0];
       confidence = "medium";
-      why = `the only PR in the range that can reach this file (affected graph)${b ? `; bisect: ${b.why}` : ""}`;
+      why = `${a.method === "direct" ? `the only PR that changed this file, but ${a.others} other PR(s) can reach it` : "the only PR in the range that can reach this file (affected graph)"}${b ? `; bisect: ${b.why}` : ""}`;
     } else {
       unattributed.push({
         file: f.file,
@@ -470,23 +490,54 @@ export function verdict({ failing, candidates, attribution, bisected = null }) {
   }
   const culprits = [...groups.values()];
   const why = [];
+  if (!lastGreen)
+    why.push(
+      `no all-green main in the last ${RANGE_LIMIT} commits (the range has no lower end)`
+    );
   if (failing.length === 0) why.push("the red run names no failing file");
+  if (silentJobs.length)
+    why.push(
+      `${silentJobs.join(", ")} failed and named no file (a revert may not green it)`
+    );
   if (culprits.length !== 1)
     why.push(`${culprits.length} culprits (a revert needs exactly one)`);
   const only = culprits.length === 1 ? culprits[0] : null;
-  if (only && only.confidence !== "high")
-    why.push(
-      `the culprit is ${only.confidence} confidence (a revert needs high)`
-    );
+  if (only && only.files.some((f) => f.confidence !== "high"))
+    why.push("the culprit is not high confidence on every file");
   if (only && only.pr == null) why.push("the culprit commit is not a PR merge");
+  if (only?.files.some((f) => f.kind === "fixed" || f.kind === "stale"))
+    why.push(
+      "a test-ratchet baseline red (fixed / stale-baseline): reverting would undo a test fix"
+    );
+  if (only && bySha.get(only.sha)?.migration)
+    why.push("the culprit adds a migration (forward-only): a person decides");
   if (unattributed.length)
     why.push(`${unattributed.length} failing file(s) no culprit explains`);
   return { culprits, unattributed, revertable: why.length === 0, why };
 }
 
-// ── pure: the revert rule ───────────────────────────────────────────────────
+/**
+ * A bisect result is data from a job that ran merged code: keep only what the
+ * plan allows (the plan's own files, the range's own commits), so a probe
+ * cannot name a commit outside the range or add a file.
+ */
+export function trustedBisect(plan, result) {
+  const files = new Set(plan.bisect ?? []);
+  const shas = new Set((plan.candidates ?? []).map((c) => c.sha));
+  const out = new Map();
+  for (const [file, r] of Object.entries(result?.bisected ?? {})) {
+    if (!files.has(file) || !r || typeof r !== "object") continue;
+    if (r.sha != null && !shas.has(r.sha)) continue;
+    out.set(file, {
+      sha: r.sha ?? null,
+      confidence: r.sha ? "high" : "low",
+      why: String(r.why ?? "").slice(0, 300),
+    });
+  }
+  return out;
+}
 
-const at = (iso) => (iso ? Date.parse(iso) : NaN);
+// ── pure: the revert rule ───────────────────────────────────────────────────
 
 /** Is this PR itself a revert? Then it is never reverted. */
 export function isRevert(pr) {
@@ -500,62 +551,58 @@ export const revertBranch = (pr, sha) =>
   `fix/main-red-revert-${pr}-${String(sha).slice(0, 8)}`;
 
 /**
- * May the sweep revert now? Pure. Input:
- *   now            ms
- *   main           { latest: run|null, newerRunning: bool }  (main's push runs)
- *   record         the latest red run's record, or null
- *   culpritPr      { number, title, head, mergedAt, session } of record's culprit
- *   openPrs        [{ number, head, body, createdAt }]
- *   revertPrs      [{ number, head, body, state }] PRs on revert branches (any state)
- *   branchExists   bool (the revert branch)
- *   owners         { ok: true, sessions: [{ title, status, startedAt }] } | { ok: false, why }
- *   token          bool (the app token is present)
- * Returns { revert: bool, hold: string|null (an owner is working), reasons }.
+ * THE REVERT RULE: may the sweep open the revert now? Pure. Input:
+ *   now           ms
+ *   main          { latest: finished push run | null, fixRunning: bool (a
+ *                 newer push run of a fix/main-red-* or revert merge runs) }
+ *   record        the latest red run's record (from red-main.yml), or null
+ *   culpritPr     { number, title, head, mergedAt, mergeSha, session }
+ *   onMainLine    the culprit's merge is on main's first-parent line in
+ *                 (lastGreen, latest]
+ *   openPrs       [{ number, head, body, createdAt }]
+ *   priorReverts  [{ number, head, body, state }] (this branch, any state, and
+ *                 recent revert branches)
+ *   branchExists  the revert branch exists
+ *   owners        { ok: true, sessions } | { ok: false, why }
+ *   token         the app token is present
+ * It reverts only when ALL hold: main is red and no fix is running; the
+ * record is revertable (verdict()); the culprit is that PR's merge commit, on
+ * main's line, and not itself a revert; it was first named GRACE_MINUTES ago
+ * and the files it was named for still fail; this red has had no revert
+ * (any state: a closed one is a person saying no) and the branch is free;
+ * NOBODY OWNS THE FIX: no `fix/main-red-*` PR, and no PR from the culprit's
+ * pod session, opened after the culprit merged; no ACTIVE `main red:
+ * backend …` session started after it merged (a pod that is not read is an
+ * UNKNOWN owner, and an unknown owner holds it); the token is present.
+ * An owner holds the revert for as long as it is open, with no deadline; the
+ * grace window starts at the first naming and never restarts.
+ * Returns { revert, hold: string | null, reasons }.
  */
 export function revertDecision(input) {
-  const r = [];
   const { now, main, record, culpritPr } = input;
-  if (!main?.latest)
-    return {
-      revert: false,
-      hold: null,
-      reasons: ["no finished push run on main"],
-    };
-  if (main.latest.conclusion === "success")
-    return { revert: false, hold: null, reasons: ["main is green"] };
-  if (main.newerRunning)
-    return {
-      revert: false,
-      hold: null,
-      reasons: ["a newer main run is still running (it may be the fix)"],
-    };
-  if (!record)
-    return {
-      revert: false,
-      hold: null,
-      reasons: ["the red run has no culprit record yet"],
-    };
+  const no = (why) => ({ revert: false, hold: null, reasons: [why] });
+  if (!main?.latest) return no("no finished push run on main");
+  if (main.latest.conclusion === "success") return no("main is green");
+  if (main.fixRunning)
+    return no("a newer main run of a main-red fix or revert is still running");
+  if (!record) return no("the red run has no culprit record yet");
   if (!record.revertable)
-    return {
-      revert: false,
-      hold: null,
-      reasons: [
-        `not revertable: ${(record.why ?? []).join("; ") || "no reason recorded"}`,
-      ],
-    };
+    return no(
+      `not revertable: ${(record.why ?? []).join("; ") || "no reason recorded"}`
+    );
   const c = record.culprits?.[0];
-  if (!c || !culpritPr)
-    return {
-      revert: false,
-      hold: null,
-      reasons: ["the culprit PR is not read"],
-    };
+  if (!c || !culpritPr) return no("the culprit PR is not read");
   if (isRevert(culpritPr))
-    return {
-      revert: false,
-      hold: null,
-      reasons: [`#${culpritPr.number} is a revert: never revert a revert`],
-    };
+    return no(`#${culpritPr.number} is a revert: never revert a revert`);
+  const r = [];
+  if (culpritPr.mergeSha !== c.sha)
+    r.push(
+      `the record's commit ${short(c.sha)} is not #${culpritPr.number}'s merge (${short(culpritPr.mergeSha)})`
+    );
+  if (!input.onMainLine)
+    r.push(
+      `${short(c.sha)} is not on main's first-parent line after ${short(record.lastGreen)}`
+    );
   const named = at(c.namedAt);
   if (!Number.isFinite(named)) r.push("the culprit has no naming time");
   else if (now - named < GRACE_MINUTES * 60_000)
@@ -566,30 +613,28 @@ export function revertDecision(input) {
   if (!c.files?.some((f) => namedFiles.has(f.file)))
     r.push("the files it was named for no longer fail (a different red)");
   const branch = revertBranch(culpritPr.number, c.sha);
-  const priorRevert = (input.revertPrs ?? []).find(
+  const prior = (input.priorReverts ?? []).find(
     (p) =>
-      REVERT_BRANCH_RE.test(p.head) &&
-      String(p.body ?? "").includes(`${RED_BASE_LINE} ${record.lastGreen}`)
+      p.head === branch ||
+      (REVERT_BRANCH_RE.test(p.head) &&
+        String(p.body ?? "").includes(`${RED_BASE_LINE} ${record.lastGreen}`))
   );
-  if (priorRevert)
+  if (prior)
     r.push(
-      `this red already had its revert (#${priorRevert.number}, ${priorRevert.state})`
+      `this red already had its revert (#${prior.number}, ${prior.state})`
     );
   if (input.branchExists) r.push(`the branch ${branch} exists`);
-  // The one owner: a person or a session already fixing it.
+  // The one owner: a person or a session already fixing THIS red.
   const merged = at(culpritPr.mergedAt);
-  let hold = null;
-  const fixPr = (input.openPrs ?? []).find(
-    (p) => FIX_BRANCH_RE.test(p.head) && p.number !== culpritPr.number
+  const after = (iso) => !(at(iso) < merged);
+  const open = (input.openPrs ?? []).filter(
+    (p) => p.number !== culpritPr.number && after(p.createdAt)
   );
+  let hold = null;
+  const fixPr = open.find((p) => FIX_BRANCH_RE.test(p.head));
   if (fixPr) hold = `#${fixPr.number} (${fixPr.head}) is open`;
   const fromSession = culpritPr.session
-    ? (input.openPrs ?? []).find(
-        (p) =>
-          p.number !== culpritPr.number &&
-          podSessionOf(p.body) === culpritPr.session &&
-          !(at(p.createdAt) < merged)
-      )
+    ? open.find((p) => podSessionFromBody(p.body) === culpritPr.session)
     : null;
   if (!hold && fromSession)
     hold = `#${fromSession.number} from the culprit's pod session is open`;
@@ -601,7 +646,7 @@ export function revertDecision(input) {
         (s) =>
           s.status === "active" &&
           OWNER_TITLE_RE.test(s.title ?? "") &&
-          !(at(s.startedAt) < merged)
+          after(s.startedAt)
       );
       if (owner) hold = `the pod session "${owner.title}" owns this red`;
     }
@@ -616,12 +661,7 @@ export function revertDecision(input) {
 
 // ── text ────────────────────────────────────────────────────────────────────
 
-const short = (s) => String(s ?? "").slice(0, 9);
-
-/** The hidden marker of a culprit comment, and its parse. */
-export function culpritMarker(data) {
-  return `<!-- ${MARK} ${JSON.stringify(data)} -->`;
-}
+/** The hidden marker of a bot comment, and its parse. */
 export function readMarker(body, mark = MARK) {
   const m = new RegExp(`<!-- ${mark} (\\{.*?\\}) -->`).exec(String(body ?? ""));
   if (!m) return null;
@@ -638,17 +678,12 @@ function fileLines(files) {
   );
 }
 
-/** The comment on a culprit PR. */
-export function culpritComment({ record, culprit, namedAt, revertable }) {
-  const until = new Date(at(namedAt) + GRACE_MINUTES * 60_000).toISOString();
+/** The comment on a culprit PR (the marker is added by postOnce). */
+export function culpritComment({ record, culprit, revertable }) {
+  const until = new Date(
+    at(culprit.namedAt) + GRACE_MINUTES * 60_000
+  ).toISOString();
   return [
-    culpritMarker({
-      merge: culprit.sha,
-      red: record.redSha,
-      lastGreen: record.lastGreen,
-      files: culprit.files.map((f) => f.file),
-      namedAt,
-    }),
     `### This PR's merge made main red`,
     "",
     `Main's post-merge run ${record.runUrl} of \`${short(record.redSha)}\` is red. The culprit finder (scripts/ci/culprit-finder.mjs) names this PR's merge \`${short(culprit.sha)}\`, confidence **${culprit.confidence}**, for:`,
@@ -759,7 +794,7 @@ export function realShell(
 
 // ── the pod (Hub REST) ──────────────────────────────────────────────────────
 
-/** The pod door, or null when it is not configured. */
+/** The pod door, or null when it is not configured. Posts as the key's owner. */
 export function podClient(env, fetchImpl = globalThis.fetch) {
   const url = env.SYNAP_POD_URL?.replace(/\/+$/, "");
   const key = env.SYNAP_OBS_KEY;
@@ -781,7 +816,6 @@ export function podClient(env, fetchImpl = globalThis.fetch) {
     return text ? JSON.parse(text) : null;
   }
   return {
-    workspaceId: env.SYNAP_POD_WORKSPACE_ID || null,
     /** Post into a session's room (its channel), as the session's owner. */
     async postToSession(sessionId, content) {
       const s = await req("GET", `/focus-sessions/${sessionId}`);
@@ -792,7 +826,7 @@ export function podClient(env, fetchImpl = globalThis.fetch) {
         userId: s.userId,
       });
     },
-    /** The active sessions of the configured space. */
+    /** The active sessions of the configured space. A reply that is not a list THROWS. */
     async activeSessions() {
       if (!env.SYNAP_POD_WORKSPACE_ID)
         throw new Error("SYNAP_POD_WORKSPACE_ID is not set");
@@ -800,7 +834,11 @@ export function podClient(env, fetchImpl = globalThis.fetch) {
         "GET",
         `/focus-sessions?workspaceId=${env.SYNAP_POD_WORKSPACE_ID}&status=active&limit=50`
       );
-      return (Array.isArray(rows) ? rows : []).map((s) => ({
+      if (!Array.isArray(rows))
+        throw new Error(
+          `the session list is not a list (${JSON.stringify(rows)?.slice(0, 120)})`
+        );
+      return rows.map((s) => ({
         title: s.title ?? s.goal ?? "",
         status: s.status,
         startedAt: s.startedAt,
@@ -822,32 +860,41 @@ function prShape(p) {
     createdAt: p.created_at ?? null,
     state: p.merged_at ? "merged" : p.state,
     mergeSha: p.merge_commit_sha ?? null,
-    session: podSessionOf(p.body),
+    session: podSessionFromBody(p.body),
     url: p.html_url,
   };
 }
 
-/** Every changed path of a PR (paginated), or null when unreadable. */
+/** A PR's changed paths (paginated) and whether it adds a migration; files null when unreadable. */
 function prFiles(gh, repo, n, log) {
   const files = [];
+  let migration = false;
   try {
     for (let page = 1; page <= 30; page++) {
       const batch =
         gh.rest(`repos/${repo}/pulls/${n}/files?per_page=100&page=${page}`) ??
         [];
-      files.push(...batch.map((f) => f.filename));
-      if (batch.length < 100) return files;
+      for (const f of batch) {
+        files.push(f.filename);
+        if (MIGRATION_RE.test(f.filename) && f.status === "added")
+          migration = true;
+      }
+      if (batch.length < 100) break;
     }
-    return files;
+    return { files, migration };
   } catch (e) {
     log(
       `::warning::#${n}: its files could not be read (${e.message}); it is taken as reaching every file`
     );
-    return null;
+    return { files: null, migration: false };
   }
 }
 
-/** The failed jobs of a run and the failing files their logs name. */
+/**
+ * The failed jobs of a run and the failing files their logs name. A failed
+ * job that is not a judge and names no file is SILENT: a revert may not green
+ * it (an audit, a Docker build, a crash), so the red is not revertable.
+ */
 function readFailing(gh, repo, runId, dirsByName, log) {
   const jobs =
     gh.rest(
@@ -856,22 +903,23 @@ function readFailing(gh, repo, runId, dirsByName, log) {
   const failed = jobs.filter((j) => j.conclusion === "failure");
   const failing = [];
   const seen = new Set();
+  const silentJobs = [];
   for (const j of failed) {
-    let text = "";
+    let text = null;
     try {
-      text =
-        gh.rest(`repos/${repo}/actions/jobs/${j.id}/logs`, { raw: true }) ?? "";
+      text = gh.rest(`repos/${repo}/actions/jobs/${j.id}/logs`, { raw: true });
     } catch (e) {
       log(`::warning::${j.name}: its log could not be read (${e.message})`);
-      continue;
     }
-    for (const f of failingFiles(text, { dirsByName }))
+    const files = text == null ? [] : failingFiles(text, { dirsByName });
+    if (files.length === 0 && !JUDGE_JOBS.has(j.name)) silentJobs.push(j.name);
+    for (const f of files)
       if (!seen.has(f.file)) {
         seen.add(f.file);
         failing.push({ ...f, check: j.name });
       }
   }
-  return { failing, failedJobs: failed.map((j) => j.name) };
+  return { failing, failedJobs: failed.map((j) => j.name), silentJobs };
 }
 
 /** First-parent commits of `sha` (itself first): [[sha, subject]]. */
@@ -890,25 +938,70 @@ function firstParentLine(sh, sha, limit) {
     .map((l) => l.split("\t"));
 }
 
-/** The record check run of a commit, or null. */
-function readRecordOf(gh, repo, sha) {
+/**
+ * The record of a red commit, from a "Red main: culprit" check run whose
+ * check suite is a red-main.yml run on main (a check run posted by any other
+ * workflow, or from another branch, is not a record). Null when none.
+ */
+export function recordOf(gh, repo, sha, log = () => {}) {
   const runs =
     gh.rest(
       `repos/${repo}/commits/${sha}/check-runs?check_name=${encodeURIComponent(RECORD_CHECK)}&per_page=20`
     )?.check_runs ?? [];
   for (const r of runs) {
+    const suite = r.check_suite?.id;
+    const owner = suite
+      ? (gh.rest(`repos/${repo}/actions/runs?check_suite_id=${suite}`)
+          ?.workflow_runs ?? [])[0]
+      : null;
+    if (owner?.path !== RECORD_WORKFLOW || owner?.head_branch !== "main") {
+      log(
+        `::warning::a "${RECORD_CHECK}" check run on ${short(sha)} is not from ${RECORD_WORKFLOW} on main (${owner?.path ?? "no workflow run"} @ ${owner?.head_branch ?? "?"}): ignored`
+      );
+      continue;
+    }
     const rec = readRecord(r.output?.text);
     if (rec) return rec;
   }
   return null;
 }
 
+/**
+ * A comment posted once per (marker, merge sha). Returns the earlier marker's
+ * data when one exists (nothing posted), else null.
+ */
+function postOnce(gh, repo, n, mark, data, text, log, dryRun = false) {
+  let comments;
+  try {
+    comments = gh.rest(`repos/${repo}/issues/${n}/comments?per_page=100`) ?? [];
+  } catch (e) {
+    log(`::warning::#${n}: its comments could not be read (${e.message})`);
+    return null;
+  }
+  for (const cm of comments) {
+    const m = readMarker(cm.body, mark);
+    if (m?.merge === data.merge) return { ...m, at: m.at ?? cm.created_at };
+  }
+  const body = `<!-- ${mark} ${JSON.stringify(data)} -->\n${text}`;
+  if (dryRun) {
+    log(`#${n}: WOULD comment:\n${body}`);
+    return null;
+  }
+  try {
+    gh.rest(`repos/${repo}/issues/${n}/comments`, {
+      method: "POST",
+      body: { body },
+    });
+    log(`#${n}: commented (${mark})`);
+  } catch (e) {
+    log(`::warning::#${n}: could not post (${e.message})`);
+  }
+  return null;
+}
+
 // ── name ────────────────────────────────────────────────────────────────────
 
-/**
- * Read a red main run and decide who did it. Returns { plan, toBisect }:
- * plan = everything bisect and post need (JSON-safe).
- */
+/** Read a red main run and decide who did it: { plan, candidates, attribution, toBisect }. */
 export function nameRun({
   gh,
   sh,
@@ -926,9 +1019,15 @@ export function nameRun({
   const redSha = run.head_sha;
   const packages = workspacePackages(root);
   const dirsByName = new Map(packages.map((p) => [p.name, p.dir]));
-  const { failing, failedJobs } = readFailing(gh, repo, runId, dirsByName, log);
+  const { failing, failedJobs, silentJobs } = readFailing(
+    gh,
+    repo,
+    runId,
+    dirsByName,
+    log
+  );
   log(
-    `run ${runId} of ${short(redSha)}: failed jobs ${failedJobs.join(", ") || "none"}; ${failing.length} failing file(s)`
+    `run ${runId} of ${short(redSha)}: failed jobs ${failedJobs.join(", ") || "none"}; ${failing.length} failing file(s)${silentJobs.length ? `; silent: ${silentJobs.join(", ")}` : ""}`
   );
   const line = firstParentLine(sh, redSha, RANGE_LIMIT);
   const subject = new Map(line);
@@ -956,8 +1055,11 @@ export function nameRun({
         pr = null;
       }
     }
-    const files = pr == null ? null : prFiles(gh, repo, pr, log);
-    return { sha, pr, subject: subject.get(sha) ?? "", files };
+    const read =
+      pr == null
+        ? { files: null, migration: false }
+        : prFiles(gh, repo, pr, log);
+    return { sha, pr, subject: subject.get(sha) ?? "", ...read };
   });
   const g = loadGraph(root, isTripwire);
   const attribution = attribute(failing, candidates, { ...g, isTripwire });
@@ -974,13 +1076,21 @@ export function nameRun({
     lastGreen: range.lastGreen,
     failing,
     failedJobs,
-    candidates: candidates.map(({ sha, pr, subject }) => ({
+    silentJobs,
+    candidates: candidates.map(({ sha, pr, subject: s, migration }) => ({
       sha,
       pr,
-      subject,
+      subject: s,
+      migration,
     })),
     attribution: Object.fromEntries(attribution),
     bisect: toBisect.map((f) => f.file),
+    hints: Object.fromEntries(
+      bisectHints(
+        toBisect.map((f) => f.file),
+        attribution
+      )
+    ),
   };
   return { plan, candidates, attribution, toBisect };
 }
@@ -995,8 +1105,9 @@ export function buildFilters(actionYaml) {
 }
 
 /**
- * A probe on a real checkout: check out `sha`, install, build, then run each
- * file by its kind. Returns Map file → "pass" | "fail" | "absent" | "error".
+ * A probe on a real checkout: check out `sha`, install, build what CI builds,
+ * migrate a fresh database, then run each file by its kind. Returns Map file
+ * → "pass" | "fail" | "absent" | "error".
  */
 export function makeProbe({
   sh,
@@ -1040,7 +1151,7 @@ export function makeProbe({
     // differ from commit to commit).
     let testEnv = { ...env, NODE_ENV: "test" };
     if (files.some((f) => kindOf(f) === "test") && env.DATABASE_ADMIN_URL) {
-      const db = `probe_${sha.slice(0, 12)}`;
+      const db = `probe_${sha.slice(0, 12)}_${Date.now() % 100000}`;
       step("psql", [env.DATABASE_ADMIN_URL, "-c", `CREATE DATABASE "${db}"`]);
       testEnv = {
         ...testEnv,
@@ -1075,10 +1186,7 @@ export function makeProbe({
         r = sh(
           "pnpm",
           ["exec", "vitest", "run", ...flags, relative(cwd, join(root, file))],
-          {
-            cwd,
-            env: testEnv,
-          }
+          { cwd, env: testEnv }
         );
       } else if (kind === "lint") {
         r = sh("pnpm", ["exec", "prettier", "--check", file], {
@@ -1129,6 +1237,7 @@ export async function postVerdict({
     runUrl: plan.runUrl,
     lastGreen: plan.lastGreen,
     failing: plan.failing,
+    silentJobs: plan.silentJobs ?? [],
     candidates: plan.candidates,
     culprits: [],
     unattributed: v.unattributed,
@@ -1144,44 +1253,30 @@ export async function postVerdict({
     };
     record.culprits.push(entry);
     if (c.pr == null) continue;
-    let comments = [];
-    try {
-      comments =
-        gh.rest(`repos/${repo}/issues/${c.pr}/comments?per_page=100`) ?? [];
-    } catch (e) {
-      log(`::warning::#${c.pr}: its comments could not be read (${e.message})`);
-    }
-    const prior = comments
-      .map((cm) => ({ cm, m: readMarker(cm.body) }))
-      .find(({ m }) => m?.merge === c.sha);
+    const prior = postOnce(
+      gh,
+      repo,
+      c.pr,
+      MARK,
+      {
+        merge: c.sha,
+        red: record.redSha,
+        files: entry.namedFiles,
+        namedAt: entry.namedAt,
+      },
+      culpritComment({ record, culprit: entry, revertable: v.revertable }),
+      log,
+      dryRun
+    );
     if (prior) {
-      entry.namedAt = prior.m.namedAt ?? prior.cm.created_at;
-      entry.namedFiles = prior.m.files ?? entry.namedFiles;
+      // Named before: the grace window keeps its first start.
+      entry.namedAt = prior.namedAt ?? prior.at;
+      entry.namedFiles = prior.files ?? entry.namedFiles;
       log(`#${c.pr}: already named at ${entry.namedAt}; not posted again`);
       continue;
     }
-    const body = culpritComment({
-      record,
-      culprit: entry,
-      namedAt: entry.namedAt,
-      revertable: v.revertable,
-    });
-    if (dryRun) {
-      log(`#${c.pr}: WOULD comment:\n${body}`);
-      continue;
-    }
-    try {
-      gh.rest(`repos/${repo}/issues/${c.pr}/comments`, {
-        method: "POST",
-        body: { body },
-      });
-      log(`#${c.pr}: named as the culprit (comment posted)`);
-    } catch (e) {
-      log(
-        `::warning::#${c.pr}: the comment could not be posted (${e.message})`
-      );
-    }
-    let pr = null;
+    if (dryRun) continue;
+    let pr;
     try {
       pr = prShape(gh.rest(`repos/${repo}/pulls/${c.pr}`));
     } catch (e) {
@@ -1276,76 +1371,100 @@ export async function sweep({ gh, sh, pod, repo, now, log, token, dryRun }) {
     sorted.find(
       (r) => r.status === "completed" && r.conclusion !== "cancelled"
     ) ?? null;
-  const newerRunning = latest
+  // A newer run holds the revert only when it may BE the fix.
+  const fixRunning = latest
     ? sorted.some(
         (r) =>
-          r.status !== "completed" && at(r.created_at) > at(latest.created_at)
+          r.status !== "completed" &&
+          at(r.created_at) > at(latest.created_at) &&
+          isFixMerge(r.head_commit?.message)
       )
     : false;
-  const main = { latest, newerRunning };
+  const main = { latest, fixRunning };
   let record = null;
-  if (latest && latest.conclusion !== "success" && !newerRunning)
-    record = readRecordOf(gh, repo, latest.head_sha);
+  if (latest && latest.conclusion !== "success" && !fixRunning)
+    record = recordOf(gh, repo, latest.head_sha, log);
   const c = record?.culprits?.[0];
-  let culpritPr = null;
-  let openPrs = [];
-  let revertPrs = [];
-  let branchExists = false;
-  let owners = { ok: false, why: "not read" };
+  const input = {
+    now,
+    main,
+    record,
+    culpritPr: null,
+    onMainLine: false,
+    openPrs: [],
+    priorReverts: [],
+    branchExists: false,
+    owners: { ok: false, why: "not read" },
+    token: Boolean(token),
+  };
   if (record?.revertable && c?.pr) {
-    culpritPr = prShape(gh.rest(`repos/${repo}/pulls/${c.pr}`));
-    const all =
-      gh.rest(
+    input.culpritPr = prShape(gh.rest(`repos/${repo}/pulls/${c.pr}`));
+    const branch = revertBranch(c.pr, c.sha);
+    const owner = repo.split("/")[0];
+    input.openPrs = (
+      gh.rest(`repos/${repo}/pulls?state=open&per_page=100`) ?? []
+    ).map(prShape);
+    input.priorReverts = [
+      ...(gh.rest(
+        `repos/${repo}/pulls?state=all&head=${encodeURIComponent(`${owner}:${branch}`)}&per_page=10`
+      ) ?? []),
+      ...(gh.rest(
         `repos/${repo}/pulls?state=all&sort=created&direction=desc&per_page=100`
-      ) ?? [];
-    openPrs = all.filter((p) => p.state === "open").map(prShape);
-    revertPrs = all.map(prShape).filter((p) => REVERT_BRANCH_RE.test(p.head));
+      ) ?? []),
+    ]
+      .map(prShape)
+      .filter((p) => REVERT_BRANCH_RE.test(p.head));
     try {
-      gh.rest(`repos/${repo}/git/ref/heads/${revertBranch(c.pr, c.sha)}`);
-      branchExists = true;
+      gh.rest(`repos/${repo}/git/ref/heads/${branch}`);
+      input.branchExists = true;
     } catch (e) {
       if (!/404|Not Found/i.test(e.message)) throw e;
     }
+    if (record.lastGreen) {
+      const l = sh("git", [
+        "log",
+        "--first-parent",
+        "--format=%H",
+        `${record.lastGreen}..${latest.head_sha}`,
+      ]);
+      input.onMainLine =
+        l.code === 0 && l.out.split("\n").includes(String(c.sha));
+      if (l.code !== 0)
+        log(
+          `::warning::main's first-parent line could not be read (${l.out.trim().slice(-200)})`
+        );
+    }
     if (!pod)
-      owners = {
+      input.owners = {
         ok: false,
         why: "the pod is not configured (SYNAP_POD_URL / SYNAP_OBS_KEY / SYNAP_POD_WORKSPACE_ID)",
       };
     else
       try {
-        owners = { ok: true, sessions: await pod.activeSessions() };
+        input.owners = { ok: true, sessions: await pod.activeSessions() };
       } catch (e) {
-        owners = { ok: false, why: `the pod read failed: ${e.message}` };
+        input.owners = { ok: false, why: `the pod read failed: ${e.message}` };
       }
   }
-  const d = revertDecision({
-    now,
-    main,
-    record,
-    culpritPr,
-    openPrs,
-    revertPrs,
-    branchExists,
-    owners,
-    token: Boolean(token),
-  });
+  const d = revertDecision(input);
   log(
     `sweep: ${d.revert ? "REVERT" : "no revert"}: ${d.reasons.join("; ") || "all conditions hold"}`
   );
-  if (d.hold && culpritPr && !dryRun)
+  if (d.hold && input.culpritPr)
     postOnce(
       gh,
       repo,
-      culpritPr.number,
+      input.culpritPr.number,
       HELD_MARK,
-      c.sha,
+      { merge: c.sha },
       `The automatic revert of this merge is held: ${d.hold}. The bot does not revert while someone owns the fix (founder decision ${FOUNDER_DECISION}).`,
-      log
+      log,
+      dryRun
     );
   if (!d.revert) return d;
   if (dryRun) {
     log(
-      `WOULD revert #${culpritPr.number} (${c.sha}) on ${revertBranch(culpritPr.number, c.sha)}`
+      `WOULD revert #${input.culpritPr.number} (${c.sha}) on ${revertBranch(input.culpritPr.number, c.sha)}`
     );
     return d;
   }
@@ -1356,28 +1475,11 @@ export async function sweep({ gh, sh, pod, repo, now, log, token, dryRun }) {
     repo,
     record,
     culprit: c,
-    culpritPr,
+    culpritPr: input.culpritPr,
     token,
     log,
   });
   return d;
-}
-
-/** A comment posted once per (marker, merge sha). */
-function postOnce(gh, repo, n, mark, sha, text, log) {
-  try {
-    const comments =
-      gh.rest(`repos/${repo}/issues/${n}/comments?per_page=100`) ?? [];
-    if (comments.some((cm) => readMarker(cm.body, mark)?.merge === sha)) return;
-    gh.rest(`repos/${repo}/issues/${n}/comments`, {
-      method: "POST",
-      body: {
-        body: `<!-- ${mark} ${JSON.stringify({ merge: sha })} -->\n${text}`,
-      },
-    });
-  } catch (e) {
-    log(`::warning::#${n}: could not post (${e.message})`);
-  }
 }
 
 /** git revert on origin/main, push the revert branch (never main), open the PR. */
@@ -1393,7 +1495,7 @@ export async function openRevert({
   log,
 }) {
   const branch = revertBranch(culpritPr.number, culprit.sha);
-  if (!REVERT_BRANCH_RE.test(branch) || branch === "main")
+  if (!REVERT_BRANCH_RE.test(branch))
     throw new Error(`refusing to push ${branch}`);
   const git = (...args) => sh("git", args);
   const must = (r, what) => {
@@ -1442,7 +1544,7 @@ export async function openRevert({
       repo,
       culpritPr.number,
       CONFLICT_MARK,
-      culprit.sha,
+      { merge: culprit.sha },
       `The automatic revert of this merge conflicts with today's main, so the bot did not open it. One owner reverts or fixes it by hand (founder decision ${FOUNDER_DECISION}).`,
       log
     );
@@ -1484,8 +1586,8 @@ export async function openRevert({
     gh,
     repo,
     culpritPr.number,
-    `${MARK}-reverted`,
-    culprit.sha,
+    REVERTED_MARK,
+    { merge: culprit.sha },
     `Main stayed red on this merge's files for ${GRACE_MINUTES} min with no owner, so the bot opened #${pr?.number}, which reverts it and jumps the merge queue (founder decision ${FOUNDER_DECISION}).`,
     log
   );
@@ -1520,8 +1622,14 @@ export async function main({
   const mode = argv[0];
   const repo = env.GITHUB_REPOSITORY;
   const dryRun = env.CULPRIT_DRY_RUN === "true" || env.CULPRIT_DRY_RUN === "1";
-  const pod = podClient(env, fetchImpl);
   if (!repo) throw new Error("GITHUB_REPOSITORY is not set");
+  const out = (name, value) => {
+    if (env.GITHUB_OUTPUT)
+      appendFileSync(
+        env.GITHUB_OUTPUT,
+        `${name}<<__CULPRIT__\n${value}\n__CULPRIT__\n`
+      );
+  };
   if (mode === "name") {
     const { plan, candidates, attribution, toBisect } = nameRun({
       gh,
@@ -1534,15 +1642,18 @@ export async function main({
     });
     if (toBisect.length) {
       log(`bisect: ${toBisect.map((f) => f.file).join(", ")}`);
-      if (env.GITHUB_OUTPUT) {
-        appendFileSync(
-          env.GITHUB_OUTPUT,
-          `bisect=true\nplan<<__PLAN__\n${JSON.stringify(plan)}\n__PLAN__\n`
-        );
-      }
+      out("bisect", "true");
+      out("plan", JSON.stringify(plan));
       return { plan, bisect: true };
     }
-    const v = verdict({ failing: plan.failing, candidates, attribution });
+    const v = verdict({
+      failing: plan.failing,
+      candidates,
+      attribution,
+      lastGreen: plan.lastGreen,
+      silentJobs: plan.silentJobs,
+    });
+    const pod = podClient(env, fetchImpl);
     const record = await postVerdict({
       gh,
       pod,
@@ -1556,7 +1667,7 @@ export async function main({
     return { plan, record, bisect: false };
   }
   if (mode === "bisect") {
-    const plan = JSON.parse(env.PLAN || readFileSync(env.PLAN_FILE, "utf8"));
+    const plan = JSON.parse(env.PLAN);
     const shas = plan.candidates.map((c) => c.sha);
     const filters = buildFilters(
       readFileSync(
@@ -1566,33 +1677,41 @@ export async function main({
     );
     const kinds = new Map(plan.failing.map((f) => [f.file, f.kind]));
     const probe = makeProbe({ sh, root, log, env, filters, kinds });
-    const { results, probes } = await bisect(shas, plan.bisect, probe);
+    const { results, probes } = await bisect(shas, plan.bisect, probe, {
+      hints: new Map(Object.entries(plan.hints ?? {})),
+    });
     log(`bisect: ${probes} probe(s)`);
-    const out = { ...plan, bisected: Object.fromEntries(results), probes };
-    if (env.RESULT_FILE) writeFileSync(env.RESULT_FILE, JSON.stringify(out));
-    return out;
+    const result = { bisected: Object.fromEntries(results), probes };
+    out("result", JSON.stringify(result));
+    return result;
   }
   if (mode === "post") {
-    // The bisect's result, or the plan alone when the bisect did not finish:
+    // The plan comes from the name job (main's finder); the bisect result is
+    // checked against it. A bisect that did not finish leaves RESULT empty:
     // the verdict is then the mapping's, and says what it could not settle.
-    const res =
-      env.RESULT_FILE && existsSync(env.RESULT_FILE)
-        ? JSON.parse(readFileSync(env.RESULT_FILE, "utf8"))
-        : JSON.parse(env.PLAN || readFileSync(env.PLAN_FILE, "utf8"));
-    const attribution = new Map(Object.entries(res.attribution));
+    const plan = JSON.parse(env.PLAN);
+    let result = null;
+    try {
+      result = env.RESULT ? JSON.parse(env.RESULT) : null;
+    } catch {
+      log("::warning::the bisect result is not JSON: ignored");
+    }
     const v = verdict({
-      failing: res.failing,
-      candidates: res.candidates,
-      attribution,
-      bisected: new Map(Object.entries(res.bisected ?? {})),
+      failing: plan.failing,
+      candidates: plan.candidates,
+      attribution: new Map(Object.entries(plan.attribution)),
+      bisected: trustedBisect(plan, result),
+      lastGreen: plan.lastGreen,
+      silentJobs: plan.silentJobs,
     });
-    return postVerdict({ gh, pod, repo, plan: res, v, now, log, dryRun });
+    const pod = podClient(env, fetchImpl);
+    return postVerdict({ gh, pod, repo, plan, v, now, log, dryRun });
   }
   if (mode === "sweep")
     return sweep({
       gh,
       sh,
-      pod,
+      pod: podClient(env, fetchImpl),
       repo,
       now,
       log,
