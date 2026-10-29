@@ -854,6 +854,12 @@ describe("W2 typed ask doors", () => {
   });
 
   it("askAboutSlot: an asker that reads its own room (Claude Code) is not stood in for — no orchestrator turn", async () => {
+    // Claude Code holds its own key: that is what makes it read its own room
+    // (`resolveAgentReach` → `pull`), not an agent the pod runs.
+    await q(
+      `insert into api_keys (id, user_id, key_name, key_type) values ($1, $2, 'claude-code', 'user_pat') on conflict do nothing`,
+      ["66666666-6666-4666-8666-666666666666", EXT_AGENT]
+    );
     const { sessionId, channelId } = await seedAsk(CHOOSE, {
       askedBy: EXT_AGENT,
     });
