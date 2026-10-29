@@ -20,7 +20,7 @@ import {
   lifecycleTransitionOutbox,
   type LifecycleTransitionOutboxRow,
 } from "../../schema/lifecycle-transition-outbox.js";
-import type { StatusTransition } from "./apply-status-move.js";
+import type { AnyTransitionPayload } from "@synap-core/types/lifecycle";
 
 type Db = PostgresJsDatabase<typeof schema>;
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
@@ -33,24 +33,31 @@ export const TRANSITION_OUTBOX_MAX_BACKOFF_SECONDS = 3600;
 export const TRANSITION_OUTBOX_SWEEP_GRACE_SECONDS = 30;
 
 export interface ClaimedTransition {
-  transition: StatusTransition;
+  transition: AnyTransitionPayload;
   emitContext: Record<string, unknown>;
   eventId: string | null;
   delivered: string[];
   attempts: number;
 }
 
-/** Owe the transition's event — call inside the CAS transaction. */
+/**
+ * Owe the transitions' events — call inside the CAS transaction. Any subject
+ * (entity, goal, session); a bulk move owes one row per moved thing.
+ */
 export async function insertTransitionOutbox(
   tx: Db | Tx,
-  transition: StatusTransition,
+  transitions: AnyTransitionPayload | readonly AnyTransitionPayload[],
   emitContext: Record<string, unknown> = {}
 ): Promise<void> {
-  await tx.insert(lifecycleTransitionOutbox).values({
-    transitionId: transition.transitionId,
-    transition,
-    emitContext,
-  });
+  const list = ([] as AnyTransitionPayload[]).concat(transitions);
+  if (list.length === 0) return;
+  await tx.insert(lifecycleTransitionOutbox).values(
+    list.map((transition) => ({
+      transitionId: transition.transitionId,
+      transition,
+      emitContext,
+    }))
+  );
 }
 
 /** Take the row for one dispatch, or `null` (done, or held by another). */
@@ -80,12 +87,28 @@ export async function claimTransitionOutbox(
 
 function toClaimed(row: LifecycleTransitionOutboxRow): ClaimedTransition {
   return {
-    transition: row.transition as StatusTransition,
+    transition: withSubject(row.transition as AnyTransitionPayload),
     emitContext: (row.emitContext ?? {}) as Record<string, unknown>,
     eventId: row.eventId,
     delivered: row.delivered ?? [],
     attempts: row.attempts,
   };
+}
+
+/**
+ * A row owed before transitions named their subject (W1) is an entity move:
+ * `subjectType` / `subjectId` are filled from `entityId` on the way out.
+ */
+function withSubject(t: AnyTransitionPayload): AnyTransitionPayload {
+  if (t.subjectType) return t;
+  const legacy = t as Omit<AnyTransitionPayload, "subjectType"> & {
+    entityId: string;
+  };
+  return {
+    ...legacy,
+    subjectType: "entity",
+    subjectId: legacy.entityId,
+  } as AnyTransitionPayload;
 }
 
 /** Record a dispatch's outcome; an incomplete one backs off, keeping progress. */

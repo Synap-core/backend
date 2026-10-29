@@ -583,12 +583,18 @@ export function trackGateSubject(
     },
     async pause(metadataPatch) {
       // Through the repository (guarded `active → paused` in its WHERE), so the
-      // pause emits `track.update.completed` like every other track write.
+      // pause emits `track.update.completed` like every other track write, and
+      // owes the goal's transition — the gate's own move, the system's.
       const flipped = await (
         await trackRepository()
       ).transitionStatus(
         params.trackId,
-        { from: "active", to: "paused", metadataPatch },
+        {
+          from: "active",
+          to: "paused",
+          metadataPatch,
+          actor: { kind: "system", userId: params.userId },
+        },
         params.userId
       );
       return flipped !== null;

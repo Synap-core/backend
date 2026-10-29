@@ -63,22 +63,30 @@ export function findLifecycleOption(
 }
 
 /**
- * The payload of `entity.transition.completed` — the ONE event every status
- * move emits (the `moveStatus` door). `role` is the role-profile slug when the
- * status is a role's (stored on the facet), null for the kind's own lifecycle.
+ * What a transition is ABOUT. An entity (a kind's lifecycle, or a role's on
+ * its facet) moves through the `moveStatus` door; a goal (`project_tracks`)
+ * through its own compare-and-set; a focus session through `setSessionStatus`.
+ * All three write the SAME shape below, through the same outbox.
  */
-export interface LifecycleTransitionPayload {
+export type TransitionSubjectType = "entity" | "track" | "focus_session";
+
+/**
+ * ONE TRANSITION SHAPE (status-flow plan W1): what every status move carries,
+ * whatever moved. Emitted as `<subjectType>.transition.completed`
+ * (`entity.transition.completed`, `track.…`, `focus_session.…`).
+ */
+export interface TransitionBase {
   transitionId: string;
-  entityId: string;
-  profileSlug: string | null;
-  role: string | null;
-  facetId: string | null;
+  subjectType: TransitionSubjectType;
+  subjectId: string;
+  /** The status property (`status` for a goal or a session). */
   property: string;
   from: string | null;
   to: string;
   fromCategory: LifecycleCategory | null;
   category: LifecycleCategory;
   actorKind: "human" | "agent" | "system";
+  /** The person the move is attributed to (the owner of an agent's move). */
   userId: string;
   agentUserId: string | null;
   sessionId: string | null;
@@ -86,7 +94,39 @@ export interface LifecycleTransitionPayload {
   /** A person moved it from a value they had not seen ("moved meanwhile"). */
   staleExpected: boolean;
   proposalId: string | null;
+  /** The lens the move happened in. */
+  workspaceId: string | null;
 }
+
+/**
+ * The payload of `entity.transition.completed` — the ONE event every entity
+ * status move emits (the `moveStatus` door). `role` is the role-profile slug
+ * when the status is a role's (stored on the facet), null for the kind's own
+ * lifecycle. `subjectId` is the entity.
+ */
+export interface LifecycleTransitionPayload extends TransitionBase {
+  subjectType: "entity";
+  entityId: string;
+  profileSlug: string | null;
+  role: string | null;
+  facetId: string | null;
+}
+
+/**
+ * The payload of `track.transition.completed` / `focus_session.transition.
+ * completed`: a goal's or a session's status moved. `subjectId` is the goal or
+ * the session; `projectId` / `trackId` say where it sits (a goal's `trackId`
+ * is itself).
+ */
+export interface WorkUnitTransitionPayload extends TransitionBase {
+  subjectType: "track" | "focus_session";
+  projectId: string | null;
+  trackId: string | null;
+}
+
+/** Any transition, discriminated on `subjectType`. */
+export type AnyTransitionPayload =
+  LifecycleTransitionPayload | WorkUnitTransitionPayload;
 
 export {
   STEP_POSITIONS,

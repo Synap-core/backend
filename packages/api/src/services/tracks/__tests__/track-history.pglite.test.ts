@@ -146,6 +146,7 @@ import {
   focusSessions,
   playbooks,
   projects,
+  lifecycleTransitionOutbox,
   proposals,
   workspaces,
   workspaceMembers,
@@ -232,6 +233,8 @@ beforeAll(async () => {
     links,
     playbooks,
     projects,
+    // A goal's status flip owes its transition here (status-flow W1).
+    lifecycleTransitionOutbox,
     sessionEvaluations,
     podMembers,
     projectMembers,

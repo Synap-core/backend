@@ -129,6 +129,25 @@ export const OperationalEventTypes = {
       "Fires when a focus session advances to a different playbook stage.",
     filterKeys: ["toStage", "fromStage", "playbookId"],
   },
+  // A session's status moved — every writer goes through `setSessionStatus`
+  // (@synap/database), which owes this in the same transaction (status-flow
+  // W2). The same shape as the entity transition, subject = the session.
+  FOCUS_SESSION_TRANSITIONED: {
+    type: "focus_session.transition.completed",
+    label: "Session status changed",
+    domain: "Focus sessions",
+    description:
+      "Fires when a focus session's status moves (active, paused, stale, closed…).",
+    filterKeys: [
+      "from",
+      "to",
+      "fromCategory",
+      "category",
+      "actorKind",
+      "projectId",
+      "trackId",
+    ],
+  },
 
   // ── Tracks (a method running inside a project, 0272) ──────────────────────
   // Emitted as `track.stage_changed` (action="stage_changed") by the track's
@@ -143,6 +162,25 @@ export const OperationalEventTypes = {
     description:
       "Fires when a project's track (a method it runs) moves to a different stage.",
     filterKeys: ["toStage", "fromStage", "playbookId", "projectId", "trackId"],
+  },
+  // A goal's status moved — `TrackRepository.transitionStatus`, its one
+  // compare-and-set, owes this in the same transaction (status-flow W1),
+  // beside the `track.update.completed` receipt every track write keeps.
+  TRACK_TRANSITIONED: {
+    type: "track.transition.completed",
+    label: "Goal status changed",
+    domain: "Tracks",
+    description:
+      "Fires when a project's goal (a track) moves status (active, paused, completed…).",
+    filterKeys: [
+      "from",
+      "to",
+      "fromCategory",
+      "category",
+      "actorKind",
+      "projectId",
+      "trackId",
+    ],
   },
 
   // ── Proposal governance ──────────────────────────────────────────────────

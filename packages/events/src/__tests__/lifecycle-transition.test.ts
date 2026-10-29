@@ -69,6 +69,10 @@ import {
   toBackendTrigger,
 } from "@synap-core/types/automations";
 import { evaluateTriggerFilterValue } from "@synap-core/types/automations/filter-operators";
+import type {
+  LifecycleTransitionPayload,
+  WorkUnitTransitionPayload,
+} from "@synap-core/types/lifecycle";
 
 /** The matcher's rule: every filter key evaluates true against the payload. */
 function firesOn(
@@ -92,8 +96,10 @@ function firesOn(
   );
 }
 
-const T = {
+const T: LifecycleTransitionPayload = {
   transitionId: "t1",
+  subjectType: "entity",
+  subjectId: "e1",
   entityId: "e1",
   profileSlug: "deal",
   role: null as string | null,
@@ -103,7 +109,7 @@ const T = {
   to: "negotiating",
   fromCategory: "open",
   category: "active",
-  actorKind: "agent" as const,
+  actorKind: "agent",
   userId: "u1",
   agentUserId: "a1",
   sessionId: null,
@@ -111,6 +117,28 @@ const T = {
   staleExpected: false,
   proposalId: null,
   workspaceId: "w1",
+};
+
+/** A goal's move, in the same shape (status-flow W1). */
+const G: WorkUnitTransitionPayload = {
+  transitionId: "g1",
+  subjectType: "track",
+  subjectId: "tr1",
+  property: "status",
+  from: "active",
+  to: "paused",
+  fromCategory: "active",
+  category: "paused",
+  actorKind: "system",
+  userId: "u1",
+  agentUserId: null,
+  sessionId: null,
+  reason: null,
+  staleExpected: false,
+  proposalId: null,
+  workspaceId: "w1",
+  projectId: "p1",
+  trackId: "tr1",
 };
 
 beforeEach(() => {
@@ -146,6 +174,36 @@ describe("emitLifecycleTransition", () => {
         commercialStage: "negotiating",
       },
     });
+  });
+
+  it("goal and session: their own event type and subject, the transition fan-out alone", async () => {
+    for (const [subjectType, type] of [
+      ["track", "track.transition.completed"],
+      ["focus_session", "focus_session.transition.completed"],
+    ] as const) {
+      h.appended = [];
+      h.emitted = [];
+      await emitLifecycleTransition({ ...G, subjectType });
+      expect(h.appended).toHaveLength(1);
+      expect(h.appended[0]).toMatchObject({
+        id: "g1",
+        type,
+        subjectType,
+        subjectId: "tr1",
+        source: "system",
+      });
+      expect(h.emitted).toHaveLength(1);
+      expect(h.emitted[0]).toMatchObject({
+        subjectType,
+        action: "transition",
+        subjectId: "tr1",
+        workspaceId: "w1",
+        eventId: "g1",
+        data: { to: "paused", category: "paused", projectId: "p1" },
+      });
+      // No profile, no back-compat entity update.
+      expect(h.emitted[0].data).not.toHaveProperty("lifecycleProfile");
+    }
   });
 
   it("role: no back-compat update fan-out", async () => {

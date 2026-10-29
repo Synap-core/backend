@@ -381,6 +381,9 @@ export function registerTrackExecutors(): void {
           from: "paused",
           to: "active",
           dropMetadataKey: CHECK_GATE_METADATA_KEY,
+          // The approver resumes it; the transition names the proposal.
+          actor: { kind: "human", userId },
+          proposalId: proposal.id,
         },
         userId
       );
