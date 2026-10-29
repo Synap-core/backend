@@ -3,13 +3,18 @@
  * off the ONE trigger hop (`automation-trigger-match`), with no new queue:
  *
  *  1. SUBJECT → RUN (stage follows status). When a subject entity's
- *     `statusProperty` CHANGES (`entity.update.completed` carries
- *     `changed.<k>` + the new value + `previous.<k>`), every OPEN session whose
+ *     `statusProperty` CHANGES, every OPEN session whose
  *     subject is that entity and whose playbook has a stage declaring that
  *     `subjectStatus` is advanced to it — through the ONE advance door
  *     (`advanceSessionStageViaSlot` → api `advanceSessionStage`), so the gate,
  *     the `stage_changed` emit and the forward status write all run exactly as
- *     for any other advance.
+ *     for any other advance. The change arrives as ONE of two events:
+ *       - a declared lifecycle (kind or role) moves through the status door,
+ *         whose event is the TRANSITION (`entity.transition.completed`);
+ *       - any other property arrives as `entity.update.completed` with
+ *         `changed.<k>` + the new value + `previous.<k>`. The update the
+ *         status door still dual-emits for a kind's move is skipped
+ *         (`isDualEmittedStatusUpdate`): its transition is followed, once.
  *
  *     LOOP GUARD — the subject is the source of truth on this path, so:
  *       - the follow re-reads the subject's CURRENT value and acts only when it
@@ -88,8 +93,8 @@ import {
   STAGE_GATE_PROPOSAL_TYPES,
 } from "@synap/playbooks";
 import {
-  DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS,
   LIFECYCLE_TRANSITION_EVENT_TYPE,
+  isDualEmittedStatusUpdate,
 } from "@synap/events";
 import { advanceSessionStageViaSlot } from "./stage-advance.js";
 import { loadSessionProcess } from "./session-process.js";
@@ -148,6 +153,8 @@ export async function syncProcessOnEvent(
   ev: ProcessSyncEvent
 ): Promise<ProcessSyncOutcome[]> {
   if (ev.eventType === "entity.update.completed") {
+    // A status move is followed on its transition (below), never twice.
+    if (isDualEmittedStatusUpdate(ev.data)) return [];
     return followSubjectStatus(ev);
   }
   if (ev.eventType === LIFECYCLE_TRANSITION_EVENT_TYPE) {
@@ -170,14 +177,9 @@ export async function syncProcessOnEvent(
 
 /**
  * The ONE transition event (`entity.transition.completed`, work model L2) —
- * the status door's own fact: property, from, to, role. A ROLE's status lives
- * on its facet, so its stale check reads the facet row; the entity-update path
- * could never see it (enters/follow were blind to roles).
- *
- * A KIND's transition is followed here only once the status door stops
- * dual-emitting the legacy `entity.update` (`DUAL_EMIT_ENTITY_UPDATE_FOR_
- * TRANSITIONS`); until then the update path above follows it, and following
- * both would advance twice.
+ * the status door's own fact: property, from, to, role. A KIND's status is
+ * re-read from the entity's properties (its read projection); a ROLE's lives
+ * on its facet, so its stale check reads the facet row.
  */
 async function followTransition(
   ev: ProcessSyncEvent
@@ -187,7 +189,6 @@ async function followTransition(
   const role = typeof data.role === "string" ? data.role : null;
   const facetId = typeof data.facetId === "string" ? data.facetId : null;
   if (!property) return [];
-  if (role === null && DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS) return [];
   return followSubjectStatus(
     {
       ...ev,

@@ -121,8 +121,11 @@ vi.mock("@synap/database", () => ({
   },
 }));
 vi.mock("@synap/events", () => ({
-  DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS: true,
   LIFECYCLE_TRANSITION_EVENT_TYPE: "entity.transition.completed",
+  // The real rule (lifecycle-transition.ts); its emitter test pins that the
+  // dual-emitted update satisfies it.
+  isDualEmittedStatusUpdate: (d: Record<string, unknown> | null | undefined) =>
+    typeof d?.transitionId === "string",
 }));
 vi.mock("@synap-core/core", () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -444,12 +447,42 @@ describe("the transition event (work model L2) → run stage", () => {
     expect(out).toEqual([]);
   });
 
-  it("a KIND's transition is left to the dual-emitted update event (no double follow)", async () => {
+  // W7: a KIND's move is followed on its transition, and the update the
+  // status door still dual-emits for it is skipped — once, not twice, not never.
+  it("a KIND's transition follows, reading the kind's status from its properties", async () => {
     h.sessions = [session("schedule")];
     h.subject = { "post-status": "published" };
     const out = await syncProcessOnEvent(transition({ role: null }));
-    expect(out).toEqual([]);
+    expect(h.advances).toEqual([
+      expect.objectContaining({ toStage: "publish", skipSubjectWrite: true }),
+    ]);
+    expect(out[0]).toMatchObject({ kind: "followed", toStage: "publish" });
+  });
+
+  it("one KIND move = its transition + the dual-emitted update ⇒ exactly ONE advance", async () => {
+    h.sessions = [session("schedule")];
+    h.subject = { "post-status": "published" };
+    // The two events the status door fans out for one move, in emit order.
+    await syncProcessOnEvent(transition({ role: null, transitionId: "tr-9" }));
+    // The recorder door leaves the run at `schedule`, so an update that were
+    // followed too would advance it a SECOND time.
+    const fromUpdate = await syncProcessOnEvent({
+      ...statusEvent("published", "scheduled"),
+      data: {
+        ...statusEvent("published", "scheduled").data,
+        transitionId: "tr-9",
+      },
+    });
+    expect(fromUpdate).toEqual([]);
+    expect(h.advances.map((a) => a.toStage)).toEqual(["publish"]);
+  });
+
+  it("a stale KIND transition (the entity moved on) is ignored", async () => {
+    h.sessions = [session("schedule")];
+    h.subject = { "post-status": "drafting" };
+    const out = await syncProcessOnEvent(transition({ role: null }));
     expect(h.advances).toEqual([]);
+    expect(out[0]).toMatchObject({ kind: "ignored", reason: "stale_event" });
   });
 });
 
@@ -555,13 +588,15 @@ describe("worker targets (work model L4/L5): a move settles the thing in each wo
     expect(again.filter((o) => o.kind === "target_settled")).toEqual([]);
   });
 
-  it("the subject-follow is untouched: no worker targets ⇒ the transition does what it did", async () => {
-    // A KIND's transition is left to the dual-emitted update (see above);
-    // the settle half adds nothing when no session targets the thing.
+  it("the subject-follow is untouched: no worker targets ⇒ the transition only follows", async () => {
+    // The settle half adds nothing when no session targets the thing.
     h.sessions = [session("schedule")];
+    h.subject = { "post-status": "published" };
     const out = await syncProcessOnEvent(move());
-    expect(out).toEqual([]);
-    expect(h.advances).toEqual([]);
+    expect(out).toEqual([
+      expect.objectContaining({ kind: "followed", toStage: "publish" }),
+    ]);
+    expect(h.advances).toHaveLength(1);
   });
 });
 

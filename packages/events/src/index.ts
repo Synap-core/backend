@@ -77,7 +77,7 @@ export {
   dispatchDueLifecycleTransitions,
   LIFECYCLE_TRANSITION_EVENT_TYPE,
   TRANSITION_EVENT_TYPES,
-  DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS,
+  isDualEmittedStatusUpdate,
   type LifecycleTransitionEvent,
   type TransitionEmitContext,
 } from "./lifecycle-transition.js";

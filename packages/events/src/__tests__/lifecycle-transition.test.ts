@@ -23,19 +23,19 @@ vi.mock("@synap/database", async () => ({
       "@synap/database/pg-errors"
     )
   ).isUniqueViolation,
-  sql: {},
   db: {},
   claimTransitionOutbox: h.claim,
   settleTransitionOutbox: async (_db: unknown, id: string, r: unknown) => {
     h.settled.push({ id, ...(r as object) });
   },
   listDueTransitions: async () => [],
-  EventRepository: class {
+  // The SHARED repository — the one whose hooks push to realtime (W7).
+  eventRepository: {
     async append(e: { id: string }) {
       if (h.appendError) throw h.appendError;
       h.appended.push(e);
       return { id: e.id };
-    }
+    },
   },
 }));
 vi.mock("@synap-core/core", () => ({
@@ -63,6 +63,7 @@ vi.mock("../side-effects.js", () => ({
 import {
   dispatchLifecycleTransition,
   emitLifecycleTransition,
+  isDualEmittedStatusUpdate,
 } from "../lifecycle-transition.js";
 import {
   playbookActivatorSentence,
@@ -174,6 +175,21 @@ describe("emitLifecycleTransition", () => {
         commercialStage: "negotiating",
       },
     });
+  });
+
+  // W7: consumers that follow the transition skip the dual-emitted update by
+  // this rule; an ordinary entities.update payload never matches it.
+  it("the dual-emitted update is recognisable as such; an ordinary update is not", async () => {
+    await emitLifecycleTransition(T);
+    expect(isDualEmittedStatusUpdate(h.emitted[1].data)).toBe(true);
+    expect(
+      isDualEmittedStatusUpdate({
+        profileSlug: "deal",
+        changedKeys: ["amount"],
+        "changed.amount": true,
+        amount: 3,
+      })
+    ).toBe(false);
   });
 
   it("goal and session: their own event type and subject, the transition fan-out alone", async () => {

@@ -339,6 +339,74 @@ describe("a proposed decision asks the person (W3)", () => {
     expect(slot!.retiredAt).toBeTruthy();
   });
 
+  // W7: a decision's status MOVE arrives on the status door's transition;
+  // the update the door still dual-emits for it is not seen a second time.
+  const move = (
+    id: string,
+    from: string,
+    to: string,
+    role: string | null = null
+  ) => ({
+    subjectType: "entity",
+    action: "transition",
+    subjectId: id,
+    userId: OWNER,
+    data: {
+      transitionId: `t-${id}-${to}`,
+      entityId: id,
+      profileSlug: "decision",
+      role,
+      lifecycleProfile: role ?? "decision",
+      property: "decisionStatus",
+      from,
+      to,
+    },
+  });
+  const dualUpdate = (id: string, from: string, to: string) => ({
+    subjectType: "entity",
+    action: "update",
+    subjectId: id,
+    userId: OWNER,
+    data: {
+      profileSlug: "decision",
+      transitionId: `t-${id}-${to}`,
+      changedKeys: ["decisionStatus"],
+      "changed.decisionStatus": true,
+      "previous.decisionStatus": from,
+      decisionStatus: to,
+    },
+  });
+
+  it("a MOVE into proposed asks on its transition; the move's dual-emitted update is not matched", async () => {
+    const sid = await session();
+    const id = await decision({ decisionStatus: "accepted" });
+    await setProps(id, { decisionStatus: "proposed" });
+    const tr = { ...move(id, "accepted", "proposed"), sessionId: sid };
+    expect(decisionAskReactor.match!(tr)).toBe(true);
+    await decisionAskReactor.handler(tr, { boss: {} as never });
+    expect(await slotsCarrying(id)).toHaveLength(1);
+    expect(
+      decisionAskReactor.match!(dualUpdate(id, "accepted", "proposed"))
+    ).toBe(false);
+  });
+
+  it("a MOVE out of proposed retires the ask on its transition", async () => {
+    const sid = await session();
+    const id = await decision({ decisionStatus: "proposed" });
+    await fire(id, "create", sid);
+    await setProps(id, { decisionStatus: "rejected" });
+    const tr = move(id, "proposed", "rejected");
+    expect(decisionAskReactor.match!(tr)).toBe(true);
+    await decisionAskReactor.handler(tr, { boss: {} as never });
+    const [slot] = await slotsCarrying(id);
+    expect(slot).toMatchObject({ retiredReason: "decision_resolved" });
+  });
+
+  it("a ROLE's move on a decision entity is not the decision's own move", () => {
+    const id = randomUUID();
+    expect(decisionAskReactor.match!(move(id, "a", "b", "client"))).toBe(false);
+  });
+
   it("a non-decision entity is ignored by match", () => {
     expect(
       decisionAskReactor.match!({

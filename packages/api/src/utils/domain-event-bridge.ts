@@ -9,6 +9,9 @@
  * Event type mapping (backend eventType → Socket.IO event name):
  * - entity.*.completed → entity:created | entity:updated | entity:deleted
  *   (entity.restore.completed → entity:updated)
+ * - entity.transition.completed → entity:updated (a status move — the status
+ *   door's one event; `lifecycle-transition.ts` appends it through the hooked
+ *   repository, once per move)
  * - view.*.completed → view:created | view:updated | view:deleted
  * - workspaces.update.completed → workspace:updated
  * - relation.*.completed → relation:created | relation:updated | relation:deleted
@@ -69,6 +72,12 @@ function mapToSocketEvent(
     // `entities.restore` clears `deletedAt`: the row changed and is listed
     // again, which clients read as an update of that entity.
     "entity.restore.completed": {
+      event: EventNames.ENTITY_UPDATED,
+      workspaceIdRequired: false,
+    },
+    // A status move (kind or role) changes the entity clients show. Goals'
+    // and sessions' transitions are not bridged: no client listens for them.
+    "entity.transition.completed": {
       event: EventNames.ENTITY_UPDATED,
       workspaceIdRequired: false,
     },
@@ -219,7 +228,9 @@ export function emitDomainEventToRealtime(event: EventRecord): void {
 
   const eventData = event.eventType.startsWith("workspaces.")
     ? projectWorkspaceRealtimeData(event.data)
-    : event.data;
+    : event.eventType === "entity.transition.completed"
+      ? projectTransitionRealtimeData(event)
+      : event.data;
   const payloadData = {
     ...eventData,
     subjectId: event.subjectId,
@@ -282,6 +293,23 @@ export function postToBridge(body: string, ctx: Record<string, unknown>): void {
         "Domain event bridge: failed to emit to realtime"
       );
     });
+}
+
+/**
+ * A status move as the `entity:updated` payload the realtime bridge validates
+ * (`entityUpdatedSchema`, @synap/events): the transition plus `changes` (the
+ * moved property), `updatedBy` (the actor) and `updatedAt`.
+ */
+function projectTransitionRealtimeData(
+  event: EventRecord
+): Record<string, unknown> {
+  const t = event.data;
+  return {
+    ...t,
+    changes: { [String(t.property)]: t.to },
+    updatedBy: (t.agentUserId as string | null) ?? event.userId,
+    updatedAt: new Date(event.timestamp).toISOString(),
+  };
 }
 
 /**
