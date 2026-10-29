@@ -347,7 +347,7 @@ export function decide({
   const tierFields = (t) => ({
     suites: t.scope !== "none",
     scope: t.scope,
-    selection: t.scope === "selected" ? (t.selection ?? null) : null,
+    selection: t.selection ?? null,
     e2e: t.e2e,
     why: t.why,
   });
@@ -496,7 +496,7 @@ export function summary(d, files) {
         : d.reuse
           ? "reused"
           : d.scope === "full"
-            ? "runs: everything"
+            ? `runs: everything${d.selection ? ` (${d.selection.tests.length} test files in ${d.selection.shards} cost-sized shard(s))` : " (4 shards)"}`
             : d.scope === "selected"
               ? `runs: ${d.selection?.tests.length ?? "?"} selected test file(s) (every tripwire included) in ${d.selection?.shards ?? "?"} shard(s)`
               : "not affected",
@@ -667,8 +667,12 @@ function baselineAt(sha) {
 }
 
 // The tier function over this checkout's graph, or null when the graph cannot
-// be read (decide() then runs the full suite). A selection comes with its
-// shard plan (scripts/test-ratchet-shards.mjs planSelection).
+// be read (decide() then runs the full suite on the 4-shard plan). A selection
+// comes with its shard plan (scripts/test-ratchet-shards.mjs planSelection).
+// So does a PR's FULL tier (lead decision, 29 Oct): every test file, planned
+// by cost in up to 8 shards, judged with the full mode's floors (`full`).
+// Main pushes and the merge queue never reach this function: they keep the
+// 4-shard plan.
 function tierOfCheckout(baseSha) {
   try {
     const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -680,29 +684,47 @@ function tierOfCheckout(baseSha) {
         countByDir[ownerDir(f)] = (countByDir[ownerDir(f)] ?? 0) + 1;
     const plan = loadShardPlan();
     const baseBaseline = baselineAt(baseSha);
-    return (files) => {
-      const t = selectTier(files, g, { baseBaseline });
-      if (t.scope !== "selected") return t;
-      return {
-        ...t,
-        selection: planSelection({
-          tests: t.tests,
-          suiteDirs: suites,
-          isTripwire,
-          plan,
-          countByDir,
-        }),
-      };
-    };
+    const everyTest = g.imports.files.filter((f) => TEST_FILE.test(f));
+    return (files) =>
+      withPlan(selectTier(files, g, { baseBaseline }), {
+        everyTest,
+        suiteDirs: suites,
+        plan,
+        countByDir,
+      });
   } catch (err) {
     console.log(`dependency graph unreadable (${err.message}): full suite`);
     return null;
   }
 }
 
-/** The shard matrix of a decision: a selection's own count, else the plan's 4. */
+/**
+ * A PR tier with its shard plan: a selection plans its files; the full tier
+ * plans `everyTest` (marked `full`, so the judge keeps the full mode's
+ * floors). `ctx` = { everyTest, suiteDirs, plan, countByDir }.
+ */
+export function withPlan(t, ctx) {
+  if (t.scope !== "selected" && t.scope !== "full") return t;
+  const full = t.scope === "full";
+  return {
+    ...t,
+    selection: planSelection({
+      tests: full ? ctx.everyTest : t.tests,
+      suiteDirs: ctx.suiteDirs,
+      isTripwire,
+      plan: ctx.plan,
+      countByDir: ctx.countByDir,
+      full,
+    }),
+  };
+}
+
+/**
+ * The shard matrix of a decision: a selection's own count (a PR's selected or
+ * full tier), else the committed plan's 4 (main, the merge queue, fail-safe).
+ */
 export function shardMatrix(d) {
-  const n = d.scope === "selected" && d.selection ? d.selection.shards : 4;
+  const n = d.selection ? d.selection.shards : 4;
   return Array.from({ length: n }, (_, i) => i + 1);
 }
 
@@ -745,6 +767,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     `shards=${JSON.stringify(shardMatrix(d))}`,
     `shard_count=${shardMatrix(d).length}`,
     `selected=${d.selection?.tests.length ?? ""}`,
+    `select=${!!d.selection}`,
     `e2e=${d.e2e}`,
     `negctl=${d.negctl}`,
     `negctl_tests=${d.negctlTests.join(" ")}`,

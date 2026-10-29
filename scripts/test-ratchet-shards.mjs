@@ -262,6 +262,7 @@ export function planSelection({
   countByDir = {},
   budgetSeconds = SELECTION_BUDGET_SECONDS,
   maxShards = SELECTION_MAX_SHARDS,
+  full = false,
 }) {
   const suites = new Set(suiteDirs);
   const cost = fileCost(plan, countByDir);
@@ -317,6 +318,8 @@ export function planSelection({
   });
   return {
     version: 1,
+    // A PR's full tier as a plan: the judge applies the full mode's floors.
+    ...(full ? { full: true } : {}),
     shards,
     budgetSeconds,
     predictedSeconds: load.map((s) => Math.round(s)),

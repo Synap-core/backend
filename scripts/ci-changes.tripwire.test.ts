@@ -30,7 +30,6 @@ import {
   SELECTION_MAX_SHARDS,
   loadShardPlan,
   ownerDir,
-  planSelection,
   selectionProblems,
   // @ts-expect-error — plain ESM script, no declarations
 } from "./test-ratchet-shards.mjs";
@@ -46,6 +45,7 @@ import {
   changedFiles,
   reusableRun,
   shardMatrix,
+  withPlan,
   suitesPassed,
   summary,
   // @ts-expect-error — plain ESM script, no declarations
@@ -65,21 +65,17 @@ const allSuiteTests = (graph.imports.files as string[]).filter(
   (f) => TEST_FILE.test(f) && (isTripwire(f) || SUITES.includes(ownerDir(f)))
 );
 const shardPlan = loadShardPlan();
-const tier = (files: string[]) => {
-  const t = selectTier(files, graph);
-  return t.scope === "selected"
-    ? {
-        ...t,
-        selection: planSelection({
-          tests: t.tests,
-          suiteDirs: SUITES,
-          isTripwire,
-          plan: shardPlan,
-          countByDir,
-        }),
-      }
-    : t;
-};
+const everyTest = (graph.imports.files as string[]).filter((f) =>
+  TEST_FILE.test(f)
+);
+// The production wrapper (ci-changes.mjs withPlan), not a copy of it.
+const tier = (files: string[]) =>
+  withPlan(selectTier(files, graph), {
+    everyTest,
+    suiteDirs: SUITES,
+    plan: shardPlan,
+    countByDir,
+  });
 const pr = (files: string[] | null, extra = {}) =>
   decide({
     event: "pull_request",
@@ -549,6 +545,13 @@ describe("ci-changes: the PR tier on the real graph", () => {
     ]) {
       const d = pr([f]);
       expect([d.scope, d.suites, d.e2e], f).toEqual(["full", true, true]);
+      // Every test file, planned by cost (lead decision, 29 Oct): more than
+      // the main plan's 4 shards, never more than the cap.
+      expect(d.selection?.full, f).toBe(true);
+      expect(shardMatrix(d).length, f).toBeGreaterThan(4);
+      expect(shardMatrix(d).length, f).toBeLessThanOrEqual(
+        SELECTION_MAX_SHARDS
+      );
     }
     // The control: a narrowed script beside them is not full on its own.
     expect(pr(["scripts/pod-observation.mjs"]).scope).toBe("selected");
@@ -669,7 +672,24 @@ describe("ci-changes: the PR tier on the real graph", () => {
       expect(selectionProblems(d.selection, graph.tripwires)).toEqual([]);
     }
     expect(shardMatrix(small)).toEqual([1]);
-    expect(shardMatrix(pr(["package.json"]))).toEqual([1, 2, 3, 4]);
+    // A full PR: every test file in up to 8 cost-sized shards. A push to
+    // main keeps the committed 4-shard plan, whatever it changed.
+    const full = pr(["package.json"]);
+    expect(full.selection?.tests.length).toBe(
+      full.selection!.runs.flatMap((r: { files: string[] }) => r.files).length
+    );
+    expect(full.selection!.tests).toEqual(
+      expect.arrayContaining(allSuiteTests)
+    );
+    expect(shardMatrix(full)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    const pushed = decide({
+      event: "push",
+      files: ["package.json"],
+      siblingTests: none,
+      tier,
+    });
+    expect([pushed.scope, pushed.selection]).toEqual(["full", null]);
+    expect(shardMatrix(pushed)).toEqual([1, 2, 3, 4]);
   });
 });
 
@@ -973,6 +993,8 @@ describe("ci-changes: the merge queue", () => {
       true,
     ]);
     expect(d.selection).toBeNull();
+    // ... on the merge queue's 4-shard plan, never a cost-sized one.
+    expect(shardMatrix(d)).toEqual([1, 2, 3, 4]);
     expect(d.reason).toContain("on the tree it will land");
   });
 
@@ -1272,6 +1294,7 @@ describe("ci-changes: holds never read as passed", () => {
       "shards",
       "shard_count",
       "selected",
+      "select",
       "e2e",
       "reason",
     ])
@@ -1283,7 +1306,12 @@ describe("ci-changes: holds never read as passed", () => {
     // An empty diff selects every tripwire, in one shard, written to the file
     // the shards and the judge read; a draft writes none.
     expect(ready.out).toEqual(
-      expect.arrayContaining(["scope=selected", "shards=[1]", "shard_count=1"])
+      expect.arrayContaining([
+        "scope=selected",
+        "shards=[1]",
+        "shard_count=1",
+        "select=true",
+      ])
     );
     expect(ready.selection?.shards).toBe(1);
     expect(selectionProblems(ready.selection, graph.tripwires)).toEqual([]);
@@ -1375,7 +1403,7 @@ describe("ci.yml: every required check runs, and passes a skipped tier only out 
     const shard = jobs.find((j) => j.id === "full-suite-shard");
     const judge = jobs.find((j) => j.name === "Full suite");
     const SELECT =
-      "TEST_RATCHET_SELECT: ${{ needs.changes.result == 'success' && needs.changes.outputs.scope == 'selected' && format('{0}/selection/selection.json', runner.temp) || '' }}";
+      "TEST_RATCHET_SELECT: ${{ needs.changes.result == 'success' && needs.changes.outputs.select == 'true' && format('{0}/selection/selection.json', runner.temp) || '' }}";
     const COUNT =
       "${{ needs.changes.result == 'success' && needs.changes.outputs.shard_count || 4 }}";
     for (const j of [shard, judge]) {
@@ -1398,6 +1426,7 @@ describe("ci.yml: every required check runs, and passes a skipped tier only out 
       "shards",
       "shard_count",
       "selected",
+      "select",
       "e2e",
       "reason",
     ])

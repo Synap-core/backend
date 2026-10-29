@@ -109,6 +109,7 @@ jobs:
       shards: ${{ steps.decide.outputs.shards }}
       shard_count: ${{ steps.decide.outputs.shard_count }}
       selected: ${{ steps.decide.outputs.selected }}
+      select: ${{ steps.decide.outputs.select }}
       e2e: ${{ steps.decide.outputs.e2e }}
       reason: ${{ steps.decide.outputs.reason }}
       negctl: ${{ steps.decide.outputs.negctl }}
@@ -147,11 +148,11 @@ jobs:
           SELECTION_OUT: ${{ runner.temp }}/selection/selection.json
         run: node scripts/ci-changes.mjs
 
-      # scope=selected: the plan the shards and the judge read (which test
-      # files, in which shard, under which report id). One file for all of
-      # them, so they cannot disagree; a missing one fails them.
+      # A PR's selected or full tier: the plan the shards and the judge read
+      # (which test files, in which shard, under which report id). One file
+      # for all of them, so they cannot disagree; a missing one fails them.
       - name: Upload the test selection
-        if: ${{ steps.decide.outputs.scope == 'selected' }}
+        if: ${{ steps.decide.outputs.select == 'true' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: selection
@@ -645,7 +646,7 @@ jobs:
       # the import graph, and every tripwire). No selection = everything (a
       # push to main, a full PR, or `changes` failed).
       - name: Collect the test selection
-        if: ${{ needs.changes.result == 'success' && needs.changes.outputs.scope == 'selected' }}
+        if: ${{ needs.changes.result == 'success' && needs.changes.outputs.select == 'true' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: selection
@@ -658,7 +659,7 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
           NODE_ENV: test
           TEST_RATCHET_CONCURRENCY: "2"
-          TEST_RATCHET_SELECT: ${{ needs.changes.result == 'success' && needs.changes.outputs.scope == 'selected' && format('{0}/selection/selection.json', runner.temp) || '' }}
+          TEST_RATCHET_SELECT: ${{ needs.changes.result == 'success' && needs.changes.outputs.select == 'true' && format('{0}/selection/selection.json', runner.temp) || '' }}
 
       - name: Security Audit
         if: ${{ !cancelled() && matrix.shard == 1 }}
@@ -756,7 +757,7 @@ jobs:
 
       # The selection the shards ran (scope=selected), judged from the same file.
       - name: Collect the test selection
-        if: ${{ env.RUN_WORK == 'true' && needs.changes.result == 'success' && needs.changes.outputs.scope == 'selected' }}
+        if: ${{ env.RUN_WORK == 'true' && needs.changes.result == 'success' && needs.changes.outputs.select == 'true' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: selection
@@ -768,7 +769,7 @@ jobs:
         if: ${{ env.RUN_WORK == 'true' }}
         run: node scripts/test-ratchet.mjs --reports="$RUNNER_TEMP/ratchet" --shards=${{ needs.changes.result == 'success' && needs.changes.outputs.shard_count || 4 }}
         env:
-          TEST_RATCHET_SELECT: ${{ needs.changes.result == 'success' && needs.changes.outputs.scope == 'selected' && format('{0}/selection/selection.json', runner.temp) || '' }}
+          TEST_RATCHET_SELECT: ${{ needs.changes.result == 'success' && needs.changes.outputs.select == 'true' && format('{0}/selection/selection.json', runner.temp) || '' }}
 
       # A shard can also fail outside its reports (setup, the audit, the
       # publish-freshness tripwire): that fails the Full suite too.

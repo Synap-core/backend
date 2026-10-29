@@ -606,6 +606,7 @@ async function selectMode() {
       });
     perRun.push({
       id: r.id,
+      dir: r.dir,
       files: retried.files.size,
       failedFiles: [...retried.files.values()].filter((v) => !v.ok).length,
       passed: first.passed,
@@ -651,6 +652,27 @@ async function selectMode() {
     if (!plannedSet.has(f) || notCollected.includes(f)) continue;
     const r = results.get(f);
     if (r?.ok) fixed.push(f);
+  }
+  // A PR's FULL tier, planned as a selection: the full mode's floors hold too
+  // (a config that stops collecting tests must not read green).
+  if (SELECTION.full) {
+    if (results.size < PLAUSIBLE_MIN_FILES)
+      problems.push({
+        kind: "vacuous",
+        detail: `only ${results.size} test files ran (floor ${PLAUSIBLE_MIN_FILES}). Whole packages went missing.`,
+      });
+    const floors = JSON.parse(readFileSync(FLOORS_PATH, "utf8")).entries.filter(
+      (e) => !e.args && typeof e.floor === "number"
+    );
+    for (const e of floors) {
+      const mine = perRun.filter((x) => x.dir === e.dir);
+      const passed = mine.reduce((n, x) => n + x.passed, 0);
+      if (passed < e.floor)
+        problems.push({
+          kind: "below-floor",
+          detail: `${e.dir}: ${passed} passing${mine.length ? "" : " (it did not run)"}, floor ${e.floor} (scripts/test-floors.json).`,
+        });
+    }
   }
   for (const p of parseProblems)
     problems.push({ kind: "baseline-format", detail: p });
