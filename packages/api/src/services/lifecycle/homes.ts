@@ -74,6 +74,7 @@ import {
   groupThingsByStatus,
   kindVisibilityConditions,
   roleVisibilityConditions,
+  stuckAfterDaysOf,
   type StatusGroup,
 } from "./status-groups.js";
 import { asksYouSessionIds } from "../signals/needs-you-owed.js";
@@ -643,13 +644,7 @@ async function readProducedKind(
     g.items.map((i) => ({ id: i.id, name: i.name, status: g.status }))
   );
   const workOn = (id: string) => input.openWork?.get(id) ?? [];
-  const stuckDays = new Map(
-    lifecycle.options.flatMap((o) =>
-      o.stuckAfterDays !== undefined && !terminalKeys.has(o.key)
-        ? [[o.key, o.stuckAfterDays] as const]
-        : []
-    )
-  );
+  const stuckDays = stuckAfterDaysOf(lifecycle.options);
   const stuckItem = groups
     .flatMap((g) =>
       g.status !== null && stuckDays.has(g.status)

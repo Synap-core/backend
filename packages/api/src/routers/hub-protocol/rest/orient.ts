@@ -11,6 +11,7 @@
  *   ?scope=a,b,c   — restrict to workspaces|projects|profiles
  *   ?workspaceId=  — pin to one workspace
  *   ?projectId=    — pin to one project
+ *   ?statusOf=a,b  — where each id stands (`startHere.statusOf`)
  */
 
 import { z } from "@hono/zod-openapi";
@@ -65,6 +66,10 @@ export function registerOrientRoutes(app: HubHono): void {
     const workspaceId = c.req.query("workspaceId") || undefined;
     const projectId = c.req.query("projectId") || undefined;
     const explain = c.req.query("explain") === "true";
+    const statusOf = (c.req.query("statusOf") ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     const scopeParam = c.req.query("scope");
     const scope = scopeParam
       ? (scopeParam
@@ -84,6 +89,7 @@ export function registerOrientRoutes(app: HubHono): void {
         scope,
         workspaceId,
         projectId,
+        ...(statusOf.length ? { statusOf } : {}),
         explain,
       });
       return c.json(result);

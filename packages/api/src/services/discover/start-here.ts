@@ -327,6 +327,37 @@ async function readLibrary(userId: string): Promise<StartHere["library"]> {
   }
 }
 
+/**
+ * The pinned space's or project's rollup; a failed read is `unavailable`, a
+ * project the caller cannot see leaves it out.
+ */
+async function readStatusRollup(p: {
+  userId: string;
+  workspaceId?: string;
+  projectId?: string;
+}): Promise<StartHere["statusRollup"]> {
+  try {
+    const { readScopeRollup } = await import("../status/status-rollup.js");
+    return (await readScopeRollup(p)) ?? undefined;
+  } catch (err) {
+    logger.warn({ err }, "orient: status rollup NOT read — unavailable");
+    return UNAVAILABLE;
+  }
+}
+
+async function readStatusOfSection(
+  userId: string,
+  ids: string[]
+): Promise<StartHere["statusOf"]> {
+  try {
+    const { readStatusOf } = await import("../status/status-read.js");
+    return await readStatusOf(userId, ids);
+  } catch (err) {
+    logger.warn({ err }, "orient: statusOf NOT read — unavailable");
+    return UNAVAILABLE;
+  }
+}
+
 /** The pending-review state as `startHere.pendingReview` words it. */
 export function foldPendingReview(
   pending: PendingReviewState
@@ -380,6 +411,8 @@ export async function buildStartHere(p: {
   workspaceId?: string;
   /** Orient scoped to one project — `openGoals` lists that project's. */
   projectId?: string;
+  /** Ids to say where each stands (`statusOf`). */
+  statusOf?: string[];
   pending: PendingReviewState;
   learnMoreSkill: string;
   /** The lens listing, when the caller already started reading it. */
@@ -396,6 +429,8 @@ export async function buildStartHere(p: {
     looseEnds,
     library,
     openGoals,
+    statusRollup,
+    statusOf,
   ] = await Promise.all([
     readOwedByPerson(p.userId),
     readOpenSessions(p.userId),
@@ -410,12 +445,29 @@ export async function buildStartHere(p: {
       ? readLooseEnds({ userId: p.userId, agentUserId: p.agentUserId })
       : Promise.resolve(undefined),
     readLibrary(p.userId),
-    readOpenGoals(p.userId, p.projectId),
+    readOpenGoals(p.userId, p.projectId).then(async (goals) =>
+      (await import("../status/status-rollup.js")).withGoalRollups(
+        p.userId,
+        goals
+      )
+    ),
+    p.workspaceId || p.projectId
+      ? readStatusRollup({
+          userId: p.userId,
+          workspaceId: p.workspaceId,
+          projectId: p.projectId,
+        })
+      : Promise.resolve(undefined),
+    p.statusOf?.length
+      ? readStatusOfSection(p.userId, p.statusOf)
+      : Promise.resolve(undefined),
   ]);
   const pendingReview = foldPendingReview(p.pending);
   // Key order is the briefing order — pending review first, then the blockers
   // the agent is about to walk into, then its own open work.
   return {
+    // An explicit question comes first: the caller asked where these stand.
+    ...(statusOf ? { statusOf } : {}),
     pendingReview,
     openFindings,
     // What the person owes, right after the blockers: the agent raises these
@@ -425,6 +477,8 @@ export async function buildStartHere(p: {
     // The goals the work serves, beside the open sessions: an agent starting
     // work files it into one (`trackId`) instead of opening a free session.
     openGoals,
+    // The pinned space's or project's rollup, right after its goals.
+    ...(statusRollup ? { statusRollup } : {}),
     ...(handedToYou ? { handedToYou } : {}),
     // The agent's OWN leftovers, right after the work handed to it: agents
     // keep the books (W-B2). Each row carries the call that ends it.

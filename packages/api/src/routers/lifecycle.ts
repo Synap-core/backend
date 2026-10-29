@@ -52,6 +52,7 @@ import {
   kindVisibilityConditions,
   pageThingsInColumn,
   roleVisibilityConditions,
+  stuckAfterDaysOf,
 } from "../services/lifecycle/status-groups.js";
 
 /** W17: below this many LIVE things a pipeline defaults to a list. */
@@ -469,14 +470,7 @@ export const lifecycleRouter = router({
         .map((o) => o.key);
       // STUCK: the option's own rule (declared once, on the lifecycle), never
       // a client-side guess. Terminal options never carry one.
-      const stuckDays = new Map(
-        lifecycle.options.flatMap((o) =>
-          o.stuckAfterDays !== undefined &&
-          !isTerminalLifecycleCategory(o.category)
-            ? [[o.key, o.stuckAfterDays] as const]
-            : []
-        )
-      );
+      const stuckDays = stuckAfterDaysOf(lifecycle.options);
       const now = Date.now();
       const stuckOf = (status: string | null, sinceIso: string): boolean => {
         const days = status === null ? undefined : stuckDays.get(status);

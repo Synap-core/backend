@@ -5,7 +5,7 @@
  */
 
 import { createLogger } from "@synap-core/core";
-import type { StartHere } from "./discover.js";
+import type { StartHereUnavailable } from "./discover.js";
 
 /** Open goals read before reporting "at least N". */
 export const OPEN_GOALS_READ_CAP = 20;
@@ -23,6 +23,17 @@ export interface OpenGoalRow {
   endState: string | null;
   criteria: number;
 }
+
+/** The open goals as read, before orient adds each one's rollup. */
+export type OpenGoalsRead =
+  | {
+      count: number;
+      countIsLowerBound: boolean;
+      lens: "project" | "pod";
+      items: OpenGoalRow[];
+      howTo: string;
+    }
+  | StartHereUnavailable;
 
 /**
  * The LIVE goals (open, active, paused) the caller can see, newest activity
@@ -85,7 +96,7 @@ export async function listOpenGoalRows(p: {
 export async function readOpenGoals(
   userId: string,
   projectId?: string
-): Promise<StartHere["openGoals"]> {
+): Promise<OpenGoalsRead> {
   try {
     const rows = await listOpenGoalRows({
       userId,

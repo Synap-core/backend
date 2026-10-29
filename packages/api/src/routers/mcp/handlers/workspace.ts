@@ -76,6 +76,9 @@ export const workspaceHandlers: McpHandlerMap = {
         Array<"workspaces" | "projects" | "profiles"> | undefined,
       workspaceId: args.workspaceId as string | undefined,
       projectId: args.projectId as string | undefined,
+      statusOf: Array.isArray(args.statusOf)
+        ? args.statusOf.filter((id): id is string => typeof id === "string")
+        : undefined,
       explain: args.explain === true,
     });
     return ok(result);
