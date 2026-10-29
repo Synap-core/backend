@@ -702,6 +702,14 @@ export async function mergeProposalRevision(
   // validators read through the shared pool, so they run BEFORE the row lock.
   const payloadCheck = await checkRevisedPayload(params);
 
+  // Set inside the lock when the AGENT revised the operations it authored:
+  // that revision is decided again once it has committed (S4).
+  // (Asserted, not annotated: TS does not see the assignment in the closure.)
+  let redecide = null as {
+    actingAgentUserId: string;
+    revisions: number;
+  } | null;
+
   await db.transaction(async (tx) => {
     const [existing] = await tx
       .select({
@@ -903,6 +911,26 @@ export async function mergeProposalRevision(
           eq(proposals.status, ProposalStatus.PENDING)
         )
       );
+
+    if (isAuthor && actingAgentUserId && revisionCheck) {
+      redecide = {
+        actingAgentUserId,
+        revisions:
+          (Array.isArray(existing.revisionHistory)
+            ? existing.revisionHistory.length
+            : 0) + 1,
+      };
+    }
+  });
+
+  // AFTER the commit, never inside the lock: the re-decision reads through
+  // the shared pool, and it never throws (a failure leaves it pending).
+  if (!redecide) return;
+  const { redecideOwnGraphRevision } =
+    await import("./redecide-graph-revision.js");
+  await redecideOwnGraphRevision({
+    proposalId: params.proposalId,
+    ...redecide,
   });
 }
 
