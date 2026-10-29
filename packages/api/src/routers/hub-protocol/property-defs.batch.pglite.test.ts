@@ -177,9 +177,15 @@ function ddlFor(table: PgTable): string {
       `create unique index "${name ?? `${cfg.name}_${names.join("_")}_uidx`}" on "${cfg.name}" (${names.map((n) => `"${n}"`).join(", ")});`,
     ];
   });
-  return [`create table "${cfg.name}" (${cols.join(", ")});`, ...uniques].join(
-    "\n"
+  // Composite primary keys (`profile_properties`): the link upsert's
+  // `on conflict (profile_id, property_def_id)` needs one.
+  const pks = cfg.primaryKeys.map(
+    (pk) => `primary key (${pk.columns.map((c) => `"${c.name}"`).join(", ")})`
   );
+  return [
+    `create table "${cfg.name}" (${[...cols, ...pks].join(", ")});`,
+    ...uniques,
+  ].join("\n");
 }
 
 const q = <T = Record<string, unknown>>(sql: string, params?: unknown[]) =>
