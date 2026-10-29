@@ -348,22 +348,43 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
       "lifecycle.get",
       declaredQuery,
       async (ctx, q) => {
-        const stages = await lifecycleRouter.createCaller(ctx).get({
-          profileSlug: q.profileSlug,
-          ...(q.workspaceId ? { workspaceId: q.workspaceId } : {}),
-        });
         // A fenced key reads a kind's stages only where its grant reads that
         // kind (`entity.<kind>.read`) or that role (`facet.read`): the
         // permission it needs for the rows themselves.
-        if (isFencedGrant(getRequestGrant())) {
-          const denied = q.workspaceId
-            ? await grantWriteDenial({
-                subjectType: stages.profileKind === "role" ? "facet" : "entity",
-                action: "read",
-                workspaceId: q.workspaceId,
-                data: { profileSlug: q.profileSlug },
-              })
-            : "A key bounded by a grant must name `workspaceId`.";
+        const fenced = isFencedGrant(getRequestGrant());
+        const { workspaceId } = q;
+        if (fenced && !workspaceId)
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "A key bounded by a grant must name `workspaceId`.",
+          });
+        const denial = (subjectType: "entity" | "facet") =>
+          grantWriteDenial({
+            subjectType,
+            action: "read",
+            workspaceId,
+            data: { profileSlug: q.profileSlug },
+          });
+        let stages;
+        try {
+          stages = await lifecycleRouter.createCaller(ctx).get({
+            profileSlug: q.profileSlug,
+            ...(workspaceId ? { workspaceId } : {}),
+          });
+        } catch (err) {
+          // A failed read (unknown slug, no lifecycle) tells a fenced key
+          // nothing about a kind it may not read: it gets the 403.
+          if (fenced) {
+            const denied = await denial("entity");
+            if (denied && (await denial("facet")))
+              throw new TRPCError({ code: "FORBIDDEN", message: denied });
+          }
+          throw err;
+        }
+        if (fenced) {
+          const denied = await denial(
+            stages.profileKind === "role" ? "facet" : "entity"
+          );
           if (denied)
             throw new TRPCError({ code: "FORBIDDEN", message: denied });
         }
