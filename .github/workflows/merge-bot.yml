@@ -1,0 +1,113 @@
+name: Merge bot
+
+# The backend merge bot (founder, 2026-10-29). It ENQUEUES a PR into the merge
+# queue once it is green and eligible, puts a main-red fix at the FRONT of the
+# queue, and gives the PRs that went red only because main was red ONE fresh
+# CI run once main is green again. It never merges, never bypasses, never
+# pushes, never updates a branch. Rules, and why a plain re-run would not do:
+# scripts/ci/merge-bot.mjs; tripwire: scripts/ci/merge-bot.tripwire.test.ts.
+#
+# Identity: a write made with this job's GITHUB_TOKEN starts no workflow run,
+# so an enqueue with it would queue a PR whose merge_group checks never start.
+# The writes use the "Synap Merge Bot" GitHub App (contents + pull requests
+# write, installed on backend only, never on the ruleset's bypass list), from
+# the secrets SYNAP_MERGE_BOT_APP_ID / SYNAP_MERGE_BOT_KEY. Without them the
+# bot judges and logs, writes nothing, and the run stays green (fail-safe).
+#
+# workflow_run and schedule run the DEFAULT BRANCH's copy of this file and of
+# the scripts; the job never checks out or runs a PR's code. A change here
+# takes effect once it is on main (try it first with "Run workflow", dry run).
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  schedule:
+    - cron: "4,19,34,49 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Judge and log only; enqueue nothing, run nothing again
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  # A PR's CI run judges that PR only (one group per head commit); a main push
+  # run, the schedule and the button sweep in ONE group, so two sweeps never
+  # run the same victim twice. A newer pending sweep replaces an older one:
+  # each is a whole sweep.
+  group: merge-bot-${{ (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request') && github.event.workflow_run.head_sha || 'sweep' }}
+  cancel-in-progress: false
+
+jobs:
+  bot:
+    name: Enqueue green PRs, run main's victims again
+    # A merge-queue run's completion makes no PR eligible: skip it.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request' || github.event.workflow_run.event == 'push' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # Reads: PRs, check runs, workflow runs. checks: write = the once-only
+      # "Re-run after main green" marker. Every write that must START CI goes
+      # through the app token below, not this one.
+      contents: read
+      pull-requests: read
+      actions: read
+      checks: write
+    env:
+      MERGE_BOT_CONFIGURED: ${{ secrets.SYNAP_MERGE_BOT_APP_ID != '' && secrets.SYNAP_MERGE_BOT_KEY != '' }}
+    steps:
+      # The default branch's scripts only.
+      - name: Checkout the bot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            scripts/ci/merge-bot.mjs
+            scripts/ci/release-gate-wait.mjs
+            scripts/layout/layout.mjs
+            scripts/layout/layout.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      # A Depends-On target may live in a PRIVATE repo: the read-only Reader
+      # App reads it (as in depends-on.yml). Without it such a dependency reads
+      # as "could not read", is held, and the PR is not enqueued.
+      - name: Mint the private-repo read token (Reader App)
+        id: reader-token
+        if: ${{ vars.SYNAP_READER_APP_ID != '' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ vars.SYNAP_READER_APP_ID }}
+          private-key: ${{ secrets.SYNAP_READER_APP_KEY }}
+          owner: Synap-core
+          repositories: |
+            control-plane-api
+            app-bases
+          permission-contents: read
+
+      # The writer: the Synap Merge Bot app, on backend only, with only what an
+      # enqueue and a draft/ready toggle need. A failed mint leaves the token
+      # empty, and the bot then writes nothing (fail-safe).
+      - name: Mint the merge bot token (Synap Merge Bot app)
+        id: bot-token
+        if: ${{ env.MERGE_BOT_CONFIGURED == 'true' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.SYNAP_MERGE_BOT_APP_ID }}
+          private-key: ${{ secrets.SYNAP_MERGE_BOT_KEY }}
+          owner: Synap-core
+          repositories: backend
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Enqueue green PRs, run main's victims again
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_BOT_TOKEN: ${{ steps.bot-token.outputs.token }}
+          LAYOUT_TOKEN: ${{ steps.reader-token.outputs.token }}
+          MERGE_BOT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: node scripts/ci/merge-bot.mjs
