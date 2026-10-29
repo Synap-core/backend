@@ -68,6 +68,8 @@ import {
   CONVERSATION_CWD_HEADER,
   CONVERSATION_META_KEY,
   CONVERSATION_CWD_META_KEY,
+  PROCESS_HEADER,
+  PROCESS_META_KEY,
   isProbeApiKey,
 } from "@synap/database";
 import {
@@ -629,7 +631,8 @@ mcpHttpApp.post("/", async (c) => {
               transport.handleRequest(c.req.raw, { parsedBody })
             ),
           c.req.header(CONVERSATION_CWD_HEADER) ??
-            metaString(CONVERSATION_CWD_META_KEY)
+            metaString(CONVERSATION_CWD_META_KEY),
+          c.req.header(PROCESS_HEADER) ?? metaString(PROCESS_META_KEY)
         )
       )
     )

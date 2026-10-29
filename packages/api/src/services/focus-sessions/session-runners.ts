@@ -23,6 +23,13 @@
  * its one caller). The access-layer rule for the table is
  * `sessionRunnerReadableWhere` (`access/registry.ts`).
  *
+ * A runner is a conversation's OS PROCESS (0373): the client names its process
+ * (`X-Synap-Process: <host>:<pid>:<startedAtMs>`), the primary key carries it,
+ * and two live copies of one conversation are two rows. A client that names no
+ * process keeps the one row per (session, client key) it always had
+ * (`process_key = ''`); that row is never read as a twin. SIGNAL ONLY: nothing
+ * here refuses a write or a wait ({@link markTwins}).
+ *
  * A runner row carries the session's `clientKey` + `cwd` shape, so the ONE
  * resume derivation (`resolveAgentConversation`, @synap-core/types/agents)
  * reads it as it reads a session's metadata — never a second resume rule.
@@ -37,6 +44,7 @@ import {
   drizzleSql,
   getRequestClientKey,
   getRequestConversationCwd,
+  getRequestProcess,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
@@ -103,6 +111,7 @@ export async function stampSessionRunner(p: {
   const parsed = parseRunnerClientKey(clientKey);
   if (!clientKey || !parsed) return false;
   const cwd = getRequestConversationCwd() ?? null;
+  const proc = getRequestProcess();
   const agentUserId = p.agentUserId ?? null;
   try {
     // The computer: the agent's host (`users.host_user_id`), or the agent
@@ -122,9 +131,16 @@ export async function stampSessionRunner(p: {
         conversationId: parsed.conversationId,
         cwd,
         machineUserId: machine,
+        processKey: proc?.key ?? "",
+        processHost: proc?.host ?? null,
+        processStartedAt: proc?.startedAt ?? null,
       })
       .onConflictDoUpdate({
-        target: [sessionRunners.sessionId, sessionRunners.clientKey],
+        target: [
+          sessionRunners.sessionId,
+          sessionRunners.clientKey,
+          sessionRunners.processKey,
+        ],
         set: {
           lastSeenAt: drizzleSql`now()`,
           cwd: drizzleSql`coalesce(excluded.cwd, ${sessionRunners.cwd})`,
@@ -145,6 +161,15 @@ export async function stampSessionRunner(p: {
   }
 }
 
+/** One other live copy of the same conversation (0373). */
+export interface TwinCopy {
+  /** The copy's `X-Synap-Process` value — what a client compares to its own. */
+  processId: string;
+  host: string | null;
+  startedAt: string | null;
+  lastSeenAt: string;
+}
+
 export interface SessionRunner {
   harness: string;
   conversationId: string;
@@ -152,6 +177,16 @@ export interface SessionRunner {
   agentUserId: string | null;
   /** The computer hosting the agent (`users.id` of a `machine` agent user). */
   machineUserId: string | null;
+  /** The OS process holding the wait (`<host>:<pid>:<startedAtMs>`); '' when its client named none. */
+  processId: string;
+  /** That process's host and start time, as it named itself. */
+  processHost: string | null;
+  processStartedAt: string | null;
+  /**
+   * The OTHER live copies of this conversation on this session (never this
+   * row); empty when there is no twin. Only rows that named a process count.
+   */
+  twin: TwinCopy[];
   firstSeenAt: string;
   lastSeenAt: string;
   /** Stamped within {@link RUNNER_LIVE_WINDOW_SECONDS} of `now`. */
@@ -178,6 +213,9 @@ export async function loadSessionRunners(
       cwd: sessionRunners.cwd,
       agentUserId: sessionRunners.agentUserId,
       machineUserId: sessionRunners.machineUserId,
+      processKey: sessionRunners.processKey,
+      processHost: sessionRunners.processHost,
+      processStartedAt: sessionRunners.processStartedAt,
       firstSeenAt: sessionRunners.firstSeenAt,
       lastSeenAt: sessionRunners.lastSeenAt,
     })
@@ -185,18 +223,57 @@ export async function loadSessionRunners(
     .where(eq(sessionRunners.sessionId, sessionId))
     .orderBy(desc(sessionRunners.lastSeenAt))
     .limit(Math.max(1, Math.min(opts.limit ?? 20, 100)));
-  return rows.map((r) => ({
-    harness: r.harness,
-    conversationId: r.conversationId,
-    cwd: r.cwd,
-    agentUserId: r.agentUserId,
-    machineUserId: r.machineUserId,
-    firstSeenAt: r.firstSeenAt.toISOString(),
-    lastSeenAt: r.lastSeenAt.toISOString(),
-    live: now - r.lastSeenAt.getTime() <= RUNNER_LIVE_WINDOW_SECONDS * 1000,
-    conversation: resolveAgentConversation({
-      clientKey: r.clientKey,
-      conversationCwd: r.cwd,
-    }),
-  }));
+  return markTwins(
+    rows.map((r) => ({
+      harness: r.harness,
+      conversationId: r.conversationId,
+      cwd: r.cwd,
+      agentUserId: r.agentUserId,
+      machineUserId: r.machineUserId,
+      processId: r.processKey,
+      processHost: r.processHost,
+      processStartedAt: r.processStartedAt?.toISOString() ?? null,
+      twin: [],
+      firstSeenAt: r.firstSeenAt.toISOString(),
+      lastSeenAt: r.lastSeenAt.toISOString(),
+      live: now - r.lastSeenAt.getTime() <= RUNNER_LIVE_WINDOW_SECONDS * 1000,
+      conversation: resolveAgentConversation({
+        clientKey: r.clientKey,
+        conversationCwd: r.cwd,
+      }),
+    }))
+  );
+}
+
+/**
+ * Mark a twin: two LIVE runners of one conversation (same harness and id, case
+ * folded) whose processes differ. A runner with no process (`processId ''`: a
+ * legacy client, or a row from before 0373) never counts — it cannot be told
+ * apart from the copy that sent the header. A stale copy is history, not a
+ * twin. Pure; the rows come back with `twin` filled.
+ */
+export function markTwins(runners: SessionRunner[]): SessionRunner[] {
+  const groups = new Map<string, SessionRunner[]>();
+  for (const r of runners) {
+    if (!r.live || r.processId === "") continue;
+    const k = `${r.harness}:${r.conversationId.toLowerCase()}`;
+    groups.set(k, [...(groups.get(k) ?? []), r]);
+  }
+  return runners.map((r) => {
+    if (!r.live || r.processId === "") return r;
+    const group =
+      groups.get(`${r.harness}:${r.conversationId.toLowerCase()}`) ?? [];
+    const others = group.filter((o) => o.processId !== r.processId);
+    return others.length === 0
+      ? r
+      : {
+          ...r,
+          twin: others.map((o) => ({
+            processId: o.processId,
+            host: o.processHost,
+            startedAt: o.processStartedAt,
+            lastSeenAt: o.lastSeenAt,
+          })),
+        };
+  });
 }

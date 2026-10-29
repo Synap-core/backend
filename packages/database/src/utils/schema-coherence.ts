@@ -1842,6 +1842,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "machine_user_id",
     addedBy: "0342_session_runners.sql",
   },
+  // The process half of a runner (0373). Absence means two live copies of one
+  // conversation overwrite each other's row, and the runner stamp's upsert
+  // (ON CONFLICT names process_key) fails.
+  {
+    table: "session_runners",
+    column: "process_key",
+    addedBy: "0373_session_runners_process.sql",
+  },
 
   // proposal_apply_runs — a large approval applied by the background job
   // (0352). Absence means every approve at or above the background threshold

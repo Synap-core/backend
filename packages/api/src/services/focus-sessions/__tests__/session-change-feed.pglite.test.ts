@@ -265,6 +265,7 @@ beforeAll(async () => {
   await h.client!.exec(migration("0277_focus_session_changed_notify.sql"));
   await h.client!.exec(migration("0341_session_owner_message_notify.sql"));
   await h.client!.exec(migration("0342_session_runners.sql"));
+  await h.client!.exec(migration("0373_session_runners_process.sql"));
   await q(
     `insert into users (id, email, name, timezone, user_type, agent_type, host_user_id) values
       ($1, 'o@example.test', 'Owner', 'UTC', 'human', null, null),
@@ -655,6 +656,58 @@ describe("session runners", () => {
       [sessionId]
     );
     expect(rows[0]!.n).toBe(1);
+  });
+
+  it("two processes of ONE conversation are two runners, each stamped once a minute, and each sees the other as a twin", async () => {
+    const { sessionId } = await seed();
+    const stamp = (proc: string) =>
+      runWithClientKey(
+        CLIENT_KEY,
+        () =>
+          stampSessionRunner({ sessionId, ownerId: OWNER, agentUserId: AGENT }),
+        CWD,
+        proc
+      );
+    const MAC = "mac-a:4242:1761600000000";
+    const BOX = "devbox:77:1761650000000";
+    expect(await stamp(MAC)).toBe(true);
+    expect(await stamp(BOX)).toBe(true);
+    // Throttled per process, not per conversation.
+    expect(await stamp(MAC)).toBe(false);
+    const runners = await loadSessionRunners(sessionId);
+    expect(runners).toHaveLength(2);
+    const mac = runners.find((r) => r.processId === MAC)!;
+    const box = runners.find((r) => r.processId === BOX)!;
+    expect(mac.processHost).toBe("mac-a");
+    expect(mac.processStartedAt).toBe("2025-10-27T21:20:00.000Z");
+    expect(mac.twin.map((t) => t.processId)).toEqual([BOX]);
+    expect(box.twin.map((t) => t.processId)).toEqual([MAC]);
+    expect(box.twin[0]).toMatchObject({ host: "mac-a" });
+  });
+
+  it("a client that names no process keeps its one row and is never a twin; a stale copy is not one either", async () => {
+    const { sessionId } = await seed();
+    const stamp = (proc?: string) =>
+      runWithClientKey(
+        CLIENT_KEY,
+        () =>
+          stampSessionRunner({ sessionId, ownerId: OWNER, agentUserId: AGENT }),
+        CWD,
+        proc
+      );
+    expect(await stamp()).toBe(true);
+    expect(await stamp("mac-a:1:1761600000000")).toBe(true);
+    let runners = await loadSessionRunners(sessionId);
+    expect(runners).toHaveLength(2);
+    expect(runners.every((r) => r.twin.length === 0)).toBe(true);
+    // A second keyed copy that went quiet 3 minutes ago is history.
+    expect(await stamp("devbox:2:1761650000000")).toBe(true);
+    await q(
+      `update session_runners set last_seen_at = now() - interval '3 minutes' where session_id = $1 and process_key = 'devbox:2:1761650000000'`,
+      [sessionId]
+    );
+    runners = await loadSessionRunners(sessionId);
+    expect(runners.every((r) => r.twin.length === 0)).toBe(true);
   });
 
   it("never writes the session row: no NOTIFY on the session channel, updated_at untouched", async () => {

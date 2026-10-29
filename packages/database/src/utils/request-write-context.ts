@@ -46,6 +46,8 @@ export interface RequestWriteContext {
   readonly clientKey?: string;
   /** C1 — where the calling conversation runs (a local agent's cwd). */
   readonly conversationCwd?: string;
+  /** C1 — which OS process of that conversation is calling (0373). */
+  readonly process?: ProcessIdentity;
   /** W1 — what the calling key may touch (absent = a key with no grant). */
   readonly grant?: KeyGrant;
   /** B4 — the sessions this request's writes were FILED under (see below). */
@@ -500,20 +502,65 @@ export function normalizeConversationCwd(
 }
 
 /**
+ * Which OS process of a conversation is calling: `<host>:<pid>:<startedAtMs>`.
+ * Two live copies of ONE conversation (the same Claude Code session resumed
+ * twice) share a client key; this is what tells them apart (0373). Header
+ * `X-Synap-Process`, or `_meta["live.synap/process"]`. Telemetry: it never
+ * enters the client key, so no session, focus or resume derivation changes.
+ */
+export const PROCESS_HEADER = "x-synap-process";
+export const PROCESS_META_KEY = "live.synap/process";
+
+export interface ProcessIdentity {
+  /** The normalised wire value (host lower-cased) — the runner's identity. */
+  key: string;
+  host: string;
+  pid: number;
+  /** When the process started. Two copies of a pid on one host differ by it. */
+  startedAt: Date;
+}
+
+const PROCESS_RE = /^([A-Za-z0-9._-]{1,255}):(\d{1,10}):(\d{10,14})$/;
+
+/** A client-supplied process identity, or undefined when unusable. */
+export function parseProcessIdentity(
+  raw: string | null | undefined
+): ProcessIdentity | undefined {
+  const m = PROCESS_RE.exec(raw?.trim() ?? "");
+  if (!m) return undefined;
+  const startedAt = new Date(Number(m[3]));
+  if (Number.isNaN(startedAt.getTime())) return undefined;
+  const host = m[1]!.toLowerCase();
+  return {
+    key: `${host}:${Number(m[2])}:${m[3]}`,
+    host,
+    pid: Number(m[2]),
+    startedAt,
+  };
+}
+
+/**
  * Run `fn` with the calling client recorded; `undefined` enters no scope. The
- * cwd rides only with a client key: it describes that client's conversation.
+ * cwd and the process ride only with a client key: they describe that
+ * client's conversation.
  */
 export function runWithClientKey<T>(
   clientKey: string | undefined,
   fn: () => T,
-  conversationCwd?: string | null
+  conversationCwd?: string | null,
+  processIdentity?: string | null
 ): T {
   if (!clientKey) return fn();
   const slot = storage.getStore()?.usage;
   if (slot) slot.clientKey = clientKey;
   const cwd = normalizeConversationCwd(conversationCwd);
+  const process = parseProcessIdentity(processIdentity);
   return runWithPatch(
-    cwd ? { clientKey, conversationCwd: cwd } : { clientKey },
+    {
+      clientKey,
+      ...(cwd ? { conversationCwd: cwd } : {}),
+      ...(process ? { process } : {}),
+    },
     fn
   );
 }
@@ -526,6 +573,11 @@ export function getRequestClientKey(): string | undefined {
 /** The calling conversation's cwd, when its client named one. */
 export function getRequestConversationCwd(): string | undefined {
   return storage.getStore()?.conversationCwd;
+}
+
+/** The calling OS process, when its client named one (0373). */
+export function getRequestProcess(): ProcessIdentity | undefined {
+  return storage.getStore()?.process;
 }
 
 /**

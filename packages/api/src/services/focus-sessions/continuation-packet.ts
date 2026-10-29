@@ -238,6 +238,24 @@ export interface PacketRunnerItem {
   machineId?: string;
   /** The agent acting through the key, when an agent key held the wait. */
   agentUserId?: string;
+  /**
+   * The OS process that held the wait (`<host>:<pid>:<startedAtMs>`, 0373):
+   * a client compares it with its own to tell "me" from "my twin". Absent for
+   * a client that names none.
+   */
+  processId?: string;
+  processHost?: string;
+  processStartedAt?: string;
+  /**
+   * TWIN: another LIVE process runs this same conversation on this session.
+   * Names the other copies (host, start time). Signal only: nothing is refused.
+   */
+  twin?: Array<{
+    processId: string;
+    host?: string;
+    startedAt?: string;
+    lastSeenAt: string;
+  }>;
   firstSeenAt: string;
   lastSeenAt: string;
   /** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read. */
@@ -862,6 +880,19 @@ function runnerItem(r: SessionRunner): PacketRunnerItem {
     cwd: r.cwd,
     ...(r.machineUserId ? { machineId: r.machineUserId } : {}),
     ...(r.agentUserId ? { agentUserId: r.agentUserId } : {}),
+    ...(r.processId ? { processId: r.processId } : {}),
+    ...(r.processHost ? { processHost: r.processHost } : {}),
+    ...(r.processStartedAt ? { processStartedAt: r.processStartedAt } : {}),
+    ...(r.twin.length > 0
+      ? {
+          twin: r.twin.map((t) => ({
+            processId: t.processId,
+            ...(t.host ? { host: t.host } : {}),
+            ...(t.startedAt ? { startedAt: t.startedAt } : {}),
+            lastSeenAt: t.lastSeenAt,
+          })),
+        }
+      : {}),
     firstSeenAt: r.firstSeenAt,
     lastSeenAt: r.lastSeenAt,
     live: r.live,
