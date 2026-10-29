@@ -17,7 +17,8 @@
  *            DELIVERED (clears)     DROPPED (still holds)   OPEN (holds)
  *   session  `closed`               `cancelled` · `failed`  anything else —
  *                                                           incl. `stale`
- *   track    `completed`            `archived` (the goal    `active` · `paused`
+ *   track    lifecycle category     category `lost`         anything else
+ *            `done` (`completed`)   (`archived`: the goal
  *                                   was dropped)
  *   entity   lifecycle category     category `lost`, or     anything else; no
  *            `done`, or a           a dropped status        status ⇒ open
@@ -47,13 +48,13 @@
  * cannot SEE is still a blocker: hiding it would read as "free to go", a calm
  * wrong answer. Callers report it as `hidden`, never omit it.
  *
- * Pure and dependency-free (type-only imports of the session status and the
- * lifecycle category).
+ * Pure. Its one runtime import is the track status declaration, a leaf
+ * (`units/track-status.ts`) with no runtime imports; the rest are types.
  */
 
 import type { TerminalSessionStatus } from "../focus-sessions/statuses.js";
 import type { LifecycleCategory } from "../lifecycle/option.js";
-import type { TrackStatusIn } from "../units/track.js";
+import { trackStatusCategory } from "../units/track-status.js";
 
 /** `X --blocked_by--> Y`: X waits on Y. */
 export const DEPENDENCY_LINK_TYPE = "blocked_by" as const;
@@ -98,6 +99,8 @@ export function isDependencyLinkType(
 /** What became of a blocker — see the table at the top of this module. */
 export type DependencyOutcome = "open" | "delivered" | "dropped";
 
+// Hand-listed only until sessions declare categories (a session status
+// declaration beside the track's); then derived from it like a track's.
 /** A `focus_sessions.status` that DELIVERED — the only one that clears. */
 export const SESSION_DELIVERED_STATUSES = [
   "closed",
@@ -109,40 +112,13 @@ export const SESSION_DROPPED_STATUSES = [
 ] as const satisfies readonly TerminalSessionStatus[];
 
 /**
- * The `project_tracks.status` values that delivered: the track lifecycle's
- * DONE category (a goal closed with a verdict). Pinned to the declaration.
- */
-export const TRACK_DELIVERED_STATUSES = [
-  "completed",
-] as const satisfies readonly TrackStatusIn<"done">[];
-/**
- * The values that ended without delivering: its LOST category (a dropped
- * goal). An open (proposed · agreed · ready), active or paused track is OPEN.
- */
-export const TRACK_DROPPED_STATUSES = [
-  "archived",
-] as const satisfies readonly TrackStatusIn<"lost">[];
-// Exactly the category: a done or lost status added to the track lifecycle and
-// not listed here stops the build (it would otherwise hold dependents forever).
-const _deliveredExact: [
-  Exclude<TrackStatusIn<"done">, (typeof TRACK_DELIVERED_STATUSES)[number]>,
-] extends [never]
-  ? true
-  : never = true;
-const _droppedExact: [
-  Exclude<TrackStatusIn<"lost">, (typeof TRACK_DROPPED_STATUSES)[number]>,
-] extends [never]
-  ? true
-  : never = true;
-void _deliveredExact;
-void _droppedExact;
-
-/**
  * Entity `status` property values that read as DELIVERED, when the reader does
- * not know the kind's lifecycle category. Compared after lower-casing and
- * folding `-` / space to `_`, so `Done`, `closed-won` and `Closed won` all
- * match. Deliberately narrow: a value no list knows keeps the dependent
- * blocked, which is the honest default.
+ * not know the kind's lifecycle category. A list, not a derivation: a kind
+ * that declares no lifecycle has no categories to read, its free `status`
+ * property is all there is. Compared after lower-casing and folding `-` /
+ * space to `_`, so `Done`, `closed-won` and `Closed won` all match.
+ * Deliberately narrow: a value no list knows keeps the dependent blocked,
+ * which is the honest default.
  */
 export const ENTITY_DELIVERED_STATUSES = [
   "done",
@@ -185,6 +161,14 @@ function foldStatus(status: string): string {
 const has = (list: readonly string[], v: string | null | undefined) =>
   v != null && list.includes(v);
 
+/** A declared category's outcome: done delivered, lost dropped, else open. */
+function outcomeOfCategory(
+  category: LifecycleCategory | null | undefined
+): DependencyOutcome {
+  if (category === "done") return "delivered";
+  return category === "lost" ? "dropped" : "open";
+}
+
 /**
  * THE classification — what became of a blocker of this kind, in this status
  * (and, for an entity, this lifecycle category when the reader resolved it).
@@ -201,12 +185,9 @@ export function classifyDependencyBlocker(
       if (has(SESSION_DELIVERED_STATUSES, status)) return "delivered";
       return has(SESSION_DROPPED_STATUSES, status) ? "dropped" : "open";
     case "track":
-      if (has(TRACK_DELIVERED_STATUSES, status)) return "delivered";
-      return has(TRACK_DROPPED_STATUSES, status) ? "dropped" : "open";
+      return outcomeOfCategory(trackStatusCategory(status));
     case "entity": {
-      if (category === "done") return "delivered";
-      if (category === "lost") return "dropped";
-      if (category) return "open";
+      if (category) return outcomeOfCategory(category);
       if (!status) return "open";
       const folded = foldStatus(status);
       if (has(ENTITY_DELIVERED_STATUSES, folded)) return "delivered";

@@ -5972,6 +5972,16 @@ export interface LifecycleTransitionPayload extends TransitionBase {
 	role: string | null;
 	facetId: string | null;
 }
+declare const TRACK_STATUSES: readonly [
+	"proposed",
+	"agreed",
+	"ready",
+	"active",
+	"paused",
+	"completed",
+	"archived"
+];
+export type TrackStatus = (typeof TRACK_STATUSES)[number];
 declare const TRACK_STAGE_POSITIONS: readonly [
 	"done",
 	"active",
@@ -6038,16 +6048,6 @@ export interface TrackStageCheckVerdict {
 	failing: string[];
 	reason?: string;
 }
-declare const TRACK_STATUSES: readonly [
-	"proposed",
-	"agreed",
-	"ready",
-	"active",
-	"paused",
-	"completed",
-	"archived"
-];
-export type TrackStatus = (typeof TRACK_STATUSES)[number];
 declare const TRACK_VERDICTS: readonly [
 	"met",
 	"partly_met",
