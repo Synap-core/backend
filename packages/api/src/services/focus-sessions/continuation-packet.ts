@@ -2278,7 +2278,10 @@ export function deriveNextMove(input: {
         kind: "unknown",
         actor: "none",
         label: "Next move unknown",
-        reason: `Whether this session's criteria pass could not be read (${input.criteria.reason}).`,
+        // The cause is logged where the read failed (the packet's section
+        // reader, the page batch's `settle`); the person gets no internals.
+        reason:
+          "Could not check whether this session's criteria pass. Try again.",
       };
     }
     const { state, requiredUnmet } = input.criteria.verdict;
@@ -2288,13 +2291,15 @@ export function deriveNextMove(input: {
         kind: "agent_slot",
         actor: "ai",
         label: one
-          ? "Meet the required criterion left"
-          : `Meet the ${requiredUnmet} required criteria left`,
-        reason: `Everything this session declared is produced, but ${
+          ? "Pass the last required criterion"
+          : `Pass the ${requiredUnmet} required criteria left`,
+        // Person-facing words; how the agent gets there is its nudge's
+        // (`session-nudges.ts`, ungraded criteria).
+        reason: `Everything declared is produced, but ${
           one
-            ? `1 required criterion ${state === "failing" ? "does not pass (it failed)" : "has no passing grade yet"}`
-            : `${requiredUnmet} required criteria ${state === "failing" ? "do not pass (at least one failed)" : "have no passing grade yet"}`
-        }. The agent grades ${one ? "it" : "them"} against real evidence, or hands one only the person can check to them as a task whose answer grades it; the session is ready to close once ${one ? "it passes" : "they pass"}.`,
+            ? `1 required criterion ${state === "failing" ? "has failed" : "is not graded yet"}`
+            : `${requiredUnmet} required criteria ${state === "failing" ? "do not pass; at least one has failed" : "are not graded yet"}`
+        }. Once ${one ? "it passes" : "they pass"}, the session is ready to close.`,
         reasonCode: "criteria_unmet",
       };
     }

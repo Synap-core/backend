@@ -208,7 +208,9 @@ describe("deriveNextMove", () => {
         input({ expectedOutputs: [doneSlot], criteria: graded("failing", 2) })
       )
     ).toMatchObject({
-      reason: expect.stringMatching(/2 required criteria do not pass/),
+      label: "Pass the 2 required criteria left",
+      reason:
+        "Everything declared is produced, but 2 required criteria do not pass; at least one has failed. Once they pass, the session is ready to close.",
       reasonCode: "criteria_unmet",
     });
   });
@@ -219,10 +221,12 @@ describe("deriveNextMove", () => {
     );
     expect(failed).toMatchObject({
       kind: "agent_slot",
-      label: "Meet the required criterion left",
+      label: "Pass the last required criterion",
       reasonCode: "criteria_unmet",
     });
-    expect(failed.reason).toMatch(/1 required criterion does not pass/);
+    expect(failed.reason).toBe(
+      "Everything declared is produced, but 1 required criterion has failed. Once it passes, the session is ready to close."
+    );
     expect(
       deriveNextMove(
         input({
@@ -230,7 +234,9 @@ describe("deriveNextMove", () => {
           criteria: graded("incomplete", 1),
         })
       ).reason
-    ).toMatch(/1 required criterion has no passing grade yet/);
+    ).toBe(
+      "Everything declared is produced, but 1 required criterion is not graded yet. Once it passes, the session is ready to close."
+    );
     // A declared agent slot is the plain agent_slot: no code.
     expect(
       deriveNextMove(
@@ -260,11 +266,18 @@ describe("deriveNextMove", () => {
   });
 
   it("an unreadable grade never yields ready_to_close, and holds nothing earlier", () => {
-    const down: NextMoveCriteria = { status: "unavailable", reason: "x" };
-    expect(
-      deriveNextMove(input({ expectedOutputs: [doneSlot], criteria: down }))
-        .kind
-    ).toBe("unknown");
+    const down: NextMoveCriteria = {
+      status: "unavailable",
+      reason: "internal read failure",
+    };
+    const unknown = deriveNextMove(
+      input({ expectedOutputs: [doneSlot], criteria: down })
+    );
+    expect(unknown).toMatchObject({
+      kind: "unknown",
+      reason:
+        "Could not check whether this session's criteria pass. Try again.",
+    });
     expect(deriveNextMove(input({ criteria: down })).kind).toBe("undeclared");
     expect(
       deriveNextMove(

@@ -182,7 +182,7 @@ export function computeSessionNudges(input: {
       out.hints.push(
         phase === "complete"
           ? `Closed with ${ungraded.length} ungraded criteri${ungraded.length === 1 ? "on" : "a"} — grade them now with evaluate_session and real evidence.`
-          : `${ungraded.length} criteri${ungraded.length === 1 ? "on" : "a"} ungraded — grade with evaluate_session and real evidence before saying done.`
+          : `${ungraded.length} criteri${ungraded.length === 1 ? "on" : "a"} ungraded — grade with evaluate_session and real evidence before saying done. One only the person can check goes to them as an act task under that criterion's key: their "I did this" grades it.`
       );
     }
   }
