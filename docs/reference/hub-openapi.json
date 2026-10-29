@@ -20207,6 +20207,26 @@
             "description": "Filter by relation type.",
             "name": "type",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Page size, 1-200 (default 100)."
+            },
+            "required": false,
+            "description": "Page size, 1-200 (default 100).",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Rows to skip, newest first (default 0). Not with `entityId`: that read is not paged."
+            },
+            "required": false,
+            "description": "Rows to skip, newest first (default 0). Not with `entityId`: that read is not paged.",
+            "name": "offset",
+            "in": "query"
           }
         ],
         "responses": {
