@@ -67,6 +67,8 @@ export function registerEntityTransitionExecutors(): void {
             : null,
         occurredAt:
           typeof inner.occurredAt === "string" ? inner.occurredAt : null,
+        // Moved for the app whose key filed it (0310), not the approver's.
+        appId: proposal.appId ?? null,
       });
 
       if (result.status === "conflict") {

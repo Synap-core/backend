@@ -344,6 +344,7 @@ export function registerTrackExecutors(): void {
                 proposal.agentUserId
               ),
               proposalId: proposal.id,
+              appId: proposal.appId ?? null,
               // The pause's hold and the move's time, as filed (W4).
               hold:
                 data.hold && typeof data.hold === "object"

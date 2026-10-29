@@ -43,6 +43,8 @@ vi.mock("@synap/database", async (importOriginal) => ({
           { key: "negotiating", category: "active" },
           { key: "won", category: "done", humanOnly: true },
           { key: "lost", category: "lost" },
+          // W4: a paused step (its holds are pinned below).
+          { key: "on-hold", category: "paused" },
         ],
       },
     },
@@ -354,7 +356,7 @@ describe("moveStatus input normaliser", () => {
     const r = await moveStatus({ entityId: "e1", to: "closed", actor: AGENT });
     expect(r).toMatchObject({ status: "refused", code: "UNKNOWN_OPTION" });
     expect((r as { reason: string }).reason).toContain(
-      "draft, negotiating, won, lost"
+      "draft, negotiating, won, lost, on-hold"
     );
     expect(h.perm).not.toHaveBeenCalled();
   });
@@ -387,5 +389,72 @@ describe("moveStatus door — FB1020 B3: closing its own fresh task", () => {
     for (const call of h.perm.mock.calls.slice(1)) {
       expect(call[0]).not.toHaveProperty("ownWorkOrganise");
     }
+  });
+});
+
+describe("moveStatus door — W4: a pause says what it waits on", () => {
+  it("an agent's pause without a hold is refused BEFORE anything is filed", async () => {
+    const r = await moveStatus({ entityId: "e1", to: "on-hold", actor: AGENT });
+    expect(r).toMatchObject({ status: "refused", code: "HOLD_REQUIRED" });
+    expect((r as { reason: string }).reason).toContain("`hold`");
+    expect(h.perm).not.toHaveBeenCalled();
+    expect(h.apply).not.toHaveBeenCalled();
+  });
+
+  it("an agent's `unspecified` is refused: it is a person's default, not an answer", async () => {
+    const r = await moveStatus({
+      entityId: "e1",
+      to: "on-hold",
+      actor: AGENT,
+      hold: { on: "unspecified" },
+    });
+    expect(r).toMatchObject({ status: "refused", code: "HOLD_INVALID" });
+    expect(h.perm).not.toHaveBeenCalled();
+  });
+
+  it("an agent driving a process stage into a pause records the stage's hold", async () => {
+    h.perm.mockResolvedValue({ granted: true });
+    h.apply.mockResolvedValue({
+      status: "moved",
+      transition: { to: "on-hold" },
+    });
+    const stageHold = { on: "thing" as const, ref: "stage:review" };
+    const r = await moveStatus({
+      entityId: "e1",
+      to: "on-hold",
+      actor: AGENT,
+      pauseHold: stageHold,
+    });
+    expect(r.status).toBe("moved");
+    // Filed with the move (an approval replays it) and written with it.
+    expect(h.perm.mock.calls[0]![0].data).toMatchObject({ hold: stageHold });
+    expect(h.apply.mock.calls[0]![1]).toMatchObject({ hold: stageHold });
+  });
+
+  it("a stage's hold is not sent with a move that does not pause", async () => {
+    h.perm.mockResolvedValue({ granted: true });
+    h.apply.mockResolvedValue({ status: "moved", transition: { to: "draft" } });
+    await moveStatus({
+      entityId: "e1",
+      to: "draft",
+      actor: AGENT,
+      pauseHold: { on: "thing", ref: "stage:review" },
+    });
+    expect(h.apply.mock.calls[0]![1].hold).toBeUndefined();
+  });
+
+  it("an approved replay of an agent's pause filed without a hold is not refused", async () => {
+    h.apply.mockResolvedValue({
+      status: "moved",
+      transition: { to: "on-hold" },
+    });
+    const r = await moveStatus({
+      entityId: "e1",
+      to: "on-hold",
+      actor: AGENT,
+      approvedProposalId: "p-1",
+    });
+    expect(r.status).toBe("moved");
+    expect(h.apply).toHaveBeenCalledTimes(1);
   });
 });

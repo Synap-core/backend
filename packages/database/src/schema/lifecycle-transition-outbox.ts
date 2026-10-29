@@ -7,6 +7,13 @@
  * appends the `events` log row (id = transitionId, so at most one) and runs
  * the side-effect fan-out, recording each delivered reactor; a failure leaves
  * the row pending and the sweeper retries it. `emittedAt` set = done.
+ *
+ * ⚠️ A DELIVERED ROW IS NOT GARBAGE: it is where a pause's HOLD is stored
+ * (status-flow W4). The hold has no column; the current hold is read off this
+ * table (`listHolds`, services/lifecycle/holds.ts) as the subject's LATEST
+ * transition. Any retention job must keep each subject's latest row (and so
+ * every row a still-paused thing's hold lives in), or holds silently vanish
+ * and their date / move resumes never fire.
  */
 import {
   pgTable,
@@ -47,6 +54,17 @@ export const lifecycleTransitionOutbox = pgTable(
     pendingIdx: index("lifecycle_transition_outbox_pending_idx")
       .on(table.createdAt)
       .where(sql`${table.emittedAt} IS NULL`),
+    // 0374 — the hold reads (W4): the awaited thing of `until.moves`, and a
+    // subject's transitions in order.
+    holdMovesIdx: index("lifecycle_transition_outbox_hold_moves_idx")
+      .on(sql`(${table.transition} -> 'hold' -> 'until' ->> 'moves')`)
+      .where(
+        sql`(${table.transition} -> 'hold' -> 'until' ->> 'moves') IS NOT NULL`
+      ),
+    subjectIdx: index("lifecycle_transition_outbox_subject_idx").on(
+      sql`coalesce(${table.transition} ->> 'subjectId', ${table.transition} ->> 'entityId')`,
+      table.createdAt
+    ),
   })
 );
 

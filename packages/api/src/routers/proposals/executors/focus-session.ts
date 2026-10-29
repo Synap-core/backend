@@ -1021,6 +1021,7 @@ export function registerFocusSessionExecutors(): void {
             proposal.agentUserId
           ),
           proposalId: input.proposalId,
+          appId: proposal.appId ?? null,
           // The pause's hold and the move's time, as filed (W4).
           hold:
             set.status && innerData.hold && typeof innerData.hold === "object"

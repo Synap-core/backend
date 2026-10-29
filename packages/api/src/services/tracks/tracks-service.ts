@@ -2090,6 +2090,8 @@ export async function applyTrackStatus(
   transition: {
     actor?: WorkUnitActor;
     proposalId?: string | null;
+    /** A replay: the app its proposal was filed by (`proposals.app_id`). */
+    appId?: string | null;
   } & TrackMoveFacts = {}
 ): Promise<{ status: "updated"; track: ProjectTrack }> {
   // Only the goal's JUDGE closes it (W3), only its owner or judge drops it
@@ -2120,6 +2122,7 @@ export async function applyTrackStatus(
       proposalId: transition.proposalId,
       hold: transition.hold,
       occurredAt: transition.occurredAt,
+      appId: transition.appId,
       // Decision 2a: closing/dropping ENDS the track's space grant — a stamp,
       // so nothing revives it (a reopened goal is a NEW track with its own).
       // Pausing needs no stamp: the gate admits only an ACTIVE track (W5), so

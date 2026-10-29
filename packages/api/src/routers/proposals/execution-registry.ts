@@ -77,6 +77,8 @@ type ProposalRow = {
   sourceMessageId: string | null;
   /** The request chain id (`proposals.correlation_id`). */
   correlationId?: string | null;
+  /** The app whose key filed it (`proposals.app_id`, 0310). */
+  appId?: string | null;
   data: unknown;
 };
 

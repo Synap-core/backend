@@ -5198,6 +5198,15 @@ CREATE TABLE IF NOT EXISTS "lifecycle_transition_outbox" (
 CREATE INDEX IF NOT EXISTS "lifecycle_transition_outbox_pending_idx"
   ON "lifecycle_transition_outbox" ("created_at") WHERE "emitted_at" IS NULL;
 
+-- 0374: the hold reads (status-flow W4) — mirrors
+-- 0374_lifecycle_transition_outbox_hold_indexes.sql.
+CREATE INDEX IF NOT EXISTS "lifecycle_transition_outbox_hold_moves_idx"
+  ON "lifecycle_transition_outbox" (((transition -> 'hold' -> 'until' ->> 'moves')))
+  WHERE (transition -> 'hold' -> 'until' ->> 'moves') IS NOT NULL;
+CREATE INDEX IF NOT EXISTS "lifecycle_transition_outbox_subject_idx"
+  ON "lifecycle_transition_outbox"
+  ((coalesce(transition ->> 'subjectId', transition ->> 'entityId')), "created_at");
+
 -- 0339: a pod app's rotating, single-use refresh tokens (mirrors
 -- 0339_oauth_refresh_tokens.sql). Here, after `apps`, so the key is inline.
 CREATE TABLE IF NOT EXISTS "oauth_refresh_tokens" (

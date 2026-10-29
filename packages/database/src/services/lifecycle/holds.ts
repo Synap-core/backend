@@ -64,6 +64,8 @@ export interface CurrentHold extends Required<HoldSubjectRef> {
  * (BAD_REQUEST on the wire, `refused` from `moveStatus`).
  */
 export class HoldRefusedError extends Error {
+  /** A refusal of the caller's input: the api maps it to 400 (`isSynapLikeError`). */
+  readonly statusCode = 400;
   readonly code: Extract<MoveHoldDecision, { ok: false }>["code"];
   constructor(decision: Extract<MoveHoldDecision, { ok: false }>) {
     super(decision.message);
@@ -134,7 +136,9 @@ export async function listHolds(
           WHERE ${SUBJECT_ID("n")} = ${SUBJECT_ID("o")}
             AND ${SUBJECT_TYPE("n")} = ${SUBJECT_TYPE("o")}
             AND (n.transition->>'facetId') IS NOT DISTINCT FROM (o.transition->>'facetId')
-            AND ${RECORDED("n")} > ${RECORDED("o")}
+            -- latest by record time, then row time, then id: one winner, always
+            AND (${RECORDED("n")}, n.created_at, n.transition_id)
+              > (${RECORDED("o")}, o.created_at, o.transition_id)
        )`);
   // postgres.js returns the rows; the PGlite driver (tests) wraps them.
   const raw = (

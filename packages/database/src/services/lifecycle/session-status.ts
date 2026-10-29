@@ -87,6 +87,8 @@ export interface SetSessionStatusInput {
   defaultHold?: Hold;
   /** When it really happened (already bounded by the door); default now. */
   occurredAt?: Date | null;
+  /** A replay: the app its proposal was filed by (`proposals.app_id`). */
+  appId?: string | null;
 }
 
 export interface SetSessionStatusResult {
@@ -194,6 +196,7 @@ export async function setSessionStatus(
           trackId: row.trackId ?? null,
           occurredAt: input.occurredAt,
           hold: holds.get(row.id) ?? null,
+          appId: input.appId,
         });
       });
     await insertTransitionOutbox(tx, transitions);
@@ -221,6 +224,7 @@ export async function writeSessionPatch(
     /** With a pause: what it waits on (`setSessionStatus`). */
     hold?: Hold | null;
     occurredAt?: Date | null;
+    appId?: string | null;
   }
 ): Promise<FocusSession[]> {
   const { status, ...rest } = input.set;
@@ -247,6 +251,7 @@ export async function writeSessionPatch(
     set: rest,
     hold: input.hold,
     occurredAt: input.occurredAt,
+    appId: input.appId,
   });
   return rows;
 }

@@ -60,6 +60,8 @@ export function buildWorkUnitTransition(input: {
   occurredAt?: Date | null;
   /** Decided by the writer (`decideMoveHold`); null when not a pause. */
   hold?: RecordedHold | null;
+  /** A replay: the app its proposal was filed by (`proposals.app_id`). */
+  appId?: string | null;
 }): WorkUnitTransitionPayload {
   return {
     transitionId: randomUUID(),
@@ -83,7 +85,9 @@ export function buildWorkUnitTransition(input: {
     workspaceId: input.workspaceId,
     projectId: input.projectId,
     trackId: input.trackId,
-    ...transitionStamp(input.actor.kind, input.occurredAt),
+    ...transitionStamp(input.actor.kind, input.occurredAt, {
+      appId: input.appId,
+    }),
     hold: input.hold ?? null,
   };
 }

@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
   emitted: [] as Array<Record<string, unknown>>,
+  followUps: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -53,7 +54,7 @@ import {
   projects,
 } from "@synap/database/schema";
 import { db, setSessionStatus, TrackRepository } from "@synap/database";
-import { handleHoldResume } from "./hold-resume.js";
+import { handleHoldResume, registerHoldResumeFollowUp } from "./hold-resume.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -102,6 +103,10 @@ const lastOwed = async (id: string) =>
   ).rows[0]!.transition;
 
 beforeAll(async () => {
+  // The api's follow-ups (judgement notices, stale runs), recorded.
+  registerHoldResumeFollowUp(async (r) => {
+    h.followUps.push(r);
+  });
   for (const t of [
     focusSessions,
     lifecycleTransitionOutbox,
@@ -160,6 +165,15 @@ describe("the hourly sweep (until.date)", () => {
       actorKind: "system",
       hold: null,
     });
+    // The api's follow-up ran for it (as the doors' own moves do).
+    expect(h.followUps).toContainEqual(
+      expect.objectContaining({
+        subjectType: "focus_session",
+        subjectId: due,
+        from: "paused",
+        to: "active",
+      })
+    );
     // Resumed once: the next tick finds nothing.
     expect((await handleHoldResume({}, AFTER)).resumed).toBe(0);
   });
@@ -196,6 +210,9 @@ describe("the hourly sweep (until.date)", () => {
       )
     ).rows;
     expect(row!.metadata).not.toHaveProperty("checkGate");
+    expect(h.followUps).toContainEqual(
+      expect.objectContaining({ subjectType: "track", subjectId: trackId })
+    );
     expect(h.emitted.at(-1)).toMatchObject({
       subjectType: "track",
       action: "update",

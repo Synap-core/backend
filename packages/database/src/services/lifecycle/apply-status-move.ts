@@ -255,6 +255,8 @@ export interface ApplyStatusMoveInput {
   emitContext?: Record<string, unknown>;
   /** When it really happened (already bounded by the door); default now. */
   occurredAt?: Date | null;
+  /** A replay: the app its proposal was filed by (`proposals.app_id`). */
+  appId?: string | null;
   /**
    * What a move into a paused status waits on (`decideMoveHold`: refused
    * from an agent when absent, `unspecified` for a person or the system; a
@@ -370,7 +372,9 @@ export async function applyStatusMove(
     };
   }
   const human = actor.kind === "human" && input.strict !== true;
-  const stamp = transitionStamp(actor.kind, input.occurredAt);
+  const stamp = transitionStamp(actor.kind, input.occurredAt, {
+    appId: input.appId,
+  });
   // The CAS and the owed event commit together, or neither does.
   return db.transaction(async (tx): Promise<ApplyStatusMoveResult> => {
     // The hold the move records, decided from the status it moves FROM —
@@ -401,6 +405,7 @@ export async function applyStatusMove(
               )[0]?.hold ?? null)
             : null,
         since: new Date(stamp.occurredAt),
+        now: new Date(stamp.recordedAt),
       });
     };
     let current = target.current;

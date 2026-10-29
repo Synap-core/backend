@@ -62,7 +62,10 @@ import {
   moveHoldArgs,
   moveHoldInputShape,
 } from "../../services/lifecycle/hold-input.js";
-import { HOLD_NOT_A_PAUSE_MESSAGE } from "@synap-core/types/lifecycle";
+import {
+  MOVE_FACTS_IGNORED_NOTICE,
+  moveFactsWithoutMoveMessage,
+} from "@synap-core/types/lifecycle";
 import { createLogger } from "@synap-core/core";
 import {
   UpdateEntitiesInputSchema,
@@ -308,6 +311,7 @@ export const mutateProcs = {
       // whole call before anything else is written. A re-typed entity
       // (`profileSlug`) re-derives its columns in the repository instead.
       let statusMove: MoveStatusResult | undefined;
+      let moveFactsNotice: { notice?: string } = {};
       const lifecycleSlug =
         existing.profileId && input.profileSlug === undefined
           ? (
@@ -349,6 +353,12 @@ export const mutateProcs = {
           forcePropose: input.forcePropose,
           ...moveHoldArgs(input),
         });
+        // A move that found the thing already there records no hold or time:
+        // said back, never silently dropped.
+        moveFactsNotice =
+          statusMove.status === "unchanged" && (input.hold || input.occurredAt)
+            ? { notice: MOVE_FACTS_IGNORED_NOTICE }
+            : {};
         if (statusMove.status === "conflict") {
           throw lifecycleConflictError(
             statusMove.expectedFrom,
@@ -403,6 +413,7 @@ export const mutateProcs = {
             message: "Entity updated",
             written: after,
             statusMove,
+            ...moveFactsNotice,
           };
         }
       }
@@ -411,7 +422,7 @@ export const mutateProcs = {
       if (!statusMove && (input.hold || input.occurredAt)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: HOLD_NOT_A_PAUSE_MESSAGE,
+          message: moveFactsWithoutMoveMessage(input),
         });
       }
 
@@ -532,6 +543,7 @@ export const mutateProcs = {
             ? { deferred: true as const, ref: perm.deferredRef }
             : {}),
           ...(statusMove ? { statusMove } : {}),
+          ...moveFactsNotice,
         };
       }
 
@@ -785,6 +797,7 @@ export const mutateProcs = {
         // The lifecycle part of this call, when it carried the status key
         // (moved / unchanged / proposed — see LIFECYCLE SPLIT above).
         ...(statusMove ? { statusMove } : {}),
+        ...moveFactsNotice,
         // The row as THIS write left it — what an approval's undo stamp
         // records as `after`, read from the write itself so a concurrent edit
         // landing just after it is never recorded as this write's change.

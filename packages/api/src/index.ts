@@ -455,6 +455,9 @@ export { registerSessionCriteriaUnmetReactor } from "./notifications/session-cri
 // switched on, makes the goal look for its next run (goal-loop-reactor.ts);
 // the reaper's hourly tick re-checks the rest through `sweepGoalLoops`.
 export { registerGoalLoopReactor } from "./services/tracks/goal-loop-reactor.js";
+// Exported for @synap/jobs' `registerHoldResumeFollowUp` IoC slot (W4): what
+// a goal's or a session's hold resume owes after the move.
+export { holdResumeFollowUp } from "./services/lifecycle/hold-resume-follow-up.js";
 export { sweepGoalLoops } from "./services/tracks/goal-loop.js";
 // And the closing report: on the same close event the session document gains
 // its structured Outcome / Definition of done / Produced / Decisions sections.

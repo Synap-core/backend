@@ -22,13 +22,23 @@ export type TransitionStamp = Pick<
 export function transitionStamp(
   actorKind: TransitionBase["actorKind"],
   occurredAt?: Date | null,
-  now: Date = new Date()
+  opts: {
+    /**
+     * The app a REPLAY moves for: the proposal's own `app_id` (0310), filed
+     * under the app's key — the approver's request carries none.
+     */
+    appId?: string | null;
+    now?: Date;
+  } = {}
 ): TransitionStamp {
+  const now = opts.now ?? new Date();
   // The app whose key made the request (the attribution `events.app_id`
-  // carries, 0310). Server code moving on its own is the system's, whatever
-  // request it runs in.
+  // carries, 0310), or the one the replayed proposal was filed by. Server
+  // code moving on its own is the system's, whatever request it runs in.
   const appId =
-    actorKind === "system" ? null : (getRequestGrant()?.clientId ?? null);
+    actorKind === "system"
+      ? null
+      : (opts.appId ?? getRequestGrant()?.clientId ?? null);
   const at = occurredAt ?? now;
   return {
     actorClass: appId ? "app" : actorKind,

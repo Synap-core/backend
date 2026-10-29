@@ -145,6 +145,12 @@ export async function writeStageSubjectStatus(input: {
       sessionId: session.id,
       reason: reasoning,
       forcePropose: proc.humanOnlyStatuses.includes(value) || undefined,
+      // A stage that pauses its subject: it waits on the stage (W4).
+      pauseHold: {
+        on: "thing" as const,
+        ref: `stage:${stage.key}`,
+        reason: reasoning,
+      },
     };
 
     // A ROLE subject: the facet's status, through the door, or nothing.

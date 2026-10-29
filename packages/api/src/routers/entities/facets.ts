@@ -47,7 +47,7 @@ import {
   moveHoldArgs,
   moveHoldInputShape,
 } from "../../services/lifecycle/hold-input.js";
-import { HOLD_NOT_A_PAUSE_MESSAGE } from "@synap-core/types/lifecycle";
+import { moveFactsWithoutMoveMessage } from "@synap-core/types/lifecycle";
 import { canWriteFacet } from "../../utils/facet-write-gate.js";
 import {
   entityWriteVisibleWhere,
@@ -642,7 +642,7 @@ export const facetProcs = {
       if (!statusMove && (input.hold || input.occurredAt)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: HOLD_NOT_A_PAUSE_MESSAGE,
+          message: moveFactsWithoutMoveMessage(input),
         });
       }
 

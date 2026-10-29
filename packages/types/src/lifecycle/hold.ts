@@ -69,11 +69,31 @@ export interface RecordedHold extends Hold {
  * shape, so the agent can fix the call in one try.
  */
 export const HOLD_REQUIRED_MESSAGE =
-  'A pause must say what it waits on: pass `hold` with the move, e.g. { "on": "person" | "agent" | "external" | "thing" | "decision" | "date", "ref": "<who or what>", "reason": "<why>", "until": { "date": "<ISO date>" } or { "moves": "<entity|track|focus_session>:<id>", "to": "<status>" } }. An agent cannot pause without one.';
+  'A pause must say what it waits on: pass `hold` with the move, e.g. { "on": "person" | "agent" | "external" | "thing" | "decision" | "date" | "nobody", "ref": "<who or what>", "reason": "<why>", "until": { "date": "<ISO date>" } or { "moves": "<entity|track|focus_session>:<id>", "to": "<status>" } }. An agent cannot pause without one.';
+
+/** An agent's `on: "unspecified"`: the default a person gets, never an agent's answer. */
+export const HOLD_UNSPECIFIED_BY_AGENT_MESSAGE =
+  '`hold.on: "unspecified"` is not an answer an agent can give: say what the pause waits on (person, agent, external, thing, decision, date or nobody).';
 
 /** `hold` given with a move that is not a pause. */
 export const HOLD_NOT_A_PAUSE_MESSAGE =
   "`hold` is only for a move into a paused status; this move does not pause.";
+
+/** `occurredAt` given with a call that moves no status. */
+export const OCCURRED_AT_NOT_A_MOVE_MESSAGE =
+  "`occurredAt` is only for a status move; this call moves no status.";
+
+/** Said back when a move carried a hold or a time but the status did not change. */
+export const MOVE_FACTS_IGNORED_NOTICE =
+  "The status did not change, so the hold and occurredAt sent with it were not recorded.";
+
+/** The refusal for a hold or a time sent with no move to carry it. */
+export function moveFactsWithoutMoveMessage(given: {
+  hold?: unknown;
+  occurredAt?: unknown;
+}): string {
+  return given.hold ? HOLD_NOT_A_PAUSE_MESSAGE : OCCURRED_AT_NOT_A_MOVE_MESSAGE;
+}
 
 /** Default review window for an open-ended hold (plan Q2.2). */
 export const HOLD_REVIEW_DAYS = { default: 14, run: 7, pipeline: 7 } as const;
@@ -114,7 +134,15 @@ function isoTime(v: string | null | undefined): number | null {
  * `reviewBy` must lie ahead (a passed date would resume or nag at once);
  * `until.moves` must name a transition subject.
  */
-export function holdProblem(hold: Hold, now: Date): string | null {
+export function holdProblem(
+  hold: Hold,
+  now: Date,
+  /**
+   * Shape only (an approved replay): a date that passed while the proposal
+   * waited is not a fault — the hourly sweep resumes a passed `until.date`.
+   */
+  opts: { shapeOnly?: boolean } = {}
+): string | null {
   if (!(HOLD_ON as readonly string[]).includes(hold.on)) {
     return `hold.on must be one of ${HOLD_ON.join(" | ")}.`;
   }
@@ -124,14 +152,19 @@ export function holdProblem(hold: Hold, now: Date): string | null {
     if (t === null || Number.isNaN(t)) {
       return "hold.until.date must be an ISO date.";
     }
-    if (t <= now.getTime()) return "hold.until.date must be in the future.";
+    if (!opts.shapeOnly && t <= now.getTime()) {
+      return "hold.until.date must be in the future.";
+    }
   } else if (until && "moves" in until) {
     if (!parseHoldMovesRef(until.moves)) {
       return `hold.until.moves must be "<${MOVES_SUBJECTS.join("|")}>:<id>".`;
     }
   }
   const review = isoTime(hold.reviewBy);
-  if (review !== null && (Number.isNaN(review) || review <= now.getTime())) {
+  if (
+    review !== null &&
+    (Number.isNaN(review) || (!opts.shapeOnly && review <= now.getTime()))
+  ) {
     return "hold.reviewBy must be an ISO date in the future.";
   }
   return null;
@@ -262,7 +295,10 @@ export function decideMoveHold(input: {
   current?: RecordedHold | null;
   /** What a person's or the system's pause records when it gives none. */
   fallback?: Hold;
+  /** When the pause began (the move's `occurredAt`). */
   since: Date;
+  /** When the move is recorded: what a hold's dates must lie ahead of. */
+  now?: Date;
   base?: HoldReviewBase | null;
 }): MoveHoldDecision {
   const given = input.given ?? null;
@@ -283,7 +319,20 @@ export function decideMoveHold(input: {
     ? (input.current?.resumeTo ?? null)
     : input.from;
   if (given) {
-    const problem = holdProblem(given, input.since);
+    if (
+      given.on === "unspecified" &&
+      input.actorKind === "agent" &&
+      !input.approved
+    ) {
+      return {
+        ok: false,
+        code: "HOLD_INVALID",
+        message: HOLD_UNSPECIFIED_BY_AGENT_MESSAGE,
+      };
+    }
+    const problem = holdProblem(given, input.now ?? new Date(), {
+      shapeOnly: input.approved,
+    });
     if (problem) return { ok: false, code: "HOLD_INVALID", message: problem };
     return {
       ok: true,
@@ -294,7 +343,10 @@ export function decideMoveHold(input: {
       }),
     };
   }
-  if (input.actorKind === "agent" && !input.approved) {
+  // Already paused with no hold on record (paused or reaped before holds
+  // existed): it is not a NEW pause, so nothing is asked of the mover — the
+  // fallback is recorded, as the pre-governance checks assume.
+  if (input.actorKind === "agent" && !input.approved && !alreadyPaused) {
     return { ok: false, code: "HOLD_REQUIRED", message: HOLD_REQUIRED_MESSAGE };
   }
   return {

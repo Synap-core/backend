@@ -292,6 +292,8 @@ export class TrackRepository extends BaseRepository<
       defaultHold?: Hold;
       /** When it really happened (already bounded by the door). */
       occurredAt?: Date | null;
+      /** A replay: the app its proposal was filed by (`proposals.app_id`). */
+      appId?: string | null;
     },
     userId: string
   ): Promise<ProjectTrack | null> {
@@ -367,6 +369,7 @@ export class TrackRepository extends BaseRepository<
           proposalId: params.proposalId,
           occurredAt: params.occurredAt,
           hold: decided.hold,
+          appId: params.appId,
           workspaceId: project?.workspaceId ?? null,
           projectId: flipped.projectId,
           trackId: flipped.id,

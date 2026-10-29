@@ -68,6 +68,7 @@ export async function handleHoldResume(
       )
     : await listHolds(db, { resumeDueBy: now }, now);
   let resumed = 0;
+  let failure: unknown = null;
   for (const h of held) {
     const reason = moved
       ? `What it waited on (${moved.subjectType}:${moved.subjectId}) moved to ${moved.to}.`
@@ -75,12 +76,19 @@ export async function handleHoldResume(
     try {
       if (await resumeHold(h, reason)) resumed++;
     } catch (err) {
+      failure = err;
       logger.warn(
         { err, subjectType: h.subjectType, subjectId: h.subjectId },
-        "hold resume failed — retried on the next tick"
+        moved
+          ? "hold resume failed — the job is retried"
+          : "hold resume failed — retried on the next tick"
       );
     }
   }
+  // A move happens once: a failed wake is retried by pg-boss (what already
+  // resumed is no longer held, so a retry never moves it twice). The date
+  // sweep needs no retry: the next hourly tick finds the hold still due.
+  if (moved && failure) throw failure;
   if (held.length > 0) {
     logger.info(
       { resumed, skipped: held.length - resumed, by: moved ? "move" : "date" },
@@ -133,6 +141,7 @@ async function resumeHold(h: CurrentHold, reason: string): Promise<boolean> {
         h.userId
       );
       if (!row) return false;
+      await followUp(h, to);
       // The goal loop reads a goal's status moves off this event.
       void emitSideEffects({
         subjectType: "track",
@@ -164,9 +173,47 @@ async function resumeHold(h: CurrentHold, reason: string): Promise<boolean> {
       for (const t of transitions) {
         await dispatchLifecycleTransition(t.transitionId);
       }
+      if (rows.length > 0) await followUp(h, to);
       return rows.length > 0;
     }
   }
+}
+
+/**
+ * What the api's own doors do after the same move (a goal's judgement
+ * notices, `refreshGoalJudgements`; a stale session's runs back to running,
+ * as `reviveStaleSession`). `@synap/api` depends on `@synap/jobs`, so it fills
+ * this slot at boot (apps/api), the pattern of `registerSessionCloser`.
+ */
+export type HoldResumeFollowUp = (resumed: {
+  subjectType: CurrentHold["subjectType"];
+  subjectId: string;
+  userId: string;
+  from: string;
+  to: string;
+}) => Promise<void>;
+
+let holdResumeFollowUp: HoldResumeFollowUp | null = null;
+
+export function registerHoldResumeFollowUp(fn: HoldResumeFollowUp): void {
+  holdResumeFollowUp = fn;
+}
+
+async function followUp(h: CurrentHold, to: string): Promise<void> {
+  if (!holdResumeFollowUp) {
+    logger.warn(
+      { subjectType: h.subjectType, subjectId: h.subjectId },
+      "hold resume follow-up not registered — apps/api must call registerHoldResumeFollowUp() at boot"
+    );
+    return;
+  }
+  await holdResumeFollowUp({
+    subjectType: h.subjectType,
+    subjectId: h.subjectId,
+    userId: h.userId,
+    from: h.status,
+    to,
+  });
 }
 
 /**

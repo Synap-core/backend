@@ -39,7 +39,11 @@ import { errorCatchingMiddleware } from "../trpc.js";
 import { SetupRequiredError } from "../services/proposals/setup-required-error.js";
 import type { Context } from "../context.js";
 import { NotFoundError } from "@synap-core/core";
-import { WorkspaceIdentityConflictError } from "@synap/database";
+import {
+  HoldRefusedError,
+  WorkspaceIdentityConflictError,
+} from "@synap/database";
+import { HOLD_REQUIRED_MESSAGE } from "@synap-core/types/lifecycle";
 
 const testRouter = t.router({
   missingField: t.procedure.use(errorCatchingMiddleware).mutation(() => {
@@ -62,6 +66,18 @@ const testRouter = t.router({
   /** Any SynapError keeps its status (was an opaque 500 — probed 2026-10-06). */
   notFound: t.procedure.use(errorCatchingMiddleware).mutation(() => {
     throw new NotFoundError("Workspace", "ws-x");
+  }),
+  /**
+   * A refused pause thrown from a status write (`setSessionStatus`,
+   * `TrackRepository.transitionStatus`) — the caller's input, so a 400 with
+   * the message that names `hold`, never an opaque 500 (W4 review).
+   */
+  holdRefused: t.procedure.use(errorCatchingMiddleware).mutation(() => {
+    throw new HoldRefusedError({
+      ok: false,
+      code: "HOLD_REQUIRED",
+      message: HOLD_REQUIRED_MESSAGE,
+    });
   }),
   /** An honest unknown — MUST stay an opaque 500 (the unchanged contract). */
   boom: t.procedure.use(errorCatchingMiddleware).mutation(() => {
@@ -138,6 +154,13 @@ describe("tRPC door — setup-required payload survives the hop", () => {
     const { status, error } = await call("notFound");
     expect(error.data.code).toBe("NOT_FOUND");
     expect(status).toBe(404);
+  });
+
+  it("a refused pause (HoldRefusedError) → BAD_REQUEST/400 with the message naming `hold`", async () => {
+    const { status, error } = await call("holdRefused");
+    expect(error.data.code).toBe("BAD_REQUEST");
+    expect(status).toBe(400);
+    expect(error.message).toBe(HOLD_REQUIRED_MESSAGE);
   });
 
   it("an unclassified error stays an opaque INTERNAL_SERVER_ERROR", async () => {

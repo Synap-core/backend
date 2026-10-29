@@ -124,7 +124,18 @@ export async function reviveStaleSession(
     set: { updatedAt: drizzleSql`now()` },
   });
   if (revived.length === 0) return { sessionRevived: false, runsRevived: 0 };
+  return {
+    sessionRevived: true,
+    runsRevived: await reviveStaleRuns(sessionId),
+  };
+}
 
+/**
+ * A stale session's stale playbook run(s) back to `running` — what reviving
+ * the session owes its runs, here and when its hold resumes it (W4,
+ * `hold-resume-follow-up.ts`). The number of runs revived.
+ */
+export async function reviveStaleRuns(sessionId: string): Promise<number> {
   const runs = await db
     .update(playbookRuns)
     .set({ status: "running" })
@@ -135,5 +146,5 @@ export async function reviveStaleSession(
       )
     )
     .returning({ id: playbookRuns.id });
-  return { sessionRevived: true, runsRevived: runs.length };
+  return runs.length;
 }

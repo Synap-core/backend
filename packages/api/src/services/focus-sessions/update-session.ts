@@ -126,8 +126,8 @@ import {
   type SessionStatus,
 } from "@synap-core/types/focus-sessions";
 import {
-  HOLD_NOT_A_PAUSE_MESSAGE,
   decideMoveHold,
+  moveFactsWithoutMoveMessage,
   resolveOccurredAt,
   type Hold,
 } from "@synap-core/types/lifecycle";
@@ -1736,7 +1736,9 @@ export function sessionMoveRefusal(
   agentUserId?: string | null
 ): string | null {
   if (params.status === undefined || params.status === from) {
-    return params.hold || params.occurredAt ? HOLD_NOT_A_PAUSE_MESSAGE : null;
+    return params.hold || params.occurredAt
+      ? moveFactsWithoutMoveMessage(params)
+      : null;
   }
   let since = new Date();
   if (params.occurredAt) {

@@ -88,6 +88,14 @@ export interface MoveStatusInput {
    * ahead (`resolveOccurredAt`). The move is marked backdated.
    */
   occurredAt?: string | Date | null;
+  /**
+   * The hold to record when the move PAUSES and the mover gave none — a
+   * process stage's own (`{ on: "thing", ref: "stage:<key>" }`). Ignored on a
+   * move that does not pause.
+   */
+  pauseHold?: Hold;
+  /** A replay: the app its proposal was filed by (`proposals.app_id`). */
+  appId?: string | null;
 }
 
 const AI_SOURCES = new Set(["ai", "intelligence", "agent"]);
@@ -265,14 +273,19 @@ export async function moveStatus(
   }
   const fromCategory =
     findLifecycleOption(target.lifecycle, target.current)?.category ?? null;
+  // `classifyStatusMove` answered, so the option exists.
+  const toCategory = findLifecycleOption(target.lifecycle, to)!.category;
+  // A process stage that pauses its subject says what it waits on (the
+  // stage), so an agent driving the stage is not asked for one.
+  const hold =
+    input.hold ?? (toCategory === "paused" ? input.pauseHold : undefined);
   const holdCheck = decideMoveHold({
     from: target.current,
     fromCategory,
-    // `classifyStatusMove` answered, so the option exists.
-    toCategory: findLifecycleOption(target.lifecycle, to)!.category,
+    toCategory,
     actorKind: input.actor.kind,
     approved: Boolean(input.approvedProposalId),
-    given: input.hold,
+    given: hold,
     current:
       fromCategory === "paused"
         ? ((
@@ -323,7 +336,7 @@ export async function moveStatus(
       to,
       reason: input.reason ?? null,
       // Replayed with the move (the approval keeps them).
-      ...(input.hold ? { hold: input.hold } : {}),
+      ...(hold ? { hold } : {}),
       ...(occurredAt ? { occurredAt: occurredAt.toISOString() } : {}),
     };
     // The key's grant is checked on the row's own workspace — a pod-wide
@@ -399,8 +412,9 @@ export async function moveStatus(
     reason: input.reason,
     proposalId: input.approvedProposalId ?? receiptId ?? null,
     lensWorkspaceId: input.workspaceId,
-    hold: input.hold,
+    hold,
     occurredAt,
+    appId: input.appId,
   });
   if (result.status === "moved") {
     // Owed in the move's transaction; a failed delivery stays owed (sweeper).

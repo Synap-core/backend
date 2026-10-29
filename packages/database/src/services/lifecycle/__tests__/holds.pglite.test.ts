@@ -400,4 +400,47 @@ describe("session pause (setSessionStatus)", () => {
       hold: { on: "person", until: { date: LATER }, resumeTo: "active" },
     });
   });
+
+  it("an agent moves a session reaped before holds (no hold on record): the fallback, as the door's pre-check assumes", async () => {
+    const id = await session("stale");
+    const r = await setSessionStatus(db, {
+      sessionId: id,
+      from: "stale",
+      to: "paused",
+      actor: AGENT,
+    });
+    expect(r.rows).toHaveLength(1);
+    expect(r.transitions[0]!.hold).toMatchObject({
+      on: "unspecified",
+      resumeTo: null,
+    });
+  });
+
+  it("resumed, then paused again: only the NEW hold is current", async () => {
+    const id = await session("active");
+    const ref = { subjectType: "focus_session" as const, subjectId: id };
+    await setSessionStatus(db, {
+      sessionId: id,
+      from: "active",
+      to: "paused",
+      actor: HUMAN,
+      hold: { on: "person", reason: "first" },
+    });
+    await setSessionStatus(db, {
+      sessionId: id,
+      from: "paused",
+      to: "active",
+      actor: { kind: "system" },
+    });
+    expect(await listHolds(db, { subjects: [ref] })).toEqual([]);
+    await setSessionStatus(db, {
+      sessionId: id,
+      from: "active",
+      to: "paused",
+      actor: AGENT,
+      hold: { on: "external", reason: "second" },
+    });
+    const [current] = await listHolds(db, { subjects: [ref] });
+    expect(current!.hold).toMatchObject({ on: "external", reason: "second" });
+  });
 });

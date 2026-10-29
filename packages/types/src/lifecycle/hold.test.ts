@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import {
   HOLD_REQUIRED_MESSAGE,
+  HOLD_UNSPECIFIED_BY_AGENT_MESSAGE,
   decideMoveHold,
   holdWokenBy,
   resolveOccurredAt,
@@ -144,6 +145,105 @@ describe("decideMoveHold", () => {
       on: "decision",
       resumeTo: "active",
     });
+  });
+});
+
+describe("decideMoveHold — review fixes", () => {
+  const passed = {
+    on: "external" as const,
+    until: { date: "2026-10-20T00:00:00.000Z" },
+  };
+
+  it("an approved replay keeps a hold whose date passed while the proposal waited", () => {
+    // Refused when filed now…
+    expect(
+      decideMoveHold({ ...pause, actorKind: "agent", given: passed, now: NOW })
+    ).toMatchObject({ ok: false, code: "HOLD_INVALID" });
+    // …but a person approved it: only its SHAPE is checked; the sweep resumes it.
+    const d = decideMoveHold({
+      ...pause,
+      actorKind: "agent",
+      approved: true,
+      given: passed,
+      now: NOW,
+    });
+    expect(d.ok && d.hold).toMatchObject({
+      on: "external",
+      until: passed.until,
+    });
+    // A malformed one is still refused.
+    expect(
+      decideMoveHold({
+        ...pause,
+        actorKind: "agent",
+        approved: true,
+        given: { on: "thing", until: { moves: "nope" } },
+      })
+    ).toMatchObject({ ok: false, code: "HOLD_INVALID" });
+  });
+
+  it("an agent's `unspecified` is refused, unless a person approved the move", () => {
+    expect(
+      decideMoveHold({
+        ...pause,
+        actorKind: "agent",
+        given: { on: "unspecified" },
+      })
+    ).toEqual({
+      ok: false,
+      code: "HOLD_INVALID",
+      message: HOLD_UNSPECIFIED_BY_AGENT_MESSAGE,
+    });
+    expect(
+      decideMoveHold({
+        ...pause,
+        actorKind: "agent",
+        approved: true,
+        given: { on: "unspecified" },
+      }).ok
+    ).toBe(true);
+    // The agent-facing list names `nobody` and never offers `unspecified`.
+    expect(HOLD_REQUIRED_MESSAGE).toContain('"nobody"');
+    expect(HOLD_REQUIRED_MESSAGE).not.toContain("unspecified");
+  });
+
+  it("already paused with no hold on record (before holds): the fallback, not a refusal", () => {
+    const d = decideMoveHold({
+      ...pause,
+      from: "stale",
+      fromCategory: "paused",
+      actorKind: "agent",
+      current: null,
+    });
+    expect(d.ok && d.hold).toMatchObject({ on: "unspecified", resumeTo: null });
+  });
+
+  it("a hold's dates are checked against NOW, not the backdated occurred time", () => {
+    const since = new Date(NOW.getTime() - 20 * DAY);
+    // Ahead of `since`, behind now: passed — refused.
+    expect(
+      decideMoveHold({
+        ...pause,
+        since,
+        now: NOW,
+        actorKind: "human",
+        given: {
+          on: "date",
+          until: { date: new Date(NOW.getTime() - 5 * DAY).toISOString() },
+        },
+      })
+    ).toMatchObject({ ok: false, code: "HOLD_INVALID" });
+    const d = decideMoveHold({
+      ...pause,
+      since,
+      now: NOW,
+      actorKind: "human",
+      given: {
+        on: "date",
+        until: { date: new Date(NOW.getTime() + DAY).toISOString() },
+      },
+    });
+    expect(d.ok && d.hold).toMatchObject({ since: since.toISOString() });
   });
 });
 
