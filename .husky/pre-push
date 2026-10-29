@@ -3,11 +3,20 @@
 # heavy (founder, 2026-10-28). The real gates are the PR's GitHub CI (a draft
 # runs the Release gate: typecheck + lint + build) and the devbox (`be-file`).
 #
-# What it does, printed as one line:
-#   - skips when SYNAP_HOOK_SKIP=1 or HUSKY=0 is set;
-#   - skips when the push does not update `main` (a feature branch: its PR's
-#     Release gate typechecks and builds it on GitHub);
-#   - skips when node_modules is absent (a lane worktree with no install);
+# What it does, each step printed as one line:
+#   - skips everything when SYNAP_HOOK_SKIP=1 or HUSKY=0 is set;
+#   - a branch whose PR on Synap-core/backend is OPEN and READY: runs
+#     `pnpm preflight` (tiers 0+1, ~5-10 s, no install needed for tier 0) and
+#     refuses the push on a red (firewall F9, scripts/pre-push-ready-pr.mjs,
+#     which says why it skips: no PR, a draft, another remote; fail-open with
+#     a warning when gh is missing or offline). Preflight checks the WORKING
+#     TREE, not the pushed commit: a pushed sha other than HEAD only warns.
+#     The firewall is advisory: HUSKY=0, SYNAP_HOOK_SKIP=1 or
+#     `git push --no-verify` push without it, and nothing on GitHub re-checks;
+#   - skips the rest when the push does not update `main` (a feature branch:
+#     its PR's Release gate typechecks and builds it on GitHub);
+#   - skips the main typecheck when node_modules is absent (a lane worktree
+#     with no install);
 #   - on a push to `main`: typechecks ONLY the packages changed since the
 #     remote's main, plus their dependents (`turbo run typecheck
 #     --filter=...[<remote main>] --only`). No build: `--only` drops the
@@ -28,6 +37,16 @@ skip() {
 [ "${HUSKY:-}" = "0" ] && skip "HUSKY=0"
 
 remote="${1:-origin}"
+refs=$(cat)
+
+# F9: a ready PR is never pushed without preflight. The helper is this hook's
+# own copy (the main checkout's, like this file); it runs the pushing tree's
+# scripts/preflight.mjs. Exit 1 = refused; it prints why and how to bypass.
+helper="$(dirname "$0")/../scripts/pre-push-ready-pr.mjs"
+if [ -f "$helper" ] && command -v node >/dev/null 2>&1; then
+  printf '%s\n' "$refs" | node "$helper" "$@" || exit 1
+fi
+
 zero="0000000000000000000000000000000000000000"
 to_main=""
 base=""
@@ -38,7 +57,9 @@ while read -r _ local_sha remote_ref remote_sha; do
   if [ "$remote_sha" != "$zero" ] && git cat-file -e "${remote_sha}^{commit}" 2>/dev/null; then
     base="$remote_sha"
   fi
-done
+done <<EOF
+$refs
+EOF
 
 [ -n "$to_main" ] || skip "not a push to main (the PR's Release gate typechecks and builds it on GitHub)"
 [ -x node_modules/.bin/turbo ] || skip "no node_modules in $(pwd) (nothing installed to check with)"
