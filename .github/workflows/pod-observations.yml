@@ -34,6 +34,21 @@ permissions:
   # ci.finished reads the run's PR body for its `Pod session:` line.
   pull-requests: read
 
+# DEBOUNCE (2026-10-29, lane cispeed): ~12 of ~50 queued backend runs at
+# 2026-10-28 22:20Z were this workflow, one per finished CI run, each waiting
+# for a runner from the same 20-job pool as the PR checks. A ci.finished for
+# a PR branch is superseded by the next one for that branch: when a newer CI
+# run of the same branch finishes while the older post is still waiting or
+# running, the older post is cancelled and the newer one is posted. A
+# pull_request event (dev.pr_opened / pr_merged / pr_closed) and every main
+# run keep their own group: they are never dropped.
+# The owner's intent for the rest is unknown, so nothing else changed: every
+# conclusion is still posted (cancelled included, CI_STATUS in
+# scripts/pod-observation.mjs), for every branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch != 'main' && format('ci-{0}', github.event.workflow_run.head_branch) || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   post:
     name: Post to the pod

@@ -6,26 +6,13 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "inputs": [
-        "src/**/*.ts",
-        "src/**/*.tsx",
-        "tsconfig.json",
-        "tsup.config.ts",
-        "tsup.config.js",
-        "tsup.config.mjs",
-        "package.json"
-      ],
-      "outputs": ["dist/**", ".tsbuildinfo"],
+      "inputs": ["$TURBO_DEFAULT$"],
+      "outputs": ["dist/**", "tsconfig.tsbuildinfo"],
       "outputLogs": "errors-only"
     },
     "typecheck": {
       "dependsOn": ["^build"],
-      "inputs": [
-        "src/**/*.ts",
-        "src/**/*.tsx",
-        "tsconfig.json",
-        "tsconfig.types.json"
-      ],
+      "inputs": ["$TURBO_DEFAULT$"],
       "cache": true
     },
     "dev": {
