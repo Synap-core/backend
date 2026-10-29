@@ -134,7 +134,7 @@ describe("classifyDependencyBlocker — per kind", () => {
 // here verbatim, with the lists that stay) keeps its answer, and every other
 // declared track status stays open.
 describe("classifyDependencyBlocker — same answers as the hand lists it retired", () => {
-  const RETIRED = {
+  const HAND_LISTS = {
     track: { delivered: ["completed"], dropped: ["archived"] },
     session: { delivered: ["closed"], dropped: ["cancelled", "failed"] },
     entity: {
@@ -151,7 +151,7 @@ describe("classifyDependencyBlocker — same answers as the hand lists it retire
       dropped: ["cancelled", "canceled", "archived", "closed_lost", "wont_do"],
     },
   } as const;
-  for (const [kind, lists] of Object.entries(RETIRED)) {
+  for (const [kind, lists] of Object.entries(HAND_LISTS)) {
     it(`${kind}: every listed value keeps its outcome`, () => {
       for (const s of lists.delivered) {
         expect(classifyDependencyBlocker(kind, s), s).toBe("delivered");
@@ -164,8 +164,8 @@ describe("classifyDependencyBlocker — same answers as the hand lists it retire
   // Rules out a derivation that clears or drops more than the lists did.
   it("track: every other declared status, and an unknown one, holds", () => {
     const listed: readonly string[] = [
-      ...RETIRED.track.delivered,
-      ...RETIRED.track.dropped,
+      ...HAND_LISTS.track.delivered,
+      ...HAND_LISTS.track.dropped,
     ];
     for (const s of TRACK_STATUSES.filter((t) => !listed.includes(t))) {
       expect(classifyDependencyBlocker("track", s), s).toBe("open");

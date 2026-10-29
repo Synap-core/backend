@@ -325,6 +325,7 @@ describe("w5 question `status` → questionStatus (status-flow W5)", () => {
     });
     const q3 = await entity(question, "question", { status: "todo" });
     const q4 = await entity(question, "question", {});
+    const q5 = await entity(question, "question", { status: "abandoned" });
     const t1 = await entity(task, "task", { status: "open" });
 
     const s = await run([KEY]);
@@ -338,6 +339,7 @@ describe("w5 question `status` → questionStatus (status-flow W5)", () => {
     // A value that is no question state is kept for a person, never guessed.
     expect(await propsOf(q3)).toEqual({ status: "todo" });
     expect(await propsOf(q4)).toEqual({});
+    expect(await propsOf(q5)).toEqual({ questionStatus: "abandoned" });
     expect(await propsOf(t1)).toEqual({ status: "open" });
 
     // A second real run (ledger cleared) changes nothing.

@@ -2050,8 +2050,8 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
     // Status-flow W5: question's ONE lifecycle is `questionStatus` (open ·
     // exploring · answered · abandoned, ensure-system-lifecycles.ts). Life OS
     // gave the same kind a second select, `status` (open · exploring ·
-    // answered): the same states under another key. Fold them onto the
-    // lifecycle, exactly as x2 does for decision; a questionStatus already set
+    // answered): the same states under another key. Fold every lifecycle
+    // state onto the lifecycle (x2's full coverage); a questionStatus already set
     // wins (the twin key is then stripped); an unmapped value keeps its key.
     // Operator-run.
     {
@@ -2065,6 +2065,7 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
         open: "open",
         exploring: "exploring",
         answered: "answered",
+        abandoned: "abandoned",
       },
       preferTargetValues: ["open", "exploring", "answered", "abandoned"],
     },
