@@ -6904,6 +6904,22 @@ export interface ModeledField {
 	/** This field is the kind's lifecycle: it moves through the status door. */
 	lifecycle?: true;
 }
+/**
+ * One property a write cannot carry as it stands, in a shape a repair reads.
+ *
+ *  - `not_in_options`: a value outside the field's closed set (`options` on
+ *    its {@link ModeledField}); `rejected` holds the values refused, and
+ *    `didYouMean` the allowed one a single typo away, when there is one.
+ *  - `required`: a required field with no value and no default.
+ *  - `invalid`: any other refusal (type, length, range); `message` says which.
+ */
+export interface PropertyIssue {
+	key: string;
+	kind: "invalid" | "not_in_options" | "required";
+	message: string;
+	rejected?: string[];
+	didYouMean?: string;
+}
 export interface ProjectDedupCandidate {
 	id: string;
 	name: string;
@@ -13581,6 +13597,43 @@ export interface AllowedToday {
 	expiresAt: string;
 	/** True when an earlier "allow today" had already raised it for today. */
 	alreadyAllowed: boolean;
+}
+/** Why a value cannot join a field's closed set (`addEnumOptionRefusal`). */
+export type AddOptionRefusal = "already_allowed" | "close_match" | "lifecycle" | "not_a_closed_set";
+/** One field the proposal cannot carry as it stands. */
+export interface ProposalRepairField {
+	/** The property key. */
+	key: string;
+	/** Its human label (`uiHints.displayName` / `label`, else the key). */
+	label: string;
+	kind: PropertyIssue["kind"];
+	/** The validator's sentence (names the key and the rule). */
+	message: string;
+	/** The value(s) the proposal carries that the field refuses. */
+	rejected?: string[];
+	/** The field's allowed values, when it is a closed set. */
+	options?: string[];
+	/** The allowed value one typo away from the rejected one. */
+	didYouMean?: string;
+	/**
+	 * May the rejected value join the field's options (option C)? Only a
+	 * single rejected value on a closed set that is not the lifecycle and has
+	 * no close allowed value.
+	 */
+	canAddOption: boolean;
+	addOptionRefusal?: AddOptionRefusal;
+}
+export interface ProposalRepair {
+	proposalId: string;
+	/**
+	 * There is something to fix by value on this proposal. `false` for a kind
+	 * of proposal this does not read, or when the payload is valid now (the
+	 * failure came from elsewhere: a conflict, a permission, a provider).
+	 */
+	repairable: boolean;
+	fields: ProposalRepairField[];
+	/** The kind the proposal names, when it no longer resolves. */
+	missingKind?: string;
 }
 /**
  * The complete created-rows record. Extends the shared
@@ -43751,6 +43804,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				success: boolean;
 			};
+		}>;
+		repair: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				addOption?: {
+					key: string;
+					value: string;
+				} | undefined;
+				expectedRevision: number;
+				proposalId: string;
+				set?: Record<string, unknown> | undefined;
+			};
+			meta: object;
+			output: {
+				revision: number;
+			};
+		}>;
+		repairOptions: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				proposalId: string;
+			};
+			meta: object;
+			output: ProposalRepair;
 		}>;
 		restoreItem: import("@trpc/server").TRPCMutationProcedure<{
 			input: {

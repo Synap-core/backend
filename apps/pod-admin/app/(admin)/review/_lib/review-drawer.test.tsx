@@ -209,6 +209,16 @@ vi.mock("../../../../lib/trpc", () => ({
       },
       approve: { useMutation: () => ({ mutate() {}, isPending: false }) },
       reject: { useMutation: () => ({ mutate() {}, isPending: false }) },
+      // The failed-approval card (`FailedApproval.tsx`): nothing to fix here.
+      repairOptions: {
+        useQuery: () => ({
+          data: { proposalId: "p", repairable: false, fields: [] },
+          isLoading: false,
+          isError: false,
+          refetch() {},
+        }),
+      },
+      repair: { useMutation: () => ({ mutate() {}, isPending: false }) },
     },
     workspaces: { get: { useQuery: () => ({ data: undefined }) } },
     focusSessions: { get: { useQuery: query(() => state.session) } },

@@ -13,7 +13,17 @@
  * proposal there. This file only shapes the input and the per-field ledger.
  */
 
-import { PropertyValueType, slugifyPropertyKey } from "@synap/database";
+import {
+  PropertyValueType,
+  slugifyPropertyKey,
+  db,
+  ProfileResolutionService,
+  addEnumOptionRefusal,
+  normalizeEnumOptions,
+  readStoredEnum,
+  withAddedEnumOption,
+  type EffectiveProperty,
+} from "@synap/database";
 
 import type { ProposedKindField } from "../../services/profiles/proposed-kind-field.js";
 
@@ -317,16 +327,60 @@ export async function defineProfile(
     createdProfile?.profileKind === "role" &&
     (createdProfile?.scope === "shared" || createdProfile?.scope === "system");
 
-  // ONE call for every valid field (ticket a375443d): on an existing kind an
-  // agent's N fields used to file N proposals, and ran into its proposal
-  // limit. The batch door gates once — granted, each field applies with its
-  // own receipt; proposed, one proposal the owner approves once.
-  const toCreate = carried.map((field) =>
-    field.overlay !== true && overlayOnSharedRole
-      ? { ...field, overlay: true }
-      : field
+  // The kind's fields as the caller's space sees them, for a re-declared
+  // field that GROWS its allowed values (option C, below).
+  // Read only when a re-declared field names a closed set: nothing else on
+  // this path needs the stored schema.
+  const declaresOptions = carried.some(
+    (field) =>
+      declaredOptionKeys(
+        field.constraints as Record<string, unknown> | undefined
+      ) !== undefined
   );
+  const storedFields: EffectiveProperty[] =
+    result?.existing === true && declaresOptions
+      ? await new ProfileResolutionService(db).getEffectiveProperties(
+          profileId,
+          input.workspaceId
+        )
+      : [];
+
   const outcomeBySlug = new Map<string, Record<string, unknown>>();
+  // A field that already exists and grows its allowed values goes through the
+  // property-def EDIT door, field by field; it never rides the create batch.
+  for (const field of carried) {
+    try {
+      const grown = await growFieldOptions(
+        caller,
+        input,
+        // The define door normalises a slug (`uo_category` → `uo-category`);
+        // a field seeded with the other spelling is still the same field.
+        storedFields.find(
+          (p) =>
+            p.slug === field.slug || slugifyPropertyKey(p.slug) === field.slug
+        ),
+        field
+      );
+      if (grown) outcomeBySlug.set(field.slug, grown);
+    } catch (err) {
+      outcomeBySlug.set(field.slug, {
+        status: "error",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // ONE call for every other valid field (ticket a375443d): on an existing
+  // kind an agent's N fields used to file N proposals, and ran into its
+  // proposal limit. The batch door gates once — granted, each field applies
+  // with its own receipt; proposed, one proposal the owner approves once.
+  const toCreate = carried
+    .filter((field) => !outcomeBySlug.has(field.slug))
+    .map((field) =>
+      field.overlay !== true && overlayOnSharedRole
+        ? { ...field, overlay: true }
+        : field
+    );
   let fieldsProposal: Record<string, unknown> | undefined;
   if (toCreate.length > 0) {
     try {
@@ -397,4 +451,110 @@ export async function defineProfile(
       properties,
     },
   };
+}
+
+/** The keys a declared field's closed set names, in either spelling. */
+function declaredOptionKeys(
+  constraints: Record<string, unknown> | undefined
+): string[] | undefined {
+  const objects = normalizeEnumOptions(constraints?.enumOptions);
+  if (objects) return objects.map((o) => o.key);
+  return Array.isArray(constraints?.enum)
+    ? constraints.enum.filter((v): v is string => typeof v === "string")
+    : undefined;
+}
+
+/**
+ * A field that ALREADY EXISTS, re-declared with MORE allowed values: the new
+ * values are added through the property-def EDIT door (governed: an agent
+ * gets a proposal), each judged by the one rule `addEnumOptionRefusal` —
+ * never on the kind's lifecycle, never one typo away from an allowed value
+ * (option C, decision fa6c8833). This is the door the write-time refusal of a
+ * value points an agent to when no allowed value fits.
+ *
+ * Anything else about an existing field is left as it was (this door never
+ * rewrites a stored definition): `null` hands it to the create door, which
+ * reports `unchanged` and names the edit door. A declaration that also DROPS
+ * a value is not a growth and is handed over the same way.
+ */
+async function growFieldOptions(
+  caller: ProfilesCaller,
+  input: DefineProfileInput,
+  stored: EffectiveProperty | undefined,
+  field: ProposedKindField
+): Promise<Record<string, unknown> | null> {
+  if (!stored) return null;
+  const declared = declaredOptionKeys(
+    field.constraints as Record<string, unknown> | undefined
+  );
+  const storedKeys = readStoredEnum({
+    constraints: stored.constraints as Record<string, unknown> | null,
+    uiHints: stored.uiHints as Record<string, unknown> | null,
+  });
+  if (!declared || !storedKeys) return null;
+  if (storedKeys.some((k) => !declared.includes(k))) return null;
+  const added = declared.filter((v) => !storedKeys.includes(v));
+  if (added.length === 0) return null;
+
+  const refused: Array<{ value: string; reason: string; closest?: string }> =
+    [];
+  let constraints = stored.constraints as Record<string, unknown> | null;
+  const accepted: string[] = [];
+  for (const value of added) {
+    const refusal = addEnumOptionRefusal(
+      {
+        constraints,
+        uiHints: stored.uiHints as Record<string, unknown> | null,
+        isLifecycle: stored.isLifecycle,
+      },
+      value
+    );
+    if (refusal) {
+      refused.push({
+        value,
+        reason: refusal.refusal,
+        ...(refusal.closest ? { closest: refusal.closest } : {}),
+      });
+      continue;
+    }
+    constraints = withAddedEnumOption(constraints, value);
+    accepted.push(value);
+  }
+  const refusedNote =
+    refused.length > 0
+      ? ` Not added: ${refused
+          .map((r) =>
+            r.reason === "close_match"
+              ? `'${r.value}' (use '${r.closest}', already allowed)`
+              : r.reason === "lifecycle"
+                ? `'${r.value}' (this field is the kind's status: design statuses on the kind)`
+                : `'${r.value}'`
+          )
+          .join(", ")}.`
+      : "";
+  if (accepted.length === 0) {
+    return {
+      status: "unchanged",
+      optionsRefused: refused,
+      message: `No value was added to '${field.slug}'.${refusedNote}`,
+    };
+  }
+  const res = (await caller.profiles.updatePropertyDef({
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+    propertyDefId: stored.id,
+    constraints: constraints ?? {},
+    reasoning: `Add ${accepted.map((v) => `'${v}'`).join(", ")} to the allowed values of '${field.slug}'.`,
+    ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
+  })) as Record<string, unknown>;
+  return withReviewUrl({
+    ...res,
+    optionsAdded: accepted,
+    ...(refused.length > 0 ? { optionsRefused: refused } : {}),
+    message:
+      (res.status === "proposed"
+        ? `Adding ${accepted.map((v) => `'${v}'`).join(", ")} to '${field.slug}' is waiting for review.`
+        : `Added ${accepted.map((v) => `'${v}'`).join(", ")} to '${field.slug}'.`) +
+      refusedNote,
+  });
 }
