@@ -15608,10 +15608,10 @@ export interface PacketRunnerItem {
 	 * Names the other copies (host, start time). Signal only: nothing is refused.
 	 */
 	twin?: Array<{
-		processId: string;
 		host?: string;
-		startedAt?: string;
 		lastSeenAt: string;
+		processId: string;
+		startedAt?: string;
 	}>;
 	firstSeenAt: string;
 	lastSeenAt: string;
