@@ -28,7 +28,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+  const actual = await importOriginal<typeof import("@synap/database")>();
   const schema = await import("@synap/database/schema");
   const { PGlite } = await import("@electric-sql/pglite");
   const { drizzle } = await import("drizzle-orm/pglite");

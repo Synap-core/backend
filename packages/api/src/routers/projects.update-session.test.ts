@@ -17,7 +17,7 @@ const PROJECT = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const gated = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 
 vi.mock("@synap/database", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+  const actual = await importOriginal<typeof import("@synap/database")>();
   return { ...actual, getDb: async () => ({}) };
 });
 vi.mock("@synap/events", () => ({ emitSideEffects: async () => undefined }));
