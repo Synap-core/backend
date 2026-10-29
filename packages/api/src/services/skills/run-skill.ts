@@ -55,7 +55,16 @@ export async function runSkill(
     .from(skills)
     .where(eq(skills.id, args.skillId))
     .limit(1);
+  // Files as bytes reach a provider only through the pod sandbox's bridges
+  // (`podFiles`): a box script and the IS rollback have none, so the run is
+  // refused rather than handed handles nothing can resolve.
+  const bytesRefused = (where: string) => ({
+    success: false as const,
+    error: `This run carries files as bytes, which ${where} cannot send. Nothing was sent.`,
+    executionTimeMs: 0,
+  });
   if (row?.executionMode === "box") {
+    if (args.podFiles) return bytesRefused("a box script");
     if (args.dryRun) {
       return { success: false, error: BOX_NO_PREVIEW, executionTimeMs: 0 };
     }
@@ -83,6 +92,7 @@ export async function runSkill(
 
   const { provenance: _provenance, ...runArgs } = args;
   if (skillRuntime() === "pod") return runSkillInSandbox(runArgs);
+  if (args.podFiles) return bytesRefused("the Intelligence Service runtime");
   // Rollback path. The IS forwards no agent identity, session or verb act:
   // that is the gap R2 closes, kept only for SKILL_RUNTIME=is.
   if (args.dryRun) {

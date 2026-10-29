@@ -163,6 +163,7 @@ import type { WriteAckState } from "../../utils/write-door-idempotency.js";
 import {
   checkPodFilesAtAsk,
   describePodFileSend,
+  requiredToolIdsOf,
   resolvePodFilesAtRun,
   verbToolLabel,
 } from "./file-parameters.js";
@@ -1618,25 +1619,6 @@ export async function runResolvedSkill(
   return outcome;
 }
 
-/**
- * The tools a verb DECLARES (`skill → requires → tool` links, written by
- * `skills.setRequiredTools`) — the scope its decision covers (`verbAct`).
- */
-async function requiredToolIdsOf(skillId: string): Promise<string[]> {
-  const rows = await db
-    .select({ toolId: links.toId })
-    .from(links)
-    .where(
-      and(
-        eq(links.fromType, "skill"),
-        eq(links.fromId, skillId),
-        eq(links.toType, "tool"),
-        eq(links.linkType, "requires")
-      )
-    );
-  return rows.map((r) => r.toolId);
-}
-
 async function runResolvedSkillInner(
   skill: ResolvedSkillRow,
   parameters: Record<string, unknown> | undefined,
@@ -1723,6 +1705,14 @@ async function runResolvedSkillInner(
     return { kind: "error", message: filesResolved.message };
   }
   const runParameters = filesResolved.parameters;
+  // Files as bytes are turned into a provider body by the sandbox's bridge
+  // only (install refuses `:bytes` elsewhere): another tier never sees a handle.
+  if (filesResolved.podFiles && skill.kind !== "code") {
+    return {
+      kind: "error",
+      message: `Verb "${skill.name}" asks for files as bytes, which only a code verb can send. Nothing was sent.`,
+    };
+  }
 
   if (skill.kind === "builtin") {
     const handler = BUILTIN_VERBS[skill.name];
@@ -1823,6 +1813,8 @@ async function runResolvedSkillInner(
       skillId: skill.id,
       toolIds: await requiredToolIdsOf(skill.id),
     },
+    // This run's `:bytes` files: their handles resolve in its bridges only.
+    ...(filesResolved.podFiles ? { podFiles: filesResolved.podFiles } : {}),
   });
   if (!envelope.success) {
     return {

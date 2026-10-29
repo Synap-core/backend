@@ -17401,7 +17401,7 @@ export type PodFileProblem =
  | "too_large"
 /** More files than one parameter may carry. */
  | "too_many"
-/** The verb asks for a delivery not wired yet (bytes, phase 2). */
+/** The verb names a file delivery the pod does not know. */
  | "delivery_not_supported";
 export type ExecuteCapabilityResult = {
 	ackState: WriteAckState;
