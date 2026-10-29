@@ -2195,6 +2195,10 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "entity/create": "reversible",
   "entity/delete": "disruptive", // destroy
   "entity/renderer.set": "reversible", // one record's view
+  // Undoing a restore is a delete, which an agent can only propose: not
+  // cheaply reversible by the actor, so an agent's restore proposes, as its
+  // delete does (UI practices plan 0655ce1e, N3).
+  "entity/restore": "disruptive",
   "entity/update": "reversible", // kind/scope change is forcePropose'd (2.1)
   "entity/update_pack": "disruptive", // many records in one review; no pack undo
   "entity/transition": "reversible", // a status move is moved back; done/lost floored (2.85)
@@ -2459,6 +2463,8 @@ export const GATE_WRITE_DOORS = {
   "entity/create": "gate+automation",
   "entity/delete": "gate",
   "entity/renderer.set": "gate",
+  // `entities.restore`, the undo of `entity/delete`. Executor: `entity/restore`.
+  "entity/restore": "gate",
   "entity/update": "gate+automation",
   // R1 batch writes: the items of one `updateEntities` call that need review,
   // filed as ONE pack (`services/entities/update-entities.ts`). Always

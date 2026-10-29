@@ -190,6 +190,8 @@ export const AI_PRESET_EXCLUSIONS: Readonly<Record<string, string>> = {
   "workspace.update": "Space administration.",
   "workspace.adopt": "Space administration.",
   "workspace.restore": "Space administration.",
+  "entity.restore":
+    "Undo of a delete: the person's Undo, not a verb an AI key asks for.",
   "workspace.declare_source": "Space administration.",
   "workspace.configure_public_projection":
     "Space administration: publishes a space.",

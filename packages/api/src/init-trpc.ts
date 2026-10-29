@@ -8,9 +8,15 @@
 import { initTRPC } from "@trpc/server";
 import superjson from "superjson";
 import type { Context } from "./context.js";
+import type { FieldErrors } from "@synap-core/types/errors";
 import { createLogger } from "@synap-core/core";
 import { isSetupRequiredLike } from "./services/proposals/setup-required-error.js";
 import { readWeakDedupWire } from "./utils/weak-dedup-wire.js";
+import {
+  zodFieldErrors,
+  zodIssuesOf,
+  zodIssuesSentence,
+} from "./utils/zod-field-errors.js";
 
 const logger = createLogger({ module: "trpc" });
 
@@ -81,11 +87,28 @@ export const t = initTRPC.context<Context>().create({
         }
       : {};
 
+    // A refused INPUT (tRPC's `.input()` parse, or a door that throws
+    // BAD_REQUEST with the ZodError as cause) names its fields, so a form puts
+    // each message under its field instead of parsing the message. Only on
+    // BAD_REQUEST: a ZodError behind an INTERNAL error is the server's own
+    // parse failing, and its paths are not the caller's fields. One optional
+    // field, typed flat like `lifecycleStale`, never a union.
+    const zodIssues =
+      shape.data.code === "BAD_REQUEST" ? zodIssuesOf(cause) : null;
+    const fieldErrors: { fieldErrors?: FieldErrors } = zodIssues
+      ? { fieldErrors: zodFieldErrors(zodIssues) }
+      : {};
+
     return {
       ...shape,
       // Always expose the error message — clients need it for debugging.
-      // Stack traces are NOT included (only the message string).
-      message: shape.message,
+      // Stack traces are NOT included (only the message string). A refused
+      // input reads as one sentence, never zod's JSON dump of its issues; a
+      // message the door wrote itself is kept.
+      message:
+        zodIssues && shape.message === cause?.message
+          ? zodIssuesSentence(zodIssues)
+          : shape.message,
       data: {
         ...shape.data,
         ...(typeof captureQuestionStatus === "string"
@@ -106,6 +129,7 @@ export const t = initTRPC.context<Context>().create({
           : {}),
         ...setupRequired,
         ...lifecycleStale,
+        ...fieldErrors,
       },
     };
   },

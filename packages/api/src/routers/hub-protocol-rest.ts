@@ -20,6 +20,7 @@ import { idempotencyMiddleware } from "./hub-protocol/_middleware/idempotency.js
 import { sessionMiddleware } from "./hub-protocol/_middleware/session.js";
 import { AuthErrorEnvelopeSchema } from "./hub-protocol/rest/_codecs/auth.js";
 import { registerOpenApiStubs } from "./hub-protocol/rest/_openapi-stubs.js";
+import { hubValidationHook } from "./hub-protocol/rest/_validation-hook.js";
 import {
   type HubHono,
   registerAgentConfigsRoutes,
@@ -132,27 +133,14 @@ const logger = createLogger({ module: "hub-protocol-rest" });
 // sub-token resolver below (gated by HUB_PROTOCOL_SUB_TOKENS).
 //
 // `defaultHook` shapes Zod validation failures emitted by `app.openapi(...)`
-// routes into the canonical `{ error: string }` envelope used by every other
-// hub handler. Without it, @hono/zod-openapi returns the raw ZodError object,
-// which differs from `ErrorSchema` and would make response shapes inconsistent
-// across migrated vs non-migrated routes.
+// routes into the canonical `HubError` envelope (`{ error, fieldErrors }`, see
+// `hubValidationHook`). Without it, @hono/zod-openapi returns the raw ZodError
+// object, which differs from `ErrorSchema` and would make response shapes
+// inconsistent across migrated vs non-migrated routes.
 const app: HubHono = new OpenAPIHono<{
   Variables: import("./hub-protocol/rest/_shared.js").HubVariables;
 }>({
-  defaultHook: (result, c) => {
-    if (result.success) return;
-    // Flatten Zod issues into a single human-readable string. The full issue
-    // list is available in result.error.issues if a future debug surface
-    // wants it; for now we mirror the existing inline format used by the
-    // legacy handlers (e.g. "userId is required, fact is required").
-    const message = result.error.issues
-      .map((i) => {
-        const path = i.path.join(".");
-        return path ? `${path}: ${i.message}` : i.message;
-      })
-      .join(", ");
-    return c.json({ error: message || "Validation failed" }, 400);
-  },
+  defaultHook: hubValidationHook,
 });
 
 // Register the bearer-auth security scheme used by every protected route.

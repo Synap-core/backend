@@ -964,6 +964,67 @@ export function registerEntityExecutors(): void {
     },
   });
 
+  // ── entity / restore ─────────────────────────────────────────────────────
+  // The undo of entity/delete (`entities.restore`), materialized the same way:
+  // the APPROVER re-runs the restore door with their own role. `assertApplied`
+  // refuses a replay that only re-proposed, before the status flips.
+  registerProposalExecutor({
+    key: "entity/restore",
+    async execute({ proposal, payload, userId, input, deps }) {
+      void payload;
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const entityId = (innerData.id as string) || proposal.targetId;
+      const wsId = proposal.workspaceId ?? undefined;
+      let workspaceRole = "owner";
+      if (wsId) {
+        const membership = await getWorkspaceMembership(db, wsId, userId);
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "No workspace access",
+          });
+        }
+        workspaceRole = membership.role;
+      }
+      const entityCaller = regularEntitiesRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        ...(wsId ? { workspaceId: wsId } : {}),
+        workspaceRole,
+      } as unknown as Context);
+      const restored = await entityCaller.restore({
+        id: entityId,
+        source: "system",
+      });
+      assertApplied(restored);
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return {
+        success: true,
+        ...("effect" in restored ? { effect: restored.effect } : {}),
+      };
+    },
+  });
+
   // ── entity / merge ───────────────────────────────────────────────────────
   // Pod Hygiene W0: near-duplicate → glass-box merge. ALWAYS proposal-gated
   // (`merge` ∈ DESTRUCTIVE_ACTIONS). Materializes via EntityMergeService only

@@ -271,3 +271,13 @@ export function toSynapError(
     originalError: String(error),
   });
 }
+
+/**
+ * Field errors of a refused input: dotted input path (`items.0.title`) →
+ * the messages for that field; `""` is the input as a whole.
+ *
+ * The pod sends it as tRPC `error.data.fieldErrors` and as `fieldErrors` on a
+ * Hub REST 400, built from the Zod refusal (messages only, never the values
+ * the caller sent). Absent when the refusal is not a validation one.
+ */
+export type FieldErrors = Record<string, string[]>;
