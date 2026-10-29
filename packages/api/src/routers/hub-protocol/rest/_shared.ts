@@ -19,9 +19,11 @@ import {
   db,
   users,
   workspaceMembers,
+  workspaces,
   proposals,
   eq,
   and,
+  isNull,
   or,
   drizzleSql,
   getWorkspaceMembership,
@@ -935,12 +937,24 @@ export async function getUserAccessibleWorkspaceIds(
  * typo can never silently swap the two semantics.
  */
 export async function getUserMemberWorkspaceIds(
-  userId: string
+  userId: string,
+  opts: { activeOnly?: boolean } = {}
 ): Promise<string[]> {
-  const rows = await db
+  // `activeOnly` drops archived workspaces: a reader that gathers per-space
+  // data must not read them (every read there fails "has been archived").
+  const query = db
     .select({ workspaceId: workspaceMembers.workspaceId })
-    .from(workspaceMembers)
-    .where(eq(workspaceMembers.userId, userId));
+    .from(workspaceMembers);
+  const rows = opts.activeOnly
+    ? await query
+        .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
+        .where(
+          and(
+            eq(workspaceMembers.userId, userId),
+            isNull(workspaces.archivedAt)
+          )
+        )
+    : await query.where(eq(workspaceMembers.userId, userId));
   return rows.map((r) => r.workspaceId);
 }
 

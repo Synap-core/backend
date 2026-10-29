@@ -7105,11 +7105,31 @@
           {
             "schema": {
               "type": "string",
+              "description": "ISO timestamp, inclusive upper bound."
+            },
+            "required": false,
+            "description": "ISO timestamp, inclusive upper bound.",
+            "name": "toDate",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
               "description": "Default 50, hard-capped at 200."
             },
             "required": false,
             "description": "Default 50, hard-capped at 200.",
             "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Non-negative integer, default 0. Order is timestamp DESC, id DESC; a full page carries `nextOffset`."
+            },
+            "required": false,
+            "description": "Non-negative integer, default 0. Order is timestamp DESC, id DESC; a full page carries `nextOffset`.",
+            "name": "offset",
             "in": "query"
           },
           {
@@ -7135,7 +7155,8 @@
                     "events": {
                       "type": "array",
                       "items": { "$ref": "#/components/schemas/Event" }
-                    }
+                    },
+                    "nextOffset": { "type": "integer" }
                   },
                   "required": ["events"]
                 }
@@ -27248,7 +27269,7 @@
       "get": {
         "tags": ["FocusSessions"],
         "summary": "List focus sessions for a workspace or a project",
-        "description": "Scope by `workspaceId` (membership-checked), `projectId` (the project must be visible to the caller — `loadVisibleProject`, the same floor every project read and filing write uses), or both. At least one is required, except for a workspace-bound key, which reads its own workspace when it names none (another `workspaceId` is a 403). Rows are always floored at the sessions the caller can read.",
+        "description": "Scope by `workspaceId` (membership-checked), `projectId` (the project must be visible to the caller — `loadVisibleProject`, the same floor every project read and filing write uses), or both. With neither it lists pod-wide, except for a workspace-bound key, which reads its own workspace when it names none (another `workspaceId` is a 403). Rows are always floored at the sessions the caller can read. `offset` pages past `limit` (newest first, `id` breaks ties).",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -27328,6 +27349,12 @@
             "schema": { "type": "integer", "minimum": 1, "maximum": 50 },
             "required": false,
             "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": { "type": ["integer", "null"], "minimum": 0 },
+            "required": false,
+            "name": "offset",
             "in": "query"
           }
         ],
