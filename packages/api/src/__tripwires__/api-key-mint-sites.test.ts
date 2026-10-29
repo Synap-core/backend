@@ -161,7 +161,9 @@ const PRIVILEGED_SCOPE_RULE: Record<keyof typeof MINT_SITES, PrivilegedRule> = {
   "packages/api/src/services/agent-identity-service.ts":
     "provisionSurfaceAgentKey mints SETUP_AGENT_HUB_SCOPES or its caller's list: setup.ts (rule below) and OAuth /token + /mcp/redeem, whose list comes only from mapCpScopesToPodScopes (drops every privileged scope). createNamedAgent: fixed read+write.",
   "packages/api/src/routers/api-keys.ts": {
-    // create, rotate, createForWorkspace (+ the integration door: fixed scopes).
+    // create, rotate, createForWorkspace (+ the integration door: fixed
+    // scopes; createSystemKey / adminCreateServiceKey: podAdminProcedure +
+    // requireFreshAuthentication, the rule itself).
     rule: /\bassertMayMintScopes\(/,
     calls: 3,
   },
@@ -183,6 +185,8 @@ const PRIVILEGED_SCOPE_RULE: Record<keyof typeof MINT_SITES, PrivilegedRule> = {
     "server-chosen: hub-protocol read/write from what was approved.",
   "packages/api/src/services/app-person-token.ts":
     "server-chosen: APP_PERSON_SCOPES or hub-protocol.read.",
+  "packages/api/src/services/person-key-mint.ts":
+    "PRIMITIVE — mints the scopes its caller hands it: apiKeys.create (rule above, run on the derived scopes) and a CLI key request (services/key-requests.ts), whose scopes are derived from `uses`, and no use derives a privileged scope (types grants/key-uses.test.ts).",
   "packages/api/src/routers/hub-protocol/rest/keys.ts":
     "INTEGRATION_HUB_SCOPES.cli, fixed, none privileged.",
   "apps/api/src/routers/provision.ts":
