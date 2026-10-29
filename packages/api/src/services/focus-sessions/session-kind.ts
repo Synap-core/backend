@@ -100,7 +100,7 @@ function receiptWhere(): SQL {
  * negation is NULL and the row would vanish from every lens — the same NULL
  * trap `notTriagePendingWhere` documents.
  */
-function notReceiptWhere(): SQL {
+export function notReceiptWhere(): SQL {
   return drizzleSql`${focusSessions.metadata} #>> '{kind}' IS DISTINCT FROM ${AGENT_PROPOSAL_PACKAGE_KIND}` as SQL;
 }
 

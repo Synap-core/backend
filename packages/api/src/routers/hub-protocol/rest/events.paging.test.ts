@@ -23,7 +23,9 @@ function buildTestApp(): HubHono {
 describe("GET /events — paging", () => {
   let search: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
-    search = vi.spyOn(eventRepository, "searchEvents").mockResolvedValue([]);
+    search = vi.spyOn(eventRepository, "searchEvents");
+    search.mockReset();
+    search.mockResolvedValue([]);
   });
 
   it("passes offset and toDate through", async () => {
