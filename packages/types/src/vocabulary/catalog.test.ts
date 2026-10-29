@@ -123,6 +123,13 @@ describe("English is unchanged: no locale, the ambient default and an explicit e
     expect(resolveObjectNounPlural("api_key")).toBe("API keys");
   });
 
+  it("a token named like an Object member humanizes, never reads the prototype", () => {
+    expect(resolveObjectNoun("constructor")).toBe("Constructor");
+    expect(resolveObjectNounPlural("toString")).toBe("Tostrings");
+    expect(resolveActionLabel("constructor", "past")).toBe("Constructor");
+    expect(resolveStatusLabel("hasOwnProperty")).toBe("Has own property");
+  });
+
   it("the English bundle says when a noun takes 'an'", () => {
     expect(nounParams(resolveNoun("task", "en"))).toEqual({
       obj: "task",

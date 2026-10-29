@@ -135,7 +135,7 @@ export function humanizeToken(token: string): string {
   if (!words) return "";
   const cased = words
     .split(" ")
-    .map((w) => CASED_WORDS[w] ?? w)
+    .map((w) => (Object.hasOwn(CASED_WORDS, w) ? CASED_WORDS[w]! : w))
     .join(" ");
   return cased.charAt(0).toUpperCase() + cased.slice(1);
 }
@@ -952,7 +952,9 @@ export function resolveObjectNoun(
 
 function canonicalKind(kind: string): string {
   const key = kind.toLowerCase();
-  return OBJECT_KIND_ALIASES[key] ?? key;
+  return Object.hasOwn(OBJECT_KIND_ALIASES, key)
+    ? OBJECT_KIND_ALIASES[key]!
+    : key;
 }
 
 /**
