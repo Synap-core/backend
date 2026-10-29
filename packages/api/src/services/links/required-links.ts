@@ -167,29 +167,28 @@ export function requiredLinkCheckOf(
 }
 
 /**
- * The required links a NEW record of `profileId` leaves out, given the edges
- * the same write carries (`present`; a plain create carries none). Never
- * throws: a failed read is `unchecked`, never `clear`.
+ * The required links a NEW record of `kind` leaves out, given the edges the
+ * same write carries (`present`; a plain create carries none). Read by kind
+ * SLUG, like the graph check: the create door and the reconcile may resolve
+ * different rows of one kind (a workspace copy), and either row's mark
+ * counts. Never throws: a failed read is `unchecked`, never `clear`.
  */
 export async function checkRequiredLinksForCreate(params: {
-  profileId: string | null | undefined;
+  kind: string | null | undefined;
   present?: readonly PresentLink[];
   database?: Database;
 }): Promise<RequiredLinkCheck> {
-  if (!params.profileId) return { status: "clear", missing: [] };
+  if (!params.kind) return { status: "clear", missing: [] };
   try {
-    const rules = await readRequiredLinkRules(
-      [params.profileId],
+    const rules = await readRequiredLinkRulesForKinds(
+      [params.kind],
       params.database
     );
     return requiredLinkCheckOf(
       dedupeMissing(missingRequiredLinks(rules, params.present ?? []))
     );
   } catch (err) {
-    logger.warn(
-      { err, profileId: params.profileId },
-      "required-link check failed"
-    );
+    logger.warn({ err, kind: params.kind }, "required-link check failed");
     return { status: "unchecked", missing: [] };
   }
 }

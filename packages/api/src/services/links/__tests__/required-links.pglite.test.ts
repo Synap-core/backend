@@ -152,7 +152,7 @@ const RELATES_TO_LEAD = {
 describe("checkRequiredLinksForCreate — what a new record leaves out", () => {
   it("a new touch misses its required relates_to, once, naming both target kinds", async () => {
     const check = await checkRequiredLinksForCreate({
-      profileId: ids.touchKind,
+      kind: "outreach-touch",
     });
     expect(check).toEqual({ status: "missing", missing: [RELATES_TO_LEAD] });
     expect(missingLinkWarning(check.missing[0]!)).toBe(
@@ -161,7 +161,7 @@ describe("checkRequiredLinksForCreate — what a new record leaves out", () => {
   });
 
   it("a kind with no required link is clear (sent_to is declared, not required)", async () => {
-    expect(await checkRequiredLinksForCreate({ profileId: ids.note })).toEqual({
+    expect(await checkRequiredLinksForCreate({ kind: "note" })).toEqual({
       status: "clear",
       missing: [],
     });
@@ -175,7 +175,7 @@ describe("checkRequiredLinksForCreate — what a new record leaves out", () => {
     };
     expect(
       await checkRequiredLinksForCreate({
-        profileId: ids.touchKind,
+        kind: "outreach-touch",
         database: broken as never,
       })
     ).toEqual({ status: "unchecked", missing: [] });

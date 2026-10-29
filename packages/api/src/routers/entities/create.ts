@@ -1477,7 +1477,7 @@ export const createProcs = {
       // refuse). A plain create carries no edge, so each one is missing; the
       // answer rides the reply and, on a proposal, the card.
       const requiredLinks = await checkRequiredLinksForCreate({
-        profileId: earlyResolvedProfile?.id,
+        kind: profileSlug,
       });
       const requiredLinksToReport =
         requiredLinks.status !== "clear" ? { requiredLinks } : {};
