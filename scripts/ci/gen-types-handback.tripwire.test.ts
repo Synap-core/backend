@@ -84,7 +84,8 @@ describe("ci.yml hands back the regenerated API types on a red (F10)", () => {
     expect(HOW).toContain("${FIX}");
   });
 
-  describe("the drift step's shell", () => {
+  // 20 s, not vitest's 5: each case spawns git and bash, slow on a loaded box.
+  describe("the drift step's shell", { timeout: 20_000 }, () => {
     const script = (() => {
       const m = /\n {8}run: \|\n((?: {10}.*\n)+)/.exec(DRIFT);
       return (m?.[1] ?? "").replace(/^ {10}/gm, "");
