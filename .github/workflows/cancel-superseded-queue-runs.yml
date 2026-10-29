@@ -1,0 +1,47 @@
+name: Cancel superseded queue runs
+
+# When the merge queue (re)builds an entry, the CI runs of entries that no
+# longer exist are cancelled: every move of main rebuilds the entries behind
+# it on a new base, and the old entries' runs kept holding slots (24 of them
+# in the org's 20-job cap on 2026-10-29; finding 66c40812, decision ffaafe15).
+# Only ci.yml `merge_group` runs on a `gh-readonly-queue/main/` branch whose
+# head is no live entry's head and not already on main: never a push run,
+# never a PR run, never a live entry's run. If the live entries cannot be
+# read, nothing is cancelled. The rules and their tripwire:
+# scripts/ci/cancel-superseded-queue-runs.mjs.
+#
+# No concurrency group: a group would cancel a pending sweep, and that
+# cancelled run would show on a queue commit. Two sweeps at once cancel the
+# same runs; the second gets 409 and says so.
+
+on:
+  merge_group:
+    types: [checks_requested]
+
+permissions: {}
+
+jobs:
+  sweep:
+    name: Cancel superseded queue runs
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      # Least privilege: list and cancel workflow runs, read the merge queue
+      # (GraphQL) and the compare API, read the script.
+      actions: write
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            scripts/ci/cancel-superseded-queue-runs.mjs
+            scripts/ci/cancel-closed-pr-runs.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Cancel the runs of entries no longer in the queue
+        run: node scripts/ci/cancel-superseded-queue-runs.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TRIGGER_SHA: ${{ github.event.merge_group.head_sha }}
