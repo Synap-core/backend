@@ -6,6 +6,7 @@
 #   cp ~/wt/dev-facts/scripts/devbox/devbox-dev-facts.{service,timer} ~/.config/systemd/user/
 #   (key: see ~/.config/synap-obs.env below)  systemctl --user daemon-reload
 #   systemctl --user enable --now devbox-dev-facts.timer
+# Live build of the intelligence hub: set SNAPSHOT_IS_HEALTH_URL (its private /health/details) in ~/.config/synap-obs.env; unset = not configured (live null).
 # Update: git -C ~/wt/dev-facts pull --ff-only (by hand: the unit never pulls code that runs with the key).
 [Unit]
 Description=Devbox dev-facts producer: post repo snapshots (PRs, checks, main health, live) to the pod
