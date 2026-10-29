@@ -271,18 +271,6 @@ export async function handleFocusSessionReaper(): Promise<void> {
   } else {
     logger.debug("Goal loop sweeper not registered — skipped");
   }
-  // Abandoned agent sessions (W-B4). Its own failure never stops the sweep.
-  try {
-    const abandoned = await staleAbandonedAgentSessions();
-    if (abandoned > 0) {
-      logger.info(
-        { abandoned },
-        "Focus session reaper marked abandoned agent sessions stale"
-      );
-    }
-  } catch (err) {
-    logger.error({ err }, "Abandoned agent session sweep failed");
-  }
   try {
     // Receipts first, so a finished one is CLOSED rather than swept to stale.
     const receiptsClosed = await closeIdleReceipts();
@@ -301,6 +289,22 @@ export async function handleFocusSessionReaper(): Promise<void> {
         { stoppedStaled },
         "Focus session reaper staled sessions stopped on their asks"
       );
+    }
+
+    // Then abandoned agent sessions (W-B4), AFTER the stopped-on-asks door so a
+    // session both rules match goes through that door and its asks end with it
+    // (decision E1); this rule keeps the asks owed. Its own failure never stops
+    // the sweep.
+    try {
+      const abandoned = await staleAbandonedAgentSessions();
+      if (abandoned > 0) {
+        logger.info(
+          { abandoned },
+          "Focus session reaper marked abandoned agent sessions stale"
+        );
+      }
+    } catch (err) {
+      logger.error({ err }, "Abandoned agent session sweep failed");
     }
 
     // Cutoff computed in SQL (int * interval), no Date param bound — mirrors
