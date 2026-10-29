@@ -277,7 +277,12 @@ export async function ask(params: AskParams): Promise<AskResult> {
           query,
           workspaceId ?? userId,
           limit,
-          { minMatchedTerms: 2, ignoreTerms: PROCEDURAL_IGNORED_TERMS }
+          {
+            // Uncued runbooks join every question (no project lens), so they
+            // need a stronger match than a cued how-to ask.
+            minMatchedTerms: intent === "procedural" ? 2 : 3,
+            ignoreTerms: PROCEDURAL_IGNORED_TERMS,
+          }
         )
       )
     : Promise.resolve(null);
@@ -360,6 +365,20 @@ export async function ask(params: AskParams): Promise<AskResult> {
           })
         )
       : { status: "ok", items: [] };
+  }
+
+  // The structured block leads the answer, so rows the semantic pass also hit
+  // come first (in semantic order); the rest keep their createdAt order.
+  if (structured && structured.items.length > 1) {
+    const rank = new Map(
+      semantic.entities.map((e, i) => [(e as { id?: string }).id, i] as const)
+    );
+    const at = (r: Record<string, unknown>) =>
+      rank.get(r.id as string) ?? Number.MAX_SAFE_INTEGER;
+    structured = {
+      ...structured,
+      items: [...structured.items].sort((a, b) => at(a) - at(b)),
+    };
   }
 
   // SPACES hint — where the understood kinds live. Reads the semantic

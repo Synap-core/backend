@@ -490,7 +490,26 @@
    * 2026-09-27; was 760px in the shell and 68ch in the document). */
   --synap-measure-reading: 760px;
   --synap-measure-list: 880px;
+  --synap-measure-prose: 34em;
   --synap-measure-detail: 960px;
+
+  /* ── Focus ring ─────────────────────────────────────────────────────────────
+   * The ONE focus recipe (founder, 2026-10-28, plan 0655ce1e §4.1 D): every `:focus-visible` draws
+   * `outline: var(--synap-focus-ring-width) solid var(--synap-focus-ring)` with
+   * `outline-offset: var(--synap-focus-ring-offset)`; a row inside a clipping scroll container insets it
+   * (`outline-offset: calc(-1 * var(--synap-focus-ring-width))`). Outline only: never a box-shadow
+   * ring, never the AI colour. The colour is `--synap-focus-ring` (color tokens, 3:1 on every neutral
+   * ground, scripts/focus-ring.test.ts). Guard: `check:focus-ring`. */
+  --synap-focus-ring-width: 2px;
+  --synap-focus-ring-offset: 2px;
+
+  /* ── Speed ──────────────────────────────────────────────────────────────────
+   * The speed numbers (founder, 2026-10-28, plan 0655ce1e K5). A skeleton waits `skeleton-delay`
+   * before it shows, so a fast read never flashes one (`.synap-spatial-skeleton`, once for every
+   * caller). `interaction-budget` is the local input-to-paint budget (INP "good"): the dev-only
+   * interaction timer warns above it. */
+  --synap-skeleton-delay: 300ms;
+  --synap-interaction-budget: 200ms;
 }
 
 /* ───────────────────────────────── LIGHT ───────────────────────────────────

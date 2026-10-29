@@ -2316,7 +2316,11 @@ export function isReversibleWrite(eventKey: string): boolean {
  * `forcePropose: !ownWorkOrganise`, so outside the class nothing changes.
  *
  * Closed list. Recording a decision the person made in chat, starting a
- * track, unfiling, a space move and a track filing are NOT here.
+ * track, unfiling and a space move are NOT here. Filing its own session into
+ * a GOAL (track) of a project the person named is (founder D1, 2026-10-29),
+ * through the same `focus_session.update` key and the same proof, but only
+ * when the filing writes no `project --uses--> space` stamp, the one part an
+ * Undo cannot take back; such a filing stays a proposal.
  */
 export const OWN_ORGANISE_CLASS_PATTERN = "@own-organise";
 
@@ -2324,7 +2328,7 @@ export const OWN_ORGANISE_CLASS_PATTERN = "@own-organise";
 export const OWN_ORGANISE_EVENT_KEYS = [
   /** File records into a project (`file-entities.ts`). */
   "project.file_entities",
-  /** File its own session into a project (`session-filing-gate.ts`). */
+  /** File its own session into a project or a goal of it (`session-filing-gate.ts`). */
   "focus_session.update",
   /** Close its own task (`move-status.ts`, into a `done` option). */
   "entity.transition",

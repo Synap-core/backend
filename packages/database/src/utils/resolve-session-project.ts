@@ -46,6 +46,13 @@ export interface SessionProjectContext {
    * it has exactly one". A subject in two projects is a tie → honest abstain.
    */
   subjectEntityId?: string | null;
+  /**
+   * Rung 3.5 — the acting AGENT's declared project focus
+   * (`synap_set_project_focus`), read by the caller (`getAgentFocusProjectId`)
+   * and passed as a value. A declaration, never an inference: the ladder ranks
+   * it below the bindings above and above the subject (`project-resolution-service.ts`).
+   */
+  focusProjectId?: string | null;
 }
 
 export async function resolveSessionProjectPlacement(
@@ -57,6 +64,7 @@ export async function resolveSessionProjectPlacement(
     explicitProjectId: ctx.explicitProjectId ?? null,
     sessionId: ctx.parentSessionId ?? null,
     channelId: ctx.channelId ?? null,
+    focusProjectId: ctx.focusProjectId ?? null,
     ...(ctx.subjectEntityId ? { relatedEntityIds: [ctx.subjectEntityId] } : {}),
   });
 }
