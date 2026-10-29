@@ -4,6 +4,7 @@
  * IS. Thin doors over the tRPC procedures the surface itself reads — never a
  * second predicate:
  *
+ *   GET /lifecycle             → `lifecycle.get`        (the declared stages)
  *   GET /lifecycle/board       → `lifecycle.board`      (the pipeline)
  *   GET /lifecycle/throughput  → `lifecycle.throughput` (the goal line)
  *   GET /lifecycle/home        → `lifecycle.home`       (what each space makes)
@@ -36,6 +37,10 @@ import {
   httpStatusForTrpcError,
 } from "./_shared.js";
 import type { Context as HonoContext } from "hono";
+import { TRPCError } from "@trpc/server";
+import { getRequestGrant } from "@synap/database";
+import { isFencedGrant } from "../../../access/grant-door-fence.js";
+import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { lifecycleRouter } from "../../lifecycle.js";
 import { signalsRouter } from "../../signals.js";
@@ -48,6 +53,11 @@ const lensQuery = {
   projectId: uuidQueryParam.optional(),
   trackId: uuidQueryParam.optional(),
 };
+
+const declaredQuery = z.object({
+  profileSlug: z.string().min(1),
+  workspaceId: uuidQueryParam.optional(),
+});
 
 const boardQuery = z.object({
   ...lensQuery,
@@ -195,6 +205,19 @@ const errors = {
 export function registerIntentSurfacesRoutes(app: HubHono): void {
   registerOpenApi(app, {
     method: "get",
+    path: "/lifecycle",
+    tags: ["Lifecycle"],
+    summary: "The declared lifecycle of a kind or role",
+    description:
+      "The stages a kind or role declares (`lifecycle.get`): the status `property` and its `options` in declared order, each with `key`, `label`, `category`, `tone` and `humanOnly`. Declared data, no rows. A key bounded by a grant must name `workspaceId` and hold `entity.<profileSlug>.read` (`facet.read` for a role) there (403 otherwise).",
+    request: { query: declaredQuery },
+    responses: {
+      200: { description: "Lifecycle", schema: z.object({}).passthrough() },
+      ...errors,
+    },
+  });
+  registerOpenApi(app, {
+    method: "get",
     path: "/lifecycle/board",
     tags: ["Lifecycle"],
     summary: "The pipeline of a kind or role",
@@ -316,6 +339,36 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
           ...(q.sessionId ? { sessionId: q.sessionId } : {}),
           ...(q.limit ? { limit: q.limit } : {}),
         }),
+      { confineWorkspace: true }
+    )
+  );
+  app.get(
+    "/lifecycle",
+    readDoor(
+      "lifecycle.get",
+      declaredQuery,
+      async (ctx, q) => {
+        const stages = await lifecycleRouter.createCaller(ctx).get({
+          profileSlug: q.profileSlug,
+          ...(q.workspaceId ? { workspaceId: q.workspaceId } : {}),
+        });
+        // A fenced key reads a kind's stages only where its grant reads that
+        // kind (`entity.<kind>.read`) or that role (`facet.read`): the
+        // permission it needs for the rows themselves.
+        if (isFencedGrant(getRequestGrant())) {
+          const denied = q.workspaceId
+            ? await grantWriteDenial({
+                subjectType: stages.profileKind === "role" ? "facet" : "entity",
+                action: "read",
+                workspaceId: q.workspaceId,
+                data: { profileSlug: q.profileSlug },
+              })
+            : "A key bounded by a grant must name `workspaceId`.";
+          if (denied)
+            throw new TRPCError({ code: "FORBIDDEN", message: denied });
+        }
+        return stages;
+      },
       { confineWorkspace: true }
     )
   );
