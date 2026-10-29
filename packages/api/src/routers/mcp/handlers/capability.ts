@@ -33,6 +33,7 @@ import {
   type CallToolResult,
   type McpHandlerMap,
 } from "./shared.js";
+import { AccessContext, scopedDb } from "../../../access/index.js";
 
 export const capabilityHandlers: McpHandlerMap = {
   // Governed FIELD retirement — the same door as capability verb
