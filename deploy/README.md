@@ -210,6 +210,13 @@ What changes for an operator when a pod updates past a release. Newest first.
   `RATE_LIMIT_CRUD_READ_SESSION_MAX` for a signed-in person). Writes keep
   `RATE_LIMIT_CRUD_MAX`, so an agent stuck writing in a loop still stops at
   `500`.
+- **An answer from `synap_ask` spends the AI budget.** It runs a model, so
+  `synap_ask` with an answer (and the Hub's `POST /knowledge/answer`, which
+  `synap ask` calls) spends `RATE_LIMIT_AI_MAX` (default `60` per 5 minutes,
+  per key), not the read budget. `synap_ask` with `detail:"sources"` and the
+  retrieval doors (`/knowledge/search`) run no model and are reads. The MCP
+  door's own per-key burst cap went from 100 to 300 requests a minute, so the
+  budgets above are the ones that apply.
 - **Budgets from the pod's own settings.** The owner can set any of these
   budgets on the pod itself, without a redeploy: `GET /api/pod-rate-limits`
   lists every budget with its value and where it comes from (the pod's

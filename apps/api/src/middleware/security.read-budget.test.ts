@@ -7,8 +7,8 @@
  * now spend their own bucket; writes keep theirs, so a runaway writer still
  * stops at the write budget.
  *
- * Negative control (re-run when touching this): make `isCrudRead` in
- * `security.ts` return false — "reads go on past the write budget" and "a
+ * Negative control (re-run when touching this): make `crudRequestKind` in
+ * `security.ts` return "write" — "reads go on past the write budget" and "a
  * read-only MCP tool call is a read" must go RED.
  */
 

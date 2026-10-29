@@ -448,7 +448,7 @@ mcpHttpApp.post("/", async (c) => {
     );
   }
 
-  // ── 1b. Per-key rate limit (100 req/min) ─────────────────────────────────
+  // ── 1b. Per-key burst cap (300 req/min, hub-protocol-rate-limit.ts) ──────
   try {
     checkHubRateLimit(keyRecord.id, "mcp");
   } catch (err) {
