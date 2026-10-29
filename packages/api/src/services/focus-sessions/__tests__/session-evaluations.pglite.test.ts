@@ -134,6 +134,7 @@ vi.mock("../../messaging/post-message.js", async (importOriginal) => ({
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   focusSessions,
+  lifecycleTransitionOutbox,
   playbooks,
   playbookRuns,
   proposals,
@@ -254,6 +255,7 @@ describe("session evaluations", () => {
     // and its workspace floor (decision C).
     for (const t of [
       focusSessions,
+      lifecycleTransitionOutbox,
       playbooks,
       playbookRuns,
       proposals,

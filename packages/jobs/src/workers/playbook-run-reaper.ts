@@ -46,6 +46,7 @@ import {
   playbookRuns,
   focusSessions,
   sessionWaitsOnPersonWhere,
+  setSessionStatus,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { closeSessionViaDoor } from "../utils/session-close.js";
@@ -187,17 +188,16 @@ export async function handlePlaybookRunReaper(): Promise<void> {
         .map((r) => r.sessionId)
         .filter((id): id is string => !!id);
       // Status only, the focus-session reaper's own write: `updatedAt` stays
-      // the last real activity. Not a lifecycle exit, so not the close door.
+      // the last real activity. Not a lifecycle exit, so not the close door;
+      // the one session status write, so each owes its transition.
       if (staleSessionIds.length > 0) {
-        await db
-          .update(focusSessions)
-          .set({ status: "stale" })
-          .where(
-            and(
-              inArray(focusSessions.id, staleSessionIds),
-              drizzleSql`${focusSessions.status} IN ('active', 'paused')`
-            )
-          );
+        await setSessionStatus(db, {
+          where: inArray(focusSessions.id, staleSessionIds),
+          from: ["active", "paused"],
+          to: "stale",
+          actor: { kind: "system" },
+          reason: "Its run's external agent went quiet.",
+        });
       }
       logger.info(
         { staled: staled.length },

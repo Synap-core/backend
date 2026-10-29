@@ -25,6 +25,7 @@ export * from "./services/profile-resolution-service.js";
 export * from "./services/renderer-binding-service.js";
 export * from "./services/facet-resolution-service.js";
 export * from "./services/property-validation-service.js";
+export { suggestClosest } from "./services/did-you-mean.js";
 export * from "./services/property-reconciliation.js";
 export * from "./services/property-index-service.js";
 export * from "./services/view-filter-compiler.js";
@@ -380,6 +381,8 @@ export {
 export { normalizeProfileScope } from "./utils/normalize-profile-scope.js";
 export {
   buildStoredConstraints,
+  addEnumOptionRefusal,
+  withAddedEnumOption,
   readStoredEnum,
   readStoredEnumOptions,
   normalizeEnumOptions,
@@ -459,6 +462,17 @@ export {
 } from "./services/lifecycle/lifecycle-def-guard.js";
 export { declaredLifecycleProfilesStatement } from "./services/lifecycle/project-lifecycle-columns.js";
 export { expireProposalsStaleAfterMove } from "./services/lifecycle/stale-proposals.js";
+export {
+  setSessionStatus,
+  writeSessionPatch,
+  type SetSessionStatusInput,
+  type SetSessionStatusResult,
+} from "./services/lifecycle/session-status.js";
+export {
+  buildWorkUnitTransition,
+  workUnitActorOf,
+  type WorkUnitActor,
+} from "./services/lifecycle/work-unit-transition.js";
 export {
   LifecycleWriteOutsideDoorError,
   assertNoLifecycleMove,

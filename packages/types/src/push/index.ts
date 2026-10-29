@@ -45,6 +45,7 @@ export const PUSH_CATEGORIES = [
   "decision-blocking",
   "work-broke",
   "mention",
+  "morning-brief",
   "system",
 ] as const;
 export type PushCategory = (typeof PUSH_CATEGORIES)[number];
@@ -77,10 +78,10 @@ export interface PushCategoryPolicy {
  * intelligence, issuer approval) belongs on the Settings health mark, so it
  * is opt-in.
  *
- * NOT HERE (yet): the morning brief ("3 need you · 4 landed overnight", one
- * passive push at a chosen time). It has no producer — a category and a time
- * setting nobody reads would be a toggle that does nothing — so it joins this
- * list together with its producer, never before.
+ * `morning-brief` ("3 need you", one PASSIVE push a day at the person's
+ * chosen time) joined with its producer (`api/src/services/morning-brief/`,
+ * W0 of the status-flow plan, 2026-10-29). Passive: it lands silently in the
+ * notification list and never breaks through, so it costs no interruption.
  */
 export const PUSH_CATEGORY_POLICY: Readonly<
   Record<PushCategory, PushCategoryPolicy>
@@ -104,6 +105,11 @@ export const PUSH_CATEGORY_POLICY: Readonly<
     defaultOn: true,
     level: "interruptive",
     interruptionLevel: "active",
+  },
+  "morning-brief": {
+    defaultOn: true,
+    level: "passive",
+    interruptionLevel: "passive",
   },
   system: { defaultOn: false, level: "passive", interruptionLevel: "passive" },
 };
@@ -140,6 +146,10 @@ export const PUSH_CATEGORY_LABELS: Readonly<
   mention: {
     name: "When you're mentioned",
     hint: "Someone names you or invites you to a space",
+  },
+  "morning-brief": {
+    name: "Your morning brief",
+    hint: "One quiet summary a day of what waits on you",
   },
   system: {
     name: "System notices",
@@ -218,6 +228,8 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
   // A person addressed you by name.
   "chat.mention": "mention",
   "workspace.invite": "mention",
+  // The once-a-day summary of what waits on you (passive, never rings).
+  "ai.proactive.morning_briefing": "morning-brief",
   // Health — the Settings mark carries it; a push only if opted in.
   "pod.storage_warning": "system",
   "system.intelligence_degraded": "system",

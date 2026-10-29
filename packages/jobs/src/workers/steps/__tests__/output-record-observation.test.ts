@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
  * `guardProducerEffect` (only the governance ladder and the sinks are mocked).
  */
 
-const { resolveDecisionMock, safeExternalFetchMock, insertChannelMessageMock } =
+const { resolveDecisionMock, safePublicFetchMock, insertChannelMessageMock } =
   vi.hoisted(() => ({
     resolveDecisionMock: vi.fn(
       async (input: { agentUserId: string; forcePropose?: boolean }) => {
@@ -22,7 +22,7 @@ const { resolveDecisionMock, safeExternalFetchMock, insertChannelMessageMock } =
         }
       }
     ),
-    safeExternalFetchMock: vi.fn(async () => ({ ok: true, status: 200 })),
+    safePublicFetchMock: vi.fn(async () => ({ ok: true, status: 200 })),
     insertChannelMessageMock: vi.fn(async () => ({ id: "msg-1" })),
   }));
 
@@ -64,7 +64,7 @@ vi.mock("../../../utils/vault-resolver.js", () => ({
 }));
 vi.mock("@synap/shared-utils", () => ({
   validateExternalUrl: vi.fn(() => ({ valid: true })),
-  safeExternalFetch: safeExternalFetchMock,
+  safePublicFetch: safePublicFetchMock,
 }));
 vi.mock("../../template-resolve.js", () => ({
   deepResolveTemplates: vi.fn((c: unknown) => c),

@@ -31,6 +31,7 @@
     "test:unit": "vitest run -c vitest.unit.config.ts",
     "dev": "tsx src/dev.ts",
     "index-entities": "tsx src/scripts/index-existing-entities.ts",
+    "index-passages": "tsx src/scripts/index-document-passages.ts",
     "pod-hygiene-sweep": "tsx src/scripts/pod-hygiene-sweep.ts"
   },
   "dependencies": {

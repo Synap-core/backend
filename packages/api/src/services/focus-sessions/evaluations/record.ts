@@ -384,6 +384,9 @@ export const CRITERION_SLOT_ASK: SlotAsk = {
     { label: "Pass", value: "pass" },
     { label: "Fail", value: "fail" },
   ],
+  // Closed: the answer IS the verdict (`criterionVerdictOf`); words would
+  // mark the slot answered while the grade never moves.
+  allowOther: false,
 };
 
 /** A criterion slot answer's verdict, or `null` when it is not pass/fail. */
@@ -497,10 +500,13 @@ export async function loadSessionEvaluationSummary(
  */
 export async function attachSessionVerdicts<
   T extends Pick<FocusSession, "id" | "userId" | "criteria">,
->(rows: T[]): Promise<Array<T & { verdict?: SessionVerdict }>> {
+>(
+  rows: T[],
+  database: typeof db = db
+): Promise<Array<T & { verdict?: SessionVerdict }>> {
   const graded = rows.filter((r) => readCriteria(r.criteria).length > 0);
   if (graded.length === 0) return rows;
-  const evals = await db
+  const evals = await database
     .select()
     .from(sessionEvaluations)
     .where(

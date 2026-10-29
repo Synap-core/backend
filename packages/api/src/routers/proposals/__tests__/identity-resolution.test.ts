@@ -643,6 +643,162 @@ describe("composite materialize uses the same helper per ref", () => {
   });
 });
 
+describe("composite materialize: one answer for every twin (identityResolutionForTwins)", () => {
+  const SECOND = "44444444-4444-4444-8444-444444444444";
+  const relationCaller = {
+    create: vi.fn(async (input: { sourceEntityId: string }) => ({
+      id: `rel-${input.sourceEntityId}`,
+    })),
+  };
+  beforeEach(() => {
+    relationCaller.create.mockClear();
+  });
+
+  /** A create door whose same-name gate refuses "Ada" (the twins given). */
+  function gateOn(twinIds: string[]) {
+    const creates: Array<Record<string, unknown>> = [];
+    return {
+      creates,
+      caller: {
+        create: async (input: Record<string, unknown>) => {
+          creates.push(input);
+          if (
+            input.title === "Ada" &&
+            input.approvalDuplicate !== "keep_both"
+          ) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: "An entity named Ada already exists.",
+              cause: buildWeakDedupCause(
+                twinIds.map((id) => ({ id, title: "Ada", type: "person" }))
+              ),
+            });
+          }
+          return { id: input.title === "Ada" ? CREATED : `new-${input.title}` };
+        },
+        get: async ({ id }: { id: string }) => ({
+          entity: { id, title: "Ada", description: null, properties: {} },
+        }),
+        update: async () => ({}),
+      },
+    };
+  }
+  const ops = [
+    {
+      op: "create_entity" as const,
+      ref: "ada",
+      profileSlug: "person",
+      title: "Ada",
+    },
+    {
+      op: "create_entity" as const,
+      ref: "acme",
+      profileSlug: "company",
+      title: "Acme",
+    },
+    {
+      op: "create_relation" as const,
+      sourceRef: "ada",
+      targetRef: "acme",
+      type: "works_at",
+    },
+  ];
+
+  it("keep_existing links the one twin and the approval goes on", async () => {
+    const gate = gateOn([CANDIDATE]);
+    const result = await materializeCompositeGraph(
+      ops,
+      gate.caller,
+      relationCaller,
+      undefined,
+      {
+        askReviewerOnDuplicate: true,
+        identityResolutionForTwins: "keep_existing",
+      }
+    );
+    expect(result.entities[0]).toMatchObject({
+      entityId: CANDIDATE,
+      linked: true,
+      identity: { verb: "keep_existing", entityId: CANDIDATE, ref: "ada" },
+    });
+    expect(result.created).toBe(1);
+    expect(result.entities[1]?.entityId).toBe("new-Acme");
+    expect(relationCaller.create).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceEntityId: CANDIDATE })
+    );
+    expect(result.entitiesSkipped).toBeUndefined();
+  });
+
+  it("keep_existing leaves out a record several existing ones share, and goes on", async () => {
+    const gate = gateOn([CANDIDATE, SECOND]);
+    const result = await materializeCompositeGraph(
+      ops,
+      gate.caller,
+      relationCaller,
+      undefined,
+      {
+        askReviewerOnDuplicate: true,
+        identityResolutionForTwins: "keep_existing",
+      }
+    );
+    expect(result.entitiesSkipped).toEqual([
+      { ref: "ada", title: "Ada", existingIds: [CANDIDATE, SECOND] },
+    ]);
+    expect(result.entities.map((e) => e.entityId)).toEqual(["new-Acme"]);
+    expect(result.relationsFailed).toHaveLength(1);
+  });
+
+  it("separate keeps both: the refused create is made again with keep_both", async () => {
+    const gate = gateOn([CANDIDATE]);
+    const result = await materializeCompositeGraph(
+      ops,
+      gate.caller,
+      relationCaller,
+      undefined,
+      { askReviewerOnDuplicate: true, identityResolutionForTwins: "separate" }
+    );
+    expect(gate.creates.map((c) => [c.title, c.approvalDuplicate])).toEqual([
+      ["Ada", "ask_reviewer"],
+      ["Ada", "keep_both"],
+      ["Acme", "ask_reviewer"],
+    ]);
+    expect(result.entities[0]).toMatchObject({
+      entityId: CREATED,
+      linked: false,
+      identity: { verb: "separate", entityId: CREATED, ref: "ada" },
+    });
+  });
+
+  it("without an answer the twin still refuses with its candidates", async () => {
+    const gate = gateOn([CANDIDATE]);
+    await expect(
+      materializeCompositeGraph(ops, gate.caller, relationCaller, undefined, {
+        askReviewerOnDuplicate: true,
+      })
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      cause: { code: "ENTITY_WEAK_DEDUP", opRef: "ada" },
+    });
+  });
+
+  it("a per-ref choice wins over the answer for every twin", async () => {
+    const gate = gateOn([CANDIDATE]);
+    const result = await materializeCompositeGraph(
+      ops,
+      gate.caller,
+      relationCaller,
+      undefined,
+      {
+        askReviewerOnDuplicate: true,
+        identityResolutionForTwins: "keep_existing",
+        identityResolutionByRef: { ada: { verb: "separate" } },
+      }
+    );
+    expect(result.entities[0]?.entityId).toBe(CREATED);
+    expect(result.entities[0]?.identity?.verb).toBe("separate");
+  });
+});
+
 describe("source seams", () => {
   const createSrc = entitySrc.slice(
     entitySrc.indexOf('key: "entity/create"'),

@@ -10,24 +10,58 @@
  *      `subjectType: "entity", action: "transition"`, the transition FLAT so a
  *      rule filters on `to` / `from` / `category` / `role` / `profileSlug`.
  *
+ * GOALS AND SESSIONS (status-flow plan W1): a goal's or a session's status
+ * move owes the SAME transition shape through the same outbox, and is emitted
+ * here as `track.transition.completed` / `focus_session.transition.completed`
+ * (`TRANSITION_EVENT_TYPES`), subject = the goal or the session. Their writers
+ * do not dispatch inline; the sweeper delivers them.
+ *
+ * THE SHARED REPOSITORY: the log row is appended through `eventRepository`,
+ * whose hooks (`setup-event-broadcasting.ts`, @synap/api) run on it:
+ *   - realtime: `domain-event-bridge.ts` pushes an entity's transition as
+ *     `entity:updated`, AT MOST once per move — a retry finds the row
+ *     written and appends nothing, so a crash between the insert and the
+ *     hooks pushes nothing on retry. A pod-wide entity's push (workspace
+ *     null) is refused by the realtime schema, like every pod-wide entity
+ *     push. Goals and sessions are not bridged: no client listens for them,
+ *     and `focus_session:updated` has its own producer.
+ *   - Hub SSE (`/api/hub/events/stream`, `event-stream-manager.ts`):
+ *     subscribers whose filter admits them now receive
+ *     `entity.transition.completed`, `track.…` and `focus_session.…` — new
+ *     event types on that external stream;
+ *   - sync peers get the row in real time (`syncRealtimeHook`), as the
+ *     polling push already sent it. A peer's `sync-materializer.ts` applies
+ *     only create / update / delete, so a status-only move does not reach a
+ *     peer's entity (pre-existing; pod finding).
+ *
  * BACK-COMPAT (founder decision 2026-10-11): for a KIND's lifecycle the
  * fan-out is ALSO emitted as `entity.update.completed` carrying
- * `changed.<slug>`, `previous.<slug>` and `<slug>` — the exact keys rules
- * compiled from the old `enters_status` sentence filter on. The log does not
- * get a second row. Roles never had that shape and get none.
+ * `changed.<slug>`, `previous.<slug>`, `<slug>` and the `transitionId` — the
+ * keys rules compiled from the old `enters_status` sentence filter on. The log
+ * does not get a second row. Roles never had that shape and get none.
  *
- * `enters_status` activators now compile onto the transition (E1, 2026-10-11;
- * untouched rules recompile through the activator convergence at boot). The
- * flag STAYS ON because these still read the update for a status move:
- *   1. process-sync follows a KIND's move on the update path
- *      (`followTransition` defers to it while this flag is on — flip both
- *      together, or a process advances twice / never);
- *   2. realtime: `domain-event-bridge.ts` pushes `entity:updated` from the
- *      update; nothing bridges the transition, so clients would not refresh;
- *   3. rules NOT born from an activator — hand-authored "updated" rules with
- *      `changed.<lifecycle slug>`, and owner-edited activator rules (the
- *      convergence keeps them) — plus webhook subscriptions to the update.
- * Turning it off needs 1 + 2 moved to the transition and a conversion for 3.
+ * Moved onto the transition already (status-flow W7): process-sync, the
+ * `decision-ask` reactor and realtime. The first two skip the dual-emitted
+ * update ({@link isDualEmittedStatusUpdate}), so a move reaches them once
+ * whatever this flag says. The flag STAYS ON because these still read the
+ * update for a status move, and each needs a decision or a conversion:
+ *   1. rules NOT born from an activator: hand-authored "updated" rules
+ *      filtering `changed.<lifecycle slug>` / `<slug>` / `previous.<slug>`,
+ *      and owner-edited activator rules (the convergence keeps them). Their
+ *      conversion rewrites the rule's stored sentence AND its automation's
+ *      trigger (+ the template seed stamp), so the editor does not compile the
+ *      old shape back on the next save.
+ *   2. "updated" rules with NO lifecycle key (e.g. "when a person is
+ *      updated"): they fire on every status move today. Whether a status move
+ *      still counts as an update for them is a product decision, not a
+ *      conversion.
+ *   3. webhook subscriptions to `entity.update.completed` (event.v1): the
+ *      advertised catalog (`integrations-capabilities.ts`) lists the update,
+ *      not the transition — an external contract.
+ *   4. reactors matching only `create | update`: `entity-embedding` (embeds
+ *      the status projection), `cross-thread-notify`, `entity-media-copy`.
+ *      Each gains `transition` at the flip (one match line each).
+ * Turning it off needs 1 converted, 2 and 3 decided, 4 widened — together.
  *
  * DELIVERY (review D8): the move's transaction already OWES this event — an
  * outbox row written with the compare-and-set (`transition-outbox.ts`,
@@ -40,45 +74,62 @@
  * fingerprint is the transitionId (2aec15c3), so a rule still fires once.
  */
 import {
-  EventRepository,
   claimTransitionOutbox,
   db,
+  eventRepository,
   isUniqueViolation,
   listDueTransitions,
   settleTransitionOutbox,
-  sql,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import type {
+  AnyTransitionPayload,
+  TransitionSubjectType,
+} from "@synap-core/types/lifecycle";
 import { fanOutSideEffects, type SideEffectPayload } from "./side-effects.js";
 
 const logger = createLogger({ module: "lifecycle-transition" });
 
-/** Mirrors `StatusTransition` (`@synap/database` apply-status-move.ts). */
-export interface LifecycleTransitionEvent {
-  transitionId: string;
-  entityId: string;
-  profileSlug: string | null;
-  role: string | null;
-  facetId: string | null;
-  property: string;
-  from: string | null;
-  to: string;
-  fromCategory: string | null;
-  category: string;
-  actorKind: "human" | "agent" | "system";
-  userId: string;
-  agentUserId: string | null;
-  sessionId: string | null;
-  reason: string | null;
-  staleExpected: boolean;
-  proposalId: string | null;
-  workspaceId: string | null;
-}
+/**
+ * The ONE transition shape (`@synap-core/types/lifecycle`): an entity's move,
+ * a goal's, a session's — discriminated on `subjectType`.
+ */
+export type LifecycleTransitionEvent = AnyTransitionPayload;
 
-export const LIFECYCLE_TRANSITION_EVENT_TYPE = "entity.transition.completed";
+/** The event each subject's transition is emitted as (log + fan-out). */
+export const TRANSITION_EVENT_TYPES = {
+  entity: "entity.transition.completed",
+  track: "track.transition.completed",
+  focus_session: "focus_session.transition.completed",
+} as const satisfies Record<TransitionSubjectType, string>;
+
+export const LIFECYCLE_TRANSITION_EVENT_TYPE = TRANSITION_EVENT_TYPES.entity;
 
 /** Feature flag for the dual emit — one place to delete it. */
-export const DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS = true;
+const DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS = true;
+
+/**
+ * Is this `entity.update` payload the dual emit of a status move? That emit
+ * names the move's `transitionId` beside exactly ONE changed key (the
+ * lifecycle slug, flagged `changed.<slug>`). An ordinary update spreads its
+ * changed properties flat, so a property slugged `transitionId` is itself a
+ * changed key — and is not taken for the marker. A consumer that follows the
+ * transition skips the dual emit, so a move reaches it once. Deleted with
+ * the flag.
+ */
+export function isDualEmittedStatusUpdate(
+  data: Record<string, unknown> | null | undefined
+): boolean {
+  if (typeof data?.transitionId !== "string") return false;
+  const keys = data.changedKeys;
+  if (!Array.isArray(keys) || keys.length !== 1) return false;
+  const [key] = keys;
+  return (
+    typeof key === "string" &&
+    key !== "transitionId" &&
+    data[`changed.${key}`] === true
+  );
+}
 
 /** The emit options a mover passes; stored on the outbox row and replayed. */
 export interface TransitionEmitContext {
@@ -111,10 +162,12 @@ export async function emitLifecycleTransition(
   // an `enters_status` / "transitioned" rule filters its subject on
   // (`entityKindFilterKey`, @synap-core/types/automations). `profileSlug`
   // alone cannot say it: a role's move carries the entity's KIND there.
-  const data: Record<string, unknown> = {
-    ...t,
-    lifecycleProfile: t.role ?? t.profileSlug,
-  };
+  // A goal's or a session's transition has no profile: its subject type IS
+  // what a rule filters on (the event type).
+  const data: Record<string, unknown> =
+    t.subjectType === "entity"
+      ? { ...t, lifecycleProfile: t.role ?? t.profileSlug }
+      : { ...t };
   // The fan-out's `userId` is the event's ACTOR (the trigger hop reads it as
   // the causal-chain producer — `producerAgentUserId`): the agent for an agent
   // move, the person otherwise. The payload keeps both.
@@ -122,13 +175,14 @@ export async function emitLifecycleTransition(
   let eventId = progress.eventId;
   if (!eventId) {
     try {
-      const record = await new EventRepository(sql).append({
+      // The shared repository: its hooks (realtime, SSE, sync) see the row.
+      const record = await eventRepository.append({
         // The transition's id IS the log row's id: at most one row, ever.
         id: t.transitionId,
         version: "v1",
-        type: LIFECYCLE_TRANSITION_EVENT_TYPE,
-        subjectId: t.entityId,
-        subjectType: "entity",
+        type: TRANSITION_EVENT_TYPES[t.subjectType],
+        subjectId: t.subjectId,
+        subjectType: t.subjectType,
         data,
         metadata: {},
         userId: t.userId,
@@ -140,7 +194,7 @@ export async function emitLifecycleTransition(
         source: t.actorKind === "system" ? "system" : "api",
         timestamp: new Date(),
         correlationId: opts.correlationId,
-      } as Parameters<EventRepository["append"]>[0]);
+      } as Parameters<typeof eventRepository.append>[0]);
       eventId = record?.id ?? t.transitionId;
     } catch (err) {
       if (isUniqueViolation(err)) {
@@ -150,7 +204,7 @@ export async function emitLifecycleTransition(
         // No fan-out before the log row: history, triggers and goals must
         // never disagree about whether the move happened. Retried.
         logger.warn(
-          { err, entityId: t.entityId },
+          { err, subjectType: t.subjectType, subjectId: t.subjectId },
           "transition log append failed"
         );
         return {
@@ -177,42 +231,58 @@ export async function emitLifecycleTransition(
     failures.push(...r.failed.map((id) => `${prefix}:${id}`));
   };
 
-  await fanOut("transition", {
-    subjectType: "entity",
-    action: "transition",
-    subjectId: t.entityId,
-    userId: actorId,
-    workspaceId: t.workspaceId,
-    sessionId: t.sessionId,
-    eventId,
-    automationContext: opts.automationContext,
-    // `data` is an untyped record, so the catalog-declared filter key is
-    // named HERE, at the emit, where the tripwire
-    // `entity-emits-carry-declared-filter-keys` can see it — the entity's
-    // KIND (a role's move carries the role in `role` / `lifecycleProfile`).
-    data: { ...data, profileSlug: t.profileSlug },
-  } as SideEffectPayload);
-
-  if (DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS && t.role === null) {
-    await fanOut("update", {
+  if (t.subjectType === "entity") {
+    await fanOut("transition", {
       subjectType: "entity",
-      action: "update",
+      action: "transition",
       subjectId: t.entityId,
       userId: actorId,
       workspaceId: t.workspaceId,
       sessionId: t.sessionId,
+      eventId,
       automationContext: opts.automationContext,
-      data: {
-        profileSlug: t.profileSlug ?? undefined,
-        // The matcher's fingerprint names it: two identical A→S moves are two
-        // claims for a hand-written "updated" rule, a redelivery one (review
-        // item 10). Without it both moves hashed to the same payload.
-        transitionId: t.transitionId,
-        changedKeys: [t.property],
-        [`changed.${t.property}`]: true,
-        [`previous.${t.property}`]: t.from,
-        [t.property]: t.to,
-      },
+      // `data` is an untyped record, so the catalog-declared filter key is
+      // named HERE, at the emit, where the tripwire
+      // `entity-emits-carry-declared-filter-keys` can see it — the entity's
+      // KIND (a role's move carries the role in `role` / `lifecycleProfile`).
+      data: { ...data, profileSlug: t.profileSlug },
+    } as SideEffectPayload);
+
+    if (DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS && t.role === null) {
+      await fanOut("update", {
+        subjectType: "entity",
+        action: "update",
+        subjectId: t.entityId,
+        userId: actorId,
+        workspaceId: t.workspaceId,
+        sessionId: t.sessionId,
+        automationContext: opts.automationContext,
+        data: {
+          profileSlug: t.profileSlug ?? undefined,
+          // The matcher's fingerprint names it: two identical A→S moves are
+          // two claims for a hand-written "updated" rule, a redelivery one
+          // (review item 10). Without it both moves hashed to the same payload.
+          transitionId: t.transitionId,
+          changedKeys: [t.property],
+          [`changed.${t.property}`]: true,
+          [`previous.${t.property}`]: t.from,
+          [t.property]: t.to,
+        },
+      } as SideEffectPayload);
+    }
+  } else {
+    // A goal's or a session's move: the transition alone. No rule ever read
+    // their status off an update event, so there is nothing to keep working.
+    await fanOut("transition", {
+      subjectType: t.subjectType,
+      action: "transition",
+      subjectId: t.subjectId,
+      userId: actorId,
+      workspaceId: t.workspaceId,
+      sessionId: t.sessionId,
+      eventId,
+      automationContext: opts.automationContext,
+      data,
     } as SideEffectPayload);
   }
 

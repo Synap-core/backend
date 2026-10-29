@@ -23,6 +23,8 @@ import { randomUUID } from "node:crypto";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 
 const h = vi.hoisted(() => ({
+  /** Which IS serves the pod: "synap-hub" = the shared, CP-provisioned hub. */
+  serviceId: "self-hosted-is",
   client: null as null | {
     exec: (sql: string) => Promise<unknown>;
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
@@ -44,6 +46,11 @@ vi.mock("../utils/intelligence-routing.js", () => ({
   resolveIntelligenceService: async () => ({
     endpoint: "http://is.test",
     serviceApiKey: "k",
+    serviceId: h.serviceId,
+  }),
+  selectIntelligenceService: async () => ({
+    service: { serviceId: h.serviceId },
+    via: "pod_default",
   }),
 }));
 vi.mock("../utils/split-brain-service.js", () => ({
@@ -71,18 +78,21 @@ function ddlFor(table: PgTable): string {
     const t = c.getSQLType();
     const type = BASIC.test(t) ? t.replace(/\(.*\)/, "") : "text";
     const pk = c.primary ? " primary key" : "";
+    // `uuid("id").defaultRandom()`: a real `create` inserts with id = default.
     const def =
-      c.name === "approved" || c.name === "enabled"
-        ? ` default ${c.name === "enabled"}`
-        : c.name === "args"
-          ? " default '[]'"
-          : c.name === "env"
-            ? " default '{}'"
-            : c.name === "created_at" || c.name === "updated_at"
-              ? " default now()"
-              : c.name === "status"
-                ? " default 'unknown'"
-                : "";
+      c.name === "id" && type === "uuid"
+        ? " default gen_random_uuid()"
+        : c.name === "approved" || c.name === "enabled"
+          ? ` default ${c.name === "enabled"}`
+          : c.name === "args"
+            ? " default '[]'"
+            : c.name === "env"
+              ? " default '{}'"
+              : c.name === "created_at" || c.name === "updated_at"
+                ? " default now()"
+                : c.name === "status"
+                  ? " default 'unknown'"
+                  : "";
     return `"${c.name}" ${type}${pk}${def}`;
   });
   return `create table "${cfg.name}" (${cols.join(", ")});`;
@@ -150,6 +160,7 @@ beforeAll(async () => {
 }, 120_000);
 
 beforeEach(async () => {
+  h.serviceId = "self-hosted-is";
   await h.client!.exec(`delete from mcp_servers;`);
   vi.stubGlobal(
     "fetch",
@@ -349,5 +360,192 @@ describe("list masks env for callers who cannot manage the row", () => {
       await caller(POD_ADMIN).list({ workspaceId: null })
     ).servers.find((s) => s.id === id)?.env;
     expect(podAdmin).toEqual(ENV);
+  });
+});
+
+/**
+ * The SHARED hub (`synap-hub`, provisioned by the control plane) never spawns a
+ * pod's command: a tenant's process there runs beside every other customer
+ * (security audit 2026-10-28, F1). The hub refuses stdio itself (403
+ * MCP_STDIO_NOT_ALLOWED); the pod refuses first, and maps the hub's refusal to
+ * a clear error instead of "could not reach the intelligence service".
+ */
+describe("stdio on the shared hub", () => {
+  const stdioInput = {
+    workspaceId: WS,
+    slug: "local-cmd",
+    name: "Local",
+    transport: "stdio" as const,
+    command: "sh",
+    args: ["-c", "id"],
+  };
+  const count = async () =>
+    (
+      await h.client!.query<{ n: number }>(
+        `select count(*)::int as n from mcp_servers`
+      )
+    ).rows[0]!.n;
+
+  it("create stdio on the shared hub → BAD_REQUEST, nothing saved", async () => {
+    h.serviceId = "synap-hub";
+    await expect(caller(WS_OWNER).create(stdioInput)).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: "This hub does not run local commands; use an http MCP server.",
+    });
+    expect(await count()).toBe(0);
+  });
+
+  it("create stdio on a self-hosted hub is still allowed", async () => {
+    await caller(WS_OWNER).create(stdioInput);
+    expect(await count()).toBe(1);
+  });
+
+  it("create http on the shared hub is allowed", async () => {
+    h.serviceId = "synap-hub";
+    await caller(WS_OWNER).create({
+      workspaceId: WS,
+      slug: "remote",
+      name: "Remote",
+      transport: "http",
+      url: "https://mcp.example.test",
+    });
+    expect(await count()).toBe(1);
+  });
+
+  it("update switching an http server to stdio on the shared hub → BAD_REQUEST, row unchanged", async () => {
+    h.serviceId = "synap-hub";
+    const id = await seedServer(WS, true);
+    await expect(
+      caller(WS_OWNER).update({ id, transport: "stdio", command: "sh" })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    const r = await h.client!.query<{ transport: string }>(
+      `select transport from mcp_servers where id = $1`,
+      [id]
+    );
+    expect(r.rows[0]!.transport).toBe("http");
+  });
+
+  it("a legacy stdio row can still be DISABLED on the shared hub (full-object save)", async () => {
+    h.serviceId = "synap-hub";
+    const id = await seedStdio(WS, true);
+    await caller(WS_OWNER).update({
+      id,
+      transport: "stdio",
+      command: "npx",
+      enabled: false,
+    });
+    const r = await h.client!.query<{ enabled: boolean }>(
+      `select enabled from mcp_servers where id = $1`,
+      [id]
+    );
+    expect(r.rows[0]!.enabled).toBe(false);
+  });
+
+  it("ping / listTools of a legacy stdio row on the shared hub → PRECONDITION_FAILED, no IS call", async () => {
+    h.serviceId = "synap-hub";
+    const id = await seedStdio(WS, true);
+    await expect(caller(WS_ADMIN).ping({ id })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringMatching(/does not run local commands/),
+    });
+    await expect(caller(WS_MEMBER).listTools({ id })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  /** A hub the pod does not recognise as shared that still refuses stdio. */
+  const hubRefuses = () =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              status: "error",
+              code: "MCP_STDIO_NOT_ALLOWED",
+              error:
+                "This hub does not run local commands; use an http MCP server.",
+            }),
+            { status: 403 }
+          )
+      )
+    );
+
+  it("the hub's 403 MCP_STDIO_NOT_ALLOWED on ping → a clear error, recorded on the row", async () => {
+    hubRefuses();
+    const id = await seedStdio(WS, true);
+    await expect(caller(WS_ADMIN).ping({ id })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: "This hub does not run local commands; use an http MCP server.",
+    });
+    const r = await h.client!.query<{ status: string; error_message: string }>(
+      `select status, error_message from mcp_servers where id = $1`,
+      [id]
+    );
+    expect(r.rows[0]).toMatchObject({
+      status: "error",
+      error_message:
+        "This hub does not run local commands; use an http MCP server.",
+    });
+  });
+
+  it("the hub's 403 MCP_STDIO_NOT_ALLOWED on listTools → a clear error, not BAD_GATEWAY", async () => {
+    hubRefuses();
+    const id = await seedStdio(WS, true);
+    await expect(caller(WS_MEMBER).listTools({ id })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: "This hub does not run local commands; use an http MCP server.",
+    });
+  });
+
+  it("the hub's 403 MCP_URL_NOT_ALLOWED on ping / listTools → a clear error, recorded on the row", async () => {
+    const message =
+      "This hub only connects to public MCP servers: URL '10.0.0.1' resolves to a private or reserved address.";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              status: "error",
+              code: "MCP_URL_NOT_ALLOWED",
+              error: message,
+            }),
+            { status: 403 }
+          )
+      )
+    );
+    const id = await seedServer(WS, true);
+    await expect(caller(WS_ADMIN).ping({ id })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message,
+    });
+    const r = await h.client!.query<{ status: string; error_message: string }>(
+      `select status, error_message from mcp_servers where id = $1`,
+      [id]
+    );
+    expect(r.rows[0]).toMatchObject({
+      status: "error",
+      error_message: message,
+    });
+    await expect(caller(WS_MEMBER).listTools({ id })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message,
+    });
+  });
+
+  it("any other hub 403 stays a gateway failure (the mapping keys on the code)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: "nope" }), { status: 403 })
+      )
+    );
+    const id = await seedStdio(WS, true);
+    await expect(caller(WS_MEMBER).listTools({ id })).rejects.toMatchObject({
+      code: "BAD_GATEWAY",
+    });
   });
 });

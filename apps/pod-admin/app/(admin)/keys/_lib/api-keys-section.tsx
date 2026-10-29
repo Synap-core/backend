@@ -2,8 +2,10 @@
 
 /**
  * Keys → the unified key list (no system/operator split).
- * Tabs: Active | Revoked. Each row carries a type badge (`categorize`, in
- * `key-model.ts`); revoked keys get a "Delete" action to remove the record.
+ * One toolbar row: search (name, prefix, holder, type, scopes, person), type,
+ * status and order (`queryKeys`, in `key-model.ts`). Each row carries a type
+ * badge (`categorize`); a row opens the key's panel (`KeyDrawer`: what it may
+ * do, its use, what it did); revoked keys get a "Delete" action.
  *
  * Procedures used:
  *   • trpc.apiKeys.adminListAll      — pod-admin, all keys
@@ -21,8 +23,9 @@ import {
   DropdownMenu,
   DropdownTrigger,
   Input,
-  Tab,
-  Tabs,
+  Select,
+  SelectItem,
+  Textarea,
   addToast,
 } from "@heroui/react";
 import {
@@ -31,6 +34,7 @@ import {
   MoreHorizontal,
   Plus,
   RefreshCw,
+  Search,
   Trash2,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -49,14 +53,20 @@ import { useFocusRow } from "../../components/use-focus-row";
 import { formatRelative, shortId } from "../../../../lib/format";
 import {
   CATEGORY_LABEL,
+  KEY_SORTS,
+  KEY_STATUS_FILTERS,
   categorize,
-  keyHref,
   holderName,
   keyStatus,
+  keyTypeCounts,
   normalizeScopes,
+  queryKeys,
   type KeyCategory,
+  type KeySort,
+  type KeyStatusFilter,
   type UnifiedKey,
 } from "./key-model";
+import { KeyDrawer } from "./key-drawer";
 import { RevealKeyModal } from "./key-modals";
 import { newKeyHref } from "./key-form-model";
 
@@ -91,7 +101,11 @@ export function ApiKeysSection() {
 
   const utils = trpc.useUtils();
 
-  const [tab, setTab] = useState<"active" | "revoked">("active");
+  const [search, setSearch] = useState("");
+  const [type, setType] = useState<KeyCategory | null>(null);
+  const [status, setStatus] = useState<KeyStatusFilter>("live");
+  const [sort, setSort] = useState<KeySort>("recent");
+  const [opened, setOpened] = useState<UnifiedKey | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<UnifiedKey | null>(null);
   const [revokeReason, setRevokeReason] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<UnifiedKey | null>(null);
@@ -164,20 +178,22 @@ export function ApiKeysSection() {
     for (const k of (systemKeys.data as UnifiedKey[] | undefined) ?? []) {
       if (!map.has(k.id)) map.set(k.id, k);
     }
-    return Array.from(map.values()).sort((a, b) => {
-      const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-      const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-      return tb - ta;
-    });
+    return Array.from(map.values());
   }, [operatorKeys.data, systemKeys.data]);
 
-  const active = useMemo(() => allKeys.filter((k) => k.isActive), [allKeys]);
-  const revoked = useMemo(() => allKeys.filter((k) => !k.isActive), [allKeys]);
+  const shown = useMemo(
+    () => queryKeys(allKeys, { search, type, status }, sort),
+    [allKeys, search, type, status, sort]
+  );
+  const typeCounts = useMemo(
+    () => keyTypeCounts(allKeys, { search, status }),
+    [allKeys, search, status]
+  );
+  const filtered = search.trim() !== "" || type !== null || status !== "live";
 
   const isLoading =
     operatorKeys.isLoading || systemKeys.isLoading || isAuthRedirecting;
   const isError = operatorKeys.isError || systemKeys.isError;
-  const shown = tab === "active" ? active : revoked;
 
   return (
     <div className="flex flex-col gap-5">
@@ -197,43 +213,90 @@ export function ApiKeysSection() {
           </Button>
         }
       >
-        <div className="mb-3 -mt-1">
-          <Tabs
+        <div
+          role="search"
+          className="mb-3 -mt-1 flex flex-wrap items-center gap-2"
+        >
+          <Input
+            aria-label="Search keys"
+            placeholder="Search name, prefix, holder, scope…"
+            value={search}
+            onValueChange={setSearch}
             size="sm"
-            selectedKey={tab}
-            onSelectionChange={(k) => setTab(k as "active" | "revoked")}
-            classNames={{
-              tabList: "bg-foreground/[0.04] rounded-lg",
-              tab: "text-[12px]",
+            radius="md"
+            variant="flat"
+            isClearable
+            onClear={() => setSearch("")}
+            startContent={<Search className="h-3.5 w-3.5 text-foreground/40" />}
+            className="w-full sm:w-64"
+          />
+          <Select
+            aria-label="Type"
+            size="sm"
+            radius="md"
+            variant="flat"
+            className="w-40"
+            selectedKeys={[type ?? "all"]}
+            disallowEmptySelection
+            onSelectionChange={(keys) => {
+              const v = Array.from(keys as Set<string>)[0];
+              setType(!v || v === "all" ? null : (v as KeyCategory));
             }}
           >
-            <Tab
-              key="active"
-              title={
-                <span className="flex items-center gap-1.5">
-                  Active
-                  {active.length > 0 && (
-                    <span className="rounded-full bg-foreground/10 px-1.5 py-px text-[10px] font-medium">
-                      {active.length}
+            {[
+              <SelectItem key="all">All types</SelectItem>,
+              ...(Object.keys(CATEGORY_LABEL) as KeyCategory[]).map((c) => (
+                <SelectItem
+                  key={c}
+                  textValue={CATEGORY_LABEL[c]}
+                  endContent={
+                    <span className="tabular text-[11px] text-foreground/60">
+                      {typeCounts.get(c) ?? 0}
                     </span>
-                  )}
-                </span>
-              }
-            />
-            <Tab
-              key="revoked"
-              title={
-                <span className="flex items-center gap-1.5">
-                  Revoked
-                  {revoked.length > 0 && (
-                    <span className="rounded-full bg-foreground/10 px-1.5 py-px text-[10px] font-medium">
-                      {revoked.length}
-                    </span>
-                  )}
-                </span>
-              }
-            />
-          </Tabs>
+                  }
+                >
+                  {CATEGORY_LABEL[c]}
+                </SelectItem>
+              )),
+            ]}
+          </Select>
+          <Select
+            aria-label="Status"
+            size="sm"
+            radius="md"
+            variant="flat"
+            className="w-40"
+            selectedKeys={[status]}
+            disallowEmptySelection
+            onSelectionChange={(keys) => {
+              const v = Array.from(keys as Set<string>)[0];
+              if (v) setStatus(v as KeyStatusFilter);
+            }}
+          >
+            {KEY_STATUS_FILTERS.map((f) => (
+              <SelectItem key={f.key}>{f.label}</SelectItem>
+            ))}
+          </Select>
+          <Select
+            aria-label="Order"
+            size="sm"
+            radius="md"
+            variant="flat"
+            className="w-40"
+            selectedKeys={[sort]}
+            disallowEmptySelection
+            onSelectionChange={(keys) => {
+              const v = Array.from(keys as Set<string>)[0];
+              if (v) setSort(v as KeySort);
+            }}
+          >
+            {KEY_SORTS.map((o) => (
+              <SelectItem key={o.key}>{o.label}</SelectItem>
+            ))}
+          </Select>
+          <span className="tabular ml-auto text-[11.5px] text-foreground/65">
+            {shown.length} of {allKeys.length}
+          </span>
         </div>
 
         {isLoading ? (
@@ -248,7 +311,9 @@ export function ApiKeysSection() {
           />
         ) : shown.length === 0 ? (
           <ResourceRowEmpty
-            message={tab === "active" ? "No active keys." : "No revoked keys."}
+            message={
+              filtered ? "No key matches these filters." : "No active keys."
+            }
           />
         ) : (
           <div className="-mx-2 divide-y divide-foreground/[0.05]">
@@ -261,6 +326,7 @@ export function ApiKeysSection() {
                 <KeyRow
                   apiKey={k}
                   category={categorize(k)}
+                  onOpen={() => setOpened(k)}
                   onRevoke={k.isActive ? () => setRevokeTarget(k) : undefined}
                   onRotate={
                     k.isActive && categorize(k) !== "system"
@@ -301,7 +367,8 @@ export function ApiKeysSection() {
         confirmLabel="Revoke"
         isPending={revoke.isPending}
       >
-        <Input
+        <Textarea
+          minRows={1}
           label="Reason (optional)"
           placeholder="e.g. compromised, no longer needed"
           value={revokeReason}
@@ -326,6 +393,8 @@ export function ApiKeysSection() {
         isPending={deleteRevoked.isPending}
       />
 
+      <KeyDrawer apiKey={opened} onClose={() => setOpened(null)} />
+
       {revealedKey && (
         <RevealKeyModal
           keyName={revealedKey.keyName}
@@ -343,20 +412,19 @@ export function ApiKeysSection() {
 function KeyRow({
   apiKey,
   category,
+  onOpen,
   onRevoke,
   onRotate,
   onDelete,
 }: {
   apiKey: UnifiedKey;
   category: KeyCategory;
+  /** Opens the key's panel; its holder's page is a link inside it. */
+  onOpen: () => void;
   onRevoke?: () => void;
   onRotate?: () => void;
   onDelete?: () => void;
 }) {
-  const router = useRouter();
-  // A computer's or app's key opens its holder's page (what holds it, what it
-  // reaches, how to revoke it); a space key with neither opens its space.
-  const holderPage = keyHref(apiKey);
   const status = keyStatus(apiKey);
   const scopes = normalizeScopes(apiKey.scope);
   const lastUsed = apiKey.lastUsedAt
@@ -388,7 +456,7 @@ function KeyRow({
       primary={apiKey.keyName}
       secondary={`[${CATEGORY_LABEL[category]}] ${secondary}`}
       status={status}
-      onSelect={holderPage ? () => router.push(holderPage) : undefined}
+      onSelect={onOpen}
       actions={
         hasActions ? (
           <Dropdown>

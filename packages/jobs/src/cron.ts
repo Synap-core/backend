@@ -89,6 +89,10 @@ import {
   CHAT_TURN_REAPER_CRON,
 } from "./workers/chat-turn-reaper.js";
 import {
+  DOCUMENT_PASSAGES_SWEEP_QUEUE,
+  DOCUMENT_PASSAGES_SWEEP_CRON,
+} from "./workers/document-passages.js";
+import {
   LIFECYCLE_TRANSITION_SWEEPER_QUEUE,
   LIFECYCLE_TRANSITION_SWEEPER_CRON,
 } from "./workers/lifecycle-transition-sweeper.js";
@@ -130,6 +134,10 @@ import {
   LIBRARY_KEEP_ALIVE_QUEUE,
   LIBRARY_KEEP_ALIVE_CRON,
 } from "./workers/library-keep-alive-worker.js";
+import {
+  MORNING_BRIEF_QUEUE,
+  MORNING_BRIEF_CRON,
+} from "./workers/morning-brief-worker.js";
 
 const logger = createLogger({ module: "cron-scheduler" });
 
@@ -254,6 +262,11 @@ export async function registerCronSchedules(): Promise<void> {
   );
   logger.info("Registered cron: library-keep-alive (daily at 4:23 AM UTC)");
 
+  // Morning brief (every 15 min — each person is due within the hour after
+  // their own brief time, read from their proactive settings)
+  await scheduleSafe(boss, MORNING_BRIEF_QUEUE, MORNING_BRIEF_CRON, {});
+  logger.info("Registered cron: morning-brief (every 15min)");
+
   // Session titler (every 10min — derived names for untitled runs/captures, one
   // generated name per unnamed work session/receipt, one outcome-aware rename
   // at close; never touches a human- or agent-chosen title)
@@ -270,6 +283,18 @@ export async function registerCronSchedules(): Promise<void> {
     {}
   );
   logger.info("Registered cron: session-recall-sweep (every 2min)");
+
+  // Document passages sweep (every 15min — re-queues the passage build of any
+  // document whose passages were cut from an older content revision, so an
+  // edit whose event was missed self-heals; never-built documents are the
+  // backfill script's)
+  await scheduleSafe(
+    boss,
+    DOCUMENT_PASSAGES_SWEEP_QUEUE,
+    DOCUMENT_PASSAGES_SWEEP_CRON,
+    {}
+  );
+  logger.info("Registered cron: document-passages-sweep (every 15min)");
 
   // Playbook run reaper (every ~30min — force-fails playbook_runs stuck
   // 'running' past PLAYBOOK_RUN_REAPER_STALE_HOURS whose session went quiet;

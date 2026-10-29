@@ -59,16 +59,26 @@ async function createFloorsBySlug(
   return floors;
 }
 
-/** True when ANY member of the graph would propose at its own door. */
-export async function captureGraphMemberProposes(input: {
+type CaptureGraphGovernanceInput = {
   agentUserId: string;
   userId: string;
   workspaceId: string | null;
   operations: CompositeProposalOperation[];
-}): Promise<boolean> {
+};
+
+/**
+ * Whether ANY member of the graph would propose at its own door, and WHY: the
+ * first proposing member's `reasonCode` (a `PROPOSE_REASON` key), stored on
+ * the pending row as `governanceReason` exactly as the single-entity gate
+ * stores `gov.reasonCode`. `null` when no engine rung named a reason (the
+ * plain default propose, or a graph that could not be scored).
+ */
+export async function captureGraphMemberVerdict(
+  input: CaptureGraphGovernanceInput
+): Promise<{ proposes: boolean; reasonCode: string | null }> {
   const keys = captureGraphEventKeys(input.operations);
   // An empty key set has nothing auto-approvable to vouch for it.
-  if (keys.length === 0) return true;
+  if (keys.length === 0) return { proposes: true, reasonCode: null };
   let floors: Map<string, LifecycleMove>;
   try {
     floors = await createFloorsBySlug(
@@ -83,7 +93,7 @@ export async function captureGraphMemberProposes(input: {
       { err, agentUserId: input.agentUserId },
       "capture governance: born-status floors unreadable — the graph proposes"
     );
-    return true;
+    return { proposes: true, reasonCode: null };
   }
   for (const key of keys) {
     const lifecycleMove =
@@ -111,7 +121,20 @@ export async function captureGraphMemberProposes(input: {
       // autoApproveFor, falling back to the workspace override (chat-door rule).
       preferAgentMetadataAutoApproveFor: true,
     });
-    if (gov.decision !== "execute") return true;
+    if (gov.decision !== "execute") {
+      return {
+        proposes: true,
+        reasonCode:
+          gov.decision === "propose" ? (gov.reasonCode ?? null) : null,
+      };
+    }
   }
-  return false;
+  return { proposes: false, reasonCode: null };
+}
+
+/** True when ANY member of the graph would propose at its own door. */
+export async function captureGraphMemberProposes(
+  input: CaptureGraphGovernanceInput
+): Promise<boolean> {
+  return (await captureGraphMemberVerdict(input)).proposes;
 }

@@ -94,7 +94,10 @@ export function registerEventsRoutes(app: HubHono): void {
     responses: {
       200: {
         description: "Events array (newest first)",
-        schema: z.object({ events: z.array(WireEventSchema) }),
+        schema: z.object({
+          events: z.array(WireEventSchema),
+          nextOffset: z.number().int().optional(),
+        }),
       },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
@@ -105,7 +108,7 @@ export function registerEventsRoutes(app: HubHono): void {
   /**
    * GET /events
    * Query the event log for IS agents (query_recent_events tool).
-   * Supports: userId, workspaceId, type, subjectType, subjectId, fromDate, limit.
+   * Supports: userId, workspaceId, type, subjectType, subjectId, fromDate, toDate, offset, limit.
    */
   app.get("/events", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
@@ -121,7 +124,24 @@ export function registerEventsRoutes(app: HubHono): void {
     const subjectType = c.req.query("subjectType");
     const subjectId = c.req.query("subjectId");
     const fromDateStr = c.req.query("fromDate");
-    const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10), 200);
+    const toDateStr = c.req.query("toDate");
+    const limitRaw = parseInt(c.req.query("limit") ?? "50", 10);
+    const limit = Number.isFinite(limitRaw)
+      ? Math.min(Math.max(limitRaw, 1), 200)
+      : 50;
+    const offsetRaw = c.req.query("offset");
+    const offset = offsetRaw === undefined ? 0 : Number(offsetRaw);
+    if (!Number.isInteger(offset) || offset < 0) {
+      return c.json({ error: "offset must be a non-negative integer" }, 400);
+    }
+    const fromDate = fromDateStr ? new Date(fromDateStr) : undefined;
+    if (fromDate && Number.isNaN(fromDate.getTime())) {
+      return c.json({ error: "fromDate must be an ISO timestamp" }, 400);
+    }
+    const toDate = toDateStr ? new Date(toDateStr) : undefined;
+    if (toDate && Number.isNaN(toDate.getTime())) {
+      return c.json({ error: "toDate must be an ISO timestamp" }, 400);
+    }
 
     // "What did this agent do?" — the reader for `events.agent_user_id` (indexed
     // since 0131). `agentUserId` is a TEXT column (Kratos identity id), so it is
@@ -165,12 +185,16 @@ export function registerEventsRoutes(app: HubHono): void {
         correlationId,
         isAgent,
         ungoverned,
-        fromDate: fromDateStr
-          ? new Date(fromDateStr)
-          : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+        fromDate: fromDate ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+        toDate,
         limit,
+        offset,
       });
-      return c.json({ events });
+      // A full page may have more behind it: hand back the next offset.
+      return c.json({
+        events,
+        ...(events.length === limit ? { nextOffset: offset + limit } : {}),
+      });
     } catch (err) {
       logger.error({ err, userId }, "listEvents failed");
       return c.json(

@@ -290,7 +290,7 @@ describe("tripwire: Hub REST id-shaped path params are uuid-guarded before Postg
       "utf8"
     );
     expect(projectsSrc).toMatch(
-      /app\.get\("\/projects\/:id", async \(c\) => \{\s*const userId = c\.get\("userId"\);\s*const id = requireUuidParam\(c, "id"\);/
+      /app\.get\("\/projects\/:id", async \(c\) => \{[\s\S]{0,400}const userId = c\.get\("userId"\);\s*const id = requireUuidParam\(c, "id"\);/
     );
     expect(workspacesSrc).toMatch(
       /app\.get\("\/workspaces\/:workspaceId", async \(c\) => \{[\s\S]{0,400}const workspaceId = requireUuidParam\(c, "workspaceId"\);/

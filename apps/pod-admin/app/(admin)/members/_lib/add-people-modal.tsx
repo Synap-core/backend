@@ -214,7 +214,6 @@ export function AddPeopleModal({
             <>
               <Input
                 label="Email"
-                labelPlacement="outside"
                 type="email"
                 placeholder="colleague@example.com"
                 value={email}

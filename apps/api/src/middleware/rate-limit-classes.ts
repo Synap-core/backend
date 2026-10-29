@@ -38,6 +38,11 @@ import {
  *   token), under a per-IP ceiling only when addresses tell callers apart:
  *   every pod app's refresh must not share a budget a stranger can drain
  * - crud: everything else
+ * - crud_read: a `crud` request that only reads (`isCrudReadPath` /
+ *   `classifyMcpBody`), on its own bucket so a busy reader never spends the
+ *   write budget. Never returned by `classifyRateLimitPath`: the edge decides
+ *   it inside the `crud` branch (security.ts), since an MCP read is in the body.
+ *   An MCP `synap_ask` that answers runs a model, so it spends `ai_interactive`
  */
 export type RateLimitClass =
   | "free"
@@ -51,12 +56,162 @@ export type RateLimitClass =
   | "key_state"
   | "oauth_public"
   | "oauth_token"
-  | "crud";
+  | "crud"
+  | "crud_read";
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   if (value == null || value === "") return fallback;
   const n = Number.parseInt(value, 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/**
+ * Every budget variable the code reads, in one list: the env names, the keys
+ * of the pod's own setting (`pod_settings.settings.rateLimits`, set through
+ * `/api/pod-rate-limits`) and what the deploy config must pass
+ * (rate-limit-deploy-wiring.test.ts).
+ */
+export const RATE_LIMIT_BUDGET_KEYS = [
+  "RATE_LIMIT_CRUD_WINDOW_MS",
+  "RATE_LIMIT_IMPORT_WINDOW_MS",
+  "RATE_LIMIT_AI_WINDOW_MS",
+  "RATE_LIMIT_AGENT_TURN_WINDOW_MS",
+  "RATE_LIMIT_CALENDAR_FEED_WINDOW_MS",
+  "RATE_LIMIT_CRUD_SESSION_MAX",
+  "RATE_LIMIT_CRUD_READ_WINDOW_MS",
+  "RATE_LIMIT_IMPORT_MAX",
+  "RATE_LIMIT_AI_MAX",
+  "RATE_LIMIT_AGENT_TURN_MAX",
+  "RATE_LIMIT_CRUD_MAX",
+  "RATE_LIMIT_CRUD_IP_CEILING",
+  "RATE_LIMIT_CRUD_READ_MAX",
+  "RATE_LIMIT_CRUD_READ_SESSION_MAX",
+  "RATE_LIMIT_CALENDAR_FEED_MAX",
+  "RATE_LIMIT_CALENDAR_FEED_IP_MAX",
+  "RATE_LIMIT_PUBLIC_READ_WINDOW_MS",
+  "RATE_LIMIT_PUBLIC_SUBMIT_IP_WINDOW_MS",
+  "RATE_LIMIT_PUBLIC_SUBMIT_SHARE_WINDOW_MS",
+  "RATE_LIMIT_PUBLIC_READ_IP_MAX",
+  "RATE_LIMIT_PUBLIC_SUBMIT_IP_MAX",
+  "RATE_LIMIT_PUBLIC_SUBMIT_SHARE_MAX",
+  "RATE_LIMIT_DEVICE_AUTH_WINDOW_MS",
+  "RATE_LIMIT_DEVICE_AUTH_MAX",
+  "RATE_LIMIT_KEY_STATE_WINDOW_MS",
+  "RATE_LIMIT_KEY_STATE_MAX",
+  "RATE_LIMIT_OAUTH_PUBLIC_WINDOW_MS",
+  "RATE_LIMIT_OAUTH_PUBLIC_MAX",
+  "RATE_LIMIT_OAUTH_TOKEN_WINDOW_MS",
+  "RATE_LIMIT_OAUTH_TOKEN_MAX",
+  "RATE_LIMIT_OAUTH_TOKEN_IP_CEILING",
+] as const;
+
+export type RateLimitBudgetKey = (typeof RATE_LIMIT_BUDGET_KEYS)[number];
+
+const BUDGET_KEY_SET: ReadonlySet<string> = new Set(RATE_LIMIT_BUDGET_KEYS);
+
+/** Largest value a pod setting may hold (a 24 h window is 86 400 000 ms). */
+export const RATE_LIMIT_SETTING_MAX = 1_000_000_000;
+
+export type RateLimitOverrides = Partial<Record<RateLimitBudgetKey, number>>;
+
+/**
+ * The pod owner's values, from `pod_settings.settings.rateLimits.values`:
+ * known keys with a positive integer up to `RATE_LIMIT_SETTING_MAX`; anything
+ * else is dropped, so a bad stored value falls back to the env, never to 0.
+ */
+export function parseRateLimitOverrides(raw: unknown): RateLimitOverrides {
+  const out: RateLimitOverrides = {};
+  if (raw === null || typeof raw !== "object") return out;
+  for (const [key, value] of Object.entries(raw)) {
+    if (
+      BUDGET_KEY_SET.has(key) &&
+      Number.isInteger(value) &&
+      (value as number) > 0 &&
+      (value as number) <= RATE_LIMIT_SETTING_MAX
+    ) {
+      out[key as RateLimitBudgetKey] = value as number;
+    }
+  }
+  return out;
+}
+
+let podOverrides: RateLimitOverrides = {};
+let overridesVersion = 0;
+
+/**
+ * Apply the pod owner's values over the env. Bumps the version the edge
+ * rebuilds its limiters on (security.ts) only when a value changed.
+ */
+export function setRateLimitOverrides(next: RateLimitOverrides): boolean {
+  const clean = parseRateLimitOverrides(next);
+  const same =
+    Object.keys(clean).length === Object.keys(podOverrides).length &&
+    RATE_LIMIT_BUDGET_KEYS.every((k) => clean[k] === podOverrides[k]);
+  if (same) return false;
+  podOverrides = clean;
+  overridesVersion += 1;
+  return true;
+}
+
+/** Changes each time `setRateLimitOverrides` changes a value. */
+export function rateLimitOverridesVersion(): number {
+  return overridesVersion;
+}
+
+/** Records each budget's default while `describeRateLimitBudgets` runs. */
+let defaultsSeen: Map<RateLimitBudgetKey, number> | null = null;
+
+/** A budget: the pod's setting, else the env, else `fallback`. */
+function budget(key: RateLimitBudgetKey, fallback: number): number {
+  defaultsSeen?.set(key, fallback);
+  const pod = podOverrides[key];
+  return pod ?? parsePositiveInt(process.env[key], fallback);
+}
+
+export interface RateLimitBudgetView {
+  key: RateLimitBudgetKey;
+  /** In force now. */
+  value: number;
+  /** Where `value` comes from. */
+  source: "pod" | "env" | "default";
+  /** What applies with neither a pod setting nor an env value. */
+  defaultValue: number;
+  /** The deployment's env value, when it sets a valid one. */
+  envValue: number | null;
+}
+
+/**
+ * Every budget with its value, source and default, as the getters below
+ * compute them. A default that derives from another budget (the address
+ * ceiling is five person budgets) is the one derived from the value in force.
+ */
+export function describeRateLimitBudgets(): RateLimitBudgetView[] {
+  const seen = new Map<RateLimitBudgetKey, number>();
+  defaultsSeen = seen;
+  try {
+    getRateLimitClassConfig();
+    getCalendarFeedIpCeiling();
+    getPublicDoorRateConfig();
+    getDeviceAuthRateConfig();
+    getKeyStateRateConfig();
+    getOAuthPublicRateConfig();
+    getOAuthTokenRateConfig();
+  } finally {
+    defaultsSeen = null;
+  }
+  return RATE_LIMIT_BUDGET_KEYS.map((key) => {
+    const defaultValue = seen.get(key) ?? 0;
+    const env = parsePositiveInt(process.env[key], 0);
+    const envValue = env > 0 ? env : null;
+    const pod = podOverrides[key];
+    return {
+      key,
+      value: pod ?? envValue ?? defaultValue,
+      source: pod !== undefined ? "pod" : envValue !== null ? "env" : "default",
+      defaultValue,
+      envValue,
+    };
+  });
 }
 
 function formatRetryAfter(windowMs: number): string {
@@ -87,24 +242,12 @@ export function getRateLimitClassConfig(): Record<
     ipCeiling?: number;
   }
 > {
-  const crudWindow = parsePositiveInt(
-    process.env.RATE_LIMIT_CRUD_WINDOW_MS,
-    15 * 60 * 1000
-  );
-  const importWindow = parsePositiveInt(
-    process.env.RATE_LIMIT_IMPORT_WINDOW_MS,
-    15 * 60 * 1000
-  );
-  const aiWindow = parsePositiveInt(
-    process.env.RATE_LIMIT_AI_WINDOW_MS,
-    5 * 60 * 1000
-  );
-  const agentWindow = parsePositiveInt(
-    process.env.RATE_LIMIT_AGENT_TURN_WINDOW_MS,
-    aiWindow
-  );
-  const calendarFeedWindow = parsePositiveInt(
-    process.env.RATE_LIMIT_CALENDAR_FEED_WINDOW_MS,
+  const crudWindow = budget("RATE_LIMIT_CRUD_WINDOW_MS", 15 * 60 * 1000);
+  const importWindow = budget("RATE_LIMIT_IMPORT_WINDOW_MS", 15 * 60 * 1000);
+  const aiWindow = budget("RATE_LIMIT_AI_WINDOW_MS", 5 * 60 * 1000);
+  const agentWindow = budget("RATE_LIMIT_AGENT_TURN_WINDOW_MS", aiWindow);
+  const calendarFeedWindow = budget(
+    "RATE_LIMIT_CALENDAR_FEED_WINDOW_MS",
     5 * 60 * 1000
   );
 
@@ -112,48 +255,162 @@ export function getRateLimitClassConfig(): Record<
   // gate calls per page and prefetch plus its own queries and polling —
   // roughly 60–150 requests a minute for an active operator — so the anonymous
   // per-IP budget would lock a single person out.
-  const crudSessionMax = parsePositiveInt(
-    process.env.RATE_LIMIT_CRUD_SESSION_MAX,
-    3000
-  );
+  const crudSessionMax = budget("RATE_LIMIT_CRUD_SESSION_MAX", 3000);
+
+  const crudReadWindow = budget("RATE_LIMIT_CRUD_READ_WINDOW_MS", crudWindow);
 
   return {
     import: {
-      max: parsePositiveInt(process.env.RATE_LIMIT_IMPORT_MAX, 200),
+      max: budget("RATE_LIMIT_IMPORT_MAX", 200),
       windowMs: importWindow,
       retryAfter: formatRetryAfter(importWindow),
     },
     ai_interactive: {
-      max: parsePositiveInt(process.env.RATE_LIMIT_AI_MAX, 60),
+      max: budget("RATE_LIMIT_AI_MAX", 60),
       windowMs: aiWindow,
       retryAfter: formatRetryAfter(aiWindow),
     },
     ai_agent_turn: {
-      max: parsePositiveInt(process.env.RATE_LIMIT_AGENT_TURN_MAX, 120),
+      max: budget("RATE_LIMIT_AGENT_TURN_MAX", 120),
       windowMs: agentWindow,
       retryAfter: formatRetryAfter(agentWindow),
     },
     crud: {
-      max: parsePositiveInt(process.env.RATE_LIMIT_CRUD_MAX, 500),
+      max: budget("RATE_LIMIT_CRUD_MAX", 500),
       sessionMax: crudSessionMax,
       // Every `crud` request from one client address, whatever bucket it
       // spends from (`crud:ipall:*`, see `buildCrudIpCeilingKey`). Five busy
       // people behind one address fit; a caller inventing a session or Bearer
       // per request does not get past it.
-      ipCeiling: parsePositiveInt(
-        process.env.RATE_LIMIT_CRUD_IP_CEILING,
-        5 * crudSessionMax
-      ),
+      ipCeiling: budget("RATE_LIMIT_CRUD_IP_CEILING", 5 * crudSessionMax),
       windowMs: crudWindow,
       retryAfter: formatRetryAfter(crudWindow),
     },
+    // Reads spend their own bucket: several agents sharing one key mostly
+    // read (get_session, get_entities…), and 500 shared with writes 429'd
+    // four of them at once (2026-10-27). Writes keep `crud.max`, so a runaway
+    // writer still stops there. The address ceiling counts both.
+    crud_read: {
+      max: budget("RATE_LIMIT_CRUD_READ_MAX", 3000),
+      sessionMax: budget("RATE_LIMIT_CRUD_READ_SESSION_MAX", crudSessionMax),
+      windowMs: crudReadWindow,
+      retryAfter: formatRetryAfter(crudReadWindow),
+    },
     calendar_feed: {
-      max: parsePositiveInt(process.env.RATE_LIMIT_CALENDAR_FEED_MAX, 120),
+      max: budget("RATE_LIMIT_CALENDAR_FEED_MAX", 120),
       windowMs: calendarFeedWindow,
       retryAfter: formatRetryAfter(calendarFeedWindow),
     },
   };
 }
+
+/** The pod's MCP door (`app.route("/mcp", …)`): its reads arrive as POST. */
+export function isMcpPath(path: string): boolean {
+  const p = path.split(/[?#]/, 1)[0] || "/";
+  return p === "/mcp" || p === "/mcp/";
+}
+
+/** The Hub's retrieval doors: a POST that only reads (no model call). */
+const HUB_RETRIEVAL_POST =
+  /^\/api\/hub(?:-protocol)?\/knowledge\/(?:search|ask)\/?$/;
+
+/**
+ * A `crud` request that reads by its method and path alone: GET, HEAD or
+ * OPTIONS on the Hub (`/api/hub/*`, `/api/hub-protocol/*`) or the MCP door,
+ * and a POST to the Hub's retrieval doors (`/knowledge/search`, its alias
+ * `/knowledge/ask`). Other GETs (the console's tRPC queries) stay in `crud`:
+ * a signed-in person already has the larger session budget there.
+ */
+export function isCrudReadPath(path: string, method: string): boolean {
+  const m = method.toUpperCase();
+  const p = path.split(/[?#]/, 1)[0] || "/";
+  if (m === "POST") return HUB_RETRIEVAL_POST.test(p);
+  if (m !== "GET" && m !== "HEAD" && m !== "OPTIONS") return false;
+  return (
+    p.startsWith("/api/hub/") ||
+    p.startsWith("/api/hub-protocol/") ||
+    isMcpPath(p)
+  );
+}
+
+/** JSON-RPC methods of the MCP door that change nothing. */
+const MCP_READ_METHODS: ReadonlySet<string> = new Set([
+  "initialize",
+  "ping",
+  "tools/list",
+  "resources/list",
+  "resources/templates/list",
+  "resources/read",
+  "prompts/list",
+  "prompts/get",
+  "completion/complete",
+]);
+
+/**
+ * The MCP recall tool. Its answer is synthesized by a model, so a call spends
+ * the AI budget; with `detail: "sources"` (or `compare`) no model runs and it
+ * is a read. Its description tells agents so (tools/index.ts).
+ */
+export const MCP_ASK_TOOL = "synap_ask";
+
+export type McpBodyKind = "read" | "ai" | "write";
+
+function mcpMessageKind(
+  m: unknown,
+  readOnlyTools: ReadonlySet<string>
+): McpBodyKind {
+  if (m === null || typeof m !== "object") return "write";
+  const method = (m as { method?: unknown }).method;
+  if (typeof method !== "string") return "write";
+  if (method.startsWith("notifications/")) return "read";
+  if (MCP_READ_METHODS.has(method)) return "read";
+  if (method !== "tools/call") return "write";
+  const params = (m as { params?: { name?: unknown; arguments?: unknown } })
+    .params;
+  const name = params?.name;
+  if (typeof name !== "string") return "write";
+  if (name === MCP_ASK_TOOL) {
+    const args = (params?.arguments ?? {}) as {
+      detail?: unknown;
+      compare?: unknown;
+    };
+    return args.detail === "sources" || args.compare === true ? "read" : "ai";
+  }
+  return readOnlyTools.has(name) ? "read" : "write";
+}
+
+/**
+ * What this MCP JSON-RPC body spends. A `tools/call` reads when its tool is in
+ * `readOnlyTools` (the tools that declare `readOnlyHint`), except `synap_ask`
+ * with an answer, which runs a model (`ai`); the listed protocol methods and
+ * notifications read. A batch is a write if any message writes, else `ai` if
+ * any runs a model, else a read. Anything else, or a body that is not
+ * JSON-RPC, is a write.
+ */
+export function classifyMcpBody(
+  body: unknown,
+  readOnlyTools: ReadonlySet<string>
+): McpBodyKind {
+  const messages = Array.isArray(body) ? body : [body];
+  if (messages.length === 0) return "write";
+  const kinds = messages.map((m) => mcpMessageKind(m, readOnlyTools));
+  if (kinds.includes("write")) return "write";
+  return kinds.includes("ai") ? "ai" : "read";
+}
+
+/** Does this MCP JSON-RPC body only read (`classifyMcpBody`)? */
+export function isMcpReadBody(
+  body: unknown,
+  readOnlyTools: ReadonlySet<string>
+): boolean {
+  return classifyMcpBody(body, readOnlyTools) === "read";
+}
+
+/**
+ * Largest MCP body the edge reads to tell a read from a write. A tool call is
+ * a few KB; a bigger or undeclared body is counted as a write, unread.
+ */
+export const MCP_READ_BODY_MAX = 256 * 1024;
 
 /** The unauthenticated OAuth doors budgeted per IP (`oauth_public`). */
 export const OAUTH_PUBLIC_PATHS: ReadonlySet<string> = new Set([
@@ -258,6 +515,13 @@ export function classifyRateLimitPath(
     return "ai_interactive";
   }
 
+  // The Hub's answer door runs a model on every call (retrieve + synthesize,
+  // services/knowledge/synthesize.ts): the AI budget, like `synap_ask` with an
+  // answer (`classifyMcpBody`). Its retrieval-only siblings are reads.
+  if (/^\/api\/hub(?:-protocol)?\/knowledge\/answer\/?$/.test(p)) {
+    return "ai_interactive";
+  }
+
   // Hub stored-file transcription — a paid provider call per POST, keyed per
   // Bearer like every class here. Not crud: the crud budget (500/15m) would
   // let one key loop 20 MB transcriptions. Its Kratos sibling
@@ -294,12 +558,9 @@ export function getCalendarFeedIpCeiling(): {
   windowMs: number;
   retryAfter: string;
 } {
-  const windowMs = parsePositiveInt(
-    process.env.RATE_LIMIT_CALENDAR_FEED_WINDOW_MS,
-    5 * 60 * 1000
-  );
+  const windowMs = budget("RATE_LIMIT_CALENDAR_FEED_WINDOW_MS", 5 * 60 * 1000);
   return {
-    max: parsePositiveInt(process.env.RATE_LIMIT_CALENDAR_FEED_IP_MAX, 600),
+    max: budget("RATE_LIMIT_CALENDAR_FEED_IP_MAX", 600),
     windowMs,
     retryAfter: formatRetryAfter(windowMs),
   };
@@ -326,34 +587,28 @@ export function getPublicDoorRateConfig(): {
   submitIp: { max: number; windowMs: number; retryAfter: string };
   submitShare: { max: number; windowMs: number; retryAfter: string };
 } {
-  const readWindow = parsePositiveInt(
-    process.env.RATE_LIMIT_PUBLIC_READ_WINDOW_MS,
-    5 * 60 * 1000
-  );
-  const submitIpWindow = parsePositiveInt(
-    process.env.RATE_LIMIT_PUBLIC_SUBMIT_IP_WINDOW_MS,
+  const readWindow = budget("RATE_LIMIT_PUBLIC_READ_WINDOW_MS", 5 * 60 * 1000);
+  const submitIpWindow = budget(
+    "RATE_LIMIT_PUBLIC_SUBMIT_IP_WINDOW_MS",
     10 * 60 * 1000
   );
-  const submitShareWindow = parsePositiveInt(
-    process.env.RATE_LIMIT_PUBLIC_SUBMIT_SHARE_WINDOW_MS,
+  const submitShareWindow = budget(
+    "RATE_LIMIT_PUBLIC_SUBMIT_SHARE_WINDOW_MS",
     60 * 60 * 1000
   );
   return {
     readIp: {
-      max: parsePositiveInt(process.env.RATE_LIMIT_PUBLIC_READ_IP_MAX, 300),
+      max: budget("RATE_LIMIT_PUBLIC_READ_IP_MAX", 300),
       windowMs: readWindow,
       retryAfter: formatRetryAfter(readWindow),
     },
     submitIp: {
-      max: parsePositiveInt(process.env.RATE_LIMIT_PUBLIC_SUBMIT_IP_MAX, 10),
+      max: budget("RATE_LIMIT_PUBLIC_SUBMIT_IP_MAX", 10),
       windowMs: submitIpWindow,
       retryAfter: formatRetryAfter(submitIpWindow),
     },
     submitShare: {
-      max: parsePositiveInt(
-        process.env.RATE_LIMIT_PUBLIC_SUBMIT_SHARE_MAX,
-        200
-      ),
+      max: budget("RATE_LIMIT_PUBLIC_SUBMIT_SHARE_MAX", 200),
       windowMs: submitShareWindow,
       retryAfter: formatRetryAfter(submitShareWindow),
     },
@@ -369,12 +624,9 @@ export function getDeviceAuthRateConfig(): {
   windowMs: number;
   retryAfter: string;
 } {
-  const windowMs = parsePositiveInt(
-    process.env.RATE_LIMIT_DEVICE_AUTH_WINDOW_MS,
-    10 * 60 * 1000
-  );
+  const windowMs = budget("RATE_LIMIT_DEVICE_AUTH_WINDOW_MS", 10 * 60 * 1000);
   return {
-    max: parsePositiveInt(process.env.RATE_LIMIT_DEVICE_AUTH_MAX, 10),
+    max: budget("RATE_LIMIT_DEVICE_AUTH_MAX", 10),
     windowMs,
     retryAfter: formatRetryAfter(windowMs),
   };
@@ -390,12 +642,9 @@ export function getKeyStateRateConfig(): {
   windowMs: number;
   retryAfter: string;
 } {
-  const windowMs = parsePositiveInt(
-    process.env.RATE_LIMIT_KEY_STATE_WINDOW_MS,
-    10 * 60 * 1000
-  );
+  const windowMs = budget("RATE_LIMIT_KEY_STATE_WINDOW_MS", 10 * 60 * 1000);
   return {
-    max: parsePositiveInt(process.env.RATE_LIMIT_KEY_STATE_MAX, 30),
+    max: budget("RATE_LIMIT_KEY_STATE_MAX", 30),
     windowMs,
     retryAfter: formatRetryAfter(windowMs),
   };
@@ -413,12 +662,9 @@ export function getOAuthPublicRateConfig(): {
   windowMs: number;
   retryAfter: string;
 } {
-  const windowMs = parsePositiveInt(
-    process.env.RATE_LIMIT_OAUTH_PUBLIC_WINDOW_MS,
-    10 * 60 * 1000
-  );
+  const windowMs = budget("RATE_LIMIT_OAUTH_PUBLIC_WINDOW_MS", 10 * 60 * 1000);
   return {
-    max: parsePositiveInt(process.env.RATE_LIMIT_OAUTH_PUBLIC_MAX, 60),
+    max: budget("RATE_LIMIT_OAUTH_PUBLIC_MAX", 60),
     windowMs,
     retryAfter: formatRetryAfter(windowMs),
   };
@@ -458,16 +704,10 @@ export function getOAuthTokenRateConfig(): {
   windowMs: number;
   retryAfter: string;
 } {
-  const windowMs = parsePositiveInt(
-    process.env.RATE_LIMIT_OAUTH_TOKEN_WINDOW_MS,
-    10 * 60 * 1000
-  );
+  const windowMs = budget("RATE_LIMIT_OAUTH_TOKEN_WINDOW_MS", 10 * 60 * 1000);
   return {
-    max: parsePositiveInt(process.env.RATE_LIMIT_OAUTH_TOKEN_MAX, 20),
-    ipCeiling: parsePositiveInt(
-      process.env.RATE_LIMIT_OAUTH_TOKEN_IP_CEILING,
-      600
-    ),
+    max: budget("RATE_LIMIT_OAUTH_TOKEN_MAX", 20),
+    ipCeiling: budget("RATE_LIMIT_OAUTH_TOKEN_IP_CEILING", 600),
     windowMs,
     retryAfter: formatRetryAfter(windowMs),
   };

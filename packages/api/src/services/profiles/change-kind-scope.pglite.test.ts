@@ -303,4 +303,27 @@ describe("an agent shares a workspace-scoped kind with a third space", () => {
     expect(same.status).toBe("unchanged");
     expect(permSpy).not.toHaveBeenCalled();
   });
+
+  it("refuses a role made pod-wide before the gate, so it never waits to fail at approval", async () => {
+    // Proposal ffd8a217 (`proof-point`, 2026-10-29) was filed, approved, and
+    // failed: a role is workspace-scoped by definition.
+    const id = randomUUID();
+    await q(
+      `insert into profiles (id, slug, display_name, scope, workspace_id, entity_scope, profile_kind, is_active, created_at, updated_at)
+       values ($1, 'proof-point', 'Proof point', 'workspace', $2, 'workspace', 'role', true, now(), now())`,
+      [id, HOME]
+    );
+    await expect(
+      changeKindScope(
+        { userId: USER, scopes: [], agentUserId: AGENT },
+        { profileId: id, entityScope: "pod" }
+      )
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(
+        /profileKind='role' cannot declare entityScope='pod'/
+      ),
+    });
+    expect(permSpy).not.toHaveBeenCalled();
+  });
 });

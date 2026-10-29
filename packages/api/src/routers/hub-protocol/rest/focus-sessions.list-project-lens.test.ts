@@ -8,7 +8,7 @@
  *  - `projectId` alone ⇒ 200, the project lens reaches `sessionListConditions`;
  *  - a project the caller cannot see (`loadVisibleProject` → undefined) ⇒ 404,
  *    never a calm `[]`;
- *  - neither ⇒ 400 naming both.
+ *  - neither ⇒ pod-wide under the owner floor (as MCP `synap_list_sessions`).
  *
  * DB-free: `loadVisibleProject` is mocked (its own predicate is covered where
  * it lives), `db.select` is spied with a chain stub, and
@@ -76,7 +76,8 @@ describe("Hub REST GET /focus-sessions — project lens alone", () => {
       from: () => chain,
       where: () => chain,
       orderBy: () => chain,
-      limit: async () => [],
+      limit: () => chain,
+      offset: async () => [],
     };
     selectSpy = vi.spyOn(db, "select").mockReturnValue(chain as never);
   });
@@ -108,11 +109,11 @@ describe("Hub REST GET /focus-sessions — project lens alone", () => {
     expect(res.status).toBe(400);
   });
 
-  it("neither workspaceId nor projectId ⇒ 400 naming both", async () => {
+  it("neither workspaceId nor projectId ⇒ pod-wide under the owner floor", async () => {
     const res = await buildTestApp().request(`/focus-sessions`);
-    expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toMatch(
-      /workspaceId or projectId/
-    );
+    expect(res.status).toBe(200);
+    expect(h.scopes).toEqual([
+      { workspaceLens: undefined, projectLens: undefined },
+    ]);
   });
 });

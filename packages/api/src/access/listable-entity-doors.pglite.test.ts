@@ -748,7 +748,10 @@ const WITHHELD_FILES: Record<string, string> = {
     "a focal object's graph neighbourhood (opening it) + name resolution",
   "services/postiz/record-postiz-published.ts": "match by external id",
   "services/projects/create-project.ts": "validates evidence ids",
+  "services/proposals/redecide-graph-revision.ts":
+    "the capture duplicate door's record scope, re-run for a revised graph (dedup)",
   "services/runs/index.ts": "one run's produced records, by id",
+  "services/status/status-read.ts": "statusOf: the named ids, by id",
   "services/surfaces/renderer-usage.ts":
     "renderer-removal impact count: a demo row's override is affected too",
   "utils/identity-resolve-response.ts": "strong-match recheck, by id (dedup)",
@@ -813,6 +816,8 @@ const WITHHELD_JOBS_FILES: Record<string, string> = {
   "utils/process-sync.ts": "one subject, by id",
   "workers/ai-workers.ts": "one entity, by id",
   "workers/cross-channel-notifier.ts": "one subject, by id",
+  "workers/document-passages.ts":
+    "re-embeds the entities that own one document, by document id",
   "workers/entity-embedding.ts": "indexes one row, by id",
   "workers/entity-query-scope.ts": "defines the jobs-local access floor",
   "workers/pagerank-centrality.ts":

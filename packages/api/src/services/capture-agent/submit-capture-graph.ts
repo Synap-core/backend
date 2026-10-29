@@ -24,6 +24,7 @@
  */
 
 import { randomUUID } from "crypto";
+import { TRPCError } from "@trpc/server";
 import { boundRawSourceText } from "./capture-narrative.js";
 import {
   materializedReceiptState,
@@ -97,7 +98,8 @@ import {
 } from "../duplicates/find-duplicate-candidates.js";
 import { openLink } from "../../utils/deep-links.js";
 import { entityWriteVisibleWhere } from "../../routers/entities/helpers.js";
-import { captureGraphMemberProposes } from "./capture-graph-governance.js";
+import { captureGraphMemberVerdict } from "./capture-graph-governance.js";
+import { refuseAtAgentPendingCap } from "../../utils/permission-check.js";
 import {
   fenceCaptureGraphOperations,
   grantMayLinkRecord,
@@ -1404,6 +1406,8 @@ export async function submitCaptureGraph(
   // binds.
   // A possible twin is never auto-applied for an agent (B2c): the graph is
   // filed for review with POSSIBLE_DUPLICATE and the reviewer decides per item.
+  // Why a scored member proposed (its `reasonCode`), for the pending row.
+  let memberReason: string | null = null;
   if (
     input.agentUserId &&
     bindings.length === 0 &&
@@ -1414,12 +1418,14 @@ export async function submitCaptureGraph(
     // gates on — governance by kind AND the born-status lifecycle floor — so
     // this never says "execute" where the create door it runs says "propose".
     // Any non-execute → the WHOLE graph proposes.
-    const allAutoApprove = !(await captureGraphMemberProposes({
+    const memberVerdict = await captureGraphMemberVerdict({
       agentUserId: input.agentUserId,
       userId,
       workspaceId,
       operations,
-    }));
+    });
+    memberReason = memberVerdict.reasonCode;
+    const allAutoApprove = !memberVerdict.proposes;
 
     if (allAutoApprove) {
       // Materialize NOW as a DIRECT OPERATOR write, through the EXACT composite
@@ -1567,88 +1573,15 @@ export async function submitCaptureGraph(
             ? { governanceProposalId: captureProposalId }
             : {}),
         };
-        const { entitiesRouter } = await import("../../routers/entities.js");
-        const { relationsRouter } = await import("../../routers/relations.js");
-        const entityCaller = entitiesRouter.createCaller(
-          compositeCtx as unknown as Parameters<
-            typeof entitiesRouter.createCaller
-          >[0]
-        );
-        const relationCaller = relationsRouter.createCaller(
-          compositeCtx as unknown as Parameters<
-            typeof relationsRouter.createCaller
-          >[0]
-        );
-
-        const materialized = await runMaterializationUnderReceipt(
-          captureReceipt,
-          () =>
-            materializeCompositeGraph(
-              operations,
-              entityCaller,
-              relationCaller,
-              (err, type) =>
-                logger.warn(
-                  { err, type },
-                  "capture auto-apply: relation create failed (entities kept)"
-                ),
-              {
-                source,
-                // Homes are per-op via stampScopeAwareHomesOnOps (targetWorkspaceId
-                // on workspace-scoped kinds only). Do NOT blanket workspaceScoped —
-                // that re-pinned pod identity into the graph home (folder prison).
-                // materializeCompositeGraph forces pin only when op.targetWorkspaceId
-                // is set; pod kinds stay null via entities.create entityScope.
-                // The composite ctx's `attachFacet` door — same governance context,
-                // so a policy-approved graph attaches facets directly.
-                facetCaller: entityCaller,
-                // Connected-plan callers — the SAME doors approval wires, with
-                // the capturing human as the sessions' owner (auto-apply has no
-                // separate approver).
-                planCallers: buildPlanCallers({
-                  database: db,
-                  userId,
-                  sessionOwnerUserId: userId,
-                  workspaceId,
-                  workspaceRole: membershipRole,
-                  entityCaller,
-                  proposal: {
-                    id: captureReceipt?.id ?? null,
-                    sessionId: input.sessionId ?? null,
-                  },
-                }),
-                // Rule Loop callers — the SAME three canonical doors proposal
-                // approval wires. Without them a config op in an auto-applied
-                // graph would be silently dropped here while the identical graph
-                // materialized it on the approval path.
-                ...buildRuleLoopCallers({
-                  database: db,
-                  userId,
-                  workspaceId: workspaceId ?? null,
-                  auditSource: "rule_loop_capture_auto_apply",
-                  // The AGENT authored this graph and no person reviewed it
-                  // (a rule or its own space let every member execute), so
-                  // its skills are born unapproved, as at `skills.create`.
-                  skillAuthor: {
-                    agentUserId: input.agentUserId ?? null,
-                    personApproved: false,
-                  },
-                }),
-                // RE-SUBMIT IDEMPOTENCY (piece 1a): key every created entity in the
-                // external-link store by `${userId}:${idempotencyKey}:${op.ref}`. If
-                // the SAME graph is auto-applied twice (a retry that races the
-                // auto_approved record write, so the early proposal lookup missed
-                // it), the second materialize LINKS the already-created entities
-                // instead of duplicating them. userId-prefixed so a client-supplied
-                // key can't collide with another tenant on the global links index —
-                // exactly the pattern the tRPC capture door uses.
-                idempotency: makeExternalLinkIdempotency(db, {
-                  namespace: `${userId}:${idempotencyKey}`,
-                  provider: "capture",
-                  userId,
-                }),
-              }
-            )
+        const materialized = await materializeAgentGraphUnderReceipt(
+          compositeCtx,
+          {
+            receipt: captureReceipt,
+            operations,
+            agentUserId: input.agentUserId ?? null,
+            source,
+            idempotencyKey,
+          }
         );
 
         // Complete the receipt inserted BEFORE materialization: fill in what
@@ -1788,6 +1721,21 @@ export async function submitCaptureGraph(
   }
 
   // ── PENDING PATH (confirm mode + agent-propose + machine callers) ─────────
+  // An agent's graph meets the SAME pending budget as its single writes: its
+  // rows always counted against the cap, and it now stops at it too.
+  if (input.agentUserId) {
+    const refusal = await refuseAtAgentPendingCap({
+      attributionAgentUserId: input.agentUserId,
+      userId,
+      workspaceId,
+      subjectType: "entity",
+      action: "create",
+      correlationId: randomUUID(),
+    });
+    if (refusal) {
+      throw new TRPCError({ code: "FORBIDDEN", message: refusal.reason });
+    }
+  }
   const { proposal: created } = await createEventBackedProposal({
     userId,
     workspaceId,
@@ -1805,9 +1753,14 @@ export async function submitCaptureGraph(
     // dedup. A webhook/cron/human-confirm caller still has no agentUserId, so
     // it stays correctly unattributed.
     ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
-    // Why an agent's graph waits, when the duplicate door is why (B2c).
-    ...(input.agentUserId && possibleDuplicate
-      ? { governanceReason: "POSSIBLE_DUPLICATE" }
+    // Why an agent's graph waits: the duplicate door (B2c), else the reason
+    // the first proposing member was given, as the single-entity gate stores.
+    ...(input.agentUserId && (possibleDuplicate || memberReason)
+      ? {
+          governanceReason: possibleDuplicate
+            ? "POSSIBLE_DUPLICATE"
+            : memberReason,
+        }
       : {}),
     ...(input.sourceMessageId
       ? { sourceMessageId: input.sourceMessageId }
@@ -1883,4 +1836,119 @@ export async function submitCaptureGraph(
       source,
     },
   };
+}
+
+/**
+ * The composite ctx an agent graph materializes under when the policy let it
+ * execute: a DIRECT operator write, `governanceProposalId` naming its
+ * `auto_approved` receipt only once that row exists (the FK).
+ */
+export interface AgentGraphMaterializeCtx {
+  db: typeof db;
+  authenticated: true;
+  userId: string;
+  workspaceId: string | null;
+  workspaceRole: string;
+  sessionId: string | null;
+  governanceProposalId?: string;
+}
+
+/**
+ * Materialize an executing agent graph under its receipt, through the
+ * composite callers this door wires (entities, relations, facets, plan steps,
+ * Rule Loop config). Shared by the auto-apply above and the re-decide of an
+ * agent's own revision (`redecide-graph-revision.ts`), so the two cannot
+ * materialize differently. A throw marks the receipt `approval_failed`.
+ */
+export async function materializeAgentGraphUnderReceipt(
+  compositeCtx: AgentGraphMaterializeCtx,
+  input: {
+    receipt: { id?: string; data?: Record<string, unknown> } | undefined;
+    operations: CompositeProposalOperation[];
+    agentUserId: string | null;
+    source: string;
+    idempotencyKey: string;
+  }
+): Promise<Awaited<ReturnType<typeof materializeCompositeGraph>>> {
+  const { userId, workspaceId, workspaceRole, sessionId } = compositeCtx;
+  const { receipt, operations, agentUserId, source, idempotencyKey } = input;
+  const { entitiesRouter } = await import("../../routers/entities.js");
+  const { relationsRouter } = await import("../../routers/relations.js");
+  const entityCaller = entitiesRouter.createCaller(
+    compositeCtx as unknown as Parameters<typeof entitiesRouter.createCaller>[0]
+  );
+  const relationCaller = relationsRouter.createCaller(
+    compositeCtx as unknown as Parameters<
+      typeof relationsRouter.createCaller
+    >[0]
+  );
+
+  return runMaterializationUnderReceipt(receipt, () =>
+    materializeCompositeGraph(
+      operations,
+      entityCaller,
+      relationCaller,
+      (err, type) =>
+        logger.warn(
+          { err, type },
+          "capture auto-apply: relation create failed (entities kept)"
+        ),
+      {
+        source,
+        // Homes are per-op via stampScopeAwareHomesOnOps (targetWorkspaceId
+        // on workspace-scoped kinds only). Do NOT blanket workspaceScoped —
+        // that re-pinned pod identity into the graph home (folder prison).
+        // materializeCompositeGraph forces pin only when op.targetWorkspaceId
+        // is set; pod kinds stay null via entities.create entityScope.
+        // The composite ctx's `attachFacet` door — same governance context,
+        // so a policy-approved graph attaches facets directly.
+        facetCaller: entityCaller,
+        // Connected-plan callers — the SAME doors approval wires, with
+        // the capturing human as the sessions' owner (auto-apply has no
+        // separate approver).
+        planCallers: buildPlanCallers({
+          database: db,
+          userId,
+          sessionOwnerUserId: userId,
+          workspaceId,
+          workspaceRole,
+          entityCaller,
+          proposal: {
+            id: receipt?.id ?? null,
+            sessionId,
+          },
+        }),
+        // Rule Loop callers — the SAME three canonical doors proposal
+        // approval wires. Without them a config op in an auto-applied
+        // graph would be silently dropped here while the identical graph
+        // materialized it on the approval path.
+        ...buildRuleLoopCallers({
+          database: db,
+          userId,
+          workspaceId: workspaceId ?? null,
+          auditSource: "rule_loop_capture_auto_apply",
+          // The AGENT authored this graph and no person reviewed it
+          // (a rule or its own space let every member execute), so
+          // its skills are born unapproved, as at `skills.create`.
+          skillAuthor: {
+            agentUserId,
+            personApproved: false,
+          },
+        }),
+        // RE-SUBMIT IDEMPOTENCY (piece 1a): key every created entity in the
+        // external-link store by `${userId}:${idempotencyKey}:${op.ref}`. If
+        // the SAME graph is auto-applied twice (a retry that races the
+        // auto_approved record write, so the early proposal lookup missed
+        // it), the second materialize LINKS the already-created entities
+        // instead of duplicating them. userId-prefixed so a client-supplied
+        // key can't collide with another tenant on the global links index —
+        // exactly the pattern the tRPC capture door uses.
+        idempotency: makeExternalLinkIdempotency(db, {
+          namespace: `${userId}:${idempotencyKey}`,
+          provider: "capture",
+          userId,
+        }),
+      }
+    )
+  );
 }

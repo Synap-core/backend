@@ -219,12 +219,21 @@ async function insertProposal(size: number): Promise<ApplyArgs["proposal"]> {
 
 function approve(
   proposal: ApplyArgs["proposal"],
-  opts: { userId?: string; background?: boolean } = {}
+  opts: {
+    userId?: string;
+    background?: boolean;
+    identityResolutionForTwins?: "keep_existing" | "separate";
+  } = {}
 ) {
   return applyProposalApproval({
     proposal,
     userId: opts.userId ?? APPROVER,
-    input: { proposalId: proposal.id },
+    input: {
+      proposalId: proposal.id,
+      ...(opts.identityResolutionForTwins
+        ? { identityResolutionForTwins: opts.identityResolutionForTwins }
+        : {}),
+    },
     ctx: {} as ApplyArgs["ctx"],
     background: opts.background ?? true,
   });
@@ -412,6 +421,49 @@ describe("a failure is recorded, and resume is safe", () => {
     const resumed = await approve(proposal);
     expect(resumed).toMatchObject({ queued: true, joined: false });
     expect(resumed.approvalRun!.runId).not.toBe(runId);
+  });
+
+  it("a stop on a record that already exists keeps the twins; one answer for every twin rides the resume", async () => {
+    const { TRPCError } = await import("@trpc/server");
+    const { buildWeakDedupCause } = await import("@synap/database");
+    const proposal = await insertProposal(LARGE);
+    const runId = (await approve(proposal)).approvalRun!.runId;
+    holder.behaviour = async () => {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: "An entity named contactsamirt already exists.",
+        cause: {
+          ...buildWeakDedupCause([
+            { id: "ent-twin", title: "contactsamirt", type: "person" },
+          ]),
+          opRef: "e0",
+        },
+      });
+    };
+    expect(await runApprovalJob({ runId })).toEqual({ status: "failed" });
+    expect(await readLatestApprovalRun(proposal.id)).toMatchObject({
+      state: "failed",
+      errorClass: "conflict",
+      twins: [{ id: "ent-twin", title: "contactsamirt", kind: "person" }],
+    });
+
+    // The reviewer answers for every twin: the resume replays that answer.
+    let seen: unknown;
+    holder.behaviour = async (_ops, options) => {
+      seen = options.identityResolutionForTwins;
+    };
+    const resumed = await approve(proposal, {
+      identityResolutionForTwins: "keep_existing",
+    });
+    expect(await runApprovalJob({ runId: resumed.approvalRun!.runId })).toEqual(
+      { status: "succeeded" }
+    );
+    expect(seen).toBe("keep_existing");
+    expect(await readLatestApprovalRun(proposal.id)).toMatchObject({
+      state: "succeeded",
+      twins: null,
+      skipped: 0,
+    });
   });
 
   it("a running attempt whose heartbeat stopped reads stalled, and the next approve retires it", async () => {

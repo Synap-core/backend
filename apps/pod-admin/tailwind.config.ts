@@ -74,6 +74,13 @@ const config: Config = {
     plugin(({ addVariant }) =>
       addVariant("nav-collapsed", "html[data-nav-collapsed] &")
     ),
+    // @heroui/theme 2.4.x writes Tailwind v4 class names; this app builds with
+    // Tailwind v3, which has no `outline-solid`. Its fields carry
+    // `!outline-solid outline-transparent`, so without the rule the browser's
+    // own `outline: auto` focus ring (blue) drew around every input.
+    plugin(({ addUtilities }) =>
+      addUtilities({ ".outline-solid": { "outline-style": "solid" } })
+    ),
     heroui({
       defaultTheme: "dark",
       defaultExtendTheme: "dark",

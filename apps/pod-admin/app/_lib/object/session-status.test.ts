@@ -6,6 +6,7 @@ import {
 import {
   criteriaVerdictMark,
   criterionRows,
+  railGradedKeys,
   deliverableRows,
   draftSummary,
   moveNotice,
@@ -337,5 +338,21 @@ describe("criteriaVerdictMark — ONE mark for the session verdict", () => {
       criteriaVerdictMark({ passed: 0, total: 0, state: "none" })
     ).toBeNull();
     expect(criteriaVerdictMark(null)).toBeNull();
+  });
+});
+
+describe("railGradedKeys — the criteria a session's rail grades", () => {
+  const rows = ["a", "b", "c", "d", "e", "f", "g"].map((key) => ({ key }));
+
+  it("the ones shown before Show all", () => {
+    expect([...railGradedKeys(rows, 5)]).toEqual(["a", "b", "c", "d", "e"]);
+  });
+
+  it("a criterion past the cap is not one of them: Needs you keeps its grade", () => {
+    expect(railGradedKeys(rows, 5).has("f")).toBe(false);
+  });
+
+  it("fewer than the cap: every one", () => {
+    expect([...railGradedKeys(rows.slice(0, 2), 5)]).toEqual(["a", "b"]);
   });
 });

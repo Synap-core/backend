@@ -23,19 +23,19 @@ vi.mock("@synap/database", async () => ({
       "@synap/database/pg-errors"
     )
   ).isUniqueViolation,
-  sql: {},
   db: {},
   claimTransitionOutbox: h.claim,
   settleTransitionOutbox: async (_db: unknown, id: string, r: unknown) => {
     h.settled.push({ id, ...(r as object) });
   },
   listDueTransitions: async () => [],
-  EventRepository: class {
+  // The SHARED repository — the one whose hooks push to realtime (W7).
+  eventRepository: {
     async append(e: { id: string }) {
       if (h.appendError) throw h.appendError;
       h.appended.push(e);
       return { id: e.id };
-    }
+    },
   },
 }));
 vi.mock("@synap-core/core", () => ({
@@ -63,12 +63,17 @@ vi.mock("../side-effects.js", () => ({
 import {
   dispatchLifecycleTransition,
   emitLifecycleTransition,
+  isDualEmittedStatusUpdate,
 } from "../lifecycle-transition.js";
 import {
   playbookActivatorSentence,
   toBackendTrigger,
 } from "@synap-core/types/automations";
 import { evaluateTriggerFilterValue } from "@synap-core/types/automations/filter-operators";
+import type {
+  LifecycleTransitionPayload,
+  WorkUnitTransitionPayload,
+} from "@synap-core/types/lifecycle";
 
 /** The matcher's rule: every filter key evaluates true against the payload. */
 function firesOn(
@@ -92,8 +97,10 @@ function firesOn(
   );
 }
 
-const T = {
+const T: LifecycleTransitionPayload = {
   transitionId: "t1",
+  subjectType: "entity",
+  subjectId: "e1",
   entityId: "e1",
   profileSlug: "deal",
   role: null as string | null,
@@ -103,7 +110,7 @@ const T = {
   to: "negotiating",
   fromCategory: "open",
   category: "active",
-  actorKind: "agent" as const,
+  actorKind: "agent",
   userId: "u1",
   agentUserId: "a1",
   sessionId: null,
@@ -111,6 +118,28 @@ const T = {
   staleExpected: false,
   proposalId: null,
   workspaceId: "w1",
+};
+
+/** A goal's move, in the same shape (status-flow W1). */
+const G: WorkUnitTransitionPayload = {
+  transitionId: "g1",
+  subjectType: "track",
+  subjectId: "tr1",
+  property: "status",
+  from: "active",
+  to: "paused",
+  fromCategory: "active",
+  category: "paused",
+  actorKind: "system",
+  userId: "u1",
+  agentUserId: null,
+  sessionId: null,
+  reason: null,
+  staleExpected: false,
+  proposalId: null,
+  workspaceId: "w1",
+  projectId: "p1",
+  trackId: "tr1",
 };
 
 beforeEach(() => {
@@ -146,6 +175,88 @@ describe("emitLifecycleTransition", () => {
         commercialStage: "negotiating",
       },
     });
+  });
+
+  // W7: consumers that follow the transition skip the dual-emitted update by
+  // this rule; an ordinary entities.update payload never matches it.
+  it("the dual-emitted update is recognisable as such; an ordinary update is not", async () => {
+    await emitLifecycleTransition(T);
+    expect(isDualEmittedStatusUpdate(h.emitted[1].data)).toBe(true);
+    expect(
+      isDualEmittedStatusUpdate({
+        profileSlug: "deal",
+        changedKeys: ["amount"],
+        "changed.amount": true,
+        amount: 3,
+      })
+    ).toBe(false);
+    // An ordinary update of a property SLUGGED `transitionId` spreads it flat
+    // (entities.update): it is a changed key, never the marker.
+    expect(
+      isDualEmittedStatusUpdate({
+        profileSlug: "deal",
+        changedKeys: ["transitionId"],
+        "changed.transitionId": true,
+        "previous.transitionId": null,
+        transitionId: "TR-2026-001",
+      })
+    ).toBe(false);
+    expect(
+      isDualEmittedStatusUpdate({
+        profileSlug: "deal",
+        changedKeys: ["transitionId", "amount"],
+        "changed.transitionId": true,
+        "changed.amount": true,
+        transitionId: "TR-2026-001",
+        amount: 3,
+      })
+    ).toBe(false);
+  });
+
+  // A redelivered transition (the sweeper's retry after the log row landed)
+  // appends nothing, so the realtime hook on the shared repository pushes
+  // the move at most once.
+  it("a redelivered transition appends its log row once (one realtime push, at most)", async () => {
+    const first = await emitLifecycleTransition(T);
+    await emitLifecycleTransition(T, {}, first);
+    expect(h.appended).toHaveLength(1);
+    // A retry that lost its progress hits the row's id: no second row either.
+    h.appendError = Object.assign(new Error("duplicate key"), {
+      code: "23505",
+    });
+    const again = await emitLifecycleTransition(T);
+    expect(again.eventId).toBe("t1");
+    expect(h.appended).toHaveLength(1);
+  });
+
+  it("goal and session: their own event type and subject, the transition fan-out alone", async () => {
+    for (const [subjectType, type] of [
+      ["track", "track.transition.completed"],
+      ["focus_session", "focus_session.transition.completed"],
+    ] as const) {
+      h.appended = [];
+      h.emitted = [];
+      await emitLifecycleTransition({ ...G, subjectType });
+      expect(h.appended).toHaveLength(1);
+      expect(h.appended[0]).toMatchObject({
+        id: "g1",
+        type,
+        subjectType,
+        subjectId: "tr1",
+        source: "system",
+      });
+      expect(h.emitted).toHaveLength(1);
+      expect(h.emitted[0]).toMatchObject({
+        subjectType,
+        action: "transition",
+        subjectId: "tr1",
+        workspaceId: "w1",
+        eventId: "g1",
+        data: { to: "paused", category: "paused", projectId: "p1" },
+      });
+      // No profile, no back-compat entity update.
+      expect(h.emitted[0].data).not.toHaveProperty("lifecycleProfile");
+    }
   });
 
   it("role: no back-compat update fan-out", async () => {

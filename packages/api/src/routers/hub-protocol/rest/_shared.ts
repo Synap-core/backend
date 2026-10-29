@@ -19,9 +19,11 @@ import {
   db,
   users,
   workspaceMembers,
+  workspaces,
   proposals,
   eq,
   and,
+  isNull,
   or,
   drizzleSql,
   getWorkspaceMembership,
@@ -38,6 +40,7 @@ import { getConfinedWorkspace } from "../confine-workspace.js";
 import { isAgentCaller } from "../../../services/library/agent-door.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 import { canRead, userPrincipal } from "../../../access/door.js";
+import type { KeyPrincipal } from "../../../access/key-identity.js";
 
 /**
  * Module-scoped pino logger.
@@ -81,6 +84,12 @@ export type HubVariables = {
    * explicitly in the request body.
    */
   agentUserId?: string;
+  /**
+   * Who HOLDS the bearer key (`resolveKeyIdentity().principal`): its own id,
+   * kind and computer. Set only for an API-key caller; `userId` is the human
+   * it acts for.
+   */
+  keyPrincipal?: KeyPrincipal;
   /**
    * The authenticating key's `keyType` (e.g. "service", "hub_inbound"). Set by
    * the auth middleware for Bearer callers. Used for SERVICE-KEY WORKSPACE
@@ -928,12 +937,24 @@ export async function getUserAccessibleWorkspaceIds(
  * typo can never silently swap the two semantics.
  */
 export async function getUserMemberWorkspaceIds(
-  userId: string
+  userId: string,
+  opts: { activeOnly?: boolean } = {}
 ): Promise<string[]> {
-  const rows = await db
+  // `activeOnly` drops archived workspaces: a reader that gathers per-space
+  // data must not read them (every read there fails "has been archived").
+  const query = db
     .select({ workspaceId: workspaceMembers.workspaceId })
-    .from(workspaceMembers)
-    .where(eq(workspaceMembers.userId, userId));
+    .from(workspaceMembers);
+  const rows = opts.activeOnly
+    ? await query
+        .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
+        .where(
+          and(
+            eq(workspaceMembers.userId, userId),
+            isNull(workspaces.archivedAt)
+          )
+        )
+    : await query.where(eq(workspaceMembers.userId, userId));
   return rows.map((r) => r.workspaceId);
 }
 

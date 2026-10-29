@@ -66,6 +66,11 @@ export const workspaceHandlers: McpHandlerMap = {
     const { toolName, args, userId, apiKeyScopes, caller, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const { discover } = await import("../../../services/discover/discover.js");
+    const { statusOfInput } =
+      await import("../../../services/status/status-read.js");
+    // More than 10 ids is refused (a ZodError, flattened by the error door),
+    // never cut silently.
+    const statusOf = statusOfInput.parse(args.statusOf);
     const result = await discover({
       caller,
       userId,
@@ -76,6 +81,7 @@ export const workspaceHandlers: McpHandlerMap = {
         Array<"workspaces" | "projects" | "profiles"> | undefined,
       workspaceId: args.workspaceId as string | undefined,
       projectId: args.projectId as string | undefined,
+      statusOf,
       explain: args.explain === true,
     });
     return ok(result);

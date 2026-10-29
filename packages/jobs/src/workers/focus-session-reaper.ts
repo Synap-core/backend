@@ -31,6 +31,7 @@ import {
   RECEIPT_IDLE_WINDOW_HOURS,
   focusSessionWaitsOnPersonWhere,
   sessionStoppedOnItsAsksWhere,
+  setSessionStatus,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
@@ -99,9 +100,15 @@ export const SESSION_IS_STALE = and(
  * starting it explicitly lost the marker and is real work, reaped as `stale`
  * like any other. A receipt still holding a pending proposal stays open — its
  * review is not done — and falls to the stale sweep only after 24h.
+ *
+ * `stale` included: that sweep stales a receipt whose proposal sat pending for
+ * 24h, and once the proposal is decided nothing else would ever close it (~50
+ * on the founder's pod since 31 Aug). `stale` is not terminal, so the close
+ * door takes it, and the stale write leaves `updated_at` alone, so the idle
+ * window below still holds.
  */
 export const RECEIPT_IS_DONE = and(
-  drizzleSql`${focusSessions.status} IN ('active', 'paused')`,
+  drizzleSql`${focusSessions.status} IN ('active', 'paused', 'stale')`,
   drizzleSql`${focusSessions.metadata} ->> 'kind' = ${AGENT_PROPOSAL_PACKAGE_MARKER}`,
   drizzleSql`${focusSessions.updatedAt} < now() - (${RECEIPT_IDLE_WINDOW_HOURS}::int * interval '1 hour')`,
   drizzleSql`NOT EXISTS (select 1 from proposals p where p.session_id = ${focusSessions.id} and (p.status = 'pending' or p.created_at > now() - (${RECEIPT_IDLE_WINDOW_HOURS}::int * interval '1 hour')))`,
@@ -234,11 +241,15 @@ export async function handleFocusSessionReaper(): Promise<void> {
     // erase when the session actually went quiet (and a stale row no longer matches
     // the predicate, so it is never re-reaped regardless). Not binding a `new Date()`
     // here also avoids the postgres.js 3.4.8 Date-bind crash the cutoff above dodges.
-    const reaped = await db
-      .update(focusSessions)
-      .set({ status: "stale" })
-      .where(SESSION_IS_STALE)
-      .returning({ id: focusSessions.id });
+    // Through the one session status write: each staled session owes its
+    // transition, the system's move.
+    const { rows: reaped } = await setSessionStatus(db, {
+      where: SESSION_IS_STALE,
+      from: ["active", "paused"],
+      to: "stale",
+      actor: { kind: "system" },
+      reason: `No activity for ${REAPER_STALE_HOURS} hours.`,
+    });
 
     if (reaped.length === 0) {
       logger.debug("No stale focus sessions to reap");

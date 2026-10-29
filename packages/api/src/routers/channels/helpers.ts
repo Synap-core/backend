@@ -52,7 +52,7 @@ import {
 import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
 import { ensurePersonalAgentUser } from "../../utils/personal-agent-user.js";
 
-import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
+import { validateExternalUrl, safePublicFetch } from "@synap/shared-utils";
 
 import { randomUUID } from "crypto";
 
@@ -585,8 +585,11 @@ export async function relayToExternalChannel(opts: {
   // (which can't receive external relay calls)
   if (service.serviceId === "default" || !service.endpoint) return;
 
-  // SSRF guard: validate the service endpoint before fetching
-  const urlCheck = validateExternalUrl(service.endpoint);
+  // SSRF guard: a registered service names its own port; the name must be a
+  // public one, and `safePublicFetch` refuses it if it resolves inside.
+  const urlCheck = validateExternalUrl(service.endpoint, {
+    allowedPorts: "any",
+  });
   if (!urlCheck.valid) {
     console.warn(
       "[channels] Blocked relay to potentially unsafe endpoint:",
@@ -596,20 +599,27 @@ export async function relayToExternalChannel(opts: {
     return;
   }
 
-  await safeExternalFetch(`${service.endpoint}/v1/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-synap-channel-key": externalChannelId,
-      "x-synap-channel-platform": externalSource,
+  const res = await safePublicFetch(
+    `${service.endpoint}/v1/chat/completions`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-synap-channel-key": externalChannelId,
+        "x-synap-channel-platform": externalSource,
+      },
+      body: JSON.stringify({
+        model: "synap-relay",
+        messages: [{ role: "assistant", content }],
+        stream: false,
+      }),
+      signal: AbortSignal.timeout(15000),
     },
-    body: JSON.stringify({
-      model: "synap-relay",
-      messages: [{ role: "assistant", content }],
-      stream: false,
-    }),
-    signal: AbortSignal.timeout(15000),
-  });
+    0,
+    { allowedPorts: "any" }
+  );
+  // Only the send matters: release the connection.
+  await res.body?.cancel().catch(() => undefined);
 }
 
 /**

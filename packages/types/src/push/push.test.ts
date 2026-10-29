@@ -247,6 +247,17 @@ describe("envelope", () => {
     expect(pushEnvelope("system").sound).toBeNull();
     expect(PUSH_CATEGORY_POLICY.system.level).toBe("passive");
   });
+
+  it("the morning brief pushes under its own passive category, on by default", () => {
+    expect(classifyPush("ai.proactive.morning_briefing")).toBe("morning-brief");
+    expect(pushEnvelope("morning-brief")).toEqual({
+      interruptionLevel: "passive",
+      sound: null,
+    });
+    expect(isPushCategoryEnabled({}, "morning-brief")).toBe(true);
+    // The other proactive types stay in-app only.
+    expect(classifyPush("ai.proactive.weekly_digest")).toBeNull();
+  });
 });
 
 describe("labels", () => {

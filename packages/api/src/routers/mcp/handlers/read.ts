@@ -805,7 +805,9 @@ export const readHandlers: McpHandlerMap = {
     // same row across calls regardless of membership-query order. This is not
     // a twin policy — which duplicate-slug row SHOULD win is a pending ontology
     // decision; this only stops the answer changing between identical calls.
-    const wsIds = [...(await getUserMemberWorkspaceIds(userId))].sort();
+    const wsIds = [
+      ...(await getUserMemberWorkspaceIds(userId, { activeOnly: true })),
+    ].sort();
     if (wsIds.length === 0) {
       const podRelations = await relationTypesFor([null]);
       return ok(

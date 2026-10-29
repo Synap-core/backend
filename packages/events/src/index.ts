@@ -67,6 +67,7 @@ export {
   emitSideEffects,
   fanOutSideEffects,
   enqueueConnectionSyncApproval,
+  enqueueDocumentPassages,
   type SideEffectPayload,
 } from "./side-effects.js";
 
@@ -76,7 +77,8 @@ export {
   dispatchLifecycleTransition,
   dispatchDueLifecycleTransitions,
   LIFECYCLE_TRANSITION_EVENT_TYPE,
-  DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS,
+  TRANSITION_EVENT_TYPES,
+  isDualEmittedStatusUpdate,
   type LifecycleTransitionEvent,
   type TransitionEmitContext,
 } from "./lifecycle-transition.js";

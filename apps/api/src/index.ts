@@ -83,6 +83,7 @@ import {
   requestSizeLimit,
   applicationConnectionStatusRateLimitMiddleware,
   handshakeRateLimitMiddleware,
+  watchPodRateLimits,
 } from "./middleware/security.js";
 import { usageTelemetry } from "./middleware/usage-telemetry.js";
 import { configuredPodAdminBase } from "./pod-admin-config.js";
@@ -1109,6 +1110,14 @@ import { createPodUpdatesRouter } from "./routers/pod-updates.js";
 import { readLastUpdate } from "./pod-updates/index.js";
 import { podUpdatesDeps } from "./routers/pod-updates-deps.js";
 app.route("/api/pod-updates", createPodUpdatesRouter(podUpdatesDeps));
+import { createPodRateLimitsRouter } from "./routers/pod-rate-limits.js";
+import {
+  podRateLimitsDeps,
+  readPodRateLimitValuesRaw,
+} from "./routers/pod-rate-limits-deps.js";
+app.route("/api/pod-rate-limits", createPodRateLimitsRouter(podRateLimitsDeps));
+// The owner's budgets over the env, re-read every 30 s (rate-limit-classes.ts).
+watchPodRateLimits(readPodRateLimitValuesRaw);
 
 // The owner's restic recovery kit: download (fresh sign-in) + read-back confirm.
 import { createBackupKitRouter } from "./routers/backup-kit.js";
@@ -1674,6 +1683,7 @@ void (async () => {
 
 // WebSocket upgrade router — handles SSH proxy and recipe runner endpoints
 import { handleWebSocketUpgrade } from "./ws-router.js";
+import { serverBindHostname } from "./server-bind.js";
 
 // Start server
 try {
@@ -1681,13 +1691,13 @@ try {
     {
       fetch: app.fetch,
       port: config.server.port,
-      hostname: "0.0.0.0",
+      hostname: serverBindHostname(config.server.localMode),
     },
     async (info) => {
       apiLogger.info(
         {
           port: info.port,
-          host: "0.0.0.0",
+          host: serverBindHostname(config.server.localMode),
           nodeEnv: config.server.nodeEnv,
         },
         "API server started"
@@ -1870,6 +1880,17 @@ try {
             apiLogger.info("Registered library keep-alive handler (IoC)");
           }
 
+          // IoC: the morning brief pass (every 15 min). jobs owns the queue
+          // and its cron; the pass reads the needs-you rule and writes through
+          // NotificationService, both in api, so the handler is filled here.
+          {
+            const { registerMorningBriefHandler } =
+              await import("@synap/jobs/workers/morning-brief-worker.js");
+            const { runMorningBriefs } = await import("@synap/api");
+            registerMorningBriefHandler(() => runMorningBriefs());
+            apiLogger.info("Registered morning brief handler (IoC)");
+          }
+
           // IoC: fill the capability / signal / feed-runner slots owned by
           // @synap/jobs with the @synap/api implementations. The pg-boss workers
           // run IN this process, but @synap/jobs can't statically import
@@ -1964,8 +1985,13 @@ try {
             // review pack, the session-bound ephemeral expiry and both halves
             // of the close event (@synap-core/types/focus-sessions states the
             // invariant outright). They now call completeFocusSession through
-            // this slot.
-            registerSessionCloser((input) => api.completeFocusSession(input));
+            // this slot. Every close through it is automatic: the system's.
+            registerSessionCloser((input) =>
+              api.completeFocusSession({
+                ...input,
+                actor: { kind: "system", userId: input.userId },
+              })
+            );
             // ONE stopped-session door (decision E1): the hourly reaper stales
             // a session no agent moved for 7 days whose only owed items are
             // its agent's confirm / choose asks, and those asks end with it.

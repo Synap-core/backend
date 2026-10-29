@@ -21,6 +21,8 @@ import {
   focusSessions,
   links,
   vaultGrants,
+  workUnitActorOf,
+  writeSessionPatch,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database/schema";
 import { withParentSessionId } from "../services/focus-sessions/parent-lineage.js";
@@ -2228,11 +2230,11 @@ export const focusSessionsRouter = router({
         }
       }
 
-      const [updated] = await db
-        .update(focusSessions)
-        .set(set)
-        .where(eq(focusSessions.id, input.id))
-        .returning();
+      const [updated] = await writeSessionPatch(db, {
+        sessionId: input.id,
+        set,
+        actor: workUnitActorOf(ctx.userId, ctx.agentUserId),
+      });
 
       // The spine record of this edit — the signal "touched by a person
       // since" reads (`isOwnFreshWork`, FB1020 B3). Without it a person

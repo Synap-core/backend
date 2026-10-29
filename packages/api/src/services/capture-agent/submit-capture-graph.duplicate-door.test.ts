@@ -48,6 +48,12 @@ vi.mock("@synap/database/agent-governance", async (importOriginal) => ({
     .fn()
     .mockResolvedValue({ decision: "execute" }),
 }));
+// The pending-proposal budget (`refuseAtAgentPendingCap`) reads the queue
+// through `db`, which this file fakes: under the cap, as these rows assume.
+vi.mock("../../utils/permission-check.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/permission-check.js")>()),
+  refuseAtAgentPendingCap: async () => null,
+}));
 vi.mock("../../routers/entities.js", () => ({
   entitiesRouter: { createCaller: () => ({}) },
 }));

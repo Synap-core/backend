@@ -1,5 +1,5 @@
 /**
- * ONE "N+" formatter (`formatFloorCount`, lens/header.ts). A capped count
+ * ONE "N+" formatter (`formatFloorCount`, value-format/numbers.ts). A capped count
  * reads "100+", an exact one "100" — and every "N+" this package prints goes
  * through it, so the lens strip, the space intent line and the Home brief can
  * never disagree on how a floor reads.
@@ -13,7 +13,8 @@ import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { formatFloorCount, lensCountDoorText } from "./header.js";
+import { lensCountDoorText } from "../lens/header.js";
+import { formatFloorCount } from "./numbers.js";
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
 const COPY = /\$\{[^}`]+\}\+`/;
@@ -48,6 +49,6 @@ describe("formatFloorCount — the one N+ formatter", () => {
     const hits = files
       .filter((f) => COPY.test(readFileSync(f, "utf8")))
       .map((f) => relative(SRC, f));
-    expect(hits).toEqual(["lens/header.ts"]);
+    expect(hits).toEqual(["value-format/numbers.ts"]);
   });
 });

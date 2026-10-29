@@ -111,6 +111,7 @@ vi.mock("../update-session.js", async (importOriginal) => {
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   focusSessions,
+  lifecycleTransitionOutbox,
   messages,
   playbookRuns,
   playbooks,
@@ -148,6 +149,7 @@ const q = <T>(sql: string, params?: unknown[]) =>
 beforeAll(async () => {
   for (const t of [
     focusSessions,
+    lifecycleTransitionOutbox,
     messages,
     playbookRuns,
     playbooks,
@@ -425,6 +427,9 @@ describe("an agent's close and its own open questions", () => {
         { messageId: keptSlotless, disposition: "keep_as_owed" },
         { messageId: theirs, disposition: "withdrawn" },
       ],
+      // The person still owes the confirm: an agent's `closed` over it
+      // needs a stated reason (F11, close-not-done.ts).
+      notDoneReason: "The person answers after this session",
     });
 
     expect(await statusOf(s.id)).toBe("closed");

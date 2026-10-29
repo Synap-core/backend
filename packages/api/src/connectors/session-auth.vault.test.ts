@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * The vault:// handler's HTTP behaviour, pinned at the handler seam with the
- * global `fetch` mocked (`safeExternalFetch` calls it; nothing here reaches a
- * network). Two halves:
+ * global `fetch` mocked: the pinned door (`safePublicFetch`, node:http) is
+ * stubbed to hand its request to that recorder, so nothing here reaches a
+ * network. The door itself is tested in shared-utils. Two halves:
  *
  *  1. LEGACY static-key tools (no `config.auth.type`) — every assertion records
  *     the EXACT outbound request and the EXACT result. These were run against
@@ -40,6 +41,20 @@ vi.mock("../utils/vault-resolver.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../utils/vault-resolver.js")>();
   return { ...actual, resolveVaultSecret: mockResolveVaultSecret };
+});
+
+// The pinned door speaks node:http, not `fetch`: hand its request (minus the
+// timeout signal) to the recorded global `fetch` so every assertion below
+// still sees the exact outbound request.
+vi.mock("@synap/shared-utils", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synap/shared-utils")>();
+  return {
+    ...actual,
+    safePublicFetch: (url: string, init: RequestInit = {}) => {
+      const { signal: _signal, ...rest } = init;
+      return fetch(url, rest);
+    },
+  };
 });
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -182,7 +197,6 @@ describe("legacy static-key tools (no auth.type) — unchanged", () => {
         Authorization: "Bearer s3cret-static",
       },
       body: JSON.stringify({ a: 1 }),
-      redirect: "manual",
     });
     expect(r).toEqual({
       success: true,
@@ -205,7 +219,6 @@ describe("legacy static-key tools (no auth.type) — unchanged", () => {
       method: "GET",
       headers: { "x-api-key": "s3cret-static" },
       body: undefined,
-      redirect: "manual",
     });
   });
 

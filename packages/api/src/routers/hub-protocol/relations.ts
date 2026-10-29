@@ -10,12 +10,23 @@
  *   - deleteRelation:  generates proposal (irreversible structural change)
  */
 
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { relationsRouter as regularRelationsRouter } from "../relations.js";
 import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";
+
+/** `getRelated` takes no offset: a silently ignored one would repeat page 1. */
+function rejectEntityOffset(offset: number): void {
+  if (offset > 0) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "offset pages the workspace-wide list; drop entityId to use it",
+    });
+  }
+}
 
 export const hubRelationsRouter = router({
   /**
@@ -30,6 +41,8 @@ export const hubRelationsRouter = router({
         entityId: z.string().uuid().optional(),
         type: z.string().optional(),
         limit: z.number().min(1).max(200).default(100),
+        /** Pages the workspace-wide list; an `entityId` read has no offset. */
+        offset: z.number().int().min(0).default(0),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -42,6 +55,7 @@ export const hubRelationsRouter = router({
       const caller = regularRelationsRouter.createCaller(callerContext);
 
       if (input.entityId) {
+        rejectEntityOffset(input.offset);
         // getRelated returns related entities for a specific entity
         const result = await caller.getRelated({
           entityId: input.entityId,
@@ -56,6 +70,7 @@ export const hubRelationsRouter = router({
       const result = await caller.list({
         type: input.type,
         limit: input.limit,
+        offset: input.offset,
       });
       return result;
     }),
@@ -77,6 +92,8 @@ export const hubRelationsRouter = router({
         entityId: z.string().uuid().optional(),
         type: z.string().optional(),
         limit: z.number().min(1).max(200).default(100),
+        /** Pages the workspace-wide list; an `entityId` read has no offset. */
+        offset: z.number().int().min(0).default(0),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -92,6 +109,7 @@ export const hubRelationsRouter = router({
       const caller = regularRelationsRouter.createCaller(callerContext);
 
       if (input.entityId) {
+        rejectEntityOffset(input.offset);
         return caller.getRelated({
           entityId: input.entityId,
           type: input.type,
@@ -103,6 +121,7 @@ export const hubRelationsRouter = router({
       return caller.list({
         type: input.type,
         limit: input.limit,
+        offset: input.offset,
       });
     }),
 

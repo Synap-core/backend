@@ -40,23 +40,9 @@ export interface NormalizedHandshakeError {
   message: string;
 }
 
-export const DEFAULT_CONNECT_REDIRECT_PREFIXES = [
-  "raycast://extensions/synap-core/synap/",
-  "synap://",
-  // CLI flow: loopback HTTP callback. The CLI starts a short-lived local server
-  // on an ephemeral port and passes the full URL as redirect_uri. Loopback is
-  // safe — no external network can intercept the callback, and the port is
-  // chosen by the local process.
-  "http://127.0.0.1:",
-  "http://localhost:",
-] as const;
-
-export function isAllowedConnectRedirectUri(
-  uri: string,
-  allowedPrefixes: readonly string[] = DEFAULT_CONNECT_REDIRECT_PREFIXES
-): boolean {
-  return allowedPrefixes.some((prefix) => uri.startsWith(prefix));
-}
+// Where /connect may deliver a key (`isAllowedConnectRedirectUri`,
+// `DEFAULT_CONNECT_REDIRECT_PREFIXES`) lives in `@synap-core/types/external-connect`:
+// one parsed-URL rule for the pod-admin page AND `apiKeys.connectIntegration`.
 
 export function buildConnectDeeplink(
   redirectUri: string,

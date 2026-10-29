@@ -20,6 +20,17 @@ export const identityResolutionInput = z.object({
 
 export type IdentityResolutionInput = z.infer<typeof identityResolutionInput>;
 
+/**
+ * A composite approval's ONE answer for every same-name twin no per-ref choice
+ * covers (`materializeCompositeGraph`'s `identityResolutionForTwins`): what
+ * "Use existing records and continue" / "Keep both and continue" send after a
+ * large import stopped on a record that already exists.
+ */
+export const identityResolutionForTwinsInput = z.enum([
+  "keep_existing",
+  "separate",
+]);
+
 export const identityResolutionByRefInput = z.record(
   z.string(),
   identityResolutionInput

@@ -5,7 +5,8 @@
  */
 
 import { createLogger } from "@synap-core/core";
-import type { StartHere } from "./discover.js";
+import type { ProjectTrack } from "@synap/database/schema";
+import type { StartHereUnavailable } from "./discover.js";
 
 /** Open goals read before reporting "at least N". */
 export const OPEN_GOALS_READ_CAP = 20;
@@ -24,54 +25,78 @@ export interface OpenGoalRow {
   criteria: number;
 }
 
+/** The open goals as read, before orient adds each one's rollup. */
+export type OpenGoalsRead =
+  | {
+      count: number;
+      countIsLowerBound: boolean;
+      lens: "project" | "pod";
+      items: OpenGoalRow[];
+      /** The listed goals' rows, for their rollups (never on the wire). */
+      tracks: ProjectTrack[];
+      howTo: string;
+    }
+  | StartHereUnavailable;
+
 /**
- * The LIVE goals (open, active, paused) the caller can see, newest activity
- * first — through the `project_tracks` VisibilityRule (`scopedDb`, visible iff
- * its project is), the floor every track read uses. THROWS on a failed read:
- * each caller says `unavailable` its own way. Shared by orient's `openGoals`
- * and the start door's goal offer (`start-offers.ts`).
+ * The LIVE goals (open, active, paused) the caller can see, the caller's own
+ * first, then newest activity — through the `project_tracks` VisibilityRule
+ * (`scopedDb`, visible iff its project is), the floor every track read uses.
+ * THROWS on a failed read: each caller says `unavailable` its own way. Shared
+ * by orient's `openGoals` (whose rollups read these same rows) and the start
+ * door's goal offer (`start-offers.ts`).
  */
-export async function listOpenGoalRows(p: {
+export async function listOpenGoalTracks(p: {
   userId: string;
   projectId?: string | null;
   limit: number;
-}): Promise<OpenGoalRow[]> {
+}): Promise<ProjectTrack[]> {
   const [
     { AccessContext, scopedDb },
     { projectTracks, LIVE_PROJECT_TRACK_STATUSES },
-    { and, eq, inArray, desc },
-    { readEndState, readGoalCriteria },
+    { and, eq, inArray, desc, drizzleSql },
   ] = await Promise.all([
     import("../../access/index.js"),
     import("@synap/database/schema"),
     import("@synap/database"),
-    import("../tracks/goal-content.js"),
   ]);
-  const rows = await scopedDb(
+  return scopedDb(
     AccessContext.from({ userId: p.userId })
-  ).findMany<{
-    id: string;
-    projectId: string;
-    name: string;
-    status: string;
-    endState: string | null;
-    criteria: unknown;
-  }>(projectTracks, {
+  ).findMany<ProjectTrack>(projectTracks, {
     where: and(
       p.projectId ? eq(projectTracks.projectId, p.projectId) : undefined,
       inArray(projectTracks.status, [...LIVE_PROJECT_TRACK_STATUSES])
     ),
-    orderBy: [desc(projectTracks.updatedAt), desc(projectTracks.id)],
+    orderBy: [
+      drizzleSql`(${projectTracks.userId} = ${p.userId}) DESC`,
+      desc(projectTracks.updatedAt),
+      desc(projectTracks.id),
+    ],
     limit: p.limit,
   });
-  return rows.map((r) => ({
+}
+
+/** One open goal as orient lists it and the start door offers it. */
+export async function toOpenGoalRow(r: ProjectTrack): Promise<OpenGoalRow> {
+  const { readEndState, readGoalCriteria } =
+    await import("../tracks/goal-content.js");
+  return {
     id: r.id,
     projectId: r.projectId,
     name: r.name,
     status: r.status,
     endState: readEndState(r.endState),
     criteria: readGoalCriteria(r.criteria).length,
-  }));
+  };
+}
+
+/** {@link listOpenGoalTracks}, as rows. */
+export async function listOpenGoalRows(p: {
+  userId: string;
+  projectId?: string | null;
+  limit: number;
+}): Promise<OpenGoalRow[]> {
+  return Promise.all((await listOpenGoalTracks(p)).map(toOpenGoalRow));
 }
 
 /**
@@ -85,18 +110,20 @@ export async function listOpenGoalRows(p: {
 export async function readOpenGoals(
   userId: string,
   projectId?: string
-): Promise<StartHere["openGoals"]> {
+): Promise<OpenGoalsRead> {
   try {
-    const rows = await listOpenGoalRows({
+    const tracks = await listOpenGoalTracks({
       userId,
       projectId,
       limit: OPEN_GOALS_READ_CAP,
     });
+    const listed = tracks.slice(0, OPEN_GOALS_LISTED);
     return {
-      count: rows.length,
-      countIsLowerBound: rows.length >= OPEN_GOALS_READ_CAP,
+      count: tracks.length,
+      countIsLowerBound: tracks.length >= OPEN_GOALS_READ_CAP,
       lens: projectId ? "project" : "pod",
-      items: rows.slice(0, OPEN_GOALS_LISTED),
+      items: await Promise.all(listed.map(toOpenGoalRow)),
+      tracks: listed,
       howTo:
         "Work that serves one of these goals is filed into it: start_session with its trackId (or update_session trackId on a session already open). list_tracks reads a goal in full.",
     };

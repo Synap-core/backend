@@ -4002,7 +4002,15 @@ export async function agentProposalCap(agentUserId: string): Promise<number> {
       isPartial: drizzleSql<boolean>`coalesce(jsonb_path_exists(${proposals.data}, '$.dispositions.*.status ? (@ == "reject")'), false)`,
     })
     .from(proposals)
-    .where(eq(proposals.agentUserId, agentUserId))
+    .where(
+      and(
+        eq(proposals.agentUserId, agentUserId),
+        // A receipt (`auto_approved`) is the pod's own decision, not a
+        // person's: counted as an approval, the system cited itself as the
+        // trust that raised its own cap. Only reviewable rows are evidence.
+        drizzleSql`${proposals.status} <> ${ProposalStatus.AUTO_APPROVED}`
+      )
+    )
     .orderBy(desc(proposals.createdAt))
     .limit(CAP_TRUST_WINDOW);
 
@@ -4013,10 +4021,7 @@ export async function agentProposalCap(agentUserId: string): Promise<number> {
   // whose packages are routinely thrown away — the same miscount the widening
   // lane scanner had (`computeQualification`), on a second trust gate.
   const approved = recentRows.filter(
-    (r) =>
-      !r.isPartial &&
-      (r.status === ProposalStatus.APPROVED ||
-        r.status === ProposalStatus.AUTO_APPROVED)
+    (r) => !r.isPartial && r.status === ProposalStatus.APPROVED
   ).length;
   const approveRate = total > 0 ? approved / total : 0;
 
@@ -4027,6 +4032,138 @@ export async function agentProposalCap(agentUserId: string): Promise<number> {
     return AGENT_PENDING_PROPOSAL_CAP * TRUSTED_AGENT_CAP_MULTIPLIER;
   }
   return AGENT_PENDING_PROPOSAL_CAP;
+}
+
+/**
+ * The ONE pending-proposal budget (F2), for every lane that files an agent's
+ * proposal: `createProposal` (the single-entity gate) and the capture graph
+ * lane (`submitCaptureGraph`, which files through `createEventBackedProposal`
+ * and used to skip it while its rows still spent the other doors' budget).
+ * `null` = under the cap, file it. Otherwise the refusal: nothing is written,
+ * a cap-raise request is filed (or found), and the refusal is recorded.
+ */
+export async function refuseAtAgentPendingCap(args: {
+  attributionAgentUserId: string;
+  userId: string;
+  workspaceId: string | null | undefined;
+  subjectType: string;
+  action: string;
+  correlationId: string;
+}): Promise<Extract<PermissionResult, { denied: true }> | null> {
+  const { attributionAgentUserId, userId, workspaceId, subjectType, action } =
+    args;
+  const resolvedCorrelationId = args.correlationId;
+  const [pendingCount, cap] = await Promise.all([
+    countPendingAgentProposals(attributionAgentUserId),
+    agentProposalCap(attributionAgentUserId),
+  ]);
+  if (pendingCount < cap) return null;
+  logger.warn(
+    {
+      userId,
+      agentUserId: attributionAgentUserId,
+      pendingCount,
+      cap,
+      subjectType,
+      action,
+    },
+    "Agent proposal cap reached — refusing further agent proposals"
+  );
+  // THE REFUSAL IS THE DOOR. Naming a remedy in prose ("raise its cap via a
+  // governance ceiling") names nothing CALLABLE: the raise lives behind a
+  // builtin verb that `synap_list_capabilities` folds out of its default
+  // view, so an agent that hunts for it finds nothing and reports the cap as
+  // unconfigurable. So the refusal FILES the remedy itself and returns its
+  // review link — which makes this work identically on every door (pod MCP,
+  // Hub REST, Raycast, claude.ai) with no new tool exposure, because they
+  // all refuse through THIS function.
+  //
+  // Deduped by the filer: one open request per agent, so a flooding agent
+  // gets the same id + link on every refusal, never a second row.
+  //
+  // Best-effort by contract (mirrors the emitAiDecision comment below): a
+  // filer failure must degrade to the plain refusal, never turn a refusal
+  // into a 500. DYNAMIC import for the same two reasons emitAiDecision is
+  // deferred — the recommender imports THIS module (a static import would
+  // be a cycle), and it pulls `@synap/database`, which this module's suites
+  // replace with a TOTAL `vi.mock`.
+  let capRaise: RaiseProposalCapRequest | null = null;
+  try {
+    const { requestRaiseProposalCap } =
+      await import("../services/proposals/recommend-raise-proposal-cap.js");
+    capRaise = await requestRaiseProposalCap(attributionAgentUserId, {
+      pendingCount,
+      cap,
+    });
+  } catch (err) {
+    logger.warn(
+      { err, agentUserId: attributionAgentUserId },
+      "Agent proposal cap: failed to file a cap-raise request (refusal stands)"
+    );
+  }
+  // Plain words, in the order a blocked agent needs them: nothing was
+  // written · a raise is waiting for review (here) · the other way out.
+  // The THIRD way out, and the one a structure-building agent needs most:
+  // the budget is per PROPOSAL, not per object, so a connected plan filed
+  // as ONE `synap_capture` call costs ONE slot instead of N. An agent that
+  // is told only "raise the cap or clear the queue" files its objects one
+  // at a time and duplicates what it already proposed — observed live.
+  const capReason = agentProposalLimitLine(
+    cap,
+    capRaise
+      ? {
+          proposedLimit: capRaise.proposedLimit,
+          link: openLink(capRaise.proposalId),
+        }
+      : null
+  );
+  // HUMAN-facing record of the refusal. A `logger.warn` reaches no user, so
+  // a capped agent and a dead agent were byte-identical from the UI: the
+  // write neither executed nor proposed, and NOTHING said so. This event is
+  // the agent_write ledger's refusal row — `listAgentWriteRuns`
+  // (services/runs/index.ts) synthesises a `blocked_by_policy` run from it,
+  // exactly as the capability ledger already synthesises a direct run from a
+  // `capability_run` event. Best-effort by contract: emitAiDecision swallows
+  // + logs and never throws, so telemetry cannot turn a refusal into a 500.
+  // DYNAMIC import: `ai-feedback-events` pulls `lib/ai-events` →
+  // `@synap/database`, and this module's suites replace that package with a
+  // TOTAL `vi.mock`. A static import would kill every test in those files at
+  // load time; loading it only on the refusal path keeps the hazard out of
+  // the module graph. (Same reason execute-capability defers
+  // `capability-registry`.)
+  const { emitAiDecision } = await import("./ai-feedback-events.js");
+  await emitAiDecision({
+    action: AGENT_WRITE_EVENT_KIND,
+    userId,
+    workspaceId: workspaceId ?? null,
+    correlationId: resolvedCorrelationId,
+    data: {
+      kind: AGENT_WRITE_EVENT_KIND,
+      outcome: "refused",
+      refusalReason: "capped",
+      subjectType,
+      writeAction: action,
+      agentUserId: attributionAgentUserId,
+      pendingCount,
+      cap,
+      reason: capReason,
+      ...(capRaise ? { capRaiseProposalId: capRaise.proposalId } : {}),
+      // Read by getRun's agent_write branch as the activity row's hint.
+      fixHint: capRaise
+        ? `Approve the pending request to raise this agent's limit to ${capRaise.proposedLimit}, or review/clear its pending proposals to free budget.`
+        : "Review or clear this agent's pending proposals to free budget, or raise its cap via a governance ceiling.",
+    },
+  });
+  return {
+    denied: true,
+    reason: capReason,
+    ...(capRaise
+      ? {
+          capRaiseProposalId: capRaise.proposalId,
+          capRaiseReviewUrl: openLink(capRaise.proposalId),
+        }
+      : {}),
+  };
 }
 
 async function createProposal(args: {
@@ -4240,118 +4377,15 @@ async function createProposal(args: {
   // the agent gets a denial it can surface.
   const isGovernanceMetaProposal = action.startsWith("governance.");
   if (attributionAgentUserId && !isGovernanceMetaProposal) {
-    const [pendingCount, cap] = await Promise.all([
-      countPendingAgentProposals(attributionAgentUserId),
-      agentProposalCap(attributionAgentUserId),
-    ]);
-    if (pendingCount >= cap) {
-      logger.warn(
-        {
-          userId,
-          agentUserId: attributionAgentUserId,
-          pendingCount,
-          cap,
-          subjectType,
-          action,
-        },
-        "Agent proposal cap reached — refusing further agent proposals"
-      );
-      // THE REFUSAL IS THE DOOR. Naming a remedy in prose ("raise its cap via a
-      // governance ceiling") names nothing CALLABLE: the raise lives behind a
-      // builtin verb that `synap_list_capabilities` folds out of its default
-      // view, so an agent that hunts for it finds nothing and reports the cap as
-      // unconfigurable. So the refusal FILES the remedy itself and returns its
-      // review link — which makes this work identically on every door (pod MCP,
-      // Hub REST, Raycast, claude.ai) with no new tool exposure, because they
-      // all refuse through THIS function.
-      //
-      // Deduped by the filer: one open request per agent, so a flooding agent
-      // gets the same id + link on every refusal, never a second row.
-      //
-      // Best-effort by contract (mirrors the emitAiDecision comment below): a
-      // filer failure must degrade to the plain refusal, never turn a refusal
-      // into a 500. DYNAMIC import for the same two reasons emitAiDecision is
-      // deferred — the recommender imports THIS module (a static import would
-      // be a cycle), and it pulls `@synap/database`, which this module's suites
-      // replace with a TOTAL `vi.mock`.
-      let capRaise: RaiseProposalCapRequest | null = null;
-      try {
-        const { requestRaiseProposalCap } =
-          await import("../services/proposals/recommend-raise-proposal-cap.js");
-        capRaise = await requestRaiseProposalCap(attributionAgentUserId, {
-          pendingCount,
-          cap,
-        });
-      } catch (err) {
-        logger.warn(
-          { err, agentUserId: attributionAgentUserId },
-          "Agent proposal cap: failed to file a cap-raise request (refusal stands)"
-        );
-      }
-      // Plain words, in the order a blocked agent needs them: nothing was
-      // written · a raise is waiting for review (here) · the other way out.
-      // The THIRD way out, and the one a structure-building agent needs most:
-      // the budget is per PROPOSAL, not per object, so a connected plan filed
-      // as ONE `synap_capture` call costs ONE slot instead of N. An agent that
-      // is told only "raise the cap or clear the queue" files its objects one
-      // at a time and duplicates what it already proposed — observed live.
-      const capReason = agentProposalLimitLine(
-        cap,
-        capRaise
-          ? {
-              proposedLimit: capRaise.proposedLimit,
-              link: openLink(capRaise.proposalId),
-            }
-          : null
-      );
-      // HUMAN-facing record of the refusal. A `logger.warn` reaches no user, so
-      // a capped agent and a dead agent were byte-identical from the UI: the
-      // write neither executed nor proposed, and NOTHING said so. This event is
-      // the agent_write ledger's refusal row — `listAgentWriteRuns`
-      // (services/runs/index.ts) synthesises a `blocked_by_policy` run from it,
-      // exactly as the capability ledger already synthesises a direct run from a
-      // `capability_run` event. Best-effort by contract: emitAiDecision swallows
-      // + logs and never throws, so telemetry cannot turn a refusal into a 500.
-      // DYNAMIC import: `ai-feedback-events` pulls `lib/ai-events` →
-      // `@synap/database`, and this module's suites replace that package with a
-      // TOTAL `vi.mock`. A static import would kill every test in those files at
-      // load time; loading it only on the refusal path keeps the hazard out of
-      // the module graph. (Same reason execute-capability defers
-      // `capability-registry`.)
-      const { emitAiDecision } = await import("./ai-feedback-events.js");
-      await emitAiDecision({
-        action: AGENT_WRITE_EVENT_KIND,
-        userId,
-        workspaceId: workspaceId ?? null,
-        correlationId: resolvedCorrelationId,
-        data: {
-          kind: AGENT_WRITE_EVENT_KIND,
-          outcome: "refused",
-          refusalReason: "capped",
-          subjectType,
-          writeAction: action,
-          agentUserId: attributionAgentUserId,
-          pendingCount,
-          cap,
-          reason: capReason,
-          ...(capRaise ? { capRaiseProposalId: capRaise.proposalId } : {}),
-          // Read by getRun's agent_write branch as the activity row's hint.
-          fixHint: capRaise
-            ? `Approve the pending request to raise this agent's limit to ${capRaise.proposedLimit}, or review/clear its pending proposals to free budget.`
-            : "Review or clear this agent's pending proposals to free budget, or raise its cap via a governance ceiling.",
-        },
-      });
-      return {
-        denied: true,
-        reason: capReason,
-        ...(capRaise
-          ? {
-              capRaiseProposalId: capRaise.proposalId,
-              capRaiseReviewUrl: openLink(capRaise.proposalId),
-            }
-          : {}),
-      };
-    }
+    const refusal = await refuseAtAgentPendingCap({
+      attributionAgentUserId,
+      userId,
+      workspaceId,
+      subjectType,
+      action,
+      correlationId: resolvedCorrelationId,
+    });
+    if (refusal) return refusal;
   }
 
   if (heldWrite) return fileHeldWrites(heldWrite, summary);

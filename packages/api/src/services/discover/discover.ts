@@ -30,6 +30,8 @@ import type { OwedByPerson } from "./owed-by-person.js";
 import type { LooseEnds } from "./loose-ends.js";
 import type { LibraryHealth } from "@synap-core/types/imports";
 import type { SessionsOwingGrade } from "../focus-sessions/session-nudges.js";
+import type { GoalRollup, ScopeRollup } from "../status/status-rollup.js";
+import type { StatusOfAnswer } from "../status/status-read.js";
 import {
   db,
   entities,
@@ -194,10 +196,25 @@ export interface StartHere {
           endState: string | null;
           /** How many criteria it declares (0 = a lasting goal). */
           criteria: number;
+          /** Where it stands: since when, its work per category, moves, waits. */
+          rollup: GoalRollup | StartHereUnavailable;
         }>;
+        /** The window `rollup.moved` counts over. */
+        rollupWindowDays: number;
         howTo: string;
       }
     | StartHereUnavailable;
+  /**
+   * Where the PINNED space or project stands (present only when orient is
+   * pinned): things and work per category, moves this week, the stuck things,
+   * what waits. See `services/status/status-rollup.ts`.
+   */
+  statusRollup?: ScopeRollup | StartHereUnavailable;
+  /**
+   * The answer to `statusOf`: where each asked id stands (present only when
+   * asked). See `services/status/status-read.ts`.
+   */
+  statusOf?: StatusOfAnswer[] | StartHereUnavailable;
   /**
    * Open sessions the person HANDED TO THIS AGENT (the agent is on the
    * session's roster — e.g. relay Capture "Give to agent"), newest first.
@@ -356,6 +373,8 @@ interface DiscoverOptions {
   scope?: DiscoverScope[];
   workspaceId?: string;
   projectId?: string;
+  /** Ids to answer "where does it stand" for (`startHere.statusOf`). */
+  statusOf?: string[];
   /**
    * Include the lens-model concept prose in `note`. Implied by detail:'full'.
    * Off by default: the concept is taught once per conversation (instructions
@@ -1049,6 +1068,7 @@ export async function discover(
       agentUserId: params.agentUserId ?? null,
       workspaceId,
       projectId,
+      statusOf: params.statusOf,
       pending: pendingState,
       learnMoreSkill: ORIENT_LEARN_MORE_SKILL,
       ranked,

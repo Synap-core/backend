@@ -28,6 +28,7 @@ import {
   drizzleSql,
   focusSessions,
   playbookRuns,
+  setSessionStatus,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { isTerminalSessionStatus } from "./session-statuses.js";
@@ -111,17 +112,17 @@ export async function reviveStaleSession(
   sessionId: string,
   userId: string
 ): Promise<ReviveStaleSessionResult> {
-  const revived = await db
-    .update(focusSessions)
-    .set({ status: "active", updatedAt: drizzleSql`now()` })
-    .where(
-      and(
-        eq(focusSessions.id, sessionId),
-        eq(focusSessions.userId, userId),
-        eq(focusSessions.status, "stale")
-      )
-    )
-    .returning({ id: focusSessions.id });
+  // A consequence of the write, not anyone's choice of status: the system's
+  // move, attributed to the session's person.
+  const { rows: revived } = await setSessionStatus(db, {
+    sessionId,
+    where: eq(focusSessions.userId, userId),
+    from: "stale",
+    to: "active",
+    actor: { kind: "system", userId },
+    reason: "A write attributed to it brought it back.",
+    set: { updatedAt: drizzleSql`now()` },
+  });
   if (revived.length === 0) return { sessionRevived: false, runsRevived: 0 };
 
   const runs = await db

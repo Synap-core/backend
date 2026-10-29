@@ -227,7 +227,8 @@ describe("askView — one control per mode", () => {
     expect(c).toMatchObject({
       mode: "choose",
       initialKey: "Stance",
-      allowOther: false,
+      // Open by default: the person can always answer in their own words.
+      allowOther: true,
     });
     if (c.mode !== "choose") throw new Error("choose");
     expect(c.options.map((o) => [o.key, o.recommended, o.description])).toEqual(
@@ -368,14 +369,28 @@ describe("answerCall — checked with the pod's rule, carrying the fingerprint",
     );
   });
 
-  it("choose: Other… only when allowed, and only with words", () => {
-    const other = answerCall(slot(choose), {
+  it("choose: a picked option carries the person's details as its note", () => {
+    const built = answerCall(slot(choose), {
+      type: "choose",
+      key: "fail",
+      note: " but keep it short ",
+    });
+    expect(built.ok && built.call).toMatchObject({
+      value: { type: "chip" },
+      text: "but keep it short",
+    });
+  });
+
+  it("choose: their own answer unless the ask is closed, and only with words", () => {
+    const closed = slot({ ...choose, allowOther: false } as Ask);
+    expect(askView(closed).control).toMatchObject({ allowOther: false });
+    const other = answerCall(closed, {
       type: "choose",
       key: OTHER_KEY,
       other: "Mine",
     });
     expect(other.ok).toBe(false);
-    const open = slot({ ...choose, allowOther: true } as Ask);
+    const open = slot(choose);
     const built = answerCall(open, {
       type: "choose",
       key: OTHER_KEY,

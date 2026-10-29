@@ -109,4 +109,29 @@ describe("synap_list_profiles — multi-workspace failures + stable order", () =
       expect(payload.workspacesFailed).toBeUndefined();
     }
   });
+
+  it("gathers only ACTIVE workspaces: an archived one is neither read nor reported", async () => {
+    const archived = new Set(["ws-old"]);
+    getUserMemberWorkspaceIds.mockImplementation(
+      async (_u: string, opts?: { activeOnly?: boolean }) =>
+        ["ws-a", "ws-old"].filter(
+          (id) => !(opts?.activeOnly && archived.has(id))
+        )
+    );
+    listProfiles.mockImplementation(
+      async ({ workspaceId }: { workspaceId: string }) => {
+        if (workspaceId === "ws-old")
+          throw new Error("This workspace has been archived.");
+        return { profiles: [{ slug: "task" }] };
+      }
+    );
+    const payload = payloadOf(
+      await readHandlers.synap_list_profiles!(makeCtx())
+    );
+    expect(payload.workspacesFailed).toBeUndefined();
+    expect(listProfiles).toHaveBeenCalledTimes(1);
+    expect(listProfiles.mock.calls[0]![0]).toMatchObject({
+      workspaceId: "ws-a",
+    });
+  });
 });

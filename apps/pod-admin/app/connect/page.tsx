@@ -23,10 +23,13 @@
  *                       it records consent as a one-time code and top-level
  *                       navigates to the CP callback with `?code=<code>`.
  *   redirect_uri      — deeplink the page will send credentials to on
- *                       success. Must match an entry in
+ *                       success. Must pass isAllowedConnectRedirectUri
+ *                       (@synap-core/types/external-connect, a parsed-URL
+ *                       check, re-run by the server before it mints) against
  *                       DEFAULT_CONNECT_REDIRECT_PREFIXES — PLUS, for the
- *                       claude-web https callback, an https origin the pod
- *                       owner allowlisted via CONNECT_ALLOWED_HTTPS_ORIGINS.
+ *                       claude-web https callback (a code, never a key), an
+ *                       https origin the pod owner allowlisted via
+ *                       CONNECT_ALLOWED_HTTPS_ORIGINS.
  *   issuer_assertion  — one-shot assertion from a Pod-approved issuer. Read
  *                       ONLY to allowlist the redirect origin (see
  *                       approvedIssuerRedirectPrefix, lib/connect-redirect.ts); never exchanged — the
@@ -56,9 +59,9 @@ export const dynamic = "force-dynamic";
  * Extra https redirect prefixes the pod OWNER trusts — a comma-separated list of
  * https origins in `CONNECT_ALLOWED_HTTPS_ORIGINS` (e.g. the control-plane origin
  * that hosts the CP-MCP callback). Read server-side and passed down so the client
- * form never has to hardcode a CP domain. We do NOT edit the shared/forked
- * DEFAULT_CONNECT_REDIRECT_PREFIXES (a published, cross-repo package) — this is a
- * pod-owner-controlled env, no package bump.
+ * form never has to hardcode a CP domain. These never join
+ * DEFAULT_CONNECT_REDIRECT_PREFIXES: only a consent code goes to them, never a
+ * plaintext key — this is a pod-owner-controlled env, no package bump.
  */
 function readAllowedHttpsOrigins(): string[] {
   return (process.env.CONNECT_ALLOWED_HTTPS_ORIGINS ?? "")

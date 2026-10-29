@@ -14,10 +14,18 @@
  */
 
 import {
+  nounInSentence,
   resolveActionLabel,
+  resolveEventFamilyLabel,
   resolveObjectNounPlural,
 } from "../vocabulary/index.js";
-import { GRANT_ACTIONS, QUALIFIED_GRANT_SUBJECTS } from "./grammar.js";
+import { OBSERVATION_NAMESPACES } from "../events/unified.js";
+import {
+  GRANT_ACTIONS,
+  GRANT_QUALIFIER_OF,
+  QUALIFIED_GRANT_SUBJECTS,
+  parsePermission,
+} from "./grammar.js";
 
 /** One of the four verbs a grant UI offers. */
 export type GrantAction = (typeof GRANT_ACTIONS)[number];
@@ -63,9 +71,42 @@ export const GRANT_SUBJECT_CATALOG: readonly GrantSubjectSpec[] = [
   { subject: "event", actions: ["read", "create"], noun: "activity" },
 ];
 
-/** Is this subject's key qualified by a kind (`entity.<kind>.<action>`)? */
+/**
+ * Is this subject's key qualified (`entity.<kind>.<action>`,
+ * `event.<family>.<action>`, `capability.<intent>.run`)? What the qualifier
+ * names is `GRANT_QUALIFIER_OF`; only a KIND is one of the pod's profiles.
+ */
 export function isQualifiedGrantSubject(subject: string): boolean {
   return (QUALIFIED_GRANT_SUBJECTS as readonly string[]).includes(subject);
+}
+
+/** Is this subject qualified by a KIND (a profile slug of the pod)? */
+export function isKindQualifiedGrantSubject(subject: string): boolean {
+  return (
+    (GRANT_QUALIFIER_OF as Readonly<Record<string, string>>)[subject] === "kind"
+  );
+}
+
+/**
+ * The qualifiers a subject offers on its own, when they are a fixed set: the
+ * activity families for `event`. A kind comes from the pod (`profiles.list`),
+ * an intent from the intent registry, so both are [] here.
+ */
+export function grantQualifierValues(subject: string): readonly string[] {
+  return subject === "event" ? OBSERVATION_NAMESPACES : [];
+}
+
+/**
+ * A qualifier row's label: a kind's own name (else its noun), an activity
+ * family's words ("CI events"); anything else humanizes through the noun door.
+ */
+export function grantQualifierLabel(
+  subject: string,
+  qualifier: string,
+  name?: string | null
+): string {
+  if (subject === "event") return resolveEventFamilyLabel(qualifier);
+  return grantKindLabel(qualifier, name);
 }
 
 /** The catalog entry for a subject, or undefined when it is not offered. */
@@ -127,4 +168,26 @@ export function grantKindLabel(kind: string, name?: string | null): string {
 /** "Read", "Create" — the imperative verb, from the vocabulary. */
 export function grantActionLabel(action: string): string {
   return resolveActionLabel(action, "imperative");
+}
+
+/**
+ * A permission limited to ONE activity family, in words: `event.ci.create` →
+ * "Create CI events", `event.dev.read` → "Read dev events". null for every
+ * other permission (an every-family `event.create` reads as Activity).
+ */
+export function resolveEventFamilyPermissionLabel(
+  permission: string
+): string | null {
+  let segs: string[];
+  try {
+    segs = parsePermission(permission);
+  } catch {
+    return null;
+  }
+  if (segs[0] !== "event" || !segs[1] || segs[1] === "*") return null;
+  const verb =
+    segs[2] && segs[2] !== "*"
+      ? grantActionLabel(segs[2])
+      : grantActionLabel("read");
+  return `${verb} ${nounInSentence(resolveEventFamilyLabel(segs[1]))}`;
 }

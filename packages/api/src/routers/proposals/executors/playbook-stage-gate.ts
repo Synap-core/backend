@@ -26,7 +26,13 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { db, proposals, focusSessions, eq, and } from "@synap/database";
+import {
+  db,
+  proposals,
+  focusSessions,
+  eq,
+  setSessionStatus,
+} from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import {
   registerProposalExecutor,
@@ -62,16 +68,15 @@ export function registerPlaybookStageGateExecutors(): void {
       // or cancelled must not be reanimated by an approval that was about a
       // stage boundary, not about the session's life. The guard is in the WHERE
       // clause so the decision and the write cannot disagree.
-      const resumed = await db
-        .update(focusSessions)
-        .set({ status: "active", updatedAt: new Date() })
-        .where(
-          and(
-            eq(focusSessions.id, sessionId),
-            eq(focusSessions.status, "paused")
-          )
-        )
-        .returning({ id: focusSessions.id, status: focusSessions.status });
+      // The approver resumes it; the transition names the proposal.
+      const { rows: resumed } = await setSessionStatus(db, {
+        sessionId,
+        from: "paused",
+        to: "active",
+        actor: { kind: "human", userId },
+        proposalId: proposal.id,
+        set: { updatedAt: new Date() },
+      });
 
       // THE EFFECT RECEIPT — what Postgres returned for THIS statement, not
       // "we reached this line". Zero rows is a real, reachable outcome (the

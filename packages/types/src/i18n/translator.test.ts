@@ -15,7 +15,7 @@ describe("createT", () => {
       "0 élément dans Builder"
     );
     expect(t("seed.items.inSpace", { n: 1000000, space: "Builder" })).toBe(
-      "1000000 d’éléments dans Builder"
+      "1\u202f000\u202f000 d’éléments dans Builder" // narrow no-break space thousands
     );
     expect(t("seed.created", { kind: "task" })).toBe("Tâche créée");
     expect(t("seed.created", { kind: "project" })).toBe("Projet créé");

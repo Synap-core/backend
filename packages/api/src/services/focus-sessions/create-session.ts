@@ -121,6 +121,16 @@ export function firstStageKey(stages: unknown): string | null {
   return typeof key === "string" && key.length > 0 ? key : null;
 }
 
+/** `reasonCode` of an agent's start that declares no criterion. */
+export const NO_CRITERIA = "NO_CRITERIA" as const;
+
+export const NO_CRITERIA_MESSAGE =
+  "Not started: an agent's session must say what done means — at least one criterion, or an outcome with `verify` " +
+  "(it becomes a criterion), or a templateId whose playbook declares criteria. Example: " +
+  '`criteria: [{ key: "tests-pass", statement: "The new tests pass on the devbox", check: { kind: "evidence", evidenceKey: "tests" } }]`, ' +
+  'or `outcomes: [{ key: "spec-approved", kind: "fact", label: "The founder approved the spec", verify: { kind: "human" } }]`. ' +
+  "Continuing a session that already exists (same goal and scope) needs none.";
+
 export interface CreateFocusSessionParams {
   userId: string;
   /**
@@ -227,6 +237,16 @@ export interface CreateFocusSessionParams {
    * goal and scope exists. Without it that session is returned as `deduped`.
    */
   forceCreate?: boolean;
+  /**
+   * An AGENT's own start (MCP `synap_start_session`, Hub `POST
+   * /focus-sessions` with an agent key): a NEW session must declare at least
+   * one criterion, an outcome with `verify` (which becomes one), or bind a
+   * playbook that brings one (founder, 29 Oct, firewall F11). Refused with
+   * `NO_CRITERIA` otherwise, after the dedup (continuing an existing session
+   * is never refused) and before the membrane (nothing is filed). The
+   * person's starts and every automatic start leave it unset.
+   */
+  requireCriteria?: boolean;
   /**
    * ONE open session per (user, track, stage): inside the insert transaction,
    * take an advisory lock on `stage-session|user|track|stage`, re-read the
@@ -632,6 +652,18 @@ export async function createFocusSession(
       session: twinMatch.exact,
       candidates: twinMatch.candidates,
     };
+  }
+
+  // DONE IS DECLARED (F11): an agent's new session says what done means.
+  if (
+    params.requireCriteria &&
+    criteria.length === 0 &&
+    (!playbook || collectPlaybookCriteria(playbook).length === 0)
+  ) {
+    throw Object.assign(new Error(NO_CRITERIA_MESSAGE), {
+      code: "BAD_REQUEST",
+      reasonCode: NO_CRITERIA,
+    });
   }
 
   // PLAYBOOKS — only when the AI door asked and the caller named none

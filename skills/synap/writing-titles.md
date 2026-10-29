@@ -61,3 +61,10 @@ claim cut off. Everything else goes elsewhere:
 
 When unsure, ask: "will this still help someone in three months, and is it a
 fact, a pitfall or a rule?" If not, it is not knowledge.
+
+### Descriptions of projects, spaces and goals
+
+A description says what the thing **is** and who it is for. A decision is
+**linked, never restated**: a restated decision goes stale the day the decision
+changes (the Synap project description repeated the 5 Oct branding split, which
+a 13 Oct decision replaced). Link the `decision` entity; let it carry the rule.

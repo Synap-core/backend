@@ -31,6 +31,16 @@ vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
+    // The one session status write: records the status it writes beside the
+    // caller's other columns.
+    setSessionStatus: async (
+      _db: unknown,
+      input: { to: string; set?: Record<string, unknown> }
+    ) => {
+      const patch = { ...input.set, status: input.to };
+      sets.push(patch);
+      return { rows: [{ id: SESSION, ...patch }], transitions: [] };
+    },
     db: {
       insert: () => {
         const chain: Record<string, unknown> = {

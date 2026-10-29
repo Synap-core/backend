@@ -16,7 +16,7 @@ import {
   ModalContent,
   ModalFooter,
   ModalHeader,
-  Input,
+  Textarea,
   useDisclosure,
 } from "@heroui/react";
 import { Ban, KeyRound, Plus } from "lucide-react";
@@ -288,7 +288,8 @@ function RevokeKeyModal({
           <p className="text-[12.5px] text-foreground/85">
             This key will stop working immediately. It cannot be reactivated.
           </p>
-          <Input
+          <Textarea
+            minRows={1}
             label="Reason (optional)"
             placeholder="e.g. no longer needed"
             value={reason}

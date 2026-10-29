@@ -232,7 +232,7 @@ const IDLE = "DNS record";
 
 async function seedAsk(
   ask: Record<string, unknown> | null,
-  opts: { agentIds?: string[] } = {}
+  opts: { agentIds?: string[]; askedBy?: string } = {}
 ): Promise<{ sessionId: string; channelId: string }> {
   const channelId = randomUUID();
   await q(
@@ -255,6 +255,7 @@ async function seedAsk(
       why: WHY,
       owedSince: "2026-09-25T09:00:00.000Z",
       ...(ask ? { ask } : {}),
+      ...(opts.askedBy ? { askedBy: opts.askedBy } : {}),
     },
     { kind: "document", label: IDLE },
   ];
@@ -415,8 +416,8 @@ describe("W2 typed ask doors", () => {
     expect(h.events).toHaveLength(0);
   });
 
-  it("refuses free text on a closed choose (no allowOther)", async () => {
-    const { sessionId } = await seedAsk(CHOOSE);
+  it("refuses free text on a closed choose (allowOther: false)", async () => {
+    const { sessionId } = await seedAsk({ ...CHOOSE, allowOther: false });
     const res = await answer(sessionId, { text: "whatever works" });
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toMatch(
@@ -779,9 +780,8 @@ describe("W2 typed ask doors", () => {
     const room = await roomMessages(channelId);
     expect(room).toHaveLength(1);
     expect(room[0]!.id).toBe(result.messageId);
-    expect(room[0]!.content).toBe(
-      `Tell me more about "${LABEL}". What exactly do you need from me?\n\nWhich one do we use today?`
-    );
+    // The person's OWN words, never wrapped in a template (founder 2026-10-29).
+    expect(room[0]!.content).toBe("Which one do we use today?");
     expect(room[0]!.message_category).toBe("comment");
     expect(room[0]!.metadata?.anchor).toEqual({
       kind: "session_slot",
@@ -804,6 +804,81 @@ describe("W2 typed ask doors", () => {
     });
     // The slot itself is untouched — asking is not answering.
     expect((await slot(sessionId)).owner).toBe("human");
+  });
+
+  it("askAboutSlot: a bare tap (no words) says the one default sentence", async () => {
+    const { sessionId, channelId } = await seedAsk(CHOOSE);
+    await askAboutSlot({ sessionId, userId: OWNER, expectedLabel: LABEL });
+    expect((await roomMessages(channelId))[0]!.content).toBe(
+      `Tell me more about "${LABEL}". What exactly do you need from me?`
+    );
+  });
+
+  it("askAboutSlot: NEW words while the first message waits are a second message, not swallowed", async () => {
+    const { sessionId, channelId } = await seedAsk(CHOOSE);
+    const a = await askAboutSlot({
+      sessionId,
+      userId: OWNER,
+      expectedLabel: LABEL,
+      note: "Which one costs less?",
+    });
+    const b = await askAboutSlot({
+      sessionId,
+      userId: OWNER,
+      expectedLabel: LABEL,
+      note: "And which is faster to ship?",
+    });
+    expect(b).toMatchObject({ status: "asked", seeded: true });
+    expect(b.status === "asked" && b.messageId).not.toBe(
+      a.status === "asked" && a.messageId
+    );
+    expect((await roomMessages(channelId)).map((m) => m.content)).toEqual([
+      "Which one costs less?",
+      "And which is faster to ship?",
+    ]);
+  });
+
+  it("askAboutSlot reaches the agent that ASKED: a pod-run asker gets the turn", async () => {
+    const { sessionId } = await seedAsk(CHOOSE, {
+      agentIds: [],
+      askedBy: IS_AGENT,
+    });
+    const r = await askAboutSlot({
+      sessionId,
+      userId: OWNER,
+      expectedLabel: LABEL,
+      note: "Why not both?",
+    });
+    expect(r).toMatchObject({ status: "asked", triggered: true });
+    expect(h.triggers.map((t) => t.agentType)).toEqual(["researcher"]);
+  });
+
+  it("askAboutSlot: an asker that reads its own room (Claude Code) is not stood in for — no orchestrator turn", async () => {
+    // Claude Code holds its own key: that is what makes it read its own room
+    // (`resolveAgentReach` → `pull`), not an agent the pod runs.
+    await q(
+      `insert into api_keys (id, user_id, key_name, key_type) values ($1, $2, 'claude-code', 'user_pat') on conflict do nothing`,
+      ["66666666-6666-4666-8666-666666666666", EXT_AGENT]
+    );
+    const { sessionId, channelId } = await seedAsk(CHOOSE, {
+      askedBy: EXT_AGENT,
+    });
+    const r = await askAboutSlot({
+      sessionId,
+      userId: OWNER,
+      expectedLabel: LABEL,
+      note: "Is option B worth the extra week?",
+    });
+    expect(r).toMatchObject({
+      status: "asked",
+      seeded: true,
+      triggered: false,
+    });
+    // The words are in the room — that is how a pull agent hears them.
+    expect((await roomMessages(channelId))[0]!.content).toBe(
+      "Is option B worth the extra week?"
+    );
+    expect(h.triggers).toHaveLength(0);
   });
 
   it("askAboutSlot is idempotent under double-tap — one seed; a re-tap re-triggers THAT seed's turn", async () => {
@@ -1024,7 +1099,10 @@ describe("W2 typed ask doors", () => {
     ).answer;
 
   it("words in the room do NOT answer a closed choose — the question is answered, the slot stays owed", async () => {
-    const { sessionId, channelId } = await seedAsk(CHOOSE);
+    const { sessionId, channelId } = await seedAsk({
+      ...CHOOSE,
+      allowOther: false,
+    });
     const qid = await agentQuestion(channelId);
     await ownerReply(channelId, "the EU one I guess");
     const s = await slot(sessionId);
@@ -1036,6 +1114,18 @@ describe("W2 typed ask doors", () => {
     ).toHaveLength(0);
     // The asker still hears the reply to its question.
     expect(h.triggers).toHaveLength(1);
+  });
+
+  it("a choose with NO flag takes the person's own words (open by default, founder 2026-10-29)", async () => {
+    const { sessionId } = await seedAsk(CHOOSE);
+    const res = await answer(sessionId, { text: "the APAC account" });
+    expect(res.status).toBe(200);
+    const s = await slot(sessionId);
+    expect(s.owner).toBeUndefined();
+    expect(s.answer).toMatchObject({
+      text: "the APAC account",
+      value: { type: "text" },
+    });
   });
 
   it("a choose WITH allowOther takes the words as its typed text answer", async () => {

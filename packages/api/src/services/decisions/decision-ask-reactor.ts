@@ -9,6 +9,11 @@
  * `session-unblock-reactor.ts` IoC precedent: `@synap/events` cannot import
  * `@synap/api`, so the api process registers its own reactors at boot).
  *
+ * `decisionStatus` is the decision's declared lifecycle, so a MOVE arrives on
+ * the status door's transition (`entity.transition.completed`); the update the
+ * door still dual-emits for it is skipped (`isDualEmittedStatusUpdate`), so a
+ * move is seen once.
+ *
  * ON ENTERING `decisionStatus: 'proposed'` (created so, or moved into it —
  * {@link entersProposed}; any other edit of a proposed decision asks nothing)
  * AND ONLY WHEN AN AGENT WROTE IT ({@link decisionHasAgentAuthor}: a person's
@@ -52,7 +57,11 @@ import {
   entities,
   focusSessions,
 } from "@synap/database";
-import { registerReactor, type Reactor } from "@synap/events";
+import {
+  isDualEmittedStatusUpdate,
+  registerReactor,
+  type Reactor,
+} from "@synap/events";
 import type { ExpectedOutput, SlotAsk, SlotAskCause } from "@synap/playbooks";
 import {
   AskOptionSchema,
@@ -242,17 +251,21 @@ export function decisionHasAgentAuthor(
 }
 
 /**
- * Did THIS write put the decision into `proposed`? A create, or an update whose
- * status changed from something else — the update fan-out carries
- * `changed.<slug>` / `previous.<slug>` (`entities.update`, and the lifecycle
- * emitter's update for every status move). Any other edit of a proposed
- * decision (a renamed title, a backfill) is not a new question. Pure.
+ * Did THIS write put the decision into `proposed`? A create, or a change of its
+ * status from something else: a move through the status door (the
+ * transition's `from` / `to`), or a write that sets the status outside it (a
+ * revert, a sync) and reports `changed.<slug>` / `previous.<slug>` on the
+ * update. Any other edit of a proposed decision (a renamed title, a backfill)
+ * is not a new question. Pure.
  */
 function entersProposed(payload: {
   action: string;
   data?: Record<string, unknown> | null;
 }): boolean {
   if (payload.action === "create") return true;
+  if (payload.action === "transition") {
+    return payload.data?.to === "proposed" && payload.data?.from !== "proposed";
+  }
   return (
     payload.action === "update" &&
     payload.data?.["changed.decisionStatus"] === true &&
@@ -568,7 +581,12 @@ export const decisionAskReactor: Reactor = {
   id: "decision-ask",
   match: (payload) =>
     payload.subjectType === "entity" &&
-    (payload.action === "create" || payload.action === "update") &&
+    (payload.action === "create" ||
+      (payload.action === "update" &&
+        !isDualEmittedStatusUpdate(payload.data)) ||
+      // The decision's OWN status move — not a role's on the same entity.
+      (payload.action === "transition" &&
+        payload.data?.lifecycleProfile === DECISION_PROFILE_SLUG)) &&
     // Cheap filter when the door named the kind; a door that did not is
     // checked on the row.
     (payload.data?.profileSlug === undefined ||

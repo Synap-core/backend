@@ -22,7 +22,13 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { db, eq, profiles, ProfileResolutionService } from "@synap/database";
+import {
+  db,
+  eq,
+  profiles,
+  ProfileResolutionService,
+  resolveEntityScope,
+} from "@synap/database";
 import { createHubProtocolCallerContext } from "../../routers/hub-protocol/utils.js";
 import { profilesRouter } from "../../routers/profiles.js";
 import {
@@ -123,6 +129,25 @@ export async function changeKindScope(
       status: "unchanged",
       message: `Kind "${existing.slug}" already has that scope.`,
     };
+  }
+
+  // A role is workspace-scoped by definition, and the profile repository
+  // refuses `role` + `pod` (`resolveEntityScope`). Refused HERE, before the
+  // gate, so it never waits in the queue only to fail when it is approved
+  // (proposal ffd8a217, `proof-point`, failed at approve 2026-10-29).
+  if (entityScopeChanges && input.entityScope === "pod") {
+    try {
+      resolveEntityScope(
+        existing.slug,
+        existing.profileKind as "kind" | "role" | undefined,
+        "pod"
+      );
+    } catch (err) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   const perm = await checkPermissionOrPropose({

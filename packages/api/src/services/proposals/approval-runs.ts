@@ -29,6 +29,13 @@
  * create them a second time, so it is refused while a partial attempt by
  * someone else stands (`assertMayResume`).
  *
+ * A STOP ON A TWIN (founder, 2026-10-28, proposal 00082bc3): an import that
+ * meets a record which already exists by name stops there, and resuming hits
+ * the same refusal. The failed run therefore keeps WHICH records stopped it
+ * (`twins`), so the reviewer answers once for every twin
+ * (`identityResolutionForTwins`: use the existing records, or keep both) and
+ * the approval goes on instead of stopping again.
+ *
  * Small approvals never come here: they keep today's synchronous apply.
  */
 
@@ -56,6 +63,7 @@ import {
 } from "@synap/jobs/workers/proposal-approve-worker.js";
 import type { Context } from "../../context.js";
 import type { MaterializeProgress } from "../../utils/materialize-composite.js";
+import { readWeakDedupWire } from "../../utils/weak-dedup-wire.js";
 import {
   classifyThrownFailure,
   safeFailureSentence,
@@ -110,6 +118,16 @@ export interface ApprovalRunView {
   failed: number;
   /** A safe sentence (failed / stalled), never raw thrown text. */
   error: string | null;
+  /** The failure's class (`conflict`, `validation`…); null while it runs. */
+  errorClass: string | null;
+  /**
+   * The existing records a stopped run met: the same-name gate refused a
+   * record because these already exist. The reviewer can then use them, or
+   * keep both, for every twin and approve again. Null for any other stop.
+   */
+  twins: ApprovalRunTwin[] | null;
+  /** Records a finished run left out (several twins shared the name). */
+  skipped: number;
   /** Who approved — the only person who may resume a partial attempt. */
   approverId: string;
   /** Doors to what was created, once it succeeded. */
@@ -120,6 +138,14 @@ export interface ApprovalRunView {
   startedAt: string | null;
   finishedAt: string | null;
   updatedAt: string;
+}
+
+/** An existing record a stopped run met — a door, never a sentence. */
+export interface ApprovalRunTwin {
+  id: string;
+  title: string | null;
+  /** The record's kind (profile slug). */
+  kind: string;
 }
 
 /** Operations a proposal would materialize; 0 for anything not composite. */
@@ -151,6 +177,8 @@ export function toApprovalRunView(
     primaryId?: unknown;
     sessionId?: unknown;
     relationsFailed?: unknown;
+    skipped?: unknown;
+    twins?: unknown;
   };
   return {
     runId: row.id,
@@ -163,6 +191,12 @@ export function toApprovalRunView(
     linked: row.linked,
     failed: row.failed,
     error: stalled ? STALLED_RUN_SENTENCE : (row.error ?? null),
+    errorClass: stalled ? "interrupted" : (row.errorClass ?? null),
+    twins:
+      !stalled && row.status === "failed" && Array.isArray(result.twins)
+        ? (result.twins as ApprovalRunTwin[])
+        : null,
+    skipped: typeof result.skipped === "number" ? result.skipped : 0,
     approverId: row.userId,
     primaryId: typeof result.primaryId === "string" ? result.primaryId : null,
     sessionId: typeof result.sessionId === "string" ? result.sessionId : null,
@@ -456,6 +490,16 @@ function failureOf(err: unknown): {
   };
 }
 
+/** The records a same-name refusal named, when that is what stopped the run. */
+function twinsOf(err: unknown): ApprovalRunTwin[] | null {
+  if (!(err instanceof TRPCError) || err.code !== "CONFLICT") return null;
+  const wire = readWeakDedupWire(err.cause);
+  if (!wire || wire.candidates.length === 0) return null;
+  return wire.candidates
+    .slice(0, 5)
+    .map((c) => ({ id: c.id, title: c.title, kind: c.type }));
+}
+
 /**
  * The job: claim the run, re-read the proposal, apply it through the approval
  * door after its gates, and record how it ended. Registered as the
@@ -565,6 +609,7 @@ export async function runApprovalJob(payload: {
           created: result.created ?? null,
           linked: result.linked ?? null,
           relationsFailed: result.relationsFailed?.length ?? 0,
+          skipped: result.entitiesSkipped?.length ?? 0,
         },
         heartbeatAt: finishedAt,
         finishedAt,
@@ -575,6 +620,7 @@ export async function runApprovalJob(payload: {
   } catch (err) {
     await progress.flush();
     const { sentence, errorClass } = failureOf(err);
+    const twins = twinsOf(err);
     const finishedAt = new Date();
     await db
       .update(proposalApplyRuns)
@@ -582,6 +628,7 @@ export async function runApprovalJob(payload: {
         status: "failed",
         error: sentence,
         errorClass,
+        ...(twins ? { result: { twins } } : {}),
         heartbeatAt: finishedAt,
         finishedAt,
         updatedAt: finishedAt,

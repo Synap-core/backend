@@ -183,6 +183,7 @@ const FILE_PROFILE = randomUUID();
 const TOOL = randomUUID();
 const POST_VERB = randomUUID(); // sync: postiz_schedule_post
 const EDIT_VERB = randomUUID(); // async: fal_edit_reference_image
+const BYTES_VERB = randomUUID(); // code: unipile_create_post (file[]:bytes)
 
 const keyOf = (id: string) => `users/owner/${id}.bin`;
 const MB = 1024 * 1024;
@@ -193,6 +194,8 @@ const FILES = {
   second: { ws: WS_A, title: "second.png", size: MB, doc: true },
   other: { ws: WS_B, title: "other.jpg", size: MB, doc: true },
   big: { ws: WS_A, title: "reel.mp4", size: 400 * MB, doc: true },
+  // Over the bytes cap (100 MB), under the URL cap (300 MB).
+  mid: { ws: WS_A, title: "long.mp4", size: 150 * MB, doc: true },
   empty: { ws: WS_A, title: "no-bytes", size: 0, doc: false },
   trashed: { ws: WS_A, title: "gone.jpg", size: MB, doc: true },
   later: { ws: WS_A, title: "later.jpg", size: MB, doc: true },
@@ -300,6 +303,15 @@ beforeAll(async () => {
       [randomUUID(), id, TOOL]
     );
   }
+  await q(
+    `insert into skills (id, user_id, name, kind, scope, status, approved, execution_mode, parameters, metadata, code)
+     values ($1,$2,'unipile_create_post','code','pod','active',true,'async',$3::jsonb,'{}'::jsonb,'return 1')`,
+    [
+      BYTES_VERB,
+      OWNER,
+      JSON.stringify({ text: "string", attachments: "file[]:bytes" }),
+    ]
+  );
 }, 120_000);
 
 beforeEach(() => {
@@ -419,6 +431,26 @@ describe("ask time: only files the caller can read are proposed or run", () => {
       [{ problem: "no_stored_bytes", fileId: ID.empty }]
     );
     await refused([ID.big], [{ problem: "too_large", fileId: ID.big }]);
+  });
+
+  it("a :bytes verb holds a file to the bytes cap; the same file goes by URL", async () => {
+    const out = await executeCapability({
+      verbId: "unipile_create_post",
+      parameters: { text: "Launch day", attachments: [ID.mid] },
+      workspaceId: null,
+      userId: OWNER,
+      idempotencyKey: randomUUID(),
+    });
+    expect(out).toMatchObject({
+      kind: "error",
+      repair: {
+        files: [{ field: "attachments", fileId: ID.mid, problem: "too_large" }],
+      },
+    });
+    expect(h.proposals).toHaveLength(0);
+    // Control: a URL verb sends the same 150 MB file.
+    expect((await post([ID.mid])).kind).toBe("run");
+    expect(h.calls).toHaveLength(1);
   });
 
   it("a value that is not a list of file ids", async () => {
@@ -581,6 +613,34 @@ describe("after approval: the file is read again and the URL minted then", () =>
     await q(`delete from entities where id = $1`, [victim]);
     expect(await approve(proposal)).toMatchObject({ kind: "error" });
 
+    expect(h.calls).toHaveLength(0);
+    expect(fileSent()).toHaveLength(0);
+  });
+});
+
+describe("files as bytes only reach a code verb", () => {
+  it("a declarative verb declaring :bytes is refused at run time, before any read", async () => {
+    const out = await runResolvedSkill(
+      {
+        id: POST_VERB,
+        name: "postiz_schedule_post",
+        kind: "declarative",
+        providerSpec: {
+          tool: "postiz",
+          method: "POST",
+          pathTemplate: "/p",
+        } as never,
+        metadata: {},
+        parameters: { media: "file[]:bytes" },
+        executionMode: "sync",
+      },
+      { media: [ID.photo] },
+      { userId: OWNER, workspaceId: null }
+    );
+    expect(out).toMatchObject({ kind: "error" });
+    expect((out as { message: string }).message).toContain(
+      "only a code verb run in the pod can send"
+    );
     expect(h.calls).toHaveLength(0);
     expect(fileSent()).toHaveLength(0);
   });

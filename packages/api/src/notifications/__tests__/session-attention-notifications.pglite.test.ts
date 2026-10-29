@@ -109,6 +109,7 @@ vi.mock("../../services/proposals/expire-lapsed-proposals.js", () => ({
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   focusSessions,
+  lifecycleTransitionOutbox,
   playbooks,
   playbookRuns,
   proposals,
@@ -250,6 +251,7 @@ describe("session attention notifications", () => {
   beforeAll(async () => {
     for (const t of [
       focusSessions,
+      lifecycleTransitionOutbox,
       playbooks,
       playbookRuns,
       proposals,

@@ -46,6 +46,10 @@ import { resolveKeyUseLabel } from "../vocabulary/index.js";
 /**
  * The sections, in this order and no other (keys plan §3.2). Titles are
  * product copy. The rail repeats `review` live.
+ *
+ * EXPAND (key pages plan 447800fe, wave K1): the page is now the four
+ * `KEY_DRAFT_STEPS`; a section is a PART inside a step. Kept exported until
+ * the web and desktop hosts render the steps (wave K4), then removed.
  */
 export const KEY_DRAFT_SECTIONS = [
   { id: "start", label: "Start from" },
@@ -58,6 +62,58 @@ export const KEY_DRAFT_SECTIONS = [
 ] as const;
 
 export type KeyDraftSectionId = (typeof KEY_DRAFT_SECTIONS)[number]["id"];
+
+/**
+ * The New key page as four steps that close as they are answered — one page,
+ * never a wizard (decision 68d37853, answer 23): where it acts (and who it
+ * acts as) → what it is for (a template that works there) → what it can do
+ * (families at one level, `./access-levels.ts`; doors and lifetime inside)
+ * → its name. `parts` are the sections each step holds. Titles and hints are
+ * product copy.
+ */
+export const KEY_DRAFT_STEPS = [
+  {
+    id: "where",
+    label: "Where it acts",
+    hint: "The whole pod, one space or one project.",
+    parts: ["where"],
+  },
+  {
+    id: "purpose",
+    label: "What it is for",
+    hint: "Start from what the key will do.",
+    parts: ["start"],
+  },
+  {
+    id: "access",
+    label: "What it can do",
+    hint: "Each kind of thing at one level.",
+    parts: ["access", "uses", "lifetime"],
+  },
+  {
+    id: "name",
+    label: "Name it",
+    hint: "And note where you will keep it.",
+    parts: ["name"],
+  },
+] as const satisfies readonly {
+  readonly id: string;
+  readonly label: string;
+  readonly hint: string;
+  readonly parts: readonly KeyDraftSectionId[];
+}[];
+
+export type KeyDraftStepId = (typeof KEY_DRAFT_STEPS)[number]["id"];
+
+/** The step a section is part of; `review` is the bar, under every step. */
+export function keyDraftStepOf(
+  section: KeyDraftSectionId
+): KeyDraftStepId | null {
+  const step = KEY_DRAFT_STEPS.find((s) =>
+    (s.parts as readonly string[]).includes(section)
+  );
+  return step ? step.id : null;
+}
 
 /** The lifetimes offered as choices, in days; "custom" and "never" besides. */
 export const KEY_LIFETIME_CHOICES = [1, 30, 90, 365] as const;
@@ -122,8 +178,9 @@ export function setKeyGrant(draft: KeyDraft, grant: GrantDraft): KeyDraft {
 
 /**
  * A mark the review shows beside the sentence. `full-access` is always red;
- * `powerful-actions` lists the deletes and gate verbs it holds; `never-expires`
- * is a warning.
+ * `powerful-actions` lists the gate verbs it holds (approve, merge, …);
+ * `can-delete` says Edit includes delete (decision 68d37853, answer 24);
+ * `never-expires` is a warning.
  */
 export type KeyDangerMark =
   | { readonly code: "full-access"; readonly label: string }
@@ -132,7 +189,11 @@ export type KeyDangerMark =
       readonly label: string;
       readonly verbs: readonly string[];
     }
+  | { readonly code: "can-delete"; readonly label: string }
   | { readonly code: "never-expires"; readonly label: string };
+
+/** The words of the `can-delete` mark (copy). */
+export const KEY_CAN_DELETE_LABEL = "Can delete";
 
 /**
  * The powerful actions section 4 offers after the read/create/update/delete
@@ -201,13 +262,16 @@ export function describeKey(
   const marks: KeyDangerMark[] = [];
   if (isFullAccess(draft.grant))
     marks.push({ code: "full-access", label: FULL_ACCESS_LABEL });
-  const verbs = powerfulVerbs(draft.grant.permissions);
+  const all = powerfulVerbs(draft.grant.permissions);
+  const verbs = all.filter((v) => v !== "delete");
   if (verbs.length > 0)
     marks.push({
       code: "powerful-actions",
       label: `Powerful actions: ${verbs.map(grantActionLabel).join(", ")}`,
       verbs,
     });
+  if (all.includes("delete"))
+    marks.push({ code: "can-delete", label: KEY_CAN_DELETE_LABEL });
   if (grantLifetime(draft.grant).kind === "never")
     marks.push({ code: "never-expires", label: "Never expires" });
   const useWords = uses.map((u) => u.label).join(", ");
@@ -288,9 +352,19 @@ export function validateKeyDraft(
 /**
  * Where a problem is fixed, and how it reads there: ONE wording for every
  * host (the New key page, the request Review page, the approval door's
- * refusal). `section` is the section the person goes back to.
+ * refusal). `section` is the section the person goes back to, `step` the step
+ * that holds it.
  */
 export function describeKeyProblem(p: KeyDraftProblem): {
+  readonly section: KeyDraftSectionId;
+  readonly step: KeyDraftStepId;
+  readonly text: string;
+} {
+  const found = problemSection(p);
+  return { ...found, step: keyDraftStepOf(found.section) ?? "access" };
+}
+
+function problemSection(p: KeyDraftProblem): {
   readonly section: KeyDraftSectionId;
   readonly text: string;
 } {

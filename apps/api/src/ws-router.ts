@@ -10,6 +10,7 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { handleSshUpgrade } from "./ssh-proxy.js";
 import { handleRecipeRunUpgrade } from "./recipe-runner.js";
+import { isLocalShellAllowed } from "@synap/api";
 import { handleLocalTerminalUpgrade } from "./local-terminal.js";
 
 export function handleWebSocketUpgrade(
@@ -23,7 +24,12 @@ export function handleWebSocketUpgrade(
     handleSshUpgrade(req, socket, head);
   } else if (url.pathname === "/api/devplane/recipe-run") {
     handleRecipeRunUpgrade(req, socket, head);
-  } else if (url.pathname === "/api/devplane/local-terminal") {
+  } else if (
+    url.pathname === "/api/devplane/local-terminal" &&
+    // Pod-level operator switch: a cloud pod does not route this path at all
+    // (the handler re-checks it before any auth or spawn).
+    isLocalShellAllowed()
+  ) {
     handleLocalTerminalUpgrade(req, socket, head);
   } else {
     // `/api/devplane/claude-code` (the pod-spawned coding-agent viewer) was

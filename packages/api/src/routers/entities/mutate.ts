@@ -1,19 +1,21 @@
 /**
  * Entities Router — mutations (Wave 3 router-decomposition).
  *
- * `update`, `delete`, `moveToWorkspace`, `setEntityViewMode`,
+ * `update`, `delete`, `restore`, `moveToWorkspace`, `setEntityViewMode`,
  * `setEntityRenderer`.
  */
 
 import { z } from "zod";
 import { TITLE_HARD_MAX, titleTooLongReason } from "@synap-core/types/titles";
 import { decodeHtmlEntities } from "@synap-core/types/text";
+import { ENTITY_RESTORE_REASON_CODES } from "@synap-core/types/entities";
 import { workspaceProcedure, podProcedure } from "../../trpc.js";
 import {
   db,
   eq,
   and,
   isNull,
+  isNotNull,
   getDb,
   eventRepository,
   EntityRepository,
@@ -969,6 +971,169 @@ export const mutateProcs = {
       }
 
       return { status: "deleted", message: "Entity deleted" };
+    }),
+
+  /**
+   * Undo a delete: clear the soft delete of an entity the caller may write.
+   *
+   * The inverse of `delete` above, through the same doors: the row is loaded on
+   * the same write floor (`entityWriteVisibleWhere`), governance runs on THAT
+   * row's workspace (never a request-supplied one) through
+   * `checkPermissionOrPropose`, a framed view's trust is re-resolved server-side,
+   * and the result has the same `{ status, message }` / proposed shape. An agent
+   * restore proposes by default, as its delete does (`entity/restore` is a
+   * disruptive door: undoing it is a delete, which an agent can only propose).
+   *
+   * What it restores is exactly what `delete` removed: `deletedAt` and nothing
+   * else. Delete leaves the body document, the relations, the facets and the
+   * project filing untouched, so clearing `deletedAt` finds them as they were
+   * (the proposal revert's `restore-delete` does the same). A permanent
+   * delete (`adminDelete`) removes the row, and then there is nothing left to
+   * restore.
+   *
+   * Refusals carry `data.reasonCode` (`ENTITY_RESTORE_REASON_CODES`,
+   * @synap-core/types/entities): `ENTITY_GONE` (NOT_FOUND) when no row the
+   * caller may write has this id, `ENTITY_NOT_DELETED` (CONFLICT) when it is
+   * live.
+   */
+  restore: podProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        source: z
+          .enum(["user", "ai", "intelligence", "system", "agent"])
+          .optional(),
+        reasoning: z.string().optional(),
+        agentUserId: z.string().uuid().optional(),
+        /** As on `delete`: host-stamped, trust re-resolved server-side. */
+        viewContext: z
+          .object({
+            viewId: z.string().uuid().optional(),
+            typeKey: z.string().optional(),
+          })
+          .optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const correlationId = randomUUID();
+
+      const existing = await db.query.entities.findFirst({
+        where: and(
+          eq(entities.id, input.id),
+          entityWriteVisibleWhere(ctx.userId)
+        ),
+        columns: { id: true, workspaceId: true, deletedAt: true, type: true },
+      });
+      if (!existing) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Entity not found: ${input.id}. It was deleted permanently, or it is not yours to restore.`,
+          cause: { reasonCode: ENTITY_RESTORE_REASON_CODES.gone },
+        });
+      }
+      if (existing.deletedAt === null) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "This entity is not deleted: there is nothing to restore.",
+          cause: { reasonCode: ENTITY_RESTORE_REASON_CODES.notDeleted },
+        });
+      }
+      const governanceWorkspaceId = existing.workspaceId ?? null;
+
+      const issuer = input.viewContext
+        ? await resolveViewTrust(
+            input.viewContext,
+            ctx.userId,
+            ctx.workspaceId ?? governanceWorkspaceId
+          )
+        : undefined;
+
+      const requestedEvent = await auditLog({
+        subjectType: "entity",
+        action: "restore",
+        phase: "requested",
+        subjectId: input.id,
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: governanceWorkspaceId,
+        correlationId,
+        data: { id: input.id },
+      });
+
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: governanceWorkspaceId,
+        subjectType: "entity",
+        action: "restore",
+        source: input.source,
+        issuer,
+        reasoning: input.reasoning,
+        correlationId,
+        requestedEventId: requestedEvent?.id,
+        data: { id: input.id },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          status: "proposed",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Restore proposed for review"
+          ),
+          proposalId: perm.proposalId,
+          proposalType: perm.proposalType,
+          reviewUrl: perm.reviewUrl,
+        };
+      }
+
+      // Compare-and-set on `deletedAt`: a concurrent restore that won leaves
+      // this one with 0 rows, refused like any restore of a live row.
+      const database = await getDb();
+      const restored = await database
+        .update(entities)
+        .set({ deletedAt: null, updatedAt: new Date() })
+        .where(and(eq(entities.id, input.id), isNotNull(entities.deletedAt)))
+        .returning({ id: entities.id });
+      if (restored.length === 0) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "This entity is not deleted: there is nothing to restore.",
+          cause: { reasonCode: ENTITY_RESTORE_REASON_CODES.notDeleted },
+        });
+      }
+
+      // `.completed` + fan-out through the ONE door, as delete. The search
+      // reactor reads any action other than "delete" as an upsert, so the row
+      // is indexed again.
+      void recordDomainMutation({
+        subjectType: "entity",
+        action: "restore",
+        subjectId: input.id,
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: governanceWorkspaceId,
+        correlationId,
+        sessionId: ctx.sessionId ?? null,
+        proposalId: ctx.governanceProposalId,
+        origin: ctx.origin,
+        data: { profileSlug: existing.type ?? undefined },
+        logData: {},
+      });
+
+      return {
+        status: "restored",
+        message: "Entity restored",
+        effect: {
+          applied: "verified" as const,
+          rows: restored.length,
+          ids: restored.map((r) => r.id),
+          subject: "entities",
+        },
+      };
     }),
 
   /**

@@ -27,8 +27,8 @@ import {
   sentenceCaseLabel,
 } from "../vocabulary/index.js";
 import { decodeHtmlEntities } from "../text/html-entities.js";
+import { formatFloorCount } from "../value-format/numbers.js";
 import {
-  formatFloorCount,
   formatKpiFraction,
   lensCountDoorText,
   type LensKpiFact,

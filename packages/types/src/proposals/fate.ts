@@ -9,7 +9,7 @@
 import { isDocumentEditProposal } from "./intent.js";
 import type { UnitTone } from "../units/state.js";
 import type { AskFate } from "../ask/card.js";
-import { formatFloorCount } from "../lens/header.js";
+import { formatFloorCount } from "../value-format/numbers.js";
 
 /**
  * Untouched `objectWork` proposals leave the headline count after this many

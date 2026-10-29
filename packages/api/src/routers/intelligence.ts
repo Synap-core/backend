@@ -53,8 +53,11 @@ import { authoringMisses } from "../utils/template-diagnostics.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { publicServiceRow } from "../utils/intelligence-service-projection.js";
-import { assertSafeServiceUrl } from "../utils/intelligence-service-url.js";
-import { safeExternalFetch, isBlockedOutboundError } from "@synap/shared-utils";
+import {
+  assertSafeServiceUrl,
+  SERVICE_URL_FETCH,
+} from "../utils/intelligence-service-url.js";
+import { safePublicFetch, isBlockedOutboundError } from "@synap/shared-utils";
 import { scopedDb, accessFor } from "../access/index.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
@@ -1513,7 +1516,7 @@ export const intelligenceRouter = router({
    * Pod admin only, like `registerCustomService` (the only reason to test is
    * to register, and only a pod admin may). It fetches a caller-chosen URL
    * from inside the pod and reflects what came back, so the URL passes the
-   * SSRF guard first and every request goes through `safeExternalFetch`
+   * SSRF guard first and every request goes through `safePublicFetch`
    * (no redirect is followed: the key rides in the header).
    */
   testCustomServiceConnection: workspaceProcedure
@@ -1528,10 +1531,15 @@ export const intelligenceRouter = router({
       let hasManifest = false;
 
       try {
-        const capRes = await safeExternalFetch(`${hubUrl}/api/capabilities`, {
-          headers: { Authorization: `Bearer ${apiKey}` },
-          signal: AbortSignal.timeout(8000),
-        });
+        const capRes = await safePublicFetch(
+          `${hubUrl}/api/capabilities`,
+          {
+            headers: { Authorization: `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(8000),
+          },
+          0,
+          SERVICE_URL_FETCH
+        );
         if (!capRes.ok) {
           throw new TRPCError({
             code: "BAD_REQUEST",
@@ -1554,10 +1562,15 @@ export const intelligenceRouter = router({
       }
 
       try {
-        const mfRes = await safeExternalFetch(`${hubUrl}/api/manifest`, {
-          headers: { Authorization: `Bearer ${apiKey}` },
-          signal: AbortSignal.timeout(5000),
-        });
+        const mfRes = await safePublicFetch(
+          `${hubUrl}/api/manifest`,
+          {
+            headers: { Authorization: `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(5000),
+          },
+          0,
+          SERVICE_URL_FETCH
+        );
         hasManifest = mfRes.ok;
       } catch {
         // manifest is optional
@@ -1599,10 +1612,15 @@ export const intelligenceRouter = router({
       // Fetch capabilities to verify connectivity
       let capabilities: string[] = [];
       try {
-        const capRes = await safeExternalFetch(`${hubUrl}/api/capabilities`, {
-          headers: { Authorization: `Bearer ${apiKey}` },
-          signal: AbortSignal.timeout(8000),
-        });
+        const capRes = await safePublicFetch(
+          `${hubUrl}/api/capabilities`,
+          {
+            headers: { Authorization: `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(8000),
+          },
+          0,
+          SERVICE_URL_FETCH
+        );
         if (!capRes.ok) {
           throw new TRPCError({
             code: "BAD_REQUEST",
@@ -1627,10 +1645,15 @@ export const intelligenceRouter = router({
       // Try fetching manifest (soft-fail)
       let agentManifest: unknown = null;
       try {
-        const mfRes = await safeExternalFetch(`${hubUrl}/api/manifest`, {
-          headers: { Authorization: `Bearer ${apiKey}` },
-          signal: AbortSignal.timeout(5000),
-        });
+        const mfRes = await safePublicFetch(
+          `${hubUrl}/api/manifest`,
+          {
+            headers: { Authorization: `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(5000),
+          },
+          0,
+          SERVICE_URL_FETCH
+        );
         if (mfRes.ok) agentManifest = await mfRes.json();
       } catch {
         // optional

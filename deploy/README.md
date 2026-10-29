@@ -204,6 +204,27 @@ What changes for an operator when a pod updates past a release. Newest first.
   `RATE_LIMIT_CRUD_MAX` (default `500` per 15 minutes, per key): several
   agents sharing one key spend it together
   (`synap config set RATE_LIMIT_CRUD_MAX=3000 && synap apply`).
+- **Reads have their own budget.** A Hub read (GET on `/api/hub/*`) and an MCP
+  call that only reads (a read-only tool, `tools/list`, …) spend a read
+  budget, `RATE_LIMIT_CRUD_READ_MAX` (default `3000` per 15 minutes, per key;
+  `RATE_LIMIT_CRUD_READ_SESSION_MAX` for a signed-in person). Writes keep
+  `RATE_LIMIT_CRUD_MAX`, so an agent stuck writing in a loop still stops at
+  `500`.
+- **An answer from `synap_ask` spends the AI budget.** It runs a model, so
+  `synap_ask` with an answer (and the Hub's `POST /knowledge/answer`, which
+  `synap ask` calls) spends `RATE_LIMIT_AI_MAX` (default `60` per 5 minutes,
+  per key), not the read budget. `synap_ask` with `detail:"sources"` and the
+  retrieval doors (`/knowledge/search`) run no model and are reads. The MCP
+  door's own per-key burst cap went from 100 to 300 requests a minute, so the
+  budgets above are the ones that apply.
+- **Budgets from the pod's own settings.** The owner can set any of these
+  budgets on the pod itself, without a redeploy: `GET /api/pod-rate-limits`
+  lists every budget with its value and where it comes from (the pod's
+  setting, the env, or the default), and `PUT /api/pod-rate-limits` with
+  `{"values": {"RATE_LIMIT_CRUD_MAX": 3000}}` sets one (`null` clears it).
+  Only a signed-in pod admin can change them; an agent's key cannot. A value
+  set there wins over the env, which stays the deployment's default; it takes
+  effect on the next request, and every budget's count starts afresh.
 - **Migration 0327** (split `source` into `provenance` and `leadSource`) runs
   automatically during `synap update`; nothing to do.
 - **Console URL.** The Apps page moved from `/origins` to `/applications`. Old

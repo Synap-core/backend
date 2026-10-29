@@ -48,9 +48,12 @@ import {
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import {
   KEY_TEMPLATES,
+  accessFamily,
   describeKeyProblem,
   grantLifetime,
   keyTemplate,
+  setFamilyLevel,
+  templatesForScope,
   validateKeyDraft,
   type GrantDraft,
   type GrantRole,
@@ -63,8 +66,15 @@ import { auditLog } from "../utils/audit-log.js";
 import { deriveKeyScopes } from "./key-grant.js";
 import { mintPersonKey } from "./person-key-mint.js";
 
-/** How long a request waits for its person (a sign-in may come first). */
-export const KEY_REQUEST_TTL_SECONDS = 900;
+/**
+ * How long a request waits for its person: 24 hours (decision 68d37853,
+ * answer 25). The person who approves is often not at the screen, so this is
+ * GitHub's "an owner decides later" case, not the device flow's (ours keeps
+ * 10 minutes, `machine-connect.ts`). Bounded: only the person's own key can
+ * file, the request holds no key (a hashed code and a draft), and re-filing
+ * the same ask hands back the SAME request, never a longer one.
+ */
+export const KEY_REQUEST_TTL_SECONDS = 24 * 60 * 60;
 export const KEY_REQUEST_POLL_INTERVAL_SECONDS = 5;
 const SLOW_DOWN_STEP_SECONDS = 5;
 /** Requests one requester may have waiting at once. */
@@ -173,6 +183,8 @@ export interface CreateKeyRequestInput {
   expiresInDays?: number | null;
   /** Narrow the key to this space. */
   workspaceId?: string;
+  /** Narrow the key to this project (its templates: no Activity). */
+  projectId?: string;
   /** pod-admin origin, for `review_url`. */
   podAdminOrigin: string;
 }
@@ -185,10 +197,14 @@ export interface KeyRequestResponse {
   interval: number;
 }
 
-/** The ceiling a request asks for: its template, narrowed by name, lifetime and space. */
+/** The ceiling a request asks for: its template, narrowed by name, lifetime, space and project. */
 export function ceilingFromTemplate(
   template: GrantRole,
-  opts: { expiresInDays?: number | null; workspaceId?: string }
+  opts: {
+    expiresInDays?: number | null;
+    workspaceId?: string;
+    projectId?: string;
+  }
 ): { ceiling: KeyCeiling & { grant: GrantDraft }; problems: string[] } {
   const problems: string[] = [];
   const base = template.grant;
@@ -200,10 +216,27 @@ export function ceilingFromTemplate(
       );
     workspaceIds = [opts.workspaceId];
   }
+  let projectIds = base.projectIds ?? null;
+  let permissions = [...base.permissions];
+  if (opts.projectId) {
+    // At a project a key posts no activity (answer 26, finding 8809cc21):
+    // a template that exists to post is refused, any other keeps the rest.
+    const hidden = templatesForScope([template], "project").hidden[0];
+    if (hidden) problems.push(hidden.why);
+    if (projectIds && !projectIds.includes(opts.projectId))
+      problems.push(
+        `The template "${template.name}" does not reach that project.`
+      );
+    projectIds = [opts.projectId];
+    permissions = [
+      ...setFamilyLevel({ permissions }, accessFamily("activity"), "off")
+        .permissions,
+    ];
+  }
   const grant: GrantDraft = {
-    permissions: [...base.permissions],
+    permissions,
     ...(workspaceIds ? { workspaceIds } : {}),
-    ...(base.projectIds ? { projectIds: base.projectIds } : {}),
+    ...(projectIds ? { projectIds } : {}),
     ...(base.entityIds ? { entityIds: base.entityIds } : {}),
     ...(opts.expiresInDays !== undefined
       ? { expiresInDays: opts.expiresInDays }
@@ -247,9 +280,66 @@ export async function createKeyRequest(
   const { ceiling, problems } = ceilingFromTemplate(template, {
     expiresInDays: input.expiresInDays,
     workspaceId: input.workspaceId,
+    projectId: input.projectId,
   });
   if (problems.length > 0)
     throw new TRPCError({ code: "BAD_REQUEST", message: problems.join(" ") });
+  if (ceiling.grant.permissions.length === 0)
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `"${template.name}" can do nothing there. Pick another template or scope.`,
+    });
+
+  const requestedName = input.name?.trim() || template.name;
+  const lifetime = grantLifetime(ceiling.grant);
+  const asked = {
+    templateId: template.id,
+    requestedName,
+    requestedWorkspaceIds: ceiling.grant.workspaceIds
+      ? [...ceiling.grant.workspaceIds]
+      : null,
+    requestedProjectIds: ceiling.grant.projectIds
+      ? [...ceiling.grant.projectIds]
+      : null,
+    requestedExpiresInDays: lifetime.kind === "days" ? lifetime.days : null,
+    requestedNeverExpires: lifetime.kind === "never",
+  };
+
+  // The SAME ask (same asker, template, name, space, project, lifetime) hands
+  // back the request already waiting — its id, its link, its expiry — never a
+  // new link (finding 214947f7: the devbox re-filed every 15 minutes). Its
+  // code is rotated: only a hash is stored, so the new code is the one that
+  // collects, and a poller holding the old one reads "invalid_grant".
+  const waitingRows = await db
+    .select()
+    .from(keyRequests)
+    .where(
+      and(
+        eq(keyRequests.requesterUserId, input.requesterUserId),
+        eq(keyRequests.personUserId, input.personUserId),
+        eq(keyRequests.status, "pending"),
+        gt(keyRequests.expiresAt, new Date())
+      )
+    )
+    .orderBy(desc(keyRequests.createdAt));
+  const same = waitingRows.find((r) => sameAsk(r, asked));
+  if (same) {
+    const requestCode = randomBytes(32).toString("base64url");
+    await db
+      .update(keyRequests)
+      .set({ requestCodeHash: sha256(requestCode) })
+      .where(eq(keyRequests.id, same.id));
+    return {
+      request_code: requestCode,
+      request_id: same.id,
+      review_url: `${input.podAdminOrigin}/keys/requests/${same.id}`,
+      expires_in: Math.max(
+        0,
+        Math.floor((same.expiresAt.getTime() - Date.now()) / 1000)
+      ),
+      interval: same.pollIntervalSeconds,
+    };
+  }
 
   const [{ waiting }] = await db
     .select({ waiting: count() })
@@ -268,7 +358,6 @@ export async function createKeyRequest(
     });
 
   const requestCode = randomBytes(32).toString("base64url");
-  const lifetime = grantLifetime(ceiling.grant);
   const [row] = await db
     .insert(keyRequests)
     .values({
@@ -277,21 +366,12 @@ export async function createKeyRequest(
       requesterUserId: input.requesterUserId,
       requesterKeyId: input.requesterKeyId,
       personUserId: input.personUserId,
-      templateId: template.id,
-      requestedName: input.name?.trim() || template.name,
+      ...asked,
       requestedUses: [...ceiling.uses],
       requestedPermissions: [...ceiling.grant.permissions],
-      requestedWorkspaceIds: ceiling.grant.workspaceIds
-        ? [...ceiling.grant.workspaceIds]
-        : null,
-      requestedProjectIds: ceiling.grant.projectIds
-        ? [...ceiling.grant.projectIds]
-        : null,
       requestedEntityIds: ceiling.grant.entityIds
         ? [...ceiling.grant.entityIds]
         : null,
-      requestedExpiresInDays: lifetime.kind === "days" ? lifetime.days : null,
-      requestedNeverExpires: lifetime.kind === "never",
       pollIntervalSeconds: KEY_REQUEST_POLL_INTERVAL_SECONDS,
       expiresAt: new Date(Date.now() + KEY_REQUEST_TTL_SECONDS * 1000),
     })
@@ -318,6 +398,33 @@ export async function createKeyRequest(
     expires_in: KEY_REQUEST_TTL_SECONDS,
     interval: KEY_REQUEST_POLL_INTERVAL_SECONDS,
   };
+}
+
+const sameIds = (a: readonly string[] | null, b: readonly string[] | null) =>
+  (a ?? []).length === (b ?? []).length &&
+  (a ?? []).every((id) => (b ?? []).includes(id));
+
+/** Is a waiting request the same ask (see `createKeyRequest`)? */
+function sameAsk(
+  row: KeyRequest,
+  asked: {
+    templateId: string;
+    requestedName: string;
+    requestedWorkspaceIds: string[] | null;
+    requestedProjectIds: string[] | null;
+    requestedExpiresInDays: number | null;
+    requestedNeverExpires: boolean;
+  }
+): boolean {
+  return (
+    row.templateId === asked.templateId &&
+    row.requestedName === asked.requestedName &&
+    sameIds(row.requestedWorkspaceIds, asked.requestedWorkspaceIds) &&
+    sameIds(row.requestedProjectIds, asked.requestedProjectIds) &&
+    row.requestedNeverExpires === asked.requestedNeverExpires &&
+    (row.requestedNeverExpires ||
+      row.requestedExpiresInDays === asked.requestedExpiresInDays)
+  );
 }
 
 // ── 2. Review + decide (the person, signed in) ──────────────────────────────

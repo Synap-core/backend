@@ -102,6 +102,8 @@ export function playbookParamAsk(param: PlaybookParamLike): Ask | null {
             : o,
         value: o,
       })),
+      // Closed: the answer becomes the param's value, one of its choices.
+      allowOther: false,
     };
   }
   if (param.type === "boolean") return { mode: "confirm" };

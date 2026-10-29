@@ -20,3 +20,9 @@ export * from "./entity-history.js";
 export * from "./space-intent.js";
 export * from "./home-brief.js";
 export * from "./home-brief-reads.js";
+/**
+ * @deprecated Import `formatFloorCount` from `@synap-core/types/value-format`
+ * (plan 915cc937 Q6). Kept until synap-app's list-cap and relay's three
+ * importers move; then this line goes.
+ */
+export { formatFloorCount } from "../value-format/numbers.js";

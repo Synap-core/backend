@@ -27,7 +27,14 @@
  *                the session is evaluated).
  */
 
-import { db, focusSessions, and, eq, drizzleSql } from "@synap/database";
+import {
+  db,
+  focusSessions,
+  and,
+  eq,
+  drizzleSql,
+  setSessionStatus,
+} from "@synap/database";
 import {
   readCriteria,
   type ExpectedOutput,
@@ -496,6 +503,43 @@ export async function gradeCriterionAsOwner(params: {
 }
 
 /**
+ * {@link gradeCriterionAsOwner} AFTER the person's act committed: their
+ * answer to a criterion slot's pass/fail ask, or a task of theirs that meets
+ * a criterion (`criterionMetBy`, satisfy-expected-output.ts — plan aac47c4a,
+ * Q7.4). Never throws: the act stands either way, and the result says
+ * whether the grade landed (`recorded` false: the criterion was removed in
+ * between, or the write failed).
+ */
+export async function gradeCriterionAfterAct(params: {
+  sessionId: string;
+  userId: string;
+  criterionKey: string;
+  verdict: "pass" | "fail";
+  rationale?: string | null;
+}): Promise<{ verdict: "pass" | "fail"; recorded: boolean; resumed: boolean }> {
+  try {
+    const { out, resumed } = await gradeCriterionAsOwner(params);
+    if (out.status !== "recorded") {
+      logger.warn(
+        { sessionId: params.sessionId, status: out.status },
+        "criterion grade after the person's act did not land — the act stands"
+      );
+    }
+    return {
+      verdict: params.verdict,
+      recorded: out.status === "recorded",
+      resumed,
+    };
+  } catch (err) {
+    logger.warn(
+      { err, sessionId: params.sessionId },
+      "criterion grade after the person's act threw — the act stands"
+    );
+    return { verdict: params.verdict, recorded: false, resumed: false };
+  }
+}
+
+/**
  * The RESUME half of a `check` stage gate (services/playbooks/stage-gate.ts):
  * a session paused by a check gate goes back to `active` once every required
  * criterion of the stage it left passes. Called after every evaluation and every
@@ -535,17 +579,18 @@ export async function resumeCheckGateIfMet(params: {
       })
     );
   if (checkGateFailing(summary, gate.fromStage).length > 0) return false;
-  const resumed = await db
-    .update(focusSessions)
-    .set({
-      status: "active",
+  // The check gate's own release: the system's move.
+  const { rows: resumed } = await setSessionStatus(db, {
+    sessionId: session.id,
+    from: "paused",
+    to: "active",
+    actor: { kind: "system", userId: params.userId },
+    reason: "Its check gate now passes.",
+    set: {
       updatedAt: new Date(),
       metadata: drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) - ${CHECK_GATE_METADATA_KEY}`,
-    })
-    .where(
-      and(eq(focusSessions.id, session.id), eq(focusSessions.status, "paused"))
-    )
-    .returning({ id: focusSessions.id });
+    },
+  });
   if (resumed.length === 0) return false;
   // The gate PASSED: the gated stage's `subjectStatus` is written now — the
   // advance door held it while the check failed. Only while the run still

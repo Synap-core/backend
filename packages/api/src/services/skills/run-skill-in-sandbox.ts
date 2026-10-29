@@ -57,7 +57,7 @@ import {
   VaultGrantError,
 } from "@synap/database";
 import { skills, secrets } from "@synap/database/schema";
-import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
+import { validateExternalUrl, safePublicFetch } from "@synap/shared-utils";
 import { createLogger } from "@synap-core/core";
 import { createHubProtocolCallerContext } from "../../routers/hub-protocol/utils.js";
 import {
@@ -65,6 +65,8 @@ import {
   type FailureErrorClass,
 } from "../../connectors/external-dispatch.js";
 import { SKILL_RUNTIME_VERSION } from "./skill-stdlib.js";
+import type { PodFileHandles } from "../capabilities/file-parameters.js";
+import { podFileBodyFor } from "./pod-file-body.js";
 import { visibleSkillsAnyWorkspaceWhere } from "./visibility.js";
 import type {
   RecordedEffect,
@@ -238,6 +240,12 @@ export async function runSkillInSandbox(args: {
    */
   verbAct?: { skillId: string; toolIds: readonly string[] };
   /**
+   * This run's `:bytes` pod files (`resolvePodFilesAtRun`): the handles the
+   * skill received and the files they name. Set only by the post-gate runner;
+   * a `callProvider` body resolves them, nothing else does.
+   */
+  podFiles?: PodFileHandles;
+  /**
    * The focus session the run belongs to, from the RUN's context (never from
    * the skill's input). Rides the governed provider-write branch, so a
    * proposal that write files carries `proposals.session_id`.
@@ -371,6 +379,7 @@ export async function runSkillInSandbox(args: {
       caller,
       failureSink: providerFailure,
       verbAct: args.verbAct,
+      podFiles: args.podFiles,
       recordedEffects: dryRun ? recordedEffects : undefined,
     });
 
@@ -425,6 +434,8 @@ export interface SkillBridgeParams {
   failureSink: { errorClass?: FailureErrorClass; providerRef?: string };
   /** This run's verb decision — scoped to THIS run's provider calls. */
   verbAct?: { skillId: string; toolIds: readonly string[] };
+  /** This run's `:bytes` files — resolved by THIS run's `callProvider` only. */
+  podFiles?: PodFileHandles;
   /**
    * Present = DRY-RUN: the write/send bridges record their effect here and
    * return a stub instead of performing it. Reads and every guard stay real.
@@ -477,6 +488,7 @@ export function buildSkillBridges(params: SkillBridgeParams): SkillBridges {
     caller,
     failureSink,
     verbAct,
+    podFiles,
     recordedEffects,
   } = params;
   const dryRun = recordedEffects !== undefined;
@@ -551,7 +563,9 @@ export function buildSkillBridges(params: SkillBridgeParams): SkillBridges {
   const hostFetch = async (urlStr: unknown, optsStr?: unknown) => {
     const url = String(urlStr);
 
-    const check = validateExternalUrl(url);
+    // The person approves a HOST for the skill, not a port: any port of an
+    // approved public host, never an internal name or address.
+    const check = validateExternalUrl(url, { allowedPorts: "any" });
     if (!check.valid) {
       return {
         error: "url_rejected",
@@ -587,18 +601,22 @@ export function buildSkillBridges(params: SkillBridgeParams): SkillBridges {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 30_000);
       try {
-        // `safeExternalFetch` re-validates SSRF ranges on every hop and, with
-        // `maxRedirects` left at its default of 0, REJECTS any redirect
-        // outright — `check.url`/`allowedHosts` above only vetted the
-        // INITIAL URL, so a raw `fetch()` here would follow a same-host-
-        // approved response straight through a `302 Location:
-        // http://169.254.169.254/...` (or any internal service) with no
-        // re-check. Rejecting redirects keeps the initial `allowedHosts`
-        // gate sufficient — there is no second hop to smuggle through it.
-        const response = await safeExternalFetch(url, {
-          ...(typeof optsStr === "string" ? JSON.parse(optsStr) : {}),
-          signal: controller.signal,
-        });
+        // `safePublicFetch` resolves the approved name, refuses a private
+        // answer and connects to the address it vetted (an approved public
+        // name pointed at 127.0.0.1 or a Docker service is refused). With
+        // `maxRedirects` left at 0 it REJECTS any redirect outright:
+        // `check.url`/`allowedHosts` above only vetted the INITIAL URL, so
+        // following a `302 Location: http://169.254.169.254/...` would skip
+        // that gate. There is no second hop to smuggle through it.
+        const response = await safePublicFetch(
+          url,
+          {
+            ...(typeof optsStr === "string" ? JSON.parse(optsStr) : {}),
+            signal: controller.signal,
+          },
+          0,
+          { allowedPorts: "any" }
+        );
         const { body, truncated } = await readBodyCapped(
           response,
           HOST_FETCH_MAX_BODY_BYTES
@@ -692,6 +710,16 @@ export function buildSkillBridges(params: SkillBridgeParams): SkillBridges {
       ).filter(([, v]) => typeof v === "string") as [string, string][];
       if (entries.length > 0) headers = Object.fromEntries(entries);
     }
+    // This run's `:bytes` files: a handle in the body becomes a file the
+    // host streams from storage (`pod-file-body.ts`); the bytes never enter
+    // the isolate, and only toward the verb's own tools (`fileToolIds`).
+    const files = podFileBodyFor(
+      body,
+      typeof opts === "object" && opts !== null
+        ? (opts as { multipart?: unknown })
+        : undefined,
+      podFiles
+    );
     // Dry-run: the provider is never called; the intended call is recorded
     // and a stub answers so the skill's control flow carries on.
     if (recordedEffects) {
@@ -723,10 +751,14 @@ export function buildSkillBridges(params: SkillBridgeParams): SkillBridges {
         provider,
         method: upper,
         path,
-        body:
-          typeof body === "object" && body !== null
-            ? (body as Record<string, unknown>)
-            : undefined,
+        ...(files.fileBody
+          ? { fileBody: files.fileBody, fileToolIds: podFiles?.toolIds ?? [] }
+          : {
+              body:
+                typeof body === "object" && body !== null
+                  ? (body as Record<string, unknown>)
+                  : undefined,
+            }),
         baseUrlOverride,
         ...(headers ? { headers } : {}),
         ...(isWrite && agentUserId

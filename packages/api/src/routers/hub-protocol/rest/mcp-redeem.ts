@@ -10,7 +10,7 @@
  * endpoint to kill that same key server-to-server.
  *
  * Auth for BOTH routes = a CP TRUSTED-ISSUER assertion (verifyCpAssertion
- * below), NOT a hub API key: the CP-held pod credential (`intelligenceApiKey`)
+ * below: the approved Control Plane issuer only), NOT a hub API key: the CP-held pod credential (`intelligenceApiKey`)
  * is a random bootstrap secret, not a `synap_*` key, so it could never pass the
  * key-format middleware. Both routes are listed in `skipAuthPaths`
  * (hub-protocol-rest.ts) so that middleware doesn't run, and each verifies its
@@ -42,6 +42,7 @@ import { apiKeys } from "@synap/database/schema";
 import { provisionSurfaceAgentKey } from "../../../services/agent-identity-service.js";
 import { mapCpScopesToPodScopes } from "../../oauth/config.js";
 import {
+  controlPlaneIssuerScopes,
   podAudience,
   verifyTrustedIssuerJwt,
 } from "../../../utils/jwks-client.js";
@@ -81,9 +82,16 @@ async function verifyCpAssertion(
   if (!authToken) {
     return c.json({ error: "unauthorized", reason: "missing_assertion" }, 401);
   }
+  // Only the issuer this pod approved as its Control Plane (the full
+  // `controlPlaneIssuerScopes()` set: the boot seed from CONTROL_PLANE_URL, or
+  // the owner's bootstrap approval on a self-hosted pod). Any other approved
+  // issuer, a partner granted `setup.agent` say, could otherwise revoke every
+  // claude-web key or redeem a leaked code (audit 2026-10-28 F4). The CP signs
+  // these assertions with the boolean purpose claim and no `type`, so no
+  // `expectedType` here: the purpose check below does that job.
   const claims = await verifyTrustedIssuerJwt<Record<string, unknown>>(
     authToken,
-    { audience }
+    { audience, requiredScope: controlPlaneIssuerScopes() }
   );
   if (!claims) {
     logger.warn(
@@ -174,6 +182,8 @@ export function registerMcpRedeemRoutes(app: HubHono): void {
         agentType: row.agentType, // "claude-web"
         createdByUserId: row.podUserId,
         linkedUserId: row.podUserId, // the key acts for THIS human
+        // claude.ai runs on no computer of this person's.
+        hostUserId: null,
         instanceId,
         scopes,
         ensureRegistryRow: true,

@@ -19,6 +19,7 @@
 
 import {
   assertPermissions,
+  canonicalPermission,
   DEFAULT_KEY_TTL_DAYS,
   GRANT_ACTIONS,
   parsePermission,
@@ -27,6 +28,8 @@ import {
 } from "./grammar.js";
 import {
   GRANT_SUBJECT_CATALOG,
+  grantQualifierValues,
+  isKindQualifiedGrantSubject,
   isQualifiedGrantSubject,
   type GrantAction,
   type GrantSubjectSpec,
@@ -66,7 +69,11 @@ export interface GrantCell {
 
 /** What a toggle needs to know about the pod: its kinds, for splitting `*`. */
 export interface GrantContext {
-  /** Kind slugs offered as rows (a wildcard is split into these). */
+  /**
+   * Kind slugs offered as rows (an every-kind wildcard is split into these).
+   * Another qualified subject splits into its own fixed set
+   * (`grantQualifierValues`: the activity families).
+   */
   readonly kinds: readonly string[];
   /**
    * The subjects the editor offers (default GRANT_SUBJECT_CATALOG). Turning a
@@ -226,7 +233,8 @@ function compareRank(a: string, b: string): number {
 
 /**
  * The canonical spelling of a permission list: the governance spelling
- * normalised (`entity.read` → `entity.*.read`), duplicates and patterns
+ * normalised (`entity.read` → `entity.*.read`; an every-family event pattern
+ * stays `event.create`, `canonicalPermission`), duplicates and patterns
  * covered by a broader one dropped, catalog order. It NEVER compacts ticked
  * actions into a subject pattern: `proposal` grants read, create, update AND
  * delete, while its catalog offers only Read, so "every box I can see" is not
@@ -248,7 +256,11 @@ export function normalizeGrantPermissions(
 
   const all = [...valid];
   const kept = all.filter((k) => !all.some((j) => j !== k && subsumes(j, k)));
-  return [...kept.sort(compareRank), ...invalid];
+  // Compared and ranked in the full segment form; spelled canonically last.
+  return [
+    ...kept.sort(compareRank).map((k) => canonicalPermission(k.split("."))),
+    ...invalid,
+  ];
 }
 
 function withPermissions(draft: GrantDraft, permissions: string[]): GrantDraft {
@@ -286,7 +298,10 @@ export function toggleGrant(
       if (!covers) {
         out.push(atomPattern(atom));
       } else if (atom.kind === "*" && target.kind !== "*") {
-        for (const kind of ctx.kinds)
+        const values = isKindQualifiedGrantSubject(atom.subject)
+          ? ctx.kinds
+          : grantQualifierValues(atom.subject);
+        for (const kind of values)
           if (kind !== target.kind) out.push(atomPattern({ ...atom, kind }));
       }
     }

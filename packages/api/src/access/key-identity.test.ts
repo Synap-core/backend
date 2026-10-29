@@ -9,6 +9,8 @@ import { describe, it, expect, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
   userType: undefined as string | undefined,
+  agentType: null as string | null,
+  hostUserId: null as string | null,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -19,7 +21,13 @@ vi.mock("@synap/database", async (importOriginal) => {
       query: {
         users: {
           findFirst: async () =>
-            h.userType === undefined ? undefined : { userType: h.userType },
+            h.userType === undefined
+              ? undefined
+              : {
+                  userType: h.userType,
+                  agentType: h.agentType,
+                  hostUserId: h.hostUserId,
+                },
         },
       },
     },
@@ -61,5 +69,49 @@ describe("resolveKeyIdentity", () => {
     expect(identity.isAgent).toBe(false);
     expect(identity.agentUserId).toBeUndefined();
     expect(identity.effectiveUserId).toBe("human-2");
+  });
+});
+
+describe("resolveKeyIdentity — the key's holder and its computer (D1)", () => {
+  const holder = async (
+    userType: string | undefined,
+    agentType: string | null,
+    hostUserId: string | null
+  ) => {
+    Object.assign(h, { userType, agentType, hostUserId });
+    return (
+      await resolveKeyIdentity({ userId: "holder", linkedUserId: "human-1" })
+    ).principal;
+  };
+
+  it("a hosted agent: itself, on its computer", async () => {
+    expect(await holder("agent", "claude-code", "computer-1")).toEqual({
+      id: "holder",
+      kind: "agent",
+      hostUserId: "computer-1",
+    });
+  });
+
+  it("a computer: its own computer", async () => {
+    expect(await holder("agent", "machine", null)).toEqual({
+      id: "holder",
+      kind: "machine",
+      hostUserId: "holder",
+    });
+  });
+
+  it("a computer-less agent, a person, a holder with no row", async () => {
+    expect(await holder("agent", "codex", null)).toMatchObject({
+      kind: "agent",
+      hostUserId: null,
+    });
+    expect(await holder("human", null, null)).toMatchObject({
+      kind: "human",
+      hostUserId: null,
+    });
+    expect(await holder(undefined, null, null)).toMatchObject({
+      kind: "service",
+      hostUserId: null,
+    });
   });
 });

@@ -175,3 +175,19 @@ describe("diagnose(approved run proposal) — the sessions it started", () => {
     ]);
   });
 });
+
+describe("diagnose(proposal) — why it went to review", () => {
+  it("carries the structured governanceReason and reasonCode", async () => {
+    const proposalId = "99999999-9999-4999-8999-999999999999";
+    await q(
+      `insert into proposals (id, workspace_id, target_type, proposal_type, status, created_by, data, governance_reason, reason_code, created_at, updated_at)
+       values ($1, $2, 'entity', 'create', 'pending', $3, '{}'::jsonb, 'UNTRUSTED_ORIGIN', 'NOT_NEEDED', now(), now())`,
+      [proposalId, WS, USER]
+    );
+    const out = (await diagnoseRouter({ userId: USER, id: proposalId })) as {
+      why: { governanceReason?: string; reasonCode?: string };
+    };
+    expect(out.why.governanceReason).toBe("UNTRUSTED_ORIGIN");
+    expect(out.why.reasonCode).toBe("NOT_NEEDED");
+  });
+});

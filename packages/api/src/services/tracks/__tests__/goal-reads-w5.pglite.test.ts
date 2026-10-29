@@ -128,6 +128,7 @@ import {
   podMembers,
   projectMembers,
   projects,
+  lifecycleTransitionOutbox,
   proposals,
   sessionEvaluations,
   users,
@@ -252,6 +253,8 @@ beforeAll(async () => {
     links,
     playbooks,
     projects,
+    // A goal's status flip owes its transition here (status-flow W1).
+    lifecycleTransitionOutbox,
     channels,
     channelMembers,
     notifications,
