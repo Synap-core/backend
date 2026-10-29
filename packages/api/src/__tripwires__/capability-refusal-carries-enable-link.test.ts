@@ -319,9 +319,25 @@ describe("TRIPWIRE: capability refusals emit a human-facing record", () => {
     // the refusal must FILE the cap-raise request and put its link in the
     // reason, because the reason is the only channel every door forwards (the
     // narrow doors have no `synap_governance` tool to ask).
+    //
+    // The refusal lives in ONE helper (`refuseAtAgentPendingCap`) since the
+    // graph capture lane is budgeted too: its body is the scanned branch, past
+    // the under-cap early return, and both lanes must still return what it
+    // refuses with.
     const src = readFileSync(PERMISSION_CHECK, "utf-8");
-    const cap = /if \(pendingCount >= cap\) \{([\s\S]*?)\n {4}\}/.exec(src);
+    const cap =
+      /export async function refuseAtAgentPendingCap\(([\s\S]*?)\n\}/.exec(src);
     expect(cap, "proposal-cap branch not found — did it move?").not.toBeNull();
+    expect(cap![1]).toMatch(/if \(pendingCount < cap\) return null;/);
+    expect(src).toMatch(
+      /await refuseAtAgentPendingCap\(\{[\s\S]{0,300}?\}\);\s*if \(refusal\) return refusal;/
+    );
+    expect(
+      readFileSync(
+        join(API_SRC, "services/capture-agent/submit-capture-graph.ts"),
+        "utf-8"
+      )
+    ).toMatch(/await refuseAtAgentPendingCap\(/);
     expect(cap![1], WHY_EMIT_MATTERS).toMatch(/emitAiDecision\(/);
     expect(cap![1]).toMatch(/outcome: "refused"/);
     expect(cap![1]).toMatch(/denied: true/);

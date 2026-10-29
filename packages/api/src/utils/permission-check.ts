@@ -4002,7 +4002,15 @@ export async function agentProposalCap(agentUserId: string): Promise<number> {
       isPartial: drizzleSql<boolean>`coalesce(jsonb_path_exists(${proposals.data}, '$.dispositions.*.status ? (@ == "reject")'), false)`,
     })
     .from(proposals)
-    .where(eq(proposals.agentUserId, agentUserId))
+    .where(
+      and(
+        eq(proposals.agentUserId, agentUserId),
+        // A receipt (`auto_approved`) is the pod's own decision, not a
+        // person's: counted as an approval, the system cited itself as the
+        // trust that raised its own cap. Only reviewable rows are evidence.
+        drizzleSql`${proposals.status} <> ${ProposalStatus.AUTO_APPROVED}`
+      )
+    )
     .orderBy(desc(proposals.createdAt))
     .limit(CAP_TRUST_WINDOW);
 
@@ -4013,10 +4021,7 @@ export async function agentProposalCap(agentUserId: string): Promise<number> {
   // whose packages are routinely thrown away — the same miscount the widening
   // lane scanner had (`computeQualification`), on a second trust gate.
   const approved = recentRows.filter(
-    (r) =>
-      !r.isPartial &&
-      (r.status === ProposalStatus.APPROVED ||
-        r.status === ProposalStatus.AUTO_APPROVED)
+    (r) => !r.isPartial && r.status === ProposalStatus.APPROVED
   ).length;
   const approveRate = total > 0 ? approved / total : 0;
 

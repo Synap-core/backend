@@ -122,7 +122,7 @@ beforeEach(() => {
   } as never);
 });
 
-async function capture(agentUserId: string | undefined = "agent-1") {
+async function capture(agentUserId: string | null = "agent-1") {
   const pending = vi
     .spyOn(writer, "createEventBackedProposal")
     .mockImplementation(async (input) => ({
@@ -210,7 +210,7 @@ describe("an agent graph meets the same pending budget as its single writes", ()
 
   it("a non-agent caller (webhook, cron) is never budgeted", async () => {
     h.refusal = { denied: true, reason: "would refuse" };
-    const { result, pending } = await capture(undefined);
+    const { result, pending } = await capture(null);
     await expect(result).resolves.toMatchObject({ applied: false });
     expect(h.capCalls).toEqual([]);
     expect(pending).toHaveBeenCalledTimes(1);
