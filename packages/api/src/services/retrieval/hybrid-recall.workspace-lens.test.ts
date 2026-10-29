@@ -58,7 +58,8 @@ vi.mock("@synap/database", async (importOriginal) => {
 vi.mock("@synap/search", () => ({
   searchService: { search: async () => ({ results: [] }) },
 }));
-vi.mock("@synap-core/core", () => ({
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap-core/core")>()),
   createLogger: () => ({ debug: vi.fn(), warn: vi.fn(), info: vi.fn() }),
 }));
 vi.mock("../../utils/intelligence-routing.js", () => ({
