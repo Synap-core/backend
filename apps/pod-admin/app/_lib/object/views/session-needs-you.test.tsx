@@ -22,6 +22,8 @@ const {
   ASK,
   owedHere,
   owedElsewhere,
+  criterionSlot,
+  criterionSlotOpenAsk,
   cluster,
   proposalHere,
   proposalElsewhere,
@@ -71,6 +73,38 @@ const {
     ask: ASK,
     target: { kind: "session", id: OTHER_SESSION_ID },
   });
+  // An escalated criterion, handed to the person to grade (`CRITERION_SLOT_ASK`).
+  const criterionSlot = signal({
+    id: "owed:criterion",
+    kind: "owed-slot",
+    title: "Check: Relay offers the same turn-on doors",
+    why: "Checked 2 times and still not passing — mark it pass or fail.",
+    blockedReason: "decision",
+    slotKind: "criterion",
+    criterionKey: "relay-approve",
+    ask: {
+      mode: "choose",
+      options: [
+        { label: "Pass", value: "pass" },
+        { label: "Fail", value: "fail" },
+      ],
+    },
+    target: { kind: "session", id: SESSION_ID },
+  });
+  // A criterion slot whose ask an agent rewrote: not a grade, graded elsewhere.
+  const criterionSlotOpenAsk = signal({
+    id: "owed:criterion-open",
+    kind: "owed-slot",
+    title: "Check: The Rules page turns a draft rule on",
+    slotKind: "criterion",
+    criterionKey: "activate-draft-rule",
+    ask: {
+      mode: "choose",
+      allowOther: true,
+      options: [{ label: "Pass", value: "pass" }],
+    },
+    target: { kind: "session", id: SESSION_ID },
+  });
   const cluster = signal({
     id: "cluster:1",
     kind: "proposal-cluster",
@@ -93,6 +127,8 @@ const {
     ASK,
     owedHere,
     owedElsewhere,
+    criterionSlot,
+    criterionSlotOpenAsk,
     cluster,
     proposalHere: proposal(
       "7a000000-0000-4000-8000-000000000001",
@@ -222,7 +258,12 @@ vi.mock("../../../../lib/trpc", () => {
   };
 });
 
-import { NeedsYouSection, ProposedChangesSection } from "./session-needs-you";
+import {
+  CriterionGrade,
+  criterionGradeSignals,
+  NeedsYouSection,
+  ProposedChangesSection,
+} from "./session-needs-you";
 import { AskAnswer } from "../../../(admin)/review/_lib/ask-answer";
 import { reviewRows } from "../../../(admin)/review/_lib/review-rows";
 
@@ -446,5 +487,86 @@ describe("Proposed changes — this session's pending proposals", () => {
     );
     expect(seenText).toContain("Draft the launch post");
     expect(seenText).toContain("couldn’t be read");
+  });
+});
+
+/**
+ * Layout A (founder, 2026-10-28): an escalated criterion is graded under the
+ * criterion in the session's rail, through the same answer card, and Needs
+ * you then leaves it out — the reader meets each grade once.
+ */
+describe("A criterion's grade — once, in the rail", () => {
+  it("finds the slot that grades each criterion, only when its ask IS the grade", () => {
+    const grades = criterionGradeSignals(
+      [owedHere, criterionSlot, criterionSlotOpenAsk, owedElsewhere] as never,
+      SESSION_ID
+    );
+    expect([...grades]).toEqual([["relay-approve", "owed:criterion"]]);
+  });
+
+  it("Needs you leaves out a criterion the rail grades, and keeps every other ask", () => {
+    seen.signals = [owedHere, criterionSlot];
+    const both = text(render(<NeedsYouSection sessionId={SESSION_ID} />));
+    expect(both).toContain("same turn-on doors");
+    expect(both).toContain("Which day do we ship?");
+
+    const railed = text(
+      render(
+        <NeedsYouSection
+          sessionId={SESSION_ID}
+          gradedInRail={new Set(["relay-approve"])}
+        />
+      )
+    );
+    expect(railed).not.toContain("same turn-on doors");
+    expect(railed).toContain("Which day do we ship?");
+    expect(railed).toContain("1 waiting on you");
+  });
+
+  it("with only railed grades left, Needs you draws nothing", () => {
+    seen.signals = [criterionSlot];
+    expect(
+      render(
+        <NeedsYouSection
+          sessionId={SESSION_ID}
+          gradedInRail={new Set(["relay-approve"])}
+        />
+      )
+    ).toBe("");
+  });
+
+  it("the rail draws the grade with Review's answer card: Pass, Fail, Send answer", () => {
+    seen.signals = [owedHere, criterionSlot];
+    const html = render(
+      <CriterionGrade sessionId={SESSION_ID} criterionKey="relay-approve" />
+    );
+    const seenText = text(html);
+    expect(seenText).toContain("Pass");
+    expect(seenText).toContain("Fail");
+    expect(buttons.some((b) => b.children === "Send answer")).toBe(true);
+    // Under its own statement: the why is not said a second time.
+    expect(seenText).not.toContain("Checked 2 times");
+    // It reads Needs you's own query, never a second one.
+    expect(calls).toContainEqual([
+      "signals.list",
+      expect.objectContaining({ lens: "needs-you", sessionId: SESSION_ID }),
+    ]);
+  });
+
+  it("draws nothing for a criterion with no grade waiting on the person", () => {
+    seen.signals = [owedHere, criterionSlot, criterionSlotOpenAsk];
+    expect(
+      render(
+        <CriterionGrade sessionId={SESSION_ID} criterionKey="grade-in-place" />
+      )
+    ).toBe("");
+    expect(
+      render(
+        <CriterionGrade
+          sessionId={SESSION_ID}
+          criterionKey="activate-draft-rule"
+        />
+      )
+    ).toBe("");
   });
 });

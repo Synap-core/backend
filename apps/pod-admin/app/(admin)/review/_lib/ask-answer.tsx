@@ -152,6 +152,11 @@ export interface AskAnswerProps {
    * question (Review's detail), so it is read once.
    */
   showHeading?: boolean;
+  /**
+   * Draw the agent's why under it. Off where the line above already says what
+   * is asked (a criterion's grade under its own statement, in a session's rail).
+   */
+  showContext?: boolean;
 }
 
 export function AskAnswer({
@@ -161,6 +166,7 @@ export function AskAnswer({
   onClose,
   sessionDoor = true,
   showHeading = true,
+  showContext = true,
 }: AskAnswerProps) {
   // What the reader sees stays put until they choose to see the new question:
   // a poll must never swap the options under a half-made answer.
@@ -294,7 +300,7 @@ export function AskAnswer({
             {view.heading}
           </h3>
         )}
-        {view.context && (
+        {showContext && view.context && (
           <p className="text-pretty text-[13px] leading-relaxed text-foreground/75">
             {view.context}
           </p>

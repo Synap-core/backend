@@ -15,6 +15,7 @@ import type { ReactNode } from "react";
 import {
   PageShell,
   PageSkeleton,
+  type PageWidth,
 } from "../../../(admin)/components/page-header";
 import type { LoadFailure } from "../load-failure";
 import type { ObjectCrumb } from "../object-header";
@@ -39,6 +40,18 @@ export interface ObjectFrame {
   breadcrumb?: (title: string) => ObjectCrumb[];
   /** Where another object of `kind` opens in this frame ("Run again" lands there). */
   pathFor?: (kind: string, id: string) => string;
+}
+
+/**
+ * The console column an object page draws in: a page with a rail reads wide
+ * (its body keeps the reading measure, the rail sits beside it); any other
+ * keeps its list's width. The receiver card's twin is `openWidth`.
+ */
+export function consoleWidth(
+  props: Pick<ObjectPageProps, "rail">,
+  listWidth: PageWidth | undefined
+): PageWidth | undefined {
+  return props.rail ? "wide" : listWidth;
 }
 
 /**
@@ -79,7 +92,7 @@ export function consoleFrame(list: {
       </PageShell>
     ),
     object: (props) => (
-      <PageShell width={list.width}>
+      <PageShell width={consoleWidth(props, list.width)}>
         <ObjectPage {...props} />
       </PageShell>
     ),

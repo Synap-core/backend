@@ -105,12 +105,23 @@ export function OpenFailure({
   );
 }
 
+/**
+ * The receiver card's width for an object page: one with a rail reads at a
+ * document's width (`lg`), any other at the default. The console's twin is
+ * `consoleWidth`.
+ */
+export function openWidth(
+  props: Pick<ObjectPageProps, "rail">
+): ReceiverWidth | undefined {
+  return props.rail ? "lg" : undefined;
+}
+
 /** The receiver card as an object page's frame — every hosted kind draws in it. */
 export const OPEN_FRAME: ObjectFrame = {
   loading: (label) => <OpenLoading label={label} />,
   failure: ({ kind, id, failure }) => (
     <OpenFailure kind={kind} id={id} failure={failure} />
   ),
-  object: (props) => <OpenObject {...props} />,
+  object: (props) => <OpenObject width={openWidth(props)} {...props} />,
   pathFor: (kind, id) => `/open/${kind}/${encodeURIComponent(id)}`,
 };

@@ -353,6 +353,19 @@ export function criterionRows(
   }));
 }
 
+/**
+ * The criteria a session page's rail grades in place (layout A, founder
+ * 2026-10-28): the ones its capped list shows before "Show all". Needs you
+ * leaves exactly these out, so a criterion past the cap keeps its grade where
+ * the reader sees it, and none is drawn twice.
+ */
+export function railGradedKeys(
+  rows: ReadonlyArray<Pick<CriterionRow, "key">>,
+  shown: number
+): ReadonlySet<string> {
+  return new Set(rows.slice(0, shown).map((r) => r.key));
+}
+
 // ─── Its room ────────────────────────────────────────────────────────────────
 
 /** The slice of the continuation packet's `room` section this reads. */

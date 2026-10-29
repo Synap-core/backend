@@ -24,13 +24,17 @@
  *   • Revert — undo what this session applied. Secondary: in the danger zone.
  * The Intake Room (`?view=room`) is the app's; links to it keep bouncing.
  *
- * Under the header, top → down: who started it and where it lives (chips,
- * each a door); what it waits on the owner for — the agents' questions and
- * blockers, answered in place, and the changes it proposed, each a door to
- * its review (`session-needs-you.tsx`); its room (the session channel, from
- * the continuation packet's `room` — a door to `/open/channel/:id`); what it
- * owes (declared deliverables) and its criteria; then what it left — its
- * outputs (`focusSessions.outputs`) and its report (`focusSessions.document`).
+ * Layout A (founder, 2026-10-28): the body at a document's width with a rail
+ * beside it, in both frames (`ObjectPage`'s `rail`). The main column, top →
+ * down: who started it and where it lives (chips, each a door); what it waits
+ * on the owner for — the agents' questions and blockers, answered in place,
+ * and the changes it proposed, each a door to its review
+ * (`session-needs-you.tsx`); what it left — its report
+ * (`focusSessions.document`) and its outputs (`focusSessions.outputs`); its
+ * room (the session channel, from the continuation packet's `room`), read in
+ * a side panel (`RoomPanel`) or on `/open/channel/:id`. The rail: its
+ * criteria, an escalated one graded right there (and so not again in Needs
+ * you), what it owes (declared deliverables), then the facts.
  * Every section with nothing in it is OMITTED; a section whose read failed
  * says so. All doors read through the same session floor as `get`.
  */
@@ -91,6 +95,7 @@ import {
   deliverableRows,
   draftSummary,
   holdsRun,
+  railGradedKeys,
   sessionMoves,
   sessionRoom,
   sessionStarter,
@@ -104,7 +109,12 @@ import {
   type SessionStarter,
 } from "../session-status";
 import { useSessionMoves } from "../use-session-moves";
-import { NeedsYouSection, ProposedChangesSection } from "./session-needs-you";
+import {
+  CriterionGrade,
+  NeedsYouSection,
+  ProposedChangesSection,
+} from "./session-needs-you";
+import { RoomPanel } from "./room-panel";
 import { couldNotLoad, loadFailure } from "../load-failure";
 import { OpenInAppLink } from "../open-in-app-link";
 import { useReauthOnUnauthorized } from "../use-reauth";
@@ -235,6 +245,9 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
     evaluation.status === "ok"
       ? criterionRows(evaluation.criteria, evaluation.evaluations)
       : [];
+  // The criteria the rail grades: those it shows before "Show all". Any
+  // further one keeps its grade in Needs you, so no grade is hidden.
+  const railGraded = railGradedKeys(criteria, LIST_CAP);
   const deliverables = deliverableRows(session.expectedOutputs);
   const project =
     session.continuation.project.status === "ok"
@@ -334,6 +347,26 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
           ]
         : []),
     ],
+    // Layout A (founder, 2026-10-28): what "done" means and what it owes sit
+    // beside the work, read alongside it; the facts close the rail.
+    rail: (
+      <>
+        <CriteriaSection
+          rows={criteria}
+          verdict={
+            evaluation.status === "ok"
+              ? criteriaVerdictMark(evaluation.verdict)
+              : null
+          }
+          failed={evaluation.status === "unavailable"}
+          onRetry={() => void query.refetch()}
+          gradeIn={owner ? id : null}
+          graded={railGraded}
+        />
+        <DeliverablesSection rows={deliverables} />
+      </>
+    ),
+    railLabel: "Criteria, deliverables and facts",
     advanced: {
       ids: [
         { label: "Session id", value: session.id },
@@ -420,24 +453,8 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
           </p>
         )}
 
-        {owner && <NeedsYouSection sessionId={id} />}
+        {owner && <NeedsYouSection sessionId={id} gradedInRail={railGraded} />}
         <ProposedChangesSection sessionId={id} />
-        <RoomSection
-          room={room}
-          name={channel.data?.channel.title?.trim() || null}
-          onRetry={() => void query.refetch()}
-        />
-        <DeliverablesSection rows={deliverables} />
-        <CriteriaSection
-          rows={criteria}
-          verdict={
-            evaluation.status === "ok"
-              ? criteriaVerdictMark(evaluation.verdict)
-              : null
-          }
-          failed={evaluation.status === "unavailable"}
-          onRetry={() => void query.refetch()}
-        />
 
         {report.isLoading ? (
           <DocumentContentSection title="Report" content={null} />
@@ -494,6 +511,11 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
             )}
           </SectionCard>
         )}
+        <RoomSection
+          room={room}
+          name={channel.data?.channel.title?.trim() || null}
+          onRetry={() => void query.refetch()}
+        />
         {[...moves.errors, rerunPreview.error, rerun.error, revert.error].map(
           (err, i) =>
             err && err.data?.code !== "UNAUTHORIZED" ? (
@@ -770,8 +792,10 @@ const DOOR =
 
 /**
  * The session's room: its name, when the newest message landed and what it
- * said, and a door to the room's page. OMITTED when the session has no room;
- * a room that could not be read says so, with a retry, and keeps its door.
+ * said, and two doors — its messages in a side panel beside the session
+ * (`RoomPanel`, founder 2026-10-28), and the room's page. OMITTED when the
+ * session has no room; a room that could not be read says so, with a retry,
+ * and keeps its doors.
  */
 function RoomSection({
   room,
@@ -782,6 +806,7 @@ function RoomSection({
   name: string | null;
   onRetry: () => void;
 }) {
+  const [panel, setPanel] = useState(false);
   if (room.state === "none") return null;
   const href = room.channelId ? objectPage("channel", room.channelId) : null;
   const RoomIcon = kindIcon("channel");
@@ -791,13 +816,32 @@ function RoomSection({
       variant="flat"
       title="Room"
       actions={
-        href ? (
-          <Link href={href} className={DOOR}>
-            Open room
-          </Link>
+        room.channelId ? (
+          <span className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setPanel(true)}
+              className={DOOR}
+            >
+              Read here
+            </button>
+            {href && (
+              <Link href={href} className={DOOR}>
+                Open room
+              </Link>
+            )}
+          </span>
         ) : undefined
       }
     >
+      {room.channelId && (
+        <RoomPanel
+          channelId={room.channelId}
+          name={label}
+          isOpen={panel}
+          onClose={() => setPanel(false)}
+        />
+      )}
       {room.state === "failed" ? (
         <ResourceRowError
           message="Its room couldn’t be read."
@@ -930,18 +974,26 @@ const VERDICT_MARK: Record<
 /**
  * What "done" means for this session, criterion by criterion, with the
  * current verdict. OMITTED when it declares none; a failed read says so.
+ * For the owner (`gradeIn`), a criterion handed to them to grade is graded
+ * right under it (`CriterionGrade`), and Needs you leaves it out.
  */
 function CriteriaSection({
   rows,
   verdict,
   failed,
   onRetry,
+  gradeIn,
+  graded,
 }: {
   rows: CriterionRow[];
   /** The ONE verdict mark (`criteriaVerdictMark`) — the strip and the list draw it too. */
   verdict: ReturnType<typeof criteriaVerdictMark>;
   failed: boolean;
   onRetry: () => void;
+  /** The session the reader grades in (its owner); null = they only read. */
+  gradeIn: string | null;
+  /** The criteria graded here (`railGradedKeys`); Needs you grades the rest. */
+  graded: ReadonlySet<string>;
 }) {
   if (failed) {
     return (
@@ -977,15 +1029,22 @@ function CriteriaSection({
           return (
             <>
               <RowMark icon={mark.icon} tone={mark.tone} />
-              <span className="min-w-0 flex-1 break-words text-[13px] text-foreground/85">
-                {r.statement}
-                {!r.required && (
-                  <span className="text-foreground/55"> · optional</span>
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                <p className="flex items-start gap-2">
+                  <span className="min-w-0 flex-1 break-words text-[13px] text-foreground/85">
+                    {r.statement}
+                    {!r.required && (
+                      <span className="text-foreground/55"> · optional</span>
+                    )}
+                  </span>
+                  <span className="shrink-0 text-[12px] text-foreground/65">
+                    {word}
+                  </span>
+                </p>
+                {gradeIn && graded.has(r.key) && r.verdict !== "pass" && (
+                  <CriterionGrade sessionId={gradeIn} criterionKey={r.key} />
                 )}
-              </span>
-              <span className="shrink-0 text-[12px] text-foreground/65">
-                {word}
-              </span>
+              </div>
             </>
           );
         }}
