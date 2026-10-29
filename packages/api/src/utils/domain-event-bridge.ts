@@ -297,8 +297,11 @@ export function postToBridge(body: string, ctx: Record<string, unknown>): void {
 
 /**
  * A status move as the `entity:updated` payload the realtime bridge validates
- * (`entityUpdatedSchema`, @synap/events): the transition plus `changes` (the
- * moved property), `updatedBy` (the actor) and `updatedAt`.
+ * (`entityUpdatedSchema`, @synap/events). The clients patch `changes` onto the
+ * entity's TOP level (`useRealtimeSync` `buildMerged`), while a status lives
+ * in its columns, `properties[slug]` and, for a role, its facet — so nothing
+ * here is patchable: `changes` is empty and `facetChange` names the move,
+ * which makes the client refetch the entity and its graph instead.
  */
 function projectTransitionRealtimeData(
   event: EventRecord
@@ -306,7 +309,13 @@ function projectTransitionRealtimeData(
   const t = event.data;
   return {
     ...t,
-    changes: { [String(t.property)]: t.to },
+    changes: {},
+    facetChange: {
+      property: t.property,
+      from: t.from,
+      to: t.to,
+      role: t.role ?? null,
+    },
     updatedBy: (t.agentUserId as string | null) ?? event.userId,
     updatedAt: new Date(event.timestamp).toISOString(),
   };

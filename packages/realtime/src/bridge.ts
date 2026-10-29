@@ -11,9 +11,15 @@ import type { Server as SocketIOServer } from "socket.io";
 import type { IncomingMessage, ServerResponse } from "http";
 import * as Y from "yjs";
 import { safeTokenEqual } from "@synap/auth";
-// Import the schema lookup via the dedicated subpath so the bridge doesn't
-// pull in `@synap/events`' boss/db side-effects (which require DATABASE_URL).
-import { getSchemaForEvent } from "@synap/events/realtime-schemas";
+// The payload contract lives with the schemas (dedicated subpath, so the
+// bridge doesn't pull in `@synap/events`' boss/db side-effects, which require
+// DATABASE_URL): the pod's emitters test their payloads against this same
+// function.
+import { validateEmitPayload } from "@synap/events/realtime-schemas";
+export {
+  validateEmitPayload,
+  type ValidateEmitResult,
+} from "@synap/events/realtime-schemas";
 
 interface BridgeEmitRequest {
   event: string;
@@ -23,31 +29,6 @@ interface BridgeEmitRequest {
   /** Channel-scoped room — reduces noise by targeting only clients in that channel */
   channelId?: string;
   data: any;
-}
-
-/**
- * Result of validating an inbound bridge emit payload against the schema
- * registry. Pulled out of `handleEmit` so it can be unit-tested without
- * spinning up a real HTTP server / Socket.IO.
- *
- * Contract: legacy events without a schema fall through with `ok: true`.
- * The bridge MUST stay backwards-compatible with old emitters.
- */
-export type ValidateEmitResult = { ok: true } | { ok: false; issues: unknown };
-
-/**
- * Apply the realtime schema (if any) to a payload. Returns `{ ok: true }`
- * when no schema is registered for `event` — that's the legacy pass-through.
- */
-export function validateEmitPayload(
-  event: string,
-  data: unknown
-): ValidateEmitResult {
-  const schema = getSchemaForEvent(event);
-  if (!schema) return { ok: true };
-  const result = schema.safeParse(data);
-  if (result.success) return { ok: true };
-  return { ok: false, issues: result.error.issues };
 }
 
 /** Lazy getter for the Yjs server — set after yjsServer is initialized in server.ts */
