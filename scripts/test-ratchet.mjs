@@ -650,6 +650,21 @@ async function selectMode() {
         .map((f) => `      ${f}`)
         .join("\n")}`,
     });
+  // A test file this PR ADDS that vitest collects nowhere would never run,
+  // here or on main: red, not a log line. (An existing path's collection only
+  // changes with a config, which runs the committed plan, not this judge.)
+  const addedSet = new Set(SELECTION.added ?? []);
+  const addedUncollected = [...new Set(notCollected)].filter((f) =>
+    addedSet.has(f)
+  );
+  if (addedUncollected.length)
+    problems.push({
+      kind: "not-collected-new",
+      detail: `${addedUncollected.length} test file(s) this PR adds that their package's vitest config does not collect: they would never run, here or on main. Move each under a path the config includes, or change the config:\n${addedUncollected
+        .slice(0, 20)
+        .map((f) => `      ${f}`)
+        .join("\n")}`,
+    });
   const twUnrun = discovered.filter((t) => !results.has(t));
   if (twUnrun.length)
     problems.push({

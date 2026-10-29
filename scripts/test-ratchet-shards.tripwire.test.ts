@@ -187,6 +187,33 @@ describe("test-ratchet shards: the measured plan", () => {
     ).toThrow(/no packages\/api file/);
   });
 
+  it("a plan that places a package outside 1..N does not fit: the old split runs it", () => {
+    const committed = loadShardPlan();
+    // A refresh that wrote 5 for a 4-shard run would run packages/jobs
+    // nowhere, and the PR would read green.
+    const off = {
+      ...committed,
+      packages: { ...committed.packages, "packages/jobs": 5 },
+    };
+    expect(planFits(off, 4)).toBe(false);
+    for (const bad of [0, 2.5, "2", null])
+      expect(
+        planFits(
+          { ...committed, packages: { ...committed.packages, x: bad } },
+          4
+        ),
+        String(bad)
+      ).toBe(false);
+    const jobs = { id: "packages/jobs", dir: "packages/jobs", args: [] };
+    const placed = [1, 2, 3, 4].flatMap((k) =>
+      runsForShard([jobs], { k, n: 4 }, { plan: off, apiFiles: [] }).map(
+        () => k
+      )
+    );
+    // Exactly one shard runs it (the fallback: shard 1).
+    expect(placed).toEqual([1]);
+  });
+
   it("the committed plan fits the CI shard count and names real files", () => {
     const committed = loadShardPlan();
     expect(planFits(committed, 4)).toBe(true);

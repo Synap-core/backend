@@ -24,6 +24,8 @@ import {
   reach,
   // @ts-expect-error — plain ESM script, no declarations
 } from "./import-graph.mjs";
+// @ts-expect-error — plain ESM script, no declarations
+import { loadGraph, selectTier } from "./affected.mjs";
 
 const FIXTURE: Record<string, string> = {
   "pnpm-workspace.yaml": 'packages:\n  - "packages/*"\n',
@@ -56,7 +58,20 @@ const FIXTURE: Record<string, string> = {
     scripts: { test: "vitest run" },
   }),
   "packages/app/vitest.config.ts":
-    'export default { test: { setupFiles: ["./src/setup.ts"] } };\n',
+    'import { include } from "./vitest.shared";\nexport default { test: { include, setupFiles: ["./src/setup.ts"] } };\n',
+  "packages/app/vitest.shared.ts":
+    'export const include = ["src/**/*.test.ts"];\n',
+  // A tsup entry naming a file that does not exist: src/ resolves the export.
+  // A tsup entry that names a file that is gone (no src twin of its dist
+  // name either): the export maps to no source, so the whole package.
+  "packages/third/package.json": JSON.stringify({
+    name: "@x/third",
+    exports: { "./e": { import: "./dist/e.js" } },
+  }),
+  "packages/third/tsup.config.ts":
+    'export default { entry: { e: "src/gone.ts" } };\n',
+  "packages/third/src/t.ts": "export const t = 1;\n",
+  "packages/app/src/third.test.ts": 'import { e } from "@x/third/e";\n',
   "packages/app/src/setup.ts": 'import "./setup-helper.js";\n',
   "packages/app/src/setup-helper.ts": "export const reset = 1;\n",
   "packages/app/src/a.ts":
@@ -161,6 +176,23 @@ describe("import-graph: the edges, on a fixture small enough to read", () => {
     expect(sel("packages/lib/src/inner/entry-src.ts")).toEqual([
       T("entry.test.ts"),
     ]);
+  });
+
+  it("a tsup entry that names no file is no edge: the whole package", () => {
+    expect(sel("packages/third/src/t.ts")).toEqual([T("third.test.ts")]);
+    expect(g.wholePkg.get(T("third.test.ts"))).toEqual(
+      new Set(["packages/third"])
+    );
+  });
+
+  it("what a vitest config imports is known, and selectTier runs it in full on the committed plan", () => {
+    expect([...g.configImports]).toEqual(["packages/app/vitest.shared.ts"]);
+    const lg = loadGraph(root, () => false);
+    const t = selectTier(["packages/app/vitest.shared.ts"], lg);
+    expect([t.scope, t.committedPlan]).toEqual(["full", true]);
+    expect(t.why.join(" ")).toContain("a vitest config imports it");
+    // The control: a source file of the same package is selected.
+    expect(selectTier([T("c.ts")], lg).scope).toBe("selected");
   });
 
   it("an export that maps to no source depends on the whole package", () => {

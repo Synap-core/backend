@@ -90,7 +90,7 @@ export const ROOT_FULL = [
   /^vitest[^/]*\.config\.[mc]?[jt]s$/,
   /^scripts\/(test-ratchet[^/]*\.mjs|tripwire-discovery\.mjs|test-floors\.json)$/,
   /^scripts\/(ci-changes|strip-comments)\.mjs$/,
-  /^scripts\/ci\/(affected|import-graph)\.mjs$/,
+  /^scripts\/ci\/(affected\.mjs|import-graph\.mjs|shard-plan\.json)$/,
   /^\.github\/workflows\/ci\.yml$/,
   /^\.github\/actions\//,
   /^packages\/database\/migrations\//,
@@ -122,13 +122,20 @@ export const NARROWED = [
  * committed 4-shard plan in the full mode (ci-changes.mjs withPlan).
  * Measured on #522's own run 40930625305: main collects packages/auth's
  * compiled dist/*.test.js too (4 files, 18 tests), the plan named its 2
- * src files (9 tests).
+ * src files (9 tests). The shard plan (`shard-plan.json`) is here too: the
+ * shard jobs read it. And so is any file a vitest config imports (the graph's
+ * `configImports`, selectTier): a shared config decides collection as much as
+ * the config itself. Its limit: a file such a file imports in turn is not.
  */
 export const COMMITTED_PLAN = [
   /^scripts\/(test-ratchet[^/]*\.mjs|tripwire-discovery\.mjs|test-floors\.json)$/,
   /^scripts\/(ci-changes|strip-comments)\.mjs$/,
-  /^scripts\/ci\/(affected|import-graph)\.mjs$/,
+  /^scripts\/ci\/(affected\.mjs|import-graph\.mjs|shard-plan\.json)$/,
   /^\.github\/workflows\/ci\.yml$/,
+  // the setup action and turbo decide what is built before the tests run,
+  // so whether a package's dist (and its compiled tests) exists
+  /^\.github\/actions\//,
+  /^turbo\.json$/,
   /(^|\/)package\.json$/,
   /^(pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc)$/,
   /(^|\/)vitest[^/]*\.config\.[mc]?[jt]s$/,
@@ -403,12 +410,21 @@ export function selectTier(
   { baseBaseline = [], collectionInert = [] } = {}
 ) {
   const inert = new Set(collectionInert.filter((f) => PACKAGE_JSON.test(f)));
+  // A file a vitest config imports decides collection like the config.
+  const configImports = g.imports?.configImports ?? new Set();
+  const committed = (f) =>
+    !inert.has(f) &&
+    (COMMITTED_PLAN.some((re) => re.test(f)) || configImports.has(f));
   const full = [];
   const neutral = [];
   const graphed = [];
   for (const f of files) {
     if (SUITE_NEUTRAL.some((re) => re.test(f))) {
       neutral.push(f);
+      continue;
+    }
+    if (configImports.has(f) && !ROOT_FULL.some((re) => re.test(f))) {
+      full.push(`${f} (a vitest config imports it: it decides collection)`);
       continue;
     }
     if (!inert.has(f) && ROOT_FULL.some((re) => re.test(f))) {
@@ -440,9 +456,7 @@ export function selectTier(
       scope: "full",
       tests: [],
       e2e: true,
-      committedPlan: files.some(
-        (f) => !inert.has(f) && COMMITTED_PLAN.some((re) => re.test(f))
-      ),
+      committedPlan: files.some(committed),
       why: [`full suite: ${cap(full)}`],
     };
 

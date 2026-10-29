@@ -48,6 +48,7 @@ import {
   isImageInput,
   queuePrNumber,
   changedFiles,
+  addedFiles,
   collectionInert,
   sidesOf,
   reusableRun,
@@ -542,6 +543,8 @@ describe("ci-changes: the PR tier on the real graph", () => {
       "scripts/ci/affected.mjs",
       "scripts/ci/import-graph.mjs",
       "scripts/strip-comments.mjs",
+      // the shard plan the shard jobs read
+      "scripts/ci/shard-plan.json",
       // the shard jobs: database service, env, migrate step, install layout
       ".github/workflows/ci.yml",
       ".github/actions/monorepo-setup/action.yml",
@@ -579,6 +582,11 @@ describe("ci-changes: the PR tier on the real graph", () => {
       "pnpm-lock.yaml",
       "apps/pod-admin/package.json",
       "packages/database/vitest.config.ts",
+      // what is built before the tests run (whether a dist exists)
+      "turbo.json",
+      ".github/actions/monorepo-setup/action.yml",
+      // what the shard jobs read to place packages
+      "scripts/ci/shard-plan.json",
     ]) {
       expect(
         COMMITTED_PLAN.some((re: RegExp) => re.test(f)),
@@ -731,6 +739,23 @@ describe("ci-changes: the PR tier on the real graph", () => {
       "new.yml",
       "old.yml",
     ]);
+    // What the change ADDS: a rename's new path, never the edited or old one.
+    expect(addedFiles(base, "HEAD", dir)).toEqual(["new.yml"]);
+    expect(addedFiles(base, "nope", dir)).toEqual([]);
+  });
+
+  it("4e. the test files a PR adds reach the plan (the judge's not-collected-new)", () => {
+    const added = "packages/api/src/routers/agent-runs.summary.test.ts";
+    const t = withPlan(selectTier([added], graph), {
+      everyTest,
+      suiteDirs: SUITES,
+      plan: shardPlan,
+      countByDir,
+      added: [added],
+    });
+    expect(t.selection.added).toEqual([added]);
+    // No added test: no field (the plan of every other PR is unchanged).
+    expect(tier([added]).selection.added).toBeUndefined();
   });
 
   it("5a. one test-file pattern: the graph's, in the selection and in ci-changes", () => {

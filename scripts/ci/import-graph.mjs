@@ -391,7 +391,12 @@ export function buildGraph(root, { files = listFiles(root) } = {}) {
     if (direct && !direct.includes("/dist/")) return direct;
     const m = /^dist\/(.+?)(\.d)?\.(js|mjs|cjs|ts|mts|cts)$/.exec(t);
     if (!m) return null;
-    return p.tsup.get(m[1]) ?? resolveFile(`${p.dir}/src/${m[1]}`);
+    // A tsup entry that names no file falls back to src/ (else: whole package).
+    const entry = p.tsup.get(m[1]);
+    return (
+      (entry && fileSet.has(entry) ? entry : null) ??
+      resolveFile(`${p.dir}/src/${m[1]}`)
+    );
   };
   const resolvePackage = (spec) => {
     const p = packages.find(
@@ -413,6 +418,8 @@ export function buildGraph(root, { files = listFiles(root) } = {}) {
   const missing = new Map();
   const missingReads = new Map();
   const wholePkg = new Map();
+  // What vitest configs import (a shared config, a package they load).
+  const configImports = new Set();
   const add = (m, k, v) => {
     if (!m.has(k)) m.set(k, new Set());
     m.get(k).add(v);
@@ -441,16 +448,20 @@ export function buildGraph(root, { files = listFiles(root) } = {}) {
         const base = norm(join(dir, spec));
         if (base.startsWith("..")) continue;
         const r = resolveFile(base);
-        if (r) add(imports, f, r);
-        else if (!dirSet.has(base))
+        if (r) {
+          add(imports, f, r);
+          if (isConfig) configImports.add(r);
+        } else if (!dirSet.has(base))
           add(missing, f, base.replace(/\.(js|jsx|mjs|cjs|ts|tsx)$/, ""));
         continue;
       }
       const r = resolvePackage(spec);
       if (!r) continue; // a third-party package
       for (const c of configsOf.get(r.pkg.dir) ?? []) add(imports, f, c);
-      if (r.src) add(imports, f, r.src);
-      else add(wholePkg, f, r.pkg.dir);
+      if (r.src) {
+        add(imports, f, r.src);
+        if (isConfig) configImports.add(r.src);
+      } else add(wholePkg, f, r.pkg.dir);
     }
 
     // Paths read by name. Production code names paths in messages and docs
@@ -550,6 +561,7 @@ export function buildGraph(root, { files = listFiles(root) } = {}) {
     missing,
     missingReads,
     wholePkg,
+    configImports,
     packages,
     packageOf,
   };

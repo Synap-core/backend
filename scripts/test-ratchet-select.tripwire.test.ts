@@ -94,6 +94,7 @@ type Sel = {
   runs: { id: string; dir: string; shard: number; files: string[] }[];
   tests: string[];
   dropped: string[];
+  added?: string[];
 };
 
 /** Write what the shards write for this plan (with faults), then judge. */
@@ -246,6 +247,36 @@ describe("test-ratchet --select: the PR selection, judged as CI judges it", () =
     const r = judge(small, { notListed: EXTRA[0] });
     expect(r.out).toContain("[not-collected]");
     expect(r.status).toBe(0);
+  });
+
+  it("a test file the PR ADDS that its config does not collect: red", () => {
+    const withAdded = planOf([...tripwires, ...EXTRA], { added: [EXTRA[0]] });
+    expect(withAdded.added).toEqual([EXTRA[0]]);
+    const r = judge(withAdded, { notListed: EXTRA[0] });
+    expect(r.out).toContain("[not-collected-new]");
+    expect(r.out).toContain(EXTRA[0]);
+    expect(r.status).toBe(1);
+    // Added and collected: green. (An EXISTING path its config excludes is
+    // not red: the test above.)
+    expect(judge(withAdded).status).toBe(0);
+    // The empty-listing path too: a new file in a run vitest lists nothing of.
+    const { run } = loneRun();
+    const lone = planOf([...tripwires, ...run.files], { added: run.files });
+    const e = judge(lone, { emptyList: run.id });
+    expect(e.out).toContain("[not-collected-new]");
+    expect(e.status).toBe(1);
+    // `added` names only selected files: an added file outside any suite is
+    // dropped from it, and a plan whose `added` strays is refused.
+    expect(
+      planOf([...tripwires], { added: ["nowhere/x.test.ts"] }).added
+    ).toBeUndefined();
+    const stray = {
+      ...withAdded,
+      added: ["packages/api/src/not-planned.test.ts"],
+    };
+    const s = judge(stray);
+    expect(s.out).toContain("added names file(s) the selection does not hold");
+    expect(s.status).toBe(1);
   });
 
   it("a run whose listing is empty needs no report", () => {

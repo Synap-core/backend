@@ -592,6 +592,31 @@ export function collectionInert(files, read) {
   });
 }
 
+/**
+ * The paths a change ADDS (`base...head`, renames as delete + add), or [] when
+ * git cannot say. The judge is red when vitest collects one of them nowhere.
+ */
+export function addedFiles(base, head, cwd = undefined) {
+  if (!base || !head) return [];
+  try {
+    return execFileSync(
+      "git",
+      [
+        "diff",
+        "--name-only",
+        "--no-renames",
+        "--diff-filter=A",
+        `${base}...${head}`,
+      ],
+      { encoding: "utf8", cwd, stdio: ["ignore", "pipe", "ignore"] }
+    )
+      .split("\n")
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 /** A file at a commit, or null (absent, or git cannot say). */
 function showAt(ref, path, cwd) {
   try {
@@ -735,6 +760,7 @@ function tierOfCheckout(baseSha, headSha) {
     const baseBaseline = baselineAt(baseSha);
     const everyTest = g.imports.files.filter((f) => TEST_FILE.test(f));
     const sides = sidesOf(baseSha, headSha);
+    const added = addedFiles(baseSha, headSha).filter((f) => TEST_FILE.test(f));
     return (files) =>
       withPlan(
         selectTier(files, g, {
@@ -746,6 +772,7 @@ function tierOfCheckout(baseSha, headSha) {
           suiteDirs: suites,
           plan,
           countByDir,
+          added,
         }
       );
   } catch (err) {
@@ -758,7 +785,7 @@ function tierOfCheckout(baseSha, headSha) {
  * A PR tier with its shard plan: a selection plans its files; the full tier
  * plans `everyTest` (marked `full`: the judge adds the 2,000-file floor),
  * unless it is a COMMITTED_PLAN change. `ctx` = { everyTest, suiteDirs, plan,
- * countByDir }.
+ * countByDir, added (the test files the PR adds) }.
  */
 export function withPlan(t, ctx) {
   if (t.scope !== "selected" && t.scope !== "full") return t;
@@ -777,6 +804,7 @@ export function withPlan(t, ctx) {
       plan: ctx.plan,
       countByDir: ctx.countByDir,
       full,
+      added: ctx.added ?? [],
     }),
   };
 }

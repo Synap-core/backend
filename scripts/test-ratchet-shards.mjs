@@ -112,9 +112,19 @@ export function assignApiFiles(files, plan, n) {
   return out;
 }
 
-/** True when the plan can drive an N-shard run. */
+/**
+ * True when the plan can drive an N-shard run: its shard count is N and every
+ * package it places sits in a shard 1..N (a package placed in shard N+1 would
+ * run nowhere, and the PR would read green).
+ */
 export const planFits = (plan, n) =>
-  !!plan && plan.shards === n && !!plan.api && !!plan.packages;
+  !!plan &&
+  plan.shards === n &&
+  !!plan.api &&
+  !!plan.packages &&
+  Object.values(plan.packages).every(
+    (k) => Number.isInteger(k) && k >= 1 && k <= n
+  );
 
 /**
  * The runs one shard executes. `runs` are the ratchet's package runs; `opts`:
@@ -263,6 +273,7 @@ export function planSelection({
   budgetSeconds = SELECTION_BUDGET_SECONDS,
   maxShards = SELECTION_MAX_SHARDS,
   full = false,
+  added = [],
 }) {
   const suites = new Set(suiteDirs);
   const cost = fileCost(plan, countByDir);
@@ -270,6 +281,10 @@ export function planSelection({
   const dropped = [];
   for (const f of [...new Set(tests)].sort())
     (suites.has(ownerDir(f)) || isTripwire(f) ? runnable : dropped).push(f);
+  const runnableSet = new Set(runnable);
+  const addedRunnable = [...new Set(added)]
+    .filter((f) => runnableSet.has(f))
+    .sort();
   const byDir = new Map();
   for (const f of runnable) {
     const d = ownerDir(f);
@@ -326,6 +341,10 @@ export function planSelection({
     runs,
     tests: runnable,
     dropped,
+    // Test files the PR adds: the judge is red when vitest collects one of
+    // them nowhere (a new path is the one way a test silently never runs;
+    // a config change gets no plan at all).
+    ...(addedRunnable.length ? { added: addedRunnable } : {}),
   };
 }
 
@@ -369,6 +388,11 @@ export function selectionProblems(sel, tripwires) {
   if (unplanned.length || unlisted.length)
     out.push(
       `the runs are not the selection: ${unplanned.length} selected file(s) planned in no run (${unplanned.slice(0, 3).join(", ")}), ${unlisted.length} planned file(s) not selected (${unlisted.slice(0, 3).join(", ")})`
+    );
+  const strayAdded = (sel.added ?? []).filter((f) => !tests.has(f));
+  if (!Array.isArray(sel.added ?? []) || strayAdded.length)
+    out.push(
+      `added names file(s) the selection does not hold: ${strayAdded.slice(0, 3).join(", ")}`
     );
   const missing = tripwires.filter((t) => !planned.has(t));
   if (missing.length)
