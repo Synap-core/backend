@@ -94,9 +94,9 @@ function push(
       opts.gh === "missing" ? join(dir, "no-such-gh") : join(dir, "bin", "gh"),
     FAKE_GH_MODE: opts.gh ?? "none",
     FAKE_PREFLIGHT_EXIT: String(opts.preflightExit ?? 0),
-    // 1 s only for the hanging fake: a loaded box can take > 1 s to start
-    // the node fake, and the other cases would then read as "gh hanging".
-    SYNAP_PRE_PUSH_GH_TIMEOUT_MS: opts.gh === "slow" ? "1000" : "8000",
+    // 1 s only for the hanging fake. The others get 20 s: on a loaded box
+    // the node fake took over 8 s to start (29 Oct), read as "gh hanging".
+    SYNAP_PRE_PUSH_GH_TIMEOUT_MS: opts.gh === "slow" ? "1000" : "20000",
     ...opts.env,
   });
   const r = spawnSync("sh", ["-e", HOOK, "origin", opts.url ?? BACKEND_SSH], {

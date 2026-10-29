@@ -17,21 +17,16 @@ on:
     # run would test the branch merged into today's main instead.
     branches: ["main", "develop", "release/**"]
 
-# A pull request keeps only its newest run (cancel-in-progress, group = its
-# ref). EVERY OTHER RUN gets a group of its own commit and is never cancelled
-# or replaced: a merge queue entry, and each push to main, develop or a release
-# branch (firewall F7, 29 Oct). A group keyed by branch replaced the waiting
-# main run with each newer one, even with cancel-in-progress off (GitHub keeps
-# one pending run per group): 215 of 315 main push runs since 20 Oct ended
-# cancelled, those commits got no verdict, a pod takes only a commit whose own
-# push run is green (scripts/ci/release-gate-wait.mjs), and a red main had no
-# culprit range. Cost, measured 29 Oct: a main run is 10-15 jobs, ~115
-# job-min, ~25 min; a burst of k merges runs k of them at once against the
-# org's 20-job cap (27 Oct, before the queue: 14 queued ahead of every PR). The
-# merge queue paces merges; its cap is the queue, not this group.
-# Tripwire: scripts/ci/ci-concurrency.tripwire.test.ts.
+# A pull request keeps only its newest run (cancel-in-progress). A push to
+# main, develop or a release branch never cancels a RUNNING run: with
+# cancel-in-progress off, GitHub keeps the running one and only the NEWEST
+# waiting one per branch, so every run that starts finishes and the latest main
+# is always measured. (26 Oct, cancel-in-progress on: no main run finished
+# between 08:44 and 18:00. 27 Oct, one group per commit: 14 full main runs
+# queued behind each other after a merge wave, ahead of every PR.) A merge
+# queue entry gets a group per commit: each one must report.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'merge_group' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Least privilege: jobs that need more declare it themselves.
