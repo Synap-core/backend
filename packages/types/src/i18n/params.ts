@@ -8,6 +8,7 @@
  * agree on every message that parses.
  */
 import type { ParamValue } from "./message.js";
+import type { NounParams } from "./noun.js";
 
 type Space = " " | "\n" | "\t" | "\r";
 type TrimStart<S extends string> = S extends `${Space}${infer R}`
@@ -71,12 +72,23 @@ type ThenOptions<R> = R extends [infer P, infer Rest extends string]
 type Flatten<T> = { [K in keyof T]: T[K] };
 
 /**
+ * A message reading any member of the noun bundle (`obj`, `Obj`, `objs`,
+ * `objG`, `objV`) takes the whole bundle, typed as `nounParams` returns it:
+ * a translation may read a member English does not (`catalogProblems`), so
+ * the caller always passes all of them.
+ */
+type WithNounBundle<P> =
+  Extract<keyof P, keyof NounParams> extends never
+    ? P
+    : Omit<P, keyof NounParams> & NounParams;
+
+/**
  * The parameter object message `M` takes. A widened `string` (a catalog not
  * declared `as const`) gives a loose record: declare catalogs `as const`.
  */
 export type ParamsOf<M extends string> = string extends M
   ? Readonly<Record<string, ParamValue>>
-  : Flatten<WalkText<M, None>[0]>;
+  : Flatten<WithNounBundle<WalkText<M, None>[0]>>;
 
 /** The rest-arguments `t(key, …)` takes for message `M`. */
 export type ParamsArgs<M extends string> = string extends M

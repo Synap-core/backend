@@ -19,6 +19,7 @@ import {
   MessageSyntaxError,
   type ParamValue,
 } from "./message.js";
+import { NOUN_BUNDLE_MEMBERS } from "./noun.js";
 import type { ParamsArgs } from "./params.js";
 
 /** Any catalog: message key → message text. */
@@ -92,15 +93,31 @@ export interface CatalogProblem {
   readonly detail: string;
 }
 
+const BUNDLE_MEMBERS: ReadonlySet<string> = new Set(NOUN_BUNDLE_MEMBERS);
+/** The one argument a noun bundle counts as, whichever members a message reads. */
+const NOUN_BUNDLE = `{${NOUN_BUNDLE_MEMBERS.join(",")}}`;
+
+/**
+ * The arguments `message` reads, with the noun bundle's members folded into
+ * ONE argument (`ParamsOf` hands a message reading any member all of them, so
+ * English "Deleted {obj}" and French reading `objG` and `Obj` read the same).
+ */
 function argumentsOf(
   message: string
 ): Map<string, string> | MessageSyntaxError {
+  let args: Map<string, string>;
   try {
-    return messageArguments(message);
+    args = messageArguments(message);
   } catch (err) {
     if (err instanceof MessageSyntaxError) return err;
     throw err;
   }
+  const folded = new Map<string, string>();
+  for (const [name, use] of args) {
+    if (BUNDLE_MEMBERS.has(name)) folded.set(NOUN_BUNDLE, "arg");
+    else folded.set(name, use);
+  }
+  return folded;
 }
 
 function describe(args: Map<string, string>): string {
@@ -112,7 +129,10 @@ function describe(args: Map<string, string>): string {
  * message outside the subset; a translation missing a key, holding a key
  * English lacks, outside the subset, or reading other arguments than the
  * English message (a counted argument must stay counted; a printed one may
- * become counted or selected). Empty when the catalogs are sound.
+ * become counted or selected). The noun bundle counts as one argument: when
+ * English reads any of `obj`, `Obj`, `objs`, `objG`, `objV`, a translation
+ * may read any of them, and must read at least one. Empty when the catalogs
+ * are sound.
  */
 export function catalogProblems(
   catalogs: { readonly en: MessageCatalog } & Partial<

@@ -13,17 +13,40 @@
  * byte sizes, relative time): those are a different SSOT with different rules,
  * and folding them in here is how a focused registry becomes a junk drawer.
  *
- * WHY NOT i18n. This is a key→word lookup, not message formatting; the vast
- * majority of sites need no interpolation and no plurals. Keeping the vocabulary
- * as typed data (rather than an English catalog) is what lets a future i18n
- * layer resolve `key → locale` mechanically. Registry first; translation on top
- * only if the product is ever localized.
+ * IN ANY LANGUAGE. The vocabulary is the first catalog of the one i18n door
+ * (`@synap-core/types/i18n`, rule `i18n`): its tables stay the English source,
+ * `catalog.en.ts` derives the English catalog from them (keys = the tokens),
+ * and `catalog.fr.ts` translates it, nouns with their gender. Every resolver
+ * takes `locale?`; without one it reads the ambient catalog locale, which only
+ * a client host sets (decision D1), so server text stays English. The door's
+ * sentences are messages, never splices; a noun reaches a sentence as a
+ * `Noun` (`resolveNoun`) through the bundle `nounParams` builds.
  *
  * Pure + dependency-free — safe to import from browser, Electron, and server
  * contexts (same contract as `proposals/proposal-utils.ts`).
  */
 
-import { OBJECT_KINDS, OBJECT_KIND_ALIASES } from "./object-kinds.js";
+import {
+  OBJECT_KINDS,
+  OBJECT_KIND_ALIASES,
+  type ObjectKindRows,
+} from "./object-kinds.js";
+import type { Locale } from "../i18n/locale.js";
+import { pluralCategory } from "../i18n/plural.js";
+import { createT, type TFunction } from "../i18n/translator.js";
+import type { Noun, NounParams } from "../i18n/noun.js";
+import {
+  buildVocabularyEn,
+  type VocabularyEn,
+  type VocabularySentencesEn,
+} from "./catalog.en.js";
+import { vocabularyFr } from "./catalog.fr.js";
+import {
+  catalogLocaleOf,
+  translatedNoun,
+  sentences,
+  translatedWord,
+} from "./translate.js";
 import type { SpaceBrief } from "../space-brief/index.js";
 import type { NextRungOutcome, TrustRung } from "../trust-ladder/index.js";
 import type { GovernanceRung, MatrixMark } from "../agent-matrix/index.js";
@@ -115,7 +138,7 @@ export function humanizeToken(token: string): string {
   if (!words) return "";
   const cased = words
     .split(" ")
-    .map((w) => CASED_WORDS[w] ?? w)
+    .map((w) => (Object.hasOwn(CASED_WORDS, w) ? CASED_WORDS[w]! : w))
     .join(" ");
   return cased.charAt(0).toUpperCase() + cased.slice(1);
 }
@@ -227,7 +250,7 @@ export type VerbMood = "imperative" | "past";
  * whole token, so `capability.run` and `run` resolve identically. Anything
  * absent falls back to {@link humanizeToken}, which is always safe.
  */
-export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
+const ACTION_VERB_ROWS = {
   create: { imperative: "Create", past: "Created", present: "Creates" },
   update: { imperative: "Update", past: "Updated", present: "Updates" },
   delete: { imperative: "Delete", past: "Deleted" },
@@ -613,7 +636,13 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // Library: run a reader on a kept link again (or with another reader). The
   // button asks "Read again"; the receipt says it was "Read".
   read_again: { imperative: "Read again", past: "Read" },
-};
+} satisfies Readonly<Record<string, ActionVerb>>;
+
+export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> =
+  ACTION_VERB_ROWS;
+
+/** The curated verbs' rows, exactly typed: the keys of the `action.*` catalog. */
+export type ActionVerbRows = typeof ACTION_VERB_ROWS;
 
 /**
  * Metadata key for the ordered subject ids a pinned playbook consumes from
@@ -636,7 +665,15 @@ export const ACTION_OBJECT_PREPOSITIONS: Readonly<Record<string, string>> = {
   section_update: "in",
   session_narrative_update: "of",
   widen_scopes: "for",
-};
+} satisfies Readonly<Record<string, TitlePreposition>>;
+
+/**
+ * The prepositions a title or a button may carry. Each has its own messages
+ * (`vocabulary.title.<mood>.<preposition>`), since another language contracts
+ * or reorders them ("du document", "dans la session"): a new one is a type
+ * error until its messages exist.
+ */
+type TitlePreposition = "in" | "of" | "for";
 
 /**
  * Actions whose title is a LEAD, `<verb>: <name>`, with no kind noun: the
@@ -661,13 +698,31 @@ function resolveActionPreposition(action: string | null | undefined): string {
  */
 export function resolveActionLabel(
   action: string | null | undefined,
-  mood: VerbMood = "imperative"
+  mood: VerbMood = "imperative",
+  locale?: Locale
 ): string {
   if (!action) return "";
+  const row = actionRow(action);
+  if (!row) return humanizeToken(action);
+  return (
+    translatedWord(`action.${row.token}.${mood}`, catalogLocaleOf(locale)) ??
+    row.verb[mood]
+  );
+}
+
+/** The curated row an action token resolves to (whole token, then its last dotted segment). */
+function actionRow(
+  action: string
+): { token: string; verb: ActionVerb } | undefined {
   const key = action.toLowerCase();
   const tail = key.includes(".") ? key.slice(key.lastIndexOf(".") + 1) : key;
-  const verb = ACTION_VERBS[key] ?? ACTION_VERBS[tail];
-  return verb ? verb[mood] : humanizeToken(action);
+  if (Object.hasOwn(ACTION_VERBS, key)) {
+    return { token: key, verb: ACTION_VERBS[key]! };
+  }
+  if (Object.hasOwn(ACTION_VERBS, tail)) {
+    return { token: tail, verb: ACTION_VERBS[tail]! };
+  }
+  return undefined;
 }
 
 /**
@@ -677,13 +732,18 @@ export function resolveActionLabel(
  * conjugation nobody curated.
  */
 export function resolveActionPresent(
-  action: string | null | undefined
+  action: string | null | undefined,
+  locale?: Locale
 ): string {
   if (!action) return "";
-  const key = action.toLowerCase();
-  const tail = key.includes(".") ? key.slice(key.lastIndexOf(".") + 1) : key;
-  const verb = ACTION_VERBS[key] ?? ACTION_VERBS[tail];
-  return verb?.present ?? resolveActionLabel(action, "imperative");
+  const row = actionRow(action);
+  if (row?.verb.present === undefined) {
+    return resolveActionLabel(action, "imperative", locale);
+  }
+  return (
+    translatedWord(`action.${row.token}.present`, catalogLocaleOf(locale)) ??
+    row.verb.present
+  );
 }
 
 /**
@@ -693,13 +753,20 @@ export function resolveActionPresent(
  * it is doing it, rather than guessing a tense nobody curated.
  */
 export function resolveActionProgressive(
-  action: string | null | undefined
+  action: string | null | undefined,
+  locale?: Locale
 ): string {
   if (!action) return "";
-  const key = action.toLowerCase();
-  const tail = key.includes(".") ? key.slice(key.lastIndexOf(".") + 1) : key;
-  const verb = ACTION_VERBS[key] ?? ACTION_VERBS[tail];
-  return verb?.progressive ?? resolveActionLabel(action, "imperative");
+  const row = actionRow(action);
+  if (row?.verb.progressive === undefined) {
+    return resolveActionLabel(action, "imperative", locale);
+  }
+  return (
+    translatedWord(
+      `action.${row.token}.progressive`,
+      catalogLocaleOf(locale)
+    ) ?? row.verb.progressive
+  );
 }
 
 /** Which end of a lineage edge the reader is standing on. */
@@ -786,7 +853,7 @@ export function resolveLineageEdgeLabel(
  * Anything the registry DOES model resolves through it — never duplicate a
  * registry kind here; that is exactly the fork this consolidation removed.
  */
-export const OBJECT_NOUNS: Readonly<Record<string, string>> = {
+const OBJECT_NOUN_ROWS = {
   relation_def: "Relation type",
   mcp: "MCP server",
   api_key: "API key",
@@ -824,7 +891,46 @@ export const OBJECT_NOUNS: Readonly<Record<string, string>> = {
   // The Project Management `okr` kind ("Make it a goal" names it in the
   // proposal it files): an acronym again — it humanized to "Okr".
   okr: "OKR",
+} satisfies Readonly<Record<string, string>>;
+
+export const OBJECT_NOUNS: Readonly<Record<string, string>> = OBJECT_NOUN_ROWS;
+
+/** The backend-only nouns' rows, exactly typed: part of the `kind.*` catalog. */
+export type ObjectNounRows = typeof OBJECT_NOUN_ROWS;
+
+/**
+ * The plural of each backend-only noun, curated like the registry's
+ * `labelPlural` (they used to be the singular run through English suffix
+ * rules). Keyed by every {@link OBJECT_NOUNS} row: a noun without its plural
+ * stops the build.
+ */
+export const OBJECT_NOUN_PLURALS: Readonly<
+  Record<keyof ObjectNounRows, string>
+> = {
+  relation_def: "Relation types",
+  mcp: "MCP servers",
+  api_key: "API keys",
+  ssh_key: "SSH keys",
+  env_variable: "Environment variables",
+  url: "Pages",
+  proactive: "Proactive AIs",
+  share_link: "Share links",
+  guest: "Guests",
+  form: "Forms",
+  submission: "Submissions",
+  property: "Fields",
+  "ui-design": "UI designs",
+  okr: "OKRs",
 };
+
+// A backend-only noun never shares a slug with a registry kind: both live in
+// the one `kind.<slug>` namespace of the catalog.
+type _NounsApart =
+  Extract<keyof ObjectNounRows, keyof ObjectKindRows> extends never
+    ? true
+    : never;
+const _nounsApart: _NounsApart = true;
+void _nounsApart;
 
 /**
  * The human noun for an object kind / target type.
@@ -834,17 +940,100 @@ export const OBJECT_NOUNS: Readonly<Record<string, string>> = {
  * label → {@link humanizeToken}, which is always safe. Nothing can leak a raw
  * token, and there is exactly one place a kind's name is decided.
  */
-export function resolveObjectNoun(kind: string | null | undefined): string {
+export function resolveObjectNoun(
+  kind: string | null | undefined,
+  locale?: Locale
+): string {
   if (!kind) return "";
-  const key = kind.toLowerCase();
-  const backendOnly = OBJECT_NOUNS[key];
-  if (backendOnly) return backendOnly;
-  const canonical = OBJECT_KIND_ALIASES[key] ?? key;
+  const slug = nounSlot(kind);
+  if (slug === null) return humanizeToken(canonicalKind(kind));
   return (
-    OBJECT_KINDS[canonical]?.label ??
-    OBJECT_NOUNS[canonical] ??
-    humanizeToken(canonical)
+    translatedWord(`kind.${slug}.one`, catalogLocaleOf(locale)) ??
+    englishNoun(slug).one
   );
+}
+
+function canonicalKind(kind: string): string {
+  const key = kind.toLowerCase();
+  return Object.hasOwn(OBJECT_KIND_ALIASES, key)
+    ? OBJECT_KIND_ALIASES[key]!
+    : key;
+}
+
+/**
+ * The catalog slug a kind resolves to, in the noun door's order: a
+ * backend-only noun under its own key, then the alias table, then the
+ * registry, then a backend-only noun under the alias target. Null when no
+ * table names it (it humanizes).
+ */
+function nounSlot(kind: string): string | null {
+  const key = kind.toLowerCase();
+  if (Object.hasOwn(OBJECT_NOUNS, key)) return key;
+  const canonical = canonicalKind(kind);
+  if (Object.hasOwn(OBJECT_KINDS, canonical)) return canonical;
+  if (Object.hasOwn(OBJECT_NOUNS, canonical)) return canonical;
+  return null;
+}
+
+/** A catalog slug's English forms, from its table row. */
+function englishNoun(slug: string): { one: string; other: string } {
+  if (Object.hasOwn(OBJECT_NOUNS, slug)) {
+    return {
+      one: OBJECT_NOUNS[slug]!,
+      other: OBJECT_NOUN_PLURALS[slug as keyof ObjectNounRows],
+    };
+  }
+  const def = OBJECT_KINDS[slug]!;
+  return { one: def.label, other: def.labelPlural };
+}
+
+/**
+ * A kind's noun WITH its grammar, in `locale` (else the ambient catalog
+ * locale) — what a sentence agrees with, through {@link nounParams}.
+ *
+ * A kind the catalog of that locale does not name (a kind a person defined,
+ * an uncurated token) keeps its English words with gender `n`: French then
+ * takes its neutral phrasing ("Élément créé : Recette"). In English the
+ * gender is always `n`, and `elides` says the noun takes "an".
+ */
+export function resolveNoun(
+  kind: string | null | undefined,
+  locale?: Locale
+): Noun {
+  const loc = catalogLocaleOf(locale);
+  const slug = kind ? nounSlot(kind) : null;
+  if (slug !== null && loc !== "en") {
+    const translated = translatedNoun(slug, loc);
+    if (translated) return translated;
+  }
+  const one = resolveObjectNoun(kind, "en");
+  return {
+    one,
+    other: resolveObjectNounPlural(kind, "en"),
+    gender: "n",
+    elides: takesAn(one),
+  };
+}
+
+/** English: "an" before a noun that starts with a vowel letter (the door's rule since `withArticle`). */
+function takesAn(noun: string): boolean {
+  return /^[aeiou]/i.test(noun.trim());
+}
+
+/**
+ * The noun bundle a message reads a noun through: `obj` (mid-sentence),
+ * `Obj` (sentence start), `objs` (plural, mid-sentence), `objG` (gender) and
+ * `objV` (vowel: "yes" | "no"). Mid-sentence casing is {@link nounInSentence}'s
+ * ("UI design" stays, "Task" reads "task").
+ */
+export function nounParams(noun: Noun): NounParams {
+  return {
+    obj: nounInSentence(noun.one),
+    Obj: noun.one,
+    objs: nounInSentence(noun.other),
+    objG: noun.gender,
+    objV: noun.elides ? "yes" : "no",
+  };
 }
 
 /**
@@ -857,27 +1046,38 @@ export function resolveObjectNoun(kind: string | null | undefined): string {
  * the hand-written label map `.claude/rules/vocabulary.md` forbids — and it was
  * shipped once, in relay's reference-param sheet, before a review caught it.
  *
- * Same resolution order as {@link resolveObjectNoun}. The backend-only tail has
- * no curated plural, so those fall back to the singular + "s"; every one of them
- * ("API key", "SSH key", "MCP server", "Relation type", "Environment variable",
- * "Page") pluralises correctly that way.
+ * Same resolution order as {@link resolveObjectNoun}. The backend-only tail
+ * carries its curated plural in {@link OBJECT_NOUN_PLURALS}; only a token no
+ * table names goes through the English suffix rules.
  */
 export function resolveObjectNounPlural(
+  kind: string | null | undefined,
+  locale: Locale
+): string;
+// Listed last, so `kinds.map(resolveObjectNounPlural)` (relay) still compiles:
+// the index `map` passes reads as no locale (`catalogLocaleOf`).
+export function resolveObjectNounPlural(
   kind: string | null | undefined
+): string;
+export function resolveObjectNounPlural(
+  kind: string | null | undefined,
+  locale?: Locale
 ): string {
   if (!kind) return "";
-  const key = kind.toLowerCase();
-  const backendOnly = OBJECT_NOUNS[key];
-  if (backendOnly) return pluralizeFallback(backendOnly);
-  const canonical = OBJECT_KIND_ALIASES[key] ?? key;
-  const entry = OBJECT_KINDS[canonical];
-  if (entry?.labelPlural) return entry.labelPlural;
-  const canonicalNoun = OBJECT_NOUNS[canonical];
-  if (canonicalNoun) return pluralizeFallback(canonicalNoun);
-  return pluralizeFallback(humanizeToken(canonical));
+  const slug = nounSlot(kind);
+  if (slug === null)
+    return pluralizeFallback(humanizeToken(canonicalKind(kind)));
+  return (
+    translatedWord(`kind.${slug}.other`, catalogLocaleOf(locale)) ??
+    englishNoun(slug).other
+  );
 }
 
 /**
+ * ENGLISH ONLY, for words no catalog holds: a humanized token, or a noun a
+ * person typed (a profile's own name). A curated noun takes its plural from
+ * the catalog in every locale; a sentence counts through a plural message.
+ *
  * Nouns that do not take a plural — "14 Research", never "Researchs"
  * (dogfood-2 #10, a project's pipeline door). Matched on the LAST word.
  */
@@ -901,17 +1101,16 @@ const UNCOUNTABLE_NOUNS = new Set([
 ]);
 
 /**
- * The uncurated fallback: singular + "s", except a consonant + "y" ending,
- * which takes "ies" — `property` (an alias target with no registry entry)
- * rendered "Propertys" through the bare-`s` rule — a sibilant ending
- * (s / x / z / ch / sh), which takes "es", and an uncountable noun, which
- * stays as it is. A Greek -sis / -xis ending takes -ses / -xes.
- */
-/**
  * A noun's plural KEEPING its casing — for a profile's own display name
  * ("UI design" → "UI designs"). `resolveObjectNounPlural` takes a machine KIND
  * and lower-cases it to look it up, so a cased name must never go through it
  * ("UI Design" → "Ui designs", homes review S9).
+ *
+ * @deprecated English suffix rules: French cannot use them. A kind's plural
+ *   comes from {@link resolveObjectNounPlural}; a noun a person typed is shown
+ *   as written. Kept for its English callers (backend `import-title.ts`,
+ *   `lens/space-intent.ts`; synap-app `intake-room/library.ts`); removed once
+ *   they move (P2b, research 7b8070fd §2.6).
  */
 export function pluralizeNoun(noun: string): string {
   const trimmed = noun.trim();
@@ -919,16 +1118,25 @@ export function pluralizeNoun(noun: string): string {
 }
 
 /**
- * "<n> <noun>": the noun singular at exactly 1, else its plural by the same
- * rule as {@link pluralizeNoun} ("1 item", "3 items", "2 analyses"). The one
- * door for a counted plain noun — never a `n === 1 ? 'item' : 'items'` at a
- * call site. A KIND's count goes through {@link resolveObjectNounPlural}
- * instead, which knows the curated plurals ("People").
+ * "<n> <noun>" with English plural rules ("1 item", "3 items", "2 analyses").
+ *
+ * @deprecated A count is a plural message in the caller's catalog
+ *   (`"{n, plural, one {# item} other {# items}}"`), which French can follow
+ *   ("0 élément", "1 000 000 d’éléments"). Kept for synap-app's callers
+ *   (`goal/make-them-goals.ts`, `intake-ui`, `work-graph`); removed once they
+ *   move (P2b). No backend code calls it.
  */
 export function countedNoun(n: number, noun: string): string {
-  return `${n} ${n === 1 ? noun.trim() : pluralizeNoun(noun)}`;
+  return `${n} ${pluralCategory("en", n) === "one" ? noun.trim() : pluralizeNoun(noun)}`;
 }
 
+/**
+ * The English suffix rules: singular + "s", except a consonant + "y" ending,
+ * which takes "ies" — `property` (an alias target with no registry entry)
+ * rendered "Propertys" through the bare-`s` rule — a sibilant ending
+ * (s / x / z / ch / sh), which takes "es", and an uncountable noun, which
+ * stays as it is. A Greek -sis / -xis ending takes -ses / -xes.
+ */
 function pluralizeFallback(noun: string): string {
   const last = noun.trim().split(/\s+/).pop()?.toLowerCase() ?? "";
   if (UNCOUNTABLE_NOUNS.has(last)) return noun;
@@ -959,26 +1167,76 @@ export function buildObjectActionTitle(params: {
   /** The specific object's name, when known. */
   objectName?: string | null;
   mood?: VerbMood;
+  /** The catalog locale; the ambient catalog locale when absent. */
+  locale?: Locale;
 }): string {
-  const { action, fallbackAction, objectKind, objectName, mood } = params;
+  const { action, fallbackAction, objectKind, objectName } = params;
+  const mood = params.mood ?? "imperative";
+  const locale = catalogLocaleOf(params.locale);
+  const t = sentences(locale);
   const actionToken = action ?? fallbackAction;
-  const verb = resolveActionLabel(actionToken, mood ?? "imperative");
+  // The name slot compares against the ENGLISH words: names and summaries
+  // reaching it were written by the pod, in English.
+  const verbEn = resolveActionLabel(actionToken, mood, "en");
+  const verb = resolveActionLabel(actionToken, mood, locale);
   if (actionToken && ACTION_TITLE_LEADS.has(actionToken.toLowerCase())) {
-    const lead = nameSlot(objectName, verb, verb, "");
-    return lead ? `${verb}: ${lead}` : verb;
+    const lead = nameSlot(objectName, verbEn, verbEn, "");
+    return lead ? t("vocabulary.title.lead", { verb, name: lead }) : verb;
   }
   // `entity` is the generic base kind — naming it adds nothing ("Create
   // Entity"), so it is suppressed in favour of the concrete profile slug.
-  const noun =
-    objectKind && objectKind.toLowerCase() !== "entity"
-      ? resolveObjectNoun(objectKind)
-      : "";
-  const preposition = noun ? resolveActionPreposition(actionToken) : "";
-  const head = [verb || "Proposal", preposition, noun]
+  const kind =
+    objectKind && objectKind.toLowerCase() !== "entity" ? objectKind : null;
+  const nounEn = kind ? resolveObjectNoun(kind, "en") : "";
+  const preposition = kind ? titlePreposition(actionToken) : "";
+  const headEn = [verbEn || "Proposal", preposition, nounEn]
     .filter(Boolean)
     .join(" ");
-  const name = nameSlot(objectName, head, verb, noun);
-  return name ? `${head} "${name}"` : head;
+  const name = nameSlot(objectName, headEn, verbEn, nounEn);
+  const shownVerb = verb || t("vocabulary.title.fallbackVerb");
+  if (!kind) {
+    return name
+      ? t("vocabulary.title.verbOnly.named", { verb: shownVerb, name })
+      : shownVerb;
+  }
+  if (!verb) {
+    const noun = nounParams(resolveNoun(kind, locale));
+    return name
+      ? t("vocabulary.title.noVerb.named", { ...noun, name })
+      : t("vocabulary.title.noVerb", noun);
+  }
+  const key: keyof VocabularySentencesEn = `vocabulary.title.${mood}${
+    preposition ? (`.${preposition}` as const) : ""
+  }${name ? ".named" : ""}`;
+  return looseSentence(t)(key, {
+    verb,
+    name,
+    ...nounParams(resolveNoun(kind, locale)),
+  });
+}
+
+/** The title preposition an action takes, or "" for none. */
+function titlePreposition(
+  action: string | null | undefined
+): TitlePreposition | "" {
+  return resolveActionPreposition(action) as TitlePreposition | "";
+}
+
+/**
+ * A translator called with a key chosen at run time: its key is checked
+ * where it is built (`keyof VocabularySentencesEn`), and every message of a
+ * family takes the same params, so the call passes them as one record.
+ */
+function looseSentence(
+  t: ReturnType<typeof sentences>
+): (
+  key: keyof VocabularySentencesEn,
+  params: Record<string, string>
+) => string {
+  return t as unknown as (
+    key: keyof VocabularySentencesEn,
+    params: Record<string, string>
+  ) => string;
 }
 
 const UUID_TOKEN =
@@ -1072,15 +1330,26 @@ export function buildActionLabel(params: {
   action: string;
   objectKind?: string | null;
   mood?: VerbMood;
+  /** The catalog locale; the ambient catalog locale when absent. */
+  locale?: Locale;
 }): string {
-  const { action, objectKind, mood } = params;
-  const verb = resolveActionLabel(action, mood ?? "imperative");
-  const noun =
-    objectKind && objectKind.toLowerCase() !== "entity"
-      ? nounInSentence(resolveObjectNoun(objectKind))
-      : "";
-  const preposition = noun ? resolveActionPreposition(action) : "";
-  return [verb, preposition, noun].filter(Boolean).join(" ");
+  const { action, objectKind } = params;
+  const mood = params.mood ?? "imperative";
+  const locale = catalogLocaleOf(params.locale);
+  const verb = resolveActionLabel(action, mood, locale);
+  const kind =
+    objectKind && objectKind.toLowerCase() !== "entity" ? objectKind : null;
+  if (!kind) return verb;
+  const noun = resolveNoun(kind, locale);
+  if (!verb) return nounInSentence(noun.one);
+  const preposition = titlePreposition(action);
+  const key: keyof VocabularySentencesEn = `vocabulary.button.${mood}${
+    preposition ? (`.${preposition}` as const) : ""
+  }`;
+  return looseSentence(sentences(locale))(key, {
+    verb,
+    ...nounParams(noun),
+  });
 }
 
 /**
@@ -1191,7 +1460,7 @@ export function resolveProposalKindLabel(
  *     real distinction, the same way collapsing the two verb moods would.
  * Adopt this table only where the value really is an object lifecycle state.
  */
-export const STATUS_LABELS: Readonly<Record<string, string>> = {
+const STATUS_LABEL_ROWS = {
   // proposal lifecycle
   pending: "Pending",
   approved: "Approved",
@@ -1396,15 +1665,29 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   // read "Wont fix" — no apostrophe. `open` / `investigating` / `fixed`
   // humanize correctly and need no row.
   wont_fix: "Won't fix",
-};
+} satisfies Readonly<Record<string, string>>;
+
+export const STATUS_LABELS: Readonly<Record<string, string>> =
+  STATUS_LABEL_ROWS;
+
+/** The status rows, exactly typed: the keys of the `status.*` catalog. */
+export type StatusLabelRows = typeof STATUS_LABEL_ROWS;
 
 /**
  * The human label for a lifecycle status. Unknown values humanize rather than
  * leak, so a new DB enum value can never render as a raw token.
  */
-export function resolveStatusLabel(status: string | null | undefined): string {
+export function resolveStatusLabel(
+  status: string | null | undefined,
+  locale?: Locale
+): string {
   if (!status) return "";
-  return STATUS_LABELS[status.toLowerCase()] ?? humanizeToken(status);
+  const key = status.toLowerCase();
+  if (!Object.hasOwn(STATUS_LABELS, key)) return humanizeToken(status);
+  return (
+    translatedWord(`status.${key}`, catalogLocaleOf(locale)) ??
+    STATUS_LABELS[key]!
+  );
 }
 
 /**
@@ -1867,11 +2150,14 @@ export function resolveWaitingOnReasonLabel(v: string | null | undefined) {
  * (`resolveActionLabel(move.verb)`).
  */
 export function resolveTrackMoveLabel(
-  status: string | null | undefined
+  status: string | null | undefined,
+  locale?: Locale
 ): string {
   const word = resolveTrackStatusLabel(status);
   return word
-    ? `${ACTION_VERBS.move!.imperative} to ${word.toLowerCase()}`
+    ? sentences(catalogLocaleOf(locale))("vocabulary.track.moveTo", {
+        status: word.toLowerCase(),
+      })
     : "";
 }
 
@@ -2325,9 +2611,7 @@ export function resolveBlockedReasonIcon(
  * recorded no reason as `owed`. `[singular, plural]`, lower case: the noun
  * sits after a number, mid-phrase.
  */
-export const NEEDS_YOU_ITEM_NOUNS: Readonly<
-  Record<string, readonly [string, string]>
-> = {
+const NEEDS_YOU_ITEM_NOUN_ROWS = {
   decision: ["decision", "decisions"],
   physical: ["action", "actions"],
   credential: ["credential", "credentials"],
@@ -2339,21 +2623,39 @@ export const NEEDS_YOU_ITEM_NOUNS: Readonly<
   owed: ["thing", "things"],
   /** The Inbox's routine bucket — a batch of reversible routine changes (`needsYouBuckets`). */
   routine: ["routine change", "routine changes"],
-};
+} satisfies Readonly<Record<string, readonly [string, string]>>;
+
+export const NEEDS_YOU_ITEM_NOUNS: Readonly<
+  Record<string, readonly [string, string]>
+> = NEEDS_YOU_ITEM_NOUN_ROWS;
+
+/** The needs-you count rows, exactly typed: the keys of `needsYou.count.*`. */
+export type NeedsYouItemNounRows = typeof NEEDS_YOU_ITEM_NOUN_ROWS;
 
 /**
- * "<n> <noun>" for one needs-you item kind — singular at 1. An unknown kind
- * humanizes (lower-cased, plural by the fallback rule), never leaks.
+ * "<n> <noun>" for one needs-you item kind, through its plural message
+ * (`needsYou.count.<kind>`: "1 decision", "3 decisions"; French "0 décision").
+ * An unknown kind humanizes (lower-cased, English suffix rules), never leaks.
  */
 export function resolveNeedsYouItemCount(
   kind: string | null | undefined,
-  n: number
+  n: number,
+  locale?: Locale
 ): string {
+  const loc = catalogLocaleOf(locale);
   const key = (kind ?? "owed").trim().toLowerCase();
-  const nouns = NEEDS_YOU_ITEM_NOUNS[key];
-  if (nouns) return `${n} ${n === 1 ? nouns[0] : nouns[1]}`;
+  if (Object.hasOwn(NEEDS_YOU_ITEM_NOUNS, key)) {
+    return vocabularyT(loc)(
+      `needsYou.count.${key as keyof NeedsYouItemNounRows}`,
+      { n }
+    );
+  }
   const noun = humanizeToken(key).toLowerCase();
-  return `${n} ${n === 1 ? noun : pluralizeFallback(noun)}`;
+  return sentences(loc)("vocabulary.needsYou.count.uncurated", {
+    n,
+    noun,
+    nouns: pluralizeFallback(noun),
+  });
 }
 
 /**
@@ -2596,13 +2898,15 @@ export function resolveNotificationRoutingRuleLabel(
  * is lowered unless it opens an acronym ("API key" stays "API key").
  */
 export function resolvePrivateObjectLabel(
-  kind: string | null | undefined
+  kind: string | null | undefined,
+  locale?: Locale
 ): string {
-  const noun = resolveObjectNoun(kind) || "item";
-  const lowered = /^[A-Z]{2}/.test(noun)
-    ? noun
-    : noun.charAt(0).toLowerCase() + noun.slice(1);
-  return `Private ${lowered}`;
+  const t = sentences(catalogLocaleOf(locale));
+  if (!kind) return t("vocabulary.private.unnamed");
+  return t(
+    "vocabulary.private",
+    nounParams(resolveNoun(kind, catalogLocaleOf(locale)))
+  );
 }
 
 /**
@@ -2616,10 +2920,15 @@ export function resolvePrivateObjectLabel(
  * The noun comes from {@link resolveObjectNoun}, like the private placeholder.
  */
 export function resolveMembersDecideLabel(
-  kind: string | null | undefined
+  kind: string | null | undefined,
+  locale?: Locale
 ): string {
-  const noun = resolveObjectNoun(kind) || "Item";
-  return `${noun} members decide`;
+  const t = sentences(catalogLocaleOf(locale));
+  if (!kind) return t("vocabulary.membersDecide.unnamed");
+  return t(
+    "vocabulary.membersDecide",
+    nounParams(resolveNoun(kind, catalogLocaleOf(locale)))
+  );
 }
 
 /**
@@ -2631,10 +2940,11 @@ export function resolveMembersDecideLabel(
  */
 export function resolveHandedToLabel(
   agentType: string,
-  displayName?: string | null
+  displayName?: string | null,
+  locale?: Locale
 ): string {
   const name = displayName?.trim() || humanizeToken(agentType);
-  return `Handed to ${name}`;
+  return sentences(catalogLocaleOf(locale))("vocabulary.handedTo", { name });
 }
 
 // ─── The one-line aim of a sitting (decision D3, 2026-10-23) ────────────────
@@ -2738,10 +3048,15 @@ export function resolveTrustRungLabel(
  */
 export function resolveNextRungOfferLabel(
   to: string | null | undefined,
-  reach?: "space" | "pod" | null
+  reach?: "space" | "pod" | null,
+  locale?: Locale
 ): string {
   const offer = resolveTrustRungLabel(to, "offer");
-  return offer && reach === "pod" ? `${offer} in every space` : offer;
+  return offer && reach === "pod"
+    ? sentences(catalogLocaleOf(locale))("vocabulary.offer.everySpace", {
+        offer,
+      })
+    : offer;
 }
 
 /**
@@ -3002,4 +3317,41 @@ export function resolveAgentBindingErrorLabel(
     (AGENT_BINDING_ERROR_LABELS as Readonly<Record<string, string>>)[code] ??
     "Connector broken"
   );
+}
+
+// ─── The catalogs (`@synap-core/types/i18n`) ─────────────────────────────────
+
+/**
+ * The vocabulary's English catalog, derived from the tables above (keys =
+ * their tokens) plus the door's sentences. The source and the type of
+ * {@link vocabularyCatalogs}' other locales.
+ */
+export const vocabularyEn = buildVocabularyEn({
+  kinds: OBJECT_KINDS,
+  nouns: OBJECT_NOUNS,
+  nounPlurals: OBJECT_NOUN_PLURALS,
+  verbs: ACTION_VERBS,
+  statuses: STATUS_LABELS,
+  needsYouNouns: NEEDS_YOU_ITEM_NOUNS,
+});
+
+/** Every locale's vocabulary catalog, for `createT` and the parity test. */
+export const vocabularyCatalogs = {
+  en: vocabularyEn,
+  fr: vocabularyFr,
+} as const;
+
+export type { NounSlug, VocabularyEn } from "./catalog.en.js";
+export type { Noun, NounGender, NounParams } from "../i18n/noun.js";
+
+const vocabularyTranslators = new Map<Locale, TFunction<VocabularyEn>>();
+
+/** The whole vocabulary catalog's translator for `locale` (memoised per locale). */
+function vocabularyT(locale: Locale): TFunction<VocabularyEn> {
+  let t = vocabularyTranslators.get(locale);
+  if (!t) {
+    t = createT(locale, vocabularyCatalogs);
+    vocabularyTranslators.set(locale, t);
+  }
+  return t;
 }

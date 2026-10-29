@@ -102,3 +102,49 @@ describe("catalogProblems", () => {
     ).toEqual([]);
   });
 });
+
+describe("catalogProblems: the noun bundle is one argument", () => {
+  const en = {
+    deleted: "Deleted {obj}",
+    counted: "{n, plural, one {# {obj}} other {# {objs}}}",
+    plain: "Saved",
+  };
+
+  it("lets a translation read any member when English reads one", () => {
+    expect(
+      catalogProblems({
+        en,
+        fr: {
+          deleted:
+            "{objG, select, f {{Obj} supprimée} m {{Obj} supprimé} other {Élément supprimé : {obj}}}",
+          counted:
+            "{n, plural, one {# {obj}} other {{objV, select, yes {# {objs}} other {# {objs}}}}}",
+          plain: "Enregistré",
+        },
+      })
+    ).toEqual([]);
+  });
+
+  it("still names a translation that drops the noun, or adds one English lacks", () => {
+    const problems = catalogProblems({
+      en,
+      fr: {
+        deleted: "Supprimé",
+        counted: "{n, plural, one {# élément} other {# éléments}}",
+        plain: "{Obj} enregistré",
+      },
+    }).map((p) => `${p.key} ${p.problem}`);
+    expect(problems.sort()).toEqual(
+      ["counted arguments", "deleted arguments", "plain arguments"].sort()
+    );
+  });
+
+  it("keeps a counted argument counted beside the bundle", () => {
+    expect(
+      catalogProblems({
+        en,
+        fr: { ...en, counted: "{n} {objs}" },
+      }).map((p) => `${p.key} ${p.problem}`)
+    ).toEqual(["counted arguments"]);
+  });
+});

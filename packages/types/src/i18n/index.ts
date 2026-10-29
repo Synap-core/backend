@@ -10,6 +10,10 @@
  * - `Catalog`, `createT`: typed catalogs where English is the source and the
  *   type, and params are checked against the English message text;
  * - `catalogProblems`: parity checks for a catalog test;
+ * - `Noun`, `NounParams`: a noun with its grammar, and the bundle of params a
+ *   sentence reads it through (`obj`, `Obj`, `objs`, `objG`, `objV`);
+ * - `ambientCatalogLocale` / `setAmbientCatalogLocale`: the language code
+ *   outside React reads with no `locale` argument; set by client hosts only;
  * - `pseudoLocalize`: a pseudo-locale for leak and overflow checks.
  *
  * Content (what people and agents write) is never translated: only chrome
@@ -39,6 +43,13 @@ export {
   type ParamValue,
 } from "./message.js";
 export type { ParamsArgs, ParamsOf } from "./params.js";
+export {
+  NOUN_BUNDLE_MEMBERS,
+  type Noun,
+  type NounGender,
+  type NounParams,
+} from "./noun.js";
+export { ambientCatalogLocale, setAmbientCatalogLocale } from "./ambient.js";
 export {
   catalogProblems,
   createT,
