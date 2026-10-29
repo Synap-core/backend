@@ -53,7 +53,8 @@ permissions:
 # go"): the `changes` job reads what a pull request touched and turns off what
 # it cannot affect — a draft runs no suites, a negctl/* branch runs only its own
 # test files ("Targeted tests"), a docs-only change runs nothing, and the Docker
-# build + deploy tests run only when an image-relevant path changed.
+# build + deploy tests run only when a path the image is made of changed
+# (IMAGE_INPUTS; always on a push to main, and before every release).
 # THREE TIERS (founder, 2026-10-29, "One trunk, three CI tiers"): a pull
 # request runs the tests of what it can break (the touched packages, their
 # workspace dependents, the tests that read them by path, every tripwire;
@@ -102,6 +103,7 @@ jobs:
     outputs:
       gate: ${{ steps.decide.outputs.gate }}
       image: ${{ steps.decide.outputs.image }}
+      image_reason: ${{ steps.decide.outputs.image_reason }}
       suites: ${{ steps.decide.outputs.suites }}
       scope: ${{ steps.decide.outputs.scope }}
       affected: ${{ steps.decide.outputs.affected }}
@@ -214,9 +216,11 @@ jobs:
   #                                         migrate, schema, build, boot,
   #                                         smoke, schema hash (Postgres)
   #   Release gate: deploy tests            deploy/__tests__ + pod-agent (no
-  #                                         install); only when image-relevant
+  #                                         install); "Not affected" unless
+  #                                         an IMAGE_INPUTS path changed
   #   Release gate: Docker image            build + image smoke (no install);
-  #                                         only when image-relevant
+  #                                         "Not affected" unless an
+  #                                         IMAGE_INPUTS path changed
   #   Release gate (judge)                  fails unless every sub-job it needs
   #                                         succeeded (scripts/ci/release-gate-judge.mjs)
   # Every step of the old job is in exactly one sub-job, under its old name
@@ -402,85 +406,95 @@ jobs:
           key: ${{ steps.setup.outputs.turbo-cache-key }}
 
   # Deploy safety tripwires (daemon-free). pgdata-safety guards the
+  # THE IMAGE JOBS (founder, 2026-10-29, decision ffaafe15: "image checks
+  # move to the nightly"). The deploy tests and the Docker image run on every
+  # push to main (and develop, release/**), and on a pull request or a queue
+  # entry only when it touches what the image or the deploy tests are made of
+  # (scripts/ci-changes.mjs IMAGE_INPUTS: Dockerfile*, deploy/**, the
+  # lockfile and manifests, packages/database/**, skills/, the skill runner,
+  # ...). Every release runs them again before it is built
+  # (docker-publish.yml release-checks and build-and-push-backend-api). Until
+  # then every PR touching anything but application source paid ~10 min of
+  # runner for them. Whenever the gate runs these two jobs RUN: when the
+  # change does not need them they pass through their "Not affected" step,
+  # which names why in the run's summary, and the judge requires `success`
+  # from every sub-job (a skipped sub-job is red, #441).
+  #
   # 2026-10-02 pod wipe: postgres data must live on its volume, every update
   # door must run the placement guard first, and backups must land on the
   # host. They guard what a release DOES to a pod, so they gate releases.
-  # bash, python3 and node only: no install, no layout (until 2026-10-29 they
-  # ran inside the single gate job, after its install, and read none of it).
+  # bash, python3 and node only: no install, no layout.
   gate-deploy:
     name: "Release gate: deploy tests"
     needs: [changes, preflight]
-    if: ${{ !cancelled() && needs.preflight.outputs.hold != 'true' && (needs.changes.result != 'success' || (needs.changes.outputs.gate == 'true' && needs.changes.outputs.image == 'true')) }}
+    if: ${{ !cancelled() && needs.preflight.outputs.hold != 'true' && (needs.changes.result != 'success' || needs.changes.outputs.gate == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # The image work runs (or `changes` failed, and then everything runs).
+      RUN_WORK: ${{ needs.changes.result != 'success' || needs.changes.outputs.image != 'false' }}
     steps:
+      - name: Not affected (nothing the deploy tests read changed)
+        if: ${{ needs.changes.result == 'success' && needs.changes.outputs.image == 'false' && needs.preflight.outputs.hold != 'true' }}
+        env:
+          REASON: ${{ needs.changes.outputs.image_reason }}
+        run: |
+          echo "Deploy tests not run: $REASON"
+          printf '### Release gate: deploy tests not affected\n\n%s.\n\nDecided by "What changed" (scripts/ci-changes.mjs IMAGE_INPUTS).\n' "$REASON" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Checkout Repository
+        if: ${{ env.RUN_WORK == 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - name: Setup Node
+        if: ${{ env.RUN_WORK == 'true' }}
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: ".node-version"
 
       - name: Deploy safety tests
-        run: |
-          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
-          # EVERY deploy/__tests__/*.test.sh, derived by glob: a new test joins
-          # by existing. stdin is closed: a test that reads it would hang the job.
-          failed=""; n=0
-          for t in deploy/__tests__/*.test.sh; do
-            n=$((n+1)); echo "::group::$t"
-            bash "$t" </dev/null || failed="$failed $t"
-            echo "::endgroup::"
-          done
-          [ "$n" -ge 30 ] || { echo "::error::only $n deploy tests found (glob moved?)"; exit 1; }
-          node --test deploy/pod-agent/*.test.js || failed="$failed deploy/pod-agent"
-          [ -z "$failed" ] || { echo "::error::deploy tests failed:$failed"; exit 1; }
+        if: ${{ env.RUN_WORK == 'true' }}
+        run: bash scripts/ci/deploy-tests.sh
 
-  # The image smoke: in the BUILT image, the code-skill sandbox's native
-  # addon loads and runs an isolate. isolated-vm is resolved from @synap/api
-  # (the package that imports it), with the flag its README requires on
-  # Node >= 20, and the image's CMD must carry that flag too. The image is
+  # The image smoke (scripts/ci/image-smoke.sh): in the BUILT image the
+  # code-skill sandbox's native addon runs an isolate, the CMD carries
+  # --no-node-snapshot, and the skill runner's sandbox holds. The image is
   # built from a clean checkout, as docker-publish.yml builds it.
   gate-image:
     name: "Release gate: Docker image"
     needs: [changes, preflight]
-    if: ${{ !cancelled() && needs.preflight.outputs.hold != 'true' && (needs.changes.result != 'success' || (needs.changes.outputs.gate == 'true' && needs.changes.outputs.image == 'true')) }}
+    if: ${{ !cancelled() && needs.preflight.outputs.hold != 'true' && (needs.changes.result != 'success' || needs.changes.outputs.gate == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # The image work runs (or `changes` failed, and then everything runs).
+      RUN_WORK: ${{ needs.changes.result != 'success' || needs.changes.outputs.image != 'false' }}
     steps:
+      - name: Not affected (nothing the image is made of changed)
+        if: ${{ needs.changes.result == 'success' && needs.changes.outputs.image == 'false' && needs.preflight.outputs.hold != 'true' }}
+        env:
+          REASON: ${{ needs.changes.outputs.image_reason }}
+        run: |
+          echo "Docker image not built: $REASON"
+          printf '### Release gate: Docker image not affected\n\n%s.\n\nDecided by "What changed" (scripts/ci-changes.mjs IMAGE_INPUTS).\n' "$REASON" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Checkout Repository
+        if: ${{ env.RUN_WORK == 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Test Docker Build
+        if: ${{ env.RUN_WORK == 'true' }}
         run: |
           docker build -t synap-backend:test -f deploy/Dockerfile .
-          docker run --rm synap-backend:test node --version
-          docker run --rm synap-backend:test node --no-node-snapshot -e '
-            const { realpathSync } = require("node:fs");
-            const { createRequire } = require("node:module");
-            const req = createRequire(realpathSync("node_modules/@synap/api/package.json"));
-            const ivm = req("isolated-vm");
-            const isolate = new ivm.Isolate({ memoryLimit: 16 });
-            const out = isolate.compileScriptSync("6 * 7").runSync(isolate.createContextSync());
-            if (out !== 42) throw new Error("isolate returned " + out);
-            console.log("isolated-vm " + req("isolated-vm/package.json").version + " ran an isolate on node " + process.version);
-          '
-          cmd=$(docker inspect --format '{{json .Config.Cmd}}' synap-backend:test)
-          echo "CMD: $cmd"
-          echo "$cmd" | grep -q -- '--no-node-snapshot' || { echo "::error::deploy/Dockerfile CMD lacks --no-node-snapshot (isolated-vm requires it on Node >= 20)"; exit 1; }
-          # The runner the API's pool starts carries the Node permission model,
-          # runs a skill under it, and is refused a file write, a process and
-          # the API's environ (review F12; no suite runs the BUILT runner).
-          docker run --rm -v "$PWD/scripts/skill-runner-sandbox-smoke.mjs:/smoke/skill-runner-sandbox-smoke.mjs:ro" \
-            synap-backend:test node --no-node-snapshot /smoke/skill-runner-sandbox-smoke.mjs
+          bash scripts/ci/image-smoke.sh synap-backend:test
           docker rmi synap-backend:test
 
   # The judge: the ONE check named "Release gate". It runs whenever the gate
   # is due (same condition as the single job had) and fails unless every
-  # sub-job it needs ended `success`; the deploy tests and the image only
-  # when the change is image-relevant, and then they too must succeed. A
-  # sub-job that failed, was cancelled (a timeout), or was skipped while
-  # required is red here (scripts/ci/release-gate-judge.mjs reads `needs`
+  # sub-job it needs ended `success` (the image jobs too: when the change
+  # does not need them they succeed through their "Not affected" step). A
+  # sub-job that failed, was cancelled (a timeout), or was skipped is red
+  # here (scripts/ci/release-gate-judge.mjs reads `needs`
   # whole, so a sub-job added to `needs:` is required by existing).
   # `!cancelled()`, not `always()`: a superseded (cancelled) run then starts
   # no runner just to report red, and its "Release gate" is not a success
@@ -539,10 +553,6 @@ jobs:
         if: ${{ env.RUN_WORK == 'true' }}
         env:
           NEEDS: ${{ toJSON(needs) }}
-          # The jobs that run only for an image-relevant change, and whether
-          # this change is one (the same condition their `if:` reads).
-          IMAGE_JOBS: gate-deploy gate-image
-          IMAGE_DUE: ${{ needs.changes.result != 'success' || needs.changes.outputs.image == 'true' }}
         run: node scripts/ci/release-gate-judge.mjs
 
   # The Full suite: 4 shard jobs run the tests, one judge job ("Full suite", the

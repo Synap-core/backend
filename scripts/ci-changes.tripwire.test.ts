@@ -6,9 +6,9 @@
  * skipped tier only through an explicit, logged "Not affected" step.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error — plain ESM script, no declarations
@@ -20,7 +20,7 @@ import {
   TESTED_STEP,
   decide,
   isDocsOnly,
-  isImageNeutral,
+  isImageInput,
   queuePrNumber,
   reusableRun,
   suitesPassed,
@@ -83,30 +83,224 @@ describe("ci-changes: every check runs unless a narrow match says otherwise", ()
     expect(d.reason).toContain("could not be read");
   });
 
-  it("an application source change skips only the image steps", () => {
-    const d = pr([
-      "packages/api/src/routers/x.ts",
-      "packages/api/src/routers/x.test.ts",
-    ]);
-    expect([d.gate, d.image, d.suites]).toEqual([true, false, true]);
+  // The image tiers (founder, 2026-10-29, decision ffaafe15): a PR or a
+  // queue entry runs the Docker image and the deploy tests only when it
+  // touches what they are made of; a push to main always does (the push row
+  // above). Each row is one the old deny-list (IMAGE_NEUTRAL) or an
+  // always-on rule decides differently.
+  it("a source-only PR: no image (application source, its tests, a CI script, a tsconfig)", () => {
+    for (const files of [
+      ["packages/api/src/routers/x.ts", "packages/api/src/routers/x.test.ts"],
+      // Not application source: the old deny-list ran the image for these.
+      ["scripts/ci/affected.mjs"],
+      ["packages/api/tsconfig.json"],
+      ["scripts/smoke-test.sh"],
+    ]) {
+      const d = pr(files);
+      expect([d.gate, d.image, d.suites], files.join()).toEqual([
+        true,
+        false,
+        true,
+      ]);
+      expect(d.reason).toContain("Docker image and deploy tests not affected");
+      expect(d.imageWhy).toContain("IMAGE_INPUTS");
+    }
   });
 
-  it("anything image-relevant keeps the image steps", () => {
+  it("a Dockerfile, a lockfile or anything else the image is made of: the image", () => {
     for (const f of [
       "deploy/Dockerfile",
+      "apps/pod-admin/Dockerfile",
+      ".dockerignore",
       "pnpm-lock.yaml",
+      "package.json",
       "packages/api/package.json",
       "packages/database/migrations/0400_x.sql",
       "packages/database/src/schema/x.ts",
       "packages/api/src/services/skills/runner/index.ts",
-      "packages/api/tsup.config.ts",
+      "packages/api/tsup.provision.config.ts",
+      "skills/synap/SKILL.md",
+      "kratos/kratos.yml",
+      "deploy/__tests__/x.test.sh",
       "synap",
-      "scripts/smoke-test.sh",
+      "scripts/skill-runner-sandbox-smoke.mjs",
+      "scripts/ci/image-smoke.sh",
       ".github/workflows/ci.yml",
+      ".github/workflows/docker-publish.yml",
     ]) {
-      expect(isImageNeutral(f), f).toBe(false);
-      expect(pr(["packages/api/src/x.ts", f]).image, f).toBe(true);
+      expect(isImageInput(f), f).toBe(true);
+      const d = pr(["packages/api/src/x.ts", f]);
+      expect(d.image, f).toBe(true);
+      expect(d.imageWhy, f).toBe("");
     }
+  });
+
+  it("unknown changed files and every push run the image", () => {
+    expect(pr(null).image).toBe(true);
+    for (const event of ["push", "workflow_dispatch", "schedule"])
+      expect(
+        decide({
+          event,
+          headRef: "main",
+          draft: false,
+          files: ["packages/api/src/x.ts"],
+          siblingTests: none,
+          tier,
+        }).image,
+        event
+      ).toBe(true);
+  });
+
+  it("a merge-queue entry follows the same rule, in the light run and in the tier", () => {
+    const q = (files: string[] | null, suitesPassed: boolean) =>
+      decide({
+        event: "merge_group",
+        headRef: "",
+        draft: false,
+        files,
+        siblingTests: none,
+        tier,
+        queue: { pr: 480, headSha: "fc6b05901", suitesPassed, reuse: null },
+      });
+    for (const passed of [true, false]) {
+      expect(q(["packages/api/src/x.ts"], passed).image, `${passed}`).toBe(
+        false
+      );
+      expect(q(["packages/api/src/x.ts"], passed).reason).toContain(
+        "not affected"
+      );
+      expect(q(["deploy/Dockerfile"], passed).image, `${passed}`).toBe(true);
+      expect(q(["pnpm-lock.yaml"], passed).image, `${passed}`).toBe(true);
+      expect(q(null, passed).image, `${passed}`).toBe(true);
+    }
+  });
+
+  // DERIVED: what deploy/Dockerfile copies and builds, and every repo path a
+  // deploy test reads, must be an image input. A new COPY or a new
+  // "$HERE/<path>" in a deploy test joins the check by existing.
+  describe("IMAGE_INPUTS covers what the image and the deploy tests read", () => {
+    const dockerfile = readFileSync(join(REPO, "deploy/Dockerfile"), "utf8");
+    // `x/*` → `x/x`: a sample path under a glob.
+    const sample = (p: string) => p.replace(/\*/g, "x");
+
+    it("every source deploy/Dockerfile copies, the manifests it reads and the configs it builds", () => {
+      const sources: string[] = [];
+      for (const m of dockerfile.matchAll(/^COPY (.+)$/gm)) {
+        const words = m[1].split(/\s+/).filter((w) => !w.startsWith("--"));
+        const from = /--from=(\w+)/.exec(m[1])?.[1];
+        for (const w of words.slice(0, -1)) {
+          if (w === ".") continue; // the whole context: built, then copied
+          if (from === "manifests") continue; // the stage below
+          const path = from ? w.replace(/^\/app\//, "") : w;
+          // Build outputs of `pnpm turbo build`, `pnpm deploy`: their inputs
+          // are application source, which the Build step already checks.
+          if (
+            /(^|\/)dist(\/|$)/.test(path) ||
+            /^deploy\/(api|realtime)$/.test(path)
+          )
+            continue;
+          sources.push(path);
+        }
+      }
+      const manifests = /for f in ([^;]+); do/.exec(dockerfile)?.[1] ?? "";
+      sources.push(...manifests.split(/\s+/).filter(Boolean));
+      for (const m of dockerfile.matchAll(/--config ([\w./-]+)/g))
+        sources.push(`packages/api/${m[1]}`);
+      // Non-vacuity: the scan still sees a literal sample of each form.
+      expect(sources).toEqual(
+        expect.arrayContaining([
+          "pnpm-lock.yaml",
+          "kratos",
+          "packages/database/migrations/*.sql",
+          "skills",
+          "apps/*/package.json",
+          "packages/api/tsup.provision.config.ts",
+        ])
+      );
+      for (const src of sources) {
+        const path = sample(src);
+        const isDir =
+          existsSync(join(REPO, path)) &&
+          statSync(join(REPO, path)).isDirectory();
+        const probe = isDir ? `${path}/x` : path;
+        expect(isImageInput(probe), `${src} (deploy/Dockerfile)`).toBe(true);
+      }
+    });
+
+    it("every repo path a deploy test reads", () => {
+      const tests = execFileSync(
+        "git",
+        ["ls-files", "deploy/__tests__/*.test.sh"],
+        {
+          cwd: REPO,
+          encoding: "utf8",
+        }
+      )
+        .split("\n")
+        .filter(Boolean);
+      expect(tests.length).toBeGreaterThanOrEqual(30);
+      const read = new Map<string, string>();
+      for (const t of tests) {
+        const src = readFileSync(join(REPO, t), "utf8");
+        for (const m of src.matchAll(
+          /\$\{?HERE\}?\/([A-Za-z0-9_.][A-Za-z0-9_./-]*)/g
+        )) {
+          const rel = m[1].replace(/\/$/, "");
+          // HERE is the repo root in most tests, deploy/ in a few.
+          for (const base of ["", "deploy/"]) {
+            const path = normalize(`${base}${rel}`).replace(/\/$/, "");
+            if (path.startsWith("..")) continue; // a sibling repo
+            if (existsSync(join(REPO, path)) && !read.has(path))
+              read.set(path, t);
+          }
+        }
+      }
+      // Non-vacuity: paths outside deploy/ that tests are known to read.
+      expect([...read.keys()]).toEqual(
+        expect.arrayContaining([
+          "synap",
+          "kratos",
+          "apps/api/src/index.ts",
+          "scripts/check-migrations-forward-only.mjs",
+          ".github/workflows/docker-publish.yml",
+          "packages/api/src/services/skills/runner",
+        ])
+      );
+      // A directory a test reads under a NAME it computes ("$HERE/<dir>/$x").
+      // What it reads there is pinned by the rows below, not by the scan.
+      const COMPUTED_UNDER: Record<string, string[]> = {
+        // install-manifest-signature: the workflow named in the signer identity.
+        ".github/workflows": [".github/workflows/docker-publish.yml"],
+        // kratos-recovery-config: `for page in recovery settings/security`.
+        "apps/pod-admin/app": [
+          "apps/pod-admin/app/recovery/page.tsx",
+          "apps/pod-admin/app/settings/security/page.tsx",
+        ],
+      };
+      // NOT COVERED, on purpose (measured): caddy-routes greps the WHOLE API
+      // source for a header neither caddy nor the API may send
+      // (X-XSS-Protection). Making apps/api/src an image input would run the
+      // image for most PRs; a PR that adds that header is caught by main's
+      // post-merge run and before any release.
+      const SCANS_SOURCE: Record<string, string> = {
+        "apps/api/src": "deploy/__tests__/caddy-routes.test.sh",
+      };
+      for (const [path, test] of read) {
+        if (COMPUTED_UNDER[path]) {
+          for (const f of COMPUTED_UNDER[path])
+            expect(isImageInput(f), `${f} (${test})`).toBe(true);
+          continue;
+        }
+        if (SCANS_SOURCE[path]) {
+          expect(test).toBe(SCANS_SOURCE[path]);
+          continue;
+        }
+        const probe = statSync(join(REPO, path)).isDirectory()
+          ? `${path}/x`
+          : path;
+        expect(isImageInput(probe), `${path} (read by ${test})`).toBe(true);
+      }
+    });
   });
 
   it("a draft runs the Release gate, not the suites, and holds the suite checks red", () => {
@@ -906,6 +1100,15 @@ describe("ci-changes: holds never read as passed", () => {
         key
       ).toBe(true);
     expect(ready.out).toEqual(expect.arrayContaining(["draft_hold=false"]));
+    // An empty diff touches nothing the image is made of: the image jobs pass
+    // through "Not affected", with the reason they print.
+    expect(ready.out).toEqual(expect.arrayContaining(["image=false"]));
+    expect(ready.out.find((l) => l.startsWith("image_reason="))).toContain(
+      "IMAGE_INPUTS"
+    );
+    expect(ready.summary).toContain(
+      "| Docker image + deploy tests | not affected"
+    );
     expect(ready.summary).toContain("### What this run checks");
   });
 });
@@ -1004,6 +1207,9 @@ describe("ci.yml: every required check runs, and passes a skipped tier only out 
   it("the changes job exports hold and passes the base ref", () => {
     const changes = jobs.find((j) => j.name === "What changed");
     expect(changes?.block).toContain("hold: ${{ steps.decide.outputs.hold }}");
+    expect(changes?.block).toContain(
+      "image_reason: ${{ steps.decide.outputs.image_reason }}"
+    );
     expect(changes?.block).toContain("BASE_REF: ${{ github.base_ref }}");
   });
 

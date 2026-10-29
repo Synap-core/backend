@@ -18,7 +18,6 @@ import { judge } from "./release-gate-judge.mjs";
 
 const REPO = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..");
 const SCRIPT = join(REPO, "scripts/ci/release-gate-judge.mjs");
-const IMAGE_JOBS = ["gate-deploy", "gate-image"];
 
 const needs = (r: Record<string, string>) =>
   Object.fromEntries(
@@ -38,86 +37,55 @@ const noImage = { ...green, "gate-deploy": "skipped", "gate-image": "skipped" };
 
 describe("release-gate-judge: the verdict", () => {
   it.each([
-    ["every sub-job green, image due", green, true, true],
-    ["image jobs skipped, image not due", noImage, false, true],
-    ["image jobs green although not due", green, false, true],
+    // A change that does not need the image: its jobs succeed through their
+    // "Not affected" step, so the judge sees `success` (ci.yml).
+    ["every sub-job green", green, true],
     // Each red row rules out a looser rule ("not failure", "success or skipped").
-    ["lint failed", { ...green, "gate-lint": "failure" }, true, false],
+    // Until 2026-10-29 the judge passed a skipped image job when the image was
+    // not due: a skip read as a pass (decision ffaafe15).
+    ["image jobs skipped", noImage, false],
+    ["deploy tests skipped", { ...green, "gate-deploy": "skipped" }, false],
+    ["lint failed", { ...green, "gate-lint": "failure" }, false],
     [
       "build cancelled (a timeout)",
       { ...green, "gate-build": "cancelled" },
-      true,
       false,
     ],
-    [
-      "build skipped (always due)",
-      { ...noImage, "gate-build": "skipped" },
-      false,
-      false,
-    ],
-    [
-      "image skipped while due",
-      { ...green, "gate-image": "skipped" },
-      true,
-      false,
-    ],
-    [
-      "deploy failed while not due",
-      { ...noImage, "gate-deploy": "failure" },
-      false,
-      false,
-    ],
-    ["a sub-job with no result", { ...green, "gate-lint": "" }, true, false],
-  ])("%s", (_label, results, imageDue, ok) => {
-    expect(
-      judge({ needs: needs(results), imageJobs: IMAGE_JOBS, imageDue }).ok
-    ).toBe(ok);
+    ["build skipped", { ...green, "gate-build": "skipped" }, false],
+    ["deploy failed", { ...green, "gate-deploy": "failure" }, false],
+    ["a sub-job with no result", { ...green, "gate-lint": "" }, false],
+  ])("%s", (_label, results, ok) => {
+    expect(judge({ needs: needs(results) }).ok).toBe(ok);
   });
 
   it("the deciders' results are not the gate's: a crashed preflight holds nothing", () => {
     expect(
       judge({
         needs: needs({ ...green, preflight: "failure", changes: "failure" }),
-        imageJobs: IMAGE_JOBS,
-        imageDue: true,
       }).ok
     ).toBe(true);
   });
 
-  it("never a vacuous pass: no sub-job, one sub-job, or an IMAGE_JOBS name not in needs", () => {
-    expect(judge({ needs: needs({}), imageJobs: [], imageDue: false }).ok).toBe(
-      false
-    );
-    expect(
-      judge({
-        needs: needs({ "gate-build": "success" }),
-        imageJobs: [],
-        imageDue: false,
-      }).ok
-    ).toBe(false);
-    expect(
-      judge({
-        needs: needs({ "gate-lint": "success", "gate-build": "success" }),
-        imageJobs: ["gate-image"],
-        imageDue: false,
-      }).ok
-    ).toBe(false);
+  it("never a vacuous pass: no sub-job, or one sub-job", () => {
+    expect(judge({ needs: needs({}) }).ok).toBe(false);
+    expect(judge({ needs: needs({ "gate-build": "success" }) }).ok).toBe(false);
   });
 
   it("the script reads the needs context and exits 1 on red, 0 on green (the seam ci.yml runs)", () => {
-    const run = (r: Record<string, string>, due: string) =>
+    const run = (
+      r: Record<string, string>,
+      extra: Record<string, string> = {}
+    ) =>
       spawnSync("node", [SCRIPT], {
-        env: {
-          ...process.env,
-          NEEDS: JSON.stringify(needs(r)),
-          IMAGE_JOBS: IMAGE_JOBS.join(" "),
-          IMAGE_DUE: due,
-        },
+        env: { ...process.env, NEEDS: JSON.stringify(needs(r)), ...extra },
         encoding: "utf8",
       });
-    expect(run(green, "true").status).toBe(0);
-    expect(run(noImage, "false").status).toBe(0);
-    const red = run({ ...green, "gate-image": "skipped" }, "true");
+    expect(run(green).status).toBe(0);
+    // The retired IMAGE_DUE no longer excuses a skip, whatever it says.
+    const red = run(noImage, {
+      IMAGE_JOBS: "gate-deploy gate-image",
+      IMAGE_DUE: "false",
+    });
     expect(red.status).toBe(1);
     expect(red.stdout).toContain("RED  gate-image: skipped");
     expect(
@@ -171,19 +139,41 @@ describe("release-gate-judge: ci.yml wiring", () => {
     );
   });
 
-  it("IMAGE_JOBS is exactly the parts that run only for an image-relevant change", () => {
-    const imageParts = parts
-      .filter((p) => p.if.includes("needs.changes.outputs.image == 'true'"))
-      .map((p) => p.id)
-      .sort();
-    expect(imageParts.length).toBeGreaterThan(0);
-    const declared =
-      /IMAGE_JOBS: (.+)$/m.exec(judgeJob?.block ?? "")?.[1] ?? "";
-    expect(declared.split(/\s+/).filter(Boolean).sort()).toEqual(imageParts);
-    // IMAGE_DUE reads the same condition the parts' `if:` reads.
-    expect(judgeJob?.block).toContain(
-      "IMAGE_DUE: ${{ needs.changes.result != 'success' || needs.changes.outputs.image == 'true' }}"
-    );
+  // DERIVED: the parts whose work depends on the image decision.
+  const imageParts = parts.filter((p) =>
+    p.block.includes("needs.changes.outputs.image")
+  );
+
+  it("no part is skipped by the image decision: it runs and says `Not affected` (#441)", () => {
+    expect(imageParts.map((p) => p.id).sort()).toEqual([
+      "gate-deploy",
+      "gate-image",
+    ]);
+    for (const p of parts)
+      expect(p.if, p.id).not.toContain("needs.changes.outputs.image");
+    expect(judgeJob?.block).not.toMatch(/IMAGE_(JOBS|DUE)/);
+    for (const p of imageParts) {
+      expect(p.block, p.id).toContain(
+        "RUN_WORK: ${{ needs.changes.result != 'success' || needs.changes.outputs.image != 'false' }}"
+      );
+      const steps = (p.block.split(/^ {4}steps:\n/m)[1] ?? "")
+        .split(/^ {6}- /m)
+        .slice(1);
+      // The first step is the logged pass, reached only by an explicit
+      // image=false from a successful `changes`.
+      expect(steps[0], p.id).toMatch(/^name: Not affected/);
+      expect(steps[0]).toContain(
+        "needs.changes.result == 'success' && needs.changes.outputs.image == 'false'"
+      );
+      expect(steps[0]).toContain("GITHUB_STEP_SUMMARY");
+      expect(steps[0]).not.toMatch(/exit [1-9]/);
+      // Every step after it does the work, and is gated on RUN_WORK.
+      expect(steps.length, p.id).toBeGreaterThan(1);
+      for (const s of steps.slice(1))
+        expect(s, `${p.id}: ${s.split("\n")[0]}`).toMatch(
+          /\n\s+if: \$\{\{ env\.RUN_WORK == 'true' \}\}\n/
+        );
+    }
   });
 
   it("every part runs when `changes` failed and stops for a preflight hold (fail-safe)", () => {

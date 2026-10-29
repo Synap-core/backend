@@ -14,6 +14,11 @@
  * Every output defaults to "run it". Only a positive, narrow match skips
  * anything: an unknown path, a failed `git diff` or a push to main checks
  * everything. ci.yml also runs every job when THIS job fails.
+ * ONE exception, on purpose (founder, 2026-10-29, decision ffaafe15): on a
+ * pull request or a queue entry the Docker image and the deploy tests run
+ * only for a positive match of IMAGE_INPUTS, so an unknown path does NOT run
+ * them there. They are not lost: every push to main runs them, and a release
+ * runs them again before it is built (docker-publish.yml).
  *
  * ── THREE TIERS (founder, 2026-10-29, "One trunk, three CI tiers") ──────────
  *   PR       Preflight, the Release gate, and the tests of what the change can
@@ -33,7 +38,8 @@
  *
  * ── THE MERGE QUEUE (founder, 2026-10-28: "light queue run", #428) ──────────
  * A queue entry re-checks what can break when PRs combine — the Release gate
- * (install, lint, typecheck, build, migrate, boot, image) — and takes the Full
+ * (install, lint, typecheck, build, migrate, boot; the image only when the
+ * entry touches IMAGE_INPUTS, since 2026-10-29) — and takes the Full
  * suite + API e2e from the PR's OWN run, but only when that run really ran
  * them: both checks concluded `success` on the PR's head commit (since
  * 2026-10-29 that run checked the PR's tier, not everything: main's
@@ -59,7 +65,9 @@
  *
  * ── OUTPUTS (GITHUB_OUTPUT) ──────────────────────────────────────────────────
  *   gate          Release gate runs           false: negctl branch, docs-only
- *   image         Docker build + deploy tests false: only image-neutral paths
+ *   image         Docker build + deploy tests false: a PR or queue entry
+ *                                             touching no IMAGE_INPUTS path
+ *   image_reason  image=false: why, for the jobs' "Not affected" step
  *   suites        the Full suite shards run   false: draft, stack, negctl,
  *                                             docs-only, a same-tree or a
  *                                             light queue entry
@@ -106,17 +114,48 @@ const DOCS_ONLY = [
   /^\.github\/pull_request_template\.md$/,
 ];
 
-// Paths that cannot change what the Docker image is or what the deploy tests
-// read: application source compiled by `pnpm build` (the gate's Build step
-// already fails a broken build) and test files. Everything else — deploy/,
-// Dockerfile, package.json, the lockfile, packages/database (its migrations
-// ship in the image and deploy tests read them), the skill runner the image
-// smoke runs — keeps the image steps on.
-const IMAGE_NEUTRAL = [
-  /^(apps|packages)\/(?!database\/)[^/]+\/src\/(?!services\/skills\/)/,
-  /\.test\.(ts|tsx|mts|mjs|js)$/,
-  /\/__tests__\//,
-  /\/__tripwires__\//,
+// What the Docker image and the deploy tests are made of (founder,
+// 2026-10-29, decision ffaafe15, finding 66c40812: "image checks move to the
+// nightly"). A pull request or a merge-queue entry builds and smoke-tests the
+// image ("Release gate: Docker image") and runs the deploy tests ("Release
+// gate: deploy tests") ONLY when it touches one of these paths. A push to
+// main, develop or a release branch always runs both (decide() returns
+// `all`), and every release re-runs them before it is built
+// (docker-publish.yml, job release-checks, and the image smoke in
+// build-and-push-backend-api), so a path this list misses is caught on main,
+// before any pod gets it. Until 2026-10-29 the list was the other way round
+// (IMAGE_NEUTRAL: application source and tests skipped, everything else ran
+// the image), which ran the image for a CI script, a README or a tsconfig.
+// Derived from, and pinned against (ci-changes.tripwire.test.ts):
+//   - deploy/Dockerfile: every COPY source (the lockfile, the workspace and
+//     turbo manifests, kratos/, the migrations, skills/), the manifests stage
+//     (every workspace package.json) and the tsup provision config it builds;
+//   - the image smoke (scripts/ci/image-smoke.sh): the skill runner and its
+//     sandbox smoke script;
+//   - every repo path a deploy test reads ("$HERE/<path>" in
+//     deploy/__tests__/*.test.sh), derived by the tripwire;
+//   - the files that define the image jobs themselves (ci.yml, the
+//     docker-publish workflow, the two scripts the jobs run).
+const IMAGE_INPUTS = [
+  /^deploy\//,
+  /(^|\/)Dockerfile[^/]*$/,
+  /(^|\/)\.dockerignore$/,
+  /^docker\//,
+  /^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|turbo\.json|\.npmrc)$/,
+  /^(apps|packages|marketplaces)\/[^/]+\/package\.json$/,
+  /^packages\/database\//,
+  /^packages\/api\/tsup\.provision\.config\.ts$/,
+  /^packages\/api\/src\/services\/skills\//,
+  /^kratos\//,
+  /^skills\//,
+  /^(synap|install\.sh)$/,
+  /^scripts\/(skill-runner-sandbox-smoke|check-migrations-forward-only|release-min-from)\.mjs$/,
+  /^scripts\/ci\/(image-smoke|deploy-tests)\.sh$/,
+  /^\.github\/workflows\/(ci|docker-publish)\.yml$/,
+  // Read by the deploy tests by path (kratos-recovery-config,
+  // kratos-registration-gate, pod-version-reported).
+  /^apps\/api\/src\/(index\.ts|routers\/provision\.ts|webhooks\/kratos[^/]*\.ts)$/,
+  /^apps\/pod-admin\/app\/(recovery|settings\/security)\/page\.tsx$/,
 ];
 
 const TEST_FILE = /\.test\.(ts|tsx|mts|mjs|js)$/;
@@ -134,8 +173,9 @@ export const touchesDependents = (files) =>
   files.some((f) => SHARED_FOR_DEPENDENTS.some((re) => re.test(f)));
 
 export const isDocsOnly = (path) => DOCS_ONLY.some((re) => re.test(path));
-export const isImageNeutral = (path) =>
-  isDocsOnly(path) || IMAGE_NEUTRAL.some((re) => re.test(path));
+export const isImageInput = (path) => IMAGE_INPUTS.some((re) => re.test(path));
+/** Does this change need the image jobs? `files` null (unknown): yes. */
+export const needsImage = (files) => !files || files.some(isImageInput);
 
 /** The PR a merge-queue branch tests: `refs/heads/gh-readonly-queue/main/pr-402-<sha>` → 402. */
 export function queuePrNumber(queueHeadRef) {
@@ -238,6 +278,7 @@ export function decide({
     draftHold: false,
     hold: "",
     dependents: false,
+    imageWhy: "",
   };
   const nothing = {
     ...all,
@@ -270,7 +311,13 @@ export function decide({
     };
 
   const docsOnly = files.length > 0 && files.every(isDocsOnly);
-  const image = !files.every(isImageNeutral);
+  // The image jobs: only when the change touches what the image or the
+  // deploy tests are made of (IMAGE_INPUTS). Their jobs still RUN and pass
+  // through a "Not affected" step that names this line (ci.yml).
+  const image = needsImage(files);
+  const imageWhy = image
+    ? ""
+    : "no path the image or the deploy tests are made of changed (scripts/ci-changes.mjs IMAGE_INPUTS): Docker image and deploy tests not affected; main's post-merge run and every release run them";
   // The tier: what the change can break (scripts/ci/affected.mjs). No graph
   // (it failed to load) is the full suite, never a guess.
   const pick = () => {
@@ -303,10 +350,17 @@ export function decide({
   if (event === "merge_group" && queue?.suitesPassed === true)
     return {
       ...all,
+      image,
+      imageWhy,
       suites: false,
       scope: "none",
       e2e: false,
-      reason: `merge queue: #${queue.pr}'s own Full suite and API e2e passed on ${String(queue.headSha).slice(0, 9)}; this run re-checks the Release gate`,
+      reason: [
+        `merge queue: #${queue.pr}'s own Full suite and API e2e passed on ${String(queue.headSha).slice(0, 9)}; this run re-checks the Release gate`,
+        imageWhy,
+      ]
+        .filter(Boolean)
+        .join("; "),
     };
 
   // A queue entry whose PR run did not pass both: the Release gate, and the
@@ -316,8 +370,15 @@ export function decide({
     const t = pick();
     return {
       ...all,
+      image,
+      imageWhy,
       ...tierFields(t),
-      reason: `merge queue${queue?.pr ? ` (#${queue.pr})` : ""}: the Release gate, and ${tierText(t)} on the tree it will land`,
+      reason: [
+        `merge queue${queue?.pr ? ` (#${queue.pr})` : ""}: the Release gate, and ${tierText(t)} on the tree it will land`,
+        imageWhy,
+      ]
+        .filter(Boolean)
+        .join("; "),
     };
   }
 
@@ -355,6 +416,7 @@ export function decide({
   return {
     ...all,
     image,
+    imageWhy,
     ...(t
       ? tierFields(t)
       : { suites: false, scope: "none", e2e: false, why: [] }),
@@ -375,9 +437,7 @@ export function decide({
         : draft
           ? "draft: Release gate only; Full suite and API e2e report red (suites not run) until it is marked ready"
           : `the Release gate, and ${tierText(t)}`,
-      image
-        ? ""
-        : "no image-relevant path: Docker build and deploy tests skipped",
+      imageWhy,
     ]
       .filter(Boolean)
       .join("; "),
@@ -433,7 +493,14 @@ export function summary(d, files) {
             ? "runs"
             : "not affected",
     ],
-    ["Docker image + deploy tests", d.gate && d.image ? "runs" : "skipped"],
+    [
+      "Docker image + deploy tests",
+      d.gate && d.image
+        ? "runs"
+        : d.gate
+          ? "not affected (main's post-merge run and every release run them)"
+          : "not run (the Release gate does not run)",
+    ],
   ];
   return [
     "### What this run checks (scripts/ci-changes.mjs)",
@@ -585,6 +652,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const out = [
     `gate=${d.gate}`,
     `image=${d.image}`,
+    `image_reason=${d.imageWhy}`,
     `suites=${d.suites}`,
     `scope=${d.scope}`,
     `affected=${d.affected.join(",")}`,
