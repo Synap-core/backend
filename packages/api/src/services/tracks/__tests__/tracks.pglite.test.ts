@@ -252,6 +252,8 @@ const q = <T>(sql: string, params?: unknown[]) =>
 
 const human = { userId: USER };
 const agent = { userId: USER, agentUserId: AGENT, isHubProtocol: true };
+/** What an agent's pause of a goal waits on (W4: refused without one). */
+const AGENT_HOLD = { on: "decision" as const, reason: "Waiting on the owner." };
 
 async function trackRows(projectId = PROJECT) {
   return (
@@ -975,6 +977,8 @@ describe("stale writes — the approval replay and a concurrent advance", () => 
       status: "paused",
       expectedStatus: "active",
       actor: agent,
+      // W4: an agent's pause says what it waits on.
+      hold: AGENT_HOLD,
     });
     expect(filed.status).toBe("proposed");
     const { expectedStatus, ...data } = h.permCalls.at(-1)!.data as Record<
@@ -1470,6 +1474,8 @@ describe("closing a goal — the verdict rule and the person's act", () => {
       status: "paused",
       expectedStatus: "active",
       actor: agent,
+      // W4: an agent's pause says what it waits on.
+      hold: AGENT_HOLD,
     });
     expect(h.permCalls.at(-1)!.lifecycleMove).toBeUndefined();
     expect(h.permCalls.at(-1)!.forcePropose).toBeUndefined();
@@ -2257,6 +2263,8 @@ describe("expectedStatus — a status move decided on a stale read (D1)", () => 
       trackId: id,
       status: "paused",
       actor: agent,
+      // W4: an agent's pause says what it waits on.
+      hold: AGENT_HOLD,
     });
     expect(filed.status).toBe("proposed");
     // The proposal still carries a belief — the status read at filing — so
@@ -2267,7 +2275,7 @@ describe("expectedStatus — a status move decided on a stale read (D1)", () => 
     });
     const res = await trackHandlers.synap_set_track_status!({
       toolName: "synap_set_track_status",
-      args: { trackId: id, status: "paused" },
+      args: { trackId: id, status: "paused", hold: AGENT_HOLD },
       userId: USER,
       apiKeyScopes: ["mcp.write"],
       agentUserId: AGENT,
@@ -2339,6 +2347,8 @@ describe("expectedStatus — a status move decided on a stale read (D1)", () => 
       status: "paused",
       expectedStatus: "active",
       actor: agent,
+      // W4: an agent's pause says what it waits on.
+      hold: AGENT_HOLD,
     });
     expect(filed.status).toBe("proposed");
     expect(h.permCalls.at(-1)!.data).toMatchObject({

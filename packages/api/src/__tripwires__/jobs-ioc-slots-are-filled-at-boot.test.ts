@@ -42,7 +42,12 @@ const BOOT = join(BACKEND_ROOT, "apps/api/src/index.ts");
  * Slots that intentionally have no boot-time filler. Each entry must say WHY;
  * an empty reason is the same as no entry.
  */
-const UNFILLED_BY_DESIGN: Record<string, string> = {};
+const UNFILLED_BY_DESIGN: Record<string, string> = {
+  // Not a slot: it takes no api implementation; jobs' own `registerAllWorkers`
+  // (which apps/api calls at boot) registers the hold-resume reactor (W4).
+  registerHoldResumeReactor:
+    "registers a jobs-owned reactor from registerAllWorkers, which boot calls",
+};
 
 function read(file: string): string {
   if (!existsSync(file)) {
