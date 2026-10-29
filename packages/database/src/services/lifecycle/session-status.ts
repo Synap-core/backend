@@ -149,11 +149,10 @@ export async function setSessionStatus(
  * A session row PATCH that may carry a status — the update doors (tRPC and
  * Hub REST PATCH, the MCP `update_session`, the `focus_session/update`
  * approval replay). With a status it is a move through
- * {@link setSessionStatus} from whatever the session stands at: these doors
- * have always written it unguarded, after their own checks on the row they
- * read (a closed run stays closed; a terminal status goes to the close door),
- * and still do. Without one it is a plain write. The written rows, like the
- * `.returning()` it replaces (empty when the session is gone).
+ * {@link setSessionStatus} from whatever the session stands at: the doors run
+ * their own checks on the row they read first (a closed run stays closed; a
+ * terminal status goes to the close door). Without one it is a plain write.
+ * Returns the written rows (empty when the session is gone).
  */
 export async function writeSessionPatch(
   db: Db | Tx,

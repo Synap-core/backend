@@ -491,6 +491,20 @@ describe("D6 — a quiet run an EXTERNAL agent holds goes stale, never failed", 
     expect(await statusOf("playbook_runs", ext.run)).toBe("stale");
     expect(await completedAtOf(ext.run)).toBeNull();
     expect(await statusOf("focus_sessions", ext.sess)).toBe("stale");
+    // Its session's stale stamp owes the session's transition, the system's.
+    const owed = (
+      await q<{ transition: Record<string, unknown> }>(
+        `select transition from lifecycle_transition_outbox where transition->>'subjectId' = $1`,
+        [ext.sess]
+      )
+    ).rows;
+    expect(owed).toHaveLength(1);
+    expect(owed[0]!.transition).toMatchObject({
+      subjectType: "focus_session",
+      to: "stale",
+      category: "paused",
+      actorKind: "system",
+    });
     expect(closed).not.toContain(ext.sess);
     expect(await statusOf("playbook_runs", is.run)).toBe("failed");
     expect(closed).toContain(is.sess);

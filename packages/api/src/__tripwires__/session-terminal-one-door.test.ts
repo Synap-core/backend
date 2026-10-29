@@ -88,9 +88,10 @@ function walk(dir: string, out: string[] = []): string[] {
 //
 // Since status-flow W2 every session status write goes through
 // `setSessionStatus` (@synap/database), so a terminal stamp can also be a
-// literal `to: "<terminal>"` handed to it — the second alternative.
+// literal `to: "<terminal>"` handed to it, or a literal `status:` in the
+// `set` handed to the update doors' `writeSessionPatch`.
 const TERMINAL_STAMP =
-  /(?:\.update\(\s*focusSessions\s*\)(?:(?!\.update\()[\s\S]){0,400}?status:|setSessionStatus\((?:(?!setSessionStatus\()[\s\S]){0,400}?\bto:)\s*"(closed|cancelled|failed)"/g;
+  /(?:\.update\(\s*focusSessions\s*\)(?:(?!\.update\()[\s\S]){0,400}?status:|setSessionStatus\((?:(?!setSessionStatus\()[\s\S]){0,400}?\bto:|writeSessionPatch\((?:(?!writeSessionPatch\()[\s\S]){0,400}?\bstatus:)\s*"(closed|cancelled|failed)"/g;
 
 function findViolations(roots: string[]): string[] {
   const hits: string[] = [];
@@ -168,6 +169,19 @@ describe("tripwire: a session's terminal status has ONE door", () => {
     expect(
       TERMINAL_STAMP.test(stripComments(HELPER_BAD, "ts")),
       "the detector no longer sees a terminal status handed to setSessionStatus"
+    ).toBe(true);
+    TERMINAL_STAMP.lastIndex = 0;
+    const PATCH_BAD = `
+      await writeSessionPatch(db, {
+        sessionId,
+        set: { status: "closed", progress: 100 },
+        actor,
+      });
+    `;
+    TERMINAL_STAMP.lastIndex = 0;
+    expect(
+      TERMINAL_STAMP.test(stripComments(PATCH_BAD, "ts")),
+      "the detector no longer sees a terminal status in a writeSessionPatch set"
     ).toBe(true);
     TERMINAL_STAMP.lastIndex = 0;
     const HELPER_OK = `

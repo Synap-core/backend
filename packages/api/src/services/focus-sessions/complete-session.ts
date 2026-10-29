@@ -67,6 +67,7 @@ import {
   openRoomQuestionConditions,
   setSessionStatus,
   workUnitActorOf,
+  type WorkUnitActor,
 } from "@synap/database";
 import { WORKER_TARGET_REASONS } from "@synap-core/types/workers";
 import { isDeliverableOutstanding } from "@synap-core/types/units";
@@ -152,10 +153,11 @@ export interface CompleteFocusSessionParams {
    */
   approvedCloseOf?: string;
   /**
-   * An AUTOMATIC close (the jobs closer slot: the reapers, a run's end): the
-   * session's transition names the system as its actor, not the owner.
+   * Who the session's transition names. Default: the agent when
+   * `agentUserId` is set, else the person; the jobs closer slot (the reapers,
+   * a run's end) passes the system.
    */
-  actorKind?: "system";
+  actor?: WorkUnitActor;
 }
 
 /** One of the closing agent's still-open questions, as the refusal lists it. */
@@ -769,9 +771,7 @@ export async function completeFocusSession(
       sessionId,
       from: SESSION_STATUSES,
       to: terminalStatus,
-      actor: params.actorKind
-        ? { kind: params.actorKind, userId: params.userId }
-        : workUnitActorOf(params.userId, params.agentUserId),
+      actor: params.actor ?? workUnitActorOf(params.userId, params.agentUserId),
       reason: params.cancelReason ?? null,
       set: {
         closedAt: new Date(),

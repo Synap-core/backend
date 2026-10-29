@@ -30,7 +30,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq } from "@synap/database";
+import { db, proposals, eq, workUnitActorOf } from "@synap/database";
 import {
   PROJECT_TRACK_STATUSES,
   ProposalStatus,
@@ -336,7 +336,14 @@ export function registerTrackExecutors(): void {
             project,
             data.status as ProjectTrackStatus,
             userId,
-            close
+            close,
+            {
+              actor: workUnitActorOf(
+                proposal.subjectUserId ?? userId,
+                proposal.agentUserId
+              ),
+              proposalId: proposal.id,
+            }
           );
         }
       } else {

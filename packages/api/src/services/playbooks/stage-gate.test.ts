@@ -39,8 +39,8 @@ vi.mock("@synap/database", async (importOriginal) => {
   let selectingRuns = true;
   return {
     ...actual,
-    // The one session status write (the gate's pause, status-flow W2),
-    // recorded like the UPDATE it replaced; `from` is its compare-and-set.
+    // The one session status write: records the status it writes beside the
+    // caller's other columns, and its compare-and-set (`from`).
     setSessionStatus: async (
       _db: unknown,
       input: { from: unknown; to: string; set?: Record<string, unknown> }

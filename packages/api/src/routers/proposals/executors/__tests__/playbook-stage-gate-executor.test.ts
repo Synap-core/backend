@@ -43,8 +43,8 @@ vi.mock("@synap/database", async (importOriginal) => {
     t === actual.focusSessions ? "focus_sessions" : "proposals";
   return {
     ...actual,
-    // The one session status write (status-flow W2), recorded like the
-    // UPDATE it replaced; `from` is its compare-and-set.
+    // The one session status write: records the status it writes beside the
+    // caller's other columns, and its compare-and-set (`from`).
     setSessionStatus: async (
       _db: unknown,
       input: { from: unknown; to: string; set?: Record<string, unknown> }

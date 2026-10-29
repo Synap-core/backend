@@ -22,6 +22,7 @@ import {
   ne,
   playbooks,
   projectTracks,
+  workUnitActorOf,
   writeSessionPatch,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
@@ -1009,11 +1010,15 @@ export function registerFocusSessionExecutors(): void {
         const undoBefore = isUndoableSessionPatch(innerData)
           ? await readSessionUndoSnapshot(db, sessionId)
           : null;
-        // The approver applies it; the transition names the proposal.
+        // The proposing agent's move, approved (as `entity/transition`
+        // credits it): the transition names the agent and the proposal.
         let [updated] = await writeSessionPatch(db, {
           sessionId,
           set,
-          actor: { kind: "human", userId },
+          actor: workUnitActorOf(
+            proposal.subjectUserId ?? userId,
+            proposal.agentUserId
+          ),
           proposalId: input.proposalId,
         });
         await stampSessionUpdate({

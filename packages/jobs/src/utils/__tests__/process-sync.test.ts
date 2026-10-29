@@ -110,8 +110,8 @@ vi.mock("@synap/database", () => ({
     h.posts.push(m);
     return { messageId: "m-1", mirrored: false };
   },
-  // The one session status write (status-flow W2), recorded like the UPDATE
-  // it replaced; resumes only a paused run.
+  // The one session status write: records the status and columns it writes,
+  // and its compare-and-set (`from`).
   setSessionStatus: async (
     _db: unknown,
     i: { from: unknown; to: string; set?: Record<string, unknown> }

@@ -31,8 +31,8 @@ vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
-    // The one session status write (the gate's pause), recorded like the
-    // UPDATE it replaced.
+    // The one session status write: records the status it writes beside the
+    // caller's other columns.
     setSessionStatus: async (
       _db: unknown,
       input: { to: string; set?: Record<string, unknown> }
