@@ -10,8 +10,8 @@
  * needed a sixth):
  *
  *   confirm  — yes / no (+ an optional note)
- *   choose   — one of ≤ 8 offered options (≤ 1 recommended), or free text if
- *              `allowOther`
+ *   choose   — one of ≤ 8 offered options (≤ 1 recommended), or the person's
+ *              own words unless the ask is CLOSED (`chooseTakesOwnAnswer`)
  *   form     — a small FLAT form. AI-authored credential fields (by type, key
  *              or label) are DROPPED at the parse, exactly as capture does
  *   act      — do a thing in the world (optionally at an http(s) `url`, in ≤ 7
@@ -647,7 +647,12 @@ const AskModesSchema = z.discriminatedUnion("mode", [
       .refine(atMostOneRecommended, {
         message: "at most one option may be recommended",
       }),
-    /** Offer "Other…" — a free-text answer instead of one of the options. */
+    /**
+     * The person's own answer instead of an option ("Something else…"). OPEN
+     * unless `false` (founder 2026-10-29): the person decides, so an agent's
+     * choice never traps them in its options. `false` closes it, for a choice
+     * whose answer code reads as a value (a typed playbook param).
+     */
     allowOther: z.boolean().optional(),
     ...lookedAtField,
     ...stakesField,
@@ -1017,6 +1022,22 @@ function isBlank(v: unknown): boolean {
 }
 
 /**
+ * Does this choice take the person's own words instead of an option? Yes
+ * unless it is CLOSED: `allowOther: false`, or a pass / fail GRADE (a
+ * criterion slot, `CRITERION_GRADE_VALUES` in `../focus-sessions` — an answer
+ * in words there would mark the slot answered while the verdict never moves;
+ * slots filed before `allowOther: false` was written on them carry no flag).
+ */
+export function chooseTakesOwnAnswer(
+  ask: Extract<Ask, { mode: "choose" }>
+): boolean {
+  if (ask.allowOther === false) return false;
+  if (ask.allowOther === true) return true;
+  const grades = ["pass", "fail"];
+  return !ask.options.every((o) => grades.includes(o.value ?? o.label));
+}
+
+/**
  * Does this answer fit this ask? The ONE rule, pure — the pod's answer door and
  * every client call it, so a client never offers what the pod would refuse.
  *
@@ -1028,7 +1049,7 @@ function isBlank(v: unknown): boolean {
  * - `act` ⇒ refused (`wrong_door`): it resolves through the attest door.
  * - `confirm` ⇒ a confirm value.
  * - `choose` ⇒ one of the OFFERED options (matched by value, else label), or
- *   free text only when `allowOther`.
+ *   the person's own words unless the ask is closed (`chooseTakesOwnAnswer`).
  * - `form` ⇒ keys the spec declares, every required field present, enum
  *   constraints honoured.
  * - `provide` ⇒ a reference of the kind the ask asked for.
@@ -1062,7 +1083,7 @@ export function validateAnswerAgainstAsk(
         : refuse("type_mismatch", "This ask takes a yes or a no.");
     case "choose": {
       if (value.type === "text") {
-        return ask.allowOther
+        return chooseTakesOwnAnswer(ask)
           ? { ok: true, value }
           : refuse(
               "other_not_allowed",

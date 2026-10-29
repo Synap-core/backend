@@ -384,6 +384,9 @@ export const CRITERION_SLOT_ASK: SlotAsk = {
     { label: "Pass", value: "pass" },
     { label: "Fail", value: "fail" },
   ],
+  // Closed: the answer IS the verdict (`criterionVerdictOf`); words would
+  // mark the slot answered while the grade never moves.
+  allowOther: false,
 };
 
 /** A criterion slot answer's verdict, or `null` when it is not pass/fail. */
