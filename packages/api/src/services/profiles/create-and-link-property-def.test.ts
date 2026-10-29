@@ -19,7 +19,10 @@ const h = vi.hoisted(() => ({
   level: vi.fn(() => "additive"),
 }));
 
-vi.mock("@synap/database", () => ({
+// Partial: the door's import graph reads real exports (`PropertyValueType`
+// via proposed-kind-field since #495); only the db and the resolver are faked.
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   getDb: vi.fn(async () => ({})),
   ProfileResolutionService: class {
     async resolveProfile(id: string) {
