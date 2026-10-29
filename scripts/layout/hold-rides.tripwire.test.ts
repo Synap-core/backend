@@ -60,44 +60,86 @@ describe("hold: on the PR, a dependency rides while it is in the queue", () => {
   });
 });
 
-describe("hold: in the queue, a dependency rides only when the group merges its head", () => {
+describe("hold: in the queue, a dependency rides only when the group's own line merges its head", () => {
   const heads = new Map([[20, sha("2")]]);
-  const mergeOf = (head: string, s = sha("9")) => ({
-    sha: s,
-    parents: [{ sha: sha("0") }, { sha: head }],
-  });
-  it("the group merges #20's current head: counts", () => {
-    const r = H.rideInGroup([waiting(20)], {
+  const D = sha("d"); // the dependent's head
+  // The queue's line: base 0 -> a = merge of #20 (parents 0, 2) -> c = merge of D (parents a, D).
+  const line = [
+    { sha: sha("a"), parents: [{ sha: sha("0") }, { sha: sha("2") }] },
+    { sha: sha("c"), parents: [{ sha: sha("a") }, { sha: D }] },
+  ];
+  const ride = (groupCommits: unknown[], headSha = sha("c")) =>
+    H.rideInGroup([waiting(20)], {
       repo: REPO,
       heads,
-      groupCommits: [mergeOf(sha("2")), mergeOf(sha("3"), sha("8"))],
-    });
-    expect(r[0]).toMatchObject({ status: "landed", rides: "group" });
+      groupCommits,
+      headSha,
+    })[0];
+  it("the group's first-parent line merges #20's current head: counts", () => {
+    expect(ride(line)).toMatchObject({ status: "landed", rides: "group" });
   });
   it.each([
-    ["the group does not hold #20 (it left the queue)", [mergeOf(sha("3"))]],
+    [
+      "the group does not hold #20 (it left the queue)",
+      [{ sha: sha("c"), parents: [{ sha: sha("0") }, { sha: D }] }],
+    ],
+    [
+      "the dependent's AUTHOR merged #20 into its own branch: reached through a second parent, not the group's line",
+      [
+        { sha: sha("c"), parents: [{ sha: sha("0") }, { sha: D }] },
+        { sha: D, parents: [{ sha: sha("7") }, { sha: sha("2") }] },
+      ],
+    ],
     [
       "a branch stacked on #20: its head is IN the range but no queue merge of it",
-      [{ sha: sha("2"), parents: [{ sha: sha("0") }] }, mergeOf(sha("3"))],
+      [
+        { sha: sha("c"), parents: [{ sha: sha("0") }, { sha: D }] },
+        { sha: D, parents: [{ sha: sha("2") }] },
+        { sha: sha("2"), parents: [{ sha: sha("0") }] },
+      ],
     ],
     [
       "the group merged an OLD head of #20 (#20 moved since)",
-      [mergeOf(sha("1"))],
+      [
+        { sha: sha("a"), parents: [{ sha: sha("0") }, { sha: sha("1") }] },
+        line[1],
+      ],
     ],
     ["no commits read", []],
   ])("waits: %s", (_n, groupCommits) => {
-    expect(
-      H.rideInGroup([waiting(20)], { repo: REPO, heads, groupCommits })[0]
-        .status
-    ).toBe("waiting");
+    expect(ride(groupCommits).status).toBe("waiting");
+  });
+  it("a group head that is not in the range: waits (no line to read)", () => {
+    expect(ride(line, sha("e")).status).toBe("waiting");
   });
   it("another repo's dependency never rides, even with a matching merge", () => {
     const r = H.rideInGroup([waiting(20, "Synap-core/app-bases")], {
       repo: REPO,
       heads,
-      groupCommits: [mergeOf(sha("2"))],
+      groupCommits: line,
+      headSha: sha("c"),
     });
     expect(r[0].status).toBe("waiting");
+  });
+});
+
+describe("hold: main's required checks, one parse", () => {
+  it("reads the required_status_checks rules, and refuses what is not a list", () => {
+    expect(
+      H.requiredContextsOf([
+        { type: "deletion" },
+        {
+          type: "required_status_checks",
+          parameters: {
+            required_status_checks: [
+              { context: "Release gate" },
+              { context: "Dependencies merged" },
+            ],
+          },
+        },
+      ])
+    ).toEqual(["Release gate", "Dependencies merged"]);
+    expect(() => H.requiredContextsOf({ message: "Not Found" })).toThrow();
   });
 });
 
@@ -237,13 +279,56 @@ describe("hold: main(), the posted check", () => {
   const prEvent = {
     pull_request: { number: 21, head: { sha: sha("3") }, body: BODY },
   };
+  const REQUIRED_WITH_HOLD = [
+    {
+      type: "required_status_checks",
+      parameters: {
+        required_status_checks: [
+          { context: "Release gate" },
+          { context: "Dependencies merged" },
+        ],
+      },
+    },
+  ];
+  const REQUIRED_WITHOUT_HOLD = [
+    {
+      type: "required_status_checks",
+      parameters: { required_status_checks: [{ context: "Release gate" }] },
+    },
+  ];
   const prRoute =
-    (queue: unknown): Route =>
+    (queue: unknown, rules: unknown = REQUIRED_WITH_HOLD): Route =>
     (method, path) => {
       if (method === "POST" && path === "/graphql") return queue;
       if (path === `/repos/${REPO}/pulls/20`) return PR20;
+      if (path === `/repos/${REPO}/rules/branches/main`)
+        return rules ?? undefined;
       return undefined;
     };
+  const QUEUED = {
+    data: {
+      repository: {
+        pullRequest: { isInMergeQueue: true, headRefOid: sha("2") },
+      },
+    },
+  };
+  it("on the PR, #20 queued but the hold NOT required (riding off): held, never 'landed'", async () => {
+    const { posted } = await runHold(
+      "pull_request_target",
+      prEvent,
+      prRoute(QUEUED, REQUIRED_WITHOUT_HOLD)
+    );
+    expect(posted[0]).toMatchObject({ status: "in_progress" });
+  });
+  it("on the PR, #20 queued, main's rules unreadable: held", async () => {
+    const { posted, logs } = await runHold(
+      "pull_request_target",
+      prEvent,
+      prRoute(QUEUED, null)
+    );
+    expect(posted[0]).toMatchObject({ status: "in_progress" });
+    expect(logs.join("\n")).toMatch(/could not read main's required checks/);
+  });
   it("on the PR, #20 in the queue: success (the dependent may queue behind it)", async () => {
     const { posted } = await runHold(
       "pull_request_target",

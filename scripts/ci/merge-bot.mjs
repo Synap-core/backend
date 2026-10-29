@@ -15,38 +15,45 @@
  * ── WHAT IT DOES ─────────────────────────────────────────────────────────────
  * A. ENQUEUE. A PR enters the merge queue (GraphQL `enqueuePullRequest`, with
  *    `expectedHeadOid` = the head the checks judged) when ALL hold
- *    (enqueueReasons): open, base main, not a draft, not a `negctl/*` branch,
- *    not dependabot, not from a fork, its body has a `Pod session: <uuid>`
- *    line, every `Depends-On:` line has landed (scripts/layout/layout.mjs, the
- *    resolver the "Dependencies merged" hold uses), the 4 required checks
- *    (release-gate-wait.mjs REQUIRED_CHECKS, posted by GitHub Actions) are
- *    `success` on its head sha, it is not CONFLICTING, and it is not already
- *    queued. It never merges, never uses admin, never calls `gh pr merge`.
- * B. JUMP (jumpReason, founder 2026-10-29): enqueued with `jump: true` (front
- *    of the queue; GitHub rebuilds the groups in flight):
- *      - a main-red fix: branch `fix/main-red-*` (the culprit finder's reverts,
- *        `fix/main-red-revert-*`, included), or a title `fix: main red` /
- *        `fix(<scope>): main red`;
- *      - a security fix: label `security`, branch `fix/security-*`, or a title
- *        starting `fix(security)`;
- *      - a revert: a title starting `Revert "` (GitHub's revert button).
+ *    (enqueueReasons):
+ *      - the shared PR gates (prGates): open, base main, not a draft, not a
+ *        `negctl/*` branch, not from a fork;
+ *      - not dependabot; its body names a pod session (podSessionFromBody,
+ *        scripts/pod-observation.mjs: the one parser of that line);
+ *      - it is not CONFLICTING and not already queued;
+ *      - every live required check of main (at least release-gate-wait.mjs
+ *        REQUIRED_CHECKS), posted by GitHub Actions, is `success` on its head;
+ *      - every `Depends-On:` line has landed, or rides (C);
+ *      - it touches no CI or test infrastructure (INFRA_PATHS): a PR that
+ *        edits what judges it could certify itself, so it needs the founder
+ *        (`prcheck`);
+ *      - main is not red, unless the PR jumps (B): while main's latest
+ *        finished push run failed, only jumpers are enqueued (founder default,
+ *        2026-10-29; MERGE_BOT_ENQUEUE_WHILE_RED=true overrides it).
+ *    It never merges, never uses admin, never calls `gh pr merge`.
+ * B. JUMP (jumpReason): enqueued with `jump: true` (front of the queue; GitHub
+ *    rebuilds the groups in flight):
+ *      - while main is red: a main-red fix (branch `fix/main-red-*`, the
+ *        culprit finder's `fix/main-red-revert-*` included; or a title
+ *        `fix: main red` / `fix(<scope>): main red`) or a revert (a title
+ *        starting `Revert "`, GitHub's revert button);
+ *      - at any time: a PR labelled `security` (labels need triage rights; a
+ *        branch or a title anyone can write does not count).
  *    If GitHub refuses the jump, it is enqueued without it, and said. A PR
- *    that rides behind its dependency (D) never jumps: it must land after it.
- * D. DEPENDENTS RIDE WITH THEIR DEPENDENCY. A PR whose only unmet Depends-On is
- *    an open PR of THIS repo that is already IN the merge queue is enqueued
- *    (behind it: the queue appends). The hold (scripts/layout/hold.mjs) then
- *    lets its queue run pass only when the group's base..head merges the
- *    dependency's head, so they are tested together and land in order; if the
- *    dependency leaves the queue, the group is rebuilt without it and the
- *    dependent is held. That holds only when "Dependencies merged" is a
- *    REQUIRED check, so riding is ON only when the live ruleset requires it
- *    (liveRequiredChecks); otherwise a dependent waits until its dependency
- *    has merged. Every live required check is required here too.
- * C. MAIN'S VICTIMS RUN AGAIN. When main's latest finished push run of CI is
- *    `success` and the one(s) before it `failure` (mainRedWindow), every open,
- *    non-draft PR whose latest CI run FAILED and was CREATED in the red window
- *    (from the first red run's creation, i.e. the red push, to the green run's
- *    end) gets ONE fresh CI run (victimReasons).
+ *    that rides behind its dependency (C) never jumps ahead of it.
+ * C. DEPENDENTS RIDE WITH THEIR DEPENDENCY. A PR whose only unmet Depends-On
+ *    is an open PR of THIS repo already IN the merge queue is enqueued (behind
+ *    it: the queue appends). The hold (scripts/layout/hold.mjs) lets its queue
+ *    run pass only when the group's first-parent line merges the dependency's
+ *    head, so both are tested together and land in order. Safe only when
+ *    "Dependencies merged" is a REQUIRED check: riding is ON only when main's
+ *    live rules say so (liveRequiredChecks); otherwise a dependent waits for
+ *    its dependency to merge.
+ * D. MAIN'S VICTIMS RUN AGAIN. After main's latest red→green transition of
+ *    the last 24 h (mainRedWindow), every open, non-draft, non-queued PR whose
+ *    latest CI run FAILED and was CREATED in the red window (from the first
+ *    red push to the green run's end) gets ONE fresh CI run (victimReasons),
+ *    at most MAX_TOGGLES_PER_SWEEP per sweep.
  *    NOT `gh run rerun --failed`: a re-run reuses the run's GITHUB_SHA, which
  *    for a pull_request run is GitHub's test merge AS IT WAS, red main
  *    included. Seen on run 40594912129: attempt 1 (22:31Z) and attempt 2
@@ -55,7 +62,8 @@
  *    again: `ready_for_review` is a ci.yml trigger, and that new run tests the
  *    PR merged into TODAY's main. Nothing is pushed; the branch is never
  *    updated. Before it does, it checks GitHub's test merge is already built
- *    on main's current tip (else the next sweep does it).
+ *    on main's current tip (else the next sweep does it). A queued PR is never
+ *    toggled: a draft leaves the queue.
  *    ONCE per main red: after the toggle it posts a neutral check run
  *    "Re-run after main green" on the PR's head with external_id
  *    `main-green-<green run id>`; a PR carrying it for that green run is
@@ -71,7 +79,8 @@
  * GITHUB_TOKEN ready_for_review. Every WRITE that must start CI therefore uses
  * the "Synap Merge Bot" GitHub App's installation token (MERGE_BOT_TOKEN:
  * contents + pull requests write, installed on backend only, NOT on the
- * ruleset's bypass list). Reads, and the marker check run, use the job's
+ * ruleset's bypass list; its secrets live only in environment `ci-bots`,
+ * deployable from main only). Reads, and the marker check run, use the job's
  * GITHUB_TOKEN (GH_TOKEN).
  * FAIL-SAFE: no MERGE_BOT_TOKEN (the app or its secrets absent, or the mint
  * failed) = judge and log everything, write nothing, exit 0.
@@ -79,17 +88,24 @@
  * ── WHEN ─────────────────────────────────────────────────────────────────────
  * .github/workflows/merge-bot.yml: on every completed CI run (a PR's run
  * judges that PR only; a main push run sweeps), every 15 min and on demand
- * (sweep). A sweep runs C, then A over every open PR.
+ * (sweep). One concurrency group, so two passes never run at once. A sweep
+ * runs D, then A over every open PR.
  *
  * Env: GITHUB_REPOSITORY, GITHUB_EVENT_NAME, GITHUB_EVENT_PATH, GH_TOKEN
  * (reads, checks: write), MERGE_BOT_TOKEN (writes), LAYOUT_TOKEN (optional:
  * the Reader App, to read a private repo's Depends-On target),
- * MERGE_BOT_DRY_RUN=true|1 (judge, write nothing). `--dry-run` likewise.
+ * MERGE_BOT_DRY_RUN=true|1 (judge, write nothing; `--dry-run` likewise),
+ * MERGE_BOT_ENQUEUE_WHILE_RED=true (override the red-main default of A).
  * Transport: the `gh` CLI (`gh api`), so the tripwire drives it with a fake.
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import {
+  CHECK_NAME as HOLD_CHECK,
+  requiredContextsOf,
+  rideTheQueue,
+} from "../layout/hold.mjs";
 import {
   evaluateAll,
   githubClient,
@@ -98,7 +114,7 @@ import {
   repoNamed,
   verdictOf,
 } from "../layout/layout.mjs";
-import { CHECK_NAME as HOLD_CHECK, rideTheQueue } from "../layout/hold.mjs";
+import { podSessionFromBody } from "../pod-observation.mjs";
 import { CI_WORKFLOW, REQUIRED_CHECKS } from "./release-gate-wait.mjs";
 
 /** The GitHub Actions app: the only integration whose checks the ruleset reads. */
@@ -107,30 +123,46 @@ export const GITHUB_ACTIONS_APP_ID = 15368;
 export const RERUN_CHECK_NAME = "Re-run after main green";
 /** A red window older than this is history: no victim is looked for. */
 export const WINDOW_MAX_AGE_HOURS = 24;
-
-const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
-const POD_SESSION_LINE = new RegExp(
-  `^[ \\t]*Pod session:[ \\t]*\`?(${UUID})\\b`,
-  "i"
-);
+/** At most this many victims get a fresh run per sweep (~6 jobs each, 20-job cap). */
+export const MAX_TOGGLES_PER_SWEEP = 5;
+/** The reason a PR that touches CI or test infrastructure is never enqueued. */
+export const INFRA_REASON =
+  "touches CI/test infrastructure: needs the founder (prcheck)";
 
 /**
- * The `Pod session: <uuid>` of a PR body, or null. One line, at its start
- * (text may follow the id); lines inside ``` / ~~~ fences are ignored, like
- * Depends-On lines (layout.mjs parseDependsOn).
+ * CI and test infrastructure: a PR touching any of these edits what judges it
+ * (the workflows, the change-aware skips, the ratchet and its baseline, the
+ * tripwire set, the verdict scripts, the test configs, the hooks), so it could
+ * certify itself; it is left to the founder. One list, matched by
+ * isInfraPath. The tripwire derives every script the workflows run and fails
+ * on one this list does not classify.
  */
-export function podSessionOf(body) {
-  let fenced = false;
-  for (const raw of String(body ?? "").split(/\r?\n/)) {
-    if (/^[ \t]*(```|~~~)/.test(raw)) {
-      fenced = !fenced;
-      continue;
-    }
-    if (fenced) continue;
-    const m = POD_SESSION_LINE.exec(raw);
-    if (m) return m[1].toLowerCase();
-  }
-  return null;
+export const INFRA_PATHS = [
+  /^\.github\//,
+  /^\.husky\//,
+  /^ci\//,
+  /^scripts\/ci\//,
+  /^scripts\/ci-changes\.mjs$/,
+  /^scripts\/test-ratchet/, // the ratchet, its shards, retry and baseline
+  /^scripts\/layout\//, // the Depends-On hold and the CI sibling layout
+  /^scripts\/tripwires?[^/]*\.mjs$/, // which tripwires run
+  /^scripts\/preflight\.mjs$/, // the "Preflight red" hold
+  /^scripts\/check-[^/]+\.mjs$/, // check-* verdict scripts CI runs
+  /^scripts\/smoke-test\.sh$/,
+  /(^|\/)vitest[^/]*\.config\.[^/]+$/,
+  /^turbo\.json$/,
+];
+
+export const isInfraPath = (path) =>
+  INFRA_PATHS.some((re) => re.test(String(path ?? "")));
+
+/** The infrastructure paths among a PR's files (REST pulls/<n>/files; a rename counts both names). */
+export function infraFilesOf(files) {
+  const hits = new Set();
+  for (const f of files ?? [])
+    for (const p of [f?.filename, f?.previous_filename])
+      if (p && isInfraPath(p)) hits.add(p);
+  return [...hits];
 }
 
 /** A main-red fix: branch `fix/main-red-*`, or title `fix: main red…` / `fix(x): main red…`. */
@@ -142,22 +174,18 @@ export function isMainRedFix(pr) {
 }
 
 /**
- * Why a PR goes to the FRONT of the queue, or null: "main-red fix",
- * "security fix" or "revert".
+ * Why a PR goes to the FRONT of the queue, or null: "main-red fix" or
+ * "revert" (only while main is red), "security fix" (the `security` label,
+ * at any time). `mainRed` is true only when main is KNOWN red.
  */
-export function jumpReason(pr) {
-  if (isMainRedFix(pr)) return "main-red fix";
-  const title = String(pr?.title ?? "").trim();
+export function jumpReason(pr, { mainRed = false } = {}) {
   const labels = (pr?.labels?.nodes ?? []).map((l) =>
     String(l?.name ?? "").toLowerCase()
   );
-  if (
-    labels.includes("security") ||
-    /^fix\/security-/i.test(pr?.headRefName ?? "") ||
-    /^fix\(security\)/i.test(title)
-  )
-    return "security fix";
-  if (/^Revert "/.test(title)) return "revert";
+  if (labels.includes("security")) return "security fix";
+  if (!mainRed) return null;
+  if (isMainRedFix(pr)) return "main-red fix";
+  if (/^Revert "/.test(String(pr?.title ?? "").trim())) return "revert";
   return null;
 }
 
@@ -168,6 +196,17 @@ export function isDependabot(pr) {
     login === "dependabot[bot]" ||
     /^dependabot\//.test(pr?.headRefName ?? "")
   );
+}
+
+/** The gates every action of the bot shares: open, base main, not a draft, not negctl, not a fork. */
+export function prGates(pr) {
+  const r = [];
+  if (pr.state && pr.state !== "OPEN") r.push(`state: ${pr.state}`);
+  if (pr.baseRefName !== "main") r.push(`base: ${pr.baseRefName}, not main`);
+  if (pr.isDraft) r.push("draft");
+  if (/^negctl\//.test(pr.headRefName ?? "")) r.push("negctl branch");
+  if (pr.isCrossRepository) r.push("from a fork");
+  return r;
 }
 
 /**
@@ -181,13 +220,14 @@ export function requiredChecksState(
   names = REQUIRED_CHECKS
 ) {
   const latest = new Map();
+  const order = (x) =>
+    `${x.started_at ?? ""}|${String(x.id).padStart(20, "0")}`;
   for (const c of checkRuns ?? []) {
     if (c?.app?.id !== GITHUB_ACTIONS_APP_ID) continue;
     if (headSha && c.head_sha && c.head_sha !== headSha) continue;
     if (!names.includes(c.name)) continue;
     const prev = latest.get(c.name);
-    const at = (x) => `${x.started_at ?? ""}|${String(x.id).padStart(20, "0")}`;
-    if (!prev || at(c) > at(prev)) latest.set(c.name, c);
+    if (!prev || order(c) > order(prev)) latest.set(c.name, c);
   }
   const missing = [];
   const notGreen = [];
@@ -215,41 +255,56 @@ export function dependsState(results, { repo, queued }) {
   return { state: v === "landed" && behind.length ? "rides" : v, behind };
 }
 
-const asDepends = (d) =>
-  d === undefined
-    ? undefined
-    : typeof d === "string"
-      ? { state: d, behind: [] }
-      : d;
-
 /**
  * Why a PR is NOT enqueued (empty = enqueue). Pure. `pr` is the GraphQL
- * PullRequest shape read by listOpenPrs. `checks` (requiredChecksState) and
- * `depends` ("landed" | "waiting" | "blocked") are judged only when given: the
- * driver reads them for the PRs that pass the cheap gates, to spare the API.
+ * PullRequest shape read by listOpenPrs. `checks` (requiredChecksState),
+ * `depends` (dependsState) and `files` (REST pulls/<n>/files) are judged only
+ * when given: the driver reads them for the PRs that pass the cheap gates.
+ * `riding`: "Dependencies merged" is required (C). `mainRed`: "red" | "green"
+ * | "unknown". `whileRed`: the founder's override of the red-main default.
  */
-export function enqueueReasons({ pr, checks, depends, riding = false }) {
-  const dep = asDepends(depends);
-  const r = [];
-  if (pr.state && pr.state !== "OPEN") r.push(`state: ${pr.state}`);
-  if (pr.baseRefName !== "main") r.push(`base: ${pr.baseRefName}, not main`);
-  if (pr.isDraft) r.push("draft");
-  if (/^negctl\//.test(pr.headRefName ?? "")) r.push("negctl branch");
+export function enqueueReasons({
+  pr,
+  checks,
+  depends,
+  files,
+  riding = false,
+  mainRed = "green",
+  whileRed = false,
+}) {
+  const r = prGates(pr);
   if (isDependabot(pr)) r.push("dependabot");
-  if (pr.isCrossRepository) r.push("from a fork");
-  if (!podSessionOf(pr.body)) r.push("no `Pod session: <uuid>` line");
+  if (!podSessionFromBody(pr.body)) r.push("no `Pod session: <uuid>` line");
   if (pr.mergeable === "CONFLICTING") r.push("conflicting");
   if (pr.isInMergeQueue) r.push("already queued");
-  if (dep && dep.state === "rides" && !riding)
+  if (
+    mainRed !== "green" &&
+    !whileRed &&
+    !jumpReason(pr, { mainRed: mainRed === "red" })
+  )
     r.push(
-      `Depends-On: #${dep.behind.join(", #")} is in the merge queue, but riding is off ("${HOLD_CHECK}" is not a required check, so nothing would hold this PR if it left the queue)`
+      mainRed === "red"
+        ? "main is red: only main-red fixes, reverts and security fixes are enqueued"
+        : "main's state is unknown: only security fixes are enqueued"
     );
-  else if (dep && dep.state !== "landed" && dep.state !== "rides")
-    r.push(`Depends-On: ${dep.state}`);
+  if (depends && depends.state === "rides" && !riding)
+    r.push(
+      `Depends-On: #${depends.behind.join(", #")} is in the merge queue, but riding is off ("${HOLD_CHECK}" is not a required check, so nothing would hold this PR if it left the queue)`
+    );
+  else if (depends && depends.state !== "landed" && depends.state !== "rides")
+    r.push(`Depends-On: ${depends.state}`);
   if (checks !== undefined && !checks.ok)
     r.push(
       `required checks: ${[...checks.missing.map((n) => `${n}: none`), ...checks.notGreen].join(", ")}`
     );
+  if (files !== undefined) {
+    const infra = files === null ? null : infraFilesOf(files);
+    if (infra === null) r.push("its files could not be read");
+    else if (infra.length)
+      r.push(
+        `${INFRA_REASON} (${infra.slice(0, 3).join(", ")}${infra.length > 3 ? ", …" : ""})`
+      );
+  }
   return r;
 }
 
@@ -258,13 +313,16 @@ export function enqueueReasons({ pr, checks, depends, riding = false }) {
  * @returns {{ enqueue: boolean, jump: boolean, jumpReason: string | null,
  *             rides: number[], reasons: string[] }}
  */
-export function enqueueDecision({ pr, checks, depends, riding = false }) {
-  const reasons = enqueueReasons({ pr, checks, depends, riding });
-  if (checks === undefined) reasons.push("required checks: not read");
-  if (depends === undefined) reasons.push("Depends-On: not read");
-  const rides = asDepends(depends)?.behind ?? [];
+export function enqueueDecision(input) {
+  const reasons = enqueueReasons(input);
+  if (input.checks === undefined) reasons.push("required checks: not read");
+  if (input.depends === undefined) reasons.push("Depends-On: not read");
+  if (input.files === undefined) reasons.push("files: not read");
+  const rides = input.depends?.behind ?? [];
   // A PR riding behind its dependency never jumps ahead of it.
-  const why = rides.length ? null : jumpReason(pr);
+  const why = rides.length
+    ? null
+    : jumpReason(input.pr, { mainRed: input.mainRed === "red" });
   return {
     enqueue: reasons.length === 0,
     jump: Boolean(why),
@@ -276,19 +334,9 @@ export function enqueueDecision({ pr, checks, depends, riding = false }) {
 
 const at = (x) => Date.parse(x ?? "") || 0;
 
-/**
- * The latest red→green transition of main, or null. `runs` = CI push runs on
- * main (any order, any status). Only finished runs that succeeded or failed
- * count (a cancelled or skipped run says nothing about main). Null when the
- * latest finished run is not a success, when no failure precedes it, or when
- * it ended more than WINDOW_MAX_AGE_HOURS ago.
- * Window: [the first red run's created_at (the red push), the green run's end].
- */
-export function mainRedWindow(
-  runs,
-  { now = Date.now(), maxAgeHours = WINDOW_MAX_AGE_HOURS } = {}
-) {
-  const done = (runs ?? [])
+/** CI push runs on main that finished green or red, newest first. */
+function finishedMainRuns(runs) {
+  return (runs ?? [])
     .filter(
       (r) =>
         r.event === "push" &&
@@ -297,14 +345,40 @@ export function mainRedWindow(
         (r.conclusion === "success" || r.conclusion === "failure")
     )
     .sort((a, b) => at(b.created_at) - at(a.created_at));
-  const green = done[0];
-  if (!green || green.conclusion !== "success") return null;
+}
+
+/** Main's state from its CI push runs: "red" | "green" | "unknown" (no finished run). */
+export function mainState(runs) {
+  const latest = finishedMainRuns(runs)[0];
+  if (!latest) return "unknown";
+  return latest.conclusion === "failure" ? "red" : "green";
+}
+
+/**
+ * Main's latest red→green transition of the last WINDOW_MAX_AGE_HOURS, or
+ * null. `runs` = CI push runs on main (any order, any status); only finished
+ * runs that succeeded or failed count (a cancelled or skipped run says nothing
+ * about main). Null while main is red again (a fresh run would test a red
+ * main), when no transition is in the list, or when it is older.
+ * Window: [the first red run's created_at (the red push), the green run's end].
+ */
+export function mainRedWindow(
+  runs,
+  { now = Date.now(), maxAgeHours = WINDOW_MAX_AGE_HOURS } = {}
+) {
+  const done = finishedMainRuns(runs);
+  if (!done.length || done[0].conclusion !== "success") return null;
+  const g = done.findIndex(
+    (r, i) =>
+      r.conclusion === "success" && done[i + 1]?.conclusion === "failure"
+  );
+  if (g < 0) return null;
+  const green = done[g];
   const streak = [];
-  for (const r of done.slice(1)) {
+  for (const r of done.slice(g + 1)) {
     if (r.conclusion !== "failure") break;
     streak.push(r);
   }
-  if (!streak.length) return null;
   const end = green.updated_at ?? green.created_at;
   if (now - at(end) > maxAgeHours * 3600_000) return null;
   const firstRed = streak[streak.length - 1];
@@ -328,13 +402,10 @@ export function mainRedWindow(
  *              the main commit it is built on, and main's tip now.
  */
 export function victimReasons({ pr, window, latestRun, markers, merge }) {
-  const r = [];
-  if (!window) r.push("main is not just back to green");
-  if (pr.state && pr.state !== "OPEN") r.push(`state: ${pr.state}`);
-  if (pr.baseRefName !== "main") r.push(`base: ${pr.baseRefName}, not main`);
-  if (pr.isDraft) r.push("draft");
-  if (/^negctl\//.test(pr.headRefName ?? "")) r.push("negctl branch");
-  if (pr.isCrossRepository) r.push("from a fork");
+  const r = prGates(pr);
+  if (!window) r.unshift("main is not just back to green");
+  // A draft toggle takes a queued PR out of the queue.
+  if (pr.isInMergeQueue) r.push("in the merge queue");
   if (latestRun === null) r.push("no CI run of its head");
   if (latestRun) {
     if (latestRun.head_sha !== pr.headRefOid)
@@ -368,6 +439,10 @@ export function victimDecision(input) {
     if (input[k] === undefined) reasons.push(`${k}: not read`);
   return { rerun: reasons.length === 0, reasons };
 }
+
+/** An enqueue refused because the PR is already queued (a concurrent pass got there first). */
+export const ALREADY_QUEUED =
+  /already (in the merge queue|queued|enqueued)|is already in (a|the) merge queue/i;
 
 // ── transport ───────────────────────────────────────────────────────────────
 
@@ -456,19 +531,35 @@ export function listOpenPrs(gh, repo, token) {
   return prs;
 }
 
+/** A PR's changed files (REST, 100 a page, GitHub's 3000-file cap), or null when they cannot all be read. */
+export function listPrFiles(gh, repo, number, token) {
+  const files = [];
+  for (let page = 1; page <= 30; page++) {
+    let batch;
+    try {
+      batch = gh.rest(
+        `repos/${repo}/pulls/${number}/files?per_page=100&page=${page}`,
+        { token }
+      );
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(batch)) return null;
+    files.push(...batch);
+    if (batch.length < 100) return files;
+  }
+  return null; // more than 3000 files: not all of them are visible
+}
+
 /**
  * The required checks of `main`, read live from its rules (the ruleset), or
  * null when they cannot be read (then: REQUIRED_CHECKS, and no riding).
  */
 export function liveRequiredChecks(gh, repo, token) {
   try {
-    const rules = gh.rest(`repos/${repo}/rules/branches/main?per_page=100`, {
-      token,
-    });
-    return (rules ?? [])
-      .filter((r) => r?.type === "required_status_checks")
-      .flatMap((r) => r.parameters?.required_status_checks ?? [])
-      .map((c) => c.context);
+    return requiredContextsOf(
+      gh.rest(`repos/${repo}/rules/branches/main?per_page=100`, { token })
+    );
   } catch {
     return null;
   }
@@ -486,10 +577,9 @@ export function layoutDepends(env) {
   return async (pr, repo) => {
     const self = repoNamed(repo, layout)?.dir ?? null;
     const parsed = parseDependsOn(pr.body ?? "", { self, layout });
-    const results = await evaluateAll(parsed, client, {
+    return evaluateAll(parsed, client, {
       defaultBranch: layout.defaultBranch,
     });
-    return results;
   };
 }
 
@@ -497,8 +587,7 @@ export function layoutDepends(env) {
 
 /**
  * One pass. Returns { code, enqueued: [n], rerun: [n], failures }.
- * `dependsOf(pr, repo)` → the resolver's results (default: layout), or a
- * state string ("landed" | "waiting" | "blocked").
+ * `dependsOf(pr, repo)` → the resolver's results (default: layout).
  */
 export async function runBot({
   env = process.env,
@@ -520,6 +609,7 @@ export async function runBot({
     env.MERGE_BOT_DRY_RUN === "true" ||
     env.MERGE_BOT_DRY_RUN === "1";
   const dryRun = askedDry || !botToken;
+  const whileRed = env.MERGE_BOT_ENQUEUE_WHILE_RED === "true";
   const out = { code: 0, enqueued: [], rerun: [], failures: 0 };
   if (!repo) {
     log("::warning::no GITHUB_REPOSITORY: nothing to do");
@@ -554,12 +644,26 @@ export async function runBot({
       ? `required checks: ${names.join(", ")}; dependents ${riding ? "ride their queued dependency" : `wait for their dependency to merge ("${HOLD_CHECK}" is not required)`}`
       : `::warning::could not read main's required checks: using ${names.join(", ")}; dependents wait for their dependency to merge`
   );
+  let mainRuns = null;
+  try {
+    mainRuns =
+      gh.rest(
+        `repos/${repo}/actions/workflows/${CI_WORKFLOW}/runs?branch=main&event=push&per_page=50`,
+        { token: readToken }
+      )?.workflow_runs ?? [];
+  } catch (e) {
+    log(`::warning::could not read main's CI runs (${e.message})`);
+  }
+  const mainRed = mainRuns ? mainState(mainRuns) : "unknown";
+  log(
+    `main is ${mainRed}${mainRed === "green" ? "" : whileRed ? ": MERGE_BOT_ENQUEUE_WHILE_RED=true, every eligible PR is enqueued" : ": only PRs that jump are enqueued"}`
+  );
   if (prMode) prs = prs.filter((p) => p.headRefOid === wr.head_sha);
   log(
     `${prMode ? `CI run ${wr.id} of ${String(wr.head_sha).slice(0, 9)}` : `sweep (${event})`}: ${prs.length} open PR(s)`
   );
 
-  if (!prMode)
+  if (!prMode && mainRuns)
     await victims({
       gh,
       repo,
@@ -568,17 +672,17 @@ export async function runBot({
       botToken,
       dryRun,
       log,
-      now,
+      window: mainRedWindow(mainRuns, { now }),
       out,
     });
 
-  // A + B: the jumpers first, then the oldest first.
-  const ordered = [...prs].sort(
-    (a, b) => Number(Boolean(jumpReason(b))) - Number(Boolean(jumpReason(a)))
-  );
+  // A + B + C: the jumpers first, then the oldest first.
+  const jumps = (p) => Boolean(jumpReason(p, { mainRed: mainRed === "red" }));
+  const ordered = [...prs].sort((a, b) => Number(jumps(b)) - Number(jumps(a)));
+  const ctx = { riding, mainRed, whileRed };
   for (const pr of ordered) {
     const tag = `#${pr.number}`;
-    const cheap = enqueueReasons({ pr });
+    const cheap = enqueueReasons({ pr, ...ctx });
     if (cheap.length) {
       log(`${tag} not enqueued: ${cheap.join("; ")}`);
       continue;
@@ -594,15 +698,13 @@ export async function runBot({
         pr.headRefOid,
         names
       );
-      // Depends-On is read only for a PR whose checks are green (it may cost
-      // a read per dependency, in another repo).
+      // Depends-On and the files are read only for a PR whose checks are green.
       if (checks.ok) {
-        const got = await depends(pr, repo);
-        const dep = Array.isArray(got)
-          ? dependsState(got, { repo, queued })
-          : got;
-        d = enqueueDecision({ pr, checks, depends: dep, riding });
-      } else d = { enqueue: false, reasons: enqueueReasons({ pr, checks }) };
+        const dep = dependsState(await depends(pr, repo), { repo, queued });
+        const files = listPrFiles(gh, repo, pr.number, readToken);
+        d = enqueueDecision({ pr, checks, depends: dep, files, ...ctx });
+      } else
+        d = { enqueue: false, reasons: enqueueReasons({ pr, checks, ...ctx }) };
     } catch (e) {
       log(`${tag} not enqueued: a read failed (${e.message})`);
       continue;
@@ -620,8 +722,7 @@ export async function runBot({
       log(`${tag} WOULD enqueue${how} at ${pr.headRefOid.slice(0, 9)}`);
       continue;
     }
-    const r = enqueue(gh, pr, d.jump, botToken, log, how);
-    if (r) {
+    if (enqueue(gh, pr, d.jump, botToken, log, how)) {
       out.enqueued.push(pr.number);
       queued.set(pr.number, pr.headRefOid);
     } else out.failures++;
@@ -634,36 +735,39 @@ export async function runBot({
 }
 
 /**
- * Enqueue one PR with the bot's token. A jump GitHub refuses is retried
- * without it (a main-red fix still enters the queue). True when it entered.
+ * Enqueue one PR with the bot's token: with the jump, then (if GitHub refuses
+ * it) without. "Already queued" (a concurrent pass got there first) counts as
+ * entered. True when it entered.
  */
 function enqueue(gh, pr, jump, token, log, how = "") {
   const tag = `#${pr.number}`;
-  const vars = { id: pr.id, oid: pr.headRefOid };
-  try {
-    const res = gh.graphql(ENQUEUE, { ...vars, jump }, { token });
-    const e = res?.data?.enqueuePullRequest?.mergeQueueEntry;
-    log(
-      `${tag} enqueued${how}: position ${e?.position ?? "?"}, ${e?.state ?? "?"}`
-    );
-    return true;
-  } catch (first) {
-    if (!jump) {
-      log(`::warning::${tag} could not be enqueued: ${first.message}`);
-      return false;
+  let last;
+  for (const j of jump ? [true, false] : [false]) {
+    try {
+      const res = gh.graphql(
+        ENQUEUE,
+        { id: pr.id, oid: pr.headRefOid, jump: j },
+        { token }
+      );
+      const e = res?.data?.enqueuePullRequest?.mergeQueueEntry;
+      log(
+        `${tag} enqueued${j || !jump ? how : " (no jump)"}: position ${e?.position ?? "?"}, ${e?.state ?? "?"}`
+      );
+      return true;
+    } catch (e) {
+      if (ALREADY_QUEUED.test(e.message)) {
+        log(`${tag} was already queued (${e.message})`);
+        return true;
+      }
+      last = e;
+      if (j)
+        log(
+          `::warning::${tag} could not jump the queue (${e.message}); enqueuing it without the jump`
+        );
     }
-    log(
-      `::warning::${tag} could not jump the queue (${first.message}); enqueuing it without the jump`
-    );
   }
-  try {
-    gh.graphql(ENQUEUE, { ...vars, jump: false }, { token });
-    log(`${tag} enqueued (no jump)`);
-    return true;
-  } catch (e) {
-    log(`::warning::${tag} could not be enqueued: ${e.message}`);
-    return false;
-  }
+  log(`::warning::${tag} could not be enqueued: ${last.message}`);
+  return false;
 }
 
 async function victims({
@@ -674,22 +778,9 @@ async function victims({
   botToken,
   dryRun,
   log,
-  now,
+  window,
   out,
 }) {
-  let window;
-  try {
-    const main = gh.rest(
-      `repos/${repo}/actions/workflows/${CI_WORKFLOW}/runs?branch=main&event=push&per_page=30`,
-      { token: readToken }
-    );
-    window = mainRedWindow(main?.workflow_runs, { now });
-  } catch (e) {
-    log(
-      `::warning::could not read main's CI runs (${e.message}); no victim run again`
-    );
-    return;
-  }
   if (!window) {
     log("main: no red→green transition to answer");
     return;
@@ -698,9 +789,16 @@ async function victims({
     `main went green in run ${window.green.id} after ${window.firstRed.id === window.lastRed.id ? `red run ${window.lastRed.id}` : `red runs ${window.firstRed.id}…${window.lastRed.id}`}: window ${window.start} → ${window.end}`
   );
   let mainSha;
+  let toggled = 0;
   for (const pr of prs) {
     const tag = `#${pr.number}`;
     if (victimReasons({ pr, window }).length) continue;
+    if (toggled >= MAX_TOGGLES_PER_SWEEP) {
+      log(
+        `${tag} and later victims wait for the next sweep (at most ${MAX_TOGGLES_PER_SWEEP} per sweep)`
+      );
+      break;
+    }
     try {
       const runs =
         gh.rest(
@@ -749,6 +847,7 @@ async function victims({
         log(`${tag} not run again: ${d.reasons.join("; ")}`);
         continue;
       }
+      toggled++;
       if (dryRun) {
         log(
           `${tag} WOULD run CI again (run ${latestRun.id} failed while main was red)`

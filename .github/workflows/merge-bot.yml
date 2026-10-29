@@ -11,8 +11,11 @@ name: Merge bot
 # so an enqueue with it would queue a PR whose merge_group checks never start.
 # The writes use the "Synap Merge Bot" GitHub App (contents + pull requests
 # write, installed on backend only, never on the ruleset's bypass list), from
-# the secrets SYNAP_MERGE_BOT_APP_ID / SYNAP_MERGE_BOT_KEY. Without them the
-# bot judges and logs, writes nothing, and the run stays green (fail-safe).
+# the secrets SYNAP_MERGE_BOT_APP_ID / SYNAP_MERGE_BOT_KEY. They live ONLY in
+# environment `ci-bots`, whose deployment branch policy is main: a workflow on
+# any other branch cannot read them (a repo secret could be read by any
+# branch's workflow). Without them the bot judges and logs, writes nothing,
+# and the run stays green (fail-safe).
 #
 # workflow_run and schedule run the DEFAULT BRANCH's copy of this file and of
 # the scripts; the job never checks out or runs a PR's code. A change here
@@ -34,11 +37,10 @@ on:
 permissions: {}
 
 concurrency:
-  # A PR's CI run judges that PR only (one group per head commit); a main push
-  # run, the schedule and the button sweep in ONE group, so two sweeps never
-  # run the same victim twice. A newer pending sweep replaces an older one:
-  # each is a whole sweep.
-  group: merge-bot-${{ (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request') && github.event.workflow_run.head_sha || 'sweep' }}
+  # ONE group: two passes never run at once, so a PR is never enqueued twice
+  # and a victim never run twice. A newer pending pass replaces an older one;
+  # a PR's own pass lost that way is judged by the next sweep (<= 15 min).
+  group: merge-bot
   cancel-in-progress: false
 
 jobs:
@@ -48,6 +50,10 @@ jobs:
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request' || github.event.workflow_run.event == 'push' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The bot app's secrets are in this environment only (branch policy: main).
+    # workflow_run and schedule run on main, so they get them; the tripwire
+    # fails if this line goes.
+    environment: ci-bots
     permissions:
       # Reads: PRs, check runs, workflow runs. checks: write = the once-only
       # "Re-run after main green" marker. Every write that must START CI goes
@@ -69,6 +75,7 @@ jobs:
             scripts/layout/hold.mjs
             scripts/layout/layout.mjs
             scripts/layout/layout.json
+            scripts/pod-observation.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
 

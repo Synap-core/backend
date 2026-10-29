@@ -29,8 +29,10 @@
  * 2026-10-29, merge bot): Zuul's "test together, land in order".
  *   - On the PR (pull_request_target, sweep): a dependency that is IN the merge
  *     queue counts (rideTheQueue), so the dependent may queue behind it.
- *   - In the queue (merge_group): it counts only when the group's base..head
- *     MERGES the dependency's current head (rideInGroup): the group then tests
+ *     Only while this check is REQUIRED (main's live rules): otherwise nothing
+ *     would hold the dependent in the queue, so it stays waiting.
+ *   - In the queue (merge_group): it counts only when the group's first-parent
+ *     line MERGES the dependency's current head (rideInGroup): the group then tests
  *     both together and the queue lands them in order. If the dependency leaves
  *     the queue, the group is rebuilt without it and the dependent is held again.
  * A dependency in another repo never rides: it must be on its main.
@@ -140,14 +142,21 @@ export function rideTheQueue(results, { repo, queued }) {
  * commits (a branch stacked on it) does not count: that change has not passed
  * the queue. `heads` = Map of PR number -> current head sha. Pure.
  */
-export function rideInGroup(results, { repo, groupCommits, heads }) {
+export function rideInGroup(results, { repo, groupCommits, heads, headSha }) {
+  // Only the group's own line: the queue's merges sit on the FIRST-parent
+  // chain from its head. A merge inside a PR's branch (`git merge <dep>` by
+  // its author) is reached through a second parent, never on that chain.
+  const bySha = new Map((groupCommits ?? []).map((c) => [c?.sha, c]));
+  const line = [];
+  for (let c = bySha.get(headSha); c; c = bySha.get(c.parents?.[0]?.sha)) {
+    line.push(c);
+    if (line.length > bySha.size) break;
+  }
   return results.map((r) => {
     if (!sameRepoWaitingPr(r, repo)) return r;
     const head = heads?.get(r.dep.number);
     if (!head) return r;
-    const merge = (groupCommits ?? []).find(
-      (c) => c?.parents?.[1]?.sha === head
-    );
+    const merge = line.find((c) => c?.parents?.[1]?.sha === head);
     if (!merge) return r;
     return {
       ...r,
@@ -156,6 +165,19 @@ export function rideInGroup(results, { repo, groupCommits, heads }) {
       detail: `in this merge-queue group (${String(merge.sha).slice(0, 9)} merges its head ${head.slice(0, 9)}): they land together, in order`,
     };
   });
+}
+
+/**
+ * The required status check names of a branch's rules (REST
+ * GET /repos/{repo}/rules/branches/{branch}). The one parse: the merge bot
+ * reads main's live required checks through it too.
+ */
+export function requiredContextsOf(rules) {
+  if (!Array.isArray(rules)) throw new Error("rules: not a list");
+  return rules
+    .filter((r) => r?.type === "required_status_checks")
+    .flatMap((r) => r.parameters?.required_status_checks ?? [])
+    .map((c) => c.context);
 }
 
 /** The PR number of a merge-queue branch: gh-readonly-queue/<base>/pr-<n>-<sha>. */
@@ -242,6 +264,19 @@ const QUEUE_STATE = `query($owner: String!, $name: String!, $number: Int!) {
 /** PR level: the waiting same-repo PR dependencies in the queue ride. A failed read leaves them waiting. */
 export function queueAdjust(own, repo, log) {
   return async (results) => {
+    if (!results.some((r) => sameRepoWaitingPr(r, repo))) return results;
+    // A queued dependency counts on the PR only while this check is REQUIRED
+    // (riding on): otherwise "landed" would tell whoever reads it before
+    // prcheck that a PR is ready while nothing holds it in the queue.
+    let required = false;
+    try {
+      required = requiredContextsOf(
+        await own.call("GET", `/repos/${repo}/rules/branches/main`)
+      ).includes(CHECK_NAME);
+    } catch (e) {
+      log(`could not read main's required checks (${e.message}); no riding`);
+    }
+    if (!required) return results;
     const [owner, name] = repo.split("/");
     const queued = new Map();
     for (const r of results) {
@@ -278,7 +313,12 @@ export function groupAdjust(own, repo, mg, log) {
         const p = await own.call("GET", `/repos/${repo}/pulls/${r.dep.number}`);
         if (p?.head?.sha) heads.set(r.dep.number, p.head.sha);
       }
-      return rideInGroup(results, { repo, groupCommits: cmp?.commits, heads });
+      return rideInGroup(results, {
+        repo,
+        groupCommits: cmp?.commits,
+        heads,
+        headSha: mg.head_sha,
+      });
     } catch (e) {
       log(
         `could not read the group's commits (${e.message}); its dependencies stay waiting`
