@@ -50,14 +50,20 @@ export function moveHoldArgs(input: {
   };
 }
 
+/**
+ * What an agent may say a pause waits on: every `on` but `unspecified`, the
+ * default a person's pause records and an agent's is refused
+ * (`decideMoveHold`).
+ */
+const AGENT_HOLD_ON = HOLD_ON.filter((on) => on !== "unspecified");
+
 /** Spread into an MCP tool's `inputSchema.properties` (a status door). */
 export const MOVE_HOLD_TOOL_PROPERTIES = {
   hold: {
     type: "object",
-    description:
-      "REQUIRED from you when the move PAUSES it (a status in the paused category): what it waits on — a pause without one is refused. { on: person | agent | external | thing | decision | date | nobody | unspecified, ref?: who or what ('person:<id>', 'company:<id>', a label), reason?: why, until?: { date: ISO } (resumes on that day) or { moves: '<entity|track|focus_session>:<id>', to?: status or category } (resumes when that thing moves), reviewBy?: ISO date to look again (defaults to 14 days when nothing resumes it on a date) }. Refused on a move that does not pause.",
+    description: `Required when the move pauses. Say what it waits on. on: ${AGENT_HOLD_ON.join(" | ")}. ref: who or what ('person:<id>', 'company:<id>', a label). reason: why. until: { date: ISO } resumes on that day; { moves: '<entity|track|focus_session>:<id>', to?: status or category } resumes when that thing moves. reviewBy: an ISO date to look again (14 days by default when nothing resumes it on a date). Leave it out when the move does not pause.`,
     properties: {
-      on: { type: "string", enum: [...HOLD_ON] },
+      on: { type: "string", enum: AGENT_HOLD_ON },
       ref: { type: ["string", "null"] },
       reason: { type: ["string", "null"] },
       until: { type: ["object", "null"] },

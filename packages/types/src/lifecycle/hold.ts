@@ -69,7 +69,7 @@ export interface RecordedHold extends Hold {
  * shape, so the agent can fix the call in one try.
  */
 export const HOLD_REQUIRED_MESSAGE =
-  'A pause must say what it waits on: pass `hold` with the move, e.g. { "on": "person" | "agent" | "external" | "thing" | "decision" | "date" | "nobody", "ref": "<who or what>", "reason": "<why>", "until": { "date": "<ISO date>" } or { "moves": "<entity|track|focus_session>:<id>", "to": "<status>" } }. An agent cannot pause without one.';
+  'A pause must say what it waits on: pass `hold` with the move, e.g. { "on": "person" | "agent" | "external" | "thing" | "decision" | "date" | "nobody", "ref": "<who or what>", "reason": "<why>", "until": { "date": "<ISO date>" } or { "moves": "<entity|track|focus_session>:<id>", "to": "<status>" } }. An agent cannot pause without one. Retry the same move with `hold` added.';
 
 /** An agent's `on: "unspecified"`: the default a person gets, never an agent's answer. */
 export const HOLD_UNSPECIFIED_BY_AGENT_MESSAGE =
@@ -77,15 +77,15 @@ export const HOLD_UNSPECIFIED_BY_AGENT_MESSAGE =
 
 /** `hold` given with a move that is not a pause. */
 export const HOLD_NOT_A_PAUSE_MESSAGE =
-  "`hold` is only for a move into a paused status; this move does not pause.";
+  "`hold` only applies when the move pauses something. Remove it, or move to a paused status.";
 
 /** `occurredAt` given with a call that moves no status. */
 export const OCCURRED_AT_NOT_A_MOVE_MESSAGE =
-  "`occurredAt` is only for a status move; this call moves no status.";
+  "`occurredAt` only applies to a status move. Remove it, or change the status.";
 
 /** Said back when a move carried a hold or a time but the status did not change. */
 export const MOVE_FACTS_IGNORED_NOTICE =
-  "The status did not change, so the hold and occurredAt sent with it were not recorded.";
+  "The status did not change, so the hold and occurredAt were ignored. Send them with a real status change.";
 
 /** The refusal for a hold or a time sent with no move to carry it. */
 export function moveFactsWithoutMoveMessage(given: {
