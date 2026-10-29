@@ -12,29 +12,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
   isPodAdmin: vi.fn(),
-  requireEditor: vi.fn(),
+  canWrite: vi.fn(),
 }));
 
 vi.mock("../../utils/workspace-role.js", () => ({
   isPodAdmin: h.isPodAdmin,
 }));
-vi.mock("../../utils/workspace-permissions.js", () => ({
-  requireEditor: h.requireEditor,
+vi.mock("../../access/door.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../access/door.js")>()),
+  canWrite: h.canWrite,
 }));
-// PARTIAL mock (importOriginal + spread) — a TOTAL replacement breaks the
-// moment any module in the graph reaches for an export this suite never named
-// (see the database-mock-total-ratchet tripwire). Only `db` is faked; the gate
-// passes it straight to the mocked `requireEditor` and never dereferences it.
-vi.mock("@synap/database", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@synap/database")>();
-  return { ...actual, db: {} };
-});
 
 const { assertMayBindRenderer } = await import("./renderer-binding-authz.js");
 
 beforeEach(() => {
   h.isPodAdmin.mockReset();
-  h.requireEditor.mockReset();
+  h.canWrite.mockReset();
 });
 
 describe("scope: user", () => {
@@ -44,7 +37,7 @@ describe("scope: user", () => {
     ).resolves.toBeUndefined();
     // Personal scope asks nobody: no membership, no pod-admin round trip.
     expect(h.isPodAdmin).not.toHaveBeenCalled();
-    expect(h.requireEditor).not.toHaveBeenCalled();
+    expect(h.canWrite).not.toHaveBeenCalled();
   });
 
   /**
@@ -94,7 +87,7 @@ describe("scope: pod", () => {
 
 describe("scope: workspace", () => {
   it("allows an editor of that workspace", async () => {
-    h.requireEditor.mockResolvedValue({ role: "editor" });
+    h.canWrite.mockResolvedValue(true);
     await expect(
       assertMayBindRenderer({
         userId: "u-1",
@@ -102,12 +95,15 @@ describe("scope: workspace", () => {
         workspaceId: "ws-1",
       })
     ).resolves.toBeUndefined();
-    expect(h.requireEditor).toHaveBeenCalledWith({}, "ws-1", "u-1");
+    expect(h.canWrite).toHaveBeenCalledWith(
+      { userId: "u-1", grant: null },
+      { workspace: "ws-1" }
+    );
     expect(h.isPodAdmin).not.toHaveBeenCalled();
   });
 
   it("refuses a non-editor who is not a pod admin", async () => {
-    h.requireEditor.mockRejectedValue(new Error("Requires editor role"));
+    h.canWrite.mockResolvedValue(false);
     h.isPodAdmin.mockResolvedValue(false);
     await expect(
       assertMayBindRenderer({
@@ -115,11 +111,11 @@ describe("scope: workspace", () => {
         scope: "workspace",
         workspaceId: "ws-1",
       })
-    ).rejects.toThrow(/Requires editor role/);
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("admits a pod admin who holds no member row (the sovereign-pod owner)", async () => {
-    h.requireEditor.mockRejectedValue(new Error("Workspace not found"));
+    h.canWrite.mockResolvedValue(false);
     h.isPodAdmin.mockResolvedValue(true);
     await expect(
       assertMayBindRenderer({

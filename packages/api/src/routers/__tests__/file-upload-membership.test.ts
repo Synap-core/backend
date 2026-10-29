@@ -35,6 +35,27 @@ vi.mock("@synap/database", () => ({
   resolveImportEntityPlacement: vi.fn(),
 }));
 vi.mock("@synap/database/schema", () => ({ channelContextItems: {} }));
+// The access door pulls in the whole access layer, which this total
+// `@synap/database` mock cannot serve. Its write boolean is the REAL floor
+// (`assertWorkspaceWrite`) under the same refusal mapping as the door's
+// `canWrite`, which `access/door.pglite.test.ts` proves on its own.
+vi.mock("../../access/door.js", async () => {
+  const { assertWorkspaceWrite } =
+    await import("../../utils/workspace-write-access.js");
+  const { db } = await import("@synap/database");
+  return {
+    userPrincipal: (userId: string) => ({ userId, grant: null }),
+    canWrite: async (p: { userId: string }, t: { workspace: string }) => {
+      try {
+        await assertWorkspaceWrite(db, p.userId, { workspaceId: t.workspace });
+        return true;
+      } catch (err) {
+        if ((err as { code?: string }).code === "FORBIDDEN") return false;
+        throw err;
+      }
+    },
+  };
+});
 // The read floor of the URL doors pulls in the access layer; these tests
 // drive the upload doors only.
 vi.mock("../../utils/stored-file-access.js", () => ({

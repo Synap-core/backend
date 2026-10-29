@@ -69,8 +69,10 @@ request (tRPC, Hub REST, MCP)
        denied   → error
 ```
 
-- **Workspace roles:** `viewer` < `editor` < `admin` < `owner`
-  (`requireWorkspaceRole`, `packages/api/src/utils/workspace-permissions.ts`).
+- **Workspace roles:** `viewer` < `editor` < `admin` < `owner`. Every door asks
+  the access door (`packages/api/src/access/door.ts`): `canRead` (a space: a
+  member, its owner, or a pod-visible space), `canWrite` / `assertCanWrite`
+  (editor+, or the owner with no member row: `assertWorkspaceWrite`).
   A write with no workspace is a personal resource.
 - **Agents are users.** An agent acts as its own user record
   (`users.user_type`), with its own memberships; its role, not the triggering

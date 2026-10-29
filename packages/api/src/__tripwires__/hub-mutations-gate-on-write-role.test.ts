@@ -11,7 +11,7 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
  * check was `verifyWorkspaceAccess` (`rest/_shared.ts`): any membership row,
  * role ignored. The same helper gated `/cells/install`, `/cells/define`,
  * `DELETE /cells/:typeKey`, both whiteboard placements and the attachments
- * route. A write gates on `verifyWorkspaceWriteAccess` (the editor+ floor of
+ * route. A write gates on the access door's `canWrite` (the editor+ floor of
  * `assertWorkspaceWrite`); `verifyWorkspaceAccess` is a READ check.
  *
  * HOW IT SCANS: every non-test `.ts` under `routers/hub-protocol/` is globbed
@@ -34,7 +34,7 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
 const HUB_DIR = join(__dirname, "..", "routers", "hub-protocol");
 
 const MEMBERSHIP_CALL = /(?<!function\s+)\bverifyWorkspaceAccess\s*\(/;
-const WRITE_CALL = /\bverifyWorkspaceWriteAccess\s*\(/;
+const WRITE_CALL = /\bcanWrite\s*\(/;
 const HANDLER_START = /\bapp\.(get|post|put|patch|delete|openapi)\(/g;
 const HELPER_DECL =
   /(?:async\s+function|function)\s+([A-Za-z_$][\w$]*)\s*\(|const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(/g;
@@ -134,7 +134,7 @@ describe("tripwire: mutating Hub routes gate on the write role", () => {
         await verifyWorkspaceAccess(userId, ws);
       });
       app.delete("/ok", async (c) => {
-        if (!(await verifyWorkspaceWriteAccess(userId, ws))) return c.json({}, 403);
+        if (!(await canWrite(p, { workspace: ws }))) return c.json({}, 403);
       });`;
     expect(offendersIn("synthetic.ts", synthetic)).toEqual([
       "synthetic.ts::helper",

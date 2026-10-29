@@ -117,11 +117,11 @@ import {
   resolveActorId,
   uuidPathParam,
   verifyWorkspaceReadAccess,
-  verifyWorkspaceWriteAccess,
   type HubHono,
   type HubVariables,
   requireUuidParam,
 } from "./_shared.js";
+import { canWrite, userPrincipal } from "../../../access/door.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 
@@ -1849,7 +1849,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
           // WRITE-TARGET existence gate — NO facetLens (a role-shared read lens
           // must never authorize a write target). Canonical floor requires real
           // workspace membership for a workspaced target; a subsequent
-          // verifyWorkspaceWriteAccess re-checks it before the write lands.
+          // the door's `canWrite` re-checks it before the write lands.
           accessScopeWhere({
             workspaceIdColumn: entities.workspaceId,
             entityIdColumn: entities.id,
@@ -1864,13 +1864,15 @@ export function registerEntitiesRoutes(app: HubHono): void {
       // target's scope. The file ALWAYS lands in the target's own scope (never a
       // caller-supplied workspaceId — that would let a caller inject into a
       // foreign workspace via a pod-personal target). A workspace-scoped target
-      // requires the WRITE role there (verifyWorkspaceWriteAccess), not mere
+      // requires the WRITE role there (`canWrite`, the access door), not mere
       // membership or pod-read-visibility — reads must not authorize writes. A pod-personal target (null ws) is
       // already gated above to the caller's own entities.
       const effectiveWorkspaceId = target.workspaceId ?? null;
       if (
         effectiveWorkspaceId &&
-        !(await verifyWorkspaceWriteAccess(userId, effectiveWorkspaceId))
+        !(await canWrite(userPrincipal(userId), {
+          workspace: effectiveWorkspaceId,
+        }))
       ) {
         return c.json(
           { error: "Access denied: no write access to the entity's workspace" },
@@ -1888,7 +1890,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
       // contact" work (the primary capture case), since contacts are pod-scoped.
       let linkWorkspaceId: string | null = effectiveWorkspaceId;
       if (!linkWorkspaceId && body.workspaceId) {
-        if (await verifyWorkspaceWriteAccess(userId, body.workspaceId)) {
+        if (
+          await canWrite(userPrincipal(userId), { workspace: body.workspaceId })
+        ) {
           linkWorkspaceId = body.workspaceId;
         }
       }
@@ -2326,7 +2330,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
     // alone (a viewer) must not authorize writes (same rule as the attachments
     // route). The workspace is a storage-path + auth context signal; the
     // governed create below places the entity.
-    if (!(await verifyWorkspaceWriteAccess(userId, workspaceId))) {
+    if (!(await canWrite(userPrincipal(userId), { workspace: workspaceId }))) {
       return c.json(
         { error: "Access denied: no write access to the target workspace" },
         403
@@ -2517,7 +2521,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
     }
     const workspaceId =
       getConfinedWorkspace(c, pin.workspaceId) ?? pin.workspaceId;
-    if (!(await verifyWorkspaceWriteAccess(userId, workspaceId))) {
+    if (!(await canWrite(userPrincipal(userId), { workspace: workspaceId }))) {
       return c.json(
         { error: "Access denied: no write access to the target workspace" },
         403
@@ -2591,7 +2595,11 @@ export function registerEntitiesRoutes(app: HubHono): void {
       if (confined && confined !== bound.workspaceId) {
         return c.json({ error: "Key is confined to another workspace" }, 403);
       }
-      if (!(await verifyWorkspaceWriteAccess(userId, bound.workspaceId))) {
+      if (
+        !(await canWrite(userPrincipal(userId), {
+          workspace: bound.workspaceId,
+        }))
+      ) {
         return c.json(
           { error: "Access denied: no write access to the target workspace" },
           403

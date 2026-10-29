@@ -9,7 +9,8 @@
  *   - join a room   → the read of what the room streams (`canRead(p, {room})`);
  *   - write         → `assertWorkspaceWrite` on the STORED row's workspace,
  *                     then the key grant (`grantWriteDenial`). Governance stays
- *                     in `checkPermissionOrPropose`.
+ *                     in `checkPermissionOrPropose`;
+ *   - write in a space → the same floor, as a boolean (`canWrite`).
  *
  * Exported as `@synap/api/access-door` and vendored into realtime by
  * `packages/realtime/scripts/bundle-document-access.mjs`, so every import here
@@ -137,6 +138,33 @@ export async function assertCanWrite(
   if (!p.grant) return;
   const denial = await grantWriteDenial(target, p.grant);
   if (denial) throw new TRPCError({ code: "FORBIDDEN", message: denial });
+}
+
+/**
+ * May `p` write in the space `workspace`? The write floor
+ * (`assertWorkspaceWrite`: an editor+ member, or its owner with no member row)
+ * and the key's binding, as a boolean for a door's 403. What is written is
+ * judged where the write is governed (`checkPermissionOrPropose`, the grant).
+ * A refusal is false; a failed read throws, never "no".
+ */
+export async function canWrite(
+  p: Principal,
+  target: { workspace: string }
+): Promise<boolean> {
+  if (!keyReachesWorkspace(p, target.workspace)) return false;
+  try {
+    await assertWorkspaceWrite(db, p.userId, {
+      workspaceId: target.workspace,
+    });
+    return true;
+  } catch (err) {
+    if (
+      err instanceof TRPCError &&
+      (err.code === "FORBIDDEN" || err.code === "UNAUTHORIZED")
+    )
+      return false;
+    throw err;
+  }
 }
 
 function contextOf(p: Principal): AccessContext {

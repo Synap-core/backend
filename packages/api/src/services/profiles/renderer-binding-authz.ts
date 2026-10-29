@@ -15,13 +15,12 @@
  *               pod admin writing into another user's scope would be an
  *               invisible impersonation, and the resolver would report it as
  *               that user's own preference.
- *   workspace — editor+ on THAT workspace, or pod admin. Pod admin is NOT
- *               generosity: a sovereign single-user pod's owner legitimately
- *               has no `workspace_members` row (the same gap that hid a pod
- *               owner's own vocabulary from `profiles.list`), and
- *               `requireEditor` answers NOT_FOUND for a non-member — so
- *               membership alone would lock the pod owner out of their own
- *               workspace's renderers.
+ *   workspace — the write floor on THAT workspace (the access door's
+ *               `canWrite`: editor+, or its owner with no member row), or pod
+ *               admin. Pod admin is NOT generosity: a pod admin administers
+ *               every workspace, including ones they hold no member row on
+ *               (the same gap that hid a pod owner's own vocabulary from
+ *               `profiles.list`).
  *   pod       — pod admin only. A pod binding answers for EVERY workspace and
  *               every user, which is the same blast radius `requirePodAdmin`
  *               already guards for pod-wide capabilities.
@@ -36,10 +35,9 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { db } from "@synap/database";
 
+import { canWrite, userPrincipal } from "../../access/door.js";
 import { isPodAdmin } from "../../utils/workspace-role.js";
-import { requireEditor } from "../../utils/workspace-permissions.js";
 import type { RendererScope } from "./set-profile-renderer.js";
 
 export interface BindRendererAuthzInput {
@@ -91,13 +89,13 @@ export async function assertMayBindRenderer(
       message: "workspaceId is required for a workspace-scoped renderer",
     });
   }
-  try {
-    await requireEditor(db, workspaceId, userId);
-  } catch (err) {
-    // A pod admin administers every workspace, including ones they hold no
-    // member row on. Checked only on the membership MISS so the common path
-    // stays one query.
-    if (await isPodAdmin(userId)) return;
-    throw err;
-  }
+  if (await canWrite(userPrincipal(userId), { workspace: workspaceId })) return;
+  // A pod admin administers every workspace, including ones they hold no
+  // member row on. Checked only on the write floor's MISS so the common path
+  // stays one query. A failed read throws from either: never "no".
+  if (await isPodAdmin(userId)) return;
+  throw new TRPCError({
+    code: "FORBIDDEN",
+    message: "Only an editor of this workspace can bind its renderer.",
+  });
 }
