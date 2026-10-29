@@ -32,11 +32,13 @@ import {
   GITHUB_ACTIONS_APP_ID,
   INFRA_PATHS,
   INFRA_REASON,
+  MAX_QUEUE_FAILURES_PER_HEAD,
   MAX_TOGGLES_PER_SWEEP,
   RERUN_CHECK_NAME,
   dependsState,
   enqueueDecision,
   ghTransport,
+  headCiSince,
   infraFilesOf,
   isInfraPath,
   isMainRedFix,
@@ -45,6 +47,7 @@ import {
   mainRedWindow,
   mainState,
   prGates,
+  queueFailuresSince,
   requiredChecksState,
   runBot,
   victimDecision,
@@ -104,6 +107,49 @@ const decide = (p: Pr, over: Pr = {}) =>
     files: SOURCE_FILES,
     ...over,
   });
+
+// 29 Oct 2026: #310, green on its own checks, was enqueued at one head three
+// times while the queue failed it on a real type error.
+describe("merge-bot: a head the queue keeps failing is held until a push", () => {
+  const removed = (createdAt: string, reason = "failed_checks") => ({
+    createdAt,
+    reason,
+  });
+  const withRemovals = (...nodes: Pr[]) => pr({ timelineItems: { nodes } });
+  const since = headCiSince(greenRuns(), HEAD); // 10:00Z
+  it("the head's CI began at its earliest check run on that head", () => {
+    expect(since).toBe(Date.parse("2026-10-29T10:00:00Z"));
+    const older = checkRun("Preflight", "success", {
+      started_at: "2026-10-29T09:58:00Z",
+    });
+    const otherHead = checkRun("Preflight", "success", {
+      head_sha: "b".repeat(40),
+      started_at: "2026-10-29T08:00:00Z",
+    });
+    expect(headCiSince([...greenRuns(), older, otherHead], HEAD)).toBe(
+      Date.parse("2026-10-29T09:58:00Z")
+    );
+    expect(headCiSince([], HEAD)).toBeNull();
+  });
+  it("only red removals after the head's CI began count", () => {
+    const p = withRemovals(
+      removed("2026-10-29T09:00:00Z"), // an older head's red
+      removed("2026-10-29T10:20:00Z", "merge_conflict"), // not the PR's red
+      removed("2026-10-29T10:30:00Z", "manual"),
+      removed("2026-10-29T10:40:00Z")
+    );
+    expect(queueFailuresSince(p, since)).toBe(1);
+    expect(queueFailuresSince(pr(), since)).toBe(0);
+    expect(queueFailuresSince(p, null)).toBe(0);
+  });
+  it("one red is retried (a flake); the second at the same head holds it", () => {
+    expect(MAX_QUEUE_FAILURES_PER_HEAD).toBe(2);
+    expect(decide(pr(), { queueFailures: 1 }).enqueue).toBe(true);
+    const d = decide(pr(), { queueFailures: 2 });
+    expect(d.enqueue).toBe(false);
+    expect(d.reasons.join(" ")).toMatch(/failed it 2 times at this head/);
+  });
+});
 
 describe("merge-bot: the Pod session line (pod-observation.mjs's parser)", () => {
   it.each([
@@ -1009,6 +1055,33 @@ describe(
   "merge-bot: the script, end to end, through `gh api`",
   { timeout: 30_000 },
   () => {
+    it("holds a head the queue failed twice, enqueues one it failed once (the sweep reads the timeline)", async () => {
+      const red = (at: string) => ({ createdAt: at, reason: "failed_checks" });
+      const { r, out } = await bot({
+        prs: [
+          pr({
+            number: 7,
+            id: "PR_7",
+            headRefOid: sha("7"),
+            timelineItems: {
+              nodes: [red("2026-10-29T10:30:00Z"), red("2026-10-29T10:50:00Z")],
+            },
+          }),
+          pr({
+            number: 8,
+            id: "PR_8",
+            headRefOid: sha("8"),
+            timelineItems: { nodes: [red("2026-10-29T10:30:00Z")] },
+          }),
+        ],
+        checks: {
+          [sha("7")]: greenOn(sha("7")),
+          [sha("8")]: greenOn(sha("8")),
+        },
+      });
+      expect(r).toMatchObject({ code: 0, enqueued: [8] });
+      expect(out).toMatch(/#7 not enqueued: .*failed it 2 times at this head/);
+    });
     it("enqueues the green eligible PRs with the APP's token and expectedHeadOid, the security fix first and jumping", async () => {
       const { r, calls, out } = await bot(queueData());
       expect(r).toMatchObject({ code: 0, enqueued: [4, 1] });
