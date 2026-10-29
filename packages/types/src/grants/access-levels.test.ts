@@ -12,7 +12,9 @@ import {
   activityFamilies,
   describeKey,
   familyAccess,
+  familyParts,
   setActivityFamilies,
+  setFamilyPart,
   setFamilyLevel,
   summarizeGrant,
   type GrantDraft,
@@ -189,5 +191,119 @@ describe("activity families", () => {
     expect(
       setActivityFamilies({ permissions: ["event"] }, ["ci"]).permissions
     ).toEqual(["event.read", "event.ci.create"]);
+  });
+});
+
+describe("family parts (Only some…)", () => {
+  const ctx = {
+    kinds: [
+      { slug: "note", name: "Notes" },
+      { slug: "person", name: "People" },
+    ],
+  };
+  const work = accessFamily("work");
+
+  // Rules out: a parts list that ignores the level (a View family's kind
+  // read as off, or an Edit family's kind read as on because it only reads).
+  it("Records lists the pod's kinds, on when the kind holds the level", () => {
+    const parts = familyParts(
+      { permissions: ["entity.note.read", "entity.note.create"] },
+      records,
+      ctx
+    );
+    expect(parts.map((p) => [p.label, p.on])).toEqual([
+      ["Notes", false],
+      ["People", false],
+    ]);
+    const viewNotes = familyParts(
+      { permissions: ["entity.note.read"] },
+      records,
+      ctx
+    );
+    expect(viewNotes.map((p) => p.on)).toEqual([true, false]);
+  });
+
+  it("Activity lists the dev and CI families", () => {
+    const parts = familyParts(
+      { permissions: ["event.ci.create"] },
+      activity,
+      ctx
+    );
+    expect(parts.map((p) => [p.id, p.on])).toEqual([
+      ["dev", false],
+      ["ci", true],
+    ]);
+    expect(parts.map((p) => p.label)).toEqual(["Dev events", "CI events"]);
+  });
+
+  // Rules out: taking one family out leaving the every-family pattern behind
+  // (the key would still post every family) — the dev/ci decision a29a40d4.
+  it("taking dev out of a poster limits it to CI", () => {
+    const d = setFamilyPart(
+      { permissions: ["event.create"] },
+      activity,
+      "dev",
+      false,
+      ctx
+    );
+    expect(d.permissions).toEqual(["event.ci.create"]);
+    expect(familyAccess(d, activity)).toEqual({ level: "post", partial: true });
+    expect(setFamilyPart(d, activity, "dev", true, ctx).permissions).toEqual([
+      "event.create",
+    ]);
+  });
+
+  // Rules out: Off on a part keeping its read when the family is at Edit.
+  it("a kind out of an Edit family keeps nothing on that kind", () => {
+    const d = setFamilyPart(
+      setFamilyLevel(none, records, "edit"),
+      records,
+      "note",
+      false,
+      ctx
+    );
+    expect(d.permissions.some((p) => p.startsWith("entity.note."))).toBe(false);
+    expect(d.permissions).toContain("entity.person.delete");
+  });
+
+  it("Work lists its subjects; one in at View gives its read only", () => {
+    const d = setFamilyPart(
+      setFamilyLevel(none, work, "view"),
+      work,
+      "session",
+      false,
+      ctx
+    );
+    const parts = familyParts(d, work, ctx);
+    expect(parts.find((p) => p.id === "session")?.on).toBe(false);
+    expect(parts.find((p) => p.id === "project")?.on).toBe(true);
+    expect(d.permissions).not.toContain("session.read");
+  });
+
+  // Rules out: a part edit WIDENING full access (keeping `*` beside it).
+  it("from full access, a Decide verb out breaks `*` and keeps the rest", () => {
+    const d = setFamilyPart(
+      { permissions: ["*"] },
+      decide,
+      "proposal.approve",
+      false,
+      ctx
+    );
+    expect(d.permissions).not.toContain("*");
+    expect(d.permissions).not.toContain("proposal.approve");
+    expect(d.permissions).toContain("entity.*.merge");
+    expect(familyAccess(d, records)).toEqual({ level: "edit", partial: false });
+  });
+
+  it("Decide lists its four verbs in words", () => {
+    expect(familyParts(none, decide, ctx).map((p) => p.label)).toEqual(
+      KEY_POWERFUL_ACTIONS.map(
+        (a) =>
+          familyParts({ permissions: [a.pattern] }, decide, ctx).find(
+            (p) => p.id === a.pattern
+          )!.label
+      )
+    );
+    expect(familyParts(none, decide, ctx)[0]!.label).toBe("Approve Proposals");
   });
 });

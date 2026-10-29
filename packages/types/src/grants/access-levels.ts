@@ -24,6 +24,12 @@
 import { GRANT_ACTIONS, parsePermission } from "./grammar.js";
 import {
   GRANT_SUBJECT_CATALOG,
+  grantActionLabel,
+  grantKindLabel,
+  grantQualifierLabel,
+  grantQualifierValues,
+  grantSubjectLabel,
+  isKindQualifiedGrantSubject,
   isQualifiedGrantSubject,
   type GrantAction,
   type GrantSubjectSpec,
@@ -32,6 +38,7 @@ import {
   isFullAccess,
   isGranted,
   normalizeGrantPermissions,
+  toggleGrant,
   type GrantDraft,
 } from "./draft.js";
 import { GRANT_SUBJECT_GROUPS } from "./sections.js";
@@ -308,4 +315,127 @@ export function setActivityFamilies(
     ...draft,
     permissions: normalizeGrantPermissions([...kept, ...added]),
   };
+}
+
+// ── "Only some…": the parts of a family ────────────────────────────────────
+
+/**
+ * One part of a family the person can leave in or out at the family's level
+ * ("Only some…", key pages plan 447800fe §5.1): a kind of record (Records),
+ * a subject (Content, Work), an activity family (Activity), a verb (Decide).
+ */
+export interface FamilyPart {
+  readonly id: string;
+  readonly label: string;
+  /** The part holds the family's whole level. */
+  readonly on: boolean;
+}
+
+/** What the parts need from the pod: its kinds (slug → its own name). */
+export interface FamilyPartsContext {
+  readonly kinds: readonly { readonly slug: string; readonly name?: string }[];
+}
+
+/** The subject and the qualifier (a kind, an activity family) a part sets. */
+function partCells(
+  family: AccessFamily,
+  partId: string,
+  level: AccessLevel
+): { subject: string; kind: string; action: GrantAction }[] {
+  const subject = family.subjects.length === 1 ? family.subjects[0]! : partId;
+  const kind = family.subjects.length === 1 ? partId : "*";
+  return cellsAt(subject, level).map((c) => ({ ...c, kind }));
+}
+
+/** Is the family one subject split by its qualifier (kinds, activity families)? */
+function splitByQualifier(family: AccessFamily): boolean {
+  return (
+    family.subjects.length === 1 && isQualifiedGrantSubject(family.subjects[0]!)
+  );
+}
+
+/**
+ * The parts of a family, in order, and which hold its level. A family at Off
+ * has every part off. Records needs the pod's kinds (`ctx.kinds`); Activity's
+ * families are fixed (`grantQualifierValues`).
+ */
+export function familyParts(
+  draft: GrantDraft,
+  family: AccessFamily,
+  ctx: FamilyPartsContext
+): FamilyPart[] {
+  const full = isFullAccess(draft);
+  if (family.id === "decide")
+    return KEY_POWERFUL_ACTIONS.map((a) => ({
+      id: a.pattern,
+      label: `${grantActionLabel(a.verb)} ${grantSubjectLabel(a.subject)}`,
+      on: full || draft.permissions.includes(a.pattern),
+    }));
+  const { level } = familyAccess(draft, family);
+  const holds = (id: string) =>
+    level !== "off" &&
+    partCells(family, id, level).every((c) => isGranted(draft, c));
+  if (splitByQualifier(family)) {
+    const subject = family.subjects[0]!;
+    const parts = isKindQualifiedGrantSubject(subject)
+      ? ctx.kinds.map((k) => ({
+          id: k.slug,
+          label: grantKindLabel(k.slug, k.name),
+        }))
+      : grantQualifierValues(subject).map((q) => ({
+          id: q,
+          label: grantQualifierLabel(subject, q),
+        }));
+    return parts.map((p) => ({ ...p, on: holds(p.id) }));
+  }
+  return family.subjects.map((s) => ({
+    id: s,
+    label: grantSubjectLabel(s),
+    on: holds(s),
+  }));
+}
+
+/**
+ * Leave one part in (at the family's level) or out (nothing on it). From
+ * full access, `*` is first broken into every family at its top level: a
+ * NARROWING, never a widening. A family at Off has no level to give a part.
+ */
+export function setFamilyPart(
+  draft: GrantDraft,
+  family: AccessFamily,
+  partId: string,
+  on: boolean,
+  ctx: FamilyPartsContext
+): GrantDraft {
+  const base = isFullAccess(draft)
+    ? setFamilyLevel(draft, family, top(family))
+    : draft;
+  if (family.id === "decide") {
+    const kept = base.permissions.filter((p) => p !== partId);
+    return {
+      ...base,
+      permissions: normalizeGrantPermissions(on ? [...kept, partId] : kept),
+    };
+  }
+  const { level } = familyAccess(base, family);
+  if (level === "off") return base;
+  // Posting: every family ticked is EVERY family (`event.create`, families
+  // added later included), as the Post level itself gives.
+  if (family.id === "activity" && level === "post") {
+    const was = activityFamilies(base);
+    const all = grantQualifierValues("event");
+    const now = (was === "all" ? all : was).filter((f) => f !== partId);
+    const next = on ? [...now, partId] : now;
+    return setActivityFamilies(
+      base,
+      all.every((f) => next.includes(f))
+        ? null
+        : all.filter((f) => next.includes(f))
+    );
+  }
+  const kinds = ctx.kinds.map((k) => k.slug);
+  // Off takes the part out at every level, read included (Edit's cells are
+  // every action the catalog offers); on gives it the family's level.
+  const cells = partCells(family, partId, on ? level : "edit");
+  return cells.reduce((d, c) => toggleGrant(d, c, on, { kinds }), base);
 }
