@@ -31,6 +31,15 @@ vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
+    // The one session status write (the onFail un-pause, status-flow W2),
+    // recorded like the UPDATE it replaced.
+    setSessionStatus: async (
+      _db: unknown,
+      input: { to: string; set?: Record<string, unknown> }
+    ) => {
+      h.updates.push({ ...input.set, status: input.to });
+      return { rows: [{ id: "sess-1" }], transitions: [] };
+    },
     db: {
       select: () => ({
         from: () => ({

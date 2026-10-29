@@ -26,7 +26,11 @@ import { readFileSync } from "fs";
 import { join } from "path";
 
 /** Every `db.update(...).set(...)` payload, tagged by table. */
-const updates: Array<{ table: string; values: Record<string, unknown> }> = [];
+const updates: Array<{
+  table: string;
+  values: Record<string, unknown>;
+  from?: unknown;
+}> = [];
 /** What the session lookup returns; null = the session is gone. */
 let sessionRow: Record<string, unknown> | null = null;
 /** Rows the focus-session UPDATE's `.returning()` reports. */
@@ -39,6 +43,19 @@ vi.mock("@synap/database", async (importOriginal) => {
     t === actual.focusSessions ? "focus_sessions" : "proposals";
   return {
     ...actual,
+    // The one session status write (status-flow W2), recorded like the
+    // UPDATE it replaced; `from` is its compare-and-set.
+    setSessionStatus: async (
+      _db: unknown,
+      input: { from: unknown; to: string; set?: Record<string, unknown> }
+    ) => {
+      updates.push({
+        table: "focus_sessions",
+        values: { ...input.set, status: input.to },
+        from: input.from,
+      });
+      return { rows: updateReturns, transitions: [] };
+    },
     db: {
       query: { focusSessions: { findFirst: async () => sessionRow } },
       update: (table: unknown) => ({
@@ -141,6 +158,10 @@ describe("focus_session/playbook.stage_gate — approval resumes the run", () =>
     >;
 
     expect(sessionUpdate().status).toBe("active");
+    // Guarded: it resumes ONLY a paused session.
+    expect(updates.find((u) => u.table === "focus_sessions")?.from).toBe(
+      "paused"
+    );
     expect(result.success).toBe(true);
     const effect = result.effect as Record<string, unknown>;
     expect(effect.applied).toBe("verified");

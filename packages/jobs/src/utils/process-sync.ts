@@ -77,6 +77,7 @@ import {
   insertChannelMessage,
   listOpenWorkerTargetSessions,
   stampWorkerTargetResult,
+  setSessionStatus,
 } from "@synap/database";
 import { WORKER_TARGET_REASONS } from "@synap-core/types/workers";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
@@ -518,13 +519,15 @@ async function applyRejectedGateOnFail(
     if (!target || target === stageKey) return [];
     // Un-pause FIRST (guarded on `paused`), so a gate on the target stage can
     // pause the run again — the gate only ever pauses an ACTIVE session.
-    const resumed = await db
-      .update(focusSessions)
-      .set({ status: "active", updatedAt: new Date() })
-      .where(
-        and(eq(focusSessions.id, s.id), eq(focusSessions.status, "paused"))
-      )
-      .returning({ id: focusSessions.id });
+    const { rows: resumed } = await setSessionStatus(db, {
+      sessionId: s.id,
+      from: "paused",
+      to: "active",
+      actor: { kind: "system", userId: s.userId },
+      reason: `Its stage gate was rejected: back to stage "${target}".`,
+      proposalId: ev.subjectId,
+      set: { updatedAt: new Date() },
+    });
     if (resumed.length === 0) return [];
     await advanceSessionStageViaSlot({
       session: s,

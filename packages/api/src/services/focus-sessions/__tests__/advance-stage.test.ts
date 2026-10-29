@@ -36,6 +36,15 @@ vi.mock("@synap/database", async (importOriginal) => {
   let selectingRuns = true;
   return {
     ...actual,
+    // The one session status write (the gate's pause), recorded like the
+    // UPDATE it replaced: the status beside the caller's other columns.
+    setSessionStatus: async (
+      _db: unknown,
+      input: { to: string; set?: Record<string, unknown> }
+    ) => {
+      updates.push({ ...input.set, status: input.to });
+      return { rows: [{ id: SESSION_ID }], transitions: [] };
+    },
     db: {
       select: (cols: Record<string, unknown>) => {
         selectingRuns = "definitionSnapshot" in cols;

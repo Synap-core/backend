@@ -110,6 +110,15 @@ vi.mock("@synap/database", () => ({
     h.posts.push(m);
     return { messageId: "m-1", mirrored: false };
   },
+  // The one session status write (status-flow W2), recorded like the UPDATE
+  // it replaced; resumes only a paused run.
+  setSessionStatus: async (
+    _db: unknown,
+    i: { from: unknown; to: string; set?: Record<string, unknown> }
+  ) => {
+    h.updates.push({ ...i.set, status: i.to, from: i.from });
+    return { rows: [{ id: "s" }], transitions: [] };
+  },
 }));
 vi.mock("@synap/events", () => ({
   DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS: true,
@@ -342,7 +351,9 @@ describe("rejected human gate → onFail", () => {
       workspaceId: "ws-1",
       data: { proposalStatus: "rejected" },
     });
-    expect(h.updates).toEqual([expect.objectContaining({ status: "active" })]);
+    expect(h.updates).toEqual([
+      expect.objectContaining({ status: "active", from: "paused" }),
+    ]);
     expect(h.advances).toEqual([expect.objectContaining({ toStage: "draft" })]);
     expect(out).toEqual([
       {

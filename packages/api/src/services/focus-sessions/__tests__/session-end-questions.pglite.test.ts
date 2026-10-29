@@ -111,6 +111,7 @@ vi.mock("../update-session.js", async (importOriginal) => {
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   focusSessions,
+  lifecycleTransitionOutbox,
   messages,
   playbookRuns,
   playbooks,
@@ -148,6 +149,7 @@ const q = <T>(sql: string, params?: unknown[]) =>
 beforeAll(async () => {
   for (const t of [
     focusSessions,
+    lifecycleTransitionOutbox,
     messages,
     playbookRuns,
     playbooks,

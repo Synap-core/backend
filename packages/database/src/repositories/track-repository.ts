@@ -24,6 +24,7 @@ import { projects } from "../schema/projects.js";
 import { insertTransitionOutbox } from "../services/lifecycle/transition-outbox.js";
 import {
   buildWorkUnitTransition,
+  workUnitActorOf,
   type WorkUnitActor,
 } from "../services/lifecycle/work-unit-transition.js";
 import { getActingAgentUserId } from "../utils/request-write-context.js";
@@ -291,12 +292,8 @@ export class TrackRepository extends BaseRepository<
     if (dropMetadataKey) {
       metadata = sql`(${metadata} - ${dropMetadataKey}::text)`;
     }
-    const actingAgentUserId = getActingAgentUserId();
-    const actor: WorkUnitActor = params.actor ?? {
-      kind: actingAgentUserId ? "agent" : "human",
-      userId,
-      agentUserId: actingAgentUserId ?? null,
-    };
+    const actor =
+      params.actor ?? workUnitActorOf(userId, getActingAgentUserId());
     const track = await this.db.transaction(async (tx: any) => {
       const [flipped] = await tx
         .update(projectTracks)

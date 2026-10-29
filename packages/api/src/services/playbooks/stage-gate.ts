@@ -39,6 +39,7 @@ import {
   inArray,
   drizzleSql,
   liveRunStatusWhere,
+  setSessionStatus,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
@@ -480,24 +481,22 @@ export function sessionGateSubject(
         : null;
     },
     async pause(metadataPatch) {
-      const rows = await db
-        .update(focusSessions)
-        .set({
-          status: "paused",
+      // The gate's own hold: the system's move (guarded `active → paused`).
+      const { rows } = await setSessionStatus(db, {
+        sessionId: params.sessionId,
+        from: "active",
+        to: "paused",
+        actor: { kind: "system", userId: params.userId },
+        reason: "Its stage gate is holding it.",
+        set: {
           updatedAt: new Date(),
           ...(metadataPatch
             ? {
                 metadata: drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(metadataPatch)}::jsonb`,
               }
             : {}),
-        })
-        .where(
-          and(
-            eq(focusSessions.id, params.sessionId),
-            eq(focusSessions.status, "active")
-          )
-        )
-        .returning({ id: focusSessions.id });
+        },
+      });
       return rows.length > 0;
     },
     async checkFailing(fromStage) {

@@ -32,6 +32,7 @@ import {
   focusSessions,
   closeOpenRoomQuestions,
   sessionStoppedOnItsAsksWhere,
+  setSessionStatus,
 } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
 import {
@@ -91,19 +92,23 @@ export async function staleStoppedSession(input: {
         ).length
       : 0;
     // Only the status and the receipts change: `updated_at` is left alone,
-    // like the reaper's own stale stamp (it is no agent's activity).
-    await tx
-      .update(focusSessions)
-      .set({
-        status: "stale",
+    // like the reaper's own stale stamp (it is no agent's activity). The row
+    // is locked above and the predicate held it at active/paused.
+    await setSessionStatus(tx, {
+      sessionId: row.id,
+      from: ["active", "paused"],
+      to: "stale",
+      actor: { kind: "system" },
+      reason: "It stopped on its own questions.",
+      set: {
         expectedOutputs: stampRetired(
           outputs,
           "session_ended",
           now,
           slotEndsWithSession
         ),
-      })
-      .where(eq(focusSessions.id, row.id));
+      },
+    });
     return {
       sessionId: row.id,
       retiredSlots: owed.length,

@@ -29,6 +29,16 @@ export interface WorkUnitActor {
   agentUserId?: string | null;
 }
 
+/** The actor of a door's move: the agent when an agent key made it, else the person. */
+export function workUnitActorOf(
+  userId: string,
+  agentUserId?: string | null
+): WorkUnitActor {
+  return agentUserId
+    ? { kind: "agent", userId, agentUserId }
+    : { kind: "human", userId };
+}
+
 export function buildWorkUnitTransition(input: {
   subjectType: WorkUnitTransitionPayload["subjectType"];
   subjectId: string;

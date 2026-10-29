@@ -5923,6 +5923,53 @@ declare const LIFECYCLE_CATEGORIES: readonly [
 	"lost"
 ];
 export type LifecycleCategory = (typeof LIFECYCLE_CATEGORIES)[number];
+/**
+ * What a transition is ABOUT. An entity (a kind's lifecycle, or a role's on
+ * its facet) moves through the `moveStatus` door; a goal (`project_tracks`)
+ * through its own compare-and-set; a focus session through `setSessionStatus`.
+ * All three write the SAME shape below, through the same outbox.
+ */
+export type TransitionSubjectType = "entity" | "focus_session" | "track";
+/**
+ * ONE TRANSITION SHAPE (status-flow plan W1): what every status move carries,
+ * whatever moved. Emitted as `<subjectType>.transition.completed`
+ * (`entity.transition.completed`, `track.…`, `focus_session.…`).
+ */
+export interface TransitionBase {
+	transitionId: string;
+	subjectType: TransitionSubjectType;
+	subjectId: string;
+	/** The status property (`status` for a goal or a session). */
+	property: string;
+	from: string | null;
+	to: string;
+	fromCategory: LifecycleCategory | null;
+	category: LifecycleCategory;
+	actorKind: "agent" | "human" | "system";
+	/** The person the move is attributed to (the owner of an agent's move). */
+	userId: string;
+	agentUserId: string | null;
+	sessionId: string | null;
+	reason: string | null;
+	/** A person moved it from a value they had not seen ("moved meanwhile"). */
+	staleExpected: boolean;
+	proposalId: string | null;
+	/** The lens the move happened in. */
+	workspaceId: string | null;
+}
+/**
+ * The payload of `entity.transition.completed` — the ONE event every entity
+ * status move emits (the `moveStatus` door). `role` is the role-profile slug
+ * when the status is a role's (stored on the facet), null for the kind's own
+ * lifecycle. `subjectId` is the entity.
+ */
+export interface LifecycleTransitionPayload extends TransitionBase {
+	subjectType: "entity";
+	entityId: string;
+	profileSlug: string | null;
+	role: string | null;
+	facetId: string | null;
+}
 declare const TRACK_STAGE_POSITIONS: readonly [
 	"done",
 	"active",
@@ -6910,6 +6957,27 @@ export interface ProjectDedupCandidate {
 	/** Token-set overlap score with the requested name. */
 	score: number;
 }
+/**
+ * The transition, as the event carries it (`entity.transition.completed`) —
+ * the entity half of the ONE transition shape (`@synap-core/types/lifecycle`;
+ * goals and sessions write the same base, `work-unit-transition.ts`).
+ */
+export type StatusTransition = LifecycleTransitionPayload;
+export type ApplyStatusMoveResult = {
+	status: "moved";
+	transition: StatusTransition;
+} | {
+	current: string;
+	status: "unchanged";
+} | {
+	actual: string | null;
+	expectedFrom: string | null;
+	status: "conflict";
+} | {
+	code: "UNKNOWN_OPTION";
+	reason: string;
+	status: "refused";
+};
 declare const OBJECT_ROOM_CONTEXT_TYPES: readonly [
 	"document",
 	"entity"
@@ -7645,52 +7713,63 @@ export interface ReconcileReport {
 	 */
 	layers?: InstallLayerReport[];
 }
-export interface StatusMoveActor {
-	/**
-	 * `agent` with no `agentUserId` is an UNATTRIBUTED AI write (a service or
-	 * hub key): still an AI, governed and compare-and-set as one, never a person.
-	 */
-	kind: "agent" | "human" | "system";
-	/** The human the write is attributed to (owner of an agent's write). */
-	userId: string;
-	agentUserId?: string | null;
-}
-/** The transition, as the event carries it (`entity.transition.completed`). */
-export interface StatusTransition {
-	transitionId: string;
+/**
+ * SESSION RECALL — the ONE reader of what recall left on a session.
+ *
+ * When a session starts, the pod looks for raw captures and notes that could
+ * help it (api `services/focus-sessions/session-recall.ts`, the runner) and
+ * writes its result onto `focus_sessions.metadata`:
+ *   `recalled: RecalledItem[]`, `recalledAt`, `recallError?`, `recallSkipped?`.
+ * Every surface (pod MCP + Hub + tRPC `focusSessions.get` `recall`, web, relay,
+ * the intelligence service) reads it through {@link projectSessionRecall}, so
+ * the five states can never fold into one another — above all, a FAILED recall
+ * never reads as "nothing found".
+ *
+ *   pending   recall has not run yet (no `recalledAt`)
+ *   ok        it found items (`recalled` non-empty)
+ *   empty     it ran and found nothing
+ *   skipped   it deliberately did not run (`recallSkipped`): a session an
+ *             automation started (cost), or a shared session with no
+ *             workspace to recall from (privacy)
+ *   failed    it errored (`recallError`); what an EARLIER run found is kept
+ *
+ * Pure and dependency-free (web, relay, Electron, Node, IS).
+ */
+export interface RecalledItem {
 	entityId: string;
-	profileSlug: string | null;
-	role: string | null;
-	facetId: string | null;
-	property: string;
-	from: string | null;
-	to: string;
-	fromCategory: LifecycleCategory | null;
-	category: LifecycleCategory;
-	actorKind: StatusMoveActor["kind"];
-	userId: string;
-	agentUserId: string | null;
-	sessionId: string | null;
-	reason: string | null;
-	staleExpected: boolean;
-	proposalId: string | null;
-	/** The lens the move happened in (facet row's / entity's workspace). */
-	workspaceId: string | null;
-}
-export type ApplyStatusMoveResult = {
-	status: "moved";
-	transition: StatusTransition;
-} | {
-	current: string;
-	status: "unchanged";
-} | {
-	actual: string | null;
-	expectedFrom: string | null;
-	status: "conflict";
-} | {
-	code: "UNKNOWN_OPTION";
+	title: string;
+	kind: string;
+	/** 0..1, two decimals — the candidate's own evidence. */
+	score: number;
+	/** One human line: why this was recalled. */
 	reason: string;
-	status: "refused";
+	recalledAt: string;
+}
+/** Why recall deliberately did not run on a session. */
+export type RecallSkipReason = 
+/** Started by an automation with no person (cost); a manual recall still runs. */
+"automation"
+/** Others can read the session and it has no workspace to recall from. */
+ | "shared_without_workspace";
+export type SessionRecallView = {
+	status: "pending";
+} | {
+	recalled: RecalledItem[];
+	recalledAt: string;
+	status: "ok";
+} | {
+	recalledAt: string;
+	status: "empty";
+} | {
+	reason: RecallSkipReason;
+	recalledAt: string;
+	status: "skipped";
+} | {
+	error: string;
+	/** What an EARLIER run found, kept across the failure. */
+	recalled: RecalledItem[];
+	recalledAt: string;
+	status: "failed";
 };
 /**
  * What a merge wrote onto a PRE-EXISTING entity, with the values it replaced.
@@ -13837,6 +13916,21 @@ declare const OperationalEventTypes: {
 		readonly label: "Playbook stage changed";
 		readonly type: "focus_session.stage_changed.completed";
 	};
+	readonly FOCUS_SESSION_TRANSITIONED: {
+		readonly description: "Fires when a focus session's status moves (active, paused, stale, closed\u2026).";
+		readonly domain: "Focus sessions";
+		readonly filterKeys: [
+			"from",
+			"to",
+			"fromCategory",
+			"category",
+			"actorKind",
+			"projectId",
+			"trackId"
+		];
+		readonly label: "Session status changed";
+		readonly type: "focus_session.transition.completed";
+	};
 	readonly INBOX_ITEM_ANALYZED: {
 		readonly description: "An inbox item was analyzed by the intelligence service.";
 		readonly domain: "Inbox";
@@ -13984,6 +14078,21 @@ declare const OperationalEventTypes: {
 		];
 		readonly label: "Track stage changed";
 		readonly type: "track.stage_changed.completed";
+	};
+	readonly TRACK_TRANSITIONED: {
+		readonly description: "Fires when a project's goal (a track) moves status (active, paused, completed\u2026).";
+		readonly domain: "Tracks";
+		readonly filterKeys: [
+			"from",
+			"to",
+			"fromCategory",
+			"category",
+			"actorKind",
+			"projectId",
+			"trackId"
+		];
+		readonly label: "Goal status changed";
+		readonly type: "track.transition.completed";
 	};
 	readonly USER_UPDATED: {
 		readonly description: "A user identity was updated.";

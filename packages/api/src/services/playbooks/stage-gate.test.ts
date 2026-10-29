@@ -39,6 +39,15 @@ vi.mock("@synap/database", async (importOriginal) => {
   let selectingRuns = true;
   return {
     ...actual,
+    // The one session status write (the gate's pause, status-flow W2),
+    // recorded like the UPDATE it replaced; `from` is its compare-and-set.
+    setSessionStatus: async (
+      _db: unknown,
+      input: { from: unknown; to: string; set?: Record<string, unknown> }
+    ) => {
+      updates.push({ ...input.set, status: input.to, from: input.from });
+      return { rows: updateReturns, transitions: [] };
+    },
     db: {
       select: (cols: Record<string, unknown>) => {
         selectingRuns = "definitionSnapshot" in cols;
@@ -171,6 +180,8 @@ describe("applyStageGateOnAdvance", () => {
 
     expect(updates).toHaveLength(1);
     expect(updates[0].status).toBe("paused");
+    // Guarded: only an active session is paused.
+    expect(updates[0].from).toBe("active");
 
     expect(proposalCalls).toHaveLength(1);
     const call = proposalCalls[0];

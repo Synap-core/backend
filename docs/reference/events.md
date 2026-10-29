@@ -2,7 +2,7 @@
 
 # Events
 
-The pod's event catalog: the 29 event types an automation trigger can name.
+The pod's event catalog: the 31 event types an automation trigger can name.
 
 ## Catalog
 
@@ -17,15 +17,17 @@ The pod's event catalog: the 29 event types an automation trigger can name.
 
 ### Focus sessions
 
-| Event type                              | Name                   | Description                                                        | Filter keys                          |
-| --------------------------------------- | ---------------------- | ------------------------------------------------------------------ | ------------------------------------ |
-| `focus_session.stage_changed.completed` | Playbook stage changed | Fires when a focus session advances to a different playbook stage. | `toStage`, `fromStage`, `playbookId` |
+| Event type                              | Name                   | Description                                                                 | Filter keys                                                                   |
+| --------------------------------------- | ---------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `focus_session.stage_changed.completed` | Playbook stage changed | Fires when a focus session advances to a different playbook stage.          | `toStage`, `fromStage`, `playbookId`                                          |
+| `focus_session.transition.completed`    | Session status changed | Fires when a focus session's status moves (active, paused, stale, closed…). | `from`, `to`, `fromCategory`, `category`, `actorKind`, `projectId`, `trackId` |
 
 ### Tracks
 
-| Event type                      | Name                | Description                                                                 | Filter keys                                                  |
-| ------------------------------- | ------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `track.stage_changed.completed` | Track stage changed | Fires when a project's track (a method it runs) moves to a different stage. | `toStage`, `fromStage`, `playbookId`, `projectId`, `trackId` |
+| Event type                      | Name                | Description                                                                      | Filter keys                                                                   |
+| ------------------------------- | ------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `track.stage_changed.completed` | Track stage changed | Fires when a project's track (a method it runs) moves to a different stage.      | `toStage`, `fromStage`, `playbookId`, `projectId`, `trackId`                  |
+| `track.transition.completed`    | Goal status changed | Fires when a project's goal (a track) moves status (active, paused, completed…). | `from`, `to`, `fromCategory`, `category`, `actorKind`, `projectId`, `trackId` |
 
 ### Proposals
 

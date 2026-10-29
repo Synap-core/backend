@@ -2371,11 +2371,14 @@ export async function updateFocusSession(
       outputsBefore = current;
       outputsAfter = applied.outputs;
     }
-    return tx
-      .update(focusSessions)
-      .set(set)
-      .where(eq(focusSessions.id, sessionId))
-      .returning();
+    // The one session status write when `set` carries a status.
+    const { writeSessionPatch, workUnitActorOf } =
+      await import("@synap/database");
+    return writeSessionPatch(tx, {
+      sessionId,
+      set,
+      actor: workUnitActorOf(userId, agentUserId),
+    });
   });
   await stampSessionUpdate({
     proposalId: receiptId && undoable ? receiptId : undefined,

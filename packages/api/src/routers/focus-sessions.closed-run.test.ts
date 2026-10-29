@@ -24,6 +24,15 @@ vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
+    // The update doors' row patch (status-flow W2), recorded like the UPDATE
+    // it replaced.
+    writeSessionPatch: async (
+      _db: unknown,
+      input: { set: Record<string, unknown> }
+    ) => {
+      sets.push(input.set);
+      return [{ id: SESSION, ...input.set }];
+    },
     db: {
       insert: () => {
         const chain: Record<string, unknown> = {

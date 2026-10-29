@@ -65,6 +65,8 @@ import {
   stampOpenWorkerTargets,
   closeOpenRoomQuestions,
   openRoomQuestionConditions,
+  setSessionStatus,
+  workUnitActorOf,
 } from "@synap/database";
 import { WORKER_TARGET_REASONS } from "@synap-core/types/workers";
 import { isDeliverableOutstanding } from "@synap-core/types/units";
@@ -92,6 +94,7 @@ import {
 } from "./close-event.js";
 import {
   isTerminalSessionStatus,
+  SESSION_STATUSES,
   TERMINAL_SESSION_STATUSES,
 } from "./session-statuses.js";
 import {
@@ -148,6 +151,11 @@ export interface CompleteFocusSessionParams {
    * nothing — a question it did not cover closes with the session.
    */
   approvedCloseOf?: string;
+  /**
+   * An AUTOMATIC close (the jobs closer slot: the reapers, a run's end): the
+   * session's transition names the system as its actor, not the owner.
+   */
+  actorKind?: "system";
 }
 
 /** One of the closing agent's still-open questions, as the refusal lists it. */
@@ -754,10 +762,18 @@ export async function completeFocusSession(
       }
     }
 
-    return await tx
-      .update(focusSessions)
-      .set({
-        status: terminalStatus,
+    // The one session status write, from whatever it stands at (the row is
+    // locked above; the already-terminal guard ran on the load): the close
+    // owes its transition beside the `focus_session.closed` event below.
+    const { rows } = await setSessionStatus(tx, {
+      sessionId,
+      from: SESSION_STATUSES,
+      to: terminalStatus,
+      actor: params.actorKind
+        ? { kind: params.actorKind, userId: params.userId }
+        : workUnitActorOf(params.userId, params.agentUserId),
+      reason: params.cancelReason ?? null,
+      set: {
         closedAt: new Date(),
         ...(retirement ? { expectedOutputs: retirement.outputs } : {}),
         ...(cancel ? { metadata: cancelRecordMetadataSql(cancel) } : {}),
@@ -770,9 +786,9 @@ export async function completeFocusSession(
                 verificationReport: drizzleSql`(CASE WHEN jsonb_typeof(${focusSessions.verificationReport}) = 'object' THEN ${focusSessions.verificationReport} ELSE '{}'::jsonb END) || ${JSON.stringify(reportPatch)}::jsonb`,
               }
             : {}),
-      })
-      .where(eq(focusSessions.id, sessionId))
-      .returning();
+      },
+    });
+    return rows;
   });
 
   // A successful close drops this subject from that playbook's pin list.

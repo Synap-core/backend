@@ -85,8 +85,12 @@ function walk(dir: string, out: string[] = []): string[] {
 // status: "cancelled" })` matched, and the detector blamed the wrong table.
 // (Found live 2026-09-20 on `follow-playbook.ts`, whose detach clears
 // `playbookId` on the session and then cancels the run row beneath it.)
+//
+// Since status-flow W2 every session status write goes through
+// `setSessionStatus` (@synap/database), so a terminal stamp can also be a
+// literal `to: "<terminal>"` handed to it — the second alternative.
 const TERMINAL_STAMP =
-  /\.update\(\s*focusSessions\s*\)(?:(?!\.update\()[\s\S]){0,400}?status:\s*"(closed|cancelled|failed)"/g;
+  /(?:\.update\(\s*focusSessions\s*\)(?:(?!\.update\()[\s\S]){0,400}?status:|setSessionStatus\((?:(?!setSessionStatus\()[\s\S]){0,400}?\bto:)\s*"(closed|cancelled|failed)"/g;
 
 function findViolations(roots: string[]): string[] {
   const hits: string[] = [];
@@ -148,6 +152,33 @@ describe("tripwire: a session's terminal status has ONE door", () => {
       "the detector reached past a second `.update(` and blamed a session door " +
         "for a playbook_runs status — it must bind to ONE statement."
     ).toBe(false);
+    TERMINAL_STAMP.lastIndex = 0;
+
+    // And through the one session status write (status-flow W2): a literal
+    // terminal `to:` is a stamp; a non-terminal one is not.
+    const HELPER_BAD = `
+      await setSessionStatus(db, {
+        sessionId,
+        from: "active",
+        to: "cancelled",
+        actor: { kind: "system" },
+      });
+    `;
+    TERMINAL_STAMP.lastIndex = 0;
+    expect(
+      TERMINAL_STAMP.test(stripComments(HELPER_BAD, "ts")),
+      "the detector no longer sees a terminal status handed to setSessionStatus"
+    ).toBe(true);
+    TERMINAL_STAMP.lastIndex = 0;
+    const HELPER_OK = `
+      await setSessionStatus(db, {
+        sessionId,
+        from: ["active", "paused"],
+        to: "stale",
+        actor: { kind: "system" },
+      });
+    `;
+    expect(TERMINAL_STAMP.test(stripComments(HELPER_OK, "ts"))).toBe(false);
     TERMINAL_STAMP.lastIndex = 0;
 
     // And it must NOT fire on a call that goes through the door.

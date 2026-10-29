@@ -40,6 +40,7 @@ import {
   chatTurns,
   events,
   focusSessions,
+  lifecycleTransitionOutbox,
   messages,
   proposals,
 } from "@synap/database";
@@ -129,7 +130,14 @@ const questionClosed = async (channel: string) =>
 
 describe("staleStoppedSession — a session that stopped on its own asks", () => {
   beforeAll(async () => {
-    for (const t of [focusSessions, messages, chatTurns, proposals, events]) {
+    for (const t of [
+      focusSessions,
+      lifecycleTransitionOutbox,
+      messages,
+      chatTurns,
+      proposals,
+      events,
+    ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
   }, 120_000);

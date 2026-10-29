@@ -41,6 +41,7 @@ import {
   messages,
   chatTurns,
   events,
+  lifecycleTransitionOutbox,
 } from "@synap/database/schema";
 import { handleFocusSessionReaper } from "../focus-session-reaper.js";
 import { handleAutomationRunReaper } from "../automation-run-reaper.js";
@@ -146,6 +147,8 @@ beforeAll(async () => {
     messages,
     chatTurns,
     events,
+    // Each stale stamp owes the session's transition (status-flow W2).
+    lifecycleTransitionOutbox,
   ])
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   registerStoppedSessionStaler(async ({ sessionId }) => {
@@ -166,7 +169,7 @@ beforeEach(async () => {
   closed.length = 0;
   staled.length = 0;
   await h.client!.exec(
-    "delete from focus_sessions; delete from proposals; delete from automation_runs; delete from automation_step_runs; delete from playbook_runs; delete from messages; delete from chat_turns; delete from events;"
+    "delete from focus_sessions; delete from proposals; delete from automation_runs; delete from automation_step_runs; delete from playbook_runs; delete from messages; delete from chat_turns; delete from events; delete from lifecycle_transition_outbox;"
   );
 });
 
@@ -177,6 +180,44 @@ describe("focus-session reaper", () => {
     await handleFocusSessionReaper();
     expect(await statusOf("focus_sessions", owing)).toBe("active");
     expect(await statusOf("focus_sessions", quiet)).toBe("stale");
+  });
+
+  it("stamps stale through the one status write: updated_at untouched, one transition owed", async () => {
+    const quiet = await session({ idleHours: 30, outputs: DONE });
+    const touched = async () =>
+      (
+        await q<{ at: string }>(
+          `select updated_at::text as at from focus_sessions where id = $1`,
+          [quiet]
+        )
+      ).rows[0]!.at;
+    const before = await touched();
+    await handleFocusSessionReaper();
+    expect(await statusOf("focus_sessions", quiet)).toBe("stale");
+    // The last-real-activity signal the predicate keys off is left alone.
+    expect(await touched()).toBe(before);
+    const owed = (
+      await q<{ transition: Record<string, unknown> }>(
+        `select transition from lifecycle_transition_outbox where transition->>'subjectId' = $1`,
+        [quiet]
+      )
+    ).rows;
+    expect(owed).toHaveLength(1);
+    expect(owed[0]!.transition).toMatchObject({
+      subjectType: "focus_session",
+      from: "active",
+      to: "stale",
+      category: "paused",
+      actorKind: "system",
+      userId: "u1",
+    });
+    // A second tick finds nothing to move and owes nothing more.
+    await handleFocusSessionReaper();
+    const again = await q(
+      `select 1 from lifecycle_transition_outbox where transition->>'subjectId' = $1`,
+      [quiet]
+    );
+    expect(again.rows).toHaveLength(1);
   });
 
   it("never closes an idle receipt that owes the person", async () => {

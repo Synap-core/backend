@@ -1,6 +1,6 @@
 /**
- * ONE TRANSITION SHAPE for goals (status-flow W1), on a real Postgres
- * (PGlite):
+ * ONE TRANSITION SHAPE for goals (status-flow W1) and sessions (W2), on a real
+ * Postgres (PGlite):
  *  - a goal's status flip (`TrackRepository.transitionStatus`, its one
  *    compare-and-set) owes `track.transition.completed` in the SAME
  *    transaction: one outbox row, the goal as subject, categories from
@@ -8,7 +8,11 @@
  *  - a lost compare-and-set owes nothing and emits no receipt;
  *  - an outbox that cannot be written rolls the flip back;
  *  - a row owed before transitions named their subject is claimed as an
- *    entity's.
+ *    entity's;
+ *  - `setSessionStatus`, the one session status write: compare-and-set on
+ *    `from` (one session or a set-based sweep), the caller's columns in the
+ *    same statement and nothing else (`updated_at` untouched unless passed),
+ *    one transition per row that changed, rolled back with its outbox.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -19,6 +23,8 @@ import * as schema from "../../../schema/index.js";
 import { ddlFor } from "./lifecycle-pglite.js";
 import { TrackRepository } from "../../../repositories/track-repository.js";
 import { claimTransitionOutbox } from "../transition-outbox.js";
+import { setSessionStatus, writeSessionPatch } from "../session-status.js";
+import { eq } from "drizzle-orm";
 
 let pg: PGlite;
 let db: any;
@@ -32,6 +38,7 @@ beforeAll(async () => {
   for (const t of [
     schema.projects,
     schema.projectTracks,
+    schema.focusSessions,
     schema.lifecycleTransitionOutbox,
   ]) {
     await pg.exec(ddlFor(t as unknown as PgTable));
@@ -176,5 +183,167 @@ describe("a row owed before transitions named their subject", () => {
       subjectId: "e-legacy",
       entityId: "e-legacy",
     });
+  });
+});
+
+describe("setSessionStatus — the one session status write", () => {
+  const LONG_AGO = "2026-01-01T00:00:00.000Z";
+  async function session(status: string, userId = OWNER) {
+    const r = await pg.query<{ id: string }>(
+      `INSERT INTO focus_sessions (id, user_id, goal, status, workspace_id, updated_at)
+       VALUES (gen_random_uuid(), $1, 'g', $2, $3, $4) RETURNING id`,
+      [userId, status, WORKSPACE, LONG_AGO]
+    );
+    return r.rows[0]!.id;
+  }
+  const row = async (id: string) =>
+    (
+      await pg.query<{ status: string; updated_at: Date; progress: number }>(
+        `SELECT status, updated_at, progress FROM focus_sessions WHERE id = $1`,
+        [id]
+      )
+    ).rows[0]!;
+
+  it("moves from `from`, writes the caller's columns, owes one transition", async () => {
+    const id = await session("active");
+    const r = await setSessionStatus(db, {
+      sessionId: id,
+      from: ["active", "paused"],
+      to: "stale",
+      actor: { kind: "system" },
+      reason: "quiet",
+      set: { progress: 40 },
+    });
+    expect(r.rows.map((x) => x.id)).toEqual([id]);
+    const after = await row(id);
+    expect(after.status).toBe("stale");
+    expect(after.progress).toBe(40);
+    // Not passed, not touched: the reapers' last-activity signal survives.
+    expect(new Date(after.updated_at).toISOString()).toBe(LONG_AGO);
+    const owed = await owedFor(id);
+    expect(owed).toHaveLength(1);
+    expect(owed[0]).toMatchObject({
+      transitionId: r.transitions[0]!.transitionId,
+      subjectType: "focus_session",
+      subjectId: id,
+      property: "status",
+      from: "active",
+      to: "stale",
+      fromCategory: "active",
+      // `stale` keeps its value and reads as paused.
+      category: "paused",
+      actorKind: "system",
+      // A system move is attributed to the session's own person.
+      userId: OWNER,
+      sessionId: id,
+      reason: "quiet",
+      workspaceId: WORKSPACE,
+    });
+  });
+
+  it("a session not in `from` is left as it is and owes nothing", async () => {
+    const id = await session("closed");
+    const r = await setSessionStatus(db, {
+      sessionId: id,
+      from: "paused",
+      to: "active",
+      actor: { kind: "human", userId: OWNER },
+    });
+    expect(r).toEqual({ rows: [], transitions: [] });
+    expect((await row(id)).status).toBe("closed");
+    expect(await owedFor(id)).toEqual([]);
+  });
+
+  it("a set-based sweep moves every matching row and only those", async () => {
+    const tag = randomUUID();
+    const a = await session("active", tag);
+    const b = await session("paused", tag);
+    const c = await session("closed", tag);
+    const r = await setSessionStatus(db, {
+      where: eq(schema.focusSessions.userId, tag),
+      from: ["active", "paused"],
+      to: "stale",
+      actor: { kind: "system" },
+    });
+    expect(r.rows.map((x) => x.id).sort()).toEqual([a, b].sort());
+    expect((await row(c)).status).toBe("closed");
+    expect((await owedFor(a))[0]).toMatchObject({
+      from: "active",
+      userId: tag,
+    });
+    expect((await owedFor(b))[0]).toMatchObject({
+      from: "paused",
+      fromCategory: "paused",
+    });
+    expect(await owedFor(c)).toEqual([]);
+  });
+
+  it("a patch whose status is already the session's writes the row and owes nothing", async () => {
+    const id = await session("active");
+    const rows = await writeSessionPatch(db, {
+      sessionId: id,
+      set: { status: "active", progress: 10 },
+      actor: { kind: "agent", userId: OWNER, agentUserId: "a1" },
+    });
+    expect(rows).toHaveLength(1);
+    expect((await row(id)).progress).toBe(10);
+    expect(await owedFor(id)).toEqual([]);
+  });
+
+  it("a patch with a new status moves it from whatever it stands at", async () => {
+    const id = await session("paused");
+    await writeSessionPatch(db, {
+      sessionId: id,
+      set: { status: "active" },
+      actor: { kind: "agent", userId: OWNER, agentUserId: "a1" },
+      proposalId: "p-2",
+    });
+    expect((await row(id)).status).toBe("active");
+    expect((await owedFor(id))[0]).toMatchObject({
+      from: "paused",
+      to: "active",
+      actorKind: "agent",
+      agentUserId: "a1",
+      proposalId: "p-2",
+    });
+  });
+
+  it("inside a caller's transaction it rolls back with it", async () => {
+    const id = await session("active");
+    await expect(
+      db.transaction(async (tx: any) => {
+        await setSessionStatus(tx, {
+          sessionId: id,
+          from: "active",
+          to: "paused",
+          actor: { kind: "human", userId: OWNER },
+        });
+        throw new Error("caller failed");
+      })
+    ).rejects.toThrow("caller failed");
+    expect((await row(id)).status).toBe("active");
+    expect(await owedFor(id)).toEqual([]);
+  });
+
+  it("an outbox that cannot be written rolls the move back", async () => {
+    const id = await session("active");
+    await pg.exec(
+      `ALTER TABLE lifecycle_transition_outbox RENAME TO lifecycle_transition_outbox_off`
+    );
+    try {
+      await expect(
+        setSessionStatus(db, {
+          sessionId: id,
+          from: "active",
+          to: "paused",
+          actor: { kind: "human", userId: OWNER },
+        })
+      ).rejects.toThrow();
+    } finally {
+      await pg.exec(
+        `ALTER TABLE lifecycle_transition_outbox_off RENAME TO lifecycle_transition_outbox`
+      );
+    }
+    expect((await row(id)).status).toBe("active");
   });
 });
