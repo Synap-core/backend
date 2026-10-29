@@ -25,6 +25,20 @@
  * Each state change posts a NEW check run: the latest run of a name is the one
  * a required check reads. An unchanged state posts nothing.
  *
+ * A dependency on a PR of THIS repo may RIDE the merge queue (founder,
+ * 2026-10-29, merge bot): Zuul's "test together, land in order".
+ *   - On the PR (pull_request_target, sweep): a dependency that is IN the merge
+ *     queue counts (rideTheQueue), so the dependent may queue behind it.
+ *     Only while this check is REQUIRED (main's live rules): otherwise nothing
+ *     would hold the dependent in the queue, so it stays waiting.
+ *   - In the queue (merge_group): it counts only when the group's first-parent
+ *     line MERGES the dependency's current head (rideInGroup): the group then tests
+ *     both together and the queue lands them in order. If the dependency leaves
+ *     the queue, the group is rebuilt without it and the dependent is held again.
+ * A dependency in another repo never rides: it must be on its main.
+ * This holds only if "Dependencies merged" is a REQUIRED check; the merge bot
+ * lets a dependent ride only when the live ruleset says so.
+ *
  * Env: GITHUB_TOKEN (checks: write, pull-requests: read on this repo),
  * LAYOUT_TOKEN (optional: reads the PRIVATE repos a dependency may live in),
  * GITHUB_REPOSITORY, GITHUB_EVENT_NAME, GITHUB_EVENT_PATH; HOLD_DRY_RUN=1 judges
@@ -97,6 +111,75 @@ export function sameCheck(latest, want) {
   );
 }
 
+const sameRepoWaitingPr = (r, repo) =>
+  r.status === "waiting" &&
+  r.dep?.kind === "pr" &&
+  String(r.dep.repo ?? "").toLowerCase() === String(repo ?? "").toLowerCase();
+
+/**
+ * PR level: a waiting dependency on a PR of `repo` that is in the merge queue
+ * counts as landed for this check (`rides: "queue"`). `queued` = Map of PR
+ * number -> head sha of the PRs in the queue. Pure.
+ */
+export function rideTheQueue(results, { repo, queued }) {
+  return results.map((r) => {
+    if (!sameRepoWaitingPr(r, repo) || !queued?.has(r.dep.number)) return r;
+    return {
+      ...r,
+      status: "landed",
+      rides: "queue",
+      detail: `in the merge queue (head ${String(queued.get(r.dep.number) ?? "").slice(0, 9)}): this PR may queue behind it; its queue run is held unless both are in one group`,
+    };
+  });
+}
+
+/**
+ * merge_group: a waiting dependency on a PR of `repo` counts as landed when
+ * the group's base..head commits hold the queue's MERGE of its current head:
+ * a commit whose second parent is that head (the queue merges each entry with
+ * parents [previous, PR head]; seen on aa8f854fa, "Merge pull request #485",
+ * parents 409270a3d,dd3a7bb19). A commit that merely CONTAINS the dependency's
+ * commits (a branch stacked on it) does not count: that change has not passed
+ * the queue. `heads` = Map of PR number -> current head sha. Pure.
+ */
+export function rideInGroup(results, { repo, groupCommits, heads, headSha }) {
+  // Only the group's own line: the queue's merges sit on the FIRST-parent
+  // chain from its head. A merge inside a PR's branch (`git merge <dep>` by
+  // its author) is reached through a second parent, never on that chain.
+  const bySha = new Map((groupCommits ?? []).map((c) => [c?.sha, c]));
+  const line = [];
+  for (let c = bySha.get(headSha); c; c = bySha.get(c.parents?.[0]?.sha)) {
+    line.push(c);
+    if (line.length > bySha.size) break;
+  }
+  return results.map((r) => {
+    if (!sameRepoWaitingPr(r, repo)) return r;
+    const head = heads?.get(r.dep.number);
+    if (!head) return r;
+    const merge = line.find((c) => c?.parents?.[1]?.sha === head);
+    if (!merge) return r;
+    return {
+      ...r,
+      status: "landed",
+      rides: "group",
+      detail: `in this merge-queue group (${String(merge.sha).slice(0, 9)} merges its head ${head.slice(0, 9)}): they land together, in order`,
+    };
+  });
+}
+
+/**
+ * The required status check names of a branch's rules (REST
+ * GET /repos/{repo}/rules/branches/{branch}). The one parse: the merge bot
+ * reads main's live required checks through it too.
+ */
+export function requiredContextsOf(rules) {
+  if (!Array.isArray(rules)) throw new Error("rules: not a list");
+  return rules
+    .filter((r) => r?.type === "required_status_checks")
+    .flatMap((r) => r.parameters?.required_status_checks ?? [])
+    .map((c) => c.context);
+}
+
 /** The PR number of a merge-queue branch: gh-readonly-queue/<base>/pr-<n>-<sha>. */
 export function queuePrNumber(headRef) {
   const m = /\/pr-(\d+)-[0-9a-f]+$/.exec(String(headRef ?? ""));
@@ -125,12 +208,24 @@ function api(token) {
   return { call };
 }
 
-async function judge({ repo, sha, body, deps, own, layout, log, dryRun }) {
+async function judge({
+  repo,
+  sha,
+  body,
+  deps,
+  own,
+  layout,
+  log,
+  dryRun,
+  adjust = async (r) => r,
+}) {
   const self = repoNamed(repo, layout)?.dir ?? null;
   const parsed = parseDependsOn(body, { self, layout });
-  const results = await evaluateAll(parsed, deps, {
-    defaultBranch: layout.defaultBranch,
-  });
+  const results = await adjust(
+    await evaluateAll(parsed, deps, {
+      defaultBranch: layout.defaultBranch,
+    })
+  );
   const want = checkFor(results);
   const found = await own.call(
     "GET",
@@ -158,6 +253,79 @@ async function judge({ repo, sha, body, deps, own, layout, log, dryRun }) {
     `${sha.slice(0, 9)}: ${want.status}${want.conclusion ? `/${want.conclusion}` : ""} — ${want.title}`
   );
   return want;
+}
+
+const QUEUE_STATE = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) { isInMergeQueue headRefOid }
+  }
+}`;
+
+/** PR level: the waiting same-repo PR dependencies in the queue ride. A failed read leaves them waiting. */
+export function queueAdjust(own, repo, log) {
+  return async (results) => {
+    if (!results.some((r) => sameRepoWaitingPr(r, repo))) return results;
+    // A queued dependency counts on the PR only while this check is REQUIRED
+    // (riding on): otherwise "landed" would tell whoever reads it before
+    // prcheck that a PR is ready while nothing holds it in the queue.
+    let required = false;
+    try {
+      required = requiredContextsOf(
+        await own.call("GET", `/repos/${repo}/rules/branches/main`)
+      ).includes(CHECK_NAME);
+    } catch (e) {
+      log(`could not read main's required checks (${e.message}); no riding`);
+    }
+    if (!required) return results;
+    const [owner, name] = repo.split("/");
+    const queued = new Map();
+    for (const r of results) {
+      if (!sameRepoWaitingPr(r, repo)) continue;
+      try {
+        const d = await own.call("POST", "/graphql", {
+          query: QUEUE_STATE,
+          variables: { owner, name, number: r.dep.number },
+        });
+        const p = d?.data?.repository?.pullRequest;
+        if (p?.isInMergeQueue) queued.set(r.dep.number, p.headRefOid);
+      } catch (e) {
+        log(
+          `could not read whether #${r.dep.number} is queued (${e.message}); it stays waiting`
+        );
+      }
+    }
+    return rideTheQueue(results, { repo, queued });
+  };
+}
+
+/** merge_group: the waiting same-repo PR dependencies this group merges ride. A failed read leaves them waiting. */
+export function groupAdjust(own, repo, mg, log) {
+  return async (results) => {
+    if (!results.some((r) => sameRepoWaitingPr(r, repo))) return results;
+    try {
+      const cmp = await own.call(
+        "GET",
+        `/repos/${repo}/compare/${mg.base_sha}...${mg.head_sha}`
+      );
+      const heads = new Map();
+      for (const r of results) {
+        if (!sameRepoWaitingPr(r, repo)) continue;
+        const p = await own.call("GET", `/repos/${repo}/pulls/${r.dep.number}`);
+        if (p?.head?.sha) heads.set(r.dep.number, p.head.sha);
+      }
+      return rideInGroup(results, {
+        repo,
+        groupCommits: cmp?.commits,
+        heads,
+        headSha: mg.head_sha,
+      });
+    } catch (e) {
+      log(
+        `could not read the group's commits (${e.message}); its dependencies stay waiting`
+      );
+      return results;
+    }
+  };
 }
 
 export async function main(env = process.env, log = console.log) {
@@ -189,7 +357,12 @@ export async function main(env = process.env, log = console.log) {
 
   if (event === "pull_request_target" || event === "pull_request") {
     const pr = payload.pull_request;
-    await judge({ ...ctx, sha: pr.head.sha, body: pr.body ?? "" });
+    await judge({
+      ...ctx,
+      sha: pr.head.sha,
+      body: pr.body ?? "",
+      adjust: queueAdjust(own, repo, log),
+    });
     return 0;
   }
   if (event === "merge_group") {
@@ -209,7 +382,12 @@ export async function main(env = process.env, log = console.log) {
       return 1;
     }
     const pr = await own.call("GET", `/repos/${repo}/pulls/${n}`);
-    await judge({ ...ctx, sha: mg.head_sha, body: pr.body ?? "" });
+    await judge({
+      ...ctx,
+      sha: mg.head_sha,
+      body: pr.body ?? "",
+      adjust: groupAdjust(own, repo, mg, log),
+    });
     return 0;
   }
   // push / schedule / workflow_dispatch: sweep every open PR.
@@ -228,6 +406,7 @@ export async function main(env = process.env, log = console.log) {
           sha: pr.head.sha,
           body: pr.body ?? "",
           log: (l) => log(`#${pr.number} ${l}`),
+          adjust: queueAdjust(own, repo, log),
         });
       } catch (e) {
         log(`#${pr.number} ✗ ${e.message}`);
