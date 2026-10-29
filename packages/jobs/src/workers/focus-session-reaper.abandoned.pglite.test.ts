@@ -28,7 +28,13 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { focusSessions, messages, events } from "@synap/database/schema";
+import {
+  focusSessions,
+  messages,
+  events,
+  proposals,
+  chatTurns,
+} from "@synap/database/schema";
 import {
   AGENT_SESSION_ABANDONED_DAYS,
   staleAbandonedAgentSessions,
@@ -98,9 +104,10 @@ const statusOf = async (id: string) =>
 const OLD = AGENT_SESSION_ABANDONED_DAYS + 1;
 
 beforeAll(async () => {
-  await h.client!.exec(ddlFor(focusSessions as unknown as PgTable));
-  await h.client!.exec(ddlFor(messages as unknown as PgTable));
-  await h.client!.exec(ddlFor(events as unknown as PgTable));
+  // Every table the waits-on-the-person predicate reads (needs-you-predicate:
+  // the session's room, turns, proposals and events).
+  for (const t of [focusSessions, messages, events, proposals, chatTurns])
+    await h.client!.exec(ddlFor(t as unknown as PgTable));
 }, 120_000);
 
 beforeEach(async () => {
