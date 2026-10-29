@@ -23433,9 +23433,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | undefined;
 			meta: object;
 			output: {
+				access: KeyAccess;
 				createdAt: Date;
 				createdBy: string | null;
 				expiresAt: Date | null;
+				grants: Pick<{
+					apiKeyId: string;
+					clientId: string | null;
+					createdAt: Date;
+					createdBy: string;
+					entityIds: string[] | null;
+					expiresAt: Date | null;
+					id: string;
+					label: string | null;
+					onBehalfOf: string;
+					permissions: string[];
+					principalUserId: string;
+					projectIds: string[] | null;
+					revokedAt: Date | null;
+					revokedBy: string | null;
+					roleId: string | null;
+					workspaceIds: string[] | null;
+				}, "entityIds" | "expiresAt" | "label" | "permissions" | "projectIds" | "roleId" | "workspaceIds">[];
 				holder: KeyHolder | null;
 				hubId: string | null;
 				id: string;
