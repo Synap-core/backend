@@ -7,7 +7,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const hybridRecallMock = vi.fn();
 
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: {},
   entities: {},
   relations: {},

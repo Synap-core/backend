@@ -121,6 +121,10 @@ describe("test-ratchet retry: the judge reads the retry report", () => {
     const env = { ...process.env };
     delete env.GITHUB_STEP_SUMMARY;
     delete env.GITHUB_ACTIONS;
+    // The Full suite job sets the affected tier's scope (#501); inherited, it
+    // makes the judge look for packages this fixture never reported.
+    for (const k of Object.keys(env))
+      if (k.startsWith("TEST_RATCHET_")) delete env[k];
     const r = spawnSync(
       "node",
       ["scripts/test-ratchet.mjs", `--reports=${dir}`, `--only=${PKG}`],
