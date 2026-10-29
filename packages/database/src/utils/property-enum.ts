@@ -65,6 +65,8 @@ export interface StoredEnumOption {
   humanOnly?: boolean;
   /** Days in this option before a thing is stuck (`utils/lifecycle-model.ts`). */
   stuckAfterDays?: number;
+  /** The date property the option is bound to (`utils/lifecycle-model.ts`). */
+  dateBinding?: string;
 }
 
 /** The authoring shape a template property arrives in. */
@@ -129,6 +131,8 @@ export function normalizeEnumOptions(
       raw.stuckAfterDays > 0
     )
       opt.stuckAfterDays = raw.stuckAfterDays;
+    if (typeof raw.dateBinding === "string" && raw.dateBinding.trim())
+      opt.dateBinding = raw.dateBinding.trim();
     out.push(opt);
   }
   return out.length ? out : undefined;

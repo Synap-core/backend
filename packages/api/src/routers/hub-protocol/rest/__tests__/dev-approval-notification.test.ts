@@ -148,6 +148,9 @@ vi.mock(
       typeof import("../../../../notifications/push-decision.js")
     >()),
     derivePushFacts: async () => ({ proposalBlocksOpenSession: true }),
+    // The daily push budget has its own suite (`push-cap.pglite.test.ts`).
+    pushesCountedToday: async () => 0,
+    recordPush: async () => undefined,
   })
 );
 

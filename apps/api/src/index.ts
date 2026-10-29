@@ -1935,6 +1935,8 @@ try {
               await import("@synap/jobs/utils/session-close.js");
             const { registerHoldResumeFollowUp } =
               await import("@synap/jobs/workers/hold-resume.js");
+            const { registerStatusWatcherRunner } =
+              await import("@synap/jobs/workers/status-watcher-cron.js");
             const { registerStageAdvancer } =
               await import("@synap/jobs/utils/stage-advance.js");
             const { registerSessionOutcomeDoor } =
@@ -1984,6 +1986,9 @@ try {
             registerHoldResumeFollowUp((resumed) =>
               api.holdResumeFollowUp(resumed)
             );
+            // The status watcher (W6): late, approaching, stuck and
+            // hold-review signals, raised once per episode, owner told.
+            registerStatusWatcherRunner(() => api.runStatusWatcher());
             // ONE stage-advance door: the automation `session_update` output
             // wrote `focus_sessions.current_stage` with a raw UPDATE and resolved
             // no stage gate, so an automation could advance a run straight past a

@@ -51,7 +51,9 @@ import {
 import {
   decidePush,
   derivePushFacts,
+  pushesCountedToday,
   readPodPushSettings,
+  recordPush,
 } from "./push-decision.js";
 import type { DeliveryChannel, NotificationDef } from "./registry.js";
 import {
@@ -100,6 +102,8 @@ export interface CreateNotificationInput {
     | "session"
     | "automation"
     | "track"
+    // A thing with a lifecycle (a status signal, status-flow W6).
+    | "entity"
     // Library keep-alive: a group's id, or (resurfacing) the project's id.
     | "library_group"
     | "library";
@@ -796,6 +800,11 @@ export const NotificationService = {
             typeRule: pod.routingRules[input.type],
             facts,
             prefs: pod.prefs,
+            // The interruption budget counts the person's own day.
+            pushedToday: await pushesCountedToday(
+              input.userId,
+              await recipientTimezone(input.userId)
+            ),
           });
           if (!decision.push) {
             channels.delete("os");
@@ -805,6 +814,9 @@ export const NotificationService = {
             );
           } else {
             pushCategory = decision.category;
+            // What the budget counts: recorded before the send, so a push is
+            // never out without its record.
+            await recordPush(row.id);
           }
         } catch (err) {
           channels.delete("os");

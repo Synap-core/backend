@@ -180,6 +180,25 @@ export function stuckAfterDaysOf(
   );
 }
 
+/**
+ * THE date rules of a lifecycle (W6): each option that declares `dateBinding`
+ * → the date property it is bound to. The same shape and the same terminal
+ * floor as {@link stuckAfterDaysOf}. Read by the status watcher.
+ */
+export function dateBindingsOf(
+  options: ReadonlyArray<
+    Pick<LifecycleOption, "key" | "category" | "dateBinding">
+  >
+): Map<string, string> {
+  return new Map(
+    options.flatMap((o) =>
+      o.dateBinding !== undefined && !isTerminalLifecycleCategory(o.category)
+        ? [[o.key, o.dateBinding] as const]
+        : []
+    )
+  );
+}
+
 /** Whole days since `sinceIso`, when that is past `days`; else null. */
 export function stuckForDays(
   sinceIso: string,

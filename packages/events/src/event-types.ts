@@ -109,6 +109,29 @@ export const OperationalEventTypes = {
       "actorKind",
     ],
   },
+  // The status watcher (status-flow W6) noticed something about a thing that
+  // stands still, ONCE per episode (raised again only after it clears and
+  // recurs). Derived: computed hourly, stored only because a rule triggers on
+  // it (plan Q6.2). Goal and project resolved when it is raised (Q6.3).
+  ENTITY_SIGNALED: {
+    type: "entity.signal.completed",
+    label: "Late or stuck",
+    domain: "Entity",
+    description:
+      "Fires once when a thing becomes late, nears its date, sits too long in a step, or its pause is due for review.",
+    filterKeys: [
+      // stuck | late | approaching | hold_review_due
+      "signal",
+      "lifecycleProfile",
+      "profileSlug",
+      "role",
+      "status",
+      "category",
+      "ownerId",
+      "projectId",
+      "trackId",
+    ],
+  },
   ENTITY_DELETED: {
     type: "entity.delete.completed",
     label: "Entity deleted",
@@ -148,6 +171,22 @@ export const OperationalEventTypes = {
       "trackId",
     ],
   },
+  // The status watcher (W6): a session paused past its hold's review date.
+  FOCUS_SESSION_SIGNALED: {
+    type: "focus_session.signal.completed",
+    label: "Session due for review",
+    domain: "Focus sessions",
+    description:
+      "Fires once when a paused session's hold passes its review date.",
+    filterKeys: [
+      "signal",
+      "status",
+      "category",
+      "ownerId",
+      "projectId",
+      "trackId",
+    ],
+  },
 
   // ── Tracks (a method running inside a project, 0272) ──────────────────────
   // Emitted as `track.stage_changed` (action="stage_changed") by the track's
@@ -178,6 +217,21 @@ export const OperationalEventTypes = {
       "fromCategory",
       "category",
       "actorKind",
+      "projectId",
+      "trackId",
+    ],
+  },
+  // The status watcher (W6): a goal paused past its hold's review date.
+  TRACK_SIGNALED: {
+    type: "track.signal.completed",
+    label: "Goal due for review",
+    domain: "Tracks",
+    description: "Fires once when a paused goal's hold passes its review date.",
+    filterKeys: [
+      "signal",
+      "status",
+      "category",
+      "ownerId",
       "projectId",
       "trackId",
     ],

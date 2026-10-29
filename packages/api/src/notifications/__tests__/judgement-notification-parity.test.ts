@@ -26,6 +26,8 @@ const GOAL_NUDGES: Record<string, string> = {
     "news that a goal this one waited on closed or was dropped; nothing to judge",
   "track.loop_stopped":
     "the loop paused on a criterion that failed twice; the owner re-plans or regrades in the goal, the verdict stays the judge's",
+  "track.signal":
+    "the status watcher: a paused goal is due for review; the owner resumes it or says what it waits on, nothing is judged",
 };
 
 describe("goal judgement types: client list ⇔ pod registry", () => {

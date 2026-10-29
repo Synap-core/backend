@@ -120,6 +120,9 @@ export const notifications = pgTable(
     // Triage-defer: when status='snoozed', the item is hidden from active lists
     // until this instant, at which point the reader flips it back to 'unread'.
     snoozedUntil: timestamp("snoozed_until", { withTimezone: true }),
+    // When this row's push was SENT (migration 0375); NULL = never pushed.
+    // The daily push cap (plan Q4.1, `push-decision.ts`) counts these.
+    pushedAt: timestamp("pushed_at", { withTimezone: true }),
 
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -147,6 +150,10 @@ export const notifications = pgTable(
       .where(
         sql`${t.dedupeKey} IS NOT NULL AND ${t.status} IN ('unread', 'snoozed')`
       ),
+    // The daily push cap's count (migration 0375): a person's pushes today.
+    idxUserPushed: index("notifs_user_pushed_idx")
+      .on(t.userId, t.pushedAt)
+      .where(sql`${t.pushedAt} IS NOT NULL`),
     // Grouping queries
     idxGroupKey: index("notifs_group_key_idx").on(t.groupKey, t.workspaceId),
     // Source lookup (e.g. find notification for a proposal)

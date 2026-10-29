@@ -233,7 +233,8 @@ export async function changeLifecycleOptions(
         b.label === o.label &&
         b.tone === o.tone &&
         Boolean(b.humanOnly) === Boolean(o.humanOnly) &&
-        b.stuckAfterDays === o.stuckAfterDays
+        b.stuckAfterDays === o.stuckAfterDays &&
+        b.dateBinding === o.dateBinding
       );
     });
   if (same) return { status: "unchanged" };

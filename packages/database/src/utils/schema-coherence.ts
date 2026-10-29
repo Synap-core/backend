@@ -142,6 +142,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "dedupe_key",
     addedBy: "0281_notifications_open_dedupe_key.sql",
   },
+  // notifications — when a row's push was sent (0375). The daily push cap
+  // counts it on every earned push; missing, the cap read throws and the
+  // push is skipped (the row is still written and the bell still shows it).
+  {
+    table: "notifications",
+    column: "pushed_at",
+    addedBy: "0375_notifications_pushed_at.sql",
+  },
   // notification_preferences — per-person push categories (0289). The
   // producer reads it on every os-channel notification; missing, the push
   // decision read throws, the row is still written and the bell still

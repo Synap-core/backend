@@ -218,11 +218,53 @@ export const NOTIFICATION_REPEAT_WINDOW_MS = 24 * 60 * 60 * 1000;
  */
 export const STALE_NEWS_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * A STATUS SIGNAL (status-flow W6): the hourly watcher noticed a thing its
+ * owner owns is late, close to its date, stuck in its step, or paused past its
+ * review date (`services/status/watcher.ts`). One row per subject type, so the
+ * button opens the right kind of object; the words are built by the watcher
+ * (`headline`, `detail`). Once per episode — the derived event's id is the
+ * episode — so no dedupe window. An ITEM in needs-you (the person decides
+ * what to do), folded per signal and kind ("and 4 more like it"); it goes
+ * stale on its own after a week. Pushes under `late-or-stuck`, inside the
+ * daily cap.
+ */
+function statusSignalDef(
+  type: string,
+  objectKind: "entity" | "track" | "session"
+): NotificationDef {
+  return {
+    type,
+    category: "data",
+    label: "Late or stuck",
+    icon: "alarm-clock",
+    priority: "normal",
+    titleTemplate: "{{headline}}",
+    bodyTemplate: "{{detail}}",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    foldBy: "groupKey",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
+    actions: [
+      {
+        id: "view",
+        label: "Open",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: objectKind },
+      },
+    ],
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 
 export const NOTIFICATION_REGISTRY: NotificationDef[] = [
+  // ── Status signals (status-flow W6) ───────────────────────────────────────
+  statusSignalDef("entity.signal", "entity"),
+  statusSignalDef("track.signal", "track"),
+  statusSignalDef("session.signal", "session"),
   // ── Tracks ────────────────────────────────────────────────────────────────
   {
     /**
