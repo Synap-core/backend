@@ -3,6 +3,9 @@
  * project's open goals (when the start named none) and the open sessions on
  * close work, suggestions only.
  *
+ * The `homes` part of an unfiled start has its own suite
+ * (`start-offers.homes.pglite.test.ts`).
+ *
  * Real: `readStartOffers`, `listOpenGoalRows` (project_tracks VisibilityRule),
  * `sessionReadableWhere`, `sessionKindWhere`, `tokenSetOverlap`. Only the goal
  * reader is wrapped, so one flag can force a FAILED read and prove it is
@@ -238,8 +241,15 @@ describe("start offers (F6): open sessions on close work", () => {
     });
   });
 
-  it("no project and no goal: no offers at all (nothing to look in)", async () => {
-    expect(await offersFor({ projectId: null })).toBeUndefined();
+  it("no project and no goal: no goal or near-session offer, the HOMES part instead (S5)", async () => {
+    const offers = await offersFor({ projectId: null });
+    expect(offers?.goals).toBeUndefined();
+    expect(offers?.sessions).toMatchObject({ status: "ok", total: 0 });
+    // The pod-wide open goal the words meet is offered as a home.
+    expect(offers?.homes).toMatchObject({
+      status: "ok",
+      items: [expect.objectContaining({ kind: "goal", trackId: G.map })],
+    });
   });
 
   it("both parts read and found nothing: no offers block (and no hint)", async () => {

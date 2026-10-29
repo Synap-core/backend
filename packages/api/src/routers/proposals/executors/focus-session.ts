@@ -1066,10 +1066,16 @@ export function registerFocusSessionExecutors(): void {
           (typeof innerData.projectId === "string" ||
             !!trackFiling?.set.trackId)
         ) {
-          const { fileFollowingSubSessions } =
+          const { fileFollowingSubSessions, findFollowingSubSessions } =
             await import("../../../services/focus-sessions/session-tree-filing.js");
+          // Never the stored ids blindly: re-read the tree NOW (from where the
+          // root sat before this write) and keep only those still open, still
+          // under this root and still where it sat.
+          const stillFollowing = new Set(
+            await findFollowingSubSessions(session)
+          );
           await fileFollowingSubSessions({
-            ids: carried,
+            ids: carried.filter((id) => stillFollowing.has(id)),
             userId: session.userId,
             from: {
               workspaceId: session.workspaceId ?? null,

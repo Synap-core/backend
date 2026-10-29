@@ -401,7 +401,7 @@ describe("filing a root files its open sub-sessions (S5, Q7)", () => {
     expect(after[t.closed]).toEqual({ project: null, goal: null });
   });
 
-  it("FLOOR: a tree that is not all the agent's own fresh work is ONE proposal, nothing moved; approving it files the tree with one Undo", async () => {
+  it("FLOOR: a tree that is not all the agent's own fresh work is ONE proposal, nothing moved; approving it re-reads the tree and files it with one Undo", async () => {
     const t = await seedTree({ staleChild: true });
     const res = await asAgent(() =>
       updateFocusSession({
@@ -425,6 +425,15 @@ describe("filing a root files its open sub-sessions (S5, Q7)", () => {
       if (id === t.elsewhere || id === t.underElsewhere) continue;
       expect(before[id]!.project, id).toBeNull();
     }
+
+    // Between filing and approval: `aa` is closed, and a session OUTSIDE the
+    // tree (open, unfiled — it would pass the placement compare-and-set) is
+    // slipped into the stored ids. Approval re-reads the tree: neither moves.
+    await q(`update focus_sessions set status = 'closed' where id = $1`, [
+      t.aa,
+    ]);
+    const stranger = await ownSession();
+    data.subSessionIds = [...(data.subSessionIds as string[]), stranger];
 
     // The person approves the one proposal: the executor files the tree.
     const proposalId = randomUUID();
@@ -456,15 +465,17 @@ describe("filing a root files its open sub-sessions (S5, Q7)", () => {
         notify: async () => undefined,
       },
     } as never);
-    const approved = await placement(Object.values(t));
-    for (const id of [t.root, t.a, t.aa, t.b, t.underClosed]) {
+    const approved = await placement([...Object.values(t), stranger]);
+    for (const id of [t.root, t.a, t.b, t.underClosed]) {
       expect(approved[id]!.project, id).toBe(SYNAP);
     }
-    expect(approved[t.closed]!.project).toBeNull();
+    for (const id of [t.closed, t.aa, stranger]) {
+      expect(approved[id]!.project, id).toBeNull();
+    }
 
     await undo(proposalId);
     const undone = await placement(Object.values(t));
-    for (const id of [t.root, t.a, t.aa, t.b, t.underClosed]) {
+    for (const id of [t.root, t.a, t.b, t.underClosed]) {
       expect(undone[id]!.project, id).toBeNull();
     }
   });

@@ -218,9 +218,15 @@ describe("start homes (S5): where an unfiled start may belong, with its reasons"
   it("ranks by the facts that point at each place, at most 3, each with its reasons — and files nothing", async () => {
     const offers = await homesFor();
     expect(offers?.homes).toMatchObject({ status: "ok", total: 3 });
-    // No project and no goal to look in: no goal or session part.
+    // No project and no goal to look in: no goal part, and an empty session
+    // part (still present, so no reader meets a gap).
     expect(offers?.goals).toBeUndefined();
-    expect(offers?.sessions).toBeUndefined();
+    expect(offers?.sessions).toEqual({
+      status: "ok",
+      scope: "none",
+      total: 0,
+      items: [],
+    });
     expect(offers?.hint).toMatch(/nothing was applied/i);
 
     const items = itemsOf(offers);

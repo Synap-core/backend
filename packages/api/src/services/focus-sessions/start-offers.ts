@@ -127,11 +127,14 @@ export interface StartOffers {
   /** Absent when the start named a goal, or has no project to look in. */
   goals?:
     { status: "ok"; total: number; items: StartGoalOffer[] } | Unavailable;
-  /** Absent on an unfiled start: there is no project or goal to look in. */
-  sessions?:
+  /**
+   * On an unfiled start there is no project or goal to look in: `scope:
+   * "none"` with no items (kept present so a reader never meets a gap).
+   */
+  sessions:
     | {
         status: "ok";
-        scope: "goal" | "project";
+        scope: "goal" | "project" | "none";
         total: number;
         items: StartSessionOffer[];
       }
@@ -181,6 +184,7 @@ export async function readStartOffers(p: {
     );
     if (homes.status === "ok" && homes.total === 0) return undefined;
     return {
+      sessions: { status: "ok", scope: "none", total: 0, items: [] },
       homes,
       hint: "Suggestions only — nothing was applied. This session is in no project. If it belongs in one of `homes`, file it: update_session with its projectId (a project) or trackId (a goal). Which project work belongs to is the person's call: ask when the reasons do not settle it.",
     };
