@@ -328,6 +328,8 @@ async function diagnoseObject(
           targetType: proposals.targetType,
           targetId: proposals.targetId,
           rejectionReason: proposals.rejectionReason,
+          governanceReason: proposals.governanceReason,
+          reasonCode: proposals.reasonCode,
           revisionHistory: proposals.revisionHistory,
           correlationId: proposals.correlationId,
           agentUserId: proposals.agentUserId,
@@ -387,6 +389,8 @@ async function diagnoseObject(
         },
         why: {
           rejectionReason: row.rejectionReason,
+          governanceReason: row.governanceReason,
+          reasonCode: row.reasonCode,
           revisionCount,
           correlationId: row.correlationId,
           agentUserId: row.agentUserId,

@@ -79,11 +79,12 @@ async function session(p: {
   updatedAt?: string;
   outputs?: unknown[];
   goal?: string;
+  metadata?: Record<string, unknown>;
 }): Promise<string> {
   const id = randomUUID();
   await q(
     `insert into focus_sessions (id, user_id, goal, status, origin, agent_ids, expected_outputs, metadata, created_at, updated_at)
-     values ($1, $2, $3, $4, $5, $6::text[], $7::jsonb, '{}'::jsonb, $8, $8)`,
+     values ($1, $2, $3, $4, $5, $6::text[], $7::jsonb, $9::jsonb, $8, $8)`,
     [
       id,
       PERSON,
@@ -93,6 +94,7 @@ async function session(p: {
       `{${p.agent ?? AGENT}}`,
       JSON.stringify(p.outputs ?? []),
       p.updatedAt ?? OLD,
+      JSON.stringify(p.metadata ?? {}),
     ]
   );
   return id;
@@ -156,6 +158,19 @@ describe("looseEnds — only the calling agent's own work", () => {
 
     const r = await ends();
     expect(r.lens).toBe("yours");
+    expect(r.sessions).toMatchObject({ count: 1 });
+    const items = (r.sessions as { items: Array<{ id: string }> }).items;
+    expect(items.map((s) => s.id)).toEqual([mine]);
+  });
+
+  it("never lists a receipt session: bookkeeping the reaper closes", async () => {
+    const mine = await session({ goal: "my idle work" });
+    await session({
+      goal: "Proposals filed by the agent",
+      metadata: { kind: "agent-proposal-package" },
+    });
+
+    const r = await ends();
     expect(r.sessions).toMatchObject({ count: 1 });
     const items = (r.sessions as { items: Array<{ id: string }> }).items;
     expect(items.map((s) => s.id)).toEqual([mine]);
