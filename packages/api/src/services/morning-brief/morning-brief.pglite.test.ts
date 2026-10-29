@@ -268,7 +268,7 @@ describe("composeMorningBrief — plain words, nothing when nothing", () => {
     expect(
       composeMorningBrief({
         needsYou: { count: 1, floor: false, next: ["Pick a tone"] },
-        readyToClose: 2,
+        readyToClose: 1,
         closedUnmet: 1,
         closedWithoutCriteria: 0,
       })
