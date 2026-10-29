@@ -33,6 +33,7 @@
 import {
   FULL_ACCESS_LABEL,
   GRANT_ACTIONS,
+  LEVEL_WORDS as SHARED_LEVEL_WORDS,
   grantActionLabel,
   grantKindLabel,
   grantPlainAction,
@@ -40,6 +41,7 @@ import {
   isKindQualifiedGrantSubject,
   parsePermission,
   resolveEventFamilyPermissionLabel,
+  type AccessLevel as SharedAccessLevel,
 } from "@synap-core/types/grants";
 import { intentRunLabel } from "@synap-core/types/capability-intents";
 import { isAppPublicId } from "@synap-core/types/membrane";
@@ -643,16 +645,16 @@ export function permissionLabel(permission: string): string {
 
 // ─── Object-first rows ───────────────────────────────────────────────────────
 
-/** A row's one level: what the app may do with that object. */
-export type AccessLevel = "off" | "view" | "edit" | "on";
+/**
+ * A row's one level: what the app may do with that object — the shared
+ * levels (`@synap-core/types/grants` access-levels) less Activity's Post,
+ * which an app is never asked for here.
+ */
+export type AccessLevel = Exclude<SharedAccessLevel, "post">;
 
-/** The words on a level's segment. */
-export const LEVEL_WORDS: Record<AccessLevel, string> = {
-  off: "Off",
-  view: "View",
-  edit: "Edit",
-  on: "On",
-};
+/** The words on a level's segment: the one table, in types. */
+export const LEVEL_WORDS: Readonly<Record<AccessLevel, string>> =
+  SHARED_LEVEL_WORDS;
 
 /** "Changes waiting for your review": what `proposal.*` reads as. */
 const REVIEW_QUEUE = "Changes waiting for your review";

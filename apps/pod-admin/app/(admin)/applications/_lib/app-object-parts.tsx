@@ -12,7 +12,7 @@ import Link from "next/link";
 import { Button } from "@heroui/react";
 import { KeyRound, User } from "lucide-react";
 import type { ReactNode } from "react";
-import { navHref } from "../../../../lib/console-nav";
+import { keyPageHref, navHref } from "../../../../lib/console-nav";
 import { formatRelative } from "../../../../lib/format";
 import { CopyButton } from "../../../_lib/copy-button";
 import type { ObjectFrame } from "../../../_lib/object/views/object-frame";
@@ -193,11 +193,11 @@ export function KeyList({
           status={keyStatus(k)}
           actions={
             <Link
-              href={navHref("keys", { focus: k.id })}
-              aria-label={`Open ${k.keyName} on Keys`}
+              href={keyPageHref(k.id)}
+              aria-label={`Open ${k.keyName}`}
               className="rounded-sm px-2 text-[12px] text-foreground/65 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
-              Keys
+              Open key
             </Link>
           }
           wrap

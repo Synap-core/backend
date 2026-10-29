@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@synap-core/api-types";
 import { ReceiverShell } from "../../_lib/receiver-shell";
+import { LevelControl } from "../../_lib/review/level-control";
 import { HostName } from "../../_lib/host-name";
 import {
   Button,
@@ -11,8 +12,6 @@ import {
   CardHeader,
   Checkbox,
   Chip,
-  Radio,
-  RadioGroup,
   Spinner,
   Switch,
 } from "@heroui/react";
@@ -924,35 +923,8 @@ function PermissionList({
   );
 }
 
-/**
- * A row's level control: a segmented radio group (arrow keys move, one tab
- * stop), named for its object. The ring is `default-500` (5.0:1 dark, 4.6:1
- * light against the card, as `CONSENT_CHECKBOX`); the segments are 36px
- * inside a 2px inset, so each target is 40px tall. A level that gives
- * something fills with the primary colour; Off fills neutral.
- */
-export const LEVEL_GROUP = {
-  base: "shrink-0 gap-0",
-  wrapper:
-    "flex-nowrap gap-0.5 rounded-lg p-0.5 ring-1 ring-inset ring-default-500",
-} as const;
-const SEGMENT_BASE =
-  "m-0 min-h-9 min-w-12 max-w-none justify-center rounded-md px-3 py-0 hover:bg-default-100 data-[focus-visible=true]:z-10 data-[focus-visible=true]:ring-2 data-[focus-visible=true]:ring-focus";
-export const LEVEL_SEGMENT = {
-  base: `${SEGMENT_BASE} data-[selected=true]:bg-primary data-[selected=true]:hover:bg-primary`,
-  wrapper: "hidden",
-  labelWrapper: "m-0 ml-0",
-  label:
-    "text-sm text-foreground/80 group-data-[selected=true]:font-medium group-data-[selected=true]:text-primary-foreground",
-} as const;
-export const LEVEL_SEGMENT_OFF = {
-  ...LEVEL_SEGMENT,
-  base: `${SEGMENT_BASE} data-[selected=true]:bg-default-200 data-[selected=true]:hover:bg-default-200`,
-  label:
-    "text-sm text-foreground/80 group-data-[selected=true]:font-medium group-data-[selected=true]:text-foreground",
-} as const;
-
-function LevelControl({
+/** A row's level control: the one level control (`_lib/review/level-control`), named for its object. */
+function ObjectLevelControl({
   row,
   actsAs,
   level,
@@ -966,24 +938,14 @@ function LevelControl({
   onChange: (level: AccessLevel) => void;
 }) {
   return (
-    <RadioGroup
-      orientation="horizontal"
-      aria-label={levelControlLabel(row, actsAs)}
-      value={level}
+    <LevelControl
+      label={levelControlLabel(row, actsAs)}
+      levels={row.levels}
+      words={LEVEL_WORDS}
+      level={level}
       isDisabled={isDisabled}
-      onValueChange={(v) => onChange(v as AccessLevel)}
-      classNames={LEVEL_GROUP}
-    >
-      {row.levels.map((l) => (
-        <Radio
-          key={l}
-          value={l}
-          classNames={l === "off" ? LEVEL_SEGMENT_OFF : LEVEL_SEGMENT}
-        >
-          {LEVEL_WORDS[l]}
-        </Radio>
-      ))}
-    </RadioGroup>
+      onChange={onChange}
+    />
   );
 }
 
@@ -1053,7 +1015,7 @@ function ObjectRow({
         {noSpace ? (
           <span className="text-xs text-foreground/65">No space to give</span>
         ) : (
-          <LevelControl
+          <ObjectLevelControl
             row={row}
             actsAs={actsAs}
             level={objectLevel(selection, row)}

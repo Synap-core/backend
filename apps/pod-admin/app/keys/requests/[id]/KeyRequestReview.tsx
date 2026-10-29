@@ -1,46 +1,79 @@
 "use client";
 
 /**
- * The Review of a key a computer asked for (page grammar: Review). Who asks,
- * the change first (the key in words, its marks), why (the template, the
- * command), what approving does; then the same sections as New key, locked
- * to the request: the person may narrow the key, never widen it
- * (`validateKeyDraft` with the request's ceiling, re-checked by the pod).
- * One primary, the approve action; Decline beside it (the vocabulary's negative
- * answer to a request for access, as on the app connect card).
+ * The Review of a key a computer asked for (page grammar: Review), drawn with
+ * the proposal review's parts (`app/_lib/review/`): the card header names
+ * what approving does ("Create API key · <name>") with the status mark; who
+ * asks as one line of chips; the change first ("What it asks for": the key's
+ * families as marks, where, its doors, its lifetime), said ONCE; why, as one
+ * mark (the template); the decision bar pinned to the bottom with the
+ * consequence, "Reject…" and Approve, and who decides; Advanced last.
+ *
+ * "Narrow it" swaps the summary for the same family rows as New key, capped
+ * by the request (`validateKeyDraft` with the ceiling, re-checked by the
+ * pod): the person may narrow the key, never widen it.
+ *
+ * Finding da59b051: the key was said twice (a header sentence, then the same
+ * sentence in a bordered review bar), the whole New key form sat in an
+ * accordion inside the card, a `dl` grid stood where proposals have sections,
+ * and "Deny" / "Request denied" were hand-written beside the vocabulary's
+ * "Reject" / "Rejected".
  */
 
+import { CardBody } from "@heroui/react";
 import {
-  Accordion,
-  AccordionItem,
-  Button,
-  CardBody,
-  Chip,
-} from "@heroui/react";
-import { ChevronRight } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+  Clock,
+  FolderKanban,
+  Hourglass,
+  KeyRound,
+  LayoutTemplate,
+  Layers,
+  Monitor,
+} from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   describeKey,
+  describeKeyProblem,
   grantLifetime,
   isKeyUseId,
+  keyScope,
+  scopesForKey,
   validateKeyDraft,
   type KeyCeiling,
   type KeyDraft,
 } from "@synap-core/types/grants";
-import {
-  buildObjectActionTitle,
-  resolveActionLabel,
-} from "@synap-core/types/vocabulary";
+import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
-import { formatRelative } from "../../../../lib/format";
+import { formatRelative, formatTimestamp } from "../../../../lib/format";
+import { openIn, type Exit } from "../../../../lib/open-in";
 import { ReceiverShell } from "../../../_lib/receiver-shell";
+import { AdvancedPanel } from "../../../_lib/object/advanced-panel";
+import { Pill } from "../../../_lib/object/provenance-chips";
 import {
-  KeyReviewBar,
-  KeySections,
-  type KeyPlace,
-} from "../../../(admin)/keys/_lib/key-sections";
-import { keyRequestOutcome } from "../../../(admin)/keys/_lib/key-form-model";
+  DisclosedMark,
+  Outcome,
+  ReviewProvenance,
+  ReviewSection,
+} from "../../../_lib/review/review-parts";
+import {
+  ApproveButton,
+  DECISION_BAR_PIN,
+  DecisionBar,
+  RejectButton,
+  RejectConfirm,
+  WhoDecides,
+} from "../../../_lib/review/decision-bar";
+import { ReviewHeader } from "../../../_lib/review/review-header";
+import {
+  AccessEditor,
+  AccessSummary,
+} from "../../../(admin)/keys/_lib/key-access";
+import { NameStepBody } from "../../../(admin)/keys/_lib/key-steps";
+import {
+  keyRequestOutcome,
+  keyRequestStatus,
+} from "../../../(admin)/keys/_lib/key-form-model";
 
 export function KeyRequestReview({
   requestId,
@@ -78,37 +111,21 @@ export function KeyRequestReview({
       data ? { grant: data.draft.grant, uses: data.draft.uses } : undefined,
     [data]
   );
-  const [draft, setDraft] = useState<KeyDraft | null>(null);
-  useEffect(() => {
-    if (data && !draft) setDraft(data.draft as KeyDraft);
-  }, [data, draft]);
+  // The key as the person narrowed it; until they touch it, as asked.
+  const [edited, setDraft] = useState<KeyDraft | null>(null);
+  const draft = edited ?? (data?.draft as KeyDraft | undefined) ?? null;
+  const [narrowing, setNarrowing] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
   const [busy, setBusy] = useState<"approve" | "deny" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const spaces = useMemo<KeyPlace[]>(() => {
-    const all = (spacesQuery.data ?? []).map((w) => ({
-      id: w.id,
-      name: w.name,
-    }));
-    // Under a request pinned to spaces, only those can be ticked.
-    const pinned = ceiling?.grant.workspaceIds;
-    return pinned?.length ? all.filter((s) => pinned.includes(s.id)) : all;
-  }, [spacesQuery.data, ceiling]);
-  const projects = useMemo<KeyPlace[]>(
-    () =>
-      (projectsQuery.data?.items ?? []).map((p) => ({
-        id: p.id,
-        name: p.name,
-      })),
-    [projectsQuery.data]
-  );
-
-  const kinds = useMemo(
-    () =>
-      (profilesQuery.data?.profiles ?? []).map((p) => ({
+  const ctx = useMemo(
+    () => ({
+      kinds: (profilesQuery.data?.profiles ?? []).map((p) => ({
         slug: p.slug,
-        name: p.displayName || p.slug,
+        name: p.displayName || undefined,
       })),
+    }),
     [profilesQuery.data]
   );
 
@@ -146,6 +163,7 @@ export function KeyRequestReview({
               },
             }
       );
+      setRejecting(false);
       await utils.apiKeys.getKeyRequest.invalidate({ requestId });
     } catch (err) {
       if (
@@ -160,201 +178,319 @@ export function KeyRequestReview({
     }
   }
 
-  if (request.isLoading || (data && !draft)) {
-    return (
-      <ReceiverShell podHost={podHost} identity={identity} width="md">
-        <CardBody className="px-7 py-6">
-          <p role="status" className="text-[13px] text-foreground/65">
-            Loading the request…
-          </p>
-        </CardBody>
-      </ReceiverShell>
+  // The card's first child is always a padded section, handed over here
+  // (`__tripwires__/receiver-card-body.test.ts`).
+  const shell = (children: ReactNode, pinsBar = false) => (
+    <ReceiverShell
+      podHost={podHost}
+      identity={identity}
+      width="md"
+      pinsBar={pinsBar}
+    >
+      {children}
+    </ReceiverShell>
+  );
+
+  if (request.isLoading) {
+    return shell(
+      <CardBody className="px-7 py-6">
+        <p role="status" className="text-[13px] text-foreground/65">
+          Loading the request…
+        </p>
+      </CardBody>
     );
   }
 
   if (request.isError || !data || !draft) {
     const missing = request.error?.data?.code === "NOT_FOUND";
-    return (
-      <ReceiverShell podHost={podHost} identity={identity} width="md">
-        <CardBody className="gap-2 px-7 py-6">
-          <h1 className="font-heading text-[18px] font-medium">
-            {missing ? "No such request" : "Couldn't load this request"}
-          </h1>
-          <p className="text-[13px] text-foreground/70">
-            {missing
-              ? "It may be another person's, or the link is wrong. Run the command again to get a new link."
-              : (request.error?.message ?? "Something went wrong.")}
-          </p>
-          {!missing ? (
-            <div>
-              <Button
-                size="sm"
-                variant="flat"
-                onPress={() => void request.refetch()}
-              >
-                Retry
-              </Button>
-            </div>
-          ) : null}
-        </CardBody>
-      </ReceiverShell>
-    );
-  }
-
-  const requested = (
-    <span>
-      {requester}
-      {data.requester.isComputer ? " (a computer)" : ""} asked{" "}
-      {formatRelative(data.createdAt)}
-    </span>
-  );
-
-  if (data.status !== "pending") {
-    const out = keyRequestOutcome(data.status, requester);
-    return (
-      <ReceiverShell
-        podHost={podHost}
-        identity={identity}
-        requested={requested}
-        width="md"
-      >
-        <CardBody className="gap-2 px-7 py-6">
-          <h1 className="font-heading text-[18px] font-medium">{out.title}</h1>
-          <p className="text-[13px] text-foreground/70">{out.body}</p>
-          {data.status === "approved" || data.status === "consumed" ? (
-            <a
-              href="/keys"
+    return shell(
+      <CardBody className="gap-2 px-7 py-6">
+        <h1 className="font-heading text-[18px] font-medium">
+          {missing ? "No such request" : "Couldn't load this request"}
+        </h1>
+        <p className="text-[13px] text-foreground/70">
+          {missing
+            ? "It may be another person's, or the link is wrong. Run the command again to get a new link."
+            : (request.error?.message ?? "Something went wrong.")}
+        </p>
+        {!missing ? (
+          <div>
+            <button
+              type="button"
+              onClick={() => void request.refetch()}
               className="text-[13px] text-primary underline-offset-2 hover:underline"
             >
-              See your keys
-            </a>
-          ) : null}
-        </CardBody>
-      </ReceiverShell>
+              Try again
+            </button>
+          </div>
+        ) : null}
+      </CardBody>
     );
   }
 
-  const asked = describeKey(data.draft as KeyDraft);
+  const closed = data.status === "pending" ? null : data.status;
+  const pending = closed === null;
+  const status = keyRequestStatus(data.status);
+  const asked = data.draft as KeyDraft;
+  const shown = pending ? draft : asked;
+  const scope = keyScope(shown.grant);
+  const spaceId = shown.grant.workspaceIds?.[0] ?? null;
+  const projectId = shown.grant.projectIds?.[0] ?? null;
+  const spaceName = spaceId
+    ? (spacesQuery.data?.find((w) => w.id === spaceId)?.name ?? null)
+    : null;
+  const projectName = projectId
+    ? (projectsQuery.data?.items.find((p) => p.id === projectId)?.name ?? null)
+    : null;
+  const description = describeKey(shown, {
+    kindNames: Object.fromEntries(
+      ctx.kinds.flatMap((k) => (k.name ? [[k.slug, k.name]] : []))
+    ),
+  });
+  // Full access is already the summary's one red line; the other marks say
+  // what the summary cannot (delete, gate verbs, no end).
+  const marks = description.marks.filter((m) => m.code !== "full-access");
   const validation = validateKeyDraft(draft, { ceiling });
+  const heading = `${buildObjectActionTitle({
+    action: "create",
+    objectKind: "api_key",
+  })} · ${shown.name}`;
 
-  return (
-    <ReceiverShell
-      podHost={podHost}
-      identity={identity}
-      requested={requested}
-      width="md"
-      pinsBar
-    >
-      <CardBody className="gap-4 px-7 py-8">
-        <header className="flex flex-col gap-1">
-          <h1 className="font-heading text-[18px] font-medium">
-            {requester} asks for a key
-          </h1>
-          <p
-            className={`text-[13px] ${asked.summary.full ? "text-danger" : "text-foreground/80"}`}
-          >
-            {asked.sentence}
-          </p>
-          {asked.marks.length > 0 ? (
-            <div className="flex flex-wrap gap-1.5">
-              {asked.marks.map((m) => (
-                <Chip
-                  key={m.code}
-                  size="sm"
-                  variant="flat"
-                  color={m.code === "never-expires" ? "warning" : "danger"}
-                >
-                  {m.label}
-                </Chip>
-              ))}
-            </div>
-          ) : null}
-        </header>
+  const computerExit: Exit | undefined = data.requester.isComputer
+    ? {
+        href: `/my-computers/${encodeURIComponent(data.requester.userId)}`,
+        isDesktopLink: false,
+      }
+    : undefined;
 
-        <dl className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1.5 text-[12.5px]">
-          <dt className="text-foreground/60">Why</dt>
-          <dd>
-            {data.template ? (
+  return shell(
+    <>
+      <ReviewHeader icon={KeyRound} heading={heading} status={status} />
+
+      {/* Clips nothing, so the decision bar pins to the window. */}
+      <CardBody className="overflow-visible px-7 pb-7 pt-5">
+        <div className="flex flex-col gap-5">
+          <ReviewProvenance>
+            <Pill exit={computerExit}>
+              <Monitor aria-hidden className="h-3.5 w-3.5 text-foreground/55" />
+              <span className="truncate font-medium text-foreground">
+                {requester}
+              </span>
+            </Pill>
+            {spaceId && spaceName ? (
+              <Pill
+                exit={openIn({
+                  kind: "object",
+                  objectKind: "workspace",
+                  id: spaceId,
+                })}
+              >
+                <Layers
+                  aria-hidden
+                  className="h-3.5 w-3.5 text-foreground/55"
+                />
+                <span className="truncate">{spaceName}</span>
+              </Pill>
+            ) : null}
+            {projectId && projectName ? (
+              <Pill
+                exit={openIn({
+                  kind: "object",
+                  objectKind: "project",
+                  id: projectId,
+                })}
+              >
+                <FolderKanban
+                  aria-hidden
+                  className="h-3.5 w-3.5 text-foreground/55"
+                />
+                <span className="truncate">{projectName}</span>
+              </Pill>
+            ) : null}
+            <Pill>
+              <Clock aria-hidden className="h-3.5 w-3.5 text-foreground/55" />
+              <time
+                dateTime={new Date(data.createdAt).toISOString()}
+                title={formatTimestamp(data.createdAt)}
+              >
+                {formatRelative(data.createdAt)}
+              </time>
+            </Pill>
+            {pending ? (
+              <Pill title="The request waits for you until then">
+                <Hourglass
+                  aria-hidden
+                  className="h-3.5 w-3.5 text-foreground/55"
+                />
+                <span>ends {formatRelative(data.expiresAt)}</span>
+              </Pill>
+            ) : null}
+          </ReviewProvenance>
+
+          {/* The change first, said once. */}
+          <ReviewSection label="What it asks for">
+            {pending && narrowing ? (
               <>
-                <span className="font-medium">{data.template.name}</span>:{" "}
-                {data.template.description}
+                <AccessEditor
+                  draft={draft}
+                  scope={scope}
+                  ctx={ctx}
+                  ceiling={ceiling}
+                  onChange={setDraft}
+                />
+                <NameStepBody draft={draft} onChange={setDraft} />
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setNarrowing(false)}
+                    className="text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
+                  >
+                    Done
+                  </button>
+                </div>
               </>
             ) : (
-              "A template that no longer exists; the key is what it asked for."
+              <>
+                <AccessSummary draft={shown} scope={scope} ctx={ctx} />
+                {marks.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {marks.map((m) => (
+                      <span
+                        key={m.code}
+                        className={`inline-flex h-6 items-center rounded-full px-2 text-[11.5px] font-medium ring-1 ring-inset ${
+                          m.code === "never-expires"
+                            ? "bg-warning/10 text-warning ring-warning/25"
+                            : "bg-danger/10 text-danger ring-danger/25"
+                        }`}
+                      >
+                        {m.label}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                {pending ? (
+                  <button
+                    type="button"
+                    onClick={() => setNarrowing(true)}
+                    className="self-start text-[12.5px] text-foreground/70 underline decoration-foreground/25 underline-offset-2 hover:text-foreground"
+                  >
+                    Narrow it
+                  </button>
+                ) : null}
+              </>
             )}
-          </dd>
-          <dt className="text-foreground/60">If you approve</dt>
-          <dd>
-            {requester} receives the key once, the next time it checks. It acts
-            as you, within what you set below, until{" "}
-            {grantLifetime(draft.grant).kind === "never"
-              ? "you revoke it"
-              : "it expires or you revoke it"}
-            .
-          </dd>
-          <dt className="text-foreground/60">Request ends</dt>
-          <dd>{formatRelative(data.expiresAt)}</dd>
-        </dl>
+          </ReviewSection>
 
-        <Accordion variant="splitted" className="px-0">
-          <AccordionItem
-            key="narrow"
-            aria-label="Narrow it"
-            // A closed disclosure points the way it opens: right, then down.
-            indicator={<ChevronRight aria-hidden className="h-4 w-4" />}
-            title={<span className="text-[13px] font-medium">Narrow it</span>}
-            subtitle={
-              <span className="text-[12px] text-foreground/60">
-                You can take things away, never add past what was asked.
-              </span>
-            }
+          {/* Why: ONE mark, the template's sentence on press. */}
+          <section
+            aria-label="Why"
+            className="flex flex-wrap items-center gap-2"
           >
-            <KeySections
-              draft={draft}
-              onChange={setDraft}
-              kinds={kinds}
-              spaces={spaces}
-              projects={projects}
-              placesFailed={
-                spacesQuery.isError || projectsQuery.isError
+            <DisclosedMark
+              icon={LayoutTemplate}
+              mark={
+                data.template
                   ? {
-                      retry: () => {
-                        void spacesQuery.refetch();
-                        void projectsQuery.refetch();
-                      },
+                      tone: "default",
+                      label: data.template.name,
+                      sentence: data.template.description,
                     }
-                  : null
+                  : {
+                      tone: "warning",
+                      label: "Template gone",
+                      sentence:
+                        "The template it named no longer exists; the key is what it asked for.",
+                    }
               }
-              ceiling={ceiling}
             />
-          </AccordionItem>
-        </Accordion>
+          </section>
 
-        <KeyReviewBar
-          draft={draft}
-          validation={validation}
-          primaryLabel={buildObjectActionTitle({
-            action: "approve",
-            objectKind: "api_key",
-          })}
-          onPrimary={() => void send("approve")}
-          busy={busy === "approve"}
-          error={error}
-          secondary={
-            <Button
-              size="sm"
-              radius="md"
-              variant="flat"
-              color="danger"
-              isLoading={busy === "deny"}
-              isDisabled={busy !== null}
-              onPress={() => void send("deny")}
-            >
-              {resolveActionLabel("decline")}
-            </Button>
-          }
-        />
+          <DecisionBar pinned={pending} className={DECISION_BAR_PIN}>
+            {pending ? (
+              <>
+                <p className="text-[12.5px] text-foreground/75">
+                  {requester} receives the key once, the next time it checks. It
+                  acts as you, within what it asks for here, until{" "}
+                  {grantLifetime(draft.grant).kind === "never"
+                    ? "you revoke it"
+                    : "it expires or you revoke it"}
+                  .
+                </p>
+                {!validation.ok ? (
+                  <ul className="flex flex-col gap-0.5">
+                    {validation.problems.map((p, i) => (
+                      <li key={i} className="text-[12px] text-foreground/75">
+                        {describeKeyProblem(p).text}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {error ? (
+                  <p role="alert" className="text-[12px] text-danger">
+                    {error}
+                  </p>
+                ) : null}
+                {rejecting ? (
+                  <RejectConfirm
+                    isLoading={busy === "deny"}
+                    onConfirm={() => void send("deny")}
+                    onCancel={() => setRejecting(false)}
+                  />
+                ) : (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <ApproveButton
+                      isLoading={busy === "approve"}
+                      isDisabled={!validation.ok || busy !== null}
+                      onPress={() => void send("approve")}
+                    />
+                    <RejectButton
+                      isDisabled={busy !== null}
+                      onPress={() => setRejecting(true)}
+                    />
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <Outcome
+                  status={status}
+                  message={keyRequestOutcome(closed!, requester)}
+                />
+                {data.status === "approved" || data.status === "consumed" ? (
+                  <a
+                    href="/my-connections"
+                    className="text-[13px] text-primary underline-offset-2 hover:underline"
+                  >
+                    See your keys
+                  </a>
+                ) : null}
+              </>
+            )}
+            <WhoDecides identity={identity} />
+          </DecisionBar>
+
+          <AdvancedPanel
+            ids={[
+              { label: "Request id", value: data.requestId },
+              ...(data.template
+                ? [{ label: "Template", value: data.template.id }]
+                : []),
+              {
+                label: "Scopes it gets",
+                value: scopesForKey({
+                  uses: shown.uses,
+                  permissions: shown.grant.permissions,
+                }).join(", "),
+              },
+              {
+                label: "Permissions",
+                value: shown.grant.permissions.join(", "),
+              },
+            ]}
+          />
+        </div>
       </CardBody>
-    </ReceiverShell>
+    </>,
+    pending
   );
 }

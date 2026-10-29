@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEV_LOOP_POSTER_TEMPLATE_ID,
+  accessFamily,
   keyDraftFromTemplate,
   keyTemplate,
   setGrantLifetime,
@@ -10,15 +11,16 @@ import {
 } from "@synap-core/types/grants";
 import {
   afterCreateHref,
-  cellAllowed,
-  defaultTemplateId,
   keyMintCall,
   keyPageParams,
   keyRequestOutcome,
+  keyRequestStatus,
   keyTemplates,
   keyUseAllowed,
+  levelAllowed,
   lifetimeChoices,
   newKeyHref,
+  partAllowed,
 } from "./key-form-model";
 
 const WS = "2aaaaaaa-0000-4000-8000-000000000001";
@@ -54,12 +56,6 @@ describe("the page's link (keyPageParams / newKeyHref)", () => {
     expect(params(`holder=system&space=${WS}`).holder).toBe("person");
     expect(params("holder=service").holder).toBe("person");
     expect(params("holder=system").holder).toBe("system");
-  });
-
-  it("system and service keys open on Full access (D-2's default, shown); a person on scratch", () => {
-    expect(defaultTemplateId("system")).toBe("full-access");
-    expect(defaultTemplateId("service")).toBe("full-access");
-    expect(defaultTemplateId("person")).toBeNull();
   });
 });
 
@@ -103,11 +99,10 @@ describe("keyMintCall — the door, and what it is sent", () => {
 });
 
 describe("after the key is shown once", () => {
-  it("opens its row, focused, where it is listed", () => {
-    expect(afterCreateHref(null, "k1")).toBe("/keys?focus=k1");
-    expect(afterCreateHref(WS, "k1")).toMatch(
-      new RegExp(`/${WS}\\?tab=api-keys&focus=k1$`)
-    );
+  // Rules out: landing on the list (finding d99517f7), where a space key's
+  // row was the only trace of what was just made.
+  it("opens the key's own page", () => {
+    expect(afterCreateHref("k 1")).toBe("/keys/k%201");
   });
 });
 
@@ -128,16 +123,31 @@ describe("templates", () => {
 describe("under a CLI request's ceiling: narrow, never widen", () => {
   const ceiling: KeyCeiling = { grant: poster.grant, uses: ["hub"] };
 
-  it("only what the request grants can be ticked", () => {
-    expect(cellAllowed(ceiling, { subject: "event", action: "create" })).toBe(
-      true
-    );
-    expect(cellAllowed(ceiling, { subject: "event", action: "read" })).toBe(
-      false
-    );
-    expect(cellAllowed(undefined, { subject: "event", action: "read" })).toBe(
-      true
-    );
+  const ctx = { kinds: [{ slug: "note" }, { slug: "person" }] };
+
+  // Rules out: a level offered past the request (the Dev loop poster asked
+  // for Activity · Post; View would add a read it never asked for).
+  it("a family's level is offered only within the request", () => {
+    const activity = accessFamily("activity");
+    expect(levelAllowed(ceiling, poster.grant, activity, "post")).toBe(true);
+    expect(levelAllowed(ceiling, poster.grant, activity, "off")).toBe(true);
+    expect(levelAllowed(ceiling, poster.grant, activity, "view")).toBe(false);
+    expect(
+      levelAllowed(ceiling, poster.grant, accessFamily("records"), "view")
+    ).toBe(false);
+    expect(
+      levelAllowed(undefined, poster.grant, accessFamily("records"), "edit")
+    ).toBe(true);
+  });
+
+  it("a part is left in only within the request; doors too", () => {
+    const ciOnly: KeyCeiling = {
+      grant: { permissions: ["event.ci.create"], expiresInDays: 90 },
+      uses: ["hub"],
+    };
+    const activity = accessFamily("activity");
+    expect(partAllowed(ciOnly, ciOnly.grant, activity, "ci", ctx)).toBe(true);
+    expect(partAllowed(ciOnly, ciOnly.grant, activity, "dev", ctx)).toBe(false);
     expect(keyUseAllowed(ceiling, "hub")).toBe(true);
     expect(keyUseAllowed(ceiling, "mcp")).toBe(false);
   });
@@ -154,15 +164,20 @@ describe("under a CLI request's ceiling: narrow, never widen", () => {
   });
 });
 
-describe("keyRequestOutcome", () => {
-  it("says each closed state in words naming the requester", () => {
-    for (const s of ["approved", "consumed", "denied", "expired"] as const) {
-      const o = keyRequestOutcome(s, "Antoine's laptop");
-      expect(o.title.trim()).not.toBe("");
-      expect(o.body.trim()).not.toBe("");
-    }
-    expect(keyRequestOutcome("approved", "Antoine's laptop").body).toContain(
+describe("a closed request", () => {
+  it("says each closed state in a sentence naming the requester", () => {
+    for (const st of ["approved", "consumed", "denied", "expired"] as const)
+      expect(keyRequestOutcome(st, "Antoine's laptop").trim()).not.toBe("");
+    expect(keyRequestOutcome("approved", "Antoine's laptop")).toContain(
       "Antoine's laptop"
     );
+  });
+
+  // Rules out: a hand-written "Request denied" beside proposals' "Rejected"
+  // (finding da59b051): the status is a vocabulary token, and a collected
+  // key reads as approved.
+  it("its status is a vocabulary token", () => {
+    expect(keyRequestStatus("consumed")).toBe("approved");
+    expect(keyRequestStatus("denied")).toBe("denied");
   });
 });

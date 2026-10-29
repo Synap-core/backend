@@ -109,7 +109,8 @@ describe("SEARCH_DESTINATION", () => {
     expect(SEARCH_DESTINATION.person.href("u1")).toBe("/members?focus=u1");
     expect(SEARCH_DESTINATION.agent.href("a1")).toBe("/agents?focus=a1");
     expect(SEARCH_DESTINATION.issuer.href("i1")).toBe("/security?focus=i1");
-    expect(SEARCH_DESTINATION["api-key"].href("k1")).toBe("/keys?focus=k1");
+    // A key is an object with its own page, like a computer.
+    expect(SEARCH_DESTINATION["api-key"].href("k 1")).toBe("/keys/k%201");
     expect(SEARCH_DESTINATION.proposal.href("p1")).toBe("/review?focus=p1");
     expect(SEARCH_DESTINATION.audit.href("e1")).toBe("/audit?focus=e1");
     expect(SEARCH_DESTINATION.workspace.href("w1")).toBe(

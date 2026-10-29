@@ -3,7 +3,9 @@
 /**
  * Keys → the unified key list (no system/operator split).
  * Tabs: Active | Revoked. Each row carries a type badge (`categorize`, in
- * `key-model.ts`); revoked keys get a "Delete" action to remove the record.
+ * `key-model.ts`) and says what the key can do in words (its grants, never
+ * its scope tokens), and opens the key's page (`keyHref`); revoked keys get
+ * a "Delete" action to remove the record.
  *
  * Procedures used:
  *   • trpc.apiKeys.adminListAll      — pod-admin, all keys
@@ -50,10 +52,10 @@ import { formatRelative, shortId } from "../../../../lib/format";
 import {
   CATEGORY_LABEL,
   categorize,
+  keyAccessSentence,
   keyHref,
   holderName,
   keyStatus,
-  normalizeScopes,
   type KeyCategory,
   type UnifiedKey,
 } from "./key-model";
@@ -68,6 +70,19 @@ export function ApiKeysSection() {
   const systemKeys = trpc.apiKeys.listSystemKeys.useQuery(undefined, {
     staleTime: 60_000,
   });
+  // The pod's own names for kinds, so a row says "Create Notes" in them.
+  const profiles = trpc.profiles.list.useQuery(undefined, {
+    staleTime: 60_000,
+  });
+  const kindNames = useMemo(
+    () =>
+      Object.fromEntries(
+        (profiles.data?.profiles ?? [])
+          .filter((p) => p.displayName)
+          .map((p) => [p.slug, p.displayName])
+      ),
+    [profiles.data]
+  );
 
   // Expired session → login, not a dead "couldn't load" error.
   useEffect(() => {
@@ -261,6 +276,7 @@ export function ApiKeysSection() {
                 <KeyRow
                   apiKey={k}
                   category={categorize(k)}
+                  kindNames={kindNames}
                   onRevoke={k.isActive ? () => setRevokeTarget(k) : undefined}
                   onRotate={
                     k.isActive && categorize(k) !== "system"
@@ -343,39 +359,34 @@ export function ApiKeysSection() {
 function KeyRow({
   apiKey,
   category,
+  kindNames,
   onRevoke,
   onRotate,
   onDelete,
 }: {
   apiKey: UnifiedKey;
   category: KeyCategory;
+  kindNames?: Readonly<Record<string, string>>;
   onRevoke?: () => void;
   onRotate?: () => void;
   onDelete?: () => void;
 }) {
   const router = useRouter();
   // A computer's or app's key opens its holder's page (what holds it, what it
-  // reaches, how to revoke it); a space key with neither opens its space.
-  const holderPage = keyHref(apiKey);
+  // reaches, how to revoke it); every other key opens its own page.
+  const page = keyHref(apiKey);
   const status = keyStatus(apiKey);
-  const scopes = normalizeScopes(apiKey.scope);
   const lastUsed = apiKey.lastUsedAt
     ? `last used ${formatRelative(apiKey.lastUsedAt)}`
     : "never used";
-  const created = apiKey.createdAt
-    ? `created ${formatRelative(apiKey.createdAt)}`
-    : null;
 
   const secondary = [
     // Which app / computer / agent holds it — the badge says what it is.
     holderName(apiKey),
-    apiKey.keyPrefix ? `${apiKey.keyPrefix}…` : shortId(apiKey.id),
-    scopes.length > 0
-      ? scopes.slice(0, 2).join(", ") +
-        (scopes.length > 2 ? ` +${scopes.length - 2}` : "")
-      : null,
+    // What it can do, in words; its prefix and scopes are on its page.
+    keyAccessSentence(apiKey, kindNames) ??
+      (apiKey.keyPrefix ? `${apiKey.keyPrefix}…` : shortId(apiKey.id)),
     lastUsed,
-    created,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -388,7 +399,7 @@ function KeyRow({
       primary={apiKey.keyName}
       secondary={`[${CATEGORY_LABEL[category]}] ${secondary}`}
       status={status}
-      onSelect={holderPage ? () => router.push(holderPage) : undefined}
+      onSelect={() => router.push(page)}
       actions={
         hasActions ? (
           <Dropdown>

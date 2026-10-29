@@ -9,6 +9,8 @@ import {
   managedKeys,
   normalizeScopes,
   isPodAppAccessKey,
+  keyAccessSentence,
+  keyUsesOf,
   type UnifiedKey,
 } from "./key-model";
 
@@ -188,7 +190,9 @@ describe("keyHref", () => {
     ).toBe("/computers/c1");
   });
 
-  it("opens a space key with no holder page on its space's keys tab", () => {
+  // Rules out: a key row that opens nothing (finding d99517f7), and a space
+  // key sent to its space's tab instead of its own page.
+  it("opens every other key on its own page", () => {
     expect(
       keyHref(
         key({
@@ -197,12 +201,10 @@ describe("keyHref", () => {
           holder: { kind: "person", name: "x" },
         })
       )
-    ).toBe("/workspaces/ws1?tab=api-keys&focus=k%201");
-  });
-
-  it("is null for a pod-wide key with no holder page", () => {
-    expect(keyHref(key({ workspaceId: null, holder: null }))).toBeNull();
-    expect(keyHref(key({}))).toBeNull();
+    ).toBe("/keys/k%201");
+    expect(keyHref(key({ id: "k2", workspaceId: null, holder: null }))).toBe(
+      "/keys/k2"
+    );
   });
 });
 
@@ -249,5 +251,42 @@ describe("a pod app's access key is the app's, not a key to manage", () => {
 
   it("a sign-in token keeps its App badge", () => {
     expect(CATEGORY_LABEL[categorize(signIn)]).toBe(CATEGORY_LABEL.app);
+  });
+});
+
+describe("keyAccessSentence — what a key can do, in words", () => {
+  // Rules out: a row that prints `hub-protocol.read, hub-protocol.write +1`
+  // (finding 3b57ddca) — the words come from the key's grants.
+  it("says what its grants allow, never a scope token", () => {
+    const line = keyAccessSentence(
+      key({
+        scope: ["hub-protocol.read", "hub-protocol.write"],
+        access: "granted",
+        grants: [{ permissions: ["event.create"], expiresAt: null }],
+      })
+    );
+    expect(line).toContain("Create Activity");
+    expect(line).not.toContain("hub-protocol");
+  });
+
+  it("says a key that can touch nothing so", () => {
+    expect(keyAccessSentence(key({ access: "ungranted", grants: [] }))).toMatch(
+      /^Can touch nothing/
+    );
+  });
+
+  // Rules out: a list that does not carry access read as "touches nothing".
+  it("is null when the list did not carry it", () => {
+    expect(keyAccessSentence(key({}))).toBeNull();
+  });
+});
+
+describe("keyUsesOf — a live key's doors, from its scopes", () => {
+  it("reads a use from its read or its write scope", () => {
+    expect(
+      keyUsesOf({ scope: ["hub-protocol.write", "mcp.read", "data.read"] })
+    ).toEqual(["hub", "mcp"]);
+    expect(keyUsesOf({ scope: "realtime:observe" })).toEqual(["realtime"]);
+    expect(keyUsesOf({ scope: null })).toEqual([]);
   });
 });

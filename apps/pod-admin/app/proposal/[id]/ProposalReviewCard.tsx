@@ -24,6 +24,9 @@
  *         is the one consequence marked — undo is the default;
  *       Advanced (ids + raw request), collapsed, last.
  *
+ * Its parts (marks, sections, the decision bar) are `app/_lib/review/`,
+ * shared with the key request review (`/keys/requests/[id]`).
+ *
  * This file owns provenance and the ONE "Advanced". Hosts draw only their
  * frame: the page its card header, the drawer its title. Before 2026-10-23
  * the drawer drew its own "who / when / where" rows AND embedded the decision,
@@ -39,23 +42,13 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import {
-  Button,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-  Textarea,
-} from "@heroui/react";
-import {
   AppWindow,
-  Check,
   Clock,
   Layers,
   ShieldAlert,
   ShieldCheck,
   TriangleAlert,
   UserRound,
-  X,
-  type LucideIcon,
 } from "lucide-react";
 import {
   deriveDuplicateReview,
@@ -72,7 +65,6 @@ import {
 import {
   resolveObjectNoun,
   resolveProvenanceLabel,
-  resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
 import { openIn, type Exit } from "../../../lib/open-in";
 import { ExitFallback } from "../../../lib/exit-link";
@@ -81,11 +73,24 @@ import { ExitFallback } from "../../../lib/exit-link";
    non-uuid workspace ref would fire a request that can only fail. */
 import { formatRelative, formatTimestamp, isUuid } from "../../../lib/format";
 import { trpc } from "../../../lib/trpc";
-import { navItem } from "../../../lib/console-nav";
 import { proposalExpiresAt, proposalLapsed } from "../../_lib/proposal-expiry";
 import { mediaAlt } from "../../_lib/media/stored-media-model";
-import { useConsoleRole } from "../../(admin)/components/side-nav-role";
 import { AdvancedPanel } from "../../_lib/object/advanced-panel";
+import {
+  DisclosedMark,
+  Outcome,
+  RequesterNote,
+  ReviewProvenance,
+  ReviewSection,
+} from "../../_lib/review/review-parts";
+import {
+  APPROVE_LABEL,
+  ApproveButton,
+  DecisionBar,
+  RejectButton,
+  RejectConfirm,
+  WhoDecides,
+} from "../../_lib/review/decision-bar";
 import { kindIcon } from "../../_lib/object/kind-icon";
 import {
   AgentMark,
@@ -227,49 +232,6 @@ export type ProposalSourceExit = ReturnType<
   typeof useProposalReview
 >["sourceExits"][number];
 
-// ─── Marks ───────────────────────────────────────────────────────────────────
-
-const MARK_TONE: Record<ReviewMark["tone"], string> = {
-  warning: "bg-warning/10 text-warning ring-warning/25",
-  primary: "bg-primary/10 text-primary ring-primary/25",
-  success: "bg-success/10 text-success ring-success/25",
-  default: "bg-foreground/[0.05] text-foreground/75 ring-foreground/15",
-};
-
-/**
- * A state as ONE mark: colour + icon + a few words. Its sentence is disclosed
- * on press (a popover, so it reaches touch and keyboard, not only hover) —
- * never a chip with a paragraph beside it.
- */
-function DisclosedMark({
-  mark,
-  icon: Icon,
-}: {
-  mark: ReviewMark;
-  icon: LucideIcon;
-}) {
-  return (
-    <Popover placement="bottom-start">
-      <PopoverTrigger>
-        <button
-          type="button"
-          data-review-mark={mark.label}
-          aria-label={`${mark.label}: why`}
-          className={`inline-flex h-6 shrink-0 items-center gap-1 rounded-full px-2 text-[11.5px] font-medium ring-1 ring-inset transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${MARK_TONE[mark.tone]}`}
-        >
-          <Icon aria-hidden className="h-3.5 w-3.5" strokeWidth={2} />
-          {mark.label}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent className="max-w-[300px] px-3 py-2">
-        <p className="text-[12.5px] leading-relaxed text-foreground/80">
-          {mark.sentence}
-        </p>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
 // ─── Who is asking: one line ─────────────────────────────────────────────────
 
 /**
@@ -304,235 +266,105 @@ function ProvenanceLine({
     (spaceExit?.isDesktopLink ? spaceExit : undefined);
 
   return (
-    <div className="flex flex-col gap-1.5">
-      <div
-        role="group"
-        aria-label="Who is asking"
-        data-review-provenance=""
-        className="flex flex-wrap items-center gap-1.5"
-      >
-        {actor && (
-          <Pill exit={actor.role === "agent" ? agentExit?.exit : undefined}>
-            {actor.role === "agent" ? (
-              <AgentMark name={actor.name} />
-            ) : actor.role === "app" ? (
-              <AppWindow
-                aria-hidden
-                className="h-3.5 w-3.5 text-foreground/55"
-              />
-            ) : actor.role === "guest" ? (
-              <UserRound
-                aria-hidden
-                className="h-3.5 w-3.5 text-foreground/55"
-              />
-            ) : (
-              <PersonAvatar name={actor.name} />
-            )}
-            {actor.role === "guest" ? (
-              <span className="truncate">
-                <span className="font-medium text-foreground">
-                  {resolveProvenanceLabel("guest")}
-                </span>
-                <span className="text-foreground/55"> through </span>
-                {actor.name}
-              </span>
-            ) : (
-              <span className="truncate font-medium text-foreground">
-                {actor.name}
-              </span>
-            )}
-          </Pill>
-        )}
-        {forWhom && (
-          <Pill>
-            {forWhom.name ? (
-              <>
-                <span className="text-foreground/55">for</span>
-                <PersonAvatar name={forWhom.name} />
-                <span className="truncate">{forWhom.name}</span>
-              </>
-            ) : (
-              <span className="text-foreground/65">{forWhom.text}</span>
-            )}
-          </Pill>
-        )}
-        {workspaceName && (
-          <Pill exit={spaceExit} title={resolveObjectNoun("workspace")}>
-            <Layers aria-hidden className="h-3.5 w-3.5 text-foreground/55" />
-            <span className="truncate">{workspaceName}</span>
-          </Pill>
-        )}
-        {others.map(({ target, exit }) => {
-          const Icon = kindIcon(target.kind);
-          return (
-            <Pill
-              key={`${target.kind}:${target.id}`}
-              exit={exit}
-              title={resolveObjectNoun(target.kind)}
-            >
-              <Icon aria-hidden className="h-3.5 w-3.5 text-foreground/55" />
-              <span className="truncate">{target.label}</span>
-            </Pill>
-          );
-        })}
-        {asked && (
-          <Pill>
-            <Clock aria-hidden className="h-3.5 w-3.5 text-foreground/55" />
-            <time
-              dateTime={asked.toISOString()}
-              title={formatTimestamp(p.createdAt)}
-            >
-              {formatRelative(p.createdAt)}
-            </time>
-          </Pill>
-        )}
-      </div>
-      {fallbackExit && <ExitFallback exit={fallbackExit} showWeb={false} />}
-    </div>
-  );
-}
-
-function Section({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <section
-      aria-label={label}
-      className="flex flex-col gap-3 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10"
+    <ReviewProvenance
+      fallback={
+        fallbackExit && <ExitFallback exit={fallbackExit} showWeb={false} />
+      }
     >
-      {children}
-    </section>
-  );
-}
-
-// ─── The requester's note ────────────────────────────────────────────────────
-
-/** A note past this length (or this many lines) clamps, with "Show more". */
-const NOTE_CLAMP_CHARS = 220;
-const NOTE_CLAMP_LINES = 3;
-
-/**
- * The requester's own words — theirs, not the system's: labelled with who
- * wrote them, quiet, clamped to three lines.
- */
-function RequesterNote({ who, text }: { who: string | null; text: string }) {
-  const [open, setOpen] = useState(false);
-  const long =
-    text.length > NOTE_CLAMP_CHARS ||
-    text.split("\n").length > NOTE_CLAMP_LINES;
-  return (
-    <figure data-review-note="" className="flex flex-col gap-1">
-      <figcaption className="text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/55">
-        {who ? `Note from ${who}` : "Their note"}
-      </figcaption>
-      <blockquote
-        className={`whitespace-pre-line border-l-2 border-foreground/10 pl-3 text-[12.5px] leading-relaxed text-foreground/65 ${
-          long && !open ? "line-clamp-3" : ""
-        }`}
-      >
-        {text}
-      </blockquote>
-      {long && (
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="self-start pl-3 text-[12px] text-foreground/55 underline decoration-foreground/20 underline-offset-2 hover:text-foreground"
-        >
-          {open ? "Show less" : "Show more"}
-        </button>
+      {actor && (
+        <Pill exit={actor.role === "agent" ? agentExit?.exit : undefined}>
+          {actor.role === "agent" ? (
+            <AgentMark name={actor.name} />
+          ) : actor.role === "app" ? (
+            <AppWindow aria-hidden className="h-3.5 w-3.5 text-foreground/55" />
+          ) : actor.role === "guest" ? (
+            <UserRound aria-hidden className="h-3.5 w-3.5 text-foreground/55" />
+          ) : (
+            <PersonAvatar name={actor.name} />
+          )}
+          {actor.role === "guest" ? (
+            <span className="truncate">
+              <span className="font-medium text-foreground">
+                {resolveProvenanceLabel("guest")}
+              </span>
+              <span className="text-foreground/55"> through </span>
+              {actor.name}
+            </span>
+          ) : (
+            <span className="truncate font-medium text-foreground">
+              {actor.name}
+            </span>
+          )}
+        </Pill>
       )}
-    </figure>
+      {forWhom && (
+        <Pill>
+          {forWhom.name ? (
+            <>
+              <span className="text-foreground/55">for</span>
+              <PersonAvatar name={forWhom.name} />
+              <span className="truncate">{forWhom.name}</span>
+            </>
+          ) : (
+            <span className="text-foreground/65">{forWhom.text}</span>
+          )}
+        </Pill>
+      )}
+      {workspaceName && (
+        <Pill exit={spaceExit} title={resolveObjectNoun("workspace")}>
+          <Layers aria-hidden className="h-3.5 w-3.5 text-foreground/55" />
+          <span className="truncate">{workspaceName}</span>
+        </Pill>
+      )}
+      {others.map(({ target, exit }) => {
+        const Icon = kindIcon(target.kind);
+        return (
+          <Pill
+            key={`${target.kind}:${target.id}`}
+            exit={exit}
+            title={resolveObjectNoun(target.kind)}
+          >
+            <Icon aria-hidden className="h-3.5 w-3.5 text-foreground/55" />
+            <span className="truncate">{target.label}</span>
+          </Pill>
+        );
+      })}
+      {asked && (
+        <Pill>
+          <Clock aria-hidden className="h-3.5 w-3.5 text-foreground/55" />
+          <time
+            dateTime={asked.toISOString()}
+            title={formatTimestamp(p.createdAt)}
+          >
+            {formatRelative(p.createdAt)}
+          </time>
+        </Pill>
+      )}
+    </ReviewProvenance>
   );
 }
 
 // ─── The decision ────────────────────────────────────────────────────────────
 
 /**
- * Terminal-state payoff — mirrors the `Outcome` pattern in ApproveForm.tsx.
- * Its title is the status's own label, from the vocabulary door.
+ * A decided proposal, in one sentence beside its status (`Outcome`, which
+ * takes its mark and its words from the status).
  */
-function terminalOutcome(status: string): {
-  tone: "success" | "danger" | "muted";
-  icon: ReactNode;
-  message: string;
-} {
+function terminalMessage(status: string): string {
   switch (status) {
     case "approved":
-      return {
-        tone: "success",
-        icon: <Check className="h-6 w-6" strokeWidth={2.2} />,
-        message: "You approved this change — it's now in your pod.",
-      };
+      return "You approved this change — it's now in your pod.";
     case "auto_approved":
-      return {
-        tone: "success",
-        icon: <Check className="h-6 w-6" strokeWidth={2.2} />,
-        message: "This matched an auto-approve rule and is already applied.",
-      };
+      return "This matched an auto-approve rule and is already applied.";
     case "rejected":
-      return {
-        tone: "danger",
-        icon: <X className="h-6 w-6" strokeWidth={2.2} />,
-        message: "You rejected this — the agent was told why.",
-      };
+      return "You rejected this — the agent was told why.";
     case "reverted":
-      return {
-        tone: "muted",
-        icon: <X className="h-6 w-6" strokeWidth={2.2} />,
-        message: "This change was undone after it was applied.",
-      };
+      return "This change was undone after it was applied.";
     case "expired":
-      return {
-        tone: "muted",
-        icon: <Clock className="h-6 w-6" strokeWidth={2.2} />,
-        message:
-          "Its moment passed before anyone decided — nothing was applied.",
-      };
+      return "Its moment passed before anyone decided — nothing was applied.";
     default:
-      return {
-        tone: "muted",
-        icon: <X className="h-6 w-6" strokeWidth={2.2} />,
-        message: "The agent withdrew this proposal — nothing was applied.",
-      };
+      return "The agent withdrew this proposal — nothing was applied.";
   }
-}
-
-const OUTCOME_TONE: Record<
-  "success" | "danger" | "muted",
-  { ring: string; bg: string; text: string }
-> = {
-  success: {
-    ring: "ring-success/25",
-    bg: "bg-success/10",
-    text: "text-success",
-  },
-  danger: { ring: "ring-danger/25", bg: "bg-danger/10", text: "text-danger" },
-  muted: {
-    ring: "ring-foreground/15",
-    bg: "bg-foreground/[0.05]",
-    text: "text-foreground/60",
-  },
-};
-
-function Outcome({ status }: { status: string }) {
-  const o = terminalOutcome(status);
-  const tone = OUTCOME_TONE[o.tone];
-  return (
-    <div aria-live="polite" className="flex items-center gap-3">
-      <span
-        aria-hidden
-        className={`flex h-10 w-10 items-center justify-center rounded-full ring-1 ring-inset ${tone.bg} ${tone.ring} ${tone.text}`}
-      >
-        {o.icon}
-      </span>
-      <div className="flex flex-col">
-        <span className="text-[15px] font-medium text-foreground">
-          {resolveStatusLabel(status)}
-        </span>
-        <span className="text-[13px] leading-relaxed text-foreground/60">
-          {o.message}
-        </span>
-      </div>
-    </div>
-  );
 }
 
 /** What the decision bar offers: the verbs a twin needs, or a plain Approve. */
@@ -577,47 +409,21 @@ function DecisionButtons({
 
   if (rejecting) {
     return (
-      <div className="flex flex-col gap-2">
-        <Textarea
-          value={reason}
-          onValueChange={setReason}
-          label="Reason (optional)"
-          placeholder="Why are you rejecting this? The agent sees this."
-          minRows={2}
-        />
-        <div className="flex items-center gap-2">
-          <Button
-            color="danger"
-            className="min-h-10"
-            isLoading={decision.rejecting}
-            onPress={() => decision.reject(reason)}
-          >
-            Confirm reject
-          </Button>
-          <Button
-            variant="light"
-            className="min-h-10"
-            isDisabled={decision.rejecting}
-            onPress={() => setRejecting(false)}
-          >
-            Cancel
-          </Button>
-        </div>
-      </div>
+      <RejectConfirm
+        reason={{
+          value: reason,
+          onChange: setReason,
+          placeholder: "Why are you rejecting this? The agent sees this.",
+        }}
+        isLoading={decision.rejecting}
+        onConfirm={() => decision.reject(reason)}
+        onCancel={() => setRejecting(false)}
+      />
     );
   }
 
   const rejectButton = (
-    <Button
-      color="danger"
-      variant="flat"
-      className="min-h-10"
-      startContent={<X size={16} />}
-      isDisabled={busy}
-      onPress={() => setRejecting(true)}
-    >
-      Reject…
-    </Button>
+    <RejectButton isDisabled={busy} onPress={() => setRejecting(true)} />
   );
   const undoChip = undo && <DisclosedMark mark={undo} icon={TriangleAlert} />;
 
@@ -654,16 +460,13 @@ function DecisionButtons({
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Button
-        color="success"
-        className="min-h-10"
-        startContent={<Check size={16} />}
+      <ApproveButton
         isLoading={decision.approving}
         isDisabled={busy || waiting}
         onPress={() => decision.approve(choice)}
       >
-        {resume ? "Resume" : "Approve"}
-      </Button>
+        {resume ? "Resume" : APPROVE_LABEL}
+      </ApproveButton>
       {rejectButton}
       {/* Never widen autonomy beside the approval of something that acts on
           its own: that moment is for reading it, not for "always". */}
@@ -695,36 +498,6 @@ function ApplyingNow({ run }: { run: ApprovalRun }) {
       </span>
       <ApprovalProgressLines copy={copy} />
     </div>
-  );
-}
-
-/** Who decides, and where it is recorded — one quiet line by the verbs. */
-function WhoDecides({ identity }: { identity?: string }) {
-  const role = useConsoleRole();
-  const audit = navItem("audit");
-  const log =
-    role === "admin" ? (
-      <a
-        href={audit.href}
-        className="underline decoration-foreground/25 underline-offset-2 hover:text-foreground hover:decoration-foreground/60"
-      >
-        {audit.label}
-      </a>
-    ) : (
-      audit.label
-    );
-  return (
-    <p className="text-[11.5px] text-foreground/55">
-      {identity ? (
-        <>
-          You decide as <span className="text-foreground/75">{identity}</span>
-          {" · recorded in the "}
-        </>
-      ) : (
-        "Recorded in the "
-      )}
-      {log}
-    </p>
   );
 }
 
@@ -971,7 +744,7 @@ export function ProposalReviewBody({
 
       {/* The change first. */}
       {appConnect ? (
-        <Section label="What it asks for">
+        <ReviewSection label="What it asks for">
           <ul className="flex flex-col gap-1">
             {appConnect.lines.map((line) => (
               <li
@@ -986,13 +759,13 @@ export function ProposalReviewBody({
             It gets a key only after you approve, and its writes still follow
             your review rules.
           </p>
-        </Section>
+        </ReviewSection>
       ) : deferredWrites ? (
         <DeferredWritesList review={deferredWrites} />
       ) : docChanges ? (
-        <Section label="What changes">
+        <ReviewSection label="What changes">
           <DocumentChanges changes={docChanges} />
-        </Section>
+        </ReviewSection>
       ) : records.length > 0 ? (
         <div className="flex flex-col gap-3">
           {groups.map((group) => (
@@ -1110,12 +883,7 @@ export function ProposalReviewBody({
         </section>
       )}
 
-      <div
-        data-review-decision=""
-        className={`flex flex-col gap-2 border-t border-foreground/[0.06] ${
-          actionable ? "sticky z-10" : ""
-        } ${barClassName}`}
-      >
+      <DecisionBar pinned={actionable} className={barClassName}>
         {applying && run ? (
           <>
             <ApplyingNow run={run} />
@@ -1143,12 +911,12 @@ export function ProposalReviewBody({
           </>
         ) : (
           <>
-            <Outcome status={status} />
+            <Outcome status={status} message={terminalMessage(status)} />
             {afterDecision}
           </>
         )}
         <WhoDecides identity={identity} />
-      </div>
+      </DecisionBar>
 
       {/* The ONE Advanced: ids and the raw request, collapsed, under the
           decision — the reader decides on the change, not on the JSON. */}

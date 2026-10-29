@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { CardBody, CardHeader, Chip, Spinner } from "@heroui/react";
+import { CardBody, Spinner } from "@heroui/react";
 import { ShieldCheck } from "lucide-react";
 import { openIn } from "../../../lib/open-in";
-import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { ExitLink } from "../../../lib/exit-link";
 import { trpc } from "../../../lib/trpc";
 import { ReceiverShell } from "../../_lib/receiver-shell";
+import { DECISION_BAR_PIN } from "../../_lib/review/decision-bar";
+import { ReviewHeader } from "../../_lib/review/review-header";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { proposalHeading } from "./proposal-heading";
 import {
@@ -18,20 +19,6 @@ import {
 } from "./ProposalReviewCard";
 import { AfterDecision } from "./ProposalSessionContext";
 import { afterDecisionShown } from "./proposal-session-model";
-
-const STATUS_COLOR: Record<
-  string,
-  "default" | "success" | "danger" | "warning"
-> = {
-  pending: "warning",
-  approval_failed: "warning",
-  approved: "success",
-  auto_approved: "success",
-  rejected: "danger",
-  reverted: "default",
-  withdrawn: "default",
-  expired: "default",
-};
 
 export function ProposalReview({
   proposalId,
@@ -122,26 +109,7 @@ export function ProposalReview({
 
   return shell(
     <>
-      <CardHeader className="flex items-start justify-between gap-3 px-7 pb-0 pt-7">
-        <div className="flex min-w-0 items-start gap-3">
-          <span
-            aria-hidden
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-inset ring-primary/20"
-          >
-            <ShieldCheck className="h-5 w-5" strokeWidth={2} />
-          </span>
-          <h1 className="min-w-0 break-words font-heading text-[22px] font-medium leading-tight tracking-tight text-foreground">
-            {heading}
-          </h1>
-        </div>
-        <Chip
-          color={STATUS_COLOR[status] ?? "default"}
-          variant="flat"
-          size="sm"
-        >
-          {resolveStatusLabel(status)}
-        </Chip>
-      </CardHeader>
+      <ReviewHeader icon={ShieldCheck} heading={heading} status={status} />
 
       {/* Clips nothing, so the decision bar pins to the window. */}
       <CardBody className="overflow-visible px-7 pb-7 pt-5">
@@ -172,12 +140,3 @@ export function ProposalReview({
     true
   );
 }
-
-/**
- * The decision bar pinned to the window's bottom: Approve and Reject stay in
- * reach under a long review (a 106-record capture read 34,545 px). Spans the
- * card body's padding, on the card's own ground made opaque (the page under
- * it plus the card's 4% tint), so nothing scrolls visibly beneath it.
- */
-const DECISION_BAR_PIN =
-  "bottom-0 -mx-7 bg-background bg-[linear-gradient(hsl(var(--heroui-foreground)/0.04),hsl(var(--heroui-foreground)/0.04))] px-7 py-3";

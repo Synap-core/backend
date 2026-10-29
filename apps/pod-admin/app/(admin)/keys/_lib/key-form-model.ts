@@ -3,33 +3,36 @@
  * the key (so which mint door it goes through), what that door is sent, where
  * the person lands after, and what a CLI request lets the reviewer change.
  *
- * Every rule about the KEY itself — the sections, templates, uses → scopes,
- * the sentence, the marks, validation, the wire shape — is the shared model
- * in `@synap-core/types/grants` (`key-draft.ts`). This file only picks the
- * door. Pure, so it is tested without a browser.
+ * Every rule about the KEY itself — the four steps, where it acts and who
+ * holds it, the templates that work there, the families and their levels,
+ * uses → scopes, the sentence, the marks, validation, the wire shape — is the
+ * shared model in `@synap-core/types/grants` (`key-draft.ts`, `key-steps.ts`,
+ * `access-levels.ts`). This file only picks the door. Pure, so it is tested
+ * without a browser.
  */
 
 import {
   KEY_LIFETIME_CHOICES,
   KEY_TEMPLATES,
   grantLifetime,
-  isGranted,
+  scopeWithin,
+  setFamilyLevel,
+  setFamilyPart,
   toKeyMintInput,
-  type GrantCell,
+  type AccessFamily,
+  type AccessLevel,
+  type FamilyPartsContext,
+  type GrantDraft,
   type GrantRole,
   type KeyCeiling,
   type KeyDraft,
+  type KeyHolder,
   type KeyMintInput,
 } from "@synap-core/types/grants";
-import { navHref } from "../../../../lib/console-nav";
+import { keyPageHref, navHref } from "../../../../lib/console-nav";
 
-/**
- * Who holds the key: the person themself (`apiKeys.create`), the pod (a
- * system key, `createSystemKey`) or a service in one space
- * (`adminCreateServiceKey`). A system key is pod-wide, so it never has a
- * space; a service key always has one.
- */
-export type KeyHolder = "person" | "system" | "service";
+/** Who holds the key (so which mint door): the shared model's `KeyHolder`. */
+export type { KeyHolder } from "@synap-core/types/grants";
 
 export interface KeyPageParams {
   /** `?template=<id>`: the template the page opens on. */
@@ -75,48 +78,6 @@ export function newKeyHref(
     if (v && !(k === "holder" && v === "person")) q.set(k, v);
   const query = q.toString();
   return query ? `/keys/new?${query}` : "/keys/new";
-}
-
-/** The holders the page offers, given whether it is made for a space. */
-export function holderChoices(
-  inSpace: boolean
-): readonly { id: KeyHolder; label: string; description: string }[] {
-  return inSpace
-    ? [
-        {
-          id: "person",
-          label: "You, in this space",
-          description: "Acts as you, and only in this space.",
-        },
-        {
-          id: "service",
-          label: "A service, in this space",
-          description:
-            "For an outside service (n8n, a site's backend). Listed on this space's keys.",
-        },
-      ]
-    : [
-        {
-          id: "person",
-          label: "You",
-          description: "Acts as you, wherever you can reach.",
-        },
-        {
-          id: "system",
-          label: "The pod",
-          description:
-            "A system key for automation and scripts, listed as System.",
-        },
-      ];
-}
-
-/**
- * The template a holder opens on when the link names none. A system or
- * service key has always been Full access (D-2: the default stays, shown as
- * such, red); a person starts from scratch.
- */
-export function defaultTemplateId(holder: KeyHolder): string | null {
-  return holder === "person" ? null : "full-access";
 }
 
 /** The templates the page offers: the built-ins, then the person's stored roles. */
@@ -186,30 +147,48 @@ export function keysListHref(workspaceId: string | null): string {
     : navHref("keys");
 }
 
-/** Where the person lands after the key is shown once: its row, focused. */
-export function afterCreateHref(
-  workspaceId: string | null,
-  keyId: string
-): string {
-  return workspaceId
-    ? `${keysListHref(workspaceId)}&focus=${encodeURIComponent(keyId)}`
-    : navHref("keys", { focus: keyId });
+/**
+ * Where the person lands after the key is shown once: the key's own page,
+ * never the list (finding d99517f7).
+ */
+export function afterCreateHref(keyId: string): string {
+  return keyPageHref(keyId);
 }
 
 // ── a CLI's request: narrow, never widen ──────────────────────────────────
 
 /**
- * Under a request's ceiling, a cell may be ticked only when the ceiling
- * grants it; the reviewer can untick anything. (`validateKeyDraft` with the
- * ceiling refuses the rest anyway; this keeps the page from offering it.)
+ * Under a request's ceiling, a family may be set to a level only when the
+ * result stays within what was asked; the reviewer can always lower it.
+ * (`validateKeyDraft` with the ceiling refuses the rest anyway; this keeps
+ * the page from offering it.)
  */
-export function cellAllowed(
+export function levelAllowed(
   ceiling: KeyCeiling | undefined,
-  cell: GrantCell
+  grant: GrantDraft,
+  family: AccessFamily,
+  level: AccessLevel
 ): boolean {
-  return !ceiling || isGranted(ceiling.grant, cell);
+  return (
+    !ceiling || scopeWithin(setFamilyLevel(grant, family, level), ceiling.grant)
+  );
 }
 
+/** The same for leaving one part of a family in ("Only some…"). */
+export function partAllowed(
+  ceiling: KeyCeiling | undefined,
+  grant: GrantDraft,
+  family: AccessFamily,
+  partId: string,
+  ctx: FamilyPartsContext
+): boolean {
+  return (
+    !ceiling ||
+    scopeWithin(setFamilyPart(grant, family, partId, true, ctx), ceiling.grant)
+  );
+}
+
+/** Under a request's ceiling, a door may be ticked only when the request names it. */
 export function keyUseAllowed(
   ceiling: KeyCeiling | undefined,
   use: string
@@ -241,30 +220,29 @@ export function lifetimeLabel(days: number | null): string {
 export type KeyRequestState =
   "pending" | "approved" | "denied" | "consumed" | "expired";
 
+/**
+ * A closed request's status token, for the vocabulary's words: a key the
+ * computer collected was approved first, so it reads "Approved".
+ */
+export function keyRequestStatus(
+  state: KeyRequestState
+): Exclude<KeyRequestState, "consumed"> {
+  return state === "consumed" ? "approved" : state;
+}
+
+/** One sentence beside a closed request's status (copy), naming who asked. */
 export function keyRequestOutcome(
   state: Exclude<KeyRequestState, "pending">,
   requester: string
-): { title: string; body: string } {
+): string {
   switch (state) {
     case "approved":
-      return {
-        title: "Key approved",
-        body: `${requester} collects it once, the next time it checks. You can revoke it on Keys.`,
-      };
+      return `${requester} collects it once, the next time it checks. You can revoke it from your keys.`;
     case "consumed":
-      return {
-        title: "Key made",
-        body: `${requester} collected the key. Revoke it on Keys when it is no longer needed.`,
-      };
+      return `${requester} collected the key. Revoke it from your keys when it is no longer needed.`;
     case "denied":
-      return {
-        title: "Request denied",
-        body: `No key was made, and the command ${requester} ran stops.`,
-      };
+      return `No key was made, and the command ${requester} ran stops.`;
     case "expired":
-      return {
-        title: "Request expired",
-        body: "No key was made. Run the command again to ask for a new one.",
-      };
+      return "No key was made. Run the command again to ask for a new one.";
   }
 }

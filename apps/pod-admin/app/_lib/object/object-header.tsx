@@ -67,6 +67,11 @@ export interface ObjectHeaderProps {
   /** The entity's profile, so a task draws a task's icon. */
   profile?: ProfileIdentityInput | null;
   /**
+   * The glyph, for a kind the registry has no row for yet (an API key):
+   * otherwise it is the registry's (`kindIcon`), never a page's choice.
+   */
+  icon?: LucideIcon;
+  /**
    * The noun line, when the registry noun is not the whole story (an entity's
    * profile name, "Rule · cron"), or the noun with a neutral fact chip beside
    * it (an app's "how it connects"). Defaults to the registry noun.
@@ -86,6 +91,7 @@ export interface ObjectHeaderProps {
 export function ObjectHeader({
   kind,
   profile,
+  icon,
   noun,
   title,
   summary,
@@ -94,7 +100,7 @@ export function ObjectHeader({
   secondaryActions,
   breadcrumb,
 }: ObjectHeaderProps) {
-  const Icon = kindIcon(kind, profile);
+  const Icon = icon ?? kindIcon(kind, profile);
   const nounLine = noun ?? kindLabel(kind);
   return (
     <header className="flex flex-col gap-3">

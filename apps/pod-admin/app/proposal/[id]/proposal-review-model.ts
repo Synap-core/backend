@@ -17,6 +17,7 @@
 
 import { governanceReasonMark } from "@synap-core/types/proposals";
 import { GOVERNANCE_REASON_RULE_REACH } from "@synap-core/types/trust-ladder";
+import type { ReviewMark, ReviewTone } from "../../_lib/review/review-mark";
 
 /** One field of the pod's diff, read structurally. */
 export interface ProposalChangeInput {
@@ -28,14 +29,8 @@ export interface ProposalChangeInput {
   drift?: "unchanged" | "changed_since" | "unknown";
 }
 
-export type ReviewTone = "warning" | "primary" | "default" | "success";
-
-/** A state, said as a short label; its sentence is disclosed on press. */
-export interface ReviewMark {
-  tone: ReviewTone;
-  label: string;
-  sentence: string;
-}
+// A mark is shared by every review page (`_lib/review`).
+export type { ReviewMark, ReviewTone } from "../../_lib/review/review-mark";
 
 /**
  * The reason a person decides, as one mark — only when it says something

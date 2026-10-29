@@ -387,6 +387,15 @@ export function computerHref(id: string): string {
   return `${navHref("computers")}/${encodeURIComponent(id)}`;
 }
 
+/**
+ * One key's page in the console (`/keys/[id]`) — the ONE spelling of "open
+ * this key", for every surface that names one (Keys, a computer, an app,
+ * search, New key after the key is shown).
+ */
+export function keyPageHref(id: string): string {
+  return `${navHref("keys")}/${encodeURIComponent(id)}`;
+}
+
 /** True when a viewer with `role` may open (and so see) this item. */
 export function navVisibleTo(item: NavItem, role: NavAudience): boolean {
   return role === "admin" || item.audience === "member";
@@ -457,7 +466,7 @@ export interface SearchDestination {
  * ⌘K categories → the page that receives them. Two routes are decided by the
  * row, not the category, and stay at the call site: a PENDING issuer goes to
  * Review (`pendingIssuerHref`), and an API key opens where its Keys row opens
- * (`keyHref`: its holder's page, or the space it is confined to).
+ * (`keyHref`: its holder's page, else its own page).
  */
 export const SEARCH_DESTINATION: Readonly<
   Record<SearchCategory, SearchDestination>
@@ -491,7 +500,7 @@ export const SEARCH_DESTINATION: Readonly<
   "api-key": {
     nav: "keys",
     label: "API keys",
-    href: (id) => navHref("keys", { focus: id }),
+    href: keyPageHref,
   },
   // The id travels with the link so the list can land on the entity.
   entity: {

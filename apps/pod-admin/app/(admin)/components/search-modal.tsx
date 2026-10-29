@@ -352,8 +352,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
     matches.push(...bucket);
 
     // API keys — opened where a Keys row opens (`keyHref`: the holder's page,
-    // else the space a key is confined to); a pod-wide key with no holder
-    // page is focused on the Keys list.
+    // else the key's own page).
     bucket = [];
     const keyItems = apiKeysQuery.data ?? [];
     for (const k of keyItems) {
@@ -364,7 +363,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
         category: "api-key",
         primary: k.keyName,
         secondary: `${k.keyPrefix}… · ${k.isActive ? "active" : "revoked"}`,
-        href: keyHref(k) ?? SEARCH_DESTINATION["api-key"].href(k.id),
+        href: keyHref(k),
       });
       if (bucket.length >= cap) break;
     }

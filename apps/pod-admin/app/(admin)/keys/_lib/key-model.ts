@@ -1,13 +1,20 @@
 /**
  * What a key IS, as every keys surface shows it: its category badge, its
- * status pill, its scopes as a list. Pure, so `/keys`, `/my-connections` and
- * the workspace keys tab read one rule and cannot drift.
+ * status pill, what it can do in words, where its row opens. Pure, so
+ * `/keys`, `/keys/[id]`, `/my-connections` and the workspace keys tab read
+ * one rule and cannot drift.
  */
 
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@synap-core/api-types";
+import {
+  KEY_USES,
+  describeKeyAccess,
+  type KeyAccess,
+  type KeyAccessGrant,
+} from "@synap-core/types/grants";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
-import { computerHref, navHref } from "../../../../lib/console-nav";
+import { computerHref, keyPageHref } from "../../../../lib/console-nav";
 import { DAY_MS } from "../../../../lib/format";
 import type { StatusKind } from "../../components/status-pill";
 import { appHref } from "../../applications/_lib/app-inventory";
@@ -50,6 +57,28 @@ export interface UnifiedKey {
     userType?: string | null;
   };
   holder?: KeyHolder | null;
+  /**
+   * What it may touch (`apiKeys.list`, `adminListAll`: `access` + every live
+   * grant). Absent = a list that does not carry it (`listSystemKeys`).
+   */
+  access?: KeyAccess;
+  grants?: readonly KeyAccessGrant[];
+}
+
+/**
+ * What a key can DO, in one line for its row (`describeKeyAccess`), never
+ * its scope tokens (finding 3b57ddca). null when the list did not carry it:
+ * the row then says nothing rather than a guess.
+ */
+export function keyAccessSentence(
+  k: UnifiedKey,
+  kindNames?: Readonly<Record<string, string>>
+): string | null {
+  if (!k.access) return null;
+  return describeKeyAccess(
+    { access: k.access, grants: k.grants ?? [] },
+    { kindNames }
+  ).sentence;
 }
 
 export type KeyCategory =
@@ -145,15 +174,13 @@ export function holderHref(k: UnifiedKey): string | null {
 }
 
 /**
- * Where a key row opens: its holder's page first; a key confined to one space
- * with no holder page opens on that space's keys tab, focused on the key.
- * null = nothing to open — the row stays a row.
+ * Where a key row opens: its holder's page first (a computer's, an app's:
+ * what holds it, what it reaches, how to stop it — and that page links to
+ * the key), else the key's own page. Every key is a door (finding d99517f7:
+ * a person's or the pod's key row opened nothing).
  */
-export function keyHref(k: UnifiedKey): string | null {
-  const holder = holderHref(k);
-  if (holder) return holder;
-  if (!k.workspaceId) return null;
-  return `${navHref("spaces")}/${encodeURIComponent(k.workspaceId)}?tab=api-keys&focus=${encodeURIComponent(k.id)}`;
+export function keyHref(k: UnifiedKey): string {
+  return holderHref(k) ?? keyPageHref(k.id);
 }
 
 export function keyStatus(apiKey: {
@@ -179,4 +206,18 @@ export function normalizeScopes(
     .split(",")
     .map((x) => x.trim())
     .filter(Boolean);
+}
+
+/**
+ * Where a live key is used, read back from its scopes (`KEY_USES`: a use is
+ * there when its read or write scope is). A key made before uses existed
+ * reads the same way; a scope no use names is left to Advanced.
+ */
+export function keyUsesOf(k: Pick<UnifiedKey, "scope">): string[] {
+  const scopes = normalizeScopes(k.scope);
+  return KEY_USES.filter(
+    (u) =>
+      scopes.includes(u.read) ||
+      ("write" in u && !!u.write && scopes.includes(u.write))
+  ).map((u) => u.id);
 }

@@ -51,6 +51,12 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => ({
   checkPermissionOrPropose: vi.fn(async () => ({ granted: true })),
 }));
 vi.mock("../utils/audit-log.js", () => ({ auditLog: async () => null }));
+// The pod-admin gate is pinned in its own tests; here the person is one, so
+// the Keys list (`adminListAll`) is read beside the person's own lists.
+vi.mock("../utils/workspace-role.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  isPodAdmin: vi.fn(async (userId: string) => userId === "human-rotate"),
+}));
 vi.mock("@synap/events", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   emitSideEffects: async () => undefined,
@@ -229,14 +235,22 @@ describe("apiKeys.rotate — the grant follows the key", () => {
 
 describe("key lists say what a key may touch", () => {
   const listed = async (keyId: string) => {
-    const [mine, ws] = await Promise.all([
+    const [mine, ws, admin] = await Promise.all([
       caller().list(),
       wsCaller().listForWorkspace(),
+      caller().adminListAll(),
     ]);
     const a = mine.find((k) => k.id === keyId)!;
     const b = ws.find((k) => k.id === keyId)!;
-    // Both lists read the same door, so they must agree.
+    // The pod-admin Keys list and a key's page read it too (finding
+    // 3b57ddca: they printed scope tokens, the wire carried no access).
+    const c = admin.find((k) => k.id === keyId)!;
+    // Every list reads the same door, so they must agree.
     expect({ access: b.access, grants: b.grants }).toEqual({
+      access: a.access,
+      grants: a.grants,
+    });
+    expect({ access: c.access, grants: c.grants }).toEqual({
       access: a.access,
       grants: a.grants,
     });
