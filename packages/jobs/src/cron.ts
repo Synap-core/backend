@@ -130,6 +130,10 @@ import {
   LIBRARY_KEEP_ALIVE_QUEUE,
   LIBRARY_KEEP_ALIVE_CRON,
 } from "./workers/library-keep-alive-worker.js";
+import {
+  MORNING_BRIEF_QUEUE,
+  MORNING_BRIEF_CRON,
+} from "./workers/morning-brief-worker.js";
 
 const logger = createLogger({ module: "cron-scheduler" });
 
@@ -253,6 +257,11 @@ export async function registerCronSchedules(): Promise<void> {
     {}
   );
   logger.info("Registered cron: library-keep-alive (daily at 4:23 AM UTC)");
+
+  // Morning brief (every 15 min — each person is due within the hour after
+  // their own brief time, read from their proactive settings)
+  await scheduleSafe(boss, MORNING_BRIEF_QUEUE, MORNING_BRIEF_CRON, {});
+  logger.info("Registered cron: morning-brief (every 15min)");
 
   // Session titler (every 10min — derived names for untitled runs/captures, one
   // generated name per unnamed work session/receipt, one outcome-aware rename

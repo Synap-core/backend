@@ -95,6 +95,25 @@ export async function getProactivePrefsForWorkspace(
   return settings.proactiveAi ?? getDefaultProactiveAiPreferences();
 }
 
+/**
+ * Why the person's proactive settings hold a proactive post back, or `null`
+ * when nothing does: the kill switch, then an active snooze (`mutedUntil`).
+ * The ONE reading of those two settings — the morning brief applies it too.
+ */
+export function proactivePostHeldBy(
+  prefs: ProactiveAiPreferences,
+  now: Date = new Date()
+): "proactive_ai_disabled" | "muted_until_active" | null {
+  if (!prefs.enabled) return "proactive_ai_disabled";
+  if (prefs.mutedUntil) {
+    const mutedUntilDate = new Date(prefs.mutedUntil);
+    if (!isNaN(mutedUntilDate.getTime()) && mutedUntilDate > now) {
+      return "muted_until_active";
+    }
+  }
+  return null;
+}
+
 /** Read delivery preferences for a workspace. */
 async function getDeliveryPreferences(
   workspaceId: string
@@ -418,18 +437,10 @@ export async function routeProactiveMessage(
     }
 
     // ── Check global proactive AI preferences ─────────────────────────────
-    const prefs = await getProactivePrefsForWorkspace(workspaceId);
-
-    if (!prefs.enabled) {
-      return { posted: false, reason: "proactive_ai_disabled" };
-    }
-
-    if (prefs.mutedUntil) {
-      const mutedUntilDate = new Date(prefs.mutedUntil);
-      if (!isNaN(mutedUntilDate.getTime()) && mutedUntilDate > new Date()) {
-        return { posted: false, reason: "muted_until_active" };
-      }
-    }
+    const held = proactivePostHeldBy(
+      await getProactivePrefsForWorkspace(workspaceId)
+    );
+    if (held) return { posted: false, reason: held };
 
     // ── Resolve delivery surfaces ─────────────────────────────────────────
     const deliveryPrefs = await getDeliveryPreferences(workspaceId);

@@ -942,7 +942,10 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     priority: "normal",
     titleTemplate: "{{title}}",
     bodyTemplate: "{{body}}",
-    defaultChannels: ["in_app"],
+    // `os` joined with its producer (`services/morning-brief/`): one PASSIVE
+    // push a day under the `morning-brief` category (`@synap-core/types/push`),
+    // silent, never breaking through. Still a suggestion, never counted.
+    defaultChannels: ["in_app", "os"],
     ttl: 0,
     needsYou: "suggestion",
   },
