@@ -94,6 +94,9 @@ vi.mock("@synap/database", async (importOriginal) => {
   // break this file; explicit entries still win.
   const base: Record<string, unknown> = {
     db: dbStub,
+    // The real status door: it writes through the `db` it is handed (the
+    // stub above), so the executor's flip still lands in `proposalUpdates`.
+    transitionProposal: actual.transitionProposal,
     // Pulled in transitively via store-entity-source-blob.js (source-file
     // staging on approval). A total vi.mock replaces the module wholesale,
     // so every export the source chain imports must be declared here.

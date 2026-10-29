@@ -28,7 +28,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { and, db, proposals, eq } from "@synap/database";
+import { and, db, proposals, eq, transitionProposal } from "@synap/database";
 import { ProposalStatus, users } from "@synap/database/schema";
 import {
   InvalidPermissionError,
@@ -129,15 +129,15 @@ export function registerAgentExecutors(): void {
               : "This key was already approved.",
         });
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       await auditLog({
         subjectType: "agent_user",
@@ -234,15 +234,15 @@ export function registerAgentExecutors(): void {
         actorId: userId,
       });
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       await auditLog({
         subjectType: "agent_user",

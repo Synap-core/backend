@@ -14,8 +14,8 @@ import { join, relative } from "path";
  *  A. every MUTATION of the `proposals` tRPC router is classified — a decision
  *     (and then its FIRST statement is the gate, so it fires before any read)
  *     or not a decision, with the reason. A new mutation joins by existing.
- *  B. every router file that writes a decided status (`update(proposals)` +
- *     APPROVED / REJECTED / REVERTED) calls the gate. Executors are excluded:
+ *  B. every router file that writes a decided status (`transitionProposal(`
+ *     or `update(proposals)`, + APPROVED / REJECTED / REVERTED) calls the gate. Executors are excluded:
  *     they run only under `applyProposalApproval`, which is in the set.
  *  C. every Hub REST `/proposals/:id/<action>` route delegates to a gated
  *     procedure (the MCP reject tool delegates to `reject` the same way), and
@@ -138,8 +138,12 @@ describe("B — every router file that writes a decided status calls the gate", 
     .filter((f) => !f.includes(`${join("proposals", "executors")}`))
     .filter((f) => {
       const s = readFileSync(f, "utf8");
+      // A status is written through the status door (`transitionProposal`,
+      // tripwire proposal-status-one-door); a raw `update(proposals)` is
+      // still matched so a writer that bypasses the door is not missed here.
       return (
-        s.includes("update(proposals)") &&
+        (s.includes("update(proposals)") ||
+          s.includes("transitionProposal(")) &&
         /ProposalStatus\.(APPROVED|REJECTED|REVERTED)\b/.test(s)
       );
     })

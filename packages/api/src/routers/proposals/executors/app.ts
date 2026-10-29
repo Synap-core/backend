@@ -26,6 +26,7 @@ import {
   AppRepository,
   readAppConnectRequests,
   APP_EVENT_ACTIONS,
+  transitionProposal,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { registerProposalExecutor } from "../execution-registry.js";
@@ -125,15 +126,15 @@ export function registerAppExecutors(): void {
       // proposal whose live key still holds the old reach.
       const rederivedKeys = await applyApprovedReach(appId);
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       // The app's own timeline: "Approved by you" (`events.read({ appId })`).
       await auditLog({

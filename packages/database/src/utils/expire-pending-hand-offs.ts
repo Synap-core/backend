@@ -20,6 +20,7 @@
  */
 import { and, eq, ne, sql } from "drizzle-orm";
 import { db } from "../client-pg.js";
+import { transitionProposal } from "./proposal-transition.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
 
 type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -34,27 +35,24 @@ export async function expirePendingHandOffsOfAttachedAgent(
   },
   executor: typeof db | DbTx = db
 ): Promise<string[]> {
-  const expired = await executor
-    .update(proposals)
-    .set({
-      status: ProposalStatus.EXPIRED,
+  const expired = await transitionProposal(executor, {
+    to: ProposalStatus.EXPIRED,
+    set: {
       updatedAt: new Date(),
       data: sql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object(
         'expiredBy', 'agent_attached',
         'supersededByProposalId', ${input.landedByProposalId ?? null}::text)`,
-    })
-    .where(
-      and(
-        eq(proposals.status, ProposalStatus.PENDING),
-        eq(proposals.targetType, "focus_session"),
-        eq(proposals.proposalType, "assign_agent"),
-        eq(proposals.targetId, input.sessionId),
-        sql`${proposals.data}->'data'->>'addAgentId' = ${input.agentId}`,
-        ...(input.landedByProposalId
-          ? [ne(proposals.id, input.landedByProposalId)]
-          : [])
-      )
-    )
-    .returning({ id: proposals.id });
+    },
+    where: and(
+      eq(proposals.status, ProposalStatus.PENDING),
+      eq(proposals.targetType, "focus_session"),
+      eq(proposals.proposalType, "assign_agent"),
+      eq(proposals.targetId, input.sessionId),
+      sql`${proposals.data}->'data'->>'addAgentId' = ${input.agentId}`,
+      ...(input.landedByProposalId
+        ? [ne(proposals.id, input.landedByProposalId)]
+        : [])
+    ),
+  }).returning({ id: proposals.id });
   return expired.map((row) => row.id);
 }

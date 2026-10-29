@@ -222,8 +222,13 @@ describe("the staging substrate is WIRED, not just built", () => {
     // The authoritative, per-occurrence version of this invariant (across every
     // file, derived from the `ProposalStatus` enum itself) lives in
     // `__tripwires__/source-blob-ownership-and-terminal-discard.test.ts`.
+    // A write is the status door's `to: ProposalStatus.X` (every status write
+    // since `transitionProposal`, tripwire proposal-status-one-door) or a raw
+    // `status: ProposalStatus.X`.
     const terminalWrites = (
-      s.match(/status: ProposalStatus\.(REJECTED|WITHDRAWN|EXPIRED)/g) ?? []
+      s.match(
+        /\b(?:status|to): ProposalStatus\.(REJECTED|WITHDRAWN|EXPIRED)/g
+      ) ?? []
     ).length;
     const discards = s.split("discardProposalSourceBlob({").length - 1;
     expect(

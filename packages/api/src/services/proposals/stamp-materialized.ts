@@ -29,6 +29,8 @@ import {
   isNull,
   links,
   proposals,
+  transitionProposal,
+  type ProposalTransitionSet,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import type { ProposalMaterializedRecord } from "@synap-core/types";
@@ -727,12 +729,18 @@ export function subtractFromRecord(
 
 type StampDatabase = Pick<typeof db, "query" | "update" | "select" | "insert">;
 
-type ProposalColumns = typeof proposals.$inferInsert;
+/** A status move that rides the stamp's UPDATE (through the status door). */
+export interface StampTransition {
+  to: ProposalStatus;
+  set?: Omit<ProposalTransitionSet, "data">;
+}
 
 /**
  * Merge `record` into `proposals.data.materialized` and write it — the ONE
- * writer every materializer uses. `set` rides the same UPDATE so a door that
- * flips status at the same moment (approve) stays a single statement.
+ * writer every materializer uses. `transition` rides the same UPDATE so a door
+ * that moves the status at the same moment (approve) stays a single statement;
+ * it goes through the status door (`transitionProposal`), like every status
+ * write.
  *
  * `baseData` is the row's data as the caller already holds it (approve loaded
  * the proposal; the capture receipt insert returned its row) — the write merges
@@ -746,7 +754,7 @@ export async function stampMaterialized(args: {
   database?: StampDatabase;
   baseData?: Record<string, unknown> | null;
   dataPatch?: Record<string, unknown>;
-  set?: Omit<Partial<ProposalColumns>, "data" | "id">;
+  transition?: StampTransition;
 }): Promise<CompleteMaterializedRecord> {
   const database = args.database ?? db;
   const currentData = (args.baseData ??
@@ -766,10 +774,18 @@ export async function stampMaterialized(args: {
     ...(args.dataPatch ?? {}),
     materialized: merged,
   };
-  await database
-    .update(proposals)
-    .set({ ...(args.set ?? {}), data: nextData })
-    .where(eq(proposals.id, args.proposalId));
+  if (args.transition) {
+    await transitionProposal(database, {
+      to: args.transition.to,
+      set: { ...(args.transition.set ?? {}), data: nextData },
+      where: eq(proposals.id, args.proposalId),
+    });
+  } else {
+    await database
+      .update(proposals)
+      .set({ data: nextData })
+      .where(eq(proposals.id, args.proposalId));
+  }
 
   const sourceDocumentIds = readSourceDocumentIds(nextData.sourceDocumentIds);
   if (sourceDocumentIds.length > 0 && (merged.entityIds ?? []).length > 0) {
@@ -840,7 +856,7 @@ export async function stampEntityUpdate(args: {
   after: EntityUndoSnapshot;
   database?: StampDatabase;
   baseData?: Record<string, unknown> | null;
-  set?: Omit<Partial<ProposalColumns>, "data" | "id">;
+  transition?: StampTransition;
 }): Promise<CompleteMaterializedRecord> {
   const diff = computeEntityUpdateDiff(args.entityId, args.before, args.after);
   return stampMaterialized({
@@ -848,7 +864,7 @@ export async function stampEntityUpdate(args: {
     record: { propertyDiffs: diff ? [diff] : [] },
     ...(args.database ? { database: args.database } : {}),
     ...(args.baseData !== undefined ? { baseData: args.baseData } : {}),
-    ...(args.set ? { set: args.set } : {}),
+    ...(args.transition ? { transition: args.transition } : {}),
   });
 }
 
@@ -890,7 +906,7 @@ export async function stampSessionUpdate(args: {
   before: Record<SessionUndoColumn, unknown> | null;
   after: Partial<Record<SessionUndoColumn, unknown>> | undefined;
   database?: StampDatabase;
-  set?: Omit<Partial<ProposalColumns>, "data" | "id">;
+  transition?: StampTransition;
 }): Promise<void> {
   if (!args.proposalId || !args.before || !args.after) return;
   const before: Record<string, unknown> = {};
@@ -912,7 +928,7 @@ export async function stampSessionUpdate(args: {
           : [],
       },
       ...(args.database ? { database: args.database } : {}),
-      ...(args.set ? { set: args.set } : {}),
+      ...(args.transition ? { transition: args.transition } : {}),
     });
   } catch (err) {
     logger.error(
@@ -1082,10 +1098,9 @@ export async function runMaterializationUnderReceipt<T>(
         // it holds is now ALSO the redacted `detail`, and the class + safe
         // sentence ride alongside.
         const meta = classifyThrownFailure(err);
-        await database
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVAL_FAILED,
+        await transitionProposal(database, {
+          to: ProposalStatus.APPROVAL_FAILED,
+          set: {
             rejectionReason: safeFailureSentence(err, meta),
             data: {
               ...(receipt.data ?? {}),
@@ -1098,8 +1113,9 @@ export async function runMaterializationUnderReceipt<T>(
               ),
               failure: failureRecord(meta),
             },
-          })
-          .where(eq(proposals.id, receipt.id));
+          },
+          where: eq(proposals.id, receipt.id),
+        });
       } catch (markErr) {
         logger.error(
           { err: markErr, proposalId: receipt.id },

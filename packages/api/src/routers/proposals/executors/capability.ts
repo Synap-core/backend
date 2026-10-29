@@ -6,6 +6,7 @@ import {
   and,
   skills,
   knowledgeRepository,
+  transitionProposal,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { randomUUID } from "crypto";
@@ -275,16 +276,16 @@ export function registerCapabilityExecutors(): void {
           >)
         : null;
 
-    await db
-      .update(proposals)
-      .set({
-        status: ProposalStatus.APPROVED,
+    await transitionProposal(db, {
+      to: ProposalStatus.APPROVED,
+      set: {
         ...(materializedPayload ? { data: materializedPayload } : {}),
         reviewedBy: userId,
         reviewedAt: new Date(),
         updatedAt: new Date(),
-      })
-      .where(eq(proposals.id, input.proposalId));
+      },
+      where: eq(proposals.id, input.proposalId),
+    });
 
     // Report to IS telemetry (fire-and-forget — never blocks)
     reportApproved(deps, proposal, input.proposalId);
@@ -444,17 +445,17 @@ export function registerCapabilityExecutors(): void {
         runResult,
       } as unknown as typeof payload;
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           data: materializedPayload,
           correlationId,
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       // An approved PROPOSED start of an external agent's binding: record the
       // hand-off on its run from THIS execution's result, so the run is
@@ -582,16 +583,16 @@ export function registerCapabilityExecutors(): void {
         installResult,
       } as unknown as typeof payload;
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           data: materializedPayload,
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);
@@ -678,16 +679,16 @@ export function registerCapabilityExecutors(): void {
         enabledToolIds: toolIds,
       } as unknown as typeof payload;
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           data: materializedPayload,
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);
@@ -777,15 +778,15 @@ export function registerCapabilityExecutors(): void {
         scope,
       });
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);
@@ -891,15 +892,15 @@ export function registerCapabilityExecutors(): void {
         })
       );
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
 
@@ -986,15 +987,15 @@ export function registerCapabilityExecutors(): void {
         templateKey,
       });
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
 

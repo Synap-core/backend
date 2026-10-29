@@ -32,6 +32,7 @@ import {
   and,
   eq,
   inArray,
+  transitionProposal,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import {
@@ -359,24 +360,21 @@ export async function markOrganizeProposalApproved(
   approverUserId: string,
   at: Date
 ): Promise<boolean> {
-  const rows = await tx
-    .update(proposals)
-    .set({
-      status: ProposalStatus.APPROVED,
+  const rows = await transitionProposal(tx, {
+    to: ProposalStatus.APPROVED,
+    set: {
       reviewedBy: approverUserId,
       reviewedAt: at,
       updatedAt: at,
-    })
-    .where(
-      and(
-        eq(proposals.id, proposalId),
-        inArray(proposals.status, [
-          ProposalStatus.PENDING,
-          ProposalStatus.APPROVAL_FAILED,
-        ])
-      )
-    )
-    .returning({ id: proposals.id });
+    },
+    where: and(
+      eq(proposals.id, proposalId),
+      inArray(proposals.status, [
+        ProposalStatus.PENDING,
+        ProposalStatus.APPROVAL_FAILED,
+      ])
+    ),
+  }).returning({ id: proposals.id });
   return rows.length > 0;
 }
 
@@ -390,16 +388,17 @@ export async function releaseOrganizeApproval(
   at: Date,
   database: LibraryDb = defaultDb
 ): Promise<void> {
-  await database
-    .update(proposals)
-    .set({ status: ProposalStatus.APPROVAL_FAILED, updatedAt: new Date() })
-    .where(
-      and(
-        eq(proposals.id, proposalId),
-        eq(proposals.status, ProposalStatus.APPROVED),
-        proposalUnchangedSince(at)
-      )
-    );
+  await transitionProposal(database, {
+    to: ProposalStatus.APPROVAL_FAILED,
+    set: {
+      updatedAt: new Date(),
+    },
+    where: and(
+      eq(proposals.id, proposalId),
+      eq(proposals.status, ProposalStatus.APPROVED),
+      proposalUnchangedSince(at)
+    ),
+  });
 }
 
 /**

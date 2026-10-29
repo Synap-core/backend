@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq } from "@synap/database";
+import { db, proposals, eq, transitionProposal } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { moveStatus } from "../../../services/lifecycle/move-status.js";
 import { registerProposalExecutor } from "../execution-registry.js";
@@ -81,15 +81,15 @@ export function registerEntityTransitionExecutors(): void {
         });
       }
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
       reportApproved(deps, proposal, input.proposalId);
       deps.emitProposalReviewed(
         input.proposalId,

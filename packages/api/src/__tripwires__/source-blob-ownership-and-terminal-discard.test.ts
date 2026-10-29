@@ -408,13 +408,19 @@ describe("TRIPWIRE: every terminal proposal state discards the staged blob", () 
     for (const file of files) {
       const s = stripComments(readFileSync(file, "utf8"), "ts");
       const helpers = localDiscardHelpers(s);
-      // WRITE sites only: a `.set({ … status: ProposalStatus.X … })`. A status
-      // named in a filter array or a switch is a READ and out of scope by
-      // construction rather than by allowlist.
-      for (const m of s.matchAll(/\.set\s*\(\s*\{/g)) {
+      // WRITE sites only: the status door's `transitionProposal(x, { to:
+      // ProposalStatus.X … })` (every status write since the door, tripwire
+      // proposal-status-one-door), or a raw `.set({ … status:
+      // ProposalStatus.X … })`. A status named in a filter array or a switch
+      // is a READ and out of scope by construction rather than by allowlist.
+      for (const m of s.matchAll(
+        /\.set\s*\(\s*\{|\btransitionProposal\s*\(\s*[\w.]+\s*,\s*\{/g
+      )) {
         const braceAt = s.indexOf("{", m.index!);
         const obj = objectAt(s, braceAt);
-        const status = obj.match(/status:\s*ProposalStatus\.([A-Z_]+)/);
+        const status = obj.match(
+          /\b(?:status|to):\s*ProposalStatus\.([A-Z_]+)/
+        );
         if (!status || !TERMINAL_KEYS.includes(status[1]!)) continue;
         const label = `${file.slice(API_SRC.length + 1)} → ${status[1]}`;
         found.push(label);

@@ -47,6 +47,7 @@ import {
   type CurrentGuideline,
   type StructureGuidelineProposalData,
   type StructureGuidelineScopeKind,
+  transitionProposal,
 } from "@synap/database";
 import { profiles, ProposalStatus } from "@synap/database/schema";
 import type { ConfigSetting } from "@synap/database/schema";
@@ -634,15 +635,15 @@ export const structureGuidelineApprovalDbDeps: StructureGuidelineApprovalDeps =
   {
     ...guidelineVersionDbDeps,
     async markApproved(proposalId, reviewerId) {
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: reviewerId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, proposalId));
+        },
+        where: eq(proposals.id, proposalId),
+      });
     },
     // The ONE revise core: row lock, PENDING assertion (CONFLICT otherwise),
     // reviewer authority, and a `revisionHistory` entry recording the rebase.

@@ -6,6 +6,7 @@ import {
   and,
   getWorkspaceMembership,
   isUniqueViolation,
+  transitionProposal,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
@@ -150,22 +151,19 @@ export function registerViewExecutors(): void {
         if (!isUniqueViolation(err)) throw err;
       }
 
-      const [claimed] = await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      const [claimed] = await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
           ...(reservedId ? { targetId: reservedId } : {}),
-        })
-        .where(
-          and(
-            eq(proposals.id, input.proposalId),
-            eq(proposals.status, ProposalStatus.PENDING)
-          )
-        )
-        .returning({ id: proposals.id });
+        },
+        where: and(
+          eq(proposals.id, input.proposalId),
+          eq(proposals.status, ProposalStatus.PENDING)
+        ),
+      }).returning({ id: proposals.id });
 
       if (!claimed) {
         return { success: true, alreadyApproved: true };

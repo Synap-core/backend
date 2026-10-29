@@ -46,6 +46,7 @@ import {
   extractIdentitySignals,
   ownerPrivateVisibleWhere,
   getWorkspaceMembership,
+  transitionProposal,
 } from "@synap/database";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { ruleCanReachReason } from "@synap-core/types/trust-ladder";
@@ -287,17 +288,17 @@ async function redecide(input: {
   if (!workspaceRole) return { outcome: "pending", reason: storedReason };
 
   const now = new Date();
-  const [claimed] = await db
-    .update(proposals)
-    .set({
-      status: ProposalStatus.AUTO_APPROVED,
+  const [claimed] = await transitionProposal(db, {
+    to: ProposalStatus.AUTO_APPROVED,
+    from: [ProposalStatus.PENDING],
+    set: {
       reviewedBy: userId,
       reviewedAt: now,
       updatedAt: now,
       governanceReason: null,
-    })
-    .where(unchangedSince(proposalId, actingAgentUserId, revisions))
-    .returning({ id: proposals.id, data: proposals.data });
+    },
+    where: unchangedSince(proposalId, actingAgentUserId, revisions),
+  }).returning({ id: proposals.id, data: proposals.data });
   if (!claimed) return { outcome: "superseded" };
   markProposalNotificationsActioned([claimed.id]);
 

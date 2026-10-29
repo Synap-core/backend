@@ -11,10 +11,15 @@
  * lifecycle only (the kind's, or the same facet's); a proposal that expects
  * the status the person just chose stays answerable.
  */
-import { sql } from "drizzle-orm";
+import { and, eq, isNotNull, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../../schema/index.js";
 import type { StatusTransition } from "./apply-status-move.js";
+import { proposals, ProposalStatus } from "../../schema/proposals.js";
+import {
+  transitionProposal,
+  type ProposalStatusWriter,
+} from "../../utils/proposal-transition.js";
 
 type Db = PostgresJsDatabase<typeof schema>;
 
@@ -27,26 +32,27 @@ export async function expireProposalsStaleAfterMove(
   >
 ): Promise<string[]> {
   if (transition.actorKind !== "human") return [];
-  const res = await db.execute(sql`
-    UPDATE proposals
-       SET status = 'expired',
-           updated_at = now(),
-           data = COALESCE(data, '{}'::jsonb) || jsonb_build_object(
+  // Through the status door (`transitionProposal`): pending → expired is in
+  // the transition table, and the door adds that guard to this predicate.
+  const rows = await transitionProposal(db as unknown as ProposalStatusWriter, {
+    to: ProposalStatus.EXPIRED,
+    from: [ProposalStatus.PENDING],
+    set: {
+      updatedAt: sql`now()`,
+      data: sql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object(
              'expiredBy', 'lifecycle_move',
-             'supersededByTransitionId', ${transition.transitionId}::text)
-     WHERE status = 'pending'
-       AND target_type = 'entity'
-       AND proposal_type = 'transition'
-       AND target_id = ${transition.entityId}
-       AND agent_user_id IS NOT NULL
-       AND COALESCE(data->'data'->>'facetId', data->>'facetId', '')
-           = COALESCE(${transition.facetId}::text, '')
-       AND COALESCE(data->'data'->>'expectedFrom', data->>'expectedFrom')
-           IS DISTINCT FROM ${transition.to}
-    RETURNING id`);
-  // postgres.js returns the rows; the PGlite driver (tests) wraps them.
-  const rows = (
-    Array.isArray(res) ? res : ((res as { rows?: unknown[] }).rows ?? [])
-  ) as Array<{ id: string }>;
+             'supersededByTransitionId', ${transition.transitionId}::text)`,
+    },
+    where: and(
+      eq(proposals.targetType, "entity"),
+      eq(proposals.proposalType, "transition"),
+      eq(proposals.targetId, transition.entityId),
+      isNotNull(proposals.agentUserId),
+      sql`COALESCE(${proposals.data}->'data'->>'facetId', ${proposals.data}->>'facetId', '')
+           = COALESCE(${transition.facetId}::text, '')`,
+      sql`COALESCE(${proposals.data}->'data'->>'expectedFrom', ${proposals.data}->>'expectedFrom')
+           IS DISTINCT FROM ${transition.to}`
+    ),
+  }).returning({ id: proposals.id });
   return rows.map((r) => r.id);
 }

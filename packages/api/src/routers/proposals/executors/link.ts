@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { db, getDb, proposals, eq } from "@synap/database";
+import { db, getDb, proposals, eq, transitionProposal } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { unlinkProjectFromWorkspace } from "../../../utils/project-workspace.js";
 import { registerProposalExecutor } from "../execution-registry.js";
@@ -74,15 +74,15 @@ export function registerLinkExecutors(): void {
           proposalId: input.proposalId,
         });
         if (!applied.ok) throw refuse(applied.why);
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
+        await transitionProposal(db, {
+          to: ProposalStatus.APPROVED,
+          set: {
             reviewedBy: userId,
             reviewedAt: new Date(),
             updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
+          },
+          where: eq(proposals.id, input.proposalId),
+        });
         reportApproved(deps, proposal, input.proposalId);
         deps.emitProposalReviewed(
           input.proposalId,
@@ -138,15 +138,15 @@ export function registerLinkExecutors(): void {
         );
       }
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
       deps.emitProposalReviewed(

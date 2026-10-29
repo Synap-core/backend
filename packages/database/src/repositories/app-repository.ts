@@ -26,6 +26,7 @@ import { apiKeys } from "../schema/api-keys.js";
 import { grants } from "../schema/grants.js";
 import { isUniqueViolation } from "../utils/pg-errors.js";
 import { GrantRepository } from "./grant-repository.js";
+import { transitionProposal } from "../utils/proposal-transition.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
 
 export interface RegisterAppInput {
@@ -666,24 +667,21 @@ export class AppRepository {
     reason: string
   ): Promise<string[]> {
     const now = new Date();
-    const rows = await this.db
-      .update(proposals)
-      .set({
-        status: ProposalStatus.WITHDRAWN,
+    const rows = await transitionProposal(this.db, {
+      to: ProposalStatus.WITHDRAWN,
+      set: {
         reviewedBy: by,
         reviewedAt: now,
         updatedAt: now,
         data: sql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('withdrawReason', ${reason}::text)`,
-      })
-      .where(
-        and(
-          eq(proposals.targetType, APP_CONNECT_TARGET_TYPE),
-          eq(proposals.proposalType, APP_CONNECT_PROPOSAL_TYPE),
-          eq(proposals.targetId, appId),
-          eq(proposals.status, ProposalStatus.PENDING)
-        )
-      )
-      .returning({ id: proposals.id });
+      },
+      where: and(
+        eq(proposals.targetType, APP_CONNECT_TARGET_TYPE),
+        eq(proposals.proposalType, APP_CONNECT_PROPOSAL_TYPE),
+        eq(proposals.targetId, appId),
+        eq(proposals.status, ProposalStatus.PENDING)
+      ),
+    }).returning({ id: proposals.id });
     return rows.map((r) => r.id);
   }
 

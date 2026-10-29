@@ -42,6 +42,7 @@ import {
   sameScopeSet,
   drizzleSql,
   type TrustedIssuer,
+  transitionProposal,
 } from "@synap/database";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { resolvePodOwnerUserId } from "../capabilities/pod-owner.js";
@@ -171,20 +172,17 @@ export async function syncTrustedIssuerScopeRequest(
     );
     if (stale.length > 0) {
       const ids = stale.map((r) => r.id);
-      const withdrawn = await tx
-        .update(proposals)
-        .set({
-          status: ProposalStatus.WITHDRAWN,
+      const withdrawn = await transitionProposal(tx, {
+        to: ProposalStatus.WITHDRAWN,
+        set: {
           updatedAt: new Date(),
           data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || '{"withdrawnReason":"scope_request_changed"}'::jsonb`,
-        })
-        .where(
-          and(
-            inArray(proposals.id, ids),
-            eq(proposals.status, ProposalStatus.PENDING)
-          )
-        )
-        .returning({ id: proposals.id, data: proposals.data });
+        },
+        where: and(
+          inArray(proposals.id, ids),
+          eq(proposals.status, ProposalStatus.PENDING)
+        ),
+      }).returning({ id: proposals.id, data: proposals.data });
       markProposalNotificationsActioned(ids);
       // WITHDRAWN is terminal: the same discard every terminal door makes. A
       // no-op for a scope request (it stages no source blob); `null` because,
@@ -289,18 +287,16 @@ export async function markWidenScopesProposalApproved(
   proposalId: string,
   userId: string
 ): Promise<void> {
-  await db
-    .update(proposals)
-    .set({
-      status: ProposalStatus.APPROVED,
+  await transitionProposal(db, {
+    to: ProposalStatus.APPROVED,
+    set: {
       reviewedBy: userId,
       reviewedAt: new Date(),
       updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(proposals.id, proposalId),
-        eq(proposals.status, ProposalStatus.PENDING)
-      )
-    );
+    },
+    where: and(
+      eq(proposals.id, proposalId),
+      eq(proposals.status, ProposalStatus.PENDING)
+    ),
+  });
 }
