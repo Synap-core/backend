@@ -886,10 +886,11 @@ export const capabilityHandlers: McpHandlerMap = {
           }));
         },
         // Ticket c7e2afa2 (founder, option C): a verb that is a skill still in
-        // review stays refused, and the error names the proposal. Read under
-        // the review queue's own floor (`proposalUserFloor`, lens ∪ authored),
-        // so it can never name a proposal the person could not open. The skill
-        // name is the one the `skill/create` executor reads (`data.data.name`).
+        // review stays refused, and the error names the proposal. Read through
+        // the access layer AND the review queue's own floor
+        // (`proposalUserFloor`, lens ∪ authored), so it can never name a
+        // proposal the person could not open. The skill name is the one the
+        // `skill/create` executor reads (`data.data.name`).
         findPendingProposals: async (verbIds) => {
           const { and, eq, inArray, desc, drizzleSql, proposals } =
             await import("@synap/database");
@@ -898,36 +899,37 @@ export const capabilityHandlers: McpHandlerMap = {
             await import("../../proposals/scope-conditions.js");
           const { openLink } = await import("../../../utils/deep-links.js");
           const skillName = drizzleSql<string>`${proposals.data} -> 'data' ->> 'name'`;
-          const rows = await db
-            .select({
-              id: proposals.id,
-              name: skillName,
-              summary: drizzleSql<
-                string | null
-              >`${proposals.data} ->> 'summary'`,
-              kind: drizzleSql<
-                string | null
-              >`${proposals.data} -> 'data' ->> 'kind'`,
-            })
-            .from(proposals)
-            .where(
-              and(
-                eq(proposals.status, ProposalStatus.PENDING),
-                eq(proposals.targetType, "skill"),
-                eq(proposals.proposalType, "create"),
-                inArray(skillName, verbIds),
-                proposalUserFloor(userId)
-              )
-            )
-            .orderBy(desc(proposals.createdAt))
-            .limit(verbIds.length * 3);
-          return rows.map((r) => ({
-            verbId: r.name,
-            proposalId: r.id,
-            ...(r.summary ? { title: r.summary } : {}),
-            reviewUrl: openLink(r.id),
-            ...(r.kind ? { skillKind: r.kind } : {}),
-          }));
+          const rows = await scopedDb(
+            AccessContext.agent({ userId, agentUserId })
+          ).findMany<{ id: string; data: unknown }>(proposals, {
+            columns: { id: true, data: true },
+            where: and(
+              eq(proposals.status, ProposalStatus.PENDING),
+              eq(proposals.targetType, "skill"),
+              eq(proposals.proposalType, "create"),
+              inArray(skillName, verbIds),
+              proposalUserFloor(userId)
+            ),
+            orderBy: desc(proposals.createdAt),
+            limit: verbIds.length * 3,
+          });
+          return rows.map((r) => {
+            const data = (r.data ?? {}) as {
+              summary?: unknown;
+              data?: { name?: unknown; kind?: unknown };
+            };
+            const summary =
+              typeof data.summary === "string" ? data.summary : null;
+            const kind =
+              typeof data.data?.kind === "string" ? data.data.kind : null;
+            return {
+              verbId: String(data.data?.name ?? ""),
+              proposalId: r.id,
+              ...(summary ? { title: summary } : {}),
+              reviewUrl: openLink(r.id),
+              ...(kind ? { skillKind: kind } : {}),
+            };
+          });
         },
       });
       if (!flowVerdict.ok) return ok({ error: flowVerdict.error });

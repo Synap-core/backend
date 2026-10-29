@@ -136,6 +136,52 @@ const AGENT = randomUUID();
 const WS = randomUUID();
 const KIND = randomUUID();
 
+const BASIC =
+  /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
+function ddlFor(table: PgTable): string {
+  const cfg = getTableConfig(table);
+  const cols = cfg.columns.map((c) => {
+    const t = c.getSQLType();
+    const isArray = t.endsWith("[]");
+    const base = BASIC.test(t) ? t.replace(/\(.*\)/, "") : "text";
+    const type = isArray && !base.endsWith("[]") ? `${base}[]` : base;
+    const pk = c.primary
+      ? ` primary key${type === "uuid" ? " default gen_random_uuid()" : ""}`
+      : "";
+    let def = "";
+    if (c.name === "created_at" || c.name === "updated_at")
+      def = " default now()";
+    else if (
+      c.hasDefault &&
+      c.default !== undefined &&
+      typeof c.default !== "object"
+    ) {
+      const d = c.default as unknown;
+      def =
+        typeof d === "string"
+          ? ` default '${d.replace(/'/g, "''")}'`
+          : ` default ${String(d)}`;
+    } else if (c.hasDefault && type === "jsonb") def = ` default '{}'::jsonb`;
+    else if (c.hasDefault && type.endsWith("[]")) def = ` default '{}'`;
+    return `"${c.name}" ${type}${pk}${def}`;
+  });
+  // The schema's plain unique indexes too: an `on conflict (…)` insert (links'
+  // `idx_links_unique_edge`) needs its target. Partial or expression indexes
+  // are left out; no write here depends on one.
+  const uniques = cfg.indexes.flatMap((idx) => {
+    const { unique, where, columns, name } = idx.config;
+    const names = columns.map((c) => (c as { name?: unknown }).name);
+    if (!unique || where || !names.every((n) => typeof n === "string"))
+      return [];
+    return [
+      `create unique index "${name ?? `${cfg.name}_${names.join("_")}_uidx`}" on "${cfg.name}" (${names.map((n) => `"${n}"`).join(", ")});`,
+    ];
+  });
+  return [`create table "${cfg.name}" (${cols.join(", ")});`, ...uniques].join(
+    "\n"
+  );
+}
+
 const q = <T = Record<string, unknown>>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 

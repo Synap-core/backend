@@ -424,7 +424,7 @@ describe("define_kind — fields added to an EXISTING kind are ONE proposal (tic
 
     // ONE decision for 19 fields (it used to be 19), carrying all of them.
     expect(gate).toHaveBeenCalledTimes(1);
-    const call = gate.mock.calls[0]![0] as {
+    const call = gate.mock.calls[0]![0] as unknown as {
       subjectType: string;
       action: string;
       data: { profileId: string; kindFields: Array<{ slug: string }> };
