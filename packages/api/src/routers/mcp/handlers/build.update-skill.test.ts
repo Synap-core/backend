@@ -21,7 +21,16 @@ vi.mock("@synap/database", async (importOriginal) => {
   const selectChain: Record<string, unknown> = {};
   selectChain.from = () => selectChain;
   selectChain.where = () => selectChain;
-  selectChain.limit = async () => (h.existing ? [{ id: h.existing.id }] : []);
+  selectChain.limit = async () =>
+    h.existing
+      ? [
+          {
+            id: h.existing.id,
+            kind: h.existing.kind,
+            workspaceId: h.existing.workspaceId,
+          },
+        ]
+      : [];
   const db = {
     select: () => selectChain,
     update: () => ({
@@ -141,6 +150,63 @@ describe("synap_update_skill", () => {
     const r = await call({ slug: "biz/house-style" }, AGENT);
 
     expect(r.isError).toBe(true);
+    expect(h.permCalls).toHaveLength(0);
+  });
+
+  // Ticket 01fc187c: a code skill is fixed IN PLACE, not by a second create.
+  it("an agent's code fix rides the same governed door and leaves the skill off", async () => {
+    h.existing = {
+      ...h.existing!,
+      kind: "code",
+      code: "return 1;",
+      timeoutSeconds: 30,
+      parameters: {},
+    };
+    const r = await call(
+      {
+        id: SKILL_ID,
+        code: "return 2;",
+        timeoutSeconds: 120,
+        parameters: { n: "number" },
+      },
+      AGENT
+    );
+
+    expect(JSON.parse(r.text)).toEqual({
+      status: "updated",
+      skillId: SKILL_ID,
+    });
+    // The gate saw the whole change, so a held edit replays it whole.
+    expect(h.permCalls[0]).toMatchObject({
+      subjectType: "skill",
+      action: "update",
+      data: {
+        id: SKILL_ID,
+        code: "return 2;",
+        timeoutSeconds: 120,
+        parameters: { n: "number" },
+      },
+    });
+    expect(h.sets[0]).toMatchObject({
+      code: "return 2;",
+      timeoutSeconds: 120,
+      approved: false,
+    });
+  });
+
+  it("refuses code on a documentation-only skill, before the gate", async () => {
+    const r = await call({ id: SKILL_ID, code: "return 1;" }, AGENT);
+
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("synap_create_skill");
+    expect(h.permCalls).toHaveLength(0);
+  });
+
+  it("refuses a timeout outside 1..300 in words", async () => {
+    const r = await call({ id: SKILL_ID, timeoutSeconds: 900 }, AGENT);
+
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("1 to 300");
     expect(h.permCalls).toHaveLength(0);
   });
 });

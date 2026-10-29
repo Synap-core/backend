@@ -33,6 +33,7 @@ import {
   type CallToolResult,
   type McpHandlerMap,
 } from "./shared.js";
+import { AccessContext, scopedDb } from "../../../access/index.js";
 
 export const capabilityHandlers: McpHandlerMap = {
   // Governed FIELD retirement — the same door as capability verb
@@ -884,6 +885,52 @@ export const capabilityHandlers: McpHandlerMap = {
             name: r.name,
             kind: r.kind,
           }));
+        },
+        // Ticket c7e2afa2 (founder, option C): a verb that is a skill still in
+        // review stays refused, and the error names the proposal. Read through
+        // the access layer AND the review queue's own floor
+        // (`proposalUserFloor`, lens ∪ authored), so it can never name a
+        // proposal the person could not open. The skill name is the one the
+        // `skill/create` executor reads (`data.data.name`).
+        findPendingProposals: async (verbIds) => {
+          const { and, eq, inArray, desc, drizzleSql, proposals } =
+            await import("@synap/database");
+          const { ProposalStatus } = await import("@synap/database/schema");
+          const { proposalUserFloor } =
+            await import("../../proposals/scope-conditions.js");
+          const { openLink } = await import("../../../utils/deep-links.js");
+          const skillName = drizzleSql<string>`${proposals.data} -> 'data' ->> 'name'`;
+          const rows = await scopedDb(
+            AccessContext.agent({ userId, agentUserId })
+          ).findMany<{ id: string; data: unknown }>(proposals, {
+            columns: { id: true, data: true },
+            where: and(
+              eq(proposals.status, ProposalStatus.PENDING),
+              eq(proposals.targetType, "skill"),
+              eq(proposals.proposalType, "create"),
+              inArray(skillName, verbIds),
+              proposalUserFloor(userId)
+            ),
+            orderBy: desc(proposals.createdAt),
+            limit: verbIds.length * 3,
+          });
+          return rows.map((r) => {
+            const data = (r.data ?? {}) as {
+              summary?: unknown;
+              data?: { name?: unknown; kind?: unknown };
+            };
+            const summary =
+              typeof data.summary === "string" ? data.summary : null;
+            const kind =
+              typeof data.data?.kind === "string" ? data.data.kind : null;
+            return {
+              verbId: String(data.data?.name ?? ""),
+              proposalId: r.id,
+              ...(summary ? { title: summary } : {}),
+              reviewUrl: openLink(r.id),
+              ...(kind ? { skillKind: kind } : {}),
+            };
+          });
         },
       });
       if (!flowVerdict.ok) return ok({ error: flowVerdict.error });

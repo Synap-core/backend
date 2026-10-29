@@ -269,6 +269,21 @@ describe("skill/create approval WIRES the verb (executable, not source-text)", (
   });
 });
 
+describe("the skill lands under the id the proposal returned (ticket 9d740153)", () => {
+  it("hands the pre-minted `data.id` to the insert as the id to adopt", async () => {
+    await run({
+      agentUserId: AGENT,
+      data: { id: "pre-minted-1", name: "fetch_invoice", kind: "declarative" },
+    });
+    expect(insertInputs[0]?.adoptId).toBe("pre-minted-1");
+  });
+
+  it("adopts nothing when the stored payload carries no id", async () => {
+    await run({ agentUserId: AGENT });
+    expect(insertInputs[0]).not.toHaveProperty("adoptId");
+  });
+});
+
 describe("BORN-APPROVED DOWNGRADE stays intact (security)", () => {
   const instruction = () =>
     declarativeSkill({ kind: "instruction", approved: true });

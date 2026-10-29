@@ -193,4 +193,83 @@ describe("validateFlowCapabilities", () => {
     expect(r.error).toContain("nope.two");
     expect(r.error).toContain("2 capability step(s)");
   });
+
+  // ── Ticket c7e2afa2 (option C): a verb that is a skill still in review ────
+  const PENDING_CODE = {
+    verbId: "instagram.score_handle",
+    proposalId: "22222222-2222-2222-2222-222222222222",
+    title: 'Create skill "instagram.score_handle"',
+    reviewUrl: "https://pod.test/open/22222222-2222-2222-2222-222222222222",
+    skillKind: "code",
+  };
+
+  it("names the PENDING proposal that would provide the verb, and still refuses", async () => {
+    let marketplaceAsked = false;
+    const r = await validateFlowCapabilities(
+      [capNode("start", { verbId: "instagram.score_handle" })],
+      deps({
+        findPendingProposals: async (verbs) => {
+          expect(verbs).toEqual(["instagram.score_handle"]);
+          return [PENDING_CODE];
+        },
+        searchMarketplace: async () => {
+          marketplaceAsked = true;
+          return [];
+        },
+      })
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("unreachable");
+    expect(r.error).toContain(`proposal ${PENDING_CODE.proposalId}`);
+    expect(r.error).toContain(PENDING_CODE.title);
+    expect(r.error).toContain(PENDING_CODE.reviewUrl);
+    expect(r.error).toContain("re-send create_automation unchanged");
+    // A code skill cannot ride the capture bundle, and the error says so.
+    expect(r.error).toContain("cannot carry it");
+    expect(r.error).toContain("a code skill");
+    // The verb is coming: no marketplace hunt, no "nothing provides it".
+    expect(marketplaceAsked).toBe(false);
+    expect(r.error).not.toContain("No marketplace entry");
+  });
+
+  it("points a pending INSTRUCTION skill at one synap_capture bundle", async () => {
+    const r = await validateFlowCapabilities(
+      [capNode("start", { verbId: "team.weekly_brief" })],
+      deps({
+        findPendingProposals: async () => [
+          {
+            verbId: "team.weekly_brief",
+            proposalId: "33333333-3333-3333-3333-333333333333",
+            reviewUrl: "/open/33333333-3333-3333-3333-333333333333",
+            skillKind: "instruction",
+          },
+        ],
+      })
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("unreachable");
+    expect(r.error).toContain("proposal 33333333-3333-3333-3333-333333333333");
+    expect(r.error).toContain(
+      "synap_capture call (skills[] + automations[]; skills are applied before automations"
+    );
+    expect(r.error).not.toContain("cannot carry it");
+  });
+
+  it("a pending-proposal lookup FAILURE leaves the plain validation error", async () => {
+    const r = await validateFlowCapabilities(
+      [capNode("start", { verbId: "instagram.score_handle" })],
+      deps({
+        findPendingProposals: async () => {
+          throw new Error("proposals unreachable");
+        },
+        searchMarketplace: async () => [],
+      })
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("unreachable");
+    expect(r.error).toContain("instagram.score_handle");
+    expect(r.error).not.toContain("waiting for review");
+    expect(r.error).not.toContain("proposals unreachable");
+    expect(r.error).toContain("No marketplace entry");
+  });
 });

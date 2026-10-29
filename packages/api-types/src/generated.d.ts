@@ -46053,6 +46053,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name?: string | undefined;
 				parameters?: Record<string, unknown> | undefined;
 				providerSpec?: Record<string, unknown> | undefined;
+				requiredToolIds?: string[] | undefined;
 				scope?: "pod" | "user" | "workspace" | undefined;
 				timeoutSeconds?: number | undefined;
 			};

@@ -2,7 +2,10 @@ import { TRPCError } from "@trpc/server";
 import { db, proposals, eq } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import type { ProposalMaterializedRecord } from "@synap-core/types";
-import { createAndLinkPropertyDef } from "../../../services/profiles/create-and-link-property-def.js";
+import {
+  createAndLinkPropertyDef,
+  createAndLinkPropertyDefs,
+} from "../../../services/profiles/create-and-link-property-def.js";
 import { updatePropertyDef } from "../../../services/profiles/update-property-def.js";
 import {
   registerProposalExecutor,
@@ -34,28 +37,45 @@ export function registerPropertyDefExecutors(): void {
         });
       }
 
-      await createAndLinkPropertyDef({
-        userId,
-        workspaceId,
-        profileId: innerData.profileId as string | undefined,
-        slug: innerData.slug as string,
-        valueType: innerData.valueType as
-          | "string"
-          | "number"
-          | "boolean"
-          | "object"
-          | "array"
-          | "date"
-          | "secret"
-          | "entity_id",
-        constraints: innerData.constraints as
-          Record<string, unknown> | undefined,
-        uiHints: innerData.uiHints as Record<string, unknown> | undefined,
-        overlay: innerData.overlay === true,
-        required: innerData.required as boolean | undefined,
-        defaultValue: innerData.defaultValue,
-        displayOrder: innerData.displayOrder as number | undefined,
-      });
+      // A batch (`kindFields`, hub `createPropertyDefs`, ticket a375443d):
+      // N fields of one existing kind, approved once, applied all or none.
+      if (Array.isArray(innerData.kindFields)) {
+        if (typeof innerData.profileId !== "string") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Property def batch proposal is missing profileId",
+          });
+        }
+        await createAndLinkPropertyDefs({
+          userId,
+          workspaceId,
+          profileId: innerData.profileId,
+          fields: innerData.kindFields,
+        });
+      } else {
+        await createAndLinkPropertyDef({
+          userId,
+          workspaceId,
+          profileId: innerData.profileId as string | undefined,
+          slug: innerData.slug as string,
+          valueType: innerData.valueType as
+            | "string"
+            | "number"
+            | "boolean"
+            | "object"
+            | "array"
+            | "date"
+            | "secret"
+            | "entity_id",
+          constraints: innerData.constraints as
+            Record<string, unknown> | undefined,
+          uiHints: innerData.uiHints as Record<string, unknown> | undefined,
+          overlay: innerData.overlay === true,
+          required: innerData.required as boolean | undefined,
+          defaultValue: innerData.defaultValue,
+          displayOrder: innerData.displayOrder as number | undefined,
+        });
+      }
 
       // No revert path exists for property_def creates (mirrors "no delete
       // endpoints exposed to agents" — see module docstring), so `materialized`

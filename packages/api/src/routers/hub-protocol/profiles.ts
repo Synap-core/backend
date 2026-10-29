@@ -51,7 +51,10 @@ import {
   RENDERER_SCOPES,
   RENDERER_SLOTS,
 } from "../../services/profiles/renderer-slots.js";
-import { createAndLinkPropertyDef } from "../../services/profiles/create-and-link-property-def.js";
+import {
+  createAndLinkPropertyDef,
+  type CreateAndLinkPropertyDefInput,
+} from "../../services/profiles/create-and-link-property-def.js";
 import { updatePropertyDef as updatePropertyDefApply } from "../../services/profiles/update-property-def.js";
 
 /** The `property_defs.value_type` PG enum values, as strings. */
@@ -85,6 +88,55 @@ export function buildCellRendererRef(
 }
 
 const ProfileRendererContentKindSchema = z.enum(PROFILE_CONTENT_KINDS);
+
+/**
+ * A GRANTED property-def create, applied: the shared create+link path, and
+ * the honest receipt for it. One field of `createPropertyDef`, and each field
+ * of `createPropertyDefs` when its one gate granted the batch.
+ */
+async function applyGrantedPropertyDef(input: CreateAndLinkPropertyDefInput) {
+  const { propertyDef, link, existing, ignored } =
+    await createAndLinkPropertyDef(input);
+
+  // HONESTY FLOOR: `property-defs.create` is slug-idempotent and NOT
+  // convergent — on a slug hit it returns the stored row untouched. Saying
+  // "applied" there is a receipt for a write that did not happen, and it is
+  // exactly the path the two-phase define flow tells agents to re-walk
+  // ("re-call with the same slug once approved"). Report `unchanged`, and
+  // name every declared def field that was ignored — declared value AND
+  // stored value, so the caller can read the divergence from the receipt
+  // alone. Convergence (silently updating the stored def) is deliberately
+  // NOT implemented: the founder's rule is no silent convergence, but the
+  // thing must stay editable through a door — so the receipt NAMES that
+  // door (`updatePropertyDef` below) and the def's id.
+  if (existing) {
+    return {
+      status: "unchanged" as const,
+      proposalId: null,
+      propertyDef,
+      link,
+      ignored,
+      message:
+        ignored.length > 0
+          ? `A property def '${input.slug}' (id ${propertyDef.id}) already exists in this scope and its DEFINITION was left as-is. NOT written: ${ignored
+              .map(
+                (i) =>
+                  `${i.field} — you declared ${JSON.stringify(i.declared)}, the pod holds ${JSON.stringify(i.stored)}`
+              )
+              .join(
+                "; "
+              )}. This door never converges. To apply those changes, use the EDIT door: hub \`profiles.updatePropertyDef\` / \`PATCH /api/hub/property-defs/${propertyDef.id}\` (governed — an agent caller gets a proposal). The profile link WAS re-applied, so required/defaultValue/displayOrder did take effect.`
+          : `A property def '${input.slug}' (id ${propertyDef.id}) already exists in this scope and matched this declaration; its definition was left as-is. To change it later, use the edit door \`profiles.updatePropertyDef\` / \`PATCH /api/hub/property-defs/${propertyDef.id}\`.`,
+    };
+  }
+
+  return {
+    status: "applied" as const,
+    proposalId: null,
+    propertyDef,
+    link,
+  };
+}
 
 export const hubProfilesRouter = router({
   /**
@@ -530,59 +582,127 @@ export const hubProfilesRouter = router({
 
       // Granted (operator, or agent within DEFAULT_AUTO_APPROVE) → apply
       // immediately via the shared create+link path.
-      const { propertyDef, link, existing, ignored } =
-        await createAndLinkPropertyDef({
-          userId: input.userId,
-          workspaceId: input.workspaceId,
-          profileId: input.profileId,
-          slug: input.slug,
-          valueType,
-          constraints: input.constraints,
-          uiHints: input.uiHints,
-          overlay,
-          required: input.required,
-          defaultValue: input.defaultValue,
-          displayOrder: input.displayOrder,
-        });
+      return applyGrantedPropertyDef({
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        profileId: input.profileId,
+        slug: input.slug,
+        valueType,
+        constraints: input.constraints,
+        uiHints: input.uiHints,
+        overlay,
+        required: input.required,
+        defaultValue: input.defaultValue,
+        displayOrder: input.displayOrder,
+      });
+    }),
 
-      // HONESTY FLOOR: `property-defs.create` is slug-idempotent and NOT
-      // convergent — on a slug hit it returns the stored row untouched. Saying
-      // "applied" there is a receipt for a write that did not happen, and it is
-      // exactly the path the two-phase define flow tells agents to re-walk
-      // ("re-call with the same slug once approved"). Report `unchanged`, and
-      // name every declared def field that was ignored — declared value AND
-      // stored value, so the caller can read the divergence from the receipt
-      // alone. Convergence (silently updating the stored def) is deliberately
-      // NOT implemented: the founder's rule is no silent convergence, but the
-      // thing must stay editable through a door — so the receipt NAMES that
-      // door (`updatePropertyDef` below) and the def's id.
-      if (existing) {
+  /**
+   * Create SEVERAL property definitions on ONE existing profile, through ONE
+   * gate (ticket a375443d). `synap_define_kind` re-called on an approved kind
+   * with 19 fields used to file 19 `property_def/create` proposals, one
+   * click each, and an agent ran into its proposal limit after 16. Now the
+   * batch is one `property_def/create` decision whose data carries the fields
+   * (`kindFields`, the shape a new kind's carried fields already use):
+   *   - granted → each field applies at once through the same create+link
+   *     path and receipt as `createPropertyDef`, one ledger entry per field
+   *     (a failed field never undoes its siblings — unchanged from the
+   *     per-field door);
+   *   - proposed → ONE proposal; its approval applies every field or none
+   *     (`createAndLinkPropertyDefs`, from the `property_def/create`
+   *     executor).
+   * Same action key as one field, so a governance rule that grants or holds
+   * `property_def.create` decides a batch the same way. The gate reads the
+   * batch whole: any base (non-overlay) field makes it pod-wide schema for the
+   * key's grant, and any required/default link onto a pod-admin kind routes
+   * it to a pod admin (permission-check 4d).
+   *
+   * Requires: hub-protocol.write scope
+   */
+  createPropertyDefs: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        userId: z.string(),
+        workspaceId: z.string().uuid(),
+        profileId: z.string().uuid(),
+        /** The kind's display name, for the sentence the reviewer reads. */
+        profileName: z.string().max(200).optional(),
+        fields: z.array(ProposedKindFieldSchema).min(1).max(100),
+        agentUserId: z.string().uuid().optional(),
+        reasoning: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
+      // Identity floor, as on `createPropertyDef`.
+      assertMayActAs(ctx, input.userId);
+      const slugs = input.fields.map((f) => f.slug);
+      const twice = slugs.filter((slug, i) => slugs.indexOf(slug) !== i);
+      if (twice.length > 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `fields: ${[...new Set(twice)].join(", ")} named more than once.`,
+        });
+      }
+      const allOverlay = input.fields.every((f) => f.overlay === true);
+
+      const perm = await checkPermissionOrPropose({
+        userId: input.userId,
+        agentUserId,
+        workspaceId: input.workspaceId,
+        grantWorkspaceId: allOverlay ? input.workspaceId : null,
+        subjectType: "property_def",
+        action: "create",
+        source: "intelligence",
+        reasoning: input.reasoning,
+        data: {
+          profileId: input.profileId,
+          workspaceId: input.workspaceId,
+          ...(input.profileName ? { targetName: input.profileName } : {}),
+          kindFields: input.fields,
+        },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
         return {
-          status: "unchanged" as const,
-          proposalId: null,
-          propertyDef,
-          link,
-          ignored,
-          message:
-            ignored.length > 0
-              ? `A property def '${input.slug}' (id ${propertyDef.id}) already exists in this scope and its DEFINITION was left as-is. NOT written: ${ignored
-                  .map(
-                    (i) =>
-                      `${i.field} — you declared ${JSON.stringify(i.declared)}, the pod holds ${JSON.stringify(i.stored)}`
-                  )
-                  .join(
-                    "; "
-                  )}. This door never converges. To apply those changes, use the EDIT door: hub \`profiles.updatePropertyDef\` / \`PATCH /api/hub/property-defs/${propertyDef.id}\` (governed — an agent caller gets a proposal). The profile link WAS re-applied, so required/defaultValue/displayOrder did take effect.`
-              : `A property def '${input.slug}' (id ${propertyDef.id}) already exists in this scope and matched this declaration; its definition was left as-is. To change it later, use the edit door \`profiles.updatePropertyDef\` / \`PATCH /api/hub/property-defs/${propertyDef.id}\`.`,
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+          fields: slugs,
         };
       }
 
-      return {
-        status: "applied" as const,
-        proposalId: null,
-        propertyDef,
-        link,
-      };
+      const properties: Array<Record<string, unknown>> = [];
+      for (const field of input.fields) {
+        try {
+          properties.push({
+            slug: field.slug,
+            ...(await applyGrantedPropertyDef({
+              userId: input.userId,
+              workspaceId: input.workspaceId,
+              profileId: input.profileId,
+              slug: field.slug,
+              valueType:
+                field.valueType as CreateAndLinkPropertyDefInput["valueType"],
+              constraints: field.constraints,
+              uiHints: field.uiHints,
+              overlay: field.overlay === true,
+              required: field.required,
+              defaultValue: field.defaultValue,
+              displayOrder: field.displayOrder,
+            })),
+          });
+        } catch (err) {
+          properties.push({
+            slug: field.slug,
+            status: "error",
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      return { status: "applied" as const, proposalId: null, properties };
     }),
 
   /**

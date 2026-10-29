@@ -27,9 +27,9 @@ export function registerSkillExecutors(): void {
   // create exactly. The propose gate widened `data` to the full insert shape, so
   // kind/code/body/scope/providerSpec/… all flow through here.
   //
-  // targetId NOTE (decision B): insertSkillGoverned mints its own skillId and
-  // ignores a caller-supplied id, so the materialized skill's id is NOT yet the
-  // proposal's pre-minted targetId — adoption is a follow-up (see wave report).
+  // The skill lands under the id the proposal pre-minted (`data.id`, the id
+  // `skills.create` returned to its author), passed as `adoptId` (ticket
+  // 9d740153: the author ran the skill by that id and got "not found").
   registerProposalExecutor({
     key: "skill/create",
     async execute({ proposal, userId, input, ctx, deps }) {
@@ -43,8 +43,8 @@ export function registerSkillExecutors(): void {
         });
       }
 
-      // Idempotency: insertSkillGoverned mints a fresh id each run, so a
-      // re-approve without this guard would double-create.
+      // Idempotency: a re-approve must not re-run the approval verdict below
+      // (an adopted id already taken by this approver returns that row).
       const [alreadyDone] = await db
         .select({ status: proposals.status })
         .from(proposals)
@@ -65,9 +65,11 @@ export function registerSkillExecutors(): void {
         ...(skillValues as Record<string, unknown>),
         // Own the skill as the APPROVER (mirrors project/view) — no agentUserId
         // so the re-entrant gate auto-grants for the operator authority. `id` in
-        // innerData is stripped by insertSkillGoverned (it mints its own).
+        // innerData is stripped by insertSkillGoverned; `adoptId` is the one
+        // way it lands under the proposal's id.
         userId,
         agentUserId: undefined,
+        ...(typeof innerData.id === "string" ? { adoptId: innerData.id } : {}),
         auditSource: "proposal_approval",
       } as unknown as InsertSkillGovernedInput);
       if (result.status === "denied") {

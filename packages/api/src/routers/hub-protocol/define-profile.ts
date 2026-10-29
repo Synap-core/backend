@@ -3,7 +3,8 @@
  *
  * MCP `synap_define_kind` / `synap_define_role` and Hub REST `POST /profiles`
  * all land here, so the mapping from a door's arguments onto the governed hub
- * `profiles.createProfile` (+ one `createPropertyDef` per field) exists once.
+ * `profiles.createProfile` (+ ONE `createPropertyDefs` for its fields) exists
+ * once.
  * Before this, the mapping lived inline in the MCP handler and REST had no way
  * to express a role, an entity scope, or fields at all.
  *
@@ -103,7 +104,7 @@ function normalizationNotice(
 
 /**
  * One caller field spec, checked and normalised ONCE — read by both the
- * applied path (one `createPropertyDef` each) and the proposed path (the
+ * applied path (one `createPropertyDefs` batch) and the proposed path (the
  * valid ones ride the kind's proposal as `deferredFields`). An invalid spec
  * becomes its ledger entry, never a write.
  */
@@ -225,8 +226,8 @@ export async function defineProfile(
   // Checked BEFORE the create, so the valid fields can ride the kind's
   // proposal (`deferredFields`): one approval creates the kind AND them, and
   // the author never re-calls (ticket a375443d — 16 proposals, one per field,
-  // then the agent's proposal limit). The direct path ignores them and writes
-  // each below through `createPropertyDef`.
+  // then the agent's proposal limit). The direct path ignores them and adds
+  // them below through ONE `createPropertyDefs`.
   const checkedFields = fieldSpecs.map(checkFieldSpec);
   const carried = checkedFields.flatMap((c) => ("field" in c ? [c.field] : []));
   const refusedFields = checkedFields.flatMap((c) =>
@@ -316,47 +317,84 @@ export async function defineProfile(
     createdProfile?.profileKind === "role" &&
     (createdProfile?.scope === "shared" || createdProfile?.scope === "system");
 
-  const properties: Array<Record<string, unknown>> = [];
-  for (const checked of checkedFields) {
-    if ("entry" in checked) {
-      properties.push(checked.entry);
-      continue;
-    }
-    const { field, normalized } = checked;
+  // ONE call for every valid field (ticket a375443d): on an existing kind an
+  // agent's N fields used to file N proposals, and ran into its proposal
+  // limit. The batch door gates once — granted, each field applies with its
+  // own receipt; proposed, one proposal the owner approves once.
+  const toCreate = carried.map((field) =>
+    field.overlay !== true && overlayOnSharedRole
+      ? { ...field, overlay: true }
+      : field
+  );
+  const outcomeBySlug = new Map<string, Record<string, unknown>>();
+  let fieldsProposal: Record<string, unknown> | undefined;
+  if (toCreate.length > 0) {
     try {
-      const propResult = await caller.profiles.createPropertyDef({
+      const batch = (await caller.profiles.createPropertyDefs({
         userId: input.userId,
         workspaceId: input.workspaceId,
         profileId,
-        slug: field.slug,
-        valueType: field.valueType,
-        ...(field.constraints ? { constraints: field.constraints } : {}),
-        ...(field.uiHints ? { uiHints: field.uiHints } : {}),
-        ...(field.required !== undefined ? { required: field.required } : {}),
-        ...(field.defaultValue !== undefined
-          ? { defaultValue: field.defaultValue }
-          : {}),
-        ...(field.displayOrder !== undefined
-          ? { displayOrder: field.displayOrder }
-          : {}),
-        ...(field.overlay === true || overlayOnSharedRole
-          ? { overlay: true }
-          : {}),
-        reasoning: `Field of kind '${profileSlug}' defined via ${labels.door}`,
+        profileName: input.displayName,
+        fields: toCreate,
+        reasoning:
+          input.reasoning ??
+          `Fields of kind '${profileSlug}' defined via ${labels.door}`,
         ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
-      });
-      properties.push({ slug: field.slug, ...normalized, ...propResult });
+      })) as {
+        status: string;
+        proposalId?: string | null;
+        properties?: Array<Record<string, unknown>>;
+      };
+      if (batch.status === "proposed" && batch.proposalId) {
+        fieldsProposal = withReviewUrl({
+          status: "proposed",
+          proposalId: batch.proposalId,
+          message: `These ${toCreate.length} field(s) are ONE proposal: approving it adds them all. Do not re-call ${labels.door} for them.`,
+        });
+        for (const field of toCreate) {
+          outcomeBySlug.set(field.slug, {
+            status: "proposed",
+            proposalId: batch.proposalId,
+          });
+        }
+      } else {
+        for (const entry of batch.properties ?? []) {
+          const { slug, ...rest } = entry;
+          if (typeof slug === "string") outcomeBySlug.set(slug, rest);
+        }
+      }
     } catch (err) {
-      // One rejected field must not discard the fields that did land — the
-      // caller gets a per-field ledger and can retry just the failures.
-      properties.push({
-        slug: field.slug,
-        ...normalized,
-        status: "error",
-        error: err instanceof Error ? err.message : String(err),
-      });
+      // The ONE gate refused the batch (or it was malformed): every field
+      // says so, and the caller can retry them together.
+      const error = err instanceof Error ? err.message : String(err);
+      for (const field of toCreate) {
+        outcomeBySlug.set(field.slug, { status: "error", error });
+      }
     }
   }
 
-  return { ok: true, result: { ...announced, ...result, properties } };
+  // The per-field ledger, in the caller's order.
+  const properties: Array<Record<string, unknown>> = checkedFields.map(
+    (checked) =>
+      "entry" in checked
+        ? checked.entry
+        : {
+            slug: checked.field.slug,
+            ...checked.normalized,
+            ...(outcomeBySlug.get(checked.field.slug) ?? {
+              status: "error",
+              error: "No outcome was reported for this field.",
+            }),
+          }
+  );
+
+  return {
+    ok: true,
+    result: {
+      ...announced,
+      ...result,
+      ...(fieldsProposal ? { fieldsProposal } : {}),
+      properties,
+    },
+  };
 }

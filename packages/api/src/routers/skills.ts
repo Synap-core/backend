@@ -274,6 +274,21 @@ export async function replaceSkillRequiredTools(params: {
 }
 
 /**
+ * True when `toolIds` declares a tool the skill does not `require` yet — the
+ * scope its own provider calls skip a second review under grows.
+ */
+async function requiredToolsWidened(
+  userId: string,
+  skillId: string,
+  toolIds: readonly string[]
+): Promise<boolean> {
+  const existing = new Set(
+    (await skillRequiresEdges(userId, skillId)).map((e) => e.toId)
+  );
+  return toolIds.some((tid) => !existing.has(tid));
+}
+
+/**
  * The ONE governed persistence path for inserting a `skills` row. Shared by
  * every skill-creation door (`create`, `installFromUrl` here, and the Hub
  * Protocol `/agent-skills/import` door) so none of them can bypass the same
@@ -303,6 +318,16 @@ export type InsertSkillGovernedInput = typeof skills.$inferInsert & {
    * also carries.
    */
   skillAuthor?: { agentUserId: string | null; personApproved: boolean };
+  /**
+   * The id a `skill/create` proposal pre-minted and returned to its author
+   * (`skills.create`'s `id`): the approval replay passes it back so the skill
+   * lands under the id the author already holds (ticket 9d740153). Only the
+   * executor sets it; no door's input schema carries it. Same contract as
+   * `createFocusSession`'s `proposedSessionId`: a free id is used; the
+   * caller's own skill already at that id is returned (a replay run twice);
+   * anyone else's row there ⇒ a fresh id. `id` itself stays ignored.
+   */
+  adoptId?: string;
   /** Folded into the audit-log `data` for observability, e.g. "install_from_url". */
   auditSource: string;
 };
@@ -327,12 +352,26 @@ export async function insertSkillGoverned(
     agentUserId,
     skillAuthor,
     auditSource,
+    adoptId,
     id: _ignoredId,
     approved: _ignoredApproved,
     status: _ignoredStatus,
     ...values
   } = input;
-  const skillId = randomUUID();
+  let adoptedId: string | null = null;
+  // A uuid only: comparing the uuid column to other text throws in Postgres.
+  if (adoptId && z.string().uuid().safeParse(adoptId).success) {
+    const [taken] = await db
+      .select()
+      .from(skills)
+      .where(eq(skills.id, adoptId))
+      .limit(1);
+    if (taken?.userId === values.userId) {
+      return { status: "installed", skill: taken };
+    }
+    if (!taken) adoptedId = adoptId;
+  }
+  const skillId = adoptedId ?? randomUUID();
 
   // Save-time global-reference scan (B1) — the shared BACKSTOP for every door
   // that funnels through this governed insert (`installFromUrl`, the Hub
@@ -1511,6 +1550,14 @@ export const skillsRouter = router({
         executionMode: z.enum(["sync", "async"]).optional(),
         timeoutSeconds: z.number().min(1).max(300).optional(),
         /**
+         * The tools this skill `requires`, as on `create`: the set REPLACES
+         * the declared one, through `replaceSkillRequiredTools`. Not a column,
+         * so it is peeled off the UPDATE. A tool ADDED widens what the skill's
+         * own provider calls may do without a second review, so it re-earns
+         * approval like a code change (ticket 01fc187c).
+         */
+        requiredToolIds: z.array(z.string().uuid()).max(20).optional(),
+        /**
          * Free-form metadata patch — SHALLOW-MERGED onto the existing row bag
          * (mirrors `views`/`automations` update; never a wholesale replace). The
          * standalone-config reconcile uses this to advance `metadata.marketSource`
@@ -1529,6 +1576,7 @@ export const skillsRouter = router({
         id,
         agentUserId: _agentUserId,
         metadata: metadataPatch,
+        requiredToolIds: requestedToolIds,
         ...updateData
       } = input;
 
@@ -1579,6 +1627,26 @@ export const skillsRouter = router({
         })?.box;
       }
 
+      // A declared tool must exist and be visible to the editor NOW, as on
+      // `create`; the names ride the gate data so the review names the scope.
+      const requiredToolIds =
+        requestedToolIds !== undefined
+          ? [...new Set(requestedToolIds)]
+          : undefined;
+      let requiredToolNames: string[] = [];
+      if (requiredToolIds?.length) {
+        const visible = await visibleRequiredTools(userId, requiredToolIds);
+        const nameById = new Map(visible.map((t) => [t.id, t.name]));
+        const missing = requiredToolIds.filter((tid) => !nameById.has(tid));
+        if (missing.length > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `requiredToolIds: no installed tool you can see has id ${missing.join(", ")}.`,
+          });
+        }
+        requiredToolNames = requiredToolIds.map((tid) => nameById.get(tid)!);
+      }
+
       // The acting agent, derived exactly as `delete` derives it: the ambient
       // ALS value first (set server-side at every key-auth entry point, so an
       // agent key cannot drop it by omitting `input.agentUserId`), then
@@ -1611,6 +1679,11 @@ export const skillsRouter = router({
           id,
           ...updateData,
           ...(metadataPatch ? { metadata: metadataPatch } : {}),
+          // Replayed by the `skill/update` executor (procedure input); the
+          // names are display-only and stripped by this input schema.
+          ...(requiredToolIds !== undefined
+            ? { requiredToolIds, requiredToolNames }
+            : {}),
         },
       });
 
@@ -1678,7 +1751,11 @@ export const skillsRouter = router({
         boxDeclarationChanged(
           metadataPatch as Record<string, unknown> | undefined,
           existingSkill.metadata as Record<string, unknown> | null
-        );
+        ) ||
+        // A tool ADDED to `requires` is reach the person never approved;
+        // dropping one only narrows it, so it keeps the approval.
+        (requiredToolIds !== undefined &&
+          (await requiredToolsWidened(userId, id, requiredToolIds)));
 
       // The column is typed `ProviderVerbSpec`; the input accepts the open
       // `z.record` shape the spec is stored as. Narrow it for the write — same
@@ -1711,6 +1788,14 @@ export const skillsRouter = router({
         .where(eq(skills.id, id))
         .returning();
 
+      if (requiredToolIds !== undefined) {
+        await replaceSkillRequiredTools({
+          userId,
+          skill: existingSkill,
+          toolIds: requiredToolIds,
+        });
+      }
+
       // 3. Audit log
       auditLog({
         subjectType: "skill",
@@ -1719,7 +1804,10 @@ export const skillsRouter = router({
         subjectId: id,
         userId,
         workspaceId: existingSkill.workspaceId || undefined,
-        data: updateData,
+        data: {
+          ...updateData,
+          ...(requiredToolIds !== undefined ? { requiredToolIds } : {}),
+        },
       });
 
       // 4. Side-effects

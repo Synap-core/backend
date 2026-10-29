@@ -658,6 +658,9 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       if (result.status === "not_found") {
         return c.json({ error: "Skill not found" }, 404);
       }
+      if (result.status === "invalid") {
+        return c.json({ error: result.message }, 400);
+      }
       if (result.status === "proposed") {
         return jsonGoverned(c, {
           status: "proposed" as const,

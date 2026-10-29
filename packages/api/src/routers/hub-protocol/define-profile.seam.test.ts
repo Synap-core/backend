@@ -4,7 +4,7 @@
  *
  * The chain under test is the one an agent actually walks:
  *   defineProfile (this door)
- *     → hub `profiles.createPropertyDef` (the REAL procedure, scope middleware
+ *     → hub `profiles.createPropertyDefs` (the REAL procedure, scope middleware
  *       swapped for `t.procedure` the way proposals.update-expected-revision
  *       does — API-key validation needs a live key row and has its own suites)
  *       → the REAL `createAndLinkPropertyDef`
@@ -104,6 +104,7 @@ vi.mock("../profile-properties.js", () => ({
 
 import { hubProfilesRouter } from "./profiles.js";
 import { defineProfile } from "./define-profile.js";
+import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const WS = "22222222-2222-4222-8222-222222222222";
@@ -122,7 +123,7 @@ function caller() {
           profile: { id: PROFILE, slug: input.slug },
         };
       },
-      createPropertyDef: hub.createPropertyDef,
+      createPropertyDefs: hub.createPropertyDefs,
     },
   } as never;
 }
@@ -268,7 +269,7 @@ describe("define_kind — the FIRST result states every rewrite (ticket a375443d
             profile: { slug: input.slug },
           };
         },
-        createPropertyDef: async () => {
+        createPropertyDefs: async () => {
           throw new Error("a deferred field must not be written");
         },
       },
@@ -336,7 +337,7 @@ describe("define_kind — a new kind's fields ride its proposal (ticket a375443d
               ...(carried.length ? { fieldsIncluded: carried.length } : {}),
             };
           },
-          createPropertyDef: async () => {
+          createPropertyDefs: async () => {
             throw new Error("a carried field must not be written here");
           },
         },
@@ -386,7 +387,7 @@ describe("define_kind — a new kind's fields ride its proposal (ticket a375443d
             proposalId: "66666666-6666-4666-8666-666666666666",
             existing: true,
           }),
-          createPropertyDef: async () => {
+          createPropertyDefs: async () => {
             throw new Error("not written");
           },
         },
@@ -404,5 +405,77 @@ describe("define_kind — a new kind's fields ride its proposal (ticket a375443d
     expect((outcome.result.properties as Record<string, unknown>).status).toBe(
       "deferred"
     );
+  });
+});
+
+describe("define_kind — fields added to an EXISTING kind are ONE proposal (ticket a375443d)", () => {
+  it("one gate for every field; a proposed verdict is one proposal named on every ledger row", async () => {
+    const gate = vi.mocked(checkPermissionOrPropose);
+    gate.mockClear();
+    gate.mockResolvedValueOnce({
+      proposalId: "77777777-7777-4777-8777-777777777777",
+    } as never);
+    const fields = Array.from({ length: 19 }, (_, i) => ({
+      slug: `metric_${i + 1}`,
+      valueType: "number",
+    }));
+    const outcome = await define("social-account-audit", fields);
+    if (!outcome.ok) throw new Error(outcome.error);
+
+    // ONE decision for 19 fields (it used to be 19), carrying all of them.
+    expect(gate).toHaveBeenCalledTimes(1);
+    const call = gate.mock.calls[0]![0] as unknown as {
+      subjectType: string;
+      action: string;
+      data: { profileId: string; kindFields: Array<{ slug: string }> };
+    };
+    expect(call).toMatchObject({
+      subjectType: "property_def",
+      action: "create",
+    });
+    expect(call.data.profileId).toBe(PROFILE);
+    expect(call.data.kindFields.map((f) => f.slug)).toEqual(
+      fields.map((f) => f.slug.replace("_", "-"))
+    );
+    // Nothing written; every field points at the one proposal.
+    expect(h.createCalls).toHaveLength(0);
+    const ledger = ledgerOf(outcome);
+    expect(ledger).toHaveLength(19);
+    for (const row of ledger) {
+      expect(row).toMatchObject({
+        status: "proposed",
+        proposalId: "77777777-7777-4777-8777-777777777777",
+      });
+    }
+    expect(ledger[0]).toMatchObject({
+      slug: "metric-1",
+      normalizedFrom: "metric_1",
+    });
+    expect(outcome.result.fieldsProposal).toMatchObject({
+      status: "proposed",
+      proposalId: "77777777-7777-4777-8777-777777777777",
+    });
+    expect(
+      String(
+        (outcome.result.fieldsProposal as { reviewUrl?: string }).reviewUrl
+      )
+    ).toContain("77777777-7777-4777-8777-777777777777");
+  });
+
+  it("a refused batch reports the refusal on every field, never a partial write", async () => {
+    vi.mocked(checkPermissionOrPropose).mockResolvedValueOnce({
+      denied: true,
+      reason: "Not allowed here",
+    } as never);
+    const outcome = await define("social-account-audit", [
+      { slug: "a", valueType: "string" },
+      { slug: "b", valueType: "string" },
+    ]);
+    const ledger = ledgerOf(outcome);
+    expect(ledger.map((r) => [r.slug, r.status, r.error])).toEqual([
+      ["a", "error", "Not allowed here"],
+      ["b", "error", "Not allowed here"],
+    ]);
+    expect(h.createCalls).toHaveLength(0);
   });
 });

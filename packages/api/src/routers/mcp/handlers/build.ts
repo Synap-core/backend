@@ -26,6 +26,12 @@ import { getDb } from "@synap/database";
 import { skillsRouter as regularSkillsRouter } from "../../skills.js";
 import { skillAuthoringProblem } from "../../../services/skills/skill-authoring.js";
 import {
+  REQUIRED_TOOLS_SHAPE_MESSAGE,
+  readRequiredToolNames,
+  resolveRequiredToolNames,
+} from "../../../services/skills/required-tool-names.js";
+import { sameNameSkill } from "../../../services/skills/same-name-skill.js";
+import {
   updateSkillGoverned,
   type SkillUpdatePatch,
 } from "../../../services/skills/update-skill-governed.js";
@@ -1001,40 +1007,15 @@ export const buildHandlers: McpHandlerMap = {
     // its parent tool. An unknown name is refused, never dropped.
     let requiredToolIds: string[] | undefined;
     if (args.requiredTools !== undefined) {
-      if (
-        !Array.isArray(args.requiredTools) ||
-        !args.requiredTools.every((n) => typeof n === "string" && n.trim())
-      ) {
-        return ok({
-          error:
-            'requiredTools must be an array of installed tool names, e.g. ["apify_api"].',
-        });
-      }
-      const { parentToolWhere, parentToolMissingMessage } =
-        await import("../../../services/capabilities/create-declarative-verb.js");
-      const { tools: toolsTable } = await import("@synap/database/schema");
-      const db = await getDb();
-      requiredToolIds = [];
-      for (const raw of new Set(args.requiredTools as string[])) {
-        const toolName = raw.trim();
-        const [tool] = await db
-          .select({ id: toolsTable.id })
-          .from(toolsTable)
-          .where(
-            parentToolWhere({
-              userId,
-              toolName,
-              workspaceId: skillWorkspaceId ?? null,
-            })
-          )
-          .limit(1);
-        if (!tool) {
-          return ok({
-            error: parentToolMissingMessage(toolName, skillWorkspaceId),
-          });
-        }
-        requiredToolIds.push(tool.id);
-      }
+      const names = readRequiredToolNames(args.requiredTools);
+      if (!names) return ok({ error: REQUIRED_TOOLS_SHAPE_MESSAGE });
+      const resolved = await resolveRequiredToolNames({
+        userId,
+        names,
+        workspaceId: skillWorkspaceId ?? null,
+      });
+      if ("error" in resolved) return ok({ error: resolved.error });
+      requiredToolIds = resolved.ids;
     }
     // A box script (0356): the declaration is parsed by the router's one box
     // rule (`boxSkillMetadata`), which refuses a bad one in words.
@@ -1054,6 +1035,20 @@ export const buildHandlers: McpHandlerMap = {
         : undefined;
     if (box && executionMode !== "box") {
       return ok({ error: "`box` needs executionMode: 'box'." });
+    }
+    // One name, one skill in a scope (ticket 01fc187c): a second create under
+    // a name already here made `run_capability` by name ambiguous and left
+    // the old skill running. A fix to an existing skill is an UPDATE.
+    const twin = await sameNameSkill({
+      userId,
+      name: args.name.trim(),
+      workspaceId: skillWorkspaceId,
+    });
+    if (twin) {
+      return ok({
+        error: `A skill named "${twin.name}" already exists here (id ${twin.id}${twin.slug ? `, slug ${twin.slug}` : ""}). To change it, call synap_update_skill with id "${twin.id}": it takes code, parameters, timeoutSeconds and requiredTools as well as body. A second skill with the same name would make run_capability by name ambiguous.`,
+        existingSkillId: twin.id,
+      });
     }
     const skillsCtx = await createHubProtocolCallerContext(
       userId,
@@ -1124,12 +1119,41 @@ export const buildHandlers: McpHandlerMap = {
       return toolError(`Tool '${toolName}': id must be a UUID — got '${id}'.`);
     }
     const patch: SkillUpdatePatch = {};
-    for (const field of ["name", "description", "body"] as const) {
+    for (const field of ["name", "description", "body", "code"] as const) {
       if (typeof args[field] === "string") patch[field] = args[field];
+    }
+    if (args.parameters !== undefined) {
+      if (
+        !args.parameters ||
+        typeof args.parameters !== "object" ||
+        Array.isArray(args.parameters)
+      ) {
+        return toolError(
+          `Tool '${toolName}': parameters must be a JSON Schema object.`
+        );
+      }
+      patch.parameters = args.parameters as Record<string, unknown>;
+    }
+    // Same bound as `synap_create_skill` (1..300 s).
+    if (args.timeoutSeconds !== undefined) {
+      const t = args.timeoutSeconds;
+      if (typeof t !== "number" || !Number.isInteger(t) || t < 1 || t > 300) {
+        return toolError(
+          `Tool '${toolName}': timeoutSeconds must be a whole number of seconds, 1 to 300.`
+        );
+      }
+      patch.timeoutSeconds = t;
+    }
+    if (args.requiredTools !== undefined) {
+      const names = readRequiredToolNames(args.requiredTools);
+      if (!names) {
+        return toolError(`Tool '${toolName}': ${REQUIRED_TOOLS_SHAPE_MESSAGE}`);
+      }
+      patch.requiredTools = names;
     }
     if (Object.keys(patch).length === 0) {
       return toolError(
-        `Tool '${toolName}': nothing to change — pass body, description and/or name.`
+        `Tool '${toolName}': nothing to change — pass body, description, name, code, parameters, timeoutSeconds and/or requiredTools.`
       );
     }
     const callerCtx = await createHubProtocolCallerContext(
@@ -1141,7 +1165,8 @@ export const buildHandlers: McpHandlerMap = {
       agentUserId ?? null
     );
     // GOVERNED: the ONE skill-update door (skills.update) — gate, owner floor,
-    // and an agent body rewrite re-earns approval, so it never stays live.
+    // and an agent body rewrite or any change to what the skill runs re-earns
+    // approval, so it never stays live.
     const result = await updateSkillGoverned({
       callerCtx,
       userId,
@@ -1153,6 +1178,9 @@ export const buildHandlers: McpHandlerMap = {
       return toolError(
         `Tool '${toolName}': no skill you can edit matches ${id ? `id ${id}` : `slug '${slug}'`}.`
       );
+    }
+    if (result.status === "invalid") {
+      return toolError(`Tool '${toolName}': ${result.message}`);
     }
     return ok(result);
   },
