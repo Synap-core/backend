@@ -79,6 +79,7 @@ import {
   getOAuthConsentContext,
 } from "./oauth/consent.js";
 import { OAuthError } from "./oauth/protocol.js";
+import { readKeyDetail } from "../services/key-detail.js";
 import { logOAuthRefusal } from "./oauth/refusal-log.js";
 import { isPodAdminOrigin } from "../utils/pod-admin-origin.js";
 import { findUserDefaultWorkspaceId } from "../utils/user-default-workspace.js";
@@ -464,6 +465,22 @@ export const apiKeysRouter = router({
         revokedAt: key.revokedAt,
         revokedReason: key.revokedReason,
       }));
+    }),
+
+  /**
+   * One key's detail for the Keys page's panel: its live grants (what it may
+   * touch), its usage over the usage window, and the proposals and sessions
+   * it worked through (`services/key-detail.ts`). Pod-admin only, like the
+   * list and like usage telemetry.
+   */
+  adminKeyDetail: podAdminProcedure
+    .input(z.object({ keyId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const detail = await readKeyDetail(input.keyId, ctx.userId);
+      if (!detail) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Key not found" });
+      }
+      return detail;
     }),
 
   /**
