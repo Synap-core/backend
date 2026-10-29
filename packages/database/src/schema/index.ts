@@ -266,3 +266,7 @@ export * from "./calendar-feed-tokens.js";
 // Lifecycle transition outbox (0324, review D8) — the event a status move owes,
 // written in the move's own transaction; dispatched + retried from here.
 export * from "./lifecycle-transition-outbox.js";
+
+// Inbound webhook deliveries + observation keys (0372, pipeline-health W1):
+// stored before the door answers, and one row per observed fact.
+export * from "./inbound-deliveries.js";

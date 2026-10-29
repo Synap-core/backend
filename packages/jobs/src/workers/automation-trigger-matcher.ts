@@ -174,9 +174,21 @@ export function resolveAutomationEventFingerprintId(input: {
     // (thing, transition event) — a redelivery collapses, and the same A→S
     // move made twice is two moves. Named, not left to the hash below.
     data.transitionId,
+    // An inbound webhook's own delivery id (`X-GitHub-Delivery`,
+    // `X-Synap-Delivery-Id`): the sender's name for ONE occurrence, so a
+    // redelivery collapses even when the body changed (the control plane's
+    // ops events re-send under the same id: `task.opsKey` = deliveryId,
+    // finding d0fbdc0e), and two distinct deliveries with byte-identical
+    // bodies stay two. Scoped by the subscription: ids are per sender.
+    data.subscriptionId && typeof data.deliveryId === "string"
+      ? `${String(data.subscriptionId)}:delivery:${data.deliveryId}`
+      : null,
     // Webhook redelivery often repeats the same body under the same subscription.
-    data.subscriptionId && data.payload != null
-      ? `${String(data.subscriptionId)}:${stableJsonHash(data.payload)}`
+    // Any body, `null` included: an inbound event must never fall through to
+    // the whole-`data` hash below, which would read its per-delivery
+    // `inboundDeliveryId` (the stored row's id) and make every copy unique.
+    data.subscriptionId && "payload" in data
+      ? `${String(data.subscriptionId)}:${stableJsonHash(data.payload ?? null)}`
       : null,
   ];
   for (const c of candidates) {
@@ -1817,6 +1829,11 @@ export async function handleAutomationTriggerMatch(job: {
         ...(typeof data?.event === "string" ? { event: data.event } : {}),
         ...(typeof data?.deliveryId === "string"
           ? { deliveryId: data.deliveryId }
+          : {}),
+        // The stored delivery this run came from (`inbound_deliveries`, 0372),
+        // so a delivery's runs and their outcome are one read.
+        ...(typeof data?.inboundDeliveryId === "string"
+          ? { inboundDeliveryId: data.inboundDeliveryId }
           : {}),
         timestamp: new Date().toISOString(),
       },

@@ -13,8 +13,9 @@ import {
   resolveVaultSecret,
   resolveIdentity,
   ProfileResolutionService,
+  recordInboundDelivery,
 } from "@synap/database";
-import { emitSideEffects } from "@synap/events";
+import { dispatchInboundDelivery } from "@synap/events";
 import { moveStatus } from "../services/lifecycle/move-status.js";
 import { getBoss } from "@synap/jobs";
 import {
@@ -155,38 +156,53 @@ webhooksInboundRouter.post("/inbound/:subscriptionId", async (c) => {
     payload = rawBody;
   }
 
-  // Update lastTriggeredAt
+  // DURABLE BEFORE THE 200 (finding 66e1e526). The sender treats a 2xx as
+  // delivered and never resends it (GitHub never redelivers on its own), so
+  // the delivery is stored first and the automation event is fanned out FROM
+  // the stored row: a fan-out that fails now is retried by the sweeper
+  // (`dispatchDueInboundDeliveries`), not lost. A store that fails answers
+  // 500, so the sender sees the failure and can resend. The sender's delivery
+  // id is unique per subscription: a redelivery is answered 200 and stored,
+  // fired and counted once.
+  let stored: { id: string; duplicate: boolean };
+  try {
+    stored = await recordInboundDelivery(db, {
+      subscriptionId,
+      userId: subscription.userId,
+      workspaceId: subscription.workspaceId,
+      deliveryId,
+      event,
+      payload,
+    });
+  } catch (err) {
+    logger.error(
+      { err, subscriptionId },
+      "Inbound webhook could not be stored — answered 500 so the sender retries"
+    );
+    return c.json({ error: "Delivery not stored" }, 500);
+  }
+  // Update lastTriggeredAt — the source's liveness, so a redelivery counts.
   await db
     .update(webhookSubscriptions)
     .set({ lastTriggeredAt: new Date() })
     .where(eq(webhookSubscriptions.id, subscriptionId));
+
+  if (stored.duplicate) {
+    logger.info(
+      { subscriptionId, deliveryId },
+      "Inbound webhook redelivered — already stored, nothing fired again"
+    );
+    return c.json({ received: true, deduped: true }, 200);
+  }
 
   logger.info(
     { subscriptionId, workspaceId: subscription.workspaceId },
     "Inbound webhook received"
   );
 
-  // Emit automation event (fire-and-forget, mirrors messaging inbound pattern)
-  if (subscription.workspaceId) {
-    emitSideEffects({
-      subjectType: "external_webhook",
-      action: "received",
-      subjectId: subscriptionId,
-      userId: subscription.userId,
-      workspaceId: subscription.workspaceId,
-      data: {
-        subscriptionId,
-        payload,
-        ...(event ? { event } : {}),
-        ...(deliveryId ? { deliveryId } : {}),
-      },
-    }).catch((err) => {
-      logger.warn(
-        { err, subscriptionId },
-        "emitSideEffects failed (non-fatal)"
-      );
-    });
-  }
+  // The inline attempt; never throws. What it cannot deliver stays owed on
+  // the row for the sweeper.
+  await dispatchInboundDelivery(stored.id);
 
   return c.json({ received: true }, 200);
 });

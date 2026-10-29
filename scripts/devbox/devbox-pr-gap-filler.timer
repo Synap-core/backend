@@ -1,0 +1,10 @@
+# NOT managed by Ansible. Enable: systemctl --user enable --now devbox-pr-gap-filler.timer
+[Unit]
+Description=Devbox PR gap-filler: every 10 min
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=10min
+
+[Install]
+WantedBy=timers.target

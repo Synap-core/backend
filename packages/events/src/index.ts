@@ -81,6 +81,15 @@ export {
   type TransitionEmitContext,
 } from "./lifecycle-transition.js";
 
+// The delivery of a stored inbound webhook (0372, pipeline-health W1).
+export {
+  inboundDeliverySideEffect,
+  dispatchInboundDelivery,
+  dispatchDueInboundDeliveries,
+  INBOUND_NO_WORKSPACE,
+  type StoredInboundDelivery,
+} from "./inbound-delivery.js";
+
 // Reactor registry — a new reaction = registerReactor(...), never an edit to
 // emitSideEffects. getReactors() is exposed for tests/introspection.
 export {

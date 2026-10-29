@@ -1,0 +1,24 @@
+# Devbox PR gap-filler: posts the merged/closed PR facts the pod missed (observations.append).
+# Replaces devbox-pod-obs.timer's PR mode (`pod-obs.py prs`). NOT managed by Ansible, like devbox-dev-facts.
+# Script: scripts/dev-pr-gap-filler.mjs (this repo, public). Read-only on GitHub: the Reader App, never gh's login.
+# Install (devbox), ONLY once the pod runs migration 0372 (it keys PR facts; before it, a post duplicates):
+#   git -C ~/wt/dev-facts pull --ff-only        (the sparse clone of devbox-dev-facts.service: scripts/)
+#   cp ~/wt/dev-facts/scripts/devbox/devbox-pr-gap-filler.{service,timer} ~/.config/systemd/user/
+#   ~/.config/synap-gapfill.env: SYNAP_READER_APP_ID=5487355, SYNAP_READER_APP_KEY_FILE=<pem, 0600>,
+#     GAPFILL_SINCE=<the ISO time the pod came up on 0372>
+#   systemctl --user daemon-reload && systemctl --user enable --now devbox-pr-gap-filler.timer
+# Update: git -C ~/wt/dev-facts pull --ff-only (by hand: the unit never pulls code that runs with the key).
+[Unit]
+Description=Devbox PR gap-filler: post the PR facts (merged, closed) the pod missed
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:%h/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+# SYNAP_POD_URL + SYNAP_OBS_KEY (a pod Hub key with hub-protocol.write + event.create). Same file as devbox-dev-facts.
+# Absent or without the key = dry-run: prints the gaps, posts nothing, exits 0.
+EnvironmentFile=-%h/.config/synap-obs.env
+# The Reader App (read-only) + GAPFILL_SINCE. Absent = nothing read, exits 0.
+EnvironmentFile=-%h/.config/synap-gapfill.env
+ExecStart=/usr/bin/node %h/wt/dev-facts/scripts/dev-pr-gap-filler.mjs
+TimeoutStartSec=5min
+Nice=10

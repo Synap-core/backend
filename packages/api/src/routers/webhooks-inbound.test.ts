@@ -5,8 +5,12 @@
  *
  * Security properties a break in which is silent and severe:
  *   (a) a valid subscription + valid HMAC-SHA256 signature (per-subscription
- *       secret, `x-synap-signature: sha256=<hex>`) → 200 and the inbound body is
- *       forwarded to the matcher as event DATA (never fetched).
+ *       secret, `x-synap-signature: sha256=<hex>`) → the delivery is STORED
+ *       (`recordInboundDelivery`) BEFORE the 200, then dispatched from the
+ *       stored row (`dispatchInboundDelivery`: the event it builds is pinned in
+ *       @synap/events `__tests__/inbound-delivery.test.ts`); a store that fails
+ *       answers 500 and dispatches nothing; a redelivered id answers 200 and
+ *       fires nothing again (finding 66e1e526).
  *   (b) an UNKNOWN subscription and a KNOWN subscription with a BAD signature
  *       return the SAME 401 body — a caller cannot enumerate which subscription
  *       ids exist, and neither fires an automation event.
@@ -43,7 +47,18 @@ let toolRow: {
 let vaultSecret: string | null = null;
 const sendJob = vi.fn().mockResolvedValue(undefined);
 
-const emitSideEffects = vi.fn().mockResolvedValue(undefined);
+// The generic door's two steps: store the delivery, then dispatch it FROM the
+// stored row.
+let storeResult: { id: string; duplicate: boolean } | Error = {
+  id: "row-1",
+  duplicate: false,
+};
+const recordInboundDelivery = vi.fn((..._args: unknown[]) =>
+  storeResult instanceof Error
+    ? Promise.reject(storeResult)
+    : Promise.resolve(storeResult)
+);
+const dispatchInboundDelivery = vi.fn().mockResolvedValue(true);
 
 // Mailgun: resolveIdentity + recordInboundMessage are driven per-test.
 let identityResolution: {
@@ -115,10 +130,12 @@ vi.mock("@synap/database", async (importOriginal) => ({
   webhookSubscriptions: { id: "id", active: "active" },
   resolveVaultSecret: () => Promise.resolve(vaultSecret),
   resolveIdentity: (...args: unknown[]) => resolveIdentityMock(...args),
+  recordInboundDelivery: (...args: unknown[]) => recordInboundDelivery(...args),
 }));
 
 vi.mock("@synap/events", () => ({
-  emitSideEffects: (...args: unknown[]) => emitSideEffects(...args),
+  dispatchInboundDelivery: (...args: unknown[]) =>
+    dispatchInboundDelivery(...args),
 }));
 
 vi.mock("@synap/jobs", () => ({
@@ -176,9 +193,22 @@ async function post(
   });
 }
 
+/** What the door stored (the store's second argument; the first is `db`). */
+function storedDelivery(): Record<string, unknown> {
+  return recordInboundDelivery.mock.calls[0]![1] as Record<string, unknown>;
+}
+
+/** Nothing stored, nothing dispatched. */
+function expectNothingFired(): void {
+  expect(recordInboundDelivery).not.toHaveBeenCalled();
+  expect(dispatchInboundDelivery).not.toHaveBeenCalled();
+}
+
 describe("inbound webhook ingress auth", () => {
   beforeEach(() => {
-    emitSideEffects.mockClear();
+    recordInboundDelivery.mockClear();
+    dispatchInboundDelivery.mockClear();
+    storeResult = { id: "row-1", duplicate: false };
     subscriptionRow = {
       id: SUB_ID,
       userId: OWNER_ID,
@@ -188,27 +218,52 @@ describe("inbound webhook ingress auth", () => {
     };
   });
 
-  it("accepts a valid signature and forwards the body as an automation event", async () => {
+  it("accepts a valid signature, stores the delivery, then dispatches it from the stored row", async () => {
     const body = JSON.stringify({ order: 42 });
     const res = await post(SUB_ID, body, {
       "x-synap-signature": sign(SECRET, body),
     });
 
     expect(res.status).toBe(200);
-    expect(emitSideEffects).toHaveBeenCalledTimes(1);
-    const arg = emitSideEffects.mock.calls[0][0] as {
-      subjectType: string;
-      action: string;
-      userId: string;
-      workspaceId: string;
-      data: { subscriptionId: string; payload: unknown };
-    };
-    expect(arg.subjectType).toBe("external_webhook");
-    expect(arg.action).toBe("received");
-    expect(arg.userId).toBe(OWNER_ID);
-    expect(arg.workspaceId).toBe(WS_ID);
-    expect(arg.data.subscriptionId).toBe(SUB_ID);
-    expect(arg.data.payload).toEqual({ order: 42 });
+    expect(recordInboundDelivery).toHaveBeenCalledTimes(1);
+    expect(storedDelivery()).toMatchObject({
+      subscriptionId: SUB_ID,
+      userId: OWNER_ID,
+      workspaceId: WS_ID,
+      payload: { order: 42 },
+    });
+    // Dispatched FROM the row, and only after it was stored.
+    expect(dispatchInboundDelivery).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundDelivery).toHaveBeenCalledWith("row-1");
+    expect(recordInboundDelivery.mock.invocationCallOrder[0]).toBeLessThan(
+      dispatchInboundDelivery.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("a store that fails answers 500 (the sender retries) and dispatches nothing", async () => {
+    storeResult = new Error("db down");
+    const body = JSON.stringify({ order: 42 });
+    const res = await post(SUB_ID, body, {
+      "x-synap-signature": sign(SECRET, body),
+    });
+
+    expect(res.status).toBe(500);
+    expect(dispatchInboundDelivery).not.toHaveBeenCalled();
+  });
+
+  it("a redelivered id answers 200 and fires nothing again", async () => {
+    storeResult = { id: "row-first", duplicate: true };
+    const body = JSON.stringify({ action: "closed", number: 7 });
+    const res = await post(SUB_ID, body, {
+      "x-github-event": "pull_request",
+      "x-github-delivery": "gh-1",
+      "X-Hub-Signature-256": sign(SECRET, body),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true, deduped: true });
+    expect(storedDelivery()).toMatchObject({ deliveryId: "gh-1" });
+    expect(dispatchInboundDelivery).not.toHaveBeenCalled();
   });
 
   it("rejects a bad signature with 401 and fires no event", async () => {
@@ -218,13 +273,13 @@ describe("inbound webhook ingress auth", () => {
     });
 
     expect(res.status).toBe(401);
-    expect(emitSideEffects).not.toHaveBeenCalled();
+    expectNothingFired();
   });
 
   it("rejects a missing signature with 401 and fires no event", async () => {
     const res = await post(SUB_ID, JSON.stringify({ order: 42 }));
     expect(res.status).toBe(401);
-    expect(emitSideEffects).not.toHaveBeenCalled();
+    expectNothingFired();
   });
 
   it("returns the SAME 401 for an unknown subscription (no id enumeration leak)", async () => {
@@ -252,18 +307,15 @@ describe("inbound webhook ingress auth", () => {
     expect(unknownRes.status).toBe(401);
     expect(badSigRes.status).toBe(401);
     expect(unknownJson).toEqual(badSigJson); // identical body → no leak
-    expect(emitSideEffects).not.toHaveBeenCalled();
+    expectNothingFired();
   });
 
   it("leaves event + deliveryId ABSENT when the sender sends no such header", async () => {
     const body = JSON.stringify({ order: 42 });
     await post(SUB_ID, body, { "x-synap-signature": sign(SECRET, body) });
 
-    const arg = emitSideEffects.mock.calls[0][0] as {
-      data: Record<string, unknown>;
-    };
-    expect(arg.data).not.toHaveProperty("event");
-    expect(arg.data).not.toHaveProperty("deliveryId");
+    expect(storedDelivery().event).toBeUndefined();
+    expect(storedDelivery().deliveryId).toBeUndefined();
   });
 
   // ── The conventional `X-Hub-Signature-256` header (GitHub, WebSub) ───────
@@ -282,16 +334,16 @@ describe("inbound webhook ingress auth", () => {
     });
 
     expect(res.status).toBe(200);
-    expect(emitSideEffects).toHaveBeenCalledTimes(1);
-    const arg = emitSideEffects.mock.calls[0][0] as {
-      data: Record<string, unknown>;
-    };
-    expect(arg.data).toEqual({
+    expect(recordInboundDelivery).toHaveBeenCalledTimes(1);
+    expect(storedDelivery()).toEqual({
       subscriptionId: SUB_ID,
+      userId: OWNER_ID,
+      workspaceId: WS_ID,
       payload: { action: "closed", number: 7 },
       event: "pull_request",
       deliveryId: "72d3162e-cc78-11e3-81ab-4c9367dc0958",
     });
+    expect(dispatchInboundDelivery).toHaveBeenCalledTimes(1);
   });
 
   it("rejects a wrong X-Hub-Signature-256 with the SAME 401 as an unknown subscription", async () => {
@@ -312,7 +364,7 @@ describe("inbound webhook ingress auth", () => {
     expect(badSigRes.status).toBe(401);
     expect(unknownRes.status).toBe(401);
     expect(badSigJson).toEqual(unknownJson);
-    expect(emitSideEffects).not.toHaveBeenCalled();
+    expectNothingFired();
   });
 
   it("answers a signed ping 2xx and fires no automation event", async () => {
@@ -327,7 +379,7 @@ describe("inbound webhook ingress auth", () => {
     });
 
     expect(res.status).toBe(200);
-    expect(emitSideEffects).not.toHaveBeenCalled();
+    expectNothingFired();
   });
 
   it("never forwards a ping, whichever signature header carried it", async () => {
@@ -338,7 +390,7 @@ describe("inbound webhook ingress auth", () => {
     });
 
     expect(res.status).toBe(200);
-    expect(emitSideEffects).not.toHaveBeenCalled();
+    expectNothingFired();
   });
 
   it("still refuses an unsigned ping (auth comes before the handshake)", async () => {
@@ -354,7 +406,7 @@ describe("inbound webhook ingress auth", () => {
       "x-synap-signature": "sha256=whatever",
     });
     expect(res.status).toBe(413);
-    expect(emitSideEffects).not.toHaveBeenCalled();
+    expectNothingFired();
   });
 });
 
