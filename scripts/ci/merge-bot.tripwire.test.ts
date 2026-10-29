@@ -276,7 +276,9 @@ describe("merge-bot: a PR touching CI or test infrastructure needs the founder",
   it.each([
     ["packages/api/src/routers/x.ts"],
     ["packages/api/src/x.test.ts"],
-    ["docs/reference/x.md"],
+    // A product file that is not code (no docs-only path here: a docs-only
+    // PR runs no tests, so ci-changes' guard forbids a test naming one).
+    ["packages/database/migrations/0300_example.sql"],
     ["scripts/gen-types.mjs"],
     ["packages/vitest-helpers/src/a.ts"],
   ])("not infrastructure: %s", (path) => {
@@ -287,7 +289,7 @@ describe("merge-bot: a PR touching CI or test infrastructure needs the founder",
     expect(
       infraFilesOf([
         {
-          filename: "docs/old.yml",
+          filename: "packages/api/src/old-ci.yml",
           previous_filename: ".github/workflows/ci.yml",
         },
       ])
