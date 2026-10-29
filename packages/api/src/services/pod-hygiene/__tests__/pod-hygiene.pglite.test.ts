@@ -17,8 +17,8 @@
  *  - `assertProfileSchemaWrite` — an authority door with its own suite; the
  *    retire authority is NOT under test here. `isPodAdmin` is a flag the
  *    merge-authority tests flip.
- *  - `completeFocusSession` and `automationsRouter.pause` — the ONE close door
- *    and the ONE pause door have their own suites. What is pinned here is that
+ *  - `completeFocusSession` and `automationsRouter.pause` / `.archive` — the
+ *    ONE close door and the automation doors have their own suites. What is pinned here is that
  *    the pack reaches them for APPROVED items only, with the owner's identity.
  *  - `runConversions` — the engine has its own suite; pinned: a refusal files
  *    a merge proposal whose suggestion names a real row. The APPROVED merge
@@ -43,6 +43,7 @@ const h = vi.hoisted(() => ({
   /** Runs before the stubbed close; a throw here is a door failure. */
   beforeClose: null as null | ((sessionId: string) => Promise<void>),
   pauseCalls: [] as Array<{ id: string; userId: string }>,
+  archiveCalls: [] as Array<{ id: string; userId: string }>,
   podAdmin: { value: true },
 }));
 
@@ -152,6 +153,15 @@ vi.mock("../../../routers/automations.js", () => ({
       pause: async ({ id }: { id: string }) => {
         h.pauseCalls.push({ id, userId: ctx.userId });
         return { status: "paused" };
+      },
+      archive: async ({ id }: { id: string }) => {
+        h.archiveCalls.push({ id, userId: ctx.userId });
+        // The real door's effect, so a rescan no longer sees a candidate.
+        await h.client!.query(
+          `update automations set status = 'archived' where id = $1`,
+          [id]
+        );
+        return { status: "archived" };
       },
     }),
   },
@@ -402,6 +412,7 @@ beforeEach(async () => {
   h.closeCalls.length = 0;
   h.beforeClose = null;
   h.pauseCalls.length = 0;
+  h.archiveCalls.length = 0;
   h.podAdmin.value = true;
   await q(
     `insert into workspaces (id, name, owner_id, created_at, updated_at) values ($1, 'A space', $2, now(), now()), ($3, 'B space', $4, now(), now())`,
@@ -533,6 +544,7 @@ describe("cleanup pack v2 (filer + executor)", () => {
     (p.data.items as Array<{ ref: string }>).map((i) => i.ref).sort();
   const S = (id: string) => stableItemRef("close_session", id);
   const K = (id: string) => stableItemRef("retire_profile", id);
+  const AU = (id: string) => stableItemRef("archive_automation", id);
 
   async function seedPod() {
     const sessionA = await staleSession(A);
@@ -563,7 +575,11 @@ describe("cleanup pack v2 (filer + executor)", () => {
     expect(result.filed).toBe(2);
     const packA = await latest(A);
     expect(packA.data.schema).toBe(2);
-    expect(refsOf(packA)).toEqual([S(s.sessionA), K(s.probeA)].sort());
+    // The never-run automation is an ARCHIVE item now (W-B4, the warden
+    // folded in) — never a pause, and the old proposal is still not packed.
+    expect(refsOf(packA)).toEqual(
+      [S(s.sessionA), K(s.probeA), AU(s.autoA)].sort()
+    );
     expect(packA.data.changeType).toBeUndefined();
     expect(packA.data.properties).toBeUndefined();
     const kindItem = packA.data.items.find((i: any) => i.ref === K(s.probeA));
@@ -609,7 +625,7 @@ describe("cleanup pack v2 (filer + executor)", () => {
     const second = await fileCleanupPacks(NOW);
 
     expect(second.filed).toBe(0);
-    expect(second.suppressed.open).toBe(3);
+    expect(second.suppressed.open).toBe(4);
     expect(await packs(A)).toHaveLength(1);
   });
 
@@ -638,7 +654,9 @@ describe("cleanup pack v2 (filer + executor)", () => {
 
     await fileCleanupPacks(NOW);
     const refiled = await latest(A);
-    expect(refsOf(refiled)).toEqual([S(s.sessionA), K(s.probeA)].sort());
+    expect(refsOf(refiled)).toEqual(
+      [S(s.sessionA), K(s.probeA), AU(s.autoA)].sort()
+    );
 
     // A manual withdraw stamps reviewedAt — still not a decision.
     await q(
@@ -648,7 +666,7 @@ describe("cleanup pack v2 (filer + executor)", () => {
     await fileCleanupPacks(NOW);
     expect(await packs(A)).toHaveLength(3);
     expect(refsOf(await latest(A))).toEqual(
-      [S(s.sessionA), K(s.probeA)].sort()
+      [S(s.sessionA), K(s.probeA), AU(s.autoA)].sort()
     );
   });
 
@@ -663,7 +681,7 @@ describe("cleanup pack v2 (filer + executor)", () => {
     const rescan = await fileCleanupPacks(NOW);
 
     expect(await packs(A)).toHaveLength(1);
-    expect(rescan.suppressed.rejectedPack).toBe(2);
+    expect(rescan.suppressed.rejectedPack).toBe(3);
   });
 
   it("a keep past its window is proposed again — sessions (30d) before kinds (90d)", async () => {
@@ -683,7 +701,10 @@ describe("cleanup pack v2 (filer + executor)", () => {
 
     await fileCleanupPacks(NOW);
 
-    expect(refsOf(await latest(A))).toEqual([S(s.sessionA)]);
+    // The automation was neither left out nor applied: proposed again too.
+    expect(refsOf(await latest(A))).toEqual(
+      [S(s.sessionA), AU(s.autoA)].sort()
+    );
   });
 
   it("an undecided pack older than 7 days is WITHDRAWN (not reviewed) and superseded by a fresh one", async () => {
@@ -705,7 +726,9 @@ describe("cleanup pack v2 (filer + executor)", () => {
       fresh.id
     );
     expect(fresh.id).not.toBe(old.id);
-    expect(refsOf(fresh)).toEqual([S(s.sessionA), K(s.probeA)].sort());
+    expect(refsOf(fresh)).toEqual(
+      [S(s.sessionA), K(s.probeA), AU(s.autoA)].sort()
+    );
     expect(rescan.superseded).toBe(1);
   });
 
@@ -720,6 +743,7 @@ describe("cleanup pack v2 (filer + executor)", () => {
     const result = await approve(packA.id, A);
 
     expect(h.closeCalls).toEqual([{ sessionId: s.sessionA, userId: A }]);
+    expect(h.archiveCalls).toEqual([{ id: s.autoA, userId: A }]);
     expect((await status("profiles", s.probeA))!.is_active).toBe(true);
     const row = await status("proposals", packA.id);
     expect(row!.status).toBe("approved");
@@ -727,8 +751,9 @@ describe("cleanup pack v2 (filer + executor)", () => {
       row!.data as { outcomes: Record<string, { outcome: string }> }
     ).outcomes;
     expect(outcomes[S(s.sessionA)]!.outcome).toBe("applied");
+    expect(outcomes[AU(s.autoA)]!.outcome).toBe("applied");
     expect(outcomes[K(s.probeA)]!.outcome).toBe("skipped_by_reviewer");
-    expect(result.effect).toMatchObject({ applied: "verified", rows: 1 });
+    expect(result.effect).toMatchObject({ applied: "verified", rows: 2 });
   });
 
   it("a session active again — or merely touched — since filing is REFUSED by name, not closed, and then settles", async () => {
@@ -830,6 +855,114 @@ describe("cleanup pack v2 (filer + executor)", () => {
     ).toBe("applied");
     // The refusal is the door's sentence, never the stored v1 `reason` (it promised undo).
     expect(result.refusals).toEqual(["Gone (session): No longer exists"]);
+  });
+
+  async function endedSession(
+    owner: string,
+    endedAt: string,
+    slots: Array<Record<string, unknown>>
+  ): Promise<string> {
+    const id = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, goal, title, status, expected_outputs, metadata, created_at, updated_at)
+       values ($1, $2, 'g', 'Brand refresh', 'closed', $3::jsonb, '{}'::jsonb, $4, $4)`,
+      [id, owner, JSON.stringify(slots), endedAt]
+    );
+    return id;
+  }
+  const ASK = {
+    key: "logo",
+    label: "Pick a logo",
+    owner: "human",
+    status: "pending",
+    owedSince: "2026-08-01T00:00:00Z",
+  };
+
+  it("W-B4: an ask left owed on a session that ended over a week ago is packed per ask; approval withdraws it", async () => {
+    const ended = await endedSession(A, "2026-09-01T00:00:00Z", [
+      ASK,
+      { key: "copy", label: "Write copy", owner: "agent", status: "pending" },
+    ]);
+    // Ended 3 days before the scan: the person may still answer it.
+    await endedSession(A, "2026-09-11T00:00:00Z", [ASK]);
+
+    await fileCleanupPacks(NOW);
+    const packA = await latest(A);
+    const ref = stableItemRef("withdraw_ask", ended, "logo");
+    expect(refsOf(packA)).toEqual([ref]);
+    const item = packA.data.items.find((i: any) => i.ref === ref);
+    expect(item.subject).toEqual({
+      kind: "session",
+      id: ended,
+      name: "Pick a logo · Brand refresh",
+    });
+    expect(item.slot).toEqual({ key: "logo" });
+
+    await approve(packA.id, A);
+
+    const slots = (await status("focus_sessions", ended))!
+      .expected_outputs as Array<Record<string, unknown>>;
+    const logo = slots.find((sl) => sl.key === "logo")!;
+    expect(logo.retiredAt).toBeTruthy();
+    expect(slots.find((sl) => sl.key === "copy")!.retiredAt).toBeUndefined();
+    const outcomes = (
+      (await status("proposals", packA.id))!.data as {
+        outcomes: Record<string, { outcome: string }>;
+      }
+    ).outcomes;
+    expect(outcomes[ref]!.outcome).toBe("applied");
+  });
+
+  it("W-B4: an ask the person delivered after filing is refused, not withdrawn", async () => {
+    const ended = await endedSession(A, "2026-09-01T00:00:00Z", [ASK]);
+    await fileCleanupPacks(NOW);
+    const packA = await latest(A);
+    await q(
+      `update focus_sessions set expected_outputs = $2::jsonb where id = $1`,
+      [ended, JSON.stringify([{ ...ASK, status: "done" }])]
+    );
+
+    const result = await approve(packA.id, A);
+
+    expect(result.refusals).toEqual([
+      "Pick a logo · Brand refresh (session): No longer owed",
+    ]);
+  });
+
+  it("W-B4: an agent's never-run automation is packed for the person who made the agent", async () => {
+    await q(`update users set created_by_user_id = $2 where id = $1`, [
+      AGENT,
+      B,
+    ]);
+    const agentAuto = await neverRunAutomation(AGENT, WS_B);
+    const manual = await neverRunAutomation(B, WS_B, { triggerType: "manual" });
+    const ran = await neverRunAutomation(B, WS_B);
+    await q(
+      `insert into automation_runs (id, automation_id, status, started_at) values ($1, $2, 'completed', now())`,
+      [randomUUID(), ran]
+    );
+
+    await fileCleanupPacks(NOW);
+
+    expect(refsOf(await latest(B))).toEqual([AU(agentAuto)]);
+    expect(refsOf(await latest(B))).not.toContain(AU(manual));
+  });
+
+  it("W-B4: an automation that ran after filing is refused at approval, not archived", async () => {
+    const auto = await neverRunAutomation(A, WS_A);
+    await fileCleanupPacks(NOW);
+    const packA = await latest(A);
+    await q(
+      `insert into automation_runs (id, automation_id, status, started_at) values ($1, $2, 'completed', now())`,
+      [randomUUID(), auto]
+    );
+
+    const result = await approve(packA.id, A);
+
+    expect(h.archiveCalls).toEqual([]);
+    expect(result.refusals).toEqual([
+      "Generate report (rule): Automation has run since the pack was filed",
+    ]);
   });
 
   it("a crash mid-loop leaves a true partial record; re-approving finishes without re-applying", async () => {

@@ -46,6 +46,10 @@ const WITHHELD: Record<string, string> = {
   "routers/proposals/executors/focus-session.ts":
     "The approval executor re-applies a patch a HUMAN just approved; there is " +
     "no agent response to annotate at that moment.",
+  "routers/proposals/executors/pod-hygiene.ts":
+    "The cleanup pack's approval half (W-B4 `withdraw_ask`): it only WITHDRAWS " +
+    "an ask a HUMAN just approved withdrawing, on a session that already " +
+    "ended. Nothing is blocked and no agent response exists to annotate.",
   "services/playbooks/playbook-lifecycle.ts":
     "DEFINES `instantiateSession(Row)`: it sanitizes a TEMPLATE's declared " +
     "slots at birth (the author's own definition, not an agent's hand-off " +

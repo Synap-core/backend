@@ -520,6 +520,20 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       },
     },
     {
+      name: "automation.archive",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "ARCHIVE an automation (it stops running; the row is kept) via the governed automations.archive path (workspace-write gated on the automation's own workspace). An AGENT archiving an automation it created that never ran applies at once: { status: 'archived', previousStatus }. Any other agent archive PROPOSES (automation/archive, a destructive floor): { status: 'proposed', proposalId }. A person archives directly. The way back: a person runs automation.activate.",
+      parameters: {
+        type: "object",
+        required: ["automationId"],
+        properties: {
+          automationId: { type: "string", format: "uuid" },
+        },
+      },
+    },
+    {
       name: "view.update",
       kind: "builtin",
       scope: "pod",

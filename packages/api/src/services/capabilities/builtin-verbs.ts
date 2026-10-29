@@ -3499,6 +3499,38 @@ const automationDeleteHandler: BuiltinVerbHandler = async (params, ctx) => {
   });
 };
 
+/**
+ * automation.archive — take an automation out of service, keeping its row
+ * (`archived`), through the governed `automationsRouter.archive` caller. The
+ * door gates on the loaded row's workspace and the key's grant. An agent's OWN
+ * automation that NEVER RAN archives at once (W-B3, `agentArchivesDirectly`);
+ * any other agent archive files an `automation/archive` proposal ("archive" is
+ * a DESTRUCTIVE_ACTIONS floor no rule widens). A person archives directly.
+ */
+const automationArchiveParams = z
+  .object({
+    automationId: z.string().uuid(),
+  })
+  .strict();
+
+const automationArchiveHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = automationArchiveParams.parse(params);
+
+  const { automationsRouter } = await import("../../routers/automations.js");
+  const caller = automationsRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+    ...(ctx.agentUserId ? { agentUserId: ctx.agentUserId } : {}),
+  } as unknown as Context);
+
+  return caller.archive({
+    id: input.automationId,
+    workspaceId: ctx.workspaceId,
+  });
+};
+
 // ── Lifecycle REVISION half (Wave B) — view / cell / playbook / rule / kind ──
 //
 // Wave A closed config REVISION for playbook + automation. This wave closes the
@@ -4051,6 +4083,7 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "automation.activate": automationActivateHandler,
   "automation.pause": automationPauseHandler,
   "automation.delete": automationDeleteHandler,
+  "automation.archive": automationArchiveHandler,
   // Lifecycle REVISION (Wave B): the remaining doors an agent could CREATE
   // through but never REVISE or RETIRE. See the section note above for the
   // FOUR groups deliberately left out (ungated destructive doors, the
@@ -4126,6 +4159,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "automation.activate": automationActivateParams,
   "automation.pause": automationPauseParams,
   "automation.delete": automationDeleteParams,
+  "automation.archive": automationArchiveParams,
   "view.update": viewUpdateParams,
   "cell.update": cellUpdateParams,
   "playbook.archive": playbookArchiveParams,
@@ -4143,9 +4177,15 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
  * stopping a misbehaving automation must not itself wait for review. The way
  * back up (`automation.activate`) stays governed. Founder decision 2026-10-23
  * (ticket 68aeb326). Never a verb that creates, widens or deletes.
+ *
+ * `automation.archive` (W-B3, founder Q-B1): archiving takes an automation out
+ * of service and keeps its row. Its door is the real gate: it applies at once
+ * only for the agent's own never-run automation and proposes otherwise, so the
+ * outer gate must not file a second, capability-level proposal in front of it.
  */
 export const DE_ESCALATION_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   "automation.pause",
+  "automation.archive",
 ]);
 
 /**
