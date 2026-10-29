@@ -22,6 +22,7 @@ import {
   desc,
   drizzleSql,
   getActingAgentUserId,
+  transitionProposal,
 } from "@synap/database";
 import type { ProposalRevision } from "@synap/database";
 import { getRequestGrant } from "@synap/database";
@@ -901,35 +902,50 @@ export async function mergeProposalRevision(
     // postgres.js 3.4.8 sql.json() is broken on the pod image — always
     // JSON.stringify + ::jsonb. In Drizzle .set() use drizzleSql, not raw sql.
     // The lock already holds PENDING; the WHERE re-guard is belt-and-suspenders.
-    await tx
-      .update(proposals)
-      .set({
-        data: merged as typeof proposals.$inferInsert.data,
-        revisionHistory: drizzleSql`COALESCE(${proposals.revisionHistory}, '[]'::jsonb) || ${JSON.stringify([reopening ? { ...revision, reopened: { from: existing.status, failure: failureSummaryOf(existing.data), rejectionReason: existing.rejectionReason ?? null } } : revision])}::jsonb`,
-        updatedAt: new Date(),
-        // Reopened: the failure is history (kept on the revision entry above),
-        // and the row waits for a review again.
-        ...(reopening
-          ? {
-              status: ProposalStatus.PENDING,
-              rejectionReason: null,
-              reviewedBy: null,
-              reviewedAt: null,
-            }
-          : {}),
-        ...(params.workspaceId !== undefined
-          ? { workspaceId: params.workspaceId }
-          : {}),
-        ...(params.projectId !== undefined
-          ? { projectId: params.projectId }
-          : {}),
-      })
-      .where(
-        and(
-          eq(proposals.id, params.proposalId),
-          eq(proposals.status, existing.status)
-        )
-      );
+    const revisionHistory = drizzleSql`COALESCE(${proposals.revisionHistory}, '[]'::jsonb) || ${JSON.stringify([reopening ? { ...revision, reopened: { from: existing.status, failure: failureSummaryOf(existing.data), rejectionReason: existing.rejectionReason ?? null } } : revision])}::jsonb`;
+    const unchanged = and(
+      eq(proposals.id, params.proposalId),
+      eq(proposals.status, existing.status)
+    );
+    if (reopening) {
+      // Reopened: the failure is history (kept on the revision entry above),
+      // and the row waits for a review again: approval_failed → pending,
+      // through the status door.
+      await transitionProposal(tx, {
+        to: ProposalStatus.PENDING,
+        from: [ProposalStatus.APPROVAL_FAILED],
+        set: {
+          data: merged as typeof proposals.$inferInsert.data,
+          revisionHistory,
+          updatedAt: new Date(),
+          rejectionReason: null,
+          reviewedBy: null,
+          reviewedAt: null,
+          ...(params.workspaceId !== undefined
+            ? { workspaceId: params.workspaceId }
+            : {}),
+          ...(params.projectId !== undefined
+            ? { projectId: params.projectId }
+            : {}),
+        },
+        where: unchanged,
+      });
+    } else {
+      await tx
+        .update(proposals)
+        .set({
+          data: merged as typeof proposals.$inferInsert.data,
+          revisionHistory,
+          updatedAt: new Date(),
+          ...(params.workspaceId !== undefined
+            ? { workspaceId: params.workspaceId }
+            : {}),
+          ...(params.projectId !== undefined
+            ? { projectId: params.projectId }
+            : {}),
+        })
+        .where(unchanged);
+    }
 
     if (isAuthor && actingAgentUserId && revisionCheck) {
       redecide = {

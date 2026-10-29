@@ -57,11 +57,21 @@ export const PROPOSAL_TRANSITIONS: Readonly<
 > = {
   // Approve (every executor, the shared approval tail), reject, withdraw (the
   // proposer), expire (the lapse scanners, goal end, cleanup packs, a landed
-  // record), approval failed (the tail's failure write).
-  [PENDING]: [APPROVED, REJECTED, WITHDRAWN, EXPIRED, APPROVAL_FAILED],
+  // record), approval failed (the tail's failure write), auto-approved (an
+  // agent's own revised graph capture re-decided under its rule,
+  // `redecide-graph-revision.ts`, #512).
+  [PENDING]: [
+    APPROVED,
+    REJECTED,
+    WITHDRAWN,
+    EXPIRED,
+    APPROVAL_FAILED,
+    AUTO_APPROVED,
+  ],
   // A failed approval stays in the actionable queue: retried (approved, or
-  // failed again) or rejected.
-  [APPROVAL_FAILED]: [APPROVED, APPROVAL_FAILED, REJECTED],
+  // failed again) or rejected; or its author revises it, which reopens it
+  // for review (`proposals-service.ts` revise, #512).
+  [APPROVAL_FAILED]: [APPROVED, APPROVAL_FAILED, REJECTED, PENDING],
   // Re-stamp; revert; revert-and-reopen (`proposals.revert {reopen}`); a
   // library organise claim given back after a later step threw.
   [APPROVED]: [APPROVED, REVERTED, PENDING, APPROVAL_FAILED],
