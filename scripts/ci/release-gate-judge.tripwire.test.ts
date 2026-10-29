@@ -117,6 +117,36 @@ describe("release-gate-judge: the verdict", () => {
       });
     expect(run(green, "true").status).toBe(0);
     expect(run(noImage, "false").status).toBe(0);
+    // Both directions of the skip rule at the seam: a skip passes only on an
+    // explicit "false"; an empty, missing or garbled IMAGE_DUE is due.
+    for (const due of ["", "TRUE", "0", "true"]) {
+      const bare = run(noImage, due);
+      expect(bare.status, `IMAGE_DUE=${JSON.stringify(due)}`).toBe(1);
+      expect(bare.stdout).toContain("RED  gate-deploy: skipped");
+    }
+    const unset = spawnSync("node", [SCRIPT], {
+      env: {
+        ...process.env,
+        NEEDS: JSON.stringify(needs(noImage)),
+        IMAGE_JOBS: IMAGE_JOBS.join(" "),
+      },
+      encoding: "utf8",
+    });
+    expect(unset.status, "IMAGE_DUE unset").toBe(1);
+    // The not-due line names the decision's reason.
+    const why = spawnSync("node", [SCRIPT], {
+      env: {
+        ...process.env,
+        NEEDS: JSON.stringify(needs(noImage)),
+        IMAGE_JOBS: IMAGE_JOBS.join(" "),
+        IMAGE_DUE: "false",
+        IMAGE_REASON: "no IMAGE_INPUTS path changed",
+      },
+      encoding: "utf8",
+    });
+    expect(why.stdout).toContain(
+      "ok   gate-image: skipped (not due: no IMAGE_INPUTS path changed)"
+    );
     const red = run({ ...green, "gate-image": "skipped" }, "true");
     expect(red.status).toBe(1);
     expect(red.stdout).toContain("RED  gate-image: skipped");
@@ -180,10 +210,16 @@ describe("release-gate-judge: ci.yml wiring", () => {
     const declared =
       /IMAGE_JOBS: (.+)$/m.exec(judgeJob?.block ?? "")?.[1] ?? "";
     expect(declared.split(/\s+/).filter(Boolean).sort()).toEqual(imageParts);
-    // IMAGE_DUE reads the same condition the parts' `if:` reads.
+    // IMAGE_DUE is due unless `changes` said exactly image=false: where it
+    // and the parts' `if:` (image == 'true') disagree (an empty output), the
+    // part skips and the judge holds it due, so that skip is red.
     expect(judgeJob?.block).toContain(
-      "IMAGE_DUE: ${{ needs.changes.result != 'success' || needs.changes.outputs.image == 'true' }}"
+      "IMAGE_DUE: ${{ needs.changes.result != 'success' || needs.changes.outputs.image != 'false' }}"
     );
+    for (const p of parts.filter((x) => declared.includes(x.id)))
+      expect(p.if, p.id).toContain(
+        "(needs.changes.result != 'success' || (needs.changes.outputs.gate == 'true' && needs.changes.outputs.image == 'true'))"
+      );
   });
 
   it("every part runs when `changes` failed and stops for a preflight hold (fail-safe)", () => {

@@ -6,7 +6,8 @@ on:
   # ci-gate below: the push run's Release gate, Full suite, API e2e and
   # Reference docs all `success`; founder, 2026-10-29, "One trunk, three CI
   # tiers": a PR runs only what it can break, so only main's own full run
-  # clears a commit for a pod) and on the `production` environment's required
+  # clears a commit for a pod), on the release's own deploy tests and image
+  # smoke (job release-checks) and on the `production` environment's required
   # reviewer:
   #   - a v* tag  → STABLE release vX.Y.Z (what managed pods install)
   #   - "Run workflow" on main (gh workflow run docker-publish.yml --ref main)
@@ -120,8 +121,62 @@ jobs:
             gh api -X POST "repos/$REPO/actions/runs/$id/cancel"
           done
 
-  build-and-push-backend-api:
+  # RELEASE CHECKS: the deploy tests and the backend image smoke on the exact
+  # commit a release builds, BEFORE any build job asks for the `production`
+  # approval (a red check: no approval request, no image). Why a release runs
+  # them itself: scripts/ci-changes.mjs IMAGE_INPUTS. This job has no
+  # environment and publishes nothing; the build jobs keep `production`.
+  release-checks:
+    name: "Release checks: deploy tests + Docker image"
     needs: ci-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'schedule' && needs.ci-gate.outputs.build == 'true') ||
+      (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository)
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The nightly builds the commit ci-gate picked, not main's head.
+          ref: ${{ github.event_name == 'schedule' && needs.ci-gate.outputs.sha || github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: ".node-version"
+
+      - name: Deploy safety tests
+        run: bash scripts/ci/deploy-tests.sh
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build Backend image (release check)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ./deploy/Dockerfile
+          push: false
+          load: true
+          tags: synap-backend:release-check
+          build-args: GIT_SHA=${{ github.event_name == 'schedule' && needs.ci-gate.outputs.sha || github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Image smoke (isolated-vm, CMD flag, skill-runner sandbox)
+        run: bash scripts/ci/image-smoke.sh synap-backend:release-check
+
+  build-and-push-backend-api:
+    needs: [ci-gate, release-checks]
     runs-on: ubuntu-latest
     # Only run if CI passed (workflow_run), or if triggered by tag push / manual dispatch
     if: >
@@ -249,6 +304,11 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64
 
+      # Again, after release-checks: this smoke checks the exact image that
+      # is pushed (built here with the release's build args).
+      - name: Image smoke (isolated-vm, CMD flag, skill-runner sandbox)
+        run: bash scripts/ci/image-smoke.sh synap-backend:smoke-test
+
       - name: Run migrations against smoke-test DB
         run: |
           docker run --rm \
@@ -310,7 +370,7 @@ jobs:
           platforms: linux/amd64
 
   build-and-push-pod-agent:
-    needs: ci-gate
+    needs: [ci-gate, release-checks]
     runs-on: ubuntu-latest
     if: >
       github.event_name == 'workflow_dispatch' ||
@@ -415,7 +475,7 @@ jobs:
   # on the host. It is a generic image (POD_PUBLIC_URL is runtime env, nothing
   # NEXT_PUBLIC_* is baked), so one artifact serves every pod.
   build-and-push-pod-admin:
-    needs: ci-gate
+    needs: [ci-gate, release-checks]
     runs-on: ubuntu-latest
     if: >
       github.event_name == 'workflow_dispatch' ||

@@ -232,7 +232,10 @@ describe("release-gate-wait: the culprit range", () => {
  * read of each endpoint (one per commit's runs, one per check suite) from a
  * list, so a run can move queued → green.
  */
-describe("release-gate-wait: the script, end to end, through `gh api`", () => {
+// 20 s, not vitest's 5: each case spawns node + a fake gh per read (~2.8 s
+// for --once) and went red ~1 run in 5 on a loaded Mac (29 Oct).
+const E2E = { timeout: 20_000 };
+describe("release-gate-wait: the script, end to end, via `gh`", E2E, () => {
   const SCRIPT = fileURLToPath(
     new URL("./release-gate-wait.mjs", import.meta.url)
   );

@@ -11,7 +11,8 @@ const structuredLookupMock = vi.fn();
 vi.mock("../../retrieval/retrieve.js", () => ({
   retrieve: (...args: unknown[]) => retrieveMock(...args),
 }));
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   // `db` handle — only forwarded to the pending scan (mocked below); a bare
   // stub is enough for these router tests, which never touch a real store.
   db: {},

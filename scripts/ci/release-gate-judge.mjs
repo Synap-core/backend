@@ -9,9 +9,11 @@
  * skipped sub-job would release a commit nobody built: GitHub reports a job
  * skipped by its `if:` as `skipped`, and a skipped required check as passed.
  *
- *   pass  every sub-job ended `success`. A sub-job named in IMAGE_JOBS must
- *         succeed only when IMAGE_DUE is "true" (an image-relevant change);
- *         otherwise it must have been `skipped` (or `success`).
+ *   pass  every sub-job ended `success`. A sub-job named in IMAGE_JOBS may
+ *         instead be `skipped` only when IMAGE_DUE is exactly "false": the
+ *         "What changed" decision said image=false (the rule:
+ *         scripts/ci-changes.mjs IMAGE_INPUTS). Any other IMAGE_DUE, empty
+ *         or missing included, makes it due: a bare skip is never a pass.
  *   fail  any sub-job `failure`, `cancelled` (a timeout ends a job so),
  *         `skipped` while it was due, or with no result at all; fewer than two
  *         sub-jobs in `needs` (the scan saw nothing: never a vacuous pass).
@@ -22,7 +24,7 @@
  *
  * Usage (ci.yml, job release-gate):
  *   env NEEDS=${{ toJSON(needs) }}, IMAGE_JOBS="gate-deploy gate-image",
- *       IMAGE_DUE=true|false
+ *       IMAGE_DUE=true|false, IMAGE_REASON (printed on a not-due line)
  *   node scripts/ci/release-gate-judge.mjs      exit 0 = pass, 1 = fail
  * Self-contained (node: builtins only): the judge job checks out this file
  * alone and runs no install.
@@ -33,10 +35,10 @@ import { pathToFileURL } from "node:url";
 export const DECIDERS = ["changes", "preflight"];
 
 /**
- * @param {{ needs: Record<string, {result?: string}>, imageJobs: string[], imageDue: boolean }} input
+ * @param {{ needs: Record<string, {result?: string}>, imageJobs: string[], imageDue: boolean, imageReason?: string }} input
  * @returns {{ ok: boolean, lines: string[] }}
  */
-export function judge({ needs, imageJobs, imageDue }) {
+export function judge({ needs, imageJobs, imageDue, imageReason = "" }) {
   const lines = [];
   let ok = true;
   const subJobs = Object.keys(needs ?? {})
@@ -65,7 +67,7 @@ export function judge({ needs, imageJobs, imageDue }) {
       : result === "skipped" || result === "success";
     if (!pass) ok = false;
     lines.push(
-      `${pass ? "ok  " : "RED "} ${id}: ${result || "(no result)"}${due ? "" : " (not due: no image-relevant change)"}`
+      `${pass ? "ok  " : "RED "} ${id}: ${result || "(no result)"}${due ? "" : ` (not due: ${imageReason || "no image-relevant change"})`}`
     );
   }
   return { ok, lines };
@@ -82,8 +84,11 @@ function main() {
     process.exit(1);
   }
   const imageJobs = (process.env.IMAGE_JOBS ?? "").split(/\s+/).filter(Boolean);
-  const imageDue = process.env.IMAGE_DUE === "true";
-  const r = judge({ needs, imageJobs, imageDue });
+  // Due unless the decision said exactly "false" (fail-safe: an unset or
+  // garbled IMAGE_DUE never excuses a skip).
+  const imageDue = process.env.IMAGE_DUE !== "false";
+  const imageReason = process.env.IMAGE_REASON ?? "";
+  const r = judge({ needs, imageJobs, imageDue, imageReason });
   for (const line of r.lines) console.log(line);
   if (!r.ok) {
     console.log(

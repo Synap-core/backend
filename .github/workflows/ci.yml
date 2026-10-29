@@ -53,7 +53,8 @@ permissions:
 # go"): the `changes` job reads what a pull request touched and turns off what
 # it cannot affect — a draft runs no suites, a negctl/* branch runs only its own
 # test files ("Targeted tests"), a docs-only change runs nothing, and the Docker
-# build + deploy tests run only when an image-relevant path changed.
+# build + deploy tests run only when an image-relevant path changed
+# (scripts/ci-changes.mjs IMAGE_INPUTS).
 # THREE TIERS (founder, 2026-10-29, "One trunk, three CI tiers"): a pull
 # request runs the tests of what it can break (the touched packages, their
 # workspace dependents, the tests that read them by path, every tripwire;
@@ -102,6 +103,7 @@ jobs:
     outputs:
       gate: ${{ steps.decide.outputs.gate }}
       image: ${{ steps.decide.outputs.image }}
+      image_reason: ${{ steps.decide.outputs.image_reason }}
       suites: ${{ steps.decide.outputs.suites }}
       scope: ${{ steps.decide.outputs.scope }}
       affected: ${{ steps.decide.outputs.affected }}
@@ -329,7 +331,51 @@ jobs:
       # would not produce never lands; nothing regenerates it after a merge.
       # Fix when red: the hint the check prints (scripts/gen-types.mjs).
       - name: Verify generated API types are up to date
+        id: gen-types
         run: pnpm --filter @synap/api gen-types:check
+
+      # F10 (29 Oct): "API types out of date" was 22 % of the primary PR reds,
+      # and regenerating needs a built workspace the Mac must not build
+      # (rules/devbox-gates rung 0b). A red above leaves the file the
+      # generator produced on disk: hand it back, so the fix is one download.
+      # CI never commits to a branch. The file is for the tree this run
+      # tested (a PR merged with main), which merges cleanly with main's.
+      - name: Hand back the regenerated API types (on a red)
+        id: gen-types-drift
+        if: failure() && steps.gen-types.outcome == 'failure'
+        run: |
+          if git diff --quiet -- packages/api-types/src/generated.d.ts; then
+            echo "The generator failed before producing a file: nothing to hand back (read the step above)."
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "drift=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload the regenerated API types
+        if: failure() && steps.gen-types-drift.outputs.drift == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: generated-api-types
+          path: packages/api-types/src/generated.d.ts
+          retention-days: 7
+      - name: How to apply the regenerated API types
+        if: failure() && steps.gen-types-drift.outputs.drift == 'true'
+        env:
+          # gh run download refuses to overwrite a file (gh 2.87: "file
+          # exists"), so it downloads beside, then moves over the committed one.
+          FIX: gh run download ${{ github.run_id }} -R ${{ github.repository }} -n generated-api-types -D /tmp/api-types-${{ github.run_id }} && mv /tmp/api-types-${{ github.run_id }}/generated.d.ts packages/api-types/src/generated.d.ts
+          TESTED: ${{ github.sha }}
+        run: |
+          echo "::error title=API types out of date::Apply the file this run generated, commit it, push once: ${FIX}"
+          {
+            echo "### API types out of date"
+            echo ""
+            echo "This run generated \`packages/api-types/src/generated.d.ts\` for the tree it tested (\`${TESTED}\`). From your branch, with no build:"
+            echo ""
+            echo "\`\`\`"
+            echo "${FIX}"
+            echo "git add packages/api-types/src/generated.d.ts && git commit -m 'chore: regenerate API types'"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Validate migrations
         run: pnpm --filter @synap/database migrate
@@ -401,6 +447,11 @@ jobs:
           path: .turbo/cache
           key: ${{ steps.setup.outputs.turbo-cache-key }}
 
+  # The two image jobs (deploy tests, Docker image) run when the change
+  # touches what the image is made of, and on every push: the rule, and the
+  # release that re-runs them, are at scripts/ci-changes.mjs IMAGE_INPUTS.
+  # The judge accepts their skip only when that decision said image=false.
+  #
   # Deploy safety tripwires (daemon-free). pgdata-safety guards the
   # 2026-10-02 pod wipe: postgres data must live on its volume, every update
   # door must run the placement guard first, and backups must land on the
@@ -422,25 +473,11 @@ jobs:
           node-version-file: ".node-version"
 
       - name: Deploy safety tests
-        run: |
-          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
-          # EVERY deploy/__tests__/*.test.sh, derived by glob: a new test joins
-          # by existing. stdin is closed: a test that reads it would hang the job.
-          failed=""; n=0
-          for t in deploy/__tests__/*.test.sh; do
-            n=$((n+1)); echo "::group::$t"
-            bash "$t" </dev/null || failed="$failed $t"
-            echo "::endgroup::"
-          done
-          [ "$n" -ge 30 ] || { echo "::error::only $n deploy tests found (glob moved?)"; exit 1; }
-          node --test deploy/pod-agent/*.test.js || failed="$failed deploy/pod-agent"
-          [ -z "$failed" ] || { echo "::error::deploy tests failed:$failed"; exit 1; }
+        run: bash scripts/ci/deploy-tests.sh
 
-  # The image smoke: in the BUILT image, the code-skill sandbox's native
-  # addon loads and runs an isolate. isolated-vm is resolved from @synap/api
-  # (the package that imports it), with the flag its README requires on
-  # Node >= 20, and the image's CMD must carry that flag too. The image is
-  # built from a clean checkout, as docker-publish.yml builds it.
+  # The image smoke (scripts/ci/image-smoke.sh, shared with
+  # docker-publish.yml). The image is built from a clean checkout, as
+  # docker-publish.yml builds it.
   gate-image:
     name: "Release gate: Docker image"
     needs: [changes, preflight]
@@ -454,25 +491,7 @@ jobs:
       - name: Test Docker Build
         run: |
           docker build -t synap-backend:test -f deploy/Dockerfile .
-          docker run --rm synap-backend:test node --version
-          docker run --rm synap-backend:test node --no-node-snapshot -e '
-            const { realpathSync } = require("node:fs");
-            const { createRequire } = require("node:module");
-            const req = createRequire(realpathSync("node_modules/@synap/api/package.json"));
-            const ivm = req("isolated-vm");
-            const isolate = new ivm.Isolate({ memoryLimit: 16 });
-            const out = isolate.compileScriptSync("6 * 7").runSync(isolate.createContextSync());
-            if (out !== 42) throw new Error("isolate returned " + out);
-            console.log("isolated-vm " + req("isolated-vm/package.json").version + " ran an isolate on node " + process.version);
-          '
-          cmd=$(docker inspect --format '{{json .Config.Cmd}}' synap-backend:test)
-          echo "CMD: $cmd"
-          echo "$cmd" | grep -q -- '--no-node-snapshot' || { echo "::error::deploy/Dockerfile CMD lacks --no-node-snapshot (isolated-vm requires it on Node >= 20)"; exit 1; }
-          # The runner the API's pool starts carries the Node permission model,
-          # runs a skill under it, and is refused a file write, a process and
-          # the API's environ (review F12; no suite runs the BUILT runner).
-          docker run --rm -v "$PWD/scripts/skill-runner-sandbox-smoke.mjs:/smoke/skill-runner-sandbox-smoke.mjs:ro" \
-            synap-backend:test node --no-node-snapshot /smoke/skill-runner-sandbox-smoke.mjs
+          bash scripts/ci/image-smoke.sh synap-backend:test
           docker rmi synap-backend:test
 
   # The judge: the ONE check named "Release gate". It runs whenever the gate
@@ -540,9 +559,11 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           # The jobs that run only for an image-relevant change, and whether
-          # this change is one (the same condition their `if:` reads).
+          # this change is one: due unless `changes` decided image=false (an
+          # empty or missing output never excuses their skip).
           IMAGE_JOBS: gate-deploy gate-image
-          IMAGE_DUE: ${{ needs.changes.result != 'success' || needs.changes.outputs.image == 'true' }}
+          IMAGE_DUE: ${{ needs.changes.result != 'success' || needs.changes.outputs.image != 'false' }}
+          IMAGE_REASON: ${{ needs.changes.outputs.image_reason }}
         run: node scripts/ci/release-gate-judge.mjs
 
   # The Full suite: 4 shard jobs run the tests, one judge job ("Full suite", the
