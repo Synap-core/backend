@@ -5,7 +5,7 @@
  * Extracted to keep add-connection-modal.tsx under 500 lines.
  */
 
-import { Checkbox, Input } from "@heroui/react";
+import { Checkbox, Input, Textarea } from "@heroui/react";
 import { ArrowDownToLine, Bot, Database, Webhook } from "lucide-react";
 import { WEBHOOK_EVENTS } from "./add-connection-modal";
 
@@ -106,7 +106,8 @@ export function Step2WebhookOutbound({
         size="sm"
         isRequired
       />
-      <Input
+      <Textarea
+        minRows={1}
         label="Description"
         placeholder="e.g. n8n automation trigger"
         value={description}
