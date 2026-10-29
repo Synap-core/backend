@@ -16,12 +16,23 @@
  * (`TRANSITION_EVENT_TYPES`), subject = the goal or the session. Their writers
  * do not dispatch inline; the sweeper delivers them.
  *
- * REALTIME: the log row is appended through the shared `eventRepository`,
- * whose hooks (`setup-event-broadcasting.ts`, @synap/api) forward it to the
- * realtime bridge; `domain-event-bridge.ts` pushes an entity's transition as
- * `entity:updated`, once per move (a retry finds the row written and appends
- * nothing). Goals and sessions are not bridged: no client listens for them,
- * and `focus_session:updated` has its own producer.
+ * THE SHARED REPOSITORY: the log row is appended through `eventRepository`,
+ * whose hooks (`setup-event-broadcasting.ts`, @synap/api) run on it:
+ *   - realtime: `domain-event-bridge.ts` pushes an entity's transition as
+ *     `entity:updated`, AT MOST once per move — a retry finds the row
+ *     written and appends nothing, so a crash between the insert and the
+ *     hooks pushes nothing on retry. A pod-wide entity's push (workspace
+ *     null) is refused by the realtime schema, like every pod-wide entity
+ *     push. Goals and sessions are not bridged: no client listens for them,
+ *     and `focus_session:updated` has its own producer.
+ *   - Hub SSE (`/api/hub/events/stream`, `event-stream-manager.ts`):
+ *     subscribers whose filter admits them now receive
+ *     `entity.transition.completed`, `track.…` and `focus_session.…` — new
+ *     event types on that external stream;
+ *   - sync peers get the row in real time (`syncRealtimeHook`), as the
+ *     polling push already sent it. A peer's `sync-materializer.ts` applies
+ *     only create / update / delete, so a status-only move does not reach a
+ *     peer's entity (pre-existing; pod finding).
  *
  * BACK-COMPAT (founder decision 2026-10-11): for a KIND's lifecycle the
  * fan-out is ALSO emitted as `entity.update.completed` carrying
@@ -98,14 +109,26 @@ export const LIFECYCLE_TRANSITION_EVENT_TYPE = TRANSITION_EVENT_TYPES.entity;
 const DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS = true;
 
 /**
- * Is this `entity.update` payload the dual emit of a status move? Only that
- * emit names a `transitionId`. A consumer that follows the transition skips
- * it, so a move reaches it once. Deleted with the flag.
+ * Is this `entity.update` payload the dual emit of a status move? That emit
+ * names the move's `transitionId` beside exactly ONE changed key (the
+ * lifecycle slug, flagged `changed.<slug>`). An ordinary update spreads its
+ * changed properties flat, so a property slugged `transitionId` is itself a
+ * changed key — and is not taken for the marker. A consumer that follows the
+ * transition skips the dual emit, so a move reaches it once. Deleted with
+ * the flag.
  */
 export function isDualEmittedStatusUpdate(
   data: Record<string, unknown> | null | undefined
 ): boolean {
-  return typeof data?.transitionId === "string";
+  if (typeof data?.transitionId !== "string") return false;
+  const keys = data.changedKeys;
+  if (!Array.isArray(keys) || keys.length !== 1) return false;
+  const [key] = keys;
+  return (
+    typeof key === "string" &&
+    key !== "transitionId" &&
+    data[`changed.${key}`] === true
+  );
 }
 
 /** The emit options a mover passes; stored on the outbox row and replayed. */
@@ -152,7 +175,7 @@ export async function emitLifecycleTransition(
   let eventId = progress.eventId;
   if (!eventId) {
     try {
-      // The shared repository: its hooks push the row to realtime.
+      // The shared repository: its hooks (realtime, SSE, sync) see the row.
       const record = await eventRepository.append({
         // The transition's id IS the log row's id: at most one row, ever.
         id: t.transitionId,

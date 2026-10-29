@@ -120,13 +120,16 @@ vi.mock("@synap/database", () => ({
     return { rows: [{ id: "s" }], transitions: [] };
   },
 }));
-vi.mock("@synap/events", () => ({
-  LIFECYCLE_TRANSITION_EVENT_TYPE: "entity.transition.completed",
-  // The real rule (lifecycle-transition.ts); its emitter test pins that the
-  // dual-emitted update satisfies it.
-  isDualEmittedStatusUpdate: (d: Record<string, unknown> | null | undefined) =>
-    typeof d?.transitionId === "string",
-}));
+// The REAL event name and dual-emit rule (lifecycle-transition.ts), so this
+// suite follows the emitter, never a copy of it.
+vi.mock("@synap/events", async () => {
+  const actual =
+    await vi.importActual<typeof import("@synap/events")>("@synap/events");
+  return {
+    LIFECYCLE_TRANSITION_EVENT_TYPE: actual.LIFECYCLE_TRANSITION_EVENT_TYPE,
+    isDualEmittedStatusUpdate: actual.isDualEmittedStatusUpdate,
+  };
+});
 vi.mock("@synap-core/core", () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
@@ -474,6 +477,18 @@ describe("the transition event (work model L2) → run stage", () => {
       },
     });
     expect(fromUpdate).toEqual([]);
+    expect(h.advances.map((a) => a.toStage)).toEqual(["publish"]);
+  });
+
+  it("a REDELIVERED transition advances the run once (the door moved it; the loop guard holds)", async () => {
+    h.sessions = [session("schedule")];
+    h.subject = { "post-status": "published" };
+    const tr = transition({ role: null, transitionId: "tr-9" });
+    await syncProcessOnEvent(tr);
+    // The door advanced the run: the redelivery reads it at `publish`.
+    h.sessions = [session("publish")];
+    const again = await syncProcessOnEvent(tr);
+    expect(again).toEqual([]);
     expect(h.advances.map((a) => a.toStage)).toEqual(["publish"]);
   });
 

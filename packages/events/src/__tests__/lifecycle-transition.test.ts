@@ -190,6 +190,43 @@ describe("emitLifecycleTransition", () => {
         amount: 3,
       })
     ).toBe(false);
+    // An ordinary update of a property SLUGGED `transitionId` spreads it flat
+    // (entities.update): it is a changed key, never the marker.
+    expect(
+      isDualEmittedStatusUpdate({
+        profileSlug: "deal",
+        changedKeys: ["transitionId"],
+        "changed.transitionId": true,
+        "previous.transitionId": null,
+        transitionId: "TR-2026-001",
+      })
+    ).toBe(false);
+    expect(
+      isDualEmittedStatusUpdate({
+        profileSlug: "deal",
+        changedKeys: ["transitionId", "amount"],
+        "changed.transitionId": true,
+        "changed.amount": true,
+        transitionId: "TR-2026-001",
+        amount: 3,
+      })
+    ).toBe(false);
+  });
+
+  // A redelivered transition (the sweeper's retry after the log row landed)
+  // appends nothing, so the realtime hook on the shared repository pushes
+  // the move at most once.
+  it("a redelivered transition appends its log row once (one realtime push, at most)", async () => {
+    const first = await emitLifecycleTransition(T);
+    await emitLifecycleTransition(T, {}, first);
+    expect(h.appended).toHaveLength(1);
+    // A retry that lost its progress hits the row's id: no second row either.
+    h.appendError = Object.assign(new Error("duplicate key"), {
+      code: "23505",
+    });
+    const again = await emitLifecycleTransition(T);
+    expect(again.eventId).toBe("t1");
+    expect(h.appended).toHaveLength(1);
   });
 
   it("goal and session: their own event type and subject, the transition fan-out alone", async () => {
