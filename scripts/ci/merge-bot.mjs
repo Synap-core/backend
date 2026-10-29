@@ -22,10 +22,26 @@
  *    (release-gate-wait.mjs REQUIRED_CHECKS, posted by GitHub Actions) are
  *    `success` on its head sha, it is not CONFLICTING, and it is not already
  *    queued. It never merges, never uses admin, never calls `gh pr merge`.
- * B. A MAIN-RED FIX JUMPS. A PR whose branch is `fix/main-red-*`, or whose
- *    title starts `fix: main red` / `fix(<scope>): main red`, is enqueued with
- *    `jump: true` (front of the queue; GitHub rebuilds the groups in flight).
- *    If GitHub refuses the jump, it is enqueued without it, and said.
+ * B. JUMP (jumpReason, founder 2026-10-29): enqueued with `jump: true` (front
+ *    of the queue; GitHub rebuilds the groups in flight):
+ *      - a main-red fix: branch `fix/main-red-*` (the culprit finder's reverts,
+ *        `fix/main-red-revert-*`, included), or a title `fix: main red` /
+ *        `fix(<scope>): main red`;
+ *      - a security fix: label `security`, branch `fix/security-*`, or a title
+ *        starting `fix(security)`;
+ *      - a revert: a title starting `Revert "` (GitHub's revert button).
+ *    If GitHub refuses the jump, it is enqueued without it, and said. A PR
+ *    that rides behind its dependency (D) never jumps: it must land after it.
+ * D. DEPENDENTS RIDE WITH THEIR DEPENDENCY. A PR whose only unmet Depends-On is
+ *    an open PR of THIS repo that is already IN the merge queue is enqueued
+ *    (behind it: the queue appends). The hold (scripts/layout/hold.mjs) then
+ *    lets its queue run pass only when the group's base..head merges the
+ *    dependency's head, so they are tested together and land in order; if the
+ *    dependency leaves the queue, the group is rebuilt without it and the
+ *    dependent is held. That holds only when "Dependencies merged" is a
+ *    REQUIRED check, so riding is ON only when the live ruleset requires it
+ *    (liveRequiredChecks); otherwise a dependent waits until its dependency
+ *    has merged. Every live required check is required here too.
  * C. MAIN'S VICTIMS RUN AGAIN. When main's latest finished push run of CI is
  *    `success` and the one(s) before it `failure` (mainRedWindow), every open,
  *    non-draft PR whose latest CI run FAILED and was CREATED in the red window
@@ -82,6 +98,7 @@ import {
   repoNamed,
   verdictOf,
 } from "../layout/layout.mjs";
+import { CHECK_NAME as HOLD_CHECK, rideTheQueue } from "../layout/hold.mjs";
 import { CI_WORKFLOW, REQUIRED_CHECKS } from "./release-gate-wait.mjs";
 
 /** The GitHub Actions app: the only integration whose checks the ruleset reads. */
@@ -124,6 +141,26 @@ export function isMainRedFix(pr) {
   );
 }
 
+/**
+ * Why a PR goes to the FRONT of the queue, or null: "main-red fix",
+ * "security fix" or "revert".
+ */
+export function jumpReason(pr) {
+  if (isMainRedFix(pr)) return "main-red fix";
+  const title = String(pr?.title ?? "").trim();
+  const labels = (pr?.labels?.nodes ?? []).map((l) =>
+    String(l?.name ?? "").toLowerCase()
+  );
+  if (
+    labels.includes("security") ||
+    /^fix\/security-/i.test(pr?.headRefName ?? "") ||
+    /^fix\(security\)/i.test(title)
+  )
+    return "security fix";
+  if (/^Revert "/.test(title)) return "revert";
+  return null;
+}
+
 export function isDependabot(pr) {
   const login = String(pr?.author?.login ?? "").toLowerCase();
   return (
@@ -138,19 +175,23 @@ export function isDependabot(pr) {
  * returns for that commit; only GitHub Actions' (app 15368) count, the latest
  * of each name. Returns { ok, missing: [name], notGreen: ["name: state"] }.
  */
-export function requiredChecksState(checkRuns, headSha) {
+export function requiredChecksState(
+  checkRuns,
+  headSha,
+  names = REQUIRED_CHECKS
+) {
   const latest = new Map();
   for (const c of checkRuns ?? []) {
     if (c?.app?.id !== GITHUB_ACTIONS_APP_ID) continue;
     if (headSha && c.head_sha && c.head_sha !== headSha) continue;
-    if (!REQUIRED_CHECKS.includes(c.name)) continue;
+    if (!names.includes(c.name)) continue;
     const prev = latest.get(c.name);
     const at = (x) => `${x.started_at ?? ""}|${String(x.id).padStart(20, "0")}`;
     if (!prev || at(c) > at(prev)) latest.set(c.name, c);
   }
   const missing = [];
   const notGreen = [];
-  for (const name of REQUIRED_CHECKS) {
+  for (const name of names) {
     const c = latest.get(name);
     if (!c) missing.push(name);
     else if (c.status !== "completed" || c.conclusion !== "success")
@@ -162,12 +203,33 @@ export function requiredChecksState(checkRuns, headSha) {
 }
 
 /**
+ * One Depends-On state from the resolver's results (layout.mjs evaluateAll).
+ * A waiting dependency on a PR of `repo` that is in `queued` (Map of PR number
+ * -> head sha) RIDES (hold.mjs rideTheQueue, the one copy of the rule).
+ * Returns { state: "landed" | "rides" | "waiting" | "blocked", behind: [n] }.
+ */
+export function dependsState(results, { repo, queued }) {
+  const ridden = rideTheQueue(results ?? [], { repo, queued });
+  const behind = ridden.filter((r) => r.rides).map((r) => r.dep.number);
+  const v = verdictOf(ridden);
+  return { state: v === "landed" && behind.length ? "rides" : v, behind };
+}
+
+const asDepends = (d) =>
+  d === undefined
+    ? undefined
+    : typeof d === "string"
+      ? { state: d, behind: [] }
+      : d;
+
+/**
  * Why a PR is NOT enqueued (empty = enqueue). Pure. `pr` is the GraphQL
  * PullRequest shape read by listOpenPrs. `checks` (requiredChecksState) and
  * `depends` ("landed" | "waiting" | "blocked") are judged only when given: the
  * driver reads them for the PRs that pass the cheap gates, to spare the API.
  */
-export function enqueueReasons({ pr, checks, depends }) {
+export function enqueueReasons({ pr, checks, depends, riding = false }) {
+  const dep = asDepends(depends);
   const r = [];
   if (pr.state && pr.state !== "OPEN") r.push(`state: ${pr.state}`);
   if (pr.baseRefName !== "main") r.push(`base: ${pr.baseRefName}, not main`);
@@ -178,8 +240,12 @@ export function enqueueReasons({ pr, checks, depends }) {
   if (!podSessionOf(pr.body)) r.push("no `Pod session: <uuid>` line");
   if (pr.mergeable === "CONFLICTING") r.push("conflicting");
   if (pr.isInMergeQueue) r.push("already queued");
-  if (depends !== undefined && depends !== "landed")
-    r.push(`Depends-On: ${depends}`);
+  if (dep && dep.state === "rides" && !riding)
+    r.push(
+      `Depends-On: #${dep.behind.join(", #")} is in the merge queue, but riding is off ("${HOLD_CHECK}" is not a required check, so nothing would hold this PR if it left the queue)`
+    );
+  else if (dep && dep.state !== "landed" && dep.state !== "rides")
+    r.push(`Depends-On: ${dep.state}`);
   if (checks !== undefined && !checks.ok)
     r.push(
       `required checks: ${[...checks.missing.map((n) => `${n}: none`), ...checks.notGreen].join(", ")}`
@@ -189,13 +255,23 @@ export function enqueueReasons({ pr, checks, depends }) {
 
 /**
  * The enqueue verdict once every input is read. Pure.
- * @returns {{ enqueue: boolean, jump: boolean, reasons: string[] }}
+ * @returns {{ enqueue: boolean, jump: boolean, jumpReason: string | null,
+ *             rides: number[], reasons: string[] }}
  */
-export function enqueueDecision({ pr, checks, depends }) {
-  const reasons = enqueueReasons({ pr, checks, depends });
+export function enqueueDecision({ pr, checks, depends, riding = false }) {
+  const reasons = enqueueReasons({ pr, checks, depends, riding });
   if (checks === undefined) reasons.push("required checks: not read");
   if (depends === undefined) reasons.push("Depends-On: not read");
-  return { enqueue: reasons.length === 0, jump: isMainRedFix(pr), reasons };
+  const rides = asDepends(depends)?.behind ?? [];
+  // A PR riding behind its dependency never jumps ahead of it.
+  const why = rides.length ? null : jumpReason(pr);
+  return {
+    enqueue: reasons.length === 0,
+    jump: Boolean(why),
+    jumpReason: why,
+    rides,
+    reasons,
+  };
 }
 
 const at = (x) => Date.parse(x ?? "") || 0;
@@ -346,6 +422,7 @@ const PRS_QUERY = `query($owner: String!, $name: String!, $after: String) {
         id number title body state isDraft baseRefName headRefName headRefOid
         isCrossRepository mergeable isInMergeQueue
         author { login }
+        labels(first: 20) { nodes { name } }
       }
     }
   }
@@ -379,7 +456,25 @@ export function listOpenPrs(gh, repo, token) {
   return prs;
 }
 
-/** The Depends-On verdict of a PR body, through the layout resolver. */
+/**
+ * The required checks of `main`, read live from its rules (the ruleset), or
+ * null when they cannot be read (then: REQUIRED_CHECKS, and no riding).
+ */
+export function liveRequiredChecks(gh, repo, token) {
+  try {
+    const rules = gh.rest(`repos/${repo}/rules/branches/main?per_page=100`, {
+      token,
+    });
+    return (rules ?? [])
+      .filter((r) => r?.type === "required_status_checks")
+      .flatMap((r) => r.parameters?.required_status_checks ?? [])
+      .map((c) => c.context);
+  } catch {
+    return null;
+  }
+}
+
+/** The Depends-On results of a PR body, through the layout resolver. */
 export function layoutDepends(env) {
   const layout = loadLayout();
   const client = githubClient({
@@ -394,7 +489,7 @@ export function layoutDepends(env) {
     const results = await evaluateAll(parsed, client, {
       defaultBranch: layout.defaultBranch,
     });
-    return verdictOf(results);
+    return results;
   };
 }
 
@@ -402,7 +497,8 @@ export function layoutDepends(env) {
 
 /**
  * One pass. Returns { code, enqueued: [n], rerun: [n], failures }.
- * `dependsOf(pr, repo)` → "landed" | "waiting" | "blocked" (default: layout).
+ * `dependsOf(pr, repo)` → the resolver's results (default: layout), or a
+ * state string ("landed" | "waiting" | "blocked").
  */
 export async function runBot({
   env = process.env,
@@ -446,6 +542,18 @@ export async function runBot({
     log(`::warning::could not list the open PRs (${e.message}); nothing done`);
     return out;
   }
+  // The queue as the PR list saw it; a PR enqueued in this pass joins it.
+  const queued = new Map(
+    prs.filter((p) => p.isInMergeQueue).map((p) => [p.number, p.headRefOid])
+  );
+  const live = liveRequiredChecks(gh, repo, readToken);
+  const names = [...new Set([...REQUIRED_CHECKS, ...(live ?? [])])];
+  const riding = Boolean(live?.includes(HOLD_CHECK));
+  log(
+    live
+      ? `required checks: ${names.join(", ")}; dependents ${riding ? "ride their queued dependency" : `wait for their dependency to merge ("${HOLD_CHECK}" is not required)`}`
+      : `::warning::could not read main's required checks: using ${names.join(", ")}; dependents wait for their dependency to merge`
+  );
   if (prMode) prs = prs.filter((p) => p.headRefOid === wr.head_sha);
   log(
     `${prMode ? `CI run ${wr.id} of ${String(wr.head_sha).slice(0, 9)}` : `sweep (${event})`}: ${prs.length} open PR(s)`
@@ -464,9 +572,9 @@ export async function runBot({
       out,
     });
 
-  // A + B: main-red fixes first, then the oldest first.
+  // A + B: the jumpers first, then the oldest first.
   const ordered = [...prs].sort(
-    (a, b) => Number(isMainRedFix(b)) - Number(isMainRedFix(a))
+    (a, b) => Number(Boolean(jumpReason(b))) - Number(Boolean(jumpReason(a)))
   );
   for (const pr of ordered) {
     const tag = `#${pr.number}`;
@@ -481,12 +589,20 @@ export async function runBot({
         `repos/${repo}/commits/${pr.headRefOid}/check-runs?filter=latest&per_page=100`,
         { token: readToken }
       );
-      const checks = requiredChecksState(runs?.check_runs, pr.headRefOid);
+      const checks = requiredChecksState(
+        runs?.check_runs,
+        pr.headRefOid,
+        names
+      );
       // Depends-On is read only for a PR whose checks are green (it may cost
       // a read per dependency, in another repo).
-      d = checks.ok
-        ? enqueueDecision({ pr, checks, depends: await depends(pr, repo) })
-        : { enqueue: false, reasons: enqueueReasons({ pr, checks }) };
+      if (checks.ok) {
+        const got = await depends(pr, repo);
+        const dep = Array.isArray(got)
+          ? dependsState(got, { repo, queued })
+          : got;
+        d = enqueueDecision({ pr, checks, depends: dep, riding });
+      } else d = { enqueue: false, reasons: enqueueReasons({ pr, checks }) };
     } catch (e) {
       log(`${tag} not enqueued: a read failed (${e.message})`);
       continue;
@@ -495,15 +611,20 @@ export async function runBot({
       log(`${tag} not enqueued: ${d.reasons.join("; ")}`);
       continue;
     }
+    const how = d.jump
+      ? ` with jump (${d.jumpReason})`
+      : d.rides.length
+        ? ` behind #${d.rides.join(", #")} (rides with its dependency)`
+        : "";
     if (dryRun) {
-      log(
-        `${tag} WOULD enqueue${d.jump ? " with jump (main-red fix)" : ""} at ${pr.headRefOid.slice(0, 9)}`
-      );
+      log(`${tag} WOULD enqueue${how} at ${pr.headRefOid.slice(0, 9)}`);
       continue;
     }
-    const r = enqueue(gh, pr, d.jump, botToken, log);
-    if (r) out.enqueued.push(pr.number);
-    else out.failures++;
+    const r = enqueue(gh, pr, d.jump, botToken, log, how);
+    if (r) {
+      out.enqueued.push(pr.number);
+      queued.set(pr.number, pr.headRefOid);
+    } else out.failures++;
   }
   log(
     `done: ${out.enqueued.length} enqueued${out.enqueued.length ? ` (#${out.enqueued.join(", #")})` : ""}, ${out.rerun.length} run again${out.rerun.length ? ` (#${out.rerun.join(", #")})` : ""}, ${out.failures} write(s) failed`
@@ -516,14 +637,14 @@ export async function runBot({
  * Enqueue one PR with the bot's token. A jump GitHub refuses is retried
  * without it (a main-red fix still enters the queue). True when it entered.
  */
-function enqueue(gh, pr, jump, token, log) {
+function enqueue(gh, pr, jump, token, log, how = "") {
   const tag = `#${pr.number}`;
   const vars = { id: pr.id, oid: pr.headRefOid };
   try {
     const res = gh.graphql(ENQUEUE, { ...vars, jump }, { token });
     const e = res?.data?.enqueuePullRequest?.mergeQueueEntry;
     log(
-      `${tag} enqueued${jump ? " at the front (main-red fix)" : ""}: position ${e?.position ?? "?"}, ${e?.state ?? "?"}`
+      `${tag} enqueued${how}: position ${e?.position ?? "?"}, ${e?.state ?? "?"}`
     );
     return true;
   } catch (first) {

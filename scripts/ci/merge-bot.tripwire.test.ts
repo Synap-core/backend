@@ -28,7 +28,10 @@ import {
   RERUN_CHECK_NAME,
   enqueueDecision,
   ghTransport,
+  dependsState,
   isMainRedFix,
+  jumpReason,
+  liveRequiredChecks,
   mainRedWindow,
   podSessionOf,
   requiredChecksState,
@@ -123,6 +126,64 @@ describe("merge-bot: the jump rule (a main-red fix goes to the front)", () => {
   });
 });
 
+const labelled = (...names: string[]) => ({
+  labels: { nodes: names.map((name) => ({ name })) },
+});
+
+describe("merge-bot: security fixes and reverts jump too", () => {
+  it.each([
+    ["the security label", labelled("security"), "security fix"],
+    [
+      "the Security label, any case",
+      labelled("ci", "Security"),
+      "security fix",
+    ],
+    [
+      "a fix/security-* branch",
+      { headRefName: "fix/security-token-leak" },
+      "security fix",
+    ],
+    [
+      "a fix(security) title",
+      { title: "fix(security): scope the hub key" },
+      "security fix",
+    ],
+    [
+      "the culprit finder's revert branch",
+      { headRefName: "fix/main-red-revert-409270a3" },
+      "main-red fix",
+    ],
+    [
+      "GitHub's revert title",
+      { title: 'Revert "feat: purpose-first keys"' },
+      "revert",
+    ],
+  ])("jumps: %s", (_n, over: Pr, why: string) => {
+    expect(jumpReason(pr(over))).toBe(why);
+    expect(decide(pr(over))).toMatchObject({
+      enqueue: true,
+      jump: true,
+      jumpReason: why,
+    });
+  });
+  it.each([
+    ["an ordinary PR", {}],
+    [
+      "a label that only contains the word",
+      labelled("security-review", "insecure"),
+    ],
+    ["a feature on a security page", { headRefName: "feat/security-page" }],
+    ["a feat(security) title", { title: "feat(security): a settings page" }],
+    ["a chore(security) title", { title: "chore(security): bump" }],
+    ["a revert: title (no quote)", { title: "revert: the old banner" }],
+    ['a "Reverted" title', { title: 'Reverted "x" by hand' }],
+    ["Revert in the middle", { title: 'fix: Revert "x" partly' }],
+  ])("does not jump: %s", (_n, over: Pr) => {
+    expect(jumpReason(pr(over))).toBeNull();
+    expect(decide(pr(over))).toMatchObject({ enqueue: true, jump: false });
+  });
+});
+
 describe("merge-bot: the required checks", () => {
   it("are the ruleset's four, posted by the app the ruleset names", () => {
     const sh = readFileSync(
@@ -198,7 +259,13 @@ describe("merge-bot: the required checks", () => {
 
 describe("merge-bot: enqueue eligibility, each condition both ways", () => {
   it("an eligible PR is enqueued", () => {
-    expect(decide(pr())).toEqual({ enqueue: true, jump: false, reasons: [] });
+    expect(decide(pr())).toMatchObject({
+      enqueue: true,
+      jump: false,
+      jumpReason: null,
+      rides: [],
+      reasons: [],
+    });
   });
   it("mergeable UNKNOWN (GitHub still computing) is not CONFLICTING: enqueued (the mutation refuses a real conflict)", () => {
     expect(decide(pr({ mergeable: "UNKNOWN" })).enqueue).toBe(true);
@@ -498,6 +565,7 @@ if ((m = /commits\\/([0-9a-f]+)\\/check-runs/.exec(path))) say({ check_runs: (da
 if (path.includes("runs?branch=main&event=push")) say({ workflow_runs: data.mainRuns || [] });
 if ((m = /runs\\?event=pull_request&head_sha=([0-9a-f]+)/.exec(path))) say({ workflow_runs: (data.prRuns || {})[m[1]] || [] });
 if (path.endsWith("git/ref/heads/main")) say({ object: { sha: data.mainSha } });
+if (path.includes("rules/branches/main")) { if (data.rules === undefined) die("gh: Not Found (HTTP 404)"); say(data.rules); }
 if ((m = /pulls\\/(\\d+)$/.exec(path))) say((data.pulls || {})[m[1]] || {});
 if ((m = /commits\\/([0-9a-f]+)$/.exec(path))) say({ parents: [{ sha: (data.mergeBase || {})[m[1]] }] });
 die("fake gh: unknown path " + path);
@@ -738,6 +806,207 @@ describe("merge-bot: the script, end to end, through `gh api`", () => {
       },
     });
     expect(r.rerun).toEqual([]);
+  });
+});
+
+// ── dependents ride with their dependency ───────────────────────────────────
+
+const BACKEND = "Synap-core/backend";
+const waitingOn = (n: number, repo = BACKEND, kind = "pr") => ({
+  dep: { kind, repo, number: n, label: `backend#${n}` },
+  status: "waiting",
+  testRef: null,
+  detail: "open, into main",
+});
+const landedOn = (n: number) => ({ ...waitingOn(n), status: "landed" });
+
+describe("merge-bot: a dependent rides with its queued dependency", () => {
+  const queued = new Map([[20, sha("2")]]);
+  it("an open backend dependency IN the queue: rides behind it", () => {
+    expect(dependsState([waitingOn(20)], { repo: BACKEND, queued })).toEqual({
+      state: "rides",
+      behind: [20],
+    });
+    expect(
+      dependsState([waitingOn(20), landedOn(9)], { repo: BACKEND, queued })
+        .state
+    ).toBe("rides");
+  });
+  it.each([
+    ["the dependency is NOT queued", [waitingOn(21)]],
+    [
+      "a dependency in ANOTHER repo never rides",
+      [waitingOn(20, "Synap-core/app-bases")],
+    ],
+    ["a commit dependency never rides", [waitingOn(20, BACKEND, "ref")]],
+    ["one queued, one not", [waitingOn(20), waitingOn(21)]],
+  ])("waits: %s", (_n, results) => {
+    expect(dependsState(results, { repo: BACKEND, queued }).state).toBe(
+      "waiting"
+    );
+  });
+  it("a blocked line is still blocked, queue or not", () => {
+    expect(
+      dependsState([waitingOn(20), { ...waitingOn(9), status: "blocked" }], {
+        repo: BACKEND,
+        queued,
+      }).state
+    ).toBe("blocked");
+  });
+  it("no dependency, or all landed: landed (nothing to ride)", () => {
+    expect(dependsState([], { repo: BACKEND, queued })).toEqual({
+      state: "landed",
+      behind: [],
+    });
+    expect(dependsState([landedOn(9)], { repo: BACKEND, queued }).state).toBe(
+      "landed"
+    );
+  });
+
+  const rides = { state: "rides", behind: [20] };
+  it("riding ON (the hold is a required check): enqueued, and never jumps ahead of its dependency", () => {
+    expect(decide(pr(), { depends: rides, riding: true })).toMatchObject({
+      enqueue: true,
+      jump: false,
+      rides: [20],
+    });
+    expect(
+      decide(pr({ headRefName: "fix/main-red-x" }), {
+        depends: rides,
+        riding: true,
+      })
+    ).toMatchObject({
+      enqueue: true,
+      jump: false,
+      jumpReason: null,
+    });
+  });
+  it("riding OFF (the hold is not required): not enqueued, and the log says why", () => {
+    const d = decide(pr(), { depends: rides, riding: false });
+    expect(d.enqueue).toBe(false);
+    expect(d.reasons.join("; ")).toMatch(/riding is off/);
+  });
+  it("a dependency NOT queued is not enqueued, riding or not", () => {
+    for (const riding of [true, false])
+      expect(
+        decide(pr(), { depends: { state: "waiting", behind: [] }, riding })
+          .enqueue
+      ).toBe(false);
+  });
+
+  it("reads main's required checks from its live rules, and a failed read is null", () => {
+    const gh = (rules: unknown, fail = false) => ({
+      rest: () => {
+        if (fail) throw new Error("HTTP 404");
+        return rules;
+      },
+    });
+    const rules = [
+      { type: "pull_request", parameters: {} },
+      {
+        type: "required_status_checks",
+        parameters: {
+          required_status_checks: [
+            { context: "Release gate" },
+            { context: "Dependencies merged" },
+          ],
+        },
+      },
+    ];
+    expect(liveRequiredChecks(gh(rules), BACKEND, "t")).toEqual([
+      "Release gate",
+      "Dependencies merged",
+    ]);
+    expect(liveRequiredChecks(gh(null, true), BACKEND, "t")).toBeNull();
+  });
+});
+
+describe("merge-bot: riding, end to end", () => {
+  const hold = (head: string) =>
+    checkRun("Dependencies merged", "success", { head_sha: head });
+  const required = (...ctx: string[]) => [
+    {
+      type: "required_status_checks",
+      parameters: {
+        required_status_checks: ctx.map((context) => ({ context })),
+      },
+    },
+  ];
+  const rideData = (over: Pr = {}) => ({
+    prs: [
+      pr({
+        number: 20,
+        id: "PR_20",
+        headRefOid: sha("2"),
+        isInMergeQueue: true,
+      }),
+      pr({
+        number: 21,
+        id: "PR_21",
+        headRefOid: sha("3"),
+        headRefName: "fix/main-red-y",
+      }), // rides #20
+      pr({ number: 22, id: "PR_22", headRefOid: sha("4") }), // its dependency #23 is not queued
+    ],
+    checks: {
+      [sha("3")]: [
+        ...greenRuns().map((c: Pr) => ({ ...c, head_sha: sha("3") })),
+        hold(sha("3")),
+      ],
+      [sha("4")]: [
+        ...greenRuns().map((c: Pr) => ({ ...c, head_sha: sha("4") })),
+        hold(sha("4")),
+      ],
+    },
+    depends: { 21: [waitingOn(20)], 22: [waitingOn(23)] },
+    rules: required(...REQUIRED_CHECKS, "Dependencies merged"),
+    mainRuns: [],
+    ...over,
+  });
+
+  it("the hold required: #21 is enqueued behind its queued #20, with no jump; #22 (dependency not queued) is not", async () => {
+    const { r, calls, out } = await bot(rideData());
+    expect(r.enqueued).toEqual([21]);
+    expect(
+      mutations(calls, "enqueuePullRequest").map((c) => [
+        varOf(c, "id"),
+        varOf(c, "jump"),
+      ])
+    ).toEqual([["PR_21", "false"]]);
+    expect(out).toMatch(/#21 enqueued behind #20/);
+    expect(out).toMatch(/#22 not enqueued: Depends-On: waiting/);
+    expect(out).toMatch(/#20 not enqueued: already queued/);
+  });
+
+  it("the hold NOT required: nothing rides", async () => {
+    const { r, out } = await bot(
+      rideData({ rules: required(...REQUIRED_CHECKS) })
+    );
+    expect(r.enqueued).toEqual([]);
+    expect(out).toMatch(
+      /#21 not enqueued: Depends-On: #20 is in the merge queue, but riding is off/
+    );
+  });
+
+  it("main's rules unreadable: nothing rides (fail-safe), the four checks still decide", async () => {
+    const { r, out } = await bot(rideData({ rules: undefined }));
+    expect(r.enqueued).toEqual([]);
+    expect(out).toMatch(/could not read main's required checks/);
+  });
+
+  it("every LIVE required check is required: the hold required and absent on a PR = not enqueued", async () => {
+    const d = rideData();
+    const { r, out } = await bot({
+      ...d,
+      prs: [pr({ number: 1, id: "PR_1", headRefOid: sha("1") })],
+      checks: {
+        [sha("1")]: greenRuns().map((c: Pr) => ({ ...c, head_sha: sha("1") })),
+      },
+    });
+    expect(r.enqueued).toEqual([]);
+    expect(out).toMatch(
+      /#1 not enqueued: required checks: Dependencies merged: none/
+    );
   });
 });
 

@@ -66,6 +66,7 @@ jobs:
           sparse-checkout: |
             scripts/ci/merge-bot.mjs
             scripts/ci/release-gate-wait.mjs
+            scripts/layout/hold.mjs
             scripts/layout/layout.mjs
             scripts/layout/layout.json
           sparse-checkout-cone-mode: false
