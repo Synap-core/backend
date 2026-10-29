@@ -117,7 +117,12 @@ describe("pod-admin exit door", () => {
   it("has no permanently-disabled control standing in for a missing procedure", () => {
     // Five surfaces rendered `isDisabled` buttons whose tooltip named a tRPC
     // procedure nobody had written. Those are handoffs now.
-    const hits = FILES.filter((f) => /Pending:\s*[a-zA-Z]+\./.test(f.body));
+    // "Pending:" as a word: `isPending: revoke.isPending` is React state on a
+    // real action, not a placeholder (the key page's revoke, K3).
+    const PLACEHOLDER = /(?<![A-Za-z])Pending:\s*[a-zA-Z]+\./;
+    expect(PLACEHOLDER.test("Pending: apiKeys.rotate.")).toBe(true);
+    expect(PLACEHOLDER.test("isPending: revoke.isPending")).toBe(false);
+    const hits = FILES.filter((f) => PLACEHOLDER.test(f.body));
     expect(hits.map((h) => h.path)).toEqual([]);
   });
 

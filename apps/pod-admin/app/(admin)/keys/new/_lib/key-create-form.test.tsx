@@ -8,7 +8,17 @@ import { createElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-const { search } = vi.hoisted(() => ({ search: { value: "" } }));
+// The trpc mock factory is hoisted above every top-level const: its helpers
+// must be hoisted with it.
+const { search, query, mutation } = vi.hoisted(() => ({
+  search: { value: "" },
+  query: (data: unknown) => ({
+    useQuery: () => ({ data, isError: false, refetch() {} }),
+  }),
+  mutation: {
+    useMutation: () => ({ mutateAsync: async () => ({}), isPending: false }),
+  },
+}));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace() {}, push() {} }),
@@ -16,12 +26,6 @@ vi.mock("next/navigation", () => ({
 }));
 
 const SPACE = "33333333-3333-4333-8333-333333333333";
-const query = (data: unknown) => ({
-  useQuery: () => ({ data, isError: false, refetch() {} }),
-});
-const mutation = {
-  useMutation: () => ({ mutateAsync: async () => ({}), isPending: false }),
-};
 
 vi.mock("../../../../../lib/trpc", () => ({
   POD_URL: "https://pod.example",
