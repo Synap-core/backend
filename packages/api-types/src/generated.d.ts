@@ -31149,6 +31149,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				deduplicated?: undefined;
 				deferred?: true | undefined;
 				duplicateCheck?: DuplicateCheck | undefined;
+				effectiveHomeWorkspaceId: string | null;
 				effectiveWorkspaceId: string | null;
 				entity: Record<string, unknown> | null;
 				facets: {

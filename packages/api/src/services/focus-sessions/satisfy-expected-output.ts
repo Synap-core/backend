@@ -72,7 +72,11 @@ import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import { readCriteria, type ExpectedOutput } from "@synap/playbooks";
 import { logEvent } from "../../lib/event-helpers.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
-import { deriveSlotKeys, findSlotIndex } from "./slot-keys.js";
+import {
+  deriveSlotKeys,
+  findClaimedSlotIndex,
+  findSlotIndex,
+} from "./slot-keys.js";
 import { acceptDraftOnEngagement } from "./accept-on-engagement.js";
 import { linkSatisfiedOutputsToSubject } from "./subject-edge.js";
 import {
@@ -237,12 +241,13 @@ export function selectOutputToSatisfy(
   const matchesKind = (o: ExpectedOutput): boolean =>
     slotMatchesChangeKind(o.kind, targetType, entityProfileSlug);
 
-  // The claim names the slot by KEY first, then by label (`findSlotIndex`).
-  // NO CLAIM, NO STAMP: there is no kind guess after it (see the docblock).
+  // The claim names the slot by KEY first, then by label, then a label that is
+  // a slot's key (`findClaimedSlotIndex`). NO CLAIM, NO STAMP: there is no kind
+  // guess after it (see the docblock).
   if (!expectedKey?.trim() && !normalizeExpectedLabel(expectedLabel)) {
     return -1;
   }
-  return findSlotIndex(
+  return findClaimedSlotIndex(
     outputs,
     { key: expectedKey, label: expectedLabel },
     (o) => o.status !== "done" && matchesKind(o)

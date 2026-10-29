@@ -113,6 +113,54 @@ export function findSlotIndex<T>(
 }
 
 /**
+ * A CREATE door's slot claim (`expectedLabel` on `synap_create_document` /
+ * `synap_create_entity`): {@link findSlotIndex}, and when the caller sent a
+ * label and no key, that label tried as a KEY last. Agents hold slot keys
+ * (`completeOutput`, `outcomes[].key`) and pass them where the door asks for a
+ * label; matching the label alone stored a claim that filled no slot and
+ * attributed no evidence, with nothing said (ticket 228ebe4b). The label rung
+ * stays first, so a label equal to ANOTHER slot's key still names its own slot.
+ */
+export function findClaimedSlotIndex<T>(
+  slots: readonly T[],
+  claim: { key?: string | null; label?: string | null },
+  accept: (slot: T, index: number) => boolean = () => true
+): number {
+  const index = findSlotIndex(slots, claim, accept);
+  if (index !== -1 || claim.key?.trim() || !claim.label?.trim()) return index;
+  return findSlotIndex(slots, { key: claim.label }, accept);
+}
+
+/**
+ * The words a create receipt carries when its slot claim names NO slot of the
+ * session: the document or entity is still written (or proposed) and recorded
+ * under the name sent, but it fills nothing — say so, with the slots it could
+ * have named. `undefined` when the claim names one (or none was sent).
+ */
+export function unmatchedSlotClaimWarning(
+  slots: readonly unknown[],
+  claim: string | null | undefined
+): string | undefined {
+  const sent = claim?.trim();
+  if (!sent || findClaimedSlotIndex(slots, { label: sent }) !== -1) {
+    return undefined;
+  }
+  const keys = deriveSlotKeys(slots);
+  const named = slots
+    .map((slot, i) => {
+      const key = keys[i];
+      const label = labelOf(slot);
+      return key && label && key !== label
+        ? `${key} — ${label}`
+        : (key ?? label);
+    })
+    .filter((s): s is string => !!s);
+  return named.length > 0
+    ? `No output named "${sent}" on this session (outputs: ${named.join("; ")}): this write fills none of them. Name one by its key or its label.`
+    : `No output named "${sent}" on this session: it declares none. This write fills nothing.`;
+}
+
+/**
  * The slot KEY a proposal claims (`proposals.data.expectedKey`), written beside
  * `expectedLabel` by `checkPermissionOrPropose`. The label stays the alias every
  * pending proposal filed before keys existed carries; readers try the key first.

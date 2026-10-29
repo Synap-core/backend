@@ -33,7 +33,11 @@ import {
   focusSessions,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import { findSlotIndex, slotKeyAt } from "./slot-keys.js";
+import {
+  findClaimedSlotIndex,
+  slotKeyAt,
+  unmatchedSlotClaimWarning,
+} from "./slot-keys.js";
 
 const logger = createLogger({ module: "session-artifact" });
 
@@ -148,20 +152,43 @@ async function sessionSlots(sessionId: string): Promise<
 
 /**
  * The claim as the session's slots name it: the slot found by key first,
- * then label (`findSlotIndex`), as `{key, label}` in the slot's own words.
- * A claim naming no slot is kept as the label the caller sent (today's
- * behaviour — the join then simply finds nothing to match) and carries no key.
+ * then label, then a label that is a slot's KEY (`findClaimedSlotIndex`), as
+ * `{key, label}` in the slot's own words. A claim naming no slot is kept as
+ * the label the caller sent (the join then simply finds nothing to match) and
+ * carries no key; the create door says so on its receipt
+ * (`unmatchedSlotClaimWarning`).
  */
 export function resolveArtifactSlotClaim(
   slots: ReadonlyArray<{ label?: string }>,
   claim: { key?: string | null; label?: string | null }
 ): { key?: string; label?: string } {
   if (!claim.key && !claim.label) return {};
-  const index = findSlotIndex(slots, claim);
+  const index = findClaimedSlotIndex(slots, claim);
   if (index === -1) return claim.label ? { label: claim.label } : {};
   const key = slotKeyAt(slots, index) ?? undefined;
   const label = slots[index]?.label ?? claim.label ?? undefined;
   return { ...(key ? { key } : {}), ...(label ? { label } : {}) };
+}
+
+/**
+ * The warning a create door puts on its receipt when its slot claim names no
+ * output of the session (`unmatchedSlotClaimWarning`). Best-effort like the
+ * ledger write: a failed read says nothing rather than failing the create.
+ */
+export async function sessionSlotClaimWarning(
+  sessionId: string | null | undefined,
+  claim: string | null | undefined
+): Promise<string | undefined> {
+  if (!sessionId || !claim?.trim()) return undefined;
+  try {
+    return unmatchedSlotClaimWarning(await sessionSlots(sessionId), claim);
+  } catch (err) {
+    logger.warn(
+      { err, sessionId },
+      "session-artifact: slot claim check failed (non-fatal)"
+    );
+    return undefined;
+  }
 }
 
 /**

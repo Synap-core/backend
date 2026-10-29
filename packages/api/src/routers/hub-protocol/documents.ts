@@ -37,7 +37,10 @@ import {
   idempotencyWindowSeconds,
 } from "../../utils/write-door-idempotency.js";
 
-import { recordSessionArtifact } from "../../services/focus-sessions/record-session-artifact.js";
+import {
+  recordSessionArtifact,
+  sessionSlotClaimWarning,
+} from "../../services/focus-sessions/record-session-artifact.js";
 import { stampAutoApprovedCreate } from "../../services/proposals/stamp-materialized.js";
 import {
   readSessionDocument,
@@ -261,6 +264,16 @@ export const documentsRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
 
+      // A slot claim naming no output of the session is kept — the document is
+      // created either way — and SAID on the receipt, never silent (228ebe4b).
+      const slotClaimWarning = await sessionSlotClaimWarning(
+        ctx.sessionId,
+        input.expectedLabel
+      );
+      const receiptWarnings = slotClaimWarning
+        ? { warnings: [slotClaimWarning] }
+        : {};
+
       if ("proposalId" in perm) {
         // Not auto-approved: content is stored in proposal JSONB.
         // MinIO upload happens in proposals.approve when the user accepts.
@@ -295,6 +308,7 @@ export const documentsRouter = router({
           ...(perm.deferred
             ? { deferred: true as const, ref: perm.deferredRef }
             : {}),
+          ...receiptWarnings,
         };
       }
 
@@ -367,6 +381,7 @@ export const documentsRouter = router({
           documentId: created.id,
           status: "created" as const,
           ackState: "applied" as const,
+          ...receiptWarnings,
         };
       }
 
@@ -422,6 +437,7 @@ export const documentsRouter = router({
         documentId: created.id,
         status: "created" as const,
         ackState: "applied" as const,
+        ...receiptWarnings,
       };
     }),
 

@@ -434,3 +434,46 @@ describe("an agent cannot claim a slot it handed to the human", () => {
     });
   });
 });
+
+describe("rung 0 — a declared `expectedLabel` that is a slot KEY (228ebe4b)", () => {
+  // The live case: `synap_create_document` with `expectedLabel: "claude-brief"`
+  // (the slot's key) instead of its label. Matched as a label only, it named
+  // nothing, so the approval stamped nothing and the later `completeOutput`
+  // claim found no evidence. Label ≠ key on purpose: a fixture where they are
+  // equal cannot tell the two rules apart.
+  const KEYED = [
+    { kind: "document", label: "Spec", key: "spec" },
+    { kind: "document", label: "Claude brief", key: "claude-brief" },
+  ];
+
+  it("claims the slot the key names, and records its label and key", async () => {
+    agentRow.current = { agentType: "crm-hygiene" };
+    sessionRow.current = openSessionWith(KEYED);
+    governanceRow.current = declares(KEYED);
+
+    await checkPermissionOrPropose({ ...OPTS, expectedLabel: "claude-brief" });
+
+    expect(receiptData()).toMatchObject({
+      expectedLabel: "Claude brief",
+      expectedKey: "claude-brief",
+    });
+    expect(writtenOutputs()![1]).toMatchObject({
+      label: "Claude brief",
+      status: "done",
+      satisfiedByProposalId: "receipt-1",
+    });
+    expect(writtenOutputs()![0]).not.toHaveProperty("status");
+  });
+
+  it("keeps the ownership floor: a key never claims the human's slot", async () => {
+    agentRow.current = { agentType: "crm-hygiene" };
+    const slots = [{ ...KEYED[1], owner: "human" }];
+    sessionRow.current = openSessionWith(slots);
+    governanceRow.current = declares(slots);
+
+    await checkPermissionOrPropose({ ...OPTS, expectedLabel: "claude-brief" });
+
+    expect(receiptData()).not.toHaveProperty("expectedLabel");
+    expect(writtenOutputs()).toBeUndefined();
+  });
+});

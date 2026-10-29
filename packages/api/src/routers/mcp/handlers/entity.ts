@@ -47,6 +47,65 @@ import {
   finalizeAgentUpload,
 } from "../../../services/files/agent-upload.js";
 
+/**
+ * What became of the space a `synap_create_entity` caller asked for (ticket
+ * d39eb826): `undefined` when none was asked for, or the row landed in it.
+ *
+ *  - a pod-wide kind stays pod-wide and is filed FOR the lens (its home,
+ *    0355, set by `entities.create` from the ambient lens): that space's
+ *    members see it in its lists, so no `synap_move_entities` is needed;
+ *  - a space the caller cannot reach was dropped as a lens by the adapter
+ *    (`verifyWorkspaceAccess`), so nothing was filed there — said, never
+ *    silent;
+ *  - a kind that placed itself elsewhere names where.
+ */
+function describePlacement(p: {
+  profileSlug: string | undefined;
+  requestedWorkspaceId: string | undefined;
+  lensWorkspaceId: string | undefined;
+  /** Where the row lives (or will); `undefined` = the door named no row. */
+  entityWorkspaceId: string | null | undefined;
+  entityHomeWorkspaceId: string | null;
+}) {
+  const { requestedWorkspaceId: asked, lensWorkspaceId: lens } = p;
+  if (!asked) return undefined;
+  if (!lens) {
+    return {
+      workspaceId: p.entityWorkspaceId ?? null,
+      requestedWorkspaceId: asked,
+      applied: false as const,
+      note:
+        `workspaceId ${asked} is not a space you are a member of, so nothing was filed there` +
+        (p.entityWorkspaceId === null
+          ? ": the entity lands pod-wide, readable by you only."
+          : p.entityWorkspaceId
+            ? `: the entity lands in workspace ${p.entityWorkspaceId}.`
+            : "."),
+    };
+  }
+  if (p.entityWorkspaceId === undefined || p.entityWorkspaceId === lens) {
+    return undefined;
+  }
+  if (p.entityWorkspaceId === null && p.entityHomeWorkspaceId === lens) {
+    return {
+      workspaceId: null,
+      homeWorkspaceId: lens,
+      requestedWorkspaceId: asked,
+      applied: true as const,
+      note: `A ${p.profileSlug} is a pod-wide kind: it stays pod-wide and is filed for workspace ${lens}, so it shows in that space for its members. No synap_move_entities needed.`,
+    };
+  }
+  return {
+    workspaceId: p.entityWorkspaceId,
+    requestedWorkspaceId: asked,
+    applied: false as const,
+    note:
+      p.entityWorkspaceId === null
+        ? `A ${p.profileSlug} is a pod-wide kind and this one is filed for no space, so workspaceId ${lens} only governed this write.`
+        : `Its kind placed it in workspace ${p.entityWorkspaceId}, not ${lens}: workspaceId only governed this write. To move it, call synap_move_entities once it exists.`,
+  };
+}
+
 export const entityHandlers: McpHandlerMap = {
   synap_create_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const {
@@ -106,6 +165,11 @@ export const entityHandlers: McpHandlerMap = {
       ...(typeof args.expectedLabel === "string"
         ? { expectedLabel: args.expectedLabel }
         : {}),
+      // A retried create (its answer lost to a timeout) returns the first
+      // one instead of landing twice (ticket 13a82f38).
+      ...(typeof args.idempotencyKey === "string" && args.idempotencyKey.trim()
+        ? { idempotencyKey: args.idempotencyKey }
+        : {}),
       aiMetadata: { model: "mcp", reasoning: `MCP tool: ${toolName}` },
       // The GOVERNANCE reason, distinct from `aiMetadata.reasoning` above:
       // only this one reaches `checkPermissionOrPropose` and the reviewer.
@@ -132,15 +196,43 @@ export const entityHandlers: McpHandlerMap = {
     // The hub procedure echoes the AMBIENT governance lens it resolved (which
     // may be the membership fallback, not our injected lens) — prefer it, and
     // fall back to the URL lens. Not the entity's placement: a pod-scope kind
-    // still lands pod-wide. Same caveat as the hub's own echo.
-    const receiptWorkspaceId =
+    // still lands pod-wide. It still governs the resolution's auto-connect.
+    const governanceWorkspaceId =
       (typeof created.workspaceId === "string" ? created.workspaceId : null) ??
       lensWorkspaceId ??
       null;
+    // WHERE THE ROW LANDED (or will, on a proposal), from the door itself;
+    // the lens only when the door named no row. The receipt used to echo the
+    // lens as `effectiveWorkspaceId`, so a note created "in" a space read as
+    // filed there while it sat pod-wide (ticket d39eb826).
+    const entityWorkspaceId =
+      typeof created.entityWorkspaceId === "string" ||
+      created.entityWorkspaceId === null
+        ? created.entityWorkspaceId
+        : undefined;
+    const receiptWorkspaceId =
+      entityWorkspaceId !== undefined
+        ? entityWorkspaceId
+        : governanceWorkspaceId;
+    const entityHomeWorkspaceId =
+      typeof created.entityHomeWorkspaceId === "string"
+        ? created.entityHomeWorkspaceId
+        : null;
+    // The space the caller asked for, and what became of it.
+    const placement = describePlacement({
+      profileSlug,
+      requestedWorkspaceId:
+        typeof args.workspaceId === "string" && args.workspaceId.trim()
+          ? args.workspaceId
+          : lensWorkspaceId,
+      lensWorkspaceId,
+      entityWorkspaceId,
+      entityHomeWorkspaceId,
+    });
     const { writeReceipt, resolution } = await buildCreateEntityReceipt({
       result: created,
       profileSlug: profileSlug ?? "",
-      effectiveWorkspaceId: receiptWorkspaceId,
+      effectiveWorkspaceId: governanceWorkspaceId,
       userId,
       scopes: apiKeyScopes,
       title: args.title as string,
@@ -154,7 +246,11 @@ export const entityHandlers: McpHandlerMap = {
     return ok({
       ...created,
       effectiveWorkspaceId: receiptWorkspaceId,
-      writeReceipt,
+      writeReceipt: {
+        ...writeReceipt,
+        effectiveWorkspaceId: receiptWorkspaceId,
+      },
+      ...(placement ? { placement } : {}),
       ...(resolution ? { resolution } : {}),
     });
   },
