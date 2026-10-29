@@ -35,7 +35,7 @@ import { pathToFileURL } from "node:url";
 
 export const CANCELLABLE_WORKFLOWS = [".github/workflows/ci.yml"];
 
-const IN_FLIGHT = new Set([
+export const IN_FLIGHT = new Set([
   "queued",
   "in_progress",
   "waiting",
