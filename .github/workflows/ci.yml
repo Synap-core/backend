@@ -334,7 +334,51 @@ jobs:
       # would not produce never lands; nothing regenerates it after a merge.
       # Fix when red: the hint the check prints (scripts/gen-types.mjs).
       - name: Verify generated API types are up to date
+        id: gen-types
         run: pnpm --filter @synap/api gen-types:check
+
+      # F10 (29 Oct): "API types out of date" was 22 % of the primary PR reds,
+      # and regenerating needs a built workspace the Mac must not build
+      # (rules/devbox-gates rung 0b). A red above leaves the file the
+      # generator produced on disk: hand it back, so the fix is one download.
+      # CI never commits to a branch. The file is for the tree this run
+      # tested (a PR merged with main), which merges cleanly with main's.
+      - name: Hand back the regenerated API types (on a red)
+        id: gen-types-drift
+        if: failure() && steps.gen-types.outcome == 'failure'
+        run: |
+          if git diff --quiet -- packages/api-types/src/generated.d.ts; then
+            echo "The generator failed before producing a file: nothing to hand back (read the step above)."
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "drift=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload the regenerated API types
+        if: failure() && steps.gen-types-drift.outputs.drift == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: generated-api-types
+          path: packages/api-types/src/generated.d.ts
+          retention-days: 7
+      - name: How to apply the regenerated API types
+        if: failure() && steps.gen-types-drift.outputs.drift == 'true'
+        env:
+          # gh run download refuses to overwrite a file (gh 2.87: "file
+          # exists"), so it downloads beside, then moves over the committed one.
+          FIX: gh run download ${{ github.run_id }} -R ${{ github.repository }} -n generated-api-types -D /tmp/api-types-${{ github.run_id }} && mv /tmp/api-types-${{ github.run_id }}/generated.d.ts packages/api-types/src/generated.d.ts
+          TESTED: ${{ github.sha }}
+        run: |
+          echo "::error title=API types out of date::Apply the file this run generated, commit it, push once: ${FIX}"
+          {
+            echo "### API types out of date"
+            echo ""
+            echo "This run generated \`packages/api-types/src/generated.d.ts\` for the tree it tested (\`${TESTED}\`). From your branch, with no build:"
+            echo ""
+            echo "\`\`\`"
+            echo "${FIX}"
+            echo "git add packages/api-types/src/generated.d.ts && git commit -m 'chore: regenerate API types'"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Validate migrations
         run: pnpm --filter @synap/database migrate

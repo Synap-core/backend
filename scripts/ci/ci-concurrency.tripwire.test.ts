@@ -32,7 +32,8 @@ export function evaluate(expr: string, ctx: Ctx): Val {
   let i = 0;
   const peek = () => toks[i];
   const next = () => toks[i++];
-  const truthy = (v: Val) => !(v === "" || v === null || v === false || v === 0);
+  const truthy = (v: Val) =>
+    !(v === "" || v === null || v === false || v === 0);
   const eq = (a: Val, b: Val) =>
     typeof a === "string" && typeof b === "string"
       ? a.toLowerCase() === b.toLowerCase() // GitHub compares strings ignoring case
@@ -51,7 +52,8 @@ export function evaluate(expr: string, ctx: Ctx): Val {
     if (t === "null") return null;
     if (/^\d+$/.test(t)) return Number(t);
     if (/^[a-z_][\w-]*(\.[\w-]+)+$/i.test(t)) {
-      if (!(t in ctx)) throw new Error(`context ${t} not given to the evaluator`);
+      if (!(t in ctx))
+        throw new Error(`context ${t} not given to the evaluator`);
       return ctx[t];
     }
     throw new Error(`unsupported token ${t} in ${expr}`);
@@ -105,9 +107,8 @@ export function render(value: string, ctx: Ctx): Val {
 }
 
 // ── what ci.yml declares ─────────────────────────────────────────────────────
-const block = /^concurrency:\n {2}group: (.+)\n {2}cancel-in-progress: (.+)$/m.exec(
-  CI
-);
+const block =
+  /^concurrency:\n {2}group: (.+)\n {2}cancel-in-progress: (.+)$/m.exec(CI);
 const GROUP = block?.[1] ?? "";
 const CANCEL = block?.[2] ?? "";
 // The events that start ci.yml: the two-space keys of the top-level `on:`.
@@ -153,17 +154,21 @@ describe("ci.yml concurrency: every main commit gets its own verdict (F7)", () =
     expect(EVENTS.length).toBeGreaterThanOrEqual(3);
     // Every event that starts ci.yml has a case here: a new trigger fails
     // until someone decides its group.
-    const covered = new Set(Object.values(RUNS).map((r) => r["github.event_name"]));
+    const covered = new Set(
+      Object.values(RUNS).map((r) => r["github.event_name"])
+    );
     for (const e of EVENTS) expect(covered, `event ${e}`).toContain(e);
   });
 
   it("the evaluator is GitHub's: && and || return operands, == ignores case", () => {
     const c = run("push", "refs/heads/main", SHA("a"));
     expect(evaluate("github.event_name == 'PUSH'", c)).toBe(true);
-    expect(evaluate("github.event_name == 'push' && github.sha || 'x'", c)).toBe(
-      SHA("a")
+    expect(
+      evaluate("github.event_name == 'push' && github.sha || 'x'", c)
+    ).toBe(SHA("a"));
+    expect(evaluate("github.event_name == 'pr' && github.sha || 'x'", c)).toBe(
+      "x"
     );
-    expect(evaluate("github.event_name == 'pr' && github.sha || 'x'", c)).toBe("x");
     expect(evaluate("!(github.ref == 'refs/heads/main')", c)).toBe(false);
     expect(render("${{ github.workflow }}-${{ github.ref }}", c)).toBe(
       "CI-refs/heads/main"

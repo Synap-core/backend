@@ -23,7 +23,8 @@
  *   tier 0  no install, no build: Node and the network.          (~5 s)
  *   tier 1  an installed tree: eslint and prettier on the files
  *           changed against origin/main (committed, staged,
- *           unstaged, untracked).                                 (~10-30 s)
+ *           unstaged, untracked); and, advisory, a tRPC surface
+ *           change with no regenerated API types (git only).      (~10-30 s)
  *   tier 2  a BUILT workspace (pnpm build): gen-types:check and
  *           docs:reference:check. Each needs the workspace dists and
  *           takes 1+ min, so they are NOT in the 2-minute default;
@@ -270,6 +271,27 @@ export function cpDriftProblems({
     if (!curatedNames.has(m[1]) && !exempt.includes(m[1]))
       out.add(`error-text ${m[1]}()`);
   return [...out].sort();
+}
+
+export const GENERATED_API_TYPES = "packages/api-types/src/generated.d.ts";
+
+/**
+ * The changed files that can move the generated API types (the tRPC
+ * AppRouter that packages/api/scripts/gen-types.mjs bundles from
+ * packages/api/src/root.ts): the routers and the tRPC wiring, tests excluded.
+ * A heuristic in both directions: a service whose return type a procedure
+ * infers can move them too (not listed), and most router edits do not.
+ */
+export function apiTypesSurface(files) {
+  const isTest = (f) =>
+    /(__tests__|__tripwires__)\/|\.(test|spec)\.[cm]?[jt]sx?$/.test(f);
+  const surface = files.filter(
+    (f) =>
+      /^packages\/api\/src\/(routers\/.+|root|trpc|init-trpc|context)\.ts$/.test(
+        f
+      ) && !isTest(f)
+  );
+  return { surface, regenerated: files.includes(GENERATED_API_TYPES) };
 }
 
 // ── changed files (tier 1) ───────────────────────────────────────────────────
@@ -758,6 +780,37 @@ export const CHECKS = [
           .map((l) => l.slice(7))
           .slice(0, 6)
           .join(", ")}`,
+      };
+    },
+  },
+  {
+    // F10 (29 Oct, pod document 9ca0c96b): "API types out of date" was 22 % of
+    // the primary PR reds. Of 41 sampled reds of CI's "Verify generated API
+    // types" step, the 21 whose PR diff could still be read ALL changed the
+    // tRPC surface (apiTypesSurface) without touching generated.d.ts. The
+    // exact answer needs the generator, which needs ~10 built workspace
+    // packages and ~70 s (tier 2, `gen-types`): not a Mac check. So this is
+    // the cheap half, ADVISORY: of the 140 PRs merged 20-29 Oct that touched
+    // the routers, 73 were right NOT to regenerate (their types did not
+    // move), so a FAIL here would refuse half of the correct pushes.
+    id: "api-types-surface",
+    tier: 1,
+    advisory: true,
+    mirrors: "Release gate › Verify generated API types are up to date",
+    costHint: 1, // measured 0.7 s (git diff only)
+    fix: "if the API types changed: regenerate on a built tree (pnpm build, then pnpm --filter @synap/api gen-types) and commit packages/api-types/src/generated.d.ts; when CI's 'Verify generated API types' is red, its run hands back the regenerated file (the step prints the one gh run download line)",
+    async run(ctx) {
+      const { surface, regenerated } = apiTypesSurface(await ctx.changed());
+      if (!surface.length)
+        return { verdict: "SKIP", detail: "no tRPC surface file changed" };
+      if (regenerated)
+        return {
+          verdict: "PASS",
+          detail: `${surface.length} surface file(s) changed, generated.d.ts changed with them (CI checks it is current)`,
+        };
+      return {
+        verdict: "WARN",
+        detail: `${surface.length} tRPC surface file(s) changed (${surface.slice(0, 3).join(", ")}${surface.length > 3 ? ", …" : ""}) and packages/api-types/src/generated.d.ts did not: if a procedure's input or output type moved, CI's "Verify generated API types" goes red`,
       };
     },
   },

@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   CHECKS,
+  apiTypesSurface,
   cpDriftProblems,
   inScoreOrder,
   parseRegistryKeys,
@@ -439,5 +440,72 @@ describe("ci.yml: a red preflight fails every required check, skips none", () =>
       s.startsWith("name: Every shard job succeeded")
     );
     expect(every).toContain(NOT_HOLD);
+  });
+});
+
+// F10 (29 Oct): the cheap, advisory half of "API types never drift". The
+// rows are the shapes that discriminate: a router change alone (the 21 of 21
+// readable CI reds of 20-29 Oct), the same with the regenerated file, a
+// router TEST (never moves the types), and a service outside the surface.
+describe("preflight: api-types-surface (advisory)", () => {
+  const GEN = "packages/api-types/src/generated.d.ts";
+  const run = (files: string[]) =>
+    runChecks(
+      CHECKS.filter((c: { id: string }) => c.id === "api-types-surface"),
+      { changed: async () => files }
+    ).then((r: { verdict: string; detail: string }[]) => r[0]);
+
+  it("is a tier-1 check that can warn, never fail", () => {
+    const c = CHECKS.find((x: { id: string }) => x.id === "api-types-surface");
+    expect(c?.tier).toBe(1);
+    expect(c?.advisory).toBe(true);
+    expect(c?.mirrors).toBe(
+      "Release gate › Verify generated API types are up to date"
+    );
+  });
+
+  it("a router changed, generated.d.ts not: WARN naming the file", async () => {
+    const r = await run([
+      "packages/api/src/routers/entities.ts",
+      "packages/jobs/src/x.ts",
+    ]);
+    expect(r.verdict).toBe("WARN");
+    expect(r.detail).toContain("packages/api/src/routers/entities.ts");
+  });
+
+  it("the router changed with generated.d.ts: PASS", async () => {
+    const r = await run(["packages/api/src/routers/hub.ts", GEN]);
+    expect(r.verdict).toBe("PASS");
+  });
+
+  it("only tests or files outside the surface: SKIP", async () => {
+    for (const files of [
+      ["packages/api/src/routers/hub.test.ts"],
+      ["packages/api/src/routers/__tests__/x.ts"],
+      ["packages/api/src/services/x.ts", "packages/database/src/x.ts"],
+      [],
+    ])
+      expect((await run(files)).verdict, files.join(",")).toBe("SKIP");
+  });
+
+  it("the surface: routers at any depth and the tRPC wiring", () => {
+    const { surface, regenerated } = apiTypesSurface([
+      "packages/api/src/root.ts",
+      "packages/api/src/trpc.ts",
+      "packages/api/src/init-trpc.ts",
+      "packages/api/src/context.ts",
+      "packages/api/src/routers/mcp/tools/x.ts",
+      "packages/api/src/routers/x.spec.ts",
+      "packages/api/src/rootx.ts",
+      "packages/web/src/routers/x.ts",
+    ]);
+    expect(surface).toEqual([
+      "packages/api/src/root.ts",
+      "packages/api/src/trpc.ts",
+      "packages/api/src/init-trpc.ts",
+      "packages/api/src/context.ts",
+      "packages/api/src/routers/mcp/tools/x.ts",
+    ]);
+    expect(regenerated).toBe(false);
   });
 });
