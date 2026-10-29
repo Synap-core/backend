@@ -536,7 +536,9 @@ describe("the pod-wide authority gate runs BEFORE any executor dispatch", () => 
     // If it rises, confirm the new call site replaced a hand-rolled copy; if it
     // falls, a door has stopped using the shared gate — investigate, do not
     // simply re-pin. The four are: approve, revise, batchApprove, revert.
-    expect(ROUTER.match(/await computeCanReviewApproval\(/g)?.length).toBe(4);
+    // SIX since 2026-10-29 (decision fa6c8833): `repairOptions` and `repair`
+    // are NEW doors that read the SAME shared ladder, not inline copies.
+    expect(ROUTER.match(/await computeCanReviewApproval\(/g)?.length).toBe(6);
     // Non-vacuity: a renamed helper would make BOTH counts zero and the
     // assertions above trivially unsatisfiable rather than silently true.
     expect(ROUTER.length).toBeGreaterThan(1000);

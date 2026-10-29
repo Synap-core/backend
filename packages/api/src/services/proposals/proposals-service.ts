@@ -715,6 +715,7 @@ export async function mergeProposalRevision(
         sessionId: proposals.sessionId,
         revisionHistory: proposals.revisionHistory,
         subjectUserId: proposals.subjectUserId,
+        rejectionReason: proposals.rejectionReason,
       })
       .from(proposals)
       .where(eq(proposals.id, params.proposalId))
@@ -828,13 +829,19 @@ export async function mergeProposalRevision(
       });
     }
 
-    if (existing.status !== ProposalStatus.PENDING) {
+    // A proposal whose approval FAILED is still open work: repairing it is
+    // what its failure card asks for, so a revision REOPENS it as pending
+    // (decision fa6c8833, 2026-10-29). It used to be refused as "reviewed
+    // elsewhere", which left only withdraw-and-file-again: two sessions did
+    // exactly that for the same 5 preferences, and a person reviewed both.
+    const reopening = existing.status === ProposalStatus.APPROVAL_FAILED;
+    if (existing.status !== ProposalStatus.PENDING && !reopening) {
       throw new TRPCError({
         code: "CONFLICT",
-        message:
-          "This proposal is no longer pending — it was reviewed elsewhere. Reload to see its current state.",
+        message: revisionRefusedMessage(existing.status),
       });
     }
+    if (reopening) assertReopenable(existing.data);
 
     // Stale-content guard, inside the lock (after authority, so an unauthorized
     // caller still reads NOT_FOUND and learns nothing from the version).
@@ -851,7 +858,9 @@ export async function mergeProposalRevision(
     }
 
     const { merged, revision } = computeRevisedEnvelope({
-      envelope: (existing.data ?? {}) as Record<string, unknown>,
+      envelope: reopening
+        ? withoutFailureRecord(existing.data)
+        : ((existing.data ?? {}) as Record<string, unknown>),
       patch,
       summary: params.summary,
       reasoning: params.reasoning,
@@ -888,8 +897,18 @@ export async function mergeProposalRevision(
       .update(proposals)
       .set({
         data: merged as typeof proposals.$inferInsert.data,
-        revisionHistory: drizzleSql`COALESCE(${proposals.revisionHistory}, '[]'::jsonb) || ${JSON.stringify([revision])}::jsonb`,
+        revisionHistory: drizzleSql`COALESCE(${proposals.revisionHistory}, '[]'::jsonb) || ${JSON.stringify([reopening ? { ...revision, reopened: { from: existing.status, failure: failureSummaryOf(existing.data), rejectionReason: existing.rejectionReason ?? null } } : revision])}::jsonb`,
         updatedAt: new Date(),
+        // Reopened: the failure is history (kept on the revision entry above),
+        // and the row waits for a review again.
+        ...(reopening
+          ? {
+              status: ProposalStatus.PENDING,
+              rejectionReason: null,
+              reviewedBy: null,
+              reviewedAt: null,
+            }
+          : {}),
         ...(params.workspaceId !== undefined
           ? { workspaceId: params.workspaceId }
           : {}),
@@ -900,10 +919,62 @@ export async function mergeProposalRevision(
       .where(
         and(
           eq(proposals.id, params.proposalId),
-          eq(proposals.status, ProposalStatus.PENDING)
+          eq(proposals.status, existing.status)
         )
       );
   });
+}
+
+/** Why a revision is refused, by the status the row is actually in. */
+function revisionRefusedMessage(status: string): string {
+  switch (status) {
+    case ProposalStatus.APPROVED:
+    case ProposalStatus.AUTO_APPROVED:
+      return "This proposal was already approved, so it can no longer be revised. To change what it did, file a new change.";
+    case ProposalStatus.REJECTED:
+      return "This proposal was rejected, so it can no longer be revised. File it again if it is still needed.";
+    case ProposalStatus.WITHDRAWN:
+      return "This proposal was withdrawn, so it can no longer be revised. File it again if it is still needed.";
+    case ProposalStatus.REVERTED:
+      return "This proposal was applied and then undone, so it can no longer be revised. File it again if it is still needed.";
+    default:
+      return `This proposal is ${status}, so it can no longer be revised. Reload to see its current state.`;
+  }
+}
+
+/**
+ * A failed CONNECTED PLAN is all-or-none: every step that applied was undone,
+ * so reopening it is safe — unless a step could NOT be undone. Then part of it
+ * is live and approving it again would apply that part twice.
+ */
+function assertReopenable(data: unknown): void {
+  const planFailure = (data as { planFailure?: unknown } | null)
+    ?.planFailure as
+    { compensation?: { notCompensated?: unknown[] } } | undefined;
+  if ((planFailure?.compensation?.notCompensated?.length ?? 0) > 0) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message:
+        "Part of this plan was applied and could not be undone, so it cannot be reopened. Withdraw it and file what is still missing as a new plan.",
+    });
+  }
+}
+
+/** The envelope without the last attempt's failure record. */
+function withoutFailureRecord(data: unknown): Record<string, unknown> {
+  const {
+    failure: _failure,
+    planFailure: _planFailure,
+    ...rest
+  } = (data ?? {}) as Record<string, unknown>;
+  return rest;
+}
+
+/** The failure class a reopened row carried, for its revision entry. */
+function failureSummaryOf(data: unknown): string | null {
+  const failure = (data as { failure?: { errorClass?: unknown } } | null)
+    ?.failure;
+  return typeof failure?.errorClass === "string" ? failure.errorClass : null;
 }
 
 /**

@@ -97,6 +97,7 @@ import { DocumentChanges } from "../../_lib/object/content/document-changes";
 import { documentChanges } from "../../_lib/object/content/document-changes-model";
 import { AlwaysApproveMenu } from "./AlwaysApproveMenu";
 import { DeferredWritesList } from "./DeferredWritesList";
+import { FailedApproval } from "./FailedApproval";
 import {
   DuplicateUnchecked,
   ItemTwinChoice,
@@ -1108,6 +1109,22 @@ export function ProposalReviewBody({
             <RequesterNote who={actor?.name ?? null} text={why.proposer} />
           )}
         </section>
+      )}
+
+      {/* A failed approval says why, and offers the fix the pod found
+          (decision fa6c8833), before the verbs. */}
+      {status === "approval_failed" && (
+        <FailedApproval
+          proposalId={p.id}
+          expectedRevision={renderedRevision(p) ?? 0}
+          reason={
+            typeof (p as { rejectionReason?: unknown }).rejectionReason ===
+            "string"
+              ? (p as { rejectionReason: string }).rejectionReason
+              : null
+          }
+          onDecided={onDecided}
+        />
       )}
 
       <div

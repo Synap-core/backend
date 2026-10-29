@@ -118,6 +118,38 @@ export interface ValidationResult {
    * kind with no fields says so instead of leaving the caller to guess).
    */
   modeled: ModeledField[];
+  /**
+   * Every error above that a person can fix BY VALUE, as data: the key, the
+   * rejected values and the nearest allowed one. `errors` stays the sentence
+   * list every caller already reads; this is what a repair card is drawn from
+   * (`services/proposals/repair-options.ts`), so it never re-parses the prose.
+   * Always present (possibly empty).
+   */
+  issues: PropertyIssue[];
+}
+
+/**
+ * One property a write cannot carry as it stands, in a shape a repair reads.
+ *
+ *  - `not_in_options`: a value outside the field's closed set (`options` on
+ *    its {@link ModeledField}); `rejected` holds the values refused, and
+ *    `didYouMean` the allowed one a single typo away, when there is one.
+ *  - `required`: a required field with no value and no default.
+ *  - `invalid`: any other refusal (type, length, range); `message` says which.
+ */
+export interface PropertyIssue {
+  key: string;
+  kind: "not_in_options" | "required" | "invalid";
+  message: string;
+  rejected?: string[];
+  didYouMean?: string;
+}
+
+/** One constraint a value breaks; `rejected` only for a closed set. */
+interface ConstraintFailure {
+  message: string;
+  rejected?: string[];
+  didYouMean?: string;
 }
 
 export class PropertyValidationService {
@@ -149,6 +181,7 @@ export class PropertyValidationService {
     }
   ): Promise<ValidationResult> {
     const errors: string[] = [];
+    const issues: PropertyIssue[] = [];
     const unmodeled: UnmodeledProperty[] = [];
     const normalized: Record<string, unknown> = { ...properties };
     const enforceRequired = opts?.enforceRequired !== false;
@@ -167,7 +200,9 @@ export class PropertyValidationService {
         if (prop.defaultValue !== null && prop.defaultValue !== undefined) {
           normalized[prop.slug] = prop.defaultValue;
         } else if (enforceRequired) {
-          errors.push(`Property '${prop.slug}' is required`);
+          const message = `Property '${prop.slug}' is required`;
+          errors.push(message);
+          issues.push({ key: prop.slug, kind: "required", message });
         }
       }
     }
@@ -208,12 +243,27 @@ export class PropertyValidationService {
         // Validate constraints. Each message names the key: "String length
         // 612 is greater than maximum 500" alone did not say WHICH of an
         // 8-entity capture's fields broke the limit.
-        const constraintErrors = this.validateConstraints(casted, prop);
-        errors.push(...constraintErrors.map((e) => `Property '${key}': ${e}`));
+        for (const failure of this.validateConstraints(casted, prop)) {
+          const message = `Property '${key}': ${failure.message}`;
+          errors.push(message);
+          issues.push(
+            failure.rejected
+              ? {
+                  key,
+                  kind: "not_in_options",
+                  message,
+                  rejected: failure.rejected,
+                  ...(failure.didYouMean
+                    ? { didYouMean: failure.didYouMean }
+                    : {}),
+                }
+              : { key, kind: "invalid", message }
+          );
+        }
       } catch (error) {
-        errors.push(
-          `Property '${key}': ${error instanceof Error ? error.message : String(error)}`
-        );
+        const message = `Property '${key}': ${error instanceof Error ? error.message : String(error)}`;
+        errors.push(message);
+        issues.push({ key, kind: "invalid", message });
       }
     }
 
@@ -225,6 +275,7 @@ export class PropertyValidationService {
       // signal, not a rejection.
       unmodeled,
       modeled: effectiveProperties.map(describeModeledField),
+      issues,
     };
   }
 
@@ -260,6 +311,7 @@ export class PropertyValidationService {
     errors: string[];
     unmodeled: UnmodeledProperty[];
     modeled: ModeledField[];
+    issues: PropertyIssue[];
   }> {
     const merged: Record<string, unknown> = {
       ...(opts?.profileDefaults ?? {}),
@@ -279,6 +331,7 @@ export class PropertyValidationService {
       errors: result.errors,
       unmodeled: result.unmodeled,
       modeled: result.modeled,
+      issues: result.issues,
     };
   }
 
@@ -376,8 +429,8 @@ export class PropertyValidationService {
   private validateConstraints(
     value: unknown,
     propertyDef: EffectiveProperty
-  ): string[] {
-    const errors: string[] = [];
+  ): ConstraintFailure[] {
+    const errors: ConstraintFailure[] = [];
     const constraints =
       (propertyDef.constraints as Record<string, unknown>) || {};
 
@@ -389,9 +442,10 @@ export class PropertyValidationService {
         const allowed = constraints.enum as unknown[];
         const unknown = value.filter((v) => !allowed.includes(v));
         if (unknown.length > 0) {
-          errors.push(
-            `Values '${unknown.join(", ")}' not in enum: ${allowed.join(", ")}`
-          );
+          errors.push({
+            message: `Values '${unknown.join(", ")}' not in enum: ${allowed.join(", ")}`,
+            rejected: unknown.map(String),
+          });
         }
       } else if (!constraints.enum.includes(value)) {
         // `in_progress` for `in-progress`: the same case/separator fold the
@@ -400,10 +454,13 @@ export class PropertyValidationService {
           typeof value === "string"
             ? suggestClosest(value, constraints.enum.map(String))
             : undefined;
-        errors.push(
-          `Value '${value}' not in enum: ${constraints.enum.join(", ")}` +
-            (closest ? ` (did you mean '${closest}'?)` : "")
-        );
+        errors.push({
+          message:
+            `Value '${value}' not in enum: ${constraints.enum.join(", ")}` +
+            (closest ? ` (did you mean '${closest}'?)` : ""),
+          rejected: [String(value)],
+          ...(closest ? { didYouMean: closest } : {}),
+        });
       }
     }
 
@@ -411,10 +468,14 @@ export class PropertyValidationService {
     if (propertyDef.valueType === PropertyValueType.NUMBER) {
       const num = value as number;
       if (constraints.min !== undefined && num < (constraints.min as number)) {
-        errors.push(`Value ${num} is less than minimum ${constraints.min}`);
+        errors.push({
+          message: `Value ${num} is less than minimum ${constraints.min}`,
+        });
       }
       if (constraints.max !== undefined && num > (constraints.max as number)) {
-        errors.push(`Value ${num} is greater than maximum ${constraints.max}`);
+        errors.push({
+          message: `Value ${num} is greater than maximum ${constraints.max}`,
+        });
       }
     }
 
@@ -425,37 +486,37 @@ export class PropertyValidationService {
         constraints.minLength !== undefined &&
         str.length < (constraints.minLength as number)
       ) {
-        errors.push(
-          `String length ${str.length} is less than minimum ${constraints.minLength}`
-        );
+        errors.push({
+          message: `String length ${str.length} is less than minimum ${constraints.minLength}`,
+        });
       }
       if (
         constraints.maxLength !== undefined &&
         str.length > (constraints.maxLength as number)
       ) {
-        errors.push(
-          `String length ${str.length} is greater than maximum ${constraints.maxLength}`
-        );
+        errors.push({
+          message: `String length ${str.length} is greater than maximum ${constraints.maxLength}`,
+        });
       }
 
       // Format constraints
       if (constraints.format === "email") {
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(str)) {
-          errors.push(`Invalid email format: ${str}`);
+          errors.push({ message: `Invalid email format: ${str}` });
         }
       }
       if (constraints.format === "uri") {
         try {
           new URL(str);
         } catch {
-          errors.push(`Invalid URI format: ${str}`);
+          errors.push({ message: `Invalid URI format: ${str}` });
         }
       }
       if (constraints.format === "date-time") {
         const date = new Date(str);
         if (isNaN(date.getTime())) {
-          errors.push(`Invalid date-time format: ${str}`);
+          errors.push({ message: `Invalid date-time format: ${str}` });
         }
       }
 
@@ -463,7 +524,9 @@ export class PropertyValidationService {
       if (constraints.pattern && typeof constraints.pattern === "string") {
         const regex = new RegExp(constraints.pattern);
         if (!regex.test(str)) {
-          errors.push(`Value does not match pattern: ${constraints.pattern}`);
+          errors.push({
+            message: `Value does not match pattern: ${constraints.pattern}`,
+          });
         }
       }
     }
