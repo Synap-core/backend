@@ -75,6 +75,52 @@ import {
 } from "../../../services/capture-agent/capture-receipt-state.js";
 import { readStoredProposalScope } from "../../../services/capture-agent/stored-capture-scope.js";
 import { captureSkillStepProblems } from "../../../services/capture-agent/capture-plan.js";
+import type { PendingTextMatch } from "../../../utils/pending-capture-dedup.js";
+
+/** How many new entity titles the pending text scan reads, and how many matches it returns. */
+const PENDING_MATCH_TITLES = 5;
+const PENDING_MATCH_LIMIT = 5;
+
+/**
+ * The caller's own pending proposals whose text looks like the graph's new
+ * entities: one scan per titled new entity (the first
+ * {@link PENDING_MATCH_TITLES}), each proposal kept once at its best score.
+ */
+export async function findCapturePendingMatches(
+  scan: (query: string) => Promise<PendingTextMatch[]>,
+  graphEntities: Array<Record<string, unknown>>
+): Promise<PendingTextMatch[]> {
+  const titles = graphEntities
+    .filter((e) => !e.existingEntityId)
+    .map((e) => (typeof e.title === "string" ? e.title.trim() : ""))
+    .filter((t) => t.length > 0)
+    .slice(0, PENDING_MATCH_TITLES);
+  const best = new Map<string, PendingTextMatch>();
+  for (const title of titles) {
+    for (const match of await scan(title)) {
+      const seen = best.get(match.proposalId);
+      if (!seen || match.score > seen.score) best.set(match.proposalId, match);
+    }
+  }
+  return [...best.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, PENDING_MATCH_LIMIT);
+}
+
+/** The receipt's advice block; the proposal this call returned is not its own match. */
+export function pendingMatchesAdvice(
+  matches: PendingTextMatch[],
+  proposalId: string | undefined
+): { pendingMatches?: PendingTextMatch[]; pendingMatchesHint?: string } {
+  const others = matches.filter((m) => m.proposalId !== proposalId);
+  return others.length
+    ? {
+        pendingMatches: others,
+        pendingMatchesHint:
+          "Advice only, nothing was refused: these of your pending proposals look like this capture. If one is the same thing, revise it (synap_revise_proposal) or reject the extra one rather than keeping both.",
+      }
+    : {};
+}
 
 const captureHandler: McpToolHandler = async (
   ctx: McpToolContext
@@ -685,7 +731,7 @@ const captureHandler: McpToolHandler = async (
       await import("../../../services/intake/record-session-run-manifest.js");
     const { ensureIntakeSession } =
       await import("../../../services/intake/ensure-intake-session.js");
-    const { computeCaptureGraphIdempotencyKey } =
+    const { computeCaptureGraphIdempotencyKey, findPendingTextMatches } =
       await import("../../../utils/pending-capture-dedup.js");
     const { resolveAgentRunReceipt } =
       await import("../../../utils/permission-check.js");
@@ -758,6 +804,25 @@ const captureHandler: McpToolHandler = async (
         err instanceof Error ? err.message : String(err)
       );
     }
+    // Fuzzy pending twins, as ADVICE (C2-b): the duplicate door inside the
+    // submit matches the caller's own queue on an exact name or a strong
+    // identity only. This is the looser text scan `ask`'s pending block runs
+    // (`findPendingTextMatches`, owner-floored), once per new entity title.
+    // Never a refusal; a failed scan only drops the advice.
+    let pendingMatches: PendingTextMatch[] = [];
+    try {
+      pendingMatches = await findCapturePendingMatches(
+        (query) =>
+          findPendingTextMatches(db, {
+            userId,
+            query,
+            limit: PENDING_MATCH_LIMIT,
+          }),
+        graphEntities
+      );
+    } catch (err) {
+      logger.warn({ err, userId }, "capture: pending text scan failed");
+    }
     const graphResult = await submitCaptureGraph({
       ...(graphIntake.intake.sourceDocumentIds.length
         ? { sourceDocumentIds: graphIntake.intake.sourceDocumentIds }
@@ -818,6 +883,7 @@ const captureHandler: McpToolHandler = async (
       intake: graphIntake.intake,
       ...(crossKindLinks.length ? { links: { proposed: crossKindLinks } } : {}),
       ...(titleLint.length ? { titleLint } : {}),
+      ...pendingMatchesAdvice(pendingMatches, graphResult.proposalId),
       ...(captureNormalizedText
         ? {
             provenance:
