@@ -90,6 +90,9 @@ const THEIR_JANE = randomUUID();
 const THEIR_GRACE = randomUUID();
 const MY_MIA = randomUUID();
 const MY_RHEA = randomUUID();
+const MY_PENDING_ADA = randomUUID();
+const MY_PENDING_CY = randomUUID();
+const THEIR_PENDING_BOB = randomUUID();
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -136,6 +139,24 @@ beforeAll(async () => {
             (gen_random_uuid(),$2,'email','rhea@mine.test','seed')`,
     [THEIR_GRACE, MY_RHEA]
   );
+  // Pending creates (D3): one in the caller's own queue, one in another user's.
+  for (const [id, author, title] of [
+    [MY_PENDING_ADA, USER, "Ada Pending"],
+    [MY_PENDING_CY, USER, "Cy Pending"],
+    [THEIR_PENDING_BOB, OTHER, "Bob Theirs"],
+  ] as const) {
+    await q(
+      `insert into proposals (id, created_by, status, proposal_type, target_type, workspace_id, data, created_at)
+       values ($1,$2,'pending','create','entity',null,$3::jsonb, now())`,
+      [
+        id,
+        author,
+        JSON.stringify({
+          data: { profileSlug: "person", title, properties: {} },
+        }),
+      ]
+    );
+  }
 }, 120_000);
 
 beforeEach(() => {
@@ -147,7 +168,10 @@ beforeEach(() => {
   vi.spyOn(dedup, "findPriorCaptureGraphProposal").mockResolvedValue(null);
 });
 
-async function capture(entity: Record<string, unknown>) {
+async function capture(
+  entity: Record<string, unknown>,
+  more: Array<Record<string, unknown>> = []
+) {
   const pending = vi
     .spyOn(writer, "createEventBackedProposal")
     .mockImplementation(async (input) => ({
@@ -180,6 +204,12 @@ async function capture(entity: Record<string, unknown>) {
     workspaceId: null,
     entities: [
       { ref: "p1", profileSlug: "person", properties: {}, ...entity },
+      ...more.map((e, i) => ({
+        ref: `m${i}`,
+        profileSlug: "person",
+        properties: {},
+        ...e,
+      })),
     ] as never,
   } as never);
   const filed = pending.mock.calls[0]?.[0] ?? receipt.mock.calls[0]?.[0];
@@ -187,7 +217,7 @@ async function capture(entity: Record<string, unknown>) {
     duplicateCheck?: { status: string; candidates: Array<{ id: string }> };
     operations?: Array<{ existingEntityId?: string }>;
   };
-  return { result, data, materialize };
+  return { result, data, materialize, pending, receipt, filed };
 }
 
 describe("the capture door's duplicate check sees only the caller's rows (M3)", () => {
@@ -227,5 +257,64 @@ describe("the capture door's duplicate check sees only the caller's rows (M3)", 
       existingEntityId?: string;
     }>;
     expect(ops[0]!.existingEntityId).toBe(MY_RHEA);
+  });
+});
+
+/**
+ * D3 (founder, 2026-10-29): a graph whose every new entity already waits in
+ * the caller's OWN pending queue returns that proposal and files nothing.
+ * Rows: own twin → returned (rules out "always file"); one entity without a
+ * twin → filed as before (rules out "any twin returns"); another user's
+ * pending twin → filed, never named (rules out a queue read without the
+ * owner floor).
+ */
+describe("a graph whose twin is the caller's own pending proposal (D3)", () => {
+  it("returns the caller's own pending proposal and files nothing", async () => {
+    const { result, pending, receipt } = await capture({
+      title: "Ada Pending",
+    });
+    expect(pending).not.toHaveBeenCalled();
+    expect(receipt).not.toHaveBeenCalled();
+    expect(result.deduped).toBe(true);
+    expect(result.proposalId).toBe(MY_PENDING_ADA);
+    expect(result.applied).toBe(false);
+    expect(result.entityCount).toBe(1);
+    expect(result.writeReceipt).toMatchObject({
+      state: "pending",
+      proposalId: MY_PENDING_ADA,
+    });
+    expect(result.duplicateCheck?.candidates).toEqual([
+      expect.objectContaining({ ref: "proposal", id: MY_PENDING_ADA }),
+    ]);
+  });
+
+  it("each new entity waits in a different own proposal: the first is returned, the check names both", async () => {
+    const { result, pending } = await capture({ title: "Ada Pending" }, [
+      { title: "Cy Pending" },
+    ]);
+    expect(pending).not.toHaveBeenCalled();
+    expect(result.deduped).toBe(true);
+    expect(result.proposalId).toBe(MY_PENDING_ADA);
+    expect(
+      result.duplicateCheck?.candidates.map((c: { id: string }) => c.id)
+    ).toEqual(expect.arrayContaining([MY_PENDING_ADA, MY_PENDING_CY]));
+  });
+
+  it("one new entity without a pending twin: the graph is filed as before", async () => {
+    const { result, pending, filed } = await capture({ title: "Ada Pending" }, [
+      { title: "Zed Brand New" },
+    ]);
+    expect(pending).toHaveBeenCalledTimes(1);
+    expect(filed?.governanceReason).toBe("POSSIBLE_DUPLICATE");
+    expect(result.deduped).toBeUndefined();
+    expect(result.proposalId).toBe("prop-1");
+  });
+
+  it("another user's pending twin is never returned nor named: filed", async () => {
+    const { result, data } = await capture({ title: "Bob Theirs" });
+    expect(result.deduped).toBeUndefined();
+    expect(result.proposalId).not.toBe(THEIR_PENDING_BOB);
+    expect(JSON.stringify(result)).not.toContain(THEIR_PENDING_BOB);
+    expect(data.duplicateCheck?.status).toBe("clear");
   });
 });

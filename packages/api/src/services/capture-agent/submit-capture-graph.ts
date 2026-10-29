@@ -37,8 +37,11 @@ import {
   and,
   eq,
   or,
+  inArray,
   isNull,
   entities,
+  proposals,
+  ProposalStatus,
   ownerPrivateVisibleWhere,
   getWorkspaceMembership,
   ProfileResolutionService,
@@ -49,7 +52,10 @@ import {
   type ModeledField,
   deriveProposalProjectId,
 } from "@synap/database";
-import { getAgentFocusProjectId } from "../agent-identity-service.js";
+import {
+  authoredByUser,
+  getAgentFocusProjectId,
+} from "../agent-identity-service.js";
 import type { PendingWorkspaceSwitch } from "../../lib/workspace-decision.js";
 import { createLogger } from "@synap-core/core";
 import {
@@ -443,6 +449,25 @@ export interface SubmitCaptureGraphInput {
   summary?: string;
 }
 
+/**
+ * The caller's own pending proposals the graph's new entities already wait in,
+ * one per item's first twin, when EVERY checked item has one; null otherwise.
+ * A `proposal` candidate comes only from the pending leg, which reads the
+ * caller's own queue (`loadOwnPendingCreates`, owner-floored).
+ */
+export function ownPendingTwinProposalIds(
+  checks: DuplicateCheck[]
+): string[] | null {
+  if (checks.length === 0) return null;
+  const ids: string[] = [];
+  for (const check of checks) {
+    const twin = check.candidates.find((c) => c.ref === "proposal");
+    if (!twin) return null;
+    if (!ids.includes(twin.id)) ids.push(twin.id);
+  }
+  return ids;
+}
+
 export interface SubmitCaptureGraphResult {
   proposalId: string | undefined;
   entityCount: number;
@@ -506,7 +531,9 @@ export interface SubmitCaptureGraphResult {
    * with the item it is for (`forRef`/`forTitle`): a same-kind record or one
    * of the caller's own pending creates with the same name or strong identity.
    * NEVER auto-linked (only a strong identity on a record links). An agent's
-   * graph with a `possible` twin is filed for review (POSSIBLE_DUPLICATE).
+   * graph with a `possible` twin is filed for review (POSSIBLE_DUPLICATE),
+   * unless every new entity waits in the caller's own queue: that proposal
+   * is then returned (`deduped`), with this check naming each twin.
    * Omitted when the door found nothing (`clear`).
    */
   duplicateCheck?: DuplicateCheck;
@@ -1171,59 +1198,66 @@ export async function submitCaptureGraph(
       bindings,
       ...(planInput ? { plan: planInput } : {}),
     });
+  // A prior proposal returned instead of filing: the re-submit below, and an
+  // agent graph whose every new entity already waits in the caller's own queue.
+  const priorProposalReceipt = (
+    prior: typeof proposals.$inferSelect
+  ): SubmitCaptureGraphResult => {
+    const priorData = prior.data as {
+      operations?: CompositeProposalOperation[];
+    };
+    const priorOps = Array.isArray(priorData?.operations)
+      ? priorData.operations
+      : [];
+    // A single-entity `create` twin carries no operations: it is one entity.
+    const priorEntityCount =
+      prior.proposalType === "create"
+        ? 1
+        : priorOps.filter((o) => o.op === "create_entity").length;
+    const priorRelationCount = priorOps.filter(
+      (o) => o.op === "create_relation"
+    ).length;
+    const priorApplied = prior.status === "auto_approved";
+    const priorReviewUrl = priorApplied ? undefined : openLink(prior.id);
+    // What the PRIOR row stored — not this call's session/project/workspace.
+    // A re-send from another session returns the first send's proposal, and
+    // that proposal stays where the first send filed it.
+    const priorScope = storedScopeOfProposal(prior);
+    return {
+      proposalId: prior.id,
+      entityCount: priorEntityCount,
+      relationCount: priorRelationCount,
+      bindingCount: bindings.length,
+      reviewUrl: priorReviewUrl,
+      summary,
+      applied: priorApplied,
+      ...(hasComposedSteps(priorOps)
+        ? { plan: { steps: planStepReceipts(priorOps) } }
+        : {}),
+      sessionId: priorScope.sessionId,
+      scope: priorScope,
+      // Reuses the flag the MCP `ok()` shaper already reads: a deduped
+      // PENDING proposal surfaces as `status: "duplicate"` with a
+      // stop-re-proposing hint.
+      deduped: true,
+      ...(projectOutcome ? { project: projectOutcome } : {}),
+      writeReceipt: {
+        state: priorApplied ? "applied" : "pending",
+        proposalId: prior.id,
+        ...(priorReviewUrl ? { reviewUrl: priorReviewUrl } : {}),
+        effectiveWorkspaceId: priorScope.workspaceId,
+        ...(priorScope.projectId ? { projectId: priorScope.projectId } : {}),
+        ...(projectOutcome ? { project: projectOutcome } : {}),
+        source,
+      },
+    };
+  };
   try {
     const prior = await findPriorCaptureGraphProposal(db, {
       userId,
       idempotencyKey,
     });
-    if (prior) {
-      const priorData = prior.data as {
-        operations?: CompositeProposalOperation[];
-      };
-      const priorOps = Array.isArray(priorData?.operations)
-        ? priorData.operations
-        : [];
-      const priorEntityCount = priorOps.filter(
-        (o) => o.op === "create_entity"
-      ).length;
-      const priorRelationCount = priorOps.filter(
-        (o) => o.op === "create_relation"
-      ).length;
-      const priorApplied = prior.status === "auto_approved";
-      const priorReviewUrl = priorApplied ? undefined : openLink(prior.id);
-      // What the PRIOR row stored — not this call's session/project/workspace.
-      // A re-send from another session returns the first send's proposal, and
-      // that proposal stays where the first send filed it.
-      const priorScope = storedScopeOfProposal(prior);
-      return {
-        proposalId: prior.id,
-        entityCount: priorEntityCount,
-        relationCount: priorRelationCount,
-        bindingCount: bindings.length,
-        reviewUrl: priorReviewUrl,
-        summary,
-        applied: priorApplied,
-        ...(hasComposedSteps(priorOps)
-          ? { plan: { steps: planStepReceipts(priorOps) } }
-          : {}),
-        sessionId: priorScope.sessionId,
-        scope: priorScope,
-        // Reuses the flag the MCP `ok()` shaper already reads: a deduped
-        // PENDING proposal surfaces as `status: "duplicate"` with a
-        // stop-re-proposing hint.
-        deduped: true,
-        ...(projectOutcome ? { project: projectOutcome } : {}),
-        writeReceipt: {
-          state: priorApplied ? "applied" : "pending",
-          proposalId: prior.id,
-          ...(priorReviewUrl ? { reviewUrl: priorReviewUrl } : {}),
-          effectiveWorkspaceId: priorScope.workspaceId,
-          ...(priorScope.projectId ? { projectId: priorScope.projectId } : {}),
-          ...(projectOutcome ? { project: projectOutcome } : {}),
-          source,
-        },
-      };
-    }
+    if (prior) return priorProposalReceipt(prior);
   } catch (err) {
     logger.warn(
       { err, userId },
@@ -1304,6 +1338,40 @@ export async function submitCaptureGraph(
       ? mergeDuplicateChecks("entity", itemChecks)
       : undefined;
   const possibleDuplicate = duplicateCheck?.status === "possible";
+
+  // D3 (founder, 2026-10-29): an agent's graph whose EVERY new entity is
+  // already waiting in the caller's OWN pending queue files nothing — that
+  // proposal is returned (`deduped`, so the MCP door answers `duplicate`). One
+  // new entity with no pending twin, a plan step or a channel bind: filed as
+  // before, POSSIBLE_DUPLICATE. Only an agent: a webhook or cron reads no
+  // receipt, so its new content would be dropped unseen.
+  const twinIds = ownPendingTwinProposalIds(itemChecks);
+  if (input.agentUserId && twinIds && !planInput && bindings.length === 0) {
+    try {
+      // The pending leg is owner-floored already; re-read through the same
+      // floor so a twin decided since then is never handed back. Every twin
+      // must still wait, or an entity whose twin was decided would be lost.
+      const twins = await db
+        .select()
+        .from(proposals)
+        .where(
+          and(
+            inArray(proposals.id, twinIds),
+            eq(proposals.status, ProposalStatus.PENDING),
+            authoredByUser(userId)
+          )
+        );
+      const first = twins.find((t) => t.id === twinIds[0]);
+      if (first && twins.length === twinIds.length) {
+        return { ...priorProposalReceipt(first), duplicateCheck };
+      }
+    } catch (err) {
+      logger.warn(
+        { err, userId },
+        "capture/graph: own pending twin read failed (filing it)"
+      );
+    }
+  }
 
   // Ops + scope-aware homes: the ONE builder, shared with the dry run.
   const builtOperations = await buildCaptureGraphOperations(db, {
