@@ -120,7 +120,7 @@ async function parent(opts: {
   return id;
 }
 
-const child = (over: Record<string, unknown>) =>
+const child = (over: Partial<Parameters<typeof createFocusSession>[0]>) =>
   createFocusSession({
     userId: USER,
     agentUserId: AGENT,
@@ -128,7 +128,7 @@ const child = (over: Record<string, unknown>) =>
     matchTemplate: false,
     forceCreate: true,
     ...over,
-  }) as Promise<{
+  }) as unknown as Promise<{
     status: string;
     session?: { id: string; projectId: string | null; trackId: string | null };
   }>;
