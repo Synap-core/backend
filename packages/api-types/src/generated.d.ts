@@ -19145,6 +19145,7 @@ declare const PUSH_CATEGORIES: readonly [
 	"decision-blocking",
 	"work-broke",
 	"mention",
+	"morning-brief",
 	"system"
 ];
 export type PushCategory = (typeof PUSH_CATEGORIES)[number];
@@ -39075,7 +39076,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		setPushPrefs: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				categories: Partial<Record<"blocking-ask" | "decision-blocking" | "mention" | "system" | "work-broke", boolean>>;
+				categories: Partial<Record<"blocking-ask" | "decision-blocking" | "mention" | "morning-brief" | "system" | "work-broke", boolean>>;
 			};
 			meta: object;
 			output: {
