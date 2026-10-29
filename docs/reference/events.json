@@ -49,9 +49,9 @@
     {
       "key": "ENTITY_SIGNALED",
       "type": "entity.signal.completed",
-      "label": "Late or stuck",
+      "label": "Needs a look",
       "domain": "Entity",
-      "description": "Fires once when a thing becomes late, nears its date, sits too long in a step, or its pause is due for review.",
+      "description": "Runs once when a thing passes its due date, is about to, stays too long in one status, or a pause is ready to be reviewed.",
       "filterKeys": [
         "signal",
         "lifecycleProfile",
@@ -99,9 +99,9 @@
     {
       "key": "FOCUS_SESSION_SIGNALED",
       "type": "focus_session.signal.completed",
-      "label": "Session due for review",
+      "label": "Needs a look",
       "domain": "Focus sessions",
-      "description": "Fires once when a paused session's hold passes its review date.",
+      "description": "Runs once when a paused session is ready to be reviewed.",
       "filterKeys": [
         "signal",
         "status",
@@ -144,9 +144,9 @@
     {
       "key": "TRACK_SIGNALED",
       "type": "track.signal.completed",
-      "label": "Goal due for review",
+      "label": "Needs a look",
       "domain": "Tracks",
-      "description": "Fires once when a paused goal's hold passes its review date.",
+      "description": "Runs once when a paused goal is ready to be reviewed.",
       "filterKeys": [
         "signal",
         "status",

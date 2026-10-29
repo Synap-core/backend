@@ -13877,7 +13877,7 @@ declare const OperationalEventTypes: {
 		readonly type: "entity.delete.completed";
 	};
 	readonly ENTITY_SIGNALED: {
-		readonly description: "Fires once when a thing becomes late, nears its date, sits too long in a step, or its pause is due for review.";
+		readonly description: "Runs once when a thing passes its due date, is about to, stays too long in one status, or a pause is ready to be reviewed.";
 		readonly domain: "Entity";
 		readonly filterKeys: [
 			"signal",
@@ -13890,7 +13890,7 @@ declare const OperationalEventTypes: {
 			"projectId",
 			"trackId"
 		];
-		readonly label: "Late or stuck";
+		readonly label: "Needs a look";
 		readonly type: "entity.signal.completed";
 	};
 	readonly ENTITY_TRANSITIONED: {
@@ -13944,7 +13944,7 @@ declare const OperationalEventTypes: {
 		readonly type: "feed.new_item.completed";
 	};
 	readonly FOCUS_SESSION_SIGNALED: {
-		readonly description: "Fires once when a paused session's hold passes its review date.";
+		readonly description: "Runs once when a paused session is ready to be reviewed.";
 		readonly domain: "Focus sessions";
 		readonly filterKeys: [
 			"signal",
@@ -13954,7 +13954,7 @@ declare const OperationalEventTypes: {
 			"projectId",
 			"trackId"
 		];
-		readonly label: "Session due for review";
+		readonly label: "Needs a look";
 		readonly type: "focus_session.signal.completed";
 	};
 	readonly FOCUS_SESSION_STAGE_CHANGED: {
@@ -14119,7 +14119,7 @@ declare const OperationalEventTypes: {
 		readonly type: "relation.delete.completed";
 	};
 	readonly TRACK_SIGNALED: {
-		readonly description: "Fires once when a paused goal's hold passes its review date.";
+		readonly description: "Runs once when a paused goal is ready to be reviewed.";
 		readonly domain: "Tracks";
 		readonly filterKeys: [
 			"signal",
@@ -14129,7 +14129,7 @@ declare const OperationalEventTypes: {
 			"projectId",
 			"trackId"
 		];
-		readonly label: "Goal due for review";
+		readonly label: "Needs a look";
 		readonly type: "track.signal.completed";
 	};
 	readonly TRACK_STAGE_CHANGED: {
@@ -37979,6 +37979,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				lifecycle: {
 					options: {
 						category: "active" | "done" | "lost" | "open" | "paused";
+						dateBinding?: string | undefined;
 						humanOnly: boolean;
 						key: string;
 						label: string;
@@ -38009,6 +38010,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				options: {
 					category: "active" | "done" | "lost" | "open" | "paused";
+					dateBinding?: string | undefined;
 					humanOnly: boolean;
 					key: string;
 					label: string;
