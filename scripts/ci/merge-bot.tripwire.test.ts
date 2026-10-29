@@ -1369,6 +1369,13 @@ describe("merge-bot: what it must never do", () => {
     expect(/repositories: (\S+)/.exec(mint)?.[1]).toBe("backend");
     expect(mint).toMatch(/continue-on-error: true/);
   });
+  it("a merge-queue CI run starts no bot run (it would replace the pending pass)", () => {
+    const on = wf.slice(
+      wf.indexOf("  workflow_run:"),
+      wf.indexOf("  schedule:")
+    );
+    expect(on).toMatch(/branches-ignore:\n\s+- "gh-readonly-queue\/\*\*"/);
+  });
   it("one concurrency group for every pass (never two enqueues of one PR at once)", () => {
     expect(
       /^concurrency:\n(?:\s+#.*\n)*\s+group: (\S+)\s*$/m.exec(wf)?.[1]
