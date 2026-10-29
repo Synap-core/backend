@@ -8047,84 +8047,6 @@ export interface Context {
 	 */
 	revertPass?: RevertPass;
 }
-/**
- * Capture routing — the ONE mapping from a `capture.structure` result to the
- * routing hints `capture.execute` takes.
- *
- * Every capture door (MCP, hub REST, the shared app capture pipeline, intake
- * UI, relay, CLI) forwards the structure step's placement advice to execute.
- * Each door used to hand-copy a different subset of fields, so the same
- * capture recorded different data depending on where it came from (only MCP
- * forwarded the decision distribution). Doors call `captureExecuteRoutingHints`
- * instead, so what reaches execute — and what the route decision event stores
- * — is identical everywhere.
- *
- * These are ADVISORY hints: execute's placement ladder decides (an AI pick
- * proposes a move, it never moves data). A user's deliberate choice is NOT a
- * hint — doors pass it as execute's `targetWorkspaceId` / `projectId`.
- *
- * Pure, dependency-free: safe in browser, Electron, React Native, Node, CLI.
- */
-/**
- * The distribution behind an AI workspace pick, as the IS decision door
- * reported it: which decider answered (`jev` = the TypeSafe decision model,
- * `llm` = the cascade fallback), the model, the probability per candidate
- * workspace id (+ `none` for the decision model's abstain outcome) and the
- * candidate set it was asked over.
- */
-export interface WorkspaceDecisionRecord {
-	decider: "jev" | "llm";
-	model?: string;
-	probabilities?: Record<string, number>;
-	candidates?: Array<{
-		id: string;
-		name: string;
-	}>;
-}
-/**
- * Where a capture will land, as `capture.structure` resolved it — the honest
- * replacement for reading the AI's pick out of `targetWorkspaceId`.
- */
-export interface CapturePlacement {
-	/**
-	 * Where the capture lands if no suggestion is applied: a deterministic
-	 * placement (explicit pin, ontology, focus session, relational), or the
-	 * ambient workspace. `null` = pod-wide.
-	 */
-	workspaceId: string | null;
-	workspaceName: string | null;
-	/** A deterministic rung placed it — never an AI guess. */
-	deterministic: boolean;
-	/** The AI's suggestion — present only when it differs from `workspaceId`. */
-	suggestion?: {
-		/**
-		 * Ranked options for the "Why?" disclosure, suggestion first, at most 3.
-		 * `weight` (0..1) sizes a bar; it is never rendered as a number.
-		 * Empty when the decider reported no distribution.
-		 */
-		alternatives: Array<{
-			weight: number;
-			workspaceId: string;
-			workspaceName: string;
-		}>;
-		reason: string | null;
-		workspaceId: string;
-		workspaceName: string;
-	};
-}
-export interface PersistedCaptureResult {
-	messageId: string;
-	channelId: string;
-	round: number;
-}
-export interface DismissCaptureResultRowResult {
-	messageId: string;
-	round: number;
-	tempId: string;
-	dismissed: boolean;
-	/** False when the row was already in the requested state (idempotent no-op). */
-	changed: boolean;
-}
 declare const PROMOTE_TO_BODY_REFUSALS: readonly [
 	"not_body_property",
 	"empty_value",
@@ -8137,6 +8059,15 @@ declare const UNDO_PROMOTE_TO_BODY_REFUSALS: readonly [
 	"not_promoted"
 ];
 export type UndoPromoteToBodyRefusal = (typeof UNDO_PROMOTE_TO_BODY_REFUSALS)[number];
+/**
+ * Field errors of a refused input: dotted input path (`items.0.title`) →
+ * the messages for that field; `""` is the input as a whole.
+ *
+ * The pod sends it as tRPC `error.data.fieldErrors` and as `fieldErrors` on a
+ * Hub REST 400, built from the Zod refusal (messages only, never the values
+ * the caller sent). Absent when the refusal is not a validation one.
+ */
+export type FieldErrors = Record<string, string[]>;
 declare enum AgentType {
 	DEFAULT = "default",
 	META = "meta",
@@ -10251,6 +10182,84 @@ export type SessionRecallView = {
 	recalledAt: string;
 	status: "failed";
 };
+/**
+ * Capture routing — the ONE mapping from a `capture.structure` result to the
+ * routing hints `capture.execute` takes.
+ *
+ * Every capture door (MCP, hub REST, the shared app capture pipeline, intake
+ * UI, relay, CLI) forwards the structure step's placement advice to execute.
+ * Each door used to hand-copy a different subset of fields, so the same
+ * capture recorded different data depending on where it came from (only MCP
+ * forwarded the decision distribution). Doors call `captureExecuteRoutingHints`
+ * instead, so what reaches execute — and what the route decision event stores
+ * — is identical everywhere.
+ *
+ * These are ADVISORY hints: execute's placement ladder decides (an AI pick
+ * proposes a move, it never moves data). A user's deliberate choice is NOT a
+ * hint — doors pass it as execute's `targetWorkspaceId` / `projectId`.
+ *
+ * Pure, dependency-free: safe in browser, Electron, React Native, Node, CLI.
+ */
+/**
+ * The distribution behind an AI workspace pick, as the IS decision door
+ * reported it: which decider answered (`jev` = the TypeSafe decision model,
+ * `llm` = the cascade fallback), the model, the probability per candidate
+ * workspace id (+ `none` for the decision model's abstain outcome) and the
+ * candidate set it was asked over.
+ */
+export interface WorkspaceDecisionRecord {
+	decider: "jev" | "llm";
+	model?: string;
+	probabilities?: Record<string, number>;
+	candidates?: Array<{
+		id: string;
+		name: string;
+	}>;
+}
+/**
+ * Where a capture will land, as `capture.structure` resolved it — the honest
+ * replacement for reading the AI's pick out of `targetWorkspaceId`.
+ */
+export interface CapturePlacement {
+	/**
+	 * Where the capture lands if no suggestion is applied: a deterministic
+	 * placement (explicit pin, ontology, focus session, relational), or the
+	 * ambient workspace. `null` = pod-wide.
+	 */
+	workspaceId: string | null;
+	workspaceName: string | null;
+	/** A deterministic rung placed it — never an AI guess. */
+	deterministic: boolean;
+	/** The AI's suggestion — present only when it differs from `workspaceId`. */
+	suggestion?: {
+		/**
+		 * Ranked options for the "Why?" disclosure, suggestion first, at most 3.
+		 * `weight` (0..1) sizes a bar; it is never rendered as a number.
+		 * Empty when the decider reported no distribution.
+		 */
+		alternatives: Array<{
+			weight: number;
+			workspaceId: string;
+			workspaceName: string;
+		}>;
+		reason: string | null;
+		workspaceId: string;
+		workspaceName: string;
+	};
+}
+export interface PersistedCaptureResult {
+	messageId: string;
+	channelId: string;
+	round: number;
+}
+export interface DismissCaptureResultRowResult {
+	messageId: string;
+	round: number;
+	tempId: string;
+	dismissed: boolean;
+	/** False when the row was already in the requested state (idempotent no-op). */
+	changed: boolean;
+}
 /**
  * Structured follow-up the IS `structure` endpoint may emit instead of a plain
  * string question. Mirrors `@synap-core/hub-rest-client` and the frontend
@@ -22503,6 +22512,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 			currentStatus?: string | null;
 			expectedStatus?: string | null;
+			fieldErrors?: FieldErrors;
 			httpStatus: number;
 			opRef?: string | undefined;
 			path?: string;
@@ -22529,6 +22539,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -22606,6 +22617,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -22710,6 +22722,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -22772,6 +22785,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -22982,6 +22996,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -23135,6 +23150,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -23245,6 +23261,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -23389,6 +23406,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -23964,6 +23982,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -24182,6 +24201,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -24687,6 +24707,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -24828,6 +24849,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -24885,6 +24907,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -25402,6 +25425,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -25437,6 +25461,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -25540,6 +25565,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					currentStatus?: string | null;
 					expectedStatus?: string | null;
+					fieldErrors?: FieldErrors;
 					httpStatus: number;
 					opRef?: string | undefined;
 					path?: string;
@@ -25696,6 +25722,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					currentStatus?: string | null;
 					expectedStatus?: string | null;
+					fieldErrors?: FieldErrors;
 					httpStatus: number;
 					opRef?: string | undefined;
 					path?: string;
@@ -25997,6 +26024,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					currentStatus?: string | null;
 					expectedStatus?: string | null;
+					fieldErrors?: FieldErrors;
 					httpStatus: number;
 					opRef?: string | undefined;
 					path?: string;
@@ -26297,6 +26325,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -27656,6 +27685,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -27728,6 +27758,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -27900,6 +27931,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -27957,6 +27989,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -28018,6 +28051,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -29550,6 +29584,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -29661,6 +29696,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -29709,6 +29745,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -30085,6 +30122,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -30144,6 +30182,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -30193,6 +30232,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -30360,6 +30400,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -30444,6 +30485,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -30788,6 +30830,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -31553,6 +31596,39 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: PromotePropertyToBodyResult;
 		}>;
+		restore: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentUserId?: string | undefined;
+				id: string;
+				reasoning?: string | undefined;
+				source?: "agent" | "ai" | "intelligence" | "system" | "user" | undefined;
+				viewContext?: {
+					typeKey?: string | undefined;
+					viewId?: string | undefined;
+				} | undefined;
+			};
+			meta: object;
+			output: {
+				effect?: undefined;
+				message: string;
+				proposalId: string;
+				proposalType: string;
+				reviewUrl: string;
+				status: string;
+			} | {
+				effect: {
+					applied: "verified";
+					ids: string[];
+					rows: number;
+					subject: string;
+				};
+				message: string;
+				proposalId?: undefined;
+				proposalType?: undefined;
+				reviewUrl?: undefined;
+				status: string;
+			};
+		}>;
 		search: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				limit?: number | undefined;
@@ -31840,6 +31916,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -32029,6 +32106,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -32151,6 +32229,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -33495,6 +33574,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					currentStatus?: string | null;
 					expectedStatus?: string | null;
+					fieldErrors?: FieldErrors;
 					httpStatus: number;
 					opRef?: string | undefined;
 					path?: string;
@@ -34377,6 +34457,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -34457,6 +34538,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -34514,6 +34596,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -34632,6 +34715,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -34940,6 +35024,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -35092,6 +35177,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -35355,6 +35441,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -35565,6 +35652,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -35671,6 +35759,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -35756,6 +35845,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -36102,6 +36192,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -36425,6 +36516,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -37029,6 +37121,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -37299,6 +37392,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -37359,6 +37453,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -37517,6 +37612,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -37758,6 +37854,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -37846,6 +37943,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -37962,6 +38060,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					currentStatus?: string | null;
 					expectedStatus?: string | null;
+					fieldErrors?: FieldErrors;
 					httpStatus: number;
 					opRef?: string | undefined;
 					path?: string;
@@ -38071,6 +38170,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -38288,6 +38388,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -38440,6 +38541,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -38517,6 +38619,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -38760,6 +38863,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -38872,6 +38976,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -38956,6 +39061,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -39565,6 +39671,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -39614,6 +39721,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -39655,6 +39763,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -39689,6 +39798,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -39752,6 +39862,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -39798,6 +39909,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					currentStatus?: string | null;
 					expectedStatus?: string | null;
+					fieldErrors?: FieldErrors;
 					httpStatus: number;
 					opRef?: string | undefined;
 					path?: string;
@@ -39878,6 +39990,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					currentStatus?: string | null;
 					expectedStatus?: string | null;
+					fieldErrors?: FieldErrors;
 					httpStatus: number;
 					opRef?: string | undefined;
 					path?: string;
@@ -39921,6 +40034,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					currentStatus?: string | null;
 					expectedStatus?: string | null;
+					fieldErrors?: FieldErrors;
 					httpStatus: number;
 					opRef?: string | undefined;
 					path?: string;
@@ -40294,6 +40408,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					currentStatus?: string | null;
 					expectedStatus?: string | null;
+					fieldErrors?: FieldErrors;
 					httpStatus: number;
 					opRef?: string | undefined;
 					path?: string;
@@ -40415,6 +40530,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					currentStatus?: string | null;
 					expectedStatus?: string | null;
+					fieldErrors?: FieldErrors;
 					httpStatus: number;
 					opRef?: string | undefined;
 					path?: string;
@@ -41186,6 +41302,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -41525,6 +41642,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -41664,6 +41782,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -41750,6 +41869,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -41838,6 +41958,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -42642,6 +42763,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -42930,6 +43052,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -43099,6 +43222,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -43897,6 +44021,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -44007,6 +44132,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -44288,6 +44414,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -44404,6 +44531,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -44516,6 +44644,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -44606,6 +44735,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -44893,6 +45023,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -44928,6 +45059,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -45248,6 +45380,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -45412,6 +45545,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -45685,6 +45819,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -46113,6 +46248,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -46245,6 +46381,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -46463,6 +46600,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -46597,6 +46735,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -46678,6 +46817,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -46704,6 +46844,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -46740,6 +46881,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -46896,6 +47038,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -47448,6 +47591,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -47775,6 +47919,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -47999,6 +48144,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -48302,6 +48448,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -48414,6 +48561,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -48510,6 +48658,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -48606,6 +48755,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -49147,6 +49297,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -49264,6 +49415,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -49483,6 +49635,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -49515,6 +49668,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -49614,6 +49768,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
@@ -49659,6 +49814,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
 				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
 				httpStatus: number;
 				opRef?: string | undefined;
 				path?: string;
