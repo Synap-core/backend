@@ -4,6 +4,7 @@
 
 import { z } from "@hono/zod-openapi";
 import { uuidQueryParam } from "./_openapi.js";
+import { WireEntitySchema } from "./entity.js";
 
 /** Wire shape of a relation row. */
 export const WireRelationSchema = z
@@ -18,6 +19,37 @@ export const WireRelationSchema = z
     createdAt: z.union([z.string(), z.date()]).optional(),
   })
   .openapi("Relation");
+
+/** Wire shape of a config-graph link (`links` row) touching an entity. */
+export const WireConfigLinkSchema = z
+  .object({
+    id: z.string(),
+    workspaceId: z.string().nullable(),
+    fromType: z.string(),
+    fromId: z.string(),
+    toType: z.string(),
+    toId: z.string(),
+    linkType: z.string(),
+    metadata: z.record(z.string(), z.unknown()),
+    createdBy: z.string().nullable(),
+    createdAt: z.union([z.string(), z.date()]),
+  })
+  .openapi("ConfigLink");
+
+/**
+ * GET /relations answer. With `entityId` it is the entity's neighbours
+ * (`relations.getRelated`): the related entities plus config links, not
+ * relation rows. Without `entityId` it is `{ relations }`, a page of rows.
+ */
+export const ListRelationsResponseSchema = z
+  .union([
+    z.object({
+      entities: z.array(WireEntitySchema),
+      configLinks: z.array(WireConfigLinkSchema),
+    }),
+    z.object({ relations: z.array(WireRelationSchema) }),
+  ])
+  .openapi("ListRelationsResponse");
 
 /** GET /relations query. */
 export const ListRelationsQuerySchema = z

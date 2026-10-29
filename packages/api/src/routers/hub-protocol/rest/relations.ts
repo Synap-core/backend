@@ -11,6 +11,7 @@ import {
   DeleteRelationRequestSchema,
   ListRelationsQuerySchema,
   WireRelationSchema,
+  ListRelationsResponseSchema,
 } from "./_codecs/relation.js";
 import {
   actingUserIdFor,
@@ -35,14 +36,15 @@ export function registerRelationsRoutes(app: HubHono): void {
     tags: ["Relations"],
     summary: "List relations",
     description:
-      "Returns relations in a workspace. Filter by `entityId` (either side of the edge) and/or `type`.",
+      "Without `entityId`, returns `{ relations }`: relation rows in the workspace (or pod-wide when no workspace is given), optionally filtered by `type`. With `entityId`, returns `{ entities, configLinks }`: that entity's neighbours on either side of an edge, not relation rows (use `/entities/{id}/connections` when you need each edge's type and direction).",
     request: {
       query: ListRelationsQuerySchema,
     },
     responses: {
       200: {
-        description: "Array of relations",
-        schema: z.array(WireRelationSchema),
+        description:
+          "`{ relations }`, or `{ entities, configLinks }` with `entityId`",
+        schema: ListRelationsResponseSchema,
       },
       400: { description: "Missing required param", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },

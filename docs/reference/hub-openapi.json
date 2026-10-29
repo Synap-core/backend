@@ -3324,6 +3324,66 @@
         },
         "required": ["userId", "workspaceId", "slug", "valueType"]
       },
+      "ListRelationsResponse": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "entities": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/Entity" }
+              },
+              "configLinks": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/ConfigLink" }
+              }
+            },
+            "required": ["entities", "configLinks"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "relations": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/Relation" }
+              }
+            },
+            "required": ["relations"]
+          }
+        ]
+      },
+      "ConfigLink": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "workspaceId": { "type": ["string", "null"] },
+          "fromType": { "type": "string" },
+          "fromId": { "type": "string" },
+          "toType": { "type": "string" },
+          "toId": { "type": "string" },
+          "linkType": { "type": "string" },
+          "metadata": { "type": "object", "additionalProperties": {} },
+          "createdBy": { "type": ["string", "null"] },
+          "createdAt": {
+            "anyOf": [
+              { "type": "string" },
+              { "type": "string", "format": "date-time" }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "workspaceId",
+          "fromType",
+          "fromId",
+          "toType",
+          "toId",
+          "linkType",
+          "metadata",
+          "createdBy",
+          "createdAt"
+        ]
+      },
       "Relation": {
         "type": "object",
         "properties": {
@@ -20104,7 +20164,7 @@
       "get": {
         "tags": ["Relations"],
         "summary": "List relations",
-        "description": "Returns relations in a workspace. Filter by `entityId` (either side of the edge) and/or `type`.",
+        "description": "Without `entityId`, returns `{ relations }`: relation rows in the workspace (or pod-wide when no workspace is given), optionally filtered by `type`. With `entityId`, returns `{ entities, configLinks }`: that entity's neighbours on either side of an edge, not relation rows (use `/entities/{id}/connections` when you need each edge's type and direction).",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -20142,12 +20202,11 @@
         ],
         "responses": {
           "200": {
-            "description": "Array of relations",
+            "description": "`{ relations }`, or `{ entities, configLinks }` with `entityId`",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": { "$ref": "#/components/schemas/Relation" }
+                  "$ref": "#/components/schemas/ListRelationsResponse"
                 }
               }
             }

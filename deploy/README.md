@@ -80,6 +80,21 @@ cd backend
 ./synap install --from-image --domain pod.example.com --email you@example.com
 ```
 
+With `--domain localhost` the pod answers on `http://localhost:4000` (API) and
+`http://localhost:4040` (Pod Admin), with no TLS.
+
+Building from source first syncs the checkout to `origin/<branch>` with
+`git reset --hard`. It refuses when the checkout has tracked-file edits or
+commits origin does not have, and says what it found. Two environment
+variables override that:
+
+| Variable                 | Effect                                                                   |
+| ------------------------ | ------------------------------------------------------------------------ |
+| `SYNAP_SKIP_GIT_SYNC=1`  | Build the checkout as-is, unsynced. For local work; not for a deploy pod |
+| `SYNAP_FORCE_GIT_SYNC=1` | Reset anyway, after printing the work it discards                        |
+
+`synap update --from-source` applies the same guard.
+
 ### First admin
 
 Unless you passed `--admin-email` and `--admin-password`, the pod starts with
@@ -309,7 +324,7 @@ scheduled.
 
 - Scheduled snapshots keep a ladder, one per level: the newest plus the latest of
   the previous hour, day, week and month (restic's `--keep-last 1 --keep-hourly 2
-  --keep-daily 2 --keep-weekly 2 --keep-monthly 2`, at most 5).
+--keep-daily 2 --keep-weekly 2 --keep-monthly 2`, at most 5).
 - Manual snapshots never take a ladder slot; they keep their own newest
   `BACKUP_RETENTION_MANUAL_KEEP` (3).
 - Nothing is removed when the last push failed (`.push-failed`), the last dump is

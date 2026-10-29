@@ -34,6 +34,21 @@ sudo synap setup admin --email you@example.com --magic-link   # sign-in link for
 The installer installs Docker if needed, downloads the latest stable release,
 checks it, and starts the stack behind Caddy with automatic HTTPS.
 
+### Try it locally
+
+To try a pod on your own machine, with no domain or TLS, install it from a
+clone. You need Docker with Compose v2.
+
+```bash
+git clone https://github.com/synap-core/backend.git
+cd backend
+./synap install --domain localhost      # builds the images from source
+./synap setup admin --email you@example.com --magic-link
+```
+
+The API answers on <http://localhost:4000> and Pod Admin on
+<http://localhost:4040>. Details: [Install from a clone](deploy/README.md#install-from-a-clone).
+
 - Self-hosting guide: <https://docs.synap.live/docs/run>
 - The same guide in this repository, with every operator command:
   [deploy/README.md](deploy/README.md)
