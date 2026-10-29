@@ -292,13 +292,13 @@ describe("ask router — procedural lane vs project lens (X1)", () => {
     expect(r.primary).toBe("procedural");
   });
 
-  it("the procedural search asks for ≥2 content-term matches, ignoring function words", async () => {
+  it("an uncued procedural search asks for ≥3 content-term matches, ignoring function words", async () => {
     await ask({ ...baseParams, query: "the revenue model" });
     const opts = searchFullTextMock.mock.calls[0]![3] as {
       minMatchedTerms: number;
       ignoreTerms: ReadonlySet<string>;
     };
-    expect(opts.minMatchedTerms).toBe(2);
+    expect(opts.minMatchedTerms).toBe(3);
     expect(opts.ignoreTerms.has("the")).toBe(true);
     expect(opts.ignoreTerms.has("what")).toBe(true);
     expect(opts.ignoreTerms.has("revenue")).toBe(false);
