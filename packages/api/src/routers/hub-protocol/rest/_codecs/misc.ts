@@ -662,7 +662,17 @@ export const ListEventsQuerySchema = z
       .string()
       .optional()
       .describe("ISO timestamp. Defaults to 7 days ago."),
+    toDate: z
+      .string()
+      .optional()
+      .describe("ISO timestamp, inclusive upper bound."),
     limit: z.string().optional().describe("Default 50, hard-capped at 200."),
+    offset: z
+      .string()
+      .optional()
+      .describe(
+        "Non-negative integer, default 0. Order is timestamp DESC, id DESC; a full page carries `nextOffset`."
+      ),
     ungoverned: z
       .enum(["true", "false"])
       .optional()

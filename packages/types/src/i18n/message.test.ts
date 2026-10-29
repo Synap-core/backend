@@ -30,7 +30,7 @@ describe("formatMessage", () => {
     expect(en(m, { n: 0 })).toBe("0 files");
     expect(en(m, { n: 2 })).toBe("2 files");
     expect(fr(m, { n: 0 })).toBe("0 file"); // French: 0 is singular
-    expect(fr(m, { n: 1.5 })).toBe("1.5 file");
+    expect(fr(m, { n: 1.5 })).toBe("1,5 file"); // the French decimal comma
   });
 
   it("checks exact matches before the category", () => {
@@ -44,10 +44,10 @@ describe("formatMessage", () => {
 
   it("falls to other for a category the message does not list", () => {
     const m = "{n, plural, one {un} other {# autres}}";
-    expect(fr(m, { n: 1000000 })).toBe("1000000 autres"); // many → other
+    expect(fr(m, { n: 1000000 })).toBe("1\u202f000\u202f000 autres"); // many → other
     expect(
       fr("{n, plural, one {un} many {# de} other {#}}", { n: 2000000 })
-    ).toBe("2000000 de");
+    ).toBe("2\u202f000\u202f000 de");
   });
 
   it("selects on a string, other for anything else", () => {
@@ -153,5 +153,34 @@ describe("messageArguments", () => {
       )
     ).toEqual({ g: "select", n: "plural", who: "arg" });
     expect(messageArguments("Hello").size).toBe(0);
+  });
+});
+
+describe("numbers print in the locale's form (value-format)", () => {
+  const ITEMS =
+    "{n, plural, one {# élément} many {# d’éléments} other {# éléments}}";
+
+  it("# in a French plural: narrow no-break space thousands, decimal comma", () => {
+    expect(fr(ITEMS, { n: 1000000 })).toBe("1\u202f000\u202f000 d’éléments");
+    expect(fr(ITEMS, { n: 1234 })).toBe("1\u202f234 éléments");
+    expect(fr(ITEMS, { n: 0 })).toBe("0 élément");
+    expect(fr(ITEMS, { n: 2.5 })).toBe("2,5 éléments");
+  });
+
+  it("a numeric {arg} too; a string arg prints as given", () => {
+    expect(fr("{n} sur {total}", { n: 1500, total: 2000 })).toBe(
+      "1\u202f500 sur 2\u202f000"
+    );
+    expect(fr("en {year}", { year: "2026" })).toBe("en 2026");
+  });
+
+  it("English: unchanged below a thousand, grouped with a comma above", () => {
+    expect(en("{n, plural, one {# file} other {# files}}", { n: 42 })).toBe(
+      "42 files"
+    );
+    expect(
+      en("{n, plural, one {# file} other {# files}}", { n: 1234567 })
+    ).toBe("1,234,567 files");
+    expect(en("{ratio}", { ratio: 0.5 })).toBe("0.5");
   });
 });

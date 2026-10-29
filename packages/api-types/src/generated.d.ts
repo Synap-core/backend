@@ -14343,6 +14343,53 @@ declare const MARKETPLACE_TRUST_LEVELS: readonly [
 ];
 export type MarketplaceTrust = (typeof MARKETPLACE_TRUST_LEVELS)[number];
 export type CatalogKind = "automation" | "capability" | "cell" | "skill" | "template" | "view";
+export interface KeyDetail {
+	grants: Array<{
+		clientId: string | null;
+		createdAt: string;
+		entityIds: string[] | null;
+		expiresAt: string | null;
+		id: string;
+		label: string | null;
+		onBehalfOf: {
+			id: string;
+			name: string | null;
+		};
+		permissions: string[];
+		projectIds: string[] | null;
+		/** null = no narrowing on that axis. */
+		workspaces: Array<{
+			id: string;
+			name: string | null;
+		}> | null;
+	}>;
+	usage: {
+		clients: Array<{
+			calls: number;
+			client: string;
+		}>;
+		/** One row per day with calls, oldest first. */
+		days: Array<{
+			calls: number;
+			day: string;
+			failed: number;
+		}>;
+		retentionDays: number;
+	};
+	proposals: Array<{
+		createdAt: string;
+		id: string;
+		proposalType: string;
+		status: string;
+		summary: string | null;
+	}>;
+	sessions: Array<{
+		harness: string;
+		id: string;
+		lastSeenAt: string;
+		title: string | null;
+	}>;
+}
 export interface DeviceRequestView {
 	requestId: string;
 	status: "approved" | "consumed" | "denied" | "expired" | "pending";
@@ -23821,6 +23868,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				deleted: boolean;
 			};
+		}>;
+		adminKeyDetail: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				keyId: string;
+			};
+			meta: object;
+			output: KeyDetail;
 		}>;
 		adminListAll: import("@trpc/server").TRPCQueryProcedure<{
 			input: {

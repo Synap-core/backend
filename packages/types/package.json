@@ -56,6 +56,10 @@
       "types": "./dist/i18n/index.d.ts",
       "import": "./dist/i18n/index.js"
     },
+    "./value-format": {
+      "types": "./dist/value-format/index.d.ts",
+      "import": "./dist/value-format/index.js"
+    },
     "./grants": {
       "types": "./dist/grants/index.d.ts",
       "import": "./dist/grants/index.js"

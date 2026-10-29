@@ -21,6 +21,7 @@ describe("playbookParamAsk — a missing param as the ask it is owed through", (
         { label: "email", value: "email" },
         { label: "linkedin", value: "linkedin" },
       ],
+      allowOther: false,
     });
   });
 

@@ -27,6 +27,7 @@ import {
   askCardView,
   askFingerprint,
   askOptionForChip,
+  chooseTakesOwnAnswer,
   isRefusedAskField,
   relayRecordedAnswer,
   validateAnswerAgainstAsk,
@@ -306,7 +307,8 @@ function controlOf(ask: Ask | null, card: AskCardView): AskControlView {
         mode: "choose",
         options,
         initialKey: options.find((o) => o.recommended)?.key ?? null,
-        allowOther: ask.allowOther === true,
+        // The pod's rule, not the flag alone: open unless closed.
+        allowOther: chooseTakesOwnAnswer(ask),
       };
     }
     case "form":
@@ -437,13 +439,14 @@ export function formAnswerValues(
 
 // ─── The calls ───────────────────────────────────────────────────────────────
 
-/** "Other…" in a choose — never an option key (keys are the agent's values). */
+/** "Something else…" in a choose — never an option key (keys are the agent's values). */
 export const OTHER_KEY = "\u0000other";
 
 /** What the reader chose, before it is checked. */
 export type AskDraft =
   | { type: "confirm"; confirmed: boolean; note?: string }
-  | { type: "choose"; key: string; other?: string }
+  /** `note`: the person's details riding with a picked option. */
+  | { type: "choose"; key: string; other?: string; note?: string }
   | { type: "form"; draft: FormDraft }
   /** A reference to what is handed over — a vault secret, a connection, a file. */
   | { type: "provide"; ref: AskProvideRef }
@@ -496,7 +499,11 @@ function valueOf(
       }
       const option = askOptionForChip(ask, { value: draft.key });
       return option
-        ? { ok: true, value: { type: "chip", chip: option } }
+        ? {
+            ok: true,
+            value: { type: "chip", chip: option },
+            text: draft.note?.trim() || undefined,
+          }
         : { ok: false, message: "Pick one of the offered options." };
     }
     case "form": {

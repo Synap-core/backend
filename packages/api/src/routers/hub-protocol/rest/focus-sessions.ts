@@ -774,10 +774,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     description:
       "Scope by `workspaceId` (membership-checked), `projectId` (the project " +
       "must be visible to the caller — `loadVisibleProject`, the same floor " +
-      "every project read and filing write uses), or both. At least one is " +
-      "required, except for a workspace-bound key, which reads its own " +
+      "every project read and filing write uses), or both. With neither it " +
+      "lists pod-wide, except for a workspace-bound key, which reads its own " +
       "workspace when it names none (another `workspaceId` is a 403). Rows " +
-      "are always floored at the sessions the caller can read.",
+      "are always floored at the sessions the caller can read. `offset` pages " +
+      "past `limit` (newest first, `id` breaks ties).",
     request: {
       query: z.object({
         workspaceId: uuidQueryParam.optional(),
@@ -807,6 +808,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         subjectEntityId: z.string().uuid().optional(),
         subjectProfileSlug: z.string().min(1).optional(),
         limit: z.coerce.number().int().min(1).max(50).optional(),
+        offset: z.coerce.number().int().min(0).optional(),
       }),
     },
     responses: {
@@ -1323,10 +1325,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
   /**
    * GET /focus-sessions?workspaceId=...&projectId=...&status=...&limit=...
    *
-   * `workspaceId` OR `projectId` (or both). A project lens alone is how the
-   * CLI / an agent lists a project's sessions — project sessions often carry
-   * NO workspace (X1: "workspaceId is required" refused a project-only read
-   * the MCP door already answered).
+   * `workspaceId` and/or `projectId` narrow the list; with neither it is
+   * pod-wide under the owner floor (as MCP `synap_list_sessions`). A project
+   * lens alone is how the CLI / an agent lists a project's sessions — project
+   * sessions often carry NO workspace. `offset` pages past `limit`.
    */
   app.get("/focus-sessions", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
@@ -1342,9 +1344,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     if (!confined.ok) return c.json({ error: confined.error }, 403);
     const workspaceIdParam = confined.workspaceId ?? undefined;
     const projectIdParam = c.req.query("projectId") || undefined;
-    if (!workspaceIdParam && !projectIdParam) {
-      return c.json({ error: "workspaceId or projectId is required" }, 400);
-    }
+    // Neither lens: pod-wide under the owner floor, as MCP `synap_list_sessions`.
     // Validate the caller is a member of the requested workspace (when one is
     // named) and bind the acting user. Without this the read scoped by a
     // caller-supplied workspaceId ALONE with no userId floor — exposing every
@@ -1378,6 +1378,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     const limit = Number.isFinite(limitRaw)
       ? Math.min(Math.max(limitRaw, 1), 50)
       : 20;
+    const offsetRaw = Number(c.req.query("offset") ?? "0");
+    const offset =
+      Number.isFinite(offsetRaw) && offsetRaw > 0 ? Math.trunc(offsetRaw) : 0;
     // ONE status vocabulary (session-statuses.ts) — this door used to carry a
     // hand-mirrored copy that would silently reject any status the schema
     // later learned.
@@ -1441,8 +1444,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         .select()
         .from(focusSessions)
         .where(and(...conditions))
-        .orderBy(desc(focusSessions.startedAt))
-        .limit(limit);
+        // `id` breaks ties so two sessions started in the same instant never
+        // swap between pages.
+        .orderBy(desc(focusSessions.startedAt), desc(focusSessions.id))
+        .limit(limit)
+        .offset(offset);
 
       return c.json(attachSessionKind(attachTriage(rows)));
     } catch (err) {
@@ -1717,7 +1723,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         }),
       ]);
       return c.json({
-        ...row,
+        ...attachSessionKind(attachTriage([row]))[0],
         rerun: continuation.rerun,
         continuation,
         outcomes,

@@ -145,9 +145,12 @@ function key(person: string, scope: string[]) {
     isActive: true,
     scope,
   });
+  // The shape resolveKeyIdentity returns for a person's key (key-identity.ts):
+  // /setup/agent reads principal.hostUserId (the computer an AI runs on).
   resolveKeyIdentity.mockResolvedValue({
     effectiveUserId: person,
     isAgent: false,
+    principal: { id: person, kind: "human", hostUserId: null },
   });
 }
 

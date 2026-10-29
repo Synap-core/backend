@@ -455,30 +455,24 @@ export function AskAnswer({
       )}
 
       <div className="flex flex-col gap-2 border-t border-foreground/[0.06] pt-4">
-        {asked ? (
+        {asked && (
           <>
             <p className="text-[12.5px] text-foreground/75">
-              Your question is in the session room. The agent answers there.
+              Your message is in the session room, where the agent reads it.
             </p>
             <ExitLink exit={roomExit} label="Open the conversation" />
           </>
-        ) : (
-          <div>
-            <Button
-              size="sm"
-              variant="flat"
-              startContent={<MessageSquare className="h-3.5 w-3.5" />}
-              isLoading={askAbout.isPending}
-              isDisabled={busy || staleness === "gone"}
-              onPress={() => {
-                setFailure(null);
-                askAbout.mutate(slotCall(seen));
-              }}
-            >
-              Ask the agent about it
-            </Button>
-          </div>
         )}
+        <MessageAgent
+          busy={busy}
+          sending={askAbout.isPending}
+          gone={staleness === "gone"}
+          onSend={(text) => {
+            setFailure(null);
+            askAbout.mutate({ ...slotCall(seen), note: text });
+          }}
+          sent={askAbout.isSuccess ? askAbout.submittedAt : 0}
+        />
       </div>
     </div>
   );
@@ -853,6 +847,87 @@ function RecommendedChip() {
 }
 
 /**
+ * Talk to the agent about this ask in the person's OWN words (founder
+ * 2026-10-29: never a template). The message lands in the session room, and
+ * the agent that asked hears it (`focusSessions.askAboutSlot`). Collapsed
+ * behind one button; the field clears once a message is sent.
+ */
+function MessageAgent({
+  busy,
+  sending,
+  gone,
+  sent,
+  onSend,
+}: {
+  busy: boolean;
+  sending: boolean;
+  gone: boolean;
+  /** When the last message was sent (0: none) — clears the field. */
+  sent: number;
+  onSend: (text: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [clearedFor, setClearedFor] = useState(0);
+  if (sent !== clearedFor) {
+    setClearedFor(sent);
+    if (sent !== 0) setText("");
+  }
+  if (!open) {
+    return (
+      <div>
+        <Button
+          size="sm"
+          variant="flat"
+          startContent={<MessageSquare className="h-3.5 w-3.5" />}
+          isDisabled={busy || gone}
+          onPress={() => setOpen(true)}
+        >
+          Message the agent
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      <Textarea
+        size="sm"
+        minRows={2}
+        label="Your message to the agent"
+        value={text}
+        onValueChange={setText}
+        isDisabled={busy}
+        autoFocus
+      />
+      <div className="flex gap-2">
+        <Button
+          size="sm"
+          color="primary"
+          variant="flat"
+          startContent={<MessageSquare className="h-3.5 w-3.5" />}
+          isLoading={sending}
+          isDisabled={busy || gone || text.trim().length === 0}
+          onPress={() => onSend(text.trim())}
+        >
+          Send
+        </Button>
+        <Button
+          size="sm"
+          variant="light"
+          isDisabled={sending}
+          onPress={() => {
+            setText("");
+            setOpen(false);
+          }}
+        >
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
  * The optional note to the agent, collapsed behind ONE label until asked for.
  * Opened, the field is labelled with the noun, and no placeholder repeats it.
  */
@@ -905,6 +980,7 @@ function ChooseControl({
 }) {
   const [key, setKey] = useState<string>(control.initialKey ?? "");
   const [other, setOther] = useState("");
+  const [note, setNote] = useState("");
   const isOther = key === OTHER_KEY;
   const ready = key !== "" && (!isOther || other.trim().length > 0);
   return (
@@ -933,12 +1009,16 @@ function ChooseControl({
           </Radio>
         ))}
         {control.allowOther && (
-          <Radio value={OTHER_KEY} classNames={RADIO_CARD}>
-            <span className="text-[13px] text-foreground">Other…</span>
+          <Radio
+            value={OTHER_KEY}
+            description="Answer in your own words"
+            classNames={RADIO_CARD}
+          >
+            <span className="text-[13px] text-foreground">Something else…</span>
           </Radio>
         )}
       </RadioGroup>
-      {isOther && (
+      {isOther ? (
         <Textarea
           size="sm"
           minRows={1}
@@ -948,6 +1028,18 @@ function ChooseControl({
           isDisabled={busy}
           autoFocus
         />
+      ) : (
+        key !== "" && (
+          // Precision rides with the pick: the agent reads "A — <details>".
+          <Textarea
+            size="sm"
+            minRows={1}
+            label="Add details (optional)"
+            value={note}
+            onValueChange={setNote}
+            isDisabled={busy}
+          />
+        )
       )}
       <div>
         <Button
@@ -956,7 +1048,7 @@ function ChooseControl({
           startContent={<Check className="h-4 w-4" />}
           isLoading={pending}
           isDisabled={busy || !ready}
-          onPress={() => onAnswer({ type: "choose", key, other })}
+          onPress={() => onAnswer({ type: "choose", key, other, note })}
         >
           Send answer
         </Button>

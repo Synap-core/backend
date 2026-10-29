@@ -251,16 +251,34 @@ describe("validateAnswerAgainstAsk", () => {
     });
   });
 
-  it("choose: free text only when allowOther", () => {
-    expect(ok(choose, { type: "text" }, "next quarter")).toMatchObject({
+  it("choose: the person's own words, unless the ask is closed", () => {
+    // Open by default (founder 2026-10-29): no flag takes words.
+    expect(ok(choose, { type: "text" }, "next quarter").ok).toBe(true);
+    const closed: Ask = {
+      ...(choose as Extract<Ask, { mode: "choose" }>),
+      allowOther: false,
+    };
+    expect(ok(closed, { type: "text" }, "next quarter")).toMatchObject({
       ok: false,
       code: "other_not_allowed",
     });
-    const withOther: Ask = {
-      ...(choose as Extract<Ask, { mode: "choose" }>),
-      allowOther: true,
+  });
+
+  it("choose: a pass / fail grade with no flag is closed (criterion slots filed before the flag)", () => {
+    const grade: Ask = {
+      mode: "choose",
+      options: [
+        { label: "Pass", value: "pass" },
+        { label: "Fail", value: "fail" },
+      ],
     };
-    expect(ok(withOther, { type: "text" }, "next quarter").ok).toBe(true);
+    expect(ok(grade, { type: "text" }, "mostly")).toMatchObject({
+      ok: false,
+      code: "other_not_allowed",
+    });
+    expect(
+      ok({ ...grade, allowOther: true } as Ask, { type: "text" }, "mostly").ok
+    ).toBe(true);
   });
 
   it("form: required, unknown keys and enum constraints", () => {

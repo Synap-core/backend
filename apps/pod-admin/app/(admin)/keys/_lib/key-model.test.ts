@@ -9,6 +9,8 @@ import {
   managedKeys,
   normalizeScopes,
   isPodAppAccessKey,
+  keyTypeCounts,
+  queryKeys,
   type UnifiedKey,
 } from "./key-model";
 
@@ -249,5 +251,96 @@ describe("a pod app's access key is the app's, not a key to manage", () => {
 
   it("a sign-in token keeps its App badge", () => {
     expect(CATEGORY_LABEL[categorize(signIn)]).toBe(CATEGORY_LABEL.app);
+  });
+});
+
+describe("queryKeys — the list toolbar", () => {
+  const DAY = 86_400_000;
+  const now = Date.now();
+  const keys: UnifiedKey[] = [
+    key({
+      id: "a",
+      keyName: "beta deploy",
+      keyType: "service",
+      createdAt: new Date(now - 3 * DAY),
+      lastUsedAt: new Date(now - DAY),
+      scope: ["hub-protocol.read"],
+    }),
+    key({
+      id: "b",
+      keyName: "Alpha laptop",
+      holder: { kind: "computer", name: "Antoine's Mac" } as never,
+      createdAt: new Date(now - DAY),
+      expiresAt: new Date(now + 2 * DAY),
+    }),
+    key({
+      id: "c",
+      keyName: "gamma",
+      isActive: false,
+      createdAt: new Date(now - 5 * DAY),
+    }),
+    key({
+      id: "d",
+      keyName: "delta",
+      expiresAt: new Date(now - DAY),
+      createdAt: new Date(now - 2 * DAY),
+      lastUsedAt: new Date(now - 3 * DAY),
+    }),
+  ];
+  const ids = (ks: UnifiedKey[]) => ks.map((k) => k.id);
+  const q = { search: "", type: null, status: "live" as const };
+
+  it("Active (the default) is every key not revoked, newest first", () => {
+    expect(ids(queryKeys(keys, q, "recent"))).toEqual(["b", "d", "a"]);
+  });
+
+  it("status: expiring soon, expired, revoked, all", () => {
+    expect(
+      ids(queryKeys(keys, { ...q, status: "expiring" }, "recent"))
+    ).toEqual(["b"]);
+    expect(ids(queryKeys(keys, { ...q, status: "expired" }, "recent"))).toEqual(
+      ["d"]
+    );
+    expect(ids(queryKeys(keys, { ...q, status: "revoked" }, "recent"))).toEqual(
+      ["c"]
+    );
+    expect(queryKeys(keys, { ...q, status: "all" }, "recent")).toHaveLength(4);
+  });
+
+  it("type narrows to one category", () => {
+    expect(ids(queryKeys(keys, { ...q, type: "computer" }, "recent"))).toEqual([
+      "b",
+    ]);
+    expect(ids(queryKeys(keys, { ...q, type: "service" }, "recent"))).toEqual([
+      "a",
+    ]);
+  });
+
+  it("search matches name, holder, type and scopes, every word, any case", () => {
+    expect(ids(queryKeys(keys, { ...q, search: "MAC" }, "recent"))).toEqual([
+      "b",
+    ]);
+    expect(
+      ids(queryKeys(keys, { ...q, search: "service read" }, "recent"))
+    ).toEqual(["a"]);
+    expect(queryKeys(keys, { ...q, search: "beta nope" }, "recent")).toEqual(
+      []
+    );
+  });
+
+  it("orders by oldest, name (case-blind) and last use (never used last)", () => {
+    expect(ids(queryKeys(keys, q, "oldest"))).toEqual(["a", "d", "b"]);
+    expect(ids(queryKeys(keys, q, "name"))).toEqual(["b", "a", "d"]);
+    expect(ids(queryKeys(keys, q, "last-used"))).toEqual(["a", "d", "b"]);
+  });
+
+  it("type counts follow the search and status, not the type filter", () => {
+    const counts = keyTypeCounts(keys, { search: "", status: "all" });
+    expect(counts.get("computer")).toBe(1);
+    expect(counts.get("service")).toBe(1);
+    expect(counts.get("operator")).toBe(2);
+    expect(
+      keyTypeCounts(keys, { search: "mac", status: "live" }).get("service")
+    ).toBeUndefined();
   });
 });

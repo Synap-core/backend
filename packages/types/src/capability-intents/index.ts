@@ -19,8 +19,9 @@
  * THE SSOT IS THE POD's `capability_intents` TABLE, seeded by migrations
  * `0283_capability_intents.sql` (the 13), `0284_publish_post_intent.sql`
  * (`publish_post`), `0314_delegate_agent_task_intent.sql` (`delegate_agent_task`),
- * `0329_read_webpage_intent.sql` (`read_webpage`) and
- * `0370_edit_video_intent.sql` (`edit_video`). Slugs live in ROWS, not in a TypeScript union.
+ * `0329_read_webpage_intent.sql` (`read_webpage`), `0360_search_web_intent.sql`
+ * (`search_web`) and `0370_edit_video_intent.sql` (`edit_video`). Slugs live in
+ * ROWS, not in a TypeScript union.
  *
  * The pod reads THIS file: `ABSTRACT_VERBS` (`@synap/database`
  * `schema/tools.ts`) is `ABSTRACT_INTENTS`, re-exported.
@@ -30,7 +31,7 @@
  * seed migration SQL and fails the build the moment these two disagree.
  *
  * ⚠️ MIRRORED IN LOCKSTEP with:
- *   - the `INSERT` slugs — migrations `0283`, `0284`, `0314`, `0329`, `0370`
+ *   - the `INSERT` slugs — migrations `0283`, `0284`, `0314`, `0329`, `0360`, `0370`
  *   - `CAPABILITY_INTENTS` — synap-control-plane-api
  *       `src/seeds/capability-intent-vocabulary.ts`
  *
@@ -105,6 +106,7 @@ export const REGISTERED_EXTRAS = [
   "publish_post",
   "delegate_agent_task",
   "read_webpage",
+  "search_web",
   "edit_video",
 ] as const;
 
@@ -202,6 +204,7 @@ const INTENT_RUN_LABELS: Readonly<Record<string, string>> = {
   publish_post: "Publish posts with your tools",
   delegate_agent_task: "Hand tasks to your agents",
   read_webpage: "Read web pages with your tools",
+  search_web: "Search the web with your tools",
   edit_video: "Edit videos with your tools",
 };
 

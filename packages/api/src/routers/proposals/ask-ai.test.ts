@@ -124,8 +124,7 @@ const { postChannelMessage } =
   await import("../../services/messaging/post-message.js");
 const { triggerAutoRespond } =
   await import("../../utils/trigger-auto-respond.js");
-const { askAiAboutProposal, ASK_AI_SEED, isAskAiSeed } =
-  await import("./ask-ai.js");
+const { askAiAboutProposal, ASK_AI_SEED } = await import("./ask-ai.js");
 
 const PROPOSAL = "11111111-2222-3333-4444-555555555555";
 const USER = "user-1";
@@ -227,15 +226,20 @@ describe("the happy path", () => {
     });
   });
 
-  it("appends the user's note to the seed", async () => {
+  it("the user's own words ARE the message — no template around them", async () => {
     await askAiAboutProposal({
       proposalId: PROPOSAL,
       userId: USER,
       note: "I already reconnected Google.",
     });
     const posted = vi.mocked(postChannelMessage).mock.calls[0]![0]!;
-    expect(posted.content).toContain(ASK_AI_SEED);
-    expect(posted.content).toContain("I already reconnected Google.");
+    expect(posted.content).toBe("I already reconnected Google.");
+  });
+
+  it("a bare tap says the one default sentence", async () => {
+    await askAiAboutProposal({ proposalId: PROPOSAL, userId: USER });
+    const posted = vi.mocked(postChannelMessage).mock.calls[0]![0]!;
+    expect(posted.content).toBe(ASK_AI_SEED);
   });
 
   it("falls back to the caller's workspace when the proposal has none", async () => {
@@ -379,12 +383,30 @@ describe("IDEMPOTENCY under double-tap", () => {
     expect(triggerAutoRespond).toHaveBeenCalledTimes(1);
   });
 
-  it("isAskAiSeed is derived from the seed constant, not a second literal", () => {
-    expect(isAskAiSeed("user", ASK_AI_SEED)).toBe(true);
-    expect(isAskAiSeed("user", `${ASK_AI_SEED}\n\nplus a note`)).toBe(true);
-    expect(isAskAiSeed("assistant", ASK_AI_SEED)).toBe(false);
-    expect(isAskAiSeed("user", "something else")).toBe(false);
-    expect(isAskAiSeed("user", null)).toBe(false);
+  it("NEW words while the first waits are a new message, not swallowed", async () => {
+    h.latestMessages = [
+      { id: "m-prev", role: "user", content: "Why did it fail?" },
+    ];
+    const out = await askAiAboutProposal({
+      proposalId: PROPOSAL,
+      userId: USER,
+      note: "Can you retry with my Google account?",
+    });
+    expect(out.seeded).toBe(true);
+    expect(postChannelMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("the SAME words twice are a double tap: one message", async () => {
+    h.latestMessages = [
+      { id: "m-prev", role: "user", content: "Why did it fail?" },
+    ];
+    const out = await askAiAboutProposal({
+      proposalId: PROPOSAL,
+      userId: USER,
+      note: "Why did it fail?",
+    });
+    expect(out.seeded).toBe(false);
+    expect(postChannelMessage).not.toHaveBeenCalled();
   });
 });
 

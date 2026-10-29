@@ -64,6 +64,155 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+/**
+ * Every budget variable the code reads, in one list: the env names, the keys
+ * of the pod's own setting (`pod_settings.settings.rateLimits`, set through
+ * `/api/pod-rate-limits`) and what the deploy config must pass
+ * (rate-limit-deploy-wiring.test.ts).
+ */
+export const RATE_LIMIT_BUDGET_KEYS = [
+  "RATE_LIMIT_CRUD_WINDOW_MS",
+  "RATE_LIMIT_IMPORT_WINDOW_MS",
+  "RATE_LIMIT_AI_WINDOW_MS",
+  "RATE_LIMIT_AGENT_TURN_WINDOW_MS",
+  "RATE_LIMIT_CALENDAR_FEED_WINDOW_MS",
+  "RATE_LIMIT_CRUD_SESSION_MAX",
+  "RATE_LIMIT_CRUD_READ_WINDOW_MS",
+  "RATE_LIMIT_IMPORT_MAX",
+  "RATE_LIMIT_AI_MAX",
+  "RATE_LIMIT_AGENT_TURN_MAX",
+  "RATE_LIMIT_CRUD_MAX",
+  "RATE_LIMIT_CRUD_IP_CEILING",
+  "RATE_LIMIT_CRUD_READ_MAX",
+  "RATE_LIMIT_CRUD_READ_SESSION_MAX",
+  "RATE_LIMIT_CALENDAR_FEED_MAX",
+  "RATE_LIMIT_CALENDAR_FEED_IP_MAX",
+  "RATE_LIMIT_PUBLIC_READ_WINDOW_MS",
+  "RATE_LIMIT_PUBLIC_SUBMIT_IP_WINDOW_MS",
+  "RATE_LIMIT_PUBLIC_SUBMIT_SHARE_WINDOW_MS",
+  "RATE_LIMIT_PUBLIC_READ_IP_MAX",
+  "RATE_LIMIT_PUBLIC_SUBMIT_IP_MAX",
+  "RATE_LIMIT_PUBLIC_SUBMIT_SHARE_MAX",
+  "RATE_LIMIT_DEVICE_AUTH_WINDOW_MS",
+  "RATE_LIMIT_DEVICE_AUTH_MAX",
+  "RATE_LIMIT_KEY_STATE_WINDOW_MS",
+  "RATE_LIMIT_KEY_STATE_MAX",
+  "RATE_LIMIT_OAUTH_PUBLIC_WINDOW_MS",
+  "RATE_LIMIT_OAUTH_PUBLIC_MAX",
+  "RATE_LIMIT_OAUTH_TOKEN_WINDOW_MS",
+  "RATE_LIMIT_OAUTH_TOKEN_MAX",
+  "RATE_LIMIT_OAUTH_TOKEN_IP_CEILING",
+] as const;
+
+export type RateLimitBudgetKey = (typeof RATE_LIMIT_BUDGET_KEYS)[number];
+
+const BUDGET_KEY_SET: ReadonlySet<string> = new Set(RATE_LIMIT_BUDGET_KEYS);
+
+/** Largest value a pod setting may hold (a 24 h window is 86 400 000 ms). */
+export const RATE_LIMIT_SETTING_MAX = 1_000_000_000;
+
+export type RateLimitOverrides = Partial<Record<RateLimitBudgetKey, number>>;
+
+/**
+ * The pod owner's values, from `pod_settings.settings.rateLimits.values`:
+ * known keys with a positive integer up to `RATE_LIMIT_SETTING_MAX`; anything
+ * else is dropped, so a bad stored value falls back to the env, never to 0.
+ */
+export function parseRateLimitOverrides(raw: unknown): RateLimitOverrides {
+  const out: RateLimitOverrides = {};
+  if (raw === null || typeof raw !== "object") return out;
+  for (const [key, value] of Object.entries(raw)) {
+    if (
+      BUDGET_KEY_SET.has(key) &&
+      Number.isInteger(value) &&
+      (value as number) > 0 &&
+      (value as number) <= RATE_LIMIT_SETTING_MAX
+    ) {
+      out[key as RateLimitBudgetKey] = value as number;
+    }
+  }
+  return out;
+}
+
+let podOverrides: RateLimitOverrides = {};
+let overridesVersion = 0;
+
+/**
+ * Apply the pod owner's values over the env. Bumps the version the edge
+ * rebuilds its limiters on (security.ts) only when a value changed.
+ */
+export function setRateLimitOverrides(next: RateLimitOverrides): boolean {
+  const clean = parseRateLimitOverrides(next);
+  const same =
+    Object.keys(clean).length === Object.keys(podOverrides).length &&
+    RATE_LIMIT_BUDGET_KEYS.every((k) => clean[k] === podOverrides[k]);
+  if (same) return false;
+  podOverrides = clean;
+  overridesVersion += 1;
+  return true;
+}
+
+/** Changes each time `setRateLimitOverrides` changes a value. */
+export function rateLimitOverridesVersion(): number {
+  return overridesVersion;
+}
+
+/** Records each budget's default while `describeRateLimitBudgets` runs. */
+let defaultsSeen: Map<RateLimitBudgetKey, number> | null = null;
+
+/** A budget: the pod's setting, else the env, else `fallback`. */
+function budget(key: RateLimitBudgetKey, fallback: number): number {
+  defaultsSeen?.set(key, fallback);
+  const pod = podOverrides[key];
+  return pod ?? parsePositiveInt(process.env[key], fallback);
+}
+
+export interface RateLimitBudgetView {
+  key: RateLimitBudgetKey;
+  /** In force now. */
+  value: number;
+  /** Where `value` comes from. */
+  source: "pod" | "env" | "default";
+  /** What applies with neither a pod setting nor an env value. */
+  defaultValue: number;
+  /** The deployment's env value, when it sets a valid one. */
+  envValue: number | null;
+}
+
+/**
+ * Every budget with its value, source and default, as the getters below
+ * compute them. A default that derives from another budget (the address
+ * ceiling is five person budgets) is the one derived from the value in force.
+ */
+export function describeRateLimitBudgets(): RateLimitBudgetView[] {
+  const seen = new Map<RateLimitBudgetKey, number>();
+  defaultsSeen = seen;
+  try {
+    getRateLimitClassConfig();
+    getCalendarFeedIpCeiling();
+    getPublicDoorRateConfig();
+    getDeviceAuthRateConfig();
+    getKeyStateRateConfig();
+    getOAuthPublicRateConfig();
+    getOAuthTokenRateConfig();
+  } finally {
+    defaultsSeen = null;
+  }
+  return RATE_LIMIT_BUDGET_KEYS.map((key) => {
+    const defaultValue = seen.get(key) ?? 0;
+    const env = parsePositiveInt(process.env[key], 0);
+    const envValue = env > 0 ? env : null;
+    const pod = podOverrides[key];
+    return {
+      key,
+      value: pod ?? envValue ?? defaultValue,
+      source: pod !== undefined ? "pod" : envValue !== null ? "env" : "default",
+      defaultValue,
+      envValue,
+    };
+  });
+}
+
 function formatRetryAfter(windowMs: number): string {
   const seconds = Math.ceil(windowMs / 1000);
   if (seconds < 60) return `${seconds} seconds`;
@@ -92,24 +241,12 @@ export function getRateLimitClassConfig(): Record<
     ipCeiling?: number;
   }
 > {
-  const crudWindow = parsePositiveInt(
-    process.env.RATE_LIMIT_CRUD_WINDOW_MS,
-    15 * 60 * 1000
-  );
-  const importWindow = parsePositiveInt(
-    process.env.RATE_LIMIT_IMPORT_WINDOW_MS,
-    15 * 60 * 1000
-  );
-  const aiWindow = parsePositiveInt(
-    process.env.RATE_LIMIT_AI_WINDOW_MS,
-    5 * 60 * 1000
-  );
-  const agentWindow = parsePositiveInt(
-    process.env.RATE_LIMIT_AGENT_TURN_WINDOW_MS,
-    aiWindow
-  );
-  const calendarFeedWindow = parsePositiveInt(
-    process.env.RATE_LIMIT_CALENDAR_FEED_WINDOW_MS,
+  const crudWindow = budget("RATE_LIMIT_CRUD_WINDOW_MS", 15 * 60 * 1000);
+  const importWindow = budget("RATE_LIMIT_IMPORT_WINDOW_MS", 15 * 60 * 1000);
+  const aiWindow = budget("RATE_LIMIT_AI_WINDOW_MS", 5 * 60 * 1000);
+  const agentWindow = budget("RATE_LIMIT_AGENT_TURN_WINDOW_MS", aiWindow);
+  const calendarFeedWindow = budget(
+    "RATE_LIMIT_CALENDAR_FEED_WINDOW_MS",
     5 * 60 * 1000
   );
 
@@ -117,43 +254,34 @@ export function getRateLimitClassConfig(): Record<
   // gate calls per page and prefetch plus its own queries and polling —
   // roughly 60–150 requests a minute for an active operator — so the anonymous
   // per-IP budget would lock a single person out.
-  const crudSessionMax = parsePositiveInt(
-    process.env.RATE_LIMIT_CRUD_SESSION_MAX,
-    3000
-  );
+  const crudSessionMax = budget("RATE_LIMIT_CRUD_SESSION_MAX", 3000);
 
-  const crudReadWindow = parsePositiveInt(
-    process.env.RATE_LIMIT_CRUD_READ_WINDOW_MS,
-    crudWindow
-  );
+  const crudReadWindow = budget("RATE_LIMIT_CRUD_READ_WINDOW_MS", crudWindow);
 
   return {
     import: {
-      max: parsePositiveInt(process.env.RATE_LIMIT_IMPORT_MAX, 200),
+      max: budget("RATE_LIMIT_IMPORT_MAX", 200),
       windowMs: importWindow,
       retryAfter: formatRetryAfter(importWindow),
     },
     ai_interactive: {
-      max: parsePositiveInt(process.env.RATE_LIMIT_AI_MAX, 60),
+      max: budget("RATE_LIMIT_AI_MAX", 60),
       windowMs: aiWindow,
       retryAfter: formatRetryAfter(aiWindow),
     },
     ai_agent_turn: {
-      max: parsePositiveInt(process.env.RATE_LIMIT_AGENT_TURN_MAX, 120),
+      max: budget("RATE_LIMIT_AGENT_TURN_MAX", 120),
       windowMs: agentWindow,
       retryAfter: formatRetryAfter(agentWindow),
     },
     crud: {
-      max: parsePositiveInt(process.env.RATE_LIMIT_CRUD_MAX, 500),
+      max: budget("RATE_LIMIT_CRUD_MAX", 500),
       sessionMax: crudSessionMax,
       // Every `crud` request from one client address, whatever bucket it
       // spends from (`crud:ipall:*`, see `buildCrudIpCeilingKey`). Five busy
       // people behind one address fit; a caller inventing a session or Bearer
       // per request does not get past it.
-      ipCeiling: parsePositiveInt(
-        process.env.RATE_LIMIT_CRUD_IP_CEILING,
-        5 * crudSessionMax
-      ),
+      ipCeiling: budget("RATE_LIMIT_CRUD_IP_CEILING", 5 * crudSessionMax),
       windowMs: crudWindow,
       retryAfter: formatRetryAfter(crudWindow),
     },
@@ -162,16 +290,13 @@ export function getRateLimitClassConfig(): Record<
     // four of them at once (2026-10-27). Writes keep `crud.max`, so a runaway
     // writer still stops there. The address ceiling counts both.
     crud_read: {
-      max: parsePositiveInt(process.env.RATE_LIMIT_CRUD_READ_MAX, 3000),
-      sessionMax: parsePositiveInt(
-        process.env.RATE_LIMIT_CRUD_READ_SESSION_MAX,
-        crudSessionMax
-      ),
+      max: budget("RATE_LIMIT_CRUD_READ_MAX", 3000),
+      sessionMax: budget("RATE_LIMIT_CRUD_READ_SESSION_MAX", crudSessionMax),
       windowMs: crudReadWindow,
       retryAfter: formatRetryAfter(crudReadWindow),
     },
     calendar_feed: {
-      max: parsePositiveInt(process.env.RATE_LIMIT_CALENDAR_FEED_MAX, 120),
+      max: budget("RATE_LIMIT_CALENDAR_FEED_MAX", 120),
       windowMs: calendarFeedWindow,
       retryAfter: formatRetryAfter(calendarFeedWindow),
     },
@@ -383,12 +508,9 @@ export function getCalendarFeedIpCeiling(): {
   windowMs: number;
   retryAfter: string;
 } {
-  const windowMs = parsePositiveInt(
-    process.env.RATE_LIMIT_CALENDAR_FEED_WINDOW_MS,
-    5 * 60 * 1000
-  );
+  const windowMs = budget("RATE_LIMIT_CALENDAR_FEED_WINDOW_MS", 5 * 60 * 1000);
   return {
-    max: parsePositiveInt(process.env.RATE_LIMIT_CALENDAR_FEED_IP_MAX, 600),
+    max: budget("RATE_LIMIT_CALENDAR_FEED_IP_MAX", 600),
     windowMs,
     retryAfter: formatRetryAfter(windowMs),
   };
@@ -415,34 +537,28 @@ export function getPublicDoorRateConfig(): {
   submitIp: { max: number; windowMs: number; retryAfter: string };
   submitShare: { max: number; windowMs: number; retryAfter: string };
 } {
-  const readWindow = parsePositiveInt(
-    process.env.RATE_LIMIT_PUBLIC_READ_WINDOW_MS,
-    5 * 60 * 1000
-  );
-  const submitIpWindow = parsePositiveInt(
-    process.env.RATE_LIMIT_PUBLIC_SUBMIT_IP_WINDOW_MS,
+  const readWindow = budget("RATE_LIMIT_PUBLIC_READ_WINDOW_MS", 5 * 60 * 1000);
+  const submitIpWindow = budget(
+    "RATE_LIMIT_PUBLIC_SUBMIT_IP_WINDOW_MS",
     10 * 60 * 1000
   );
-  const submitShareWindow = parsePositiveInt(
-    process.env.RATE_LIMIT_PUBLIC_SUBMIT_SHARE_WINDOW_MS,
+  const submitShareWindow = budget(
+    "RATE_LIMIT_PUBLIC_SUBMIT_SHARE_WINDOW_MS",
     60 * 60 * 1000
   );
   return {
     readIp: {
-      max: parsePositiveInt(process.env.RATE_LIMIT_PUBLIC_READ_IP_MAX, 300),
+      max: budget("RATE_LIMIT_PUBLIC_READ_IP_MAX", 300),
       windowMs: readWindow,
       retryAfter: formatRetryAfter(readWindow),
     },
     submitIp: {
-      max: parsePositiveInt(process.env.RATE_LIMIT_PUBLIC_SUBMIT_IP_MAX, 10),
+      max: budget("RATE_LIMIT_PUBLIC_SUBMIT_IP_MAX", 10),
       windowMs: submitIpWindow,
       retryAfter: formatRetryAfter(submitIpWindow),
     },
     submitShare: {
-      max: parsePositiveInt(
-        process.env.RATE_LIMIT_PUBLIC_SUBMIT_SHARE_MAX,
-        200
-      ),
+      max: budget("RATE_LIMIT_PUBLIC_SUBMIT_SHARE_MAX", 200),
       windowMs: submitShareWindow,
       retryAfter: formatRetryAfter(submitShareWindow),
     },
@@ -458,12 +574,9 @@ export function getDeviceAuthRateConfig(): {
   windowMs: number;
   retryAfter: string;
 } {
-  const windowMs = parsePositiveInt(
-    process.env.RATE_LIMIT_DEVICE_AUTH_WINDOW_MS,
-    10 * 60 * 1000
-  );
+  const windowMs = budget("RATE_LIMIT_DEVICE_AUTH_WINDOW_MS", 10 * 60 * 1000);
   return {
-    max: parsePositiveInt(process.env.RATE_LIMIT_DEVICE_AUTH_MAX, 10),
+    max: budget("RATE_LIMIT_DEVICE_AUTH_MAX", 10),
     windowMs,
     retryAfter: formatRetryAfter(windowMs),
   };
@@ -479,12 +592,9 @@ export function getKeyStateRateConfig(): {
   windowMs: number;
   retryAfter: string;
 } {
-  const windowMs = parsePositiveInt(
-    process.env.RATE_LIMIT_KEY_STATE_WINDOW_MS,
-    10 * 60 * 1000
-  );
+  const windowMs = budget("RATE_LIMIT_KEY_STATE_WINDOW_MS", 10 * 60 * 1000);
   return {
-    max: parsePositiveInt(process.env.RATE_LIMIT_KEY_STATE_MAX, 30),
+    max: budget("RATE_LIMIT_KEY_STATE_MAX", 30),
     windowMs,
     retryAfter: formatRetryAfter(windowMs),
   };
@@ -502,12 +612,9 @@ export function getOAuthPublicRateConfig(): {
   windowMs: number;
   retryAfter: string;
 } {
-  const windowMs = parsePositiveInt(
-    process.env.RATE_LIMIT_OAUTH_PUBLIC_WINDOW_MS,
-    10 * 60 * 1000
-  );
+  const windowMs = budget("RATE_LIMIT_OAUTH_PUBLIC_WINDOW_MS", 10 * 60 * 1000);
   return {
-    max: parsePositiveInt(process.env.RATE_LIMIT_OAUTH_PUBLIC_MAX, 60),
+    max: budget("RATE_LIMIT_OAUTH_PUBLIC_MAX", 60),
     windowMs,
     retryAfter: formatRetryAfter(windowMs),
   };
@@ -547,16 +654,10 @@ export function getOAuthTokenRateConfig(): {
   windowMs: number;
   retryAfter: string;
 } {
-  const windowMs = parsePositiveInt(
-    process.env.RATE_LIMIT_OAUTH_TOKEN_WINDOW_MS,
-    10 * 60 * 1000
-  );
+  const windowMs = budget("RATE_LIMIT_OAUTH_TOKEN_WINDOW_MS", 10 * 60 * 1000);
   return {
-    max: parsePositiveInt(process.env.RATE_LIMIT_OAUTH_TOKEN_MAX, 20),
-    ipCeiling: parsePositiveInt(
-      process.env.RATE_LIMIT_OAUTH_TOKEN_IP_CEILING,
-      600
-    ),
+    max: budget("RATE_LIMIT_OAUTH_TOKEN_MAX", 20),
+    ipCeiling: budget("RATE_LIMIT_OAUTH_TOKEN_IP_CEILING", 600),
     windowMs,
     retryAfter: formatRetryAfter(windowMs),
   };

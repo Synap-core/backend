@@ -47,6 +47,7 @@ import type { ExpectedOutput } from "@synap/playbooks";
 import { openLink } from "../../utils/deep-links.js";
 import { isOwedSlot } from "../focus-sessions/owed-outputs.js";
 import { attachNextMove } from "../focus-sessions/session-path-sections.js";
+import { notReceiptWhere } from "../focus-sessions/session-kind.js";
 import { slotKeyAt } from "../focus-sessions/slot-keys.js";
 import {
   detectZeroRunAutomations,
@@ -265,7 +266,10 @@ async function readIdleSessions(
     const where = and(
       ownAgentSessionsWhere(userId, agentUserId),
       inArray(focusSessions.status, [...RUNNING_STATUSES]),
-      lt(focusSessions.updatedAt, cutoff)
+      lt(focusSessions.updatedAt, cutoff),
+      // Receipts (metadata.kind = the agent-proposal-package marker) are
+      // bookkeeping the reaper closes, never a leftover to act on.
+      notReceiptWhere()
     );
     const [[total], rows] = await Promise.all([
       db
@@ -283,7 +287,7 @@ async function readIdleSessions(
         })
         .from(focusSessions)
         .where(where)
-        // SESSION-KIND-LENS-EXEMPT: the agent's own sessions, every kind.
+        // SESSION-KIND-LENS-EXEMPT: the agent's own work and runs; receipts are excluded in the WHERE (bookkeeping the reaper closes, never a leftover to act on).
         .orderBy(asc(focusSessions.updatedAt))
         .limit(LOOSE_ENDS_ITEMS),
     ]);
@@ -457,10 +461,11 @@ export async function readSessionsReadyToClose(p: {
         and(
           ownAgentSessionsWhere(p.userId, p.agentUserId),
           inArray(focusSessions.status, [...RUNNING_STATUSES]),
-          drizzleSql`jsonb_typeof(${focusSessions.expectedOutputs}) = 'array' AND jsonb_array_length(${focusSessions.expectedOutputs}) > 0`
+          drizzleSql`jsonb_typeof(${focusSessions.expectedOutputs}) = 'array' AND jsonb_array_length(${focusSessions.expectedOutputs}) > 0`,
+          notReceiptWhere()
         )
       )
-      // SESSION-KIND-LENS-EXEMPT: projected to {id, title, reason, close} lines for orient, never a page of session rows.
+      // SESSION-KIND-LENS-EXEMPT: projected to {id, title, reason, close} lines for orient, never a page of session rows; receipts are excluded in the WHERE.
       .orderBy(desc(focusSessions.updatedAt))
       .limit(READY_TO_CLOSE_SCAN_CAP);
     const moved = await attachNextMove(rows, { userId: p.userId });

@@ -55,18 +55,6 @@ const logger = createLogger({ module: "proposal-ask-ai" });
  */
 export const ASK_AI_SEED = "Explain why this failed and help me resolve it.";
 
-/**
- * Is this message OUR seed? Derived from the seed constant itself, not from a
- * second hand-written literal — `postChannelMessage` has no metadata channel,
- * so the content IS the marker and the two must never be able to drift.
- */
-export function isAskAiSeed(
-  role: string | null,
-  content: string | null
-): boolean {
-  return role === "user" && (content ?? "").startsWith(ASK_AI_SEED);
-}
-
 export interface AskAiAboutProposalResult {
   channelId: string;
   /** false ⇒ an unanswered seed was already waiting; nothing new was posted. */
@@ -80,7 +68,11 @@ export async function askAiAboutProposal(params: {
   userId: string;
   /** The caller's active workspace — used only when the proposal has none. */
   fallbackWorkspaceId?: string | null;
-  /** Optional extra sentence from the user, appended to the seed. */
+  /**
+   * The person's OWN words. When present they ARE the message (founder
+   * 2026-10-29: a person asks what they want to ask, never a template);
+   * absent, a bare tap says {@link ASK_AI_SEED}.
+   */
   note?: string;
 }): Promise<AskAiAboutProposalResult> {
   const { proposalId, userId } = params;
@@ -139,8 +131,7 @@ export async function askAiAboutProposal(params: {
     agentSlug: "orchestrator",
   });
 
-  const note = params.note?.trim();
-  const content = note ? `${ASK_AI_SEED}\n\n${note}` : ASK_AI_SEED;
+  const content = params.note?.trim() || ASK_AI_SEED;
 
   // (4) IDEMPOTENCY — an unanswered seed already waiting means a turn is
   // already in flight (or already dropped); either way a second seed produces a
@@ -157,7 +148,9 @@ export async function askAiAboutProposal(params: {
     userId,
     content,
     idempotencyScope: `ask-ai:${proposalId}`,
-    isPendingSeed: (latest) => isAskAiSeed(latest.role, latest.content),
+    // A double tap re-sends the SAME words; new words are a new message.
+    isPendingSeed: (latest) =>
+      latest.role === "user" && latest.content === content,
   });
   if (!seed.seeded) {
     logger.info(

@@ -83,7 +83,8 @@ describe("Hub REST GET /focus-sessions — a workspace-bound key", () => {
       from: () => chain,
       where: () => chain,
       orderBy: () => chain,
-      limit: async () => [],
+      limit: () => chain,
+      offset: async () => [],
     };
     selectSpy = vi.spyOn(db, "select").mockReturnValue(chain as never);
   });
