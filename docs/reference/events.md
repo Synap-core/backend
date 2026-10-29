@@ -2,18 +2,19 @@
 
 # Events
 
-The pod's event catalog: the 31 event types an automation trigger can name.
+The pod's event catalog: the 34 event types an automation trigger can name.
 
 ## Catalog
 
 ### Entity
 
-| Event type                    | Name           | Description                                                                                                 | Filter keys                                                                                                  |
-| ----------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `entity.create.completed`     | Entity created | Fires after any entity is successfully created.                                                             | `profileSlug`                                                                                                |
-| `entity.update.completed`     | Entity updated | Fires after any entity field or property is updated.                                                        | `profileSlug`, `changedKeys`, `changed.<fieldName>`, `previous.<fieldName>`, `<fieldName>`                   |
-| `entity.transition.completed` | Status changed | Fires when a thing's lifecycle status moves (the kind's own, or a role's), through the one moveStatus door. | `lifecycleProfile`, `profileSlug`, `role`, `property`, `from`, `to`, `fromCategory`, `category`, `actorKind` |
-| `entity.delete.completed`     | Entity deleted | Fires after an entity is permanently deleted.                                                               | `profileSlug`                                                                                                |
+| Event type                    | Name           | Description                                                                                                    | Filter keys                                                                                                  |
+| ----------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `entity.create.completed`     | Entity created | Fires after any entity is successfully created.                                                                | `profileSlug`                                                                                                |
+| `entity.update.completed`     | Entity updated | Fires after any entity field or property is updated.                                                           | `profileSlug`, `changedKeys`, `changed.<fieldName>`, `previous.<fieldName>`, `<fieldName>`                   |
+| `entity.transition.completed` | Status changed | Fires when a thing's lifecycle status moves (the kind's own, or a role's), through the one moveStatus door.    | `lifecycleProfile`, `profileSlug`, `role`, `property`, `from`, `to`, `fromCategory`, `category`, `actorKind` |
+| `entity.signal.completed`     | Late or stuck  | Fires once when a thing becomes late, nears its date, sits too long in a step, or its pause is due for review. | `signal`, `lifecycleProfile`, `profileSlug`, `role`, `status`, `category`, `ownerId`, `projectId`, `trackId` |
+| `entity.delete.completed`     | Entity deleted | Fires after an entity is permanently deleted.                                                                  | `profileSlug`                                                                                                |
 
 ### Focus sessions
 
@@ -21,6 +22,7 @@ The pod's event catalog: the 31 event types an automation trigger can name.
 | --------------------------------------- | ---------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | `focus_session.stage_changed.completed` | Playbook stage changed | Fires when a focus session advances to a different playbook stage.          | `toStage`, `fromStage`, `playbookId`                                          |
 | `focus_session.transition.completed`    | Session status changed | Fires when a focus session's status moves (active, paused, stale, closed…). | `from`, `to`, `fromCategory`, `category`, `actorKind`, `projectId`, `trackId` |
+| `focus_session.signal.completed`        | Session due for review | Fires once when a paused session's hold passes its review date.             | `signal`, `status`, `category`, `ownerId`, `projectId`, `trackId`             |
 
 ### Tracks
 
@@ -28,6 +30,7 @@ The pod's event catalog: the 31 event types an automation trigger can name.
 | ------------------------------- | ------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | `track.stage_changed.completed` | Track stage changed | Fires when a project's track (a method it runs) moves to a different stage.      | `toStage`, `fromStage`, `playbookId`, `projectId`, `trackId`                  |
 | `track.transition.completed`    | Goal status changed | Fires when a project's goal (a track) moves status (active, paused, completed…). | `from`, `to`, `fromCategory`, `category`, `actorKind`, `projectId`, `trackId` |
+| `track.signal.completed`        | Goal due for review | Fires once when a paused goal's hold passes its review date.                     | `signal`, `status`, `category`, `ownerId`, `projectId`, `trackId`             |
 
 ### Proposals
 

@@ -4,7 +4,7 @@
     "packages/events/src/event-types.ts (OperationalEventTypes, SystemEventTypes)",
     "packages/types/src/events/unified.ts (naming grammar)"
   ],
-  "eventCount": 31,
+  "eventCount": 34,
   "events": [
     {
       "key": "ENTITY_CREATED",
@@ -47,6 +47,24 @@
       ]
     },
     {
+      "key": "ENTITY_SIGNALED",
+      "type": "entity.signal.completed",
+      "label": "Late or stuck",
+      "domain": "Entity",
+      "description": "Fires once when a thing becomes late, nears its date, sits too long in a step, or its pause is due for review.",
+      "filterKeys": [
+        "signal",
+        "lifecycleProfile",
+        "profileSlug",
+        "role",
+        "status",
+        "category",
+        "ownerId",
+        "projectId",
+        "trackId"
+      ]
+    },
+    {
       "key": "ENTITY_DELETED",
       "type": "entity.delete.completed",
       "label": "Entity deleted",
@@ -79,6 +97,21 @@
       ]
     },
     {
+      "key": "FOCUS_SESSION_SIGNALED",
+      "type": "focus_session.signal.completed",
+      "label": "Session due for review",
+      "domain": "Focus sessions",
+      "description": "Fires once when a paused session's hold passes its review date.",
+      "filterKeys": [
+        "signal",
+        "status",
+        "category",
+        "ownerId",
+        "projectId",
+        "trackId"
+      ]
+    },
+    {
       "key": "TRACK_STAGE_CHANGED",
       "type": "track.stage_changed.completed",
       "label": "Track stage changed",
@@ -104,6 +137,21 @@
         "fromCategory",
         "category",
         "actorKind",
+        "projectId",
+        "trackId"
+      ]
+    },
+    {
+      "key": "TRACK_SIGNALED",
+      "type": "track.signal.completed",
+      "label": "Goal due for review",
+      "domain": "Tracks",
+      "description": "Fires once when a paused goal's hold passes its review date.",
+      "filterKeys": [
+        "signal",
+        "status",
+        "category",
+        "ownerId",
         "projectId",
         "trackId"
       ]
