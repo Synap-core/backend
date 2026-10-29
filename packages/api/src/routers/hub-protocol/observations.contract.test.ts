@@ -59,6 +59,13 @@ vi.mock("@synap/database", async (importOriginal) => {
         return { id: `row-${appended.length}` };
       },
     }),
+    // The fact keys live beside the event store (0372), so they are stubbed
+    // with it: every call owns its fact. One fact, one event is
+    // record-observation-from-automation.test.ts's to prove; here each test
+    // appends the same PR afresh.
+    claimObservationKey: async () => ({ owned: true }),
+    settleObservationKey: async () => {},
+    releaseObservationKey: async () => {},
   };
 });
 
