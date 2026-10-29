@@ -87,11 +87,34 @@ describe("install refuses a declaration that cannot be sent", () => {
     ).toEqual([]);
   });
 
-  it("refuses bytes until phase 2, in words", () => {
-    const [problem] = fileParameterDeclarationProblems({
-      parameters: { media: "file[]:bytes?" },
-    });
-    expect(problem).toContain("files as bytes come in a later release");
+  it("accepts bytes on a code verb run in the pod (the default kind)", () => {
+    for (const skill of [
+      {},
+      { kind: "code" },
+      { kind: "code", executionMode: "async" },
+    ])
+      expect(
+        fileParameterDeclarationProblems({
+          parameters: { attachments: "file[]:bytes?" },
+          ...skill,
+        }),
+        JSON.stringify(skill)
+      ).toEqual([]);
+  });
+
+  it("refuses bytes where no sandbox bridge can send them: a declarative verb, a box script", () => {
+    for (const skill of [
+      { kind: "declarative" },
+      { kind: "code", executionMode: "box" },
+    ]) {
+      const [problem] = fileParameterDeclarationProblems({
+        parameters: { attachments: "file[]:bytes?" },
+        ...skill,
+      });
+      expect(problem, JSON.stringify(skill)).toContain(
+        "only a code verb run in the pod can send"
+      );
+    }
   });
 
   it("refuses a file parameter that does not say how the tool takes it", () => {

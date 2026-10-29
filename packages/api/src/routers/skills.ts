@@ -2117,6 +2117,10 @@ export const skillsRouter = router({
           userId,
           parameters: runParameters,
           workspaceId: skill.workspaceId ?? null,
+          // `:bytes` files: their handles resolve in this run's bridges only.
+          ...(filesResolved.podFiles
+            ? { podFiles: filesResolved.podFiles }
+            : {}),
         });
         result = {
           ...envelope,
