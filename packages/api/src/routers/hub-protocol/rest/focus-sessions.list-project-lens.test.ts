@@ -76,7 +76,8 @@ describe("Hub REST GET /focus-sessions — project lens alone", () => {
       from: () => chain,
       where: () => chain,
       orderBy: () => chain,
-      limit: async () => [],
+      limit: () => chain,
+      offset: async () => [],
     };
     selectSpy = vi.spyOn(db, "select").mockReturnValue(chain as never);
   });
