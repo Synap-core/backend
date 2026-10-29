@@ -628,6 +628,8 @@ describe("the status watcher, when a tick fails half-way", () => {
       db.selectDistinctOn = real;
     }
     h.pushes.length = 0;
+    // A new push day: ME already had today's 3 (the cap is its own suite).
+    await q(`update notifications set pushed_at = null`);
     expect(await runStatusWatcher(at(5))).toMatchObject({ raised: 1 });
     const [late] = await signalEvents(I_RETRY);
     expect(late?.data).toMatchObject({
