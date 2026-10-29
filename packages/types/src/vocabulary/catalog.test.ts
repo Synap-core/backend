@@ -310,8 +310,10 @@ describe("French: sentences agree with the noun", () => {
     expect(resolveNeedsYouItemCount("decision", 0, "fr")).toBe("0 décision");
     expect(resolveNeedsYouItemCount("decision", 1, "fr")).toBe("1 décision");
     expect(resolveNeedsYouItemCount("decision", 2, "fr")).toBe("2 décisions");
-    expect(resolveNeedsYouItemCount("physical", 1_000_000, "fr")).toBe(
-      "1000000 d’actions"
+    // The digits' grouping is the number door's (P3: "1 000 000" with
+    // U+202F); this vector is about the "many" branch and its elision.
+    expect(resolveNeedsYouItemCount("physical", 1_000_000, "fr")).toMatch(
+      /^1[\u202f\u00a0 ]?000[\u202f\u00a0 ]?000 d’actions$/
     );
   });
 
