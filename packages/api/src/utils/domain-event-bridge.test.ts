@@ -99,11 +99,11 @@ describe("domain-event-bridge — facet events", () => {
     expect(body.userId).toBe("user_1");
   });
 
-  it("pod-wide entity (null/absent workspaceId) falls back to the owner's user room", async () => {
-    // Pod-wide bridge model: a NULL-workspace entity is no longer DROPPED — it
-    // publishes to `user:<ownerUserId>` via the unified room rule (was the
-    // "pod-wide = no realtime" gap). Workspace-scoped entities still route to
-    // the workspace room (next test).
+  it("pod-wide entity (null/absent workspaceId): no POST — the realtime schema requires a workspace", async () => {
+    // The unified room rule would send it to `user:<ownerUserId>`, but the
+    // realtime server refuses an entity payload with no workspace (400), so
+    // the bridge does not send it at all (domain-event-bridge.entity-payload
+    // test pins the refusal). Facets keep the user-room fallback (above).
     emitDomainEventToRealtime(
       makeEvent({
         eventType: "entity.create.completed",
@@ -113,11 +113,7 @@ describe("domain-event-bridge — facet events", () => {
     );
     await Promise.resolve();
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
-    expect(body.event).toBe("entity:created");
-    expect(body.workspaceId).toBeUndefined();
-    expect(body.userId).toBe("user_1");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("workspace-scoped entity still targets the workspace room (unaffected)", async () => {

@@ -188,3 +188,29 @@ export { passthroughSchema };
 export function getSchemaForEvent(name: string): z.ZodType | undefined {
   return EventSchemas[name as EventName];
 }
+
+/**
+ * Result of validating an inbound bridge emit payload against the schema
+ * registry — what the realtime server's `/bridge/emit` answers 400 on.
+ *
+ * Contract: legacy events without a schema fall through with `ok: true`.
+ * The bridge MUST stay backwards-compatible with old emitters.
+ */
+export type ValidateEmitResult = { ok: true } | { ok: false; issues: unknown };
+
+/**
+ * Apply the realtime schema (if any) to a payload. Returns `{ ok: true }`
+ * when no schema is registered for `event` — that's the legacy pass-through.
+ * The realtime bridge (`@synap/realtime`) calls this on every emit; the pod's
+ * emitters pin their payloads against it.
+ */
+export function validateEmitPayload(
+  event: string,
+  data: unknown
+): ValidateEmitResult {
+  const schema = getSchemaForEvent(event);
+  if (!schema) return { ok: true };
+  const result = schema.safeParse(data);
+  if (result.success) return { ok: true };
+  return { ok: false, issues: result.error.issues };
+}
