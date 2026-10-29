@@ -15683,6 +15683,14 @@ export interface ContinuationNextMove {
 	 * `message_waiting`, the SENDER session (when it has one).
 	 */
 	sessionId?: string;
+	/**
+	 * WHY an `agent_slot` move is the agent's when no declared slot is open:
+	 * `criteria_unmet` — everything is produced, but a required criterion does
+	 * not pass yet (rung 6b). Absent on every other move. A code, not a kind:
+	 * every reader of `agent_slot` keeps working, and one that needs these
+	 * sessions (orient) can tell them apart.
+	 */
+	reasonCode?: "criteria_unmet";
 }
 export interface ContinuationPacket {
 	version: 1;

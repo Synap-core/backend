@@ -110,9 +110,9 @@ export interface SessionNudges {
    * F4 (plan v5): the session's next move is `ready_to_close` — THE next-move
    * rule (`deriveNextMove`, read through `attachNextMove`): everything it
    * declared is produced, every required criterion passes, nothing is owed or
-   * pending, no sub-session is open. The agent files the close at this turn
-   * (plan aac47c4a, Q7.3); it is never closed for it. The person-facing move
-   * stays the person's (`actor: "user"`, founder decision 2026-09-20).
+   * pending, no sub-session is open. The agent grades and closes (plan
+   * aac47c4a, Q7.3); it is never closed for it. The person-facing move stays
+   * the person's (`actor: "user"`, founder decision 2026-09-20).
    */
   readyToClose?: { reason: string };
   /** One imperative line per nudge above, in the same order. */
@@ -245,8 +245,8 @@ export function computeSessionNudges(input: {
         : "Every outcome is produced and nothing is owed";
     out.hints.push(
       out.ungradedCriteria
-        ? `${ready}: grade the optional criteria above with evaluate_session, then file the close now with complete_session (if a person worked in it, ask them in its room first).`
-        : `${ready}: file the close now with complete_session (if a person worked in it, ask them in its room first). If more work remains, declare it instead.`
+        ? `${ready}: grade the optional criteria above with evaluate_session, then close with complete_session (if a person worked in it, ask them in its room first).`
+        : `${ready}: close with complete_session (if a person worked in it, ask them in its room first). If more work remains, declare it instead.`
     );
   }
 

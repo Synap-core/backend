@@ -206,8 +206,41 @@ describe("deriveNextMove", () => {
     expect(
       deriveNextMove(
         input({ expectedOutputs: [doneSlot], criteria: graded("failing", 2) })
+      )
+    ).toMatchObject({
+      reason: expect.stringMatching(/2 required criteria do not pass/),
+      reasonCode: "criteria_unmet",
+    });
+  });
+
+  it("one required criterion left reads in the singular, with its reason code", () => {
+    const failed = deriveNextMove(
+      input({ expectedOutputs: [doneSlot], criteria: graded("failing", 1) })
+    );
+    expect(failed).toMatchObject({
+      kind: "agent_slot",
+      label: "Meet the required criterion left",
+      reasonCode: "criteria_unmet",
+    });
+    expect(failed.reason).toMatch(/1 required criterion does not pass/);
+    expect(
+      deriveNextMove(
+        input({
+          expectedOutputs: [doneSlot],
+          criteria: graded("incomplete", 1),
+        })
       ).reason
-    ).toMatch(/2 required criteria do not pass/);
+    ).toMatch(/1 required criterion has no passing grade yet/);
+    // A declared agent slot is the plain agent_slot: no code.
+    expect(
+      deriveNextMove(
+        input({
+          expectedOutputs: [doneSlot],
+          aiCanDo: ok([{ label: "Brief", kind: "document" } as PacketSlotItem]),
+          criteria: graded("failing", 1),
+        })
+      )
+    ).not.toHaveProperty("reasonCode");
   });
 
   it("every required criterion passing (an optional one unmet) is the person's ready to close", () => {

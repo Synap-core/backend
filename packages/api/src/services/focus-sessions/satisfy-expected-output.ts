@@ -465,6 +465,12 @@ export type AttestExpectedOutputResult =
        * after the commit; `null` when the slot stands for none.
        */
       criterionMet: string | null;
+      /**
+       * That grade, as the answer door reports it: present when
+       * `criterionMet` is; `recorded` false ⇒ the stamp stands but the grade
+       * did not land — said, never hidden.
+       */
+      graded?: { verdict: "pass"; recorded: boolean; resumed: boolean };
       session: {
         id: string;
         workspaceId: string | null;
@@ -590,12 +596,13 @@ export async function attestExpectedOutput(
     if (result.criterionMet) {
       const { gradeCriterionAfterAct } =
         await import("./evaluations/evaluate.js");
-      await gradeCriterionAfterAct({
+      const { recorded, resumed } = await gradeCriterionAfterAct({
         sessionId: result.session.id,
         userId,
         criterionKey: result.criterionMet,
         verdict: "pass",
       });
+      return { ...result, graded: { verdict: "pass", recorded, resumed } };
     }
   }
   return result;
@@ -605,17 +612,21 @@ export async function attestExpectedOutput(
  * The criterion a PERSON's task stands for, when doing it IS meeting it (plan
  * aac47c4a, Q7.4): a human-owned slot whose ask is a deed — `act` ("I did
  * this") or `provide` (handed over) — stored under the same key as a declared
- * criterion. That is how an outcome declared `owner: "human"` with a `verify`
- * is stored (`outcome-declarations.ts`: one slot and one criterion under ONE
- * key, folded into one outcome by the projection), so no new field links them.
+ * criterion the PERSON checks (`check.kind: "human"`). That is how an outcome
+ * declared `owner: "human"` with a `verify` is stored (`outcome-declarations.ts`:
+ * one slot and one criterion under ONE key, folded into one outcome by the
+ * projection), so no new field links them.
  * `criterionKey` stays the escalation's server stamp (`evaluations/record.ts`):
  * an escalated criterion slot is graded by its own pass/fail answer, never
- * here. A confirm / choose / form is an answer, not a deed: `null`. Pure.
+ * here. A confirm / choose / form is an answer, not a deed: `null`. A
+ * machine-checked criterion (evidence / capability / judge) keeps its own
+ * `verify`: the person saying "I did this" is not the measurement it
+ * declared. Pure.
  */
 export function criterionMetBy(
   outputs: readonly ExpectedOutput[],
   index: number,
-  criteria: readonly Pick<SessionCriterion, "key">[]
+  criteria: readonly Pick<SessionCriterion, "key" | "check">[]
 ): string | null {
   const slot = outputs[index];
   if (!slot || slot.owner !== "human" || slot.kind === CRITERION_SLOT_KIND) {
@@ -624,7 +635,9 @@ export function criterionMetBy(
   const mode = effectiveSlotAsk(slot)?.mode;
   if (mode !== "act" && mode !== "provide") return null;
   const key = slotKeyAt(outputs, index);
-  return key && criteria.some((c) => c.key === key) ? key : null;
+  return key && criteria.some((c) => c.key === key && c.check.kind === "human")
+    ? key
+    : null;
 }
 
 function slotAttestedEventData(

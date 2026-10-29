@@ -488,6 +488,14 @@ export interface ContinuationNextMove {
    * `message_waiting`, the SENDER session (when it has one).
    */
   sessionId?: string;
+  /**
+   * WHY an `agent_slot` move is the agent's when no declared slot is open:
+   * `criteria_unmet` — everything is produced, but a required criterion does
+   * not pass yet (rung 6b). Absent on every other move. A code, not a kind:
+   * every reader of `agent_slot` keeps working, and one that needs these
+   * sessions (orient) can tell them apart.
+   */
+  reasonCode?: "criteria_unmet";
 }
 
 /**
@@ -2282,7 +2290,12 @@ export function deriveNextMove(input: {
         label: one
           ? "Meet the required criterion left"
           : `Meet the ${requiredUnmet} required criteria left`,
-        reason: `Everything this session declared is produced, but ${requiredUnmet} required criteri${one ? "on" : "a"} ${state === "failing" ? "do not pass (at least one failed)" : "have no passing grade yet"}. The agent grades ${one ? "it" : "them"} against real evidence, or hands one only the person can check to them as a task whose answer grades it; the session is ready to close once ${one ? "it passes" : "they pass"}.`,
+        reason: `Everything this session declared is produced, but ${
+          one
+            ? `1 required criterion ${state === "failing" ? "does not pass (it failed)" : "has no passing grade yet"}`
+            : `${requiredUnmet} required criteria ${state === "failing" ? "do not pass (at least one failed)" : "have no passing grade yet"}`
+        }. The agent grades ${one ? "it" : "them"} against real evidence, or hands one only the person can check to them as a task whose answer grades it; the session is ready to close once ${one ? "it passes" : "they pass"}.`,
+        reasonCode: "criteria_unmet",
       };
     }
     return {

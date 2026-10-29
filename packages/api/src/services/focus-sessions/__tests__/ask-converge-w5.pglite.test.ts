@@ -533,7 +533,10 @@ describe("param / criterion / provide / room question on the ONE answer door", (
       userId: OWNER,
       expectedLabel: "Sign the contract",
     });
-    expect(r.status).toBe("attested");
+    expect(r).toMatchObject({
+      status: "attested",
+      graded: { verdict: "pass", recorded: true, resumed: false },
+    });
     expect(await humanEvals(sessionId)).toEqual([
       {
         criterion_key: "contract-signed",
@@ -558,7 +561,10 @@ describe("param / criterion / provide / room question on the ONE answer door", (
   });
 
   it("only a person's DEED meets a criterion: an answer, an agent's slot or an escalated criterion slot never does", () => {
-    const criteria = [{ key: "contract-signed" }, { key: "no-stale" }];
+    const criteria = [
+      { key: "contract-signed", check: { kind: "human" as const } },
+      { key: "no-stale", check: { kind: "human" as const } },
+    ];
     expect(criterionMetBy([actTask() as never], 0, criteria)).toBe(
       "contract-signed"
     );
@@ -591,6 +597,38 @@ describe("param / criterion / provide / room question on the ONE answer door", (
         criteria
       )
     ).toBeNull();
+    // An ask-less person slot says nothing about a deed: no grade.
+    expect(
+      criterionMetBy([{ ...actTask(), ask: undefined }] as never, 0, criteria)
+    ).toBeNull();
+    // A machine-checked criterion keeps its own verify.
+    for (const kind of ["evidence", "capability", "judge"] as const) {
+      expect(
+        criterionMetBy([actTask() as never], 0, [
+          { key: "contract-signed", check: { kind } },
+        ])
+      ).toBeNull();
+    }
+  });
+
+  it("'I did this' never grades a MACHINE-checked criterion under the task's key", async () => {
+    const { sessionId } = await seed([actTask()], {
+      criteria: [
+        {
+          key: "contract-signed",
+          statement: "The contract is signed",
+          check: { kind: "evidence", evidenceKey: "docusign" },
+        },
+      ],
+    });
+    const r = await attestSessionSlot({
+      sessionId,
+      userId: OWNER,
+      expectedLabel: "Sign the contract",
+    });
+    expect(r.status).toBe("attested");
+    expect(r).not.toHaveProperty("graded");
+    expect(await humanEvals(sessionId)).toEqual([]);
   });
 
   // ── provide ─────────────────────────────────────────────────────────────

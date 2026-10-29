@@ -1245,6 +1245,8 @@ export type AttestSessionSlotResult =
       questionId: string | null;
       wokeAgentType: string | null;
       triggered: boolean;
+      /** The grade of the criterion this deed met (`criterionMetBy`), when any. */
+      graded?: { verdict: "pass"; recorded: boolean; resumed: boolean };
     };
 
 /**
@@ -1346,6 +1348,7 @@ export async function attestSessionSlot(p: {
     questionId,
     wokeAgentType,
     triggered,
+    ...(attested.graded ? { graded: attested.graded } : {}),
   };
 }
 

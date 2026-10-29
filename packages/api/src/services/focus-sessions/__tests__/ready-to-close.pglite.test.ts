@@ -240,7 +240,7 @@ describe("update_session nudge: readyToClose (F4)", () => {
       },
       hints: expect.arrayContaining([
         expect.stringContaining(
-          "every required criterion passes and nothing is owed: file the close now with complete_session"
+          "every required criterion passes and nothing is owed: close with complete_session"
         ),
       ]),
     });
@@ -263,9 +263,29 @@ describe("update_session nudge: readyToClose (F4)", () => {
       readyToClose: expect.any(Object),
       hints: expect.arrayContaining([
         expect.stringContaining(
-          "grade the optional criteria above with evaluate_session, then file the close now with complete_session"
+          "grade the optional criteria above with evaluate_session, then close with complete_session"
         ),
       ]),
+    });
+  });
+
+  it("only OPTIONAL criteria, none graded: ready, through the real verdict", async () => {
+    const id = await session({
+      outputs: [delivered],
+      criteria: [optionalNote],
+    });
+    expect(
+      await loadSessionNudges({
+        session: await row(id),
+        phase: "update",
+        userId: PERSON,
+        agentUserId: AGENT,
+      })
+    ).toMatchObject({
+      ungradedCriteria: ["note"],
+      readyToClose: {
+        reason: expect.stringContaining("every required criterion passes"),
+      },
     });
   });
 

@@ -57,7 +57,10 @@ import {
   buildObjectActionTitle,
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  resolveSessionTitle,
+  type SessionVerdict,
+} from "@synap-core/types/focus-sessions";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { createLogger } from "@synap-core/core";
 import {
@@ -115,6 +118,12 @@ export interface PathSourceRow {
    */
   userId: string;
   criteria: unknown;
+  /**
+   * THE verdict, when the caller already attached it (`focusSessions.list`
+   * rows come through `attachSessionVerdicts`): reused, never read twice.
+   * Absent on a row with criteria ⇒ read here.
+   */
+  verdict?: Pick<SessionVerdict, "state" | "requiredUnmet">;
 }
 
 /** The sections every path/map row carries. */
@@ -552,15 +561,24 @@ export async function attachPathSections<R extends PathSourceRow>(
       () => readPageNeedsYou(database, opts.userId, rows, now)
     ),
     // THE verdict per row (rung 6b of the next move) — the batch the list
-    // door's `verdict` comes from; no query when no row declares criteria.
+    // door's `verdict` comes from. A row that already carries it is reused;
+    // no query when no other row declares criteria.
     settle(
       ctx,
       "criteria",
       "Whether these sessions' criteria pass could not be read.",
-      async () =>
-        new Map(
-          (await attachSessionVerdicts([...rows])).map((r) => [r.id, r.verdict])
-        )
+      async () => {
+        const read = await attachSessionVerdicts(
+          rows.filter((r) => !r.verdict),
+          database
+        );
+        return new Map(
+          [...rows.filter((r) => r.verdict), ...read].map((r) => [
+            r.id,
+            r.verdict,
+          ])
+        );
+      }
     ),
   ]);
 
