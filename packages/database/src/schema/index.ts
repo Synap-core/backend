@@ -11,7 +11,7 @@ export * from "./entities.js";
 export * from "./entity-vectors.js";
 export * from "./entity-facets.js";
 export * from "./documents.js";
-// Recall passages of a document body (0358).
+// Recall passages of a document body (0358b).
 export * from "./document-passages.js";
 // The Library's persistent groups (0328).
 export * from "./library-groups.js";

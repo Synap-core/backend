@@ -1,5 +1,5 @@
 /**
- * Document Passages — a document's body as recall-sized units (migration 0358).
+ * Document Passages — a document's body as recall-sized units (migration 0358b).
  *
  * One vector per entity made a long note one point in space, mostly its header
  * and opening. A passage is one section of the STORED body, cut by

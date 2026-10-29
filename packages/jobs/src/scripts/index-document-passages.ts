@@ -7,7 +7,7 @@
  * use. The worker owns reading, splitting, embedding and the write; this
  * script never talks to the IS.
  *
- * Run once per pod after the 0358 deploy (recall plan A-W2). A model change
+ * Run once per pod after the 0358b deploy (recall plan A-W2). A model change
  * later is the same script with `--all`: every passage embedded again,
  * planned, never a side effect of an edit.
  *
