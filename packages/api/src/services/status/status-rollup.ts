@@ -19,6 +19,7 @@ import {
   eq,
   focusSessions,
   inArray,
+  listableEntityWhere,
   profiles,
   projects,
   projectTracks,
@@ -370,6 +371,8 @@ export async function readScopeRollup(input: {
         "entity",
         drizzleSql`SELECT ${entities.id} AS id, 'all' AS key FROM ${entities} WHERE ${and(
           entityReadVisibleWhere(userId),
+          // The rule `things` is counted under, so demo and probe rows never move it.
+          listableEntityWhere({ projectLens: projectId }),
           projectId
             ? projectLensWhere(entities.id, projectId)
             : eq(entities.workspaceId, workspaceId!)

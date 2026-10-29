@@ -749,6 +749,7 @@ const WITHHELD_FILES: Record<string, string> = {
   "services/postiz/record-postiz-published.ts": "match by external id",
   "services/projects/create-project.ts": "validates evidence ids",
   "services/runs/index.ts": "one run's produced records, by id",
+  "services/status/status-read.ts": "statusOf: the named ids, by id",
   "services/surfaces/renderer-usage.ts":
     "renderer-removal impact count: a demo row's override is affected too",
   "utils/identity-resolve-response.ts": "strong-match recheck, by id (dedup)",
