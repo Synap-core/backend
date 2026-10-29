@@ -43,6 +43,11 @@ import {
 
 /** Mirrors `LIFECYCLE_TRANSITION_EVENT_TYPE` (@synap/events). */
 const TRANSITION_EVENT = "entity.transition.completed";
+/**
+ * When a move HAPPENED: the transition's `occurredAt` (W4: a backdated move
+ * counts from when it really happened), else the log row's time.
+ */
+const OCCURRED_AT = drizzleSql`coalesce((${events.data}->>'occurredAt')::timestamptz, ${events.timestamp})`;
 
 export type StatusGroupSubject =
   | { kind: "kind"; profileIds: string[] }
@@ -391,7 +396,7 @@ function thingsInColumns(params: {
   const lastMove = db
     .select({
       subjectId: events.subjectId,
-      enteredAt: drizzleSql`max(${events.timestamp})`.as("last_entered_at"),
+      enteredAt: drizzleSql`max(${OCCURRED_AT})`.as("last_entered_at"),
     })
     .from(events)
     .where(
@@ -586,7 +591,7 @@ export async function countTerminalEntriesByBucket(params: {
   // The unit is one of three literals (typed), never caller text.
   const unit = drizzleSql.raw(`'${params.bucket}'`);
   // Truncated in UTC, then read back as an instant (timestamptz).
-  const bucketStart = drizzleSql`(date_trunc(${unit}, ${events.timestamp} AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')`;
+  const bucketStart = drizzleSql`(date_trunc(${unit}, ${OCCURRED_AT} AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')`;
   const rows = await db
     .select({
       bucketStart: drizzleSql<string>`${bucketStart}`.as("bucket_start"),

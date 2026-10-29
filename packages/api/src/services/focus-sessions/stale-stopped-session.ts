@@ -59,6 +59,7 @@ export async function staleStoppedSession(input: {
     const [row] = await tx
       .select({
         id: focusSessions.id,
+        userId: focusSessions.userId,
         channelId: focusSessions.channelId,
         expectedOutputs: focusSessions.expectedOutputs,
       })
@@ -100,6 +101,12 @@ export async function staleStoppedSession(input: {
       to: "stale",
       actor: { kind: "system" },
       reason: "It stopped on its own questions.",
+      // It waits on the person's answers to the questions it stopped on.
+      defaultHold: {
+        on: "person",
+        ref: `person:${row.userId}`,
+        reason: "It stopped on its own questions.",
+      },
       set: {
         expectedOutputs: stampRetired(
           outputs,

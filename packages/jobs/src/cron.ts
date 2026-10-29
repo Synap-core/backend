@@ -96,6 +96,7 @@ import {
   INBOUND_DELIVERY_SWEEPER_QUEUE,
   INBOUND_DELIVERY_SWEEPER_CRON,
 } from "./workers/inbound-delivery-sweeper.js";
+import { HOLD_RESUME_QUEUE, HOLD_RESUME_CRON } from "./workers/hold-resume.js";
 import { EVENT_END_CRON_QUEUE } from "./workers/event-end-cron.js";
 import {
   EXTERNAL_AGENT_POLL_QUEUE,
@@ -312,6 +313,11 @@ export async function registerCronSchedules(): Promise<void> {
   );
   logger.info("Registered cron: inbound-delivery-sweeper (every minute)");
   await sendSafe(boss, INBOUND_DELIVERY_SWEEPER_QUEUE, {});
+
+  // Hold resume (hourly — a paused thing whose hold date has come goes back
+  // to the status it left; status-flow W4)
+  await scheduleSafe(boss, HOLD_RESUME_QUEUE, HOLD_RESUME_CRON, {});
+  logger.info("Registered cron: hold-resume (hourly)");
 
   // Pod hygiene near-dup scan (daily at 3:15 AM UTC).
   // Files PENDING entity merge proposals only; never auto-merges.

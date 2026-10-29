@@ -64,6 +64,7 @@ import {
   pageOffset,
   SESSIONS_PAGE_MAX,
 } from "./shared.js";
+import { moveHoldToolArgs } from "../../../services/lifecycle/hold-input.js";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -1431,6 +1432,8 @@ export const sessionHandlers: McpHandlerMap = {
           ? { criteria: args.criteria as SessionCriterion[] }
           : {}),
       status: args.status as "active" | "paused" | undefined,
+      // A pause's hold and the move's time (W4), checked by the service.
+      ...moveHoldToolArgs(args),
       progress: args.progress as number | undefined,
       currentStage: args.currentStage as string | undefined,
       addOutput: slots.addOutput,

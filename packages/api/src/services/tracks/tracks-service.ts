@@ -165,6 +165,11 @@ import {
 import { activityActorOf, loadActorRows } from "../activity/activity-actors.js";
 import { lifecycleConflictError } from "../lifecycle/conflict.js";
 import {
+  decideMoveHold,
+  resolveOccurredAt,
+  type Hold,
+} from "@synap-core/types/lifecycle";
+import {
   assertGoalSource,
   writeGoalLineage,
   type TrackFromEntity,
@@ -1887,6 +1892,13 @@ export async function setTrackStatus(input: {
    */
   expectedStatus?: ProjectTrackStatus;
   actor: TrackActor;
+  /**
+   * What a pause waits on (W4): required from an agent, `unspecified` for a
+   * person when absent (a check gate's own pause records the check).
+   */
+  hold?: Hold | null;
+  /** When the move really happened, if earlier (≤ 30 days back). */
+  occurredAt?: string | null;
 }): Promise<SetTrackStatusResult> {
   if (input.actor.agentUserId && input.expectedStatus === undefined) {
     logger.warn(
@@ -1919,6 +1931,8 @@ export async function setTrackStatus(input: {
     throw lifecycleConflictError(input.expectedStatus, track.status);
   }
   if (track.status === input.status) return { status: "unchanged", track };
+  // WHEN and WHAT IT WAITS ON, refused before anything is filed (W4).
+  const move = trackMoveFacts(track.status, input);
   const close = {
     verdict: input.verdict ?? null,
     verdictReason: input.verdictReason?.trim() || null,
@@ -1940,7 +1954,10 @@ export async function setTrackStatus(input: {
       input.status,
       input.actor.userId,
       close,
-      { actor: workUnitActorOf(input.actor.userId, input.actor.agentUserId) }
+      {
+        actor: workUnitActorOf(input.actor.userId, input.actor.agentUserId),
+        ...move,
+      }
     );
   }
   const perm = await checkPermissionOrPropose({
@@ -1967,6 +1984,9 @@ export async function setTrackStatus(input: {
       expectedStatus: track.status,
       ...(close.verdict ? { verdict: close.verdict } : {}),
       ...(close.verdictReason ? { verdictReason: close.verdictReason } : {}),
+      // Replayed with the move (the approval keeps them).
+      ...(move.hold ? { hold: move.hold } : {}),
+      ...(move.occurredAt ? { occurredAt: move.occurredAt.toISOString() } : {}),
     },
   });
   if ("denied" in perm && perm.denied) {
@@ -1998,8 +2018,54 @@ export async function setTrackStatus(input: {
     input.status,
     input.actor.userId,
     close,
-    { actor: workUnitActorOf(input.actor.userId, input.actor.agentUserId) }
+    {
+      actor: workUnitActorOf(input.actor.userId, input.actor.agentUserId),
+      ...move,
+    }
   );
+}
+
+/** A goal move's time and hold, as the write records them. */
+export interface TrackMoveFacts {
+  hold?: Hold | null;
+  occurredAt?: Date | null;
+}
+
+/**
+ * Check a goal move's `occurredAt` and hold BEFORE governance (the rule is
+ * `resolveOccurredAt` + `decideMoveHold`; the write applies it again in its
+ * transaction): an agent's pause without a hold is refused here, not at
+ * approval. A goal has one paused status, so nothing carries over.
+ */
+function trackMoveFacts(
+  from: ProjectTrackStatus,
+  input: {
+    status: ProjectTrackStatus;
+    actor: TrackActor;
+    hold?: Hold | null;
+    occurredAt?: string | null;
+  }
+): TrackMoveFacts {
+  let occurredAt: Date | null = null;
+  if (input.occurredAt) {
+    const when = resolveOccurredAt(input.occurredAt);
+    if (!when.ok) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: when.message });
+    }
+    occurredAt = when.occurredAt;
+  }
+  const decided = decideMoveHold({
+    from,
+    fromCategory: trackStatusCategory(from),
+    toCategory: trackStatusCategory(input.status) ?? "active",
+    actorKind: input.actor.agentUserId ? "agent" : "human",
+    given: input.hold,
+    since: occurredAt ?? new Date(),
+  });
+  if (!decided.ok) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: decided.message });
+  }
+  return { hold: input.hold ?? null, occurredAt };
 }
 
 /**
@@ -2019,8 +2085,12 @@ export async function applyTrackStatus(
   status: ProjectTrackStatus,
   userId: string,
   close: TrackCloseInput = {},
-  /** Who the goal's transition names, and the approval it replays. */
-  transition: { actor?: WorkUnitActor; proposalId?: string | null } = {}
+  /** Who the goal's transition names, the approval it replays, and (W4) a
+   * pause's hold and the move's time. */
+  transition: {
+    actor?: WorkUnitActor;
+    proposalId?: string | null;
+  } & TrackMoveFacts = {}
 ): Promise<{ status: "updated"; track: ProjectTrack }> {
   // Only the goal's JUDGE closes it (W3), only its owner or judge drops it
   // (F7) — the person acting here, or the APPROVER on a replay. ONE place:
@@ -2048,6 +2118,8 @@ export async function applyTrackStatus(
       dropMetadataKey: CHECK_GATE_METADATA_KEY,
       actor: transition.actor,
       proposalId: transition.proposalId,
+      hold: transition.hold,
+      occurredAt: transition.occurredAt,
       // Decision 2a: closing/dropping ENDS the track's space grant — a stamp,
       // so nothing revives it (a reopened goal is a NEW track with its own).
       // Pausing needs no stamp: the gate admits only an ACTIVE track (W5), so

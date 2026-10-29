@@ -42,6 +42,7 @@ import {
   setSessionStatus,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import type { Hold } from "@synap-core/types/lifecycle";
 import {
   readCriteria,
   resolveStageGate,
@@ -206,9 +207,10 @@ export interface StageGateSubject {
    * so a subject a human already paused (or that closed mid-advance) is never
    * dragged back. `metadataPatch` is merged into the row's metadata. Returns
    * whether a row actually flipped — what the UPDATE returned, never "reached
-   * this line".
+   * this line". `hold` is what the pause waits on (status-flow W4): a human
+   * gate waits on a decision, a check gate on the check itself.
    */
-  pause(metadataPatch?: Record<string, unknown>): Promise<boolean>;
+  pause(hold: Hold, metadataPatch?: Record<string, unknown>): Promise<boolean>;
   /**
    * A check gate: the keys of the LEFT stage's required criteria that do not
    * pass, plus — when the subject can say more than a key list — a readable
@@ -294,7 +296,11 @@ async function openStageGate(
     fromStage: input.fromStage ?? null,
   });
 
-  const paused = await subject.pause();
+  const paused = await subject.pause({
+    on: "decision",
+    ref: `stage:${stage.key}`,
+    reason: `The "${stage.name}" stage gate waits for a person's approval.`,
+  });
   const summary = summarizeStageGate(payload);
 
   const { proposal } = await createEventBackedProposal({
@@ -359,14 +365,23 @@ async function applyCheckGate(
   if (failing.length === 0) {
     return { kind: "check", stageKey, passed: true, failing, paused: false };
   }
-  const paused = await subject.pause({
-    [CHECK_GATE_METADATA_KEY]: {
-      stageKey,
-      fromStage,
-      failing,
-      ...(reason ? { reason } : {}),
+  const paused = await subject.pause(
+    {
+      on: "thing",
+      ref: `check:${stageKey}`,
+      reason:
+        reason ??
+        `The check of "${fromStage}" did not pass: ${failing.join(", ")}.`,
     },
-  });
+    {
+      [CHECK_GATE_METADATA_KEY]: {
+        stageKey,
+        fromStage,
+        failing,
+        ...(reason ? { reason } : {}),
+      },
+    }
+  );
   return {
     kind: "check",
     stageKey,
@@ -480,7 +495,7 @@ export function sessionGateSubject(
           }
         : null;
     },
-    async pause(metadataPatch) {
+    async pause(hold, metadataPatch) {
       // The gate's own hold: the system's move (guarded `active → paused`).
       const { rows } = await setSessionStatus(db, {
         sessionId: params.sessionId,
@@ -488,6 +503,7 @@ export function sessionGateSubject(
         to: "paused",
         actor: { kind: "system", userId: params.userId },
         reason: "Its stage gate is holding it.",
+        hold,
         set: {
           updatedAt: new Date(),
           ...(metadataPatch
@@ -580,7 +596,7 @@ export function trackGateSubject(
       const stage = findStage(params.snapshotStages, stageKey);
       return stage ? { stage } : null;
     },
-    async pause(metadataPatch) {
+    async pause(hold, metadataPatch) {
       // Through the repository (guarded `active → paused` in its WHERE), so the
       // pause emits `track.update.completed` like every other track write, and
       // owes the goal's transition — the gate's own move, the system's.
@@ -593,6 +609,7 @@ export function trackGateSubject(
           to: "paused",
           metadataPatch,
           actor: { kind: "system", userId: params.userId },
+          hold,
         },
         params.userId
       );

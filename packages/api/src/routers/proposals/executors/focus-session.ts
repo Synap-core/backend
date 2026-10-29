@@ -76,6 +76,7 @@ import { resolveFilingStage } from "../../../services/tracks/tracks-service.js";
 import { paramOwedSlots } from "../../../services/focus-sessions/param-slots.js";
 import { z } from "zod";
 import { sessionCriteriaSchema } from "../../../schemas/session-criteria.js";
+import type { Hold } from "@synap-core/types/lifecycle";
 
 /**
  * A title from a stored payload: one line, blank ⇒ null, over the column bound
@@ -1020,6 +1021,15 @@ export function registerFocusSessionExecutors(): void {
             proposal.agentUserId
           ),
           proposalId: input.proposalId,
+          // The pause's hold and the move's time, as filed (W4).
+          hold:
+            set.status && innerData.hold && typeof innerData.hold === "object"
+              ? (innerData.hold as Hold)
+              : null,
+          occurredAt:
+            set.status && typeof innerData.occurredAt === "string"
+              ? new Date(innerData.occurredAt)
+              : null,
         });
         await stampSessionUpdate({
           proposalId: input.proposalId,

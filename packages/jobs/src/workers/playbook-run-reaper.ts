@@ -197,6 +197,10 @@ export async function handlePlaybookRunReaper(): Promise<void> {
           to: "stale",
           actor: { kind: "system" },
           reason: "Its run's external agent went quiet.",
+          defaultHold: {
+            on: "nobody",
+            reason: "Its run's external agent went quiet.",
+          },
         });
       }
       logger.info(

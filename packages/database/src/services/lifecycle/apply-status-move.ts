@@ -45,8 +45,15 @@ import {
   type EffectiveLifecycle,
   type LifecycleCategory,
 } from "../../utils/lifecycle-model.js";
-import type { LifecycleTransitionPayload } from "@synap-core/types/lifecycle";
+import {
+  decideMoveHold,
+  type Hold,
+  type LifecycleTransitionPayload,
+  type MoveHoldDecision,
+} from "@synap-core/types/lifecycle";
 import { insertTransitionOutbox } from "./transition-outbox.js";
+import { transitionStamp } from "./transition-stamp.js";
+import { listHolds } from "./holds.js";
 
 type Db = PostgresJsDatabase<typeof schema>;
 /** The CAS runs inside the move's transaction. */
@@ -246,13 +253,25 @@ export interface ApplyStatusMoveInput {
    * id), stored on the outbox row with the transition.
    */
   emitContext?: Record<string, unknown>;
+  /** When it really happened (already bounded by the door); default now. */
+  occurredAt?: Date | null;
+  /**
+   * What a move into a paused status waits on (`decideMoveHold`: refused
+   * from an agent when absent, `unspecified` for a person or the system; a
+   * move between two paused statuses keeps the hold it had).
+   */
+  hold?: Hold | null;
 }
 
 export type ApplyStatusMoveResult =
   | { status: "moved"; transition: StatusTransition }
   | { status: "unchanged"; current: string }
   | { status: "conflict"; expectedFrom: string | null; actual: string | null }
-  | { status: "refused"; code: "UNKNOWN_OPTION"; reason: string };
+  | {
+      status: "refused";
+      code: "UNKNOWN_OPTION" | Extract<MoveHoldDecision, { ok: false }>["code"];
+      reason: string;
+    };
 
 /** Thrown by a door that turns a conflict into an error (CONFLICT, 409). */
 export class LifecycleConflictError extends Error {
@@ -351,8 +370,39 @@ export async function applyStatusMove(
     };
   }
   const human = actor.kind === "human" && input.strict !== true;
+  const stamp = transitionStamp(actor.kind, input.occurredAt);
   // The CAS and the owed event commit together, or neither does.
   return db.transaction(async (tx): Promise<ApplyStatusMoveResult> => {
+    // The hold the move records, decided from the status it moves FROM —
+    // before the write, so a refused pause writes nothing (a person's move
+    // that finds another status re-decides from that one).
+    const holdFor = async (from: string | null) => {
+      const fromCategory =
+        findLifecycleOption(target.lifecycle, from)?.category ?? null;
+      return decideMoveHold({
+        from,
+        fromCategory,
+        toCategory: option.category,
+        actorKind: actor.kind,
+        approved: Boolean(input.proposalId),
+        given: input.hold,
+        current:
+          fromCategory === "paused"
+            ? ((
+                await listHolds(tx, {
+                  subjects: [
+                    {
+                      subjectType: "entity",
+                      subjectId: target.entityId,
+                      facetId: target.facetId,
+                    },
+                  ],
+                })
+              )[0]?.hold ?? null)
+            : null,
+        since: new Date(stamp.occurredAt),
+      });
+    };
     let current = target.current;
     const expressed = input.expectedFrom !== undefined;
     const expected = expressed ? (input.expectedFrom ?? null) : current;
@@ -363,6 +413,10 @@ export async function applyStatusMove(
     }
     if (current === to) return { status: "unchanged", current: to };
 
+    let held = await holdFor(current);
+    if (!held.ok) {
+      return { status: "refused", code: held.code, reason: held.message };
+    }
     let ok = await casWrite(tx, target, current, to, option.category);
     if (!ok) {
       // Someone wrote between our read and our update.
@@ -372,6 +426,10 @@ export async function applyStatusMove(
       }
       current = actual;
       if (current === to) return { status: "unchanged", current: to };
+      held = await holdFor(current);
+      if (!held.ok) {
+        return { status: "refused", code: held.code, reason: held.message };
+      }
       ok = await casWrite(tx, target, current, to, option.category);
       if (!ok) {
         return {
@@ -409,6 +467,8 @@ export async function applyStatusMove(
       staleExpected: human && expressed && expected !== current,
       proposalId: input.proposalId ?? null,
       workspaceId: target.workspaceId ?? input.lensWorkspaceId ?? null,
+      ...stamp,
+      hold: held.hold,
     };
     await insertTransitionOutbox(tx, transition, input.emitContext);
     return { status: "moved", transition };

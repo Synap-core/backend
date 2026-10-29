@@ -1243,6 +1243,18 @@
           "description": "When you change the status: the status you SAW (compare-and-set). If it moved meanwhile you get { status: 'conflict', conflict: { currentStatus } } and nothing is written — re-read and decide again; never retry blindly."
         },
         {
+          "name": "hold",
+          "type": "object",
+          "required": false,
+          "description": "REQUIRED from you when the move PAUSES it (a status in the paused category): what it waits on — a pause without one is refused. { on: person | agent | external | thing | decision | date | nobody | unspecified, ref?: who or what ('person:<id>', 'company:<id>', a label), reason?: why, until?: { date: ISO } (resumes on that day) or { moves: '<entity|track|focus_session>:<id>', to?: status or category } (resumes when that thing moves), reviewBy?: ISO date to look again (defaults to 14 days when nothing resumes it on a date) }. Refused on a move that does not pause."
+        },
+        {
+          "name": "occurredAt",
+          "type": "string",
+          "required": false,
+          "description": "When the move really happened, if earlier than now (ISO date-time): at most 30 days back, never in the future. The move is recorded now and marked backdated."
+        },
+        {
           "name": "documentId",
           "type": "string",
           "required": false,
@@ -1289,6 +1301,35 @@
           "expectedStatus": {
             "type": ["string", "null"],
             "description": "When you change the status: the status you SAW (compare-and-set). If it moved meanwhile you get { status: 'conflict', conflict: { currentStatus } } and nothing is written — re-read and decide again; never retry blindly."
+          },
+          "hold": {
+            "type": "object",
+            "description": "REQUIRED from you when the move PAUSES it (a status in the paused category): what it waits on — a pause without one is refused. { on: person | agent | external | thing | decision | date | nobody | unspecified, ref?: who or what ('person:<id>', 'company:<id>', a label), reason?: why, until?: { date: ISO } (resumes on that day) or { moves: '<entity|track|focus_session>:<id>', to?: status or category } (resumes when that thing moves), reviewBy?: ISO date to look again (defaults to 14 days when nothing resumes it on a date) }. Refused on a move that does not pause.",
+            "properties": {
+              "on": {
+                "type": "string",
+                "enum": [
+                  "person",
+                  "agent",
+                  "external",
+                  "thing",
+                  "decision",
+                  "date",
+                  "nobody",
+                  "unspecified"
+                ]
+              },
+              "ref": { "type": ["string", "null"] },
+              "reason": { "type": ["string", "null"] },
+              "until": { "type": ["object", "null"] },
+              "reviewBy": { "type": ["string", "null"] }
+            },
+            "required": ["on"],
+            "additionalProperties": false
+          },
+          "occurredAt": {
+            "type": "string",
+            "description": "When the move really happened, if earlier than now (ISO date-time): at most 30 days back, never in the future. The move is recorded now and marked backdated."
           },
           "documentId": {
             "type": "string",
@@ -1375,6 +1416,35 @@
                     "expectedStatus": {
                       "type": ["string", "null"],
                       "description": "When the patch moves the status: the status you SAW. If it moved meanwhile the item is skipped."
+                    },
+                    "hold": {
+                      "type": "object",
+                      "description": "REQUIRED from you when the move PAUSES it (a status in the paused category): what it waits on — a pause without one is refused. { on: person | agent | external | thing | decision | date | nobody | unspecified, ref?: who or what ('person:<id>', 'company:<id>', a label), reason?: why, until?: { date: ISO } (resumes on that day) or { moves: '<entity|track|focus_session>:<id>', to?: status or category } (resumes when that thing moves), reviewBy?: ISO date to look again (defaults to 14 days when nothing resumes it on a date) }. Refused on a move that does not pause.",
+                      "properties": {
+                        "on": {
+                          "type": "string",
+                          "enum": [
+                            "person",
+                            "agent",
+                            "external",
+                            "thing",
+                            "decision",
+                            "date",
+                            "nobody",
+                            "unspecified"
+                          ]
+                        },
+                        "ref": { "type": ["string", "null"] },
+                        "reason": { "type": ["string", "null"] },
+                        "until": { "type": ["object", "null"] },
+                        "reviewBy": { "type": ["string", "null"] }
+                      },
+                      "required": ["on"],
+                      "additionalProperties": false
+                    },
+                    "occurredAt": {
+                      "type": "string",
+                      "description": "When the move really happened, if earlier than now (ISO date-time): at most 30 days back, never in the future. The move is recorded now and marked backdated."
                     }
                   },
                   "additionalProperties": false
@@ -3879,6 +3949,18 @@
           "enum": ["active", "paused"]
         },
         {
+          "name": "hold",
+          "type": "object",
+          "required": false,
+          "description": "REQUIRED from you when the move PAUSES it (a status in the paused category): what it waits on — a pause without one is refused. { on: person | agent | external | thing | decision | date | nobody | unspecified, ref?: who or what ('person:<id>', 'company:<id>', a label), reason?: why, until?: { date: ISO } (resumes on that day) or { moves: '<entity|track|focus_session>:<id>', to?: status or category } (resumes when that thing moves), reviewBy?: ISO date to look again (defaults to 14 days when nothing resumes it on a date) }. Refused on a move that does not pause."
+        },
+        {
+          "name": "occurredAt",
+          "type": "string",
+          "required": false,
+          "description": "When the move really happened, if earlier than now (ISO date-time): at most 30 days back, never in the future. The move is recorded now and marked backdated."
+        },
+        {
           "name": "progress",
           "type": "number",
           "required": false,
@@ -4013,6 +4095,35 @@
             "type": "string",
             "enum": ["active", "paused"],
             "description": "New lifecycle status (optional). To CLOSE a session use synap_complete_session — update_session cannot close, since a raw close would orphan a running playbook_run."
+          },
+          "hold": {
+            "type": "object",
+            "description": "REQUIRED from you when the move PAUSES it (a status in the paused category): what it waits on — a pause without one is refused. { on: person | agent | external | thing | decision | date | nobody | unspecified, ref?: who or what ('person:<id>', 'company:<id>', a label), reason?: why, until?: { date: ISO } (resumes on that day) or { moves: '<entity|track|focus_session>:<id>', to?: status or category } (resumes when that thing moves), reviewBy?: ISO date to look again (defaults to 14 days when nothing resumes it on a date) }. Refused on a move that does not pause.",
+            "properties": {
+              "on": {
+                "type": "string",
+                "enum": [
+                  "person",
+                  "agent",
+                  "external",
+                  "thing",
+                  "decision",
+                  "date",
+                  "nobody",
+                  "unspecified"
+                ]
+              },
+              "ref": { "type": ["string", "null"] },
+              "reason": { "type": ["string", "null"] },
+              "until": { "type": ["object", "null"] },
+              "reviewBy": { "type": ["string", "null"] }
+            },
+            "required": ["on"],
+            "additionalProperties": false
+          },
+          "occurredAt": {
+            "type": "string",
+            "description": "When the move really happened, if earlier than now (ISO date-time): at most 30 days back, never in the future. The move is recorded now and marked backdated."
           },
           "progress": {
             "type": "number",
@@ -10801,6 +10912,18 @@
           ]
         },
         {
+          "name": "hold",
+          "type": "object",
+          "required": false,
+          "description": "REQUIRED from you when the move PAUSES it (a status in the paused category): what it waits on — a pause without one is refused. { on: person | agent | external | thing | decision | date | nobody | unspecified, ref?: who or what ('person:<id>', 'company:<id>', a label), reason?: why, until?: { date: ISO } (resumes on that day) or { moves: '<entity|track|focus_session>:<id>', to?: status or category } (resumes when that thing moves), reviewBy?: ISO date to look again (defaults to 14 days when nothing resumes it on a date) }. Refused on a move that does not pause."
+        },
+        {
+          "name": "occurredAt",
+          "type": "string",
+          "required": false,
+          "description": "When the move really happened, if earlier than now (ISO date-time): at most 30 days back, never in the future. The move is recorded now and marked backdated."
+        },
+        {
           "name": "reasoning",
           "type": "string",
           "required": false,
@@ -10860,6 +10983,35 @@
               "archived"
             ],
             "description": "The status you read the goal in (synap_list_tracks) — always send it. Compare-and-set: if it moved meanwhile the call answers status='conflict' with the current status and writes nothing."
+          },
+          "hold": {
+            "type": "object",
+            "description": "REQUIRED from you when the move PAUSES it (a status in the paused category): what it waits on — a pause without one is refused. { on: person | agent | external | thing | decision | date | nobody | unspecified, ref?: who or what ('person:<id>', 'company:<id>', a label), reason?: why, until?: { date: ISO } (resumes on that day) or { moves: '<entity|track|focus_session>:<id>', to?: status or category } (resumes when that thing moves), reviewBy?: ISO date to look again (defaults to 14 days when nothing resumes it on a date) }. Refused on a move that does not pause.",
+            "properties": {
+              "on": {
+                "type": "string",
+                "enum": [
+                  "person",
+                  "agent",
+                  "external",
+                  "thing",
+                  "decision",
+                  "date",
+                  "nobody",
+                  "unspecified"
+                ]
+              },
+              "ref": { "type": ["string", "null"] },
+              "reason": { "type": ["string", "null"] },
+              "until": { "type": ["object", "null"] },
+              "reviewBy": { "type": ["string", "null"] }
+            },
+            "required": ["on"],
+            "additionalProperties": false
+          },
+          "occurredAt": {
+            "type": "string",
+            "description": "When the move really happened, if earlier than now (ISO date-time): at most 30 days back, never in the future. The move is recorded now and marked backdated."
           },
           "reasoning": {
             "type": "string",

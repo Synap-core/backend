@@ -140,8 +140,14 @@ export async function emitLifecycleTransition(
         agentUserId: t.agentUserId ?? undefined,
         proposalId: t.proposalId ?? undefined,
         sessionId: t.sessionId ?? undefined,
+        // The app whose key made the move (0310), carried on the transition:
+        // a sweeper delivery runs outside the request that knew it.
+        appId: t.appId ?? undefined,
         source: t.actorKind === "system" ? "system" : "api",
-        timestamp: new Date(),
+        // Recorded at the move (W4), not at delivery: a goal's or a session's
+        // move is delivered by the sweeper up to ~90 s later. A row owed
+        // before W4 has no stamp.
+        timestamp: t.recordedAt ? new Date(t.recordedAt) : new Date(),
         correlationId: opts.correlationId,
       } as Parameters<EventRepository["append"]>[0]);
       eventId = record?.id ?? t.transitionId;

@@ -35,6 +35,7 @@ import {
   type McpHandlerMap,
 } from "./shared.js";
 import { toolError } from "../tool-errors.js";
+import { moveHoldToolArgs } from "../../../services/lifecycle/hold-input.js";
 import {
   TITLE_HARD_MAX,
   lintTitle,
@@ -364,6 +365,8 @@ export const entityHandlers: McpHandlerMap = {
       args.expectedStatus === null
         ? { expectedStatus: args.expectedStatus as string | null }
         : {}),
+      // A pause's hold and the move's time (W4), validated by the door.
+      ...moveHoldToolArgs(args),
     });
     // The title rubric, as on create: the title is stored as sent, and this is
     // how the writer learns it should be rewritten. Kind unknown here (an

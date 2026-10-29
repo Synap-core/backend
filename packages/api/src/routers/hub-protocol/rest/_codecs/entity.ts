@@ -14,6 +14,7 @@ import { HUB_WRITE_SOURCES } from "@synap-core/types/proposals";
 import { z } from "@hono/zod-openapi";
 import { projectKnowledgeProperties } from "@synap/database";
 import { uuidQueryParam } from "./_openapi.js";
+import { moveHoldInputShape } from "../../../../services/lifecycle/hold-input.js";
 
 // Canonical wire shape for entities returned by Hub Protocol after passing
 // through `entityToWire(...)`. Routes that return raw DB rows directly should
@@ -274,6 +275,8 @@ export const UpdateEntityRequestSchema = z
       .describe(
         "Compare-and-set on the status: the status you SAW. If it moved meanwhile the call answers 409 with the current status and writes nothing."
       ),
+    // With a pause: what it waits on, and when the move happened (W4).
+    ...moveHoldInputShape,
     documentId: z
       .string()
       .uuid()

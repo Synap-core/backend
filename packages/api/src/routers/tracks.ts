@@ -51,6 +51,10 @@ import {
   changeTrackParticipants,
   trackParticipantChangeSchema,
 } from "../services/tracks/track-participants.js";
+import {
+  moveHoldArgs,
+  moveHoldInputShape,
+} from "../services/lifecycle/hold-input.js";
 
 function actorOf(
   ctx: { userId: string; agentUserId?: string | null; isHubProtocol?: boolean },
@@ -252,6 +256,8 @@ export const tracksRouter = router({
         /** The status the caller read — an agent sends it (D1 step 1 warns without it); CONFLICT when stale. */
         expectedStatus: z.enum(PROJECT_TRACK_STATUSES).optional(),
         reasoning,
+        /** With a pause: what it waits on, and when the move happened (W4). */
+        ...moveHoldInputShape,
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -262,6 +268,7 @@ export const tracksRouter = router({
         verdictReason: input.verdictReason,
         expectedStatus: input.expectedStatus,
         actor: actorOf(ctx, input.reasoning),
+        ...moveHoldArgs(input),
       });
       if (result.status === "proposed") return result;
       return {

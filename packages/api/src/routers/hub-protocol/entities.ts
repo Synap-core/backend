@@ -32,6 +32,10 @@ import {
 } from "../../services/entities/update-entities.js";
 import { deterministicUuidFromKey } from "../../utils/write-door-idempotency.js";
 import { sessionSlotClaimWarning } from "../../services/focus-sessions/record-session-artifact.js";
+import {
+  moveHoldArgs,
+  moveHoldInputShape,
+} from "../../services/lifecycle/hold-input.js";
 
 export const entitiesRouter = router({
   /**
@@ -553,6 +557,8 @@ export const entitiesRouter = router({
          * current status, and nothing is written.
          */
         expectedStatus: z.string().nullable().optional(),
+        /** With a pause: what it waits on, and when the move happened (W4). */
+        ...moveHoldInputShape,
         /**
          * Attach an EXISTING document as the entity's body — the re-attach
          * door for an orphaned document (decision B9g). Same procedure,
@@ -606,6 +612,7 @@ export const entitiesRouter = router({
           ...(input.expectedStatus !== undefined
             ? { expectedStatus: input.expectedStatus }
             : {}),
+          ...moveHoldArgs(input),
         });
       } catch (err) {
         // A stale status move is an answer the agent re-plans on, not a fault.
@@ -853,6 +860,7 @@ export const entitiesRouter = router({
         source: z.enum(HUB_WRITE_SOURCES).optional(),
         /** Compare-and-set on the role's status — see `updateEntity`. */
         expectedStatus: z.string().nullable().optional(),
+        ...moveHoldInputShape,
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -884,6 +892,7 @@ export const entitiesRouter = router({
           ...(input.expectedStatus !== undefined
             ? { expectedStatus: input.expectedStatus }
             : {}),
+          ...moveHoldArgs(input),
         });
       } catch (err) {
         const conflict = lifecycleConflictOf(err);

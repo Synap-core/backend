@@ -11,6 +11,7 @@
  * `utils/lifecycle-model.ts` re-exports them); there is no second copy.
  */
 import type { LifecycleCategory, LifecycleOption } from "./option.js";
+import type { RecordedHold } from "./hold.js";
 
 export {
   LIFECYCLE_CATEGORIES,
@@ -85,7 +86,17 @@ export interface TransitionBase {
   to: string;
   fromCategory: LifecycleCategory | null;
   category: LifecycleCategory;
+  /** How the move was governed and compare-and-set (who wins a race). */
   actorKind: "human" | "agent" | "system";
+  /**
+   * Who made it, for attribution: `actorKind`, except a move made with an
+   * APP's key (`grants.client_id`, the same attribution `events.app_id`
+   * carries, 0310) is the app's: the CRM app moving a deal is neither the
+   * person who connected it nor an agent.
+   */
+  actorClass: TransitionActorClass;
+  /** The app's `public_id` when `actorClass` is `app`, else null. */
+  appId: string | null;
   /** The person the move is attributed to (the owner of an agent's move). */
   userId: string;
   agentUserId: string | null;
@@ -96,7 +107,24 @@ export interface TransitionBase {
   proposalId: string | null;
   /** The lens the move happened in. */
   workspaceId: string | null;
+  /**
+   * When it happened (ISO): now, or up to 30 days back when the mover says so
+   * (`resolveOccurredAt`). Time in a status is measured from here.
+   */
+  occurredAt: string;
+  /** When it was recorded (ISO), stamped at the move, never at delivery. */
+  recordedAt: string;
+  /** `occurredAt` was given and lies before `recordedAt`. */
+  backdated: boolean;
+  /**
+   * What a move into a paused status waits on (`./hold.ts`); null for any
+   * other move. The transition log is the hold's only store.
+   */
+  hold: RecordedHold | null;
 }
+
+/** Who made a move, for attribution (`TransitionBase.actorClass`). */
+export type TransitionActorClass = "human" | "agent" | "app" | "system";
 
 /**
  * The payload of `entity.transition.completed` — the ONE event every entity
@@ -127,6 +155,27 @@ export interface WorkUnitTransitionPayload extends TransitionBase {
 /** Any transition, discriminated on `subjectType`. */
 export type AnyTransitionPayload =
   LifecycleTransitionPayload | WorkUnitTransitionPayload;
+
+export {
+  HOLD_ON,
+  HOLD_REQUIRED_MESSAGE,
+  HOLD_NOT_A_PAUSE_MESSAGE,
+  HOLD_REVIEW_DAYS,
+  OCCURRED_AT_MAX_PAST_DAYS,
+  UNSPECIFIED_HOLD,
+  decideMoveHold,
+  holdProblem,
+  holdWokenBy,
+  parseHoldMovesRef,
+  recordHold,
+  resolveOccurredAt,
+  type Hold,
+  type HoldOn,
+  type HoldReviewBase,
+  type HoldUntil,
+  type MoveHoldDecision,
+  type RecordedHold,
+} from "./hold.js";
 
 export {
   STEP_POSITIONS,

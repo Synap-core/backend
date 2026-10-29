@@ -117,6 +117,12 @@ const T: LifecycleTransitionPayload = {
   staleExpected: false,
   proposalId: null,
   workspaceId: "w1",
+  actorClass: "agent",
+  appId: null,
+  occurredAt: "2026-10-29T10:00:00.000Z",
+  recordedAt: "2026-10-29T10:00:00.000Z",
+  backdated: false,
+  hold: null,
 };
 
 /** A goal's move, in the same shape (status-flow W1). */
@@ -139,6 +145,18 @@ const G: WorkUnitTransitionPayload = {
   workspaceId: "w1",
   projectId: "p1",
   trackId: "tr1",
+  // Moved by the CRM app's key, recorded at the move (W4).
+  actorClass: "app",
+  appId: "app_crm",
+  occurredAt: "2026-10-27T16:00:00.000Z",
+  recordedAt: "2026-10-29T09:12:00.000Z",
+  backdated: true,
+  hold: {
+    on: "external",
+    until: { date: "2026-11-10T00:00:00.000Z" },
+    resumeTo: "active",
+    since: "2026-10-27T16:00:00.000Z",
+  },
 };
 
 beforeEach(() => {
@@ -191,6 +209,10 @@ describe("emitLifecycleTransition", () => {
         subjectType,
         subjectId: "tr1",
         source: "system",
+        // The log row is timed at the MOVE (not at the sweeper's delivery)
+        // and names the app whose key made it (W4).
+        timestamp: new Date("2026-10-29T09:12:00.000Z"),
+        appId: "app_crm",
       });
       expect(h.emitted).toHaveLength(1);
       expect(h.emitted[0]).toMatchObject({

@@ -43,6 +43,11 @@ import {
 } from "../../services/lifecycle/move-status.js";
 import { initialStatusFloor } from "../../services/lifecycle/initial-status-floor.js";
 import { randomUUID } from "crypto";
+import {
+  moveHoldArgs,
+  moveHoldInputShape,
+} from "../../services/lifecycle/hold-input.js";
+import { HOLD_NOT_A_PAUSE_MESSAGE } from "@synap-core/types/lifecycle";
 import { canWriteFacet } from "../../utils/facet-write-gate.js";
 import {
   entityWriteVisibleWhere,
@@ -482,6 +487,8 @@ export const facetProcs = {
         status: z.string().optional(),
         /** The role status the caller SAW — `expectedFrom` of the status move. */
         expectedStatus: z.string().nullable().optional(),
+        /** With a pause: what it waits on, and when the move happened (W4). */
+        ...moveHoldInputShape,
         properties: z.record(z.string(), z.unknown()).optional(),
         /** Overlay lens for property validation (defaults to the facet's stored ws). */
         workspaceId: z.string().uuid().nullable().optional(),
@@ -585,6 +592,7 @@ export const facetProcs = {
             sessionId: ctx.sessionId ?? null,
             reason: input.reasoning ?? null,
             workspaceId: governanceWorkspaceId,
+            ...moveHoldArgs(input),
           });
           if (statusMove.status === "conflict") {
             throw lifecycleConflictError(
@@ -628,6 +636,14 @@ export const facetProcs = {
             ...(statusMove ? { statusMove } : {}),
           };
         }
+      }
+
+      // A hold or a time with no status move would be dropped: refused.
+      if (!statusMove && (input.hold || input.occurredAt)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: HOLD_NOT_A_PAUSE_MESSAGE,
+        });
       }
 
       // 1. .requested

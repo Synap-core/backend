@@ -33,10 +33,17 @@ import {
   classifyStatusMove,
   resolveStatusMoveTarget,
   expireProposalsStaleAfterMove,
+  listHolds,
   type ApplyStatusMoveResult,
   type StatusMoveActor,
 } from "@synap/database";
 import { dispatchLifecycleTransition } from "@synap/events";
+import {
+  decideMoveHold,
+  findLifecycleOption,
+  resolveOccurredAt,
+  type Hold,
+} from "@synap-core/types/lifecycle";
 import { createLogger } from "@synap-core/core";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { roleWriteGrantSpace } from "../../utils/role-write-grant.js";
@@ -70,6 +77,17 @@ export interface MoveStatusInput {
   forcePropose?: boolean;
   /** An approved proposal replaying this move — governance already decided. */
   approvedProposalId?: string | null;
+  /**
+   * What a move into a paused status waits on (W4). An agent's pause without
+   * one is refused (`HOLD_REQUIRED`) before anything is filed; a person's or
+   * the system's is recorded `unspecified`.
+   */
+  hold?: Hold | null;
+  /**
+   * When it really happened, if earlier than now: at most 30 days back, never
+   * ahead (`resolveOccurredAt`). The move is marked backdated.
+   */
+  occurredAt?: string | Date | null;
 }
 
 const AI_SOURCES = new Set(["ai", "intelligence", "agent"]);
@@ -145,7 +163,11 @@ export type MoveStatusResult =
         | "NO_LIFECYCLE"
         | "NOT_THE_LIFECYCLE"
         | "ROLE_NOT_ATTACHED"
-        | "UNKNOWN_OPTION";
+        | "UNKNOWN_OPTION"
+        | "HOLD_REQUIRED"
+        | "HOLD_INVALID"
+        | "HOLD_NOT_A_PAUSE"
+        | "OCCURRED_AT_INVALID";
       reason: string;
     };
 
@@ -222,6 +244,58 @@ export async function moveStatus(
   if (target.current === to) {
     return { status: "unchanged", current: to };
   }
+  // WHEN and WHAT IT WAITS ON, refused before anything is filed: an agent's
+  // proposal without a hold could only be refused at approval. A replay keeps
+  // the time and hold its proposal was filed with (checked then).
+  let occurredAt: Date | null = null;
+  if (input.occurredAt != null) {
+    if (input.approvedProposalId) {
+      occurredAt = new Date(input.occurredAt);
+    } else {
+      const when = resolveOccurredAt(input.occurredAt);
+      if (!when.ok) {
+        return {
+          status: "refused",
+          code: "OCCURRED_AT_INVALID",
+          reason: when.message,
+        };
+      }
+      occurredAt = when.occurredAt;
+    }
+  }
+  const fromCategory =
+    findLifecycleOption(target.lifecycle, target.current)?.category ?? null;
+  const holdCheck = decideMoveHold({
+    from: target.current,
+    fromCategory,
+    // `classifyStatusMove` answered, so the option exists.
+    toCategory: findLifecycleOption(target.lifecycle, to)!.category,
+    actorKind: input.actor.kind,
+    approved: Boolean(input.approvedProposalId),
+    given: input.hold,
+    current:
+      fromCategory === "paused"
+        ? ((
+            await listHolds(db, {
+              subjects: [
+                {
+                  subjectType: "entity",
+                  subjectId: target.entityId,
+                  facetId: target.facetId,
+                },
+              ],
+            })
+          )[0]?.hold ?? null)
+        : null,
+    since: occurredAt ?? new Date(),
+  });
+  if (!holdCheck.ok) {
+    return {
+      status: "refused",
+      code: holdCheck.code,
+      reason: holdCheck.message,
+    };
+  }
 
   const governanceWorkspaceId = target.workspaceId ?? input.workspaceId ?? null;
   let receiptId: string | undefined;
@@ -248,6 +322,9 @@ export async function moveStatus(
       expectedFrom: target.current,
       to,
       reason: input.reason ?? null,
+      // Replayed with the move (the approval keeps them).
+      ...(input.hold ? { hold: input.hold } : {}),
+      ...(occurredAt ? { occurredAt: occurredAt.toISOString() } : {}),
     };
     // The key's grant is checked on the row's own workspace — a pod-wide
     // entity is pod-scope, never the caller's lens (S7). A ROLE's move is a
@@ -322,6 +399,8 @@ export async function moveStatus(
     reason: input.reason,
     proposalId: input.approvedProposalId ?? receiptId ?? null,
     lensWorkspaceId: input.workspaceId,
+    hold: input.hold,
+    occurredAt,
   });
   if (result.status === "moved") {
     // Owed in the move's transaction; a failed delivery stays owed (sweeper).

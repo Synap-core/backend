@@ -58,6 +58,11 @@ import {
   readEntityUndoSnapshot,
   stampEntityUpdate,
 } from "../../services/proposals/stamp-materialized.js";
+import {
+  moveHoldArgs,
+  moveHoldInputShape,
+} from "../../services/lifecycle/hold-input.js";
+import { HOLD_NOT_A_PAUSE_MESSAGE } from "@synap-core/types/lifecycle";
 import { createLogger } from "@synap-core/core";
 import {
   UpdateEntitiesInputSchema,
@@ -169,6 +174,8 @@ export const mutateProcs = {
          * stale value gets CONFLICT and NOTHING in the call is written.
          */
         expectedStatus: z.string().nullable().optional(),
+        /** With a pause: what it waits on, and when the move happened (W4). */
+        ...moveHoldInputShape,
         /**
          * The `updateEntities` call this write belongs to. Stamped on the
          * gate data, so the AUTO_APPROVED receipt carries it and a feed can
@@ -340,6 +347,7 @@ export const mutateProcs = {
           reason: input.reasoning ?? null,
           workspaceId: overlayWorkspaceId,
           forcePropose: input.forcePropose,
+          ...moveHoldArgs(input),
         });
         if (statusMove.status === "conflict") {
           throw lifecycleConflictError(
@@ -397,6 +405,14 @@ export const mutateProcs = {
             statusMove,
           };
         }
+      }
+
+      // A hold or a time with no status move would be dropped: refused.
+      if (!statusMove && (input.hold || input.occurredAt)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: HOLD_NOT_A_PAUSE_MESSAGE,
+        });
       }
 
       // 1. Emit .requested event
