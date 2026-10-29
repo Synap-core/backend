@@ -1611,6 +1611,40 @@ describe("the wire and the workflow", () => {
     }
   });
 
+  it("ghTransport reads a job log that carries terminal escape sequences, on a new gh and an old one", () => {
+    // A new gh refuses escapes without --allow-escape-sequences; an old gh
+    // rejects that flag. The log text must come back either way.
+    // The shape of run 40930185444's Full suite log: timestamped, colours on
+    // the vitest lines, the ratchet's list plain.
+    const LOG = [
+      "2026-10-29T19:07:20.0000000Z \u001b[31m FAIL \u001b[39m a/b.test.ts > x",
+      "2026-10-29T19:07:26.2125347Z   [new-failure]",
+      "2026-10-29T19:07:26.2127262Z       a/b.test.ts",
+      "",
+    ].join("\n");
+    const fakes = {
+      newGh: `const a=process.argv.slice(2);if(a.includes("--allow-escape-sequences")){process.stdout.write(${JSON.stringify(LOG)})}else{console.error("the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway");process.exit(1)}`,
+      oldGh: `const a=process.argv.slice(2);if(a.includes("--allow-escape-sequences")){console.error("unknown flag: --allow-escape-sequences");process.exit(1)}process.stdout.write(${JSON.stringify(LOG)})`,
+    };
+    for (const [name, body] of Object.entries(fakes)) {
+      const dir = mkdtempSync(join(tmpdir(), `fake-gh-${name}-`));
+      try {
+        const fake = join(dir, "gh");
+        writeFileSync(fake, `#!/usr/bin/env node\n${body}\n`);
+        chmodSync(fake, 0o755);
+        const gh = ghTransport({ ghBin: fake });
+        const text = gh.rest("repos/o/r/actions/jobs/1/logs", { raw: true });
+        expect(text, name).toBe(LOG);
+        expect(
+          failingFiles(text).map((f: { file: string }) => f.file),
+          name
+        ).toEqual(["a/b.test.ts"]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
   const wf = readFileSync(join(REPO, RECORD_WORKFLOW), "utf8");
   const jobsText = wf.slice(wf.indexOf("\njobs:\n"));
   /** One job's block (two-space-indented key under `jobs:`). */
