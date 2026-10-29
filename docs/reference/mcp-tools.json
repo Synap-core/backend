@@ -1246,7 +1246,7 @@
           "name": "hold",
           "type": "object",
           "required": false,
-          "description": "REQUIRED from you when the move PAUSES it (a status in the paused category): what it waits on — a pause without one is refused. { on: person | agent | external | thing | decision | date | nobody | unspecified, ref?: who or what ('person:<id>', 'company:<id>', a label), reason?: why, until?: { date: ISO } (resumes on that day) or { moves: '<entity|track|focus_session>:<id>', to?: status or category } (resumes when that thing moves), reviewBy?: ISO date to look again (defaults to 14 days when nothing resumes it on a date) }. Refused on a move that does not pause."
+          "description": "Required when the move pauses. Say what it waits on. on: person | agent | external | thing | decision | date | nobody. ref: who or what ('person:<id>', 'company:<id>', a label). reason: why. until: { date: ISO } resumes on that day; { moves: '<entity|track|focus_session>:<id>', to?: status or category } resumes when that thing moves. reviewBy: an ISO date to look again (14 days by default when nothing resumes it on a date). Leave it out when the move does not pause."
         },
         {
           "name": "occurredAt",
@@ -1304,7 +1304,7 @@
           },
           "hold": {
             "type": "object",
-            "description": "REQUIRED from you when the move PAUSES it (a status in the paused category): what it waits on — a pause without one is refused. { on: person | agent | external | thing | decision | date | nobody | unspecified, ref?: who or what ('person:<id>', 'company:<id>', a label), reason?: why, until?: { date: ISO } (resumes on that day) or { moves: '<entity|track|focus_session>:<id>', to?: status or category } (resumes when that thing moves), reviewBy?: ISO date to look again (defaults to 14 days when nothing resumes it on a date) }. Refused on a move that does not pause.",
+            "description": "Required when the move pauses. Say what it waits on. on: person | agent | external | thing | decision | date | nobody. ref: who or what ('person:<id>', 'company:<id>', a label). reason: why. until: { date: ISO } resumes on that day; { moves: '<entity|track|focus_session>:<id>', to?: status or category } resumes when that thing moves. reviewBy: an ISO date to look again (14 days by default when nothing resumes it on a date). Leave it out when the move does not pause.",
             "properties": {
               "on": {
                 "type": "string",
@@ -1315,8 +1315,7 @@
                   "thing",
                   "decision",
                   "date",
-                  "nobody",
-                  "unspecified"
+                  "nobody"
                 ]
               },
               "ref": { "type": ["string", "null"] },
@@ -1419,7 +1418,7 @@
                     },
                     "hold": {
                       "type": "object",
-                      "description": "REQUIRED from you when the move PAUSES it (a status in the paused category): what it waits on — a pause without one is refused. { on: person | agent | external | thing | decision | date | nobody | unspecified, ref?: who or what ('person:<id>', 'company:<id>', a label), reason?: why, until?: { date: ISO } (resumes on that day) or { moves: '<entity|track|focus_session>:<id>', to?: status or category } (resumes when that thing moves), reviewBy?: ISO date to look again (defaults to 14 days when nothing resumes it on a date) }. Refused on a move that does not pause.",
+                      "description": "Required when the move pauses. Say what it waits on. on: person | agent | external | thing | decision | date | nobody. ref: who or what ('person:<id>', 'company:<id>', a label). reason: why. until: { date: ISO } resumes on that day; { moves: '<entity|track|focus_session>:<id>', to?: status or category } resumes when that thing moves. reviewBy: an ISO date to look again (14 days by default when nothing resumes it on a date). Leave it out when the move does not pause.",
                       "properties": {
                         "on": {
                           "type": "string",
@@ -1430,8 +1429,7 @@
                             "thing",
                             "decision",
                             "date",
-                            "nobody",
-                            "unspecified"
+                            "nobody"
                           ]
                         },
                         "ref": { "type": ["string", "null"] },
@@ -2636,7 +2634,7 @@
           "name": "statusOf",
           "type": "array<string>",
           "required": false,
-          "description": "Optional: up to 10 ids (thing, goal, session or run). `startHere.statusOf` says where each stands: status, category, since, stuck, what it waits on."
+          "description": "Optional: up to 10 ids (thing, goal, session or run). `startHere.statusOf` says where each stands: status, how long it has been there, whether it is stuck, and what it waits on."
         }
       ],
       "inputSchema": {
@@ -2671,7 +2669,7 @@
             "type": "array",
             "items": { "type": "string" },
             "maxItems": 10,
-            "description": "Optional: up to 10 ids (thing, goal, session or run). `startHere.statusOf` says where each stands: status, category, since, stuck, what it waits on."
+            "description": "Optional: up to 10 ids (thing, goal, session or run). `startHere.statusOf` says where each stands: status, how long it has been there, whether it is stuck, and what it waits on."
           }
         },
         "required": []
@@ -3952,7 +3950,7 @@
           "name": "hold",
           "type": "object",
           "required": false,
-          "description": "REQUIRED from you when the move PAUSES it (a status in the paused category): what it waits on — a pause without one is refused. { on: person | agent | external | thing | decision | date | nobody | unspecified, ref?: who or what ('person:<id>', 'company:<id>', a label), reason?: why, until?: { date: ISO } (resumes on that day) or { moves: '<entity|track|focus_session>:<id>', to?: status or category } (resumes when that thing moves), reviewBy?: ISO date to look again (defaults to 14 days when nothing resumes it on a date) }. Refused on a move that does not pause."
+          "description": "Required when the move pauses. Say what it waits on. on: person | agent | external | thing | decision | date | nobody. ref: who or what ('person:<id>', 'company:<id>', a label). reason: why. until: { date: ISO } resumes on that day; { moves: '<entity|track|focus_session>:<id>', to?: status or category } resumes when that thing moves. reviewBy: an ISO date to look again (14 days by default when nothing resumes it on a date). Leave it out when the move does not pause."
         },
         {
           "name": "occurredAt",
@@ -4098,7 +4096,7 @@
           },
           "hold": {
             "type": "object",
-            "description": "REQUIRED from you when the move PAUSES it (a status in the paused category): what it waits on — a pause without one is refused. { on: person | agent | external | thing | decision | date | nobody | unspecified, ref?: who or what ('person:<id>', 'company:<id>', a label), reason?: why, until?: { date: ISO } (resumes on that day) or { moves: '<entity|track|focus_session>:<id>', to?: status or category } (resumes when that thing moves), reviewBy?: ISO date to look again (defaults to 14 days when nothing resumes it on a date) }. Refused on a move that does not pause.",
+            "description": "Required when the move pauses. Say what it waits on. on: person | agent | external | thing | decision | date | nobody. ref: who or what ('person:<id>', 'company:<id>', a label). reason: why. until: { date: ISO } resumes on that day; { moves: '<entity|track|focus_session>:<id>', to?: status or category } resumes when that thing moves. reviewBy: an ISO date to look again (14 days by default when nothing resumes it on a date). Leave it out when the move does not pause.",
             "properties": {
               "on": {
                 "type": "string",
@@ -4109,8 +4107,7 @@
                   "thing",
                   "decision",
                   "date",
-                  "nobody",
-                  "unspecified"
+                  "nobody"
                 ]
               },
               "ref": { "type": ["string", "null"] },
@@ -10915,7 +10912,7 @@
           "name": "hold",
           "type": "object",
           "required": false,
-          "description": "REQUIRED from you when the move PAUSES it (a status in the paused category): what it waits on — a pause without one is refused. { on: person | agent | external | thing | decision | date | nobody | unspecified, ref?: who or what ('person:<id>', 'company:<id>', a label), reason?: why, until?: { date: ISO } (resumes on that day) or { moves: '<entity|track|focus_session>:<id>', to?: status or category } (resumes when that thing moves), reviewBy?: ISO date to look again (defaults to 14 days when nothing resumes it on a date) }. Refused on a move that does not pause."
+          "description": "Required when the move pauses. Say what it waits on. on: person | agent | external | thing | decision | date | nobody. ref: who or what ('person:<id>', 'company:<id>', a label). reason: why. until: { date: ISO } resumes on that day; { moves: '<entity|track|focus_session>:<id>', to?: status or category } resumes when that thing moves. reviewBy: an ISO date to look again (14 days by default when nothing resumes it on a date). Leave it out when the move does not pause."
         },
         {
           "name": "occurredAt",
@@ -10986,7 +10983,7 @@
           },
           "hold": {
             "type": "object",
-            "description": "REQUIRED from you when the move PAUSES it (a status in the paused category): what it waits on — a pause without one is refused. { on: person | agent | external | thing | decision | date | nobody | unspecified, ref?: who or what ('person:<id>', 'company:<id>', a label), reason?: why, until?: { date: ISO } (resumes on that day) or { moves: '<entity|track|focus_session>:<id>', to?: status or category } (resumes when that thing moves), reviewBy?: ISO date to look again (defaults to 14 days when nothing resumes it on a date) }. Refused on a move that does not pause.",
+            "description": "Required when the move pauses. Say what it waits on. on: person | agent | external | thing | decision | date | nobody. ref: who or what ('person:<id>', 'company:<id>', a label). reason: why. until: { date: ISO } resumes on that day; { moves: '<entity|track|focus_session>:<id>', to?: status or category } resumes when that thing moves. reviewBy: an ISO date to look again (14 days by default when nothing resumes it on a date). Leave it out when the move does not pause.",
             "properties": {
               "on": {
                 "type": "string",
@@ -10997,8 +10994,7 @@
                   "thing",
                   "decision",
                   "date",
-                  "nobody",
-                  "unspecified"
+                  "nobody"
                 ]
               },
               "ref": { "type": ["string", "null"] },
