@@ -82,6 +82,12 @@ export interface UpdateProjectGovernedInput extends ProjectPatch {
   agentUserId?: string | null;
   /** Why — shown to the reviewer; never stored, never replayed. */
   reasoning?: string;
+  /**
+   * The session the caller works in (MCP: the one it named, or the one its
+   * door derived). Without it the gate files the write under the client's
+   * receipt — a teammate's session when agents share one conversation.
+   */
+  sessionId?: string | null;
 }
 
 export type UpdateProjectGovernedOutcome =
@@ -154,6 +160,7 @@ export async function updateProjectGoverned(
     workspaceId: homeWorkspaceId ?? target.workspaceId ?? undefined,
     subjectType: "project",
     action: "update",
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(reasoning ? { reasoning } : {}),
     data: {
       id,

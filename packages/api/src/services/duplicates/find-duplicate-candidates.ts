@@ -10,7 +10,9 @@
  *     name in its space): reused;
  *   - every other hit is `possible`: an agent's write is filed anyway as a proposal
  *     (`POSSIBLE_DUPLICATE`) and the reviewer decides; a person's own create is warned,
- *     never blocked.
+ *     never blocked. One exception: an agent capture graph whose every new entity
+ *     already waits in the caller's own queue returns that proposal instead
+ *     (`submit-capture-graph.ts`, founder decision D3, 2026-10-29).
  * Legs: records (strong identity + exact same-kind name via `resolveIdentity`, the
  * project matcher, the pod-wide kind slug probe) and pending (the caller's own pending
  * creates, same kind, same normalized name or an overlapping strong atom).

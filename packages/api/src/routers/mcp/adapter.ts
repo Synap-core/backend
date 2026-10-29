@@ -249,10 +249,16 @@ export async function executeMCPToolViaHubProtocol(
   // bound to this client, so the write was NOT filed under any of them — the
   // gate groups it under this client's own auto-opened session instead.
   // Disclosed here (once, in the adapter) so the model can pass `sessionId` or
-  // call start_session when the write belongs to existing work.
-  const ambiguityNoted = resolution?.attribution.ambiguous
-    ? withSessionDisclosure(result, resolution.attribution.openCount ?? 0)
-    : result;
+  // call start_session when the write belongs to existing work. Only when the
+  // call FILED something: a validate-only or refused call was grouped nowhere,
+  // and start_session creates the caller's own session (A4-a).
+  const ambiguityNoted =
+    resolution?.attribution.ambiguous &&
+    toolName !== "synap_start_session" &&
+    filed?.status === "ok" &&
+    filed.filedIn.length > 0
+      ? withSessionDisclosure(result, resolution.attribution.openCount ?? 0)
+      : result;
   // A started session never splits; a write about another project says so,
   // once per session and project (the data rides on `attribution` every time).
   const disclosed =

@@ -23,6 +23,8 @@ const h = vi.hoisted(() => ({
   payloadText: JSON.stringify({ status: "applied" }),
   /** The call named a session ⇒ its one select is the ownership check. */
   explicit: false,
+  /** What the gate's ledger says this call filed (`describeWriteSessions`). */
+  filed: undefined as unknown,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -80,13 +82,31 @@ vi.mock("../handlers/capture.js", () => ({
   },
 }));
 
+vi.mock("../handlers/session.js", () => ({
+  sessionHandlers: {
+    synap_start_session: async () => ({
+      content: [{ type: "text", text: h.payloadText }],
+    }),
+  },
+}));
+
+vi.mock("../write-session-report.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../write-session-report.js")>()),
+  describeWriteSessions: vi.fn(async () => h.filed),
+}));
+
+const FILED_IN_RECEIPT = {
+  status: "ok",
+  filedIn: [{ sessionId: "S-RECEIPT", title: "Grouped", kind: "receipt" }],
+};
+
 const { executeMCPToolViaHubProtocol } = await import("../adapter.js");
 const { resolveSessionHandle } = await import("../handlers/shared.js");
 
-async function run(args: Record<string, unknown>) {
+async function run(args: Record<string, unknown>, tool = "synap_capture") {
   h.explicit = typeof args.sessionId === "string";
   const result = await executeMCPToolViaHubProtocol(
-    "synap_capture",
+    tool,
     { text: "x", ...args },
     "user-1",
     ["mcp.write"]
@@ -101,11 +121,13 @@ beforeEach(() => {
   h.openRows = [];
   h.openThrows = false;
   h.payloadText = JSON.stringify({ status: "applied" });
+  h.filed = undefined;
 });
 
 describe("structured session attribution on every attributed write", () => {
   it("(c) no sessionId with several unclaimed sessions open → NO guess, ambiguous, and the Note says so", async () => {
     h.openRows = [{ id: "S-NEWEST" }, { id: "S-OLDER" }];
+    h.filed = FILED_IN_RECEIPT;
 
     const { blocks, payload } = await run({});
 
@@ -113,12 +135,40 @@ describe("structured session attribution on every attributed write", () => {
       session: "none",
       ambiguous: true,
       openCount: 2,
+      filed: FILED_IN_RECEIPT,
     });
     expect(payload.status).toBe("applied");
     expect(blocks).toHaveLength(2);
     expect(blocks[1].text).toMatch(
       /^Note: 2 of your focus sessions were active in the last 24 hours and none is yours/
     );
+  });
+
+  // A4-a: the Note says the write was "grouped in a session opened for you";
+  // a call that filed nothing (validate-only, refused) or start_session (the
+  // caller's own session) was grouped nowhere, so it carries no Note.
+  it("ambiguous but nothing was filed → no Note (the attribution data stays)", async () => {
+    h.openRows = [{ id: "S-NEWEST" }, { id: "S-OLDER" }];
+    for (const filed of [
+      undefined,
+      { status: "ok", filedIn: [] },
+      { status: "unavailable" },
+    ]) {
+      h.filed = filed;
+      const { blocks, payload } = await run({});
+      expect(blocks).toHaveLength(1);
+      expect(payload.attribution).toMatchObject({
+        session: "none",
+        ambiguous: true,
+      });
+    }
+  });
+
+  it("synap_start_session never carries the Note, even ambiguous and filed", async () => {
+    h.openRows = [{ id: "S-NEWEST" }, { id: "S-OLDER" }];
+    h.filed = FILED_IN_RECEIPT;
+    const { blocks } = await run({}, "synap_start_session");
+    expect(blocks).toHaveLength(1);
   });
 
   it("one unclaimed open session → derived via unclaimed, not ambiguous, counted", async () => {

@@ -6969,6 +6969,91 @@ export interface PropertyIssue {
 	rejected?: string[];
 	didYouMean?: string;
 }
+declare const VIEW_FILTER_OPERATORS: readonly [
+	"equals",
+	"not_equals",
+	"contains",
+	"not_contains",
+	"in",
+	"not_in",
+	"greater_than",
+	"greater_than_or_equal",
+	"less_than",
+	"less_than_or_equal",
+	"is_empty",
+	"is_not_empty"
+];
+/** A view filter operator. Derived from {@link VIEW_FILTER_OPERATORS}. */
+export type FilterOperator = (typeof VIEW_FILTER_OPERATORS)[number];
+/** A stored filter that could not be repaired into the grammar, and why. */
+export interface DroppedViewFilter {
+	filter: unknown;
+	reason: string;
+}
+/**
+ * Filter definition for entity queries
+ */
+export interface EntityFilter {
+	field: string;
+	operator: FilterOperator;
+	value?: unknown;
+}
+/**
+ * Sort rule for entity queries
+ */
+export interface SortRule {
+	field: string;
+	direction: "asc" | "desc";
+}
+/**
+ * Query definition for structured views
+ * Defines which entities to show and how to filter them
+ *
+ * NOTE: profileIds/profileSlugs are now stored in views.scopeProfileIds
+ * This query structure only contains filters, sorts, search, pagination, and groupBy
+ */
+export interface EntityQuery {
+	/** @deprecated - Profile IDs now stored in views.scopeProfileIds */
+	profileIds?: string[];
+	/** @deprecated - Profile slugs now stored in views.scopeProfileIds (resolved to IDs) */
+	profileSlugs?: string[];
+	/** @deprecated - Use profileSlugs instead, which is also deprecated */
+	entityTypes?: string[];
+	/** Specific entity IDs (for fixed sets) */
+	entityIds?: string[];
+	/** Filter conditions */
+	filters?: EntityFilter[];
+	/** Sort rules (multiple sorts supported) */
+	sorts?: SortRule[];
+	/** Full-text search query */
+	search?: string;
+	/** Maximum number of entities to return */
+	limit?: number;
+	/** Offset for pagination */
+	offset?: number;
+	/** Group by field (for kanban, timeline) */
+	groupBy?: string;
+}
+/**
+ * Column definition for views
+ */
+export interface ViewColumn {
+	id: string;
+	field: string;
+	title?: string;
+	valueType?: string;
+	indexed?: boolean;
+	visible?: boolean;
+	width?: number;
+}
+export interface BackfillTeamPersonBridgeResult {
+	scanned: number;
+	created: number;
+	linked: number;
+	updated: number;
+	skipped: number;
+	errors: number;
+}
 export interface ProjectDedupCandidate {
 	id: string;
 	name: string;
@@ -7071,83 +7156,6 @@ export interface AppKeySummary {
  * the profile or default rung exactly as for someone who never chose.
  */
 export type UserRendererChoice = "source" | "synap" | null;
-declare const VIEW_FILTER_OPERATORS: readonly [
-	"equals",
-	"not_equals",
-	"contains",
-	"not_contains",
-	"in",
-	"not_in",
-	"greater_than",
-	"greater_than_or_equal",
-	"less_than",
-	"less_than_or_equal",
-	"is_empty",
-	"is_not_empty"
-];
-/** A view filter operator. Derived from {@link VIEW_FILTER_OPERATORS}. */
-export type FilterOperator = (typeof VIEW_FILTER_OPERATORS)[number];
-/** A stored filter that could not be repaired into the grammar, and why. */
-export interface DroppedViewFilter {
-	filter: unknown;
-	reason: string;
-}
-/**
- * Filter definition for entity queries
- */
-export interface EntityFilter {
-	field: string;
-	operator: FilterOperator;
-	value?: unknown;
-}
-/**
- * Sort rule for entity queries
- */
-export interface SortRule {
-	field: string;
-	direction: "asc" | "desc";
-}
-/**
- * Query definition for structured views
- * Defines which entities to show and how to filter them
- *
- * NOTE: profileIds/profileSlugs are now stored in views.scopeProfileIds
- * This query structure only contains filters, sorts, search, pagination, and groupBy
- */
-export interface EntityQuery {
-	/** @deprecated - Profile IDs now stored in views.scopeProfileIds */
-	profileIds?: string[];
-	/** @deprecated - Profile slugs now stored in views.scopeProfileIds (resolved to IDs) */
-	profileSlugs?: string[];
-	/** @deprecated - Use profileSlugs instead, which is also deprecated */
-	entityTypes?: string[];
-	/** Specific entity IDs (for fixed sets) */
-	entityIds?: string[];
-	/** Filter conditions */
-	filters?: EntityFilter[];
-	/** Sort rules (multiple sorts supported) */
-	sorts?: SortRule[];
-	/** Full-text search query */
-	search?: string;
-	/** Maximum number of entities to return */
-	limit?: number;
-	/** Offset for pagination */
-	offset?: number;
-	/** Group by field (for kanban, timeline) */
-	groupBy?: string;
-}
-/**
- * Column definition for views
- */
-export interface ViewColumn {
-	id: string;
-	field: string;
-	title?: string;
-	valueType?: string;
-	indexed?: boolean;
-	visible?: boolean;
-	width?: number;
-}
 export type ResolutionRung = 1 | 2 | 3 | 4 | 5 | 6;
 export interface WorkspaceCandidate {
 	id: string;
@@ -7182,14 +7190,6 @@ export interface WorkspacePlacement {
  * gravity".
  */
 export type ProjectResolutionRung = 1 | 2 | 3 | 3.5 | 4;
-export interface BackfillTeamPersonBridgeResult {
-	scanned: number;
-	created: number;
-	linked: number;
-	updated: number;
-	skipped: number;
-	errors: number;
-}
 /**
  * Write-free preview of what `createWorkspaceFromDefinition` WOULD do to the pod
  * catalog — computed by running the REAL create-path resolver
@@ -10999,7 +10999,9 @@ export interface SubmitCaptureGraphResult {
 	 * with the item it is for (`forRef`/`forTitle`): a same-kind record or one
 	 * of the caller's own pending creates with the same name or strong identity.
 	 * NEVER auto-linked (only a strong identity on a record links). An agent's
-	 * graph with a `possible` twin is filed for review (POSSIBLE_DUPLICATE).
+	 * graph with a `possible` twin is filed for review (POSSIBLE_DUPLICATE),
+	 * unless every new entity waits in the caller's own queue: that proposal
+	 * is then returned (`deduped`), with this check naming each twin.
 	 * Omitted when the door found nothing (`clear`).
 	 */
 	duplicateCheck?: DuplicateCheck;

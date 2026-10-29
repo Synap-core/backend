@@ -744,7 +744,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Propose deleting an entity. For you, this is ALWAYS a proposal the person reviews — 'proposed' is success, never retry it. Nothing is removed until they approve; then the entity is hidden (soft delete), its body document is kept, and they can undo it. Use it to clean up what you created by mistake or what the person asked you to remove. To remove only a role, use synap_detach_facet; to change an entity, synap_update_entity.",
+      "description": "Propose deleting an entity. For you, this is ALWAYS a proposal the person reviews — 'proposed' is success, never retry it. Nothing is removed until they approve; then the entity is hidden (soft delete), its body document is kept, and they can undo it. Use it to clean up what you created by mistake or what the person asked you to remove. To remove only a role, use synap_detach_facet; to change an entity, synap_update_entity. To retire knowledge or a decision that stopped being true, set supersededBy with synap_update_entity (reversible, no review); delete only what was never true.",
       "inputSchema": {
         "type": "object",
         "properties": {
