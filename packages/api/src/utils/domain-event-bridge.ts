@@ -36,6 +36,7 @@ import { projectWorkspaceSettings, type EventRecord } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { EventNames } from "@synap-core/types/events";
 import { bridgeRequestHeaders } from "./chat-realtime-broadcast.js";
+import { entityToWire } from "../routers/hub-protocol/rest/_codecs/entity.js";
 
 const logger = createLogger({ module: "domain-event-bridge" });
 
@@ -228,8 +229,8 @@ export function emitDomainEventToRealtime(event: EventRecord): void {
 
   const eventData = event.eventType.startsWith("workspaces.")
     ? projectWorkspaceRealtimeData(event.data)
-    : event.eventType === "entity.transition.completed"
-      ? projectTransitionRealtimeData(event)
+    : event.eventType.startsWith("entity.")
+      ? projectEntityRealtimeData(event)
       : event.data;
   const payloadData = {
     ...eventData,
@@ -296,29 +297,86 @@ export function postToBridge(body: string, ctx: Record<string, unknown>): void {
 }
 
 /**
- * A status move as the `entity:updated` payload the realtime bridge validates
- * (`entityUpdatedSchema`, @synap/events). The clients patch `changes` onto the
- * entity's TOP level (`useRealtimeSync` `buildMerged`), while a status lives
- * in its columns, `properties[slug]` and, for a role, its facet — so nothing
- * here is patchable: `changes` is empty and `facetChange` names the move,
- * which makes the client refetch the entity and its graph instead.
+ * An entity event as the payload the realtime server validates
+ * (`entity{Created,Updated,Deleted}Schema`, @synap/events/realtime-schemas —
+ * `/bridge/emit` answers 400 otherwise): `entityId`, the actor
+ * (`createdBy` / `updatedBy` / `deletedBy`) and the time (the event's).
+ * The row a repository emits names none of them (`base-repository.ts`
+ * `emitCompleted`), so before this projection every repository `entity:*`
+ * push was refused.
+ *
+ * `changes` is what the clients patch onto the cached entity's TOP level
+ * (`useRealtimeSync` `buildMerged`, the browser's `useLiveDataInvalidation`):
+ *   - an update that carries the whole row (the repository's) → the fields of
+ *     it the API returns as they are, through the API's own entity codec
+ *     (`entityToWire`, the one `entities.get` uses), never its timestamps;
+ *   - a STATUS MOVE (the transition) → nothing: a status lives in its columns,
+ *     `properties[slug]` or a role's facet, so `changes` is empty and
+ *     `facetChange` names the move, which makes the client refetch the
+ *     entity and its graph;
+ *   - anything else (the media copy's announcement) → empty: it carries its
+ *     own `reason`, which the client reads first.
+ * A pod-wide entity (`workspaceId: null`) still fails the schema, which
+ * requires a workspace: unchanged, and pinned by the tests.
  */
-function projectTransitionRealtimeData(
+function projectEntityRealtimeData(
   event: EventRecord
 ): Record<string, unknown> {
-  const t = event.data;
+  const d = event.data;
+  const at = new Date(event.timestamp).toISOString();
+  const base = { ...d, entityId: d.entityId ?? d.id ?? event.subjectId };
+  switch (event.eventType) {
+    case "entity.create.completed":
+      return {
+        ...base,
+        title: d.title ?? "",
+        createdBy: event.userId,
+        createdAt: at,
+      };
+    case "entity.delete.completed":
+      return { ...base, deletedBy: event.userId, deletedAt: at };
+    case "entity.transition.completed":
+      return {
+        ...base,
+        changes: {},
+        facetChange: {
+          property: d.property,
+          from: d.from,
+          to: d.to,
+          role: d.role ?? null,
+        },
+        updatedBy: (d.agentUserId as string | null) ?? event.userId,
+        updatedAt: at,
+      };
+    default:
+      return {
+        ...base,
+        changes: d.changes ?? entityRowChanges(d),
+        updatedBy: event.userId,
+        updatedAt: at,
+      };
+  }
+}
+
+/** The top-level fields of a whole entity row the client may patch, as the API returns them. */
+function entityRowChanges(
+  row: Record<string, unknown>
+): Record<string, unknown> {
+  if (typeof row.type !== "string" || !isRecord(row.properties)) return {};
+  const wire = entityToWire(row);
   return {
-    ...t,
-    changes: {},
-    facetChange: {
-      property: t.property,
-      from: t.from,
-      to: t.to,
-      role: t.role ?? null,
-    },
-    updatedBy: (t.agentUserId as string | null) ?? event.userId,
-    updatedAt: new Date(event.timestamp).toISOString(),
+    title: wire.title,
+    preview: wire.preview,
+    documentId: wire.documentId,
+    properties: wire.properties,
+    systemData: wire.systemData,
+    ...("status" in row ? { status: row.status } : {}),
+    ...("statusCategory" in row ? { statusCategory: row.statusCategory } : {}),
   };
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 /**
