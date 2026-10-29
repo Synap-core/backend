@@ -243,7 +243,7 @@ void _seedArityFloor;
 const EXTRA_SLUG_ARITY: 5 = REGISTERED_EXTRAS.length;
 
 /** The same floor for the post-seed registry rows (see above for the trap). */
-const _extraArityFloor: typeof REGISTERED_EXTRAS extends { length: 4 }
+const _extraArityFloor: typeof REGISTERED_EXTRAS extends { length: 5 }
   ? true
   : false = true;
 void _extraArityFloor;
