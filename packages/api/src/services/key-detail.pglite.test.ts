@@ -117,11 +117,11 @@ beforeAll(async () => {
   );
   // S1 through two conversations: one row, its latest.
   await q(
-    `insert into session_runners (id, session_id, api_key_id, harness, last_seen_at) values
-      (gen_random_uuid(), $1, $3, 'claude-code', now() - interval '2 hours'),
-      (gen_random_uuid(), $1, $3, 'claude-code', now() - interval '1 hour'),
-      (gen_random_uuid(), $2, $3, 'cli', now() - interval '3 hours'),
-      (gen_random_uuid(), $2, $4, 'cli', now())`,
+    `insert into session_runners (session_id, client_key, api_key_id, harness, last_seen_at) values
+      ($1, 'conv-a', $3, 'claude-code', now() - interval '2 hours'),
+      ($1, 'conv-b', $3, 'claude-code', now() - interval '1 hour'),
+      ($2, 'conv-c', $3, 'cli', now() - interval '3 hours'),
+      ($2, 'conv-d', $4, 'cli', now())`,
     [S1, S2, KEY, OTHER_KEY]
   );
 });
