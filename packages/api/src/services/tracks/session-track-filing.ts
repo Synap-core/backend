@@ -32,6 +32,7 @@ import {
 import { workspacePackageSlug } from "./stage-domain.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
 import { linkProjectToWorkspace } from "../../utils/project-workspace.js";
+import { trackFilingStampsUses } from "../focus-sessions/session-undo.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "session-track-filing" });
@@ -55,6 +56,8 @@ export interface SessionTrackFiling {
   stageName: string | null;
   /** Present only when filing ALSO sets the session's project. */
   projectName: string | null;
+  /** The track's project (`null` for an unfile) — what an agent's own filing proves it was told to focus on. */
+  trackProjectId: string | null;
   /** The track's project home — the `uses` stamp skips it. */
   projectWorkspaceId: string | null;
   /** The step names a domain the session's space is not; the session stays put. */
@@ -92,6 +95,7 @@ export async function resolveSessionTrackFiling(params: {
       trackName: null,
       stageName: null,
       projectName: null,
+      trackProjectId: null,
       projectWorkspaceId: null,
     };
   }
@@ -165,6 +169,7 @@ export async function resolveSessionTrackFiling(params: {
     trackName: filing.trackName,
     stageName,
     projectName: effectiveProjectId ? null : project.name,
+    trackProjectId: track.projectId,
     projectWorkspaceId: project.workspaceId ?? null,
     ...(domainNote ? { domainNote } : {}),
   };
@@ -184,8 +189,13 @@ export async function stampTrackFilingUses(args: {
   userId: string;
 }): Promise<boolean> {
   const { filing, sessionWorkspaceId, projectId } = args;
-  if (!filing.set.trackId || !sessionWorkspaceId || !projectId) return false;
-  if (sessionWorkspaceId === filing.projectWorkspaceId) return false;
+  if (
+    !projectId ||
+    !sessionWorkspaceId ||
+    !trackFilingStampsUses(filing, sessionWorkspaceId)
+  ) {
+    return false;
+  }
   // The filing already LANDED: a failed index stamp must not turn it into an
   // error. Reported as `usesStamped: false` and logged, never thrown.
   try {

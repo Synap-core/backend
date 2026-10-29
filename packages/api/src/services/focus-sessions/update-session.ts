@@ -68,7 +68,10 @@ import {
   type SessionFilingDecision,
   type SessionFilingPatch,
 } from "./session-filing-gate.js";
-import { isUndoableSessionPatch } from "./session-undo.js";
+import {
+  isUndoableSessionPatch,
+  trackFilingStampsUses,
+} from "./session-undo.js";
 import {
   readSessionUndoSnapshot,
   stampSessionUpdate,
@@ -2037,6 +2040,8 @@ export async function updateFocusSession(
       workspaceId: existing.workspaceId,
       session: existing,
       filing: filingPatch,
+      // A granted goal filing is applied below on its receipt, with its Undo.
+      goalFilingUndo: true,
     });
     if (filing.status === "denied") {
       return { status: "denied", reason: filing.reason };
@@ -2071,38 +2076,80 @@ export async function updateFocusSession(
   const { checkPermissionOrPropose } =
     await import("../../utils/permission-check.js");
   // FB1020 B3: an agent's filing the pod applied directly (its own fresh
-  // session, into the project the person named) has its OWN receipt. When the
-  // patch asked for nothing else, that receipt governs the write — no second,
-  // empty receipt beside it; otherwise the rest takes its ordinary decision.
+  // session, into the project the person named or a goal of it) has its OWN
+  // receipt. When the patch asked for nothing else, that receipt governs the
+  // write — no second, empty receipt beside it; otherwise the rest takes its
+  // ordinary decision.
   const filingReceiptId =
     filing?.status === "granted" ? filing.receiptId : undefined;
   const filingAlone =
     !!filingReceiptId &&
-    !patchAsksForMore({ ...params, projectId: undefined }, criteriaChange);
+    !patchAsksForMore(
+      {
+        ...params,
+        projectId: undefined,
+        trackId: undefined,
+        trackStage: undefined,
+      },
+      criteriaChange
+    );
+  // A goal filing's Undo restores its columns only when it stamps no
+  // `project --uses--> space` (`session-undo.ts`). The session's space is
+  // decided by this patch's move when it has one (a move is never undoable).
+  const trackFilingWithoutUses =
+    !!trackFiling &&
+    !trackFilingStampsUses(
+      trackFiling,
+      params.workspaceId !== undefined
+        ? params.workspaceId
+        : (existing.workspaceId ?? null)
+    );
   // A GRANTED filing beside other fields is applied NOW, on its own receipt,
   // and leaves the patch: the gate already minted that receipt as applied, so
   // the rest's own verdict (a criteria change that proposes, a session that
   // forces proposals, a cap, a join gate, a denial) must not hold it back —
   // that left a receipt claiming a filing that was never written, with no
-  // Undo (FB1020 w2 review M1). Its Undo restores the project only. The
-  // own-organise class grants a PROJECT filing only (`own-organise.ts`); a
-  // space move or a track filing is never granted with a receipt here.
-  if (filingReceiptId && !filingAlone && params.projectId !== undefined) {
+  // Undo (FB1020 w2 review M1). Its Undo restores the project and the goal
+  // filing only. The own-organise class grants a PROJECT filing, or a GOAL
+  // filing that stamps no `uses` (`own-organise.ts`, D1); a space move, an
+  // unfile or a goal filing that stamps `uses` is never granted with a
+  // receipt here.
+  let appliedTrackFiling: typeof trackFiling;
+  if (
+    filingReceiptId &&
+    !filingAlone &&
+    (params.projectId !== undefined || trackFiling)
+  ) {
     const before = await readSessionUndoSnapshot(db, sessionId);
     const [filed] = await db
       .update(focusSessions)
-      .set({ projectId: params.projectId, updatedAt: new Date() })
+      .set({
+        ...(params.projectId !== undefined
+          ? { projectId: params.projectId }
+          : {}),
+        ...(trackFiling ? trackFiling.set : {}),
+        updatedAt: new Date(),
+      })
       .where(eq(focusSessions.id, sessionId))
-      .returning({ projectId: focusSessions.projectId });
+      .returning({
+        projectId: focusSessions.projectId,
+        trackId: focusSessions.trackId,
+        trackStage: focusSessions.trackStage,
+      });
     await stampSessionUpdate({
       proposalId: filingReceiptId,
       sessionId,
       before,
-      after: before
-        ? { ...before, projectId: filed?.projectId ?? null }
-        : undefined,
+      after: before && filed ? { ...before, ...filed } : undefined,
     });
-    params = { ...params, projectId: undefined };
+    params = {
+      ...params,
+      projectId: undefined,
+      trackId: undefined,
+      trackStage: undefined,
+    };
+    appliedTrackFiling = trackFiling;
+    trackFiling = undefined;
   }
   // An AGENT withdrawing a slot it handed to the PERSON withdraws the person's
   // gate (the A3 harm, through the explicit verb): never applied directly, only
@@ -2281,7 +2328,8 @@ export async function updateFocusSession(
   // An UNCHANGED criteria list (an MCP `outcomes` attach re-sends it) changes
   // nothing and is not written, so it must not cost the write its Undo.
   const undoable = isUndoableSessionPatch(
-    criteriaChange ? params : { ...params, criteria: undefined }
+    criteriaChange ? params : { ...params, criteria: undefined },
+    { trackFilingWithoutUses }
   );
   const undoBefore =
     receiptId && undoable ? await readSessionUndoSnapshot(db, sessionId) : null;
@@ -2453,6 +2501,8 @@ export async function updateFocusSession(
         Extract<UpdateFocusSessionResult, { status: "updated" }>["trackFiling"]
       >
     | undefined;
+  // A goal filing applied above on its own receipt is reported the same way.
+  trackFiling ??= appliedTrackFiling;
   if (trackFiling) {
     const { stampTrackFilingUses } =
       await import("../tracks/session-track-filing.js");

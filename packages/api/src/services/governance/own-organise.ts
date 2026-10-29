@@ -18,7 +18,13 @@
  *     session the door guessed (derived) names nothing, the same rule as the
  *     project ladder (A1).
  *
- * Not covered, by decision: un-filing, a space move, a track filing, a
+ * A goal (track) filing of its own fresh session is covered since D1 (founder,
+ * 2026-10-29), only into a goal whose project the person named, only through
+ * a door that applies it on its receipt with an Undo, and only when the filing
+ * writes no `uses` stamp (`trackFilingStampsUses`): an Undo cannot take that
+ * stamp back, so that filing stays a proposal (wave lead decision a').
+ *
+ * Not covered, by decision: un-filing (a project or a goal), a space move, a
  * terminal move other than `done`, a role's status, recording a decision the
  * person made in chat, starting a track.
  */
@@ -33,6 +39,7 @@ import {
   type StatusMoveTarget,
 } from "@synap/database";
 import { getAgentFocusProjectId } from "../agent-identity-service.js";
+import { trackFilingStampsUses } from "../focus-sessions/session-undo.js";
 
 /** The kinds whose `done` move an agent may make on its own fresh record. */
 export const OWN_CLOSE_KINDS: readonly string[] = ["task"];
@@ -78,29 +85,60 @@ export async function ownWorkOrganiseForFiling(input: {
 }
 
 /**
- * File its own session into a project (`session-filing-gate.ts`). Project
- * ONLY: a space move or a track filing in the same patch stays a proposal.
+ * File its own session into a project, or into a goal of that project
+ * (`session-filing-gate.ts`). A space move in the same patch, an unfile, and a
+ * goal filing that would stamp `project --uses--> space` stay a proposal.
  */
 export async function ownWorkOrganiseForSessionFiling(input: {
   agentUserId: string | null | undefined;
   sessionId: string;
+  /** The session's space, from its row: decides the goal filing's `uses` stamp. */
+  sessionWorkspaceId?: string | null;
+  /**
+   * The door applies a granted GOAL filing on its receipt with an Undo (the
+   * MCP update door). Without it a goal filing is never proven.
+   */
+  goalFilingUndo?: boolean;
   filing: {
     projectId?: string | null;
     workspaceId?: string | null;
-    trackFiling?: unknown;
+    trackFiling?: {
+      set: { trackId: string | null };
+      trackProjectId: string | null;
+      projectWorkspaceId: string | null;
+    };
   };
 }): Promise<boolean> {
   const { filing } = input;
   const apiKeyId = getRequestApiKeyId();
   if (!input.agentUserId || !apiKeyId) return false;
-  if (typeof filing.projectId !== "string") return false;
-  if (filing.workspaceId !== undefined || filing.trackFiling !== undefined) {
-    return false;
+  if (filing.workspaceId !== undefined) return false;
+  // The project the filing puts the session in: the goal's, for a goal filing
+  // (the resolver already refused a goal of another project than the session's).
+  let projectId: string;
+  if (filing.trackFiling !== undefined) {
+    const goal = filing.trackFiling;
+    if (!input.goalFilingUndo || !goal.set.trackId || !goal.trackProjectId) {
+      return false;
+    }
+    if (
+      filing.projectId !== undefined &&
+      filing.projectId !== goal.trackProjectId
+    ) {
+      return false;
+    }
+    if (trackFilingStampsUses(goal, input.sessionWorkspaceId ?? null)) {
+      return false;
+    }
+    projectId = goal.trackProjectId;
+  } else {
+    if (typeof filing.projectId !== "string") return false;
+    projectId = filing.projectId;
   }
   // The session's own project is what is changing, so only the declared focus
   // can name the target.
   const named = await namedProjectIds(input.agentUserId, null);
-  if (!named.has(filing.projectId)) return false;
+  if (!named.has(projectId)) return false;
   return isOwnFreshWork(db, {
     agentUserId: input.agentUserId,
     apiKeyId,
