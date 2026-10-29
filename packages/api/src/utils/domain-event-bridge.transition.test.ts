@@ -110,17 +110,14 @@ describe("domain-event-bridge — a status move", () => {
     expect(bodies()[1].data.updatedBy).toBe("u1");
   });
 
-  // PINNED AS IT IS (not a target): a pod-wide entity goes to its owner's
-  // room, and the realtime schema refuses a payload with no workspace.
-  it("a pod-wide entity's move goes to the owner's room and is refused by the schema", async () => {
+  // A pod-wide entity's move fails the realtime schema (no workspace), so
+  // nothing is sent.
+  it("a pod-wide entity's move is not sent (the schema requires a workspace)", async () => {
     emitDomainEventToRealtime(
       transitionRow({ data: { ...transitionRow().data, workspaceId: null } })
     );
     await Promise.resolve();
-    const [body] = bodies();
-    expect(body.workspaceId).toBeUndefined();
-    expect(body.userId).toBe("u1");
-    expect(validateEmitPayload(body.event, body.data).ok).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("a goal's or a session's transition is not bridged (no client listens)", async () => {

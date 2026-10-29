@@ -37,6 +37,9 @@ import { createLogger } from "@synap-core/core";
 import { EventNames } from "@synap-core/types/events";
 import { bridgeRequestHeaders } from "./chat-realtime-broadcast.js";
 import { entityToWire } from "../routers/hub-protocol/rest/_codecs/entity.js";
+// The realtime server's own check (`/bridge/emit` answers 400 on a miss).
+// Subpath: no boss/db side effects.
+import { validateEmitPayload } from "@synap/events/realtime-schemas";
 
 const logger = createLogger({ module: "domain-event-bridge" });
 
@@ -264,6 +267,17 @@ export function emitDomainEventToRealtime(event: EventRecord): void {
   // (only reachable here when workspaceIdRequired is false, since the
   // required case already returned above) → the owner's user room, so
   // pod-wide events still reach the one client that can see them.
+  // A payload the realtime server would refuse is not sent: a pod-wide
+  // entity (no workspace) fails the schema on every write, and a refused POST
+  // plus its warning each time says nothing new.
+  const valid = validateEmitPayload(mapped.event, payloadData);
+  if (!valid.ok) {
+    logger.debug(
+      { eventType: event.eventType, socketEvent: mapped.event },
+      "Skipping bridge emit: the realtime schema refuses this payload"
+    );
+    return;
+  }
   const body = JSON.stringify({
     event: mapped.event,
     data: payloadData,
@@ -317,24 +331,33 @@ export function postToBridge(body: string, ctx: Record<string, unknown>): void {
  *   - anything else (the media copy's announcement) → empty: it carries its
  *     own `reason`, which the client reads first.
  * A pod-wide entity (`workspaceId: null`) still fails the schema, which
- * requires a workspace: unchanged, and pinned by the tests.
+ * requires a workspace, so its push is not sent (see the check before the
+ * POST); pinned by the tests.
  */
 function projectEntityRealtimeData(
   event: EventRecord
 ): Record<string, unknown> {
   const d = event.data;
   const at = new Date(event.timestamp).toISOString();
-  const base = { ...d, entityId: d.entityId ?? d.id ?? event.subjectId };
+  // WHO wrote it: the agent for an agent's write, the person otherwise.
+  const actor = event.agentUserId ?? event.userId;
+  const base = {
+    ...d,
+    entityId: d.entityId ?? d.id ?? event.subjectId,
+    // The row's own counter when the event carries the row (create, update);
+    // absent otherwise (a delete, a status move, the media announcement).
+    version: typeof d.version === "number" ? d.version : undefined,
+  };
   switch (event.eventType) {
     case "entity.create.completed":
       return {
         ...base,
         title: d.title ?? "",
-        createdBy: event.userId,
-        createdAt: at,
+        createdBy: actor,
+        createdAt: typeof d.createdAt === "string" ? d.createdAt : at,
       };
     case "entity.delete.completed":
-      return { ...base, deletedBy: event.userId, deletedAt: at };
+      return { ...base, deletedBy: actor, deletedAt: at };
     case "entity.transition.completed":
       return {
         ...base,
@@ -352,19 +375,28 @@ function projectEntityRealtimeData(
       return {
         ...base,
         changes: d.changes ?? entityRowChanges(d),
-        updatedBy: event.userId,
-        updatedAt: at,
+        updatedBy: actor,
+        // The row's write time when the event carries it, else the event's.
+        updatedAt: typeof d.updatedAt === "string" ? d.updatedAt : at,
       };
   }
 }
 
-/** The top-level fields of a whole entity row the client may patch, as the API returns them. */
+/**
+ * The top-level fields of a whole entity row the client may patch, as the API
+ * returns them. An update can change the kind (`profileSlug`, entity
+ * repository) and the space, so those travel too.
+ */
 function entityRowChanges(
   row: Record<string, unknown>
 ): Record<string, unknown> {
   if (typeof row.type !== "string" || !isRecord(row.properties)) return {};
   const wire = entityToWire(row);
   return {
+    type: wire.type,
+    profileSlug: wire.profileSlug,
+    profileId: row.profileId ?? null,
+    workspaceId: wire.workspaceId,
     title: wire.title,
     preview: wire.preview,
     documentId: wire.documentId,

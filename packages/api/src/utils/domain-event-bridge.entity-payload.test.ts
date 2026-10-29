@@ -6,7 +6,8 @@
  * server's `/bridge/emit` answers 400 to such a payload (`validateEmitPayload`,
  * the function driven here), so before the bridge projected it no
  * repository `entity:*` push reached a client. One test per event type, plus
- * the media copy's announcement and the pod-wide case pinned as it is.
+ * the media copy's announcement, and the pod-wide case: refused by the schema,
+ * so not sent at all.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { EventRecord } from "@synap/database";
@@ -83,7 +84,9 @@ describe("domain-event-bridge — entity payloads pass the realtime validation",
       type: "task",
       title: "Write the brief",
       createdBy: "u1",
-      createdAt: "2026-10-29T10:00:00.000Z",
+      // The row's own time, and its counter at the top level.
+      createdAt: "2026-10-28T09:00:00.000Z",
+      version: 3,
     });
   });
 
@@ -98,8 +101,18 @@ describe("domain-event-bridge — entity payloads pass the realtime validation",
     const body = await one(row("entity.update.completed", ROW));
     expect(body.event).toBe("entity:updated");
     expect(validateEmitPayload(body.event, body.data)).toEqual({ ok: true });
-    expect(body.data).toMatchObject({ entityId: "e1", updatedBy: "u1" });
+    expect(body.data).toMatchObject({
+      entityId: "e1",
+      updatedBy: "u1",
+      updatedAt: "2026-10-29T10:00:00.000Z",
+      version: 3,
+    });
     expect(body.data.changes).toEqual({
+      // An update can change the kind and the space: they travel too.
+      type: "task",
+      profileSlug: "task",
+      profileId: "p1",
+      workspaceId: "w1",
       title: "Write the brief",
       preview: "First draft",
       documentId: null,
@@ -113,6 +126,14 @@ describe("domain-event-bridge — entity payloads pass the realtime validation",
     for (const key of ["createdAt", "updatedAt", "id", "userId", "version"]) {
       expect(body.data.changes).not.toHaveProperty(key);
     }
+  });
+
+  it("an AGENT's write names the agent as the actor", async () => {
+    const body = await one(
+      row("entity.update.completed", ROW, { agentUserId: "agent-7" })
+    );
+    expect(body.data.updatedBy).toBe("agent-7");
+    expect(validateEmitPayload(body.event, body.data)).toEqual({ ok: true });
   });
 
   it("an update with no whole row patches nothing (and stays valid)", async () => {
@@ -150,9 +171,9 @@ describe("domain-event-bridge — entity payloads pass the realtime validation",
     expect(body.data).toMatchObject({ reason: "media", changes: {} });
   });
 
-  // PINNED AS IT IS (not a target): the unified room rule sends a pod-wide
-  // entity to its owner's room, and the schema refuses a null workspace.
-  it("a pod-wide entity (workspaceId null) goes to the owner's room and is refused", async () => {
+  // A pod-wide entity's payload is refused by the realtime schema (it needs a
+  // workspace), so it is not POSTed at all — no refused request, no warning.
+  it("a pod-wide entity (workspaceId null) fails the schema, so nothing is sent", async () => {
     for (const type of [
       "entity.create.completed",
       "entity.update.completed",
@@ -161,11 +182,10 @@ describe("domain-event-bridge — entity payloads pass the realtime validation",
       emitDomainEventToRealtime(row(type, { ...ROW, workspaceId: null }));
     }
     await Promise.resolve();
-    expect(pushed()).toHaveLength(3);
-    for (const body of pushed()) {
-      expect(body.workspaceId).toBeUndefined();
-      expect(body.userId).toBe("u1");
-      expect(validateEmitPayload(body.event, body.data).ok).toBe(false);
-    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    // The reason, pinned: the same projection with a workspace passes.
+    emitDomainEventToRealtime(row("entity.update.completed", ROW));
+    await Promise.resolve();
+    expect(pushed()).toHaveLength(1);
   });
 });
