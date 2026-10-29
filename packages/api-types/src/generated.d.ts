@@ -11240,11 +11240,15 @@ export interface NeedsYouFoldCounts {
  * able to say them without a second read.
  */
 export interface NeedsYouAccessRequest {
-	/** What would be granted: issuer trust, or an application's browser origin. */
-	subject: "application" | "issuer";
-	/** The asker's display name (the issuer's host, the app's name). */
+	/**
+	 * What would be granted: issuer trust, an application's browser origin, or
+	 * an API key one of the person's computers asked them for (`api_key`, read
+	 * for its person, not only for admins; decision 68d37853, answer 25).
+	 */
+	subject: "api_key" | "application" | "issuer";
+	/** The asker's display name (the issuer's host, the app's name; a key's requested name). */
 	name: string;
-	/** Where it asks from: the issuer URL, or the app's requested origin. */
+	/** Where it asks from: the issuer URL, the app's requested origin, or the computer asking for a key. */
 	from: string;
 }
 /**
@@ -21671,7 +21675,9 @@ export type SignalKind =
  * One pod-level ACCESS REQUEST that is not a proposal (pod admins only,
  * `access-requests.ts`): a pending trusted issuer (`target.kind: "issuer"`)
  * or an app's pending connection request (`target.kind:
- * "connection-request"`). Who asks and from where ride in `access`.
+ * "connection-request"`); or the person's own pending KEY request
+ * (`target.kind: "key-request"`, read for its person). Who asks and from
+ * where ride in `access`.
  */
  | "access-request"
 /**
@@ -22114,6 +22120,17 @@ export interface PendingAppRequestSignalInput {
 	/** The handoff lease: past it the request is expired, never decidable. */
 	expiresAt: Date;
 }
+/** A key request waiting on its person, as `listPendingKeyRequests` reads it. */
+export interface PendingKeyRequestSignalInput {
+	id: string;
+	/** The key's name as asked ("Dev loop poster"). */
+	requestedName: string;
+	/** Who asks: the computer's (or the person's own key's) user name. */
+	requesterName: string | null;
+	createdAt: Date;
+	/** Past it the request is expired, never decidable (24 h after filing). */
+	expiresAt: Date;
+}
 /** An open invite to another space, as `listOpenSpaceInvites` reads it. */
 export interface SpaceInviteSignalInput {
 	id: string;
@@ -22217,7 +22234,7 @@ export interface ReviewSessionRow {
 	trackId: string | null;
 }
 /** A sub-read's name — what `unreadable` reports. */
-export type SignalSubRead = "activity" | "app-requests" | "captures" | "convertible-goals" | "drafts" | "events" | "invites" | "issuers" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
+export type SignalSubRead = "activity" | "app-requests" | "captures" | "convertible-goals" | "drafts" | "events" | "invites" | "issuers" | "key-requests" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
 /** One class of the lens page. */
 export interface LensClassWire {
 	/** The first `cap` rows, in the class's own order. */
@@ -45773,6 +45790,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					accessRequests: {
 						applications: PendingAppRequestSignalInput[];
 						issuers: PendingIssuerSignalInput[];
+						keys: PendingKeyRequestSignalInput[];
 					};
 					accessRequestsTruncated: boolean;
 					allNotifications: (NotificationSignalInput & {

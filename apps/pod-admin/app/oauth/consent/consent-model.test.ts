@@ -156,9 +156,24 @@ describe("permissionLabel", () => {
     ["entity.person.read", "Read people"],
     ["entity.post", "Read, create, edit and delete posts"],
     ["entity.*", "Read, create, edit and delete everything in it"],
+    // Activity: `event` is qualified by FAMILY now, never by a kind — the
+    // every-family spelling still reads as Activity, not "everything in it".
+    ["event.create", "Create activity"],
+    ["event.read", "Read activity"],
+    ["event.ci.create", "Create CI events"],
     ["*", FULL_ACCESS_LABEL],
   ])("%s → %s", (permission, label) => {
     expect(permissionLabel(permission)).toBe(label);
+  });
+
+  it("an app asking to post activity gets ONE Activity row, any family", () => {
+    const rows = groupByObject([
+      { permission: "event.create", workspaces: [] },
+      { permission: "event.ci.create", workspaces: [] },
+    ]);
+    expect(rows.map((r) => [r.key, r.label, r.kind])).toEqual([
+      ["event", "Activity", null],
+    ]);
   });
 });
 

@@ -5023,6 +5023,11 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+          },
+          "projectId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
           }
         },
         "required": ["template"]
@@ -26878,7 +26883,7 @@
       "post": {
         "tags": ["Keys"],
         "summary": "Ask the person for a key made from a template",
-        "description": "Files a key request the person approves on the pod-admin page `review_url` (they may narrow it, never widen it past the template). Then poll `POST /keys/requests/token` with `request_code` to collect the key once. The caller never mints a key itself.",
+        "description": "Files a key request the person approves on the pod-admin page `review_url` (they may narrow it, never widen it past the template). It waits 24 hours; asking the same again returns the request already waiting (same id and link, a new `request_code`). Then poll `POST /keys/requests/token` with `request_code` to collect the key once. The caller never mints a key itself.",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {

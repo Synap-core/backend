@@ -9,6 +9,7 @@ import { OBJECT_NOUNS } from "../vocabulary/index.js";
 import {
   allowedQualifiers,
   assertPermissions,
+  canonicalPermission,
   GRANT_GATE_ACTIONS,
   InvalidPermissionError,
   parsePermission,
@@ -286,5 +287,73 @@ describe("resolveKeyExpiry — 90 days by default, custom, or never", () => {
   });
   it("null means never", () => {
     expect(resolveKeyExpiry(null, now)).toBeNull();
+  });
+});
+
+describe("event — qualified by the activity FAMILY (dev, ci)", () => {
+  const post = (family: string | null): GrantRequest => ({
+    subject: "event",
+    qualifier: family,
+    action: "create",
+  });
+
+  // Rules out: the grammar refusing `event.dev.create` (finding 2ed74472:
+  // "event" had no qualifier, so a key could not be limited to dev events).
+  it("parses the family spelling event.<family>.<verb>", () => {
+    expect(parsePermission("event.dev.create")).toEqual([
+      "event",
+      "dev",
+      "create",
+    ]);
+    expect(() => assertPermissions(["event.ci.create"])).not.toThrow();
+  });
+
+  // Rules out: a two-segment `event.create` being read as the FAMILY "create"
+  // (it would then post nothing): every poster key minted since D5 holds it.
+  it("event.create still posts every family, and a request with no family", () => {
+    expect(parsePermission("event.create")).toEqual(["event", "*", "create"]);
+    for (const family of ["dev", "ci", null])
+      expect(permits({ permissions: ["event.create"] }, post(family))).toBe(
+        true
+      );
+    expect(permits({ permissions: ["event"] }, post("ci"))).toBe(true);
+  });
+
+  // Rules out: a family pattern that is not a real limit.
+  it("a family key posts its family only, and never an unknown one", () => {
+    const dev = { permissions: ["event.dev.create"] };
+    expect(permits(dev, post("dev"))).toBe(true);
+    expect(permits(dev, post("ci"))).toBe(false);
+    expect(permits(dev, post(null))).toBe(false);
+    expect(permits(dev, { subject: "event", action: "read" })).toBe(false);
+  });
+
+  it("allowedQualifiers lists the families a key may post", () => {
+    expect(
+      allowedQualifiers(
+        { permissions: ["event.dev.create", "event.ci.create"] },
+        "event",
+        "create"
+      )
+    ).toEqual(["dev", "ci"]);
+    expect(
+      allowedQualifiers({ permissions: ["event.create"] }, "event", "create")
+    ).toBe("all");
+  });
+
+  it("spells an every-family pattern short, as every stored key holds it", () => {
+    expect(canonicalPermission(parsePermission("event.create"))).toBe(
+      "event.create"
+    );
+    expect(canonicalPermission(parsePermission("event.ci.create"))).toBe(
+      "event.ci.create"
+    );
+    // Only `event` is short-spelled: the other qualified subjects keep `*`.
+    expect(canonicalPermission(parsePermission("entity.read"))).toBe(
+      "entity.*.read"
+    );
+    expect(canonicalPermission(parsePermission("capability.run"))).toBe(
+      "capability.*.run"
+    );
   });
 });
