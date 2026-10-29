@@ -178,8 +178,10 @@ function ddlFor(table: PgTable): string {
     ];
   });
   // Composite primary keys (`profile_properties`): the link upsert's
-  // `on conflict (profile_id, property_def_id)` needs one.
-  const pks = cfg.primaryKeys.map(
+  // `on conflict (profile_id, property_def_id)` needs one. A table whose
+  // column is already `primary` keeps that one key (Postgres allows one).
+  const columnPk = cfg.columns.some((c) => c.primary);
+  const pks = (columnPk ? [] : cfg.primaryKeys).map(
     (pk) => `primary key (${pk.columns.map((c) => `"${c.name}"`).join(", ")})`
   );
   return [
