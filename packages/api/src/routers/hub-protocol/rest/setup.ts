@@ -81,6 +81,7 @@ import {
   toRegistrationTrace,
 } from "../../../services/external-registration.js";
 import { provisionSurfaceAgentKey } from "../../../services/agent-identity-service.js";
+import { mayExercisePrivilegedScopes } from "../../../services/privileged-mint.js";
 import {
   approvePendingAgentKey,
   canDecidePendingConnection,
@@ -298,6 +299,28 @@ async function computePodAdminInvariant(): Promise<{
 }
 
 /**
+ * A `setup.agent` key is an OPERATOR credential: it names any human as an
+ * agent's owner (`/setup/agent` linkedUserId, `/setup/service` linkedUserId)
+ * and mints privileged scopes. It is honoured only while the human it acts for
+ * (`linkedUserId ?? userId`) is a pod admin — the one rule of
+ * `services/privileged-mint.ts`. A member who got the scope before the mint
+ * doors checked it (or an admin since demoted) holds a key that confers
+ * nothing beyond an ordinary key.
+ */
+async function setupAgentKeyIsOperator(keyRecord: {
+  isActive: boolean | null;
+  scope: readonly string[];
+  userId: string | null;
+  linkedUserId: string | null;
+}): Promise<boolean> {
+  if (!keyRecord.isActive || !keyRecord.scope.includes("setup.agent"))
+    return false;
+  return mayExercisePrivilegedScopes(
+    keyRecord.linkedUserId ?? keyRecord.userId
+  );
+}
+
+/**
  * Provisioning auth for the product-neutral `/setup/service` door.
  *
  * Mirrors the auth preamble of `/setup/agent` (trusted-issuer JWT OR
@@ -434,9 +457,11 @@ async function authenticateServiceSetupRequest(
   }
 
   // Try 3: Hub Protocol API key with `setup.agent` scope (generic provisioning scope).
+  // Operator-grade only while the key's human is a pod admin
+  // (`setupAgentKeyIsOperator`); otherwise it is just a key (Path 4).
   {
     const keyRecord = await apiKeyService.validateApiKey(token);
-    if (keyRecord?.isActive && keyRecord.scope.includes("setup.agent")) {
+    if (keyRecord && (await setupAgentKeyIsOperator(keyRecord))) {
       return {
         ok: true,
         authMethod: "api_key",
@@ -682,10 +707,12 @@ export function registerSetupRoutes(app: HubHono): void {
       }
     }
 
-    // Try 3: Hub Protocol API key with `setup.agent` scope.
+    // Try 3: Hub Protocol API key with `setup.agent` scope, held for a pod
+    // admin. Any other holder falls to Path 4: it connects an AI for ITSELF
+    // only (its body.linkedUserId is ignored) and mints no privileged scope.
     if (!authenticated) {
       const keyRecord = await apiKeyService.validateApiKey(token);
-      if (keyRecord?.isActive && keyRecord.scope.includes("setup.agent")) {
+      if (keyRecord && (await setupAgentKeyIsOperator(keyRecord))) {
         authenticated = true;
         authMethod = "api_key";
       }
@@ -867,7 +894,15 @@ export function registerSetupRoutes(app: HubHono): void {
       // the humans' email then name. An ambiguous or unknown value is REFUSED
       // rather than resolved to a best guess: binding an agent to the wrong
       // human mis-attributes every write it later makes.
-      let resolvedLinkedUserId: string | undefined = linkedUserId;
+      //
+      // ONLY for an operator credential (a pod admin's `setup.agent` key, the
+      // Control Plane's JWT, the bootstrap PROVISIONING_TOKEN). A surface key's
+      // body.linkedUserId is ignored below, so it is never looked up: the
+      // lookup and its 409 candidate list (every human's id, email and name)
+      // used to answer ANY `hub-protocol.write` key, an agent's included
+      // (pre-launch audit F6, 2026-10-28).
+      let resolvedLinkedUserId: string | undefined =
+        authMethod === "api_key_surface" ? undefined : linkedUserId;
       if (
         typeof resolvedLinkedUserId === "string" &&
         resolvedLinkedUserId.trim() !== "" &&
@@ -947,8 +982,9 @@ export function registerSetupRoutes(app: HubHono): void {
                 "`linkedUserId` accepts the user's EMAIL or NAME as well as their id.",
               // The candidates, so the caller can choose without a database
               // query. Reachable only by operator-grade credentials (trusted
-              // issuer JWT or PROVISIONING_TOKEN) — a surface key never gets
-              // here, it takes the `api_key_surface` branch above.
+              // issuer JWT, PROVISIONING_TOKEN, a pod admin's `setup.agent`
+              // key) — a surface key never gets here, it takes the
+              // `api_key_surface` branch above.
               humans: humans.map((h) => ({
                 id: h.id,
                 email: h.email,
@@ -1015,6 +1051,47 @@ export function registerSetupRoutes(app: HubHono): void {
         );
       }
 
+      // ── A KEY adds its AI only to a space its person administers ──────────
+      // The new agent becomes an `editor` of `ws` at mint time (below), and
+      // governance judges the agent's writes on THAT membership. So a key may
+      // name only a space whose owner or admin is the key's own person, and
+      // that lies inside the key's live grant. Not a member: the same 404 as
+      // a missing space, so an id never confirms a space exists (pre-launch
+      // audit F5, 2026-10-28).
+      if (ws && authMethod === "api_key_surface") {
+        const callerMembership = surfaceAgentLinkedUserId
+          ? await db.query.workspaceMembers.findFirst({
+              where: and(
+                eq(workspaceMembers.userId, surfaceAgentLinkedUserId),
+                eq(workspaceMembers.workspaceId, ws.id)
+              ),
+              columns: { role: true },
+            })
+          : undefined;
+        if (!callerMembership) {
+          return c.json(
+            { error: `Workspace ${requestedWorkspaceId} not found` },
+            404
+          );
+        }
+        const withinGrant = surfaceCallerGrants.some(
+          (g) => g.workspaceIds === null || g.workspaceIds.includes(ws.id)
+        );
+        if (
+          !["owner", "admin"].includes(callerMembership.role) ||
+          !withinGrant
+        ) {
+          return c.json(
+            {
+              error:
+                "Only an owner or admin of this space can add an AI to it, with a key that may touch the space. Connect it without a workspaceId, or ask an admin of the space.",
+              code: "WORKSPACE_ADMIN_REQUIRED",
+            },
+            403
+          );
+        }
+      }
+
       // ── Find pod owner (any human user) ────────────────────────────────────
       // Used to attribute the agent user and, when a workspace exists, to repair
       // missing workspace membership.
@@ -1043,7 +1120,9 @@ export function registerSetupRoutes(app: HubHono): void {
         if (humanUser) {
           ownerUserId = humanUser.id;
           // Self-repair: ensure the human user is a member of the workspace.
-          if (ws) {
+          // Operator credentials only: a key-minting call made with an
+          // ordinary key never writes a human into a space as its owner (F5).
+          if (ws && authMethod !== "api_key_surface") {
             const existingMembership =
               await db.query.workspaceMembers.findFirst({
                 where: and(
@@ -1971,8 +2050,14 @@ export function registerSetupRoutes(app: HubHono): void {
 
   // ── GET /setup/status ──────────────────────────────────────────────────────
   //
-  // No auth required — safe to expose so the CLI and setup page can detect
-  // whether the pod has been bootstrapped yet.
+  // No auth required, so the CLI, eve and the setup page can tell whether the
+  // pod is bootstrapped. Being public, it answers ONLY what such a client
+  // needs: `needsSetup`, `hasAdmin` and the invariant's `healthy` + `kind`.
+  // Never an email, a name, an id, a count or error text: pod hostnames are
+  // public (Certificate Transparency), and this door used to hand anyone the
+  // owner's email ("pod-admin owned by <email>") and the workspace count
+  // (pre-launch audit F3, 2026-10-28). The invariant's `reason` goes to the
+  // server log, where an operator reads it.
   app.get("/setup/status", async (c) => {
     try {
       // Primary check: Kratos identities (source of truth for auth).
@@ -1982,10 +2067,8 @@ export function registerSetupRoutes(app: HubHono): void {
         .select({ count: count() })
         .from(users)
         .where(eq(users.userType, "human"));
-      const [wsResult] = await db.select({ count: count() }).from(workspaces);
 
       const humanCount = Number(humanResult?.count ?? 0);
-      const workspaceCount = Number(wsResult?.count ?? 0);
 
       // Pod-admin invariant — true when there exists a pod-admin system
       // workspace AND at least one owner/admin member with a backing users
@@ -1995,12 +2078,20 @@ export function registerSetupRoutes(app: HubHono): void {
       // works. Eve's post-update probe reads this to surface a recovery
       // command.
       const invariant = await computePodAdminInvariant();
+      if (!invariant.healthy && invariant.kind !== "fresh") {
+        logger.warn(
+          { kind: invariant.kind, reason: invariant.reason },
+          "setup/status: pod-admin invariant unhealthy"
+        );
+      }
 
       return c.json({
         hasAdmin: kratosHasIdentity || humanCount > 0,
-        workspaceCount,
         needsSetup: !kratosHasIdentity && humanCount === 0,
-        podAdminInvariant: invariant,
+        podAdminInvariant: {
+          healthy: invariant.healthy,
+          kind: invariant.kind,
+        },
       });
     } catch (err) {
       logger.error({ err }, "setup/status: failed");

@@ -45,6 +45,21 @@ describe("mapCpScopesToPodScopes", () => {
     );
   });
 
+  // F7 (2026-10-28): the client names these scopes; an MCP connection never
+  // carries operator authority. Negative control: drop the
+  // `isPrivilegedMintScope` filter in `mapCpScopesToPodScopes` and this fails.
+  it("drops every privileged scope a client asks for", () => {
+    const out = mapCpScopesToPodScopes([
+      "mcp:read",
+      "setup:agent",
+      "setup.agent",
+      "providers.write",
+      "hub-protocol.admin",
+      "box.runner",
+    ]);
+    expect(out.sort()).toEqual(["hub-protocol.read", "mcp.read"]);
+  });
+
   it("empty / null → functional default set", () => {
     for (const input of [[], null, undefined] as const) {
       const out = mapCpScopesToPodScopes(input);

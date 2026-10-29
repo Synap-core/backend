@@ -17,7 +17,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { integrationKindSchema } from "@synap-core/types";
 import { isAppPublicId } from "@synap-core/types/membrane";
-import { API_KEY_SCOPES } from "@synap/database/schema";
+import { API_KEY_SCOPES, isPrivilegedMintScope } from "@synap/database/schema";
 import {
   db,
   and,
@@ -83,6 +83,12 @@ import { isPodAdminOrigin } from "../utils/pod-admin-origin.js";
 import { findUserDefaultWorkspaceId } from "../utils/user-default-workspace.js";
 import { assertSignedInPerson } from "../utils/signed-in-person.js";
 import { decideKeyRequest, getKeyRequest } from "../services/key-requests.js";
+import {
+  assertFreshForPrivilegedMint,
+  privilegedMintRefusal,
+  privilegedScopesBeyond,
+  type PrivilegedMintCaller,
+} from "../services/privileged-mint.js";
 import {
   decideDeviceRequest,
   getDeviceRequest,
@@ -152,6 +158,27 @@ const FULL_ACCESS_GRANT: GrantInput = {
   permissions: ["*"],
   label: FULL_ACCESS_GRANT_LABEL,
 };
+
+/**
+ * A key never carries a privileged scope its minter could not exercise
+ * (`services/privileged-mint.ts`): the minter is a pod admin AND signed in
+ * recently. Every door here that takes caller-declared scopes, or re-mints
+ * stored ones, runs this before anything is written.
+ */
+async function assertMayMintScopes(
+  ctx: PrivilegedMintCaller & { userId: string },
+  scopes: readonly string[]
+): Promise<void> {
+  if (!scopes.some((s) => isPrivilegedMintScope(s))) return;
+  const refused = await privilegedScopesBeyond(ctx.userId, scopes);
+  if (refused.length > 0) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: privilegedMintRefusal(refused),
+    });
+  }
+  assertFreshForPrivilegedMint(ctx);
+}
 
 /**
  * The authorize parameters pod-admin's consent screen round-trips.
@@ -482,6 +509,9 @@ export const apiKeysRouter = router({
       const scope = input.uses
         ? deriveKeyScopes(input.uses, grant)
         : input.scope!;
+      // The scopes the key will carry (derived from `uses`, or the legacy
+      // raw `scope`): a privileged one needs a fresh pod admin.
+      await assertMayMintScopes(ctx, scope);
 
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
@@ -648,6 +678,9 @@ export const apiKeysRouter = router({
           message: "API key not found",
         });
       }
+      // Rotation re-mints the old key's scopes: a privileged one minted
+      // before this rule, or by a person no longer admin, is not renewed.
+      await assertMayMintScopes(ctx, oldKey.scope);
 
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
@@ -1692,6 +1725,9 @@ export const apiKeysRouter = router({
           message: "Workspace admin role required",
         });
       }
+      // A workspace admin is not a pod admin. Checked on the scopes the key
+      // will carry (derived from `uses`, or the legacy raw `scopes`).
+      await assertMayMintScopes(ctx, scope);
 
       const id = randomUUID();
 

@@ -30,6 +30,7 @@ import { hasScope, type HubHono } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { grantWriteDenial } from "../../../utils/grant-write-check.js";
+import { mayExercisePrivilegedScopes } from "../../../services/privileged-mint.js";
 import {
   ProviderUpsertSchema,
   AiProviderProposalPayload,
@@ -83,6 +84,27 @@ const PROVIDER_SCOPE = "providers.write";
 
 function missingScope(c: HonoLikeContext): boolean {
   return !hasScope(c.get("scopes") as string[], PROVIDER_SCOPE);
+}
+
+/**
+ * Who may reach a provider write: a key holding `providers.write` AND acting
+ * for a pod admin — the same role the tRPC door requires (`podAdminProcedure`,
+ * `routers/ai-providers.ts`). The scope alone is not enough: a member could
+ * mint it before the mint doors checked it (`services/privileged-mint.ts`), and
+ * a key kept by a person no longer admin must stop working. The human is the
+ * one the key acts for (`linkedUserId`), else the key's own user.
+ */
+async function providerWriteRefusal(
+  c: HonoLikeContext
+): Promise<string | null> {
+  if (missingScope(c)) return `Missing scope: ${PROVIDER_SCOPE}`;
+  const actingUserId =
+    (c.get("linkedUserId") as string | undefined) ??
+    (c.get("userId") as string | undefined);
+  if (!(await mayExercisePrivilegedScopes(actingUserId))) {
+    return "Only a pod admin can change AI providers.";
+  }
+  return null;
 }
 
 type GateOutcome =
@@ -337,9 +359,8 @@ export function registerAiProvidersRoutes(app: HubHono): void {
 
   // POST /ai-providers — upsert (governed)
   app.post("/ai-providers", async (c) => {
-    if (missingScope(c)) {
-      return c.json({ error: `Missing scope: ${PROVIDER_SCOPE}` }, 403);
-    }
+    const refused = await providerWriteRefusal(c);
+    if (refused) return c.json({ error: refused }, 403);
     let body: z.infer<typeof ProviderUpsertSchema>;
     try {
       body = ProviderUpsertSchema.parse(await c.req.json());
@@ -387,9 +408,8 @@ export function registerAiProvidersRoutes(app: HubHono): void {
 
   // POST /ai-providers/sync — re-push all to IS (must be before /:id routes)
   app.post("/ai-providers/sync", async (c) => {
-    if (missingScope(c)) {
-      return c.json({ error: `Missing scope: ${PROVIDER_SCOPE}` }, 403);
-    }
+    const refused = await providerWriteRefusal(c);
+    if (refused) return c.json({ error: refused }, 403);
     const count = await db.query.aiProviders.findMany().then((r) => r.length);
     await syncToIS();
     return c.json({ ok: true, count });
@@ -406,9 +426,8 @@ export function registerAiProvidersRoutes(app: HubHono): void {
     ["disable", false],
   ] as const) {
     app.post(`/ai-providers/:id/${suffix}`, async (c) => {
-      if (missingScope(c)) {
-        return c.json({ error: `Missing scope: ${PROVIDER_SCOPE}` }, 403);
-      }
+      const refused = await providerWriteRefusal(c);
+      if (refused) return c.json({ error: refused }, 403);
       const providerId = c.req.param("id");
       const existing = await db.query.aiProviders.findFirst({
         where: eq(aiProviders.providerId, providerId),
@@ -459,9 +478,8 @@ export function registerAiProvidersRoutes(app: HubHono): void {
 
   // POST /ai-providers/:id/probe — live connectivity test via the IS provider door
   app.post("/ai-providers/:id/probe", async (c) => {
-    if (missingScope(c)) {
-      return c.json({ error: `Missing scope: ${PROVIDER_SCOPE}` }, 403);
-    }
+    const refused = await providerWriteRefusal(c);
+    if (refused) return c.json({ error: refused }, 403);
     const providerId = c.req.param("id");
     try {
       return c.json(await probeProviderOnIS(providerId));
@@ -478,9 +496,8 @@ export function registerAiProvidersRoutes(app: HubHono): void {
 
   // DELETE /ai-providers/:id
   app.delete("/ai-providers/:id", async (c) => {
-    if (missingScope(c)) {
-      return c.json({ error: `Missing scope: ${PROVIDER_SCOPE}` }, 403);
-    }
+    const refused = await providerWriteRefusal(c);
+    if (refused) return c.json({ error: refused }, 403);
     const providerId = c.req.param("id");
     const existing = await db.query.aiProviders.findFirst({
       where: eq(aiProviders.providerId, providerId),
