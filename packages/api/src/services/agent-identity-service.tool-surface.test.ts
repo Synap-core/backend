@@ -118,7 +118,8 @@ vi.mock("./external-registration.js", () => ({
   ),
 }));
 
-vi.mock("./key-grant.js", () => ({
+vi.mock("./key-grant.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./key-grant.js")>()),
   attachGrantOrRevoke: vi.fn(async () => undefined),
 }));
 
