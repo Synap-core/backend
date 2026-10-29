@@ -2529,7 +2529,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "The session BRIEFING — call first in every session. Leads with `startHere`: proposals you or your agents filed that await review (raise these first; the user's queue may hold more from others), open work sessions, the open goals they serve (`openGoals`: file work into one with trackId), the most-used kinds, runnable actions, and the skill to load for concept depth. Then your identity, what is known about the user, projects (commitments, each spanning workspaces) and the workspaces (operational domains) that hold data. Pass scope:['projects'] and/or workspaceId to narrow — and PIN a `workspaceId` and orient also returns that space's `brief`: what it is FOR (purpose, persona), the kinds it HOLDS, its rules, its SKILLS (the agent know-how this space activates — each `{ slug, mode, when? }`; `mode:'always'` is in effect now, `'on-demand'` when the task matches its `when`), plus its playbooks and anchors. That is the one door to 'what is this space for, and what does it know' — an unpinned orient carries no brief. Light omits empty domains and the full type inventory; detail:'full' adds every workspace, descriptions, onboarding specs and per-workspace profiles. Every kind and role: synap_list_profiles.",
+      "description": "The session BRIEFING — call first in every session. Leads with `startHere`: proposals you or your agents filed that await review (raise these first; the user's queue may hold more from others), open work sessions, the open goals they serve, each with where it stands (`openGoals`: file work into one with trackId), the most-used kinds, runnable actions, and the skill to load for concept depth. Then your identity, what is known about the user, projects (commitments, each spanning workspaces) and the workspaces (operational domains) that hold data. Pass scope:['projects'] and/or workspaceId to narrow — and PIN a `workspaceId` and orient also returns that space's `brief`: what it is FOR (purpose, persona), the kinds it HOLDS, its rules, its SKILLS (the agent know-how this space activates — each `{ slug, mode, when? }`; `mode:'always'` is in effect now, `'on-demand'` when the task matches its `when`), plus its playbooks and anchors. That is the one door to 'what is this space for, and what does it know' — an unpinned orient carries no brief. Light omits empty domains and the full type inventory; detail:'full' adds every workspace, descriptions, onboarding specs and per-workspace profiles. Every kind and role: synap_list_profiles.",
       "parameters": [
         {
           "name": "detail",
@@ -2560,7 +2560,13 @@
           "name": "projectId",
           "type": "string",
           "required": false,
-          "description": "Optional: pin the projects section to one project."
+          "description": "Optional: pin the projects section to one project (its goals and `startHere.statusRollup`)."
+        },
+        {
+          "name": "statusOf",
+          "type": "array<string>",
+          "required": false,
+          "description": "Optional: up to 10 ids (thing, goal, session or run). `startHere.statusOf` says where each stands: status, category, since, stuck, what it waits on."
         }
       ],
       "inputSchema": {
@@ -2589,7 +2595,13 @@
           },
           "projectId": {
             "type": "string",
-            "description": "Optional: pin the projects section to one project."
+            "description": "Optional: pin the projects section to one project (its goals and `startHere.statusRollup`)."
+          },
+          "statusOf": {
+            "type": "array",
+            "items": { "type": "string" },
+            "maxItems": 10,
+            "description": "Optional: up to 10 ids (thing, goal, session or run). `startHere.statusOf` says where each stands: status, category, since, stuck, what it waits on."
           }
         },
         "required": []
