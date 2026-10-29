@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
 // Mock the three substrate stores so we test ONLY the router's
 // classify → route → fuse logic, not the underlying retrievers.
