@@ -18,7 +18,15 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
-import { db, focusSessions, eq, and, drizzleSql } from "@synap/database";
+import {
+  db,
+  focusSessions,
+  eq,
+  and,
+  drizzleSql,
+  workUnitActorOf,
+  writeSessionPatch,
+} from "@synap/database";
 import {
   BLOCKED_REASONS,
   OUTPUT_RETIRED_REASONS,
@@ -2371,11 +2379,12 @@ export async function updateFocusSession(
       outputsBefore = current;
       outputsAfter = applied.outputs;
     }
-    return tx
-      .update(focusSessions)
-      .set(set)
-      .where(eq(focusSessions.id, sessionId))
-      .returning();
+    // The one session status write when `set` carries a status.
+    return writeSessionPatch(tx, {
+      sessionId,
+      set,
+      actor: workUnitActorOf(userId, agentUserId),
+    });
   });
   await stampSessionUpdate({
     proposalId: receiptId && undoable ? receiptId : undefined,

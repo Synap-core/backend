@@ -10,6 +10,12 @@
  *      `subjectType: "entity", action: "transition"`, the transition FLAT so a
  *      rule filters on `to` / `from` / `category` / `role` / `profileSlug`.
  *
+ * GOALS AND SESSIONS (status-flow plan W1): a goal's or a session's status
+ * move owes the SAME transition shape through the same outbox, and is emitted
+ * here as `track.transition.completed` / `focus_session.transition.completed`
+ * (`TRANSITION_EVENT_TYPES`), subject = the goal or the session. Their writers
+ * do not dispatch inline; the sweeper delivers them.
+ *
  * BACK-COMPAT (founder decision 2026-10-11): for a KIND's lifecycle the
  * fan-out is ALSO emitted as `entity.update.completed` carrying
  * `changed.<slug>`, `previous.<slug>` and `<slug>` — the exact keys rules
@@ -49,33 +55,28 @@ import {
   sql,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import type {
+  AnyTransitionPayload,
+  TransitionSubjectType,
+} from "@synap-core/types/lifecycle";
 import { fanOutSideEffects, type SideEffectPayload } from "./side-effects.js";
 
 const logger = createLogger({ module: "lifecycle-transition" });
 
-/** Mirrors `StatusTransition` (`@synap/database` apply-status-move.ts). */
-export interface LifecycleTransitionEvent {
-  transitionId: string;
-  entityId: string;
-  profileSlug: string | null;
-  role: string | null;
-  facetId: string | null;
-  property: string;
-  from: string | null;
-  to: string;
-  fromCategory: string | null;
-  category: string;
-  actorKind: "human" | "agent" | "system";
-  userId: string;
-  agentUserId: string | null;
-  sessionId: string | null;
-  reason: string | null;
-  staleExpected: boolean;
-  proposalId: string | null;
-  workspaceId: string | null;
-}
+/**
+ * The ONE transition shape (`@synap-core/types/lifecycle`): an entity's move,
+ * a goal's, a session's — discriminated on `subjectType`.
+ */
+export type LifecycleTransitionEvent = AnyTransitionPayload;
 
-export const LIFECYCLE_TRANSITION_EVENT_TYPE = "entity.transition.completed";
+/** The event each subject's transition is emitted as (log + fan-out). */
+export const TRANSITION_EVENT_TYPES = {
+  entity: "entity.transition.completed",
+  track: "track.transition.completed",
+  focus_session: "focus_session.transition.completed",
+} as const satisfies Record<TransitionSubjectType, string>;
+
+export const LIFECYCLE_TRANSITION_EVENT_TYPE = TRANSITION_EVENT_TYPES.entity;
 
 /** Feature flag for the dual emit — one place to delete it. */
 export const DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS = true;
@@ -111,10 +112,12 @@ export async function emitLifecycleTransition(
   // an `enters_status` / "transitioned" rule filters its subject on
   // (`entityKindFilterKey`, @synap-core/types/automations). `profileSlug`
   // alone cannot say it: a role's move carries the entity's KIND there.
-  const data: Record<string, unknown> = {
-    ...t,
-    lifecycleProfile: t.role ?? t.profileSlug,
-  };
+  // A goal's or a session's transition has no profile: its subject type IS
+  // what a rule filters on (the event type).
+  const data: Record<string, unknown> =
+    t.subjectType === "entity"
+      ? { ...t, lifecycleProfile: t.role ?? t.profileSlug }
+      : { ...t };
   // The fan-out's `userId` is the event's ACTOR (the trigger hop reads it as
   // the causal-chain producer — `producerAgentUserId`): the agent for an agent
   // move, the person otherwise. The payload keeps both.
@@ -126,9 +129,9 @@ export async function emitLifecycleTransition(
         // The transition's id IS the log row's id: at most one row, ever.
         id: t.transitionId,
         version: "v1",
-        type: LIFECYCLE_TRANSITION_EVENT_TYPE,
-        subjectId: t.entityId,
-        subjectType: "entity",
+        type: TRANSITION_EVENT_TYPES[t.subjectType],
+        subjectId: t.subjectId,
+        subjectType: t.subjectType,
         data,
         metadata: {},
         userId: t.userId,
@@ -150,7 +153,7 @@ export async function emitLifecycleTransition(
         // No fan-out before the log row: history, triggers and goals must
         // never disagree about whether the move happened. Retried.
         logger.warn(
-          { err, entityId: t.entityId },
+          { err, subjectType: t.subjectType, subjectId: t.subjectId },
           "transition log append failed"
         );
         return {
@@ -177,42 +180,58 @@ export async function emitLifecycleTransition(
     failures.push(...r.failed.map((id) => `${prefix}:${id}`));
   };
 
-  await fanOut("transition", {
-    subjectType: "entity",
-    action: "transition",
-    subjectId: t.entityId,
-    userId: actorId,
-    workspaceId: t.workspaceId,
-    sessionId: t.sessionId,
-    eventId,
-    automationContext: opts.automationContext,
-    // `data` is an untyped record, so the catalog-declared filter key is
-    // named HERE, at the emit, where the tripwire
-    // `entity-emits-carry-declared-filter-keys` can see it — the entity's
-    // KIND (a role's move carries the role in `role` / `lifecycleProfile`).
-    data: { ...data, profileSlug: t.profileSlug },
-  } as SideEffectPayload);
-
-  if (DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS && t.role === null) {
-    await fanOut("update", {
+  if (t.subjectType === "entity") {
+    await fanOut("transition", {
       subjectType: "entity",
-      action: "update",
+      action: "transition",
       subjectId: t.entityId,
       userId: actorId,
       workspaceId: t.workspaceId,
       sessionId: t.sessionId,
+      eventId,
       automationContext: opts.automationContext,
-      data: {
-        profileSlug: t.profileSlug ?? undefined,
-        // The matcher's fingerprint names it: two identical A→S moves are two
-        // claims for a hand-written "updated" rule, a redelivery one (review
-        // item 10). Without it both moves hashed to the same payload.
-        transitionId: t.transitionId,
-        changedKeys: [t.property],
-        [`changed.${t.property}`]: true,
-        [`previous.${t.property}`]: t.from,
-        [t.property]: t.to,
-      },
+      // `data` is an untyped record, so the catalog-declared filter key is
+      // named HERE, at the emit, where the tripwire
+      // `entity-emits-carry-declared-filter-keys` can see it — the entity's
+      // KIND (a role's move carries the role in `role` / `lifecycleProfile`).
+      data: { ...data, profileSlug: t.profileSlug },
+    } as SideEffectPayload);
+
+    if (DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS && t.role === null) {
+      await fanOut("update", {
+        subjectType: "entity",
+        action: "update",
+        subjectId: t.entityId,
+        userId: actorId,
+        workspaceId: t.workspaceId,
+        sessionId: t.sessionId,
+        automationContext: opts.automationContext,
+        data: {
+          profileSlug: t.profileSlug ?? undefined,
+          // The matcher's fingerprint names it: two identical A→S moves are
+          // two claims for a hand-written "updated" rule, a redelivery one
+          // (review item 10). Without it both moves hashed to the same payload.
+          transitionId: t.transitionId,
+          changedKeys: [t.property],
+          [`changed.${t.property}`]: true,
+          [`previous.${t.property}`]: t.from,
+          [t.property]: t.to,
+        },
+      } as SideEffectPayload);
+    }
+  } else {
+    // A goal's or a session's move: the transition alone. No rule ever read
+    // their status off an update event, so there is nothing to keep working.
+    await fanOut("transition", {
+      subjectType: t.subjectType,
+      action: "transition",
+      subjectId: t.subjectId,
+      userId: actorId,
+      workspaceId: t.workspaceId,
+      sessionId: t.sessionId,
+      eventId,
+      automationContext: opts.automationContext,
+      data,
     } as SideEffectPayload);
   }
 

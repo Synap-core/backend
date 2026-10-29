@@ -77,6 +77,7 @@ export {
   dispatchLifecycleTransition,
   dispatchDueLifecycleTransitions,
   LIFECYCLE_TRANSITION_EVENT_TYPE,
+  TRANSITION_EVENT_TYPES,
   DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS,
   type LifecycleTransitionEvent,
   type TransitionEmitContext,

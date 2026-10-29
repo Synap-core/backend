@@ -65,6 +65,8 @@ import {
   links,
   drizzleSql,
   classifyLifecycleMove,
+  workUnitActorOf,
+  type WorkUnitActor,
 } from "@synap/database";
 import {
   DEFAULT_PLAYBOOK_STAGE_CATEGORY,
@@ -1937,7 +1939,8 @@ export async function setTrackStatus(input: {
       project,
       input.status,
       input.actor.userId,
-      close
+      close,
+      { actor: workUnitActorOf(input.actor.userId, input.actor.agentUserId) }
     );
   }
   const perm = await checkPermissionOrPropose({
@@ -1994,7 +1997,8 @@ export async function setTrackStatus(input: {
     project,
     input.status,
     input.actor.userId,
-    close
+    close,
+    { actor: workUnitActorOf(input.actor.userId, input.actor.agentUserId) }
   );
 }
 
@@ -2014,7 +2018,9 @@ export async function applyTrackStatus(
   project: GateProject,
   status: ProjectTrackStatus,
   userId: string,
-  close: TrackCloseInput = {}
+  close: TrackCloseInput = {},
+  /** Who the goal's transition names, and the approval it replays. */
+  transition: { actor?: WorkUnitActor; proposalId?: string | null } = {}
 ): Promise<{ status: "updated"; track: ProjectTrack }> {
   // Only the goal's JUDGE closes it (W3), only its owner or judge drops it
   // (F7) — the person acting here, or the APPROVER on a replay. ONE place:
@@ -2040,6 +2046,8 @@ export async function applyTrackStatus(
       from: track.status,
       to: status,
       dropMetadataKey: CHECK_GATE_METADATA_KEY,
+      actor: transition.actor,
+      proposalId: transition.proposalId,
       // Decision 2a: closing/dropping ENDS the track's space grant — a stamp,
       // so nothing revives it (a reopened goal is a NEW track with its own).
       // Pausing needs no stamp: the gate admits only an ACTIVE track (W5), so

@@ -9,14 +9,25 @@
  * EVERY write to `project_tracks` goes through here — including the guarded
  * compare-and-set writes of the stage gate (`transitionStatus`,
  * `advanceStage`) — so no status or stage change can land without its
- * `track.update.completed` fact.
+ * `track.update.completed` fact. A STATUS change has exactly one writer,
+ * `transitionStatus`, which also owes the goal's transition
+ * (`track.transition.completed`, status-flow W1) in the same transaction.
  */
 
 import { and, eq, inArray, sql } from "drizzle-orm";
+import { TRACK_STATUS_DECLARATION } from "@synap-core/types/units";
 import {
   LIVE_PROJECT_TRACK_STATUSES,
   projectTracks,
 } from "../schema/project-tracks.js";
+import { projects } from "../schema/projects.js";
+import { insertTransitionOutbox } from "../services/lifecycle/transition-outbox.js";
+import {
+  buildWorkUnitTransition,
+  workUnitActorOf,
+  type WorkUnitActor,
+} from "../services/lifecycle/work-unit-transition.js";
+import { getActingAgentUserId } from "../utils/request-write-context.js";
 import type {
   ProjectTrack,
   ProjectTrackDefinitionSnapshot,
@@ -108,7 +119,6 @@ export interface AppendedTrackStage {
 export interface UpdateTrackInput {
   /** `undefined` leaves the stage untouched; `null` clears it. */
   currentStage?: string | null;
-  status?: ProjectTrackStatus;
   name?: string;
 }
 
@@ -227,8 +237,8 @@ export class TrackRepository extends BaseRepository<
       .update(projectTracks)
       .set({
         // `undefined` keys are dropped by Drizzle's SET (field untouched).
+        // Never the status: `transitionStatus` is its one writer.
         currentStage: data.currentStage,
-        status: data.status,
         name: data.name,
         updatedAt: new Date(),
       })
@@ -248,6 +258,12 @@ export class TrackRepository extends BaseRepository<
    * the verdict fits the ending; the `project_tracks_verdict_check` constraint
    * refuses one that does not. Returns the updated row, or `null` when no row
    * flipped — and emits `track.update.completed` only when one did.
+   *
+   * THE GOAL'S TRANSITION (status-flow W1): a flip also owes
+   * `track.transition.completed` — the one transition shape, categories from
+   * `TRACK_STATUS_DECLARATION` — through the transition outbox, in the SAME
+   * transaction as the flip (delivered by the sweeper). `actor` defaults to
+   * the acting agent when an agent key made the call, else the person.
    */
   async transitionStatus(
     id: string,
@@ -262,6 +278,9 @@ export class TrackRepository extends BaseRepository<
         by: string;
         at?: Date;
       };
+      actor?: WorkUnitActor;
+      reason?: string | null;
+      proposalId?: string | null;
     },
     userId: string
   ): Promise<ProjectTrack | null> {
@@ -273,28 +292,57 @@ export class TrackRepository extends BaseRepository<
     if (dropMetadataKey) {
       metadata = sql`(${metadata} - ${dropMetadataKey}::text)`;
     }
-    const [track] = await this.db
-      .update(projectTracks)
-      .set({
-        status: params.to,
-        ...(metadataPatch || dropMetadataKey ? { metadata } : {}),
-        ...(close
-          ? {
-              verdict: close.verdict,
-              verdictReason: close.reason,
-              verdictBy: close.by,
-              verdictAt: close.at ?? new Date(),
-            }
-          : {}),
-        updatedAt: new Date(),
-      })
-      .where(
-        and(eq(projectTracks.id, id), eq(projectTracks.status, params.from))
-      )
-      .returning();
+    const actor =
+      params.actor ?? workUnitActorOf(userId, getActingAgentUserId());
+    const track = await this.db.transaction(async (tx: any) => {
+      const [flipped] = await tx
+        .update(projectTracks)
+        .set({
+          status: params.to,
+          ...(metadataPatch || dropMetadataKey ? { metadata } : {}),
+          ...(close
+            ? {
+                verdict: close.verdict,
+                verdictReason: close.reason,
+                verdictBy: close.by,
+                verdictAt: close.at ?? new Date(),
+              }
+            : {}),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(eq(projectTracks.id, id), eq(projectTracks.status, params.from))
+        )
+        .returning();
+      if (!flipped) return null;
+      const [project] = await tx
+        .select({ workspaceId: projects.workspaceId })
+        .from(projects)
+        .where(eq(projects.id, flipped.projectId))
+        .limit(1);
+      await insertTransitionOutbox(
+        tx,
+        buildWorkUnitTransition({
+          subjectType: "track",
+          subjectId: flipped.id,
+          from: params.from,
+          to: params.to,
+          fromCategory: TRACK_STATUS_DECLARATION[params.from].category,
+          category: TRACK_STATUS_DECLARATION[params.to].category,
+          actor,
+          ownerUserId: userId,
+          reason: params.reason,
+          proposalId: params.proposalId,
+          workspaceId: project?.workspaceId ?? null,
+          projectId: flipped.projectId,
+          trackId: flipped.id,
+        })
+      );
+      return flipped as ProjectTrack;
+    });
     if (!track) return null;
     await this.emitCompleted("update", track, userId);
-    return track as ProjectTrack;
+    return track;
   }
 
   /**

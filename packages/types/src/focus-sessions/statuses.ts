@@ -13,7 +13,11 @@
  * A lockstep tripwire (`__tripwires__/declared-enum-covers-column.test.ts`)
  * asserts `SESSION_STATUSES` covers the `focus_sessions.status` column enum, so
  * a new stored state can never exist that this list does not know about.
+ *
+ * Its one import is a TYPE (erased): the module stays dependency-free at run
+ * time.
  */
+import type { LifecycleCategory } from "../lifecycle/option.js";
 
 /** Non-terminal statuses — a session still "in flight" for its owner. */
 export const OPEN_SESSION_STATUSES = [
@@ -119,3 +123,41 @@ export type SessionStatus = (typeof SESSION_STATUSES)[number];
 export const UPDATABLE_SESSION_STATUSES = SESSION_STATUSES.filter(
   (s): s is Exclude<SessionStatus, "stale"> => s !== "stale"
 ) as [Exclude<SessionStatus, "stale">, ...Exclude<SessionStatus, "stale">[]];
+
+/**
+ * THE session lifecycle, declared ONCE like a goal's
+ * (`TRACK_STATUS_DECLARATION`): each stored status's fixed CATEGORY. Keyed by
+ * every status, so a status added to {@link SESSION_STATUSES} and not
+ * classified here stops the build. Read by the session transition
+ * (`setSessionStatus`, @synap/database) and by any status rollup.
+ *
+ *   open    forming, scheduled — not started;
+ *   active  active;
+ *   paused  paused (a person or a check gate), stale (the reaper found it
+ *           quiet). `stale` KEEPS its stored value (founder decision
+ *           2026-09-13: Relay's Work home admits it for 7 days, and the
+ *           reaper matches `active`/`paused` only, so a stale row stored as
+ *           `paused` would be re-reaped every hour); it only READS as paused;
+ *   done    closed;
+ *   lost    failed, cancelled.
+ */
+export const SESSION_STATUS_DECLARATION = {
+  forming: { category: "open" },
+  scheduled: { category: "open" },
+  active: { category: "active" },
+  paused: { category: "paused" },
+  stale: { category: "paused" },
+  closed: { category: "done" },
+  failed: { category: "lost" },
+  cancelled: { category: "lost" },
+} as const satisfies Record<SessionStatus, { category: LifecycleCategory }>;
+
+/** The category of a session status; `null` for a value no status declares. */
+export function sessionStatusCategory(
+  status: string | null | undefined
+): LifecycleCategory | null {
+  if (status == null) return null;
+  return Object.hasOwn(SESSION_STATUS_DECLARATION, status)
+    ? SESSION_STATUS_DECLARATION[status as SessionStatus].category
+    : null;
+}

@@ -32,7 +32,11 @@ const SRC = join(__dirname, "..");
 /** A keying door: the stamp itself, or a function that stamps on its way. */
 const KEYS_SLOTS =
   /\b(stampSlotKeys|carrySlotKeys|updateExpectedOutputsLocked|mergeExpectedOutputs|applyOutputMutations)\b/;
-const WRITES_SESSIONS = /\.(insert|update)\(focusSessions\)/;
+// Since status-flow W2 a session row is also written through the one session
+// status write (`setSessionStatus` / `writeSessionPatch`, @synap/database),
+// whose `set` carries the caller's other columns — expected_outputs included.
+const WRITES_SESSIONS =
+  /\.(insert|update)\(focusSessions\)|\b(setSessionStatus|writeSessionPatch)\(/;
 /** An `expectedOutputs:` PROPERTY — not a select column, a type, or a schema. */
 const ASSIGNS_OUTPUTS =
   /expectedOutputs\s*:(?!\s*(true\b|unknown\b|ExpectedOutput|Array<|OutputItem|z\.|focusSessions\.))/;
@@ -94,6 +98,7 @@ describe("every expected_outputs write door keys its slots", () => {
     expect(ASSIGNS_OUTPUTS.test("expectedOutputs: next,")).toBe(true);
     expect(ASSIGNS_OUTPUTS.test("expectedOutputs: true,")).toBe(false);
     expect(WRITES_SESSIONS.test("tx.update(focusSessions)")).toBe(true);
+    expect(WRITES_SESSIONS.test("await setSessionStatus(tx, {")).toBe(true);
   });
 
   it("each writer keys its slots or is classified as carrying them", () => {

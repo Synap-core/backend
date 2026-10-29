@@ -45,6 +45,7 @@ import {
   type EffectiveLifecycle,
   type LifecycleCategory,
 } from "../../utils/lifecycle-model.js";
+import type { LifecycleTransitionPayload } from "@synap-core/types/lifecycle";
 import { insertTransitionOutbox } from "./transition-outbox.js";
 
 type Db = PostgresJsDatabase<typeof schema>;
@@ -62,28 +63,12 @@ export interface StatusMoveActor {
   agentUserId?: string | null;
 }
 
-/** The transition, as the event carries it (`entity.transition.completed`). */
-export interface StatusTransition {
-  transitionId: string;
-  entityId: string;
-  profileSlug: string | null;
-  role: string | null;
-  facetId: string | null;
-  property: string;
-  from: string | null;
-  to: string;
-  fromCategory: LifecycleCategory | null;
-  category: LifecycleCategory;
-  actorKind: StatusMoveActor["kind"];
-  userId: string;
-  agentUserId: string | null;
-  sessionId: string | null;
-  reason: string | null;
-  staleExpected: boolean;
-  proposalId: string | null;
-  /** The lens the move happened in (facet row's / entity's workspace). */
-  workspaceId: string | null;
-}
+/**
+ * The transition, as the event carries it (`entity.transition.completed`) —
+ * the entity half of the ONE transition shape (`@synap-core/types/lifecycle`;
+ * goals and sessions write the same base, `work-unit-transition.ts`).
+ */
+export type StatusTransition = LifecycleTransitionPayload;
 
 /** Where a move lands, resolved once (also what governance classifies). */
 export interface StatusMoveTarget {
@@ -405,6 +390,8 @@ export async function applyStatusMove(
       .limit(1);
     const transition: StatusTransition = {
       transitionId: randomUUID(),
+      subjectType: "entity",
+      subjectId: target.entityId,
       entityId: target.entityId,
       profileSlug: profileRow?.type ?? target.entityType,
       role: target.role,

@@ -1965,8 +1965,13 @@ try {
             // review pack, the session-bound ephemeral expiry and both halves
             // of the close event (@synap-core/types/focus-sessions states the
             // invariant outright). They now call completeFocusSession through
-            // this slot.
-            registerSessionCloser((input) => api.completeFocusSession(input));
+            // this slot. Every close through it is automatic: the system's.
+            registerSessionCloser((input) =>
+              api.completeFocusSession({
+                ...input,
+                actor: { kind: "system", userId: input.userId },
+              })
+            );
             // ONE stopped-session door (decision E1): the hourly reaper stales
             // a session no agent moved for 7 days whose only owed items are
             // its agent's confirm / choose asks, and those asks end with it.

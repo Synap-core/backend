@@ -31,6 +31,7 @@ import {
   RECEIPT_IDLE_WINDOW_HOURS,
   focusSessionWaitsOnPersonWhere,
   sessionStoppedOnItsAsksWhere,
+  setSessionStatus,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
@@ -234,11 +235,15 @@ export async function handleFocusSessionReaper(): Promise<void> {
     // erase when the session actually went quiet (and a stale row no longer matches
     // the predicate, so it is never re-reaped regardless). Not binding a `new Date()`
     // here also avoids the postgres.js 3.4.8 Date-bind crash the cutoff above dodges.
-    const reaped = await db
-      .update(focusSessions)
-      .set({ status: "stale" })
-      .where(SESSION_IS_STALE)
-      .returning({ id: focusSessions.id });
+    // Through the one session status write: each staled session owes its
+    // transition, the system's move.
+    const { rows: reaped } = await setSessionStatus(db, {
+      where: SESSION_IS_STALE,
+      from: ["active", "paused"],
+      to: "stale",
+      actor: { kind: "system" },
+      reason: `No activity for ${REAPER_STALE_HOURS} hours.`,
+    });
 
     if (reaped.length === 0) {
       logger.debug("No stale focus sessions to reap");

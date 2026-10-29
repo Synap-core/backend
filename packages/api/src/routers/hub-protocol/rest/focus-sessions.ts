@@ -43,6 +43,8 @@ import {
   drizzleSql,
   liveRunStatusWhere,
   getRequestGrant,
+  workUnitActorOf,
+  writeSessionPatch,
 } from "@synap/database";
 import { sessionReadableWhere } from "../../../access/session-visibility.js";
 import { sessionPacketReadable } from "../../../access/grant-door-fence.js";
@@ -2425,11 +2427,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         set.metadata = drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(metadataPatch)}::jsonb`;
       }
 
-      let [updated] = await db
-        .update(focusSessions)
-        .set(set)
-        .where(eq(focusSessions.id, id))
-        .returning();
+      let [updated] = await writeSessionPatch(db, {
+        sessionId: id,
+        set,
+        actor: workUnitActorOf(userId, agentUserId),
+      });
 
       const usesStamped =
         trackFiling && updated

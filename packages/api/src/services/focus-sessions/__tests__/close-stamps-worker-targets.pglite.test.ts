@@ -68,6 +68,7 @@ vi.mock("../../proposals/expire-lapsed-proposals.js", () => ({
 import type { PgTable } from "drizzle-orm/pg-core";
 import {
   focusSessions,
+  lifecycleTransitionOutbox,
   links,
   playbookRuns,
   playbooks,
@@ -82,7 +83,14 @@ const q = <T>(sql: string, params?: unknown[]) =>
 
 beforeAll(async () => {
   await h.init();
-  for (const t of [focusSessions, links, playbookRuns, playbooks, proposals])
+  for (const t of [
+    focusSessions,
+    lifecycleTransitionOutbox,
+    links,
+    playbookRuns,
+    playbooks,
+    proposals,
+  ])
     await h.client!.exec(pgliteTableDdl(t as unknown as PgTable));
 }, 120_000);
 

@@ -72,7 +72,7 @@
  * wave 5: gate executor + routers, with L7.
  */
 
-import { db, focusSessions, eq, and } from "@synap/database";
+import { db, focusSessions, eq, setSessionStatus } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import {
@@ -439,13 +439,15 @@ async function returnToOnFailStage(
   const stage = proc.stages.find((s) => s?.key === toStage);
   const target = resolveStageRef(proc.stages, stage?.onFail?.toStage);
   if (!target || target === toStage) return null;
-  const resumed = await db
-    .update(focusSessions)
-    .set({ status: "active", updatedAt: new Date() })
-    .where(
-      and(eq(focusSessions.id, session.id), eq(focusSessions.status, "paused"))
-    )
-    .returning({ id: focusSessions.id });
+  // The gate's own return: the system's move.
+  const { rows: resumed } = await setSessionStatus(db, {
+    sessionId: session.id,
+    from: "paused",
+    to: "active",
+    actor: { kind: "system", userId: input.userId },
+    reason: `Its check gate held: back to stage "${target}".`,
+    set: { updatedAt: new Date() },
+  });
   if (resumed.length === 0) return null;
   await advanceSessionStage({
     session: { ...session, currentStage: toStage },

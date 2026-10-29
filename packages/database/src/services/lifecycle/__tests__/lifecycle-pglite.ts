@@ -20,7 +20,7 @@ const MIGRATION_0319 = readFileSync(
   "utf8"
 );
 
-function ddlFor(table: PgTable): string {
+export function ddlFor(table: PgTable): string {
   const cfg = getTableConfig(table);
   const columns = cfg.columns.map((c) => {
     const type = c.getSQLType();

@@ -30,7 +30,11 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { focusSessions, playbookRuns } from "@synap/database/schema";
+import {
+  focusSessions,
+  lifecycleTransitionOutbox,
+  playbookRuns,
+} from "@synap/database/schema";
 import {
   reviveStaleSession,
   reviveSessionForWrite,
@@ -81,7 +85,7 @@ async function sessionWithRun(opts: {
 }
 
 beforeAll(async () => {
-  for (const t of [focusSessions, playbookRuns])
+  for (const t of [focusSessions, lifecycleTransitionOutbox, playbookRuns])
     await h.client!.exec(ddlFor(t as unknown as PgTable));
 }, 120_000);
 

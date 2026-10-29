@@ -4,7 +4,7 @@
     "packages/events/src/event-types.ts (OperationalEventTypes, SystemEventTypes)",
     "packages/types/src/events/unified.ts (naming grammar)"
   ],
-  "eventCount": 29,
+  "eventCount": 31,
   "events": [
     {
       "key": "ENTITY_CREATED",
@@ -63,6 +63,22 @@
       "filterKeys": ["toStage", "fromStage", "playbookId"]
     },
     {
+      "key": "FOCUS_SESSION_TRANSITIONED",
+      "type": "focus_session.transition.completed",
+      "label": "Session status changed",
+      "domain": "Focus sessions",
+      "description": "Fires when a focus session's status moves (active, paused, stale, closed…).",
+      "filterKeys": [
+        "from",
+        "to",
+        "fromCategory",
+        "category",
+        "actorKind",
+        "projectId",
+        "trackId"
+      ]
+    },
+    {
       "key": "TRACK_STAGE_CHANGED",
       "type": "track.stage_changed.completed",
       "label": "Track stage changed",
@@ -72,6 +88,22 @@
         "toStage",
         "fromStage",
         "playbookId",
+        "projectId",
+        "trackId"
+      ]
+    },
+    {
+      "key": "TRACK_TRANSITIONED",
+      "type": "track.transition.completed",
+      "label": "Goal status changed",
+      "domain": "Tracks",
+      "description": "Fires when a project's goal (a track) moves status (active, paused, completed…).",
+      "filterKeys": [
+        "from",
+        "to",
+        "fromCategory",
+        "category",
+        "actorKind",
         "projectId",
         "trackId"
       ]
