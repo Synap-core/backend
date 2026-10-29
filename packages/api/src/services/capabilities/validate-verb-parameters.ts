@@ -93,7 +93,7 @@ export type PodFileProblem =
   | "too_large"
   /** More files than one parameter may carry. */
   | "too_many"
-  /** The verb asks for a delivery not wired yet (bytes, phase 2). */
+  /** The verb names a file delivery the pod does not know. */
   | "delivery_not_supported";
 
 export type VerbParameterCheck =
@@ -392,7 +392,7 @@ const POD_FILE_PROBLEM_WORDS: Record<PodFileProblem, string> = {
   too_large: "this file is too large to send to a tool",
   too_many: "too many files for one parameter",
   delivery_not_supported:
-    "this verb asks for files as bytes, which come in a later release",
+    "this verb names a file delivery the pod does not know (use :url or :bytes)",
 };
 
 /** The human half of the repair error — one sentence the agent can act on. */

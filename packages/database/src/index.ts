@@ -25,6 +25,7 @@ export * from "./services/profile-resolution-service.js";
 export * from "./services/renderer-binding-service.js";
 export * from "./services/facet-resolution-service.js";
 export * from "./services/property-validation-service.js";
+export { suggestClosest } from "./services/did-you-mean.js";
 export * from "./services/property-reconciliation.js";
 export * from "./services/property-index-service.js";
 export * from "./services/view-filter-compiler.js";
@@ -380,6 +381,8 @@ export {
 export { normalizeProfileScope } from "./utils/normalize-profile-scope.js";
 export {
   buildStoredConstraints,
+  addEnumOptionRefusal,
+  withAddedEnumOption,
   readStoredEnum,
   readStoredEnumOptions,
   normalizeEnumOptions,

@@ -116,7 +116,12 @@ const live = (permissions: string[], expiresAt: Date | null = null) => ({
   expiresAt,
 });
 
-function callerKey(agent: boolean) {
+/**
+ * `agent: true` = a COMPUTER's key (an agent principal of kind `machine`, the
+ * key the CLI calls with); `false` = a person's own key. `kind` overrides,
+ * e.g. `"agent"` for an AI's own key (Q-D1).
+ */
+function callerKey(agent: boolean, kind?: "agent" | "app") {
   validateApiKey.mockResolvedValue({
     id: "caller-key",
     userId: agent ? AGENT : HUMAN,
@@ -128,6 +133,13 @@ function callerKey(agent: boolean) {
     effectiveUserId: HUMAN,
     agentUserId: agent ? AGENT : undefined,
     isAgent: agent,
+    principal: agent
+      ? {
+          id: AGENT,
+          kind: kind ?? "machine",
+          hostUserId: kind ? null : AGENT,
+        }
+      : { id: HUMAN, kind: "human", hostUserId: null },
   });
 }
 
@@ -189,7 +201,7 @@ describe("POST /setup/agent — a person's app sign-in token connects nothing (T
 
 describe("POST /setup/agent — a key never connects a live AI by itself", () => {
   it.each([
-    ["an AGENT key", true],
+    ["a computer's key", true],
     ["a human key", false],
   ])(
     "%s, not asking for approval → pending key + agent/connect proposal",
@@ -266,4 +278,35 @@ describe("POST /setup/agent — a key never connects a live AI by itself", () =>
     expect(revokeApiKeys).toHaveBeenCalled();
     expect(fileAgentConnectProposal).not.toHaveBeenCalled();
   });
+});
+
+describe("POST /setup/agent — the computer comes from the calling key (D1)", () => {
+  it("a computer's key → the agent is minted ON that computer", async () => {
+    callerKey(true);
+    const res = await connect({ hostUserId: "body-says-elsewhere" });
+    expect(res.status).toBe(200);
+    expect(provisionSurfaceAgentKey).toHaveBeenCalledWith(
+      expect.objectContaining({ hostUserId: AGENT })
+    );
+  });
+
+  it("a person's own key → no computer (Q-D3), whatever the body says", async () => {
+    callerKey(false);
+    const res = await connect({ hostUserId: AGENT });
+    expect(res.status).toBe(200);
+    expect(provisionSurfaceAgentKey).toHaveBeenCalledWith(
+      expect.objectContaining({ hostUserId: null })
+    );
+  });
+
+  it.each(["agent", "app"] as const)(
+    "Q-D1: an AI's own key (%s) connects no other AI — 403, nothing provisioned",
+    async (kind) => {
+      callerKey(true, kind);
+      const res = await connect();
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe("AGENT_KEY_CANNOT_REGISTER_AGENTS");
+      expect(provisionSurfaceAgentKey).not.toHaveBeenCalled();
+    }
+  );
 });

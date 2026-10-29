@@ -734,8 +734,13 @@ describe("the CONVERSATION is the client, not the key (founder rule, 2026-09-28)
     expect(clientKeyForApiKey({ id: "K" }, "bad id")).toMatch(
       /^key:K\|call:[0-9a-f-]{36}$/
     );
-    expect(clientKeyForApiKey({ id: "K", keyType: "is_internal" }, "c")).toBe(
+    // The IS: no named run ⇒ no client (it groups by channel); a named run
+    // (W-A4) ⇒ its own client, never `key:` (an external client).
+    expect(clientKeyForApiKey({ id: "K", keyType: "is_internal" })).toBe(
       undefined
+    );
+    expect(clientKeyForApiKey({ id: "K", keyType: "is_internal" }, "c")).toBe(
+      "is:K|conv:c"
     );
   });
 

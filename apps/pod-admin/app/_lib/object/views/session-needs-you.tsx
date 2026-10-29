@@ -12,6 +12,10 @@
  *     `AskAnswer` Review's detail draws — the same doors, the same stale and
  *     refusal handling; never a second answer path. Anything else owed opens
  *     where it is decided.
+ *   • A criterion's grade (`CriterionGrade`) — an escalated criterion's slot
+ *     is graded under the criterion in the page's rail, through that same
+ *     `AskAnswer`, and Needs you then leaves it out (`gradedInRail`), so the
+ *     reader meets each grade once.
  *   • Proposed changes — the pending proposals filed in this session
  *     (`proposals.list({ sessionId, status: "pending" })`), each a door to its
  *     review at `/proposal/<id>`. Never approved from the row: the review page
@@ -26,6 +30,10 @@
 import { useState } from "react";
 import Link from "next/link";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
+import {
+  CRITERION_SLOT_KIND,
+  isCriterionGradeAsk,
+} from "@synap-core/types/focus-sessions";
 import { trpc } from "../../../../lib/trpc";
 import { formatRelative } from "../../../../lib/format";
 import { ExitLink } from "../../../../lib/exit-link";
@@ -60,18 +68,60 @@ const DOOR =
 const BOX =
   "rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10";
 
+type SessionSignals = Parameters<typeof reviewRows>[0];
+
 /** This session's asks, in the server's order — Review's rows, narrowed. */
-function sessionAskRows(
-  signals: Parameters<typeof reviewRows>[0]
-): ReviewRow[] {
+function sessionAskRows(signals: SessionSignals): ReviewRow[] {
   return reviewRows(signals, new Map()).filter((r) => r.group === "asks");
 }
 
-export function NeedsYouSection({ sessionId }: { sessionId: string }) {
-  const signals = trpc.signals.list.useQuery(
+/**
+ * Each escalated criterion the person grades in place: criterion key → the
+ * signal id of its owed slot. Only a slot whose ask IS the grade
+ * (`isCriterionGradeAsk`) — the one `askSlotOf` lets the answer door take;
+ * any other ask on a criterion slot stays a Needs you row that opens where it
+ * is graded.
+ */
+export function criterionGradeSignals(
+  signals: SessionSignals,
+  sessionId: string
+): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const s of signals) {
+    if (
+      s.kind === "owed-slot" &&
+      s.target?.kind === "session" &&
+      s.target.id === sessionId &&
+      s.slotKind === CRITERION_SLOT_KIND &&
+      s.criterionKey &&
+      isCriterionGradeAsk(s.ask)
+    ) {
+      out.set(s.criterionKey, s.id);
+    }
+  }
+  return out;
+}
+
+/** The one needs-you read of a session; Needs you and each grade share it. */
+function useSessionSignals(sessionId: string) {
+  return trpc.signals.list.useQuery(
     { lens: "needs-you", sessionId, limit: NEEDS_YOU_LIMIT },
     { staleTime: 15_000, refetchInterval: 60_000, retry: false }
   );
+}
+
+export function NeedsYouSection({
+  sessionId,
+  gradedInRail,
+}: {
+  sessionId: string;
+  /**
+   * The criteria the page's rail grades (`CriterionGrade`): their slots are
+   * answered there, so they are not drawn here a second time.
+   */
+  gradedInRail?: ReadonlySet<string>;
+}) {
+  const signals = useSessionSignals(sessionId);
   // Answered here: gone at once, until a read newer than the answer says
   // otherwise (the agent asked again, or the answer did not land).
   const [answeredAt, setAnsweredAt] = useState<Map<string, number>>(
@@ -89,8 +139,16 @@ export function NeedsYouSection({ sessionId }: { sessionId: string }) {
     />
   ) : null;
   const readAt = signals.dataUpdatedAt;
-  const rows = sessionAskRows(signals.data?.signals ?? []);
-  const owed = rows.filter((r) => (answeredAt.get(r.key) ?? -1) < readAt);
+  const read = signals.data?.signals ?? [];
+  const rows = sessionAskRows(read);
+  const inRail = new Set(
+    [...criterionGradeSignals(read, sessionId)]
+      .filter(([criterionKey]) => gradedInRail?.has(criterionKey))
+      .map(([, signalId]) => signalId)
+  );
+  const owed = rows.filter(
+    (r) => !inRail.has(r.key) && (answeredAt.get(r.key) ?? -1) < readAt
+  );
   if (owed.length === 0) {
     return failure ? (
       <SectionCard variant="flat" title="Needs you">
@@ -133,6 +191,48 @@ export function NeedsYouSection({ sessionId }: { sessionId: string }) {
         </button>
       )}
     </SectionCard>
+  );
+}
+
+/**
+ * A criterion's grade, drawn under the criterion in the page's rail: the
+ * SAME `AskAnswer` Needs you and Review draw, on the criterion's escalated
+ * slot, so the grade goes through `focusSessions.answerOutput` like any
+ * answer (the pod records it as the grade, `gradeCriterionAsOwner`). Nothing
+ * when the criterion has no slot waiting on the person. Its read is Needs
+ * you's own (one query key, one request).
+ */
+export function CriterionGrade({
+  sessionId,
+  criterionKey,
+}: {
+  sessionId: string;
+  criterionKey: string;
+}) {
+  const signals = useSessionSignals(sessionId);
+  const [answeredAt, setAnsweredAt] = useState<number | null>(null);
+  const read = signals.data?.signals ?? [];
+  const signalId = criterionGradeSignals(read, sessionId).get(criterionKey);
+  const row = signalId
+    ? sessionAskRows(read).find((r) => r.key === signalId)
+    : undefined;
+  if (!row || row.detail?.kind !== "ask") return null;
+  // Answered here: gone until a read newer than the answer says otherwise.
+  if (answeredAt !== null && answeredAt >= signals.dataUpdatedAt) return null;
+  const settle = () => setAnsweredAt(Date.now());
+  return (
+    <div className={`${BOX} mt-1 px-3 pt-3`}>
+      <AskAnswer
+        key={`${row.detail.sessionId}:${row.detail.label}`}
+        slot={row.detail.slot}
+        live={liveAskSlot(sessionAskRows(read), row.detail)}
+        onSettled={settle}
+        onClose={settle}
+        sessionDoor={false}
+        showHeading={false}
+        showContext={false}
+      />
+    </div>
   );
 }
 

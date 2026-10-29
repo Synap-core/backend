@@ -6,36 +6,16 @@
  */
 
 import type PgBoss from "pg-boss";
-import { sql, resolveDefaultIntelligenceEndpoint } from "@synap/database";
+import { sql, loadDocumentBodyTexts } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { markdownToPlainText } from "@synap-core/markdown-core/plain-text";
 import {
   buildEntityEmbeddingText,
   type EntityEmbeddingFacet,
 } from "@synap/ai-embeddings";
+import { generateEmbedding } from "./is-embeddings.js";
 
 const logger = createLogger({ module: "entity-embedding-worker" });
-
-async function generateEmbedding(text: string): Promise<number[]> {
-  const { endpoint, apiKey } = await resolveDefaultIntelligenceEndpoint();
-  const response = await fetch(`${endpoint}/api/embeddings`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-API-Key": apiKey,
-    },
-    body: JSON.stringify({ text }),
-  });
-
-  if (!response.ok) {
-    const body = (await response.text().catch(() => "")).slice(0, 500);
-    throw new Error(
-      `Failed to generate embedding: HTTP ${response.status} ${response.statusText}${body ? ` — ${body}` : ""}`
-    );
-  }
-
-  const data = await response.json();
-  return (data as { embedding: number[] }).embedding;
-}
 
 export async function handleEntityEmbedding(
   job: PgBoss.Job<{
@@ -83,20 +63,35 @@ export async function handleEntityEmbedding(
 
     // Linked document body — feed the attached document's text into the
     // embedding so semantic recall can match an entity by its document
-    // contents, not just its title/properties. Best-effort, DB-only: read the
-    // latest version's preview-text column (document_versions.content, up to
-    // 64k chars; empty for uploaded binaries). If the document row is missing
-    // or content is empty, embed exactly as before — no throw, no behavior
-    // change. Text extraction of binaries is a separate effort, not done here.
+    // contents, not just its title/properties. The STORED body (what the
+    // document says now), never the last checkpoint row: a person's saves cut
+    // no checkpoint, so the version row held text from before every edit
+    // (recall plan A-W2). A body that cannot be read throws (pg-boss retries)
+    // rather than overwrite the vector with one that lost the body.
     if (entity?.documentId) {
-      const [docVersion] = await db
-        .select({ content: documentVersions.content })
-        .from(documentVersions)
-        .where(eq(documentVersions.documentId, entity.documentId))
-        .orderBy(desc(documentVersions.version))
-        .limit(1);
-      if (docVersion?.content) {
-        documentText = docVersion.content;
+      const bodies = await loadDocumentBodyTexts(db, [entity.documentId], {
+        markdownText: (markdown) => markdownToPlainText(markdown),
+      });
+      const failure = bodies.failed.get(entity.documentId);
+      if (failure !== undefined) {
+        throw new Error(
+          `Could not read the body of document ${entity.documentId}: ${failure}`
+        );
+      }
+      documentText = bodies.texts.get(entity.documentId) ?? null;
+      // A body with no text of its own (an uploaded PDF, image or audio) has
+      // its EXTRACTED text only on the version row (`extractedText`, see
+      // `document-version-storage.ts`): read it there, as before.
+      if (documentText === null) {
+        const [docVersion] = await db
+          .select({ content: documentVersions.content })
+          .from(documentVersions)
+          .where(eq(documentVersions.documentId, entity.documentId))
+          .orderBy(desc(documentVersions.version))
+          .limit(1);
+        if (docVersion?.content) {
+          documentText = docVersion.content;
+        }
       }
     }
 

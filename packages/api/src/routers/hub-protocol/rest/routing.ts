@@ -11,7 +11,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
-import { logger } from "./_shared.js";
+import { hasScope, logger } from "./_shared.js";
 import type { HubHono } from "./_shared.js";
 import type { Context } from "hono";
 
@@ -69,6 +69,12 @@ const ResolveRoutingSchema = z.object({
 
 export function registerRoutingRoutes(app: HubHono): void {
   app.post("/routing/resolve", async (c: Context) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
     const body = await c.req.json().catch(() => null);
     const parsed = ResolveRoutingSchema.safeParse(body);
     if (!parsed.success) {
@@ -97,6 +103,12 @@ export function registerRoutingRoutes(app: HubHono): void {
 
   // List available lanes — discoverable so surfaces don't hardcode the enum
   app.get("/routing/lanes", (c: Context) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
     return c.json({
       lanes: ROUTING_RULES.map((r) => ({
         lane: r.lane,

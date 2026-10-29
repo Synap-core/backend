@@ -72,6 +72,7 @@ import { logger, isPodReadableWorkspace } from "./workspaces/helpers.js";
 import {
   SERVER_OWNED_WORKSPACE_SETTINGS_KEYS,
   stripServerOwnedSettings,
+  stripServerOwnedSettingsLeaves,
 } from "../connectors/server-owned-settings.js";
 import { inviteProcedures } from "./workspaces/invites.js";
 import { definitionEngineProcedures } from "./workspaces/definition-engine.js";
@@ -547,7 +548,12 @@ const coreProcedures = {
       // is written through its own doors (the Governance › Rules editor /
       // `governanceRules.create`, agent provisioning, the agent-users PATCH) —
       // NEVER through this workspace-settings path.
-      let settingsToPersist = input.settings;
+      // Server-owned leaves (`devplane.localTerminalEnabled`) are dropped
+      // here; the server-owned top-level keys are carried over by the
+      // repository (`preserveSettingsKeys` below).
+      let settingsToPersist = input.settings
+        ? stripServerOwnedSettingsLeaves(input.settings)
+        : input.settings;
       const aiGovIn = input.settings?.aiGovernance;
       if (settingsToPersist && aiGovIn && typeof aiGovIn === "object") {
         const aiGov = { ...(aiGovIn as Record<string, unknown>) };

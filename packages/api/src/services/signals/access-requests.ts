@@ -11,7 +11,12 @@
  *     request past its handoff lease is `expired`; the same rule as
  *     `effectiveApplicationConnectionRequestStatus`).
  *
- * Both are decided by a POD ADMIN only (`trustedIssuers.*` and
+ *   - a pending KEY REQUEST (`key_requests.status = 'pending'`, live): one of
+ *     the person's own computers asking them for a key (`key-requests.ts`).
+ *     It is the PERSON's to decide, so it is read for its person, admin or
+ *     not (decision 68d37853, answer 25: requests wait 24 h, in needs-you).
+ *
+ * The first two are decided by a POD ADMIN only (`trustedIssuers.*` and
  * `applicationConnections.approveRequest` are `podAdminProcedure`), so they
  * are read for a pod admin only. Anyone else gets an EMPTY answer — the asks
  * are not theirs to see, which is a fact about the viewer, never a failed
@@ -31,11 +36,14 @@ import {
   gt,
   federatedApplicationConnectionRequests,
   trustedIssuers,
+  users,
 } from "@synap/database";
+import { keyRequests } from "@synap/database/schema";
 import { isPodAdmin } from "../../utils/workspace-role.js";
 import type {
   PendingAppRequestSignalInput,
   PendingIssuerSignalInput,
+  PendingKeyRequestSignalInput,
 } from "./needs-you-union.js";
 
 /** How many rows one half pulls before its number is a floor. */
@@ -107,6 +115,40 @@ export async function listPendingAppRequests(args: {
       and(eq(t.status, "pending"), gt(t.expiresAt, args.now ?? new Date()))
     )
     .orderBy(asc(t.createdAt))
+    .limit(ACCESS_REQUEST_SCAN_LIMIT + 1);
+  return {
+    rows: rows.slice(0, ACCESS_REQUEST_SCAN_LIMIT),
+    truncated: rows.length > ACCESS_REQUEST_SCAN_LIMIT,
+  };
+}
+
+/**
+ * The person's own key requests still waiting on them, oldest first. Not
+ * admin-gated: a key request is decided by its person (`apiKeys.
+ * decideKeyRequest` checks `person_user_id`), so it is read for them alone.
+ */
+export async function listPendingKeyRequests(args: {
+  personUserId: string;
+  now?: Date;
+}): Promise<AccessRequestHalf<PendingKeyRequestSignalInput>> {
+  const rows = await db
+    .select({
+      id: keyRequests.id,
+      requestedName: keyRequests.requestedName,
+      requesterName: users.name,
+      createdAt: keyRequests.createdAt,
+      expiresAt: keyRequests.expiresAt,
+    })
+    .from(keyRequests)
+    .leftJoin(users, eq(users.id, keyRequests.requesterUserId))
+    .where(
+      and(
+        eq(keyRequests.personUserId, args.personUserId),
+        eq(keyRequests.status, "pending"),
+        gt(keyRequests.expiresAt, args.now ?? new Date())
+      )
+    )
+    .orderBy(asc(keyRequests.createdAt))
     .limit(ACCESS_REQUEST_SCAN_LIMIT + 1);
   return {
     rows: rows.slice(0, ACCESS_REQUEST_SCAN_LIMIT),

@@ -37,11 +37,28 @@ export function PageHeader({
   );
 }
 
+/** A console page's column width (`PageShell`). */
+export type PageWidth = "console" | "personal" | "wide";
+
+/**
+ * Width → column classes. Pure and exported so the rule runs in a test (the
+ * `receiverWidthClass` lesson: a width prop proven only by its signature is
+ * not proven).
+ */
+export function pageShellClass(width: PageWidth): string {
+  if (width === "personal") return "max-w-[900px] py-10";
+  // An object page with a rail (a session): the body keeps its reading
+  // measure and the rail sits beside it (founder, 2026-10-28, layout A).
+  if (width === "wide") return "max-w-[1480px] py-6";
+  return "max-w-[1100px] py-6";
+}
+
 /**
  * The column every console page sits in — one width and one gutter for all
  * of them, so moving between pages never shifts the content edge.
  * `personal` is the narrower column of the self-service pages (Connected,
- * My vault, My computers), which sit outside the console's side nav.
+ * My vault, My computers), which sit outside the console's side nav. `wide`
+ * is an object page that carries a rail beside its body.
  */
 export function PageShell({
   children,
@@ -50,13 +67,13 @@ export function PageShell({
 }: {
   children: ReactNode;
   className?: string;
-  width?: "console" | "personal";
+  width?: PageWidth;
 }) {
   return (
     <div
       className={[
         "mx-auto px-4 sm:px-6",
-        width === "personal" ? "max-w-[900px] py-10" : "max-w-[1100px] py-6",
+        pageShellClass(width),
         className ?? "",
       ].join(" ")}
     >

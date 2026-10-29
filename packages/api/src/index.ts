@@ -44,6 +44,13 @@ export {
   describeServingIntelligence,
 } from "./utils/intelligence-routing.js";
 export { getPodCallback, type PodCallback } from "./utils/pod-callback.js";
+// The pod-level switch for a shell on the pod host (DevPlane local terminal).
+export {
+  isLocalShellAllowed,
+  LOCAL_SHELL_ENV,
+} from "./utils/local-shell-switch.js";
+// The one pod-admin predicate (owner/admin of the live pod-admin space).
+export { isPodAdmin } from "./utils/workspace-role.js";
 export {
   ensureAgentThread,
   ensureWorkspaceGroupChannel,
@@ -51,6 +58,7 @@ export {
   getAgentIdBySlug,
 } from "./utils/personal-channel.js";
 export { mcpHttpApp } from "./routers/mcp/http-handler.js";
+export { readOnlyToolNames as mcpReadOnlyToolNames } from "./routers/mcp/tools/index.js";
 // Pod-as-OAuth-2.1-authorization-server (Path B): /.well-known/*, /register,
 // /authorize, /token. Mounted at the pod root in apps/api/src/index.ts.
 export { oauthApp } from "./routers/oauth/routes.js";

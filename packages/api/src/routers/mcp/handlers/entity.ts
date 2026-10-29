@@ -21,6 +21,7 @@ import {
   extractIdentitySignals,
   signalsFromExplicit,
   UnknownIdentitySignalKeyError,
+  suggestClosest,
   type IdentitySignal,
 } from "@synap/database";
 import { type UserObservationCategory } from "../../../services/knowledge/remember-fact.js";
@@ -805,13 +806,34 @@ export const entityHandlers: McpHandlerMap = {
     // identity + session handle, exactly like create_entity.
     const { rememberFact, USER_OBSERVATION_CATEGORIES } =
       await import("../../../services/knowledge/remember-fact.js");
-    // Off-enum categories were written unchecked. Validate against the SSOT
-    // and fall back to the service's own default rather than failing the write.
-    const factCategory =
-      typeof args.category === "string" &&
-      (USER_OBSERVATION_CATEGORIES as readonly string[]).includes(args.category)
-        ? (args.category as UserObservationCategory)
-        : undefined;
+    // An off-enum category is REFUSED with the allowed ones and the closest
+    // (decision fa6c8833). It used to fall back silently to the default, so
+    // the agent never learned it sent a wrong value, and the same wrong value
+    // filed through `synap_create_entity` failed only at the person's
+    // Approve (five founder preferences, 'preference' for 'preferences').
+    // No category at all still takes the service's default.
+    if (
+      args.category !== undefined &&
+      args.category !== null &&
+      !(
+        typeof args.category === "string" &&
+        (USER_OBSERVATION_CATEGORIES as readonly string[]).includes(
+          args.category
+        )
+      )
+    ) {
+      const closest =
+        typeof args.category === "string"
+          ? suggestClosest(args.category, USER_OBSERVATION_CATEGORIES)
+          : undefined;
+      return toolError(
+        `category '${String(args.category)}' is not one of ${USER_OBSERVATION_CATEGORIES.join(", ")}.` +
+          (closest ? ` Did you mean '${closest}'?` : "") +
+          " Nothing was saved: send the fact again with one of them, or leave category out."
+      );
+    }
+    const factCategory = (args.category ?? undefined) as
+      UserObservationCategory | undefined;
     const result = await rememberFact({
       // Idempotency: a repeated fact within the door's window returns the
       // prior factId instead of a second governed write + recall row.

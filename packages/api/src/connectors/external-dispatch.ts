@@ -1242,6 +1242,13 @@ export interface TriggerProviderActionInput {
    * instead). `vault://` tools only.
    */
   fileBody?: ProviderFileBody;
+  /**
+   * The only tools `fileBody` may be sent to: the run's verb's own required
+   * tools, set by the sandbox bridge that resolved the files
+   * (`PodFileHandles.toolIds`). A file body to any other tool is refused
+   * before anything is read. Host-set, like `fileBody`.
+   */
+  fileToolIds?: readonly string[];
 }
 
 export interface TriggerProviderActionResult {
@@ -2596,6 +2603,21 @@ export async function triggerProviderAction(
       status: 400,
       errorCode: "bad_request",
       error: `Files can be sent only to API-key (vault://) tools today; "${tool.name}" takes a JSON body only.`,
+    };
+  }
+
+  // A run's pod files go only to its verb's own tools: a skill cannot point
+  // the bytes at another tool it can reach.
+  if (
+    input.fileBody &&
+    input.fileToolIds &&
+    !input.fileToolIds.includes(tool.id)
+  ) {
+    return {
+      success: false,
+      status: 403,
+      errorCode: "bad_request",
+      error: `This run's files can be sent only to the tools its verb requires; "${tool.name}" is not one of them. Nothing was sent.`,
     };
   }
 

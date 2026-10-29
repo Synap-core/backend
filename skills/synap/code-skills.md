@@ -31,11 +31,21 @@ Calls an installed tool's API with ITS credential (you never see the key).
 - `tool`: the tool's name, as `synap_list_capabilities` lists it (e.g. `"apify_api"`).
 - `method`: `"GET" | "POST" | "PUT" | "DELETE"`.
 - `path`: relative to the tool's base URL. If the base URL already ends in a version (`https://api.apify.com/v2`), do NOT repeat it: `"/acts/{actorId}/runs"`, not `"/v2/acts/…"`.
-- `opts`: `{ headers?, baseUrlOverride? }`.
+- `opts`: `{ headers?, baseUrlOverride?, multipart? }`.
 
 Returns `{ status, headers, body }` on success, or `{ proposed: true, proposalId }` when the call was filed for review. It THROWS `callProvider failed: …` on a provider or auth failure. Always branch on `proposed` before reading `body`.
 
 A GET runs inline. A POST/PUT/DELETE by an agent is governed: it proposes, UNLESS the tool is one the skill declared in `requiredTools` on `synap_create_skill`. Then the verb's own approval covers it, and the run does not stop for a second review.
+
+### Pod files (`file:url`, `file:bytes`)
+
+Declare a parameter as a pod file in `parameters`: `"video": "file:url"`, `"media": "file[]:url?"`, `"attachments": "file[]:bytes?"`. The caller passes the file entity's id (a list for `file[]`). An agent's run that carries a file always waits for the person's approval.
+
+- `:url`: your code receives a signed https URL to the file. Hand it to the tool as is. It lives 15 minutes for a sync skill and 6 hours for an async one.
+- `:bytes`: your code receives a handle (`podfile:…`), not the bytes. Put it in a `callProvider` body sent to a tool the skill declared in `requiredTools`, and the pod sends the file:
+  - JSON body: the handle's slot becomes the file's base64 (`{ image: args.photo }`), at most 20 MB of files per call.
+  - `opts.multipart: true`: a `multipart/form-data` form. A handle, or a list of handles, under a key becomes file parts of that field. Every other value is a text field: `callProvider("unipile_linkedin", "POST", "/api/v1/posts", { account_id, text, attachments: args.attachments }, { multipart: true })`.
+  - A handle works only in the run that received it, and only toward the skill's own required tools. `host.fetch` never sends it.
 
 ### `hubProtocol` (reads, as the user)
 

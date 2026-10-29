@@ -30,7 +30,10 @@ import type {
   ProposalMaterializedRecord,
 } from "@synap-core/types";
 import type { PropertyDecisionMap } from "@synap/database";
-import type { MaterializeRelationFailure } from "../../utils/materialize-composite.js";
+import type {
+  MaterializeRelationFailure,
+  MaterializeSkippedTwin,
+} from "../../utils/materialize-composite.js";
 import type {
   IdentityReceipt,
   IdentityResolutionInput,
@@ -242,6 +245,12 @@ export interface ProposalExecutorResult {
    * application. Omitted when every submitted edge landed.
    */
   relationsFailed?: MaterializeRelationFailure[];
+  /**
+   * Records of an approved composite left out on purpose: the reviewer chose
+   * "use existing records" for every twin, and several existing records
+   * shared the name. Omitted when none was.
+   */
+  entitiesSkipped?: MaterializeSkippedTwin[];
   /**
    * Set when an identity-resolution verb ran. `filled` / `conflicts` are
    * fill_empty only (conflicts may be empty). Composite approvals with more

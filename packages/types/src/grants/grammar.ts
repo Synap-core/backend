@@ -22,6 +22,8 @@
  *   document.read           a subject with no qualifier
  *   capability.publish_post.run  run the person's tools for ONE intent
  *   capability.run          = capability.*.run (run tools for any intent)
+ *   event.dev.create        post `dev.*` activity (commits, gate runs, deploys)
+ *   event.create            = event.*.create (post activity of every family)
  *
  * Matching is segment-wise and PREFIX-based: a pattern matches a request when
  * each of its segments equals the request's segment or is `*`, and it has no
@@ -45,6 +47,14 @@
  * last two): an intent only ever appears in the three-segment form, so no
  * grant minted before the qualifier changed meaning.
  *
+ * `event` (the activity log) is qualified by FAMILY, the observation
+ * namespace (`dev`, `ci`: `OBSERVATION_NAMESPACES`; decision a29a40d4,
+ * 2026-10-28): a CI poster is granted `event.ci.create`. Like `capability`,
+ * its two-segment spelling stays a verb on every family, so every key minted
+ * with `event.create` since D5 keeps posting every family, and the canonical
+ * spelling of an every-family pattern stays the short one
+ * (`canonicalPermission`).
+ *
  * Pure — no I/O. Shared by the backend, the UI and the CLI.
  *
  * HOME: `@synap-core/types/grants` (synap-backend/packages/types/src/grants/
@@ -54,15 +64,36 @@
 
 /**
  * Subjects whose request key carries a qualifier: `entity` (the kind, a profile
- * slug) and `capability` (the intent a run serves).
+ * slug), `capability` (the intent a run serves) and `event` (the activity
+ * family, an observation namespace).
  */
-export const QUALIFIED_GRANT_SUBJECTS = ["entity", "capability"] as const;
+export const QUALIFIED_GRANT_SUBJECTS = [
+  "entity",
+  "capability",
+  "event",
+] as const;
+
+export type QualifiedGrantSubject = (typeof QUALIFIED_GRANT_SUBJECTS)[number];
+
+/** What each qualified subject's qualifier names. */
+export const GRANT_QUALIFIER_OF = {
+  entity: "kind",
+  capability: "intent",
+  event: "family",
+} as const satisfies Record<QualifiedGrantSubject, string>;
 
 /**
  * Qualified subjects whose two-segment spelling is ALWAYS `<subject>.<verb>`:
  * their qualifier is only ever written in the three-segment form.
  */
-const VERB_FIRST_SUBJECTS: readonly string[] = ["capability"];
+const VERB_FIRST_SUBJECTS: readonly string[] = ["capability", "event"];
+
+/**
+ * Qualified subjects whose every-qualifier pattern is SPELLED in two segments
+ * (`event.create`, never `event.*.create`): the spelling every stored key and
+ * template already holds. Matching never depends on it.
+ */
+const SHORT_SPELLED_SUBJECTS: readonly string[] = ["event"];
 
 /**
  * The verbs a bare subject or kind covers. Every other verb (a governance gate
@@ -145,7 +176,7 @@ function isGrantAction(action: string): boolean {
  * Parse a pattern into its segments, normalising the governance spelling
  * `entity.read` / `entity.merge` (a qualified subject + a GRANT_ACTIONS or
  * GRANT_GATE_ACTIONS verb) to `entity.*.read` / `entity.*.merge`, and every
- * two-segment `capability.<verb>` to `capability.*.<verb>`.
+ * two-segment `capability.<verb>` / `event.<verb>` to `<subject>.*.<verb>`.
  * Throws InvalidPermissionError on a malformed pattern.
  */
 export function parsePermission(pattern: string): string[] {
@@ -176,6 +207,20 @@ export function parsePermission(pattern: string): string[] {
       `Invalid permission "${pattern}": "${segs[0]}" has no kind qualifier`
     );
   return segs;
+}
+
+/**
+ * The canonical spelling of parsed segments: joined, except an every-family
+ * `event.*.<verb>`, which is spelled `event.<verb>` (see SHORT_SPELLED_SUBJECTS).
+ */
+export function canonicalPermission(segs: readonly string[]): string {
+  if (
+    segs.length === 3 &&
+    segs[1] === "*" &&
+    SHORT_SPELLED_SUBJECTS.includes(segs[0]!)
+  )
+    return `${segs[0]}.${segs[2]}`;
+  return segs.join(".");
 }
 
 /** The request's key segments: [subject, qualifier|*, action] or [subject, action]. */

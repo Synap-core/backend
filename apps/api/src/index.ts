@@ -1674,6 +1674,7 @@ void (async () => {
 
 // WebSocket upgrade router — handles SSH proxy and recipe runner endpoints
 import { handleWebSocketUpgrade } from "./ws-router.js";
+import { serverBindHostname } from "./server-bind.js";
 
 // Start server
 try {
@@ -1681,13 +1682,13 @@ try {
     {
       fetch: app.fetch,
       port: config.server.port,
-      hostname: "0.0.0.0",
+      hostname: serverBindHostname(config.server.localMode),
     },
     async (info) => {
       apiLogger.info(
         {
           port: info.port,
-          host: "0.0.0.0",
+          host: serverBindHostname(config.server.localMode),
           nodeEnv: config.server.nodeEnv,
         },
         "API server started"

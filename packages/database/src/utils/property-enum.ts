@@ -50,6 +50,8 @@
  * not assume it.
  */
 
+import { suggestClosest } from "../services/did-you-mean.js";
+
 /**
  * An option OBJECT — the richer spelling of one enum value (0319, work model
  * L1). Stored at `constraints.enumOptions`; `constraints.enum` (the bare key
@@ -203,4 +205,57 @@ export function readStoredEnumOptions(
     normalizeEnumOptions(def.constraints?.enumOptions) ??
     readStoredEnum(def)?.map((key) => ({ key }))
   );
+}
+
+/**
+ * Why a value may NOT be added to a field's closed set, or `null` when it may
+ * (option C of decision fa6c8833, 2026-10-29: an AI may propose a new allowed
+ * value, and a person may add one from a failed proposal's repair card).
+ *
+ *  - `not_a_closed_set`: the field has no options to grow.
+ *  - `already_allowed`: the value is one of them.
+ *  - `lifecycle`: the field is the kind's lifecycle. A new status changes how
+ *    work moves (its category decides open, active, done); it is designed on
+ *    the kind, never grown from one write.
+ *  - `close_match`: an allowed value is one typo away (`preference` for
+ *    `preferences`): the write meant it, and a near-twin option would split
+ *    the field in two. `closest` names it.
+ *
+ * ONE rule for every door that grows a set: the repair card
+ * (`services/proposals/repair-options.ts`) and the kind door (`synap_define_kind`
+ * re-declaring a field with more options, `hub-protocol/profiles.ts`).
+ */
+export function addEnumOptionRefusal(
+  def: StoredEnumSource & { isLifecycle?: boolean | null },
+  value: string
+): {
+  refusal: "not_a_closed_set" | "already_allowed" | "lifecycle" | "close_match";
+  closest?: string;
+} | null {
+  const keys = readStoredEnum(def);
+  if (!keys || keys.length === 0) return { refusal: "not_a_closed_set" };
+  if (keys.includes(value)) return { refusal: "already_allowed" };
+  if (def.isLifecycle) return { refusal: "lifecycle" };
+  const closest = suggestClosest(value, keys);
+  if (closest) return { refusal: "close_match", closest };
+  return null;
+}
+
+/**
+ * The `constraints` to store once `value` joins the field's closed set: the
+ * option objects grow when the def carries them (the key list is derived from
+ * them, as in {@link buildStoredConstraints}), else the bare key list does.
+ */
+export function withAddedEnumOption(
+  constraints: Record<string, unknown> | null | undefined,
+  value: string
+): Record<string, unknown> {
+  const base = { ...(constraints ?? {}) };
+  const options = normalizeEnumOptions(base.enumOptions);
+  if (options) {
+    const next = [...options, { key: value }];
+    return { ...base, enumOptions: next, enum: next.map((o) => o.key) };
+  }
+  const keys = asStringArray(base.enum) ?? [];
+  return { ...base, enum: [...keys, value] };
 }

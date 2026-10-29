@@ -53,6 +53,7 @@ vi.mock("../services/signals/access-requests.js", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   listPendingIssuers: async () => ({ rows: [], truncated: false }),
   listPendingAppRequests: async () => ({ rows: [], truncated: false }),
+  listPendingKeyRequests: async () => ({ rows: [], truncated: false }),
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";

@@ -83,8 +83,20 @@ describe("capture/approval graph writes carry their governance receipt", () => {
     // and went to indexOf === -1 the moment the call was wrapped in a helper —
     // `toBeLessThan(-1)` then failed loudly, but a guard pinned to an incidental
     // keyword is one refactor away from being deleted rather than fixed.
-    const materializeAt = src.indexOf("materializeCompositeGraph(\n");
+    //
+    // The auto-apply materializes through `materializeAgentGraphUnderReceipt`
+    // (shared with the re-decide of a revised graph), declared at the END of
+    // the file: its CALL in the auto-apply is the anchor, and the helper must
+    // still be what runs `materializeCompositeGraph(`.
+    const materializeAt = src.indexOf("materializeAgentGraphUnderReceipt(\n");
     expect(materializeAt).toBeGreaterThan(0);
+    const helperAt = src.indexOf(
+      "export async function materializeAgentGraphUnderReceipt("
+    );
+    expect(helperAt).toBeGreaterThan(materializeAt);
+    expect(
+      src.indexOf("materializeCompositeGraph(\n", helperAt)
+    ).toBeGreaterThan(helperAt);
     expect(src.indexOf("const captureProposalId = randomUUID();")).toBeLessThan(
       materializeAt
     );

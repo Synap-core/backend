@@ -16,8 +16,9 @@ import {
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { integrationKindSchema } from "@synap-core/types";
+import { isAllowedConnectRedirectUri } from "@synap-core/types/external-connect";
 import { isAppPublicId } from "@synap-core/types/membrane";
-import { API_KEY_SCOPES } from "@synap/database/schema";
+import { API_KEY_SCOPES, isPrivilegedMintScope } from "@synap/database/schema";
 import {
   db,
   and,
@@ -83,6 +84,12 @@ import { isPodAdminOrigin } from "../utils/pod-admin-origin.js";
 import { findUserDefaultWorkspaceId } from "../utils/user-default-workspace.js";
 import { assertSignedInPerson } from "../utils/signed-in-person.js";
 import { decideKeyRequest, getKeyRequest } from "../services/key-requests.js";
+import {
+  assertFreshForPrivilegedMint,
+  privilegedMintRefusal,
+  privilegedScopesBeyond,
+  type PrivilegedMintCaller,
+} from "../services/privileged-mint.js";
 import {
   decideDeviceRequest,
   getDeviceRequest,
@@ -152,6 +159,27 @@ const FULL_ACCESS_GRANT: GrantInput = {
   permissions: ["*"],
   label: FULL_ACCESS_GRANT_LABEL,
 };
+
+/**
+ * A key never carries a privileged scope its minter could not exercise
+ * (`services/privileged-mint.ts`): the minter is a pod admin AND signed in
+ * recently. Every door here that takes caller-declared scopes, or re-mints
+ * stored ones, runs this before anything is written.
+ */
+async function assertMayMintScopes(
+  ctx: PrivilegedMintCaller & { userId: string },
+  scopes: readonly string[]
+): Promise<void> {
+  if (!scopes.some((s) => isPrivilegedMintScope(s))) return;
+  const refused = await privilegedScopesBeyond(ctx.userId, scopes);
+  if (refused.length > 0) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: privilegedMintRefusal(refused),
+    });
+  }
+  assertFreshForPrivilegedMint(ctx);
+}
 
 /**
  * The authorize parameters pod-admin's consent screen round-trips.
@@ -482,6 +510,9 @@ export const apiKeysRouter = router({
       const scope = input.uses
         ? deriveKeyScopes(input.uses, grant)
         : input.scope!;
+      // The scopes the key will carry (derived from `uses`, or the legacy
+      // raw `scope`): a privileged one needs a fresh pod admin.
+      await assertMayMintScopes(ctx, scope);
 
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
@@ -648,6 +679,9 @@ export const apiKeysRouter = router({
           message: "API key not found",
         });
       }
+      // Rotation re-mints the old key's scopes: a privileged one minted
+      // before this rule, or by a person no longer admin, is not renewed.
+      await assertMayMintScopes(ctx, oldKey.scope);
 
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
@@ -1200,6 +1234,12 @@ export const apiKeysRouter = router({
    * Called from the admin UI /connect page after the user authenticates.
    * Returns the key + podUrl + workspaceId so the caller can build a deeplink
    * or display a copy-paste flow — no separate agent provisioning required.
+   *
+   * `redirectUri`: where the page will deliver the plaintext key. Checked here,
+   * before anything is minted, with the same parsed-URL rule the page uses
+   * (default targets only: Raycast, the desktop app, the CLI's loopback). A
+   * prefix test let `http://localhost:@attacker.example/` through (pre-launch
+   * audit 2026-10-28, F3); the server is the check a page edit cannot skip.
    */
   connectIntegration: credentialProcedure
     .input(
@@ -1211,10 +1251,23 @@ export const apiKeysRouter = router({
           .default("create_new"),
         /** What it may touch (D-2); omitted = the person's full reach. */
         grant: GrantInputSchema.optional(),
+        redirectUri: z.string().max(2048).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
       assertGrantInput(input.grant);
+      if (
+        input.redirectUri !== undefined &&
+        !isAllowedConnectRedirectUri(input.redirectUri)
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This redirect_uri may not receive a key: only the Synap Raycast " +
+            "extension, the Synap desktop app (synap://) or a loopback " +
+            "callback (http://127.0.0.1, http://localhost) can.",
+        });
+      }
       const flowId = randomUUID();
       const id = randomUUID();
 
@@ -1692,6 +1745,9 @@ export const apiKeysRouter = router({
           message: "Workspace admin role required",
         });
       }
+      // A workspace admin is not a pod admin. Checked on the scopes the key
+      // will carry (derived from `uses`, or the legacy raw `scopes`).
+      await assertMayMintScopes(ctx, scope);
 
       const id = randomUUID();
 

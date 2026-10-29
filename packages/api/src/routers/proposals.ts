@@ -65,6 +65,14 @@ import {
   resolveProposalAttention,
 } from "@synap-core/types/proposals/attention";
 import { mergeProposalRevision } from "../services/proposals/proposals-service.js";
+import {
+  describeProposalRepair,
+  entityProposalInner,
+  findEffectiveField,
+  isRepairableKind,
+} from "../services/proposals/repair-options.js";
+import { updatePropertyDef } from "../services/profiles/update-property-def.js";
+import { addEnumOptionRefusal, withAddedEnumOption } from "@synap/database";
 import { scanApprovalPatterns } from "../services/proposals/approval-patterns.js";
 import {
   assertNotForeignLibraryProposal,
@@ -183,6 +191,7 @@ import {
 } from "./proposals/apply-approval.js";
 import {
   identityResolutionByRefInput,
+  identityResolutionForTwinsInput,
   identityResolutionInput,
 } from "./proposals/executors/identity-resolution.js";
 import { weakDedupFailureFields } from "../utils/weak-dedup-wire.js";
@@ -1679,6 +1688,14 @@ export const proposalsRouter = router({
          */
         identityResolutionByRef: identityResolutionByRefInput.optional(),
         /**
+         * Composite: ONE answer for every same-name twin no per-ref choice
+         * covers — "Use existing records and continue" (`keep_existing`: link
+         * the twin; several twins leave the record out) or "Keep both and
+         * continue" (`separate`), after a large import stopped on a record
+         * that already exists. A large approval replays it from its run.
+         */
+        identityResolutionForTwins: identityResolutionForTwinsInput.optional(),
+        /**
          * F3 "Approve and allow today" — held-writes packs only
          * (`agent/held_writes`). With `true`, approving the pack ALSO lifts
          * its agent's daily write ceiling to 2x the current limit until the
@@ -1810,6 +1827,190 @@ export const proposalsRouter = router({
       });
       if (!allowedToday) return approved;
       return { ...approved, allowedToday };
+    }),
+
+  /**
+   * What a person can do to make a failed entity proposal apply — the fields
+   * it cannot carry as it stands, each with its allowed values, the one it
+   * probably meant and whether the value may join the field (decision
+   * fa6c8833). One read for relay, the browser and pod-admin
+   * (`services/proposals/repair-options.ts`). The `get` floor first (a
+   * reader below editor is FORBIDDEN, as on `get`), then the approve ladder:
+   * one who sees it but cannot approve it gets NOT_FOUND.
+   */
+  repairOptions: protectedProcedure
+    .input(z.object({ proposalId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      await assertProposalVisibleTo(input.proposalId, userId, { db });
+      const proposal = await db.query.proposals.findFirst({
+        where: eq(proposals.id, input.proposalId),
+      });
+      if (proposal) assertNotForeignLibraryProposal(proposal, userId);
+      if (!proposal) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Proposal not found",
+        });
+      }
+      const { allowed } = await computeCanReviewApproval({
+        proposal,
+        userId,
+        roster: rosterReadFor(ctx),
+        purpose: "approve",
+        actingAgentUserId: ctx.agentUserId,
+      });
+      if (!allowed) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Proposal not found",
+        });
+      }
+      return describeProposalRepair(proposal, userId);
+    }),
+
+  /**
+   * Repair a failed entity proposal: set the fields the repair card names
+   * (`set`), optionally adding a value to its field first (`addOption`,
+   * option C: refused on a lifecycle field and when an allowed value is one
+   * typo away). The revise reopens an `approval_failed` row as pending
+   * (`mergeProposalRevision`), recorded on its history like any reviewer
+   * edit. It does NOT approve: it answers the revision it made, and the card
+   * approves through `approve` with exactly that `expectedRevision`, so every
+   * approval gate runs and a revise landing in between is refused.
+   * Requires the approve right: what it grows is the kind's schema.
+   */
+  repair: protectedProcedure
+    .input(
+      z.object({
+        proposalId: z.string(),
+        /** Field key → the value to write instead. */
+        set: z.record(z.string(), z.unknown()).default({}),
+        /** Add this value to this field's allowed values. */
+        addOption: z
+          .object({ key: z.string().min(1), value: z.string().min(1).max(200) })
+          .optional(),
+        /**
+         * The `revisionHistory.length` the reader saw (as `approve` takes it).
+         * Required: a revise that landed after the card drew refuses the
+         * repair (CONFLICT), so nobody repairs, then approves, unseen content.
+         */
+        expectedRevision: z.number().int().nonnegative(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      assertMayDecideProposal("approve", "repair");
+      const userId = requireUserId(ctx.userId);
+      await assertProposalVisibleTo(input.proposalId, userId, { db });
+      const proposal = await db.query.proposals.findFirst({
+        where: eq(proposals.id, input.proposalId),
+      });
+      if (proposal) assertNotForeignLibraryProposal(proposal, userId);
+      if (!proposal) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Proposal not found",
+        });
+      }
+      const { allowed, reason } = await computeCanReviewApproval({
+        proposal,
+        userId,
+        roster: rosterReadFor(ctx),
+        purpose: "approve",
+        actingAgentUserId: ctx.agentUserId,
+      });
+      if (!allowed) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: reviewRefusalMessage(reason, "approve"),
+        });
+      }
+      if (!isRepairableKind(proposal)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Only a record's create or update can be repaired here. Ask the AI to redo this one, or dismiss it.",
+        });
+      }
+      if (
+        proposal.status !== ProposalStatus.APPROVAL_FAILED &&
+        proposal.status !== ProposalStatus.PENDING
+      ) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "This proposal was already decided, so there is nothing to repair.",
+        });
+      }
+      // The version the reader saw, checked BEFORE anything changes (a field
+      // grown for a proposal that moved since is a schema change for nothing).
+      assertReviewedRevision(input.expectedRevision, proposal.revisionHistory);
+      if (Object.keys(input.set).length === 0 && !input.addOption) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Name at least one field to change, or a value to add.",
+        });
+      }
+
+      // C: grow the field first, so the value set below is allowed when the
+      // approval replays the write. Through the property-def EDIT door, which
+      // re-runs the def's own owner gate.
+      if (input.addOption) {
+        const { key, value } = input.addOption;
+        const field = await findEffectiveField(proposal, userId, key);
+        const refusal = field
+          ? addEnumOptionRefusal(
+              {
+                constraints: field.constraints as Record<
+                  string,
+                  unknown
+                > | null,
+                uiHints: field.uiHints as Record<string, unknown> | null,
+                isLifecycle: field.isLifecycle,
+              },
+              value
+            )
+          : { refusal: "not_a_closed_set" as const };
+        if (refusal) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: addOptionRefusalMessage(key, value, refusal),
+          });
+        }
+        await updatePropertyDef({
+          userId,
+          workspaceId:
+            (field!.workspaceId as string | null) ?? proposal.workspaceId ?? "",
+          propertyDefId: field!.id,
+          constraints: withAddedEnumOption(
+            field!.constraints as Record<string, unknown> | null,
+            value
+          ),
+        });
+      }
+
+      if (Object.keys(input.set).length > 0) {
+        const inner = entityProposalInner(proposal.data);
+        const properties = {
+          ...((inner.properties as Record<string, unknown> | undefined) ?? {}),
+          ...input.set,
+        };
+        await mergeProposalRevision({
+          proposalId: input.proposalId,
+          actorId: userId,
+          patch: { kind: "inner", fields: { properties } },
+          roster: rosterReadFor(ctx),
+          // Under the row lock: a revise between the card and the press wins.
+          expectedRevision: input.expectedRevision,
+        });
+      }
+
+      // The revision to approve: the one this repair made, or the one the
+      // reader saw when it only grew the field.
+      return {
+        revision:
+          input.expectedRevision + (Object.keys(input.set).length > 0 ? 1 : 0),
+      };
     }),
 
   /**
@@ -3966,3 +4167,21 @@ export const proposalsRouter = router({
       return { proposalId };
     }),
 });
+
+/** The person-facing sentence for a value that may not join a field. */
+function addOptionRefusalMessage(
+  key: string,
+  value: string,
+  refusal: { refusal: string; closest?: string }
+): string {
+  switch (refusal.refusal) {
+    case "already_allowed":
+      return `'${value}' is already allowed for ${key}. Choose it instead.`;
+    case "lifecycle":
+      return `${key} is this kind's status, so a new value is designed on the kind, not added from one record. Choose an existing status.`;
+    case "close_match":
+      return `'${refusal.closest}' is already allowed for ${key} and is one letter away. Choose it instead of adding a near twin.`;
+    default:
+      return `${key} has no list of allowed values to add '${value}' to.`;
+  }
+}

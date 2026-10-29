@@ -5067,6 +5067,11 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+          },
+          "projectId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
           }
         },
         "required": ["template"]
@@ -5930,9 +5935,35 @@
                       "type": "array",
                       "items": { "type": "string" }
                     },
-                    "isAgent": { "type": "boolean" }
+                    "isAgent": { "type": "boolean" },
+                    "principal": {
+                      "type": ["object", "null"],
+                      "properties": {
+                        "id": { "type": "string" },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "human",
+                            "agent",
+                            "machine",
+                            "app",
+                            "service"
+                          ]
+                        },
+                        "name": { "type": ["string", "null"] },
+                        "hostUserId": { "type": ["string", "null"] },
+                        "hostName": { "type": ["string", "null"] }
+                      },
+                      "required": [
+                        "id",
+                        "kind",
+                        "name",
+                        "hostUserId",
+                        "hostName"
+                      ]
+                    }
                   },
-                  "required": ["id", "scopes", "isAgent"]
+                  "required": ["id", "scopes", "isAgent", "principal"]
                 }
               }
             }
@@ -26969,7 +27000,7 @@
       "post": {
         "tags": ["Keys"],
         "summary": "Ask the person for a key made from a template",
-        "description": "Files a key request the person approves on the pod-admin page `review_url` (they may narrow it, never widen it past the template). Then poll `POST /keys/requests/token` with `request_code` to collect the key once. The caller never mints a key itself.",
+        "description": "Files a key request the person approves on the pod-admin page `review_url` (they may narrow it, never widen it past the template). It waits 24 hours; asking the same again returns the request already waiting (same id and link, a new `request_code`). Then poll `POST /keys/requests/token` with `request_code` to collect the key once. The caller never mints a key itself.",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {
@@ -32379,7 +32410,7 @@
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Complete (close) a focus session and return the proposal pack",
-        "description": "Lifecycle close via completeFocusSession — stamps closed, finishes any running playbook_run, returns pendingProposals + counts + warnings. Every still-open room question is stamped closed (session ended). An agent's closed/failed close is refused (409 OPEN_QUESTIONS) while a question it asked is open, unless questionDispositions settles each. Distinct from POST .../complete-run (playbook run only).",
+        "description": "Lifecycle close via completeFocusSession — stamps closed, finishes any running playbook_run, returns pendingProposals + counts + warnings. Every still-open room question is stamped closed (session ended). An agent's closed/failed close is refused (409 OPEN_QUESTIONS) while a question it asked is open, unless questionDispositions settles each. An agent's closed close is refused (409 NOT_DONE: unmetCriteria[], openOutcomes[], owedByPerson[], waiting) while a required criterion it can still check is not passing or a required outcome (an agent's or the person's) is open, unless `reason` says why it is done anyway (posted in the session room). Distinct from POST .../complete-run (playbook run only).",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -32419,6 +32450,11 @@
                       "required": ["messageId", "disposition"]
                     },
                     "maxItems": 100
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1000
                   }
                 }
               }
@@ -32463,7 +32499,7 @@
             }
           },
           "409": {
-            "description": "Refused: the calling agent's own room questions are still open (openQuestions[])",
+            "description": "Refused: the calling agent's own room questions are still open (OPEN_QUESTIONS, openQuestions[]), or required work it can still move is open (NOT_DONE)",
             "content": {
               "application/json": {
                 "schema": {

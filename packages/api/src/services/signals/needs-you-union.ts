@@ -157,7 +157,9 @@ export type SignalKind =
    * One pod-level ACCESS REQUEST that is not a proposal (pod admins only,
    * `access-requests.ts`): a pending trusted issuer (`target.kind: "issuer"`)
    * or an app's pending connection request (`target.kind:
-   * "connection-request"`). Who asks and from where ride in `access`.
+   * "connection-request"`); or the person's own pending KEY request
+   * (`target.kind: "key-request"`, read for its person). Who asks and from
+   * where ride in `access`.
    */
   | "access-request"
   /**
@@ -1463,10 +1465,24 @@ export interface PendingAppRequestSignalInput {
   expiresAt: Date;
 }
 
+/** A key request waiting on its person, as `listPendingKeyRequests` reads it. */
+export interface PendingKeyRequestSignalInput {
+  id: string;
+  /** The key's name as asked ("Dev loop poster"). */
+  requestedName: string;
+  /** Who asks: the computer's (or the person's own key's) user name. */
+  requesterName: string | null;
+  createdAt: Date;
+  /** Past it the request is expired, never decidable (24 h after filing). */
+  expiresAt: Date;
+}
+
 /** The access-request half of the union. Absent ⇒ none (not an admin, or a lens). */
 export interface AccessRequestsInput {
   issuers: readonly PendingIssuerSignalInput[];
   applications: readonly PendingAppRequestSignalInput[];
+  /** The viewer's own key requests (absent = none read). */
+  keys?: readonly PendingKeyRequestSignalInput[];
 }
 
 /**
@@ -1481,12 +1497,14 @@ function accessRequestSignal(args: {
   occurredAt: Date;
   lifetimeHours: number | null;
   now: Date;
+  /** What approving it does (default `connect`; a key request CREATES a key). */
+  action?: string;
 }): Signal {
   return {
     id: args.id,
     kind: "access-request",
     title: buildObjectActionTitle({
-      action: "connect",
+      action: args.action ?? "connect",
       objectKind: args.access.subject,
       objectName: args.access.name,
       mood: "imperative",
@@ -1548,7 +1566,35 @@ export function signalFromAppRequest(
   });
 }
 
-/** Every access-request row, issuers then apps (the union orders them). */
+/**
+ * A key request → one row: "Create API key "Dev loop poster"", asked by the
+ * computer named in `access.from`. Its door is the request's review page
+ * (`/keys/requests/<id>`); it stops being answerable 24 h after filing, the
+ * row's lifetime.
+ */
+export function signalFromKeyRequest(
+  row: PendingKeyRequestSignalInput,
+  now: Date = new Date()
+): Signal {
+  return accessRequestSignal({
+    id: `access:key:${row.id}`,
+    target: { kind: "key-request", id: row.id },
+    access: {
+      subject: "api_key",
+      name: row.requestedName,
+      from: row.requesterName?.trim() ?? "",
+    },
+    occurredAt: row.createdAt,
+    lifetimeHours: Math.max(
+      0,
+      (row.expiresAt.getTime() - row.createdAt.getTime()) / 3_600_000
+    ),
+    now,
+    action: "create",
+  });
+}
+
+/** Every access-request row, issuers, apps, then keys (the union orders them). */
 export function signalsFromAccessRequests(
   input: AccessRequestsInput | undefined,
   now: Date = new Date()
@@ -1557,6 +1603,7 @@ export function signalsFromAccessRequests(
   return [
     ...input.issuers.map((r) => signalFromPendingIssuer(r, now)),
     ...input.applications.map((r) => signalFromAppRequest(r, now)),
+    ...(input.keys ?? []).map((r) => signalFromKeyRequest(r, now)),
   ];
 }
 

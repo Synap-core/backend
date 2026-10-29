@@ -354,9 +354,13 @@ export function isDerivedSession(
 // 670f401a, 2026-09-28). Entered at the key-auth doors; read by the session
 // resolver, the receipt packager and the focus door several layers below.
 //
-// NOT entered for the IS's `is_internal` key: one key serves every channel, so
-// it would pour all of the IS's conversations into one session. IS writes group
-// by their channel (`actingChannelId`, `channel:<id>`) instead.
+// The IS (`is_internal` key, or the pod-signed delegation) is ONE client for
+// every channel, so its key alone is never a client: that would pour all of
+// the IS's conversations into one session. A channel turn groups by its
+// channel (`actingChannelId`, `channel:<id>`). A NON-channel IS run (a skill,
+// an automation step, a scan) names itself with `X-Synap-Conversation:
+// is:<runId>` (W-A4) and is its own client, `is:<id>|conv:is:<runId>` —
+// never the `agent:<id>` fallback every keyless IS write used to pool on.
 
 /** Separator between the key and the conversation inside a client key. */
 const CONVERSATION_SEP = "|conv:";
@@ -402,7 +406,10 @@ export function normalizeConversationId(
 /**
  * THE client-identity resolver — every key-auth door (MCP, Hub REST) calls it.
  * Precedence:
- *   1. `is_internal` key ⇒ undefined (the IS groups by channel, see above).
+ *   1. `is_internal` key (the IS) ⇒ `is:<id>|conv:<run>` when the IS named a
+ *      run (W-A4, see above), else undefined (it groups by channel). Never a
+ *      per-call run, and never `key:` — that prefix means an EXTERNAL client
+ *      (`playbook-run-reaper`, `own-fresh-work`, `parseRunnerClientKey`).
  *   2. a conversation id ⇒ `key:<id>|conv:<conversationId>` — CONVERSATION
  *      scope. The client's OWN id when it names one (`X-Synap-Conversation`,
  *      e.g. `claude-code:<uuid>` from the CLI and its stdio MCP bridge — see
@@ -419,8 +426,9 @@ export function clientKeyForApiKey(
   key: { id: string; keyType?: string | null },
   conversationId?: string | null
 ): string | undefined {
-  if (key.keyType === "is_internal") return undefined;
   const conv = normalizeConversationId(conversationId);
+  if (key.keyType === "is_internal")
+    return conv ? `is:${key.id}${CONVERSATION_SEP}${conv}` : undefined;
   return conv
     ? `key:${key.id}${CONVERSATION_SEP}${conv}`
     : perCallClientKey(`key:${key.id}`);

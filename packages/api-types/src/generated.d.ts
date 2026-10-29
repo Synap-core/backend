@@ -1683,9 +1683,11 @@ export interface WorkspaceSettings {
 	/** Settings for the DevPlane app embedded in this workspace */
 	devplane?: {
 		/**
-		 * Allow DevPlane to open a local PTY terminal in the browser.
-		 * Only safe when the pod is running on a trusted local machine.
-		 * Disabled by default.
+		 * @deprecated Gates nothing. The DevPlane local terminal is a POD-level
+		 * operator switch (`LOCAL_MODE` or `SYNAP_LOCAL_TERMINAL=1` on the pod
+		 * process) plus a pod-admin check, never a workspace setting: any member
+		 * could set this on a workspace they created (pre-launch audit
+		 * 2026-10-28, F2). Server-owned: `workspaces.create` / `update` strip it.
 		 */
 		localTerminalEnabled?: boolean;
 	};
@@ -7028,6 +7030,22 @@ export interface ModeledField {
 	/** This field is the kind's lifecycle: it moves through the status door. */
 	lifecycle?: true;
 }
+/**
+ * One property a write cannot carry as it stands, in a shape a repair reads.
+ *
+ *  - `not_in_options`: a value outside the field's closed set (`options` on
+ *    its {@link ModeledField}); `rejected` holds the values refused, and
+ *    `didYouMean` the allowed one a single typo away, when there is one.
+ *  - `required`: a required field with no value and no default.
+ *  - `invalid`: any other refusal (type, length, range); `message` says which.
+ */
+export interface PropertyIssue {
+	key: string;
+	kind: "invalid" | "not_in_options" | "required";
+	message: string;
+	rejected?: string[];
+	didYouMean?: string;
+}
 export interface ProjectDedupCandidate {
 	id: string;
 	name: string;
@@ -10499,6 +10517,17 @@ export interface IdentityReceipt {
 	filled?: string[];
 	conflicts?: IdentityConflict[];
 }
+/**
+ * A record an approval left out on purpose: the reviewer chose "use existing
+ * records" for every twin, and the same-name gate found SEVERAL existing
+ * records, so linking one would be a guess. Connections to it do not land
+ * (they are reported in `relationsFailed`).
+ */
+export interface MaterializeSkippedTwin {
+	ref: string;
+	title: string | null;
+	existingIds: string[];
+}
 /** One relation op that was submitted but never created — the honest detail
  * behind a `created < submitted` gap on a materialize receipt. */
 export interface MaterializeRelationFailure {
@@ -10730,6 +10759,8 @@ export interface MaterializeResult {
 	 * nameable instead of a swallowed `logger.warn`. Empty on the happy path.
 	 */
 	relationsFailed: MaterializeRelationFailure[];
+	/** Records left out under `identityResolutionForTwins` (several twins). */
+	entitiesSkipped?: MaterializeSkippedTwin[];
 	/**
 	 * Facets the attach door reported `attached`. The door answers `attached`
 	 * for a re-attach of an existing live facet too, so this is "attached by the
@@ -11324,11 +11355,15 @@ export interface NeedsYouFoldCounts {
  * able to say them without a second read.
  */
 export interface NeedsYouAccessRequest {
-	/** What would be granted: issuer trust, or an application's browser origin. */
-	subject: "application" | "issuer";
-	/** The asker's display name (the issuer's host, the app's name). */
+	/**
+	 * What would be granted: issuer trust, an application's browser origin, or
+	 * an API key one of the person's computers asked them for (`api_key`, read
+	 * for its person, not only for admins; decision 68d37853, answer 25).
+	 */
+	subject: "api_key" | "application" | "issuer";
+	/** The asker's display name (the issuer's host, the app's name; a key's requested name). */
 	name: string;
-	/** Where it asks from: the issuer URL, or the app's requested origin. */
+	/** Where it asks from: the issuer URL, the app's requested origin, or the computer asking for a key. */
 	from: string;
 }
 /**
@@ -13624,6 +13659,12 @@ export interface ProposalExecutorResult {
 	 */
 	relationsFailed?: MaterializeRelationFailure[];
 	/**
+	 * Records of an approved composite left out on purpose: the reviewer chose
+	 * "use existing records" for every twin, and several existing records
+	 * shared the name. Omitted when none was.
+	 */
+	entitiesSkipped?: MaterializeSkippedTwin[];
+	/**
 	 * Set when an identity-resolution verb ran. `filled` / `conflicts` are
 	 * fill_empty only (conflicts may be empty). Composite approvals with more
 	 * than one resolved op leave this unset and report `identities` instead —
@@ -13658,6 +13699,16 @@ export interface ApprovalRunView {
 	failed: number;
 	/** A safe sentence (failed / stalled), never raw thrown text. */
 	error: string | null;
+	/** The failure's class (`conflict`, `validation`…); null while it runs. */
+	errorClass: string | null;
+	/**
+	 * The existing records a stopped run met: the same-name gate refused a
+	 * record because these already exist. The reviewer can then use them, or
+	 * keep both, for every twin and approve again. Null for any other stop.
+	 */
+	twins: ApprovalRunTwin[] | null;
+	/** Records a finished run left out (several twins shared the name). */
+	skipped: number;
 	/** Who approved — the only person who may resume a partial attempt. */
 	approverId: string;
 	/** Doors to what was created, once it succeeded. */
@@ -13668,6 +13719,13 @@ export interface ApprovalRunView {
 	startedAt: string | null;
 	finishedAt: string | null;
 	updatedAt: string;
+}
+/** An existing record a stopped run met — a door, never a sentence. */
+export interface ApprovalRunTwin {
+	id: string;
+	title: string | null;
+	/** The record's kind (profile slug). */
+	kind: string;
 }
 /** What "allow today" raised the agent's daily write ceiling to. */
 export interface AllowedToday {
@@ -13681,6 +13739,43 @@ export interface AllowedToday {
 	expiresAt: string;
 	/** True when an earlier "allow today" had already raised it for today. */
 	alreadyAllowed: boolean;
+}
+/** Why a value cannot join a field's closed set (`addEnumOptionRefusal`). */
+export type AddOptionRefusal = "already_allowed" | "close_match" | "lifecycle" | "not_a_closed_set";
+/** One field the proposal cannot carry as it stands. */
+export interface ProposalRepairField {
+	/** The property key. */
+	key: string;
+	/** Its human label (`uiHints.displayName` / `label`, else the key). */
+	label: string;
+	kind: PropertyIssue["kind"];
+	/** The validator's sentence (names the key and the rule). */
+	message: string;
+	/** The value(s) the proposal carries that the field refuses. */
+	rejected?: string[];
+	/** The field's allowed values, when it is a closed set. */
+	options?: string[];
+	/** The allowed value one typo away from the rejected one. */
+	didYouMean?: string;
+	/**
+	 * May the rejected value join the field's options (option C)? Only a
+	 * single rejected value on a closed set that is not the lifecycle and has
+	 * no close allowed value.
+	 */
+	canAddOption: boolean;
+	addOptionRefusal?: AddOptionRefusal;
+}
+export interface ProposalRepair {
+	proposalId: string;
+	/**
+	 * There is something to fix by value on this proposal. `false` for a kind
+	 * of proposal this does not read, or when the payload is valid now (the
+	 * failure came from elsewhere: a conflict, a permission, a provider).
+	 */
+	repairable: boolean;
+	fields: ProposalRepairField[];
+	/** The kind the proposal names, when it no longer resolves. */
+	missingKind?: string;
 }
 /**
  * The complete created-rows record. Extends the shared
@@ -17594,7 +17689,7 @@ export type PodFileProblem =
  | "too_large"
 /** More files than one parameter may carry. */
  | "too_many"
-/** The verb asks for a delivery not wired yet (bytes, phase 2). */
+/** The verb names a file delivery the pod does not know. */
  | "delivery_not_supported";
 export type ExecuteCapabilityResult = {
 	ackState: WriteAckState;
@@ -21869,7 +21964,9 @@ export type SignalKind =
  * One pod-level ACCESS REQUEST that is not a proposal (pod admins only,
  * `access-requests.ts`): a pending trusted issuer (`target.kind: "issuer"`)
  * or an app's pending connection request (`target.kind:
- * "connection-request"`). Who asks and from where ride in `access`.
+ * "connection-request"`); or the person's own pending KEY request
+ * (`target.kind: "key-request"`, read for its person). Who asks and from
+ * where ride in `access`.
  */
  | "access-request"
 /**
@@ -22312,6 +22409,17 @@ export interface PendingAppRequestSignalInput {
 	/** The handoff lease: past it the request is expired, never decidable. */
 	expiresAt: Date;
 }
+/** A key request waiting on its person, as `listPendingKeyRequests` reads it. */
+export interface PendingKeyRequestSignalInput {
+	id: string;
+	/** The key's name as asked ("Dev loop poster"). */
+	requestedName: string;
+	/** Who asks: the computer's (or the person's own key's) user name. */
+	requesterName: string | null;
+	createdAt: Date;
+	/** Past it the request is expired, never decidable (24 h after filing). */
+	expiresAt: Date;
+}
 /** An open invite to another space, as `listOpenSpaceInvites` reads it. */
 export interface SpaceInviteSignalInput {
 	id: string;
@@ -22415,7 +22523,7 @@ export interface ReviewSessionRow {
 	trackId: string | null;
 }
 /** A sub-read's name — what `unreadable` reports. */
-export type SignalSubRead = "activity" | "app-requests" | "captures" | "convertible-goals" | "drafts" | "events" | "invites" | "issuers" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
+export type SignalSubRead = "activity" | "app-requests" | "captures" | "convertible-goals" | "drafts" | "events" | "invites" | "issuers" | "key-requests" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
 /** One class of the lens page. */
 export interface LensClassWire {
 	/** The first `cap` rows, in the class's own order. */
@@ -22762,6 +22870,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			captureQuestionStatus?: string | undefined;
 			code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 			currentStatus?: string | null;
+			errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 			expectedStatus?: string | null;
 			fieldErrors?: FieldErrors;
 			httpStatus: number;
@@ -22789,6 +22898,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -22867,6 +22977,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -22972,6 +23083,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -23035,6 +23147,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -23246,6 +23359,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -23400,6 +23514,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -23511,6 +23626,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -23656,6 +23772,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -23770,6 +23887,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceIds?: string[] | undefined;
 				} | undefined;
 				integration: "cli" | "custom" | "openclaw" | "raycast";
+				redirectUri?: string | undefined;
 				strategy?: "create_new" | "replace_existing" | undefined;
 				workspaceId?: string | undefined;
 			};
@@ -24232,6 +24350,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -24451,6 +24570,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -24957,6 +25077,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -25099,6 +25220,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -25157,6 +25279,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -25675,6 +25798,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -25711,6 +25835,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -25815,6 +25940,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					currentStatus?: string | null;
+					errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 					expectedStatus?: string | null;
 					fieldErrors?: FieldErrors;
 					httpStatus: number;
@@ -25972,6 +26098,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					currentStatus?: string | null;
+					errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 					expectedStatus?: string | null;
 					fieldErrors?: FieldErrors;
 					httpStatus: number;
@@ -26274,6 +26401,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					currentStatus?: string | null;
+					errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 					expectedStatus?: string | null;
 					fieldErrors?: FieldErrors;
 					httpStatus: number;
@@ -26575,6 +26703,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -27935,6 +28064,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -28008,6 +28138,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -28181,6 +28312,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -28239,6 +28371,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -28301,6 +28434,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -29834,6 +29968,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -29946,6 +30081,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -29995,6 +30131,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -30372,6 +30509,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -30432,6 +30570,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -30482,6 +30621,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -30650,6 +30790,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -30735,6 +30876,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -31080,6 +31222,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -32207,6 +32350,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -32397,6 +32541,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -32520,6 +32665,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -33865,6 +34011,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					currentStatus?: string | null;
+					errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 					expectedStatus?: string | null;
 					fieldErrors?: FieldErrors;
 					httpStatus: number;
@@ -34761,6 +34908,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -34842,6 +34990,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -34900,6 +35049,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -35019,6 +35169,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -35328,6 +35479,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -35481,6 +35633,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -35745,6 +35898,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -35956,6 +36110,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -36063,6 +36218,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -36149,6 +36305,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -36496,6 +36653,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -36820,6 +36978,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -37425,6 +37584,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -37696,6 +37856,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -37757,6 +37918,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -37916,6 +38078,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -38160,6 +38323,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -38249,6 +38413,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -38366,6 +38531,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					currentStatus?: string | null;
+					errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 					expectedStatus?: string | null;
 					fieldErrors?: FieldErrors;
 					httpStatus: number;
@@ -38476,6 +38642,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -38694,6 +38861,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -38847,6 +39015,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -38925,6 +39094,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -39170,6 +39340,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -39283,6 +39454,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -39368,6 +39540,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -39978,6 +40151,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -40028,6 +40202,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -40070,6 +40245,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -40105,6 +40281,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -40169,6 +40346,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -40216,6 +40394,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					currentStatus?: string | null;
+					errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 					expectedStatus?: string | null;
 					fieldErrors?: FieldErrors;
 					httpStatus: number;
@@ -40297,6 +40476,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					currentStatus?: string | null;
+					errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 					expectedStatus?: string | null;
 					fieldErrors?: FieldErrors;
 					httpStatus: number;
@@ -40341,6 +40521,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					currentStatus?: string | null;
+					errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 					expectedStatus?: string | null;
 					fieldErrors?: FieldErrors;
 					httpStatus: number;
@@ -40715,6 +40896,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					currentStatus?: string | null;
+					errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 					expectedStatus?: string | null;
 					fieldErrors?: FieldErrors;
 					httpStatus: number;
@@ -40837,6 +41019,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					currentStatus?: string | null;
+					errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 					expectedStatus?: string | null;
 					fieldErrors?: FieldErrors;
 					httpStatus: number;
@@ -41609,6 +41792,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -41949,6 +42133,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -42089,6 +42274,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -42176,6 +42362,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -42265,6 +42452,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -43070,6 +43258,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -43359,6 +43548,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -43529,6 +43719,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -43584,6 +43775,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					existingEntityId?: string | undefined;
 					verb: "fill_empty" | "keep_existing" | "separate" | "use_capture";
 				}> | undefined;
+				identityResolutionForTwins?: "keep_existing" | "separate" | undefined;
 				propertyDecisions?: Record<string, {
 					action: "keep";
 				} | {
@@ -43609,6 +43801,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				approvalRun?: ApprovalRunView;
 				created?: number;
 				effect?: ProposalEffect;
+				entitiesSkipped?: MaterializeSkippedTwin[];
 				identities?: Array<IdentityReceipt & {
 					ref: string;
 				}>;
@@ -44060,6 +44253,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				success: boolean;
 			};
 		}>;
+		repair: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				addOption?: {
+					key: string;
+					value: string;
+				} | undefined;
+				expectedRevision: number;
+				proposalId: string;
+				set?: Record<string, unknown> | undefined;
+			};
+			meta: object;
+			output: {
+				revision: number;
+			};
+		}>;
+		repairOptions: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				proposalId: string;
+			};
+			meta: object;
+			output: ProposalRepair;
+		}>;
 		restoreItem: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				itemRef: string;
@@ -44328,6 +44543,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -44439,6 +44655,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -44721,6 +44938,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -44838,6 +45056,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -44951,6 +45170,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -45042,6 +45262,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -45330,6 +45551,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -45366,6 +45588,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -45687,6 +45910,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -45852,6 +46076,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -46006,6 +46231,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					accessRequests: {
 						applications: PendingAppRequestSignalInput[];
 						issuers: PendingIssuerSignalInput[];
+						keys: PendingKeyRequestSignalInput[];
 					};
 					accessRequestsTruncated: boolean;
 					allNotifications: (NotificationSignalInput & {
@@ -46126,6 +46352,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -46555,6 +46782,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -46688,6 +46916,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -46907,6 +47136,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -47042,6 +47272,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -47124,6 +47355,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -47151,6 +47383,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -47188,6 +47421,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -47345,6 +47579,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -47898,6 +48133,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -48226,6 +48462,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -48451,6 +48688,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -48768,6 +49006,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -48881,6 +49120,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -48978,6 +49218,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -49075,6 +49316,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -49617,6 +49859,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -49735,6 +49978,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -49955,6 +50199,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -49988,6 +50233,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -50088,6 +50334,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;
@@ -50134,6 +50381,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
 				expectedStatus?: string | null;
 				fieldErrors?: FieldErrors;
 				httpStatus: number;

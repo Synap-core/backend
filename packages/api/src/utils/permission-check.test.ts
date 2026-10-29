@@ -1194,7 +1194,8 @@ describe("checkPermissionOrPropose — agent proposal cap (F2 floor)", () => {
    * recent-window trust query (D4a: `.select({ status })...orderBy(desc(
    * createdAt)).limit(CAP_TRUST_WINDOW)`, scored the same way as this test's
    * `mockRecentWindow` helper below — most-recent-first rows, the first
-   * `windowApproved` of them AUTO_APPROVED, the rest PENDING). Dispatches by
+   * `windowApproved` of them APPROVED by a person, then any receipts, the
+   * rest PENDING). Dispatches by
    * the SHAPE of the `.select({...})` field object rather than call order —
    * the real (unmocked) `resolveAgentGovernanceDecision`/`resolveGovernanceRule`
    * run their own `db.select(...)` calls in between, so a call-count-based
@@ -1203,15 +1204,21 @@ describe("checkPermissionOrPropose — agent proposal cap (F2 floor)", () => {
   function setupWeightedAgentBudget(opts: {
     pendingCount: number;
     windowTotal: number;
-    /** FULL approvals — nothing denied inside. */
+    /** FULL approvals by a person — nothing denied inside. */
     windowApproved: number;
     /**
      * Approvals the reviewer applied PER-ITEM (kept some, denied the rest).
-     * Their `status` is `auto_approved` like any other — only
+     * Their `status` is `approved` like any other — only
      * `data.dispositions` distinguishes them, which the real query surfaces as
      * the `isPartial` boolean. These must NOT count toward the trust rate.
      */
     windowPartiallyApproved?: number;
+    /**
+     * `auto_approved` RECEIPTS: the pod's own decisions, never a person's.
+     * The real query leaves them out of the window; the fake returns them
+     * anyway, so the rate itself must not count them either.
+     */
+    windowReceipts?: number;
     agentMetadata?: Record<string, unknown>;
   }) {
     const {
@@ -1219,14 +1226,18 @@ describe("checkPermissionOrPropose — agent proposal cap (F2 floor)", () => {
       windowTotal,
       windowApproved,
       windowPartiallyApproved = 0,
+      windowReceipts = 0,
       agentMetadata = { writesRequireProposal: true },
     } = opts;
     const windowRows = Array.from({ length: windowTotal }, (_, i) => {
       if (i < windowApproved) {
-        return { status: "auto_approved", isPartial: false };
+        return { status: "approved", isPartial: false };
       }
       if (i < windowApproved + windowPartiallyApproved) {
-        return { status: "auto_approved", isPartial: true };
+        return { status: "approved", isPartial: true };
+      }
+      if (i < windowApproved + windowPartiallyApproved + windowReceipts) {
+        return { status: "auto_approved", isPartial: false };
       }
       return { status: "pending", isPartial: false };
     });
@@ -1374,7 +1385,7 @@ describe("checkPermissionOrPropose — agent proposal cap (F2 floor)", () => {
   });
 
   it("does NOT grant the 3x ceiling on PARTIAL approvals (a gutted package is not an endorsement)", async () => {
-    // 96 of 100 rows carry status `auto_approved` — byte-identical to the
+    // 96 of 100 rows carry status `approved` — byte-identical to the
     // "proven agent" fixture above as far as `status` can see. But only 50 are
     // FULL approvals; the other 46 were applied per-item, with the reviewer
     // denying part of each package. Scoring those as approvals reads 96% and
@@ -1390,6 +1401,31 @@ describe("checkPermissionOrPropose — agent proposal cap (F2 floor)", () => {
     const result = await checkPermissionOrPropose({
       ...BASE_OPTS,
       agentUserId: "agent-gutted-1",
+      subjectType: "entity",
+      action: "create",
+    });
+
+    expect("denied" in result && result.denied === true).toBe(true);
+    expect((result as { reason: string }).reason).toContain(
+      "Agent proposal limit reached (10 pending)"
+    );
+  });
+
+  it("does NOT grant the 3x ceiling on RECEIPTS (the pod's own auto-approvals are not a person's trust)", async () => {
+    // 96 of 100 rows are `auto_approved` receipts: writes the policy let run.
+    // Counted as approvals they read 96% and handed the agent a 3x cap on the
+    // strength of its own lane (research fbb1eef7, W3). Only a person's
+    // approvals are evidence, and there are none here.
+    setupWeightedAgentBudget({
+      pendingCount: 15,
+      windowTotal: 100,
+      windowApproved: 0,
+      windowReceipts: 96,
+    });
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      agentUserId: "agent-receipts-1",
       subjectType: "entity",
       action: "create",
     });
@@ -2564,12 +2600,13 @@ describe("checkPermissionOrPropose — human-proposer (insufficient-role member)
 describe("agentProposalCap", () => {
   /**
    * Build `total` rows (most-recent-first, matching `orderBy(desc(createdAt))
-   * .limit(CAP_TRUST_WINDOW)`) with `approved` of them AUTO_APPROVED and the
-   * rest PENDING, then stub the query chain to resolve them.
+   * .limit(CAP_TRUST_WINDOW)`) with `approved` of them APPROVED by a person
+   * and the rest PENDING, then stub the query chain to resolve them. No
+   * receipts: the real query leaves `auto_approved` rows out of the window.
    */
   function mockRecentWindow(row: { total: number; approved: number }) {
     const rows = Array.from({ length: row.total }, (_, i) => ({
-      status: i < row.approved ? "auto_approved" : "pending",
+      status: i < row.approved ? "approved" : "pending",
     }));
     mockDbSelect.mockImplementation(() => {
       const b: Record<string, unknown> = {

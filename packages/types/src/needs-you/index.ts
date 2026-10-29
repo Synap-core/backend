@@ -585,11 +585,15 @@ export const SUGGESTIONS_CAP = 5;
  * able to say them without a second read.
  */
 export interface NeedsYouAccessRequest {
-  /** What would be granted: issuer trust, or an application's browser origin. */
-  subject: "issuer" | "application";
-  /** The asker's display name (the issuer's host, the app's name). */
+  /**
+   * What would be granted: issuer trust, an application's browser origin, or
+   * an API key one of the person's computers asked them for (`api_key`, read
+   * for its person, not only for admins; decision 68d37853, answer 25).
+   */
+  subject: "issuer" | "application" | "api_key";
+  /** The asker's display name (the issuer's host, the app's name; a key's requested name). */
   name: string;
-  /** Where it asks from: the issuer URL, or the app's requested origin. */
+  /** Where it asks from: the issuer URL, the app's requested origin, or the computer asking for a key. */
   from: string;
 }
 

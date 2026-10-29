@@ -65,6 +65,8 @@ import {
   type FailureErrorClass,
 } from "../../connectors/external-dispatch.js";
 import { SKILL_RUNTIME_VERSION } from "./skill-stdlib.js";
+import type { PodFileHandles } from "../capabilities/file-parameters.js";
+import { podFileBodyFor } from "./pod-file-body.js";
 import { visibleSkillsAnyWorkspaceWhere } from "./visibility.js";
 import type {
   RecordedEffect,
@@ -238,6 +240,12 @@ export async function runSkillInSandbox(args: {
    */
   verbAct?: { skillId: string; toolIds: readonly string[] };
   /**
+   * This run's `:bytes` pod files (`resolvePodFilesAtRun`): the handles the
+   * skill received and the files they name. Set only by the post-gate runner;
+   * a `callProvider` body resolves them, nothing else does.
+   */
+  podFiles?: PodFileHandles;
+  /**
    * The focus session the run belongs to, from the RUN's context (never from
    * the skill's input). Rides the governed provider-write branch, so a
    * proposal that write files carries `proposals.session_id`.
@@ -371,6 +379,7 @@ export async function runSkillInSandbox(args: {
       caller,
       failureSink: providerFailure,
       verbAct: args.verbAct,
+      podFiles: args.podFiles,
       recordedEffects: dryRun ? recordedEffects : undefined,
     });
 
@@ -425,6 +434,8 @@ export interface SkillBridgeParams {
   failureSink: { errorClass?: FailureErrorClass; providerRef?: string };
   /** This run's verb decision — scoped to THIS run's provider calls. */
   verbAct?: { skillId: string; toolIds: readonly string[] };
+  /** This run's `:bytes` files — resolved by THIS run's `callProvider` only. */
+  podFiles?: PodFileHandles;
   /**
    * Present = DRY-RUN: the write/send bridges record their effect here and
    * return a stub instead of performing it. Reads and every guard stay real.
@@ -477,6 +488,7 @@ export function buildSkillBridges(params: SkillBridgeParams): SkillBridges {
     caller,
     failureSink,
     verbAct,
+    podFiles,
     recordedEffects,
   } = params;
   const dryRun = recordedEffects !== undefined;
@@ -692,6 +704,16 @@ export function buildSkillBridges(params: SkillBridgeParams): SkillBridges {
       ).filter(([, v]) => typeof v === "string") as [string, string][];
       if (entries.length > 0) headers = Object.fromEntries(entries);
     }
+    // This run's `:bytes` files: a handle in the body becomes a file the
+    // host streams from storage (`pod-file-body.ts`); the bytes never enter
+    // the isolate, and only toward the verb's own tools (`fileToolIds`).
+    const files = podFileBodyFor(
+      body,
+      typeof opts === "object" && opts !== null
+        ? (opts as { multipart?: unknown })
+        : undefined,
+      podFiles
+    );
     // Dry-run: the provider is never called; the intended call is recorded
     // and a stub answers so the skill's control flow carries on.
     if (recordedEffects) {
@@ -723,10 +745,14 @@ export function buildSkillBridges(params: SkillBridgeParams): SkillBridges {
         provider,
         method: upper,
         path,
-        body:
-          typeof body === "object" && body !== null
-            ? (body as Record<string, unknown>)
-            : undefined,
+        ...(files.fileBody
+          ? { fileBody: files.fileBody, fileToolIds: podFiles?.toolIds ?? [] }
+          : {
+              body:
+                typeof body === "object" && body !== null
+                  ? (body as Record<string, unknown>)
+                  : undefined,
+            }),
         baseUrlOverride,
         ...(headers ? { headers } : {}),
         ...(isWrite && agentUserId

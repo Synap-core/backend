@@ -20,9 +20,9 @@ import {
   DropdownItem,
   DropdownMenu,
   DropdownTrigger,
-  Input,
   Tab,
   Tabs,
+  Textarea,
   addToast,
 } from "@heroui/react";
 import {
@@ -301,7 +301,8 @@ export function ApiKeysSection() {
         confirmLabel="Revoke"
         isPending={revoke.isPending}
       >
-        <Input
+        <Textarea
+          minRows={1}
           label="Reason (optional)"
           placeholder="e.g. compromised, no longer needed"
           value={revokeReason}

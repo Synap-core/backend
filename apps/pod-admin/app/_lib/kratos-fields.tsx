@@ -171,7 +171,6 @@ export function KratosFields({
           <Input
             key={`${name}-${idx}`}
             label={labelFor(node)}
-            labelPlacement="outside"
             name={name}
             type={type}
             value={values[name] ?? ""}

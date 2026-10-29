@@ -239,6 +239,19 @@ export const workerRegistry: WorkerMetadata[] = [
     category: "ai",
   },
   {
+    id: "document-passages",
+    name: "Document Passages",
+    description:
+      "On each document create/update (trailing 60s debounce per document) and every 15min for documents whose passages trail their content revision: cuts the stored body into recall passages (markdown-core segmentPassages), embeds only the passages whose text changed through the IS batch endpoint, replaces the document's document_passages rows and re-embeds the entities that own the document. An unreadable body keeps its old passages and records the failure.",
+    triggers: [
+      "document.create.completed",
+      "document.update.completed",
+      "cron:*/15 * * * *",
+    ],
+    outputs: ["document_passages.upsert", "entity-embedding"],
+    category: "ai",
+  },
+  {
     id: "entity-media-copy",
     name: "Entity Media Copy",
     description:

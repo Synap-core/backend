@@ -551,6 +551,9 @@ export function registerProfilesRoutes(app: HubHono): void {
    * procedure, which is the ONE governed door (this is only its HTTP edge).
    */
   app.patch("/property-defs/:id", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
     const propertyDefId = requireUuidParam(c, "id");
     if (propertyDefId instanceof Response) return propertyDefId;
     const body = (await c.req.json()) as {

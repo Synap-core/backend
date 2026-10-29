@@ -1007,6 +1007,8 @@ oauthApp.post("/token", async (c) => {
       agentType,
       createdByUserId: claimed.userId,
       linkedUserId: claimed.userId,
+      // An OAuth client (claude.ai, Raycast…) runs on no computer of the person's.
+      hostUserId: null,
       // Sibling revocation inside provisionSurfaceAgentKey is instance-scoped.
       // Keying the instance on (client, human) means re-authorizing rotates
       // exactly this connection's key and never kills another human's — agent

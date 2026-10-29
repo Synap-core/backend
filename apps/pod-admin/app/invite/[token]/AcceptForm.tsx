@@ -610,7 +610,6 @@ function PasskeyPanel({
       {error ? <ErrorBanner message={error} /> : null}
       <Input
         label="Email"
-        labelPlacement="outside"
         type="email"
         value={inviteEmail}
         isReadOnly
@@ -621,7 +620,6 @@ function PasskeyPanel({
       />
       <Input
         label="Display name (optional)"
-        labelPlacement="outside"
         type="text"
         placeholder="Jane Smith"
         value={name}
@@ -798,7 +796,6 @@ function RegisterPanel({
       {error ? <ErrorBanner message={error} /> : null}
       <Input
         label="Email"
-        labelPlacement="outside"
         type="email"
         value={inviteEmail}
         isReadOnly
@@ -809,7 +806,6 @@ function RegisterPanel({
       />
       <Input
         label="Display name (optional)"
-        labelPlacement="outside"
         type="text"
         placeholder="Jane Smith"
         value={name}
@@ -821,7 +817,6 @@ function RegisterPanel({
       />
       <Input
         label="Password"
-        labelPlacement="outside"
         type="password"
         value={password}
         onValueChange={setPassword}
@@ -971,7 +966,6 @@ function LoginPanel({
       ) : null}
       <Input
         label="Email"
-        labelPlacement="outside"
         type="email"
         value={inviteEmail}
         isReadOnly
@@ -982,7 +976,6 @@ function LoginPanel({
       />
       <Input
         label="Password"
-        labelPlacement="outside"
         type="password"
         value={values["password"] ?? ""}
         onValueChange={(v) => setValues((p) => ({ ...p, password: v }))}

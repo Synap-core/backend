@@ -113,6 +113,7 @@ import {
   type NotificationSignalInput,
   type OwedSlotSignalInput,
   type PendingAppRequestSignalInput,
+  type PendingKeyRequestSignalInput,
   type PendingIssuerSignalInput,
   type Signal,
   type ConvertibleGoalsSignalInput,
@@ -121,6 +122,7 @@ import {
 } from "../services/signals/needs-you-union.js";
 import {
   listPendingAppRequests,
+  listPendingKeyRequests,
   listPendingIssuers,
   podAdminCheck,
 } from "../services/signals/access-requests.js";
@@ -298,6 +300,7 @@ export type SignalSubRead =
   | "captures"
   | "issuers"
   | "app-requests"
+  | "key-requests"
   | "invites"
   | "convertible-goals"
   | "liveness"
@@ -422,7 +425,8 @@ async function readAttention(
   // they are read on the full floor (Home) only, never under a lens.
   const readsCaptures =
     follows && !container && !things && input.workspaceId === undefined;
-  // Access requests (a pending issuer, an app's origin) are the POD's, decided
+  // Access requests (a pending issuer, an app's origin; the person's own key
+  // requests are read the same way, for them alone) are the POD's, decided
   // by a pod admin, and live in no space or project: the same floor-only rule
   // as captures (so off under every lens, the intent lens included). Not an
   // admin ⇒ empty (not theirs to see), never unreadable.
@@ -444,6 +448,7 @@ async function readAttention(
     captures,
     issuers,
     appRequests,
+    keyRequestRows,
     spaceInvites,
     convertibleGoals,
   ] = await Promise.all([
@@ -564,6 +569,14 @@ async function readAttention(
           : { rows: [], truncated: false }
     ),
     settle(
+      "key-requests",
+      { rows: [] as PendingKeyRequestSignalInput[], truncated: false },
+      async () =>
+        readsAccess
+          ? await listPendingKeyRequests({ personUserId: userId })
+          : { rows: [], truncated: false }
+    ),
+    settle(
       "invites",
       { rows: [] as SpaceInviteSignalInput[], truncated: false },
       async () =>
@@ -633,9 +646,12 @@ async function readAttention(
     accessRequests: {
       issuers: issuers.value.rows,
       applications: appRequests.value.rows,
+      keys: keyRequestRows.value.rows,
     },
     accessRequestsTruncated:
-      issuers.value.truncated || appRequests.value.truncated,
+      issuers.value.truncated ||
+      appRequests.value.truncated ||
+      keyRequestRows.value.truncated,
     spaceInvites: spaceInvites.value.rows,
     spaceInvitesTruncated: spaceInvites.value.truncated,
     convertibleGoals: convertibleGoals.value,
@@ -654,6 +670,7 @@ async function readAttention(
         captures,
         issuers,
         appRequests,
+        keyRequestRows,
         spaceInvites,
         convertibleGoals,
         containers,
@@ -1489,7 +1506,7 @@ function narrowAttention(
     ...(scope.workspaceId === null && !scope.kindClusters
       ? {}
       : {
-          accessRequests: { issuers: [], applications: [] },
+          accessRequests: { issuers: [], applications: [], keys: [] },
           accessRequestsTruncated: false,
           spaceInvites: [],
           spaceInvitesTruncated: false,

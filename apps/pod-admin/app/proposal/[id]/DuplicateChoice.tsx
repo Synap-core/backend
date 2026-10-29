@@ -13,7 +13,10 @@
  *    (`TwinVerbs`); with several twins a record is picked first;
  *  - a capture graph: each item whose twin is a record gets its own choice,
  *    inside that item's card (`ItemTwinChoice`); the page's Approve sends them;
- *  - a lookup that FAILED says so in one quiet mark.
+ *  - a lookup that FAILED says so in one quiet mark;
+ *  - a large approval that STOPPED on a record that already exists: the
+ *    records it met, and one answer for every such record (`TwinStopVerbs`),
+ *    so approving again goes on instead of stopping on the same refusal.
  */
 
 import { Button, Radio, RadioGroup } from "@heroui/react";
@@ -39,6 +42,7 @@ import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { kindIcon, kindLabel } from "../../_lib/object/kind-icon";
 import { Pill } from "../../_lib/object/provenance-chips";
 import { openIn } from "../../../lib/open-in";
+import type { ApprovalRunTwin } from "../../_lib/approval-progress/approval-progress-model";
 
 /** One twin as a door: its kind, its name, and why it matched. */
 function TwinDoor({
@@ -209,6 +213,95 @@ export function TwinVerbs({
               className="h-auto min-h-12 flex-col items-start gap-0.5 whitespace-normal px-3 py-2 text-left"
               isDisabled={busy}
               onPress={() => onResolve(verb.resolution)}
+            >
+              <span className="inline-flex items-center gap-1.5 text-[13.5px] font-medium">
+                {primary && <Check aria-hidden size={15} />}
+                {verb.label}
+              </span>
+              <span
+                className={`text-[11.5px] font-normal leading-snug ${
+                  primary ? "opacity-85" : "text-foreground/60"
+                }`}
+              >
+                {verb.hint}
+              </span>
+            </Button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** The answers for every record that already exists, in the verbs' words. */
+const TWIN_STOP_VERBS = (["keep_existing", "separate"] as const).map((verb) => {
+  const shared = DUPLICATE_RESOLUTION_VERBS.find((v) => v.verb === verb)!;
+  return {
+    verb,
+    label: `${shared.label} and continue`,
+    hint:
+      verb === "keep_existing"
+        ? "Links each record to the one already there. A name several records share is left out."
+        : shared.hint,
+  };
+});
+
+/**
+ * A large approval stopped because a record already exists. Resuming alone
+ * would stop on it again, so the reviewer answers once for EVERY such record:
+ * use the existing one, or keep both. The records it met are doors.
+ */
+export function TwinStopVerbs({
+  twins,
+  onAnswer,
+  busy,
+}: {
+  twins: readonly ApprovalRunTwin[];
+  onAnswer: (verb: "keep_existing" | "separate") => void;
+  busy: boolean;
+}) {
+  return (
+    <div data-review-twin-stop="" className="flex flex-col gap-2">
+      <div
+        role="group"
+        aria-label="Already in your pod"
+        className="flex flex-wrap items-center gap-x-3 gap-y-1.5"
+      >
+        <span className="text-[12px] font-medium text-foreground/65">
+          Already in your pod
+        </span>
+        {twins.map((twin) => {
+          const Icon = kindIcon(twin.kind);
+          return (
+            <Pill
+              key={twin.id}
+              exit={openIn({
+                kind: "object",
+                objectKind: "entity",
+                id: twin.id,
+              })}
+              title={kindLabel(twin.kind)}
+            >
+              <Icon aria-hidden className="h-3.5 w-3.5 text-foreground/55" />
+              <span className="truncate font-medium text-foreground">
+                {twin.title ?? kindLabel(twin.kind)}
+              </span>
+            </Pill>
+          );
+        })}
+      </div>
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,13rem),1fr))] gap-2">
+        {TWIN_STOP_VERBS.map((verb) => {
+          const primary = verb.verb === "keep_existing";
+          return (
+            <Button
+              key={verb.verb}
+              data-verb={verb.verb}
+              color={primary ? "success" : "default"}
+              variant={primary ? "solid" : "bordered"}
+              className="h-auto min-h-12 flex-col items-start gap-0.5 whitespace-normal px-3 py-2 text-left"
+              isDisabled={busy}
+              onPress={() => onAnswer(verb.verb)}
             >
               <span className="inline-flex items-center gap-1.5 text-[13.5px] font-medium">
                 {primary && <Check aria-hidden size={15} />}

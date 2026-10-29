@@ -22,7 +22,7 @@ import {
   grantActionLabel,
   grantKindLabel,
   grantSubjectLabel,
-  isQualifiedGrantSubject,
+  isKindQualifiedGrantSubject,
   type GrantAction,
   type GrantSubjectSpec,
 } from "./catalog.js";
@@ -165,7 +165,9 @@ export function buildGrantSections({
 
   const rowsOf = (spec: GrantSubjectSpec): GrantSectionRow[] => {
     const own = GRANT_SUBJECT_DESCRIPTIONS[spec.subject] ?? "";
-    if (!isQualifiedGrantSubject(spec.subject))
+    // Only a KIND is one of the pod's profiles: activity families sit one
+    // level deeper (`access-levels.ts`), never as a row per pod kind.
+    if (!isKindQualifiedGrantSubject(spec.subject))
       return [rowFor(spec, null, grantSubjectLabel(spec.subject), own)];
     const kindRows = [...kinds]
       .map((k) =>

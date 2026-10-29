@@ -134,6 +134,105 @@ describe("API-key mint sites are known", () => {
 });
 
 /**
+ * F7 (pre-launch audit, 2026-10-28) — a privileged scope (`PRIVILEGED_MINT_SCOPES`)
+ * reaches a key only through the ONE rule in `services/privileged-mint.ts`:
+ * the minter is a pod admin with a fresh sign-in. The tRPC mint doors took any
+ * scope in `API_KEY_SCOPES`, so a member minted `setup.agent` and acted as any
+ * other human. Every minting file (the derived set above) is classified here:
+ *  - RULE: it takes CALLER-DECLARED scopes, so it runs the rule at least as
+ *    often as it has doors (`calls` counts the rule's door-level calls);
+ *  - otherwise the string says where its scopes come from and why no caller
+ *    can name a privileged one.
+ * A new minting file fails the key-set check until someone decides which.
+ *
+ * NOT COVERED (stated): a COUNT per file, so a call that guards a different
+ * door than the one added passes; "server-chosen" is a review decision.
+ */
+type PrivilegedRule = { rule: RegExp; calls: number } | string;
+const PRIVILEGED_SCOPE_RULE: Record<keyof typeof MINT_SITES, PrivilegedRule> = {
+  "packages/database/src/repositories/api-key-repository.ts":
+    "PRIMITIVE — mints the scopes its caller hands it; each caller is held here.",
+  "packages/api/src/services/api-keys.ts":
+    "PRIMITIVE + scheduled rotation, which re-mints a key's STORED scopes; the privileged doors re-check the holder at use (`setupAgentKeyIsOperator`, `providerWriteRefusal`).",
+  "packages/api/src/services/hub-integration-registration.ts":
+    "PRIMITIVE — INTEGRATION_HUB_SCOPES, fixed per integration, none privileged.",
+  "packages/api/src/services/external-registration.ts":
+    "PRIMITIVE — mints the scopes its caller hands it; each caller is held here.",
+  "packages/api/src/services/agent-identity-service.ts":
+    "provisionSurfaceAgentKey mints SETUP_AGENT_HUB_SCOPES or its caller's list: setup.ts (rule below) and OAuth /token + /mcp/redeem, whose list comes only from mapCpScopesToPodScopes (drops every privileged scope). createNamedAgent: fixed read+write.",
+  "packages/api/src/routers/api-keys.ts": {
+    // create, rotate, createForWorkspace (+ the integration door: fixed
+    // scopes; createSystemKey / adminCreateServiceKey: podAdminProcedure +
+    // requireFreshAuthentication, the rule itself).
+    rule: /\bassertMayMintScopes\(/,
+    calls: 3,
+  },
+  "packages/api/src/routers/hub-protocol/rest/setup.ts": {
+    // /setup/agent extraScopes + /setup/service scopes (isPrivilegedMintScope),
+    // and both doors' `setup.agent` operator key (setupAgentKeyIsOperator).
+    rule: /\b(?:isPrivilegedMintScope|setupAgentKeyIsOperator)\(/,
+    calls: 4,
+  },
+  "packages/api/src/services/machine-connect.ts":
+    'SETUP_AGENT_HUB_SCOPES + `box.runner` only when the person turned on "Runs scripts" for their OWN computer (server-chosen).',
+  "packages/api/src/routers/hub-protocol/rest/mcp-redeem.ts":
+    "scopes from the consent code, through mapCpScopesToPodScopes (drops every privileged scope).",
+  "packages/api/src/routers/oauth/routes.ts":
+    "the OAuth `scope` parameter, through mapCpScopesToPodScopes (drops every privileged scope); app keys: server-chosen.",
+  "packages/api/src/routers/hub-protocol/rest/agent-users.ts":
+    "createNamedAgent: fixed read+write.",
+  "packages/api/src/services/app-connect.ts":
+    "server-chosen: hub-protocol read/write from what was approved.",
+  "packages/api/src/services/app-person-token.ts":
+    "server-chosen: APP_PERSON_SCOPES or hub-protocol.read.",
+  "packages/api/src/services/person-key-mint.ts":
+    "PRIMITIVE — mints the scopes its caller hands it: apiKeys.create (rule above, run on the derived scopes) and a CLI key request (services/key-requests.ts), whose scopes are derived from `uses`, and no use derives a privileged scope (types grants/key-uses.test.ts).",
+  "packages/api/src/routers/hub-protocol/rest/keys.ts":
+    "INTEGRATION_HUB_SCOPES.cli, fixed, none privileged.",
+  "apps/api/src/routers/provision.ts":
+    "fixed hub-protocol read+write (the IS key, behind a CP-signed JWT).",
+  "packages/database/src/scripts/init-hub-keys.ts":
+    "operator bootstrap script on the host (no HTTP door).",
+};
+
+describe("privileged scopes reach a key only through the one rule (F7)", () => {
+  it("every minting file is classified, and nothing else", () => {
+    expect(Object.keys(PRIVILEGED_SCOPE_RULE).sort()).toEqual(
+      Object.keys(MINT_SITES).sort()
+    );
+  });
+
+  it("each RULE file runs the rule at every caller-declared door", () => {
+    const short: string[] = [];
+    let ruled = 0;
+    for (const [file, entry] of Object.entries(PRIVILEGED_SCOPE_RULE)) {
+      if (typeof entry === "string") continue;
+      ruled++;
+      const calls = codeLines(readFileSync(join(REPO, file), "utf8")).filter(
+        (l) => entry.rule.test(l) && !/\bfunction\s/.test(l)
+      ).length;
+      if (calls < entry.calls)
+        short.push(`${file}: ${calls} rule calls for ${entry.calls} doors`);
+    }
+    expect(ruled).toBeGreaterThanOrEqual(2);
+    expect(
+      short,
+      "A door that mints caller-declared scopes must run the privileged-scope rule (services/privileged-mint.ts)."
+    ).toEqual([]);
+  });
+
+  it("the OAuth/MCP scope funnel drops privileged scopes", () => {
+    const src = codeLines(
+      readFileSync(
+        join(REPO, "packages/api/src/routers/oauth/config.ts"),
+        "utf8"
+      )
+    ).join("\n");
+    expect(src).toMatch(/!isPrivilegedMintScope\(normalized\)/);
+  });
+});
+
+/**
  * P2b — an AI's key always carries its limits. Files that mint an AGENT's key
  * through a raw primitive (not `provisionSurfaceAgentKey` / `createNamedAgent`,
  * which attach it themselves), with how many such mints they hold. Each must
