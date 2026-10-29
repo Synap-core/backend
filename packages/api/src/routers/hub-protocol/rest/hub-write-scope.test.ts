@@ -9,6 +9,11 @@
  * check on the wrong scope (the read-only row), and a check that refuses
  * everyone (the write-key row must get PAST the door: status ≠ 403).
  *
+ * Reads too (audit 2026-10-28 F8): the `/projects` reads, `/routing/*`. The
+ * derived set of every route lives in the tripwire
+ * `__tripwires__/hub-rest-route-checks-a-scope.test.ts`; these rows prove the
+ * check is reached on the real handlers.
+ *
  * Not covered here: messaging (its own derived-set test,
  * messaging.write-scope.test.ts) and webhooks (webhooks.authz.test.ts).
  */
@@ -49,6 +54,8 @@ const { registerProjectsRoutes } = await import("./projects.js");
 const { registerWorkspacesEnsureTemplateRoutes } =
   await import("./workspaces-ensure-template.js");
 const { registerAiProvidersRoutes } = await import("./ai-providers.js");
+const { registerRoutingRoutes } = await import("./routing.js");
+const { registerProfilesRoutes } = await import("./profiles.js");
 import type { HubHono, HubVariables } from "./_shared.js";
 
 const ID = "00000000-0000-4000-8000-000000000001";
@@ -122,6 +129,59 @@ const ROWS: Row[] = [
     route: "DELETE /ai-providers/credentials/:providerId",
     register: registerAiProvidersRoutes,
     url: "/ai-providers/credentials/openai?workspaceId=" + ID,
+    needs: "hub-protocol.write",
+  },
+  // Audit 2026-10-28 F8: reads with no scope check, and one write the sweep
+  // for its tripwire (__tripwires__/hub-rest-route-checks-a-scope.test.ts)
+  // found the same way.
+  {
+    route: "GET /projects",
+    register: registerProjectsRoutes,
+    url: "/projects",
+    needs: "hub-protocol.read",
+  },
+  {
+    route: "GET /projects/:id",
+    register: registerProjectsRoutes,
+    url: `/projects/${ID}`,
+    needs: "hub-protocol.read",
+  },
+  {
+    route: "GET /projects/:projectId/digest",
+    register: registerProjectsRoutes,
+    url: `/projects/${ID}/digest`,
+    needs: "hub-protocol.read",
+  },
+  {
+    route: "GET /projects/:projectId/path",
+    register: registerProjectsRoutes,
+    url: `/projects/${ID}/path`,
+    needs: "hub-protocol.read",
+  },
+  {
+    route: "GET /projects/:projectId/outputs",
+    register: registerProjectsRoutes,
+    url: `/projects/${ID}/outputs`,
+    needs: "hub-protocol.read",
+  },
+  {
+    route: "POST /routing/resolve",
+    register: registerRoutingRoutes,
+    url: "/routing/resolve",
+    body: { lane: "work", userId: "owner" },
+    needs: "hub-protocol.read",
+  },
+  {
+    route: "GET /routing/lanes",
+    register: registerRoutingRoutes,
+    url: "/routing/lanes",
+    needs: "hub-protocol.read",
+  },
+  {
+    route: "PATCH /property-defs/:id",
+    register: registerProfilesRoutes,
+    url: `/property-defs/${ID}`,
+    body: { userId: "owner", workspaceId: ID, slug: "x" },
     needs: "hub-protocol.write",
   },
 ];

@@ -38,7 +38,6 @@ import {
   workspaceMembers,
   users,
   EventRepository,
-  eventRepository,
   ApiKeyRepository,
   GrantRepository,
   TrustedIssuerService,
@@ -62,16 +61,16 @@ import {
   lookupExternalUserMapping,
   resolveExternalUserMapping,
 } from "../../../services/external-user-mapping.js";
-import { NotificationService } from "../../../notifications/NotificationService.js";
-import {
-  NOTIFICATION_EVENT_TYPE_MAP,
-  NOTIFICATION_EVENT_SOURCE,
-} from "../../../notifications/notification-event-map.js";
 import {
   podAudience,
   verifyTrustedIssuerJwt,
 } from "../../../utils/jwks-client.js";
 import { normalizeIssuerUrl } from "../../../utils/issuer-url-safety.js";
+import {
+  requestSource,
+  requestTrustForUnknownIssuer,
+  unknownIssuerResponse,
+} from "./unknown-issuer.js";
 import {
   integrationHubIdFromIssuerUrl,
   SETUP_AGENT_HUB_SCOPES,
@@ -368,23 +367,20 @@ async function authenticateServiceSetupRequest(
         typeof rawIssuer === "string" ? normalizeIssuerUrl(rawIssuer) : null;
       if (iss && rawIssuer === iss) {
         const issuerSvc = new TrustedIssuerService();
-        let issuer = await issuerSvc.getByUrl(iss);
+        const issuer = await issuerSvc.getByUrl(iss);
 
         if (!issuer) {
-          const derivedDisplayName = new URL(iss).hostname;
-          issuer = await issuerSvc.registerPending(iss, derivedDisplayName, {
+          // Filed as pending only for a signed, addressed, rate-limited ask.
+          const outcome = await requestTrustForUnknownIssuer({
+            token,
+            issuerUrl: iss,
+            source: requestSource(c),
             requestedVia: "setup-service",
+            expectedTypes: ["agent_setup", "addon_activate"],
           });
-          logger.warn(
-            { issuerUrl: iss, adminUrl },
-            "setup/service: unknown JWT issuer registered as pending — admin approval required"
-          );
           return {
             ok: false,
-            response: c.json(
-              { code: "ISSUER_PENDING_APPROVAL", adminUrl, issuerUrl: iss },
-              202
-            ),
+            response: unknownIssuerResponse(c, outcome, iss, adminUrl),
           };
         }
 
@@ -569,77 +565,18 @@ export function registerSetupRoutes(app: HubHono): void {
           typeof rawIssuer === "string" ? normalizeIssuerUrl(rawIssuer) : null;
         if (iss && rawIssuer === iss) {
           const issuerSvc = new TrustedIssuerService();
-          let issuer = await issuerSvc.getByUrl(iss);
+          const issuer = await issuerSvc.getByUrl(iss);
 
           if (!issuer) {
-            // Unknown issuer — register as pending and ask admin to approve
-            const derivedDisplayName = new URL(iss).hostname;
-            issuer = await issuerSvc.registerPending(iss, derivedDisplayName, {
+            // Filed as pending only for a signed, addressed, rate-limited ask.
+            const outcome = await requestTrustForUnknownIssuer({
+              token,
+              issuerUrl: iss,
+              source: requestSource(c),
               requestedVia: "setup-agent",
+              expectedTypes: ["agent_setup", "addon_activate"],
             });
-            try {
-              const podAdminWorkspace = await db.query.workspaces.findFirst({
-                where: eq(workspaces.systemSlug, "pod-admin"),
-                columns: { id: true },
-              });
-              if (podAdminWorkspace) {
-                const admins = await db.query.workspaceMembers.findMany({
-                  where: and(
-                    eq(workspaceMembers.workspaceId, podAdminWorkspace.id),
-                    inArray(workspaceMembers.role, ["admin", "owner"])
-                  ),
-                  columns: { userId: true },
-                });
-                for (const admin of admins) {
-                  await NotificationService.create({
-                    type: "system.issuer_pending_approval",
-                    workspaceId: podAdminWorkspace.id,
-                    userId: admin.userId,
-                    sourceType: "system",
-                    sourceId: issuer.id,
-                    data: {
-                      issuerUrl: iss,
-                      displayName: derivedDisplayName,
-                    },
-                  });
-                }
-                // Domain-typed event alongside the per-admin notifications —
-                // see notification-event-map.ts. Attributed to the first
-                // resolved admin (there is no single "acting user" for an
-                // anonymous issuer probe). Idempotent because this whole
-                // block only runs inside `if (!issuer)`: the next request for
-                // the same issuer URL finds the row `registerPending` just
-                // created and skips straight to the status branches above.
-                const mappedEventType =
-                  NOTIFICATION_EVENT_TYPE_MAP["system.issuer_pending_approval"];
-                if (mappedEventType && admins[0]) {
-                  await eventRepository.append({
-                    id: randomUUID(),
-                    version: "v1",
-                    type: mappedEventType,
-                    subjectType: "issuer",
-                    subjectId: issuer.id,
-                    data: { issuerUrl: iss, displayName: derivedDisplayName },
-                    userId: admins[0].userId,
-                    source: NOTIFICATION_EVENT_SOURCE,
-                    timestamp: new Date(),
-                  });
-                }
-              }
-            } catch (notifyErr) {
-              logger.warn(
-                { err: notifyErr, issuerUrl: iss },
-                "setup/agent: failed to notify admins about pending issuer"
-              );
-            }
-            logger.warn(
-              { issuerUrl: iss, adminUrl },
-              "setup/agent: unknown JWT issuer registered as pending — admin approval required"
-            );
-            return c.json(
-              { code: "ISSUER_PENDING_APPROVAL", adminUrl, issuerUrl: iss },
-              202
-            );
+            return unknownIssuerResponse(c, outcome, iss, adminUrl);
           }
 
           if (issuer.status === "pending") {

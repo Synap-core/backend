@@ -136,6 +136,12 @@ const UpdateProjectSchema = z.object({
 export function registerProjectsRoutes(app: HubHono): void {
   // List projects for the authenticated user
   app.get("/projects", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
     const userId = c.get("userId");
     const status = c.req.query("status") ?? undefined;
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50") || 50, 100);
@@ -177,6 +183,12 @@ export function registerProjectsRoutes(app: HubHono): void {
   // Scoping = the canonical entity floor (accessScopeWhere) AND the project lens
   // (projectLensWhere) — the lens only narrows, never widens (no leak).
   app.get("/projects/:projectId/digest", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
     const userId = c.get("userId");
     const parsed = z
       .object({ projectId: z.string().uuid() })
@@ -307,6 +319,12 @@ export function registerProjectsRoutes(app: HubHono): void {
   // doors share (`session-list-doors-project-kind` tripwire); tRPC `path`, the
   // person's surface, defaults to `default`.
   app.get("/projects/:projectId/path", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
     const userId = c.get("userId");
     const parsed = z
       .object({
@@ -367,6 +385,12 @@ export function registerProjectsRoutes(app: HubHono): void {
   // tRPC `projects.outputs`). Registered BEFORE /projects/:id. A
   // workspace-bound service key is pinned to its workspace, as on /path.
   app.get("/projects/:projectId/outputs", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
     const parsed = z
       .object({
         projectId: z.string().uuid(),
@@ -709,6 +733,12 @@ export function registerProjectsRoutes(app: HubHono): void {
 
   // Get a single project
   app.get("/projects/:id", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
     const userId = c.get("userId");
     const id = requireUuidParam(c, "id");
     if (id instanceof Response) return id;

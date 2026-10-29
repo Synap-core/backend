@@ -1,8 +1,9 @@
 /**
  * S3 — `system.issuer_pending_approval` promotion.
  *
- * The `/setup/agent` route is a large Hono handler registered inline (no
- * exported unit under test), so — same idiom as
+ * The notification block lives in `unknown-issuer.ts` (moved out of the
+ * `/setup/agent` handler, audit 2026-10-28 F1; its behaviour is driven end to
+ * end in `unknown-issuer.test.ts`). Same idiom as
  * `capability-drift.projection-parity.tripwire.test.ts` — this pins the
  * promotion against the route's own source rather than driving Hono end to
  * end. It fails by name if the event-append is ever removed, or if it stops
@@ -15,9 +16,9 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const src = readFileSync(join(here, "setup.ts"), "utf8");
+const src = readFileSync(join(here, "unknown-issuer.ts"), "utf8");
 
-describe("setup.ts /setup/agent — issuer-pending-approval event promotion", () => {
+describe("unknown-issuer.ts — issuer-pending-approval event promotion", () => {
   it("appends an event via the shared eventRepository door, not a raw insert", () => {
     const notifyBlockStart = src.indexOf(
       'type: "system.issuer_pending_approval"'

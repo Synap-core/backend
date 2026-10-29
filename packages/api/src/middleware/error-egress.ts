@@ -32,10 +32,11 @@
  * EXEMPTIONS (deliberate, each justified):
  *  - development (`nodeEnv === "development"`) — full detail is the point.
  *  - tRPC endpoints — tRPC owns its own envelope (a batch ARRAY of
- *    `{ error: { json: … } }`), and `packages/api/src/trpc.ts` already replaces
- *    the message with a generic string outside development while
- *    `getErrorShape` drops `stack` outside development. Rewriting that body
- *    would break `TRPCClientError` parsing in every client for no security gain.
+ *    `{ error: { json: … } }`). Its errorFormatter (`init-trpc.ts`) applies
+ *    the same rule there: in production an INTERNAL_SERVER_ERROR carries
+ *    {@link SERVER_FAULT_MESSAGE} and an `errorId` that is logged, never the
+ *    thrown message or a stack. Rewriting that body here would break
+ *    `TRPCClientError` parsing in every client for no security gain.
  *  - non-JSON bodies (SSE streams, HTML) — nothing to reshape, and consuming a
  *    stream to inspect it would break it.
  *
@@ -46,6 +47,10 @@
 import { randomUUID } from "crypto";
 import type { MiddlewareHandler } from "hono";
 import { redactSecretPath } from "./redact-secret-path.js";
+
+/** What a client is told about a server fault, on REST and on tRPC alike. */
+export const SERVER_FAULT_MESSAGE =
+  "An unexpected server error occurred. Quote errorId when reporting it.";
 
 /** Paths whose 5xx envelope is owned by another protocol (see EXEMPTIONS). */
 function ownsItsOwnErrorEnvelope(path: string): boolean {
@@ -114,8 +119,7 @@ export function sanitizeErrorEgress(opts: {
           typeof parsed?.code === "string"
             ? parsed.code
             : "INTERNAL_SERVER_ERROR",
-        message:
-          "An unexpected server error occurred. Quote errorId when reporting it.",
+        message: SERVER_FAULT_MESSAGE,
         errorId,
       }),
       { status, headers: { "content-type": "application/json" } }
