@@ -22,6 +22,20 @@ import { db, eq, getActingAgentUserId, getRequestGrant } from "@synap/database";
 import { apps } from "@synap/database/schema";
 import { isAppPublicId } from "@synap-core/types/membrane";
 
+/** The app whose key drove this request (its public id), or null. */
+function requestAppId(): string | null {
+  const clientId = getRequestGrant()?.clientId ?? null;
+  return isAppPublicId(clientId) ? clientId : null;
+}
+
+/**
+ * The public id of the app this request is a person's sign-in to, or null —
+ * the predicate above, without a read (the status door asks it per move).
+ */
+export function appSignInPublicId(): string | null {
+  return getActingAgentUserId() ? null : requestAppId();
+}
+
 /** The app this request is a person's sign-in to, or null. */
 export async function signedInApp(): Promise<{
   publicId: string;
@@ -29,8 +43,8 @@ export async function signedInApp(): Promise<{
   agentUserId: string | null;
   personMayDecideOwnAgentProposals: boolean;
 } | null> {
-  const clientId = getRequestGrant()?.clientId ?? null;
-  if (!isAppPublicId(clientId) || getActingAgentUserId()) return null;
+  const clientId = appSignInPublicId();
+  if (!clientId) return null;
   const [app] = await db
     .select({
       publicId: apps.publicId,
@@ -39,7 +53,7 @@ export async function signedInApp(): Promise<{
       metadata: apps.metadata,
     })
     .from(apps)
-    .where(eq(apps.publicId, clientId!))
+    .where(eq(apps.publicId, clientId))
     .limit(1);
   if (!app) return null;
   return {

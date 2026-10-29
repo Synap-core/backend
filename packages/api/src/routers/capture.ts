@@ -104,9 +104,13 @@ import {
   structureProgressSink,
 } from "../utils/structure-progress-bus.js";
 import type {
+  StructureFailure,
   StructuredFollowUp,
   WorkspaceTiebreakResult,
 } from "@synap/intelligence-client";
+import { classifyAiFailure, type AiFailureClass } from "../utils/ai-failure.js";
+import { classifyDegradedReason } from "../services/capture-agent/capture-degraded-guidance.js";
+import { findDegradedCaptureIdentity } from "../services/capture-agent/degraded-capture-identity.js";
 import {
   eq,
   and,
@@ -446,6 +450,71 @@ export function resolveDegradedFallbackKind(
   return match && match.profileKind !== "role" ? match.slug : undefined;
 }
 
+/**
+ * WHY a capture degraded, returned beside `degradedReason` (which keeps its
+ * value: clients branch on it). A status code and two classes, never the IS
+ * body or a provider name, so it is safe to show (plan B, open question 2).
+ *
+ *   cause        — the client-reported cause (`StructureFailure`), `empty`
+ *                  for a well-formed answer with nothing in it, `unknown`
+ *                  when the call reported none;
+ *   attempts     — structure calls made, retries included;
+ *   failureClass — the ONE failure door's class (`utils/ai-failure.ts`): what
+ *                  a reader needs to say whether retrying can help.
+ */
+export interface DegradedCaptureDetail {
+  cause: StructureFailure["cause"] | "empty" | "unknown";
+  status?: number;
+  attempts: number;
+  failureClass: AiFailureClass;
+}
+
+/** The detail of a structure call that answered nothing usable (null or auth). */
+export function degradedDetailForFailure(
+  failure: StructureFailure | undefined,
+  attempts: number
+): DegradedCaptureDetail {
+  if (!failure) return { cause: "unknown", attempts, failureClass: "unknown" };
+  // Evidence only, through the one door: the IS envelope when the answer had
+  // one, else the status, else the transport's own words.
+  const evidence = Object.assign(
+    new Error(
+      failure.message ??
+        (failure.cause === "timeout" ? "structure timeout" : failure.cause)
+    ),
+    failure.status !== undefined ? { status: failure.status } : {},
+    failure.failure ? { failure: failure.failure } : {}
+  );
+  return {
+    cause: failure.cause,
+    ...(failure.status !== undefined ? { status: failure.status } : {}),
+    attempts,
+    failureClass: classifyAiFailure(evidence),
+  };
+}
+
+/**
+ * The detail of a well-formed answer with nothing in it. The reason keeps the
+ * vocabulary it already had at the agent door: the pod's own last-resort
+ * label is an unreadable answer, a spent budget is `budget`, anything else
+ * the IS named is not an AI failure this door can class.
+ */
+export function degradedDetailForEmpty(
+  degradedReason: string,
+  attempts: number
+): DegradedCaptureDetail {
+  return {
+    cause: "empty",
+    attempts,
+    failureClass:
+      degradedReason === "is_empty_result"
+        ? "invalid_response"
+        : classifyDegradedReason(degradedReason) === "budget"
+          ? "budget"
+          : "unknown",
+  };
+}
+
 /** Build the generic-item fallback proposal returned when IS cannot structure input. */
 export function buildDegradedCaptureFallback(
   inputText: string,
@@ -477,6 +546,49 @@ export function buildDegradedCaptureFallback(
     dedupCandidates: {} as Record<string, DedupCandidate[]>,
     degraded: true as const,
     degradedReason,
+  };
+}
+
+/**
+ * The degraded fallback with its identity pass (B-W2): the raw text's records
+ * as `mentions`, the item's own twins as `dedupCandidates` when the caller
+ * named its kind (`callerKind`). Offered, never linked
+ * (`degraded-capture-identity.ts`); `dedupSkipped` when a lookup failed.
+ */
+export async function buildDegradedCaptureWithIdentity(
+  database: Parameters<typeof findDegradedCaptureIdentity>[0],
+  params: {
+    userId: string;
+    workspaceId: string | null;
+    inputText: string;
+    degradedReason: DegradedCaptureReasonOrUnknown;
+    degradedDetail: DegradedCaptureDetail;
+    callerKind: string | undefined;
+  }
+) {
+  const fallback = buildDegradedCaptureFallback(
+    params.inputText,
+    params.degradedReason,
+    params.callerKind
+  );
+  const item = fallback.proposals[0]!;
+  const identity = await findDegradedCaptureIdentity(database, {
+    userId: params.userId,
+    workspaceId: params.workspaceId,
+    text: params.inputText,
+    fallback: {
+      tempId: item.tempId,
+      profileSlug: item.profileSlug,
+      title: item.title,
+    },
+    checkTwins: params.callerKind !== undefined,
+  });
+  return {
+    ...fallback,
+    degradedDetail: params.degradedDetail,
+    dedupCandidates: identity.dedupCandidates,
+    mentions: identity.mentions,
+    ...(identity.unchecked ? { dedupSkipped: true as const } : {}),
   };
 }
 
@@ -1863,20 +1975,28 @@ const captureBaseRouter = router({
       //   is_auth_error      — IS rejected the pod credentials (401/403)
       //   is_invalid_response — IS reachable but returned null (5xx/validation/
       //                         timeout/network) — NOT a credentials problem
-      const degradedFallback = (
-        degradedReason: DegradedCaptureReasonOrUnknown
+      //   `degradedDetail` says which cause and failure class, so a reader can
+      //   tell a 402 (never retry) from a cut stream (issue 1c252b3b).
+      //
+      // Each one carries the identity pass (`buildDegradedCaptureWithIdentity`).
+      const degradedWithIdentity = (
+        degradedReason: DegradedCaptureReasonOrUnknown,
+        degradedDetail: DegradedCaptureDetail
       ) =>
-        buildDegradedCaptureFallback(
+        buildDegradedCaptureWithIdentity(database, {
+          userId,
+          workspaceId: workspaceId ?? null,
           inputText,
           degradedReason,
-          resolveDegradedFallbackKind(
+          degradedDetail,
+          callerKind: resolveDegradedFallbackKind(
             input.profileSlug,
             linkableProfiles as ReadonlyArray<{
               slug: string;
               profileKind?: string | null;
             }>
-          )
-        );
+          ),
+        });
 
       // The relation vocabulary for this lens, sent so the structurer emits only
       // slugs the write lanes will accept — the SAME read those lanes validate
@@ -2003,8 +2123,11 @@ const captureBaseRouter = router({
         timeoutMs: STRUCTURE_TIMEOUT_MS,
       };
       let structureResult: Awaited<ReturnType<typeof client.structure>>;
+      // Attempts made: one, plus each retry `onRetry` reports (an auth throw
+      // leaves the loop without an outcome to read them from).
       let structureAttempts = 1;
       let structureFailReason: StructureRetryReason | undefined;
+      let structureFailure: StructureFailure | undefined;
       try {
         // Bounded retry on TRANSIENT failures only. The client returns null both
         // on a transient error/empty completion (worth a retry) AND on a genuine
@@ -2014,14 +2137,16 @@ const captureBaseRouter = router({
         // observable — it was invisible until measured by hand during the
         // 2026-08-01 IS outage.
         const outcome = await callStructureWithRetry(
-          () =>
+          (report) =>
             client.structure(structureInput, {
               onProgress: structureProgressSink(),
+              onFailure: report,
             }),
           {
             timeoutMs: STRUCTURE_TIMEOUT_MS,
             maxAttempts: STRUCTURE_MAX_ATTEMPTS,
             onRetry: ({ attempt, maxAttempts, elapsedMs, backoffMs }) => {
+              structureAttempts = attempt + 1;
               reportStructureRetry();
               logger.warn(
                 { userId, attempt, maxAttempts, elapsedMs, backoffMs },
@@ -2031,8 +2156,8 @@ const captureBaseRouter = router({
           }
         );
         structureResult = outcome.result;
-        structureAttempts = outcome.attempts;
         structureFailReason = outcome.lastReason;
+        structureFailure = outcome.lastFailure;
       } catch (err) {
         // Only an upstream auth failure reaches here as a throw — the client
         // returns null for every non-auth failure. This is the ONLY path that
@@ -2043,9 +2168,16 @@ const captureBaseRouter = router({
             "IS structure auth failure — marking service as credential_error"
           );
           markServiceCredentialError();
-          return finishIntake(degradedFallback("is_auth_error"), {
-            podDegraded: true,
-          });
+          return finishIntake(
+            await degradedWithIdentity(
+              "is_auth_error",
+              degradedDetailForFailure(
+                { cause: "http", status: err.status },
+                structureAttempts
+              )
+            ),
+            { podDegraded: true }
+          );
         }
         throw err;
       }
@@ -2060,12 +2192,18 @@ const captureBaseRouter = router({
             userId,
             attempts: structureAttempts,
             reason: structureFailReason,
+            cause: structureFailure?.cause,
+            status: structureFailure?.status,
           },
           "IS structure failed (non-auth) after retries — returning degraded fallback, credential status left unchanged"
         );
-        return finishIntake(degradedFallback("is_invalid_response"), {
-          podDegraded: true,
-        });
+        return finishIntake(
+          await degradedWithIdentity(
+            "is_invalid_response",
+            degradedDetailForFailure(structureFailure, structureAttempts)
+          ),
+          { podDegraded: true }
+        );
       }
 
       // 1a. Reconcile the workspace pick by NAME. The LLM reliably reasons the
@@ -2160,7 +2298,10 @@ const captureBaseRouter = router({
         );
         return finishIntake(
           {
-            ...degradedFallback(emptyReason),
+            ...(await degradedWithIdentity(
+              emptyReason,
+              degradedDetailForEmpty(emptyReason, structureAttempts)
+            )),
             ...(structureResult.extraction
               ? { extraction: structureResult.extraction }
               : {}),

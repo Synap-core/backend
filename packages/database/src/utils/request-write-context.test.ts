@@ -22,6 +22,8 @@ import {
   getRequestClientKey,
   getRequestConversationCwd,
   conversationCwdPatch,
+  parseProcessIdentity,
+  getRequestProcess,
 } from "./request-write-context.js";
 
 const S = "11111111-1111-4111-8111-111111111111";
@@ -211,5 +213,50 @@ describe("request write context — an IS run names itself", () => {
       expect(
         clientKeyForApiKey({ id: "is-key", keyType: "is_internal" }, conv)
       ).toBeUndefined();
+  });
+});
+
+describe("the calling process (0373)", () => {
+  it("parses <host>:<pid>:<startedAtMs>, host lower-cased; anything else is unusable", () => {
+    expect(parseProcessIdentity("Mac-A.local:4242:1761600000000")).toEqual({
+      key: "mac-a.local:4242:1761600000000",
+      host: "mac-a.local",
+      pid: 4242,
+      startedAt: new Date(1761600000000),
+    });
+    for (const bad of [
+      "",
+      undefined,
+      "mac:4242",
+      "mac:x:1761600000000",
+      "mac:1:12",
+      "a b:1:1761600000000",
+      "x".repeat(300) + ":1:1761600000000",
+    ])
+      expect(parseProcessIdentity(bad)).toBeUndefined();
+  });
+
+  it("rides with a client key, composes with the cwd, and enters no scope without a key", async () => {
+    const seen = await runWithClientKey(
+      "key:k|conv:claude-code:c",
+      async () => {
+        await tick();
+        return {
+          p: getRequestProcess()?.host,
+          cwd: getRequestConversationCwd(),
+        };
+      },
+      "/work",
+      "devbox:7:1761650000000"
+    );
+    expect(seen).toEqual({ p: "devbox", cwd: "/work" });
+    expect(
+      runWithClientKey(
+        undefined,
+        () => getRequestProcess(),
+        "/w",
+        "d:7:1761650000000"
+      )
+    ).toBeUndefined();
   });
 });

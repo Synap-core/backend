@@ -728,6 +728,8 @@ const WITHHELD_FILES: Record<string, string> = {
   "services/capabilities/verb-write-back.ts": "write target",
   "services/capture-agent/submit-capture-graph.ts":
     "capture duplicate door scope + strong-match write gate (dedup)",
+  "services/capture-agent/degraded-capture-identity.ts":
+    "degraded capture: strong-match recheck by id + duplicate door scope (dedup)",
   "services/diagnose/index.ts": "diagnose one object, by id",
   "services/diagnose/resolve-object-kind.ts": "resolves one id's kind",
   "services/entities/update-entities.ts": "batch-update targets",

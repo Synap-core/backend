@@ -5299,7 +5299,7 @@ END $$;
 -- 0342: session runners — who is attached to a session right now (one row per
 -- session × client conversation holding its change-feed wait). Telemetry,
 -- stamped by the wait at most once a minute; never on focus_sessions (0277's
--- trigger would wake the waiter). Mirrors 0342_session_runners.sql.
+-- trigger would wake the waiter). Mirrors 0342_session_runners.sql + 0373 (process).
 CREATE TABLE IF NOT EXISTS "session_runners" (
   "session_id"      uuid        NOT NULL REFERENCES "focus_sessions"("id") ON DELETE CASCADE,
   "client_key"      text        NOT NULL,
@@ -5310,9 +5310,12 @@ CREATE TABLE IF NOT EXISTS "session_runners" (
   "conversation_id" text        NOT NULL,
   "cwd"             text,
   "machine_user_id" text,
+  "process_key"        text        NOT NULL DEFAULT '',
+  "process_host"       text,
+  "process_started_at" timestamptz,
   "first_seen_at"   timestamptz NOT NULL DEFAULT now(),
   "last_seen_at"    timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY ("session_id", "client_key")
+  PRIMARY KEY ("session_id", "client_key", "process_key")
 );
 
 CREATE INDEX IF NOT EXISTS "idx_session_runners_session_seen"
@@ -5523,6 +5526,14 @@ CREATE TABLE IF NOT EXISTS "document_passage_state" (
   "failed_at"       timestamptz,
   "updated_at"      timestamptz NOT NULL DEFAULT now()
 );
+
+-- 0359: when we last spoke to someone (mirrors
+-- 0359_entities_last_interaction_at.sql). The truth behind the
+-- `properties.lastInteractionAt` projection; written only by `noteInteraction`.
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "last_interaction_at" timestamptz;
+CREATE INDEX IF NOT EXISTS "entities_profile_last_interaction_idx"
+  ON "entities" ("profile_id", "last_interaction_at")
+  WHERE "deleted_at" IS NULL;
 
 -- 0376: the status watcher's episode claims (status-flow W6) — mirrors
 -- 0376_status_signal_raised.sql.

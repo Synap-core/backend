@@ -22,7 +22,7 @@ import {
   type DeferredWriteRow,
   type DeferredWritesReview,
 } from "@synap-core/types/proposals/deferred-writes";
-import { countedNoun, resolveStatusLabel } from "@synap-core/types/vocabulary";
+import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { openIn, type Exit } from "../../../lib/open-in";
 import {
   rowHref,
@@ -32,6 +32,7 @@ import {
 import { kindIcon, kindLabel } from "../../_lib/object/kind-icon";
 import { StatusPill } from "../../(admin)/components/status-pill";
 import { statusKindForTone } from "../../(admin)/components/status-tone";
+import { proposalPageT } from "./copy";
 
 /** Writes drawn before "Show all N writes". */
 export const DEFERRED_WRITES_SHOWN = 8;
@@ -121,6 +122,7 @@ export function DeferredWritesList({
   review: DeferredWritesReview;
 }) {
   const [all, setAll] = useState(false);
+  const t = proposalPageT();
   const shown = all ? review.rows : review.rows.slice(0, DEFERRED_WRITES_SHOWN);
   return (
     <section
@@ -129,7 +131,7 @@ export function DeferredWritesList({
       className="flex flex-col gap-2 rounded-lg bg-foreground/[0.03] px-4 py-3.5 ring-1 ring-inset ring-foreground/10"
     >
       <h2 className="font-heading text-[15px] font-medium text-foreground">
-        {countedNoun(review.total, "write")}
+        {t("deferredWrites.count", { n: review.total })}
       </h2>
       {shown.length > 0 && (
         <ul className="flex flex-col divide-y divide-foreground/[0.05]">
@@ -145,7 +147,7 @@ export function DeferredWritesList({
           className="self-start px-1 text-[12.5px] text-foreground/65"
           onPress={() => setAll(true)}
         >
-          {`Show all ${countedNoun(review.rows.length, "write")}`}
+          {t("deferredWrites.showAll", { n: review.rows.length })}
         </Button>
       )}
       {review.unreadable > 0 && (
@@ -153,7 +155,7 @@ export function DeferredWritesList({
           data-deferred-unreadable=""
           className="text-[12px] text-status-stale"
         >
-          {`${countedNoun(review.unreadable, "write")} could not be read — the raw request is under Advanced.`}
+          {t("deferredWrites.unreadable", { n: review.unreadable })}
         </p>
       )}
     </section>

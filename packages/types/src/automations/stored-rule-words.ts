@@ -35,7 +35,16 @@ import {
 } from "./rule-sentence-words.js";
 import { flowToConditions } from "./sentence.js";
 
-/** "a person" / "an invoice" — the article a lowercased noun takes. */
+/**
+ * "a person" / "an invoice" — the article a lowercased noun takes.
+ *
+ * @deprecated English only: a sentence that names a kind is a message reading
+ *   the noun bundle (`nounParams(resolveNoun(kind))`, `@synap-core/types/vocabulary`),
+ *   whose `objV` selects "a" / "an" in English and the elided article in
+ *   French. Kept for the rule and worker sentences of this package
+ *   (`eventPatternWhenText`, `actionPhrase`, `workers/words.ts`), which move
+ *   with their folders' catalogs, and synap-app's `form-validation` (P2b).
+ */
 export function withArticle(noun: string): string {
   return `${/^[aeiou]/i.test(noun) ? "an" : "a"} ${noun}`;
 }

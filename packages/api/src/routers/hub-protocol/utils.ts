@@ -9,6 +9,7 @@ import { TRPCError } from "@trpc/server";
 import { agentBelongsTo } from "./agent-belongs-to.js";
 import type { Context } from "../../types/context.js";
 import { resolveConfinedWorkspace } from "./confine-workspace.js";
+import { appSignInPublicId } from "../../services/app-sign-in-policy.js";
 
 /**
  * Create a tRPC caller context for Hub Protocol
@@ -78,6 +79,35 @@ export async function createHubProtocolCallerContext(
   };
 
   return ctx;
+}
+
+/**
+ * The `source` a hub forwarder stamps on the write it relays to an entity
+ * door, from the KEY, never from the body:
+ *  - a person's own app sign-in (`app_person`, backend #94: the grant names
+ *    an app and no agent acts, `appSignInPublicId`) writes AS THE PERSON:
+ *    `"user"`, so the gate runs the person's ladder (RBAC + the key's grant).
+ *    A source it states can only narrow that (`"intelligence"`, a connector
+ *    tag): none of `HUB_WRITE_SOURCES` names a person or the system;
+ *  - every other hub key is AI: `"intelligence"`, whatever it states. A
+ *    stated connector source (`"cli"`, `"n8n"`, …) is not an AI source to the
+ *    gate, so honouring it would let an unattributed key leave the
+ *    anonymous-AI ladder.
+ *
+ * Two signatures: with no stated source the result is exactly
+ * `"user" | "intelligence"`. A single generic signature let TypeScript infer
+ * `S` from the call's contextual type and widen it to `string` (TS2322 at the
+ * no-argument call sites).
+ */
+export function hubWriteSource(): "user" | "intelligence";
+export function hubWriteSource<S extends string>(
+  stated: S | null | undefined
+): S | "user" | "intelligence";
+export function hubWriteSource<S extends string>(
+  stated?: S | null
+): S | "user" | "intelligence" {
+  if (!appSignInPublicId()) return "intelligence";
+  return stated ?? "user";
 }
 
 /**

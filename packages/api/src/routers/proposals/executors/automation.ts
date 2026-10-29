@@ -204,12 +204,12 @@ export function registerAutomationExecutors(): void {
     },
   });
 
-  // ── automation / update · automation / delete ─────────────────────────────
-  // An AGENT editing, pausing or deleting an automation (the router gates it
-  // like create). Replayed through the SAME router door as the approver, whose
+  // ── automation / update · automation / delete · automation / archive ─────
+  // An AGENT editing, deleting or archiving an automation (the router gates it
+  // like create; its own never-run automation archives without a proposal). Replayed through the SAME router door as the approver, whose
   // request carries no acting-agent scope — so the door cannot re-gate; RBAC
   // and the approver's own grant still run on the loaded row.
-  for (const action of ["update", "delete"] as const) {
+  for (const action of ["update", "delete", "archive"] as const) {
     registerProposalExecutor({
       key: `automation/${action}`,
       async execute({ proposal, userId, input, deps }) {
@@ -241,10 +241,12 @@ export function registerAutomationExecutors(): void {
         const result =
           action === "delete"
             ? await automationCaller.delete({ id: automationId })
-            : await automationCaller.update({
-                ...update,
-                id: automationId,
-              } as never);
+            : action === "archive"
+              ? await automationCaller.archive({ id: automationId })
+              : await automationCaller.update({
+                  ...update,
+                  id: automationId,
+                } as never);
         if (result.status === "proposed") {
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",

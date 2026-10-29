@@ -408,6 +408,38 @@ export const CaptureStructureResponseSchema = z
      * enum here would turn a NEW honest reason into a validation failure.
      */
     degradedReason: z.string().optional(),
+    /**
+     * Why it degraded, beside `degradedReason` (which keeps its value):
+     * `cause` (`http` | `stream` | `network` | `timeout` | `empty` |
+     * `unknown`), the IS `status` when it answered, the structure `attempts`
+     * made, and `failureClass` — the pod's AI failure class (`quota`,
+     * `bad_request`, `upstream`, …) that says whether retrying can help.
+     * Never the IS body. Open strings: the vocabularies may grow.
+     */
+    degradedDetail: z
+      .object({
+        cause: z.string(),
+        status: z.number().int().optional(),
+        attempts: z.number().int(),
+        failureClass: z.string(),
+      })
+      .optional(),
+    /**
+     * Degraded only: existing records the raw text names by a strong atom
+     * (an email or phone in the text), that the caller may see. CANDIDATES:
+     * nothing was linked; link only what the user confirms. `dedupSkipped`
+     * says when a lookup failed (then an empty list was not checked).
+     */
+    mentions: z
+      .array(
+        z.object({
+          entityId: z.string(),
+          title: z.string(),
+          profileSlug: z.string(),
+          signal: z.enum(["email", "phone"]),
+        })
+      )
+      .optional(),
     extraction: CaptureExtractionSchema.optional(),
     /**
      * Caller-state word. `needs_input` — the structurer asked a clarifying

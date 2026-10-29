@@ -204,6 +204,12 @@ import {
   CONNECTION_SYNC_APPROVAL_QUEUE,
 } from "./connection-sync-approval.js";
 import {
+  handleInteractionNote,
+  handleInteractionSweep,
+  INTERACTION_NOTE_QUEUE,
+  INTERACTION_SWEEP_QUEUE,
+} from "./interaction-note.js";
+import {
   CONNECTION_SYNC_RUN_QUEUE,
   handleConnectionSyncRun,
 } from "./connection-sync-run.js";
@@ -407,6 +413,9 @@ const ALL_QUEUES = [
   EXTERNAL_AGENT_POLL_QUEUE,
   SESSION_RECAP_QUEUE,
   CONNECTION_SYNC_APPROVAL_QUEUE,
+  // When we last spoke to someone: on demand (reactor) + the daily sweep.
+  INTERACTION_NOTE_QUEUE,
+  INTERACTION_SWEEP_QUEUE,
   CONNECTION_SYNC_RUN_QUEUE,
   PROACTIVE_SCAN_QUEUE,
   PROPOSAL_REVIEWED_NOTIFY_QUEUE,
@@ -1085,6 +1094,16 @@ export async function registerAllWorkers(): Promise<void> {
     handleConnectionSyncApproval(job)
   );
   logger.info("Registered worker: connection-sync-approval");
+
+  // When we last spoke to someone (CRM recall C-W2): the reactor's on-demand
+  // job (an interaction edge, a touch sent) + the daily past-meeting sweep.
+  await boss.work(INTERACTION_NOTE_QUEUE, async ([job]: any[]) =>
+    handleInteractionNote(job)
+  );
+  await boss.work(INTERACTION_SWEEP_QUEUE, async () =>
+    handleInteractionSweep()
+  );
+  logger.info("Registered workers: interaction-note, interaction-sweep");
 
   // Connection sync run — the one sync door's pg-boss job:
   // on-connect / webhook / manual enqueue + the 30-min cron (cron.ts).

@@ -13,6 +13,11 @@
 import { getBoss } from "./boss.js";
 import { createLogger, config } from "@synap-core/core";
 import { registerReactor, getReactors } from "./reactors.js";
+import {
+  INTERACTION_RELATION_TYPES,
+  OUTREACH_INTERACTION_MOVES,
+  OUTREACH_TOUCH_KIND,
+} from "@synap/database/interaction-kinds";
 import type { Reactor } from "./reactors.js";
 
 const logger = createLogger({ module: "side-effects" });
@@ -357,6 +362,39 @@ export async function enqueueDocumentPassages(
   });
 }
 
+// 10. Interaction note — "when did we last speak to them" (CRM recall C-W2).
+// An edge an interaction is read from (`attended_by`, `met_at`,
+// `discussed_with`, `sent_to`), or an outreach touch moving to `sent` /
+// `replied`, enqueues the worker that reads the evidence and moves the people
+// forward through `noteInteraction` (@synap/database). Whether the edge
+// really is an interaction (a PAST meeting, a DATED note, a touch that went
+// out) is the worker's rule, not this filter's. Sync-origin writes count: a
+// synced meeting that happened is an interaction.
+const interactionNoteReactor: Reactor = {
+  id: "interaction-note",
+  match: (payload) =>
+    (payload.subjectType === "relation" &&
+      payload.action === "create" &&
+      (INTERACTION_RELATION_TYPES as readonly string[]).includes(
+        String(payload.data?.relationType)
+      )) ||
+    (payload.subjectType === "entity" &&
+      payload.action === "transition" &&
+      payload.data?.profileSlug === OUTREACH_TOUCH_KIND &&
+      payload.data?.role == null &&
+      (OUTREACH_INTERACTION_MOVES as readonly string[]).includes(
+        String(payload.data?.to)
+      )),
+  async handler(payload, { boss }) {
+    await boss.send(
+      "interaction-note",
+      payload.subjectType === "relation"
+        ? { relationIds: [payload.subjectId] }
+        : { touchIds: [payload.subjectId] }
+    );
+  },
+};
+
 // Registration order === original inline order. Do not reorder.
 registerReactor(searchIndexReactor);
 registerReactor(entityEmbeddingReactor);
@@ -367,6 +405,7 @@ registerReactor(hydrationSummaryReactor);
 registerReactor(sessionRecapReactor);
 registerReactor(connectionSyncApprovalReactor);
 registerReactor(documentPassagesReactor);
+registerReactor(interactionNoteReactor);
 
 // ============================================================================
 

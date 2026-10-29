@@ -24,7 +24,10 @@
  * WHO IS MOVING (`statusMoveActorFor`, the one derivation for the request
  * doors): an AI write with no agent attribution (a service / hub key) is an
  * unattributed AGENT, never a person — governed on the anonymous AI ladder and
- * strict CAS. `system` is server code only: a request can never claim it.
+ * strict CAS. A person's own app sign-in (`app_person`, backend #94) is that
+ * PERSON, as for every other write it makes. `system` is server code only: a
+ * request can never claim it. The app a move was made with is stamped on its
+ * transition by `transitionStamp` (`actorClass: "app"`, `appId`), not here.
  */
 import {
   db,
@@ -50,6 +53,7 @@ import { roleWriteGrantSpace } from "../../utils/role-write-grant.js";
 import { ownWorkOrganiseForTaskClose } from "../governance/own-organise.js";
 import { mayWriteStatusTarget } from "./status-write-floor.js";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
+import { appSignInPublicId } from "../app-sign-in-policy.js";
 
 const logger = createLogger({ module: "move-status" });
 
@@ -119,6 +123,13 @@ export interface StatusMoveCallerContext {
  * Who a request-door status move is made by, derived ONCE for
  * `entities.update` and `entities.updateFacet` (backend review F1/F2/F15):
  *  - an attributed agent (body or ctx) → `agent`;
+ *  - a person's app sign-in (grant names an app, no agent acts: the
+ *    `app_person` key, `app-sign-in-policy.ts`) → the PERSON, whatever
+ *    `source` it carries: every hub-scoped key is branded AI on the ctx
+ *    (`api-key-auth.ts`) and the hub forwarder stamps `source:
+ *    "intelligence"` on the body (`hub-protocol/entities.ts` updateEntity),
+ *    so neither says who holds this key. Never `system` (its hub ctx has no
+ *    `req`);
  *  - an AI caller (AI `source` in the body or on the ctx, or a hub key) with
  *    no agent → an UNATTRIBUTED agent (`agentUserId: null`), never a person;
  *  - `source: "system"` → `system` only for server code (no wire request);
@@ -138,6 +149,9 @@ export function statusMoveActorFor(
       actor: { kind: "agent", userId, agentUserId },
       approvedProposalId,
     };
+  }
+  if (appSignInPublicId()) {
+    return { actor: { kind: "human", userId }, approvedProposalId };
   }
   const aiCaller =
     ctx.isHubProtocol === true ||

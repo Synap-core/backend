@@ -60,6 +60,11 @@
       "types": "./dist/utils/pg-errors.d.ts",
       "import": "./dist/utils/pg-errors.js",
       "default": "./dist/utils/pg-errors.js"
+    },
+    "./interaction-kinds": {
+      "types": "./dist/services/interactions/interaction-kinds.d.ts",
+      "import": "./dist/services/interactions/interaction-kinds.js",
+      "default": "./dist/services/interactions/interaction-kinds.js"
     }
   },
   "files": [
@@ -81,6 +86,7 @@
     "schema:check": "tsx src/scripts/check-schema-coherence.ts",
     "conversions": "tsx src/scripts/run-conversions.ts",
     "rebuild-property-index": "tsx src/scripts/rebuild-property-index.ts",
+    "recompute-last-interaction": "tsx src/scripts/recompute-last-interaction.ts",
     "backfill:default-sources-edges": "tsx src/scripts/backfill-default-sources-edges.ts",
     "backfill:comment-threads": "tsx src/scripts/backfill-comment-threads.ts"
   },

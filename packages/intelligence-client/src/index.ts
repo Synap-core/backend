@@ -27,6 +27,7 @@ export type {
   WorkspaceTiebreakResult,
   TranscriptionStatus,
   TranscribeOutcome,
+  StructureFailure,
 } from "./intelligence-hub-client.js";
 
 export {

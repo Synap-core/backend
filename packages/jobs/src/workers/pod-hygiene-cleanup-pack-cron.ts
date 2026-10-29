@@ -12,12 +12,11 @@
  * import @synap/api (circular dep), so apps/api fills the slot at boot via
  * `registerCleanupPackRunner()` — the same IoC pattern as stale-proposal-cron.
  *
- * Queue: pod-hygiene.cleanup-pack (worked — a manual `boss.send` runs it)
- * Cron:  NOT SCHEDULED. Add `scheduleSafe(…, POD_HYGIENE_CLEANUP_PACK_CRON)` to
- *        cron.ts only once relay renders a pack's items with a per-item
- *        "Leave out" (`proposals.rejectItem`); until then one Approve applies
- *        every item unseen. Pinned by
- *        `__tripwires__/cleanup-pack-cron-unscheduled.tripwire.test.ts`.
+ * Queue: pod-hygiene.cleanup-pack
+ * Cron:  weekly, Mondays 04:20 UTC (W-B4, founder Q-B4): the pack's one row is
+ *        in the person's Monday brief, before the 06:00 night shift. Relay
+ *        reviews it item by item ("Leave out" = `proposals.rejectItem`).
+ *        Pinned by `__tripwires__/cleanup-pack-cron-weekly.tripwire.test.ts`.
  */
 
 import type PgBoss from "pg-boss";
@@ -27,7 +26,7 @@ const logger = createLogger({ module: "pod-hygiene-cleanup-pack-cron" });
 
 export const POD_HYGIENE_CLEANUP_PACK_QUEUE = "pod-hygiene.cleanup-pack";
 
-export const POD_HYGIENE_CLEANUP_PACK_CRON = "20 4 * * *";
+export const POD_HYGIENE_CLEANUP_PACK_CRON = "20 4 * * 1";
 
 type CleanupPackRunner = () => Promise<unknown>;
 

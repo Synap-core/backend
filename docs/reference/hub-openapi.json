@@ -1161,6 +1161,14 @@
               { "type": "string" },
               { "type": "string", "format": "date-time" }
             ]
+          },
+          "lastInteractionAt": {
+            "anyOf": [
+              { "type": "string" },
+              { "type": "string", "format": "date-time" },
+              { "type": "null" }
+            ],
+            "description": "When we last spoke to them (a meeting that happened, sent outreach, a dated conversation); null = never. Present on rows read from the pod's entity table."
           }
         },
         "required": ["id", "profileSlug", "type", "properties", "userId"]
@@ -1719,6 +1727,29 @@
           },
           "degraded": { "type": "boolean" },
           "degradedReason": { "type": "string" },
+          "degradedDetail": {
+            "type": "object",
+            "properties": {
+              "cause": { "type": "string" },
+              "status": { "type": "integer" },
+              "attempts": { "type": "integer" },
+              "failureClass": { "type": "string" }
+            },
+            "required": ["cause", "attempts", "failureClass"]
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "entityId": { "type": "string" },
+                "title": { "type": "string" },
+                "profileSlug": { "type": "string" },
+                "signal": { "type": "string", "enum": ["email", "phone"] }
+              },
+              "required": ["entityId", "title", "profileSlug", "signal"]
+            }
+          },
           "extraction": { "$ref": "#/components/schemas/CaptureExtraction" },
           "status": { "type": "string" },
           "degradedMessage": { "type": "string" },
@@ -7528,10 +7559,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "`<field>[:asc|:desc]` (default `desc`), field one of `createdAt`, `updatedAt`, `title`. Applied in SQL before paging. Any other value is a 400; not combinable with `q`."
+              "description": "`<field>[:asc|:desc]` (default `desc`), field one of `createdAt`, `updatedAt`, `title`, `lastInteractionAt` (never-contacted last). Applied in SQL before paging. Any other value is a 400; not combinable with `q`."
             },
             "required": false,
-            "description": "`<field>[:asc|:desc]` (default `desc`), field one of `createdAt`, `updatedAt`, `title`. Applied in SQL before paging. Any other value is a 400; not combinable with `q`.",
+            "description": "`<field>[:asc|:desc]` (default `desc`), field one of `createdAt`, `updatedAt`, `title`, `lastInteractionAt` (never-contacted last). Applied in SQL before paging. Any other value is a 400; not combinable with `q`.",
             "name": "sort",
             "in": "query"
           },
@@ -7617,6 +7648,37 @@
             "description": "Creation-date window, EXCLUSIVE upper bound (ISO-8601). NOT combinable with `q`: the `q` branch is a relevance-ranked top-N served by Typesense, and a date window is an exhaustive question, so silently truncating one to the other would under-report. Ask for the window without `q`.",
             "name": "createdBefore",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Last-interaction window, INCLUSIVE lower bound (ISO-8601): people we last spoke to on or after this. 400 with `q`."
+            },
+            "required": false,
+            "description": "Last-interaction window, INCLUSIVE lower bound (ISO-8601): people we last spoke to on or after this. 400 with `q`.",
+            "name": "lastInteractionAfter",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Last-interaction window, EXCLUSIVE upper bound (ISO-8601). 'Who haven't I spoken to in a month' = this at now-30d with `includeNever=true` and `sort=lastInteractionAt:asc`. 400 with `q`."
+            },
+            "required": false,
+            "description": "Last-interaction window, EXCLUSIVE upper bound (ISO-8601). 'Who haven't I spoken to in a month' = this at now-30d with `includeNever=true` and `sort=lastInteractionAt:asc`. 400 with `q`.",
+            "name": "lastInteractionBefore",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["true", "false"],
+              "description": "`true` = a last-interaction window also returns the people never contacted (no value). Default `false`."
+            },
+            "required": false,
+            "description": "`true` = a last-interaction window also returns the people never contacted (no value). Default `false`.",
+            "name": "includeNever",
+            "in": "query"
           }
         ],
         "responses": {
@@ -7632,7 +7694,7 @@
             }
           },
           "400": {
-            "description": "Malformed or unsupported filter combination — an unparseable createdAfter/createdBefore, an unsupported `sort`, or a date window, `sort`, `includeFacets` or `includeMedia` combined with `q`.",
+            "description": "Malformed or unsupported filter combination — an unparseable createdAfter/createdBefore/lastInteraction bound, an inverted last-interaction window, an unsupported `sort`, or a date window, `sort`, `includeFacets` or `includeMedia` combined with `q`.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }

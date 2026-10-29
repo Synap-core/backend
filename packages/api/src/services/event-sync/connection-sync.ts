@@ -756,12 +756,26 @@ export async function upsertSyncGraph(
       },
       ctx.owner
     );
-    await recordSyncWrite(ctx, "relation", "create", relation.id, {
-      type: r.type,
-      sourceEntityId: sourceId,
-      targetEntityId: targetId,
-      source: ctx.provider,
-    });
+    await recordSyncWrite(
+      ctx,
+      "relation",
+      "create",
+      relation.id,
+      {
+        type: r.type,
+        sourceEntityId: sourceId,
+        targetEntityId: targetId,
+        source: ctx.provider,
+      },
+      // The fan-out speaks the relation door's keys (`relations.create`), so
+      // a reactor reads ONE shape whoever made the edge — the interaction
+      // reactor reads `relationType` (a synced meeting's `attended_by`).
+      {
+        relationType: r.type,
+        fromEntityId: sourceId,
+        toEntityId: targetId,
+      }
+    );
   }
   return { created, merged, refreshSkipped, byProfile, deferred };
 }
@@ -776,7 +790,9 @@ async function recordSyncWrite(
   subjectType: "entity" | "relation",
   action: "create" | "update",
   subjectId: string,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
+  /** The fan-out payload, when it differs from the log's (`data`). */
+  fanOutData?: Record<string, unknown>
 ): Promise<void> {
   await recordDomainMutation({
     subjectType,
@@ -785,7 +801,7 @@ async function recordSyncWrite(
     userId: ctx.owner,
     workspaceId: ctx.workspaceId,
     source: "connection_sync",
-    data,
+    ...(fanOutData ? { logData: data, data: fanOutData } : { data }),
     origin: "sync",
   });
 }

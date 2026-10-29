@@ -76,6 +76,15 @@ describe("executeCapability — de-escalation verbs auto-run at the gate (68aeb3
     });
   });
 
+  // W-B3: its door is the real gate (own + never ran applies, else proposes);
+  // a capability-level proposal in front of it would ask twice.
+  it("an agent's automation.archive takes the auto-run path to its door", async () => {
+    expect(await gateInputFor("automation.archive")).toMatchObject({
+      agentUserId: AGENT,
+      readOnly: true,
+    });
+  });
+
   it.each(["automation.delete", "automation.activate", "automation.update"])(
     "%s still flows through the full ladder",
     async (verb) => {

@@ -1803,6 +1803,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "home_workspace_id",
     addedBy: "0355_entities_home_workspace.sql",
   },
+  // When we last spoke to someone (0359). Every entity read selects it and
+  // the list doors sort / window on it — absence 500s every entity read.
+  {
+    table: "entities",
+    column: "last_interaction_at",
+    addedBy: "0359_entities_last_interaction_at.sql",
+  },
   {
     table: "entity_facets",
     column: "status_category",
@@ -1856,6 +1863,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "session_runners",
     column: "machine_user_id",
     addedBy: "0342_session_runners.sql",
+  },
+  // The process half of a runner (0373). Absence means two live copies of one
+  // conversation overwrite each other's row, and the runner stamp's upsert
+  // (ON CONFLICT names process_key) fails.
+  {
+    table: "session_runners",
+    column: "process_key",
+    addedBy: "0373_session_runners_process.sql",
   },
 
   // proposal_apply_runs — a large approval applied by the background job

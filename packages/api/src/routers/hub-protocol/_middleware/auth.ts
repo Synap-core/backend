@@ -37,6 +37,7 @@ import {
   requestConversationId,
   CONVERSATION_HEADER,
   CONVERSATION_CWD_HEADER,
+  PROCESS_HEADER,
   isProbeApiKey,
   isPodJwtShaped,
   grantOfScope,
@@ -606,7 +607,8 @@ export const hubAuthMiddleware = async (
               requestConversationId(c.req.header(CONVERSATION_HEADER))
             ),
             () => runWithGrant(keyIdentity.grant, () => next()),
-            c.req.header(CONVERSATION_CWD_HEADER)
+            c.req.header(CONVERSATION_CWD_HEADER),
+            c.req.header(PROCESS_HEADER)
           )
         )
       )

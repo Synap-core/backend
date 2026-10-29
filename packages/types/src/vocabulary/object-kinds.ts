@@ -35,6 +35,9 @@
  * identity ONLY via `uiHints`, are therefore first-class.
  */
 
+import type { Locale } from "../i18n/locale.js";
+import { catalogLocaleOf, sentences, translatedWord } from "./translate.js";
+
 // ─── Taxonomy ────────────────────────────────────────────────────────────────
 
 /**
@@ -120,7 +123,7 @@ export const identityToken = (n: number): string =>
  * mirror the CANONICAL `entity-accent` choices (the token source), NOT the old
  * hex `ENTITY_CONFIG` — so this registry ends the person-cyan-vs-teal split.
  */
-export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
+const OBJECT_KIND_ROWS = {
   // ── Entity profiles (category: entity) ──
   task: {
     kind: "task",
@@ -631,7 +634,12 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     label: "Raycast",
     labelPlural: "Raycast",
   },
-};
+} satisfies Record<string, ObjectKindDef>;
+
+export const OBJECT_KINDS: Record<string, ObjectKindDef> = OBJECT_KIND_ROWS;
+
+/** The registry's rows, exactly typed: the kinds of the `kind.*` catalog. */
+export type ObjectKindRows = typeof OBJECT_KIND_ROWS;
 
 // ─── View lenses ─────────────────────────────────────────────────────────────
 
@@ -706,11 +714,13 @@ export function resolveObjectIdentity(
   kind: string | null | undefined,
   profile?: ProfileIdentityInput | null,
   /** For `view` kind: the lens (kanban/calendar/graph/…) — overrides the icon. */
-  subtype?: string | null
+  subtype?: string | null,
+  /** The catalog locale of the registry's label; the ambient one when absent. */
+  locale?: Locale
 ): ObjectKindDef {
   const key = (kind ?? profile?.slug ?? "").toString();
   const base: ObjectKindDef =
-    OBJECT_KINDS[key] ??
+    localizedKind(key, catalogLocaleOf(locale)) ??
     ({
       kind: key || "unknown",
       category: "entity",
@@ -739,6 +749,21 @@ export function resolveObjectIdentity(
     label: profile.label ?? withLens.label,
     labelPlural: profile.labelPlural ?? withLens.labelPlural,
   };
+}
+
+/**
+ * A registry kind's entry with its label in `locale` (the catalog's words);
+ * undefined for a kind the registry does not hold. A profile's own label is
+ * content and still wins over it in {@link resolveObjectIdentity}.
+ */
+function localizedKind(key: string, locale: Locale): ObjectKindDef | undefined {
+  if (!Object.hasOwn(OBJECT_KINDS, key)) return undefined;
+  const def = OBJECT_KINDS[key]!;
+  const label = translatedWord(`kind.${key}.one`, locale);
+  const labelPlural = translatedWord(`kind.${key}.other`, locale);
+  return label === undefined || labelPlural === undefined
+    ? def
+    : { ...def, label, labelPlural };
 }
 
 /**
@@ -917,8 +942,19 @@ export type TemplateScope = "session" | "project";
 
 export function resolveTemplateNoun(
   scope: TemplateScope | string | null | undefined,
-  opts: { plural?: boolean } = {}
+  opts: { plural?: boolean; locale?: Locale } = {}
 ): string {
-  const noun = scope === "project" ? "Goal template" : "Work template";
-  return opts.plural ? `${noun}s` : noun;
+  const t = sentences(catalogLocaleOf(opts.locale));
+  if (scope === "project") {
+    return t(
+      opts.plural
+        ? "vocabulary.templateNoun.goal.other"
+        : "vocabulary.templateNoun.goal.one"
+    );
+  }
+  return t(
+    opts.plural
+      ? "vocabulary.templateNoun.work.other"
+      : "vocabulary.templateNoun.work.one"
+  );
 }
