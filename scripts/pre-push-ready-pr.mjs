@@ -16,12 +16,13 @@
  * this script is the hook's copy, and the preflight it runs is the pushing
  * tree's own scripts/preflight.mjs (it checks the tree it lives in).
  *
- * Exit 1 refuses the push: preflight red, or a ready PR's push whose sha is not
- * the checked-out HEAD (preflight checks the tree, so it cannot vouch for
- * another sha). Everything else exits 0, with a line saying why: another
- * remote, main (the hook's own typecheck path), no PR, a draft, and FAIL-OPEN
- * with a warning when gh is missing, offline or slow, or preflight itself could
- * not run. Conscious bypass: SYNAP_HOOK_SKIP=1 git push (the hook checks it).
+ * Exit 1 refuses the push: preflight red. Everything else exits 0, with a line
+ * saying why: another remote, main (the hook's own typecheck path), no PR, a
+ * draft, and FAIL-OPEN with a warning when gh is missing, offline or slow,
+ * preflight itself could not run, or the pushed sha is not the checked-out
+ * HEAD (a plumbing commit in a shared tree: preflight checks the WORKING TREE,
+ * never the pushed commit, so it cannot vouch for another sha).
+ * Conscious bypass: SYNAP_HOOK_SKIP=1 git push (the hook checks it).
  *
  * SYNAP_PRE_PUSH_GH names the gh binary (tests; default `gh`), and
  * SYNAP_PRE_PUSH_GH_TIMEOUT_MS how long to wait for it (default 8000).
@@ -115,7 +116,7 @@ export function main({
   const branches = pushedBranches(stdin);
   if (!branches.length) return 0;
 
-  const ready = [];
+  let ready = [];
   for (const b of branches) {
     const r = prsFor(b.branch, env);
     if (r.error) {
@@ -142,14 +143,16 @@ export function main({
     cwd,
     encoding: "utf8",
   }).stdout?.trim();
-  const other = ready.filter((b) => b.sha !== head);
-  if (other.length) {
-    for (const b of other)
-      say(
-        `REFUSED: ${b.branch} is ready PR #${b.pr.number}, and this push sends ${b.sha.slice(0, 8)} while the checked-out tree is ${head?.slice(0, 8) ?? "?"}. Preflight checks the tree, so it cannot vouch for that commit: check it out and push again, or bypass consciously with SYNAP_HOOK_SKIP=1.`
-      );
-    return 1;
-  }
+  // A commit built by plumbing in a shared tree (rules/shared-tree) is pushed
+  // by sha while HEAD is elsewhere. Preflight checks the tree, so it cannot
+  // vouch for that commit: say so and push. A refusal here would only teach
+  // SYNAP_HOOK_SKIP=1.
+  for (const b of ready.filter((x) => x.sha !== head))
+    say(
+      `WARNING: ${b.branch} is ready PR #${b.pr.number}, and this push sends ${b.sha.slice(0, 8)} while the checked-out tree is ${head?.slice(0, 8) ?? "?"}. Preflight checks the tree, not that commit: pushing it WITHOUT preflight. Run \`pnpm preflight\` on a checkout of it.`
+    );
+  ready = ready.filter((b) => b.sha === head);
+  if (!ready.length) return 0;
 
   const preflight = join(cwd, "scripts", "preflight.mjs");
   if (!existsSync(preflight)) {

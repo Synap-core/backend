@@ -6,10 +6,13 @@
 # What it does, each step printed as one line:
 #   - skips everything when SYNAP_HOOK_SKIP=1 or HUSKY=0 is set;
 #   - a branch whose PR on Synap-core/backend is OPEN and READY: runs
-#     `pnpm preflight` (tiers 0+1, ~5-10 s, no install needed for tier 0) on
-#     the checked-out tree and refuses the push on a red (firewall F9,
-#     scripts/pre-push-ready-pr.mjs, which says why it skips: no PR, a draft,
-#     another remote; fail-open with a warning when gh is missing or offline);
+#     `pnpm preflight` (tiers 0+1, ~5-10 s, no install needed for tier 0) and
+#     refuses the push on a red (firewall F9, scripts/pre-push-ready-pr.mjs,
+#     which says why it skips: no PR, a draft, another remote; fail-open with
+#     a warning when gh is missing or offline). Preflight checks the WORKING
+#     TREE, not the pushed commit: a pushed sha other than HEAD only warns.
+#     The firewall is advisory: HUSKY=0, SYNAP_HOOK_SKIP=1 or
+#     `git push --no-verify` push without it, and nothing on GitHub re-checks;
 #   - skips the rest when the push does not update `main` (a feature branch:
 #     its PR's Release gate typechecks and builds it on GitHub);
 #   - skips the main typecheck when node_modules is absent (a lane worktree

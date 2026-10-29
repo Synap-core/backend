@@ -192,16 +192,22 @@ describe(
       expect(r.out).toContain("has no scripts/preflight.mjs");
     });
 
-    it("a ready PR pushed from another sha than the checked-out tree: REFUSED", () => {
+    // The shared-tree plumbing flow: a commit pushed by sha while HEAD is
+    // elsewhere. Preflight would check the wrong tree, so it warns and pushes
+    // (a refusal would only teach SYNAP_HOOK_SKIP=1). preflightExit 1 proves
+    // the red tree was not consulted.
+    it("a ready PR pushed from another sha than the checked-out tree: WARNS, pushes, no preflight", () => {
       writeFileSync(join(dir, "b.txt"), "b\n");
       git("add", ".");
       git("commit", "-q", "-m", "b");
       const r = push({
         gh: "ready",
+        preflightExit: 1,
         refs: `refs/heads/feat ${head} refs/heads/feat ${ZERO}\n`, // HEAD~1
       });
-      expect(r.status).not.toBe(0);
-      expect(r.out).toContain("cannot vouch for that commit");
+      expect(r.status).toBe(0);
+      expect(r.out).toContain("Preflight checks the tree, not that commit");
+      expect(r.out).toContain("WITHOUT preflight");
       expect(r.preflightBody).toBeNull();
     });
 
