@@ -52,6 +52,10 @@
       "types": "./dist/vocabulary/index.d.ts",
       "import": "./dist/vocabulary/index.js"
     },
+    "./i18n": {
+      "types": "./dist/i18n/index.d.ts",
+      "import": "./dist/i18n/index.js"
+    },
     "./grants": {
       "types": "./dist/grants/index.d.ts",
       "import": "./dist/grants/index.js"

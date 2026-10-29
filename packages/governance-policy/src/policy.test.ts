@@ -636,10 +636,12 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
 
   it("9. default (not whitelisted, nothing else triggers) → propose with no preset reason", () => {
     // Use a non-destructive, non-whitelisted action so the 2.5 hard floor
-    // doesn't shadow the plain default-propose path this test targets.
+    // doesn't shadow the plain default-propose path this test targets. (Not
+    // `archive_note`: a compound carrying a destructive verb is floored too —
+    // `isDestructiveAction`, destructive-door-names.test.ts.)
     const v = decideAgentPolicy({
       subjectType: "entity",
-      action: "archive_note",
+      action: "tag_note",
     });
     expect(v).toEqual({ verdict: "propose" });
   });

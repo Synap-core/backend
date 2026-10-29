@@ -54,6 +54,25 @@ export interface RequestWriteContext {
   readonly apiKeyId?: string;
   /** W-B1 — the held-writes pack a person approved, whose writes now replay. */
   readonly heldWritesApprovedBy?: string;
+  /** 0364 — the usage middleware's slot, filled by the key-auth doors below. */
+  readonly usage?: UsageSlot;
+}
+
+/**
+ * What the usage middleware (`apps/api/src/middleware/usage-telemetry.ts`)
+ * learns from the request's key-auth door. The middleware runs OUTSIDE the
+ * door's scope and reads the slot after the response, so the slot is a
+ * mutable object the door's entries write into: `runWithCallingKey` sets
+ * `apiKeyId`, `runWithClientKey` sets `clientKey`.
+ */
+export interface UsageSlot {
+  apiKeyId?: string;
+  clientKey?: string;
+}
+
+/** Run `fn` with `slot` open for the key-auth doors to fill. */
+export function runWithUsageSlot<T>(slot: UsageSlot, fn: () => T): T {
+  return runWithPatch({ usage: slot }, fn);
 }
 
 const storage = new AsyncLocalStorage<RequestWriteContext>();
@@ -230,7 +249,10 @@ export function runWithCallingKey<T>(
   apiKeyId: string | null | undefined,
   fn: () => T
 ): T {
-  return apiKeyId ? runWithPatch({ apiKeyId }, fn) : fn();
+  if (!apiKeyId) return fn();
+  const slot = storage.getStore()?.usage;
+  if (slot) slot.apiKeyId = apiKeyId;
+  return runWithPatch({ apiKeyId }, fn);
 }
 
 /** The `api_keys.id` this request authenticated with, if a key-auth door set one. */
@@ -479,6 +501,8 @@ export function runWithClientKey<T>(
   conversationCwd?: string | null
 ): T {
   if (!clientKey) return fn();
+  const slot = storage.getStore()?.usage;
+  if (slot) slot.clientKey = clientKey;
   const cwd = normalizeConversationCwd(conversationCwd);
   return runWithPatch(
     cwd ? { clientKey, conversationCwd: cwd } : { clientKey },

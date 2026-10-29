@@ -10,7 +10,8 @@
  *  - a workspace-scope kind ⇒ lands in W, no home (single + bulk);
  *  - `global: true`, an explicit pin, or no workspace at all ⇒ no home;
  *  - only a member of a space may name it as the home;
- *  - a proposal-gated create persists the home beside `resolvedWorkspaceId`;
+ *  - a proposal-gated create persists the home beside `resolvedWorkspaceId`,
+ *    and both answers name it (the hub receipt reads them, d39eb826);
  *  - moving into a space clears the home; promoting a W row to pod-wide homes
  *    it in W.
  */
@@ -162,8 +163,16 @@ beforeAll(async () => {
 
 describe("create doors record the space a pod-wide entity was filed for", () => {
   it("single create: a pod-scope kind from W lands pod-wide, homed in W", async () => {
-    const id = await create(W, { profileSlug: "decision", title: "Ship it" });
-    expect(await placed(id)).toEqual({ workspace: null, home: W });
+    const res = (await caller(W).create({
+      profileSlug: "decision",
+      title: "Ship it",
+    } as never)) as unknown as {
+      id: string;
+      entity: { workspaceId: unknown; homeWorkspaceId: unknown };
+    };
+    expect(await placed(res.id)).toEqual({ workspace: null, home: W });
+    // The answer carries the home the hub receipt reads (d39eb826).
+    expect(res.entity).toMatchObject({ workspaceId: null, homeWorkspaceId: W });
   });
 
   it("single create: a workspace-scope kind lands IN W, with no home", async () => {
@@ -241,8 +250,10 @@ describe("create doors record the space a pod-wide entity was filed for", () => 
     const res = (await caller(W).create({
       profileSlug: "decision",
       title: "Needs review",
-    } as never)) as { status: string };
+    } as never)) as { status: string; effectiveHomeWorkspaceId?: unknown };
     expect(res.status).toBe("proposed");
+    // …and the answer says it, so a receipt can (d39eb826).
+    expect(res.effectiveHomeWorkspaceId).toBe(W);
     const data = gate.mock.calls.at(-1)![0].data as Record<string, unknown>;
     expect(data.resolvedWorkspaceId).toBeNull();
     expect(data.resolvedHomeWorkspaceId).toBe(W);

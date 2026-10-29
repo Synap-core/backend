@@ -12,13 +12,40 @@
  *
  * ── FAIL-SAFE ────────────────────────────────────────────────────────────────
  * Every output defaults to "run it". Only a positive, narrow match skips
- * anything: an unknown path, a failed `git diff`, a push to main or a merge
- * queue run checks everything. ci.yml also runs every job when THIS job fails.
+ * anything: an unknown path, a failed `git diff` or a push to main checks
+ * everything. ci.yml also runs every job when THIS job fails.
+ *
+ * ── THE MERGE QUEUE (founder, 2026-10-28: "light queue run") ─────────────────
+ * A queue entry re-checks what can break when PRs combine — the Release gate
+ * (install, lint, typecheck, build, migrate, boot, image) — and takes the Full
+ * suite + API e2e from the PR's OWN run, but only when that run really ran
+ * them: both checks concluded `success` on the PR's head commit. A skipped or
+ * neutral conclusion (a draft run skips the suites, and GitHub counts a skip
+ * as green), a failure, a missing check or any API error runs everything, as
+ * before.
+ *
+ * SAME TREE, NOTHING RE-RUNS (2026-10-28): #471 passed all 4 required checks
+ * on its PR run, entered the queue with main unchanged, and the queue ran a
+ * full ~30-min CI on a merge commit whose tree was the one already tested.
+ * Every run records the commit it tested in a step name of "What changed"
+ * (`Tested commit <sha>`: the jobs API returns step names). A queue entry
+ * whose tree equals the tree of the commit tested by the PR run on which ALL
+ * 4 required checks concluded `success` (one run; skipped, neutral or missing
+ * is not success) re-runs nothing: the required checks skip, which GitHub
+ * reports as passed, and the step summary names the reused run. Anything else
+ * falls through to the light queue run above, then to everything. What it
+ * does not re-check: the sibling repos (control-plane-api, app-bases) at
+ * main may have moved since; Preflight re-reads the one cross-repo red we
+ * measured (door-tool-names) on every queue run.
  *
  * ── OUTPUTS (GITHUB_OUTPUT) ──────────────────────────────────────────────────
  *   gate          Release gate runs           false: negctl branch, docs-only
  *   image         Docker build + deploy tests false: only image-neutral paths
- *   suites        Full suite + API e2e run    false: draft, negctl, docs-only
+ *   suites        Full suite + API e2e run    false: draft, negctl, docs-only,
+ *                                             a queue entry whose PR's own
+ *                                             suites passed on its head
+ *   reuse         a queue entry re-runs nothing (same tree as its PR's
+ *                 all-green run); Reference docs skips too
  *   negctl        a negctl/* branch           true: run "Targeted tests" only
  *   negctl_tests  the test files a negctl runs (space-separated, repo-relative)
  *   hold          why a required check reports RED instead of being skipped:
@@ -31,6 +58,8 @@
  *
  * Usage (ci.yml): node scripts/ci-changes.mjs
  *   env EVENT, HEAD_REF, BASE_REF, DRAFT ("true"/"false"), BASE_SHA, HEAD_SHA
+ *   merge queue: QUEUE_HEAD_REF (merge_group.head_ref), QUEUE_HEAD_SHA
+ *   (merge_group.head_sha), REPO, GITHUB_TOKEN
  */
 
 import { execFileSync } from "node:child_process";
@@ -79,10 +108,76 @@ export const isDocsOnly = (path) => DOCS_ONLY.some((re) => re.test(path));
 export const isImageNeutral = (path) =>
   isDocsOnly(path) || IMAGE_NEUTRAL.some((re) => re.test(path));
 
+/** The PR a merge-queue branch tests: `refs/heads/gh-readonly-queue/main/pr-402-<sha>` → 402. */
+export function queuePrNumber(queueHeadRef) {
+  const m = /gh-readonly-queue\/[^/]+\/pr-(\d+)-/.exec(queueHeadRef ?? "");
+  return m ? Number(m[1]) : null;
+}
+
+/** The suites a queue entry may take from the PR's own run. */
+export const QUEUE_TRUSTED_CHECKS = ["Full suite", "API e2e"];
+
+/**
+ * The checks a same-tree queue entry takes whole from the PR's own run: the
+ * 4 required checks (scripts/apply-main-protection.sh REQUIRED_CHECKS; the
+ * tripwire pins them equal).
+ */
+export const QUEUE_REUSE_CHECKS = [
+  "Release gate",
+  "Full suite",
+  "API e2e",
+  "Reference docs are current",
+];
+
+/** The "What changed" step that names the commit a run tested. */
+export const TESTED_STEP = /^Tested commit ([0-9a-f]{40})$/;
+
+/**
+ * The workflow run id on which EVERY required check concluded `success`, or
+ * null. `checkRuns` = the latest check runs of the PR's head for those names
+ * ({ name, status, conclusion, details_url }). All of them must come from ONE
+ * run (its id read from details_url, `/actions/runs/<id>/`): that run tested
+ * one commit, the one its "What changed" step names.
+ */
+export function reusableRun(checkRuns) {
+  if (!Array.isArray(checkRuns)) return null;
+  const ids = new Set();
+  for (const name of QUEUE_REUSE_CHECKS) {
+    const runs = checkRuns.filter((r) => r?.name === name);
+    if (runs.length === 0) return null;
+    for (const r of runs) {
+      if (r.status !== "completed" || r.conclusion !== "success") return null;
+      const id = /\/actions\/runs\/(\d+)\//.exec(r.details_url ?? "")?.[1];
+      if (!id) return null;
+      ids.add(id);
+    }
+  }
+  return ids.size === 1 ? Number([...ids][0]) : null;
+}
+
+/**
+ * Did the PR's own run REALLY pass the suites? `checkRuns` = the latest check
+ * runs of the PR's head commit ({ name, status, conclusion }). Only
+ * `completed` + `success` counts: `skipped` and `neutral` count as green to
+ * GitHub, and a draft run reports the suites as skipped.
+ */
+export function suitesPassed(checkRuns) {
+  if (!Array.isArray(checkRuns)) return false;
+  return QUEUE_TRUSTED_CHECKS.every((name) => {
+    const runs = checkRuns.filter((r) => r?.name === name);
+    return (
+      runs.length > 0 &&
+      runs.every((r) => r.status === "completed" && r.conclusion === "success")
+    );
+  });
+}
+
 /**
  * The decision for one run. Pure: `files` is the changed path list, or null
  * when it could not be read (then everything runs).
  * `siblingTests(path)` lists test files beside a changed source file.
+ * `queue` is a merge-queue entry's evidence ({ pr, headSha, suitesPassed,
+ * reuse: { runId, testedCommit, testedTree, queueTree } | null }), or null.
  */
 // Bases a pull request may land on through the ruleset. Any other base is a
 // stack: nothing checks it before it reaches main as one big PR (#372).
@@ -95,6 +190,7 @@ export function decide({
   draft,
   files,
   siblingTests,
+  queue = null,
 }) {
   const all = {
     gate: true,
@@ -106,6 +202,28 @@ export function decide({
     hold: "",
     dependents: false,
   };
+  const reuse = queue?.reuse;
+  if (
+    event === "merge_group" &&
+    reuse?.runId &&
+    typeof reuse.testedTree === "string" &&
+    /^[0-9a-f]{40}$/.test(reuse.testedTree) &&
+    reuse.testedTree === reuse.queueTree
+  )
+    return {
+      ...all,
+      gate: false,
+      image: false,
+      suites: false,
+      reuse: true,
+      reason: `merge queue: tree ${reuse.testedTree.slice(0, 9)} is the tree #${queue.pr}'s run ${reuse.runId} tested (commit ${String(reuse.testedCommit).slice(0, 9)}), where all ${QUEUE_REUSE_CHECKS.length} required checks passed; nothing re-runs`,
+    };
+  if (event === "merge_group" && queue?.suitesPassed === true)
+    return {
+      ...all,
+      suites: false,
+      reason: `merge queue: #${queue.pr}'s own Full suite and API e2e passed on ${String(queue.headSha).slice(0, 9)}; this run re-checks the Release gate`,
+    };
   if (event !== "pull_request")
     return { ...all, reason: `${event}: every check runs` };
   if (!files)
@@ -213,7 +331,77 @@ function siblingTests(path) {
     .map((n) => join(dir, n));
 }
 
+// The queue entry's PR and its own check runs, or null (then everything runs).
+async function queueEvidence() {
+  const pr = queuePrNumber(process.env.QUEUE_HEAD_REF);
+  const repo = process.env.REPO;
+  const token = process.env.GITHUB_TOKEN;
+  if (!pr || !repo || !token) return null;
+  const get = async (path) => {
+    const res = await fetch(`https://api.github.com/repos/${repo}${path}`, {
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: "application/vnd.github+json",
+      },
+    });
+    if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
+    return res.json();
+  };
+  try {
+    const headSha = (await get(`/pulls/${pr}`)).head.sha;
+    const checkRuns = [];
+    for (const name of QUEUE_REUSE_CHECKS) {
+      const q = `?check_name=${encodeURIComponent(name)}&filter=latest&per_page=100`;
+      checkRuns.push(
+        ...(await get(`/commits/${headSha}/check-runs${q}`)).check_runs
+      );
+    }
+    return {
+      pr,
+      headSha,
+      suitesPassed: suitesPassed(checkRuns),
+      reuse: await reuseEvidence(get, checkRuns),
+    };
+  } catch (err) {
+    console.log(
+      `merge queue: could not read #${pr}'s own checks (${err.message}); every check runs`
+    );
+    return null;
+  }
+}
+
+// The PR run to reuse and the two trees to compare, or null (a failed read
+// is no reuse, never a guess).
+async function reuseEvidence(get, checkRuns) {
+  const runId = reusableRun(checkRuns);
+  const queueSha = process.env.QUEUE_HEAD_SHA;
+  if (!runId || !queueSha) return null;
+  try {
+    const jobs = (await get(`/actions/runs/${runId}/jobs?per_page=100`)).jobs;
+    const testedCommit = jobs
+      .find((j) => j.name === "What changed")
+      ?.steps?.map((st) => TESTED_STEP.exec(st.name)?.[1])
+      .find(Boolean);
+    if (!testedCommit) {
+      console.log(
+        `merge queue: run ${runId} names no tested commit (it predates the "Tested commit" step); no reuse`
+      );
+      return null;
+    }
+    const testedTree = (await get(`/git/commits/${testedCommit}`)).tree.sha;
+    const queueTree = (await get(`/git/commits/${queueSha}`)).tree.sha;
+    return { runId, testedCommit, testedTree, queueTree };
+  } catch (err) {
+    console.log(
+      `merge queue: could not compare trees (${err.message}); no reuse`
+    );
+    return null;
+  }
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
+  const queue =
+    process.env.EVENT === "merge_group" ? await queueEvidence() : null;
   const d = decide({
     event: process.env.EVENT,
     headRef: process.env.HEAD_REF,
@@ -221,6 +409,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     draft: process.env.DRAFT === "true",
     files: changedFiles(process.env.BASE_SHA, process.env.HEAD_SHA),
     siblingTests,
+    queue,
   });
   const out = [
     `gate=${d.gate}`,
@@ -231,9 +420,15 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     `draft_hold=${d.draftHold}`,
     `hold=${d.hold}`,
     `dependents=${d.dependents}`,
+    `reuse=${d.reuse === true}`,
     `reason=${d.reason}`,
   ];
   console.log(out.join("\n"));
   if (process.env.GITHUB_OUTPUT)
     appendFileSync(process.env.GITHUB_OUTPUT, `${out.join("\n")}\n`);
+  if (d.reuse && process.env.GITHUB_STEP_SUMMARY)
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      `### Merge queue: verdict reused\n\n${d.reason}.\n\nReused run: https://github.com/${process.env.REPO}/actions/runs/${queue?.reuse?.runId}\n`
+    );
 }

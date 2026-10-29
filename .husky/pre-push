@@ -1,3 +1,55 @@
-# Types package tsup DTS worker can OOM; give Node 8GB heap for typecheck + build
+#!/usr/bin/env sh
+# pre-push: cheap by design. The Mac is shared by many sessions and runs nothing
+# heavy (founder, 2026-10-28). The real gates are the PR's GitHub CI (a draft
+# runs the Release gate: typecheck + lint + build) and the devbox (`be-file`).
+#
+# What it does, printed as one line:
+#   - skips when SYNAP_HOOK_SKIP=1 or HUSKY=0 is set;
+#   - skips when the push does not update `main` (a feature branch: its PR's
+#     Release gate typechecks and builds it on GitHub);
+#   - skips when node_modules is absent (a lane worktree with no install);
+#   - on a push to `main`: typechecks ONLY the packages changed since the
+#     remote's main, plus their dependents (`turbo run typecheck
+#     --filter=...[<remote main>] --only`). No build: `--only` drops the
+#     `^build` dependencies, so a dependent is checked against the upstream
+#     `dist/` already on disk.
+#
+# Husky's runner calls this file from the main checkout for every worktree
+# (core.hooksPath is absolute); the working directory is the pushing worktree.
+# Git passes `<remote name> <url>` as arguments and one line per ref on stdin:
+#   <local ref> <local sha> <remote ref> <remote sha>
+
+skip() {
+  echo "pre-push: skipped, $1"
+  exit 0
+}
+
+[ "${SYNAP_HOOK_SKIP:-}" = "1" ] && skip "SYNAP_HOOK_SKIP=1"
+[ "${HUSKY:-}" = "0" ] && skip "HUSKY=0"
+
+remote="${1:-origin}"
+zero="0000000000000000000000000000000000000000"
+to_main=""
+base=""
+while read -r _ local_sha remote_ref remote_sha; do
+  [ "$remote_ref" = "refs/heads/main" ] || continue
+  [ "$local_sha" = "$zero" ] && continue # deleting main is the server's problem
+  to_main=1
+  if [ "$remote_sha" != "$zero" ] && git cat-file -e "${remote_sha}^{commit}" 2>/dev/null; then
+    base="$remote_sha"
+  fi
+done
+
+[ -n "$to_main" ] || skip "not a push to main (the PR's Release gate typechecks and builds it on GitHub)"
+[ -x node_modules/.bin/turbo ] || skip "no node_modules in $(pwd) (nothing installed to check with)"
+
+if [ -z "$base" ]; then
+  git rev-parse --verify -q "${remote}/main^{commit}" >/dev/null ||
+    skip "no ${remote}/main to compare with (run git fetch ${remote})"
+  base="${remote}/main"
+fi
+
+# A ceiling, not a reservation: tsc on packages/api needs more than Node's default heap.
 export NODE_OPTIONS="${NODE_OPTIONS:-} --max-old-space-size=8192"
-pnpm typecheck && pnpm build
+echo "pre-push: push to main, typecheck of the packages changed since ${base} and their dependents (no build)"
+node_modules/.bin/turbo run typecheck --filter="...[${base}]" --only --output-logs=errors-only

@@ -10,7 +10,12 @@
  *     names the owner as producer, as `emitSideEffects` names its actor;
  *   - an AGENT owner is the fact's agent: the event, the trigger hop AND the
  *     dev-loop sweep name it (the sweep runs governed as that agent); a
- *     human owner's sweep runs as the person (no agent named).
+ *     human owner's sweep runs as the person (no agent named);
+ *   - ONE FACT, ONE EVENT: the same fact recorded again (another producer,
+ *     a redelivery) writes, triggers and sweeps nothing and returns the
+ *     first event; a failed write gives the key back (the observation keys
+ *     store is an in-memory stand-in here; its SQL is proven on PGlite in
+ *     @synap/database migrations-0372.pglite.test.ts).
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +26,10 @@ const appended: any[] = [];
 const sends: Array<[string, any]> = [];
 /** The owner's `users` row the door reads (its `userType`). */
 let ownerRows: Array<{ userType: string }> = [];
+/** The observation keys table: key → event id (null = claimed, in flight). */
+const factKeys = new Map<string, string | null>();
+/** The next append throws this, once. */
+let appendError: Error | null = null;
 
 vi.mock("@synap/events", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -46,10 +55,28 @@ vi.mock("@synap/database", async (importOriginal) => {
     },
     getEventRepository: () => ({
       append: async (e: any) => {
+        if (appendError) {
+          const err = appendError;
+          appendError = null;
+          throw err;
+        }
         appended.push(e);
         return { id: `row-${appended.length}` };
       },
     }),
+    claimObservationKey: async (_db: unknown, key: string) => {
+      if (!factKeys.has(key)) {
+        factKeys.set(key, null);
+        return { owned: true };
+      }
+      return { owned: false, eventId: factKeys.get(key) ?? null };
+    },
+    settleObservationKey: async (_db: unknown, key: string, id: string) => {
+      factKeys.set(key, id);
+    },
+    releaseObservationKey: async (_db: unknown, key: string) => {
+      if (factKeys.get(key) === null) factKeys.delete(key);
+    },
   };
 });
 
@@ -99,6 +126,8 @@ beforeEach(() => {
   appended.length = 0;
   sends.length = 0;
   ownerRows = [{ userType: "human" }];
+  factKeys.clear();
+  appendError = null;
 });
 
 describe("record_observation — the observation door's refusals", () => {
@@ -172,5 +201,56 @@ describe("record_observation — who the dev-loop sweep runs as", () => {
       userId: "owner-1",
       producerAgentUserId: "owner-1",
     });
+  });
+});
+
+describe("record_observation — one fact, one event", () => {
+  it("the same fact again records, triggers and sweeps nothing, and returns the first event", async () => {
+    const first = await record();
+    const sendsAfterFirst = sends.length;
+    expect(sendsAfterFirst).toBeGreaterThan(0);
+
+    const again = await record({
+      // Another producer: a different source, the same fact in the world.
+      data: {
+        repo: "synap-core/BACKEND",
+        number: 12,
+        url: "https://github.com/Synap-core/backend/pull/12",
+        intoDefault: true,
+        source: "devbox-pr-gap-filler",
+      },
+    });
+    expect(again).toEqual({ id: first.id, duplicate: true });
+    expect(appended).toHaveLength(1);
+    expect(sends).toHaveLength(sendsAfterFirst);
+  });
+
+  it("another PR is another fact", async () => {
+    await record();
+    await record({
+      subjectId: "Synap-core/backend#13",
+      data: {
+        repo: "Synap-core/backend",
+        number: 13,
+        url: "https://github.com/Synap-core/backend/pull/13",
+        intoDefault: true,
+      },
+    });
+    expect(appended).toHaveLength(2);
+  });
+
+  it("a failed write gives the key back, so the retry records the fact", async () => {
+    appendError = new Error("events table unavailable");
+    await expect(record()).rejects.toThrow(/unavailable/);
+    expect(appended).toHaveLength(0);
+    const retry = await record();
+    expect(retry.duplicate).toBeUndefined();
+    expect(appended).toHaveLength(1);
+  });
+
+  it("a type with no key (a free-form dev.* fact) is recorded every time", async () => {
+    await record({ type: "dev.commit", data: { repo: "Synap-core/backend" } });
+    await record({ type: "dev.commit", data: { repo: "Synap-core/backend" } });
+    expect(appended).toHaveLength(2);
   });
 });

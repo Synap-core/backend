@@ -1555,6 +1555,9 @@ export const createProcs = {
           // Homed proposal: same as materialize target (may be null = pod-wide).
           workspaceId: resolvedEntityWorkspaceId,
           effectiveWorkspaceId: resolvedEntityWorkspaceId,
+          // …and the space a pod-wide row will be filed FOR (0355), the
+          // `resolvedHomeWorkspaceId` the gate stored above.
+          effectiveHomeWorkspaceId: resolvedEntityHomeWorkspaceId,
           // Why it waits, when the duplicate door is why (B2): the reviewer
           // sees the same candidates on the card.
           ...(duplicateCheck && duplicateCheck.status !== "clear"

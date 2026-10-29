@@ -4,6 +4,8 @@
  * Exposes the authenticated user's identity and profile data.
  */
 
+import { TRPCError } from "@trpc/server";
+import { SUPPORTED_LOCALES } from "@synap-core/types/i18n";
 import { router, protectedProcedure } from "../trpc.js";
 import { db, eq } from "@synap/database";
 import { users, userPreferences } from "@synap/database/schema";
@@ -76,6 +78,30 @@ export const usersRouter = router({
       locale: dbUser?.locale ?? "en",
     };
   }),
+
+  /**
+   * Set the caller's language: the locale Synap's chrome is shown in, on every
+   * surface (`users.me.locale`). The caller's own row only, like the other
+   * self-profile writes here; one of `SUPPORTED_LOCALES`, nothing else.
+   * NOT_FOUND when the caller has no user row yet: a write that stored
+   * nothing never answers as if it had.
+   */
+  setLocale: protectedProcedure
+    .input(z.object({ locale: z.enum(SUPPORTED_LOCALES) }))
+    .mutation(async ({ ctx, input }) => {
+      const [row] = await ctx.db
+        .update(users)
+        .set({ locale: input.locale, updatedAt: new Date() })
+        .where(eq(users.id, ctx.userId))
+        .returning({ locale: users.locale });
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "There is no user record to store a language on.",
+        });
+      }
+      return { locale: input.locale };
+    }),
 
   /**
    * Relay feed preferences (legacy client contract).

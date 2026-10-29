@@ -84,6 +84,7 @@ import {
   applicationConnectionStatusRateLimitMiddleware,
   handshakeRateLimitMiddleware,
 } from "./middleware/security.js";
+import { usageTelemetry } from "./middleware/usage-telemetry.js";
 import { configuredPodAdminBase } from "./pod-admin-config.js";
 import { registerInviteBounce } from "./invite-bounce.js";
 import { registerLinkCloudBounce } from "./link-cloud-bounce.js";
@@ -282,6 +283,9 @@ app.use("*", podEdgeCorsMiddleware);
 app.use("*", requestSizeLimit); // Max 10MB requests
 // Mounted on "*" BEFORE every route, so tRPC and the backend's own
 // /.ory/kratos/public/* proxy (pod-admin's whoami) are keyed alike.
+// Usage telemetry (0364) wraps the limiter so it counts the limiter's own
+// 429s too; a separate middleware, the limiter itself is untouched.
+app.use("*", usageTelemetry.middleware);
 app.use("*", rateLimitMiddleware); // multi-class; Bearer, session or IP keyed
 app.use("*", secureHeaders()); // Hono built-in security headers
 
@@ -2275,6 +2279,12 @@ process.on("uncaughtException", (error) => {
     apiLogger.info(`${signal} received, shutting down gracefully`);
     if (config.server.localMode) {
       stopLocalSyncDriver();
+    }
+    try {
+      usageTelemetry.stop();
+      await usageTelemetry.flushNow();
+    } catch (err) {
+      apiLogger.error({ err }, "Error flushing usage telemetry");
     }
     try {
       await stopBoss();

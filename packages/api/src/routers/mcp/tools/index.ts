@@ -114,6 +114,15 @@ import { REVIEW_PACKAGES } from "@synap-core/types/proposals/review-package";
 import { TRACK_PARTICIPANT_ACTIONS } from "../handlers/track-participants.js";
 
 /**
+ * When an entity's `content` becomes a linked document rather than the inline
+ * `content` property — the rule `shouldMaterializeAsDocument`
+ * (`@synap-core/types`, `document-heuristic.ts`) applies, in words. One copy
+ * for both doors that take a body (`synap_create_entity`, `synap_capture`).
+ */
+const LONG_FORM_BODY_RULE =
+  "A long-form body (600+ characters, or 2+ headings, a code fence, 3+ list items or 4+ paragraphs)";
+
+/**
  * The ONE advertised shape of a session criterion (start + update doors).
  * Validated server-side with `sessionCriteriaSchema`; this only teaches it.
  */
@@ -964,7 +973,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Understand what\'s happening / what\'s wrong — the pod\'s health door (the third door, alongside ask + capture). The MODE is derived from what you pass (never a tool name you choose): NO ARGS → whole-pod health (stuck runs, failed flows, review backlog + age, duplicate-proposal clusters, capability posture, agents hitting the daily cap) with a plain-language summary; `type` → a class as a surface (type:"proposal" = the review queue: pending count, oldest, duplicate clusters; type:"session" = stuck sessions; type:"agent" = agent roster + quality; type:"capability" = which installed verbs are turned on and which are not (a verb that is not turned on refuses to run); type:"run" = per-flow failure counts; type:"workspace" = the workspace landscape: per-workspace entity counts + which kinds live in each, PAIRWISE profile-slug overlap between workspaces, and flags for empty / duplicate-named / no-authored-identity workspaces — the "do I have too many workspaces?" read); `id` → auto-detects what the id is (proposal / session / capability / automation-run / playbook-run / agent / entity / view / document / workspace) and explains its state + WHY; `agentId` → an agent\'s behavioural scorecard over its last 7 days (`window`): approve/reject/revise counts and rates, top rejection reasons, a duplicate rate read from a sample (`duplicateSample`), daily-cap posture. Backward-compatible: `runId`+`flowType` → that run\'s activity timeline (a capture\'s decision + trace events, each with a machine-readable reason + fixHint); `flowType`/`flowId` → the run feed. USER-scoped automatically.',
+          'Understand what\'s happening / what\'s wrong — the pod\'s health door (the third door, alongside ask + capture). The MODE is derived from what you pass (never a tool name you choose): NO ARGS → whole-pod health (stuck runs, failed flows, review backlog + age, duplicate-proposal clusters, capability posture, agents hitting the daily cap) with a plain-language summary; `type` → a class as a surface (type:"proposal" = the review queue: pending count, oldest, duplicate clusters; type:"session" = stuck sessions; type:"agent" = agent roster + quality; type:"capability" = which installed verbs are turned on and which are not (a verb that is not turned on refuses to run); type:"run" = per-flow failure counts; type:"workspace" = the workspace landscape: per-workspace entity counts + which kinds live in each, PAIRWISE profile-slug overlap between workspaces, and flags for empty / duplicate-named / no-authored-identity workspaces — the "do I have too many workspaces?" read; type:"usage" = API calls per key / client / conversation / limiter class / outcome over a window (`since`, `groupBy`, `apiKeyId`, `client`; pod owner or admin only)); `id` → auto-detects what the id is (proposal / session / capability / automation-run / playbook-run / agent / entity / view / document / workspace) and explains its state + WHY; `agentId` → an agent\'s behavioural scorecard over its last 7 days (`window`): approve/reject/revise counts and rates, top rejection reasons, a duplicate rate read from a sample (`duplicateSample`), daily-cap posture. Backward-compatible: `runId`+`flowType` → that run\'s activity timeline (a capture\'s decision + trace events, each with a machine-readable reason + fixHint); `flowType`/`flowId` → the run feed. USER-scoped automatically.',
         inputSchema: {
           type: "object",
           properties: {
@@ -978,9 +987,42 @@ export const tools = {
                 "entity",
                 "run",
                 "workspace",
+                "usage",
               ],
               description:
-                "Diagnose a whole CLASS as a surface (the review queue, stuck sessions, the agent roster, capability health, per-flow run failures, the workspace landscape).",
+                "Diagnose a whole CLASS as a surface (the review queue, stuck sessions, the agent roster, capability health, per-flow run failures, the workspace landscape, API usage).",
+            },
+            since: {
+              type: "string",
+              description:
+                'type:"usage" only — window start, ISO 8601 (default 24 h ago).',
+            },
+            groupBy: {
+              type: "array",
+              items: {
+                type: "string",
+                enum: [
+                  "hour",
+                  "day",
+                  "apiKeyId",
+                  "limiterKey",
+                  "client",
+                  "conversationId",
+                  "rlClass",
+                  "outcome",
+                ],
+              },
+              description:
+                'type:"usage" only — dimensions to group calls by (default client, rlClass, outcome).',
+            },
+            apiKeyId: {
+              type: "string",
+              description: 'type:"usage" only — narrow to one API key.',
+            },
+            client: {
+              type: "string",
+              description:
+                'type:"usage" only — narrow to one client (X-Synap-Client, e.g. "synap-bridge/0.6.0").',
             },
             id: {
               type: "string",
@@ -1227,8 +1269,7 @@ export const tools = {
             description: { type: "string" },
             content: {
               type: "string",
-              description:
-                "LONG-FORM markdown body (the write-up itself, not a summary). Materialized into a versioned document linked to the entity — so a note/article/research entity and its body land in ONE call. Use `description` for a short preview and `content` for anything multi-paragraph; do NOT stuff long text into `properties`.",
+              description: `Markdown body (the write-up itself, not a summary). ${LONG_FORM_BODY_RULE} becomes a versioned document linked to the entity, so an entity and its body land in ONE call; a shorter one is stored inline as the \`content\` property. Use \`description\` for a short preview; do NOT stuff long text into \`properties\`.`,
             },
             properties: {
               type: "object",
@@ -1239,6 +1280,11 @@ export const tools = {
               type: "string",
               description:
                 "Optional project id to file the created entity into — stamps belongs_to_project membership.",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional: the space this entity is for (defaults to the connection's). A pod-wide kind (note, person, decision…) stays pod-wide and is filed for that space, so it shows there for its members: no synap_move_entities afterwards. A space you are not a member of is ignored. The reply's `placement` says what happened.",
             },
             sessionId: {
               type: "string",
@@ -1268,7 +1314,12 @@ export const tools = {
             expectedLabel: {
               type: "string",
               description:
-                "The declared output slot this fulfils, exactly as declared on the session.",
+                "The declared output slot this fulfils: its key or its label. One that names no output of the session is said in the reply's `warnings`.",
+            },
+            idempotencyKey: {
+              type: "string",
+              description:
+                "Optional: a stable key per entity (e.g. the source file's path) so a retry after a timeout returns the entity the first call created instead of a second one.",
             },
             /**
              * WHY this write, in the person's own words — shown verbatim to the
@@ -1501,7 +1552,7 @@ export const tools = {
             expectedLabel: {
               type: "string",
               description:
-                "The declared output slot this fulfils, exactly as declared on the session.",
+                "The declared output slot this fulfils: its key or its label. One that names no output of the session is said in the reply's `warnings`; the document is created either way.",
             },
             /**
              * WHY this write, in the person's own words — shown verbatim to the
@@ -3630,13 +3681,12 @@ export const tools = {
                   },
                   content: {
                     type: "string",
-                    description:
-                      "Markdown body. A long-form body (600+ characters, or 2+ headings, a code fence, 3+ list items or 4+ paragraphs) is materialized as a linked document on approval; a shorter one is stored inline as the `content` property.",
+                    description: `Markdown body. ${LONG_FORM_BODY_RULE} is materialized as a linked document on approval; a shorter one is stored inline as the \`content\` property.`,
                   },
                   properties: {
                     type: "object",
                     description:
-                      "Typed fields. Include the STRONG identity signals when known — `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` — spelled exactly like that: they are what drives dedup against existing entities.",
+                      "Typed fields. Include the STRONG identity signals when known — `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` — spelled exactly like that: they are what drives dedup against existing entities. A kind's fields carry limits (a decision's `summary` has a maximum length): `validate: true` reports every one before you write.",
                   },
                   existingEntityId: {
                     type: "string",
@@ -3755,8 +3805,16 @@ export const tools = {
                   expectedOutputs: {
                     type: "array",
                     description:
-                      "What this session will PRODUCE — `{ kind, label }` per deliverable (`owner: 'human'` for one you cannot take). Declare them: the plan's own object list is the definition of done, so progress is derivable from unfilled slots rather than self-graded. Acceptance `criteria` are NOT carried by a plan step — set them on the session afterwards with synap_update_session.",
+                      "What this session will PRODUCE — `{ kind, label }` per deliverable (`owner: 'human'` for one you cannot take). Declare them: the plan's own object list is the definition of done, so progress is derivable from unfilled slots rather than self-graded.",
                     items: { type: "object" },
+                  },
+                  // The plan door carries them to the session door
+                  // (`materialize-composite.ts` → `createFocusSession`), which
+                  // validates them with `sessionCriteriaSchema`.
+                  criteria: {
+                    ...SESSION_CRITERIA_PROPERTY,
+                    description:
+                      "The session's acceptance criteria, proposed with the plan: two to five binary, observable statements, the same shape as synap_start_session's. They land on the session when the plan is approved, so no synap_update_session is needed afterwards.",
                   },
                 },
                 required: ["ref", "goal"],

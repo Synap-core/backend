@@ -31,7 +31,7 @@ import { recordObservation } from "./record-observation.js";
 
 export async function recordObservationFromAutomation(
   input: AutomationObservation
-): Promise<{ id: string }> {
+): Promise<{ id: string; duplicate?: true }> {
   const parsed = ObservationSchema.safeParse({
     type: input.type,
     subjectId: input.subjectId,

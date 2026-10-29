@@ -92,12 +92,20 @@ import {
   LIFECYCLE_TRANSITION_SWEEPER_QUEUE,
   LIFECYCLE_TRANSITION_SWEEPER_CRON,
 } from "./workers/lifecycle-transition-sweeper.js";
+import {
+  INBOUND_DELIVERY_SWEEPER_QUEUE,
+  INBOUND_DELIVERY_SWEEPER_CRON,
+} from "./workers/inbound-delivery-sweeper.js";
 import { EVENT_END_CRON_QUEUE } from "./workers/event-end-cron.js";
 import {
   EXTERNAL_AGENT_POLL_QUEUE,
   EXTERNAL_AGENT_POLL_CRON,
 } from "./workers/external-agent-poll.js";
 import { FEDERATION_RECEIPT_CLEANUP_QUEUE } from "./workers/federation-receipt-cleanup.js";
+import {
+  API_USAGE_RETENTION_CRON,
+  API_USAGE_RETENTION_QUEUE,
+} from "./workers/api-usage-retention.js";
 import {
   PUSH_DEVICE_SWEEP_QUEUE,
   PUSH_DEVICE_SWEEP_CRON,
@@ -292,6 +300,19 @@ export async function registerCronSchedules(): Promise<void> {
   // is delivered without waiting for the first tick.
   await sendSafe(boss, LIFECYCLE_TRANSITION_SWEEPER_QUEUE, {});
 
+  // Inbound delivery sweeper (every minute — delivers the inbound webhooks the
+  // door stored but could not hand to the queue; pipeline-health W1). Once at
+  // boot too: a delivery left by a process that died mid-request goes out
+  // without waiting for the first tick.
+  await scheduleSafe(
+    boss,
+    INBOUND_DELIVERY_SWEEPER_QUEUE,
+    INBOUND_DELIVERY_SWEEPER_CRON,
+    {}
+  );
+  logger.info("Registered cron: inbound-delivery-sweeper (every minute)");
+  await sendSafe(boss, INBOUND_DELIVERY_SWEEPER_QUEUE, {});
+
   // Pod hygiene near-dup scan (daily at 3:15 AM UTC).
   // Files PENDING entity merge proposals only; never auto-merges.
   await scheduleSafe(
@@ -404,6 +425,15 @@ export async function registerCronSchedules(): Promise<void> {
   logger.info(
     "Registered cron: federation-receipt-cleanup (daily at 2:15 AM UTC)"
   );
+
+  // API usage telemetry keeps 30 days (api_usage_buckets, 0364).
+  await scheduleSafe(
+    boss,
+    API_USAGE_RETENTION_QUEUE,
+    API_USAGE_RETENTION_CRON,
+    {}
+  );
+  logger.info("Registered cron: api-usage-retention (daily at 2:25 AM UTC)");
 
   // Phones unused for 90 days stop getting pushes (daily at 2:50 AM UTC).
   await scheduleSafe(boss, PUSH_DEVICE_SWEEP_QUEUE, PUSH_DEVICE_SWEEP_CRON, {});

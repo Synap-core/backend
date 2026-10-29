@@ -61,6 +61,7 @@ export * from "./utils/project-guardrails.js";
 export * from "./utils/reserved-profile-slugs.js";
 export * from "./utils/profile-slug-precedence.js";
 export * from "./utils/request-write-context.js";
+export * from "./utils/api-usage.js";
 export * from "./utils/listable-entity.js";
 export * from "./utils/grant-read-hook.js";
 export * from "./utils/exposure-policy-settings.js";
@@ -430,6 +431,22 @@ export {
   TRANSITION_OUTBOX_SWEEP_GRACE_SECONDS,
   type ClaimedTransition,
 } from "./services/lifecycle/transition-outbox.js";
+export {
+  recordInboundDelivery,
+  claimInboundDelivery,
+  settleInboundDelivery,
+  listDueInboundDeliveries,
+  pruneInboundDeliveries,
+  INBOUND_DELIVERY_MAX_ATTEMPTS,
+  type RecordInboundDeliveryInput,
+} from "./services/inbound-delivery-outbox.js";
+export {
+  claimObservationKey,
+  settleObservationKey,
+  releaseObservationKey,
+  OBSERVATION_KEY_LEASE_SECONDS,
+  type ObservationKeyClaim,
+} from "./services/observation-keys.js";
 export {
   LifecycleDefChangeError,
   LIFECYCLE_DEF_PROTECTED,

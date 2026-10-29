@@ -23,6 +23,7 @@ export * from "./interface.js";
 export { createFileStorageProvider, storage } from "./factory.js";
 export { fileChecksum, checksumMatchesContent } from "./checksum.js";
 export { uploadStreamToS3, S3_STREAM_PART_BYTES } from "./s3-stream-upload.js";
+export { downloadStreamFromS3, capBytes } from "./s3-stream-download.js";
 
 // Export providers (for advanced usage)
 export { R2StorageProvider, type R2Config } from "./r2-provider.js";

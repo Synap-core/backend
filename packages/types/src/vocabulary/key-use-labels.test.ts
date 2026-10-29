@@ -10,7 +10,9 @@ import {
 
 describe("resolveKeyUseLabel — where a key is used, in words", () => {
   it("names each use", () => {
-    expect(resolveKeyUseLabel("hub")).toBe("A website or app (Hub API)");
+    expect(resolveKeyUseLabel("hub")).toBe(
+      "A program, script or site (Hub API)"
+    );
     expect(resolveKeyUseLabel("mcp")).toBe("An AI client over MCP");
     expect(resolveKeyUseLabel("n8n")).toBe("n8n");
     expect(Object.keys(KEY_USE_LABELS)).toEqual([

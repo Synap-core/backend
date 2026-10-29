@@ -70,6 +70,10 @@ import {
   handleLifecycleTransitionSweeper,
   LIFECYCLE_TRANSITION_SWEEPER_QUEUE,
 } from "./lifecycle-transition-sweeper.js";
+import {
+  handleInboundDeliverySweeper,
+  INBOUND_DELIVERY_SWEEPER_QUEUE,
+} from "./inbound-delivery-sweeper.js";
 import { handleRelationBackfill } from "./relation-backfill.js";
 import {
   handleNotificationCleanup,
@@ -79,6 +83,10 @@ import {
   FEDERATION_RECEIPT_CLEANUP_QUEUE,
   handleFederationReceiptCleanup,
 } from "./federation-receipt-cleanup.js";
+import {
+  API_USAGE_RETENTION_QUEUE,
+  handleApiUsageRetention,
+} from "./api-usage-retention.js";
 import {
   PUSH_DEVICE_SWEEP_QUEUE,
   PUSH_RECEIPTS_QUEUE,
@@ -328,6 +336,7 @@ const ALL_QUEUES = [
   "automation-cron-scheduler",
   AUTOMATION_RUN_REAPER_QUEUE,
   LIFECYCLE_TRANSITION_SWEEPER_QUEUE,
+  INBOUND_DELIVERY_SWEEPER_QUEUE,
   FOCUS_SESSION_REAPER_QUEUE,
   SESSION_TITLER_QUEUE,
   // Session recall: on-demand per session + the 2-min sweep floor that
@@ -339,6 +348,8 @@ const ALL_QUEUES = [
   "relation-backfill",
   NOTIFICATION_CLEANUP_QUEUE,
   FEDERATION_RECEIPT_CLEANUP_QUEUE,
+  // API usage telemetry: 30-day retention of api_usage_buckets (0364).
+  API_USAGE_RETENTION_QUEUE,
   // Phone push hygiene: Expo receipts per send + the daily unused-phone sweep.
   PUSH_RECEIPTS_QUEUE,
   PUSH_DEVICE_SWEEP_QUEUE,
@@ -778,6 +789,13 @@ export async function registerAllWorkers(): Promise<void> {
   );
   logger.info("Registered worker: lifecycle-transition-sweeper");
 
+  // Inbound delivery sweeper (cron: every minute — delivers the inbound
+  // webhooks the door stored but could not hand to the queue; pipeline-health W1)
+  await boss.work(INBOUND_DELIVERY_SWEEPER_QUEUE, async () =>
+    handleInboundDeliverySweeper()
+  );
+  logger.info("Registered worker: inbound-delivery-sweeper");
+
   // Relation backfill (one-time: creates relation rows for existing entity_id property values)
   await boss.work("relation-backfill", async ([job]: any[]) =>
     handleRelationBackfill(job)
@@ -795,6 +813,12 @@ export async function registerAllWorkers(): Promise<void> {
     handleFederationReceiptCleanup()
   );
   logger.info("Registered worker: federation-receipt-cleanup");
+
+  // API usage retention (cron: daily at 2:25 AM UTC)
+  await boss.work(API_USAGE_RETENTION_QUEUE, async () => {
+    await handleApiUsageRetention();
+  });
+  logger.info("Registered worker: api-usage-retention");
 
   // Phone push hygiene (receipts: ~15 min after each send; sweep: daily)
   await boss.work(PUSH_RECEIPTS_QUEUE, async ([job]: any[]) =>

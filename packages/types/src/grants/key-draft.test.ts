@@ -68,14 +68,14 @@ describe("describeKey", () => {
   it("the poster reads as its door and one Activity write, no danger mark", () => {
     const d = describeKey(fromPoster);
     expect(d.uses).toEqual([
-      { id: "hub", label: "A website or app (Hub API)" },
+      { id: "hub", label: "A program, script or site (Hub API)" },
     ]);
     expect(d.scopes).toEqual(["hub-protocol.read", "hub-protocol.write"]);
     expect(d.writes).toBe(true);
     expect(d.marks).toEqual([]);
     expect(d.summary.what).toBe("Create Activity");
     expect(d.sentence).toBe(
-      "A website or app (Hub API) · Create Activity · 90 days"
+      "A program, script or site (Hub API) · Create Activity · 90 days"
     );
   });
 

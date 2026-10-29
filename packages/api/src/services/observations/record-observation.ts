@@ -20,7 +20,14 @@ import { createHash } from "crypto";
 
 import { createLogger, createSynapEvent } from "@synap-core/core";
 import { DEV_LOOP_EVENT_TYPES, isDevLoopEventType } from "@synap-core/types";
-import { getEventRepository, getRequestGrant } from "@synap/database";
+import {
+  claimObservationKey,
+  db,
+  getEventRepository,
+  getRequestGrant,
+  releaseObservationKey,
+  settleObservationKey,
+} from "@synap/database";
 import { getBoss } from "@synap/events";
 import {
   DEV_LOOP_OBSERVATION_QUEUE,
@@ -30,6 +37,7 @@ import {
 
 import { apiKeyService } from "../api-keys.js";
 import { sessionForDevLoopFact } from "../dev-loop/pr-session-resolver.js";
+import { observationFactKey } from "./fact-key.js";
 import { PG_UUID_RE } from "../../routers/hub-protocol/rest/_codecs/_openapi.js";
 
 const logger = createLogger({ module: "observations/record" });
@@ -151,11 +159,42 @@ export interface RecordObservationInput {
   triggerProducerUserId?: string;
 }
 
-/** Record one observation; returns its event row id. A failed write throws. */
+/** How long a copy waits for the first copy's write to land (in flight). */
+const IN_FLIGHT_WAIT_MS = [100, 200, 400, 800];
+
+/**
+ * ONE FACT, ONE EVENT (pipeline-health W1). Claims the fact's key
+ * (`observationFactKey`) before anything is written. `null` = this call owns
+ * the fact (or it has no key) and records it; otherwise the first copy's event
+ * id. A copy that arrives while the first is still being written waits for it
+ * briefly, then throws (the producer retries; the fact is never lost).
+ */
+async function priorCopyOf(key: string): Promise<string | null> {
+  let claim = await claimObservationKey(db, key);
+  for (const ms of IN_FLIGHT_WAIT_MS) {
+    if (claim.owned) return null;
+    if (claim.eventId) return claim.eventId;
+    await new Promise((r) => setTimeout(r, ms));
+    claim = await claimObservationKey(db, key);
+  }
+  if (claim.owned) return null;
+  if (claim.eventId) return claim.eventId;
+  throw new Error(
+    "the same fact is being recorded right now; retry in a minute"
+  );
+}
+
+/**
+ * Record one observation; returns its event row id. A failed write throws.
+ * `duplicate: true` = the same fact was already recorded (another producer,
+ * or this one again): `id` is that first event, and nothing was written,
+ * triggered or swept — a session is woken once per fact.
+ */
 export async function recordObservation(
   input: RecordObservationInput
-): Promise<{ id: string }> {
+): Promise<{ id: string; duplicate?: true }> {
   const { userId, agentUserId, workspaceId } = input;
+  const factKey = observationFactKey(input.type, input.data, input.occurredAt);
   const eventRepo = getEventRepository();
   const payload = await withResolvedSession(input);
   const event = createSynapEvent({
@@ -198,20 +237,58 @@ export async function recordObservation(
     // an observation; nothing else needs a marker.
   });
 
-  const row = await eventRepo.append({
-    ...event,
-    // `occurredAt` must drive the ROW timestamp, not a metadata field.
-    // Everything that orders, filters, partitions or expires an event
-    // keys on `timestamp`; a metadata copy is read by nothing. Without
-    // this, a CLI flushing a week of commits lands them all as "now" —
-    // precisely the case this field exists for.
-    ...(input.occurredAt ? { timestamp: input.occurredAt } : {}),
-    // The real, indexable `workspace_id` column (0223). `createSynapEvent`
-    // has no workspaceId parameter, which is why the canonical writer
-    // (utils/audit-log.ts) also passes it separately here. Leaving it in
-    // `data` only forces readers onto an unindexed JSONB fallback.
-    workspaceId,
-  });
+  // Claimed right before the write, so nothing that can throw sits between
+  // the claim and the release below.
+  if (factKey) {
+    const prior = await priorCopyOf(factKey);
+    if (prior) {
+      logger.info(
+        { type: input.type, subjectRef: input.subjectRef, eventId: prior },
+        "observation: the same fact is already recorded — nothing written"
+      );
+      return { id: prior, duplicate: true };
+    }
+  }
+  let row: Awaited<ReturnType<typeof eventRepo.append>>;
+  try {
+    row = await eventRepo.append({
+      ...event,
+      // `occurredAt` must drive the ROW timestamp, not a metadata field.
+      // Everything that orders, filters, partitions or expires an event
+      // keys on `timestamp`; a metadata copy is read by nothing. Without
+      // this, a CLI flushing a week of commits lands them all as "now" —
+      // precisely the case this field exists for.
+      ...(input.occurredAt ? { timestamp: input.occurredAt } : {}),
+      // The real, indexable `workspace_id` column (0223). `createSynapEvent`
+      // has no workspaceId parameter, which is why the canonical writer
+      // (utils/audit-log.ts) also passes it separately here. Leaving it in
+      // `data` only forces readers onto an unindexed JSONB fallback.
+      workspaceId,
+    });
+  } catch (err) {
+    // Give the key back: the fact is NOT recorded, so a retry must record it.
+    if (factKey) {
+      await releaseObservationKey(db, factKey).catch((releaseErr) =>
+        logger.error(
+          { err: releaseErr, key: factKey },
+          "observation: releasing the fact key after a failed write failed — a retry waits for the lease"
+        )
+      );
+    }
+    throw err;
+  }
+  if (factKey) {
+    try {
+      await settleObservationKey(db, factKey, row.id);
+    } catch (err) {
+      // The fact IS recorded; only its key lacks the event id. Past the
+      // lease a second copy would be recorded too, so it is said loudly.
+      logger.error(
+        { err, key: factKey, eventId: row.id },
+        "observation: recorded, but its fact key was not settled — a later copy may be recorded twice"
+      );
+    }
+  }
 
   // ── UNIFIED TRIGGER HOP (additive) ────────────────────────────────
   // A recorded observation can now fire automations, exactly like a

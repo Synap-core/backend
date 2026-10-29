@@ -186,6 +186,8 @@ export * from "./session-runners.js";
 // Proposal apply runs — a large approval applied by a background job (0352)
 export * from "./proposal-apply-runs.js";
 export * from "./box-runs.js";
+// API usage telemetry — calls per key / client / conversation, 5-min buckets (0364)
+export * from "./api-usage-buckets.js";
 
 // DEPRECATED: Agent Skills merged into skills table (migration 0130_merge_agent_skills.sql).
 // The agent-skills.ts table definition is kept for migration reference only.
@@ -264,3 +266,7 @@ export * from "./calendar-feed-tokens.js";
 // Lifecycle transition outbox (0324, review D8) — the event a status move owes,
 // written in the move's own transaction; dispatched + retried from here.
 export * from "./lifecycle-transition-outbox.js";
+
+// Inbound webhook deliveries + observation keys (0372, pipeline-health W1):
+// stored before the door answers, and one row per observed fact.
+export * from "./inbound-deliveries.js";

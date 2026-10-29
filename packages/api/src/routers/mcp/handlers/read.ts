@@ -585,8 +585,13 @@ export const readHandlers: McpHandlerMap = {
         | "entity"
         | "run"
         | "workspace"
+        | "usage"
         | undefined,
       workspaceId: (args.workspaceId as string | undefined) ?? undefined,
+      since: args.since as string | undefined,
+      groupBy: args.groupBy as string[] | undefined,
+      apiKeyId: args.apiKeyId as string | undefined,
+      client: args.client as string | undefined,
       stuckThresholdHours: args.stuckThresholdHours as number | undefined,
       flowType: args.flowType as
         | "automation"

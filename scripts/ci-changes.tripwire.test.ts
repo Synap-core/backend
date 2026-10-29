@@ -10,7 +10,16 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error — plain ESM script, no declarations
-import { decide, isDocsOnly, isImageNeutral } from "./ci-changes.mjs";
+import {
+  QUEUE_REUSE_CHECKS,
+  TESTED_STEP,
+  decide,
+  isDocsOnly,
+  isImageNeutral,
+  queuePrNumber,
+  reusableRun,
+  suitesPassed,
+} from "./ci-changes.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const none = () => [];
@@ -41,6 +50,53 @@ describe("ci-changes: every check runs unless a narrow match says otherwise", ()
         false,
       ]);
     }
+  });
+
+  it("a merge-queue entry whose PR's own suites passed runs the Release gate only", () => {
+    const d = decide({
+      event: "merge_group",
+      headRef: "",
+      draft: false,
+      files: null,
+      siblingTests: none,
+      queue: { pr: 402, headSha: "550070005abc", suitesPassed: true },
+    });
+    expect([d.gate, d.image, d.suites, d.negctl]).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
+    expect(d.reason).toContain("#402");
+  });
+
+  it("a merge-queue entry without that evidence checks everything", () => {
+    for (const queue of [
+      null,
+      { pr: 402, headSha: "x", suitesPassed: false },
+    ]) {
+      const d = decide({
+        event: "merge_group",
+        headRef: "",
+        draft: false,
+        files: null,
+        siblingTests: none,
+        queue,
+      });
+      expect([d.gate, d.image, d.suites]).toEqual([true, true, true]);
+    }
+  });
+
+  it("only a pull request run's evidence is ever read (a push never trusts it)", () => {
+    const d = decide({
+      event: "push",
+      headRef: "",
+      draft: false,
+      files: null,
+      siblingTests: none,
+      queue: { pr: 402, headSha: "x", suitesPassed: true },
+    });
+    expect(d.suites).toBe(true);
   });
 
   it("unknown changed files check everything", () => {
@@ -118,6 +174,228 @@ describe("ci-changes: every check runs unless a narrow match says otherwise", ()
       "packages/api/src/a.test.ts",
       "packages/jobs/src/b.test.ts",
     ]);
+  });
+});
+
+// Same tree: a queue entry whose tree is the tree its PR's all-green run
+// tested re-runs nothing. Each row rules out a looser rule: reuse on a
+// different tree (main moved), on a run where a required check was skipped
+// (GitHub counts that green), or on checks gathered from two runs.
+describe("ci-changes: a same-tree queue entry reuses its PR's all-green run", () => {
+  const T = "a".repeat(40);
+  const U = "b".repeat(40);
+  const url = (id: number) =>
+    `https://github.com/Synap-core/backend/actions/runs/${id}/job/1`;
+  const check = (
+    name: string,
+    conclusion: string | null = "success",
+    runId = 40776509345,
+    status = "completed"
+  ) => ({ name, status, conclusion, details_url: url(runId) });
+  const allGreen = () => QUEUE_REUSE_CHECKS.map((n: string) => check(n));
+  const queued = (reuse: unknown, suitesPassed = true) =>
+    decide({
+      event: "merge_group",
+      headRef: "",
+      draft: false,
+      files: null,
+      siblingTests: none,
+      queue: { pr: 471, headSha: "bc328a622", suitesPassed, reuse },
+    });
+
+  it("all 4 required checks success on one run: that run", () => {
+    expect(reusableRun(allGreen())).toBe(40776509345);
+  });
+
+  it.each([
+    ["a skipped suite (a draft run)", ["Full suite", "skipped"]],
+    ["a neutral check", ["Reference docs are current", "neutral"]],
+    ["a red Release gate", ["Release gate", "failure"]],
+    ["a check still running", ["API e2e", null]],
+  ])("%s: no run to reuse", (_l, [name, conclusion]) => {
+    const runs = allGreen().map((r: { name: string }) =>
+      r.name === name
+        ? check(
+            name,
+            conclusion,
+            40776509345,
+            conclusion ? "completed" : "in_progress"
+          )
+        : r
+    );
+    expect(reusableRun(runs)).toBeNull();
+  });
+
+  it("a missing check, two runs, or no run id: no run to reuse", () => {
+    expect(reusableRun(allGreen().slice(1))).toBeNull();
+    const two = allGreen();
+    two[0] = check(two[0].name, "success", 1);
+    expect(reusableRun(two)).toBeNull();
+    expect(
+      reusableRun(allGreen().map((r: object) => ({ ...r, details_url: "" })))
+    ).toBeNull();
+    expect(reusableRun(null as never)).toBeNull();
+  });
+
+  it("identical tree on an all-green run: nothing re-runs, and it says which run", () => {
+    const d = queued({
+      runId: 40776509345,
+      testedCommit: "0a42579a9" + "0".repeat(31),
+      testedTree: T,
+      queueTree: T,
+    });
+    expect([d.gate, d.image, d.suites, d.reuse]).toEqual([
+      false,
+      false,
+      false,
+      true,
+    ]);
+    expect(d.reason).toContain("40776509345");
+    expect(d.reason).toContain("#471");
+  });
+
+  it("a different tree falls through to the light queue run (Release gate)", () => {
+    const d = queued({
+      runId: 1,
+      testedCommit: "c",
+      testedTree: T,
+      queueTree: U,
+    });
+    expect(d.reuse).not.toBe(true);
+    expect([d.gate, d.suites]).toEqual([true, false]);
+  });
+
+  it("identical tree but no all-green run (a skipped suite): no reuse", () => {
+    // reuseEvidence() returns null when reusableRun() finds no run.
+    const d = queued(null, false);
+    expect(d.reuse).not.toBe(true);
+    expect([d.gate, d.suites]).toEqual([true, true]);
+  });
+
+  it("a malformed or missing tree never matches", () => {
+    for (const reuse of [
+      { runId: 1, testedTree: undefined, queueTree: undefined },
+      { runId: 1, testedTree: "", queueTree: "" },
+      { runId: null, testedTree: T, queueTree: T },
+    ])
+      expect(queued(reuse).reuse, JSON.stringify(reuse)).not.toBe(true);
+  });
+
+  it("only a merge-queue run reuses", () => {
+    const d = decide({
+      event: "push",
+      headRef: "",
+      draft: false,
+      files: null,
+      siblingTests: none,
+      queue: {
+        pr: 471,
+        headSha: "x",
+        suitesPassed: true,
+        reuse: { runId: 1, testedTree: T, queueTree: T },
+      },
+    });
+    expect([d.gate, d.suites, d.reuse]).toEqual([true, true, undefined]);
+  });
+
+  it("the reused checks are the ruleset's required checks", () => {
+    const sh = readFileSync(
+      join(REPO, "scripts/apply-main-protection.sh"),
+      "utf8"
+    );
+    const required = [
+      ...(/^REQUIRED_CHECKS=\((.+)\)$/m.exec(sh)?.[1] ?? "").matchAll(
+        /"([^"]+)"/g
+      ),
+    ].map((m) => m[1]);
+    expect(required.length).toBe(4);
+    expect([...QUEUE_REUSE_CHECKS].sort()).toEqual([...required].sort());
+  });
+
+  it("every run names the commit it tested, in the step the queue reads", () => {
+    const ci = readFileSync(join(REPO, ".github/workflows/ci.yml"), "utf8");
+    const changes = ci.slice(
+      ci.indexOf("\n  changes:\n"),
+      ci.indexOf("\n  preflight:\n")
+    );
+    expect(changes).toContain("- name: Tested commit ${{ github.sha }}");
+    expect(changes).toContain("reuse: ${{ steps.decide.outputs.reuse }}");
+    expect(changes).toContain(
+      "QUEUE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}"
+    );
+    expect(changes).toMatch(/^ {6}actions: read$/m);
+    // the rendered name parses
+    expect(TESTED_STEP.exec(`Tested commit ${T}`)?.[1]).toBe(T);
+    expect(TESTED_STEP.exec("Tested commit ${{ github.sha }}")).toBeNull();
+  });
+});
+
+describe("ci-changes: a queue entry trusts only suites that really ran", () => {
+  const run = (
+    name: string,
+    conclusion: string | null,
+    status = "completed"
+  ) => ({
+    name,
+    status,
+    conclusion,
+  });
+
+  it("reads the PR from the queue branch, and nothing else", () => {
+    expect(
+      queuePrNumber("refs/heads/gh-readonly-queue/main/pr-402-550070005abc")
+    ).toBe(402);
+    expect(queuePrNumber("gh-readonly-queue/main/pr-7-abc")).toBe(7);
+    expect(queuePrNumber("feat/pr-402-x")).toBeNull();
+    expect(queuePrNumber(undefined)).toBeNull();
+  });
+
+  it("both suites completed with success: trusted", () => {
+    expect(
+      suitesPassed([run("Full suite", "success"), run("API e2e", "success")])
+    ).toBe(true);
+  });
+
+  // Each row rules out a looser rule: GitHub counts skipped and neutral as
+  // green (a draft run reports its suites skipped), so accepting either would
+  // let a PR whose suites never ran merge through a light queue run.
+  it.each([
+    [
+      "Full suite skipped (a draft run)",
+      [run("Full suite", "skipped"), run("API e2e", "success")],
+    ],
+    [
+      "API e2e skipped",
+      [run("Full suite", "success"), run("API e2e", "skipped")],
+    ],
+    ["neutral", [run("Full suite", "neutral"), run("API e2e", "success")]],
+    ["failure", [run("Full suite", "failure"), run("API e2e", "success")]],
+    [
+      "still running",
+      [run("Full suite", null, "in_progress"), run("API e2e", "success")],
+    ],
+    ["API e2e missing", [run("Full suite", "success")]],
+    ["Full suite missing", [run("API e2e", "success")]],
+    [
+      "a shard is not the judge",
+      [run("Full suite (shard 1/4)", "success"), run("API e2e", "success")],
+    ],
+    [
+      "one of two runs red",
+      [
+        run("Full suite", "success"),
+        run("Full suite", "failure"),
+        run("API e2e", "success"),
+      ],
+    ],
+    ["no runs", []],
+  ])("%s: not trusted", (_label, runs) => {
+    expect(suitesPassed(runs)).toBe(false);
+  });
+
+  it("anything that is not a list is not trusted", () => {
+    expect(suitesPassed(null as never)).toBe(false);
+    expect(suitesPassed(undefined as never)).toBe(false);
   });
 });
 
@@ -323,8 +601,8 @@ describe("ci-changes: a draft's skipped suites never read as passed", () => {
     expect(changes?.block).toContain("BASE_REF: ${{ github.base_ref }}");
   });
 
-  it("ci.yml and reference-docs.yml run for a pull request to ANY base", () => {
-    for (const file of ["ci.yml", "reference-docs.yml"]) {
+  it("ci.yml runs for a pull request to ANY base", () => {
+    for (const file of ["ci.yml"]) {
       const text = readFileSync(join(REPO, ".github/workflows", file), "utf8");
       const on = text.slice(text.indexOf("\non:\n"), text.indexOf("\njobs:\n"));
       const prBlock = /^ {2}pull_request:\n((?: {4}.*\n| *#.*\n)*)/m.exec(on);
@@ -357,15 +635,13 @@ describe("ci-changes: a draft's skipped suites never read as passed", () => {
   });
 
   it("Reference docs reports red for a negctl branch instead of skipping", () => {
-    const text = readFileSync(
-      join(REPO, ".github/workflows/reference-docs.yml"),
-      "utf8"
-    );
+    // A job of ci.yml since 2026-10-28 (it waits for Preflight).
+    const job = jobs.find((j) => j.name === "Reference docs are current");
+    expect(job, "job exists").toBeDefined();
     // No job-level skip for negctl: a skipped required check reads as passed.
-    expect(text).not.toMatch(/^ {4}if: .*negctl/m);
-    const steps = text.split(/^ {6}- /m).slice(1);
-    expect(steps[0]).toContain("startsWith(github.head_ref, 'negctl/')");
-    expect(steps[0]).toMatch(/\n\s+exit 1\n/);
+    expect(job?.if).not.toMatch(/negctl/);
+    expect(job?.steps[0]).toContain("startsWith(github.head_ref, 'negctl/')");
+    expect(job?.steps[0]).toMatch(/\n\s+exit 1\n/);
   });
 
   it("every suite job runs on a hold and its FIRST step fails", () => {

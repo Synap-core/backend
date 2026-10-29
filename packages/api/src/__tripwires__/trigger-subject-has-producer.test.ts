@@ -129,14 +129,30 @@ function scanProducers(): Producer[] {
 
   for (const file of files) {
     const src = fs.readFileSync(file, "utf8");
+    // Where a producer's payload object OPENS: the argument of
+    // `emitSideEffects({` / `recordDomainMutation({`, or the object a PAYLOAD
+    // BUILDER returns (`function f(…): SideEffectPayload { return {`) when
+    // this file fans out its result (`fanOutSideEffects(f(` or
+    // `emitSideEffects(f(`). An outbox fans out from a stored row:
+    // `events/inbound-delivery.ts` is the only producer of `external_webhook`.
+    // A builder nothing fans out licenses nothing.
+    const opens: number[] = [];
     const call = /\b(?:emitSideEffects|recordDomainMutation)\s*\(\s*\{/g;
-    let m: RegExpExecArray | null;
-    while ((m = call.exec(src))) {
-      // Brace-balance the argument object — a fixed line window either
+    for (const c of src.matchAll(call)) opens.push(c.index! + c[0].length - 1);
+    const builder =
+      /\bfunction\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*:\s*SideEffectPayload\s*\{\s*return\s*\{/g;
+    for (const b of src.matchAll(builder)) {
+      const fannedOut = new RegExp(
+        `\\b(?:fanOutSideEffects|emitSideEffects)\\s*\\(\\s*${b[1]}\\s*\\(`
+      ).test(src);
+      if (fannedOut) opens.push(b.index! + b[0].length - 1);
+    }
+    for (const open of opens) {
+      // Brace-balance the payload object — a fixed line window either
       // truncates a long call or spills into the next one.
       let depth = 0;
-      let end = m.index;
-      for (let i = m.index + m[0].length - 1; i < src.length; i++) {
+      let end = open;
+      for (let i = open; i < src.length; i++) {
         if (src[i] === "{") depth++;
         else if (src[i] === "}") {
           depth--;
@@ -146,7 +162,7 @@ function scanProducers(): Producer[] {
           }
         }
       }
-      const block = src.slice(m.index, end + 1);
+      const block = src.slice(open, end + 1);
 
       const st = /subjectType\s*:\s*([^,\n]+)/.exec(block);
       if (!st) continue;
@@ -184,7 +200,7 @@ function scanProducers(): Producer[] {
       if (!at && /(?:^|[\s,{])action\s*(?:,|\})/.test(block)) {
         const decls = [
           ...src
-            .slice(0, m.index)
+            .slice(0, open)
             .matchAll(
               /\baction\??\s*:\s*((?:["'`][A-Za-z_]\w*["'`]\s*\|?\s*)+)[,)]/g
             ),
@@ -197,7 +213,7 @@ function scanProducers(): Producer[] {
         }
       }
 
-      const loc = `${path.relative(REPO, file)}:${src.slice(0, m.index).split("\n").length}`;
+      const loc = `${path.relative(REPO, file)}:${src.slice(0, open).split("\n").length}`;
       for (const a of shorthandActions.length ? shorthandActions : [action]) {
         producers.push({ subject, action: a, passesWorkspace, loc });
       }

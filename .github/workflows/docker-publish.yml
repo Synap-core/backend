@@ -60,20 +60,27 @@ jobs:
       sha: ${{ steps.pick.outputs.sha }}
       build: ${{ steps.pick.outputs.build }}
     steps:
+      # The gate script only (no credential kept): it reads GitHub, never the tree.
+      - name: Checkout the release gate script
+        if: github.event_name != 'schedule'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+
+      # A release started while the commit's Release gate is still queued or
+      # running (a "Run workflow" right after a merge) WAITS for it, up to the
+      # merge queue's 45-min check timeout, instead of failing and being re-run
+      # by hand (runs 40760093657, 40704054177). No gate and no CI run at all,
+      # or a gate that ended in anything but success, still fails at once.
       - name: Release gate passed on this commit
         if: github.event_name != 'schedule'
+        timeout-minutes: 50
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
-        run: |
-          n=$(gh api "repos/$REPO/commits/$SHA/check-runs?check_name=Release%20gate&per_page=100" \
-                --jq '[.check_runs[] | select(.conclusion == "success")] | length')
-          if [ "${n:-0}" -lt 1 ]; then
-            echo "::error::The CI \"Release gate\" job has not passed on $SHA. Push it to main (CI runs on every push) and wait for it, then release."
-            exit 1
-          fi
-          echo "Release gate passed on $SHA ($n green check run(s))."
+        run: node scripts/ci/release-gate-wait.mjs "$REPO" "$SHA"
 
       - name: Checkout main (nightly)
         if: github.event_name == 'schedule'

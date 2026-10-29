@@ -75,6 +75,27 @@ describe("GrantRepository (0305, PGlite)", () => {
     expect(rows).toEqual([{ n: 0 }]);
   });
 
+  // [] stored as null would read "every space" (ticket 945d8737): narrowing
+  // to nothing must never widen, and must not end the key's current grant.
+  it("refuses an EMPTY pinning on any axis and keeps the current grant", async () => {
+    await attach({ workspaceIds: ["33333333-3333-4333-8333-333333333333"] });
+    for (const empty of [
+      { workspaceIds: [] },
+      { projectIds: [] },
+      { entityIds: [] },
+    ]) {
+      await expect(attach(empty)).rejects.toThrow(/cannot be empty/);
+    }
+    expect((await repo.resolveForKey(KEY))?.scopes).toEqual([
+      {
+        permissions: ["entity.knowledge.read"],
+        workspaceIds: ["33333333-3333-4333-8333-333333333333"],
+        projectIds: null,
+        entityIds: null,
+      },
+    ]);
+  });
+
   // Rules out the legacy reading: no row = full access.
   it("a key that never had a grant resolves to deny-all, never null (P5)", async () => {
     expect(await repo.resolveForKey(OTHER_KEY)).toEqual({

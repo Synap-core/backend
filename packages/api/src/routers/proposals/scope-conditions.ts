@@ -228,3 +228,15 @@ export const proposalIdsFilterSchema = z
 export function proposalIdsWhere(ids: readonly string[]): SQL {
   return inArray(proposals.id, [...ids]);
 }
+
+/**
+ * The `recipient` filter: only the intent actions sent to this person or
+ * company, i.e. a proposal whose `intentRequest` (what the run door recorded
+ * of an app's or an agent's ask, `services/capabilities/intent-actions.ts`)
+ * names them as its recipient. "Sends waiting for your approval" on a lead
+ * (CRM consolidation, Lane 2). A FILTER only: ANDed onto a door's floor,
+ * never instead of it.
+ */
+export function proposalRecipientWhere(entityId: string): SQL {
+  return drizzleSql`${proposals.data}->'intentRequest'->'recipient'->>'id' = ${entityId}`;
+}

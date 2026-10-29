@@ -1922,7 +1922,9 @@ export type SkillScope = "pod" | "user" | "workspace";
 /**
  * `skills.input_map` (0368): a verb parameter ← `"$.<path>"` (the app's input,
  * validated against the intent's input schema), `"$account.<id|label|provider>"`
- * (the account the action targets) or `{ const: <value> }`. Validated by
+ * (the account the action targets), `"$to.<address>"` (an address of the
+ * recipient the input's `to` names, resolved by the pod; 0369) or
+ * `{ const: <value> }`. Validated by
  * `services/capabilities/intent-input.ts` before it is stored.
  */
 export type SkillInputMapValue = string | {
@@ -31147,6 +31149,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				deduplicated?: undefined;
 				deferred?: true | undefined;
 				duplicateCheck?: DuplicateCheck | undefined;
+				effectiveHomeWorkspaceId: string | null;
 				effectiveWorkspaceId: string | null;
 				entity: Record<string, unknown> | null;
 				facets: {
@@ -48521,6 +48524,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				locale: string;
 				name: string | null;
 				timezone: string;
+			};
+		}>;
+		setLocale: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				locale: "en" | "fr";
+			};
+			meta: object;
+			output: {
+				locale: "en" | "fr";
 			};
 		}>;
 		updateFeedPreferences: import("@trpc/server").TRPCMutationProcedure<{
