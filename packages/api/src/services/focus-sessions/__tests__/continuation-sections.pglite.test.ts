@@ -819,6 +819,56 @@ describe("continuation packet — runners", () => {
     });
   });
 
+  it("a TWIN: two live processes of one conversation each carry the other's host and start time", async () => {
+    const sid = randomUUID();
+    await session(sid);
+    const keyId = randomUUID();
+    const clientKey = `key:${keyId}|conv:claude-code:${CC_CONV}`;
+    const copy = (processKey: string, host: string, startedAt: string) =>
+      q(
+        `insert into session_runners (session_id, client_key, process_key, process_host, process_started_at, user_id, agent_user_id, api_key_id, harness, conversation_id, first_seen_at, last_seen_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, 'claude-code', $9, now(), now())`,
+        [
+          sid,
+          clientKey,
+          processKey,
+          host,
+          startedAt,
+          OWNER,
+          AGENT,
+          keyId,
+          CC_CONV,
+        ]
+      );
+    await copy("mac-a:111:1761600000000", "mac-a", "2025-10-27T22:40:00.000Z");
+    await copy(
+      "devbox:222:1761650000000",
+      "devbox",
+      "2025-10-28T12:33:20.000Z"
+    );
+    const { runners } = await packetFor(sid);
+    expect(runners.status).toBe("ok");
+    if (runners.status !== "ok") throw new Error("runners unavailable");
+    const items = runners.items;
+    expect(items).toHaveLength(2);
+    const a = items.find((i) => i.processHost === "mac-a")!;
+    const b = items.find((i) => i.processHost === "devbox")!;
+    expect(a.twin).toEqual([
+      expect.objectContaining({
+        processId: "devbox:222:1761650000000",
+        host: "devbox",
+        startedAt: "2025-10-28T12:33:20.000Z",
+      }),
+    ]);
+    expect(b.twin).toEqual([
+      expect.objectContaining({
+        processId: "mac-a:111:1761600000000",
+        host: "mac-a",
+        startedAt: "2025-10-27T22:40:00.000Z",
+      }),
+    ]);
+  });
+
   it("a session nobody has listened on is an empty ok, not unavailable", async () => {
     const packet = await packetFor(S.plain);
     expect(packet.runners).toEqual({ status: "ok", total: 0, items: [] });

@@ -21,6 +21,10 @@ const M0342 = readFileSync(
   resolve(HERE, "../migrations/0342_session_runners.sql"),
   "utf8"
 );
+const M0373 = readFileSync(
+  resolve(HERE, "../migrations/0373_session_runners_process.sql"),
+  "utf8"
+);
 const BASELINE = readFileSync(
   resolve(HERE, "../migrations/0000_baseline_schema.sql"),
   "utf8"
@@ -37,10 +41,12 @@ describe("migration 0342 — session_runners", () => {
     await pg.exec(SESSIONS_STUB);
     await pg.exec(M0342);
     await pg.exec(M0342);
+    await pg.exec(M0373);
+    await pg.exec(M0373);
     const cols = await pg.query<{ column_name: string }>(
       `SELECT column_name FROM information_schema.columns WHERE table_name = 'session_runners'`
     );
-    expect(declaredColumns.length).toBe(11);
+    expect(declaredColumns.length).toBe(14);
     expect(cols.rows.map((r) => r.column_name).sort()).toEqual(
       [...declaredColumns].sort()
     );
@@ -56,6 +62,7 @@ describe("migration 0342 — session_runners", () => {
     const pg = new PGlite();
     await pg.exec(SESSIONS_STUB);
     await pg.exec(M0342);
+    await pg.exec(M0373);
     const sid = randomUUID();
     await pg.query(`INSERT INTO focus_sessions VALUES ($1, 'u')`, [sid]);
     const ins = (key: string) =>
@@ -74,18 +81,72 @@ describe("migration 0342 — session_runners", () => {
     await pg.close();
   }, 60_000);
 
-  it("the baseline carries the same table + index, and schema-coherence names it", () => {
-    const create = M0342.slice(
-      M0342.indexOf('CREATE TABLE IF NOT EXISTS "session_runners"'),
-      M0342.indexOf(");", M0342.indexOf("CREATE TABLE")) + 2
+  it("the baseline carries the same table + index as 0342 + 0373, and schema-coherence names it", async () => {
+    const baselineCreate = BASELINE.slice(
+      BASELINE.indexOf('CREATE TABLE IF NOT EXISTS "session_runners"'),
+      BASELINE.indexOf(");", BASELINE.indexOf('"session_runners"')) + 2
     );
-    expect(create.length).toBeGreaterThan(300);
-    expect(BASELINE).toContain(create.trim());
+    expect(baselineCreate.length).toBeGreaterThan(300);
     expect(BASELINE).toContain('"idx_session_runners_session_seen"');
+    const shape = async (setup: string) => {
+      const pg = new PGlite();
+      await pg.exec(SESSIONS_STUB);
+      await pg.exec(setup);
+      const cols = await pg.query<{ column_name: string; is_nullable: string }>(
+        `SELECT column_name, is_nullable FROM information_schema.columns WHERE table_name = 'session_runners' ORDER BY column_name`
+      );
+      const pk = await pg.query<{ attname: string }>(
+        `SELECT a.attname FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY (i.indkey)
+         WHERE i.indrelid = 'session_runners'::regclass AND i.indisprimary ORDER BY a.attname`
+      );
+      await pg.close();
+      return { cols: cols.rows, pk: pk.rows.map((r) => r.attname) };
+    };
+    const fromBaseline = await shape(baselineCreate);
+    expect(fromBaseline).toEqual(await shape(M0342 + M0373));
+    expect(fromBaseline.pk).toEqual([
+      "client_key",
+      "process_key",
+      "session_id",
+    ]);
     expect(
       REQUIRED_COLUMNS.filter((c) => c.table === "session_runners").map(
         (c) => c.column
       )
-    ).toEqual(expect.arrayContaining(["last_seen_at", "machine_user_id"]));
-  });
+    ).toEqual(
+      expect.arrayContaining(["last_seen_at", "machine_user_id", "process_key"])
+    );
+  }, 60_000);
+
+  it("0373: an existing row survives as process '', two processes of one client key coexist, one process cannot repeat", async () => {
+    const pg = new PGlite();
+    await pg.exec(SESSIONS_STUB);
+    await pg.exec(M0342);
+    const sid = randomUUID();
+    await pg.query(`INSERT INTO focus_sessions VALUES ($1, 'u')`, [sid]);
+    const key = "key:a|conv:claude-code:c";
+    await pg.query(
+      `INSERT INTO session_runners (session_id, client_key, user_id, harness, conversation_id) VALUES ($1, $2, 'u', 'claude-code', 'c')`,
+      [sid, key]
+    );
+    await pg.exec(M0373);
+    const old = await pg.query<{ process_key: string }>(
+      `SELECT process_key FROM session_runners`
+    );
+    expect(old.rows).toEqual([{ process_key: "" }]);
+    const ins = (proc: string) =>
+      pg.query(
+        `INSERT INTO session_runners (session_id, client_key, process_key, user_id, harness, conversation_id) VALUES ($1, $2, $3, 'u', 'claude-code', 'c')`,
+        [sid, key, proc]
+      );
+    await ins("mac:1:1761600000000");
+    await ins("box:2:1761650000000");
+    await expect(ins("mac:1:1761600000000")).rejects.toThrow(/duplicate key/);
+    // Re-running after the primary key moved is a no-op.
+    await pg.exec(M0373);
+    expect((await pg.query(`SELECT 1 FROM session_runners`)).rows).toHaveLength(
+      3
+    );
+    await pg.close();
+  }, 60_000);
 });

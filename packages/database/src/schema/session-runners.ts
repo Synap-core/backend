@@ -61,6 +61,20 @@ export const sessionRunners = pgTable(
      * MACHINE-IDENTITY-PLAN), when the agent has a host. NULL otherwise.
      */
     machineUserId: text("machine_user_id"),
+    /**
+     * The OS process holding the wait: `<host>:<pid>:<startedAtMs>`
+     * (`X-Synap-Process`, 0373), '' for a client that names none. Part of the
+     * key: two live copies of one conversation are two rows. Kept out of
+     * `client_key`, which a session also stamps and a resume reads.
+     */
+    processKey: text("process_key").notNull().default(""),
+    /** The computer that process runs on, as it named itself. Display only. */
+    processHost: text("process_host"),
+    /** When that process started. Display only. */
+    processStartedAt: timestamp("process_started_at", {
+      mode: "date",
+      withTimezone: true,
+    }),
     firstSeenAt: timestamp("first_seen_at", {
       mode: "date",
       withTimezone: true,
@@ -72,7 +86,9 @@ export const sessionRunners = pgTable(
       .defaultNow(),
   },
   (table) => ({
-    pk: primaryKey({ columns: [table.sessionId, table.clientKey] }),
+    pk: primaryKey({
+      columns: [table.sessionId, table.clientKey, table.processKey],
+    }),
     sessionSeenIdx: index("idx_session_runners_session_seen").on(
       table.sessionId,
       table.lastSeenAt
