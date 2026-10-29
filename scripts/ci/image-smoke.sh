@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # image-smoke.sh <image> — what must hold INSIDE a built backend image, one
-# door for every job that builds one: ci.yml "Release gate: Docker image"
-# (every push to main, and a PR or queue entry touching
-# scripts/ci-changes.mjs IMAGE_INPUTS) and docker-publish.yml
-# build-and-push-backend-api (every release, after its local build and
-# before its push).
+# door for every job that builds one: ci.yml "Release gate: Docker image",
+# docker-publish.yml release-checks and build-and-push-backend-api (when each
+# runs: scripts/ci-changes.mjs IMAGE_INPUTS).
 #
 # In the BUILT image the code-skill sandbox's native addon loads and runs an
 # isolate. isolated-vm is resolved from @synap/api (the package that imports

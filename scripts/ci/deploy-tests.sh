@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # deploy-tests.sh — the deploy safety tests, one door for every job that runs
-# them: ci.yml "Release gate: deploy tests" (every push to main, and a PR or
-# queue entry touching scripts/ci-changes.mjs IMAGE_INPUTS) and
-# docker-publish.yml job release-checks (every release, before its build asks
-# for approval).
+# them: ci.yml "Release gate: deploy tests" and docker-publish.yml job
+# release-checks (when each runs: scripts/ci-changes.mjs IMAGE_INPUTS).
 #
-# 2026-10-02 pod wipe: postgres data must live on its volume, every update
-# door must run the placement guard first, and backups must land on the host.
-# They guard what a release DOES to a pod, so they gate releases.
+# Deploy safety tripwires (daemon-free). pgdata-safety guards the 2026-10-02
+# pod wipe: postgres data must live on its volume, every update door must run
+# the placement guard first, and backups must land on the host. They guard
+# what a release DOES to a pod, so they gate releases.
 # bash, python3 and node only: no install, no layout. Run from the repo root.
 set -uo pipefail
 

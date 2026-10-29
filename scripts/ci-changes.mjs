@@ -14,11 +14,7 @@
  * Every output defaults to "run it". Only a positive, narrow match skips
  * anything: an unknown path, a failed `git diff` or a push to main checks
  * everything. ci.yml also runs every job when THIS job fails.
- * ONE exception, on purpose (founder, 2026-10-29, decision ffaafe15): on a
- * pull request or a queue entry the Docker image and the deploy tests run
- * only for a positive match of IMAGE_INPUTS, so an unknown path does NOT run
- * them there. They are not lost: every push to main runs them, and a release
- * runs them again before it is built (docker-publish.yml).
+ * One exception, on purpose: the image jobs (see IMAGE_INPUTS).
  *
  * ── THREE TIERS (founder, 2026-10-29, "One trunk, three CI tiers") ──────────
  *   PR       Preflight, the Release gate, and the tests of what the change can
@@ -38,8 +34,8 @@
  *
  * ── THE MERGE QUEUE (founder, 2026-10-28: "light queue run", #428) ──────────
  * A queue entry re-checks what can break when PRs combine — the Release gate
- * (install, lint, typecheck, build, migrate, boot; the image only when the
- * entry touches IMAGE_INPUTS, since 2026-10-29) — and takes the Full
+ * (install, lint, typecheck, build, migrate, boot; the image per
+ * IMAGE_INPUTS) — and takes the Full
  * suite + API e2e from the PR's OWN run, but only when that run really ran
  * them: both checks concluded `success` on the PR's head commit (since
  * 2026-10-29 that run checked the PR's tier, not everything: main's
@@ -67,7 +63,7 @@
  *   gate          Release gate runs           false: negctl branch, docs-only
  *   image         Docker build + deploy tests false: a PR or queue entry
  *                                             touching no IMAGE_INPUTS path
- *   image_reason  image=false: why, for the jobs' "Not affected" step
+ *   image_reason  image=false: why (the judge prints it beside the skip)
  *   suites        the Full suite shards run   false: draft, stack, negctl,
  *                                             docs-only, a same-tree or a
  *                                             light queue entry
@@ -114,28 +110,24 @@ const DOCS_ONLY = [
   /^\.github\/pull_request_template\.md$/,
 ];
 
-// What the Docker image and the deploy tests are made of (founder,
-// 2026-10-29, decision ffaafe15, finding 66c40812: "image checks move to the
-// nightly"). A pull request or a merge-queue entry builds and smoke-tests the
-// image ("Release gate: Docker image") and runs the deploy tests ("Release
-// gate: deploy tests") ONLY when it touches one of these paths. A push to
-// main, develop or a release branch always runs both (decide() returns
-// `all`), and every release re-runs them before it is built
-// (docker-publish.yml, job release-checks, and the image smoke in
-// build-and-push-backend-api), so a path this list misses is caught on main,
-// before any pod gets it. Until 2026-10-29 the list was the other way round
-// (IMAGE_NEUTRAL: application source and tests skipped, everything else ran
-// the image), which ran the image for a CI script, a README or a tsconfig.
-// Derived from, and pinned against (ci-changes.tripwire.test.ts):
-//   - deploy/Dockerfile: every COPY source (the lockfile, the workspace and
-//     turbo manifests, kratos/, the migrations, skills/), the manifests stage
-//     (every workspace package.json) and the tsup provision config it builds;
-//   - the image smoke (scripts/ci/image-smoke.sh): the skill runner and its
-//     sandbox smoke script;
-//   - every repo path a deploy test reads ("$HERE/<path>" in
-//     deploy/__tests__/*.test.sh), derived by the tripwire;
-//   - the files that define the image jobs themselves (ci.yml, the
-//     docker-publish workflow, the two scripts the jobs run).
+// THE IMAGE RULE (founder, 2026-10-29, decision ffaafe15; finding 66c40812).
+// The one place it is stated; ci.yml, docker-publish.yml and the Release
+// gate judge point here.
+//   - A pull request or a merge-queue entry runs "Release gate: Docker image"
+//     and "Release gate: deploy tests" ONLY when it touches one of these
+//     paths. An unknown path does NOT run them: the one exception to the
+//     fail-safe above. Otherwise both jobs are skipped, and the judge accepts
+//     that skip only when this decision said image=false (IMAGE_DUE).
+//   - Every push (main, develop, release/**) runs both: decide() returns `all`.
+//   - Every release runs both again on the commit it builds, before the
+//     production approval (docker-publish.yml release-checks), and smoke-tests
+//     the image it pushes. So a path this list misses is caught on main,
+//     before any pod gets it.
+// The list is pinned against what it is derived from
+// (ci-changes.tripwire.test.ts): every COPY source, manifest and build config
+// of deploy/Dockerfile; every repo path a deploy test reads ("$HERE/<path>"
+// in deploy/__tests__/*.test.sh); the skill runner the image smoke runs; the
+// files that define the image jobs.
 const IMAGE_INPUTS = [
   /^deploy\//,
   /(^|\/)Dockerfile[^/]*$/,
@@ -311,13 +303,11 @@ export function decide({
     };
 
   const docsOnly = files.length > 0 && files.every(isDocsOnly);
-  // The image jobs: only when the change touches what the image or the
-  // deploy tests are made of (IMAGE_INPUTS). Their jobs still RUN and pass
-  // through a "Not affected" step that names this line (ci.yml).
+  // The image jobs: IMAGE_INPUTS.
   const image = needsImage(files);
   const imageWhy = image
     ? ""
-    : "no path the image or the deploy tests are made of changed (scripts/ci-changes.mjs IMAGE_INPUTS): Docker image and deploy tests not affected; main's post-merge run and every release run them";
+    : "no IMAGE_INPUTS path changed (scripts/ci-changes.mjs): Docker image and deploy tests not affected; every push to main and every release run them";
   // The tier: what the change can break (scripts/ci/affected.mjs). No graph
   // (it failed to load) is the full suite, never a guess.
   const pick = () => {
@@ -498,7 +488,7 @@ export function summary(d, files) {
       d.gate && d.image
         ? "runs"
         : d.gate
-          ? "not affected (main's post-merge run and every release run them)"
+          ? "skipped: not affected (IMAGE_INPUTS)"
           : "not run (the Release gate does not run)",
     ],
   ];

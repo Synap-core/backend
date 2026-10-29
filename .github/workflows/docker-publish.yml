@@ -7,9 +7,8 @@ on:
   # Reference docs all `success`; founder, 2026-10-29, "One trunk, three CI
   # tiers": a PR runs only what it can break, so only main's own full run
   # clears a commit for a pod), on the release's own deploy tests and image
-  # smoke (job release-checks, before any approval request; 2026-10-29,
-  # decision ffaafe15: a PR runs them only when it touches what the image is
-  # made of) and on the `production` environment's required reviewer:
+  # smoke (job release-checks) and on the `production` environment's required
+  # reviewer:
   #   - a v* tag  → STABLE release vX.Y.Z (what managed pods install)
   #   - "Run workflow" on main (gh workflow run docker-publish.yml --ref main)
   #               → FAST release main-<sha7> of main's head
@@ -122,16 +121,11 @@ jobs:
             gh api -X POST "repos/$REPO/actions/runs/$id/cancel"
           done
 
-  # RELEASE CHECKS (founder, 2026-10-29, decision ffaafe15: "image checks
-  # move to the nightly"). A pull request and a merge-queue entry run the
-  # deploy tests and the Docker image only when they touch what the image is
-  # made of (scripts/ci-changes.mjs IMAGE_INPUTS), so a release runs both
-  # itself, on the exact commit it builds, BEFORE any build job asks for the
-  # `production` approval: a red check here means no approval request and no
-  # image. The build jobs keep their environment and its required reviewer;
-  # this job has none and publishes nothing (contents: read, no push).
-  # The backend image is built here with the release's own build cache, and
-  # build-and-push-backend-api reuses it (cache-from: type=gha).
+  # RELEASE CHECKS: the deploy tests and the backend image smoke on the exact
+  # commit a release builds, BEFORE any build job asks for the `production`
+  # approval (a red check: no approval request, no image). Why a release runs
+  # them itself: scripts/ci-changes.mjs IMAGE_INPUTS. This job has no
+  # environment and publishes nothing; the build jobs keep `production`.
   release-checks:
     name: "Release checks: deploy tests + Docker image"
     needs: ci-gate
@@ -310,6 +304,8 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64
 
+      # Again, after release-checks: this smoke checks the exact image that
+      # is pushed (built here with the release's build args).
       - name: Image smoke (isolated-vm, CMD flag, skill-runner sandbox)
         run: bash scripts/ci/image-smoke.sh synap-backend:smoke-test
 

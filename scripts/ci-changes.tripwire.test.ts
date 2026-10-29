@@ -1107,7 +1107,7 @@ describe("ci-changes: holds never read as passed", () => {
       "IMAGE_INPUTS"
     );
     expect(ready.summary).toContain(
-      "| Docker image + deploy tests | not affected"
+      "| Docker image + deploy tests | skipped: not affected (IMAGE_INPUTS)"
     );
     expect(ready.summary).toContain("### What this run checks");
   });

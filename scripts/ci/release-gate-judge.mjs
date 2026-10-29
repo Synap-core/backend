@@ -9,22 +9,22 @@
  * skipped sub-job would release a commit nobody built: GitHub reports a job
  * skipped by its `if:` as `skipped`, and a skipped required check as passed.
  *
- *   pass  every sub-job ended `success`. The image jobs too: since
- *         2026-10-29 (decision ffaafe15) a change that does not need the
- *         image still RUNS them, and they succeed through their logged "Not
- *         affected" step (ci.yml). Until then they were skipped and the judge
- *         accepted `skipped` for them (IMAGE_JOBS / IMAGE_DUE), a skip read
- *         as a pass.
+ *   pass  every sub-job ended `success`. A sub-job named in IMAGE_JOBS may
+ *         instead be `skipped` only when IMAGE_DUE is exactly "false": the
+ *         "What changed" decision said image=false (the rule:
+ *         scripts/ci-changes.mjs IMAGE_INPUTS). Any other IMAGE_DUE, empty
+ *         or missing included, makes it due: a bare skip is never a pass.
  *   fail  any sub-job `failure`, `cancelled` (a timeout ends a job so),
- *         `skipped`, or with no result at all; fewer than two sub-jobs in
- *         `needs` (the scan saw nothing: never a vacuous pass).
+ *         `skipped` while it was due, or with no result at all; fewer than two
+ *         sub-jobs in `needs` (the scan saw nothing: never a vacuous pass).
  *
  * The sub-jobs are DERIVED: every job in `needs` except `changes` and
  * `preflight` (the jobs that decide, not the gate's work). A job added to the
  * judge's `needs:` is required by existing.
  *
  * Usage (ci.yml, job release-gate):
- *   env NEEDS=${{ toJSON(needs) }}
+ *   env NEEDS=${{ toJSON(needs) }}, IMAGE_JOBS="gate-deploy gate-image",
+ *       IMAGE_DUE=true|false, IMAGE_REASON (printed on a not-due line)
  *   node scripts/ci/release-gate-judge.mjs      exit 0 = pass, 1 = fail
  * Self-contained (node: builtins only): the judge job checks out this file
  * alone and runs no install.
@@ -35,10 +35,10 @@ import { pathToFileURL } from "node:url";
 export const DECIDERS = ["changes", "preflight"];
 
 /**
- * @param {{ needs: Record<string, {result?: string}> }} input
+ * @param {{ needs: Record<string, {result?: string}>, imageJobs: string[], imageDue: boolean, imageReason?: string }} input
  * @returns {{ ok: boolean, lines: string[] }}
  */
-export function judge({ needs }) {
+export function judge({ needs, imageJobs, imageDue, imageReason = "" }) {
   const lines = [];
   let ok = true;
   const subJobs = Object.keys(needs ?? {})
@@ -52,11 +52,23 @@ export function judge({ needs }) {
       ],
     };
   }
+  for (const id of imageJobs)
+    if (!subJobs.includes(id)) {
+      ok = false;
+      lines.push(
+        `${id}: named in IMAGE_JOBS but not in the judge's needs (renamed?)`
+      );
+    }
   for (const id of subJobs) {
     const result = needs[id]?.result ?? "";
-    const pass = result === "success";
+    const due = !imageJobs.includes(id) || imageDue;
+    const pass = due
+      ? result === "success"
+      : result === "skipped" || result === "success";
     if (!pass) ok = false;
-    lines.push(`${pass ? "ok  " : "RED "} ${id}: ${result || "(no result)"}`);
+    lines.push(
+      `${pass ? "ok  " : "RED "} ${id}: ${result || "(no result)"}${due ? "" : ` (not due: ${imageReason || "no image-relevant change"})`}`
+    );
   }
   return { ok, lines };
 }
@@ -71,7 +83,12 @@ function main() {
     );
     process.exit(1);
   }
-  const r = judge({ needs });
+  const imageJobs = (process.env.IMAGE_JOBS ?? "").split(/\s+/).filter(Boolean);
+  // Due unless the decision said exactly "false" (fail-safe: an unset or
+  // garbled IMAGE_DUE never excuses a skip).
+  const imageDue = process.env.IMAGE_DUE !== "false";
+  const imageReason = process.env.IMAGE_REASON ?? "";
+  const r = judge({ needs, imageJobs, imageDue, imageReason });
   for (const line of r.lines) console.log(line);
   if (!r.ok) {
     console.log(

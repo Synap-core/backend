@@ -26,6 +26,10 @@ const LIVE_485 = "dfe0aa84741693d427dfd46687b01196c48539db";
 const DEAD_480 = "f6f2f5c4fe8d1a36a9fdc6a04cd51385658dfb25";
 const DEAD_485 = "033914307ba49008fc3113ea858d980af7f8bc72";
 const MERGED = "409270a3d988bdd8adb7bf3d9ba9b7c898e95366";
+// The sweep's clock, and a run old enough to be cancelled (20 min before it).
+const NOW = Date.parse("2026-10-29T11:00:00Z");
+const OLD = "2026-10-29T10:40:00Z";
+const ago = (ms: number) => new Date(NOW - ms).toISOString();
 
 type Run = Record<string, unknown>;
 const run = (id: number, sha: string, over: Run = {}): Run => ({
@@ -37,6 +41,7 @@ const run = (id: number, sha: string, over: Run = {}): Run => ({
   head_branch: `gh-readonly-queue/main/pr-480-${"d".repeat(40)}`,
   head_sha: sha,
   html_url: `https://github.com/Synap-core/backend/actions/runs/${id}`,
+  created_at: OLD,
   ...over,
 });
 const queueBody = (shas: string[], over: Record<string, unknown> = {}) => ({
@@ -102,6 +107,7 @@ const go = (gh: ReturnType<typeof fakeGitHub>, extra = {}) =>
     selfRunId: 999,
     triggerSha: LIVE_485,
     log: () => {},
+    now: NOW,
     ...extra,
   });
 
@@ -143,10 +149,29 @@ describe("cancel-superseded-queue-runs: the sweep, through a fake GitHub", () =>
       { queue: queueBody([LIVE_480], { pageInfo: { hasNextPage: true } }) },
     ],
     [
-      "an entry with no head commit",
+      "an entry whose head commit is not a sha",
       {
         queue: queueBody([LIVE_480], {
-          nodes: [{ headCommit: { oid: LIVE_480 } }, { headCommit: null }],
+          nodes: [
+            { headCommit: { oid: LIVE_480 } },
+            { headCommit: { oid: "" } },
+          ],
+        }),
+      },
+    ],
+    [
+      "a null entry",
+      {
+        queue: queueBody([LIVE_480], {
+          nodes: [{ headCommit: { oid: LIVE_480 } }, null],
+        }),
+      },
+    ],
+    [
+      "only unbuilt entries (every head null)",
+      {
+        queue: queueBody([], {
+          nodes: [{ headCommit: null }, { headCommit: null }],
         }),
       },
     ],
@@ -163,6 +188,38 @@ describe("cancel-superseded-queue-runs: the sweep, through a fake GitHub", () =>
     const r = await go(gh);
     expect(gh.cancelled).toEqual([]);
     expect(r.reason).not.toBe("");
+  });
+
+  // The situation the sweep exists for (24 superseded runs, 29 Oct): a long
+  // queue, where only the first maximumEntriesToBuild (2) entries have a
+  // merge group and the rest wait with `headCommit: null`.
+  it("a long queue with unbuilt (null-head) entries still sweeps", async () => {
+    const gh = fakeGitHub({
+      queue: queueBody([LIVE_480, LIVE_485], {
+        nodes: [
+          { headCommit: { oid: LIVE_480 }, pullRequest: { number: 480 } },
+          { headCommit: { oid: LIVE_485 }, pullRequest: { number: 485 } },
+          { headCommit: null, pullRequest: { number: 486 } },
+          { headCommit: null, pullRequest: { number: 487 } },
+        ],
+      }),
+      runs: [run(1, LIVE_480), run(2, DEAD_480), run(3, DEAD_485)],
+    });
+    const r = await go(gh);
+    expect(gh.cancelled.sort()).toEqual([2, 3]);
+    expect(r.reason).toBe("");
+  });
+
+  it("never a run created in the last 3 min (a later sweep catches it)", async () => {
+    const gh = fakeGitHub({
+      runs: [
+        run(1, DEAD_480, { created_at: ago(3 * 60_000 - 1000) }),
+        run(2, DEAD_485, { created_at: ago(3 * 60_000) }),
+        run(3, DEAD_485, { created_at: "" }),
+      ],
+    });
+    await go(gh);
+    expect(gh.cancelled).toEqual([2]);
   });
 
   it("keeps an entry that just MERGED (its sha is on main), and one it cannot compare", async () => {
@@ -193,6 +250,7 @@ describe("cancel-superseded-queue-runs: which runs are never touched", () => {
       live,
       triggerSha: LIVE_485,
       selfRunId: 7,
+      now: NOW,
       ...extra,
     }).map((r: { id: number }) => r.id);
 
@@ -249,6 +307,14 @@ describe("cancel-superseded-queue-runs: which runs are never touched", () => {
     expect(liveEntryShas(null)).toBeNull();
     expect(liveEntryShas(queueBody([LIVE_480], { pageInfo: {} }))).toBeNull();
     expect(liveEntryShas(queueBody(["nope"]))).toBeNull();
+    // An unbuilt entry (null head) is skipped, the rest still read.
+    expect([
+      ...liveEntryShas(
+        queueBody([], {
+          nodes: [{ headCommit: { oid: LIVE_480 } }, { headCommit: null }],
+        })
+      ),
+    ]).toEqual([LIVE_480]);
   });
 });
 

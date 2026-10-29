@@ -29,17 +29,28 @@
  *     commit whose event started this sweep;
  *   - its head commit is not already on main (an entry that just MERGED: its
  *     run's remaining jobs are left to finish; compare main...<sha>);
+ *   - it was created at least MIN_AGE_MS (3 min) ago: a run younger than that
+ *     may belong to an entry the live list does not show yet (the list and
+ *     the runs are two reads, and the queue builds as it moves). A later
+ *     sweep (the next merge_group event) catches it if it is a true leftover;
  *   - it is not this workflow's own run.
  *
  * ── FAIL-SAFE ────────────────────────────────────────────────────────────────
  * Cancelling a live entry's run drops that PR from the queue; missing a dead
  * run only wastes runner minutes. So every doubt cancels NOTHING: the live
  * list unreadable (an HTTP error, GraphQL errors, no merge queue, a second
- * page we did not read, an entry with no head commit), the live list EMPTY
- * (the entry that started this sweep should be in it), a run list unreadable,
- * a merged-check unreadable (that run is kept). The runs are listed BEFORE
- * the live entries: a run exists only after its entry, so an entry created
- * between the two reads is still seen live.
+ * page we did not read, a head commit that is not a sha), the live list
+ * EMPTY (the entry that started this sweep should be in it), a run list
+ * unreadable, a merged-check unreadable (that run is kept), a run with no
+ * readable creation time. The runs are listed BEFORE the live entries: a run
+ * exists only after its entry, so an entry created between the two reads is
+ * still seen live.
+ * An entry with NO head commit (`headCommit: null`, nullable in the schema)
+ * is one the queue has not built: beyond `maximumEntriesToBuild` (2 here) an
+ * entry waits without a merge group. It has no run to protect, so it is
+ * skipped, not read as a broken list: distrusting the list for it would
+ * cancel nothing exactly when the queue is longest. (Not observed live: the
+ * queue held 2 or fewer entries whenever it was read, 2026-10-29.)
  *
  * Usage (.github/workflows/cancel-superseded-queue-runs.yml):
  *   env GITHUB_TOKEN (actions: write, contents: read, pull-requests: read),
@@ -54,6 +65,8 @@ import { CANCELLABLE_WORKFLOWS, IN_FLIGHT } from "./cancel-closed-pr-runs.mjs";
 export const QUEUE_BASE = "main";
 /** A queue branch of main: `gh-readonly-queue/main/pr-<N>-<base sha>`. */
 export const QUEUE_BRANCH = /^gh-readonly-queue\/main\/pr-(\d+)-[0-9a-f]{40}$/;
+/** A run younger than this is never cancelled (see WHAT IT CANCELS). */
+export const MIN_AGE_MS = 3 * 60_000;
 /** The run statuses listed (the API filters one status per call). */
 export const LISTED_STATUSES = ["queued", "in_progress", "waiting"];
 
@@ -82,7 +95,10 @@ export function liveEntryShas(body) {
   if (entries.pageInfo?.hasNextPage !== false) return null;
   const shas = new Set();
   for (const node of entries.nodes) {
-    const oid = node?.headCommit?.oid;
+    if (!node || typeof node !== "object") return null;
+    // Not built yet (beyond maximumEntriesToBuild): no merge group, no run.
+    if (node.headCommit === null) continue;
+    const oid = node.headCommit?.oid;
     if (typeof oid !== "string" || !SHA.test(oid)) return null;
     shas.add(oid);
   }
@@ -92,7 +108,7 @@ export function liveEntryShas(body) {
 /**
  * The runs whose queue entry is gone, each with why. Pure.
  * @param {{ runs: Array<Record<string, any>>, live: Set<string> | null,
- *           triggerSha?: string, selfRunId?: number }} input
+ *           triggerSha?: string, selfRunId?: number, now?: number }} input
  * @returns {Array<{ id: number, sha: string, url?: string, why: string }>}
  */
 export function selectSupersededQueueRuns({
@@ -100,6 +116,7 @@ export function selectSupersededQueueRuns({
   live,
   triggerSha,
   selfRunId,
+  now = Date.now(),
 }) {
   // No trustworthy live list, or an empty one: cancel nothing.
   if (!(live instanceof Set) || live.size === 0) return [];
@@ -115,6 +132,8 @@ export function selectSupersededQueueRuns({
     const sha = String(run.head_sha ?? "");
     if (!SHA.test(sha)) continue;
     if (live.has(sha) || sha === triggerSha) continue;
+    const created = Date.parse(run.created_at ?? "");
+    if (!Number.isFinite(created) || now - created < MIN_AGE_MS) continue;
     seen.add(run.id);
     out.push({
       id: run.id,
@@ -137,6 +156,7 @@ export async function sweep({
   triggerSha,
   dryRun = false,
   log = console.log,
+  now = Date.now(),
 }) {
   const result = { cancelled: [], kept: [], reason: "" };
   const stop = (reason) => {
@@ -183,6 +203,7 @@ export async function sweep({
     live,
     triggerSha,
     selfRunId,
+    now,
   });
   log(
     `${QUEUE_BASE} queue: ${live.size} live entr${live.size === 1 ? "y" : "ies"}, ${runs.length} in-flight queue run(s), ${picks.length} superseded`
