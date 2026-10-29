@@ -265,7 +265,7 @@ beforeAll(async () => {
   // The agent is a member, so the write needs no join first.
   await q(
     `insert into workspace_members (id, workspace_id, user_id, role) values
-      ($1, $3, $4, 'owner'), ($2, $3, $5, 'member')`,
+      ($1, $3, $4, 'owner'), ($2, $3, $5, 'editor')`,
     [randomUUID(), randomUUID(), WS, USER, AGENT]
   );
   // The already-approved kind the agent adds fields to.

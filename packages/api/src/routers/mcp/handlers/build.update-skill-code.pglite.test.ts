@@ -463,12 +463,20 @@ describe("c7e2afa2: an automation naming a skill still in review names that prop
       `insert into users (id, email, name, user_type) values ($1, 'o@x.test', 'Other', 'human')`,
       [OTHER]
     );
+    // In a space the person cannot see. A pod-wide proposal (no workspace)
+    // is in every pod reader's review queue, so naming it would leak nothing.
+    const otherSpace = randomUUID();
+    await q(
+      `insert into workspaces (id, owner_id, name) values ($1, $2, 'Private')`,
+      [otherSpace, OTHER]
+    );
     const foreign = randomUUID();
     await q(
       `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, status, created_by, subject_user_id, data)
-       values ($1, null, 'skill', $2, 'create', 'pending', $3, $3, $4)`,
+       values ($1, $2, 'skill', $3, 'create', 'pending', $4, $4, $5)`,
       [
         foreign,
+        otherSpace,
         randomUUID(),
         OTHER,
         JSON.stringify({
