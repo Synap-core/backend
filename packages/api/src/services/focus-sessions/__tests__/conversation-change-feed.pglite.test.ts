@@ -355,10 +355,12 @@ describe("the conversation change feed", () => {
     const resolved = await session();
     const cursor = new Date().toISOString();
     // Happened BEFORE the cursor (merged_at), heard of AFTER it: still news.
+    // Relative to now: the feed drops a fact that happened more than a day
+    // before the cursor, so a fixed date went red a day after it was written.
     await prFact({
       type: "dev.pr_merged",
       number: 9001,
-      occurredAt: "2026-10-28T08:00:00.000Z",
+      occurredAt: new Date(Date.now() - 60 * 60_000).toISOString(),
       ingestedAt: new Date(Date.now() + 1000).toISOString(),
     });
     // Heard of AFTER the cursor, said explicitly. Left to the row time (DB
