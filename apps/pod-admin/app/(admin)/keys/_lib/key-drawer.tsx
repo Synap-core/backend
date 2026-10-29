@@ -11,6 +11,8 @@ import { Button, Chip, Spinner } from "@heroui/react";
 import { ArrowUpRight, FileCheck2, PlayCircle } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
+import type { inferRouterOutputs } from "@trpc/server";
+import type { AppRouter } from "@synap-core/api-types";
 import { trpc } from "../../../../lib/trpc";
 import { formatRelative, shortId } from "../../../../lib/format";
 import { openIn } from "../../../../lib/open-in";
@@ -173,9 +175,8 @@ export function KeyDrawer({
   );
 }
 
-type Grant = NonNullable<
-  ReturnType<typeof trpc.apiKeys.adminKeyDetail.useQuery>["data"]
->["grants"][number];
+type Grant =
+  inferRouterOutputs<AppRouter>["apiKeys"]["adminKeyDetail"]["grants"][number];
 
 function GrantCard({ grant }: { grant: Grant }) {
   const pins = [
