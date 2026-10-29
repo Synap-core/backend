@@ -11,29 +11,37 @@
  *     (`homeMoves` over `needsYouBuckets`);
  *   - sessions ready to close: the same read's `review` part, the sessions
  *     whose next move is `ready_to_close` (THE next-move rule,
- *     `continuation-packet.ts`). Closing is the PERSON's move (founder
- *     decision 2026-09-20): the brief names them, it never closes them;
+ *     `continuation-packet.ts`). It is a PART of the count (`countNeedsYou`
+ *     sums it in), so the brief says it as "N of them", never beside it.
+ *     Closing is the PERSON's move (founder decision 2026-09-20): the brief
+ *     names them, it never closes them;
  *   - sessions closed in the last day with required criteria unmet: the
  *     `session.closed.criteria_unmet` notifications its reactor already
  *     raised; and closed with no criteria at all: the work sessions settled
  *     since then that declared none.
  *
  * WHEN. Proactive settings live per workspace and the brief is per person, so
- * it reads the person's FIRST space (the oldest active workspace they own):
- * `morningBriefing.cronHour:cronMinute` in `morningBriefing.timezone` when the
- * space stored its settings, else the default 08:00 in the person's own
- * timezone (`users.timezone`). The cron ticks every 15 minutes and a person is
- * due for the hour after their time, so a missed tick catches up.
+ * it reads ONE of the person's spaces: the oldest active space they own that
+ * stored proactive settings, else the oldest active space they own (a person
+ * who owns none gets no brief). `morningBriefing.cronHour:cronMinute` in
+ * `morningBriefing.timezone`; a stored "UTC" is the default a settings save
+ * wrote, not a choice, so it reads as unset and the person's own timezone
+ * (`users.timezone`) stands in. The cron ticks every 15 minutes and a person
+ * is due for the hour after their time, so a missed tick catches up.
  *
  * HELD BACK by what holds every proactive post (`proactivePostHeldBy`: the
  * kill switch, a snooze) and by `morningBriefing.enabled`; delivered through
  * the ONE notification door, so mute, quiet hours and the push category
  * toggle apply as they do to every notification.
  *
- * ONCE A DAY. A brief raised in the last 20 hours is the marker: the due
- * window is one hour a day, so 20 hours never separates two ticks of one day
- * and always separates two days. A muted brief writes no row, and a re-run is
- * muted the same way.
+ * ONCE A DAY, held twice. The notification door holds it where it writes:
+ * the brief's groupKey is the person's local day and the registry row
+ * declares a dedupe window, so two racing ticks write one OPEN row (0281's
+ * unique index). That window ignores a row already READ, so the pass also
+ * skips a person with a brief raised in the last 20 hours (the due window is
+ * one hour a day: 20 hours never separates two ticks of one day and always
+ * separates two days). A muted brief writes no row, and a re-run is muted
+ * the same way.
  *
  * NOTHING TO SAY, NOTHING SENT. A read that FAILS skips that person (logged)
  * and the next tick retries: a failed read is never "nothing waits".
@@ -68,21 +76,20 @@ import {
 } from "../../notifications/NotificationService.js";
 import { CRITERIA_UNMET_NOTIFICATION_TYPE } from "../../notifications/session-criteria-unmet-reactor.js";
 import { sessionListConditions } from "../focus-sessions/session-list-conditions.js";
+import type { Signal } from "../signals/needs-you-union.js";
 
 const logger = createLogger({ module: "morning-brief" });
 
 /** The registry type — lowercase `notificationType` so the producer scan sees it. */
 const notificationType = "ai.proactive.morning_briefing" as const;
-export const MORNING_BRIEF_NOTIFICATION_TYPE = notificationType;
 
-const MINUTE_MS = 60_000;
-const HOUR_MS = 60 * MINUTE_MS;
+const HOUR_MS = 3_600_000;
 /** A person is due for this long after their time (four 15-minute ticks). */
-export const MORNING_BRIEF_DUE_WINDOW_MINUTES = 60;
-/** A brief raised this recently means today's is sent. */
-export const MORNING_BRIEF_ONCE_WITHIN_MS = 20 * HOUR_MS;
+const DUE_WINDOW_MINUTES = 60;
+/** A brief raised this recently means today's is sent (even if read). */
+const ONCE_WITHIN_MS = 20 * HOUR_MS;
 /** "In the last day" for the closed sessions. */
-export const MORNING_BRIEF_LOOKBACK_MS = 24 * HOUR_MS;
+const LOOKBACK_MS = 24 * HOUR_MS;
 /** A named item longer than this is cut, so the brief stays a few lines. */
 const ITEM_MAX = 60;
 
@@ -124,21 +131,26 @@ export function composeMorningBrief(
     const named = f.needsYou.next.map(clip).filter(Boolean);
     lines.push(named.length > 0 ? `${head}: ${named.join("; ")}.` : `${head}.`);
   }
+  // A part of the count above, never beside it (see the header).
   if (f.readyToClose > 0) {
     lines.push(
-      f.readyToClose === 1
-        ? "1 session is ready for you to close."
-        : `${f.readyToClose} sessions are ready for you to close.`
+      f.needsYou.count === 1 && f.readyToClose === 1
+        ? "It is a session ready for you to close."
+        : f.readyToClose === 1
+          ? "1 of them is a session ready for you to close."
+          : `${f.readyToClose} of them are sessions ready for you to close.`
     );
   }
   const closed: string[] = [];
   if (f.closedUnmet > 0) {
     closed.push(
-      `${sessions(f.closedUnmet)} closed with required criteria not met`
+      `${sessions(f.closedUnmet)} closed before meeting what they set out to do`
     );
   }
   if (f.closedWithoutCriteria > 0) {
-    closed.push(`${sessions(f.closedWithoutCriteria)} closed with no criteria`);
+    closed.push(
+      `${sessions(f.closedWithoutCriteria)} closed with no checks set`
+    );
   }
   if (closed.length > 0)
     lines.push(`In the last day, ${closed.join(" and ")}.`);
@@ -156,10 +168,10 @@ export interface MorningBriefSchedule {
 }
 
 /**
- * The person's brief settings from their first space's stored settings. A
+ * The person's brief settings from their chosen space's stored settings. A
  * space that never stored them reads the defaults (`proactive/index.ts`),
- * except the timezone: the default "UTC" is nobody's morning, so the person's
- * own timezone stands in until they pick one.
+ * except the timezone: "UTC" (the default, which every settings save writes
+ * back) is nobody's morning, so the person's own timezone stands in.
  */
 export function morningBriefSchedule(
   settings: WorkspaceSettings | null | undefined,
@@ -180,7 +192,8 @@ export function morningBriefSchedule(
     hour: prefs.morningBriefing.cronHour,
     minute: prefs.morningBriefing.cronMinute,
     timeZone:
-      stored?.morningBriefing?.timezone ||
+      (stored?.morningBriefing?.timezone !== "UTC" &&
+        stored?.morningBriefing?.timezone) ||
       personTimeZone ||
       defaults.morningBriefing.timezone,
   };
@@ -194,7 +207,18 @@ export function morningBriefDue(
   const [h, m] = localHourMinute(now, at.timeZone).split(":").map(Number);
   const since =
     (((h! * 60 + m! - (at.hour * 60 + at.minute)) % 1440) + 1440) % 1440;
-  return since < MORNING_BRIEF_DUE_WINDOW_MINUTES;
+  return since < DUE_WINDOW_MINUTES;
+}
+
+/** The person's calendar day (`YYYY-MM-DD`); an unknown zone reads in UTC. */
+function localDay(at: Date, timeZone: string): string {
+  const day = (tz: string) =>
+    new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(at);
+  try {
+    return day(timeZone);
+  } catch {
+    return day("UTC");
+  }
 }
 
 // ── Reads ───────────────────────────────────────────────────────────────────
@@ -207,22 +231,14 @@ export type NeedsYouForBrief = Pick<
 >;
 
 /**
- * THE needs-you read, as the person's own Home reads it (a person context:
- * no agent, not the hub door, so the session roster counts as on Home).
+ * The brief's needs-you facts from ONE `signals.needsYou` read: the headline
+ * is the badge number, the names are Home's next three moves, and the
+ * sessions ready to close are the `review` PART of that same number.
  */
-export async function readNeedsYouForBrief(
-  userId: string
-): Promise<NeedsYouForBrief> {
-  const { signalsRouter } = await import("../../routers/signals.js");
-  const caller = signalsRouter.createCaller({
-    db: defaultDb,
-    authenticated: true,
-    userId,
-    workspaceId: null,
-    agentUserId: null,
-    isHubProtocol: false,
-  } as unknown as Context);
-  const read = await caller.needsYou({});
+export function needsYouForBrief(read: {
+  count: { needsYou: number; truncated: boolean; review: number };
+  rows: { needs_you: readonly Signal[] };
+}): NeedsYouForBrief {
   const { moves } = homeMoves(needsYouBuckets(read.rows.needs_you));
   return {
     needsYou: {
@@ -234,7 +250,27 @@ export async function readNeedsYouForBrief(
   };
 }
 
-/** Each person who owns an active space, with their first space's settings. */
+/**
+ * THE needs-you read, as the person's own Home reads it (a person context:
+ * no agent, not the hub door, so the session roster counts as on Home).
+ */
+async function readNeedsYouForBrief(userId: string): Promise<NeedsYouForBrief> {
+  const { signalsRouter } = await import("../../routers/signals.js");
+  const caller = signalsRouter.createCaller({
+    db: defaultDb,
+    authenticated: true,
+    userId,
+    workspaceId: null,
+    agentUserId: null,
+    isHubProtocol: false,
+  } as unknown as Context);
+  return needsYouForBrief(await caller.needsYou({}));
+}
+
+/**
+ * Each person who owns an active space, with ONE space's settings: the oldest
+ * that stored proactive settings, else the oldest.
+ */
 async function briefCandidates(database: Database) {
   return database
     .selectDistinctOn([workspaces.ownerId], {
@@ -245,7 +281,11 @@ async function briefCandidates(database: Database) {
     .from(workspaces)
     .innerJoin(users, eq(users.id, workspaces.ownerId))
     .where(and(isNull(workspaces.archivedAt), eq(users.userType, "human")))
-    .orderBy(workspaces.ownerId, workspaces.createdAt);
+    .orderBy(
+      workspaces.ownerId,
+      drizzleSql`(${workspaces.settings} -> 'proactiveAi') IS NULL`,
+      workspaces.createdAt
+    );
 }
 
 async function briefRaisedSince(
@@ -351,14 +391,14 @@ export async function runMorningBriefs(args?: {
     if (!morningBriefDue(now, schedule)) continue;
     result.due++;
     try {
-      const since = new Date(now.getTime() - MORNING_BRIEF_ONCE_WITHIN_MS);
+      const since = new Date(now.getTime() - ONCE_WITHIN_MS);
       if (await briefRaisedSince(database, c.userId, since)) continue;
       const [needs, closed] = await Promise.all([
         readNeedsYou(c.userId),
         readClosedSince(
           database,
           c.userId,
-          new Date(now.getTime() - MORNING_BRIEF_LOOKBACK_MS)
+          new Date(now.getTime() - LOOKBACK_MS)
         ),
       ]);
       const brief = composeMorningBrief({ ...needs, ...closed });
@@ -369,6 +409,8 @@ export async function runMorningBriefs(args?: {
         // Pod-wide: the brief counts every space, so no space's rules own it.
         workspaceId: null,
         sourceType: "proactive_message",
+        // The person's day: the door's dedupe window holds one open brief.
+        groupKey: `morning-brief:${localDay(now, schedule.timeZone)}`,
         data: { ...brief, proactiveType: "morning_briefing" },
       });
       if (id) result.sent++;

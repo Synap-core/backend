@@ -16,12 +16,16 @@ import * as schema from "@synap/database/schema";
 import type { db as DatabaseHandle } from "@synap/database";
 import type { CreateNotificationInput } from "../../notifications/NotificationService.js";
 import {
+  countNeedsYou,
+  signalFromReviewSession,
+} from "../signals/needs-you-union.js";
+import {
   composeMorningBrief,
   morningBriefDue,
   morningBriefSchedule,
+  needsYouForBrief,
   readClosedSince,
   runMorningBriefs,
-  MORNING_BRIEF_NOTIFICATION_TYPE,
   type NeedsYouForBrief,
 } from "./morning-brief.js";
 
@@ -49,10 +53,19 @@ const NOW = new Date("2026-10-29T07:10:00Z");
 const hoursAgo = (n: number) =>
   new Date(NOW.getTime() - n * 3_600_000).toISOString();
 
-/** Paris, first space stores nothing: 08:00 in the person's own timezone. */
+/**
+ * Paris. Its space with stored settings says 08:00 "UTC" (a default a save
+ * wrote): read on the person's clock. Its archived space (turned off) and its
+ * oldest space (nothing stored) do not count.
+ */
 const A = "person-a";
-/** New York, first space stores 07:00 UTC: the stored timezone wins. */
+/** New York; its space stores 16:00 Tokyo: a real stored timezone wins. */
 const B = "person-b";
+/**
+ * Paris. Its OLDEST space stores nothing (08:00 would be due); a later one
+ * stored the brief OFF: the space with stored settings decides.
+ */
+const E = "person-e";
 /** Proactive AI off in their first space. */
 const C = "person-c";
 /** Snoozed until tomorrow. */
@@ -73,20 +86,34 @@ async function person(id: string, timezone: string, userType = "human") {
 async function space(
   ownerId: string,
   createdHoursAgo: number,
-  settings: Record<string, unknown> = {}
+  settings: Record<string, unknown> = {},
+  archived = false
 ) {
   await client.query(
-    `insert into workspaces (id, owner_id, name, settings, created_at)
-     values ($1, $2, $3, $4::jsonb, $5::timestamptz)`,
+    `insert into workspaces (id, owner_id, name, settings, created_at, archived_at)
+     values ($1, $2, $3, $4::jsonb, $5::timestamptz, $6::timestamptz)`,
     [
       randomUUID(),
       ownerId,
       `${ownerId} space ${createdHoursAgo}`,
       JSON.stringify(settings),
       hoursAgo(createdHoursAgo),
+      archived ? hoursAgo(1) : null,
     ]
   );
 }
+
+const briefOff = {
+  proactiveAi: {
+    enabled: true,
+    morningBriefing: {
+      enabled: false,
+      cronHour: 8,
+      cronMinute: 0,
+      timezone: "UTC",
+    },
+  },
+};
 
 const briefAt = (cronHour: number, timezone: string, more = {}) => ({
   proactiveAi: {
@@ -184,21 +211,14 @@ beforeAll(async () => {
   await person(B, "America/New_York");
   await person(C, "UTC");
   await person(D, "UTC");
+  await person(E, "Europe/Paris");
   await person(G, "UTC", "agent");
-  // A's FIRST space stores nothing; a later one turned the brief off.
+  await space(A, 600, briefOff, true);
   await space(A, 500);
-  await space(A, 100, {
-    proactiveAi: {
-      enabled: true,
-      morningBriefing: {
-        enabled: false,
-        cronHour: 8,
-        cronMinute: 0,
-        timezone: "UTC",
-      },
-    },
-  });
-  await space(B, 300, briefAt(7, "UTC"));
+  await space(A, 100, briefAt(8, "UTC"));
+  await space(B, 300, briefAt(16, "Asia/Tokyo"));
+  await space(E, 500);
+  await space(E, 100, briefOff);
   await space(C, 300, {
     proactiveAi: { ...briefAt(7, "UTC").proactiveAi, enabled: false },
   });
@@ -256,8 +276,8 @@ describe("composeMorningBrief — plain words, nothing when nothing", () => {
       title: "Your morning brief",
       body: [
         "1 thing waits on you: Pick a tone.",
-        "2 sessions are ready for you to close.",
-        "In the last day, 1 session closed with required criteria not met.",
+        "It is a session ready for you to close.",
+        "In the last day, 1 session closed before meeting what they set out to do.",
       ].join("\n"),
     });
   });
@@ -270,7 +290,51 @@ describe("composeMorningBrief — plain words, nothing when nothing", () => {
       closedWithoutCriteria: 3,
     });
     expect(brief!.body).toBe(
-      `100+ things wait on you: ${"x".repeat(59)}….\nIn the last day, 3 sessions closed with no criteria.`
+      `100+ things wait on you: ${"x".repeat(59)}….\nIn the last day, 3 sessions closed with no checks set.`
+    );
+  });
+
+  it("a session ready to close is a PART of the headline, never added beside it", () => {
+    // The real counting rule: a review session is summed into `needsYou`.
+    const review = signalFromReviewSession(
+      { id: "s-9", title: "Ship the brief", goal: null, updatedAt: NOW },
+      NOW
+    );
+    const count = countNeedsYou({
+      distinctClusters: 0,
+      clustersTruncated: false,
+      clusters: [],
+      notifications: [],
+      notificationsTruncated: false,
+      owedSlots: [],
+      owedTruncated: false,
+      reviewSessions: 1,
+      reviewSessionIds: ["s-9"],
+    });
+    expect(count.needsYou).toBe(1);
+    const facts = needsYouForBrief({ count, rows: { needs_you: [review] } });
+    expect(facts).toEqual({
+      needsYou: { count: 1, floor: false, next: ["Ship the brief"] },
+      readyToClose: 1,
+    });
+    expect(
+      composeMorningBrief({
+        ...facts,
+        closedUnmet: 0,
+        closedWithoutCriteria: 0,
+      })!.body
+    ).toBe(
+      "1 thing waits on you: Ship the brief.\nIt is a session ready for you to close."
+    );
+    expect(
+      composeMorningBrief({
+        needsYou: { count: 5, floor: false, next: [] },
+        readyToClose: 2,
+        closedUnmet: 0,
+        closedWithoutCriteria: 0,
+      })!.body
+    ).toBe(
+      "5 things wait on you.\n2 of them are sessions ready for you to close."
     );
   });
 });
@@ -301,6 +365,15 @@ describe("when the brief is due", () => {
       morningBriefSchedule(briefAt(7, "Asia/Tokyo") as never, "Europe/Paris")
     ).toMatchObject({ hour: 7, timeZone: "Asia/Tokyo" });
   });
+
+  it('a stored "UTC" (the default a save writes back) reads as unset', () => {
+    expect(
+      morningBriefSchedule(briefAt(7, "UTC") as never, "Europe/Paris")
+    ).toMatchObject({ hour: 7, timeZone: "Europe/Paris" });
+    expect(morningBriefSchedule(briefAt(7, "UTC") as never, "")).toMatchObject({
+      timeZone: "UTC",
+    });
+  });
 });
 
 describe("readClosedSince", () => {
@@ -315,11 +388,11 @@ describe("readClosedSince", () => {
 describe("runMorningBriefs", () => {
   beforeEach(async () => {
     await client.query(`delete from notifications where type = $1`, [
-      MORNING_BRIEF_NOTIFICATION_TYPE,
+      "ai.proactive.morning_briefing",
     ]);
   });
 
-  it("sends one brief to who is due and has something to say; agents, the off switch and a snooze are skipped", async () => {
+  it("sends one brief to who is due and has something to say; agents, the off switch, a snooze and the settings space are honoured", async () => {
     const door = fakeDoor(NOW);
     const result = await runMorningBriefs({
       database,
@@ -327,21 +400,25 @@ describe("runMorningBriefs", () => {
       notify: door.notify,
       readNeedsYou,
     });
-    // People: A, B, C, D (the agent is not one). Due: A (08:00 Paris) and B
-    // (07:00 UTC, its stored timezone, not New York's 03:10). B has nothing.
-    expect(result).toEqual({ people: 4, due: 2, sent: 1, failed: 0 });
+    // People: A, B, C, D, E (the agent is not one). Due: A (08:00 on its
+    // Paris clock) and B (16:00 Tokyo, not New York's 03:10). Not due: C
+    // (off), D (snoozed), E (its stored-settings space turned the brief off).
+    // B has nothing to say.
+    expect(result).toEqual({ people: 5, due: 2, sent: 1, failed: 0 });
     expect(door.calls).toHaveLength(1);
     expect(door.calls[0]).toMatchObject({
       type: "ai.proactive.morning_briefing",
       userId: A,
       workspaceId: null,
       sourceType: "proactive_message",
+      // The person's day, so the door's dedupe window holds one open brief.
+      groupKey: "morning-brief:2026-10-29",
     });
     expect(door.calls[0]!.data.body).toBe(
       [
         "4 things wait on you: Approve the invoice; Pick a tone; Review the launch plan.",
-        "1 session is ready for you to close.",
-        "In the last day, 2 sessions closed with required criteria not met and 1 session closed with no criteria.",
+        "1 of them is a session ready for you to close.",
+        "In the last day, 2 sessions closed before meeting what they set out to do and 1 session closed with no checks set.",
       ].join("\n")
     );
   });
