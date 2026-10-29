@@ -102,10 +102,14 @@ import {
 import type { SessionVerdict } from "@synap-core/types/focus-sessions";
 import { loadSessionEvaluationSummary } from "./evaluations/record.js";
 import {
+  boundReason,
+  describeWaiting,
   hasOpenRequiredWork,
+  hasWaiting,
   loadOpenRequiredWork,
   notDoneAtCloseError,
   type ClosedNotDoneRecord,
+  type WaitingAtClose,
 } from "./close-not-done.js";
 import { sessionNameField } from "./session-update-goal.js";
 import { createLogger } from "@synap-core/core";
@@ -140,11 +144,13 @@ export interface CompleteFocusSessionParams {
   /** Why it was cancelled — kept on `metadata.run.cancel`. Ignored unless `cancelled`. */
   cancelReason?: string;
   /**
-   * The closing AGENT's reason for closing `closed` while required work is
-   * still open (`close-not-done.ts`). Without it such a close is refused
-   * (NOT_DONE); with it the close goes through and the reason plus what was
-   * still open is recorded on `verification_report.closedNotDone` and in the
-   * close event. Read only with `agentUserId` and `terminalStatus: "closed"`.
+   * The closing AGENT's reason for closing `closed` while required work it
+   * can still move is open (`close-not-done.ts`). Without it such a close is
+   * refused (NOT_DONE); with it the close goes through, the reason is posted
+   * as one line in the session room, and it is recorded, with what was still
+   * open, on `verification_report.closedNotDone`, in the close event and on
+   * the result. Trimmed and clipped to 1000 characters; blank is no reason.
+   * Read only with `agentUserId` and `terminalStatus: "closed"`.
    */
   notDoneReason?: string;
   /**
@@ -451,7 +457,30 @@ export type CompleteFocusSessionResult = {
   verdict?: SessionVerdict;
   /** An agent closed `closed` with required work open, and said why. */
   closedNotDone?: ClosedNotDoneRecord;
+  /**
+   * An agent's `closed`: required items not done that did not hold the close
+   * because they wait on someone else (the person's check or review, a
+   * pending proposal, a delegate). Absent when there were none.
+   */
+  waiting?: WaitingAtClose;
 };
+
+/**
+ * The report this close writes: the caller's, with any `closedNotDone` it
+ * sent dropped (this door alone writes it), plus the door's own record. An
+ * explicit `null` (clear the report) stays `null`.
+ */
+export function withoutCallerCloseRecord(
+  report: Record<string, unknown> | null | undefined,
+  closedNotDone: ClosedNotDoneRecord | undefined
+): Record<string, unknown> | null | undefined {
+  if (report === null) return null;
+  if (report === undefined)
+    return closedNotDone ? { closedNotDone } : undefined;
+  const rest = { ...report };
+  delete rest.closedNotDone;
+  return closedNotDone ? { ...rest, closedNotDone } : rest;
+}
 
 /**
  * The `verification_report` write for a close. MERGES (shallow) into whatever
@@ -555,22 +584,30 @@ export async function completeFocusSession(
   // why. A person's close, an approval and an automatic close are never
   // checked (they carry no `agentUserId`).
   let closedNotDone: ClosedNotDoneRecord | undefined;
+  let waitingAtClose: WaitingAtClose | undefined;
   if (params.agentUserId && terminalStatus === "closed") {
     const openWork = await loadOpenRequiredWork(session);
+    if (hasWaiting(openWork)) waitingAtClose = openWork.waiting;
     if (hasOpenRequiredWork(openWork)) {
-      const reason = params.notDoneReason?.trim();
+      const reason = boundReason(params.notDoneReason);
       if (!reason) throw notDoneAtCloseError(openWork);
       closedNotDone = {
-        ...openWork,
+        criteria: openWork.criteria,
+        outcomes: openWork.outcomes,
+        owedByPerson: openWork.owedByPerson,
         reason,
         by: params.agentUserId,
         at: new Date().toISOString(),
       };
     }
   }
-  const verificationReport = closedNotDone
-    ? { ...(params.verificationReport ?? {}), closedNotDone }
-    : params.verificationReport;
+  // `closedNotDone` is written by this door only: a caller-sent one is
+  // dropped. An explicit `null` report (clear it) is honoured as sent; the
+  // record then lives in the room line, the close event and the result.
+  const verificationReport = withoutCallerCloseRecord(
+    params.verificationReport,
+    closedNotDone
+  );
 
   // Lifecycle close must not be blocked by session forceProposeWrites (pack mode).
   // ignoreSessionForcePropose keeps auto-approve / execute path for complete only.
@@ -713,10 +750,12 @@ export async function completeFocusSession(
       `Closed with required work still open (${[
         ...closedNotDone.criteria.map((c) => c.key),
         ...closedNotDone.outcomes.map((o) => o.key),
-      ].join(", ")}), for the reason you gave: "${closedNotDone.reason}". ` +
-        "It is recorded on the session (verificationReport.closedNotDone)."
+        ...closedNotDone.owedByPerson.map((o) => o.key),
+      ].join(", ")}), for the reason you gave: "${closedNotDone.reason}".`
     );
   }
+  const waitingLine = waitingAtClose ? describeWaiting(waitingAtClose) : null;
+  if (waitingLine) warnings.push(waitingLine);
 
   if (unfinishedOutputs > 0) {
     warnings.push(
@@ -983,6 +1022,35 @@ export async function completeFocusSession(
     );
   }
 
+  // The override is said where the person reads the work: ONE system line in
+  // the session's room (no room is minted for it). The close has committed; a
+  // failed post is said in the warnings, never swallowed.
+  if (closedNotDone && updated.channelId) {
+    try {
+      const { postChannelMessage } =
+        await import("../messaging/post-message.js");
+      await postChannelMessage({
+        channelId: updated.channelId,
+        content: `Closed with required work still open (${[
+          ...closedNotDone.criteria.map((c) => c.key),
+          ...closedNotDone.outcomes.map((o) => o.key),
+          ...closedNotDone.owedByPerson.map((o) => o.key),
+        ].join(", ")}). The agent's reason: ${closedNotDone.reason}`,
+        role: "system",
+        triggerAI: false,
+        userId: params.userId,
+      });
+    } catch (err) {
+      logger.warn(
+        { err, sessionId },
+        "the close-anyway reason could not be posted in the room"
+      );
+      warnings.push(
+        "Your reason could not be posted in the session room; it is on the close event and in this reply."
+      );
+    }
+  }
+
   // ── THE CLOSE EVENT ────────────────────────────────────────────────────────
   // Closing a session is a fact about the work, and until now it left no trace
   // anyone could react to or read back: no automation could fire on it, the
@@ -1046,6 +1114,7 @@ export async function completeFocusSession(
     ...(cancel ? { cancel } : {}),
     verdict,
     ...(closedNotDone ? { closedNotDone } : {}),
+    ...(waitingAtClose ? { waiting: waitingAtClose } : {}),
   };
 }
 

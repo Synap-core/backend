@@ -72,6 +72,8 @@ import {
   openQuestionsRefusal,
 } from "../../../services/focus-sessions/complete-session.js";
 import {
+  boundReason,
+  closeReasonFields,
   isNotDoneAtCloseError,
   notDoneRefusal,
 } from "../../../services/focus-sessions/close-not-done.js";
@@ -924,6 +926,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "Every still-open room question is stamped closed (session ended). An " +
       "agent's closed/failed close is refused (409 OPEN_QUESTIONS) while a " +
       "question it asked is open, unless questionDispositions settles each. " +
+      "An agent's closed close is refused (409 NOT_DONE: unmetCriteria[], " +
+      "openOutcomes[], owedByPerson[], waiting) while a required criterion it " +
+      "can still check is not passing or a required outcome (an agent's or " +
+      "the person's) is open, unless `reason` says why it is done anyway " +
+      "(posted in the session room). " +
       "Distinct from POST .../complete-run (playbook run only).",
     request: {
       params: z.object({ id: z.string().uuid() }),
@@ -939,7 +946,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       404: { description: "Not found", schema: ErrorSchema },
       409: {
         description:
-          "Refused: the calling agent's own room questions are still open (openQuestions[])",
+          "Refused: the calling agent's own room questions are still open (OPEN_QUESTIONS, openQuestions[]), or required work it can still move is open (NOT_DONE)",
         schema: z.object({}).passthrough(),
       },
       500: { description: "Internal error", schema: ErrorSchema },
@@ -1832,6 +1839,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // capture they made) is never re-shaped by a guessed template.
         matchTemplate: !!ctxAgentUserId,
         clientKey: ctxAgentUserId ? requestClientKey(ctxAgentUserId) : null,
+        // An agent key's NEW session declares what done means (F11,
+        // NO_CRITERIA). A person's key and the capture path (X-Capture: 1, a
+        // person capturing through a key) are exempt.
+        requireCriteria: !!ctxAgentUserId && c.req.header("x-capture") !== "1",
         ...(body.outcomes && body.outcomes.length > 0
           ? mergeOutcomesForStart({
               outcomes: body.outcomes,
@@ -1890,6 +1901,18 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         ...(result.adopted ? { adopted: true } : {}),
       });
     } catch (err) {
+      // An agent's start that declares no criterion: a refusal, not a fault.
+      const reasonCode = (err as { reasonCode?: unknown })?.reasonCode;
+      if (reasonCode === "NO_CRITERIA") {
+        return c.json(
+          {
+            status: "refused",
+            reasonCode,
+            error: err instanceof Error ? err.message : String(err),
+          },
+          400
+        );
+      }
       logger.error({ err }, "focus-sessions.create failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
@@ -2316,6 +2339,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           // The same refusal `/complete` answers: the agent is handed the list.
           if (isOpenQuestionsAtCloseError(err)) {
             return c.json(openQuestionsRefusal(err), 409);
+          }
+          // Required work still open: the same body as `/complete`, whose
+          // `reason` is the way to close anyway (the sentence says so).
+          if (isNotDoneAtCloseError(err)) {
+            return c.json(notDoneRefusal(err), 409);
           }
           const code = (err as { code?: string }).code;
           const message = err instanceof Error ? err.message : String(err);
@@ -2790,12 +2818,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         verificationReport: parsed.data.verificationReport,
         terminalStatus: parsed.data.terminalStatus,
         questionDispositions: parsed.data.questionDispositions,
-        ...(parsed.data.reason
-          ? {
-              cancelReason: parsed.data.reason,
-              notDoneReason: parsed.data.reason,
-            }
-          : {}),
+        ...closeReasonFields(
+          parsed.data.terminalStatus,
+          boundReason(parsed.data.reason)
+        ),
       });
 
       if (!result) {
@@ -2821,6 +2847,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         pendingProposals: result.pendingProposals,
         counts: result.counts,
         warnings: result.warnings,
+        ...(result.closedNotDone
+          ? { closedNotDone: result.closedNotDone }
+          : {}),
+        ...(result.waiting ? { waiting: result.waiting } : {}),
         ...(nudges ? { nudges } : {}),
       });
     } catch (err) {

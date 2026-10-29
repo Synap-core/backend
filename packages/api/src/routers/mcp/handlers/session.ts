@@ -570,57 +570,74 @@ export const sessionHandlers: McpHandlerMap = {
           expectedOutputs: slots.expectedOutputs,
           criteria: args.criteria as SessionCriterion[] | undefined,
         };
-    const result = await createFocusSession({
-      userId,
-      // The ambient lens (`?workspaceId=`, or the agent's workspace focus) is
-      // resolved and access-checked by the adapter; an EXPLICIT arg still wins.
-      // Same precedence as `synap_create_rule` (`rule.ts`). Without it a start
-      // ignored the focus its own captures were placed by (plan A2-a).
-      workspaceId: (args.workspaceId as string | undefined) ?? lensWorkspaceId,
-      projectId: args.projectId as string | undefined,
-      trackId:
-        typeof args.trackId === "string" && args.trackId.trim()
-          ? args.trackId.trim()
-          : undefined,
-      trackStage:
-        typeof args.trackStage === "string" && args.trackStage.trim()
-          ? args.trackStage.trim()
-          : undefined,
-      subjectEntityId: args.subjectEntityId as string | undefined,
-      title: typeof args.title === "string" ? args.title : null,
-      goal: args.goal as string,
-      agentUserId,
-      correlationId: args.correlationId as string | undefined,
-      channelId: args.channelId as string | undefined,
-      agentIds: args.agentIds as string[] | undefined,
-      // `null` is the explicit opt-out of template matching; absent = match.
-      templateId: readTemplateIdArg(args.templateId),
-      matchTemplate: true,
-      // F5/F6: the project's open goals (no trackId named) and the open
-      // sessions on close work — suggestions on the reply, never applied.
-      offerStartContext: true,
-      // Answers to the named template's declared params. Free-form on the wire
-      // (the playbook owns the shape); validated against the declaration by the
-      // service, with the same pure function the run funnel uses.
-      params: readParamsArg(args.params),
-      // Binds the session to THIS client and adopts the session the gate
-      // auto-opened for it, if any (never a duplicate).
-      clientKey: requestClientKey(agentUserId) ?? null,
-      // Validated by the service with the shared criteria schema.
-      criteria: declared.criteria,
-      // PARSED by the SHARED wire schema (see `parseSlotInputs`), never a
-      // re-typed inline shape: an inline copy silently narrows what this door
-      // believes a slot is, which is how the per-door shapes drifted in the
-      // first place — and a cast narrows nothing while checking nothing.
-      expectedOutputs: declared.expectedOutputs,
-      parentSessionId: args.parentSessionId as string | undefined,
-      suspendedIntent: args.suspendedIntent as string | undefined,
-      // Validated above (array of UUIDs), so this narrows nothing unchecked.
-      blockedBySessionIds: Array.isArray(blockedByArg)
-        ? (blockedByArg as string[])
-        : [],
-      forceCreate: args.forceCreate === true,
-    });
+    let result: Awaited<ReturnType<typeof createFocusSession>>;
+    try {
+      result = await createFocusSession({
+        userId,
+        // The ambient lens (`?workspaceId=`, or the agent's workspace focus) is
+        // resolved and access-checked by the adapter; an EXPLICIT arg still wins.
+        // Same precedence as `synap_create_rule` (`rule.ts`). Without it a start
+        // ignored the focus its own captures were placed by (plan A2-a).
+        workspaceId:
+          (args.workspaceId as string | undefined) ?? lensWorkspaceId,
+        projectId: args.projectId as string | undefined,
+        trackId:
+          typeof args.trackId === "string" && args.trackId.trim()
+            ? args.trackId.trim()
+            : undefined,
+        trackStage:
+          typeof args.trackStage === "string" && args.trackStage.trim()
+            ? args.trackStage.trim()
+            : undefined,
+        subjectEntityId: args.subjectEntityId as string | undefined,
+        title: typeof args.title === "string" ? args.title : null,
+        goal: args.goal as string,
+        agentUserId,
+        correlationId: args.correlationId as string | undefined,
+        channelId: args.channelId as string | undefined,
+        agentIds: args.agentIds as string[] | undefined,
+        // `null` is the explicit opt-out of template matching; absent = match.
+        templateId: readTemplateIdArg(args.templateId),
+        matchTemplate: true,
+        // F5/F6: the project's open goals (no trackId named) and the open
+        // sessions on close work — suggestions on the reply, never applied.
+        offerStartContext: true,
+        // Answers to the named template's declared params. Free-form on the wire
+        // (the playbook owns the shape); validated against the declaration by the
+        // service, with the same pure function the run funnel uses.
+        params: readParamsArg(args.params),
+        // Binds the session to THIS client and adopts the session the gate
+        // auto-opened for it, if any (never a duplicate).
+        clientKey: requestClientKey(agentUserId) ?? null,
+        // An agent's NEW session declares what done means (F11, NO_CRITERIA).
+        requireCriteria: !!agentUserId,
+        // Validated by the service with the shared criteria schema.
+        criteria: declared.criteria,
+        // PARSED by the SHARED wire schema (see `parseSlotInputs`), never a
+        // re-typed inline shape: an inline copy silently narrows what this door
+        // believes a slot is, which is how the per-door shapes drifted in the
+        // first place — and a cast narrows nothing while checking nothing.
+        expectedOutputs: declared.expectedOutputs,
+        parentSessionId: args.parentSessionId as string | undefined,
+        suspendedIntent: args.suspendedIntent as string | undefined,
+        // Validated above (array of UUIDs), so this narrows nothing unchecked.
+        blockedBySessionIds: Array.isArray(blockedByArg)
+          ? (blockedByArg as string[])
+          : [],
+        forceCreate: args.forceCreate === true,
+      });
+    } catch (err) {
+      // An agent's new session that declares no criterion: a refusal the
+      // agent acts on, not a fault (F11).
+      if ((err as { reasonCode?: unknown })?.reasonCode === "NO_CRITERIA") {
+        return ok({
+          status: "refused",
+          reasonCode: "NO_CRITERIA",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      throw err;
+    }
     if (result.status === "deduped") {
       // Said in words, not only as a status: an agent that reads "ok" here
       // opens a second session for the same work — the duplicate this door
@@ -671,12 +688,13 @@ export const sessionHandlers: McpHandlerMap = {
       isOpenQuestionsAtCloseError,
       openQuestionsRefusal,
     } = await import("../../../services/focus-sessions/complete-session.js");
-    const { isNotDoneAtCloseError, notDoneRefusal } =
-      await import("../../../services/focus-sessions/close-not-done.js");
-    const reason =
-      typeof args.reason === "string" && args.reason.trim()
-        ? args.reason.trim()
-        : undefined;
+    const {
+      boundReason,
+      closeReasonFields,
+      isNotDoneAtCloseError,
+      notDoneRefusal,
+    } = await import("../../../services/focus-sessions/close-not-done.js");
+    const reason = boundReason(args.reason);
     // The executor's reader, refusing what it would drop: a word that is not
     // `withdrawn` / `keep_as_owed` is never read as either.
     const rawDispositions = args.questionDispositions;
@@ -711,10 +729,13 @@ export const sessionHandlers: McpHandlerMap = {
         // The service matches each id against this agent's own open
         // questions and ignores the rest.
         questionDispositions,
-        // One `reason` on the wire: why it was cancelled, or why a `closed`
-        // with required work open is done anyway. Each read only where it
-        // applies (cancelReason on `cancelled`, notDoneReason on `closed`).
-        ...(reason ? { cancelReason: reason, notDoneReason: reason } : {}),
+        // One `reason` on the wire, routed by the exit it explains: why it was
+        // cancelled, or why a `closed` with required work open is done anyway.
+        // Never both from one value.
+        ...closeReasonFields(
+          args.terminalStatus as TerminalSessionStatus | undefined,
+          reason
+        ),
       });
     } catch (err) {
       // Its own questions are still open: nothing closed, and the agent is
@@ -761,6 +782,8 @@ export const sessionHandlers: McpHandlerMap = {
       ...(result.verdict ? { verdict: result.verdict } : {}),
       // Closed with required work open, for the reason the agent gave.
       ...(result.closedNotDone ? { closedNotDone: result.closedNotDone } : {}),
+      // Required items that did not hold the close: someone else's move.
+      ...(result.waiting ? { waiting: result.waiting } : {}),
       // `cancelled` only: what the cancel stopped, what was already running and
       // will finish, and what had already applied (undo it with a session
       // revert). Also kept on the session's `metadata.run.cancel`.
