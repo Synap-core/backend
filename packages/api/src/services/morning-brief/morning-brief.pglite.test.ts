@@ -264,7 +264,7 @@ describe("composeMorningBrief — plain words, nothing when nothing", () => {
     ).toBeNull();
   });
 
-  it("names the count, the next three, the sessions to close and the last day", () => {
+  it("the title carries the count; the body names what is next, the session to close and the last day", () => {
     expect(
       composeMorningBrief({
         needsYou: { count: 1, floor: false, next: ["Pick a tone"] },
@@ -273,12 +273,26 @@ describe("composeMorningBrief — plain words, nothing when nothing", () => {
         closedWithoutCriteria: 0,
       })
     ).toEqual({
-      title: "Your morning brief",
+      title: "1 thing needs you",
       body: [
-        "1 thing waits on you: Pick a tone.",
-        "It is a session ready for you to close.",
-        "In the last day, 1 session closed before meeting what they set out to do.",
+        "Next: Pick a tone",
+        "It is ready for you to close.",
+        "In the last day, 1 session closed with its criteria unmet.",
       ].join("\n"),
+    });
+  });
+
+  it("with only closed sessions to report, the title says nothing needs you", () => {
+    expect(
+      composeMorningBrief({
+        needsYou: { count: 0, floor: false, next: [] },
+        readyToClose: 0,
+        closedUnmet: 2,
+        closedWithoutCriteria: 1,
+      })
+    ).toEqual({
+      title: "Nothing needs you today",
+      body: "In the last day, 2 sessions closed with their criteria unmet and 1 session closed with no success criteria.",
     });
   });
 
@@ -289,9 +303,10 @@ describe("composeMorningBrief — plain words, nothing when nothing", () => {
       closedUnmet: 0,
       closedWithoutCriteria: 3,
     });
-    expect(brief!.body).toBe(
-      `100+ things wait on you: ${"x".repeat(59)}….\nIn the last day, 3 sessions closed with no checks set.`
-    );
+    expect(brief).toEqual({
+      title: "100+ things need you today",
+      body: `Next: ${"x".repeat(59)}…\nIn the last day, 3 sessions closed with no success criteria.`,
+    });
   });
 
   it("a session ready to close is a PART of the headline, never added beside it", () => {
@@ -323,19 +338,18 @@ describe("composeMorningBrief — plain words, nothing when nothing", () => {
         closedUnmet: 0,
         closedWithoutCriteria: 0,
       })!.body
-    ).toBe(
-      "1 thing waits on you: Ship the brief.\nIt is a session ready for you to close."
-    );
+    ).toBe("Next: Ship the brief\nIt is ready for you to close.");
     expect(
       composeMorningBrief({
         needsYou: { count: 5, floor: false, next: [] },
         readyToClose: 2,
         closedUnmet: 0,
         closedWithoutCriteria: 0,
-      })!.body
-    ).toBe(
-      "5 things wait on you.\n2 of them are sessions ready for you to close."
-    );
+      })
+    ).toEqual({
+      title: "5 things need you today",
+      body: "2 are ready for you to close.",
+    });
   });
 });
 
@@ -414,11 +428,12 @@ describe("runMorningBriefs", () => {
       // The person's day, so the door's dedupe window holds one open brief.
       groupKey: "morning-brief:2026-10-29",
     });
+    expect(door.calls[0]!.data.title).toBe("4 things need you today");
     expect(door.calls[0]!.data.body).toBe(
       [
-        "4 things wait on you: Approve the invoice; Pick a tone; Review the launch plan.",
-        "1 of them is a session ready for you to close.",
-        "In the last day, 2 sessions closed before meeting what they set out to do and 1 session closed with no checks set.",
+        "Next: Approve the invoice · Pick a tone · Review the launch plan",
+        "1 is ready for you to close.",
+        "In the last day, 2 sessions closed with their criteria unmet and 1 session closed with no success criteria.",
       ].join("\n")
     );
   });

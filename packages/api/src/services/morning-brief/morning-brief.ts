@@ -12,8 +12,9 @@
  *   - sessions ready to close: the same read's `review` part, the sessions
  *     whose next move is `ready_to_close` (THE next-move rule,
  *     `continuation-packet.ts`). It is a PART of the count (`countNeedsYou`
- *     sums it in), so the brief says it as "N of them", never beside it.
- *     Closing is the PERSON's move (founder decision 2026-09-20): the brief
+ *     sums it in), so the title carries the count and the body says "N are
+ *     ready for you to close", never a second number beside it. Closing is
+ *     the PERSON's move (founder decision 2026-09-20): the brief
  *     names them, it never closes them;
  *   - sessions closed in the last day with required criteria unmet: the
  *     `session.closed.criteria_unmet` notifications its reactor already
@@ -118,44 +119,51 @@ function sessions(n: number): string {
   return n === 1 ? "1 session" : `${n} sessions`;
 }
 
-/** The brief, in plain words; `null` when there is nothing to say. */
+/**
+ * The brief, in plain words; `null` when there is nothing to say. The TITLE
+ * carries the count (the push shows it first); the body names what is next
+ * and never repeats the number.
+ */
 export function composeMorningBrief(
   f: MorningBriefFacts
 ): { title: string; body: string } | null {
+  const { count, floor } = f.needsYou;
   const lines: string[] = [];
-  if (f.needsYou.count > 0) {
-    const head =
-      f.needsYou.count === 1 && !f.needsYou.floor
-        ? "1 thing waits on you"
-        : `${f.needsYou.count}${f.needsYou.floor ? "+" : ""} things wait on you`;
-    const named = f.needsYou.next.map(clip).filter(Boolean);
-    lines.push(named.length > 0 ? `${head}: ${named.join("; ")}.` : `${head}.`);
-  }
-  // A part of the count above, never beside it (see the header).
-  if (f.readyToClose > 0) {
+  const named = f.needsYou.next.map(clip).filter(Boolean);
+  if (count > 0 && named.length > 0) lines.push(`Next: ${named.join(" · ")}`);
+  // A part of the count in the title, never beside it (see the header).
+  if (count > 0 && f.readyToClose > 0) {
     lines.push(
-      f.needsYou.count === 1 && f.readyToClose === 1
-        ? "It is a session ready for you to close."
+      count === 1 && f.readyToClose === 1
+        ? "It is ready for you to close."
         : f.readyToClose === 1
-          ? "1 of them is a session ready for you to close."
-          : `${f.readyToClose} of them are sessions ready for you to close.`
+          ? "1 is ready for you to close."
+          : `${f.readyToClose} are ready for you to close.`
     );
   }
   const closed: string[] = [];
   if (f.closedUnmet > 0) {
     closed.push(
-      `${sessions(f.closedUnmet)} closed before meeting what they set out to do`
+      f.closedUnmet === 1
+        ? "1 session closed with its criteria unmet"
+        : `${f.closedUnmet} sessions closed with their criteria unmet`
     );
   }
   if (f.closedWithoutCriteria > 0) {
     closed.push(
-      `${sessions(f.closedWithoutCriteria)} closed with no checks set`
+      `${sessions(f.closedWithoutCriteria)} closed with no success criteria`
     );
   }
   if (closed.length > 0)
     lines.push(`In the last day, ${closed.join(" and ")}.`);
-  if (lines.length === 0) return null;
-  return { title: "Your morning brief", body: lines.join("\n") };
+  if (count === 0 && closed.length === 0) return null;
+  const title =
+    count === 0
+      ? "Nothing needs you today"
+      : count === 1 && !floor
+        ? "1 thing needs you"
+        : `${count}${floor ? "+" : ""} things need you today`;
+  return { title, body: lines.join("\n") };
 }
 
 // ── Pure: when the brief is due ─────────────────────────────────────────────
