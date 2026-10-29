@@ -62,6 +62,7 @@ import { SQL, is } from "drizzle-orm";
 import { PgTable, getTableConfig } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { readStatusOf } from "../status-read.js";
+import { listOpenGoalTracks } from "../../discover/open-goals.js";
 import {
   readGoalRollups,
   readScopeRollup,
@@ -79,6 +80,11 @@ const S_CLOSED = randomUUID();
 const E_STUCK = randomUUID();
 const E_MOVED = randomUUID();
 const E_THEIRS = randomUUID();
+const E_PLAIN = randomUUID();
+const G_QUIET = randomUUID();
+const G_THEIRS = randomUUID();
+const S_THEIRS = randomUUID();
+const NOTE = "33333333-3333-4333-8333-333333333333";
 
 let client: PGlite;
 const q = (sql: string, params: unknown[] = []) => client.query(sql, params);
@@ -156,6 +162,16 @@ beforeAll(async () => {
      values ($1, $2, $3, 'Ship the CRM', '{}'::jsonb, '1', 'active', '[]'::jsonb, ${ago(20)}, now())`,
     [G, P, ME]
   );
+  for (const [id, project, owner] of [
+    [G_QUIET, P, ME],
+    [G_THEIRS, P_THEIRS, OTHER],
+  ]) {
+    await q(
+      `insert into project_tracks (id, project_id, user_id, name, definition_snapshot, method_version, status, criteria, created_at, updated_at)
+       values ($1, $2, $3, 'Goal', '{}'::jsonb, '1', 'active', '[]'::jsonb, now(), now())`,
+      [id, project, owner]
+    );
+  }
   const owed = [
     {
       key: "pick",
@@ -167,16 +183,17 @@ beforeAll(async () => {
       owedSince: new Date().toISOString(),
     },
   ];
-  for (const [id, status, outputs] of [
-    [S_ACTIVE, "active", owed],
-    [S_CLOSED, "closed", []],
+  for (const [id, status, outputs, owner] of [
+    [S_ACTIVE, "active", owed, ME],
+    [S_CLOSED, "closed", [], ME],
+    [S_THEIRS, "active", [], OTHER],
   ] as const) {
     await q(
       `insert into focus_sessions (id, user_id, workspace_id, project_id, track_id, goal, status, origin, expected_outputs, metadata, started_at, closed_at, created_at, updated_at)
        values ($1, $2, $3, $4, $5, 'Do it', $6, 'agent', $7::jsonb, '{}'::jsonb, ${ago(5)}, $8, now(), now())`,
       [
         id,
-        ME,
+        owner,
         W,
         P,
         G,
@@ -193,6 +210,17 @@ beforeAll(async () => {
   await q(
     `insert into profile_properties (profile_id, property_def_id, is_lifecycle) values ($1, $2, true)`,
     [DEAL, randomUUID()]
+  );
+  // Another person's session, in their own project.
+  await q(
+    `update focus_sessions set track_id = null, project_id = $1 where id = $2`,
+    [P_THEIRS, S_THEIRS]
+  );
+  // A kind with no declared lifecycle: its status has no category.
+  await q(
+    `insert into entities (id, user_id, workspace_id, profile_id, title, status, properties, created_at, updated_at)
+     values ($1, $2, $3, $4, 'A note', 'draft', '{}'::jsonb, now(), now())`,
+    [E_PLAIN, ME, W, NOTE]
   );
   for (const [id, owner, created] of [
     [E_STUCK, ME, 10],
@@ -239,6 +267,9 @@ describe("readStatusOf", () => {
       G,
       S_ACTIVE,
       E_THEIRS,
+      G_THEIRS,
+      S_THEIRS,
+      E_PLAIN,
       randomUUID(),
       "not-an-id",
     ]);
@@ -269,15 +300,27 @@ describe("readStatusOf", () => {
       waitingOn: [{ reason: "input", count: 1 }],
     });
 
-    expect(by.get(E_THEIRS)).toEqual({ id: E_THEIRS, type: "unknown" });
+    expect(by.get(E_PLAIN)).toMatchObject({
+      type: "entity",
+      status: "draft",
+      category: null,
+    });
+    // Another person's thing, goal and session read as not there at all.
+    for (const id of [E_THEIRS, G_THEIRS, S_THEIRS]) {
+      expect(by.get(id)).toEqual({ id, type: "unknown" });
+    }
     expect(by.get("not-an-id")).toEqual({ id: "not-an-id", type: "unknown" });
-    expect(out).toHaveLength(7);
+    expect(out).toHaveLength(10);
   });
 });
 
 describe("rollups", () => {
   it("a goal: its sessions per category, its moves this week, what it waits on", async () => {
-    const rollup = (await readGoalRollups(ME, [G])).get(G);
+    const tracks = await listOpenGoalTracks({ userId: ME, limit: 20 });
+    // The caller's own goals come first; another person's are not seen.
+    expect(tracks.map((t) => t.id).sort()).toEqual([G, G_QUIET].sort());
+    const rollups = await readGoalRollups(ME, tracks);
+    const rollup = rollups.get(G);
     expect(rollup).toMatchObject({
       sinceMeasured: true,
       work: { active: 1, done: 1 },
@@ -285,6 +328,11 @@ describe("rollups", () => {
       moved: 2,
     });
     expect(rollup?.waitingOn).toContainEqual({ reason: "input", count: 1 });
+    // A quiet goal costs one line: nothing empty is sent.
+    expect(rollups.get(G_QUIET)).toEqual({
+      since: expect.any(String),
+      sinceMeasured: false,
+    });
   });
 
   it("a space: things per category, the stuck ones named, its work and moves", async () => {
@@ -293,12 +341,27 @@ describe("rollups", () => {
       lens: "workspace",
       id: W,
       things: { active: 2 },
+      // S_THEIRS (another person's session in this space) is not counted.
       work: { active: 1, done: 1 },
-      moved: 3,
+      // E_MOVED and S_CLOSED; the goal moves in no space.
+      moved: 2,
       stuck: {
         count: 1,
         items: [{ id: E_STUCK, kind: "deal", status: "negotiating" }],
       },
+    });
+    expect(r?.waitingOn).toContainEqual({ reason: "input", count: 1 });
+  });
+
+  it("a project: its work, its goals' and sessions' moves, what waits", async () => {
+    const r = await readScopeRollup({ userId: ME, projectId: P });
+    expect(r).toMatchObject({
+      lens: "project",
+      id: P,
+      work: { active: 1, done: 1 },
+      // The goal's move and S_CLOSED's; no thing is filed into the project.
+      moved: 2,
+      stuck: { count: 0, items: [] },
     });
     expect(r?.waitingOn).toContainEqual({ reason: "input", count: 1 });
   });
@@ -325,6 +388,9 @@ describe("rollups", () => {
         },
       ],
       howTo: "file work into it",
+      tracks: (await listOpenGoalTracks({ userId: ME, limit: 20 })).filter(
+        (t) => t.id === G
+      ),
     };
     await client.exec(`alter table focus_sessions rename to fs_gone`);
     try {

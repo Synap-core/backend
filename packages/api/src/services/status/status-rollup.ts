@@ -37,6 +37,7 @@ import type { WaitingOnMark } from "@synap-core/types/units";
 import { createLogger } from "@synap-core/core";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
+import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
 import { projectLensWhere } from "../../utils/project-scope.js";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import type { StartHere } from "../discover/discover.js";
@@ -55,6 +56,7 @@ import {
   addCount,
   countMovesSince,
   lastTransitionAt,
+  movesOf,
   readWaitingOn,
   type CategoryCounts,
 } from "./status-facts.js";
@@ -74,11 +76,12 @@ export interface GoalRollup {
   /** When the goal entered its status (ISO); `sinceMeasured` false = created. */
   since: string | null;
   sinceMeasured: boolean;
-  /** Its work sessions per category. */
-  work: CategoryCounts;
-  /** Status moves of the goal and its sessions in the window. */
-  moved: number;
-  waitingOn: WaitingOnMark[];
+  /** Its work sessions per category; absent when it has none. */
+  work?: CategoryCounts;
+  /** Status moves of the goal and its sessions in the window; absent when 0. */
+  moved?: number;
+  /** Absent when it waits on nothing. */
+  waitingOn?: WaitingOnMark[];
 }
 
 export interface ScopeRollup {
@@ -131,37 +134,49 @@ async function countWork(
 }
 
 /**
- * The rollup of each goal in `goalIds`. Counts only (a goal's work counts
- * every member's runs, as the goal page does); the goal itself was already
- * read through its visibility rule by the caller. THROWS on a failed read.
+ * The rollup of each goal in `tracks` (rows the caller already read through
+ * the goal visibility rule). Counts only: a goal's work and moves count every
+ * member's runs, as the goal page does. Empty parts are left out, so a quiet
+ * goal costs one line. THROWS on a failed read.
  */
 export async function readGoalRollups(
   userId: string,
-  goalIds: string[]
+  tracks: ProjectTrack[]
 ): Promise<Map<string, GoalRollup>> {
   const out = new Map<string, GoalRollup>();
-  if (goalIds.length === 0) return out;
-  const tracks = await scopedDb(
-    AccessContext.from({ userId })
-  ).findMany<ProjectTrack>(projectTracks, {
-    where: inArray(projectTracks.id, goalIds),
-  });
+  if (tracks.length === 0) return out;
   const ids = tracks.map((t) => t.id);
+  const inGoals = and(
+    inArray(focusSessions.trackId, ids),
+    workAndTrackedRunsWhere()
+  );
   const { loadTrackGoalFacts } = await import("../tracks/goal-content.js");
   const [work, moved, entered, facts] = await Promise.all([
     countWork(inArray(focusSessions.trackId, ids), true),
-    countMovesSince(windowStart(), { trackIds: ids }),
+    countMovesSince(windowStart(), [
+      movesOf(
+        "track",
+        drizzleSql`SELECT ${projectTracks.id} AS id, ${projectTracks.id} AS key FROM ${projectTracks} WHERE ${inArray(projectTracks.id, ids)}`
+      ),
+      movesOf(
+        "focus_session",
+        drizzleSql`SELECT ${focusSessions.id} AS id, ${focusSessions.trackId} AS key FROM ${focusSessions} WHERE ${inGoals}`
+      ),
+    ]),
     lastTransitionAt(ids.map((id) => ({ type: "track" as const, id }))),
     loadTrackGoalFacts(tracks, userId),
   ]);
   for (const t of tracks) {
     const at = entered.get(`track:${t.id}`);
+    const w = work.get(t.id);
+    const m = moved.get(t.id);
+    const waits = facts.get(t.id)?.waitingOn;
     out.set(t.id, {
       since: new Date(at ?? t.createdAt).toISOString(),
       sinceMeasured: at !== undefined,
-      work: work.get(t.id) ?? {},
-      moved: moved.get(t.id) ?? 0,
-      waitingOn: facts.get(t.id)?.waitingOn ?? [],
+      ...(w && Object.keys(w).length ? { work: w } : {}),
+      ...(m ? { moved: m } : {}),
+      ...(waits?.length ? { waitingOn: waits } : {}),
     });
   }
   return out;
@@ -176,19 +191,17 @@ export async function withGoalRollups(
   goals: OpenGoalsRead
 ): Promise<StartHere["openGoals"]> {
   if (!("items" in goals)) return goals;
+  const { tracks = [], ...listed } = goals;
   let rollups: Map<string, GoalRollup> | null = null;
   try {
-    rollups = await readGoalRollups(
-      userId,
-      goals.items.map((g) => g.id)
-    );
+    rollups = await readGoalRollups(userId, tracks);
   } catch (err) {
     logger.warn({ err }, "orient: goal rollups NOT read — unavailable");
   }
   return {
-    ...goals,
+    ...listed,
     rollupWindowDays: ROLLUP_WINDOW_DAYS,
-    items: goals.items.map((g) => ({
+    items: listed.items.map((g) => ({
       ...g,
       rollup: rollups?.get(g.id) ?? UNAVAILABLE,
     })),
@@ -349,15 +362,32 @@ export async function readScopeRollup(input: {
       ...(projectId ? { projectId } : { workspaceId }),
     }),
     countWork(sessionsInScope, false),
-    countMovesSince(
-      windowStart(),
-      projectId
-        ? {
-            projectId,
-            entityIds: drizzleSql`SELECT ${entities.id}::text FROM ${entities} WHERE ${projectLensWhere(entities.id, projectId)}`,
-          }
-        : { workspaceId: workspaceId! }
-    ),
+    // Moves of what the caller can see in the scope: its things (the entity
+    // read floor), its sessions (THE session read rule) and, for a project,
+    // the project's goals (the project was checked visible above).
+    countMovesSince(windowStart(), [
+      movesOf(
+        "entity",
+        drizzleSql`SELECT ${entities.id} AS id, 'all' AS key FROM ${entities} WHERE ${and(
+          entityReadVisibleWhere(userId),
+          projectId
+            ? projectLensWhere(entities.id, projectId)
+            : eq(entities.workspaceId, workspaceId!)
+        )}`
+      ),
+      movesOf(
+        "focus_session",
+        drizzleSql`SELECT ${focusSessions.id} AS id, 'all' AS key FROM ${focusSessions} WHERE ${and(sessionsInScope, workAndTrackedRunsWhere())}`
+      ),
+      ...(projectId
+        ? [
+            movesOf(
+              "track",
+              drizzleSql`SELECT ${projectTracks.id} AS id, 'all' AS key FROM ${projectTracks} WHERE ${eq(projectTracks.projectId, projectId)}`
+            ),
+          ]
+        : []),
+    ]),
     openWork,
   ]);
   const openIds = open.map((s) => s.id);

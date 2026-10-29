@@ -9,6 +9,7 @@
  * Served by orient's `statusOf` (no tool of its own). An id the caller cannot
  * see reads exactly like one that does not exist: `type: "unknown"`.
  */
+import { z } from "zod";
 import {
   and,
   db,
@@ -55,6 +56,12 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Ids one orient call may ask about. */
 export const STATUS_OF_MAX = 10;
 
+/** `statusOf` as both doors (MCP, REST) accept it: more than 10 is refused. */
+export const statusOfInput = z
+  .array(z.string().min(1).max(100))
+  .max(STATUS_OF_MAX)
+  .optional();
+
 type Unavailable = { status: "unavailable" };
 
 export interface StatusOf {
@@ -92,7 +99,8 @@ export async function readStatusOf(
   userId: string,
   rawIds: readonly string[]
 ): Promise<StatusOfAnswer[]> {
-  const asked = [...new Set(rawIds)].slice(0, STATUS_OF_MAX);
+  // The doors cap the list (`statusOfInput`); nothing is dropped here.
+  const asked = [...new Set(rawIds)];
   // Every id column is a uuid: anything else is simply not a thing here.
   const ids = asked.filter((id) => UUID.test(id));
   if (ids.length === 0) return asked.map((id) => ({ id, type: "unknown" }));
@@ -148,7 +156,21 @@ export async function readStatusOf(
   };
 
   const answers = new Map<string, Promise<StatusOf>>();
+  // One lifecycle read per (profile, space) for the whole call.
   const resolver = new ProfileResolutionService(db);
+  const lifecycles = new Map<
+    string,
+    ReturnType<typeof resolver.getEffectiveLifecycle>
+  >();
+  const lifecycleOf = (profileId: string, workspaceId: string | null) => {
+    const key = `${profileId}|${workspaceId ?? ""}`;
+    let read = lifecycles.get(key);
+    if (!read) {
+      read = resolver.getEffectiveLifecycle(profileId, workspaceId);
+      lifecycles.set(key, read);
+    }
+    return read;
+  };
   const goalFacts = goals.length
     ? import("../tracks/goal-content.js").then((m) =>
         m.loadTrackGoalFacts(goals, userId)
@@ -161,7 +183,7 @@ export async function readStatusOf(
       t.id,
       (async (): Promise<StatusOf> => {
         const lifecycle = t.profileId
-          ? await resolver.getEffectiveLifecycle(t.profileId, t.workspaceId)
+          ? await lifecycleOf(t.profileId, t.workspaceId)
           : null;
         const option = findLifecycleOption(lifecycle, t.status);
         const since = sinceOf(`entity:${t.id}`, t.createdAt);
@@ -183,9 +205,11 @@ export async function readStatusOf(
             : t.status
               ? resolveStatusLabel(t.status)
               : null,
-          category: isLifecycleCategory(t.statusCategory)
-            ? t.statusCategory
-            : null,
+          // The declared option first (the rollups read it too), else the
+          // stored projection, so the two can never disagree.
+          category:
+            option?.category ??
+            (isLifecycleCategory(t.statusCategory) ? t.statusCategory : null),
           ...since,
           ...(forDays !== null && afterDays !== undefined
             ? { stuck: { afterDays, forDays } }

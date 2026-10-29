@@ -29,7 +29,6 @@ import {
   type WaitingOnMark,
   type WaitingOnSource,
 } from "@synap-core/types/units";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { listOwedSlots } from "../focus-sessions/owed-outputs.js";
 import type { SessionSubject } from "../focus-sessions/session-subject-where.js";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
@@ -89,6 +88,9 @@ export async function lastTransitionAt(
     .where(
       and(
         inArray(events.type, Object.values(TRANSITION_EVENT_TYPES)),
+        // Both key columns, so the (subject_type, subject_id, timestamp)
+        // index answers it: orient must never scan the event log.
+        inArray(events.subjectType, [...new Set(refs.map((r) => r.type))]),
         inArray(events.subjectId, [...new Set(refs.map((r) => r.id))]),
         drizzleSql`(${events.subjectType} <> 'entity' OR ${events.data}->>'role' IS NULL)`
       )
@@ -101,59 +103,42 @@ export async function lastTransitionAt(
 }
 
 /**
- * Status moves since `since` — of goals and sessions filed in `trackIds`
- * (grouped per goal), or of everything in one space or project. Counted from
- * the transition log; a move made before the door existed is not counted.
+ * The subjects whose moves a rollup counts: `rows` selects `id` and `key`
+ * (the bucket it counts in) of subjects the CALLER can see, built through the
+ * read floors. Joined on both event key columns, so the index answers it.
+ */
+export function movesOf(subjectType: TransitionSubjectType, rows: SQL): SQL {
+  return drizzleSql`SELECT ${subjectType}::text AS st, m.id::text AS sid, m.key::text AS k FROM (${rows}) m`;
+}
+
+/**
+ * Status moves since `since` of the given subjects (`movesOf` rows, UNION
+ * ALL'd), per bucket. Counted from the transition log: a move made before the
+ * door existed is not counted. THROWS.
  */
 export async function countMovesSince(
   since: Date,
-  lens:
-    | { trackIds: string[] }
-    | { workspaceId: string }
-    | { projectId: string; entityIds: SQL }
+  subjects: SQL[]
 ): Promise<Map<string, number>> {
   const out = new Map<string, number>();
-  if ("trackIds" in lens && lens.trackIds.length === 0) return out;
+  if (subjects.length === 0) return out;
   const { TRANSITION_EVENT_TYPES } = await import("@synap/events");
-  const after = drizzleSql`${events.timestamp} >= ${since.toISOString()}::timestamptz`;
-  const workUnit = inArray(events.type, [
-    TRANSITION_EVENT_TYPES.track,
-    TRANSITION_EVENT_TYPES.focus_session,
-  ]);
-  if ("trackIds" in lens) {
-    const trackId = drizzleSql<string>`${events.data}->>'trackId'`;
-    const rows = await db
-      .select({
-        key: trackId,
-        n: drizzleSql<number>`cast(count(*) as integer)`,
-      })
-      .from(events)
-      .where(and(workUnit, after, inArray(trackId, lens.trackIds)))
-      .groupBy(trackId);
-    for (const r of rows) out.set(r.key, Number(r.n));
-    return out;
+  const types = drizzleSql.join(
+    Object.values(TRANSITION_EVENT_TYPES).map((t) => drizzleSql`${t}`),
+    drizzleSql`, `
+  );
+  const res = (await db.execute(drizzleSql`
+    SELECT s.k AS k, cast(count(*) as integer) AS n
+      FROM (${drizzleSql.join(subjects, drizzleSql` UNION ALL `)}) s
+      JOIN ${events} e
+        ON e.subject_type = s.st AND e.subject_id = s.sid
+     WHERE e.type IN (${types})
+       AND e.timestamp >= ${since.toISOString()}::timestamptz
+     GROUP BY s.k`)) as
+    Array<{ k: string; n: number }> | { rows: Array<{ k: string; n: number }> };
+  for (const r of Array.isArray(res) ? res : res.rows) {
+    out.set(r.k, Number(r.n));
   }
-  const inLens =
-    "workspaceId" in lens
-      ? and(
-          inArray(events.type, Object.values(TRANSITION_EVENT_TYPES)),
-          eq(events.workspaceId, lens.workspaceId)
-        )
-      : or(
-          and(
-            workUnit,
-            drizzleSql`${events.data}->>'projectId' = ${lens.projectId}`
-          ),
-          and(
-            eq(events.type, TRANSITION_EVENT_TYPES.entity),
-            drizzleSql`${events.subjectId} IN (${lens.entityIds})`
-          )
-        );
-  const [row] = await db
-    .select({ n: drizzleSql<number>`cast(count(*) as integer)` })
-    .from(events)
-    .where(and(inLens, after));
-  out.set("all", Number(row?.n ?? 0));
   return out;
 }
 
@@ -179,7 +164,11 @@ export async function readWaitingOn(input: {
   const sessionIds = input.proposals?.sessionIds ?? [];
   const targetIds = input.proposals?.targetIds ?? [];
   const nodes = input.blockedNodes ?? [];
-  const { readDependencyFacts } = await import("../links/dependency-links.js");
+  // Loaded late, like the goal reader does: both reach the router layer.
+  const [{ readDependencyFacts }, { proposalUserFloor }] = await Promise.all([
+    import("../links/dependency-links.js"),
+    import("../../routers/proposals/scope-conditions.js"),
+  ]);
   const [owed, pending, deps] = await Promise.all([
     input.owed &&
     !("sessionIds" in input.owed && input.owed.sessionIds.length === 0)
@@ -203,7 +192,7 @@ export async function readWaitingOn(input: {
           .where(
             and(
               eq(proposals.status, ProposalStatus.PENDING),
-              userVisibleWhere(proposals.workspaceId, input.userId),
+              proposalUserFloor(input.userId),
               or(
                 sessionIds.length
                   ? inArray(proposals.sessionId, sessionIds)
