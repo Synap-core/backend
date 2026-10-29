@@ -34,6 +34,7 @@ import { and, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
 import { createdRecordIdentity } from "./insert-pending-proposal.js";
+import { transitionProposal } from "./proposal-transition.js";
 import { stableStringify } from "./stable-stringify.js";
 
 type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -93,24 +94,21 @@ export async function expirePendingCreatesOfLandedRecord(
     .map((row) => row.id);
   if (sameRecord.length === 0) return [];
 
-  const expired = await executor
-    .update(proposals)
-    .set({
-      status: ProposalStatus.EXPIRED,
+  const expired = await transitionProposal(executor, {
+    to: ProposalStatus.EXPIRED,
+    set: {
       updatedAt: new Date(),
       data: sql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object(
         'expiredBy', 'record_landed',
         'supersededByEntityId', ${input.entityId}::text,
         'supersededByProposalId', ${input.landedByProposalId ?? null}::text)`,
-    })
-    .where(
-      and(
-        inArray(proposals.id, sameRecord),
-        // Re-checked at write: a copy decided between the read and here keeps
-        // its decision.
-        eq(proposals.status, ProposalStatus.PENDING)
-      )
-    )
-    .returning({ id: proposals.id });
+    },
+    where: and(
+      inArray(proposals.id, sameRecord),
+      // Re-checked at write: a copy decided between the read and here keeps
+      // its decision.
+      eq(proposals.status, ProposalStatus.PENDING)
+    ),
+  }).returning({ id: proposals.id });
   return expired.map((row) => row.id);
 }

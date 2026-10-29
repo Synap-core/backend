@@ -644,6 +644,8 @@ export const projectsRouter = router({
         // Parity with create: agents must be attributed or the gate treats
         // the write as human and can auto-apply ungoverned.
         agentUserId: ctx.agentUserId ?? undefined,
+        // The session the caller named (or its door derived), as `file` does.
+        sessionId: ctx.sessionId ?? null,
         reasoning,
         ...patch,
       });

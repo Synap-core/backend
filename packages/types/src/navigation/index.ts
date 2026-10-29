@@ -37,7 +37,7 @@ export function isObjectNavView(value: unknown): value is ObjectNavView {
  * as its `isHttpUrl`), relay and the browser all read it from here, so a link
  * the pod stored is exactly a link every surface will open — no surface opens
  * "any scheme" and none narrows to https-only. Never use it to guard a
- * server-side `fetch()` — that is `validateExternalUrl` / `safeExternalFetch`.
+ * server-side `fetch()` — that is `validateExternalUrl` / `safePublicFetch`.
  */
 export function isHttpUrl(value: unknown): value is string {
   if (typeof value !== "string") return false;

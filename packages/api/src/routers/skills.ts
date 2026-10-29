@@ -44,7 +44,7 @@ import {
   ruleEditToGovernedInput,
 } from "../services/rules/update-input.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
-import { safeExternalFetch } from "@synap/shared-utils";
+import { safePublicFetch } from "@synap/shared-utils";
 import {
   checkPermissionOrPropose,
   createPendingProposal,
@@ -2206,9 +2206,9 @@ export const skillsRouter = router({
         // SSRF guard: validate every hop (including redirects) against internal
         // targets. No credentials are sent, so a small redirect budget preserves
         // the original redirect-following behaviour for skill hosts.
-        const res = await safeExternalFetch(
+        const res = await safePublicFetch(
           input.url,
-          { headers: fetchHeaders },
+          { headers: fetchHeaders, signal: AbortSignal.timeout(30_000) },
           5
         );
         if (!res.ok) {
@@ -2237,9 +2237,9 @@ export const skillsRouter = router({
           ? input.url.replace(/\.toml$/i, ".md")
           : `${input.url}.md`;
         try {
-          const companionRes = await safeExternalFetch(
+          const companionRes = await safePublicFetch(
             companionUrl,
-            { headers: fetchHeaders },
+            { headers: fetchHeaders, signal: AbortSignal.timeout(30_000) },
             5
           );
           if (companionRes.ok) {

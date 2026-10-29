@@ -20,6 +20,7 @@ import {
   automations,
   focusSessions,
   ProposalStatus,
+  transitionProposal,
 } from "@synap/database";
 import {
   readPackItems,
@@ -67,10 +68,9 @@ async function markApproved(
   dataPatch?: Record<string, unknown>
 ): Promise<void> {
   const { proposal, userId, input, deps } = args;
-  await db
-    .update(proposals)
-    .set({
-      status: ProposalStatus.APPROVED,
+  await transitionProposal(db, {
+    to: ProposalStatus.APPROVED,
+    set: {
       reviewedBy: userId,
       reviewedAt: new Date(),
       updatedAt: new Date(),
@@ -79,8 +79,9 @@ async function markApproved(
             data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || ${JSON.stringify(dataPatch)}::jsonb`,
           }
         : {}),
-    })
-    .where(eq(proposals.id, input.proposalId));
+    },
+    where: eq(proposals.id, input.proposalId),
+  });
   reportApproved(deps, proposal, input.proposalId);
   deps.emitProposalReviewed(
     input.proposalId,
@@ -153,20 +154,17 @@ async function applyPackItem(
         .select({ data: proposals.data })
         .from(proposals)
         .where(eq(proposals.id, targetId));
-      const rows = await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.EXPIRED,
+      const rows = await transitionProposal(db, {
+        to: ProposalStatus.EXPIRED,
+        set: {
           updatedAt: new Date(),
           data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('expiredByCleanupPack', ${ctx.packId}::text)`,
-        })
-        .where(
-          and(
-            eq(proposals.id, targetId),
-            eq(proposals.status, ProposalStatus.PENDING)
-          )
-        )
-        .returning({ id: proposals.id });
+        },
+        where: and(
+          eq(proposals.id, targetId),
+          eq(proposals.status, ProposalStatus.PENDING)
+        ),
+      }).returning({ id: proposals.id });
       if (rows.length === 0) throw new Error("Proposal is no longer pending");
       markProposalNotificationsActioned([targetId]);
       await discardProposalSourceBlob({

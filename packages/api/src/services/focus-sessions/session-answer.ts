@@ -125,6 +125,7 @@ import { normalizeExpectedLabel } from "./expected-label.js";
 import { isTerminalSessionStatus } from "./session-statuses.js";
 import {
   attestExpectedOutput,
+  criterionMetBy,
   type AttestExpectedOutputResult,
 } from "./satisfy-expected-output.js";
 import { AWAITED_GATE_PROPOSAL_TYPES, readCriteria } from "@synap/playbooks";
@@ -810,8 +811,10 @@ export type AnswerSessionSlotResult =
       /**
        * A CRITERION slot's answer is a grade: present when the pass/fail went
        * through the grade door (`gradeCriterionAsOwner`), which discharged
-       * the slot. `recorded` false ⇒ the answer stands but the grade did not
-       * land (the criterion was removed in between) — said, never hidden.
+       * the slot. Also present, always `pass`, when the answer handed over a
+       * person's task that meets a criterion (`criterionMetBy`). `recorded`
+       * false ⇒ the answer stands but the grade did not land (the criterion
+       * was removed in between) — said, never hidden.
        */
       graded?: {
         verdict: "pass" | "fail";
@@ -1030,6 +1033,13 @@ export async function answerSessionSlot(p: {
       message: "This check is no longer one of the session's criteria.",
     };
   }
+  // A PERSON'S TASK that meets a criterion (a provide under the criterion's
+  // key, `criterionMetBy`): handing it over grades it pass, after the commit,
+  // through the same grade door. Unlike a criterion slot it is not a grade:
+  // the slot follows its own answer rule (hand-back included).
+  const met = verdict
+    ? null
+    : criterionMetBy(outputs, chosen.index, readCriteria(session.criteria));
 
   // SECRET — handing it over also lets the agent that asked read it, for this
   // session (`provide-secret-grant.ts`). Written BEFORE the answer commits so
@@ -1128,36 +1138,27 @@ export async function answerSessionSlot(p: {
     }
   }
 
+  // The grade, after the answer committed, through THE owner grade door: a
+  // criterion slot's pass/fail, or pass for a task that meets a criterion.
+  const grade =
+    verdict && slot.criterionKey
+      ? { criterionKey: slot.criterionKey, verdict }
+      : met
+        ? { criterionKey: met, verdict: "pass" as const }
+        : null;
   let graded:
     | { verdict: "pass" | "fail"; recorded: boolean; resumed: boolean }
     | undefined;
-  if (verdict && slot.criterionKey) {
-    try {
-      const { gradeCriterionAsOwner } =
-        await import("./evaluations/evaluate.js");
+  if (grade) {
+    const { gradeCriterionAfterAct } =
+      await import("./evaluations/evaluate.js");
+    graded = await gradeCriterionAfterAct({
+      sessionId: session.id,
+      userId: p.userId,
+      ...grade,
       // The typed note (if any) is the rationale — never the summary line.
-      const note = p.text?.trim() || null;
-      const { out, resumed } = await gradeCriterionAsOwner({
-        sessionId: session.id,
-        userId: p.userId,
-        criterionKey: slot.criterionKey,
-        verdict,
-        rationale: note,
-      });
-      graded = { verdict, recorded: out.status === "recorded", resumed };
-      if (out.status !== "recorded") {
-        logger.warn(
-          { sessionId: session.id, status: out.status },
-          "criterion answer: the grade did not land — the answer stands"
-        );
-      }
-    } catch (err) {
-      graded = { verdict, recorded: false, resumed: false };
-      logger.warn(
-        { err, sessionId: session.id },
-        "criterion answer: the grade threw — the answer stands"
-      );
-    }
+      rationale: p.text?.trim() || null,
+    });
   }
 
   let questionId: string | null = null;
@@ -1244,6 +1245,8 @@ export type AttestSessionSlotResult =
       questionId: string | null;
       wokeAgentType: string | null;
       triggered: boolean;
+      /** The grade of the criterion this deed met (`criterionMetBy`), when any. */
+      graded?: { verdict: "pass"; recorded: boolean; resumed: boolean };
     };
 
 /**
@@ -1345,6 +1348,7 @@ export async function attestSessionSlot(p: {
     questionId,
     wokeAgentType,
     triggered,
+    ...(attested.graded ? { graded: attested.graded } : {}),
   };
 }
 

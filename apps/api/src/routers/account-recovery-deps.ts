@@ -8,9 +8,8 @@
  * carries a one-time code.
  */
 
-import { TRPCError } from "@trpc/server";
 import { authMiddleware } from "@synap/auth";
-import { assertPodAdmin, refuseGuestSession } from "@synap/api";
+import { isPodAdmin, refuseGuestSession } from "@synap/api";
 import {
   AccountRecoveryCodeRepository,
   EventRepository,
@@ -160,15 +159,8 @@ async function revokeIdentitySessions(identityId: string): Promise<void> {
   }
 }
 
-export async function isPodAdmin(userId: string): Promise<boolean> {
-  try {
-    await assertPodAdmin(userId);
-    return true;
-  } catch (err) {
-    if (err instanceof TRPCError && err.code === "FORBIDDEN") return false;
-    throw err;
-  }
-}
+// THE pod-admin predicate (`@synap/api`), re-exported for this file's siblings.
+export { isPodAdmin };
 
 /**
  * Owners (human pod admins: `owner` or `admin` of the live pod-admin space,

@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { db, eq, getDb, proposals } from "@synap/database";
+import { db, eq, getDb, proposals, transitionProposal } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { registerProposalExecutor } from "../../routers/proposals/execution-registry.js";
 import { reportApproved } from "../../routers/proposals/executors/shared.js";
@@ -59,15 +59,15 @@ export function registerShareExecutors(): void {
 
       // Every branch ends the same way once its write landed.
       const markApproved = async () => {
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
+        await transitionProposal(db, {
+          to: ProposalStatus.APPROVED,
+          set: {
             reviewedBy: userId,
             reviewedAt: new Date(),
             updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
+          },
+          where: eq(proposals.id, input.proposalId),
+        });
         reportApproved(deps, proposal, input.proposalId);
         deps.emitProposalReviewed(
           input.proposalId,

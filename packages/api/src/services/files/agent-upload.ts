@@ -28,7 +28,7 @@ import {
   parsePresignedUploadKey,
   type PresignRefusal,
 } from "../../routers/file-upload-presign.js";
-import { canWriteWorkspace } from "../../routers/file-upload.js";
+import { canWrite, userPrincipal } from "../../access/door.js";
 import { createGovernedFileEntityForStoredDocument } from "../../routers/create-governed-file-entity.js";
 import { gateAndAttachStagedSourceBlob } from "../../utils/store-entity-source-blob.js";
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
@@ -152,7 +152,7 @@ export async function requestAgentUpload(params: {
       "workspaceId is required (none was supplied or accessible to your key)."
     );
   }
-  if (!(await canWriteWorkspace(userId, workspaceId))) {
+  if (!(await canWrite(userPrincipal(userId), { workspace: workspaceId }))) {
     return refuse(403, "FORBIDDEN", "You cannot write to this workspace.");
   }
   const ticket = await requestPresignedUpload({
@@ -253,7 +253,9 @@ export async function finalizeAgentUpload(params: {
     }
     throw err;
   }
-  if (!(await canWriteWorkspace(userId, bound.workspaceId))) {
+  if (
+    !(await canWrite(userPrincipal(userId), { workspace: bound.workspaceId }))
+  ) {
     return refuse(403, "FORBIDDEN", "You cannot write to this workspace.");
   }
 

@@ -18,6 +18,9 @@ const AGENT = "22222222-2222-4222-8222-222222222222";
 const h = vi.hoisted(() => ({
   proposalStatus: "pending",
   inserts: [] as Array<Record<string, unknown>>,
+  sets: [] as Array<Record<string, unknown>>,
+  // What the status door's UPDATE matches: none = decided meanwhile.
+  approvedRows: [{ id: "55555555-5555-4555-8555-555555555555" }] as unknown[],
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -46,13 +49,25 @@ vi.mock("@synap/database", async (importOriginal) => {
           })),
         },
       },
-      insert: vi.fn(() => ({
-        values: (v: Record<string, unknown>) => {
-          h.inserts.push(v);
-          return { returning: async () => [{ id: "grant-1" }] };
-        },
-      })),
-      update: vi.fn(() => ({ set: () => ({ where: async () => [] }) })),
+      transaction: vi.fn(async (fn: (tx: unknown) => unknown) => {
+        const tx = {
+          insert: () => ({
+            values: (v: Record<string, unknown>) => {
+              h.inserts.push(v);
+              return { returning: async () => [{ id: "grant-1" }] };
+            },
+          }),
+          update: () => ({
+            set: (v: Record<string, unknown>) => {
+              h.sets.push(v);
+              return {
+                where: () => ({ returning: async () => h.approvedRows }),
+              };
+            },
+          }),
+        };
+        return fn(tx);
+      }),
     },
   };
 });
@@ -84,6 +99,8 @@ const grant = () =>
 beforeEach(() => {
   h.proposalStatus = "pending";
   h.inserts.length = 0;
+  h.sets.length = 0;
+  h.approvedRows = [{ id: PROPOSAL }];
 });
 
 describe("grantAIAccess grants an open request only", () => {
@@ -92,6 +109,19 @@ describe("grantAIAccess grants an open request only", () => {
     expect(h.inserts).toEqual([
       expect.objectContaining({ grantableId: SECRET, grantedTo: AGENT }),
     ]);
+  });
+
+  it("the approval goes through the status door, attributed to the approver", async () => {
+    await grant();
+    expect(h.sets).toEqual([
+      expect.objectContaining({ status: "approved", reviewedBy: USER }),
+    ]);
+    expect(h.sets[0]!.reviewedAt).toBeInstanceOf(Date);
+  });
+
+  it("a request decided between the read and the write is refused (the grant rolls back with it)", async () => {
+    h.approvedRows = [];
+    await expect(grant()).rejects.toMatchObject({ code: "CONFLICT" });
   });
 
   it("a request whose approval failed is still grantable", async () => {

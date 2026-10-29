@@ -135,6 +135,10 @@ import {
   handleLibraryKeepAlive,
   LIBRARY_KEEP_ALIVE_QUEUE,
 } from "./library-keep-alive-worker.js";
+import {
+  handleMorningBrief,
+  MORNING_BRIEF_QUEUE,
+} from "./morning-brief-worker.js";
 import { handleSyncPush, SYNC_PUSH_QUEUE } from "./sync-push.js";
 import { handleSyncPull, SYNC_PULL_QUEUE } from "./sync-pull.js";
 import {
@@ -386,6 +390,8 @@ const ALL_QUEUES = [
   LIBRARY_LIGHT_READ_SWEEP_QUEUE,
   // Library keep-alive (daily: quiet archive, weekly build suggestion, resurfacing).
   LIBRARY_KEEP_ALIVE_QUEUE,
+  // The morning brief (every 15 min; handler slot, IoC).
+  MORNING_BRIEF_QUEUE,
   SYNC_PUSH_QUEUE,
   SYNC_PULL_QUEUE,
   SYNC_PUSH_FILES_QUEUE,
@@ -931,6 +937,10 @@ export async function registerAllWorkers(): Promise<void> {
     handleLibraryKeepAlive()
   );
   logger.info("Registered worker: library-keep-alive");
+
+  // The morning brief (every 15 min; handler slot filled by the api layer).
+  await boss.work(MORNING_BRIEF_QUEUE, async () => handleMorningBrief());
+  logger.info("Registered worker: morning-brief");
 
   // Hydration summary post — Orchestrator's first proactive message after
   // import review (Gap 3 of onboarding). One attempt, swallow-on-fail.

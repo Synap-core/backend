@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq } from "@synap/database";
+import { db, proposals, eq, transitionProposal } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { applyProjectFiling } from "../../../services/projects/file-entities.js";
 import { stampMaterialized } from "../../../services/proposals/stamp-materialized.js";
@@ -74,10 +74,12 @@ export async function approveProjectFiling(
   });
 
   const approved = {
-    status: ProposalStatus.APPROVED,
-    reviewedBy: userId,
-    reviewedAt: new Date(),
-    updatedAt: new Date(),
+    to: ProposalStatus.APPROVED,
+    set: {
+      reviewedBy: userId,
+      reviewedAt: new Date(),
+      updatedAt: new Date(),
+    },
   };
   if (result.status === "filed") {
     // The undo record rides the approval UPDATE: revert removes exactly the
@@ -85,13 +87,13 @@ export async function approveProjectFiling(
     await stampMaterialized({
       proposalId: input.proposalId,
       record: { relationIds: result.filedRelationIds },
-      set: approved,
+      transition: approved,
     });
   } else {
-    await db
-      .update(proposals)
-      .set(approved)
-      .where(eq(proposals.id, input.proposalId));
+    await transitionProposal(db, {
+      ...approved,
+      where: eq(proposals.id, input.proposalId),
+    });
   }
 
   reportApproved(deps, proposal, input.proposalId);

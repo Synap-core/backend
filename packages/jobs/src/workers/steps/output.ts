@@ -33,10 +33,7 @@ import type { SQL } from "@synap/database";
 import { MessageRole, MessageAuthorType } from "@synap/database/schema";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { emitSideEffects } from "@synap/events";
-import {
-  resolveVaultReferences,
-  isVaultReference,
-} from "../../utils/vault-resolver.js";
+import { resolveAuthoredVaultRefs } from "../../utils/authored-vault-refs.js";
 import {
   checkAutomationWriteOrPropose,
   guardProducerEffect,
@@ -55,7 +52,7 @@ import {
   resolveWakeAgentType,
   wakeAgentAtMessage,
 } from "../../utils/agent-wake.js";
-import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
+import { validateExternalUrl, safePublicFetch } from "@synap/shared-utils";
 import { deepResolveTemplates } from "../template-resolve.js";
 import { resolveSingleReferenceParam } from "./reference-param.js";
 import { dispatchOutputVerb } from "../capability-dispatch.js";
@@ -605,7 +602,7 @@ export async function executeOutputStep(
 
     case "webhook": {
       // CONFUSED-DEPUTY GUARD (M1): a webhook resolves the OWNER's vault secrets
-      // into headers (`resolveVaultReferences(headers, ownerId)` below) and POSTs
+      // into headers (`resolveAuthoredVaultRefs` below) and POSTs
       // agent-influenced data to an external URL. On the observations/governed-event
       // path a human-owned automation runs its THEN-nodes under owner-bypass, so an
       // agent-produced trigger could exfiltrate the owner's secret to an
@@ -635,31 +632,47 @@ export async function executeOutputStep(
 
       // SSRF guard: reject internal/reserved targets BEFORE resolving any
       // vault secrets into headers (never leak a secret to a private address).
-      const webhookUrlCheck = validateExternalUrl(url);
+      // The author names the port (a self-hosted n8n on :5678); the pinned
+      // door below still refuses a name that resolves inside.
+      const webhookUrlCheck = validateExternalUrl(url, {
+        allowedPorts: "any",
+      });
       if (!webhookUrlCheck.valid) {
         throw new Error(`webhook output blocked: ${webhookUrlCheck.reason}`);
       }
 
-      // Resolve vault references in headers (e.g., Authorization: vault://secret-id)
-      const hasVaultHeaders = Object.values(headers).some(isVaultReference);
-      if (hasVaultHeaders) {
-        headers = await resolveVaultReferences(headers, ownerId);
-      }
+      // Resolve vault references in headers (Authorization: vault://secret-id)
+      // only where the author wrote them: `config` went through
+      // deepResolveTemplates, so a header templated from the trigger could
+      // otherwise turn a sender's `vault://<id>` into the owner's secret.
+      headers = await resolveAuthoredVaultRefs(
+        (data.config?.headers ?? {}) as Record<string, unknown>,
+        headers,
+        ownerId,
+        "webhook output"
+      );
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 30_000);
 
       try {
-        const response = await safeExternalFetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...headers,
+        const response = await safePublicFetch(
+          url,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...headers,
+            },
+            body: JSON.stringify(body),
+            signal: controller.signal,
           },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
+          0,
+          { allowedPorts: "any" }
+        );
         clearTimeout(timer);
+        // Only the status is read: release the connection.
+        await response.body?.cancel().catch(() => undefined);
 
         return {
           status: response.ok ? "sent" : "error",

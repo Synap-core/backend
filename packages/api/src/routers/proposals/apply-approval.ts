@@ -34,6 +34,9 @@ import {
   createGuideline,
   type GovernanceScope,
   type GovernanceTarget,
+  transitionProposal,
+  canTransitionProposal,
+  APPLIED_PROPOSAL_STATUSES,
 } from "@synap/database";
 import { proposals } from "@synap/database/schema";
 import { resolveDailyWriteCeiling } from "@synap/database/agent-governance";
@@ -149,7 +152,10 @@ import {
 import { recordSessionArtifact } from "../../services/focus-sessions/record-session-artifact.js";
 import { readProposalExpectedKey } from "../../services/focus-sessions/slot-keys.js";
 import { displayLabelFromRecord } from "./helper-functions.js";
-import { normalizeObjectKind } from "@synap-core/types/vocabulary";
+import {
+  normalizeObjectKind,
+  resolveStatusLabel,
+} from "@synap-core/types/vocabulary";
 
 const logger = createLogger({ module: "proposals" });
 
@@ -639,6 +645,10 @@ export async function applyProposalApproval(args: {
   // A person signed in to an app may approve its OWN AI's proposals unless
   // the app's owner turned that off (PR #29 M2, app-sign-in-policy.ts).
   const viaApp = await assertAppSignInMayApprove(args.proposal);
+  // The status door's table says which proposals an approval may still move.
+  // Before it, approving a rejected, withdrawn, expired or reverted proposal
+  // re-ran its executor and flipped it to approved.
+  assertProposalMayBeApproved(args.proposal);
 
   // A LARGE graph is applied by the background job — every gate above has
   // already run, here, in the request. A graph that is being applied right
@@ -672,6 +682,13 @@ export async function completeProposalApproval(
   options?: { onProgress?: MaterializeOptions["onProgress"] }
 ): Promise<ProposalExecutorResult> {
   const result = await applyProposalApprovalInner(args, options?.onProgress);
+
+  // THE POSTCONDITION: an approval that applied leaves the proposal approved
+  // (or applied as a receipt), whichever of the ~100 branches ran. Checked
+  // before the stamps below, so a failure here stamps no deliverable.
+  if (result.success && !result.queued) {
+    await assertApprovalLanded(args.proposal, args.userId);
+  }
 
   // VISIBLE: an approval made inside an app is recorded as such on the
   // proposal ("approved in <app>"), whoever's proposal it was.
@@ -775,6 +792,81 @@ export async function completeProposalApproval(
   }
 
   return result;
+}
+
+/**
+ * Refuse, before anything runs, an approval of a proposal the transition table
+ * does not let become approved (rejected, withdrawn, expired, reverted). A
+ * rejected or reverted one is reopened first; the others are final.
+ */
+export function assertProposalMayBeApproved(proposal: {
+  status?: string | null;
+}): void {
+  const status = proposal.status as ProposalStatus | null | undefined;
+  if (!status || canTransitionProposal(status, ProposalStatus.APPROVED)) return;
+  const reopen =
+    status === ProposalStatus.REJECTED || status === ProposalStatus.REVERTED
+      ? " Reopen it first."
+      : "";
+  throw new TRPCError({
+    code: "CONFLICT",
+    message: `This proposal was already decided (${resolveStatusLabel(status)}), so it cannot be approved.${reopen}`,
+  });
+}
+
+/**
+ * The approval tail's postcondition. Executors flip the status themselves, and
+ * #427 found three that never did: the change applied while the proposal stayed
+ * pending, so it sat in the queue and a second approve re-ran it. A per-file
+ * source scan could not see that; this reads the row.
+ *
+ * Still pending (or failed) after a successful apply: a defect, logged as one,
+ * and the status door marks it approved by the approver. Moved elsewhere
+ * meanwhile (rejected, withdrawn): the approval fails loudly. No row to read
+ * back: logged, since nothing can sit pending. Never a silent pending.
+ */
+export async function assertApprovalLanded(
+  proposal: {
+    id: string;
+    targetType?: string | null;
+    proposalType?: string | null;
+  },
+  userId: string
+): Promise<void> {
+  const row = await db.query.proposals.findFirst({
+    where: eq(proposals.id, proposal.id),
+    columns: { status: true },
+  });
+  const status = row?.status as ProposalStatus | undefined;
+  if (status && APPLIED_PROPOSAL_STATUSES.includes(status)) return;
+  if (!status) {
+    // No row to read: nothing can sit pending, and nothing can be marked.
+    logger.error(
+      { proposalId: proposal.id },
+      "approval postcondition: the approved proposal's row could not be read back"
+    );
+    return;
+  }
+  logger.error(
+    {
+      proposalId: proposal.id,
+      status,
+      targetType: proposal.targetType,
+      proposalType: proposal.proposalType,
+    },
+    "approval postcondition: the executor reported success but left the proposal unapproved"
+  );
+  const healed = await transitionProposal(db, {
+    to: ProposalStatus.APPROVED,
+    from: [ProposalStatus.PENDING, ProposalStatus.APPROVAL_FAILED],
+    set: { reviewedBy: userId, reviewedAt: new Date(), updatedAt: new Date() },
+    where: eq(proposals.id, proposal.id),
+  }).returning({ id: proposals.id });
+  if (healed.length > 0) return;
+  throw new TRPCError({
+    code: "INTERNAL_SERVER_ERROR",
+    message: `The approval ran, but the proposal now reads ${resolveStatusLabel(status)} instead of approved.`,
+  });
 }
 
 /**
@@ -1159,10 +1251,9 @@ async function applyProposalApprovalInner(
       // verbatim by every user-facing door (the projection floor only reaches
       // inside `data.failure`), so redaction has to happen here.
       const safePlanMessage = redactForStorage(err.message);
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVAL_FAILED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVAL_FAILED,
+        set: {
           rejectionReason: safePlanMessage,
           data: {
             ...((proposal.data as Record<string, unknown> | null) ?? {}),
@@ -1181,13 +1272,12 @@ async function applyProposalApprovalInner(
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(proposals.id, proposal.id),
-            ne(proposals.status, ProposalStatus.APPROVED)
-          )
-        );
+        },
+        where: and(
+          eq(proposals.id, proposal.id),
+          ne(proposals.status, ProposalStatus.APPROVED)
+        ),
+      });
       // Same redacted sentence the row stores — one derivation, so the
       // approver's screen and the queue row can never disagree, and neither
       // carries the raw text.
@@ -1374,11 +1464,13 @@ async function applyProposalApprovalInner(
       ...(dispositions && Object.keys(dispositions).length > 0
         ? { dataPatch: { dispositions } }
         : {}),
-      set: {
-        status: ProposalStatus.APPROVED,
-        reviewedBy: userId,
-        reviewedAt: new Date(),
-        updatedAt: new Date(),
+      transition: {
+        to: ProposalStatus.APPROVED,
+        set: {
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        },
       },
     });
 
@@ -1557,15 +1649,15 @@ async function applyProposalApprovalInner(
       data: { id: claimed.documentId, title: document.title },
     });
 
-    await db
-      .update(proposals)
-      .set({
-        status: ProposalStatus.APPROVED,
+    await transitionProposal(db, {
+      to: ProposalStatus.APPROVED,
+      set: {
         reviewedBy: userId,
         reviewedAt: new Date(),
         updatedAt: new Date(),
-      })
-      .where(eq(proposals.id, input.proposalId));
+      },
+      where: eq(proposals.id, input.proposalId),
+    });
 
     // Report to IS telemetry (fire-and-forget — never blocks)
     reportProposalOutcome({
@@ -1703,15 +1795,15 @@ async function applyProposalApprovalInner(
       })
       .returning({ id: governanceRules.id });
 
-    await db
-      .update(proposals)
-      .set({
-        status: ProposalStatus.APPROVED,
+    await transitionProposal(db, {
+      to: ProposalStatus.APPROVED,
+      set: {
         reviewedBy: userId,
         reviewedAt: new Date(),
         updatedAt: new Date(),
-      })
-      .where(eq(proposals.id, input.proposalId));
+      },
+      where: eq(proposals.id, input.proposalId),
+    });
 
     reportProposalOutcome({
       proposalId: input.proposalId,
@@ -1785,15 +1877,15 @@ async function applyProposalApprovalInner(
       })
       .returning({ id: governanceRules.id });
 
-    await db
-      .update(proposals)
-      .set({
-        status: ProposalStatus.APPROVED,
+    await transitionProposal(db, {
+      to: ProposalStatus.APPROVED,
+      set: {
         reviewedBy: userId,
         reviewedAt: new Date(),
         updatedAt: new Date(),
-      })
-      .where(eq(proposals.id, input.proposalId));
+      },
+      where: eq(proposals.id, input.proposalId),
+    });
 
     reportProposalOutcome({
       proposalId: input.proposalId,
@@ -1846,15 +1938,15 @@ async function applyProposalApprovalInner(
       });
     }
 
-    await db
-      .update(proposals)
-      .set({
-        status: ProposalStatus.APPROVED,
+    await transitionProposal(db, {
+      to: ProposalStatus.APPROVED,
+      set: {
         reviewedBy: userId,
         reviewedAt: new Date(),
         updatedAt: new Date(),
-      })
-      .where(eq(proposals.id, input.proposalId));
+      },
+      where: eq(proposals.id, input.proposalId),
+    });
 
     reportProposalOutcome({
       proposalId: input.proposalId,
@@ -1932,15 +2024,15 @@ async function applyProposalApprovalInner(
       });
     }
 
-    await db
-      .update(proposals)
-      .set({
-        status: ProposalStatus.APPROVED,
+    await transitionProposal(db, {
+      to: ProposalStatus.APPROVED,
+      set: {
         reviewedBy: userId,
         reviewedAt: new Date(),
         updatedAt: new Date(),
-      })
-      .where(eq(proposals.id, input.proposalId));
+      },
+      where: eq(proposals.id, input.proposalId),
+    });
 
     reportProposalOutcome({
       proposalId: input.proposalId,
@@ -2056,15 +2148,15 @@ async function applyProposalApprovalInner(
           })
           .returning({ id: governanceCeilings.id });
 
-    await db
-      .update(proposals)
-      .set({
-        status: ProposalStatus.APPROVED,
+    await transitionProposal(db, {
+      to: ProposalStatus.APPROVED,
+      set: {
         reviewedBy: userId,
         reviewedAt: new Date(),
         updatedAt: new Date(),
-      })
-      .where(eq(proposals.id, input.proposalId));
+      },
+      where: eq(proposals.id, input.proposalId),
+    });
 
     reportProposalOutcome({
       proposalId: input.proposalId,
@@ -2145,15 +2237,15 @@ async function applyProposalApprovalInner(
       createdBy: userId,
     });
 
-    await db
-      .update(proposals)
-      .set({
-        status: ProposalStatus.APPROVED,
+    await transitionProposal(db, {
+      to: ProposalStatus.APPROVED,
+      set: {
         reviewedBy: userId,
         reviewedAt: new Date(),
         updatedAt: new Date(),
-      })
-      .where(eq(proposals.id, input.proposalId));
+      },
+      where: eq(proposals.id, input.proposalId),
+    });
 
     reportProposalOutcome({
       proposalId: input.proposalId,
@@ -2217,15 +2309,15 @@ async function applyProposalApprovalInner(
       createdBy: userId,
     });
 
-    await db
-      .update(proposals)
-      .set({
-        status: ProposalStatus.APPROVED,
+    await transitionProposal(db, {
+      to: ProposalStatus.APPROVED,
+      set: {
         reviewedBy: userId,
         reviewedAt: new Date(),
         updatedAt: new Date(),
-      })
-      .where(eq(proposals.id, input.proposalId));
+      },
+      where: eq(proposals.id, input.proposalId),
+    });
 
     reportProposalOutcome({
       proposalId: input.proposalId,
@@ -2298,15 +2390,15 @@ async function applyProposalApprovalInner(
       createdBy: userId,
     });
 
-    await db
-      .update(proposals)
-      .set({
-        status: ProposalStatus.APPROVED,
+    await transitionProposal(db, {
+      to: ProposalStatus.APPROVED,
+      set: {
         reviewedBy: userId,
         reviewedAt: new Date(),
         updatedAt: new Date(),
-      })
-      .where(eq(proposals.id, input.proposalId));
+      },
+      where: eq(proposals.id, input.proposalId),
+    });
 
     reportProposalOutcome({
       proposalId: input.proposalId,
@@ -2419,22 +2511,20 @@ async function applyProposalApprovalInner(
             failure: failureRecord(failure),
           }
         : undefined;
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVAL_FAILED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVAL_FAILED,
+        set: {
           rejectionReason: errorMessage,
           ...(nextData !== undefined ? { data: nextData as never } : {}),
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(proposals.id, proposalId),
-            ne(proposals.status, ProposalStatus.APPROVED)
-          )
-        );
+        },
+        where: and(
+          eq(proposals.id, proposalId),
+          ne(proposals.status, ProposalStatus.APPROVED)
+        ),
+      });
     }
   );
 }

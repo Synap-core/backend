@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq } from "@synap/database";
+import { db, proposals, eq, transitionProposal } from "@synap/database";
 import { aiProviders } from "@synap/database/schema";
 import { ProposalStatus } from "@synap/database/schema";
 import { registerProposalExecutor } from "../execution-registry.js";
@@ -102,15 +102,15 @@ export function registerAiProviderExecutors(): void {
     userId: string,
     deps: { emitProposalReviewed: (...a: never[]) => unknown }
   ): Promise<void> => {
-    await db
-      .update(proposals)
-      .set({
-        status: ProposalStatus.APPROVED,
+    await transitionProposal(db, {
+      to: ProposalStatus.APPROVED,
+      set: {
         reviewedBy: userId,
         reviewedAt: new Date(),
         updatedAt: new Date(),
-      })
-      .where(eq(proposals.id, proposalId));
+      },
+      where: eq(proposals.id, proposalId),
+    });
     (
       deps.emitProposalReviewed as (
         id: string,

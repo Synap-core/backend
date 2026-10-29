@@ -16,8 +16,9 @@
  *     authorized for.
  *
  * Room contract: `realtime:observe` only lets the key CONNECT. Every room it
- * joins passes `canKeyJoinRoom` (room-authz.ts): the room as its owner may
- * join it, narrowed by the key's bound workspace and its grant.
+ * joins passes `canPrincipalJoinRoom` (room-authz.ts, the access door): the
+ * room as its owner may join it, narrowed by the key's bound workspace and its
+ * grant.
  */
 
 import { createHash } from "crypto";

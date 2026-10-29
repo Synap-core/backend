@@ -17,7 +17,10 @@
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { resolveConfinedWorkspace } from "../hub-protocol/confine-workspace.js";
-import { logger, verifyWorkspaceAccess } from "../hub-protocol/rest/_shared.js";
+import {
+  getUserMemberWorkspaceIds,
+  logger,
+} from "../hub-protocol/rest/_shared.js";
 import { getAgentFocusWorkspaceId } from "../../services/agent-identity-service.js";
 import {
   runWithDerivedSession,
@@ -130,7 +133,7 @@ export async function executeMCPToolViaHubProtocol(
   // becomes `ctx.workspaceId`, which the hub write procs consume as the ambient
   // governance workspace WITHOUT re-validating it (`entities.create` only
   // membership-checks `input.targetWorkspaceId`). Gate it here — the same
-  // `verifyWorkspaceAccess` the capture-graph branch uses.
+  // membership lens the capture-graph branch uses.
   const rawRequestedWorkspaceId =
     typeof args.workspaceId === "string" && args.workspaceId.trim() !== ""
       ? args.workspaceId
@@ -159,14 +162,18 @@ export async function executeMCPToolViaHubProtocol(
   // Catalog/read tools like list_playbooks use listAllPage (user floor) — no
   // membership[0]. Never overrides, never 403s: a
   // focus on a workspace the caller has since lost access to is silently
-  // dropped by the `verifyWorkspaceAccess` check right below, same as any
+  // dropped by the membership check right below, same as any
   // other lens.
   const requestedWorkspaceId = pickAdvisoryWorkspaceId(
     confinedWorkspaceId,
     agentUserId ? await getAgentFocusWorkspaceId(agentUserId) : undefined
   );
+  // A LENS, not an object check (plan-access A-2): a space the caller is a
+  // MEMBER of, as `X-Workspace-Id` is for tRPC. Not the door's space read,
+  // which also admits a pod reader: the hub write procs take this lens as
+  // their governance workspace.
   const workspaceAccessible = requestedWorkspaceId
-    ? await verifyWorkspaceAccess(userId, requestedWorkspaceId)
+    ? (await getUserMemberWorkspaceIds(userId)).includes(requestedWorkspaceId)
     : false;
   if (requestedWorkspaceId && !workspaceAccessible) {
     // DROPPED, not rejected — like the session handle, the ambient lens is a
@@ -242,10 +249,16 @@ export async function executeMCPToolViaHubProtocol(
   // bound to this client, so the write was NOT filed under any of them — the
   // gate groups it under this client's own auto-opened session instead.
   // Disclosed here (once, in the adapter) so the model can pass `sessionId` or
-  // call start_session when the write belongs to existing work.
-  const ambiguityNoted = resolution?.attribution.ambiguous
-    ? withSessionDisclosure(result, resolution.attribution.openCount ?? 0)
-    : result;
+  // call start_session when the write belongs to existing work. Only when the
+  // call FILED something: a validate-only or refused call was grouped nowhere,
+  // and start_session creates the caller's own session (A4-a).
+  const ambiguityNoted =
+    resolution?.attribution.ambiguous &&
+    toolName !== "synap_start_session" &&
+    filed?.status === "ok" &&
+    filed.filedIn.length > 0
+      ? withSessionDisclosure(result, resolution.attribution.openCount ?? 0)
+      : result;
   // A started session never splits; a write about another project says so,
   // once per session and project (the data rides on `attribution` every time).
   const disclosed =

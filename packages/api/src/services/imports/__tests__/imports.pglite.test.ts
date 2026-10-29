@@ -43,7 +43,7 @@ vi.mock("@synap/shared-utils", async (importOriginal) => {
     h.netRequests.push(url);
     throw new Error("no network in this test");
   };
-  return { ...actual, safePublicFetch: refuse, safeExternalFetch: refuse };
+  return { ...actual, safePublicFetch: refuse };
 });
 // Build never reads a URL: it reads the STORED read.
 vi.mock("../../capabilities/url-readers.js", async (importOriginal) => {

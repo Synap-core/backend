@@ -1880,6 +1880,17 @@ try {
             apiLogger.info("Registered library keep-alive handler (IoC)");
           }
 
+          // IoC: the morning brief pass (every 15 min). jobs owns the queue
+          // and its cron; the pass reads the needs-you rule and writes through
+          // NotificationService, both in api, so the handler is filled here.
+          {
+            const { registerMorningBriefHandler } =
+              await import("@synap/jobs/workers/morning-brief-worker.js");
+            const { runMorningBriefs } = await import("@synap/api");
+            registerMorningBriefHandler(() => runMorningBriefs());
+            apiLogger.info("Registered morning brief handler (IoC)");
+          }
+
           // IoC: fill the capability / signal / feed-runner slots owned by
           // @synap/jobs with the @synap/api implementations. The pg-boss workers
           // run IN this process, but @synap/jobs can't statically import

@@ -55,7 +55,7 @@ const logger: any = createLogger({ module: "mcp-server" });
 // disk at boot (e.g. a deploy image that didn't COPY skills/). Kept to one
 // sentence deliberately: the real prose lives in reflexes.md (the SSOT).
 const REFLEX_PROSE_FALLBACK =
-  "You are connected to the user's Synap pod — their sovereign personal data brain. Call `synap_ask` before non-trivial tasks and `synap_capture` after learning something durable.";
+  "You are connected to the user's Synap pod — their sovereign personal data brain. Read what you can name directly (`synap_get_*`); call `synap_ask` before non-trivial tasks for what you cannot (`detail:'sources'` runs no model), and `synap_capture` after learning something durable.";
 
 /**
  * Derive the reflex prose from `skills/synap/reflexes.md` — the canonical

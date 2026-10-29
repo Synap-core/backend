@@ -981,8 +981,15 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     priority: "normal",
     titleTemplate: "{{title}}",
     bodyTemplate: "{{body}}",
-    defaultChannels: ["in_app"],
+    // `os` joined with its producer (`services/morning-brief/`): one PASSIVE
+    // push a day under the `morning-brief` category (`@synap-core/types/push`),
+    // silent, never breaking through. Still a suggestion, never counted.
+    defaultChannels: ["in_app", "os"],
     ttl: 0,
+    // One open brief per person-day: its producer's groupKey is the person's
+    // local day (`morning-brief:<YYYY-MM-DD>`), so a racing second tick writes
+    // nothing. A producer that passes no groupKey is not deduped.
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
     needsYou: "suggestion",
   },
   {

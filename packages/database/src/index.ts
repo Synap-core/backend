@@ -91,6 +91,7 @@ export * from "./utils/session-spawn.js";
 export * from "./utils/resolve-or-create-agent-proposal-session.js";
 export * from "./utils/agent-proposal-session-memo.js";
 export * from "./utils/insert-pending-proposal.js";
+export * from "./utils/proposal-transition.js";
 export { expirePendingCreatesOfLandedRecord } from "./utils/expire-pending-creates.js";
 export { expirePendingHandOffsOfAttachedAgent } from "./utils/expire-pending-hand-offs.js";
 export * from "./utils/facet-visibility.js";
@@ -261,6 +262,7 @@ export {
   type RetirementPlan,
   type SystemProfilesBootLogger,
 } from "./utils/ensure-system-profiles.js";
+export { systemLifecycleKeys } from "./utils/ensure-system-lifecycles.js";
 
 // Machine-written property defs (read-only in every editor) + their pass
 export {

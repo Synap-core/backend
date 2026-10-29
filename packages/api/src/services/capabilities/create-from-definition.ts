@@ -25,6 +25,7 @@
  */
 
 import { fileParameterDeclarationProblems } from "./file-parameters.js";
+import { fileInputMapProblems } from "./file-input-map.js";
 import { randomUUID } from "node:crypto";
 import {
   encryptServerSide,
@@ -540,11 +541,11 @@ async function assertInputMaps(
     if (s.inputMap === undefined || !trust.officialSource) continue;
     const intent = typeof s.intent === "string" ? s.intent : null;
     const row = intent ? await loadIntentInput(intent) : null;
-    const problems = definitionInputMapProblems(
-      s,
-      skills,
-      row?.inputSchema ?? null
-    );
+    const problems = [
+      ...definitionInputMapProblems(s, skills, row?.inputSchema ?? null),
+      // Pod file ids reach the verb only through a declared file parameter.
+      ...fileInputMapProblems(s, row?.inputSchema ?? null),
+    ];
     if (problems.length > 0)
       throw new Error(
         `Capability skill "${s.name}" declares an invalid inputMap: ${problems.join("; ")}.`

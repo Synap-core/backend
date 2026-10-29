@@ -25,10 +25,6 @@ import {
   guardProducerEffect,
   PolicyBlockedError,
 } from "../../utils/automation-governance.js";
-import {
-  resolveVaultReferences,
-  isVaultReference,
-} from "../../utils/vault-resolver.js";
 import type { StepContext } from "../automation-executor-types.js";
 
 /**
@@ -78,20 +74,14 @@ export async function executeCommandStep(
 
   const data = normalizeCommandNodeData(rawData);
 
-  let resolvedInputs = resolveInputMapping(data.inputMapping, context);
-
-  // Resolve vault references in input values (e.g., API keys)
-  const stringInputs: Record<string, string> = {};
-  let hasVaultRefs = false;
-  for (const [k, v] of Object.entries(resolvedInputs)) {
-    const sv = String(v);
-    stringInputs[k] = sv;
-    if (isVaultReference(sv)) hasVaultRefs = true;
-  }
-  if (hasVaultRefs) {
-    const resolved = await resolveVaultReferences(stringInputs, ownerId);
-    resolvedInputs = resolved;
-  }
+  // NO vault resolution here, ever: these inputs become the text of an LLM
+  // prompt (a shared model provider, its logs, an output that may echo it),
+  // and they are resolved from the run, so a sender who put `vault://<id>` in
+  // a mapped field used to get the owner's plaintext secret pasted into the
+  // prompt (pre-launch audit 2026-10-28, governance F4). A `vault://` value
+  // stays the reference text. A command that needs a credential gets it
+  // through a capability's server-side credential binding, not its prompt.
+  const resolvedInputs = resolveInputMapping(data.inputMapping, context);
 
   // Build the prompt from command title + resolved inputs
   let prompt = data.commandTitle ?? "Execute automation command";

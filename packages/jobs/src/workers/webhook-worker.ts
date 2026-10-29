@@ -70,7 +70,7 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { getBoss } from "@synap/events";
-import { safeExternalFetch } from "@synap/shared-utils";
+import { safePublicFetch } from "@synap/shared-utils";
 
 const logger = createLogger({ module: "webhook-worker" });
 
@@ -462,13 +462,22 @@ export async function deliverWebhook(job: WebhookDeliverJob): Promise<void> {
   let responseStatus = 0;
   let failure: string | null = null;
   try {
-    const response = await safeExternalFetch(sub.url, {
-      method: "POST",
-      headers: webhookHeaders(job, sub.secret),
-      body: job.body,
-      signal: AbortSignal.timeout(WEBHOOK_REQUEST_TIMEOUT_MS),
-    });
+    // The subscriber named its own endpoint, port included (a self-hosted n8n
+    // on :5678); the door still refuses any name that resolves inside.
+    const response = await safePublicFetch(
+      sub.url,
+      {
+        method: "POST",
+        headers: webhookHeaders(job, sub.secret),
+        body: job.body,
+        signal: AbortSignal.timeout(WEBHOOK_REQUEST_TIMEOUT_MS),
+      },
+      0,
+      { allowedPorts: "any" }
+    );
     responseStatus = response.status;
+    // Only the status is read: release the connection.
+    await response.body?.cancel().catch(() => undefined);
     if (!response.ok) failure = `HTTP ${response.status}`;
   } catch (err) {
     failure = err instanceof Error ? err.message : String(err);

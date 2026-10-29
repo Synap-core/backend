@@ -45,6 +45,29 @@ const { mockResolveVaultSecret, mockFindFirst, findGrant, resolveRule } =
     resolveRule: vi.fn(),
   }));
 
+// The vault handler sends through the pinned door (`safePublicFetch`,
+// node:http), which a stubbed global `fetch` cannot see. Keep the door's URL
+// check, then hand the request to the stubbed `fetch` below so the provider
+// stays faked. The door itself (DNS pin, bodies, redirects) is tested in
+// shared-utils `pinned-fetch.test.ts`.
+vi.mock("@synap/shared-utils", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synap/shared-utils")>();
+  return {
+    ...actual,
+    safePublicFetch: async (
+      url: string,
+      init: RequestInit = {},
+      _maxRedirects?: number,
+      deps?: { allowedPorts?: ReadonlySet<number> | "any" }
+    ) => {
+      const check = actual.validateExternalUrl(url, {
+        allowedPorts: deps?.allowedPorts,
+      });
+      if (!check.valid) throw new actual.BlockedOutboundError(check.reason);
+      return fetch(url, init);
+    },
+  };
+});
 vi.mock("../../utils/vault-resolver.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../utils/vault-resolver.js")>();

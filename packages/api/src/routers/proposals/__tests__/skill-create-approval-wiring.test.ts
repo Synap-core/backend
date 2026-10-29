@@ -49,6 +49,21 @@ const whereResult = (rows: unknown[]) =>
   Object.assign(Promise.resolve(rows), { limit: async () => rows });
 
 vi.mock("@synap/database", () => ({
+  // The status door's write, against the mocked `db` below (the real module
+  // cannot load under this file's @synap-core/core mock). Its guard is pinned
+  // on PGlite by approval-postcondition.pglite.test.ts.
+  transitionProposal: (
+    executor: {
+      update: (t: unknown) => {
+        set: (v: Record<string, unknown>) => { where: (w: unknown) => unknown };
+      };
+    },
+    args: { to: string; set?: Record<string, unknown>; where: unknown }
+  ) =>
+    executor
+      .update(PROPOSALS)
+      .set({ ...(args.set ?? {}), status: args.to })
+      .where(args.where),
   db: {
     select: () => ({
       from: (table: unknown) => ({

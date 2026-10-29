@@ -58,7 +58,6 @@ vi.mock("../../hub-protocol/rest/_shared.js", async (orig) => {
     await orig<typeof import("../../hub-protocol/rest/_shared.js")>();
   return {
     ...actual,
-    verifyWorkspaceAccess: async () => true,
     getUserMemberWorkspaceIds: async (userId: string) => {
       h.memberCalls.push(userId);
       if (h.memberThrows) throw new Error("workspace_members down");
@@ -66,6 +65,11 @@ vi.mock("../../hub-protocol/rest/_shared.js", async (orig) => {
     },
   };
 });
+
+vi.mock("../../../access/door.js", async (orig) => ({
+  ...(await orig<typeof import("../../../access/door.js")>()),
+  canRead: async () => true,
+}));
 
 vi.mock(
   "../../../services/capabilities/capability-registry.js",

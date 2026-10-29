@@ -8,7 +8,11 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { safePublicFetch, type AddressResolver } from "@synap/shared-utils";
+import {
+  safePublicFetch,
+  validateExternalUrl,
+  type AddressResolver,
+} from "@synap/shared-utils";
 import {
   fetchExternalVideoToSink,
   libraryMediaVideoMaxBytes,
@@ -314,13 +318,17 @@ describe("fetchExternalVideoToSink through the REAL safePublicFetch", () => {
       isAllowedAddress: (a) => a === "127.0.0.1",
       allowedPorts: "any",
     });
+  // The local server listens on an ephemeral port: the text check lifts the
+  // web-port limit exactly as the door above does.
+  const validate = (u: string) =>
+    validateExternalUrl(u, { allowedPorts: "any" });
 
   it("downloads from a vetted host", async () => {
     const c = collectingSink();
     const got = await fetchExternalVideoToSink(
       `http://cdn.test:${port}/v.mp4`,
       c.sink,
-      { fetch: door }
+      { fetch: door, validate }
     );
     expect(got).toMatchObject({ ok: true, mime: "video/mp4" });
   });
@@ -331,7 +339,7 @@ describe("fetchExternalVideoToSink through the REAL safePublicFetch", () => {
     const got = await fetchExternalVideoToSink(
       `http://cdn.test:${port}/redirect-internal`,
       c.sink,
-      { fetch: door }
+      { fetch: door, validate }
     );
     expect(got).toEqual({ ok: false, reason: "blocked" });
     expect(seen.slice(before)).toEqual(["/redirect-internal"]);
@@ -343,7 +351,7 @@ describe("fetchExternalVideoToSink through the REAL safePublicFetch", () => {
     const got = await fetchExternalVideoToSink(
       `http://rebind.test:${port}/v.mp4`,
       c.sink,
-      { fetch: door }
+      { fetch: door, validate }
     );
     expect(got).toEqual({ ok: false, reason: "blocked" });
     expect(c.sink).not.toHaveBeenCalled();

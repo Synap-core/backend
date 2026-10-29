@@ -18,7 +18,10 @@ let updates: { values: Record<string, unknown> }[] = [];
 const whereResult = (rows: unknown[]) =>
   Object.assign(Promise.resolve(rows), { limit: async () => rows });
 
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  // The real status door: it writes through the mocked `db` below.
+  transitionProposal: (await importOriginal<typeof import("@synap/database")>())
+    .transitionProposal,
   db: {
     select: () => ({
       from: () => ({ where: () => whereResult(proposalRows) }),

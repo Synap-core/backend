@@ -5,7 +5,7 @@
  *
  * Nothing here is hand-listed. A new seeded property joins every scan that
  * imports this file by existing; a seed shape the parser cannot evaluate (a
- * spread, a call, a variable) is DROPPED — which is why `SEED_ENUM_SITE_COUNT`
+ * spread or call it does not resolve, a variable) is DROPPED — which is why `SEED_ENUM_SITE_COUNT`
  * is counted independently from the raw text, so a consumer can assert the
  * two methods agree instead of trusting either one.
  */
@@ -52,6 +52,36 @@ function exportedArray(node: ts.Expression): unknown[] | undefined {
 }
 
 /**
+ * `systemLifecycleKeys("<slug>")` → the REAL keys from `@synap/database`. The
+ * seed's core status selects read their options from the lifecycle table
+ * (status-flow W5) instead of repeating them; resolved against the module like
+ * `PropertyValueType`, so an unexported helper or an unknown slug reads as
+ * `undefined` (the def drops, and the enum-site count goes red).
+ */
+function systemLifecycleKeysCall(
+  node: ts.CallExpression
+): unknown[] | undefined {
+  const [arg, ...rest] = node.arguments;
+  if (
+    !ts.isIdentifier(node.expression) ||
+    node.expression.text !== "systemLifecycleKeys" ||
+    !arg ||
+    rest.length > 0 ||
+    !ts.isStringLiteral(arg)
+  ) {
+    return undefined;
+  }
+  const fn = (database as unknown as Record<string, unknown>)
+    .systemLifecycleKeys;
+  if (typeof fn !== "function") return undefined;
+  try {
+    return [...(fn as (slug: string) => string[])(arg.text)];
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Evaluate a literal expression. Returns `undefined` for anything non-literal —
  * callers treat that as "not extractable", never as a substituted value.
  */
@@ -78,6 +108,7 @@ function literal(node: ts.Expression): unknown {
     return out;
   }
   if (ts.isObjectLiteralExpression(node)) return objectLiteral(node);
+  if (ts.isCallExpression(node)) return systemLifecycleKeysCall(node);
   // `PropertyValueType.STRING` → resolved against the REAL enum, so a renamed
   // member reads as `undefined` (and drops the def) instead of as its own text.
   if (
@@ -155,10 +186,13 @@ export const ENUM_DEFS = SEEDED_DEFS.filter((d) =>
 );
 
 /**
- * `enum: [` sites counted from the RAW TEXT, comments stripped — an
- * independent measurement of the same population `ENUM_DEFS` parses. In the
- * seed, `enum:` is only ever a constraints key. 27 on 2026-09-12.
+ * `enum: [` and `enum: systemLifecycleKeys(` sites counted from the RAW TEXT,
+ * comments stripped — an independent measurement of the same population
+ * `ENUM_DEFS` parses. In the seed, `enum:` is only ever a constraints key. 27
+ * on 2026-09-12.
  */
 export const SEED_ENUM_SITE_COUNT = (
-  stripComments(SEED_SOURCE, "ts").match(/\benum:\s*\[/g) ?? []
+  stripComments(SEED_SOURCE, "ts").match(
+    /\benum:\s*(?:\[|systemLifecycleKeys\()/g
+  ) ?? []
 ).length;

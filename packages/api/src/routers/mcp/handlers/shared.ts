@@ -287,7 +287,7 @@ export function ok(data: unknown): CallToolResult {
  * without a database: explicit-per-call / service-key pin (`confinedWorkspaceId`)
  * ALWAYS wins; the agent's live focus is consulted ONLY when that resolved to
  * nothing. Never a 403 — a stale focus is just another lens candidate the
- * caller's `verifyWorkspaceAccess` check may still drop.
+ * caller's membership check (`adapter.ts`) may still drop.
  */
 export function pickAdvisoryWorkspaceId(
   confinedWorkspaceId: string | undefined,

@@ -597,6 +597,37 @@ export function isUnboundedFullAccess(grant: KeyGrant): boolean {
 }
 
 /**
+ * What a Hub REST route does, for the access door (plan-access A3). Every
+ * route is exactly one:
+ *  - `read`: GET / HEAD, and the POSTs declared in `GRANT_REST_POST_READS`.
+ *    It writes nothing: a declared read reaches no write gate (tripwire
+ *    `grant-door-classification`, derived from the served routes).
+ *  - `write`: every other route. Bounded by the governed-write gate (the
+ *    door's `assertCanWrite` / `canWrite`, `checkPermissionOrPropose`).
+ *  - `owner-wide`: acts for the whole owner, no grant can narrow it
+ *    (`GRANT_OWNER_WIDE_REST_DOORS`, `GRANT_OWNER_WIDE_REST_WRITES`).
+ */
+export type HubRouteClass = "read" | "write" | "owner-wide";
+
+/**
+ * The class of `method path` (path relative to /api/hub), from the fence's
+ * own declarations: the ONE classification `ownerWideDoorAllowed` rules on.
+ */
+export function hubRouteClass(method: string, path: string): HubRouteClass {
+  const m = method.toUpperCase();
+  const isRead = m === "GET" || m === "HEAD";
+  if (
+    GRANT_OWNER_WIDE_REST_DOORS.some((r) => r.test(path)) ||
+    (!isRead && GRANT_OWNER_WIDE_REST_WRITES.some((r) => r.test(path)))
+  )
+    return "owner-wide";
+  if (isRead) return "read";
+  return m === "POST" && GRANT_REST_POST_READS.some(([r]) => r.test(path))
+    ? "read"
+    : "write";
+}
+
+/**
  * Hub REST: may a key holding `grant` use an owner-wide door? `true` for any
  * path that is not one, and for a request with no grant (a signed-in session).
  * `method` selects the write-only class (`GRANT_OWNER_WIDE_REST_WRITES`); when
@@ -608,12 +639,7 @@ export function ownerWideDoorAllowed(
   method?: string
 ): boolean {
   if (!grant) return true;
-  const m = method?.toUpperCase();
-  const isRead = m === "GET" || m === "HEAD";
-  const ownerWide =
-    GRANT_OWNER_WIDE_REST_DOORS.some((r) => r.test(path)) ||
-    (!isRead && GRANT_OWNER_WIDE_REST_WRITES.some((r) => r.test(path)));
-  if (!ownerWide) return true;
+  if (hubRouteClass(method ?? "POST", path) !== "owner-wide") return true;
   return isUnboundedFullAccess(grant);
 }
 

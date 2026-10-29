@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq } from "@synap/database";
+import { db, proposals, eq, transitionProposal } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { auditLog } from "../../../utils/audit-log.js";
 import { addSessionBlocker } from "../../../services/focus-sessions/session-blocked-by.js";
@@ -248,16 +248,16 @@ export function registerCatchAllExecutor(): void {
       // Every successful path settles through it, including the `blocked_by`
       // apply below, which returns before the materializer handoff.
       const settle = async (receipt: ProposalEffect) => {
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
+        await transitionProposal(db, {
+          to: ProposalStatus.APPROVED,
+          set: {
             ...(isRequestShaped(payload) ? { data: payload } : {}),
             reviewedBy: userId,
             reviewedAt: new Date(),
             updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
+          },
+          where: eq(proposals.id, input.proposalId),
+        });
 
         // Report to IS telemetry (fire-and-forget — never blocks)
         reportApproved(deps, proposal, input.proposalId);

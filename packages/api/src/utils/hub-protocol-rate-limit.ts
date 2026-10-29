@@ -26,8 +26,14 @@ const LIMITS: Record<string, { windowMs: number; max: number }> = {
   createExternalChannel: { windowMs: 60_000, max: 20 },
   /** File/blob upload door (POST /files): bound the unreviewed-upload vector. */
   files: { windowMs: 60_000, max: 30 },
-  /** MCP endpoint: 100 req/min per API key (prevents single compromised key from flooding) */
-  mcp: { windowMs: 60_000, max: 100 },
+  /**
+   * MCP endpoint: a per-minute burst cap per API key. Raised from 100
+   * (founder, 2026-10-27): at 100 it bound before the edge budgets, which are
+   * the ones the owner sets (reads 3000 / writes 500 per 15 min, apps/api
+   * rate-limit-classes.ts), so several agents sharing one key were stopped
+   * by a limit nobody could change.
+   */
+  mcp: { windowMs: 60_000, max: 300 },
   default: { windowMs: 60_000, max: 300 },
 };
 

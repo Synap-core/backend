@@ -15,12 +15,17 @@
  *       return the SAME 401 body — a caller cannot enumerate which subscription
  *       ids exist, and neither fires an automation event.
  *   (c) an oversized body is rejected 413 before any work (memory-DoS guard).
+ *   (d) only an INBOUND source receives (an outbound row's secret is known to
+ *       the endpoint the pod delivers to), and only while its creating key is
+ *       live (pre-launch audit 2026-10-28, webhooks F3). The db mock below
+ *       honours the `where` conditions, so the direction filter is exercised,
+ *       not assumed.
  *
  * The secret NEVER travels in the URL (the `:subscriptionId` path segment is an
  * identifier, not the secret; the secret is the HMAC key carried in a header).
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createHmac } from "crypto";
 import { Hono } from "hono";
 
@@ -35,7 +40,23 @@ let subscriptionRow: {
   workspaceId: string | null;
   secret: string;
   active: boolean;
+  direction: "inbound" | "outbound";
+  apiKeyId?: string | null;
 } | null = null;
+// The api keys the key-liveness rule reports live.
+let liveKeys = new Set<string>();
+// The messaging connector `/messaging` resolves (null = not configured).
+let messagingConnector: unknown = null;
+
+/** The subscription row, if it satisfies every `eq` of the query's `and(...)`. */
+function matchSubscription(q?: {
+  where?: { and?: Array<{ col: string; val: unknown }> };
+}) {
+  const row = subscriptionRow as Record<string, unknown> | null;
+  if (!row) return null;
+  const conds = q?.where?.and ?? [];
+  return conds.every((c) => row[c.col] === c.val) ? subscriptionRow : null;
+}
 
 // Fireflies tool row + vault secret + enqueue spy (driven per-test below).
 let toolRow: {
@@ -110,7 +131,8 @@ vi.mock("@synap/database", async (importOriginal) => ({
   db: {
     query: {
       webhookSubscriptions: {
-        findFirst: () => Promise.resolve(subscriptionRow),
+        findFirst: (q?: Parameters<typeof matchSubscription>[0]) =>
+          Promise.resolve(matchSubscription(q)),
       },
       // Handlers now resolve via resolveToolByWebhookToken (findMany + token
       // match), not a raw findFirst-by-name — see resolve-tool-by-webhook-token.ts.
@@ -121,13 +143,13 @@ vi.mock("@synap/database", async (importOriginal) => ({
     },
     update: () => chainable(undefined),
   },
-  eq: () => ({}),
-  and: () => ({}),
+  eq: (col: unknown, val: unknown) => ({ col, val }),
+  and: (...conds: unknown[]) => ({ and: conds }),
   workspaces: {},
   tools: {},
   entities: {},
   messagingAccounts: {},
-  webhookSubscriptions: { id: "id", active: "active" },
+  webhookSubscriptions: { id: "id", active: "active", direction: "direction" },
   resolveVaultSecret: () => Promise.resolve(vaultSecret),
   resolveIdentity: (...args: unknown[]) => resolveIdentityMock(...args),
   recordInboundDelivery: (...args: unknown[]) => recordInboundDelivery(...args),
@@ -144,9 +166,17 @@ vi.mock("@synap/jobs", () => ({
 vi.mock("@synap/jobs/workers/fireflies-worker.js", () => ({
   FIREFLIES_INGEST_QUEUE: "fireflies-ingest",
 }));
+vi.mock("@synap/jobs/workers/webhook-worker.js", () => ({
+  liveApiKeyIds: async (ids: Array<string | null | undefined>) =>
+    new Set(ids.filter((i): i is string => !!i && liveKeys.has(i))),
+  subscriptionKeyLive: (
+    apiKeyId: string | null | undefined,
+    live: ReadonlySet<string>
+  ) => !apiKeyId || live.has(apiKeyId),
+}));
 
 vi.mock("../connectors/index.js", () => ({
-  getMessagingConnector: () => Promise.resolve(null),
+  getMessagingConnector: () => Promise.resolve(messagingConnector),
 }));
 vi.mock("../services/messaging-account-service.js", () => ({
   MessagingAccountService: {},
@@ -215,6 +245,7 @@ describe("inbound webhook ingress auth", () => {
       workspaceId: WS_ID,
       secret: SECRET,
       active: true,
+      direction: "inbound",
     };
   });
 
@@ -298,6 +329,7 @@ describe("inbound webhook ingress auth", () => {
       workspaceId: WS_ID,
       secret: SECRET,
       active: true,
+      direction: "inbound",
     };
     const badSigRes = await post(SUB_ID, body, {
       "x-synap-signature": sign("wrong", body),
@@ -400,6 +432,37 @@ describe("inbound webhook ingress auth", () => {
     expect(res.status).toBe(401);
   });
 
+  it("refuses an OUTBOUND subscription with a valid signature: the same 401, nothing stored", async () => {
+    subscriptionRow = { ...subscriptionRow!, direction: "outbound" };
+    const body = JSON.stringify({ order: 42 });
+    const res = await post(SUB_ID, body, {
+      "x-synap-signature": sign(SECRET, body),
+    });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "Unauthorized" });
+    expectNothingFired();
+  });
+
+  it("refuses a source whose creating API key is revoked; accepts it while the key is live", async () => {
+    subscriptionRow = { ...subscriptionRow!, apiKeyId: "key-1" };
+    const body = JSON.stringify({ order: 42 });
+    liveKeys = new Set();
+    const dead = await post(SUB_ID, body, {
+      "x-synap-signature": sign(SECRET, body),
+    });
+    expect(dead.status).toBe(401);
+    expect(await dead.json()).toEqual({ error: "Unauthorized" });
+    expectNothingFired();
+
+    liveKeys = new Set(["key-1"]);
+    const live = await post(SUB_ID, body, {
+      "x-synap-signature": sign(SECRET, body),
+    });
+    expect(live.status).toBe(200);
+    expect(recordInboundDelivery).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundDelivery).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects an oversized body with 413 (declared content-length)", async () => {
     const res = await post(SUB_ID, JSON.stringify({ order: 42 }), {
       "content-length": String(2 * 1024 * 1024), // 2 MB > 1 MB cap
@@ -456,6 +519,13 @@ describe("fireflies inbound webhook", () => {
         },
       },
     };
+  });
+
+  it("answers 503, not 200 queued, when the job could not be enqueued", async () => {
+    sendJob.mockRejectedValueOnce(new Error("pg-boss down"));
+    const res = await postFireflies(FF_TOKEN, firefliesBody());
+    expect(res.status).toBe(503);
+    expect(await res.json()).not.toMatchObject({ queued: true });
   });
 
   it("enqueues a fetch-then-ingest job on Transcription complete", async () => {
@@ -874,5 +944,41 @@ describe("cal.com inbound webhook", () => {
 
     expect(res.status).toBe(401);
     expect(submitCaptureGraphMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("messaging inbound webhook: an unhandled event is not a 200", () => {
+  afterEach(() => {
+    messagingConnector = null;
+  });
+
+  it("answers 500 when the handler fails (Unipile retries), not 200 ok", async () => {
+    messagingConnector = {
+      parseWebhook: async () => ({
+        type: "account.created",
+        accountExternalId: "acc-1",
+        provider: "LINKEDIN",
+        userId: OWNER_ID,
+      }),
+      getAccounts: async () => {
+        throw new Error("unipile unreachable");
+      },
+    };
+    const res = await app.request("/api/webhooks/messaging", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: "account.add" }),
+    });
+    expect(res.status).toBe(500);
+  });
+
+  it("still answers 200 to a request that is not a signed event (parseWebhook null)", async () => {
+    messagingConnector = { parseWebhook: async () => null };
+    const res = await app.request("/api/webhooks/messaging", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
   });
 });

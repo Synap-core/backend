@@ -28,12 +28,24 @@ const read = (rel: string) =>
 describe("history lens includes expired proposals", () => {
   it("expiry writes status + updatedAt and never stamps reviewedAt", () => {
     const src = read("../services/proposals/expire-lapsed-proposals.ts");
-    const sets = [...src.matchAll(/\.set\(\{([^}]*)\}\)/g)].map((m) => m[1]);
-    expect(sets.length, "expiry must have at least one update").toBeGreaterThan(
-      0
+    // Expiry writes through the status door (`transitionProposal`, tripwire
+    // proposal-status-one-door): the door writes `status` from `to`, and the
+    // caller's own columns ride in `set`. A raw `.set({ … status … })` beside
+    // it would be refused by that tripwire, and is refused here too.
+    expect(src, "expiry writes status only through the door").not.toMatch(
+      /\.set\(\{[^}]*status:/
     );
-    for (const body of sets) {
-      expect(body).toMatch(/status:/);
+    const calls = [
+      ...src.matchAll(
+        /transitionProposal\(\s*[\w.]+\s*,\s*\{\s*to:\s*([\w.]+)\s*,\s*set:\s*\{([^}]*)\}/g
+      ),
+    ];
+    expect(
+      calls.length,
+      "expiry must have at least one update"
+    ).toBeGreaterThan(0);
+    for (const [, to, body] of calls) {
+      expect(to).toBe("ProposalStatus.EXPIRED");
       expect(body).toMatch(/updatedAt:/);
       expect(
         body,

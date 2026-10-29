@@ -16,24 +16,52 @@
  * (`TRANSITION_EVENT_TYPES`), subject = the goal or the session. Their writers
  * do not dispatch inline; the sweeper delivers them.
  *
+ * THE SHARED REPOSITORY: the log row is appended through `eventRepository`,
+ * whose hooks (`setup-event-broadcasting.ts`, @synap/api) run on it:
+ *   - realtime: `domain-event-bridge.ts` pushes an entity's transition as
+ *     `entity:updated`, AT MOST once per move — a retry finds the row
+ *     written and appends nothing, so a crash between the insert and the
+ *     hooks pushes nothing on retry. A pod-wide entity's push (workspace
+ *     null) is refused by the realtime schema, like every pod-wide entity
+ *     push. Goals and sessions are not bridged: no client listens for them,
+ *     and `focus_session:updated` has its own producer.
+ *   - Hub SSE (`/api/hub/events/stream`, `event-stream-manager.ts`):
+ *     subscribers whose filter admits them now receive
+ *     `entity.transition.completed`, `track.…` and `focus_session.…` — new
+ *     event types on that external stream;
+ *   - sync peers get the row in real time (`syncRealtimeHook`), as the
+ *     polling push already sent it. A peer's `sync-materializer.ts` applies
+ *     only create / update / delete, so a status-only move does not reach a
+ *     peer's entity (pre-existing; pod finding).
+ *
  * BACK-COMPAT (founder decision 2026-10-11): for a KIND's lifecycle the
  * fan-out is ALSO emitted as `entity.update.completed` carrying
- * `changed.<slug>`, `previous.<slug>` and `<slug>` — the exact keys rules
- * compiled from the old `enters_status` sentence filter on. The log does not
- * get a second row. Roles never had that shape and get none.
+ * `changed.<slug>`, `previous.<slug>`, `<slug>` and the `transitionId` — the
+ * keys rules compiled from the old `enters_status` sentence filter on. The log
+ * does not get a second row. Roles never had that shape and get none.
  *
- * `enters_status` activators now compile onto the transition (E1, 2026-10-11;
- * untouched rules recompile through the activator convergence at boot). The
- * flag STAYS ON because these still read the update for a status move:
- *   1. process-sync follows a KIND's move on the update path
- *      (`followTransition` defers to it while this flag is on — flip both
- *      together, or a process advances twice / never);
- *   2. realtime: `domain-event-bridge.ts` pushes `entity:updated` from the
- *      update; nothing bridges the transition, so clients would not refresh;
- *   3. rules NOT born from an activator — hand-authored "updated" rules with
- *      `changed.<lifecycle slug>`, and owner-edited activator rules (the
- *      convergence keeps them) — plus webhook subscriptions to the update.
- * Turning it off needs 1 + 2 moved to the transition and a conversion for 3.
+ * Moved onto the transition already (status-flow W7): process-sync, the
+ * `decision-ask` reactor and realtime. The first two skip the dual-emitted
+ * update ({@link isDualEmittedStatusUpdate}), so a move reaches them once
+ * whatever this flag says. The flag STAYS ON because these still read the
+ * update for a status move, and each needs a decision or a conversion:
+ *   1. rules NOT born from an activator: hand-authored "updated" rules
+ *      filtering `changed.<lifecycle slug>` / `<slug>` / `previous.<slug>`,
+ *      and owner-edited activator rules (the convergence keeps them). Their
+ *      conversion rewrites the rule's stored sentence AND its automation's
+ *      trigger (+ the template seed stamp), so the editor does not compile the
+ *      old shape back on the next save.
+ *   2. "updated" rules with NO lifecycle key (e.g. "when a person is
+ *      updated"): they fire on every status move today. Whether a status move
+ *      still counts as an update for them is a product decision, not a
+ *      conversion.
+ *   3. webhook subscriptions to `entity.update.completed` (event.v1): the
+ *      advertised catalog (`integrations-capabilities.ts`) lists the update,
+ *      not the transition — an external contract.
+ *   4. reactors matching only `create | update`: `entity-embedding` (embeds
+ *      the status projection), `cross-thread-notify`, `entity-media-copy`.
+ *      Each gains `transition` at the flip (one match line each).
+ * Turning it off needs 1 converted, 2 and 3 decided, 4 widened — together.
  *
  * DELIVERY (review D8): the move's transaction already OWES this event — an
  * outbox row written with the compare-and-set (`transition-outbox.ts`,
@@ -46,13 +74,12 @@
  * fingerprint is the transitionId (2aec15c3), so a rule still fires once.
  */
 import {
-  EventRepository,
   claimTransitionOutbox,
   db,
+  eventRepository,
   isUniqueViolation,
   listDueTransitions,
   settleTransitionOutbox,
-  sql,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import type {
@@ -79,7 +106,30 @@ export const TRANSITION_EVENT_TYPES = {
 export const LIFECYCLE_TRANSITION_EVENT_TYPE = TRANSITION_EVENT_TYPES.entity;
 
 /** Feature flag for the dual emit — one place to delete it. */
-export const DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS = true;
+const DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS = true;
+
+/**
+ * Is this `entity.update` payload the dual emit of a status move? That emit
+ * names the move's `transitionId` beside exactly ONE changed key (the
+ * lifecycle slug, flagged `changed.<slug>`). An ordinary update spreads its
+ * changed properties flat, so a property slugged `transitionId` is itself a
+ * changed key — and is not taken for the marker. A consumer that follows the
+ * transition skips the dual emit, so a move reaches it once. Deleted with
+ * the flag.
+ */
+export function isDualEmittedStatusUpdate(
+  data: Record<string, unknown> | null | undefined
+): boolean {
+  if (typeof data?.transitionId !== "string") return false;
+  const keys = data.changedKeys;
+  if (!Array.isArray(keys) || keys.length !== 1) return false;
+  const [key] = keys;
+  return (
+    typeof key === "string" &&
+    key !== "transitionId" &&
+    data[`changed.${key}`] === true
+  );
+}
 
 /** The emit options a mover passes; stored on the outbox row and replayed. */
 export interface TransitionEmitContext {
@@ -125,7 +175,8 @@ export async function emitLifecycleTransition(
   let eventId = progress.eventId;
   if (!eventId) {
     try {
-      const record = await new EventRepository(sql).append({
+      // The shared repository: its hooks (realtime, SSE, sync) see the row.
+      const record = await eventRepository.append({
         // The transition's id IS the log row's id: at most one row, ever.
         id: t.transitionId,
         version: "v1",
@@ -149,7 +200,7 @@ export async function emitLifecycleTransition(
         // before W4 has no stamp.
         timestamp: t.recordedAt ? new Date(t.recordedAt) : new Date(),
         correlationId: opts.correlationId,
-      } as Parameters<EventRepository["append"]>[0]);
+      } as Parameters<typeof eventRepository.append>[0]);
       eventId = record?.id ?? t.transitionId;
     } catch (err) {
       if (isUniqueViolation(err)) {

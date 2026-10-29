@@ -6,7 +6,14 @@
  * `services/views/view-content-proposal.ts`.
  */
 
-import { db, and, eq, proposals, ProposalStatus } from "@synap/database";
+import {
+  db,
+  and,
+  eq,
+  proposals,
+  ProposalStatus,
+  transitionProposal,
+} from "@synap/database";
 
 /** Has this proposal already been approved (a retried / double approval)? */
 export async function isKnowledgeKeyProposalApproved(
@@ -24,18 +31,16 @@ export async function markKnowledgeKeyProposalApproved(
   proposalId: string,
   userId: string
 ): Promise<void> {
-  await db
-    .update(proposals)
-    .set({
-      status: ProposalStatus.APPROVED,
+  await transitionProposal(db, {
+    to: ProposalStatus.APPROVED,
+    set: {
       reviewedBy: userId,
       reviewedAt: new Date(),
       updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(proposals.id, proposalId),
-        eq(proposals.status, ProposalStatus.PENDING)
-      )
-    );
+    },
+    where: and(
+      eq(proposals.id, proposalId),
+      eq(proposals.status, ProposalStatus.PENDING)
+    ),
+  });
 }

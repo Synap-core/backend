@@ -58,15 +58,19 @@ Awareness instead of `cursor:move`.
 **Server to client:** `presence:init` `{ users, yourColor }` on connect and
 `presence:update` (the user list).
 
-**Rooms.** Rooms are `<prefix>:<id>`. `canUserJoinRoom` decides per prefix and
-denies anything else:
+**Rooms.** Rooms are `<prefix>:<id>`. `canPrincipalJoinRoom` asks the access
+door (`canJoinRoom`, `packages/api/src/access/door.ts`): a join is one read of
+what the room streams. It denies anything else:
 
-| Prefix      | Who may join                                                        |
-| ----------- | ------------------------------------------------------------------- |
-| `user`      | that user                                                           |
-| `workspace` | members of the workspace                                            |
-| `channel`   | readers of the channel (`canUserSeeChannel`, the channel read rule) |
-| `view`      | the view's owner, or members of its workspace                       |
+| Prefix      | Who may join                                                                 |
+| ----------- | ---------------------------------------------------------------------------- |
+| `user`      | that user (a key: its own user only)                                         |
+| `workspace` | readers of the space: members, its owner, pod readers of a pod-visible space |
+| `channel`   | readers of the channel (its registered floor, `channelVisibilityWhere`)      |
+| `view`      | readers of the view (its registered floor, `viewReadableWhere`)              |
+
+An API-key socket is judged as its human, narrowed by the key's bound
+workspace and its live grant.
 
 ## Domain events (API to clients)
 

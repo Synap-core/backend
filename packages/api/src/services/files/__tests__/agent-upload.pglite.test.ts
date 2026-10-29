@@ -3,7 +3,7 @@
  *
  * Driven through the REAL presign lane (`requestPresignedUpload` /
  * `storeDocumentFromPresignedUpload`), the REAL write floor
- * (`canWriteWorkspace` → `assertWorkspaceWrite`), the REAL rate limiter and the
+ * (the access door's `canWrite` → `assertWorkspaceWrite`), the REAL rate limiter and the
  * REAL body door (`EntityBodyService.setBody`) on PGlite. Object storage is
  * stubbed at the provider boundary (`@synap/storage`).
  *

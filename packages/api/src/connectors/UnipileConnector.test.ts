@@ -440,6 +440,30 @@ describe("webhooks — /v2/webhooks/endpoints/, signed deliveries", () => {
     ).toBeNull();
   });
 
+  it("no signing secret = every delivery refused: none registered, or one with an empty secret", async () => {
+    let endpoints: unknown[] = [];
+    route("GET", at("/webhooks/endpoints/?offset=0"), () =>
+      json({ data: endpoints, has_more: false })
+    );
+    const c = connector();
+    // Nothing registered: no secret can verify anything.
+    expect(
+      await c.parseWebhook(
+        { "unipile-signature": sign(messageEvent, "") },
+        messageEvent
+      )
+    ).toBeNull();
+    // An endpoint whose secret is empty: an HMAC under the empty key is one
+    // anyone computes, so it is not a signature (pre-launch audit, webhooks F2).
+    resetUnipileCachesForTest();
+    endpoints = [endpoint(["message.new"], "")];
+    const forged = await c.parseWebhook(
+      { "unipile-signature": sign(messageEvent, "") },
+      messageEvent
+    );
+    expect(forged).toBeNull();
+  });
+
   it("a rotated endpoint secret is picked up without a restart", async () => {
     let secret = SECRET;
     route("GET", at("/webhooks/endpoints/?offset=0"), () =>

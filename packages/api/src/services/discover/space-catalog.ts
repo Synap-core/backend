@@ -16,9 +16,8 @@
  *     own order: root kind first), then kinds this space OWNS
  *     (`profiles.workspace_id`, `profile_kind = 'kind'`)
  *
- * MEMBERSHIP FLOOR: the same predicate `synap_find` applies to its lens
- * (`verifyWorkspaceAccess` = a `workspace_members` row), in its set form
- * `getUserMemberWorkspaceIds`. Archived spaces are not routing targets.
+ * MEMBERSHIP FLOOR: the same predicate the MCP adapter applies to its lens
+ * (a `workspace_members` row), `getUserMemberWorkspaceIds`. Archived spaces are not routing targets.
  */
 
 import {

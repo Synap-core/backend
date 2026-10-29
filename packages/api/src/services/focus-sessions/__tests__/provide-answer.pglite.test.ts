@@ -128,9 +128,10 @@ vi.mock("../../../utils/grant-write-check.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   grantWriteDenial: async () => h.keyDenial,
 }));
-vi.mock("../../../routers/file-upload.js", () => ({
-  canWriteWorkspace: async (_userId: string, workspaceId: string) =>
-    h.writable.has(workspaceId),
+vi.mock("../../../access/door.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  canWrite: async (_p: unknown, target: { workspace: string }) =>
+    h.writable.has(target.workspace),
 }));
 vi.mock("../../../connectors/index.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),

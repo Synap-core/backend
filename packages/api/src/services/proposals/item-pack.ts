@@ -13,7 +13,14 @@
  *     crash midway leaves a true partial record.
  */
 
-import { db, eq, drizzleSql, proposals, ProposalStatus } from "@synap/database";
+import {
+  db,
+  eq,
+  drizzleSql,
+  proposals,
+  ProposalStatus,
+  transitionProposal,
+} from "@synap/database";
 import {
   isItemRejected,
   readItemOutcomes,
@@ -100,13 +107,13 @@ export async function markItemPackApproved(
   packId: string,
   approverUserId: string
 ): Promise<void> {
-  await db
-    .update(proposals)
-    .set({
-      status: ProposalStatus.APPROVED,
+  await transitionProposal(db, {
+    to: ProposalStatus.APPROVED,
+    set: {
       reviewedBy: approverUserId,
       reviewedAt: new Date(),
       updatedAt: new Date(),
-    })
-    .where(eq(proposals.id, packId));
+    },
+    where: eq(proposals.id, packId),
+  });
 }

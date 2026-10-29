@@ -52,7 +52,7 @@ vi.mock("../../../utils/vault-resolver.js", () => ({
 }));
 vi.mock("@synap/shared-utils", () => ({
   validateExternalUrl: vi.fn(() => ({ valid: true })),
-  safeExternalFetch: vi.fn(async () => ({ ok: true, status: 200 })),
+  safePublicFetch: vi.fn(async () => ({ ok: true, status: 200 })),
 }));
 vi.mock("../../template-resolve.js", () => ({
   deepResolveTemplates: vi.fn((c: unknown) => c),

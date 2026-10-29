@@ -26,6 +26,8 @@ export {
 } from "./services/library/light-read-queue.js";
 // The Library keep-alive pass (daily): the app registers it in its @synap/jobs slot.
 export { runLibraryKeepAlive } from "./services/library/keep-alive.js";
+// The morning brief pass (every 15 min): the app registers it in its @synap/jobs slot.
+export { runMorningBriefs } from "./services/morning-brief/morning-brief.js";
 export { hubProtocolRouter } from "./routers/hub-protocol/index.js";
 // Where code skills run (/health `skillRuntime`) and the boot warm-up.
 export {

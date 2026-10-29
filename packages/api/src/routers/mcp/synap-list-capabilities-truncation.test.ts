@@ -49,13 +49,17 @@ vi.mock("@synap/database", async (importOriginal) => ({
 }));
 
 // `executeMCPToolViaHubProtocol` verifies the `args.workspaceId` lens against
-// a real DB row (`verifyWorkspaceAccess`) BEFORE the tool-name switch even
-// runs — unrelated to the fix under test, but real enough to hit a live
-// Postgres connection in this suite. Stub only that one check to `true`; every
-// other export of the module stays real.
+// real DB rows (the caller's memberships, then the handler's space read)
+// BEFORE the tool-name switch even runs — unrelated to the fix under test, but
+// real enough to hit a live Postgres connection in this suite. Stub only those
+// two checks to pass; every other export of both modules stays real.
 vi.mock("../hub-protocol/rest/_shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../hub-protocol/rest/_shared.js")>()),
-  verifyWorkspaceAccess: vi.fn(async () => true),
+  getUserMemberWorkspaceIds: vi.fn(async () => ["ws-1"]),
+}));
+vi.mock("../../access/door.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../access/door.js")>()),
+  canRead: vi.fn(async () => true),
 }));
 
 import { executeMCPToolViaHubProtocol } from "./adapter.js";

@@ -31,7 +31,8 @@
 import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
-import { assertPodAdmin } from "../trpc.js";
+import { isPodAdmin } from "../utils/workspace-role.js";
+import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { TRPCError } from "@trpc/server";
 import {
   db,
@@ -70,35 +71,13 @@ import { assertProposalVisibleTo } from "../utils/proposal-visibility.js";
 /** A profile slug's shape; existence is checked against `profiles` on create. */
 const ENTITY_KIND_REF = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
-const EDITOR_ROLES = ["editor", "admin", "owner"];
-
-async function isPodAdmin(userId: string): Promise<boolean> {
-  try {
-    await assertPodAdmin(userId);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
+/** Pod admin, or the write floor of that space (`assertWorkspaceWrite`). */
 async function assertWorkspaceEditor(
   userId: string,
   workspaceId: string
 ): Promise<void> {
   if (await isPodAdmin(userId)) return;
-  const membership = await db.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.workspaceId, workspaceId),
-      eq(workspaceMembers.userId, userId)
-    ),
-    columns: { role: true },
-  });
-  if (!membership || !EDITOR_ROLES.includes(membership.role)) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Editor role or higher required for this workspace",
-    });
-  }
+  await assertWorkspaceWrite(db, userId, { workspaceId });
 }
 
 async function assertWorkspaceMember(

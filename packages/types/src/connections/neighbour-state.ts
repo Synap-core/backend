@@ -34,7 +34,7 @@ import {
   type UnitStateInput,
   type UnitStateView,
 } from "../units/state.js";
-import { trackUnitInput } from "../units/track.js";
+import { trackStatusCategory, trackUnitInput } from "../units/track.js";
 import {
   DEPENDENCY_LINK_TYPE,
   REPLACES_LINK_TYPE,
@@ -81,12 +81,13 @@ export function neighbourUnitInput(
         blockedBy: blockedBy ?? null,
       });
     case "track": {
-      // Only the statuses `trackUnitInput` settles WITHOUT the sessions: an
-      // active track's state is its sessions' aggregate, not read here.
+      // Only the categories `trackUnitInput` settles WITHOUT the sessions
+      // (closed, dropped, paused): an open or active track's state is its
+      // sessions' aggregate, not read here.
+      const category = trackStatusCategory(status);
       if (
-        status !== "completed" &&
-        status !== "archived" &&
-        status !== "paused"
+        !status ||
+        (category !== "done" && category !== "lost" && category !== "paused")
       ) {
         return blocked;
       }

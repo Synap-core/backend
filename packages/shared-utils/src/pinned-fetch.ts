@@ -1,35 +1,41 @@
 /**
- * safePublicFetch — `safeExternalFetch` that also closes DNS rebinding.
+ * safePublicFetch: THE door for a server-side request to a URL that a person,
+ * an agent, an automation or content supplied. There is no other one (the
+ * hostname-only `safeExternalFetch` was folded into this door; tripwire
+ * `outbound-fetch-door.tripwire.test.ts`).
  *
- * `validateExternalUrl` matches the HOSTNAME only: `http://evil.example/` whose
- * name resolves to `169.254.169.254` (or `10.0.0.5`, or `::1`) passes it. This
- * door, on EVERY hop (the first URL and each redirect):
- *   1. runs `validateExternalUrl` (scheme + hostname patterns);
+ * `validateExternalUrl` reads the URL text only: `http://evil.example/` whose
+ * name resolves to `169.254.169.254` (or `10.0.0.5`, `::1`, a Docker service
+ * such as Kratos admin) passes it. This door, on EVERY hop (the first URL and
+ * each redirect):
+ *   1. runs `validateExternalUrl` (scheme, port, literal IP, hostname);
  *   2. resolves the hostname to ALL its addresses and refuses the hop when ANY
  *      is not public (loopback, private, link-local, CGNAT, metadata,
  *      multicast, reserved, documentation, IPv4-mapped/NAT64 of those);
- *   3. connects to the address it vetted — the socket's `lookup` is pinned to
- *      it — so a second resolution at connect time cannot swap in another IP.
+ *   3. connects to the address it vetted (the socket's `lookup` is pinned to
+ *      it), so a second resolution at connect time cannot swap in another IP.
  *      TLS still verifies the certificate against the hostname.
  *
  * Built on `node:http(s)` (whose `lookup` option is the pin) rather than a new
  * dependency; the answer is a WHATWG `Response` so callers read it like fetch.
- * No content decoding: no `Accept-Encoding` is sent, so servers answer
- * identity bytes.
+ * No content decoding: no `Accept-Encoding` is sent (a caller's is dropped),
+ * so servers answer identity bytes.
  *
- * Why a separate door and not `safeExternalFetch` itself: several callers of
- * that one reach operator-configured endpoints that legitimately resolve to a
- * private address (an intelligence service on the Docker network). Fetches of
- * URLs that came from CONTENT (an image URL on an entity, a page to read) must
- * use this one.
+ * An endpoint the OPERATOR configured (an env var, the intelligence service on
+ * the Docker network) is not a URL from content and does not come through here.
  */
 import { lookup as dnsLookup } from "node:dns/promises";
-import { BlockList, isIP } from "node:net";
+import { isIP } from "node:net";
 import type { LookupFunction } from "node:net";
 import http from "node:http";
 import https from "node:https";
-import { Readable } from "node:stream";
-import { BlockedOutboundError, validateExternalUrl } from "./validate-url.js";
+import { Readable, pipeline } from "node:stream";
+import {
+  BlockedOutboundError,
+  isPublicAddress,
+  validateExternalUrl,
+  WEB_PORTS,
+} from "./validate-url.js";
 
 export interface ResolvedAddress {
   address: string;
@@ -42,6 +48,13 @@ export type AddressResolver = (hostname: string) => Promise<ResolvedAddress[]>;
 export interface SafePublicFetchInit {
   method?: string;
   headers?: ConstructorParameters<typeof Headers>[0];
+  /**
+   * Request body. A string or bytes is sent as is, with a `Content-Length`.
+   * A byte stream (multipart file parts read from storage) is sent chunked,
+   * never held whole in memory; it can be sent once, so a redirect answered
+   * to a streamed request is refused.
+   */
+  body?: string | Uint8Array | AsyncIterable<Uint8Array> | null;
   signal?: AbortSignal;
 }
 
@@ -52,78 +65,12 @@ export interface SafePublicFetchDeps {
   /**
    * Which ports a hop may name. Default: the scheme's own (80, 443) — a
    * content URL has no business reaching a public host's admin or database
-   * port. `"any"` lifts it (tests against an ephemeral local server).
+   * port. `"any"` lifts it, for a destination a person approved by name (a
+   * registered service, a skill's approved host, a vault tool's base URL) and
+   * for tests against an ephemeral local server. The address is vetted
+   * either way.
    */
   allowedPorts?: ReadonlySet<number> | "any";
-}
-
-const WEB_PORTS: ReadonlySet<number> = new Set([80, 443]);
-
-const BLOCKED_V4 = new BlockList();
-for (const [net, prefix] of [
-  ["0.0.0.0", 8], // "this" network
-  ["10.0.0.0", 8], // RFC 1918
-  ["100.64.0.0", 10], // CGNAT
-  ["127.0.0.0", 8], // loopback
-  ["169.254.0.0", 16], // link-local, cloud metadata
-  ["172.16.0.0", 12], // RFC 1918
-  ["192.0.0.0", 24], // IETF protocol assignments
-  ["192.0.2.0", 24], // TEST-NET-1
-  ["192.88.99.0", 24], // 6to4 relay anycast
-  ["192.168.0.0", 16], // RFC 1918
-  ["198.18.0.0", 15], // benchmarking
-  ["198.51.100.0", 24], // TEST-NET-2
-  ["203.0.113.0", 24], // TEST-NET-3
-  ["224.0.0.0", 4], // multicast
-  ["240.0.0.0", 4], // reserved + broadcast
-] as const) {
-  BLOCKED_V4.addSubnet(net, prefix, "ipv4");
-}
-
-const BLOCKED_V6 = new BlockList();
-for (const [net, prefix] of [
-  ["::", 128], // unspecified
-  ["::1", 128], // loopback
-  ["::", 96], // IPv4-compatible (deprecated) — embeds any IPv4
-  ["64:ff9b:1::", 48], // local-use NAT64 (RFC 8215)
-  ["100::", 64], // discard-only
-  ["2002::", 16], // 6to4 — embeds any IPv4, incl. private ones
-  ["2001:db8::", 32], // documentation
-  ["fc00::", 7], // unique local
-  ["fe80::", 10], // link-local
-  ["fec0::", 10], // site-local (deprecated)
-  ["ff00::", 8], // multicast
-] as const) {
-  BLOCKED_V6.addSubnet(net, prefix, "ipv6");
-}
-
-/** The IPv4 address an IPv6 address embeds (IPv4-mapped, NAT64), if any. */
-function embeddedV4(v6: string): string | undefined {
-  const m =
-    /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(v6) ??
-    /^64:ff9b::(\d+\.\d+\.\d+\.\d+)$/i.exec(v6);
-  if (m) return m[1];
-  // Hex form (`::ffff:a9fe:a9fe`) — what `new URL` and resolvers produce.
-  const hex = /^(?:::ffff:|64:ff9b::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(
-    v6
-  );
-  if (!hex) return undefined;
-  const hi = parseInt(hex[1]!, 16);
-  const lo = parseInt(hex[2]!, 16);
-  return `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
-}
-
-/** True when `address` is a routable public unicast address. */
-export function isPublicAddress(address: string): boolean {
-  const bare = address.replace(/^\[|\]$/g, "").toLowerCase();
-  const family = isIP(bare);
-  if (family === 4) return !BLOCKED_V4.check(bare, "ipv4");
-  if (family === 6) {
-    const v4 = embeddedV4(bare);
-    if (v4) return isPublicAddress(v4);
-    return !BLOCKED_V6.check(bare, "ipv6");
-  }
-  return false;
 }
 
 const systemResolver: AddressResolver = async (hostname) => {
@@ -203,6 +150,22 @@ function requestOnce(
   new Headers(init.headers).forEach((v, k) => {
     headers[k] = v;
   });
+  // Identity bytes only: the answer is handed back undecoded.
+  delete headers["accept-encoding"];
+  // The door sets the length of what it sends; a caller's is never trusted.
+  delete headers["content-length"];
+  const stream = isStreamedBody(init.body) ? init.body : undefined;
+  const body =
+    init.body === undefined || init.body === null || stream
+      ? undefined
+      : typeof init.body === "string"
+        ? Buffer.from(init.body)
+        : Buffer.from(
+            (init.body as Uint8Array).buffer,
+            (init.body as Uint8Array).byteOffset,
+            (init.body as Uint8Array).byteLength
+          );
+  if (body) headers["content-length"] = String(body.byteLength);
   const mod = url.protocol === "https:" ? https : http;
   return new Promise((resolve, reject) => {
     const req = mod.request(url, {
@@ -213,8 +176,32 @@ function requestOnce(
     });
     req.once("response", resolve);
     req.once("error", reject);
-    req.end();
+    if (stream) {
+      // No Content-Length: node sends it chunked. A source that fails (a file
+      // gone, over its cap) destroys the request, and the caller reads the
+      // source's own failure.
+      pipeline(Readable.from(stream), req, (err) => {
+        if (err) {
+          req.destroy(err);
+          reject(err);
+        }
+      });
+    } else {
+      req.end(body);
+    }
   });
+}
+
+function isStreamedBody(
+  body: SafePublicFetchInit["body"]
+): body is AsyncIterable<Uint8Array> {
+  return (
+    typeof body === "object" &&
+    body !== null &&
+    !(body instanceof Uint8Array) &&
+    typeof (body as AsyncIterable<Uint8Array>)[Symbol.asyncIterator] ===
+      "function"
+  );
 }
 
 function toResponse(res: http.IncomingMessage, method: string): Response {
@@ -257,14 +244,8 @@ export async function safePublicFetch(
   const method = init.method ?? "GET";
   let currentUrl = rawUrl;
   for (let hop = 0; hop <= maxRedirects; hop++) {
-    const check = validateExternalUrl(currentUrl);
+    const check = validateExternalUrl(currentUrl, { allowedPorts: ports });
     if (!check.valid) throw blocked(check.reason);
-    const port = Number(
-      check.url.port || (check.url.protocol === "https:" ? 443 : 80)
-    );
-    if (ports !== "any" && !ports.has(port)) {
-      throw blocked(`port ${port} is not a web port`);
-    }
     const pin = await vetHost(
       check.url.hostname,
       resolve,
@@ -278,6 +259,9 @@ export async function safePublicFetch(
       return toResponse(res, method);
     }
     res.resume();
+    if (isStreamedBody(init.body)) {
+      throw blocked("a redirect cannot resend a streamed request body");
+    }
     currentUrl = new URL(location, check.url).toString();
   }
   throw blocked("too many redirects");

@@ -55,6 +55,7 @@ import {
   ProposalStatus,
   ProfileScope,
   insertPendingProposal,
+  transitionProposal,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
@@ -533,17 +534,17 @@ async function supersedePack(
   const reason = supersededBy
     ? "Superseded by a fresher cleanup pack."
     : "Nothing in it is left to tidy.";
-  const rows = await db
-    .update(proposals)
-    .set({
-      status: ProposalStatus.WITHDRAWN,
+  const rows = await transitionProposal(db, {
+    to: ProposalStatus.WITHDRAWN,
+    set: {
       updatedAt: now,
       data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('supersededBy', ${supersededBy}::text, 'withdrawReason', ${reason}::text)`,
-    })
-    .where(
-      and(eq(proposals.id, id), eq(proposals.status, ProposalStatus.PENDING))
-    )
-    .returning({ id: proposals.id, data: proposals.data });
+    },
+    where: and(
+      eq(proposals.id, id),
+      eq(proposals.status, ProposalStatus.PENDING)
+    ),
+  }).returning({ id: proposals.id, data: proposals.data });
   if (rows.length === 0) return false;
   markProposalNotificationsActioned([id]);
   // WITHDRAWN is terminal: the same discard every terminal door makes. A no-op

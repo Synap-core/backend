@@ -40,6 +40,7 @@ import {
   isServerVaultAvailable,
   assertGrantScoped,
   getActingAgentUserId,
+  transitionProposal,
 } from "@synap/database";
 import {
   proposals,
@@ -1085,31 +1086,50 @@ export const secretsVaultRouter = router({
       //    id, execMode='auto'). The legacy `secret_id` column still exists in
       //    the DB (kept for audit) but is no longer in the Drizzle model — the
       //    subject is carried by grantableId now.
-      const [grant] = await db
-        .insert(vaultGrants)
-        .values({
-          grantableType: "secret",
-          grantableId: secret.id,
-          execMode: "auto",
-          proposalId: input.proposalId,
-          grantedTo,
-          workspaceId: grantWorkspaceId,
-          scope: input.scope,
-          expiresAt,
-          maxUses,
-          createdBy: ctx.userId,
-        })
-        .returning({ id: vaultGrants.id });
+      //    The grant and the approval commit together: the status door matches
+      //    only a still-open request (pending, or a failed approval), so one
+      //    decided between the read above and here rolls the grant back.
+      const grant = await db.transaction(async (tx) => {
+        const [inserted] = await tx
+          .insert(vaultGrants)
+          .values({
+            grantableType: "secret",
+            grantableId: secret.id,
+            execMode: "auto",
+            proposalId: input.proposalId,
+            grantedTo,
+            workspaceId: grantWorkspaceId,
+            scope: input.scope,
+            expiresAt,
+            maxUses,
+            createdBy: ctx.userId,
+          })
+          .returning({ id: vaultGrants.id });
 
-      // 7. Approve the proposal and embed the vault ref + scope in data
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
-          updatedAt: new Date(),
-          data: drizzleSql`data || jsonb_build_object('vaultRef', ${vaultRef}::text, 'secretId', ${secret.id}::text, 'approvedAt', ${new Date().toISOString()}::text, 'grantId', ${grant.id}::text, 'scope', ${input.scope}::text, 'expiresAt', ${expiresAt ? expiresAt.toISOString() : null})`,
-        })
-        .where(eq(proposals.id, input.proposalId));
+        // 7. Approve the proposal, attributed to the approver, and embed the
+        //    vault ref + scope in data. Through the status door like every
+        //    status write: before, this door set APPROVED with no reviewer
+        //    and no status guard.
+        const approved = await transitionProposal(tx, {
+          to: ProposalStatus.APPROVED,
+          from: [ProposalStatus.PENDING, ProposalStatus.APPROVAL_FAILED],
+          set: {
+            reviewedBy: ctx.userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+            data: drizzleSql`data || jsonb_build_object('vaultRef', ${vaultRef}::text, 'secretId', ${secret.id}::text, 'approvedAt', ${new Date().toISOString()}::text, 'grantId', ${inserted.id}::text, 'scope', ${input.scope}::text, 'expiresAt', ${expiresAt ? expiresAt.toISOString() : null})`,
+          },
+          where: eq(proposals.id, input.proposalId),
+        }).returning({ id: proposals.id });
+        if (approved.length === 0) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "This request was already decided. Ask the agent to request it again.",
+          });
+        }
+        return inserted;
+      });
 
       // 8. Audit log — record the scope and window.
       auditLog({

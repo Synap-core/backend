@@ -118,6 +118,25 @@ describe("closeIdleReceipts", () => {
     expect(await closeIdleReceipts()).toBe(0);
   });
 
+  it("closes a receipt the stale sweep reached while its proposal was pending, once the proposal is decided", async () => {
+    // The stale write leaves `updated_at` alone: a receipt staled at 24h is
+    // still that idle, and nothing but this closer will ever end it.
+    const decided = await session({
+      metadata: RECEIPT,
+      idleHours: 30,
+      status: "stale",
+    });
+    await proposal(decided, "approved", 30);
+    const stillPending = await session({
+      metadata: RECEIPT,
+      idleHours: 30,
+      status: "stale",
+    });
+    await proposal(stillPending, "pending", 30);
+    expect(await closeIdleReceipts()).toBe(1);
+    expect(closed).toEqual([decided]);
+  });
+
   it("keeps a receipt open while writes are still arriving", async () => {
     const busy = await session({ metadata: RECEIPT, idleHours: 3 });
     await proposal(busy, "auto_approved", 0);

@@ -15,11 +15,11 @@ import {
   hasScope,
   logger,
   resolveActorId,
-  verifyWorkspaceWriteAccess,
   type HubHono,
   httpStatusForTrpcError,
   requireUuidParam,
 } from "./_shared.js";
+import { canWrite, userPrincipal } from "../../../access/door.js";
 import { jsonGoverned } from "../proposal-response.js";
 
 const BoardPlacementOptionsSchema = z.object({
@@ -152,7 +152,7 @@ export function registerWhiteboardsRoutes(app: HubHono) {
     // is a required uuid, so the `??` is a type-narrowing guard, never a widen.
     const workspaceId =
       getConfinedWorkspace(c, body.workspaceId) ?? body.workspaceId;
-    if (!(await verifyWorkspaceWriteAccess(userId, workspaceId))) {
+    if (!(await canWrite(userPrincipal(userId), { workspace: workspaceId }))) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
 
@@ -250,7 +250,7 @@ export function registerWhiteboardsRoutes(app: HubHono) {
     // is a required uuid, so the `??` is a type-narrowing guard, never a widen.
     const workspaceId =
       getConfinedWorkspace(c, body.workspaceId) ?? body.workspaceId;
-    if (!(await verifyWorkspaceWriteAccess(userId, workspaceId))) {
+    if (!(await canWrite(userPrincipal(userId), { workspace: workspaceId }))) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
 

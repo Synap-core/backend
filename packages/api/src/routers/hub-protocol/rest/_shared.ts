@@ -38,7 +38,6 @@ import { ownLibraryProposalWhere } from "../../proposals/scope-conditions.js";
 import { getUserWorkspaceIds } from "../../../utils/workspace-membership.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { isAgentCaller } from "../../../services/library/agent-door.js";
-import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 import { canRead, userPrincipal } from "../../../access/door.js";
 import type { KeyPrincipal } from "../../../access/key-identity.js";
 
@@ -956,48 +955,6 @@ export async function getUserMemberWorkspaceIds(
         )
     : await query.where(eq(workspaceMembers.userId, userId));
   return rows.map((r) => r.workspaceId);
-}
-
-/**
- * Verify a user has access to a specific workspace: ANY membership, a viewer
- * included. A READ check — a mutating route gates on
- * {@link verifyWorkspaceWriteAccess} (tripwire
- * `hub-mutations-gate-on-write-role`).
- */
-export async function verifyWorkspaceAccess(
-  userId: string,
-  workspaceId: string
-): Promise<boolean> {
-  const row = await db.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.workspaceId, workspaceId),
-      eq(workspaceMembers.userId, userId)
-    ),
-    columns: { id: true },
-  });
-  return !!row;
-}
-
-/**
- * May this user WRITE in this workspace? The write floor `assertWorkspaceWrite`
- * enforces (an editor+ member), answered as a boolean for a Hub route's 403.
- * A refusal is `false`; a failed membership read throws (never "denied").
- */
-export async function verifyWorkspaceWriteAccess(
-  userId: string,
-  workspaceId: string
-): Promise<boolean> {
-  try {
-    await assertWorkspaceWrite(db, userId, { workspaceId });
-    return true;
-  } catch (err) {
-    if (
-      err instanceof TRPCError &&
-      (err.code === "FORBIDDEN" || err.code === "UNAUTHORIZED")
-    )
-      return false;
-    throw err;
-  }
 }
 
 /**

@@ -175,7 +175,7 @@ export const buildHandlers: McpHandlerMap = {
     const cellWorkspaceId = parsed.data.workspaceId ?? null;
     // Route through the governance gate — it owns RBAC (workspace membership +
     // role, or the agent-join proposal for a non-member) AND the agent
-    // propose/execute decision. No manual verifyWorkspaceAccess: that would
+    // propose/execute decision. No manual membership check: that would
     // hard-deny an agent the gate would otherwise let PROPOSE.
     const { checkPermissionOrPropose, proposedMessageFor } =
       await import("../../../utils/permission-check.js");

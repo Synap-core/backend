@@ -31,7 +31,13 @@ vi.mock("@synap/database", async (importOriginal) => ({
 }));
 vi.mock("../hub-protocol/rest/_shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../hub-protocol/rest/_shared.js")>()),
-  verifyWorkspaceAccess: vi.fn(async () => true),
+  getUserMemberWorkspaceIds: vi.fn(async () => [WS]),
+}));
+// `synap_list_capabilities` reads the space through the door: stubbed, like
+// the lens above (this suite runs without a database).
+vi.mock("../../access/door.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../access/door.js")>()),
+  canRead: vi.fn(async () => true),
 }));
 vi.mock("../../services/agent-identity-service.js", async (importOriginal) => ({
   ...(await importOriginal<

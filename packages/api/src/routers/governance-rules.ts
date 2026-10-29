@@ -31,6 +31,8 @@
 import { z } from "zod";
 import { router, protectedProcedure, credentialProcedure } from "../trpc.js";
 import { assertPodAdmin, assertWorkspaceUsable } from "../trpc.js";
+import { isPodAdmin } from "../utils/workspace-role.js";
+import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { TRPCError } from "@trpc/server";
 import {
   db,
@@ -49,7 +51,6 @@ import {
 import {
   GOVERNANCE_PRINCIPAL_CLASSES,
   governanceRules,
-  workspaceMembers,
   workspaces,
   users,
   proposals,
@@ -87,8 +88,6 @@ import {
   OWN_ORGANISE_EVENT_KEYS,
 } from "@synap/governance-policy";
 
-const EDITOR_ROLES = ["editor", "admin", "owner"];
-
 // The active-rule predicate, the pod∪workspace scope lens, and the agent-label
 // resolver live in ONE place (`utils/governance-rule-reads.ts`) so this editor
 // door and `getEffectiveGovernance`'s introspection surface can never drift.
@@ -118,35 +117,6 @@ async function assertWorkspaceVisible(
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "You do not have access to this workspace",
-    });
-  }
-}
-
-async function isPodAdmin(userId: string): Promise<boolean> {
-  try {
-    await assertPodAdmin(userId);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function assertWorkspaceEditor(
-  userId: string,
-  workspaceId: string
-): Promise<void> {
-  const membership = await db.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.workspaceId, workspaceId),
-      eq(workspaceMembers.userId, userId)
-    ),
-    columns: { role: true },
-  });
-
-  if (!membership || !EDITOR_ROLES.includes(membership.role)) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Editor role or higher required for this workspace",
     });
   }
 }
@@ -182,7 +152,7 @@ export async function assertCanManageRule(
       });
     }
     if (!podAdmin) {
-      await assertWorkspaceEditor(userId, rule.workspaceId);
+      await assertWorkspaceWrite(db, userId, { workspaceId: rule.workspaceId });
     }
   }
 
