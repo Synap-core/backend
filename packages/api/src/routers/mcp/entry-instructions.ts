@@ -24,7 +24,7 @@ import {
 export const ENTRY_REFLEX_PROSE = [
   "The user's Synap pod: source of truth. Tool names below are stems; your door may prefix them (`pod__ask`).",
   "",
-  "1. **Recall first.** Known id/kind: `get_*`. Else `ask` (`detail:'sources'` = no model).",
+  "1. **Recall first.** `get_*` a known id, else `ask`.",
   "2. **Capture as you go.** A decision, learning, pain (`finding`), win (`proof-point`), fact or task: `capture` it when it happens.",
   "3. **Orient once.** `orient`: pending review, open sessions, open goals, actions.",
   "4. **Work in a session.** `start_session` (+ goal `trackId`: `list_tracks`, else `start_track`) or resume (`get_session`; playbook `templateId`); 2–5 `criteria`; advance `currentStage` with `update_session`; person-only: `owner:'human'` slot + `blockedReason` + `ask` (confirm/choose with 1 `recommended`/form/act/provide), then `wait_for_answer`; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them (`Q-<id8>`); chat answer: `relay_answer`, words verbatim; PR = outcome `pr-<repo>-<n>` (`ref.url`); close open asks, then `complete_session`.",
