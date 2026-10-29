@@ -1614,6 +1614,13 @@ export interface CompleteFocusSessionInput {
     disposition: "withdrawn" | "keep_as_owed";
     note?: string;
   }>;
+  /**
+   * Why. On `cancelled`: the cancel reason. On an agent's `closed` while a
+   * required criterion is not passing or a required outcome is open: why it
+   * is done anyway; without it that close is refused (409,
+   * `reasonCode: "NOT_DONE"`, `unmetCriteria[]`, `openOutcomes[]`).
+   */
+  reason?: string;
 }
 
 /** One proposal in the close pack (`pendingProposals`). */

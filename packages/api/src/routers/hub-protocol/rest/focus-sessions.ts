@@ -71,6 +71,10 @@ import {
   isOpenQuestionsAtCloseError,
   openQuestionsRefusal,
 } from "../../../services/focus-sessions/complete-session.js";
+import {
+  isNotDoneAtCloseError,
+  notDoneRefusal,
+} from "../../../services/focus-sessions/close-not-done.js";
 import { CLOSE_QUESTION_DISPOSITIONS } from "../../../services/messaging/room-post-kind.js";
 import { sessionGoalPayload } from "../../../services/focus-sessions/session-update-goal.js";
 import {
@@ -675,6 +679,9 @@ const CompleteBodySchema = z.object({
     )
     .max(100)
     .optional(),
+  // Why: the cancel reason on `cancelled`, or why a `closed` with required
+  // work still open is done anyway (else that close is refused, NOT_DONE).
+  reason: z.string().trim().min(1).max(1000).optional(),
 });
 
 // ── Registration ───────────────────────────────────────────────────────────
@@ -2783,6 +2790,12 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         verificationReport: parsed.data.verificationReport,
         terminalStatus: parsed.data.terminalStatus,
         questionDispositions: parsed.data.questionDispositions,
+        ...(parsed.data.reason
+          ? {
+              cancelReason: parsed.data.reason,
+              notDoneReason: parsed.data.reason,
+            }
+          : {}),
       });
 
       if (!result) {
@@ -2814,6 +2827,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // The calling agent left its own questions open: nothing closed.
       if (isOpenQuestionsAtCloseError(err)) {
         return c.json(openQuestionsRefusal(err), 409);
+      }
+      // Required work is still open and no reason was given: nothing closed.
+      if (isNotDoneAtCloseError(err)) {
+        return c.json(notDoneRefusal(err), 409);
       }
       const code = (err as { code?: unknown })?.code;
       if (code === "FORBIDDEN") {

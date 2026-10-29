@@ -101,6 +101,12 @@ import {
 } from "./cancel-session.js";
 import type { SessionVerdict } from "@synap-core/types/focus-sessions";
 import { loadSessionEvaluationSummary } from "./evaluations/record.js";
+import {
+  hasOpenRequiredWork,
+  loadOpenRequiredWork,
+  notDoneAtCloseError,
+  type ClosedNotDoneRecord,
+} from "./close-not-done.js";
 import { sessionNameField } from "./session-update-goal.js";
 import { createLogger } from "@synap-core/core";
 import {
@@ -133,6 +139,14 @@ export interface CompleteFocusSessionParams {
   terminalStatus?: "closed" | "cancelled" | "failed";
   /** Why it was cancelled — kept on `metadata.run.cancel`. Ignored unless `cancelled`. */
   cancelReason?: string;
+  /**
+   * The closing AGENT's reason for closing `closed` while required work is
+   * still open (`close-not-done.ts`). Without it such a close is refused
+   * (NOT_DONE); with it the close goes through and the reason plus what was
+   * still open is recorded on `verification_report.closedNotDone` and in the
+   * close event. Read only with `agentUserId` and `terminalStatus: "closed"`.
+   */
+  notDoneReason?: string;
   /**
    * The closing AGENT's word on each question it asked in the room that is
    * still open. Required for every one of them on an agent's `closed` /
@@ -430,10 +444,13 @@ export type CompleteFocusSessionResult = {
   /** `cancelled` only: what was stopped, what will finish, what already applied. */
   cancel?: SessionCancelRecord;
   /**
-   * The session's grade against its criteria at close. Never blocks the close:
-   * unmet required criteria close FLAGGED (a warning + this), not refused.
+   * The session's grade against its criteria at close. A person's close is
+   * never blocked by it (unmet required criteria close FLAGGED: a warning +
+   * this); an agent's `closed` is (`close-not-done.ts`), unless it named why.
    */
   verdict?: SessionVerdict;
+  /** An agent closed `closed` with required work open, and said why. */
+  closedNotDone?: ClosedNotDoneRecord;
 };
 
 /**
@@ -479,12 +496,7 @@ function packItem(row: typeof proposals.$inferSelect): ProposalPackItem {
 export async function completeFocusSession(
   params: CompleteFocusSessionParams
 ): Promise<CompleteFocusSessionResult | null> {
-  const {
-    sessionId,
-    summary,
-    verificationReport,
-    terminalStatus = "closed",
-  } = params;
+  const { sessionId, summary, terminalStatus = "closed" } = params;
 
   const session = await db.query.focusSessions.findFirst({
     where: and(
@@ -536,6 +548,29 @@ export async function completeFocusSession(
   ) {
     throw openQuestionsAtCloseError(agentQuestions.uncovered);
   }
+
+  // "DONE" IS CHECKED, NOT CLAIMED (F11, `close-not-done.ts`), also before
+  // governance: an agent's `closed` while a required criterion does not pass
+  // or a required agent-owned outcome is open is refused, unless it names
+  // why. A person's close, an approval and an automatic close are never
+  // checked (they carry no `agentUserId`).
+  let closedNotDone: ClosedNotDoneRecord | undefined;
+  if (params.agentUserId && terminalStatus === "closed") {
+    const openWork = await loadOpenRequiredWork(session);
+    if (hasOpenRequiredWork(openWork)) {
+      const reason = params.notDoneReason?.trim();
+      if (!reason) throw notDoneAtCloseError(openWork);
+      closedNotDone = {
+        ...openWork,
+        reason,
+        by: params.agentUserId,
+        at: new Date().toISOString(),
+      };
+    }
+  }
+  const verificationReport = closedNotDone
+    ? { ...(params.verificationReport ?? {}), closedNotDone }
+    : params.verificationReport;
 
   // Lifecycle close must not be blocked by session forceProposeWrites (pack mode).
   // ignoreSessionForcePropose keeps auto-approve / execute path for complete only.
@@ -672,6 +707,16 @@ export async function completeFocusSession(
   // membrane was silently reverted, receipt and all.
   let retiredSlots = 0;
   let closedQuestions = 0;
+
+  if (closedNotDone) {
+    warnings.push(
+      `Closed with required work still open (${[
+        ...closedNotDone.criteria.map((c) => c.key),
+        ...closedNotDone.outcomes.map((o) => o.key),
+      ].join(", ")}), for the reason you gave: "${closedNotDone.reason}". ` +
+        "It is recorded on the session (verificationReport.closedNotDone)."
+    );
+  }
 
   if (unfinishedOutputs > 0) {
     warnings.push(
@@ -928,8 +973,9 @@ export async function completeFocusSession(
     );
   }
 
-  // The grade at close — computed, never enforced (founder decision: close
-  // never blocks on criteria). Unmet required criteria are said out loud.
+  // The grade at close. For a person's close it is computed, never enforced
+  // (founder decision: their close never blocks on criteria); an agent's
+  // `closed` was checked above (F11). Unmet required criteria are said out loud.
   const { verdict } = await loadSessionEvaluationSummary(updated);
   if (verdict.requiredUnmet > 0) {
     warnings.push(
@@ -961,6 +1007,7 @@ export async function completeFocusSession(
     ...(summary !== undefined ? { summary } : {}),
     // Additive: reactors that do not know it ignore it.
     verdict,
+    ...(closedNotDone ? { closedNotDone } : {}),
   };
 
   await logEvent(params.userId, FOCUS_SESSION_CLOSED_EVENT_TYPE, eventData, {
@@ -998,6 +1045,7 @@ export async function completeFocusSession(
     warnings,
     ...(cancel ? { cancel } : {}),
     verdict,
+    ...(closedNotDone ? { closedNotDone } : {}),
   };
 }
 

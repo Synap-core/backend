@@ -671,6 +671,12 @@ export const sessionHandlers: McpHandlerMap = {
       isOpenQuestionsAtCloseError,
       openQuestionsRefusal,
     } = await import("../../../services/focus-sessions/complete-session.js");
+    const { isNotDoneAtCloseError, notDoneRefusal } =
+      await import("../../../services/focus-sessions/close-not-done.js");
+    const reason =
+      typeof args.reason === "string" && args.reason.trim()
+        ? args.reason.trim()
+        : undefined;
     // The executor's reader, refusing what it would drop: a word that is not
     // `withdrawn` / `keep_as_owed` is never read as either.
     const rawDispositions = args.questionDispositions;
@@ -705,12 +711,21 @@ export const sessionHandlers: McpHandlerMap = {
         // The service matches each id against this agent's own open
         // questions and ignores the rest.
         questionDispositions,
+        // One `reason` on the wire: why it was cancelled, or why a `closed`
+        // with required work open is done anyway. Each read only where it
+        // applies (cancelReason on `cancelled`, notDoneReason on `closed`).
+        ...(reason ? { cancelReason: reason, notDoneReason: reason } : {}),
       });
     } catch (err) {
       // Its own questions are still open: nothing closed, and the agent is
       // handed the list and the two ways out.
       if (isOpenQuestionsAtCloseError(err)) {
         return ok(openQuestionsRefusal(err));
+      }
+      // Required work is still open: nothing closed, and the agent is handed
+      // what is left and the ways out (F11).
+      if (isNotDoneAtCloseError(err)) {
+        return ok(notDoneRefusal(err));
       }
       throw err;
     }
@@ -744,6 +759,8 @@ export const sessionHandlers: McpHandlerMap = {
       warnings: result.warnings,
       // The criteria verdict at close (absent when the session had none read).
       ...(result.verdict ? { verdict: result.verdict } : {}),
+      // Closed with required work open, for the reason the agent gave.
+      ...(result.closedNotDone ? { closedNotDone: result.closedNotDone } : {}),
       // `cancelled` only: what the cancel stopped, what was already running and
       // will finish, and what had already applied (undo it with a session
       // revert). Also kept on the session's `metadata.run.cancel`.
