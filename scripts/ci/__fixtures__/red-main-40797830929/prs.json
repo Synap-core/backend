@@ -1,0 +1,130 @@
+{
+  "run": 40797830929,
+  "redSha": "4431d3ff243da60061a6ef8ea133b2c5a6cbfad2",
+  "lastGreen": "d4c25e678dab372ec0f0f2c771f0629a227b7bf6",
+  "prs": [
+    {
+      "number": 465,
+      "title": "fix(governance,grants): floor compound destructive actions; refuse empty grant pinnings",
+      "head": "fix/destructive-floor-and-empty-grant-pins",
+      "mergeSha": "148ba06eb3bb5c57e1ac0539eca862614bc3e3d6",
+      "mergedAt": "2026-10-29T01:00:01Z",
+      "files": [
+        "apps/pod-admin/app/(admin)/review/_lib/review-rows.test.ts",
+        "apps/pod-admin/app/(admin)/review/_lib/review-rows.ts",
+        "packages/api/src/routers/api-keys.set-grants.pglite.test.ts",
+        "packages/api/src/routers/hub-protocol/branches.ts",
+        "packages/api/src/services/key-grant.ts",
+        "packages/database/src/repositories/grant-repository.pglite.test.ts",
+        "packages/database/src/repositories/grant-repository.ts",
+        "packages/governance-policy/src/destructive-door-names.test.ts",
+        "packages/governance-policy/src/index.ts",
+        "packages/governance-policy/src/policy.test.ts"
+      ]
+    },
+    {
+      "number": 467,
+      "title": "fix(database): backfill automations.run_count to success + failure (0371)",
+      "head": "fix/automation-run-count-backfill",
+      "mergeSha": "86d87b7788d4f5364e56173fc2a50dfeaacad4af",
+      "mergedAt": "2026-10-29T01:00:14Z",
+      "files": [
+        "packages/database/migrations/0371_automation_run_count_backfill.sql",
+        "packages/database/src/migrations-0371.pglite.test.ts"
+      ]
+    },
+    {
+      "number": 476,
+      "title": "Inbound webhooks stored before the 200; one event per observed fact",
+      "head": "feat/inbound-durable-dedupe",
+      "mergeSha": "b22676ce096def5b30b50240014f25b9afce3df2",
+      "mergedAt": "2026-10-29T01:00:41Z",
+      "files": [
+        "docs/architecture/webhooks.md",
+        "packages/api/src/access/registry.ts",
+        "packages/api/src/routers/webhooks-inbound.test.ts",
+        "packages/api/src/routers/webhooks-inbound.ts",
+        "packages/api/src/services/observations/fact-key.test.ts",
+        "packages/api/src/services/observations/fact-key.ts",
+        "packages/api/src/services/observations/record-observation-from-automation.test.ts",
+        "packages/api/src/services/observations/record-observation-from-automation.ts",
+        "packages/api/src/services/observations/record-observation.ts",
+        "packages/database/migrations/0000_baseline_schema.sql",
+        "packages/database/migrations/0372_inbound_deliveries_and_observation_keys.sql",
+        "packages/database/src/index.ts",
+        "packages/database/src/migrations-0372.pglite.test.ts",
+        "packages/database/src/schema/inbound-deliveries.ts",
+        "packages/database/src/schema/index.ts",
+        "packages/database/src/services/inbound-delivery-outbox.ts",
+        "packages/database/src/services/observation-keys.ts",
+        "packages/database/src/utils/schema-coherence.ts",
+        "packages/events/src/__tests__/inbound-delivery.test.ts",
+        "packages/events/src/inbound-delivery.ts",
+        "packages/events/src/index.ts",
+        "packages/jobs/src/cron.ts",
+        "packages/jobs/src/workers/automation-trigger-matcher.delivery-fingerprint.test.ts",
+        "packages/jobs/src/workers/automation-trigger-matcher.ts",
+        "packages/jobs/src/workers/automation-trigger-matcher.webhook.test.ts",
+        "packages/jobs/src/workers/inbound-delivery-sweeper.ts",
+        "packages/jobs/src/workers/index.ts",
+        "scripts/dev-pr-gap-filler.mjs",
+        "scripts/dev-pr-gap-filler.test.mjs",
+        "scripts/devbox/devbox-pr-gap-filler.service",
+        "scripts/devbox/devbox-pr-gap-filler.timer"
+      ]
+    },
+    {
+      "number": 470,
+      "title": "fix(pod-admin): the key request page pads its card, names the Hub use honestly, says Approve",
+      "head": "fix/key-request-page-cards",
+      "mergeSha": "5e6ef5be7bf5aa9e0a08a2b7f052bf52d597f76f",
+      "mergedAt": "2026-10-29T01:00:51Z",
+      "files": [
+        "apps/pod-admin/__tripwires__/receiver-card-body.test.ts",
+        "apps/pod-admin/app/keys/requests/[id]/KeyRequestReview.tsx",
+        "packages/types/src/grants/key-draft.test.ts",
+        "packages/types/src/vocabulary/index.ts",
+        "packages/types/src/vocabulary/key-use-labels.test.ts"
+      ]
+    },
+    {
+      "number": 475,
+      "title": "feat(dev-loop): snapshot producer reads live builds of control-plane-api and intelligence-hub",
+      "head": "feat/snapshot-live-cp-is",
+      "mergeSha": "973e8baea6d2e8b10a61ec86bd9d3a8cc6f04203",
+      "mergedAt": "2026-10-29T01:01:10Z",
+      "files": [
+        "scripts/dev-repo-snapshot.mjs",
+        "scripts/dev-repo-snapshot.test.mjs",
+        "scripts/devbox/devbox-dev-facts.service"
+      ]
+    },
+    {
+      "number": 474,
+      "title": "feat(types): @synap-core/types/i18n core and users.setLocale",
+      "head": "feat/types-i18n-core",
+      "mergeSha": "4431d3ff243da60061a6ef8ea133b2c5a6cbfad2",
+      "mergedAt": "2026-10-29T01:01:28Z",
+      "files": [
+        "packages/api-types/src/generated.d.ts",
+        "packages/api/src/routers/users.set-locale.pglite.test.ts",
+        "packages/api/src/routers/users.ts",
+        "packages/types/package.json",
+        "packages/types/src/i18n/index.ts",
+        "packages/types/src/i18n/locale.test.ts",
+        "packages/types/src/i18n/locale.ts",
+        "packages/types/src/i18n/message.test.ts",
+        "packages/types/src/i18n/message.ts",
+        "packages/types/src/i18n/params.ts",
+        "packages/types/src/i18n/params.typecheck.test.ts",
+        "packages/types/src/i18n/plural.test.ts",
+        "packages/types/src/i18n/plural.ts",
+        "packages/types/src/i18n/pseudo.test.ts",
+        "packages/types/src/i18n/pseudo.ts",
+        "packages/types/src/i18n/seed-catalog.ts",
+        "packages/types/src/i18n/translator.test.ts",
+        "packages/types/src/i18n/translator.ts"
+      ]
+    }
+  ]
+}
