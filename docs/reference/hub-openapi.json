@@ -1719,6 +1719,29 @@
           },
           "degraded": { "type": "boolean" },
           "degradedReason": { "type": "string" },
+          "degradedDetail": {
+            "type": "object",
+            "properties": {
+              "cause": { "type": "string" },
+              "status": { "type": "integer" },
+              "attempts": { "type": "integer" },
+              "failureClass": { "type": "string" }
+            },
+            "required": ["cause", "attempts", "failureClass"]
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "entityId": { "type": "string" },
+                "title": { "type": "string" },
+                "profileSlug": { "type": "string" },
+                "signal": { "type": "string", "enum": ["email", "phone"] }
+              },
+              "required": ["entityId", "title", "profileSlug", "signal"]
+            }
+          },
           "extraction": { "$ref": "#/components/schemas/CaptureExtraction" },
           "status": { "type": "string" },
           "degradedMessage": { "type": "string" },

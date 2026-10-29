@@ -38,7 +38,10 @@ import {
 import { resolveCaptureProjectRef } from "../../../services/capture-agent/resolve-capture-project.js";
 import { logger } from "../../hub-protocol/rest/_shared.js";
 import { toolError } from "../tool-errors.js";
-import { describeAiFailure } from "../../../utils/ai-failure.js";
+import {
+  describeAiFailure,
+  type AiFailureClass,
+} from "../../../utils/ai-failure.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import { accessScopeWhere } from "../../../utils/project-scope.js";
 import { validateCaptureGraphRefs } from "../../hub-protocol/rest/_capture-graph-dedup.js";
@@ -1056,19 +1059,28 @@ const captureHandler: McpToolHandler = async (
     (structured as { degraded?: boolean }).degraded === true;
   const degradedReason = (structured as { degradedReason?: string })
     .degradedReason;
-  // `degradedReason` (capture.ts DegradedCaptureReason) is already a
-  // classification — map it onto the shared failure classes rather than
-  // re-deriving one.
+  // `degradedDetail.failureClass` is the class the pod read off the failure
+  // itself (a 402 is `quota`, never retried). A plan the IS itself marked
+  // degraded carries only `degradedReason`, mapped onto the shared failure
+  // classes rather than re-deriving one.
+  const degradedFailureClass = (
+    structured as { degradedDetail?: { failureClass?: AiFailureClass } }
+  ).degradedDetail?.failureClass;
   const degradedFailure = degradedCapture
     ? describeAiFailure(
-        degradedReason === "is_auth_error"
-          ? "auth"
-          : degradedReason === "is_invalid_response" ||
-              degradedReason === "is_empty_result"
-            ? "invalid_response"
-            : "unknown"
+        degradedFailureClass ??
+          (degradedReason === "is_auth_error"
+            ? "auth"
+            : degradedReason === "is_invalid_response" ||
+                degradedReason === "is_empty_result"
+              ? "invalid_response"
+              : "unknown")
       )
     : null;
+  // The records the raw text names by email or phone, matched on the degraded
+  // path and OFFERED, never linked (`degraded-capture-identity.ts`).
+  const degradedMentions =
+    (structured as { mentions?: Array<{ title: string }> }).mentions ?? [];
   // The fallback files the caller's explicit kind when it resolved, else a note.
   const degradedKind = (
     captureProposals[0] as { profileSlug?: string } | undefined
@@ -1084,7 +1096,12 @@ const captureHandler: McpToolHandler = async (
           `Tell the user their capture was saved as a raw ${degradedKind} and was NOT structured`) +
       (degradedFailure.retryable
         ? " — and that re-capturing shortly may structure it properly."
-        : ", and do not tell them to try again.")
+        : ", and do not tell them to try again.") +
+      (degradedMentions.length > 0
+        ? ` The text names ${degradedMentions.length} existing record(s) (\`structured.mentions\`: ` +
+          degradedMentions.map((m) => `"${m.title}"`).join(", ") +
+          `). NOTHING was linked to them: offer the user to link the note to them, and link only what they confirm.`
+        : "")
     : null;
   // ── W3: the structurer ASKED A QUESTION ────────────────────────────────
   //
@@ -1178,6 +1195,10 @@ const captureHandler: McpToolHandler = async (
   ).map((p) => {
     const top = dedup[p.tempId]?.[0];
     if (
+      // A degraded capture never merges: its candidates were matched on the
+      // raw text by name, and are offered for the agent or the person to
+      // confirm (plan B, open question 1).
+      !degradedCapture &&
       top &&
       top.score >= 0.95 &&
       top.profileSlug === p.profileSlug &&

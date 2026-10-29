@@ -7,6 +7,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 
+import type { StructureFailure } from "@synap/intelligence-client";
 import {
   callStructureWithRetry,
   type StructureRetryOptions,
@@ -172,5 +173,111 @@ describe("callStructureWithRetry", () => {
     await callStructureWithRetry(call, opts);
 
     expect(opts.sleeps).toHaveLength(2); // not 3
+  });
+});
+
+describe("callStructureWithRetry — retry by reported cause (issue 1c252b3b)", () => {
+  /** A fast call that always fails with `failure`. */
+  function failingWith(opts: { tick: () => void }, failure: StructureFailure) {
+    return vi.fn(async (report: (f: StructureFailure) => void) => {
+      report(failure);
+      opts.tick();
+      return null;
+    });
+  }
+
+  it.each([
+    { cause: "http", status: 400 },
+    { cause: "http", status: 402 },
+    { cause: "http", status: 413 },
+    { cause: "stream", status: 402 },
+  ] as StructureFailure[])(
+    "does NOT retry a refusal a retry cannot fix (%o)",
+    async (failure) => {
+      const opts = makeOptions(200);
+      const call = failingWith(opts, failure);
+
+      const outcome = await callStructureWithRetry(call, opts);
+
+      expect(call).toHaveBeenCalledTimes(1);
+      expect(outcome).toEqual({
+        result: null,
+        attempts: 1,
+        lastReason: "refused_null",
+        lastFailure: failure,
+      });
+      expect(opts.sleeps).toEqual([]);
+    }
+  );
+
+  it.each([
+    { cause: "http", status: 429 },
+    { cause: "http", status: 500 },
+    { cause: "http", status: 502 },
+    { cause: "stream" },
+    { cause: "stream", status: 503 },
+    { cause: "network", message: "fetch failed" },
+  ] as StructureFailure[])(
+    "retries a failure a retry can fix (%o)",
+    async (failure) => {
+      const opts = makeOptions(200);
+      const call = failingWith(opts, failure);
+
+      const outcome = await callStructureWithRetry(call, opts);
+
+      expect(call).toHaveBeenCalledTimes(3);
+      expect(outcome).toEqual({
+        result: null,
+        attempts: 3,
+        lastReason: "transient_null",
+        lastFailure: failure,
+      });
+    }
+  );
+
+  it("trusts the IS envelope's retryable over the status", async () => {
+    const opts = makeOptions(200);
+    const failure: StructureFailure = {
+      cause: "http",
+      status: 503,
+      failure: { code: "llm_budget_exceeded", retryable: false },
+    };
+    const call = failingWith(opts, failure);
+
+    const outcome = await callStructureWithRetry(call, opts);
+
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(outcome.lastReason).toBe("refused_null");
+  });
+
+  it("stops on a reported timeout even when it came back fast", async () => {
+    const opts = makeOptions(200);
+    const call = failingWith(opts, { cause: "timeout" });
+
+    const outcome = await callStructureWithRetry(call, opts);
+
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(outcome.lastReason).toBe("timeout_null");
+    expect(outcome.lastFailure).toEqual({ cause: "timeout" });
+  });
+
+  it("returns the LAST attempt's cause, not the first", async () => {
+    const opts = makeOptions(200);
+    let n = 0;
+    const call = vi.fn(async (report: (f: StructureFailure) => void) => {
+      report(
+        ++n === 1
+          ? { cause: "http", status: 502 }
+          : { cause: "http", status: 402 }
+      );
+      opts.tick();
+      return null;
+    });
+
+    const outcome = await callStructureWithRetry(call, opts);
+
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(outcome.lastFailure).toEqual({ cause: "http", status: 402 });
+    expect(outcome.lastReason).toBe("refused_null");
   });
 });

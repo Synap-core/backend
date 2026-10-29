@@ -10441,6 +10441,279 @@ export interface ImportAnalysisPlan {
 	overallConfidence: number;
 }
 /**
+ * WHY `structure()` returned `null`, reported through its `onFailure` option.
+ * The `null` contract is unchanged; this only stops the cause from living in a
+ * `console.warn` line alone (issue 1c252b3b: a degraded capture nobody could
+ * explain without host log access).
+ *
+ *   http    — a non-OK answer (auth excepted: that one throws), or a 200 body
+ *             that would not parse;
+ *   stream  — a non-200 `result` frame, an `error` frame, or a stream cut
+ *             before its result;
+ *   network — the request never got an answer;
+ *   timeout — aborted, on the deadline or by the caller.
+ *
+ * `failure` is the IS failure envelope (`{ code, retryable, … }`) when the
+ * answer carried one; never the rest of the body. `message` is the transport
+ * error's own text on a `network` failure (ECONNREFUSED, fetch failed): the
+ * evidence a classifier reads, not words for a person.
+ */
+export interface StructureFailure {
+	cause: "http" | "network" | "stream" | "timeout";
+	status?: number;
+	failure?: unknown;
+	message?: string;
+}
+/**
+ *   `expires`          — an ephemeral ask with a lifetime: lapses at
+ *                        `expiresAt`. `orSessionEnd` when it is bound to a
+ *                        session too: closing the session retires it as well,
+ *                        so it goes at the EARLIER of the two.
+ *   `dies_with_session` — a session-bound draft: retired when its session ends.
+ *   `review_later`     — objectWork untouched for 7 days: out of the headline
+ *                        count, kept in the Review later pile `since` then.
+ *   `until_decided`    — waits for a decision, with no deadline.
+ */
+export type ProposalFate = {
+	expiresAt: string;
+	kind: "expires";
+	orSessionEnd: boolean;
+} | {
+	kind: "dies_with_session";
+} | {
+	kind: "until_decided";
+} | {
+	kind: "review_later";
+	since: string;
+};
+declare const PROPOSAL_WAIT_REASONS: readonly [
+	"gate",
+	"owed_slot",
+	"parked_run"
+];
+export type ProposalWaitReason = (typeof PROPOSAL_WAIT_REASONS)[number];
+export interface ProposalWaits {
+	waits: boolean;
+	/** Present only when `waits`. */
+	reason?: ProposalWaitReason;
+}
+declare const NEEDS_YOU_SLOT_CLASSES: readonly [
+	"needs_you",
+	"from_system",
+	"stopped",
+	"working",
+	"review_later"
+];
+export type NeedsYouSlotClass = (typeof NEEDS_YOU_SLOT_CLASSES)[number];
+declare const NEEDS_YOU_PROPOSAL_CLASSES: readonly [
+	"needs_you",
+	"working",
+	"review_later",
+	"changes_to_review"
+];
+export type NeedsYouProposalClass = (typeof NEEDS_YOU_PROPOSAL_CLASSES)[number];
+/** Every class a row can carry — one vocabulary across slots and proposals. */
+export type NeedsYouClass = NeedsYouSlotClass | NeedsYouProposalClass;
+declare const NEEDS_YOU_FOLDS: readonly [
+	"working",
+	"stopped",
+	"review_later",
+	"from_system",
+	"changes_to_review"
+];
+export type NeedsYouFold = (typeof NEEDS_YOU_FOLDS)[number];
+/** The headline and every fold, counted over the SAME rows a list draws. */
+export interface NeedsYouFoldCounts {
+	/** The headline: rows that really need the person. */
+	needsYou: number;
+	working: number;
+	/** Stopped rows… */
+	stopped: number;
+	/** …on this many sessions (Stopped draws one row per session). */
+	stoppedSessions: number;
+	reviewLater: number;
+	fromSystem: number;
+	changesToReview: number;
+}
+/**
+ * WHO is asking for access, on an `access-request` row — a pod-level request
+ * that is not a proposal: an external service asking to be a TRUSTED ISSUER
+ * (it would sign identity tokens this pod accepts), or an APPLICATION asking
+ * that its browser origin may call this pod. Pod admins only; the pod reads
+ * them from their own tables (`trusted_issuers`, application connection
+ * requests), so they need no notification to exist.
+ *
+ * Carried on the row because they are two of the trust signals a reviewer
+ * decides on — the asker's name and where it asks from — and a tray must be
+ * able to say them without a second read.
+ */
+export interface NeedsYouAccessRequest {
+	/**
+	 * What would be granted: issuer trust, an application's browser origin, or
+	 * an API key one of the person's computers asked them for (`api_key`, read
+	 * for its person, not only for admins; decision 68d37853, answer 25).
+	 */
+	subject: "api_key" | "application" | "issuer";
+	/** The asker's display name (the issuer's host, the app's name; a key's requested name). */
+	name: string;
+	/** Where it asks from: the issuer URL, the app's requested origin, or the computer asking for a key. */
+	from: string;
+}
+/**
+ * An invite to ANOTHER space of this pod, addressed to the viewer's email, on
+ * a `space-invite` row (founder, wave PQ 2026-10-22): joined IN the app, with
+ * Accept on the row and Decline beside it. Read from the pod's own `invites`
+ * table for this person only, so it needs no notification to exist.
+ *
+ * `token` is what `workspaces.acceptInvite` takes (the same value
+ * `workspaces.listMyInvites` already hands this person); `id` is what
+ * `workspaces.rejectInvite` takes.
+ */
+export interface NeedsYouInvite {
+	id: string;
+	token: string;
+	/** The role the invite grants (`editor`, `viewer`, …). */
+	role: string;
+	/** `workspace` = one space; `pod` = every space of the pod. */
+	scope: "pod" | "workspace";
+	/** The space's name; null for a pod-wide invite or an unnamed space. */
+	spaceName: string | null;
+}
+/**
+ * One entity of a retired goal kind (Life OS `goal`, Enterprise `objective`,
+ * Project Management `okr`) that was never made a goal, on the
+ * `convertible-goals` card (founder decision D-3, 2026-10-26).
+ */
+export interface NeedsYouConvertibleGoal {
+	entityId: string;
+	/** The entity's title; null when it has none (the host names its kind). */
+	title: string | null;
+	kind: GoalConvertibleKind;
+	/** The space it lives in; null for a pod-wide entity or an unnamed space. */
+	spaceName: string | null;
+	/**
+	 * The projects it is filed in that the viewer can see (`belongs_to_project`)
+	 * — where its goal lands by default, as "Make it a goal" does.
+	 */
+	projectIds: string[];
+}
+/**
+ * The pod's ONE "Make them goals" card (founder decision D-3, 2026-10-26): the
+ * entities of a retired goal kind the viewer can read that were never made a
+ * goal (no `promoted_to` edge to a track). The person reviews them and makes
+ * them goals, each through the one convert door; nothing converts on its own.
+ */
+export interface NeedsYouConvertibleGoals {
+	/** Newest first, at most the pod's scan cap. */
+	entities: NeedsYouConvertibleGoal[];
+	/** The scan hit its cap: there are more than `entities.length`. */
+	truncated: boolean;
+}
+/**
+ * CONNECTION EVENT LINES — the ONE rule that turns a connection's lifecycle
+ * event into a human line.
+ *
+ * `parseRecordChange` reads the CRUD half of the events log ("Created person").
+ * Everything a connection does that is NOT a record change — a key revoked or
+ * replaced, an app asking for access, a sync, a sign-in that expired, a
+ * messaging account connected, a message arriving, a webhook delivery, a
+ * session or track moving — is read HERE, so no surface hand-writes those
+ * words. Every word goes through the vocabulary (`resolveActionLabel` past
+ * mood, `resolveObjectNoun`, `resolveConnectionStateLabel`) and the service
+ * names through `resolveServiceName`; this module only arranges them.
+ *
+ * Input is the event's `type` (`${subjectType}.${action}.completed`, or the
+ * two-segment connector form) and, when the reader has it, its `data`. Every
+ * line reads without `data` too (a surface that only holds the type still
+ * gets words); `data` adds the name and the detail.
+ *
+ * Null = not a connection lifecycle event (a record change, an unknown
+ * family, a governance phase, or an in-flight sync tick that is not a fact).
+ */
+/** One lifecycle event, as a line. */
+export interface ConnectionEventLine {
+	/** Vocabulary action token (`revoke`, `sync`, `receive`, …). */
+	action: string;
+	/** Vocabulary object kind (`apiKey`, `app`, `messaging_account`, …). */
+	objectKind: string;
+	/**
+	 * The thing's own name when the event carries one — a key's name, the
+	 * service ("WhatsApp"), the sender, the stage. Already words.
+	 */
+	name: string | null;
+	/** A short trailing fact ("42 new"), or a message preview. Already words. */
+	detail: string | null;
+	/** The act failed (a failed sync or delivery, an expired sign-in). */
+	failed: boolean;
+	/** The whole line, composed: "Synced Gmail · 42 new". */
+	text: string;
+}
+/** An object-nav address (the `Signal.target` shape). The host routes it. */
+export interface LensDoor {
+	kind: string;
+	id: string;
+	/** Optional view reading (`room`), from `OBJECT_NAV_VIEWS`. */
+	view?: string;
+}
+declare const AI_FAILURE_CODES: readonly [
+	"provider_no_credit",
+	"quota_exhausted",
+	"account_quota_exceeded",
+	"not_entitled",
+	"credits_empty",
+	"access_suspended",
+	"account_inactive",
+	"llm_budget_exceeded",
+	"context_length_exceeded",
+	"content_filter",
+	"cancelled",
+	"provider_auth",
+	"rate_limited",
+	"timeout",
+	"circuit_open",
+	"upstream_error",
+	"bad_request",
+	"invalid_response",
+	"unknown"
+];
+export type AiFailureCode = (typeof AI_FAILURE_CODES)[number];
+export type AiFailureClass = "access_suspended" | "account_inactive" | "account_quota" | "auth" | "bad_request" | "budget" | "cancelled" | "circuit" | "content_filter" | "context_length" | "credits_empty" | "invalid_response" | "not_entitled" | "plan_quota" | "quota" | "rate_limit" | "timeout" | "unknown" | "upstream";
+/**
+ * A COMMITTED PARTIAL turn — the client-shaped verdict.
+ *
+ * The IS commits the text produced before a mid-stream provider death and ends
+ * the stream NORMALLY (no `error` frame), so nothing on the terminal path can
+ * tell a truncated answer from a finished one. This is that missing signal.
+ *
+ * FIELD NAMES ARE THE CLIENT'S, not this module's: the streaming codec
+ * (`turn-decode.ts` → `resolveStreamingError` → `StreamError`) reads
+ * `code` / `message` / `recoverable` / `needsOperator`. Emitting `retryable`
+ * here instead would typecheck, ship, and render nothing — the same defect
+ * `chat-turn-sse.ts` documents for the error frame.
+ */
+export interface PartialTurnFailure {
+	readonly code: AiFailureCode;
+	readonly message: string;
+	/** Client spelling of `retryable`. Drives whether Retry may be offered. */
+	readonly recoverable: boolean;
+	readonly needsOperator: boolean;
+}
+/** An existing record the raw text names by a strong atom. */
+export interface DegradedCaptureMention {
+	entityId: string;
+	title: string;
+	profileSlug: string;
+	/** The atom in the text that matched it. */
+	signal: "email" | "phone";
+}
+/** Same shape as the structured lane's `dedupCandidates` entries. */
+export interface DegradedDedupCandidate {
+	entityId: string;
+	title: string;
+	profileSlug: string;
+	score: number;
+}
+/**
  * The ONE shape of the AI's pending "move to X?" suggestion on every
  * `capture.execute` outcome (applied AND proposed). Nothing was moved: the
  * capture landed where it would have without the AI; the caller confirms by
@@ -11176,6 +11449,24 @@ export type DegradedCaptureReason = "is_auth_error" | "is_empty_result" | "is_in
  * a generic pod one — see the empty-result guard in `structure`.
  */
 export type DegradedCaptureReasonOrUnknown = DegradedCaptureReason | (string & {});
+/**
+ * WHY a capture degraded, returned beside `degradedReason` (which keeps its
+ * value: clients branch on it). A status code and two classes, never the IS
+ * body or a provider name, so it is safe to show (plan B, open question 2).
+ *
+ *   cause        — the client-reported cause (`StructureFailure`), `empty`
+ *                  for a well-formed answer with nothing in it, `unknown`
+ *                  when the call reported none;
+ *   attempts     — structure calls made, retries included;
+ *   failureClass — the ONE failure door's class (`utils/ai-failure.ts`): what
+ *                  a reader needs to say whether retrying can help.
+ */
+export interface DegradedCaptureDetail {
+	cause: StructureFailure["cause"] | "empty" | "unknown";
+	status?: number;
+	attempts: number;
+	failureClass: AiFailureClass;
+}
 declare function buildDegradedCaptureFallback(inputText: string, degradedReason: DegradedCaptureReasonOrUnknown, 
 /** A caller-named kind already resolved by `resolveDegradedFallbackKind`. */
 kind?: string): {
@@ -11273,240 +11564,6 @@ export type UndoPromotePropertyToBodyResult = {
 	reason: UndoPromoteToBodyRefusal;
 	status: "refused";
 };
-/**
- *   `expires`          — an ephemeral ask with a lifetime: lapses at
- *                        `expiresAt`. `orSessionEnd` when it is bound to a
- *                        session too: closing the session retires it as well,
- *                        so it goes at the EARLIER of the two.
- *   `dies_with_session` — a session-bound draft: retired when its session ends.
- *   `review_later`     — objectWork untouched for 7 days: out of the headline
- *                        count, kept in the Review later pile `since` then.
- *   `until_decided`    — waits for a decision, with no deadline.
- */
-export type ProposalFate = {
-	expiresAt: string;
-	kind: "expires";
-	orSessionEnd: boolean;
-} | {
-	kind: "dies_with_session";
-} | {
-	kind: "until_decided";
-} | {
-	kind: "review_later";
-	since: string;
-};
-declare const PROPOSAL_WAIT_REASONS: readonly [
-	"gate",
-	"owed_slot",
-	"parked_run"
-];
-export type ProposalWaitReason = (typeof PROPOSAL_WAIT_REASONS)[number];
-export interface ProposalWaits {
-	waits: boolean;
-	/** Present only when `waits`. */
-	reason?: ProposalWaitReason;
-}
-declare const NEEDS_YOU_SLOT_CLASSES: readonly [
-	"needs_you",
-	"from_system",
-	"stopped",
-	"working",
-	"review_later"
-];
-export type NeedsYouSlotClass = (typeof NEEDS_YOU_SLOT_CLASSES)[number];
-declare const NEEDS_YOU_PROPOSAL_CLASSES: readonly [
-	"needs_you",
-	"working",
-	"review_later",
-	"changes_to_review"
-];
-export type NeedsYouProposalClass = (typeof NEEDS_YOU_PROPOSAL_CLASSES)[number];
-/** Every class a row can carry — one vocabulary across slots and proposals. */
-export type NeedsYouClass = NeedsYouSlotClass | NeedsYouProposalClass;
-declare const NEEDS_YOU_FOLDS: readonly [
-	"working",
-	"stopped",
-	"review_later",
-	"from_system",
-	"changes_to_review"
-];
-export type NeedsYouFold = (typeof NEEDS_YOU_FOLDS)[number];
-/** The headline and every fold, counted over the SAME rows a list draws. */
-export interface NeedsYouFoldCounts {
-	/** The headline: rows that really need the person. */
-	needsYou: number;
-	working: number;
-	/** Stopped rows… */
-	stopped: number;
-	/** …on this many sessions (Stopped draws one row per session). */
-	stoppedSessions: number;
-	reviewLater: number;
-	fromSystem: number;
-	changesToReview: number;
-}
-/**
- * WHO is asking for access, on an `access-request` row — a pod-level request
- * that is not a proposal: an external service asking to be a TRUSTED ISSUER
- * (it would sign identity tokens this pod accepts), or an APPLICATION asking
- * that its browser origin may call this pod. Pod admins only; the pod reads
- * them from their own tables (`trusted_issuers`, application connection
- * requests), so they need no notification to exist.
- *
- * Carried on the row because they are two of the trust signals a reviewer
- * decides on — the asker's name and where it asks from — and a tray must be
- * able to say them without a second read.
- */
-export interface NeedsYouAccessRequest {
-	/**
-	 * What would be granted: issuer trust, an application's browser origin, or
-	 * an API key one of the person's computers asked them for (`api_key`, read
-	 * for its person, not only for admins; decision 68d37853, answer 25).
-	 */
-	subject: "api_key" | "application" | "issuer";
-	/** The asker's display name (the issuer's host, the app's name; a key's requested name). */
-	name: string;
-	/** Where it asks from: the issuer URL, the app's requested origin, or the computer asking for a key. */
-	from: string;
-}
-/**
- * An invite to ANOTHER space of this pod, addressed to the viewer's email, on
- * a `space-invite` row (founder, wave PQ 2026-10-22): joined IN the app, with
- * Accept on the row and Decline beside it. Read from the pod's own `invites`
- * table for this person only, so it needs no notification to exist.
- *
- * `token` is what `workspaces.acceptInvite` takes (the same value
- * `workspaces.listMyInvites` already hands this person); `id` is what
- * `workspaces.rejectInvite` takes.
- */
-export interface NeedsYouInvite {
-	id: string;
-	token: string;
-	/** The role the invite grants (`editor`, `viewer`, …). */
-	role: string;
-	/** `workspace` = one space; `pod` = every space of the pod. */
-	scope: "pod" | "workspace";
-	/** The space's name; null for a pod-wide invite or an unnamed space. */
-	spaceName: string | null;
-}
-/**
- * One entity of a retired goal kind (Life OS `goal`, Enterprise `objective`,
- * Project Management `okr`) that was never made a goal, on the
- * `convertible-goals` card (founder decision D-3, 2026-10-26).
- */
-export interface NeedsYouConvertibleGoal {
-	entityId: string;
-	/** The entity's title; null when it has none (the host names its kind). */
-	title: string | null;
-	kind: GoalConvertibleKind;
-	/** The space it lives in; null for a pod-wide entity or an unnamed space. */
-	spaceName: string | null;
-	/**
-	 * The projects it is filed in that the viewer can see (`belongs_to_project`)
-	 * — where its goal lands by default, as "Make it a goal" does.
-	 */
-	projectIds: string[];
-}
-/**
- * The pod's ONE "Make them goals" card (founder decision D-3, 2026-10-26): the
- * entities of a retired goal kind the viewer can read that were never made a
- * goal (no `promoted_to` edge to a track). The person reviews them and makes
- * them goals, each through the one convert door; nothing converts on its own.
- */
-export interface NeedsYouConvertibleGoals {
-	/** Newest first, at most the pod's scan cap. */
-	entities: NeedsYouConvertibleGoal[];
-	/** The scan hit its cap: there are more than `entities.length`. */
-	truncated: boolean;
-}
-/**
- * CONNECTION EVENT LINES — the ONE rule that turns a connection's lifecycle
- * event into a human line.
- *
- * `parseRecordChange` reads the CRUD half of the events log ("Created person").
- * Everything a connection does that is NOT a record change — a key revoked or
- * replaced, an app asking for access, a sync, a sign-in that expired, a
- * messaging account connected, a message arriving, a webhook delivery, a
- * session or track moving — is read HERE, so no surface hand-writes those
- * words. Every word goes through the vocabulary (`resolveActionLabel` past
- * mood, `resolveObjectNoun`, `resolveConnectionStateLabel`) and the service
- * names through `resolveServiceName`; this module only arranges them.
- *
- * Input is the event's `type` (`${subjectType}.${action}.completed`, or the
- * two-segment connector form) and, when the reader has it, its `data`. Every
- * line reads without `data` too (a surface that only holds the type still
- * gets words); `data` adds the name and the detail.
- *
- * Null = not a connection lifecycle event (a record change, an unknown
- * family, a governance phase, or an in-flight sync tick that is not a fact).
- */
-/** One lifecycle event, as a line. */
-export interface ConnectionEventLine {
-	/** Vocabulary action token (`revoke`, `sync`, `receive`, …). */
-	action: string;
-	/** Vocabulary object kind (`apiKey`, `app`, `messaging_account`, …). */
-	objectKind: string;
-	/**
-	 * The thing's own name when the event carries one — a key's name, the
-	 * service ("WhatsApp"), the sender, the stage. Already words.
-	 */
-	name: string | null;
-	/** A short trailing fact ("42 new"), or a message preview. Already words. */
-	detail: string | null;
-	/** The act failed (a failed sync or delivery, an expired sign-in). */
-	failed: boolean;
-	/** The whole line, composed: "Synced Gmail · 42 new". */
-	text: string;
-}
-/** An object-nav address (the `Signal.target` shape). The host routes it. */
-export interface LensDoor {
-	kind: string;
-	id: string;
-	/** Optional view reading (`room`), from `OBJECT_NAV_VIEWS`. */
-	view?: string;
-}
-declare const AI_FAILURE_CODES: readonly [
-	"provider_no_credit",
-	"quota_exhausted",
-	"account_quota_exceeded",
-	"not_entitled",
-	"credits_empty",
-	"access_suspended",
-	"account_inactive",
-	"llm_budget_exceeded",
-	"context_length_exceeded",
-	"content_filter",
-	"cancelled",
-	"provider_auth",
-	"rate_limited",
-	"timeout",
-	"circuit_open",
-	"upstream_error",
-	"bad_request",
-	"invalid_response",
-	"unknown"
-];
-export type AiFailureCode = (typeof AI_FAILURE_CODES)[number];
-export type AiFailureClass = "access_suspended" | "account_inactive" | "account_quota" | "auth" | "bad_request" | "budget" | "cancelled" | "circuit" | "content_filter" | "context_length" | "credits_empty" | "invalid_response" | "not_entitled" | "plan_quota" | "quota" | "rate_limit" | "timeout" | "unknown" | "upstream";
-/**
- * A COMMITTED PARTIAL turn — the client-shaped verdict.
- *
- * The IS commits the text produced before a mid-stream provider death and ends
- * the stream NORMALLY (no `error` frame), so nothing on the terminal path can
- * tell a truncated answer from a finished one. This is that missing signal.
- *
- * FIELD NAMES ARE THE CLIENT'S, not this module's: the streaming codec
- * (`turn-decode.ts` → `resolveStreamingError` → `StreamError`) reads
- * `code` / `message` / `recoverable` / `needsOperator`. Emitting `retryable`
- * here instead would typecheck, ship, and render nothing — the same defect
- * `chat-turn-sse.ts` documents for the error frame.
- */
-export interface PartialTurnFailure {
-	readonly code: AiFailureCode;
-	readonly message: string;
-	/** Client spelling of `retryable`. Drives whether Retry may be offered. */
-	readonly recoverable: boolean;
-	readonly needsOperator: boolean;
-}
 /**
  * @synap/playbooks — Playbooks & Capability Substrate contracts
  *
@@ -26804,16 +26861,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetProjectId: string | null;
 				targetWorkspaceId: string | null;
 			} | ({
-				dedupCandidates: Record<string, {
-					entityId: string;
-					profileSlug: string;
-					score: number;
-					title: string;
-				}[]>;
+				dedupCandidates: Record<string, DegradedDedupCandidate[]>;
+				dedupSkipped?: true | undefined;
 				degraded: true;
+				degradedDetail: DegradedCaptureDetail;
 				degradedReason: (string & {}) | ("is_auth_error" | "is_empty_result" | "is_invalid_response");
 				followUp: string | StructuredFollowUp | null;
 				formSpec: null;
+				mentions: DegradedCaptureMention[];
 				proposals: {
 					confidence: number;
 					description: string | undefined;
@@ -27665,16 +27720,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetProjectId: string | null;
 				targetWorkspaceId: string | null;
 			} | ({
-				dedupCandidates: Record<string, {
-					entityId: string;
-					profileSlug: string;
-					score: number;
-					title: string;
-				}[]>;
+				dedupCandidates: Record<string, DegradedDedupCandidate[]>;
+				dedupSkipped?: true | undefined;
 				degraded: true;
+				degradedDetail: DegradedCaptureDetail;
 				degradedReason: (string & {}) | ("is_auth_error" | "is_empty_result" | "is_invalid_response");
 				followUp: string | StructuredFollowUp | null;
 				formSpec: null;
+				mentions: DegradedCaptureMention[];
 				proposals: {
 					confidence: number;
 					description: string | undefined;

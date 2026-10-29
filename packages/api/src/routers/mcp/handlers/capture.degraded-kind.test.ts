@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   structureResult: undefined as unknown,
   executeResult: undefined as unknown,
   structureInputs: [] as unknown[],
+  executeInputs: [] as unknown[],
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -97,7 +98,10 @@ vi.mock("../../capture.js", () => ({
         h.structureInputs.push(input);
         return h.structureResult;
       },
-      execute: async () => h.executeResult,
+      execute: async (input: unknown) => {
+        h.executeInputs.push(input);
+        return h.executeResult;
+      },
     }),
   },
 }));
@@ -147,6 +151,7 @@ const degraded = (profileSlug: string) => ({
 
 beforeEach(() => {
   h.structureInputs = [];
+  h.executeInputs = [];
   h.executeResult = {
     status: "applied",
     created: [{ title: "Call the accountant" }],
@@ -180,5 +185,104 @@ describe("synap_capture degraded fallback — the caller's kind", () => {
     });
 
     expect(out.degradedNotice).toMatch(/RAW NOTE/);
+  });
+});
+
+describe("synap_capture degraded notice — the failure class the pod read (1c252b3b)", () => {
+  const withDetail = (failureClass: string) => ({
+    ...degraded("note"),
+    degradedDetail: { cause: "http", status: 402, attempts: 1, failureClass },
+  });
+
+  it("a billing refusal names it and says not to retry", async () => {
+    h.structureResult = withDetail("quota");
+    const out = await call({ text: "Call the accountant" });
+
+    expect(out.degradedNotice).toMatch(/out of credit/);
+    expect(out.degradedNotice).toMatch(/do not tell them to try again/);
+    expect(out.degradedNotice).not.toMatch(/could not be read/);
+  });
+
+  it("a server error the retries did not outlast says re-capturing may work", async () => {
+    h.structureResult = withDetail("upstream");
+    const out = await call({ text: "Call the accountant" });
+
+    expect(out.degradedNotice).toMatch(/server error/);
+    expect(out.degradedNotice).toMatch(/re-capturing shortly may structure it/);
+  });
+
+  it("no detail (a plan the IS marked degraded) keeps the reason mapping", async () => {
+    h.structureResult = degraded("note");
+    const out = await call({ text: "Call the accountant" });
+
+    expect(out.degradedNotice).toMatch(/could not be read/);
+  });
+});
+
+describe("synap_capture degraded — candidates are offered, never linked (R6)", () => {
+  it("a same-kind name twin at score 1 does NOT merge the degraded item", async () => {
+    h.structureResult = {
+      ...degraded("person"),
+      dedupCandidates: {
+        t1: [
+          {
+            entityId: "E-ADA",
+            title: "Call the accountant",
+            profileSlug: "person",
+            score: 1,
+          },
+        ],
+      },
+    };
+    const out = await call({
+      text: "Call the accountant",
+      profileSlug: "person",
+    });
+
+    const executed = h.executeInputs[0] as {
+      entities: Array<{ existingEntityId?: string; updateExisting?: boolean }>;
+    };
+    expect(executed.entities).toHaveLength(1);
+    expect(executed.entities[0]!.existingEntityId).toBeUndefined();
+    expect(executed.entities[0]!.updateExisting).toBeUndefined();
+    expect(out.degraded).toBe(true);
+  });
+
+  it("CONTROL: the same candidate on a structured capture still merges", async () => {
+    h.structureResult = {
+      proposals: [{ tempId: "t1", profileSlug: "person", title: "Ada" }],
+      relations: [],
+      sessionId: "S-REQUESTED",
+      dedupCandidates: {
+        t1: [
+          { entityId: "E-ADA", title: "Ada", profileSlug: "person", score: 1 },
+        ],
+      },
+    };
+    await call({ text: "Ada", profileSlug: "person" });
+
+    const executed = h.executeInputs[0] as {
+      entities: Array<{ existingEntityId?: string }>;
+    };
+    expect(executed.entities[0]!.existingEntityId).toBe("E-ADA");
+  });
+
+  it("the notice names the mentioned records and says nothing was linked", async () => {
+    h.structureResult = {
+      ...degraded("note"),
+      mentions: [
+        {
+          entityId: "E-LEA",
+          title: "Léa Martin",
+          profileSlug: "person",
+          signal: "email",
+        },
+      ],
+    };
+    const out = await call({ text: "Met lea@acme.test" });
+
+    expect(out.degradedNotice).toMatch(/names 1 existing record/);
+    expect(out.degradedNotice).toMatch(/"Léa Martin"/);
+    expect(out.degradedNotice).toMatch(/NOTHING was linked/);
   });
 });
