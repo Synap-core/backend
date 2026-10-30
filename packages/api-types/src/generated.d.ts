@@ -35294,6 +35294,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					unblocks?: string | undefined;
 					why?: string | undefined;
 				}[] | undefined;
+				expectedStatus?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | undefined;
 				followPlaybookId?: string | null | undefined;
 				followStageKey?: string | null | undefined;
 				goal?: string | undefined;
