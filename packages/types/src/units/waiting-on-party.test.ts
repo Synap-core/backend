@@ -12,6 +12,9 @@ describe("who a waiting-on reason waits on", () => {
     expect(WAITS_ON_A_PERSON).toEqual(["input", "approval", "access"]);
     expect(waitsOnAPerson("another_work")).toBe(false);
     expect(waitsOnAPerson("outside_world")).toBe(false);
+    // A green PR (external) and a date resume on their own: nobody owes an act.
+    expect(waitsOnAPerson("external")).toBe(false);
+    expect(waitsOnAPerson("date")).toBe(false);
     expect(waitsOnAPerson("approval")).toBe(true);
     expect(waitsOnAPerson(null)).toBe(false);
   });

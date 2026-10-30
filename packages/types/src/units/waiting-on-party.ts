@@ -18,6 +18,8 @@ export const WAITING_ON_REASON_PARTY = {
   access: "person",
   another_work: "work",
   outside_world: "world",
+  external: "world",
+  date: "world",
 } as const satisfies Record<WaitingOnReason, WaitingOnParty>;
 
 /** The reasons a person's act unblocks, in reason order. */
