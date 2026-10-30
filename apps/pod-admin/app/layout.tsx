@@ -82,6 +82,9 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
+  // `lang` is English on the server: this layout cannot read the person's
+  // session. `ConsoleLocaleProvider` sets it from `users.me.locale` on the
+  // client, with the catalog language (rule i18n §4).
   return (
     <html
       lang="en"
