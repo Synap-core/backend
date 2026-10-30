@@ -57,6 +57,7 @@ const PROCEDURAL_IGNORED_TERMS: ReadonlySet<string> = new Set([
   ...CONVERSATIONAL_WORDS,
 ]);
 import { structuredLookup } from "./structured.js";
+import type { AskDetail } from "./synthesize.js";
 import { searchLibraryForAsk } from "../library/ask-lane.js";
 import type { AskSpacesHint } from "../discover/space-catalog.js";
 import { isQueueQuestion, type AskQueueBlock } from "./queue-question.js";
@@ -111,6 +112,14 @@ export interface AskParams {
    * retrieved). Additive — existing callers are unaffected. Defaults false.
    */
   parseOnly?: boolean;
+  /**
+   * How long an answer the caller asked for (`synap_ask` detail). Under
+   * `brief` the structured lane reads only `limit` rows: the brief answer is a
+   * few sentences over at most `BRIEF_MAX_SOURCES` sources, so the complete
+   * enumeration below would be read only to be dropped (B1-b). `full` and
+   * `sources` keep the complete set.
+   */
+  detail?: AskDetail;
 }
 
 export interface AskAnswer {
@@ -387,8 +396,9 @@ export async function ask(params: AskParams): Promise<AskResult> {
             // Enumeration promises the COMPLETE set, not the recall top-k —
             // "list all my companies" / "how many tasks" must not silently
             // truncate at the semantic limit (review finding S1). 200 is the
-            // sanity ceiling, not a relevance cut.
-            limit: Math.max(limit, 200),
+            // sanity ceiling, not a relevance cut. A `brief` ask promises a
+            // short answer instead, so it reads the caller's limit (B1-b).
+            limit: params.detail === "brief" ? limit : Math.max(limit, 200),
           })
         )
       : { status: "ok", items: [] };
