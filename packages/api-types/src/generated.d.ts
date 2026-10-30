@@ -11456,6 +11456,12 @@ export interface SubmitCaptureGraphResult {
 	/** True when this call returned a PRIOR proposal instead of filing one. */
 	deduped?: true;
 	/**
+	 * Set when that prior proposal is the caller's own pending TWIN (D3): a
+	 * different payload whose entities already wait there, not an identical
+	 * re-send. The MCP door's hint says which (`ok()` in mcp/handlers/shared.ts).
+	 */
+	dedupedAs?: "own_pending_twin";
+	/**
 	 * How the graph was placed when the caller gave no workspace (D14): each
 	 * entity resolves on its OWN kind and roles; unanimous → placed, split →
 	 * abstain (`workspaceId` null) with every workspace the entities named in
@@ -15275,27 +15281,6 @@ export interface RankComparison {
 	};
 }
 export type SubstrateKind = "episodic" | "library" | "procedural" | "semantic" | "structured";
-export interface AskSpaceHint {
-	workspaceId: string;
-	name: string;
-	/** One-line purpose (`spacePurposeLine`). Absent when the space has none. */
-	purpose?: string;
-	/** The asked-about kinds this space HOLDS, with its own entity counts. */
-	kinds: Array<{
-		count: number;
-		slug: string;
-	}>;
-}
-/**
- * The space(s) holding the kinds a question is about — `ask`'s routing hint.
- * `matches: []` = read, and no member space holds any of those kinds.
- * `{ status: "unavailable" }` = the read failed — never folded into "none".
- */
-export type AskSpacesHint = {
-	matches: AskSpaceHint[];
-} | {
-	status: "unavailable";
-};
 /** One owed deliverable, with just enough of its session to be actionable. */
 export interface OwedSlot {
 	sessionId: string;
@@ -16797,6 +16782,66 @@ export interface StartHere {
 	beforeYouFinish: string;
 }
 export type AskQueueBlock = Pick<StartHere, "openSessions" | "owedByPerson" | "pendingReview">;
+export interface SynthesisSource {
+	substrate: string;
+	id: string;
+	title: string;
+}
+/**
+ * A retrieved record that was REPLACED (`properties.supersededBy` set, read by
+ * the one predicate `supersededByOf`). It is not fed to the answer and not
+ * listed in `sources`: a replaced fact presented as current is how an agent
+ * reported a stale cause as today's diagnosis. It does not vanish either: it
+ * is listed here with the id of its replacement, the door to the current
+ * record (`synap_get_entity` on `supersededBy`), and the context tells the
+ * model it was left out and by what it was replaced.
+ */
+export interface SupersededSource extends SynthesisSource {
+	/** The id of the record that replaced this one. */
+	supersededBy: string;
+}
+/**
+ * What the context budget left OUT — and, crucially, WHICH items.
+ *
+ * `omitted`/`total` alone told a caller only that its answer was partial, with
+ * no door to complete it: the agent read "16 of 20 items are not shown" and had
+ * no cursor, no id and no follow-up call. `omittedSources` closes that — every
+ * dropped item's `{substrate, id, title}`, the SAME shape `sources` already
+ * carries, so the agent completes the answer with a tool it already has
+ * (`synap_get_entity` / `synap_get_entities` on those ids). No cursor and no
+ * server-side paging state: the ids were already computed before the budget
+ * check ran, so naming them costs nothing new.
+ *
+ * `omittedSources.length` can be SHORTER than `omitted`: an item with no `id`
+ * is counted as dropped but cannot be offered as a fetchable source — the same
+ * rule `sources` already follows (it admits only id-bearing rows).
+ */
+export interface SynthesisTruncation {
+	omitted: number;
+	total: number;
+	omittedSources: SynthesisSource[];
+}
+export interface AskSpaceHint {
+	workspaceId: string;
+	name: string;
+	/** One-line purpose (`spacePurposeLine`). Absent when the space has none. */
+	purpose?: string;
+	/** The asked-about kinds this space HOLDS, with its own entity counts. */
+	kinds: Array<{
+		count: number;
+		slug: string;
+	}>;
+}
+/**
+ * The space(s) holding the kinds a question is about — `ask`'s routing hint.
+ * `matches: []` = read, and no member space holds any of those kinds.
+ * `{ status: "unavailable" }` = the read failed — never folded into "none".
+ */
+export type AskSpacesHint = {
+	matches: AskSpaceHint[];
+} | {
+	status: "unavailable";
+};
 /**
  * The lens an answer reports — `lens: { filter, boost, source }` on `ask`'s
  * envelope, on every door that returns it (MCP `synap_ask`, Hub
@@ -16910,45 +16955,6 @@ export interface AskResult {
 	 * sections as orient's `startHere`. Retrieval cannot answer such a question.
 	 */
 	queue?: AskQueueBlock;
-}
-export interface SynthesisSource {
-	substrate: string;
-	id: string;
-	title: string;
-}
-/**
- * A retrieved record that was REPLACED (`properties.supersededBy` set, read by
- * the one predicate `supersededByOf`). It is not fed to the answer and not
- * listed in `sources`: a replaced fact presented as current is how an agent
- * reported a stale cause as today's diagnosis. It does not vanish either: it
- * is listed here with the id of its replacement, the door to the current
- * record (`synap_get_entity` on `supersededBy`), and the context tells the
- * model it was left out and by what it was replaced.
- */
-export interface SupersededSource extends SynthesisSource {
-	/** The id of the record that replaced this one. */
-	supersededBy: string;
-}
-/**
- * What the context budget left OUT — and, crucially, WHICH items.
- *
- * `omitted`/`total` alone told a caller only that its answer was partial, with
- * no door to complete it: the agent read "16 of 20 items are not shown" and had
- * no cursor, no id and no follow-up call. `omittedSources` closes that — every
- * dropped item's `{substrate, id, title}`, the SAME shape `sources` already
- * carries, so the agent completes the answer with a tool it already has
- * (`synap_get_entity` / `synap_get_entities` on those ids). No cursor and no
- * server-side paging state: the ids were already computed before the budget
- * check ran, so naming them costs nothing new.
- *
- * `omittedSources.length` can be SHORTER than `omitted`: an item with no `id`
- * is counted as dropped but cannot be offered as a fetchable source — the same
- * rule `sources` already follows (it admits only id-bearing rows).
- */
-export interface SynthesisTruncation {
-	omitted: number;
-	total: number;
-	omittedSources: SynthesisSource[];
 }
 export type RunPosture = "auto" | "propose";
 /**
