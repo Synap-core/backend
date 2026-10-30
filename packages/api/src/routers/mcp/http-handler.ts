@@ -70,8 +70,11 @@ import {
   CONVERSATION_CWD_META_KEY,
   PROCESS_HEADER,
   PROCESS_META_KEY,
+  RUNNER_STATE_HEADER,
+  RUNNER_STATE_META_KEY,
   isProbeApiKey,
 } from "@synap/database";
+import { reportRunnerState } from "../../services/focus-sessions/session-runners.js";
 import {
   loadEntityUsage,
   usageByWorkspace,
@@ -625,14 +628,18 @@ mcpHttpApp.post("/", async (c) => {
       runWithCallingKey(keyRecord.id, () =>
         runWithClientKey(
           clientKeyForApiKey(keyRecord, conversationId),
-          () =>
+          () => {
+            // 0384: what the runner says it is doing, recorded off the request path.
+            void reportRunnerState();
             // W1: the key's grant bounds every write gate and scoped read below.
-            runWithGrant(grant, () =>
+            return runWithGrant(grant, () =>
               transport.handleRequest(c.req.raw, { parsedBody })
-            ),
+            );
+          },
           c.req.header(CONVERSATION_CWD_HEADER) ??
             metaString(CONVERSATION_CWD_META_KEY),
-          c.req.header(PROCESS_HEADER) ?? metaString(PROCESS_META_KEY)
+          c.req.header(PROCESS_HEADER) ?? metaString(PROCESS_META_KEY),
+          c.req.header(RUNNER_STATE_HEADER) ?? metaString(RUNNER_STATE_META_KEY)
         )
       )
     )

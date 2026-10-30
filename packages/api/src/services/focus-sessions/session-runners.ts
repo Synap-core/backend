@@ -30,6 +30,23 @@
  * (`process_key = ''`); that row is never read as a twin. SIGNAL ONLY: nothing
  * here refuses a write or a wait ({@link markTwins}).
  *
+ * A runner SAYS WHAT IT IS DOING (0384): `busy`, `idle`, `needs_permission`
+ * or `ended`, named by any harness adapter on ANY key-auth call
+ * (`X-Synap-Runner-State`, or `_meta["live.synap/runnerState"]` on MCP;
+ * `RUNNER_STATES`, `request-write-context.ts`). ONE door, two writes:
+ *   - the wait's stamp records it with the row ({@link stampSessionRunner});
+ *     a state that changed is written at once, past the once-a-minute throttle;
+ *   - every other call that carries it updates that conversation's process
+ *     rows while they are live ({@link reportRunnerState}, called by both
+ *     key-auth doors, off the request path) — so a turn that ends while the
+ *     wait is held still reads `idle` within one call, not a minute.
+ * `state_reported_at` orders reports: an older one (a 90-second wait's
+ * re-stamp carries the state it was opened with) never overwrites a newer one.
+ * Same posture as the stamp: telemetry, no governance, never thrown.
+ * READ: a runner past the live window, or one that said `ended`, reads
+ * `ended` and not live; a live one whose client names no state reads `null`
+ * (unknown, never "idle"). {@link foldRunnerState} is the session-level word.
+ *
  * A runner row carries the session's `clientKey` + `cwd` shape, so the ONE
  * resume derivation (`resolveAgentConversation`, @synap-core/types/agents)
  * reads it as it reads a session's metadata — never a second resume rule.
@@ -45,6 +62,13 @@ import {
   getRequestClientKey,
   getRequestConversationCwd,
   getRequestProcess,
+  getRequestRunnerState,
+  and,
+  isNull,
+  lt,
+  or,
+  RUNNER_STATES,
+  type RunnerState,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
@@ -112,7 +136,10 @@ export async function stampSessionRunner(p: {
   if (!clientKey || !parsed) return false;
   const cwd = getRequestConversationCwd() ?? null;
   const proc = getRequestProcess();
+  const report = getRequestRunnerState();
   const agentUserId = p.agentUserId ?? null;
+  // The report is newer than the row's: it may move the state (0384).
+  const fresher = drizzleSql`(excluded.state IS NOT NULL AND (${sessionRunners.stateReportedAt} IS NULL OR excluded.state_reported_at > ${sessionRunners.stateReportedAt}))`;
   try {
     // The computer: the agent's host (`users.host_user_id`), or the agent
     // itself when the key belongs to a `machine` agent user.
@@ -134,6 +161,9 @@ export async function stampSessionRunner(p: {
         processKey: proc?.key ?? "",
         processHost: proc?.host ?? null,
         processStartedAt: proc?.startedAt ?? null,
+        state: report?.state ?? null,
+        stateSince: report?.reportedAt ?? null,
+        stateReportedAt: report?.reportedAt ?? null,
       })
       .onConflictDoUpdate({
         target: [
@@ -146,9 +176,13 @@ export async function stampSessionRunner(p: {
           cwd: drizzleSql`coalesce(excluded.cwd, ${sessionRunners.cwd})`,
           agentUserId: drizzleSql`excluded.agent_user_id`,
           machineUserId: drizzleSql`coalesce(excluded.machine_user_id, ${sessionRunners.machineUserId})`,
+          state: drizzleSql`CASE WHEN ${fresher} THEN excluded.state ELSE ${sessionRunners.state} END`,
+          stateSince: drizzleSql`CASE WHEN ${fresher} AND excluded.state IS DISTINCT FROM ${sessionRunners.state} THEN excluded.state_since ELSE ${sessionRunners.stateSince} END`,
+          stateReportedAt: drizzleSql`CASE WHEN ${fresher} THEN excluded.state_reported_at ELSE ${sessionRunners.stateReportedAt} END`,
         },
-        // THE throttle: at most one write a minute per row.
-        setWhere: drizzleSql`${sessionRunners.lastSeenAt} < now() - make_interval(secs => ${RUNNER_STAMP_INTERVAL_SECONDS})`,
+        // THE throttle: at most one write a minute per row — unless the
+        // runner says something new, which is written at once.
+        setWhere: drizzleSql`${sessionRunners.lastSeenAt} < now() - make_interval(secs => ${RUNNER_STAMP_INTERVAL_SECONDS}) OR (${fresher} AND excluded.state IS DISTINCT FROM ${sessionRunners.state})`,
       })
       .returning({ sessionId: sessionRunners.sessionId });
     return written.length > 0;
@@ -158,6 +192,49 @@ export async function stampSessionRunner(p: {
       "session runner stamp failed (non-fatal)"
     );
     return false;
+  }
+}
+
+/**
+ * Record what THIS request's runner says it is doing (0384) on its process's
+ * LIVE rows — every session whose wait it holds — when the state differs and
+ * the report is newer. Both key-auth doors call it on every request, off the
+ * request path; a request that names no state, or no conversation, costs no
+ * query. The wait's own stamp creates the row: a runner that never waited has
+ * no row to update. Returns how many rows moved. Never throws.
+ */
+export async function reportRunnerState(
+  opts: { database?: typeof db } = {}
+): Promise<number> {
+  try {
+    const report = getRequestRunnerState();
+    const clientKey = getRequestClientKey();
+    if (!report || !clientKey || !parseRunnerClientKey(clientKey)) return 0;
+    const moved = await (opts.database ?? db)
+      .update(sessionRunners)
+      .set({
+        state: report.state,
+        stateSince: report.reportedAt,
+        stateReportedAt: report.reportedAt,
+      })
+      .where(
+        and(
+          eq(sessionRunners.clientKey, clientKey),
+          eq(sessionRunners.processKey, getRequestProcess()?.key ?? ""),
+          drizzleSql`${sessionRunners.lastSeenAt} > now() - make_interval(secs => ${RUNNER_LIVE_WINDOW_SECONDS})`,
+          drizzleSql`${sessionRunners.state} IS DISTINCT FROM ${report.state}`,
+          or(
+            isNull(sessionRunners.stateReportedAt),
+            lt(sessionRunners.stateReportedAt, report.reportedAt)
+          )
+        )
+      )
+      .returning({ sessionId: sessionRunners.sessionId });
+    return moved.length;
+  } catch (err) {
+    // Called with `void` by the doors: it must never reject.
+    logger.warn({ err }, "runner state report failed (non-fatal)");
+    return 0;
   }
 }
 
@@ -187,9 +264,16 @@ export interface SessionRunner {
    * row); empty when there is no twin. Only rows that named a process count.
    */
   twin: TwinCopy[];
+  /**
+   * What it says it is doing (0384). `ended` when it said so, or when it left
+   * the live window; `null` while live = its client names no state (unknown).
+   */
+  state: RunnerState | null;
+  /** When it entered that state (for a runner gone quiet: when it was last seen). */
+  stateSince: string | null;
   firstSeenAt: string;
   lastSeenAt: string;
-  /** Stamped within {@link RUNNER_LIVE_WINDOW_SECONDS} of `now`. */
+  /** Stamped within {@link RUNNER_LIVE_WINDOW_SECONDS} of `now`, and not `ended`. */
   live: boolean;
   /** The reopen door (`claude --resume …`), or null for a harness we cannot reopen. */
   conversation: AgentConversationRef | null;
@@ -216,6 +300,8 @@ export async function loadSessionRunners(
       processKey: sessionRunners.processKey,
       processHost: sessionRunners.processHost,
       processStartedAt: sessionRunners.processStartedAt,
+      state: sessionRunners.state,
+      stateSince: sessionRunners.stateSince,
       firstSeenAt: sessionRunners.firstSeenAt,
       lastSeenAt: sessionRunners.lastSeenAt,
     })
@@ -224,25 +310,69 @@ export async function loadSessionRunners(
     .orderBy(desc(sessionRunners.lastSeenAt))
     .limit(Math.max(1, Math.min(opts.limit ?? 20, 100)));
   return markTwins(
-    rows.map((r) => ({
-      harness: r.harness,
-      conversationId: r.conversationId,
-      cwd: r.cwd,
-      agentUserId: r.agentUserId,
-      machineUserId: r.machineUserId,
-      processId: r.processKey,
-      processHost: r.processHost,
-      processStartedAt: r.processStartedAt?.toISOString() ?? null,
-      twin: [],
-      firstSeenAt: r.firstSeenAt.toISOString(),
-      lastSeenAt: r.lastSeenAt.toISOString(),
-      live: now - r.lastSeenAt.getTime() <= RUNNER_LIVE_WINDOW_SECONDS * 1000,
-      conversation: resolveAgentConversation({
-        clientKey: r.clientKey,
-        conversationCwd: r.cwd,
-      }),
-    }))
+    rows.map((r) => {
+      const said = parseStoredState(r.state);
+      const live =
+        said !== "ended" &&
+        now - r.lastSeenAt.getTime() <= RUNNER_LIVE_WINDOW_SECONDS * 1000;
+      return {
+        harness: r.harness,
+        conversationId: r.conversationId,
+        cwd: r.cwd,
+        agentUserId: r.agentUserId,
+        machineUserId: r.machineUserId,
+        processId: r.processKey,
+        processHost: r.processHost,
+        processStartedAt: r.processStartedAt?.toISOString() ?? null,
+        twin: [],
+        state: live ? said : "ended",
+        stateSince:
+          live || said === "ended"
+            ? (r.stateSince?.toISOString() ?? null)
+            : r.lastSeenAt.toISOString(),
+        firstSeenAt: r.firstSeenAt.toISOString(),
+        lastSeenAt: r.lastSeenAt.toISOString(),
+        live,
+        conversation: resolveAgentConversation({
+          clientKey: r.clientKey,
+          conversationCwd: r.cwd,
+        }),
+      };
+    })
   );
+}
+
+/** A stored state the pod knows, else null (a row from before 0384, or a word dropped since). */
+function parseStoredState(raw: string | null): RunnerState | null {
+  return RUNNER_STATES.find((s) => s === raw) ?? null;
+}
+
+/** What a session's runners say, folded: the most urgent word among the LIVE ones. */
+export interface RunnerStateFold {
+  /** `needs_permission` over `busy` over `idle`; null = no live runner named a state. */
+  state: Exclude<RunnerState, "ended"> | null;
+  /** When the longest-standing runner in that state entered it. */
+  since: string | null;
+}
+
+const FOLD_ORDER = ["needs_permission", "busy", "idle"] as const;
+
+/**
+ * THE session-level runner word: a person waiting on a permission dialog
+ * outranks an agent at work, which outranks one at rest. Only live runners
+ * count (an ended one says nothing about now). Pure.
+ */
+export function foldRunnerState(runners: SessionRunner[]): RunnerStateFold {
+  for (const state of FOLD_ORDER) {
+    const inState = runners.filter((r) => r.live && r.state === state);
+    if (inState.length === 0) continue;
+    const since = inState
+      .map((r) => r.stateSince)
+      .filter((s): s is string => s !== null)
+      .sort()[0];
+    return { state, since: since ?? null };
+  }
+  return { state: null, since: null };
 }
 
 /**

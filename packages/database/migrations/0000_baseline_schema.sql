@@ -5303,7 +5303,8 @@ END $$;
 -- 0342: session runners — who is attached to a session right now (one row per
 -- session × client conversation holding its change-feed wait). Telemetry,
 -- stamped by the wait at most once a minute; never on focus_sessions (0277's
--- trigger would wake the waiter). Mirrors 0342_session_runners.sql + 0373 (process).
+-- trigger would wake the waiter). Mirrors 0342_session_runners.sql + 0373 (process)
+-- + 0384 (state).
 CREATE TABLE IF NOT EXISTS "session_runners" (
   "session_id"      uuid        NOT NULL REFERENCES "focus_sessions"("id") ON DELETE CASCADE,
   "client_key"      text        NOT NULL,
@@ -5317,6 +5318,9 @@ CREATE TABLE IF NOT EXISTS "session_runners" (
   "process_key"        text        NOT NULL DEFAULT '',
   "process_host"       text,
   "process_started_at" timestamptz,
+  "state"              text,
+  "state_since"        timestamptz,
+  "state_reported_at"  timestamptz,
   "first_seen_at"   timestamptz NOT NULL DEFAULT now(),
   "last_seen_at"    timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY ("session_id", "client_key", "process_key")
@@ -5324,6 +5328,8 @@ CREATE TABLE IF NOT EXISTS "session_runners" (
 
 CREATE INDEX IF NOT EXISTS "idx_session_runners_session_seen"
   ON "session_runners" ("session_id", "last_seen_at");
+CREATE INDEX IF NOT EXISTS "idx_session_runners_client"
+  ON "session_runners" ("client_key", "process_key");
 
 -- 0352: proposal apply runs — one row per background attempt at applying a
 -- LARGE approved proposal (progress, counts, outcome). Read through its
