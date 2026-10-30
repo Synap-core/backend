@@ -13579,8 +13579,8 @@ export interface ClusterFoldCounts {
  *
  * 1. KEYED ON MOTIF, NEVER ON FINGERPRINT. The key is
  *    `${eventType}` × `${targetType}.${proposalType}` — the SAME motif
- *    vocabulary `recommend-tighten` and the widen scanner speak, so all three
- *    lanes glob-match against one language. The structural fingerprint
+ *    vocabulary `recommend-tighten` and the trust ladder's event key speak, so
+ *    every lane glob-matches against one language. The structural fingerprint
  *    (`computeProposalFingerprint`) embeds OBJECT identity (`id:<targetId>` for
  *    every non-create class), which is right for duplicate detection and fatal
  *    here: "same shape, different objects" would shatter into clusters of one.
@@ -19276,6 +19276,26 @@ export interface NextRungRuleInput {
 	profileSlug?: string | null;
 }
 declare function nextRungRuleDraft(input: NextRungRuleInput): GovernanceRuleDraft;
+/**
+ * How far an agent has earned one kind of work: `count` human approvals in a
+ * row (newest backwards), `met` once {@link STREAK_NEEDED} of them span
+ * {@link STREAK_MIN_DAYS} days. `since` is the oldest counted decision.
+ */
+export interface EarnedStreak {
+	met: boolean;
+	count: number;
+	needed: number;
+	since: string | null;
+}
+/**
+ * A grant on this card's kind that paused itself after undos
+ * ({@link RULE_PAUSED_AFTER_REVERTS}): the card offers "Ask me again" and the
+ * rule is a door. `governanceRules.nextRungs` rows carry `paused`.
+ */
+export interface NextRungPaused {
+	ruleId: string;
+	revokedAt: string;
+}
 type GovernanceRuleDraft$1 = ReturnType<typeof nextRungRuleDraft>;
 export interface NextRungProjection {
 	proposalId: string;
@@ -19289,6 +19309,18 @@ export interface NextRungProjection {
 	 * "Already a rule" as a DOOR to it. `null` when nothing covers the card.
 	 */
 	covered: NextRungCovered | null;
+	/**
+	 * How far the agent has EARNED this offer (`earnedStreak`), set only where
+	 * there is an offer. `null` WITH an offer = the history could not be read —
+	 * never an empty streak (decision e8939070). A streak never creates an offer
+	 * the ladder refuses.
+	 */
+	streak: EarnedStreak | null;
+	/**
+	 * The grant on this kind PAUSED itself after undos: the card offers "Ask me
+	 * again" and names the rule (a door). Only approvals after the pause count.
+	 */
+	paused: NextRungPaused | null;
 }
 export type FileNextRungResult = {
 	offer: NextRungOffer;
@@ -35601,6 +35633,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		meta: object;
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		alwaysApproved: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				kinds: NextRungProjection[];
+				readable: boolean;
+			};
+		}>;
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				agentUserId?: string | undefined;
@@ -35626,6 +35666,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					principalClass: string | null;
 					principalKind: "agent" | "any" | "class";
 					revokedAt: Date | null;
+					revokedReason: string | null;
 					scopeKind: "pod" | "workspace";
 					sourceProposalId: string | null;
 					targetKind: "action" | "capability" | "connection" | "profile";
@@ -35848,6 +35889,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					principalClass: string | null;
 					principalKind: "agent" | "any" | "class";
 					revokedAt: Date | null;
+					revokedReason: string | null;
 					scopeKind: "pod" | "workspace";
 					sourceProposalId: string | null;
 					targetKind: "action" | "capability" | "connection" | "profile";
