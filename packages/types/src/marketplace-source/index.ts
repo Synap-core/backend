@@ -381,6 +381,13 @@ export interface OfficialCatalogSignatureStatus {
   unverifiedRows: number | null;
   /** One plain sentence on the last attempt when it did not verify. */
   message: string | null;
+  /**
+   * sha256 of the exact bytes of the last verified keys statement and index:
+   * a later file under the same `keysVersion` / `validUntil` must be the same
+   * file. Absent on a status recorded before they were kept.
+   */
+  keysSha256?: string | null;
+  indexSha256?: string | null;
 }
 
 /**

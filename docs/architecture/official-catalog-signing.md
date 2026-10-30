@@ -148,6 +148,11 @@ hex are the row's `h-` version. Because `_meta` is outside the digest, the pod a
 | Index expired, no fresh one                     | Same as above; `SYNAP_CATALOG_ALLOW_EXPIRED=1` accepts expired signed files (air-gapped pods)                                                               |
 | A definition the index does not vouch for       | Report mode: logged. Enforced: that install or update is refused with the reason                                                                            |
 
+Freshness: a keys statement's `version` and an index's `expires` never move back. Under the same `version` or
+`expires` the file must be the one already accepted: the pod records the sha256 of each verified file, and other
+bytes under an equal stamp are refused as replayed. A keys statement that names a root key as an online key is
+refused.
+
 Operator override: `SYNAP_CATALOG_PUBLIC_KEYS` (comma-separated ed25519 keys) replaces the root chain. The index
 must then be signed by one of those keys directly, and no keys statement is read. It is logged loudly at boot.
 Enforcement ships off (`SYNAP_CATALOG_ENFORCE_SIGNATURE`); its default flips in a later release, once report-only has
