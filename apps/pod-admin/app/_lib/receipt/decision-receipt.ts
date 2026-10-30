@@ -157,15 +157,10 @@ export function undoReceipt(answer: UndoAnswer): Receipt {
       undo: false,
     };
   }
-  if (answer.success !== true) {
-    return {
-      title: t("undo.failed"),
-      description: t("failed.hint"),
-      tone: "danger",
-      undo: false,
-    };
-  }
+  // `success: false` without `nothingReverted` is a partial revert: some of
+  // it is still live (`proposals.revert`'s `stillLive`), the rest came back.
   const partly =
+    answer.success === false ||
     (answer.partialFailures?.length ?? 0) > 0 ||
     (answer.skipped?.length ?? 0) > 0;
   const hint = partly ? t("undo.partlyHint") : t("undo.doneHint");

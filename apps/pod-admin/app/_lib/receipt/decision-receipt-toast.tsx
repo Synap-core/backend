@@ -61,7 +61,7 @@ export function showDecisionReceipt(
     color: COLOR[receipt.tone],
     timeout: UNDO_WINDOW_MS,
     endContent: (
-      <UndoButton
+      <UndoDecisionButton
         proposalId={undo.proposalId}
         verb={undo.verb}
         onAnswered={() => {
@@ -105,14 +105,18 @@ export function useUndoDecision(): {
   return { undo, pending: revert.isPending || reopen.isPending };
 }
 
-function UndoButton({
+/**
+ * The Undo button: the receipt's, and a decided row's (Historique). It calls
+ * `useUndoDecision`, so the pod's answer gets its own receipt.
+ */
+export function UndoDecisionButton({
   proposalId,
   verb,
   onAnswered,
 }: {
   proposalId: string;
   verb: DecisionVerb;
-  onAnswered: () => void;
+  onAnswered?: () => void;
 }) {
   const { undo } = useUndoDecision();
   const [busy, setBusy] = useState(false);
@@ -120,7 +124,8 @@ function UndoButton({
   const run = async () => {
     setBusy(true);
     await undo(proposalId, verb);
-    onAnswered();
+    setBusy(false);
+    onAnswered?.();
   };
 
   return (

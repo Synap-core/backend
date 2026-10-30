@@ -154,16 +154,28 @@ describe("undoReceipt: what the pod answered an Undo", () => {
       tone: "success",
     });
     expect(
+      undoReceipt({ success: true, alreadyReverted: true } as never).title
+    ).toBe("Decision undone");
+    expect(
       undoReceipt({ success: true, partialFailures: ["a note (changed)"] })
         .title
     ).toBe("Partly undone");
+    expect(
+      undoReceipt({ success: true, skipped: [{ reason: "edited" }] }).title
+    ).toBe("Partly undone");
+    // `proposals.revert` answers `success: false` when some of it is still
+    // live and the rest came back: a partial Undo, not a failed one.
+    expect(
+      undoReceipt({ success: false, partialFailures: ["Task (changed)"] })
+    ).toMatchObject({ title: "Partly undone", tone: "default" });
+    expect(undoReceipt({ success: false }).title).toBe("Partly undone");
     expect(undoReceipt({ success: false, nothingReverted: true }).title).toBe(
       "Nothing was undone"
     );
-    expect(undoReceipt({ success: false })).toMatchObject({
-      title: "Couldn’t undo this decision",
-      tone: "danger",
-    });
+    // Only an Undo that threw failed.
+    expect(
+      undoFailureReceipt({ message: "boom", data: { code: "TIMEOUT" } })
+    ).toMatchObject({ title: "Couldn’t undo this decision", tone: "danger" });
   });
 
   it("says what Undo cannot bring back", () => {
