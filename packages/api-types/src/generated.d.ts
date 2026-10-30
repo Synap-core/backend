@@ -44181,6 +44181,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				constraints?: Record<string, unknown> | undefined;
 				id: string;
+				initialStatus?: string | null | undefined;
 				slug?: string | undefined;
 				uiHints?: Record<string, unknown> | undefined;
 				valueType?: "array" | "boolean" | "date" | "entity_id" | "number" | "object" | "secret" | "string" | undefined;
