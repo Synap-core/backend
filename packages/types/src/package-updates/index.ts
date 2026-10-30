@@ -71,6 +71,21 @@ export interface PackageUpdateSummary {
   reviewUrl: string;
 }
 
+/**
+ * `GET /package-updates` / `packageUpdates.list`: every installed package
+ * whose catalog version moved, and every one whose catalog could not be read
+ * (named with the reason, never folded into "nothing waiting").
+ */
+export interface PackageUpdateList {
+  updates: PackageUpdateSummary[];
+  unreadable: Array<{
+    slug: string;
+    kind: string;
+    name: string;
+    reason: string;
+  }>;
+}
+
 /** One compared field of one installed row. */
 export interface PackageUpdateField {
   /** The row field name (`body`, `description`, `flowDefinition`, …). */
@@ -138,12 +153,11 @@ export type PackageUpdateChoiceName =
  *   combine — write the 3-way merge (a `both` text field without overlap);
  *   {value} — write this value (the person's own edit of the result).
  */
-export type PackageUpdateChoice = PackageUpdateChoiceName | { value: unknown };
-
 export const packageUpdateChoiceSchema = z.union([
   z.enum(PACKAGE_UPDATE_CHOICE_NAMES),
   z.object({ value: z.unknown() }).strict(),
 ]);
+export type PackageUpdateChoice = z.infer<typeof packageUpdateChoiceSchema>;
 
 export const applyPackageUpdateInputSchema = z.object({
   slug: z.string().min(1),
