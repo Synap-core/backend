@@ -99,7 +99,8 @@ export function isNonWidenableGovernanceReason(
  *   tool): "this action"/"this type" are offered for ANY proposal
  *   (`principalKind: "any"`), agent-authored or not — an operator can widen
  *   regardless of who filed it. "This agent" additionally requires an
- *   action key and scopes to that exact action, never a wildcard.
+ *   action key and scopes to that exact action, never a wildcard, and there
+ *   is no "globally": this mode writes no wildcard rule at all.
  */
 export type GovernanceGrantMode = "agent-scoped" | "operator-any";
 
@@ -139,7 +140,12 @@ export function deriveGovernanceGrantOptions(
   // A rule scoped to EXACTLY this proposal's action sits below a floor that
   // already routed it to review, so it could never fire. Wildcard options
   // ("this agent" in agent-scoped mode, "globally") still widen other actions.
-  const actionFloored = isNonWidenableGovernanceReason(ctx.governanceReason);
+  // A capability run is widened only by a rule naming that capability (the
+  // outward floor in `resolveGovernanceRule`, @synap/database): an action rule
+  // `capability.run` would cover every capability, so it never fires.
+  const actionFloored =
+    isNonWidenableGovernanceReason(ctx.governanceReason) ||
+    ctx.actionKey === "capability.run";
 
   // "This capability" — always principalKind:"any" in both menus.
   if (ctx.capabilityTarget) {
@@ -226,9 +232,14 @@ export function deriveGovernanceGrantOptions(
     });
   }
 
-  // "Globally" — identical in both menus; server-side `assertCanManageRule`
+  // "Globally" — agent-scoped mode only; server-side `assertCanManageRule`
   // gates it to pod admins, so a non-admin sees the option and gets a clear
-  // FORBIDDEN toast rather than a silently hidden capability.
+  // FORBIDDEN toast rather than a silently hidden capability. Pod admin, the
+  // client's control plane, does not offer it (wave "client-ready control
+  // plane", finding c173cc51): one click should not let every agent make
+  // every change in the pod. Sending and grants stay asked either way (the
+  // outward floor), and deletes, members and keys sit under floors.
+  if (isOperator) return opts;
   opts.push({
     id: "global",
     rule: {
