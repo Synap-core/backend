@@ -8,6 +8,10 @@ import {
   SHIP_STAGE_LABELS,
 } from "../vocabulary/index.js";
 import {
+  pullRequestKey,
+  type PullRequestStateFacts,
+} from "../events/pr-state.js";
+import {
   CHECK_VERDICTS,
   REPO_MAIN_HEALTHS,
   REPO_SNAPSHOT_EVENT_TYPE,
@@ -331,8 +335,82 @@ describe("foldWorkRelease — tonight", () => {
       snapshots: "ok",
       sessions: "ok",
       holders: "ok",
+      pullRequests: "ok",
     });
     expect(read.generatedAt).toBe(new Date(NOW).toISOString());
+  });
+});
+
+describe("one PR fact model: the recorded facts over the snapshot", () => {
+  const facts = (
+    entries: Array<[string, number, PullRequestStateFacts]>
+  ): Map<string, PullRequestStateFacts> =>
+    new Map(
+      entries.map(([repo, n, f]) => [pullRequestKey({ repo, number: n }), f])
+    );
+  const open = (over: Partial<PullRequestStateFacts> = {}) =>
+    ({ state: "open", at: min(5), ...over }) as PullRequestStateFacts;
+
+  it("a merge recorded into main: on_main at the fact's time, and it blocks nothing", () => {
+    const read = foldWorkRelease(TONIGHT(), [], [], {
+      now: NOW,
+      pullRequests: facts([
+        [BE, 363, { state: "merged", intoDefault: true, at: min(1) }],
+      ]),
+    });
+    expect(prOf(read, BE, 363)).toMatchObject({
+      stage: "on_main",
+      mergedAt: min(1),
+      blockedBy: [],
+    });
+    expect(read.blockers.map((b) => b.ref)).not.toContainEqual({
+      kind: "pr",
+      repo: BE,
+      number: 363,
+    });
+  });
+
+  it("closed, or merged into another branch: off the board", () => {
+    const read = foldWorkRelease(TONIGHT(), [], [], {
+      now: NOW,
+      pullRequests: facts([
+        [BE, 278, { state: "closed", at: min(1) }],
+        [BE, 337, { state: "merged", intoDefault: false, at: min(1) }],
+      ]),
+    });
+    expect(read.prs.find((p) => p.number === 278)).toBeUndefined();
+    expect(read.prs.find((p) => p.number === 337)).toBeUndefined();
+  });
+
+  it("checks recorded on the CURRENT head settle the snapshot's; a pass never hides a red", () => {
+    const head = SHA(363);
+    const passed = foldWorkRelease(TONIGHT(), [], [], {
+      now: NOW,
+      pullRequests: facts([
+        [BE, 363, open({ checks: "passed", checksOn: head.slice(0, 7) })],
+        [BE, 278, open({ checks: "passed", checksOn: SHA(278) })],
+        [BE, 274, open({ checks: "failed", checksOn: SHA(274) })],
+        // A pass on an OLDER head says nothing about the current one.
+        [BE, 351, open({ checks: "failed", checksOn: SHA(9) })],
+      ]),
+    });
+    // queued → green; red stays red; green → red; another sha: the snapshot's.
+    expect(prOf(passed, BE, 363).verdict).toBe("green");
+    expect(prOf(passed, BE, 278).verdict).toBe("inherited");
+    expect(prOf(passed, BE, 274)).toMatchObject({
+      verdict: "own_red",
+      stage: "checks",
+    });
+    expect(prOf(passed, BE, 351).verdict).toBe("unmeasured");
+  });
+
+  it("a FAILED facts read says unavailable, and the rows are the snapshot's", () => {
+    const read = foldWorkRelease(TONIGHT(), [], [], {
+      now: NOW,
+      pullRequests: null,
+    });
+    expect(read.sources.pullRequests).toBe("unavailable");
+    expect(prOf(read, BE, 363).verdict).toBe("queued");
   });
 });
 

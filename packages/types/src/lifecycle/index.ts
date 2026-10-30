@@ -157,6 +157,8 @@ export type AnyTransitionPayload =
   LifecycleTransitionPayload | WorkUnitTransitionPayload;
 
 export {
+  HOLD_DEV_MOVES_HELP,
+  HOLD_DEV_TO,
   HOLD_ON,
   HOLD_REQUIRED_MESSAGE,
   HOLD_UNSPECIFIED_BY_AGENT_MESSAGE,
@@ -169,11 +171,14 @@ export {
   UNSPECIFIED_HOLD,
   decideMoveHold,
   holdProblem,
+  holdDevMovesRef,
   holdWokenBy,
+  parseHoldDevRef,
   parseHoldMovesRef,
   recordHold,
   resolveOccurredAt,
   type Hold,
+  type HoldDevRef,
   type HoldOn,
   type HoldReviewBase,
   type HoldUntil,

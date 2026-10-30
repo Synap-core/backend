@@ -690,6 +690,10 @@ export const ListEventsQuerySchema = z
     type: z.string().optional(),
     subjectType: z.string().optional(),
     subjectId: z.string().optional(),
+    sessionId: z
+      .string()
+      .optional()
+      .describe("A focus session id: only the events that session produced."),
     fromDate: z
       .string()
       .optional()

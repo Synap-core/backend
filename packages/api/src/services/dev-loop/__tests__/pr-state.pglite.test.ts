@@ -178,6 +178,8 @@ describe("readPullRequestStates — the recorded dev facts, under the reader's f
       state: "merged",
       // The sha-only run is the PR's (its head), and it failed.
       checks: "failed",
+      checksOn: HEAD.slice(0, 7),
+      intoDefault: true,
       deployed: true,
       at: at(5),
     });
@@ -259,6 +261,8 @@ describe("withPullRequestStates — the packet's PR work units", () => {
       label: "Merged",
       state: "merged",
       checks: "failed",
+      checksOn: HEAD.slice(0, 7),
+      intoDefault: true,
       deployed: true,
       at: at(5),
     });

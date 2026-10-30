@@ -18,6 +18,7 @@
 import {
   DEV_LOOP_EVENT_TYPES,
   foldPullRequestState,
+  pullRequestKey,
   type DevLoopEventRowLike,
   type PullRequestRef,
   type PullRequestStateFacts,
@@ -30,10 +31,7 @@ import {
   type EventReader,
 } from "../../access/event-visibility.js";
 
-/** One spelling per PR, whatever the repo's case: `owner/name#n`. */
-export function pullRequestKey(ref: PullRequestRef): string {
-  return `${ref.repo.toLowerCase()}#${ref.number}`;
-}
+export { pullRequestKey };
 
 const PR_TYPES = [
   DEV_LOOP_EVENT_TYPES.prOpened,

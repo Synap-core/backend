@@ -27,6 +27,12 @@
  *     one, which a Claude Code session working on a PR rarely does. The label
  *     is the session's first agent's name, else its owner's. A failed read is
  *     `null` → `sources.holders: "unavailable"`.
+ *  4. PR FACTS — what the pod recorded about every PR the snapshots name (open,
+ *     merged today, depended on, fixing a main): THE PR read
+ *     (`readPullRequestStates`, the same fold as the session packet), so a
+ *     merge or a red the pod heard of seconds ago is not drawn as the
+ *     snapshot of minutes ago. A failed read is `null` →
+ *     `sources.pullRequests: "unavailable"` and the rows are the snapshot's.
  */
 
 import {
@@ -61,6 +67,7 @@ import {
 } from "../../access/event-visibility.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { loadSessionLiveness } from "../runs/session-liveness.js";
+import { readPullRequestStates } from "./pr-state.js";
 
 const logger = createLogger({ module: "dev-loop/work-release" });
 
@@ -209,6 +216,21 @@ async function readHolders(
   });
 }
 
+/** Every PR the snapshots name: open, merged today, depended on, fixing a main. */
+function snapshotPullRequests(
+  snapshots: readonly RepoSnapshotFact[]
+): PullRequestRef[] {
+  const out: PullRequestRef[] = [];
+  for (const s of snapshots) {
+    for (const p of [...s.prs, ...s.mergedToday]) {
+      out.push({ repo: s.repo, number: p.number });
+    }
+    for (const p of s.prs) out.push(...(p.dependsOn ?? []));
+    if (s.main.fixedBy) out.push(s.main.fixedBy);
+  }
+  return out;
+}
+
 export async function readWorkRelease(
   reader: WorkReleaseReader,
   database: typeof db = db
@@ -239,5 +261,17 @@ export async function readWorkRelease(
     }
   }
 
-  return foldWorkRelease(snapshots, sessions, holders, { now });
+  let pullRequests: Awaited<ReturnType<typeof readPullRequestStates>> | null;
+  try {
+    pullRequests = await readPullRequestStates(
+      snapshotPullRequests(snapshots),
+      reader,
+      database
+    );
+  } catch (err) {
+    logger.error({ err }, "work-release: the PR facts read failed");
+    pullRequests = null;
+  }
+
+  return foldWorkRelease(snapshots, sessions, holders, { now, pullRequests });
 }

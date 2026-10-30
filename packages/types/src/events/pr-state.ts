@@ -20,10 +20,19 @@
 
 import {
   DEV_LOOP_EVENT_TYPES,
+  ciVerdictOf,
   type CiFinishedStatus,
   type PullRequestRef,
   samePullRequest,
 } from "./dev-loop.js";
+
+/**
+ * One spelling per PR, whatever the repo's case: `owner/name#n` — the key the
+ * api's reader (`readPullRequestStates`) hands its facts back under.
+ */
+export function pullRequestKey(ref: PullRequestRef): string {
+  return `${ref.repo.toLowerCase()}#${ref.number}`;
+}
 
 export const PULL_REQUEST_STATES = ["open", "merged", "closed"] as const;
 export type PullRequestState = (typeof PULL_REQUEST_STATES)[number];
@@ -36,6 +45,14 @@ export interface PullRequestStateFacts {
   state: PullRequestState;
   /** The newest CI result on the PR's newest run sha; absent when none settles it. */
   checks?: PullRequestChecks;
+  /** The sha `checks` is about — compare it with a newer head before trusting it. */
+  checksOn?: string;
+  /**
+   * A merge into the repository's default branch (the producer said so). Only
+   * on `merged`; absent when the fact did not say (a stacked PR merged into
+   * its parent branch is not on main).
+   */
+  intoDefault?: boolean;
   /**
    * A deploy contains the merge (built from a later commit of the repo, or
    * from the merge commit). Never `false`: see the file header.
@@ -66,12 +83,6 @@ const SAME_INSTANT_RANK: Readonly<Record<PullRequestState, number>> = {
   merged: 2,
   closed: 1,
   open: 0,
-};
-
-const CHECKS_OF: Partial<Record<CiFinishedStatus, PullRequestChecks>> = {
-  success: "passed",
-  failure: "failed",
-  timed_out: "failed",
 };
 
 function record(data: unknown): Record<string, unknown> {
@@ -118,6 +129,7 @@ export function foldPullRequestState(
     state: PullRequestState;
     at: number;
     sha?: string;
+    intoDefault?: boolean;
   } | null = null;
   const prShas: string[] = [];
   for (const row of rows) {
@@ -134,7 +146,14 @@ export function foldPullRequestState(
       (at === newest.at &&
         SAME_INSTANT_RANK[state] > SAME_INSTANT_RANK[newest.state])
     ) {
-      newest = { state, at, ...(sha ? { sha } : {}) };
+      newest = {
+        state,
+        at,
+        ...(sha ? { sha } : {}),
+        ...(typeof data.intoDefault === "boolean"
+          ? { intoDefault: data.intoDefault }
+          : {}),
+      };
     }
   }
   if (!newest) return null;
@@ -146,7 +165,10 @@ export function foldPullRequestState(
 
   return {
     state: newest.state,
-    ...(checks ? { checks } : {}),
+    ...(checks ? { checks: checks.result, checksOn: checks.sha } : {}),
+    ...(merge && merge.intoDefault !== undefined
+      ? { intoDefault: merge.intoDefault }
+      : {}),
     ...(deployed ? { deployed: true as const } : {}),
     at: new Date(newest.at).toISOString(),
   };
@@ -190,7 +212,7 @@ function foldChecks(
   ref: PullRequestRef,
   rows: readonly DevLoopEventRowLike[],
   prShas: readonly string[]
-): PullRequestChecks | undefined {
+): { result: PullRequestChecks; sha: string } | undefined {
   const runs = rows.flatMap((row) => {
     if (row.type !== DEV_LOOP_EVENT_TYPES.ciFinished) return [];
     const data = record(row.data);
@@ -218,11 +240,9 @@ function foldChecks(
     const seen = perWorkflow.get(run.workflow);
     if (!seen || run.at > seen.at) perWorkflow.set(run.workflow, run);
   }
-  const results = [...perWorkflow.values()].map((r) =>
-    r.status ? CHECKS_OF[r.status] : undefined
-  );
-  if (results.includes("failed")) return "failed";
+  const results = [...perWorkflow.values()].map((r) => ciVerdictOf(r.status));
+  if (results.includes("failed")) return { result: "failed", sha: latest.sha };
   if (results.length > 0 && results.every((r) => r === "passed"))
-    return "passed";
+    return { result: "passed", sha: latest.sha };
   return undefined;
 }

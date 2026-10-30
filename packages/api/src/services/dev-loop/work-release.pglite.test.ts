@@ -145,6 +145,15 @@ async function fact(user: string, minAgo: number, data: unknown) {
   );
 }
 
+/** A dev-loop fact (`dev.pr_*`, `ci.finished`) recorded by the reader. */
+async function devFact(type: string, minAgo: number, data: unknown) {
+  await q(
+    `insert into events (id, type, user_id, subject_id, subject_type, data, timestamp)
+     values ($1, $2, $3, $4, 'observation', $5::jsonb, $6)`,
+    [randomUUID(), type, USER, randomUUID(), JSON.stringify(data), ago(minAgo)]
+  );
+}
+
 async function session(
   id: string,
   user: string,
@@ -263,6 +272,7 @@ describe("readWorkRelease on PGlite", () => {
       snapshots: "ok",
       sessions: "ok",
       holders: "ok",
+      pullRequests: "ok",
     });
   });
 
@@ -296,6 +306,47 @@ describe("readWorkRelease on PGlite", () => {
       ref: { kind: "pr", repo: BE, number: 363 },
       waitingPrs: 2,
       waitingMains: 2,
+    });
+  });
+
+  it("one PR fact model: a recorded pass on the head settles queued checks; a recorded merge takes the PR off the open list", async () => {
+    const url = `https://github.com/${BE}/pull/363`;
+    await devFact("dev.pr_opened", 10, {
+      repo: BE,
+      number: 363,
+      url,
+      sha: SHA(363),
+    });
+    await devFact("ci.finished", 0.5, {
+      repo: BE,
+      sha: SHA(363),
+      pr: 363,
+      status: "success",
+      workflow: "CI",
+    });
+    let p363 = (await read()).prs.find((p) => p.number === 363)!;
+    // The snapshot (1 min old) still says queued; the fact is newer.
+    expect(p363).toMatchObject({ verdict: "green", stage: "checks" });
+
+    await devFact("dev.pr_merged", 0.2, {
+      repo: BE,
+      number: 363,
+      url,
+      sha: SHA(3630),
+      intoDefault: true,
+    });
+    const r = await read();
+    p363 = r.prs.find((p) => p.number === 363)!;
+    expect(p363).toMatchObject({
+      stage: "on_main",
+      mergedAt: ago(0.2).toISOString(),
+      blockedBy: [],
+    });
+    // Merged, it fixes backend main no more as an OPEN blocker.
+    expect(r.blockers.map((b) => b.ref)).not.toContainEqual({
+      kind: "pr",
+      repo: BE,
+      number: 363,
     });
   });
 

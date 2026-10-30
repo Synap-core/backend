@@ -38,7 +38,9 @@ export type HoldOn = (typeof HOLD_ON)[number];
  * How a hold resumes: on a calendar date (ISO), or when the awaited thing moves
  * (`moves` = `<subjectType>:<id>`, e.g. `entity:…`, `track:…`,
  * `focus_session:…`), optionally only when it reaches `to` (a status key, or a
- * category such as `done`).
+ * category such as `done`). `moves` may also name a DEV FACT
+ * ({@link HoldDevRef}: `pr:<owner/name>#<n>`, `main:<owner/name>`,
+ * `job:<name>`): the hold then resumes when a producer posts that fact.
  */
 export type HoldUntil = { date: string } | { moves: string; to?: string };
 
@@ -69,7 +71,18 @@ export interface RecordedHold extends Hold {
  * shape, so the agent can fix the call in one try.
  */
 export const HOLD_REQUIRED_MESSAGE =
-  'A pause must say what it waits on: pass `hold` with the move, e.g. { "on": "person" | "agent" | "external" | "thing" | "decision" | "date" | "nobody", "ref": "<who or what>", "reason": "<why>", "until": { "date": "<ISO date>" } or { "moves": "<entity|track|focus_session>:<id>", "to": "<status>" } }. An agent cannot pause without one. Retry the same move with `hold` added.';
+  'A pause must say what it waits on: pass `hold` with the move, e.g. { "on": "person" | "agent" | "external" | "thing" | "decision" | "date" | "nobody", "ref": "<who or what>", "reason": "<why>", "until": { "date": "<ISO date>" } or { "moves": "<entity|track|focus_session>:<id>", "to": "<status>" } or { "moves": "pr:<owner/name>#<n>" | "main:<owner/name>" | "job:<devbox job name>" } }. An agent cannot pause without one. Retry the same move with `hold` added.';
+
+/**
+ * The dev-fact forms of `until.moves`, in one line: what an agent reads in a
+ * tool's text and in a refusal (HOLD_REQUIRED_MESSAGE spells the same forms).
+ *
+ * The fact is read under the hold OWNER's own events only (the hold-resume
+ * worker), never the workspace-shared event floor: a hold ACTS on a fact, so
+ * another member's recorded `dev.pr_merged` must not resume it.
+ */
+export const HOLD_DEV_MOVES_HELP =
+  "'pr:<owner/name>#<n>' resumes when that pull request merges (to: 'closed' = when it is closed without merging); 'main:<owner/name>' when that repo's main is green again; 'job:<devbox job name>' when that devbox job finishes (to: 'passed' | 'failed' = only that verdict)";
 
 /** An agent's `on: "unspecified"`: the default a person gets, never an agent's answer. */
 export const HOLD_UNSPECIFIED_BY_AGENT_MESSAGE =
@@ -110,6 +123,73 @@ const MOVES_SUBJECTS: readonly TransitionSubjectType[] = [
   "focus_session",
 ];
 
+/**
+ * A DEV FACT a hold can wait on (plan P1.4) — not a transition subject but a
+ * fact a producer posts (`events/dev-loop.ts`):
+ *  - `pr:<owner/name>#<n>`: the PR merged (`dev.pr_merged`), or with
+ *    `to: "closed"` closed without merging (`dev.pr_closed`);
+ *  - `main:<owner/name>`: the repo's main is green again — a
+ *    `dev.repo_snapshot` observed after the pause began says `health: ok`;
+ *  - `job:<name>`: the devbox job ended — its `ci.finished` (workflow
+ *    `devbox <name>`) after the pause began; with `to: "passed" | "failed"`
+ *    only that verdict.
+ * Whether the fact is in is decided by `holdDevRefMet` (`events/dev-hold.ts`).
+ */
+export type HoldDevRef =
+  | { kind: "pr"; repo: string; number: number }
+  | { kind: "main"; repo: string }
+  | { kind: "job"; name: string };
+
+/** The `until.to` each dev fact accepts; absent = the first (pr) or any (job). */
+export const HOLD_DEV_TO = {
+  pr: ["merged", "closed"],
+  main: [],
+  job: ["passed", "failed"],
+} as const satisfies Record<HoldDevRef["kind"], readonly string[]>;
+
+const DEV_REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const DEV_JOB_RE = /^[A-Za-z0-9_.-]{1,200}$/;
+
+/** `pr:<owner/name>#<n>` / `main:<owner/name>` / `job:<name>` → its parts, else null. */
+export function parseHoldDevRef(ref: string): HoldDevRef | null {
+  const i = ref.indexOf(":");
+  if (i <= 0) return null;
+  const kind = ref.slice(0, i);
+  const rest = ref.slice(i + 1).trim();
+  if (kind === "pr") {
+    const hash = rest.lastIndexOf("#");
+    const repo = rest.slice(0, hash);
+    const number = Number(rest.slice(hash + 1));
+    return hash > 0 &&
+      DEV_REPO_RE.test(repo) &&
+      Number.isSafeInteger(number) &&
+      number > 0
+      ? { kind, repo, number }
+      : null;
+  }
+  if (kind === "main")
+    return DEV_REPO_RE.test(rest) ? { kind, repo: rest } : null;
+  if (kind === "job")
+    return DEV_JOB_RE.test(rest) ? { kind, name: rest } : null;
+  return null;
+}
+
+/**
+ * The ONE spelling of a dev ref, as `until.moves` stores it (repo lowercased:
+ * GitHub compares it case-insensitively), so the resume finds the hold by an
+ * exact match on the indexed `until.moves` (0374).
+ */
+export function holdDevMovesRef(ref: HoldDevRef): string {
+  switch (ref.kind) {
+    case "pr":
+      return `pr:${ref.repo.toLowerCase()}#${ref.number}`;
+    case "main":
+      return `main:${ref.repo.toLowerCase()}`;
+    case "job":
+      return `job:${ref.name}`;
+  }
+}
+
 /** `entity:<id>` → its parts, or null when it names no transition subject. */
 export function parseHoldMovesRef(
   ref: string
@@ -132,7 +212,8 @@ function isoTime(v: string | null | undefined): number | null {
 /**
  * What is wrong with a hold a mover gave, or null. `until.date` and
  * `reviewBy` must lie ahead (a passed date would resume or nag at once);
- * `until.moves` must name a transition subject.
+ * `until.moves` must name a transition subject or a dev fact (with a `to`
+ * that fact accepts).
  */
 export function holdProblem(
   hold: Hold,
@@ -156,8 +237,16 @@ export function holdProblem(
       return "hold.until.date must be in the future.";
     }
   } else if (until && "moves" in until) {
-    if (!parseHoldMovesRef(until.moves)) {
-      return `hold.until.moves must be "<${MOVES_SUBJECTS.join("|")}>:<id>".`;
+    const dev = parseHoldDevRef(until.moves);
+    if (dev) {
+      const accepted: readonly string[] = HOLD_DEV_TO[dev.kind];
+      if (until.to != null && !accepted.includes(until.to)) {
+        return accepted.length
+          ? `hold.until.to for "${dev.kind}:" must be ${accepted.join(" or ")}.`
+          : `hold.until.to does not apply to "${dev.kind}:": remove it.`;
+      }
+    } else if (!parseHoldMovesRef(until.moves)) {
+      return `hold.until.moves must be "<${MOVES_SUBJECTS.join("|")}>:<id>", or a dev fact: ${HOLD_DEV_MOVES_HELP}.`;
     }
   }
   const review = isoTime(hold.reviewBy);
@@ -193,15 +282,23 @@ export function recordHold(
     on: hold.on,
     ref: hold.ref ?? null,
     reason: hold.reason ?? null,
-    // A date is stored as ISO, so the sweep's SQL cast reads every one.
+    // A date is stored as ISO, so the sweep's SQL cast reads every one; a
+    // dev ref in its one spelling, so its fact finds it by exact match.
     until:
       hold.until && "date" in hold.until
         ? { date: new Date(hold.until.date).toISOString() }
-        : (hold.until ?? null),
+        : (canonicalMoves(hold.until) ?? null),
     reviewBy,
     resumeTo: at.resumeTo,
     since: at.since.toISOString(),
   };
+}
+
+function canonicalMoves(
+  until: Exclude<HoldUntil, { date: string }> | null | undefined
+): HoldUntil | null | undefined {
+  const dev = until ? parseHoldDevRef(until.moves) : null;
+  return until && dev ? { ...until, moves: holdDevMovesRef(dev) } : until;
 }
 
 /** The hold a person's or the system's pause gets when it gives none. */

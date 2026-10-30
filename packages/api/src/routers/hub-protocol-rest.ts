@@ -118,6 +118,7 @@ import {
   registerGraphRoutes,
   registerCentralityRoutes,
   registerWorkReleaseRoutes,
+  registerTimelineRoutes,
   registerObservabilityRoutes,
   registerPublicProjectionRoutes,
   registerPublicSharesRoutes,
@@ -367,6 +368,7 @@ registerResolveRoutes(app); // /resolve/:id — universal ID resolver
 registerGraphRoutes(app); // /graph/:type/:id — object + typed neighbour graph
 registerCentralityRoutes(app); // /centrality/status, /centrality/recompute — PageRank centrality window
 registerWorkReleaseRoutes(app); // /work-release — Work › Ship, the release read
+registerTimelineRoutes(app); // /timeline — what happened to a goal, a session or a PR
 registerObservabilityRoutes(app); // /observability/routing-health — decision/correction routing analysis
 // /health/dependencies — AUTHENTICATED readiness probe (IS reachability).
 // Deliberately registered HERE, after the auth middleware, and NOT next to the

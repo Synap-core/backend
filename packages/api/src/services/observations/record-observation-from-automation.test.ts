@@ -254,3 +254,26 @@ describe("record_observation — one fact, one event", () => {
     expect(appended).toHaveLength(2);
   });
 });
+
+describe("record_observation — a fact a hold may wait on", () => {
+  const holdJobs = () => sends.filter(([q]) => q === "hold-resume");
+
+  it("a merge wakes the hold-resume job with the hold's own spelling of the PR", async () => {
+    await record({
+      data: {
+        repo: "Synap-core/Backend",
+        number: 12,
+        url: "https://github.com/Synap-core/backend/pull/12",
+        intoDefault: true,
+      },
+    });
+    expect(holdJobs().map(([, d]) => d)).toEqual([
+      { devFact: "pr:synap-core/backend#12" },
+    ]);
+  });
+
+  it("a fact no hold can wait on (a PR opened) wakes nothing", async () => {
+    await record({ type: "dev.pr_opened", subjectId: "Synap-core/backend#14" });
+    expect(holdJobs()).toEqual([]);
+  });
+});

@@ -5489,6 +5489,32 @@
         },
         "required": ["generatedAt", "sources", "repos", "prs", "blockers"]
       },
+      "Timeline": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["goal", "session", "pull_request"]
+              }
+            },
+            "required": ["kind"],
+            "additionalProperties": {}
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": {}
+            }
+          },
+          "truncated": { "type": "boolean" }
+        },
+        "required": ["subject", "events", "truncated"]
+      },
       "RoutingHealth": {
         "type": "object",
         "properties": {
@@ -7163,7 +7189,7 @@
       "get": {
         "tags": ["Events"],
         "summary": "List recent events for a user",
-        "description": "Returns events from the event log filtered by type/subject/window, and optionally by producer: `agentUserId` (everything one agent did), `isAgent` (agent- vs human-produced) and `correlationId` (one request chain). Default window is 7 days; default limit is 50, hard-capped at 200.",
+        "description": "Returns events from the event log filtered by type/subject/window, and optionally by producer: `agentUserId` (everything one agent did), `isAgent` (agent- vs human-produced), `correlationId` (one request chain) and `sessionId` (what one focus session produced). Default window is 7 days; default limit is 50, hard-capped at 200.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -7188,6 +7214,16 @@
             "schema": { "type": "string" },
             "required": false,
             "name": "subjectId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "A focus session id: only the events that session produced."
+            },
+            "required": false,
+            "description": "A focus session id: only the events that session produced.",
+            "name": "sessionId",
             "in": "query"
           },
           {
@@ -38127,6 +38163,85 @@
           },
           "403": {
             "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/timeline": {
+      "get": {
+        "tags": ["FocusSessions"],
+        "summary": "What happened to a goal, a session or a pull request",
+        "description": "Newest first. Name exactly one subject: `goalId` (its history: step moves, checks, sessions, decisions, status moves), `sessionId` (its start, status moves with their holds, the dev facts of its PRs and devbox jobs, its decisions) or `pr` (`owner/name#n`: its opened / merged / closed facts and CI runs). `at` is when a thing happened; `recordedAt` appears only when the pod recorded it a second or more later (a backdated move, a late webhook). 404 when the goal or session is not yours; a PR with no recorded fact has no events.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "description": "A goal (track) id." },
+            "required": false,
+            "description": "A goal (track) id.",
+            "name": "goalId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "A focus session id."
+            },
+            "required": false,
+            "description": "A focus session id.",
+            "name": "sessionId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "A pull request: `owner/name#n` or its GitHub url."
+            },
+            "required": false,
+            "description": "A pull request: `owner/name#n` or its GitHub url.",
+            "name": "pr",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Timeline",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Timeline" }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }

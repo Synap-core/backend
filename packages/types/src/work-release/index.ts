@@ -28,8 +28,21 @@
  *    activity in the last 5 min). The signal is the pod's own session
  *    activity; it is never inferred from the session's status.
  *
- * EMPTY ≠ FAILED: a sessions or holders read that FAILED is passed as `null`
- * and reads `unavailable` in `sources`; an empty list is a real "none".
+ * ONE PR FACT MODEL (plan P1.2): what the pod RECORDED about a PR
+ * (`foldPullRequestState`: `dev.pr_*` and `ci.finished`, the same fold the
+ * session packet and the change feed read) wins over the snapshot where it
+ * speaks: a PR the facts say merged or closed is no longer open (merged into
+ * the default branch: `on_main`, at the fact's time; closed, or merged into
+ * another branch: off the board, blocking nothing), and checks the facts
+ * settled on the PR's CURRENT head sha are its checks (a recorded failure is
+ * red; a recorded pass never hides a red the snapshot saw, `checksOf`). The
+ * snapshot keeps
+ * main's health and what no fact carries: the open-PR list itself, draft,
+ * mergeable, queued / running, red-vs-main, depends-on, auto-merge, titles.
+ *
+ * EMPTY ≠ FAILED: a sessions, holders or PR facts read that FAILED is passed
+ * as `null` and reads `unavailable` in `sources`; an empty list is a real
+ * "none".
  */
 
 import {
@@ -38,6 +51,11 @@ import {
   type PullRequestRef,
   type RepoSnapshotFact,
 } from "../events/dev-loop.js";
+import {
+  pullRequestKey,
+  sameCommit,
+  type PullRequestStateFacts,
+} from "../events/pr-state.js";
 import {
   isSessionWorkingNow,
   type SessionLiveFacts,
@@ -90,6 +108,7 @@ export const WORK_RELEASE_SOURCE_STATES = {
   snapshots: ["ok", "stale", "missing"],
   sessions: ["ok", "unavailable"],
   holders: ["ok", "unavailable"],
+  pullRequests: ["ok", "unavailable"],
 } as const;
 
 export interface WorkReleaseSources {
@@ -97,6 +116,8 @@ export interface WorkReleaseSources {
   snapshots: (typeof WORK_RELEASE_SOURCE_STATES.snapshots)[number];
   sessions: (typeof WORK_RELEASE_SOURCE_STATES.sessions)[number];
   holders: (typeof WORK_RELEASE_SOURCE_STATES.holders)[number];
+  /** The recorded PR facts; `unavailable` = the rows are the snapshot's alone. */
+  pullRequests: (typeof WORK_RELEASE_SOURCE_STATES.pullRequests)[number];
 }
 
 export interface WorkReleaseRepo {
@@ -180,6 +201,39 @@ export interface WorkReleaseHolderInput {
 export interface FoldWorkReleaseOptions {
   /** The clock (default: now). Staleness and liveness are judged against it. */
   now?: Date | number | string;
+  /**
+   * What the pod recorded about the PRs (`readPullRequestStates`, keyed by
+   * `pullRequestKey`); `null` when that read FAILED. Absent = none recorded.
+   */
+  pullRequests?: ReadonlyMap<string, PullRequestStateFacts> | null;
+}
+
+/** A recorded fact that ends a PR, as the board reads it. */
+function endedByFact(
+  facts: PullRequestStateFacts | undefined
+): "on_main" | "gone" | null {
+  if (!facts || facts.state === "open") return null;
+  return facts.state === "merged" && facts.intoDefault !== false
+    ? "on_main"
+    : "gone";
+}
+
+/**
+ * A PR's checks: the facts settled on its CURRENT head (`headSha`) over the
+ * snapshot's word, with one floor — a red, or checks that did not run, the
+ * snapshot saw are never turned green by a recorded pass. The producer reads
+ * EVERY check; a recorded pass may cover fewer (one workflow, one devbox
+ * gate), so it can only settle what the snapshot had not settled yet.
+ */
+function checksOf(
+  snapshot: PrCheckState,
+  facts: PullRequestStateFacts | undefined,
+  headSha: string
+): PrCheckState {
+  if (!facts?.checks || !facts.checksOn) return snapshot;
+  if (!sameCommit(facts.checksOn, headSha)) return snapshot;
+  if (facts.checks === "failed") return "red";
+  return snapshot === "red" || snapshot === "infra" ? snapshot : "green";
 }
 
 /** A snapshot older than this (the newest one) reads `stale`. */
@@ -341,7 +395,10 @@ export function foldWorkRelease(
           : "ok",
     sessions: sessions === null ? "unavailable" : "ok",
     holders: holders === null ? "unavailable" : "ok",
+    pullRequests: options.pullRequests === null ? "unavailable" : "ok",
   };
+  const facts = options.pullRequests ?? new Map();
+  const factsOf = (ref: PullRequestRef) => facts.get(pullRequestKey(ref));
 
   const titleOf = new Map(
     (sessions ?? []).map((s) => [s.id.toLowerCase(), s.title])
@@ -367,20 +424,23 @@ export function foldWorkRelease(
   // Open on its repo's newest snapshot / merged today: what a dependsOn
   // edge can still wait on (a PR of an OBSERVED repo that is neither was
   // merged before today or closed — it blocks nothing).
+  // A PR the recorded facts ended is neither, whatever the snapshot says.
   const openPrs = new Set<string>();
   const mergedPrs = new Set<string>();
   for (const s of latest) {
     for (const m of s.mergedToday) mergedPrs.add(prKey(s.repo, m.number));
     for (const p of s.prs) {
-      if (!mergedPrs.has(prKey(s.repo, p.number))) {
-        openPrs.add(prKey(s.repo, p.number));
-      }
+      const key = prKey(s.repo, p.number);
+      if (mergedPrs.has(key)) continue;
+      if (endedByFact(factsOf({ repo: s.repo, number: p.number }))) continue;
+      openPrs.add(key);
     }
   }
   const stillBlocks = (ref: PullRequestRef) => {
     const key = prKey(ref.repo, ref.number);
     if (openPrs.has(key)) return true;
     if (mergedPrs.has(key)) return false;
+    if (endedByFact(factsOf(ref))) return false;
     return !byRepo.has(repoKey(ref.repo));
   };
 
@@ -393,7 +453,31 @@ export function foldWorkRelease(
       const key = prKey(s.repo, p.number);
       if (mergedPrs.has(key)) continue;
       const ref = { repo: s.repo, number: p.number };
-      const verdict = checkVerdictOf(p.checks, p.redInheritedFromMain);
+      const recorded = factsOf(ref);
+      const ended = endedByFact(recorded);
+      if (ended === "gone") continue;
+      if (ended === "on_main") {
+        // Merged, and the snapshot has not caught up: drawn as merged.
+        const sessionId = sessionOf(ref, p.podSessionId, sessions);
+        prs.push({
+          repo: s.repo,
+          number: p.number,
+          title: p.title,
+          url: p.url,
+          stage: "on_main",
+          verdict: "green",
+          fold: NEGCTL_RE.test(p.title) ? "negctl" : null,
+          sessionId,
+          ...join(sessionId),
+          blockedBy: [],
+          autoMerge: false,
+          updatedAt: recorded!.at,
+          mergedAt: recorded!.at,
+        });
+        continue;
+      }
+      const checks = checksOf(p.checks, recorded, p.headSha);
+      const verdict = checkVerdictOf(checks, p.redInheritedFromMain);
       const blockedBy: BlockRef[] = [];
       const seen = new Set<string>();
       for (const d of p.dependsOn ?? []) {
@@ -413,7 +497,7 @@ export function foldWorkRelease(
         number: p.number,
         title: p.title,
         url: p.url,
-        stage: shipStageOf(p),
+        stage: shipStageOf({ ...p, checks }),
         verdict,
         fold: shipFoldOf(p, now),
         sessionId,

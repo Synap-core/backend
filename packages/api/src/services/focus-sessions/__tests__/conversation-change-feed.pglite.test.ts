@@ -79,6 +79,7 @@ vi.mock("../../../utils/domain-event-bridge.js", () => ({
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import {
+  db,
   focusSessions,
   users,
   messages,
@@ -87,6 +88,7 @@ import {
   workspaces,
   workspaceMembers,
   runWithClientKey,
+  setSessionStatus,
 } from "@synap/database";
 import { sessionHandlers } from "../../../routers/mcp/handlers/session.js";
 import { startSessionChangedListener } from "../../../utils/session-changed-listener.js";
@@ -406,6 +408,200 @@ describe("the conversation change feed", () => {
     );
     expect(merged.untrusted).toBe(true);
     expect(String(merged.fenced)).toMatch(/BEGIN UNTRUSTED CONTENT/);
+  });
+
+  it("checks_finished: once per (PR, head sha) to the session that declared the PR; a devbox job only to its pod session", async () => {
+    const BE = "Synap-core/backend";
+    const owner = await session({
+      title: "Owns the PR",
+      outputs: [
+        {
+          key: "pr-backend-9101",
+          kind: "pull_request",
+          label: "backend#9101",
+          ref: { url: `https://github.com/${BE}/pull/9101` },
+        },
+      ],
+    });
+    const bystander = await session({ title: "Same conversation" });
+    const jobOwner = await session({ title: "Queued the job" });
+    const sha = (c: string) => c.repeat(40);
+    let heard = Date.now() + 1_000;
+    const run = (data: Record<string, unknown>) =>
+      q(
+        `insert into events (id, timestamp, type, subject_id, subject_type, data, user_id)
+         values (gen_random_uuid(), now(), 'ci.finished', $1, 'ci_run', $2::jsonb, $3)`,
+        [
+          `${BE}@${data.sha}`,
+          JSON.stringify({
+            repo: BE,
+            ...data,
+            ingestedAt: new Date((heard += 1_000)).toISOString(),
+          }),
+          OWNER,
+        ]
+      );
+    const cursor = new Date().toISOString();
+    await run({ sha: sha("a"), pr: 9101, status: "success", workflow: "CI" });
+    // A re-run on the same head, and a cancelled one: no second wake.
+    await run({ sha: sha("a"), pr: 9101, status: "failure", workflow: "CI" });
+    await run({ sha: sha("a"), pr: 9101, status: "cancelled", workflow: "CI" });
+    // A devbox job queued with its pod session, run twice on one sha.
+    const job = {
+      sha: sha("b"),
+      status: "failure",
+      workflow: "devbox dev-feed-h",
+      sessionId: jobOwner.sessionId,
+    };
+    await run(job);
+    await run({ ...job, status: "success" });
+    // The PR's next push.
+    await run({ sha: sha("c"), pr: 9101, status: "failure", workflow: "CI" });
+
+    const res = await wait({ events: ["checks_finished"], since: cursor });
+    expect(res.status).toBe("changed");
+    const got = res.events!.map((e) => {
+      const c = e.checks as Record<string, unknown>;
+      return [e.session!.id, c.sha, c.result];
+    });
+    expect(got).toEqual([
+      [owner.sessionId, sha("a"), "passed"],
+      [jobOwner.sessionId, sha("b"), "failed"],
+      [owner.sessionId, sha("c"), "failed"],
+    ]);
+    expect(got.map(([id]) => id)).not.toContain(bystander.sessionId);
+    expect(res.events![0]!.checks).toEqual({
+      repo: BE,
+      sha: sha("a"),
+      result: "passed",
+      status: "success",
+      pr: { number: 9101, url: `https://github.com/${BE}/pull/9101` },
+      job: null,
+      workflow: "CI",
+      url: null,
+    });
+    expect(res.events![1]!.checks).toMatchObject({
+      job: "dev-feed-h",
+      pr: null,
+    });
+    // Passed back, the cursor wakes on nothing more.
+    const again = await wait({
+      events: ["checks_finished"],
+      since: res.nextSince,
+    });
+    expect(again.status).toBe("timeout");
+  });
+
+  it("checks_finished: a run stamped for session A wakes A only, once — a session that merely declares the same PR is not woken", async () => {
+    const BE = "Synap-core/backend";
+    const stamped = await session({ title: "Named by the run" });
+    const declarer = await session({
+      title: "Declares the PR too",
+      outputs: [
+        {
+          key: "pr-backend-9102",
+          kind: "pull_request",
+          label: "backend#9102",
+          ref: { url: `https://github.com/${BE}/pull/9102` },
+        },
+      ],
+    });
+    const cursor = new Date().toISOString();
+    await q(
+      `insert into events (id, timestamp, type, subject_id, subject_type, data, user_id)
+       values (gen_random_uuid(), now(), 'ci.finished', $1, 'ci_run', $2::jsonb, $3)`,
+      [
+        `${BE}@${"d".repeat(40)}`,
+        JSON.stringify({
+          repo: BE,
+          sha: "d".repeat(40),
+          pr: 9102,
+          status: "success",
+          workflow: "CI",
+          sessionId: stamped.sessionId,
+          ingestedAt: new Date(Date.now() + 1_000).toISOString(),
+        }),
+        OWNER,
+      ]
+    );
+    const res = await wait({ events: ["checks_finished"], since: cursor });
+    expect(res.status).toBe("changed");
+    // Only this test's two sessions: the conversation also holds the earlier
+    // tests' sessions, whose facts were heard after this cursor.
+    const ours = new Set([stamped.sessionId, declarer.sessionId]);
+    expect(
+      res.events!.map((e) => e.session!.id).filter((id) => ours.has(id))
+    ).toEqual([stamped.sessionId]);
+  });
+
+  it("status_moved / hold_set / blocker_ended: a pause with its hold, and the end of a session it waits on", async () => {
+    const waiter = await session({ title: "Waits" });
+    const blocker = await session({ title: "The blocker" });
+    await q(
+      `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata, created_at)
+       values (gen_random_uuid(), 'session', $1, 'session', $2, 'blocked_by', '{}'::jsonb, now())`,
+      [waiter.sessionId, blocker.sessionId]
+    );
+    const cursor = new Date(Date.now() - 1).toISOString();
+    await setSessionStatus(db, {
+      sessionId: waiter.sessionId,
+      from: "active",
+      to: "paused",
+      actor: { kind: "human", userId: OWNER },
+      reason: "waiting on the types PR",
+      hold: {
+        on: "thing",
+        reason: "the types PR lands first",
+        until: { moves: "pr:Synap-core/backend#9200" },
+      },
+    });
+    await setSessionStatus(db, {
+      sessionId: blocker.sessionId,
+      from: "active",
+      to: "cancelled",
+      actor: { kind: "human", userId: OWNER },
+    });
+
+    const res = await wait({
+      events: ["status_moved", "hold_set", "blocker_ended"],
+      since: cursor,
+    });
+    expect(res.status).toBe("changed");
+    const mine = res.events!.filter((e) => e.session!.id === waiter.sessionId);
+    expect(mine.map((e) => e.kind)).toEqual(["hold_set", "blocker_ended"]);
+    expect(mine[0]!.move).toMatchObject({
+      from: "active",
+      to: "paused",
+      category: "paused",
+      actor: "human",
+      hold: {
+        on: "thing",
+        until: { moves: "pr:synap-core/backend#9200" },
+        resumeTo: "active",
+      },
+    });
+    expect(String(mine[0]!.fenced)).toMatch(/BEGIN UNTRUSTED CONTENT/);
+    expect(mine[1]!.blocker).toEqual({
+      sessionId: blocker.sessionId,
+      title: "The blocker",
+      status: "cancelled",
+      delivered: false,
+    });
+    // The blocker's own move is its own status_moved, never the waiter's.
+    const theirs = res.events!.filter(
+      (e) => e.session!.id === blocker.sessionId
+    );
+    expect(theirs.map((e) => e.kind)).toEqual(["status_moved"]);
+    // One transition, two events: two ids, so a client keying by id keeps both.
+    expect(theirs[0]!.id).not.toBe(mine[1]!.id);
+
+    // Asked for status_moved alone, the pause is a plain move (no hold).
+    const plain = await wait({ events: ["status_moved"], since: cursor });
+    const pause = plain.events!.find(
+      (e) => e.session!.id === waiter.sessionId
+    )!;
+    expect(pause.kind).toBe("status_moved");
+    expect((pause.move as { hold: unknown }).hold).toBeNull();
   });
 
   it("is always a peek: an answer read through it stays unread for the agent's own wait", async () => {
