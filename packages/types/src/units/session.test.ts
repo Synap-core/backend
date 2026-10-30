@@ -42,9 +42,15 @@ describe("sessionUnitInput — one session", () => {
     ).toBe("needs_you");
   });
 
-  it("stale is unmeasured, never working", () => {
-    // Rules out letting `stale` fall to the default working arm.
-    expect(stateOf({ status: "stale", owedFromYou: 0 })).toBe("unmeasured");
+  it("stale reads paused, never working and never unmeasured", () => {
+    // Rules out the default working arm AND the old `unreadable` mapping: the
+    // lifecycle files `stale` under paused (SESSION_STATUS_DECLARATION).
+    expect(stateOf({ status: "stale", owedFromYou: 0 })).toBe("paused");
+    expect(stateOf({ status: "stale", owedFromYou: 0, live: null })).toBe(
+      "paused"
+    );
+    // A count that could not be read still outranks the calm answer.
+    expect(stateOf({ status: "stale", owedFromYou: null })).toBe("unmeasured");
   });
 
   it("a failed proposals read does not silence a running session", () => {
@@ -187,7 +193,7 @@ describe("sessionRowInput — one row of a project", () => {
         .state;
     expect(stateOf("paused")).toBe("paused");
     expect(stateOf("scheduled")).toBe("scheduled");
-    expect(stateOf("stale")).toBe("unmeasured");
+    expect(stateOf("stale")).toBe("paused");
     expect(stateOf("active")).toBe("working");
     // …and needing you still outranks a quiet lifecycle (a stale session that
     // owes the person is THEIR move — the work map's MUST 2.4).

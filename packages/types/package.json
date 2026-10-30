@@ -349,6 +349,10 @@
       "types": "./dist/work-release/index.d.ts",
       "import": "./dist/work-release/index.js"
     },
+    "./work-clock": {
+      "types": "./dist/work-clock/index.d.ts",
+      "import": "./dist/work-clock/index.js"
+    },
     "./lens": {
       "types": "./dist/lens/index.d.ts",
       "import": "./dist/lens/index.js"
