@@ -421,7 +421,7 @@ describe("buildProposalSummary", () => {
   // The past form ("Rejected") would describe something that already happened.
   it("titles a pending proposal in the imperative mood", () => {
     expect(buildProposalSummary("proposal", "reject", { name: "P1" })).toBe(
-      'Reject Proposal "P1"'
+      'Reject Request "P1"'
     );
   });
 

@@ -271,7 +271,7 @@ describe("buildNeedsYou link building", () => {
     expect(row.secondary).toBe("3 failed runs");
   });
 
-  it("sends stuck runs to Sessions, naming the oldest", () => {
+  it("sends stuck runs to Jobs, naming the oldest", () => {
     const [row] = buildNeedsYou({
       sections: [
         section("stuck_runs", "degraded", {
@@ -291,7 +291,7 @@ describe("buildNeedsYou link building", () => {
     expect(row.secondary).toBe("Oldest: “Sync”, 30h");
     expect(row.action).toEqual({
       kind: "link",
-      label: "Open sessions",
+      label: "Open jobs",
       exit: { href: "/sessions?filter=stuck", isDesktopLink: false },
     });
   });

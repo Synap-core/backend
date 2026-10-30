@@ -17,7 +17,7 @@ describe("linkProposalTitle", () => {
         linkType: "blocked_by",
         toType: "session",
       })
-    ).toBe("Session blocked by session");
+    ).toBe("Job blocked by job");
   });
 
   it("an unknown edge humanizes, never leaks its token", () => {
@@ -42,6 +42,6 @@ describe("linkProposalTitle", () => {
     });
     expect(
       buildDerivedSessionTitle({ kind: "receipt", doing: proposalTitle })
-    ).toBe("Session blocked by session");
+    ).toBe("Job blocked by job");
   });
 });
