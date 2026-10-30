@@ -122,6 +122,7 @@ export const WEB_HOSTED_OPEN_KINDS = [
   "agent",
   "document",
   "channel",
+  "track",
 ] as const;
 export type WebHostedOpenKind = (typeof WEB_HOSTED_OPEN_KINDS)[number];
 
