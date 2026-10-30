@@ -7,8 +7,11 @@
  *
  * A capability's mark reads two facts:
  *   • its card's state (`capabilities.catalog`): can it run at all (an
- *     account, the pod offering it) and are its actions on — the verb's
- *     `approved` is what the execution gate reads (decision D5);
+ *     account, the pod offering it, its access to the service: the tool rows
+ *     in `toolsOff`) and are its actions on — the verb's and the tool row's
+ *     `approved` are both what the execution gate reads (decision D5). Until
+ *     2026-10-30 only the verbs were read, so Hetzner Cloud read "On" with
+ *     every run refused (its `hetzner_cloud` row was off);
  *   • its run health (`capabilities.compositions`): failed or stuck runs.
  * Worst first: it cannot run at all, then it is failing now, then actions are
  * off (every call to one is refused), then stuck runs, then On. A read that
@@ -78,13 +81,21 @@ function actionsOff(
  * not answered; `health` is null when the compositions read did not.
  */
 export function capabilityStatus(input: {
-  card: { status: CapabilityCardStatus; verbs: readonly unknown[] } | null;
+  card: {
+    status: CapabilityCardStatus;
+    verbs: readonly unknown[];
+    toolsOff?: readonly unknown[];
+  } | null;
   health: RunHealth | null;
 }): StatusMark {
   const t = toolsT();
   const { card, health } = input;
   const blocked = card ? cannotRun(card.status) : null;
   if (blocked) return blocked;
+  // Its access to the service is off: every run is refused, as surely as with
+  // no account.
+  if (card?.toolsOff && card.toolsOff.length > 0)
+    return { kind: "down", label: t("status.accessOff") };
   if (health?.status === "failed")
     return {
       kind: "down",

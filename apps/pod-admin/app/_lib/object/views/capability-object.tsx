@@ -19,16 +19,21 @@
  * templates. The status mark is THE one (`tool-status.ts`), the same the Tools
  * row shows.
  *
- * The one act on the web is turning verbs on or off
+ * The acts on the web are turning verbs on or off
  * (`capabilities.setToolEnabled`, the same gate as everywhere: a space's
- * owner, or a pod admin for a pod-wide capability). The switches are offered
- * only to those (`mayTurnVerbsOn`); everyone else reads the state and who can
- * change it. Connecting an account stays in the app — the web has no Connect
+ * owner, or a pod admin for a pod-wide capability), and turning ON its access
+ * to the service when a member tool row is off (`card.toolsOff`,
+ * `tools.setApproved`, the same gate). The run gate refuses on that row too,
+ * so a capability with every action on and its access off ran nothing, and
+ * until 2026-10-30 no screen offered to turn it on (Hetzner Cloud). The
+ * switches are offered only to those (`mayTurnVerbsOn`); everyone else reads
+ * the state and who can change it. Connecting an account stays in the app — the web has no Connect
  * flow — so that step is a "Connect in app" exit.
  */
 
 import { addToast, Chip, Switch } from "@heroui/react";
 import { useState } from "react";
+import { resolveServiceName } from "@synap-core/types/service-marks";
 import { trpc } from "../../../../lib/trpc";
 import { readableError } from "../../../../lib/format";
 import { ExitLink } from "../../../../lib/exit-link";
@@ -48,6 +53,7 @@ import {
   type CardVerbLike,
 } from "../../../(admin)/tools/_lib/installed-model";
 import { capabilityStatus } from "../../../(admin)/tools/_lib/tool-status";
+import { toolsT } from "../../../(admin)/tools/_lib/copy";
 import {
   actionLabelFor,
   capabilityFlows,
@@ -109,6 +115,24 @@ export function CapabilityObject({
       });
     },
   });
+  // Its access to the service (a member tool row the run gate refuses).
+  const [accessRefusals, setAccessRefusals] = useState<Record<string, string>>(
+    {}
+  );
+  const setAccess = trpc.tools.setApproved.useMutation({
+    onSuccess: (_res, input) => {
+      setAccessRefusals(({ [input.id]: _dropped, ...rest }) => rest);
+      void utils.capabilities.catalog.invalidate();
+      void utils.diagnose.global.invalidate();
+    },
+    onError: (err, input) => {
+      if (redirectToLoginIfUnauthorized(err)) return;
+      setAccessRefusals((r) => ({
+        ...r,
+        [input.id]: readableError(err.message) ?? toolsT()("access.notChanged"),
+      }));
+    },
+  });
   useReauthOnUnauthorized(container.error, catalog.error);
 
   if (container.isLoading) return frame.loading("Loading tool…");
@@ -140,6 +164,10 @@ export function CapabilityObject({
     objectKind: "capability",
     id,
   });
+  const accessOff = card?.toolsOff ?? [];
+  const pendingAccess = setAccess.isPending
+    ? setAccess.variables?.id
+    : undefined;
   const pendingSkill = setEnabled.isPending
     ? setEnabled.variables?.skillId
     : undefined;
@@ -212,6 +240,22 @@ export function CapabilityObject({
     ],
     children: (
       <>
+        {accessOff.length > 0 && (
+          <AccessSection
+            tools={accessOff}
+            canToggle={canToggle}
+            who={
+              workspaceId
+                ? toolsT()("access.whoSpace", { space: spaceName ?? "" })
+                : toolsT()("access.who")
+            }
+            pendingId={pendingAccess}
+            refusals={accessRefusals}
+            onTurnOn={(toolId) =>
+              setAccess.mutate({ id: toolId, approved: true })
+            }
+          />
+        )}
         <section className="flex flex-col gap-2">
           <h2 className="text-[13px] font-medium text-foreground">Actions</h2>
           {!canToggle && verbs.length > 0 && (
@@ -236,6 +280,82 @@ export function CapabilityObject({
       ...(card ? { raw: card } : {}),
     },
   });
+}
+
+/**
+ * Its access to the service, off: one row per member tool row the run gate
+ * refuses, with its switch. Only drawn while one is off; once on, the card no
+ * longer lists it and the section goes.
+ */
+function AccessSection({
+  tools,
+  canToggle,
+  who,
+  pendingId,
+  refusals,
+  onTurnOn,
+}: {
+  tools: ReadonlyArray<{ id: string; name: string }>;
+  canToggle: boolean;
+  who: string;
+  pendingId: string | undefined;
+  refusals: Record<string, string>;
+  onTurnOn: (toolId: string) => void;
+}) {
+  const t = toolsT();
+  return (
+    <section
+      data-capability-access=""
+      className="flex flex-col gap-2"
+      aria-label={t("access.title")}
+    >
+      <h2 className="text-[13px] font-medium text-foreground">
+        {t("access.title")}
+      </h2>
+      {!canToggle && <p className="text-[12.5px] text-foreground/65">{who}</p>}
+      <ul className="-mx-2 flex flex-col">
+        {tools.map((tool) => {
+          const service = resolveServiceName(tool.name);
+          return (
+            <li
+              key={tool.id}
+              data-access-tool={tool.id}
+              className="flex flex-col gap-1 border-b border-foreground/[0.05] px-2 py-2 last:border-b-0"
+            >
+              <div className="flex min-h-10 items-center gap-3">
+                <div className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate text-[13px] text-foreground">
+                    {t("access.row", { service })}
+                  </span>
+                  <span className="text-[11.5px] text-foreground/65">
+                    {t("access.why", { service })}
+                  </span>
+                </div>
+                {canToggle ? (
+                  <Switch
+                    size="sm"
+                    isSelected={false}
+                    isDisabled={pendingId === tool.id}
+                    onValueChange={(on) => on && onTurnOn(tool.id)}
+                    aria-label={t("access.turnOn", { service })}
+                  />
+                ) : (
+                  <span className="shrink-0 text-[12px] text-status-down">
+                    {t("access.off")}
+                  </span>
+                )}
+              </div>
+              {refusals[tool.id] && (
+                <p className="text-[12px] text-status-down" role="alert">
+                  {refusals[tool.id]}
+                </p>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
 }
 
 function VerbRow({

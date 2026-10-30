@@ -115,3 +115,41 @@ describe("statusRank", () => {
     expect(statusRank({ kind: "unknown", label: "" })).toBe(2);
   });
 });
+
+describe("capabilityStatus — its access to the service (founder dogfood 2026-10-30)", () => {
+  const accessOff = (status: CapabilityCardStatus) => ({
+    ...card(status),
+    toolsOff: [{ id: "t-1", name: "hetzner_cloud" }],
+  });
+
+  it("every action on but its access off is down, never On (wrong rule: read the verbs only)", () => {
+    // Hetzner Cloud: 6 of 6 actions on, its `hetzner_cloud` row off, every
+    // run refused "installed but not enabled".
+    expect(capabilityStatus({ card: accessOff("ready"), health: OK })).toEqual({
+      kind: "down",
+      label: "Access off",
+    });
+  });
+
+  it("outranks failed runs and actions off: nothing can run at all", () => {
+    expect(
+      capabilityStatus({ card: accessOff("partial"), health: FAILED }).label
+    ).toBe("Access off");
+  });
+
+  it("a card that cannot connect keeps its own reason first", () => {
+    expect(
+      capabilityStatus({ card: accessOff("needs_connection"), health: OK })
+        .label
+    ).toBe("Needs an account");
+  });
+
+  it("an empty or absent list changes nothing", () => {
+    expect(
+      capabilityStatus({ card: { ...card("ready"), toolsOff: [] }, health: OK })
+    ).toEqual({ kind: "healthy", label: "On" });
+    expect(capabilityStatus({ card: card("ready"), health: OK }).label).toBe(
+      "On"
+    );
+  });
+});
