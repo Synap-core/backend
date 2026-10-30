@@ -20,7 +20,8 @@
  *  - born `accepted` (done) ⇒ proposes (the defect: executed);
  *  - born `proposed` (open) ⇒ executes (rules out "any decision proposes");
  *  - status left to the kind's default `accepted` ⇒ proposes (the default is
- *    the born status too, as at the create door);
+ *    the born status too, as at the create door), and so does the lifecycle
+ *    link's declared initial status;
  *  - kind lookup fails ⇒ proposes, resolver never asked (unmeasured is not
  *    "no floor").
  */
@@ -29,6 +30,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const h = vi.hoisted(() => ({
   resolve: vi.fn(),
   resolveProfile: vi.fn(),
+  initialStatus: undefined as string | undefined,
 }));
 
 const LIFECYCLE = {
@@ -49,7 +51,9 @@ vi.mock("@synap/database", async (importOriginal) => {
     ProfileResolutionService: class {
       resolveProfile = h.resolveProfile;
       async getEffectiveLifecycle() {
-        return LIFECYCLE;
+        return h.initialStatus
+          ? { ...LIFECYCLE, initialStatus: h.initialStatus }
+          : LIFECYCLE;
       }
     },
   };
@@ -83,6 +87,7 @@ const ask = (operations: never[]) =>
 
 describe("capture graph member governance carries the born-status floor", () => {
   beforeEach(() => {
+    h.initialStatus = undefined;
     h.resolveProfile
       .mockReset()
       .mockResolvedValue({ id: "p-decision", defaultValues: {} });
@@ -123,6 +128,14 @@ describe("capture graph member governance carries the born-status floor", () => 
       defaultValues: { decisionStatus: "accepted" },
     });
     expect(await ask([decision({})])).toBe(true);
+  });
+
+  it("the lifecycle's declared initial status is the born status", async () => {
+    h.initialStatus = "accepted";
+    expect(await ask([decision({})])).toBe(true);
+    h.initialStatus = "proposed";
+    h.resolve.mockClear();
+    expect(await ask([decision({})])).toBe(false);
   });
 
   it("an unreadable kind proposes without asking the resolver", async () => {

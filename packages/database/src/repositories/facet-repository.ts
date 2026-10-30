@@ -35,6 +35,7 @@ import {
 } from "../utils/facet-attached-hook.js";
 import {
   assertNoLifecycleMove,
+  bornLifecycleValue,
   columnsForValue,
   LifecycleWriteOutsideDoorError,
 } from "../services/lifecycle/lifecycle-columns.js";
@@ -207,7 +208,8 @@ export class FacetRepository extends BaseRepository<
 
     // LIFECYCLE columns for the new facet (a born row is not a move). The
     // role's lifecycle value may arrive as `status` or as the property; when
-    // both are given they must agree. The read projection mirrors the column.
+    // both are given they must agree; when neither, the role's declared
+    // initial status. The read projection mirrors the column.
     const roleLifecycle = await this.profileResolution.getEffectiveLifecycle(
       profile.id,
       lensWorkspaceId
@@ -224,7 +226,10 @@ export class FacetRepository extends BaseRepository<
       ) {
         throw new LifecycleWriteOutsideDoorError(slug);
       }
-      const cols = columnsForValue(roleLifecycle, bornStatus ?? fromProps);
+      const cols = columnsForValue(
+        roleLifecycle,
+        bornLifecycleValue(roleLifecycle, bornStatus ?? fromProps)
+      );
       bornStatus = cols.status ?? undefined;
       bornCategory = cols.statusCategory;
       if (cols.status !== null) {

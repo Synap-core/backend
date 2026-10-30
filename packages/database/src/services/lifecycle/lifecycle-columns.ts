@@ -47,8 +47,59 @@ export function columnsForValue(
 }
 
 /**
- * The columns a new row of `profileId` gets from its `properties`, or `null`
- * when the profile declares no lifecycle.
+ * The value a row is BORN with: the creator's, else the lifecycle's declared
+ * initial status (`initialStatus`). Every birth door reads it — entity create
+ * ({@link bornLifecycleColumnsFor}) and role attach — so a thing whose kind
+ * declares a lifecycle is never born with no status just because its creator
+ * named none (finding 8c869510). Still a birth, not a move: no transition.
+ */
+export function bornLifecycleValue(
+  lifecycle: EffectiveLifecycle,
+  value: unknown
+): unknown {
+  return value === undefined || value === null || value === ""
+    ? (lifecycle.initialStatus ?? value)
+    : value;
+}
+
+/**
+ * The columns a row of `profileId` BORN with `properties` gets (the creator's
+ * value, else the declared initial status), plus the read projection agreeing
+ * with them; `null` when the profile declares no lifecycle.
+ */
+export async function bornLifecycleColumnsFor(
+  resolver: ProfileResolutionService,
+  profileId: string | null | undefined,
+  workspaceId: string | null | undefined,
+  properties: Record<string, unknown>
+): Promise<{
+  columns: LifecycleColumns;
+  properties: Record<string, unknown>;
+} | null> {
+  if (!profileId) return null;
+  const lifecycle = await resolver.getEffectiveLifecycle(
+    profileId,
+    workspaceId
+  );
+  if (!lifecycle) return null;
+  const columns = columnsForValue(
+    lifecycle,
+    bornLifecycleValue(lifecycle, properties[lifecycle.propertySlug])
+  );
+  return {
+    columns,
+    properties:
+      columns.status !== null &&
+      properties[lifecycle.propertySlug] !== columns.status
+        ? { ...properties, [lifecycle.propertySlug]: columns.status }
+        : properties,
+  };
+}
+
+/**
+ * The columns a row of `profileId` gets from its `properties` as they stand
+ * (a re-type or a merge — never a birth), or `null` when the profile declares
+ * no lifecycle.
  */
 export async function lifecycleColumnsFor(
   resolver: ProfileResolutionService,
