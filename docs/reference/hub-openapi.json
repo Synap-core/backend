@@ -29826,7 +29826,7 @@
       "get": {
         "tags": ["FocusSessions"],
         "summary": "The work graph: open work, recently settled work, every edge",
-        "description": "One read for a whole map (`services/focus-sessions/work-graph.ts`): every OPEN session, plus every session settled in the last `windowHours` (default 72), plus the far end of every edge of those, with the edges flat (`blocked_by`, `spawned_from`, `waits_on_output`, `triggered`, `updated`). For an unbound key, pod-wide when neither `workspaceId` nor `projectId` is given. A workspace-bound key reads its own workspace, far ends included, and another `workspaceId` is a 403. Floored at the sessions the caller can read, like the list. At most 500 window sessions, open first: `window.truncated` / `window.omitted` say when it cut. A failed edge read is `sections.<name>.status: unavailable`, never an empty list.",
+        "description": "One read for a whole map (`services/focus-sessions/work-graph.ts`): every OPEN session, plus every session settled in the last `windowHours` (default 72), plus the far end of every edge of those, with the edges flat (`blocked_by`, `spawned_from`, `waits_on_output`, `triggered`, `updated`), and the PRs, holds and goals its sessions point at. `trackId` narrows it to one goal's sessions, `rootSessionId` to one wave (the root and every session spawned under it); one or the other. For an unbound key, pod-wide when neither `workspaceId` nor `projectId` is given. A workspace-bound key reads its own workspace, far ends included, and another `workspaceId` is a 403. Floored at the sessions the caller can read, like the list. At most 500 window sessions, open first: `window.truncated` / `window.omitted` say when it cut. A failed edge read is `sections.<name>.status: unavailable`, never an empty list.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -29863,6 +29863,18 @@
             },
             "required": false,
             "name": "lens",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "trackId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "rootSessionId",
             "in": "query"
           }
         ],
@@ -29966,6 +29978,66 @@
                         "required": ["kind", "from", "to"]
                       }
                     },
+                    "pullRequests": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "url": { "type": "string" },
+                          "label": { "type": "string" },
+                          "sessions": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "sessionId": { "type": "string" },
+                                "key": { "type": ["string", "null"] },
+                                "state": {
+                                  "type": "string",
+                                  "enum": ["met", "claimed", "open", "retired"]
+                                }
+                              },
+                              "required": ["sessionId", "key", "state"]
+                            }
+                          },
+                          "prState": {}
+                        },
+                        "required": ["id", "url", "label", "sessions"]
+                      }
+                    },
+                    "holds": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "sessionId": { "type": "string" },
+                          "status": { "type": "string" },
+                          "hold": {},
+                          "resumeDue": { "type": "boolean" },
+                          "reviewDue": { "type": "boolean" }
+                        },
+                        "required": [
+                          "sessionId",
+                          "status",
+                          "resumeDue",
+                          "reviewDue"
+                        ]
+                      }
+                    },
+                    "goals": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "name": { "type": "string" },
+                          "status": { "type": "string" },
+                          "projectId": { "type": "string" }
+                        },
+                        "required": ["id", "name", "status", "projectId"]
+                      }
+                    },
                     "sections": {
                       "type": "object",
                       "properties": {
@@ -30012,13 +30084,49 @@
                             "reason": { "type": "string" }
                           },
                           "required": ["status"]
+                        },
+                        "pullRequests": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["ok", "unavailable"]
+                            },
+                            "reason": { "type": "string" }
+                          },
+                          "required": ["status"]
+                        },
+                        "holds": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["ok", "unavailable"]
+                            },
+                            "reason": { "type": "string" }
+                          },
+                          "required": ["status"]
+                        },
+                        "goals": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["ok", "unavailable"]
+                            },
+                            "reason": { "type": "string" }
+                          },
+                          "required": ["status"]
                         }
                       },
                       "required": [
                         "blockedBy",
                         "waitsOnOutputs",
                         "interactions",
-                        "farEnds"
+                        "farEnds",
+                        "pullRequests",
+                        "holds",
+                        "goals"
                       ]
                     },
                     "window": {
@@ -30039,7 +30147,15 @@
                       ]
                     }
                   },
-                  "required": ["nodes", "edges", "sections", "window"]
+                  "required": [
+                    "nodes",
+                    "edges",
+                    "pullRequests",
+                    "holds",
+                    "goals",
+                    "sections",
+                    "window"
+                  ]
                 }
               }
             }

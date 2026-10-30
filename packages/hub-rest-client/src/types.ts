@@ -1382,6 +1382,10 @@ export interface GetWorkGraphOptions {
   kind?: FocusSessionKind | "all";
   /** Triage lens of the window. Default here is `"all"`. */
   lens?: "default" | "triage" | "all";
+  /** Only this goal's sessions. Not with `rootSessionId`. */
+  trackId?: string;
+  /** Only this wave: the root and every session spawned under it. Not with `trackId`. */
+  rootSessionId?: string;
 }
 
 /** One edge of the work graph, flat. `blocked_by` runs from the waiter to its blocker. */
@@ -1416,14 +1420,59 @@ export interface HubWorkGraphNode extends HubFocusSessionListItem {
 }
 
 /** GET /api/hub/focus-sessions/graph. */
+/** A PR a node recorded as an outcome, once. `prState` absent = the pod recorded no fact about it. */
+export interface HubWorkGraphPullRequest {
+  /** `owner/name#n`, the repo lower-cased. */
+  id: string;
+  url: string;
+  label: string;
+  sessions: Array<{
+    sessionId: string;
+    key: string | null;
+    state: "met" | "claimed" | "open" | "retired";
+  }>;
+  prState?: unknown;
+}
+
+/** A paused node's standing hold: what it waits on and what resumes it. */
+export interface HubWorkGraphHold {
+  sessionId: string;
+  status: string;
+  hold: {
+    on: string;
+    ref?: string | null;
+    reason?: string | null;
+    until?: { date: string } | { moves: string; to?: string } | null;
+    reviewBy?: string | null;
+    resumeTo: string | null;
+    since: string;
+  };
+  resumeDue: boolean;
+  reviewDue: boolean;
+}
+
+/** A goal (track) a node is filed into. */
+export interface HubWorkGraphGoal {
+  id: string;
+  name: string;
+  status: string;
+  projectId: string;
+}
+
 export interface HubWorkGraph {
   nodes: HubWorkGraphNode[];
   edges: HubWorkGraphEdge[];
+  pullRequests: HubWorkGraphPullRequest[];
+  holds: HubWorkGraphHold[];
+  goals: HubWorkGraphGoal[];
   sections: {
     blockedBy: HubWorkGraphSection;
     waitsOnOutputs: HubWorkGraphSection;
     interactions: HubWorkGraphSection;
     farEnds: HubWorkGraphSection;
+    pullRequests: HubWorkGraphSection;
+    holds: HubWorkGraphSection;
+    goals: HubWorkGraphSection;
   };
   window: {
     since: string;

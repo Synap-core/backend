@@ -16,7 +16,11 @@
  *   - another person's session whose room seats this person — readable only on
  *     the HUMAN door (`roster: true`);
  *   - a session in space A blocked by the same person's session in space B —
- *     an unbound key gets B as a far end, a key BOUND to A must not.
+ *     an unbound key gets B as a far end, a key BOUND to A must not;
+ *   - a wave (root → child → grandchild) beside an unrelated session, one PR
+ *     recorded by two of its sessions, a paused grandchild with a hold, and a
+ *     child filed into a goal — `focus` must keep the wave or the goal only,
+ *     and the PR, hold and goal must come back once each.
  *
  * Stubbed: nothing on the read path except one switch that makes
  * `attachSessionEdges` throw, to prove a failed edge read is `unavailable`.
@@ -34,6 +38,7 @@ const h = vi.hoisted(() => {
       query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
     },
     db: null as unknown,
+    prReaders: [] as { lens?: unknown }[],
     failEdges: false,
     async init(): Promise<unknown> {
       if (!state.db) {
@@ -69,6 +74,20 @@ vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   const pg = await h.init();
   return { ...actual, db: pg, getDb: async () => pg };
+});
+
+vi.mock("../dev-loop/pr-state.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../dev-loop/pr-state.js")>();
+  return {
+    ...actual,
+    readPullRequestStates: async (
+      ...args: Parameters<typeof actual.readPullRequestStates>
+    ) => {
+      h.prReaders.push(args[1] as { lens?: unknown });
+      return actual.readPullRequestStates(...args);
+    },
+  };
 });
 
 vi.mock("./session-blocked-by.js", async (importOriginal) => {
@@ -126,7 +145,15 @@ const S = {
   shared: randomUUID(), // OTHER's session whose room seats USER
   inA: randomUUID(), // BOUND's session in WS_A, blocked by inB
   inB: randomUUID(), // BOUND's session in WS_B (far end of inA)
+  root: randomUUID(), // WAVE's root; records PR #7
+  waveChild: randomUUID(), // spawned from root; records PR #7 too; in TRACK
+  grandchild: randomUUID(), // spawned from waveChild; paused, with a hold
+  unrelated: randomUUID(), // WAVE's session outside the wave
 };
+const WAVE = "user-wave";
+const PROJECT = randomUUID();
+const TRACK = randomUUID();
+const PR_URL = "https://github.com/Synap-core/backend/pull/7";
 
 async function session(
   id: string,
@@ -137,12 +164,14 @@ async function session(
     closedHoursAgo?: number;
     workspaceId?: string;
     channelId?: string;
+    trackId?: string;
+    outputs?: unknown[];
   } = {}
 ) {
   const ago = opts.hoursAgo ?? 0;
   await q(
-    `insert into focus_sessions (id, user_id, goal, status, workspace_id, channel_id, expected_outputs, agent_ids, metadata, started_at, created_at, updated_at, closed_at)
-     values ($1, $2, 'g', $3, $4, $5, '[]'::jsonb, '{}', '{}'::jsonb,
+    `insert into focus_sessions (id, user_id, goal, status, workspace_id, channel_id, track_id, expected_outputs, agent_ids, metadata, started_at, created_at, updated_at, closed_at)
+     values ($1, $2, 'g', $3, $4, $5, $8, $9::jsonb, '{}', '{}'::jsonb,
              now() - make_interval(hours => $6::int), now() - make_interval(hours => $6::int), now() - make_interval(hours => $6::int),
              case when $7::int is null then null else now() - make_interval(hours => $7::int) end)`,
     [
@@ -153,6 +182,8 @@ async function session(
       opts.channelId ?? null,
       ago,
       opts.closedHoursAgo ?? null,
+      opts.trackId ?? null,
+      JSON.stringify(opts.outputs ?? []),
     ]
   );
 }
@@ -171,6 +202,7 @@ const graph = (
     windowHours?: number;
     workspaceLens?: string;
     boundWorkspaceId?: string;
+    focus?: Parameters<typeof buildWorkGraph>[0]["focus"];
   } = {}
 ) =>
   buildWorkGraph({
@@ -181,6 +213,7 @@ const graph = (
     lens: "all",
     roster: extra.roster ?? false,
     boundWorkspaceId: extra.boundWorkspaceId,
+    focus: extra.focus,
   });
 
 beforeAll(async () => {
@@ -244,6 +277,63 @@ beforeAll(async () => {
   await session(S.inA, BOUND, "active", { hoursAgo: 1, workspaceId: WS_A });
   await session(S.inB, BOUND, "active", { hoursAgo: 1, workspaceId: WS_B });
   await link(S.inA, S.inB, "blocked_by");
+
+  // WAVE: a wave, one PR two sessions recorded, a hold, a goal.
+  const pr = (key: string) => ({
+    key,
+    kind: "pull_request",
+    label: "backend#7 feat: the thing",
+    status: "pending",
+    ref: { url: PR_URL },
+  });
+  await q(`insert into projects (id, name, user_id) values ($1, 'p', $2)`, [
+    PROJECT,
+    WAVE,
+  ]);
+  await q(
+    `insert into project_tracks (id, project_id, user_id, name, status) values ($1, $2, $3, 'Ship the thing', 'active')`,
+    [TRACK, PROJECT, WAVE]
+  );
+  await session(S.root, WAVE, "active", {
+    hoursAgo: 2,
+    outputs: [
+      pr("pr-backend-7"),
+      { key: "notes", kind: "document", label: "Notes" },
+    ],
+  });
+  await session(S.waveChild, WAVE, "active", {
+    hoursAgo: 1,
+    trackId: TRACK,
+    outputs: [pr("pr-7")],
+  });
+  await session(S.grandchild, WAVE, "paused", { hoursAgo: 1 });
+  await session(S.unrelated, WAVE, "active", { hoursAgo: 1 });
+  await link(S.waveChild, S.root, "spawned_from");
+  await link(S.grandchild, S.waveChild, "spawned_from");
+  const holdId = randomUUID();
+  await q(
+    `insert into lifecycle_transition_outbox (transition_id, transition, emit_context, delivered, attempts, created_at)
+     values ($1, $2::jsonb, '{}'::jsonb, '{}', 0, now())`,
+    [
+      holdId,
+      JSON.stringify({
+        transitionId: holdId,
+        subjectType: "focus_session",
+        subjectId: S.grandchild,
+        to: "paused",
+        category: "paused",
+        userId: WAVE,
+        workspaceId: null,
+        recordedAt: new Date().toISOString(),
+        hold: {
+          on: "person",
+          reason: "waits on the review",
+          resumeTo: "active",
+          since: new Date().toISOString(),
+        },
+      }),
+    ]
+  );
 
   // BIG: one more than the ceiling of OPEN work, plus 3 recently closed.
   await q(
@@ -366,6 +456,18 @@ describe("buildWorkGraph — a workspace-bound key", () => {
   });
 });
 
+describe("buildWorkGraph — PR facts under a workspace-bound key", () => {
+  it("reads the PR states under the bound workspace, and under none for an unbound key", async () => {
+    h.prReaders.length = 0;
+    await graph(WAVE, { boundWorkspaceId: WS_A });
+    expect(h.prReaders.length).toBeGreaterThan(0);
+    expect(h.prReaders.every((r) => r.lens === WS_A)).toBe(true);
+    h.prReaders.length = 0;
+    await graph(WAVE);
+    expect(h.prReaders.every((r) => r.lens === undefined)).toBe(true);
+  });
+});
+
 describe("buildWorkGraph — a failed sub-read", () => {
   it("reads `unavailable`, draws no edge of that kind, and keeps the nodes", async () => {
     h.failEdges = true;
@@ -382,5 +484,77 @@ describe("buildWorkGraph — a failed sub-read", () => {
     } finally {
       h.failEdges = false;
     }
+  });
+});
+
+describe("buildWorkGraph — one goal or one wave", () => {
+  it("a wave keeps the root and every session spawned under it, nothing else", async () => {
+    const g = await graph(WAVE, { focus: { rootSessionId: S.root } });
+    const inWindow = g.nodes.filter((n) => n.inWindow).map((n) => n.id);
+    expect(inWindow.sort()).toEqual([S.root, S.waveChild, S.grandchild].sort());
+    expect(g.nodes.map((n) => n.id)).not.toContain(S.unrelated);
+  });
+
+  it("a goal keeps its sessions; the parent comes back only as a far end", async () => {
+    const g = await graph(WAVE, { focus: { trackId: TRACK } });
+    expect(g.nodes.filter((n) => n.inWindow).map((n) => n.id)).toEqual([
+      S.waveChild,
+    ]);
+    expect(g.nodes.find((n) => n.id === S.root)?.inWindow).toBe(false);
+    expect(g.nodes.map((n) => n.id)).not.toContain(S.unrelated);
+  });
+
+  it("another person's wave root gives nothing", async () => {
+    const g = await graph(USER, { focus: { rootSessionId: S.root } });
+    expect(g.nodes).toEqual([]);
+  });
+});
+
+describe("buildWorkGraph — PRs, holds and goals", () => {
+  it("draws a PR once, with every session that recorded it, and no guessed state", async () => {
+    const g = await graph(WAVE);
+    expect(g.pullRequests).toEqual([
+      {
+        id: "synap-core/backend#7",
+        url: PR_URL,
+        label: "backend#7 feat: the thing",
+        sessions: expect.arrayContaining([
+          { sessionId: S.root, key: "pr-backend-7", state: "open" },
+          { sessionId: S.waveChild, key: "pr-7", state: "open" },
+        ]),
+      },
+    ]);
+    expect(g.pullRequests[0]!.sessions).toHaveLength(2);
+    // No dev-loop fact recorded: no `prState`, never a guessed "Open".
+    expect(g.pullRequests[0]).not.toHaveProperty("prState");
+    expect(g.sections.pullRequests).toEqual({ status: "ok" });
+  });
+
+  it("carries a paused session's standing hold", async () => {
+    const g = await graph(WAVE);
+    expect(g.holds).toEqual([
+      expect.objectContaining({
+        sessionId: S.grandchild,
+        status: "paused",
+        hold: expect.objectContaining({ on: "person", resumeTo: "active" }),
+      }),
+    ]);
+    expect(g.sections.holds).toEqual({ status: "ok" });
+  });
+
+  it("names the goals its sessions serve, under the track floor", async () => {
+    const mine = await graph(WAVE);
+    expect(mine.goals).toEqual([
+      {
+        id: TRACK,
+        name: "Ship the thing",
+        status: "active",
+        projectId: PROJECT,
+      },
+    ]);
+    expect(mine.sections.goals).toEqual({ status: "ok" });
+    // USER holds none of WAVE's sessions, so no goal of theirs either.
+    const theirs = await graph(USER);
+    expect(theirs.goals).toEqual([]);
   });
 });

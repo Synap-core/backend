@@ -1165,6 +1165,20 @@ export const sessionHandlers: McpHandlerMap = {
         error: `Unknown lens '${lensArg}'. Valid values: default, triage, all.`,
       });
     }
+    const trackIdArg = typeof args.trackId === "string" ? args.trackId : "";
+    const rootArg =
+      typeof args.rootSessionId === "string" ? args.rootSessionId : "";
+    if (trackIdArg && rootArg) {
+      return ok({ error: "Pass trackId or rootSessionId, not both." });
+    }
+    for (const [name, value] of [
+      ["trackId", trackIdArg],
+      ["rootSessionId", rootArg],
+    ] as const) {
+      if (value && !UUID_RE.test(value)) {
+        return ok({ error: `${name} is not a valid id: ${value}` });
+      }
+    }
     const detailArg = (args.detail as string | undefined) ?? "lean";
     if (detailArg !== "lean" && detailArg !== "full") {
       return ok({
@@ -1194,6 +1208,11 @@ export const sessionHandlers: McpHandlerMap = {
       // An agent door reads owner-only (decision C v1, `rosterReadFor`).
       roster: false,
       boundWorkspaceId: keyWorkspaceId ?? undefined,
+      focus: trackIdArg
+        ? { trackId: trackIdArg }
+        : rootArg
+          ? { rootSessionId: rootArg }
+          : undefined,
     });
     return ok({
       // `lean` (default): enough to draw and to choose — a full node carries
@@ -1219,6 +1238,9 @@ export const sessionHandlers: McpHandlerMap = {
               },
             })),
       edges: graph.edges,
+      pullRequests: graph.pullRequests,
+      holds: graph.holds,
+      goals: graph.goals,
       sections: graph.sections,
       window: graph.window,
     });

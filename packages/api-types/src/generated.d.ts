@@ -7988,6 +7988,27 @@ export type SessionRecallView = {
 	recalledAt: string;
 	status: "failed";
 };
+/** A thing that can be held: an entity (kind lifecycle, or a role's facet), a goal, a session. */
+export interface HoldSubjectRef {
+	subjectType: TransitionSubjectType;
+	subjectId: string;
+	/** A role's lifecycle lives on its facet; null for the kind's own. */
+	facetId?: string | null;
+}
+export interface CurrentHold extends Required<HoldSubjectRef> {
+	role: string | null;
+	/** The paused status it stands in. */
+	status: string;
+	hold: RecordedHold;
+	transitionId: string;
+	/** The person the paused thing's move was attributed to. */
+	userId: string;
+	workspaceId: string | null;
+	/** `until.date` has come: the hourly sweep resumes it. */
+	resumeDue: boolean;
+	/** `reviewBy` has passed: a signal for the watcher, never a move. */
+	reviewDue: boolean;
+}
 /**
  * What a merge wrote onto a PRE-EXISTING entity, with the values it replaced.
  *
@@ -20270,6 +20291,42 @@ declare function projectSessionRows(sessions: FocusSession[], userId: string | n
 } & SessionParticipants & {
 	verdict?: SessionVerdict;
 })[]>;
+/**
+ * One pull request, once, however many nodes recorded it. `prState` is the
+ * PR's own state, ABSENT when the pod recorded no fact about it (draw nothing,
+ * never a guessed "Open"), `unavailable` when that read failed.
+ */
+export interface WorkGraphPullRequest {
+	/** `owner/name#n`, the repo lower-cased (`pullRequestKey`). */
+	id: string;
+	url: string;
+	/** The outcome's label, from the first node that recorded it. */
+	label: string;
+	/** Each node that recorded it, with that outcome's own state. */
+	sessions: Array<{
+		key: string | null;
+		sessionId: string;
+		state: PacketWorkUnitItem["state"];
+	}>;
+	prState?: PacketPullRequestState;
+}
+/** A node's standing hold (`listHolds`): the paused status it stands in and what it waits on. */
+export interface WorkGraphHold {
+	sessionId: string;
+	status: string;
+	hold: CurrentHold["hold"];
+	/** `until.date` has come: the hourly sweep resumes it. */
+	resumeDue: boolean;
+	/** `reviewBy` has passed. */
+	reviewDue: boolean;
+}
+/** A goal (track) a node is filed into, as the track floor lets the caller see it. */
+export interface WorkGraphGoal {
+	id: string;
+	name: string;
+	status: string;
+	projectId: string;
+}
 declare const WORK_GRAPH_EDGE_KINDS: readonly [
 	"blocked_by",
 	"spawned_from",
@@ -20305,6 +20362,12 @@ export interface WorkGraphSections {
 	interactions: WorkGraphSection;
 	/** The off-window sessions at the far end of an edge. */
 	farEnds: WorkGraphSection;
+	/** The PRs the nodes recorded, and their state. */
+	pullRequests: WorkGraphSection;
+	/** The standing holds of the nodes. */
+	holds: WorkGraphSection;
+	/** The goals the nodes are filed into. */
+	goals: WorkGraphSection;
 }
 export interface WorkGraphWindow {
 	/** ISO: settled work is in the window from this instant on. */
@@ -20327,6 +20390,9 @@ export type WorkGraphNode = Awaited<ReturnType<typeof projectSessionRows>>[numbe
 export interface WorkGraph {
 	nodes: WorkGraphNode[];
 	edges: WorkGraphEdge[];
+	pullRequests: WorkGraphPullRequest[];
+	holds: WorkGraphHold[];
+	goals: WorkGraphGoal[];
 	sections: WorkGraphSections;
 	window: WorkGraphWindow;
 }
@@ -34295,6 +34361,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				kind?: "all" | "receipt" | "run" | "work" | undefined;
 				lens?: "all" | "default" | "triage" | undefined;
 				projectId?: string | string[] | null | undefined;
+				rootSessionId?: string | undefined;
+				trackId?: string | undefined;
 				windowHours?: number | undefined;
 				workspaceId?: string | string[] | null | undefined;
 			};

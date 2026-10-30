@@ -5037,7 +5037,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "The whole map of YOUR work in one read — read-only. Every OPEN session, plus every session settled in the last `windowHours` (default 72), plus the far end of every edge: `nodes`, flat `edges` (`blocked_by` from waiter to blocker, `spawned_from` child to parent, `waits_on_output`, `triggered`, `updated`), `sections` (an edge read that FAILED is `unavailable`, never an empty list) and `window` (`truncated` + `omitted` when the 500-session ceiling cut). Use it instead of one `synap_get_session` per session to see what waits on what. Pod-wide unless you narrow to a workspace or project.",
+      "description": "The whole map of YOUR work in one read — read-only. Every OPEN session, plus every session settled in the last `windowHours` (default 72), plus the far end of every edge: `nodes`, flat `edges` (`blocked_by` from waiter to blocker, `spawned_from` child to parent, `waits_on_output`, `triggered`, `updated`), `pullRequests` (each PR a session recorded, with its state), `holds` (what each paused session waits on), `goals` (the goals the sessions serve), `sections` (a read that FAILED is `unavailable`, never an empty list) and `window` (`truncated` + `omitted` when the 500-session ceiling cut). Use it instead of one `synap_get_session` per session to see what waits on what. Pod-wide unless you narrow to a workspace or project; `trackId` narrows it to one goal, `rootSessionId` to one wave.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -5053,6 +5053,14 @@
           "projectId": {
             "type": "string",
             "description": "Optional: only sessions scoped to this project."
+          },
+          "trackId": {
+            "type": "string",
+            "description": "Optional: only the sessions filed in this goal (track). Not with rootSessionId."
+          },
+          "rootSessionId": {
+            "type": "string",
+            "description": "Optional: only this wave, the session and every session spawned under it. Not with trackId."
           },
           "kind": {
             "type": "string",
