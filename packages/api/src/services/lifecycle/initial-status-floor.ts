@@ -12,6 +12,7 @@
 import {
   db,
   ProfileResolutionService,
+  bornLifecycleValue,
   classifyStatusMove,
 } from "@synap/database";
 
@@ -27,7 +28,12 @@ export async function initialStatusFloor(input: {
     db
   ).getEffectiveLifecycle(input.profileId, input.workspaceId);
   if (!lifecycle) return undefined;
-  const value = input.status ?? input.properties?.[lifecycle.propertySlug];
+  // The value the row WILL be born with — the repository's derivation, so a
+  // kind whose declared initial status is terminal/human-only is gated too.
+  const value = bornLifecycleValue(
+    lifecycle,
+    input.status ?? input.properties?.[lifecycle.propertySlug]
+  );
   if (typeof value !== "string") return undefined;
   const move = classifyStatusMove(lifecycle, value);
   return move && (move.intoTerminal || move.humanOnly) ? move : undefined;

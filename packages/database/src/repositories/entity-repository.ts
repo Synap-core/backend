@@ -12,6 +12,7 @@ import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
 import {
   assertNoLifecycleMove,
+  bornLifecycleColumnsFor,
   lifecycleColumnsFor,
 } from "../services/lifecycle/lifecycle-columns.js";
 import { FacetRepository } from "./facet-repository.js";
@@ -562,16 +563,19 @@ export class EntityRepository extends BaseRepository<
     // — doing so would override an explicit workspace request (e.g. imports).
     const effectiveWorkspaceId = data.workspaceId ?? null;
 
-    // 2b. LIFECYCLE columns for the new row, from the same value the read
-    // projection holds (a born row is not a move — it has no "from").
-    const bornColumns = roleFacetProfile
+    // 2b. LIFECYCLE columns for the new row: the creator's value, else the
+    // kind's declared initial status, with the read projection agreeing (a
+    // born row is not a move — it has no "from").
+    const born = roleFacetProfile
       ? null
-      : await lifecycleColumnsFor(
+      : await bornLifecycleColumnsFor(
           this.profileResolution,
           profileId,
           effectiveWorkspaceId,
           validatedProperties
         );
+    const bornColumns = born?.columns;
+    const storedProperties = born?.properties ?? validatedProperties;
 
     // 3. Create entity
     const provenance = stampProvenance({
@@ -592,7 +596,7 @@ export class EntityRepository extends BaseRepository<
       title: data.title,
       preview: data.preview,
       documentId: data.documentId,
-      properties: validatedProperties,
+      properties: storedProperties,
       ...(bornColumns && {
         status: bornColumns.status,
         statusCategory: bornColumns.statusCategory,
@@ -675,11 +679,11 @@ export class EntityRepository extends BaseRepository<
 
     // 4. Index properties (async, non-blocking) — index through the
     //    requesting workspace's lens so overlay props get indexed too.
-    if (profileId && Object.keys(validatedProperties).length > 0) {
+    if (profileId && Object.keys(storedProperties).length > 0) {
       this.propertyIndex
         .indexEntityProperties(
           entity.id,
-          validatedProperties,
+          storedProperties,
           profileId,
           data.workspaceId ?? null
         )

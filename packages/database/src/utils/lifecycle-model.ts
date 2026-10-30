@@ -46,6 +46,13 @@ export interface EffectiveLifecycle extends LifecycleDeclaration {
   /** The profile whose link declares it (the leaf, or an ancestor). */
   declaredOnProfileId: string;
   unclassified: string[];
+  /**
+   * The status a row of this kind/role is BORN with when its creator names
+   * none: the declaring link's `default_value`, kept only when it is a
+   * declared option key (anything else is no initial status). Read through
+   * `bornLifecycleValue` by every birth door.
+   */
+  initialStatus?: string;
 }
 
 /** The longest stuck threshold an option may declare (ten years). */

@@ -26,6 +26,7 @@ import { profileProperties } from "../schema/profile-properties.js";
 import { propertyDefs } from "../schema/property-defs.js";
 import { readStoredEnumOptions } from "../utils/property-enum.js";
 import {
+  findLifecycleOption,
   isLifecycleCategory,
   parseLifecycleOptions,
   type EffectiveLifecycle,
@@ -68,10 +69,14 @@ export function nearestLifecycleLink<
   return undefined;
 }
 
-/** A lifecycle def's options, read through the one mapper. PURE. */
+/**
+ * A lifecycle def's options, read through the one mapper, plus the declaring
+ * link's default as the initial status when it names a declared option. PURE.
+ */
 function effectiveLifecycleOf(
   def: PropertyDef,
-  declaredOnProfileId: string
+  declaredOnProfileId: string,
+  linkDefault?: unknown
 ): EffectiveLifecycle {
   const stored =
     readStoredEnumOptions({
@@ -80,7 +85,7 @@ function effectiveLifecycleOf(
     }) ?? [];
   const categorized = stored.filter((o) => isLifecycleCategory(o.category));
   const { options } = parseLifecycleOptions(categorized);
-  return {
+  const effective: EffectiveLifecycle = {
     propertySlug: def.slug,
     propertyDefId: def.id,
     declaredOnProfileId,
@@ -89,6 +94,13 @@ function effectiveLifecycleOf(
       .filter((o) => !isLifecycleCategory(o.category))
       .map((o) => o.key),
   };
+  if (
+    typeof linkDefault === "string" &&
+    findLifecycleOption(effective, linkDefault)
+  ) {
+    effective.initialStatus = linkDefault;
+  }
+  return effective;
 }
 
 /**
@@ -904,6 +916,7 @@ export class ProfileResolutionService {
         profileId: profileProperties.profileId,
         propertyDefId: profileProperties.propertyDefId,
         isLifecycle: profileProperties.isLifecycle,
+        defaultValue: profileProperties.defaultValue,
       })
       .from(profileProperties)
       .where(
@@ -924,7 +937,7 @@ export class ProfileResolutionService {
       .where(eq(propertyDefs.id, link.propertyDefId))
       .limit(1);
     if (!def) return null;
-    return effectiveLifecycleOf(def, link.profileId);
+    return effectiveLifecycleOf(def, link.profileId, link.defaultValue);
   }
 
   /**
@@ -959,6 +972,7 @@ export class ProfileResolutionService {
         profileId: profileProperties.profileId,
         propertyDefId: profileProperties.propertyDefId,
         isLifecycle: profileProperties.isLifecycle,
+        defaultValue: profileProperties.defaultValue,
       })
       .from(profileProperties)
       .where(
@@ -981,7 +995,10 @@ export class ProfileResolutionService {
       const link = nearestLifecycleLink(hierarchy, links);
       const def = link ? defById.get(link.propertyDefId) : undefined;
       if (link && def)
-        out.set(profileId, effectiveLifecycleOf(def, link.profileId));
+        out.set(
+          profileId,
+          effectiveLifecycleOf(def, link.profileId, link.defaultValue)
+        );
     }
     return out;
   }

@@ -490,6 +490,7 @@ export {
 export {
   LifecycleWriteOutsideDoorError,
   assertNoLifecycleMove,
+  bornLifecycleValue,
   columnsForValue,
   lifecycleColumnsFor,
   type LifecycleColumns,
