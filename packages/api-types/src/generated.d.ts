@@ -18146,9 +18146,11 @@ export type ExecuteCapabilityResult = {
 	 * just had no way to make it actionable — 0 of 11 containers on the live
 	 * pod are approved, so this is the wall every run hits today.
 	 *
-	 * A deny from this gate is ALWAYS an approval problem (a dead connection
+	 * A deny from this gate is an approval problem (a dead connection
 	 * surfaces as `kind:"error"` with `errorClass:"no_connection"`, which
-	 * carries its own `connect` block) — the two fixes stay distinct.
+	 * carries its own `connect` block) — the two fixes stay distinct —
+	 * except a person's "Never" (`reasonCode`), which nothing but that
+	 * person can lift.
 	 */
 	enable?: CapabilityNextAction;
 	/**
@@ -18160,6 +18162,12 @@ export type ExecuteCapabilityResult = {
 	enableProposal?: CapabilityEnableOffer;
 	kind: "deny";
 	reason: string;
+	/**
+	 * A typed refusal the caller can branch on: `DENIED_BY_RULE` = a
+	 * person's stored "Never" on this capability for this agent (0381).
+	 * Such a refusal carries no `enable`: enabling would not fix it.
+	 */
+	reasonCode?: string;
 } | {
 	/**
 	 * CONNECTION moment: a `no_connection` / `auth` failure means the
@@ -35851,7 +35859,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetKind: "action" | "capability" | "connection" | "profile";
 				targetPattern: string;
 				targetProfile?: string | undefined;
-				verdict: "auto" | "propose";
+				verdict: "auto" | "deny" | "propose";
 				workspaceId?: string | undefined;
 			};
 			meta: object;
@@ -35871,7 +35879,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				};
 			};
@@ -35905,7 +35913,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				} | null;
 			};
@@ -35930,7 +35938,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				}[];
 			};
@@ -35953,7 +35961,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				}[];
 			};
@@ -36094,7 +36102,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				};
 			};
@@ -44551,6 +44559,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				success: boolean;
 			};
 		}>;
+		clearLater: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				proposalId: string;
+			};
+			meta: object;
+			output: {
+				cleared: boolean;
+			};
+		}>;
 		createDocumentEdit: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				documentId: string;
@@ -44679,6 +44696,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reviewLater: number;
 				scanTruncated: boolean;
 				scanned: number;
+			};
+		}>;
+		later: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				proposalId: string;
+				until: unknown;
+			};
+			meta: object;
+			output: {
+				proposalId: string;
+				snoozedUntil: Date;
 			};
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
