@@ -6,7 +6,7 @@
  * capability`, the same edges `buildCapabilityCatalog` folds into a card's
  * verbs). So a capability's runs are the runs of its member skills, and a
  * skill's runs are its own. The runs themselves are read through the
- * capability-run predicates (`capability-run-where.ts`, `RunScope.skillIds`),
+ * capability-run predicates (`capability-run-where.ts`, `ListRunsInput.skillIds`),
  * user-floored as ever.
  *
  * The container is read under the reader's floor first (`userVisibleWhere`,

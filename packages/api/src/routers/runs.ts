@@ -85,7 +85,7 @@ export const runsRouter = router({
              * TOOL lens — one tool's runs: a capability's (the runs of its
              * actions, `services/runs/tool-lens.ts`) or one skill's. Covers
              * the `capability` ledger only, every other ledger is EXCLUDED
-             * (`RunScope.skillIds`). One of the two, never both; a
+             * (`ListRunsInput.skillIds`). One of the two, never both; a
              * capability the reader cannot see is NOT_FOUND.
              */
             capabilityId: z.string().uuid().optional(),
@@ -134,7 +134,8 @@ export const runsRouter = router({
       return listRunsPage({
         userId,
         ...input,
-        scope: skillIds ? { ...scope, skillIds } : scope,
+        scope,
+        ...(skillIds ? { skillIds } : {}),
         roster: rosterReadFor(ctx),
       });
     }),

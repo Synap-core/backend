@@ -136,7 +136,7 @@ export interface BoxRunLens {
   projectId?: string;
   subjectEntityId?: string;
   sessionId?: string;
-  /** The runs of these skills (`RunScope.skillIds`); empty matches nothing. */
+  /** The runs of these skills (`ListRunsInput.skillIds`); empty matches nothing. */
   skillIds?: readonly string[];
   startedBefore?: Date;
 }

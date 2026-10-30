@@ -6,7 +6,7 @@
  * in: a `capability.run` proposal's `data.skillId` (the capability door) or
  * `data.capabilityId` with `capabilityKind: "skill"` (`skills.execute`), a
  * direct run's `capability_run` event `data.skillId`, and a box run's
- * `box_runs.skill_id`. `RunScope.skillIds` filters all three, and
+ * `box_runs.skill_id`. `ListRunsInput.skillIds` filters all three, and
  * `resolveToolSkillIds` turns a capability into its member skills.
  *
  * PGlite, like the session-lens sibling: the rows are INSERTed and a real
@@ -252,7 +252,7 @@ beforeEach(async () => {
   await insertBoxRun(BOX_B, SKILL_B, t(8));
 });
 
-describe("RunScope.skillIds — one tool's runs", () => {
+describe("ListRunsInput.skillIds — one tool's runs", () => {
   it("NON-VACUITY: with no tool lens, both tools' runs and the capture row are reachable", async () => {
     const capability = await listRuns({ userId: USER, flowType: "capability" });
     expect(ids(capability)).toEqual(
@@ -274,7 +274,7 @@ describe("RunScope.skillIds — one tool's runs", () => {
     const runs = await listRuns({
       userId: USER,
       flowType: "capability",
-      scope: { skillIds: [SKILL_A] },
+      skillIds: [SKILL_A],
     });
     expect(ids(runs)).toEqual(
       ids([
@@ -290,7 +290,7 @@ describe("RunScope.skillIds — one tool's runs", () => {
     const runs = await listRuns({
       userId: USER,
       flowType: "capability",
-      scope: { skillIds: [SKILL_B] },
+      skillIds: [SKILL_B],
     });
     expect(ids(runs)).toEqual(
       ids([{ id: PROP_B }, { id: CORR_DIRECT_B }, { id: BOX_B }])
@@ -301,7 +301,7 @@ describe("RunScope.skillIds — one tool's runs", () => {
     const runs = await listRuns({
       userId: USER,
       flowType: "capability",
-      scope: { skillIds: [] },
+      skillIds: [],
     });
     expect(runs).toEqual([]);
   });
@@ -309,7 +309,7 @@ describe("RunScope.skillIds — one tool's runs", () => {
   it("a ledger that names no skill contributes NOTHING under the lens, in the merged feed", async () => {
     const runs = await listRuns({
       userId: USER,
-      scope: { skillIds: [SKILL_A] },
+      skillIds: [SKILL_A],
     });
     expect(runs.map((r) => r.id)).not.toContain(CORR_CAPTURE);
     expect(runs.map((r) => r.id)).toContain(PROP_A_DOOR);

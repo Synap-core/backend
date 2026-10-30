@@ -197,15 +197,6 @@ export interface RunScope {
    * exclusion.
    */
   sessionId?: string;
-  /**
-   * TOOL lens — the runs of these skills: one skill's, or a capability's
-   * actions' (`tool-lens.ts` resolves a capability to its member skills).
-   * Like the session lens, only the `capability` ledger can answer it (its
-   * proposals, direct-run events and box runs name their skill); every other
-   * ledger is EXCLUDED rather than returned unfiltered. An empty list matches
-   * nothing.
-   */
-  skillIds?: readonly string[];
 }
 
 /**
@@ -216,6 +207,8 @@ export interface RunScope {
 type LedgerScope = RunScope & {
   /** Only runs whose start column is strictly before this instant. */
   startedBefore?: Date;
+  /** The tool lens, from `ListRunsInput.skillIds`. */
+  skillIds?: readonly string[];
 };
 
 /** `col < startedBefore`, or nothing when the feed is not paging. */
@@ -232,6 +225,17 @@ export interface ListRunsInput {
   flowType?: FlowType;
   /** Restrict to one flow's runs (automationId / playbookId). */
   flowId?: string;
+  /**
+   * TOOL lens — the runs of these skills: one skill's, or a capability's
+   * actions' (`tool-lens.ts` resolves a capability to its member skills).
+   * Like the session lens, only the `capability` ledger can answer it (its
+   * proposals, direct-run events and box runs name their skill); every other
+   * ledger is EXCLUDED rather than returned unfiltered. An empty list matches
+   * nothing. Not a `RunScope` key: a door takes a tool's id
+   * (`scope.capabilityId` / `scope.skillId` on tRPC `runs.list`) and
+   * resolves it, never a list of skill ids from the caller.
+   */
+  skillIds?: readonly string[];
   /** Narrow to a workspace / project / entity lens (within the user floor). */
   scope?: RunScope;
   /**
@@ -1432,10 +1436,13 @@ export async function listRuns(input: ListRunsInput): Promise<UnifiedRun[]> {
  */
 async function collectRuns(
   input: ListRunsInput,
-  scope: LedgerScope,
+  baseScope: LedgerScope,
   perFlow: number
 ): Promise<UnifiedRun[]> {
   const { userId, flowType, flowId, status, roster = false } = input;
+  const scope: LedgerScope = input.skillIds
+    ? { ...baseScope, skillIds: input.skillIds }
+    : baseScope;
 
   // Automation runs have no project lens, but do carry a durable entity subject.
   // Only a project focus excludes them; entity focus is filtered in
