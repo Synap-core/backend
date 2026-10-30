@@ -8,7 +8,7 @@
  * Read: `skills.get` in every space the reader can see (`allSpaces`: the page
  * is reached by id alone), user-floored, NOT_FOUND for one they cannot see.
  *
- *   • On or off is THE mark (`skillStatus`, the Tools row's). An instruction
+ *   • On or off is THE mark (`approvedStatus`, the Tools row's). An instruction
  *     that is off is turned on here, after its instructions are read whole in
  *     the confirmation (`skills.setApproved`; the pod re-checks the space
  *     owner or pod admin gate and its refusal stays in the dialog). Any other
@@ -36,7 +36,7 @@ import { ConfirmModal } from "../../../(admin)/components/confirm-modal";
 import { ProposedRecordCard } from "../../../proposal/[id]/ProposedRecordCard";
 import { TOOLS_CATALOGS } from "../../../(admin)/tools/_lib/copy";
 import { skillRow } from "../../../(admin)/tools/_lib/skills-model";
-import { skillStatus } from "../../../(admin)/tools/_lib/tool-status";
+import { approvedStatus } from "../../../(admin)/tools/_lib/tool-status";
 import { toolWhere } from "../../../(admin)/tools/_lib/tools-model";
 import { actionLabelFor } from "../../../(admin)/tools/_lib/tool-runs-model";
 import { ContentBody } from "../content/content-block";
@@ -79,7 +79,7 @@ export function SkillObject({ id, frame }: { id: string; frame: ObjectFrame }) {
   });
   useReauthOnUnauthorized(query.error, setApproved.error);
 
-  if (query.isLoading) return frame.loading(t("skill.loading"));
+  if (query.isLoading) return frame.loading(t("loading"));
   const skill = query.data?.skill;
   const fail = loadFailure(query.error, "Tool");
   if (fail || !skill) {
@@ -146,11 +146,11 @@ export function SkillObject({ id, frame }: { id: string; frame: ObjectFrame }) {
           kind: "skill",
           title: skill.name,
           summary: skill.description?.trim() || undefined,
-          status: skillStatus(skill),
+          status: approvedStatus(skill),
           breadcrumb: frame.breadcrumb?.(skill.name),
           primaryAction,
           secondaryActions: skill.approved ? (
-            <ExitLink exit={appExit} label={t("skill.openInApp")} />
+            <ExitLink exit={appExit} label={t("openInApp")} />
           ) : undefined,
         },
         facts: [
