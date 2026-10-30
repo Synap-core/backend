@@ -46,7 +46,7 @@
  *     `materializeRelation` unless `action === "create"`. Counting case labels
  *     would score three severed doors as wired.
  *  3. The INLINE branches in `apply-approval.ts` that run BEFORE the registry
- *     (`proposal.proposalType === "governance.widen_lane"`, ...). All five
+ *     (`proposal.proposalType === "governance.tighten_lane"`, ...). All five
  *     `governance.*` doors are handled there and nowhere else — a scanner that
  *     read only the registry would report five phantom orphans.
  *
@@ -371,8 +371,8 @@ describe("governed write doors have an approval half", () => {
     ).toBe(false);
   });
 
-  it("SELF-GUARD: the inline apply-approval parser works (governance.widen_lane)", () => {
-    expect(INLINE_TYPES.has("governance.widen_lane")).toBe(true);
+  it("SELF-GUARD: the inline apply-approval parser works (governance.tighten_lane)", () => {
+    expect(INLINE_TYPES.has("governance.tighten_lane")).toBe(true);
   });
 
   it("SELF-GUARD: an unregistered key resolves to nothing", () => {

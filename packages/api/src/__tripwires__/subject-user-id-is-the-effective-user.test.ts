@@ -33,8 +33,7 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
  *      these are DB doors; there is no local Postgres to run them against.)
  *
  * NOT IN SCOPE, deliberately: the recommender doors
- * (`recommend-tighten.ts`, `recommend-raise-ceiling.ts`,
- * `governance-lane-scanner.ts`) DO write `subjectUserId: agent.createdByUserId`
+ * (`recommend-tighten.ts`, `recommend-raise-ceiling.ts`) DO write `subjectUserId: agent.createdByUserId`
  * — correctly. They author meta-proposals ABOUT an agent and document that
  * `proposals.agentUserId` is null on those rows, so the principal reading never
  * fires and the value is already a human. The invariant is scoped to rows that

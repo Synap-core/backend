@@ -8,7 +8,12 @@ import {
   proposalEventKey,
   resolveTrustRung,
   ruleCanReachReason,
+  earnedStreak,
+  MIN_DELIBERATION_MS,
+  STREAK_MIN_DAYS,
+  STREAK_NEEDED,
   type NextRungInput,
+  type StreakDecision,
 } from "./index.js";
 import { NON_WIDENABLE_GOVERNANCE_REASONS } from "../proposals/governance-grant-options.js";
 import {
@@ -344,5 +349,176 @@ describe("W7 review: kind, reach, outcomes, refusal", () => {
 
   it("the looked-at row cap is shared", () => {
     expect(LOOKED_AT_ROW_CAP).toBe(2);
+  });
+});
+
+// ─── The earned streak (S3, founder Q3) ─────────────────────────────────────
+
+const DAY1 = Date.parse("2026-10-20T10:00:00.000Z");
+const DAY2 = Date.parse("2026-10-21T10:00:00.000Z");
+
+/**
+ * A human approval decided `afterMs` after it was filed, at `at` (newest
+ * first is NOT assumed: `earnedStreak` orders by the decided instant).
+ */
+function approval(
+  at: number,
+  over: Partial<StreakDecision> & { afterMs?: number } = {}
+): StreakDecision {
+  const { afterMs = 60_000, ...rest } = over;
+  return {
+    status: "approved",
+    data: {},
+    revisionHistory: [],
+    createdAt: new Date(at - afterMs),
+    reviewedAt: new Date(at),
+    reviewedBy: "user-owner",
+    ...rest,
+  };
+}
+
+/** `n` approvals one minute apart, ending at `end` (the newest). */
+function approvals(n: number, end: number): StreakDecision[] {
+  return Array.from({ length: n }, (_, i) => approval(end - i * 60_000));
+}
+
+/** Ten approvals: five on day 2, five on day 1. */
+function tenOverTwoDays(): StreakDecision[] {
+  return [...approvals(5, DAY2), ...approvals(5, DAY1)];
+}
+
+describe("earnedStreak", () => {
+  it("meets at exactly 10 human, unedited, ≥3 s approvals over 2 days", () => {
+    expect(STREAK_NEEDED).toBe(10);
+    expect(STREAK_MIN_DAYS).toBe(2);
+    expect(MIN_DELIBERATION_MS).toBe(3_000);
+    const s = earnedStreak(tenOverTwoDays());
+    expect(s).toEqual({
+      met: true,
+      count: 10,
+      needed: 10,
+      since: new Date(DAY1 - 4 * 60_000).toISOString(),
+    });
+    // Exactly 3 s is deliberate enough.
+    const atFloor = tenOverTwoDays();
+    atFloor[0] = approval(DAY2, { afterMs: MIN_DELIBERATION_MS });
+    expect(earnedStreak(atFloor).met).toBe(true);
+  });
+
+  it("nine is not ten", () => {
+    const s = earnedStreak(tenOverTwoDays().slice(1));
+    expect(s.met).toBe(false);
+    expect(s.count).toBe(9);
+  });
+
+  it("ten on a single day is not met", () => {
+    const s = earnedStreak(approvals(10, DAY2));
+    expect(s.count).toBe(10);
+    expect(s.met).toBe(false);
+  });
+
+  it("a receipt among them is never evidence: it counts for nothing", () => {
+    const rows = tenOverTwoDays();
+    rows[3] = {
+      ...approval(DAY2 - 3 * 60_000),
+      status: "auto_approved",
+      reviewedBy: null,
+      data: { _autoApprove: { approvedBy: "system:auto_approve" } },
+    };
+    const s = earnedStreak(rows);
+    expect(s.count).toBe(9);
+    expect(s.met).toBe(false);
+    // Receipts alone earn nothing.
+    const receipts = approvals(12, DAY2).map((r) => ({
+      ...r,
+      status: "auto_approved",
+      reviewedBy: null,
+    }));
+    expect(earnedStreak(receipts).count).toBe(0);
+  });
+
+  it("a person's edit breaks the run; an agent's own revision does not", () => {
+    const rows = tenOverTwoDays();
+    rows[4] = approval(DAY2 - 4 * 60_000, {
+      revisionHistory: [{ at: "x", by: "user-owner", before: {}, patch: {} }],
+    });
+    const s = earnedStreak(rows);
+    expect(s.count).toBe(4);
+    expect(s.met).toBe(false);
+
+    const byAgent = tenOverTwoDays();
+    byAgent[4] = approval(DAY2 - 4 * 60_000, {
+      revisionHistory: [
+        {
+          at: "x",
+          by: "user-owner",
+          actingAgentUserId: "agent-1",
+          before: {},
+          patch: {},
+        },
+      ],
+    });
+    expect(earnedStreak(byAgent).met).toBe(true);
+  });
+
+  it("an approval faster than 3 s breaks the run", () => {
+    const rows = tenOverTwoDays();
+    rows[2] = approval(DAY2 - 2 * 60_000, { afterMs: 2_000 });
+    const s = earnedStreak(rows);
+    expect(s.count).toBe(2);
+    expect(s.met).toBe(false);
+  });
+
+  it("a rejection breaks the run", () => {
+    const rows = [
+      ...approvals(3, DAY2),
+      { ...approval(DAY2 - 3 * 60_000), status: "rejected" },
+      ...approvals(10, DAY1),
+    ];
+    const s = earnedStreak(rows);
+    expect(s.count).toBe(3);
+    expect(s.met).toBe(false);
+  });
+
+  it("a partial approval, a revert and a reopened revert all break the run", () => {
+    const partial = tenOverTwoDays();
+    partial[1] = approval(DAY2 - 60_000, {
+      data: { dispositions: { $op0: { status: "reject" } } },
+    });
+    expect(earnedStreak(partial).count).toBe(1);
+
+    const reverted = tenOverTwoDays();
+    reverted[1] = { ...approval(DAY2 - 60_000), status: "reverted" };
+    expect(earnedStreak(reverted).count).toBe(1);
+
+    // Reverted, re-proposed and approved again: the undo still happened.
+    const reopened = tenOverTwoDays();
+    reopened[1] = approval(DAY2 - 60_000, {
+      data: { revertedAt: new Date(DAY2 - 90_000).toISOString() },
+    });
+    expect(earnedStreak(reopened).count).toBe(1);
+  });
+
+  it("withdrawn and expired rows neither count nor break", () => {
+    const rows = tenOverTwoDays();
+    rows.splice(2, 0, { ...approval(DAY2 - 90_000), status: "withdrawn" });
+    rows.splice(6, 0, { ...approval(DAY2 - 300_000), status: "expired" });
+    const s = earnedStreak(rows);
+    expect(s.count).toBe(10);
+    expect(s.met).toBe(true);
+  });
+
+  it("orders by the decided instant, never by input order", () => {
+    const rows = tenOverTwoDays().reverse();
+    expect(earnedStreak(rows).met).toBe(true);
+  });
+
+  it("no history is no streak", () => {
+    expect(earnedStreak([])).toEqual({
+      met: false,
+      count: 0,
+      needed: 10,
+      since: null,
+    });
   });
 });

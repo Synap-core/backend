@@ -21,13 +21,8 @@
  *     it; the moment passed). Same "not scored" treatment `AgentStanding`
  *     gives them.
  *   - `auto_approved` — **the load-bearing exclusion.** An auto-approved write
- *     never reached the queue, so it cannot be evidence about the queue. Note
- *     this is exactly where this function must NOT reuse the lane scanner's
- *     `isFullApproval` (`packages/jobs/.../governance-lane-scanner.ts`), which
- *     counts `auto_approved` as an approval — correctly, because that gate
- *     scores an AGENT's trust, where an auto-approved write is still a write
- *     the pod stood behind. Two different questions, two different status
- *     sets, and folding them together would be a number that means neither.
+ *     never reached the queue, so it cannot be evidence about the queue (nor
+ *     about an agent's trust: the trust ladder's `earnedStreak` skips it too).
  *     It is reported alongside as `autoApprovedNeverReviewed` so the exclusion
  *     is visible rather than silent.
  *

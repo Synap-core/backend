@@ -694,9 +694,9 @@ export interface SyncAutoApproveRulesInput {
  *
  * REPLACE semantics: revokes every currently-active row this same write
  * surface could have created for this (principal, scope) tuple — scoped to
- * `source_proposal_id IS NULL` so a human-approved `governance.widen_lane`
- * rule (a DIFFERENT authority, Phase D) is never touched by a plain settings
- * PATCH — then inserts one fresh row per entry in `actions`. An empty list
+ * `source_proposal_id IS NULL` so an EARNED rule (granted from a card the
+ * person approved, or a legacy `governance.widen_lane` approval — a DIFFERENT
+ * authority) is never touched by a plain settings PATCH — then inserts one fresh row per entry in `actions`. An empty list
  * legitimately clears the mirrored rules (revoke-only, no insert), matching
  * "workspace clears its autoApproveFor override."
  *

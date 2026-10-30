@@ -1555,8 +1555,8 @@ export interface ProposalDataLifecycle {
  * How many items of a composite proposal the reviewer DENIED — read straight
  * off the persisted `proposals.data.dispositions` map (written incrementally by
  * `proposals.rejectItem` and stamped whole by `approve`). Defensive over
- * `unknown` so every reader — the API scorecard AND the jobs lane-scanner,
- * which cannot import `@synap/api` — shares ONE definition of "partial".
+ * `unknown` so every reader — the API scorecard AND the trust ladder's earned
+ * streak — shares ONE definition of "partial".
  *
  * WHY this exists: partial approval ships as per-item dispositions, but the row
  * still stores plain `"approved"` (no new status enum, no migration). Any trust
@@ -1588,6 +1588,26 @@ export function countRejectedDispositions(data: unknown): number {
  */
 export function isPartiallyApprovedData(data: unknown): boolean {
   return countRejectedDispositions(data) > 0;
+}
+
+/**
+ * A revision is a HUMAN CORRECTION only when no agent made it: the entry
+ * names an acting agent when an agent key revised it on a human's behalf
+ * (`computeRevisedEnvelope`), and some doors record the agent itself as `by`
+ * (`subjectAgentId`, when scoring one agent). An unattributed entry
+ * (`by: null`) claims no actor and is not counted. LIMIT: entries written
+ * before the acting agent was recorded carry only the human owner in `by` and
+ * still count — history cannot be re-split.
+ *
+ * THE one rule — the agent scorecard, the prompt-version quality report and
+ * the trust ladder's earned streak all read it.
+ */
+export function isHumanRevision(
+  rev: unknown,
+  subjectAgentId?: string
+): boolean {
+  const r = rev as { by?: string | null; actingAgentUserId?: string | null };
+  return !r.actingAgentUserId && !!r.by && r.by !== subjectAgentId;
 }
 
 /**

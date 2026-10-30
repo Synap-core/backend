@@ -7,15 +7,14 @@
  * SAME block, arriving again and again across different sessions, is a missing
  * piece of standing intent — and that is what this scanner looks for.
  *
- * GENERALISED FROM `governance-lane-scanner.ts`, deliberately and structurally:
+ * GENERALISED FROM the (since retired, S3) daily widen-lane scanner, deliberately:
  * a daily cron, structural-fingerprint clustering, an N-threshold, two duplicate
  * guards (nothing already PENDING, nothing already COVERING), and — the property
  * that matters most — it only ever FILES A PENDING PROPOSAL. It never writes a
  * guideline itself. The one place a `config_settings` guideline is created from
  * one of these is the `governance.work_guideline` branch in
  * `packages/api/src/routers/proposals/apply-approval.ts`, on human approval.
- * That is the same division `governance.widen_lane` and
- * `governance.tighten_posture` already keep.
+ * That is the same division `governance.tighten_posture` keeps.
  *
  * ── THE THRESHOLD IS UNVALIDATED, AND MUST STAY LABELLED SO ─────────────────
  * `N >= 3 distinct slots across >= 2 distinct sessions within 30 days`. No
@@ -30,7 +29,7 @@
  * `permission` is EXCLUDED from this wave on purpose: a recurrence proposal for
  * it is the agent arguing for its own power, and one over-broad approval
  * propagates silently. It also needs no new machinery when its turn comes
- * (`governance.widen_lane` already exists). `policy`'s remedy is editing a rule
+ * (the trust ladder's next-rung grant already exists). `policy`'s remedy is editing a rule
  * a human already wrote — an existing door. `decision` and `physical` are
  * honestly terminal: a human has to choose, or act in the world. Proposing a
  * remedy for a terminal reason would manufacture busywork out of an honest stop.
@@ -42,8 +41,7 @@
  * `owner='human' AND status IS DISTINCT FROM 'done' AND retiredAt IS NULL`
  * triple, including the `IS DISTINCT FROM`, which is load-bearing: `status` is
  * ABSENT on most owed slots and `!= 'done'` yields NULL and drops the row.
- * Keep the two in sync — the same arrangement the fingerprint mirror in
- * `governance-lane-scanner.ts` documents.
+ * Keep the two in sync.
  *
  * Queue: blocked-slot.recurrence-scan
  * Cron:  daily 50 3 * * * (after librarian-archiver at 3:45)
@@ -85,8 +83,7 @@ export const BLOCKED_SLOT_RECURRENCE_CRON = "50 3 * * *";
 export const WORK_GUIDELINE_PROPOSAL_TYPE = "governance.work_guideline";
 
 /**
- * The `governance.work_guideline` payload. Mirrors the local-declaration
- * convention of `GovernanceWidenLaneProposalData` in the lane scanner: jobs
+ * The `governance.work_guideline` payload, declared locally: jobs
  * cannot import the api package, so the approval-branch consumer keeps its own
  * copy of this interface and the two are kept in sync by hand.
  */
