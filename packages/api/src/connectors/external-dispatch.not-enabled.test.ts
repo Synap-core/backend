@@ -133,7 +133,7 @@ describe("triggerProviderAction — not-enabled tool", () => {
     const out = await triggerProviderAction(CALL);
     expect(out.success).toBe(false);
     expect(out.error).toBe(
-      'Nothing ran: "gmail_send" is installed but not enabled. Enable it in Settings → Capabilities, then run it again.'
+      'Nothing ran: "gmail_send" is installed but not enabled. Enable it in Tools, then run it again.'
     );
     expect(out.enableProposal).toBeUndefined();
     expect(inserted).toHaveLength(0);

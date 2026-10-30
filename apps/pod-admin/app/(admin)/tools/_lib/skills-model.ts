@@ -1,6 +1,6 @@
 /**
- * Tools › Skills — every skill the reader can see, the ones waiting to be
- * turned on first. Pure shaping over `skills.list` rows; the tab draws it.
+ * A skill as its own page (`views/skill-object.tsx`) reads it: where it
+ * applies, and how it is turned on when it is off. Pure.
  *
  * Turning one on is `skills.setApproved` (`setSkillApproved`: a space's skill
  * needs that space's owner, a pod-wide one a pod admin; an agent key is always
@@ -8,8 +8,8 @@
  * the confirmation (`turnOnRecords`, the record the turn-on request page
  * draws): its prose is everything it adds, and it runs nothing. A code or
  * declarative skill also has a reach the pod reads server-side
- * (`skillReach`), which this list does not carry; it is turned on where that
- * is shown: its capability's Actions tab, or the app.
+ * (`skillReach`), which the page does not carry; it is turned on where that
+ * is shown: its capability's page, or the app.
  */
 
 import type { ProposedRecord } from "../../../proposal/[id]/proposal-record-model";
@@ -50,9 +50,6 @@ export interface SkillRow {
   record: ProposedRecord | null;
 }
 
-/** Shown before "Show all" in the On list. */
-export const SKILLS_ON_SHOWN = 20;
-
 function isoOf(v: string | Date): string {
   return typeof v === "string" ? v : v.toISOString();
 }
@@ -89,25 +86,5 @@ export function skillRow(s: SkillListRow): SkillRow {
             unreadSkills: 0,
           })[0] ?? null)
         : null,
-  };
-}
-
-/**
- * The two lists: waiting first (oldest first: the longest wait is the first
- * question), then the skills already on (newest first, as the pod lists them).
- * A row in both reads (it moved between them) is drawn once, from its newest
- * state: the On read wins.
- */
-export function skillLists(
-  waiting: readonly SkillListRow[],
-  on: readonly SkillListRow[]
-): { waiting: SkillRow[]; on: SkillRow[] } {
-  const onIds = new Set(on.map((s) => s.id));
-  return {
-    waiting: waiting
-      .filter((s) => !onIds.has(s.id))
-      .map(skillRow)
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
-    on: on.map(skillRow),
   };
 }

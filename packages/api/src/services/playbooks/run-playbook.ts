@@ -874,7 +874,7 @@ export async function refuseUnattendedRunIfSkillsOff(input: {
   const names = unenabled.map((s) => s.name).join(", ");
   return review.length > 0
     ? `Nothing ran: "${input.playbook.name}" uses skills that are not enabled yet (${names}). A request to enable them is waiting for the owner's review: ${review.join(" ")}`
-    : `Nothing ran: "${input.playbook.name}" uses skills that are not enabled yet (${names}), and the request to enable them could not be filed. Enable them in Settings → Capabilities.`;
+    : `Nothing ran: "${input.playbook.name}" uses skills that are not enabled yet (${names}), and the request to enable them could not be filed. Enable them in Tools.`;
 }
 
 /**

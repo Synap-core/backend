@@ -16,7 +16,7 @@ describe("catalogKindLabel", () => {
     expect(catalogKindLabel("workspace")).toBe("Space");
     expect(catalogKindLabel("automation")).toBe("Rule");
     expect(catalogKindLabel("cell")).toBe("Card");
-    expect(catalogKindLabel("capability")).toBe("Action");
+    expect(catalogKindLabel("capability")).toBe("Capability");
     expect(catalogKindLabel("skill")).toBe("Skill");
   });
 });

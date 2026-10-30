@@ -197,6 +197,15 @@ export interface RunScope {
    * exclusion.
    */
   sessionId?: string;
+  /**
+   * TOOL lens — the runs of these skills: one skill's, or a capability's
+   * actions' (`tool-lens.ts` resolves a capability to its member skills).
+   * Like the session lens, only the `capability` ledger can answer it (its
+   * proposals, direct-run events and box runs name their skill); every other
+   * ledger is EXCLUDED rather than returned unfiltered. An empty list matches
+   * nothing.
+   */
+  skillIds?: readonly string[];
 }
 
 /**
@@ -758,6 +767,7 @@ async function listCapabilityRuns(
           workspaceId: scope.workspaceId,
           projectId: scope.projectId,
           sessionId: scope.sessionId,
+          skillIds: scope.skillIds,
         }),
         startedBeforeWhere(proposals.createdAt, scope)
       )
@@ -836,6 +846,7 @@ async function listCapabilityRuns(
                 exactRunId,
                 workspaceId: scope.workspaceId,
                 sessionId: scope.sessionId,
+                skillIds: scope.skillIds,
               }),
               startedBeforeWhere(events.timestamp, scope)
             )
@@ -1435,18 +1446,20 @@ async function collectRuns(
   // rather than its unfiltered rows. Read from the classified sets above, so a
   // new ledger joins the right side by being classified, not by someone
   // remembering to edit this line.
-  const sessionLensed = (f: FlowType): boolean =>
-    !scope.sessionId ||
-    (SESSION_LENSED_FLOWS as ReadonlyArray<FlowType>).includes(f);
+  // The TOOL lens likewise: only the capability ledger names a run's skill.
+  const lensed = (f: FlowType): boolean =>
+    (!scope.sessionId ||
+      (SESSION_LENSED_FLOWS as ReadonlyArray<FlowType>).includes(f)) &&
+    (!scope.skillIds || f === "capability");
 
   const jobs: Array<Promise<UnifiedRun[]>> = [];
   if (
     (!flowType || flowType === "automation") &&
     !automationExcluded &&
-    sessionLensed("automation")
+    lensed("automation")
   )
     jobs.push(listAutomationRuns(userId, flowId, scope, perFlow, status));
-  if ((!flowType || flowType === "playbook") && sessionLensed("playbook"))
+  if ((!flowType || flowType === "playbook") && lensed("playbook"))
     jobs.push(
       listPlaybookRuns(
         userId,
@@ -1460,26 +1473,18 @@ async function collectRuns(
     );
   // capture/capability/session/chat have no per-flow id, so a flowId filter
   // excludes them.
-  if (
-    (!flowType || flowType === "capture") &&
-    !flowId &&
-    sessionLensed("capture")
-  )
+  if ((!flowType || flowType === "capture") && !flowId && lensed("capture"))
     jobs.push(listCaptureRuns(userId, scope, perFlow, status));
   if ((!flowType || flowType === "capability") && !flowId)
     jobs.push(listCapabilityRuns(userId, scope, perFlow, status));
-  if (
-    (!flowType || flowType === "session") &&
-    !flowId &&
-    sessionLensed("session")
-  )
+  if ((!flowType || flowType === "session") && !flowId && lensed("session"))
     jobs.push(
       listSessionRuns(userId, scope, perFlow, status, undefined, roster)
     );
   if (
     (!flowType || flowType === "agent_write") &&
     !flowId &&
-    sessionLensed("agent_write")
+    lensed("agent_write")
   )
     jobs.push(listAgentWriteRuns(userId, scope, perFlow, status));
   // Chat in the merged feed only when the caller is looking for trouble
@@ -1489,7 +1494,7 @@ async function collectRuns(
   const includeChat =
     flowType === "chat" ||
     (!flowType && !flowId && (status === "running" || status === "failed"));
-  if (includeChat && sessionLensed("chat"))
+  if (includeChat && lensed("chat"))
     jobs.push(listChatRuns(userId, scope, perFlow, status));
 
   const merged = (await Promise.all(jobs)).flat();

@@ -2789,7 +2789,7 @@ export const playbooksRouter = router({
             run: null,
             session: null as FocusSession | null,
             status: "blocked" as const,
-            message: `"${playbook.name}" uses skills that are not enabled yet: ${names}. Enable them in Settings → Capabilities, then approve again.`,
+            message: `"${playbook.name}" uses skills that are not enabled yet: ${names}. Enable them in Tools, then approve again.`,
             proposalId: null as string | null,
             unenabledSkills,
             enableProposals: [] as Awaited<
@@ -2800,7 +2800,7 @@ export const playbooksRouter = router({
         if (!input.agentUserId) {
           throw new TRPCError({
             code: "PRECONDITION_FAILED",
-            message: `"${playbook.name}" uses skills that are not enabled yet: ${names}. Enable them in Settings → Capabilities, then run it again.`,
+            message: `"${playbook.name}" uses skills that are not enabled yet: ${names}. Enable them in Tools, then run it again.`,
           });
         }
         const enableProposals = await proposeCapabilityEnable({
@@ -2816,7 +2816,7 @@ export const playbooksRouter = router({
           status: "blocked" as const,
           message: filed
             ? `Nothing ran: "${playbook.name}" uses skills that are not enabled yet (${names}). A request to enable them is waiting for review — run the playbook again after it is approved.`
-            : `Nothing ran: "${playbook.name}" uses skills that are not enabled yet (${names}), and the request to enable them could not be filed. Ask the user to enable them (Settings → Capabilities).`,
+            : `Nothing ran: "${playbook.name}" uses skills that are not enabled yet (${names}), and the request to enable them could not be filed. Ask the user to enable them (Tools).`,
           proposalId: null as string | null,
           unenabledSkills,
           enableProposals,

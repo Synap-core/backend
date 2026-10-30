@@ -104,11 +104,14 @@ describe("concept vocabulary — Template, Rule, Tools (W5)", () => {
 
   it("the kind still shows on a tool's detail — and is never the umbrella word", () => {
     expect(resolveToolKindLabel("skill")).toBe("Skill");
-    expect(resolveToolKindLabel("capability")).toBe("Action");
+    // "Action" names a capability's verb only (decision 79f5b7a2), never the
+    // capability itself.
+    expect(resolveToolKindLabel("capability")).toBe("Capability");
     expect(resolveToolKindLabel("tool")).toBe("Integration");
     const chips = ["skill", "capability", "tool"].map(resolveToolKindLabel);
     expect(new Set(chips).size).toBe(3);
     expect(chips).not.toContain("Tool");
+    expect(chips).not.toContain("Action");
     // Unknown kinds humanize, never leak.
     expect(resolveToolKindLabel("mcp_server")).toBe("Mcp server");
   });

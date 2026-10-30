@@ -21,6 +21,7 @@ import {
   listRunsPage,
 } from "../services/runs/index.js";
 import { listRecentRunsByFlows } from "../services/runs/recent-by-flows.js";
+import { resolveToolSkillIds } from "../services/runs/tool-lens.js";
 import { stopBoxRun } from "../services/box-runs/box-runs.js";
 import { rosterReadFor } from "../access/session-visibility.js";
 
@@ -80,6 +81,15 @@ export const runsRouter = router({
              * project, and the pair would silently drop every direct run.
              */
             sessionId: z.string().uuid().optional(),
+            /**
+             * TOOL lens — one tool's runs: a capability's (the runs of its
+             * actions, `services/runs/tool-lens.ts`) or one skill's. Covers
+             * the `capability` ledger only, every other ledger is EXCLUDED
+             * (`RunScope.skillIds`). One of the two, never both; a
+             * capability the reader cannot see is NOT_FOUND.
+             */
+            capabilityId: z.string().uuid().optional(),
+            skillId: z.string().uuid().optional(),
           })
           .optional(),
         /** Filter to one lifecycle status, pushed down per ledger (server-side). */
@@ -103,9 +113,28 @@ export const runsRouter = router({
             "scope.sessionId and scope.projectId cannot be combined — a session already pins its project, and the pair would silently drop every direct capability run. Pass one or the other.",
         });
       }
+      const { capabilityId, skillId, ...scope } = input.scope ?? {};
+      if (capabilityId && skillId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "scope.capabilityId and scope.skillId cannot be combined — a tool is one or the other.",
+        });
+      }
+      const skillIds =
+        capabilityId || skillId
+          ? await resolveToolSkillIds(
+              userId,
+              capabilityId ? { capabilityId } : { skillId: skillId! }
+            )
+          : undefined;
+      if (skillIds === null) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Tool not found" });
+      }
       return listRunsPage({
         userId,
         ...input,
+        scope: skillIds ? { ...scope, skillIds } : scope,
         roster: rosterReadFor(ctx),
       });
     }),

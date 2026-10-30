@@ -45716,8 +45716,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				flowType?: "agent_write" | "automation" | "capability" | "capture" | "chat" | "playbook" | "session" | undefined;
 				limit?: number | undefined;
 				scope?: {
+					capabilityId?: string | undefined;
 					projectId?: string | undefined;
 					sessionId?: string | undefined;
+					skillId?: string | undefined;
 					subjectEntityId?: string | undefined;
 					workspaceId?: string | undefined;
 				} | undefined;
@@ -46976,6 +46978,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				allSpaces?: boolean | undefined;
 				id: string;
 				workspaceId?: string | undefined;
 			};
@@ -47108,6 +47111,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				allSpaces?: boolean | undefined;
 				approved?: boolean | undefined;
 				kind?: "builtin" | "code" | "declarative" | "instruction" | undefined;
 				limit?: number | undefined;
