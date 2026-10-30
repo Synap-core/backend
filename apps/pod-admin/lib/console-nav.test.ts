@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   activeNavId,
+  CLIENT_GROUP_ID,
+  CLIENT_NAV,
   computerHref,
   consoleRedirects,
-  navForRole,
+  NAV_ITEMS,
+  navFor,
   navHref,
   navLabel,
   pendingIssuerHref,
@@ -52,16 +55,27 @@ describe("navHref", () => {
   });
 });
 
-describe("navForRole", () => {
-  it("shows members only Home, Review and Settings, in one group", () => {
-    const groups = navForRole("member");
-    expect(groups.map((g) => g.items.map((i) => i.id))).toEqual([
-      ["home", "review", "settings"],
+describe("navFor: the client scope of the one table", () => {
+  const ids = (groups: ReturnType<typeof navFor>) =>
+    groups.map((g) => g.items.map((i) => i.id));
+
+  it("shows a client (an admin with All tools off) the six client places, in one list", () => {
+    expect(ids(navFor("admin", { allTools: false }))).toEqual([
+      ["home", "review", "history", "agents", "members", "settings"],
     ]);
   });
 
-  it("shows admins every group in IA order", () => {
-    expect(navForRole("admin").map((g) => g.label)).toEqual([
+  it("shows a member the client places their role opens, whatever the switch", () => {
+    for (const allTools of [false, true]) {
+      expect(ids(navFor("member", { allTools }))).toEqual([
+        ["home", "review", "history", "settings"],
+      ]);
+    }
+  });
+
+  it("puts every operator group after the client places once an admin turns on All tools", () => {
+    const groups = navFor("admin", { allTools: true });
+    expect(groups.map((g) => g.label)).toEqual([
       null,
       "Operate",
       "Data",
@@ -69,6 +83,18 @@ describe("navForRole", () => {
       "Extend",
       "Pod",
     ]);
+    expect(groups[0]?.id).toBe(CLIENT_GROUP_ID);
+    expect(ids(groups)[0]).toEqual([...CLIENT_NAV]);
+    // A scope, not a fork: every item of the table, each exactly once.
+    const all = ids(groups).flat();
+    expect(new Set(all).size).toBe(all.length);
+    expect([...all].sort()).toEqual(NAV_ITEMS.map((i) => i.id).sort());
+  });
+
+  it("scopes only the navigation: every client item is an item of the table", () => {
+    for (const id of CLIENT_NAV) {
+      expect(NAV_ITEMS.some((i) => i.id === id)).toBe(true);
+    }
   });
 });
 
@@ -126,7 +152,7 @@ describe("SEARCH_DESTINATION", () => {
 
 describe("Pod group", () => {
   it("lists Pod security, Backups, Updates, Audit log, admin-only", () => {
-    const pod = navForRole("admin").find((g) => g.id === "pod");
+    const pod = navFor("admin", { allTools: true }).find((g) => g.id === "pod");
     expect(pod?.items.map((i) => [i.id, i.audience])).toEqual([
       ["security", "admin"],
       ["backups", "admin"],

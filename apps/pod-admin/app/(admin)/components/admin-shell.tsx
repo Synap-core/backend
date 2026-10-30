@@ -11,7 +11,8 @@
  * layout (cookie / header — not state), and gets the search and drawer
  * triggers as props. The viewer's role arrives the same
  * way and is provided to the nav, palette and Home through
- * `ConsoleRoleProvider`.
+ * `ConsoleRoleProvider`; the admin's "All tools" choice through
+ * `AllToolsProvider`.
  *
  * The ⌘K listener is attached at this level so it works regardless of
  * which page the user is on. We listen at `window` rather than a deeper
@@ -28,6 +29,7 @@ import {
   type ReactNode,
 } from "react";
 import type { ConsoleRole } from "../../../lib/route-policy";
+import { AllToolsProvider } from "./all-tools";
 import { SearchModal } from "./search-modal";
 import { NavDrawer, SideNav } from "./side-nav";
 import { ConsoleRoleProvider } from "./side-nav-role";
@@ -81,34 +83,36 @@ export function AdminShell({
 
   return (
     <ConsoleRoleProvider role={role}>
-      <OperatorEmailContext.Provider value={operatorEmail}>
-        <div className="flex h-dvh min-h-0 flex-col">
-          <TopNav
-            operatorEmail={operatorEmail}
-            podHost={podHost}
-            onOpenSearch={openSearch}
-            onOpenNav={() => setNavOpen(true)}
-          />
-          <div className="flex min-h-0 flex-1">
-            <SideNav />
-            <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
-              {children}
-            </main>
+      <AllToolsProvider email={operatorEmail}>
+        <OperatorEmailContext.Provider value={operatorEmail}>
+          <div className="flex h-dvh min-h-0 flex-col">
+            <TopNav
+              operatorEmail={operatorEmail}
+              podHost={podHost}
+              onOpenSearch={openSearch}
+              onOpenNav={() => setNavOpen(true)}
+            />
+            <div className="flex min-h-0 flex-1">
+              <SideNav />
+              <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+                {children}
+              </main>
+            </div>
+            <NavDrawer
+              isOpen={navOpen}
+              onClose={closeNav}
+              onOpenSearch={openSearch}
+              podHost={podHost}
+              operatorEmail={operatorEmail}
+              operatorName={operatorName}
+            />
+            <SearchModal
+              isOpen={searchOpen}
+              onClose={() => setSearchOpen(false)}
+            />
           </div>
-          <NavDrawer
-            isOpen={navOpen}
-            onClose={closeNav}
-            onOpenSearch={openSearch}
-            podHost={podHost}
-            operatorEmail={operatorEmail}
-            operatorName={operatorName}
-          />
-          <SearchModal
-            isOpen={searchOpen}
-            onClose={() => setSearchOpen(false)}
-          />
-        </div>
-      </OperatorEmailContext.Provider>
+        </OperatorEmailContext.Provider>
+      </AllToolsProvider>
     </ConsoleRoleProvider>
   );
 }

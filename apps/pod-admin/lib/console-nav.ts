@@ -21,6 +21,7 @@ export type NavAudience = "admin" | "member";
 export type NavIconName =
   | "House"
   | "Inbox"
+  | "History"
   | "MessagesSquare"
   | "Zap"
   | "Activity"
@@ -70,7 +71,7 @@ export interface NavItem {
    * the tripwire, so a registry rename cannot silently fork the nav's word.
    */
   kind?: string;
-  /** Who sees it: members get Home, Review and Settings; the rest is admin. */
+  /** Who sees it: members get Home, Requests, History and Settings; the rest is admin. */
   audience: NavAudience;
 }
 
@@ -97,12 +98,23 @@ export const CONSOLE_NAV = [
       {
         id: "review",
         href: "/review",
-        label: "Review",
+        // The client's word (decision G1): a request, "Demande".
+        label: "Requests",
         icon: "Inbox",
         legacy: [
           { source: "/audit", query: { key: "section", value: "queue" } },
           { source: "/audit", query: { key: "section", value: "proposals" } },
         ],
+        audience: "member",
+      },
+      {
+        // What was decided, with its receipt and Undo (decision G2: "what
+        // happened" grows from Review › History; `/audit` stays the
+        // operator's database log).
+        id: "history",
+        href: "/history",
+        label: "History",
+        icon: "History",
         audience: "member",
       },
       {
@@ -240,7 +252,8 @@ export const CONSOLE_NAV = [
       {
         id: "members",
         href: "/members",
-        label: "Members",
+        // The client's word: the people of the company, "Équipe".
+        label: "Team",
         icon: "Users",
         legacy: [{ source: "/people" }],
         audience: "admin",
@@ -392,13 +405,61 @@ export function navVisibleTo(item: NavItem, role: NavAudience): boolean {
   return role === "admin" || item.audience === "member";
 }
 
-/** The groups a viewer sees, empty groups dropped. */
-export function navForRole(role: NavAudience): NavGroup[] {
-  return CONSOLE_NAV.map((g) => ({
-    id: g.id,
-    label: g.label,
-    items: (g.items as readonly NavItem[]).filter((i) => navVisibleTo(i, role)),
-  })).filter((g) => g.items.length > 0);
+/**
+ * The CLIENT SCOPE of the same table (PA-G-06): the six places a company's
+ * founder and team use, in their order. A scope, not a fork: these are
+ * {@link CONSOLE_NAV}'s own items, and every other page keeps its route (a
+ * link to `/runs` still opens); only the navigation is scoped.
+ */
+export const CLIENT_NAV = [
+  "home",
+  "review",
+  "history",
+  "agents",
+  "members",
+  "settings",
+] as const satisfies readonly NavId[];
+
+/** The head group's id: the client scope, first in every view. */
+export const CLIENT_GROUP_ID = "main";
+
+const CLIENT_IDS: ReadonlySet<string> = new Set(CLIENT_NAV);
+
+/** True for an item of the client scope. */
+export function isClientNavItem(item: NavItem): boolean {
+  return CLIENT_IDS.has(item.id);
+}
+
+/**
+ * The groups a viewer sees, empty groups dropped.
+ *
+ * The client scope comes first, as ONE ungrouped list, for everyone: a
+ * client's founder IS `pod_admin`, so the role cannot tell the operator
+ * apart. An admin turns on `allTools` once (the "All tools" switch,
+ * remembered per person) and gets every operator group after it. A member
+ * sees the client items their role may open (Home, Requests, History,
+ * Settings); `allTools` adds nothing for them.
+ */
+export function navFor(
+  role: NavAudience,
+  { allTools }: { allTools: boolean }
+): NavGroup[] {
+  const client: NavGroup = {
+    id: CLIENT_GROUP_ID,
+    label: null,
+    items: CLIENT_NAV.map(navItem).filter((i) => navVisibleTo(i, role)),
+  };
+  if (role !== "admin" || !allTools) return [client];
+  const operator = CONSOLE_NAV.filter((g) => g.id !== CLIENT_GROUP_ID).map(
+    (g) => ({
+      id: g.id,
+      label: g.label,
+      items: (g.items as readonly NavItem[]).filter(
+        (i) => !isClientNavItem(i) && navVisibleTo(i, role)
+      ),
+    })
+  );
+  return [client, ...operator].filter((g) => g.items.length > 0);
 }
 
 function segmentPrefix(pathname: string, prefix: string): boolean {
