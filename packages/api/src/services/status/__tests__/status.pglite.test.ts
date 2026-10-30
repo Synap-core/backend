@@ -327,7 +327,9 @@ describe("rollups", () => {
       // The goal's own move and its closed session's; the 30-day-old one is out.
       moved: 2,
     });
-    expect(rollup?.waitingOn).toContainEqual({ reason: "input", count: 1 });
+    expect(rollup?.waitingOn).toContainEqual(
+      expect.objectContaining({ reason: "input", count: 1 })
+    );
     // A quiet goal costs one line: nothing empty is sent.
     expect(rollups.get(G_QUIET)).toEqual({
       since: expect.any(String),
@@ -350,7 +352,9 @@ describe("rollups", () => {
         items: [{ id: E_STUCK, kind: "deal", status: "negotiating" }],
       },
     });
-    expect(r?.waitingOn).toContainEqual({ reason: "input", count: 1 });
+    expect(r?.waitingOn).toContainEqual(
+      expect.objectContaining({ reason: "input", count: 1 })
+    );
   });
 
   it("a project: its work, its goals' and sessions' moves, what waits", async () => {
@@ -363,7 +367,9 @@ describe("rollups", () => {
       moved: 2,
       stuck: { count: 0, items: [] },
     });
-    expect(r?.waitingOn).toContainEqual({ reason: "input", count: 1 });
+    expect(r?.waitingOn).toContainEqual(
+      expect.objectContaining({ reason: "input", count: 1 })
+    );
   });
 
   it("another person's project is null, never a rollup of zeros", async () => {

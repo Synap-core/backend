@@ -349,7 +349,7 @@ export interface TrackView {
   periodReading: OperationPeriodReading | null;
   /**
    * DERIVED (R4) — what the goal waits on, one mark per reason present
-   * (input · approval · access · another_work · outside_world) with how many.
+   * (`WAITING_ON_REASONS`) with how many and, at most 5, what (`refs`).
    * `[]` = waiting on nothing; `null` on a write's fallback view.
    */
   waitingOn: WaitingOnMark[] | null;

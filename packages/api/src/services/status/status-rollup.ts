@@ -399,6 +399,12 @@ export async function readScopeRollup(input: {
     owed: { scope },
     proposals: { sessionIds: openIds },
     blockedNodes: openIds.map((sid) => ({ kind: "session" as const, id: sid })),
+    holds: openIds.map((sid) => ({
+      subjectType: "focus_session" as const,
+      subjectId: sid,
+    })),
+    // One PR-state read for every open session of the scope.
+    workUnitsOf: openIds,
   });
   return {
     lens,

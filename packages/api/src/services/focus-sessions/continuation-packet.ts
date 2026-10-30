@@ -65,6 +65,7 @@ import {
   ProposalStatus,
   ownerPrivateVisibleWhere,
   openRoomQuestionConditions,
+  listHolds,
 } from "@synap/database";
 import { questionDisposition } from "@synap-core/types/ask";
 import {
@@ -86,7 +87,13 @@ import {
   type PullRequestStateFacts,
 } from "@synap-core/types";
 import type { OpenBlocker } from "@synap-core/types/connections";
+import type { RecordedHold } from "@synap-core/types/lifecycle";
 import { readDependencyState } from "../links/dependency-links.js";
+import {
+  holdWaitingOnRef,
+  readWaitingOn,
+  sessionWaitingOnQuestion,
+} from "../status/status-facts.js";
 import {
   isSessionWorkingNow,
   SESSION_WORKING_WINDOW_MS,
@@ -94,6 +101,7 @@ import {
 import {
   resolveSessionTitle,
   readSuspendedNote,
+  sessionStatusCategory,
   type SessionVerdict,
 } from "@synap-core/types/focus-sessions";
 import type { SessionCriterion } from "@synap/playbooks";
@@ -116,6 +124,7 @@ import {
   filedStageKey,
   type GoalCriterionMark,
   type TrackKpi,
+  type WaitingOnMark,
 } from "@synap-core/types/units";
 import { getTrack, toTrackView } from "../tracks/tracks-service.js";
 import { loadTrackGoalFacts } from "../tracks/goal-content.js";
@@ -482,6 +491,8 @@ export type NextMoveKind =
   | "message_waiting"
   | "blocker_dropped"
   | "waiting_on_session"
+  | "waiting_on_hold"
+  | "pull_request"
   | "agent_slot"
   | "undeclared"
   | "ready_to_close"
@@ -503,18 +514,42 @@ export interface ContinuationNextMove {
   /**
    * The blocking session's id, for `waiting_on_session`; for `blocker_dropped`,
    * the DROPPED blocker's id when that blocker is a session; for
-   * `message_waiting`, the SENDER session (when it has one).
+   * `message_waiting`, the SENDER session (when it has one); for
+   * `waiting_on_hold`, the session the hold resumes on (`until.moves`).
    */
   sessionId?: string;
+  /** The pull request's page, for `pull_request`. */
+  url?: string;
   /**
    * WHY an `agent_slot` move is the agent's when no declared slot is open:
    * `criteria_unmet` — everything is produced, but a required criterion does
    * not pass yet (rung 6b). Absent on every other move. A code, not a kind:
    * every reader of `agent_slot` keeps working, and one that needs these
    * sessions (orient) can tell them apart.
+   *
+   * On `pull_request`, what the pod recorded about the PR (dev-work plan
+   * P0.4): `checks_failed` (the AI fixes them), `checks_pending` (nobody
+   * acts until CI answers), `ready_to_land` (the person, or the merge queue
+   * where one runs), `merged` / `closed` (the outcome is still open while the
+   * PR has ended: the AI records it).
    */
-  reasonCode?: "criteria_unmet";
+  reasonCode?:
+    | "criteria_unmet"
+    | "checks_failed"
+    | "checks_pending"
+    | "ready_to_land"
+    | "merged"
+    | "closed";
 }
+
+/**
+ * The session's CURRENT hold as `deriveNextMove` reads it (`listHolds`): read
+ * only for a session in a paused status; `null` = none recorded. A failed
+ * read holds back every move a paused session would otherwise get.
+ */
+export type NextMoveHold =
+  | { status: "ok"; hold: RecordedHold | null }
+  | { status: "unavailable"; reason: string };
 
 /**
  * What still holds a session up, by THE dependency rule (`deriveOpenBlockers`
@@ -706,6 +741,16 @@ export interface ContinuationPacket {
    * empty list means none was recorded, not that none exists.
    */
   workUnits: PacketSection<PacketWorkUnitItem>;
+  /**
+   * WHAT IT WAITS ON — THE collector's marks (`readWaitingOn`, the same
+   * question statusOf asks: owed slots, pending proposals, blockers, the
+   * current hold, open PRs, open sub-sessions), each with what it waits on
+   * (`refs`). `marks: []` = it waits on nothing; a failed read is
+   * `unavailable`.
+   */
+  waitingOn:
+    | { status: "ok"; marks: WaitingOnMark[] }
+    | { status: "unavailable"; reason: string };
   /** What already landed, newest first — an agent must not redo these. */
   alreadyDone: PacketSection<PacketDoneItem>;
   /** `decision: null` when nothing was ever approved or rejected here. */
@@ -1505,19 +1550,37 @@ export async function withPullRequestStates(
   reader: SessionReader,
   database: typeof db = db
 ): Promise<PacketSection<PacketWorkUnitItem>> {
-  if (units.status !== "ok") return units;
-  const refs = new Map<number, PullRequestRef>();
-  units.items.forEach((item, i) => {
-    const ref = item.url ? parsePullRequestRef(item.url) : null;
-    if (ref) refs.set(i, ref);
+  const [one] = await withPullRequestStatesFor([units], reader, database);
+  return one!;
+}
+
+/**
+ * {@link withPullRequestStates} for MANY sessions' units (a list page): ONE
+ * state read for every PR of every section, so a page costs what one session
+ * costs.
+ */
+export async function withPullRequestStatesFor(
+  sections: ReadonlyArray<PacketSection<PacketWorkUnitItem>>,
+  reader: SessionReader,
+  database: typeof db = db
+): Promise<Array<PacketSection<PacketWorkUnitItem>>> {
+  const refsOf = sections.map((units) => {
+    const refs = new Map<number, PullRequestRef>();
+    if (units.status !== "ok") return refs;
+    units.items.forEach((item, i) => {
+      const ref = item.url ? parsePullRequestRef(item.url) : null;
+      if (ref) refs.set(i, ref);
+    });
+    return refs;
   });
-  if (refs.size === 0) return units;
+  const all = refsOf.flatMap((refs) => [...refs.values()]);
+  if (all.length === 0) return [...sections];
   let states: Map<string, PullRequestStateFacts>;
   try {
     // The session reader's own floor: roster only when it honours one
     // (`SessionReader.roster` defaults to owner-only).
     states = await readPullRequestStates(
-      [...refs.values()],
+      all,
       {
         userId: reader.userId,
         roster: reader.roster ?? false,
@@ -1535,29 +1598,37 @@ export async function withPullRequestStates(
       reason:
         "What the pod recorded about this pull request could not be read.",
     };
-    return {
-      ...units,
-      items: units.items.map((item, i) =>
-        refs.has(i) ? { ...item, prState } : item
-      ),
-    };
+    return sections.map((units, s) =>
+      units.status === "ok"
+        ? {
+            ...units,
+            items: units.items.map((item, i) =>
+              refsOf[s]!.has(i) ? { ...item, prState } : item
+            ),
+          }
+        : units
+    );
   }
-  return {
-    ...units,
-    items: units.items.map((item, i) => {
-      const ref = refs.get(i);
-      const facts = ref ? states.get(pullRequestKey(ref)) : undefined;
-      if (!facts) return item;
-      return {
-        ...item,
-        prState: {
-          status: "ok",
-          label: resolvePullRequestStateLabel(facts.state),
-          ...facts,
-        },
-      };
-    }),
-  };
+  return sections.map((units, s) =>
+    units.status === "ok"
+      ? {
+          ...units,
+          items: units.items.map((item, i) => {
+            const ref = refsOf[s]!.get(i);
+            const facts = ref ? states.get(pullRequestKey(ref)) : undefined;
+            if (!facts) return item;
+            return {
+              ...item,
+              prState: {
+                status: "ok",
+                label: resolvePullRequestStateLabel(facts.state),
+                ...facts,
+              },
+            };
+          }),
+        }
+      : units
+  );
 }
 
 /**
@@ -2076,6 +2147,90 @@ function blockerName(b: OpenBlocker): string {
 const isOpenStatus = (status: string): boolean =>
   (OPEN_SESSION_STATUSES as readonly string[]).includes(status);
 
+/** Rung 2c: a paused session's move is what its hold waits on. */
+function holdMove(hold: RecordedHold): ContinuationNextMove {
+  const ref = holdWaitingOnRef(hold);
+  const until = hold.until;
+  const parked = hold.on === "nobody" || hold.on === "unspecified";
+  const why = hold.reason?.trim() ? `: ${hold.reason.trim()}` : "";
+  const resumes =
+    until && "date" in until
+      ? `It resumes on its own on ${until.date.slice(0, 10)}.`
+      : until && "moves" in until
+        ? "It resumes on its own when what it waits on moves."
+        : hold.reviewBy
+          ? `It resumes when someone resumes it, and is due for a look by ${hold.reviewBy.slice(0, 10)}.`
+          : "It resumes when someone resumes it.";
+  return {
+    kind: "waiting_on_hold",
+    actor: "none",
+    label: parked
+      ? "Paused"
+      : until && "date" in until && hold.on === "date"
+        ? `Paused until ${until.date.slice(0, 10)}`
+        : `Waiting on ${ref.label}`,
+    reason: `This session is paused${why}. ${resumes}`,
+    ...(ref.kind === "session" && ref.id ? { sessionId: ref.id } : {}),
+  };
+}
+
+/** Rung 3: the move a pull request the pod recorded asks for. */
+function pullRequestMove(
+  unit: PacketWorkUnitItem,
+  code: Exclude<
+    NonNullable<ContinuationNextMove["reasonCode"]>,
+    "criteria_unmet"
+  >
+): ContinuationNextMove {
+  const name = `"${unit.label}"`;
+  const door = unit.url ? { url: unit.url } : {};
+  switch (code) {
+    case "checks_failed":
+      return {
+        kind: "pull_request",
+        actor: "ai",
+        label: `Fix the failing checks on ${name}`,
+        reason: `${name} is open and its checks failed on its newest commit, as the pod recorded. Fixing them is this session's work.`,
+        reasonCode: code,
+        ...door,
+      };
+    case "merged":
+    case "closed":
+      return {
+        kind: "pull_request",
+        actor: "ai",
+        label:
+          code === "merged"
+            ? `Record ${name} as delivered`
+            : `Retire or replace ${name}`,
+        reason:
+          code === "merged"
+            ? `The pull request merged, but its outcome is still open: claim it (completeOutput) so the pod marks it met.`
+            : `The pull request was closed without merging: retire its outcome, or record the pull request that replaces it.`,
+        reasonCode: code,
+        ...door,
+      };
+    case "ready_to_land":
+      return {
+        kind: "pull_request",
+        actor: "user",
+        label: `Land ${name}`,
+        reason: `${name} is open and its checks passed on its newest commit. Landing it is the person's step, or the merge queue's where one runs.`,
+        reasonCode: code,
+        ...door,
+      };
+    case "checks_pending":
+      return {
+        kind: "pull_request",
+        actor: "none",
+        label: `Waiting for the checks on ${name}`,
+        reason: `${name} is open and no check result is recorded for its newest commit yet; the next move comes when they finish.`,
+        reasonCode: code,
+        ...door,
+      };
+  }
+}
+
 /**
  * THE next-move rule. Pure. In order:
  *
@@ -2105,8 +2260,18 @@ const isOpenStatus = (status: string): boolean =>
  *     kind exists to stop. Session blockers only: the kind's door is a session
  *     (an open entity or track blocker is not surfaced here). Steps 2 and 2b
  *     are skipped for a terminal session (nothing left to wait for);
- *  3. the first open agent slot — this session's own work stays actionable
- *     while its sub-sessions run;
+ *  2c. `waiting_on_hold` while the session is PAUSED under a hold (dev-work
+ *     plan P0.4): the pause says what it waits on and how it resumes, so the
+ *     move is that wait, never the agent's deliverables (actor none);
+ *  3. the session's PULL REQUESTS before its slots, by what the pod recorded
+ *     about them (`workUnits[].prState`, dev-work plan P0.4): red checks are
+ *     the AI's to fix (`pull_request`, first); then the first open agent
+ *     slot that is not such a PR — this session's own work stays actionable
+ *     while its sub-sessions run; then an open outcome whose PR ended (the AI
+ *     records it), a green PR (the person lands it, or the merge queue), and
+ *     a PR whose checks have not answered (nobody acts). A PR outcome is never
+ *     "Produce …" once the pod knows the PR exists. The PR rungs are skipped
+ *     for a terminal session: a closed session's open PR is no move of its own;
  *  4. `none` for a terminal session;
  *  5. `waiting_on_session` while a sub-session is still OPEN: a parent never
  *     auto-closes, and its children are still producing;
@@ -2146,6 +2311,10 @@ export function deriveNextMove(input: {
   inbox: NextMoveInbox;
   /** The session's grade — rung 6b reads only its required criteria. */
   criteria: NextMoveCriteria;
+  /** Its pull requests and branches, each PR with what the pod recorded. */
+  workUnits: PacketSection<PacketWorkUnitItem>;
+  /** The current hold — rung 2c reads it for a paused session only. */
+  hold: NextMoveHold;
 }): ContinuationNextMove {
   const { owedSlots, pendingProposals, aiCanDo, blockers } = input;
   const terminal = isTerminalSessionStatus(input.status);
@@ -2247,9 +2416,44 @@ export function deriveNextMove(input: {
         sessionId: first.id,
       };
     }
+    if (sessionStatusCategory(input.status) === "paused") {
+      if (input.hold.status === "unavailable") {
+        return {
+          kind: "unknown",
+          actor: "none",
+          label: "Next move unknown",
+          reason: `What this paused session waits on could not be read (${input.hold.reason}).`,
+        };
+      }
+      if (input.hold.hold) return holdMove(input.hold.hold);
+    }
   }
-  if (aiCanDo.status === "ok" && aiCanDo.items[0]) {
-    const s = aiCanDo.items[0];
+  // Rung 3: pull requests the pod recorded, then the agent's other slots.
+  if (input.workUnits.status === "unavailable") {
+    return {
+      kind: "unknown",
+      actor: "none",
+      label: "Next move unknown",
+      reason: `This session's pull requests could not be read (${input.workUnits.reason}).`,
+    };
+  }
+  const prs = input.workUnits.items.filter(
+    (u) => (u.state === "open" || u.state === "claimed") && u.prState
+  );
+  const prWith = (pick: (pr: PullRequestStateFacts) => boolean) =>
+    prs.find((u) => u.prState?.status === "ok" && pick(u.prState));
+  const red = terminal
+    ? undefined
+    : prWith((pr) => pr.state === "open" && pr.checks === "failed");
+  if (red) return pullRequestMove(red, "checks_failed");
+  const isRecordedPr = (s: PacketSlotFacts) =>
+    prs.some((u) => u.label === s.label && u.kind === s.kind);
+  const ownSlots =
+    aiCanDo.status === "ok"
+      ? aiCanDo.items.filter((s) => !isRecordedPr(s))
+      : [];
+  if (ownSlots[0]) {
+    const s = ownSlots[0];
     if (s.answer) {
       const said =
         s.answer.text.length > 140
@@ -2278,6 +2482,33 @@ export function deriveNextMove(input: {
       reason: `Open deliverables could not be read (${aiCanDo.reason}).`,
     };
   }
+  const unreadPr = terminal
+    ? undefined
+    : prs.find((u) => u.prState?.status === "unavailable");
+  if (unreadPr?.prState?.status === "unavailable") {
+    return {
+      kind: "unknown",
+      actor: "none",
+      label: "Next move unknown",
+      reason: `What the pod recorded about "${unreadPr.label}" could not be read (${unreadPr.prState.reason}).`,
+    };
+  }
+  const ended = terminal ? undefined : prWith((pr) => pr.state !== "open");
+  if (ended?.prState?.status === "ok") {
+    return pullRequestMove(
+      ended,
+      ended.prState.state === "merged" ? "merged" : "closed"
+    );
+  }
+  // A closed session's open PR is no move of its own (rung 4 says none).
+  const green = terminal
+    ? undefined
+    : prWith((pr) => pr.state === "open" && pr.checks === "passed");
+  if (green) return pullRequestMove(green, "ready_to_land");
+  const pending = terminal
+    ? undefined
+    : prWith((pr) => pr.state === "open" && !pr.checks);
+  if (pending) return pullRequestMove(pending, "checks_pending");
   if (terminal) {
     return {
       kind: "none",
@@ -2485,7 +2716,9 @@ export async function projectContinuationPacket(
     inbox,
     goal,
     siblings,
-    workUnits,
+    allWorkUnits,
+    hold,
+    waitingOn,
   ] = await Promise.all([
     readProject(database, ctx.userId, row.projectId ?? null).catch(
       unavailable(
@@ -2713,8 +2946,38 @@ export async function projectContinuationPacket(
         "The sessions beside this one could not be read."
       )
     ),
-    withPullRequestStates(workUnitsSection(all), reader, database),
+    // EVERY work unit with its state: the next move reads them all (a red PR
+    // past the first PACKET_TOP_N still comes first); the packet shows the top.
+    withPullRequestStates(
+      workUnitsSection(all, { uncapped: true }),
+      reader,
+      database
+    ),
+    readNextMoveHold(database, row).catch(
+      unavailable(
+        row.id,
+        "hold",
+        "What this paused session waits on could not be read."
+      )
+    ),
+    readWaitingOn({
+      ...reader,
+      ...sessionWaitingOnQuestion(row.id),
+    })
+      .then((marks) => ({ status: "ok" as const, marks }))
+      .catch(
+        unavailable(
+          row.id,
+          "waitingOn",
+          "What this session waits on could not be read."
+        )
+      ),
   ]);
+
+  const workUnits: PacketSection<PacketWorkUnitItem> =
+    allWorkUnits.status === "ok"
+      ? { ...allWorkUnits, items: allWorkUnits.items.slice(0, PACKET_TOP_N) }
+      : allWorkUnits;
 
   const measuredAt = Date.now();
   const live: ContinuationPacket["live"] = liveFacts
@@ -2797,6 +3060,7 @@ export async function projectContinuationPacket(
     goal,
     siblings,
     workUnits,
+    waitingOn,
     alreadyDone,
     lastDecision,
     run: manifest
@@ -2835,7 +3099,26 @@ export async function projectContinuationPacket(
       children,
       inbox,
       criteria: evaluation,
+      workUnits: allWorkUnits,
+      hold,
     }),
     evaluation,
   };
+}
+
+/**
+ * The current hold of a PAUSED session (`listHolds`, the transition log);
+ * any other status has none to read. THROWS.
+ */
+export async function readNextMoveHold(
+  database: typeof db,
+  row: { id: string; status: string }
+): Promise<NextMoveHold> {
+  if (sessionStatusCategory(row.status) !== "paused") {
+    return { status: "ok", hold: null };
+  }
+  const [current] = await listHolds(database, {
+    subjects: [{ subjectType: "focus_session", subjectId: row.id }],
+  });
+  return { status: "ok", hold: current?.hold ?? null };
 }

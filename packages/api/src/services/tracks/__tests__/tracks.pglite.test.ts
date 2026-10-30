@@ -178,6 +178,8 @@ import {
   trackParticipants,
   channels,
   channelMembers,
+  events,
+  messages,
 } from "@synap/database";
 import {
   advanceTrackStage,
@@ -291,6 +293,10 @@ beforeAll(async () => {
     // session read rule (D-6), whose human-door branch reads a run's room.
     channels,
     channelMembers,
+    // What a goal waits on reads owed slots through the needs-you lens, which
+    // measures each run's agent activity (room posts, events).
+    events,
+    messages,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -1936,8 +1942,16 @@ describe("what a goal holds (W2) — content, derived marks, acceptance, the clo
     let v = await view(id);
     expect(v.criteria.map((c) => c.mark)).toEqual(["under_way", "under_way"]);
     expect(v.waitingOn).toEqual([
-      { reason: "input", count: 1 },
-      { reason: "access", count: 1 },
+      {
+        reason: "input",
+        count: 1,
+        refs: [{ kind: "slot", id: s1, label: "Pick" }],
+      },
+      {
+        reason: "access",
+        count: 1,
+        refs: [{ kind: "slot", id: s1, label: "Key" }],
+      },
     ]);
     // An AI judge passes both: two CLAIMS, waiting on the judge — in review.
     await grade(s1, "copy", "pass", "judge", "model-x", "2026-10-21T10:00:00Z");

@@ -121,8 +121,11 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   channels,
   channelMembers,
+  chatTurns,
+  events,
   focusSessions,
   links,
+  messages,
   notifications,
   playbooks,
   podMembers,
@@ -259,6 +262,11 @@ beforeAll(async () => {
     channelMembers,
     notifications,
     sessionEvaluations,
+    // The waiting-on collector reads owed slots through the needs-you lens
+    // (a session's agent activity).
+    chatTurns,
+    messages,
+    events,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
