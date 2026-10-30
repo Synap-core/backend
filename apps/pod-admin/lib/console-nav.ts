@@ -340,9 +340,11 @@ export const CONSOLE_NAV = [
         audience: "admin",
       },
       {
+        // The pod's own software. "Pod updates", because a template's
+        // updates live in Marketplace › Updates (founder D1, 2026-10-30).
         id: "updates",
         href: "/updates",
-        label: "Updates",
+        label: "Pod updates",
         icon: "RefreshCw",
         audience: "admin",
       },

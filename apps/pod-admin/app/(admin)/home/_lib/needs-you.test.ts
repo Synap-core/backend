@@ -395,7 +395,7 @@ describe("a last update that did not land", () => {
     expect(row.headline).toBe("The last update was rolled back");
     expect(row.action).toEqual({
       kind: "link",
-      label: "Open updates",
+      label: "Open pod updates",
       exit: { href: "/updates", isDesktopLink: false },
     });
   });
