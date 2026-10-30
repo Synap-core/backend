@@ -33,11 +33,7 @@ import {
   readTemplateState,
   type KeyGrant,
 } from "@synap/database";
-import {
-  cpCatalogCache,
-  isPodWideReadScope,
-  workspaces,
-} from "@synap/database/schema";
+import { cpCatalogCache, workspaces } from "@synap/database/schema";
 import { officialCatalogCondition } from "./capabilities/catalog-cache-query.js";
 import { getWorkspaceTemplate } from "@synap-core/workspace-templates";
 import {
@@ -115,9 +111,6 @@ function grantCoversSpace(
       scope.permissions.length > 0 &&
       !scope.projectIds &&
       !scope.entityIds &&
-      // A pod-wide read of some kinds does not see a SPACE (decision
-      // e1b59d38 "B"): only a scope that is about spaces covers one.
-      !isPodWideReadScope(scope) &&
       (!scope.workspaceIds || scope.workspaceIds.includes(workspaceId))
   );
 }
