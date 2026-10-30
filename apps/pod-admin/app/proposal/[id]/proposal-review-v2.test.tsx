@@ -639,3 +639,134 @@ describe("a request to turn an agent's skill on (capability.enable)", () => {
     );
   });
 });
+
+describe("a tool run (founder dogfood 2026-10-30, proposal 4b5e040e)", () => {
+  const USER_DATA = [
+    "#cloud-config",
+    "package_update: true",
+    "packages:",
+    "  - curl",
+    "  - jq",
+  ].join("\n");
+  const parameters = {
+    name: "sillage",
+    image: "ubuntu-24.04",
+    location: "nbg1",
+    userData: USER_DATA,
+    serverType: "cx23",
+    apiToken: "tok_live_123",
+  };
+  /** The wire shape `proposals.get` returns for a `capability.run`. */
+  function toolRun(review: Record<string, unknown>) {
+    const data = {
+      verbId: "hcloud_create_server",
+      skillId: ids.NEW,
+      summary: "Run hcloud create server",
+      parameters,
+      workspaceId: null,
+    };
+    return {
+      ...personCreate(null),
+      targetType: "capability",
+      targetId: ids.NEW,
+      targetName: undefined,
+      proposalType: "capability.run",
+      governanceReason: "CAPABILITY_PROPOSE",
+      revertable: false,
+      data,
+      objectRefs: {
+        skillId: { id: ids.NEW, kind: "skill", name: "hcloud_create_server" },
+      },
+      request: {
+        targetType: "capability",
+        targetId: ids.NEW,
+        changeType: "run",
+        summary: "Run hcloud create server",
+        proposalType: "capability.run",
+      },
+      review: {
+        summary: "Run hcloud create server",
+        changes: [
+          {
+            path: "verbId",
+            label: "VerbId",
+            operation: "update",
+            after: "hcloud_create_server",
+          },
+          {
+            path: "skillId",
+            label: "SkillId",
+            operation: "update",
+            after: ids.NEW,
+          },
+          {
+            path: "parameters",
+            label: "Parameters",
+            operation: "update",
+            after: parameters,
+          },
+        ],
+        ...review,
+      },
+    };
+  }
+  const call = {
+    action: "Create server",
+    tool: "Hetzner cloud",
+    description: "Create a server on Hetzner Cloud",
+    parameters: [
+      {
+        key: "serverType",
+        label: "Server type",
+        description: "Hetzner server type",
+        value: "cx23",
+      },
+      { key: "name", label: "Name", value: "sillage" },
+      { key: "image", label: "Image", value: "ubuntu-24.04" },
+      { key: "location", label: "Location", value: "nbg1" },
+      { key: "userData", label: "User data", value: USER_DATA },
+      { key: "apiToken", label: "Api token", secret: true },
+    ],
+  };
+
+  it("is titled by its action and its tool, never 'Run Tool'", () => {
+    state.proposal = toolRun({ toolRun: call });
+    const page = text(render());
+    expect(page).toContain("Create server · Hetzner cloud");
+    expect(page).not.toMatch(/Run Tool/);
+  });
+
+  it("shows every argument's value, the whole script, and no secret", () => {
+    state.proposal = toolRun({ toolRun: call });
+    const html = render();
+    const page = text(html);
+    expect(page).toContain("What it sends");
+    expect(page).toContain("Create a server on Hetzner Cloud");
+    for (const v of ["cx23", "sillage", "ubuntu-24.04", "nbg1"]) {
+      expect(page).toContain(v);
+    }
+    expect(page).toContain("Hetzner server type");
+    for (const line of USER_DATA.split("\n"))
+      expect(page).toContain(line.trim());
+    expect(html).toContain('data-tool-run-arg="userData"');
+    expect(page).toContain("Hidden — a credential");
+    expect(page).not.toContain("tok_live_123");
+  });
+
+  it("draws no generic record card: no 'Untitled', no 'Skill ID', no key-name list", () => {
+    state.proposal = toolRun({ toolRun: call });
+    const html = render();
+    const page = text(html);
+    expect(html).not.toContain("data-proposed-record");
+    expect(page).not.toMatch(/Untitled/);
+    expect(page).not.toMatch(/Skill ID/i);
+    expect(page).not.toContain("Name, Image, Location");
+  });
+
+  it("an older pod with no toolRun keeps the card it drew before", () => {
+    state.proposal = toolRun({});
+    const html = render();
+    expect(html).toContain("data-proposed-record");
+    expect(html).not.toContain("data-tool-run");
+  });
+});
