@@ -39,7 +39,7 @@ describe("requestReadFailure: a failed read is not a withdrawn request", () => {
     expect(f?.message).toMatch(/Ask the person who sent you the link/);
   });
 
-  it("never sends the reader to an app or speaks our words", () => {
+  it("the sentence speaks the reader's words, never ours", () => {
     for (const code of ["NOT_FOUND", "FORBIDDEN", "INTERNAL_SERVER_ERROR"]) {
       const f = requestReadFailure(err(code), false)!;
       expect(`${f.title} ${f.message}`).not.toMatch(

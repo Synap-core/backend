@@ -309,9 +309,9 @@ export function LoginForm({
               onAction={backToSignIn}
             >
               <p>
-                The pod owner has to let you in. Open the Synap mobile app and
-                choose this pod to send a request, or ask the owner to invite
-                you.
+                The pod owner has to let you in. Open the Synap app (Relay or
+                the desktop app) and choose this pod to send a request, or ask
+                the owner to invite you.
               </p>
               {signIn.email ? (
                 <p className="text-foreground/65">

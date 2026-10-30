@@ -104,13 +104,17 @@ export function ProposalReview({
   const p = query.data;
   const failure = requestReadFailure(query.error, !!p);
   if (failure || !p) {
+    /* A read that failed may still open in the Synap app, where the work is
+       done (decision 94cd8636). A missing request or a refusal answers the
+       same there: no link into nothing. */
     return shell(
-      <CardBody className="px-7 py-8">
+      <CardBody className="gap-4 px-7 py-8">
         <RequestUnreadable
           failure={failure}
           retrying={query.isFetching}
           onRetry={() => void query.refetch()}
         />
+        {failure?.retry ? openInApp : null}
       </CardBody>
     );
   }

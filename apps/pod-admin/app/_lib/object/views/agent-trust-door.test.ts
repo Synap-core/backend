@@ -15,7 +15,7 @@ describe("agentTrustDoor: where an agent's trust is changed", () => {
     expect(door.kind).toBe("note");
   });
 
-  it("never sends anyone to the desktop app", () => {
+  it("is the console's page, never the app's Settings: what an agent may do is running the pod (decision 94cd8636)", () => {
     for (const role of ["admin", "member"] as const) {
       expect(JSON.stringify(agentTrustDoor(role))).not.toMatch(
         /desktop|synap:\/\/|Settings ›/
