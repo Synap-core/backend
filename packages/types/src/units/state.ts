@@ -73,20 +73,6 @@ export function isUnitTone(value: unknown): value is UnitTone {
 }
 
 /**
- * The default tone of each lifecycle CATEGORY — what an option with no
- * authored tone wears (`lifecycleOptionTone`, `@synap-core/types/lifecycle`).
- */
-export const LIFECYCLE_CATEGORY_TONE: Readonly<
-  Record<LifecycleCategory, UnitTone>
-> = {
-  open: "textSecondary",
-  active: "primary",
-  paused: "warning",
-  done: "success",
-  lost: "error",
-};
-
-/**
  * THE STATUS TONE TABLE — the tone of a status WORD, for every surface that
  * paints a stored status it did not derive (a badge, a dot, an enum chip, a
  * property value). The union of the app's two tables (`spatial-ui`
@@ -98,9 +84,6 @@ export const LIFECYCLE_CATEGORY_TONE: Readonly<
  *   cancelled  textMuted — it ended without failing (`canceled` likewise);
  *   draft      textMuted — quiet, nothing is pending on anyone.
  *
- * The five lifecycle category words (open, active, paused, done, lost) take
- * their tone from {@link LIFECYCLE_CATEGORY_TONE}, the canonical table, so a
- * status and a lifecycle option never paint one category two ways.
  * `stale` is `paused`'s tone: the reaper's `stale` READS as paused
  * (`SESSION_STATUS_DECLARATION`). `drafting` is the one `ai` word (AI
  * provenance). Keys are lower case; {@link resolveStatusTone} normalises.
@@ -108,7 +91,7 @@ export const LIFECYCLE_CATEGORY_TONE: Readonly<
  */
 export const STATUS_TONE: Readonly<Record<string, UnitTone>> = {
   // Succeeded / healthy
-  done: LIFECYCLE_CATEGORY_TONE.done,
+  done: "success",
   complete: "success",
   completed: "success",
   success: "success",
@@ -129,11 +112,11 @@ export const STATUS_TONE: Readonly<Record<string, UnitTone>> = {
   approval_failed: "error",
   fail: "error",
   past_due: "error",
-  lost: LIFECYCLE_CATEGORY_TONE.lost,
+  lost: "error",
   unqualified: "error",
   // In flight, or your turn (calm, never red)
-  active: LIFECYCLE_CATEGORY_TONE.active,
-  open: LIFECYCLE_CATEGORY_TONE.open,
+  active: "primary",
+  open: "primary",
   running: "primary",
   doing: "primary",
   "in-progress": "primary",
@@ -148,8 +131,8 @@ export const STATUS_TONE: Readonly<Record<string, UnitTone>> = {
   no_effect: "primary",
   trialing: "primary",
   // On hold, or awaiting a decision
-  paused: LIFECYCLE_CATEGORY_TONE.paused,
-  stale: LIFECYCLE_CATEGORY_TONE.paused,
+  paused: "info",
+  stale: "info",
   pending: "info",
   proposed: "info",
   review: "info",
@@ -185,6 +168,20 @@ export function resolveStatusTone(status: string | null | undefined): UnitTone {
     ? STATUS_TONE[dashed]!
     : "textMuted";
 }
+
+/**
+ * The default tone of each lifecycle CATEGORY — what an option with no
+ * authored tone wears (`lifecycleOptionTone`, `@synap-core/types/lifecycle`).
+ */
+export const LIFECYCLE_CATEGORY_TONE: Readonly<
+  Record<LifecycleCategory, UnitTone>
+> = {
+  open: "textSecondary",
+  active: "primary",
+  paused: "warning",
+  done: "success",
+  lost: "error",
+};
 
 /** Which mark the state wears. Surfaces map these to their own icon set. */
 export type UnitGlyph =
