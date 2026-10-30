@@ -18,15 +18,23 @@
  *    (enqueueReasons):
  *      - the shared PR gates (prGates): open, base main, not a draft, not a
  *        `negctl/*` branch, not from a fork;
- *      - not dependabot; its body names a pod session (podSessionFromBody,
- *        scripts/pod-observation.mjs: the one parser of that line);
+ *      - its body names a pod session (podSessionFromBody,
+ *        scripts/pod-observation.mjs: the one parser of that line), or it
+ *        is Dependabot's (isDependabotAuthor: opened by Dependabot, and
+ *        every commit made and signed by Dependabot, dependabotOnly; a PR on
+ *        a `dependabot/*` branch that fails either waits for the founder);
  *      - it is not CONFLICTING and not already queued;
  *      - every live required check of main (at least release-gate-wait.mjs
  *        REQUIRED_CHECKS), posted by GitHub Actions, is `success` on its head;
  *      - every `Depends-On:` line has landed, or rides (C);
- *      - it touches no CI or test infrastructure (INFRA_PATHS): a PR that
- *        edits what judges it could certify itself, so it needs the founder
- *        (`prcheck`);
+ *      - if it touches CI or test infrastructure (INFRA_PATHS): a PR that
+ *        edits what judges it could certify itself, so it waits
+ *        INFRA_HOLD_HOURS after its required checks went green (greenSince).
+ *        The founder's `prcheck` enqueues it at once;
+ *        Dependabot's PRs do not wait (founder, 2026-10-30: 4 green action
+ *        bumps waited a night for him; dependabot.yml bumps only actions);
+ *      - no maintainer holds it: their latest `/hold` or `/unhold` comment
+ *        (on its own line) is not `/hold` (holdOf);
  *      - main is not red, unless the PR jumps (B): while main's latest
  *        finished push run failed, only jumpers are enqueued (founder default,
  *        2026-10-29; MERGE_BOT_ENQUEUE_WHILE_RED=true overrides it).
@@ -125,9 +133,17 @@ export const RERUN_CHECK_NAME = "Re-run after main green";
 export const WINDOW_MAX_AGE_HOURS = 24;
 /** At most this many victims get a fresh run per sweep (~6 jobs each, 20-job cap). */
 export const MAX_TOGGLES_PER_SWEEP = 5;
-/** The reason a PR that touches CI or test infrastructure is never enqueued. */
-export const INFRA_REASON =
-  "touches CI/test infrastructure: needs the founder (prcheck)";
+/**
+ * A green PR that touches CI or test infrastructure is enqueued this long
+ * after its required checks went green, unless a maintainer comments `/hold`
+ * (founder, 2026-10-30: #520 and #522 waited a night for his prcheck). Two
+ * hours to read what it changes in the checks that judge it.
+ */
+export const INFRA_HOLD_HOURS = 2;
+/** The reason a green PR that touches CI or test infrastructure is not enqueued yet. */
+export const INFRA_REASON = "touches CI/test infrastructure";
+/** Who may hold a PR with a `/hold` comment: people with write access. */
+export const HOLD_ASSOCIATIONS = ["OWNER", "MEMBER", "COLLABORATOR"];
 
 /**
  * CI and test infrastructure: a PR touching any of these edits what judges it
@@ -188,6 +204,90 @@ export function jumpReason(pr, { mainRed = false } = {}) {
   if (!mainRed) return null;
   if (isMainRedFix(pr)) return "main-red fix";
   if (/^Revert "/.test(String(pr?.title ?? "").trim())) return "revert";
+  return null;
+}
+
+/** Opened by Dependabot itself (GraphQL names the bot `dependabot`). A branch name proves nothing: anyone with write access can push `dependabot/x`. */
+export function isDependabotAuthor(pr) {
+  const login = String(pr?.author?.login ?? "").toLowerCase();
+  return login === "dependabot" || login === "dependabot[bot]";
+}
+
+/**
+ * Every commit of a Dependabot PR made by Dependabot and signed (REST
+ * pulls/<n>/commits): a person who pushed to its branch makes it a PR like
+ * any other. Null = could not be read. Pure.
+ */
+export function dependabotOnly(commits) {
+  if (!Array.isArray(commits) || !commits.length) return null;
+  return commits.every(
+    (c) =>
+      String(c?.author?.login ?? "").toLowerCase() === "dependabot[bot]" &&
+      c?.commit?.verification?.verified === true
+  );
+}
+
+/**
+ * The `/hold` on a PR: the latest comment by someone with write access
+ * (HOLD_ASSOCIATIONS) whose own line is `/hold` or `/unhold`, newest wins.
+ * Returns { by, at } while held, else null. Pure.
+ */
+export function holdOf(pr) {
+  let last = null;
+  for (const c of pr?.comments?.nodes ?? []) {
+    if (!HOLD_ASSOCIATIONS.includes(c?.authorAssociation)) continue;
+    const lines = String(c?.body ?? "")
+      .split(/\r?\n/)
+      .map((l) => l.trim());
+    const cmd = lines.includes("/hold")
+      ? "hold"
+      : lines.includes("/unhold")
+        ? "unhold"
+        : null;
+    if (!cmd) continue;
+    const at = Date.parse(c.createdAt ?? "");
+    if (!last || at >= last.at) last = { cmd, at, by: c?.author?.login ?? "?" };
+  }
+  return last?.cmd === "hold" ? { by: last.by, at: last.at } : null;
+}
+
+/**
+ * When the head's required checks were all green: the latest finish among
+ * the latest run of each, or null (one missing, not green, or no finish
+ * time). Same reading as requiredChecksState. Pure.
+ */
+export function greenSince(checkRuns, headSha, names = REQUIRED_CHECKS) {
+  const latest = new Map();
+  const order = (x) =>
+    `${x.started_at ?? ""}|${String(x.id).padStart(20, "0")}`;
+  for (const c of checkRuns ?? []) {
+    if (c?.app?.id !== GITHUB_ACTIONS_APP_ID) continue;
+    if (headSha && c.head_sha && c.head_sha !== headSha) continue;
+    if (!names.includes(c.name)) continue;
+    const prev = latest.get(c.name);
+    if (!prev || order(c) > order(prev)) latest.set(c.name, c);
+  }
+  let since = null;
+  for (const name of names) {
+    const c = latest.get(name);
+    if (!c || c.status !== "completed" || c.conclusion !== "success")
+      return null;
+    const t = Date.parse(c.completed_at ?? "");
+    if (!Number.isFinite(t)) return null;
+    if (since === null || t > since) since = t;
+  }
+  return since;
+}
+
+const hhmm = (ms) => new Date(ms).toISOString().slice(11, 16) + "Z";
+
+/** Why a green infrastructure PR is not enqueued yet, or null when its hold is over. Pure. */
+export function infraHold({ green, now }) {
+  if (green === undefined || green === null)
+    return "the time its checks went green is unknown";
+  const from = green + INFRA_HOLD_HOURS * 3600_000;
+  if (now < from)
+    return `enqueued from ${hhmm(from)}, ${INFRA_HOLD_HOURS} h after its checks went green, unless a maintainer comments /hold (the founder's prcheck enqueues it now)`;
   return null;
 }
 
@@ -306,10 +406,29 @@ export function enqueueReasons({
   mainRed = "green",
   whileRed = false,
   queueFailures = 0,
+  green,
+  commits,
+  now = Date.now(),
 }) {
   const r = prGates(pr);
-  if (isDependabot(pr)) r.push("dependabot");
-  if (!podSessionFromBody(pr.body)) r.push("no `Pod session: <uuid>` line");
+  const bot = isDependabotAuthor(pr);
+  if (isDependabot(pr) && !bot)
+    r.push(
+      "dependabot branch not opened by Dependabot: needs the founder (prcheck)"
+    );
+  if (bot && commits !== undefined && commits !== true)
+    r.push(
+      commits === null
+        ? "its commits could not be read"
+        : "a commit not made and signed by Dependabot: needs the founder (prcheck)"
+    );
+  if (!bot && !podSessionFromBody(pr.body))
+    r.push("no `Pod session: <uuid>` line");
+  const held = holdOf(pr);
+  if (held)
+    r.push(
+      `on hold: /hold by ${held.by} at ${hhmm(held.at)} (an /unhold comment or the founder's prcheck lets it go)`
+    );
   if (pr.mergeable === "CONFLICTING") r.push("conflicting");
   if (pr.isInMergeQueue) r.push("already queued");
   if (queueFailures >= MAX_QUEUE_FAILURES_PER_HEAD)
@@ -339,10 +458,13 @@ export function enqueueReasons({
   if (files !== undefined) {
     const infra = files === null ? null : infraFilesOf(files);
     if (infra === null) r.push("its files could not be read");
-    else if (infra.length)
-      r.push(
-        `${INFRA_REASON} (${infra.slice(0, 3).join(", ")}${infra.length > 3 ? ", …" : ""})`
-      );
+    else if (infra.length && !bot) {
+      const hold = infraHold({ green, now });
+      if (hold)
+        r.push(
+          `${INFRA_REASON} (${infra.slice(0, 3).join(", ")}${infra.length > 3 ? ", …" : ""}): ${hold}`
+        );
+    }
   }
   return r;
 }
@@ -357,6 +479,8 @@ export function enqueueDecision(input) {
   if (input.checks === undefined) reasons.push("required checks: not read");
   if (input.depends === undefined) reasons.push("Depends-On: not read");
   if (input.files === undefined) reasons.push("files: not read");
+  if (isDependabotAuthor(input.pr) && input.commits === undefined)
+    reasons.push("commits: not read");
   const rides = input.depends?.behind ?? [];
   // A PR riding behind its dependency never jumps ahead of it.
   const why = rides.length
@@ -537,6 +661,7 @@ const PRS_QUERY = `query($owner: String!, $name: String!, $after: String) {
         isCrossRepository mergeable isInMergeQueue
         author { login }
         labels(first: 20) { nodes { name } }
+        comments(last: 50) { nodes { body createdAt authorAssociation author { login } } }
         timelineItems(last: 20, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) {
           nodes { ... on RemovedFromMergeQueueEvent { createdAt reason } }
         }
@@ -571,6 +696,18 @@ export function listOpenPrs(gh, repo, token) {
     after = conn.pageInfo.endCursor;
   }
   return prs;
+}
+
+/** A PR's commits (REST, the first 100), or null when they cannot be read. */
+export function listPrCommits(gh, repo, number, token) {
+  try {
+    const c = gh.rest(`repos/${repo}/pulls/${number}/commits?per_page=100`, {
+      token,
+    });
+    return Array.isArray(c) && c.length < 100 ? c : null;
+  } catch {
+    return null;
+  }
 }
 
 /** A PR's changed files (REST, 100 a page, GitHub's 3000-file cap), or null when they cannot all be read. */
@@ -748,12 +885,18 @@ export async function runBot({
       if (checks.ok) {
         const dep = dependsState(await depends(pr, repo), { repo, queued });
         const files = listPrFiles(gh, repo, pr.number, readToken);
+        const commits = isDependabotAuthor(pr)
+          ? dependabotOnly(listPrCommits(gh, repo, pr.number, readToken))
+          : undefined;
         d = enqueueDecision({
           pr,
           checks,
           depends: dep,
           files,
           queueFailures,
+          green: greenSince(runs?.check_runs, pr.headRefOid, names),
+          commits,
+          now,
           ...ctx,
         });
       } else
