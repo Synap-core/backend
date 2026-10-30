@@ -18,6 +18,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink, httpLink, splitLink } from "@trpc/client";
 import SuperJSON from "superjson";
 import { trpc, POD_URL } from "../lib/trpc";
+import { ConsoleLocaleProvider } from "../lib/i18n/locale-provider";
 
 export function Providers({ children }: { children: ReactNode }) {
   // QueryClient + tRPC client created once per mount — `useState` keeps
@@ -87,7 +88,8 @@ export function Providers({ children }: { children: ReactNode }) {
                 radius: "md",
               }}
             />
-            {children}
+            {/* The person's language, once (rule i18n §4). */}
+            <ConsoleLocaleProvider>{children}</ConsoleLocaleProvider>
           </QueryClientProvider>
         </trpc.Provider>
       </HeroUIProvider>

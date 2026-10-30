@@ -92,7 +92,7 @@ import { useReviewPreferences } from "./review-preferences";
 import { handOffRuleFor } from "./hand-off-rule";
 import { ReviewOnboarding } from "./review-onboarding";
 import { showReviewOnboarding } from "./review-onboarding-model";
-import { ReviewHistory } from "./review-history";
+import { HistoryList } from "../../history/_lib/history-list";
 import { SessionFilter } from "./review-session-filter";
 import { nextRowKey } from "./ask-detail";
 
@@ -613,7 +613,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
           ) : (
             <section className="divide-y divide-foreground/[0.05] rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10">
               {filter === "history" ? (
-                <ReviewHistory
+                <HistoryList
                   sessionId={sessionId}
                   onOpen={(proposalId, title) =>
                     setOpen({ detail: { kind: "proposal", proposalId }, title })

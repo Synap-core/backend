@@ -38,21 +38,26 @@ import {
 import { publicPodUrl } from "../../../lib/public-pod-url";
 import { openIn, type AccountPage } from "../../../lib/open-in";
 import { useRecoveryCodesState } from "./recovery-codes-nudge";
+import { useT } from "../../../lib/i18n/locale-provider";
+import { en, fr } from "./copy";
 import { useConsoleRole } from "./side-nav-role";
 
+const CATALOGS = { en, fr };
+type ShellKey = keyof typeof en;
+
 /** The account surfaces a pod cannot host itself. Order is most-reached-first. */
-const ACCOUNT_LINKS: { page: AccountPage; label: string }[] = [
-  { page: "pod", label: "Pod & plan" },
-  { page: "billing", label: "Billing" },
-  { page: "support", label: "Support" },
+const ACCOUNT_LINKS: { page: AccountPage; label: ShellKey }[] = [
+  { page: "pod", label: "user.plan" },
+  { page: "billing", label: "user.billing" },
+  { page: "support", label: "user.support" },
 ];
 
 /** Self-service pages about YOU (not the pod), beside Security. */
-const PERSONAL_LINKS: { href: string; label: string }[] = [
-  { href: "/my-connections", label: "My connections" },
-  { href: "/my-computers", label: "My computers" },
-  { href: "/my-notifications", label: "My notifications" },
-  { href: "/my-vault", label: "My vault" },
+const PERSONAL_LINKS: { href: string; label: ShellKey }[] = [
+  { href: "/my-connections", label: "user.connections" },
+  { href: "/my-computers", label: "user.computers" },
+  { href: "/my-notifications", label: "user.notifications" },
+  { href: "/my-vault", label: "user.vault" },
 ];
 
 const POD_URL = publicPodUrl();
@@ -75,6 +80,7 @@ export function TopNav({
   onOpenNav,
 }: TopNavProps) {
   const role = useConsoleRole();
+  const t = useT(CATALOGS);
   const initials = (operatorEmail ?? "?").charAt(0).toUpperCase();
   // A persistent ⚠ until recovery codes are saved (the Overview card is
   // skippable; this mark is not).
@@ -118,7 +124,7 @@ export function TopNav({
             variant="light"
             size="sm"
             radius="md"
-            aria-label="Open navigation"
+            aria-label={t("nav.open.aria")}
             onPress={onOpenNav}
             className="-ml-1.5 h-11 w-11 min-w-11 text-foreground/65 md:hidden"
           >
@@ -137,7 +143,7 @@ export function TopNav({
           </span>
         </span>
         <span className="text-[13px] font-medium tracking-tight text-foreground">
-          Pod Console
+          {t("brand")}
         </span>
         {podHost && (
           <span className="hidden font-mono text-[11px] text-foreground/65 sm:inline">
@@ -153,7 +159,7 @@ export function TopNav({
         <button
           type="button"
           onClick={onOpenSearch}
-          aria-label="Open search (⌘K)"
+          aria-label={t("search.aria")}
           className="
             group flex h-8 w-full items-center gap-2 rounded-md
             bg-content2/40 px-3
@@ -164,7 +170,7 @@ export function TopNav({
           "
         >
           <Search className="h-3.5 w-3.5 shrink-0 text-foreground/45" />
-          <span className="flex-1 text-left">Search this pod…</span>
+          <span className="flex-1 text-left">{t("search")}</span>
           <Kbd keys={["command"]} className="shrink-0">
             K
           </Kbd>
@@ -181,9 +187,7 @@ export function TopNav({
               size="sm"
               radius="full"
               aria-label={
-                codesMissing
-                  ? "User menu — recovery codes not saved"
-                  : "User menu"
+                codesMissing ? t("user.menu.codesMissing") : t("user.menu")
               }
               className="relative ml-1 p-0"
             >
@@ -211,7 +215,7 @@ export function TopNav({
                     {operatorEmail}
                   </p>
                   <p className="text-[11px] text-foreground/65">
-                    {role === "admin" ? "Pod admin" : "Member"}
+                    {role === "admin" ? t("role.admin") : t("role.member")}
                   </p>
                 </div>
               )}
@@ -226,11 +230,11 @@ export function TopNav({
                 href="/settings/security"
                 className="flex items-center justify-between gap-2 rounded-md px-3 py-2 text-[12.5px] text-foreground/85 hover:bg-content2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               >
-                Security
+                {t("user.security")}
                 {codesMissing ? (
                   <span className="flex items-center gap-1 text-[11px] text-warning">
                     <ShieldAlert className="h-3.5 w-3.5" />
-                    Save recovery codes
+                    {t("user.saveCodes")}
                   </span>
                 ) : (
                   <ShieldCheck className="h-3.5 w-3.5 text-foreground/40" />
@@ -244,7 +248,7 @@ export function TopNav({
                   href={href}
                   className="flex items-center rounded-md px-3 py-2 text-[12.5px] text-foreground/85 hover:bg-content2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                 >
-                  {label}
+                  {t(label)}
                 </a>
               ))}
               <div className="h-px bg-foreground/[0.05]" />
@@ -257,7 +261,7 @@ export function TopNav({
                   rel="noopener noreferrer"
                   className="flex items-center justify-between gap-2 rounded-md px-3 py-2 text-[12.5px] text-foreground/85 hover:bg-content2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                 >
-                  {label}
+                  {t(label)}
                   <ArrowUpRight
                     className="h-3 w-3 text-foreground/40"
                     strokeWidth={1.75}
@@ -270,7 +274,7 @@ export function TopNav({
                 rel="noopener noreferrer"
                 className="flex items-center justify-between gap-2 rounded-md px-3 py-2 text-[12.5px] text-foreground/85 hover:bg-content2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               >
-                Documentation
+                {t("user.docs")}
                 <ExternalLink className="h-3 w-3 text-foreground/40" />
               </a>
 
@@ -287,7 +291,7 @@ export function TopNav({
                 "
               >
                 <LogOut className="h-3.5 w-3.5" strokeWidth={2} />
-                Sign out
+                {t("user.signOut")}
               </button>
             </div>
           </PopoverContent>

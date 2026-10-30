@@ -26,6 +26,10 @@ import { Button } from "@heroui/react";
 import type { ReactNode, MouseEvent } from "react";
 import type { StatusKind } from "./status-pill";
 import { StatusPill } from "./status-pill";
+import { useT } from "../../../lib/i18n/locale-provider";
+import { en, fr } from "./copy";
+
+const CATALOGS = { en, fr };
 
 interface ResourceRowProps {
   Icon: LucideIcon;
@@ -171,12 +175,13 @@ export function ResourceRowError({
   message: string;
   onRetry?: () => void;
 }) {
+  const t = useT(CATALOGS);
   return (
     <div className="flex flex-col items-center gap-2 px-3 py-8">
       <p className="text-[12.5px] text-status-down">{message}</p>
       {onRetry && (
         <Button size="sm" variant="flat" radius="md" onPress={onRetry}>
-          Retry
+          {t("retry")}
         </Button>
       )}
     </div>
