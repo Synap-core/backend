@@ -84,6 +84,7 @@ import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import { emitSideEffects, getBoss } from "@synap/events";
 import { randomUUID } from "crypto";
 import { syncPropertyToRelations } from "../../utils/property-relation-sync.js";
+import { BELONGS_TO_PROJECT } from "../../utils/project-scope.js";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { idempotencyWindowSeconds } from "../../utils/write-door-idempotency.js";
 import { createLogger } from "@synap-core/core";
@@ -1474,10 +1475,22 @@ export const createProcs = {
       };
 
       // The links this kind's template marks REQUIRED (D3.2: warn, never
-      // refuse). A plain create carries no edge, so each one is missing; the
+      // refuse). This door writes two kinds of edge itself, so they count as
+      // present: the project filing (`linkEntityToProject`, below and in the
+      // materializer) and each entity_id property synced to a relation
+      // (`syncPropertyToRelations`, below, against the same profile). The
       // answer rides the reply and, on a proposal, the card.
       const requiredLinks = await checkRequiredLinksForCreate({
         kind: profileSlug,
+        present: resolvedProjectId ? [{ type: BELONGS_TO_PROJECT }] : [],
+        ...(earlyResolvedProfile
+          ? {
+              properties: {
+                profileId: earlyResolvedProfile.id,
+                values: effectiveProperties,
+              },
+            }
+          : {}),
       });
       const requiredLinksToReport =
         requiredLinks.status !== "clear" ? { requiredLinks } : {};
