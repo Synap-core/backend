@@ -3,8 +3,11 @@ name: Merge bot
 # The backend merge bot (founder, 2026-10-29). It ENQUEUES a PR into the merge
 # queue once it is green and eligible, puts a main-red fix at the FRONT of the
 # queue, and gives the PRs that went red only because main was red ONE fresh
-# CI run once main is green again. It never merges, never bypasses, never
-# pushes, never updates a branch. Rules, and why a plain re-run would not do:
+# CI run once main is green again: it merges main into such a PR's branch
+# (GitHub's update-branch, at the head it judged), or toggles draft -> ready
+# when the branch already holds main. It never merges a PR, never bypasses,
+# never pushes or rebases (GitHub writes the update's merge commit). Rules,
+# and why a plain re-run would not do:
 # scripts/ci/merge-bot.mjs; tripwire: scripts/ci/merge-bot.tripwire.test.ts.
 #
 # Identity: a write made with this job's GITHUB_TOKEN starts no workflow run,
@@ -110,8 +113,10 @@ jobs:
           permission-contents: read
 
       # The writer: the Synap Merge Bot app, on backend only, with only what an
-      # enqueue and a draft/ready toggle need. A failed mint leaves the token
-      # empty, and the bot then writes nothing (fail-safe).
+      # enqueue, a draft/ready toggle and an update-branch need (no
+      # `workflows`: an update that brings in a workflow change may be
+      # refused). A failed mint leaves the token empty, and the bot then
+      # writes nothing (fail-safe).
       - name: Mint the merge bot token (Synap Merge Bot app)
         id: bot-token
         if: ${{ env.MERGE_BOT_CONFIGURED == 'true' }}
