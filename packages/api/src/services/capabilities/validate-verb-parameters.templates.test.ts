@@ -61,7 +61,9 @@ function stringCall(declared: Declared): Record<string, unknown> {
         ? "5"
         : type === "boolean"
           ? "true"
-          : type === "array"
+          : // A pod file list (`file[]:url`) travels as an array of ids,
+            // like `array` (the validator's FILE_PARAMETER_TYPE).
+            type === "array" || /^file\[\]/.test(type)
             ? []
             : type === "object"
               ? {}
