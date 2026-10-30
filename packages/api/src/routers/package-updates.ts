@@ -40,8 +40,12 @@ export const packageUpdatesRouter = router({
     .input(z.object({ slug: z.string().min(1) }))
     .query(({ input }) => getPackageUpdatePlan(input.slug)),
 
-  /** Apply with a choice per field; 409 when the catalog moved since `get`. */
-  apply: podAdminProcedure
+  /**
+   * Apply with a choice per field; CONFLICT when the catalog moved since
+   * `get`. Not named `apply`: tRPC reserves `apply`, `call` and `then` as
+   * procedure names (a router using one fails to build).
+   */
+  applyUpdate: podAdminProcedure
     .input(applyPackageUpdateInputSchema)
     .mutation(({ ctx, input }) => applyPackageUpdate(ctx, input)),
 
