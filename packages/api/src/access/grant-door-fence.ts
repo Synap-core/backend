@@ -356,6 +356,13 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // that intent's actions come back, each with the intent's input — never a
   // verb's raw parameters. The labels are the pod's own.
   [/^\/capabilities\/actions\/?$/, NARROWED("capability", [], "run")],
+  // A kind's or role's DECLARED stages (`lifecycle.get`): the profile's
+  // lifecycle (key, label, category, tone, humanOnly), definition data with no
+  // entity row. The route narrows itself: a fenced key must name `workspaceId`
+  // and hold `entity.<profileSlug>.read` (`facet.read` for a role) there, so an app reads the stages of
+  // the kinds it may already read, never another kind's. Admitted when one live
+  // scope grants `entity.<some kind>.read`.
+  [/^\/lifecycle\/?$/, NARROWED("entity", [])],
   // `readWorkRelease` (services/dev-loop/work-release.ts): `dev.repo_snapshot`
   // events, the sessions the PRs belong to, and their liveness (chat turns,
   // events, proposals, room notes). Same as MCP `synap_get_work_release`.

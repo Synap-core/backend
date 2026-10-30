@@ -34186,6 +34186,82 @@
         }
       }
     },
+    "/lifecycle": {
+      "get": {
+        "tags": ["Lifecycle"],
+        "summary": "The declared lifecycle of a kind or role",
+        "description": "The stages a kind or role declares (`lifecycle.get`): the status `property` and its `options` in declared order, each with `key`, `label`, `category`, `tone` and `humanOnly`. Declared data, no rows. A key bounded by a grant must name `workspaceId` and hold `entity.<profileSlug>.read` (`facet.read` for a role) there (403 otherwise).",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "minLength": 1 },
+            "required": true,
+            "name": "profileSlug",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "workspaceId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lifecycle",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown kind / track",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "The kind declares no lifecycle",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/lifecycle/board": {
       "get": {
         "tags": ["Lifecycle"],

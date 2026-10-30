@@ -4,6 +4,7 @@
  * IS. Thin doors over the tRPC procedures the surface itself reads — never a
  * second predicate:
  *
+ *   GET /lifecycle             → `lifecycle.get`        (the declared stages)
  *   GET /lifecycle/board       → `lifecycle.board`      (the pipeline)
  *   GET /lifecycle/throughput  → `lifecycle.throughput` (the goal line)
  *   GET /lifecycle/home        → `lifecycle.home`       (what each space makes)
@@ -36,6 +37,10 @@ import {
   httpStatusForTrpcError,
 } from "./_shared.js";
 import type { Context as HonoContext } from "hono";
+import { TRPCError } from "@trpc/server";
+import { getRequestGrant } from "@synap/database";
+import { isFencedGrant } from "../../../access/grant-door-fence.js";
+import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { lifecycleRouter } from "../../lifecycle.js";
 import { signalsRouter } from "../../signals.js";
@@ -48,6 +53,11 @@ const lensQuery = {
   projectId: uuidQueryParam.optional(),
   trackId: uuidQueryParam.optional(),
 };
+
+const declaredQuery = z.object({
+  profileSlug: z.string().min(1),
+  workspaceId: uuidQueryParam.optional(),
+});
 
 const boardQuery = z.object({
   ...lensQuery,
@@ -195,6 +205,19 @@ const errors = {
 export function registerIntentSurfacesRoutes(app: HubHono): void {
   registerOpenApi(app, {
     method: "get",
+    path: "/lifecycle",
+    tags: ["Lifecycle"],
+    summary: "The declared lifecycle of a kind or role",
+    description:
+      "The stages a kind or role declares (`lifecycle.get`): the status `property` and its `options` in declared order, each with `key`, `label`, `category`, `tone` and `humanOnly`. Declared data, no rows. A key bounded by a grant must name `workspaceId` and hold `entity.<profileSlug>.read` (`facet.read` for a role) there (403 otherwise).",
+    request: { query: declaredQuery },
+    responses: {
+      200: { description: "Lifecycle", schema: z.object({}).passthrough() },
+      ...errors,
+    },
+  });
+  registerOpenApi(app, {
+    method: "get",
     path: "/lifecycle/board",
     tags: ["Lifecycle"],
     summary: "The pipeline of a kind or role",
@@ -316,6 +339,57 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
           ...(q.sessionId ? { sessionId: q.sessionId } : {}),
           ...(q.limit ? { limit: q.limit } : {}),
         }),
+      { confineWorkspace: true }
+    )
+  );
+  app.get(
+    "/lifecycle",
+    readDoor(
+      "lifecycle.get",
+      declaredQuery,
+      async (ctx, q) => {
+        // A fenced key reads a kind's stages only where its grant reads that
+        // kind (`entity.<kind>.read`) or that role (`facet.read`): the
+        // permission it needs for the rows themselves.
+        const fenced = isFencedGrant(getRequestGrant());
+        const { workspaceId } = q;
+        if (fenced && !workspaceId)
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "A key bounded by a grant must name `workspaceId`.",
+          });
+        const denial = (subjectType: "entity" | "facet") =>
+          grantWriteDenial({
+            subjectType,
+            action: "read",
+            workspaceId,
+            data: { profileSlug: q.profileSlug },
+          });
+        let stages;
+        try {
+          stages = await lifecycleRouter.createCaller(ctx).get({
+            profileSlug: q.profileSlug,
+            ...(workspaceId ? { workspaceId } : {}),
+          });
+        } catch (err) {
+          // A failed read (unknown slug, no lifecycle) tells a fenced key
+          // nothing about a kind it may not read: it gets the 403.
+          if (fenced) {
+            const denied = await denial("entity");
+            if (denied && (await denial("facet")))
+              throw new TRPCError({ code: "FORBIDDEN", message: denied });
+          }
+          throw err;
+        }
+        if (fenced) {
+          const denied = await denial(
+            stages.profileKind === "role" ? "facet" : "entity"
+          );
+          if (denied)
+            throw new TRPCError({ code: "FORBIDDEN", message: denied });
+        }
+        return stages;
+      },
       { confineWorkspace: true }
     )
   );
