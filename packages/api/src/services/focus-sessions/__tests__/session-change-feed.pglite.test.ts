@@ -5,7 +5,7 @@
  *
  *   - `events` returns TYPED events: `answer`, `proposal_decided` (with the
  *     human-decided flag; withdrawn / pending / auto-approved / another
- *     session's never), `stage_moved` (state against `knownStage`),
+ *     session's never), `stage_moved` (the stage ledger, else state against `knownStage`),
  *     `owner_message` (the OWNER typing — never a teammate, an agent post or
  *     the pod's recall notice; a reply that IS an answer is reported once);
  *   - `stamp: false` is a PEEK: no "Picked up" receipt, so the agent's own
@@ -443,6 +443,62 @@ describe("the session change feed", () => {
     expect(fromNull.events).toEqual([
       expect.objectContaining({ kind: "stage_moved", from: null, to: "build" }),
     ]);
+  });
+
+  it("stage_moved: CURSORED from the stage ledger (0382), a move and a move back both seen", async () => {
+    const { sessionId } = await seed({ stage: "plan" });
+    const t1 = "2026-10-18T09:30:00.000Z";
+    const t2 = "2026-10-18T09:45:00.000Z";
+    await q(
+      `update focus_sessions set stage_history = $2::jsonb where id = $1`,
+      [
+        sessionId,
+        JSON.stringify([
+          {
+            stageKey: "build",
+            fromStage: "plan",
+            enteredAt: t1,
+            actor: AGENT,
+            userId: OWNER,
+            via: "advance",
+          },
+          {
+            stageKey: "plan",
+            fromStage: "build",
+            enteredAt: t2,
+            actor: OWNER,
+            userId: OWNER,
+            via: "advance",
+          },
+        ]),
+      ]
+    );
+    // A→B→A: the state alone (plan = knownStage plan) would say nothing.
+    const moved = await hubWait(
+      sessionId,
+      `events=stage_moved&knownStage=plan&since=${encodeURIComponent(BEFORE)}&timeoutSeconds=1`
+    );
+    expect(moved.body.status).toBe("changed");
+    expect(moved.body.events).toEqual([
+      expect.objectContaining({
+        kind: "stage_moved",
+        at: t1,
+        from: "plan",
+        to: "build",
+      }),
+      expect.objectContaining({
+        kind: "stage_moved",
+        at: t2,
+        from: "build",
+        to: "plan",
+      }),
+    ]);
+    // Past the cursor: nothing new, and the state fallback stays quiet.
+    const after = await hubWait(
+      sessionId,
+      `events=stage_moved&knownStage=plan&since=${encodeURIComponent(t2)}&timeoutSeconds=1`
+    );
+    expect(after.body.status).toBe("timeout");
   });
 
   it("owner_message: only the OWNER typing — never a teammate, an agent post or a recall notice", async () => {
