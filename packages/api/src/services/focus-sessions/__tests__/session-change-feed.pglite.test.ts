@@ -24,7 +24,15 @@
  * the side-effect fan-out (no transport here).
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterAll,
+  vi,
+} from "vitest";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -764,6 +772,12 @@ describe("session runners", () => {
 
 describe("runner state (0384)", () => {
   const MAC = "mac-a:4242:1761600000000";
+  // A report moves EVERY live row of its process (one per session it waits
+  // on), and earlier tests leave this client key's rows live: each test here
+  // starts with none, so a count is this test's rows only.
+  beforeEach(async () => {
+    await q(`delete from session_runners where client_key = $1`, [CLIENT_KEY]);
+  });
   /** One call from the runner's process, saying `state` (or nothing). */
   const as = <T>(fn: () => Promise<T>, state?: string, proc = MAC) =>
     runWithClientKey(CLIENT_KEY, fn, CWD, proc, state);
@@ -795,13 +809,16 @@ describe("runner state (0384)", () => {
     expect(Date.parse(r!.stateSince!)).toBeGreaterThan(Date.now() - 60_000);
   });
 
-  it("any other call names the state on the runner's live rows, off the wait — once per change, never another process's", async () => {
+  it("any other call names the state on the runner's live rows, off the wait — once per change, every session it waits on, never another process's", async () => {
     const { sessionId } = await seed();
+    const { sessionId: other } = await seed();
     const BOX = "devbox:77:1761650000000";
     await stamp(sessionId, "busy");
+    await stamp(other, "busy");
     await stamp(sessionId, "busy", BOX);
-    // A call that is not the wait: the turn ended.
-    expect(await as(() => reportRunnerState(), "idle")).toBe(1);
+    // A call that is not the wait: the turn ended — on both of MAC's rows.
+    expect(await as(() => reportRunnerState(), "idle")).toBe(2);
+    expect((await row(other))!.state).toBe("idle");
     // The same word again moves nothing (no write per call).
     expect(await as(() => reportRunnerState(), "idle")).toBe(0);
     // No state named, or a word the pod does not know: no write.
@@ -811,7 +828,7 @@ describe("runner state (0384)", () => {
     expect((await row(sessionId, BOX))!.state).toBe("busy");
     // The report is telemetry about the runner, not its presence: last_seen_at is the wait's.
     const seen = (await row(sessionId))!.seen;
-    expect(await as(() => reportRunnerState(), "busy")).toBe(1);
+    expect(await as(() => reportRunnerState(), "busy")).toBe(2);
     expect((await row(sessionId))!.seen).toBe(seen);
   });
 
