@@ -14,6 +14,7 @@ import {
   changeLifecycleOptions,
   checkLifecycleDefUpdate,
   LifecycleDefChangeError,
+  setLifecycleInitialStatus,
 } from "../lifecycle-def-guard.js";
 import { buildStoredConstraints } from "../../../utils/property-enum.js";
 import * as schema from "../../../schema/index.js";
@@ -235,5 +236,88 @@ describe("changeLifecycleOptions — the lifecycle door", () => {
       (await changeLifecycleOptions(db, { propertyDefId: defId, options }))
         .status
     ).toBe("changed");
+  });
+});
+
+describe("setLifecycleInitialStatus — the lifecycle door for the initial status", () => {
+  const linkDefault = async () =>
+    (
+      await db
+        .select()
+        .from(schema.profileProperties)
+        .where(eq(schema.profileProperties.propertyDefId, defId))
+    )[0].defaultValue;
+
+  it("writes the lifecycle LINK's default (what the birth doors read), not the def", async () => {
+    const r = await setLifecycleInitialStatus(db, {
+      propertyDefId: defId,
+      initialStatus: "proposed",
+    });
+    expect(r).toEqual({ status: "changed", links: 1 });
+    expect(await linkDefault()).toBe("proposed");
+    // The read the birth path uses sees it on the declaring link.
+    const links = await db
+      .select()
+      .from(schema.profileProperties)
+      .where(eq(schema.profileProperties.isLifecycle, true));
+    expect(links.map((l: { defaultValue: unknown }) => l.defaultValue)).toEqual(
+      ["proposed"]
+    );
+    const [def] = await db
+      .select()
+      .from(schema.propertyDefs)
+      .where(eq(schema.propertyDefs.id, defId));
+    expect(def.constraints.defaultValue).toBeUndefined();
+  });
+
+  it("is unchanged on a repeat, and null clears it", async () => {
+    expect(
+      await setLifecycleInitialStatus(db, {
+        propertyDefId: defId,
+        initialStatus: "proposed",
+      })
+    ).toEqual({ status: "unchanged" });
+    expect(
+      await setLifecycleInitialStatus(db, {
+        propertyDefId: defId,
+        initialStatus: null,
+      })
+    ).toEqual({ status: "changed", links: 1 });
+    expect(await linkDefault()).toBeNull();
+  });
+
+  it("refuses a key that is not one of the lifecycle's categorised options, and writes nothing", async () => {
+    const r = await setLifecycleInitialStatus(db, {
+      propertyDefId: defId,
+      initialStatus: "prospect",
+    });
+    expect(r).toMatchObject({ status: "refused" });
+    expect((r as { reason: string }).reason).toMatch(
+      /"prospect" is not one of this lifecycle's options/
+    );
+    expect(await linkDefault()).toBeNull();
+  });
+
+  it("refuses a property that is not a declared lifecycle", async () => {
+    const [plain] = await db
+      .insert(schema.propertyDefs)
+      .values({
+        slug: "priority",
+        valueType: "string",
+        constraints: buildStoredConstraints({ enumOptions: OPTIONS }),
+        profileId,
+      })
+      .returning();
+    await db
+      .insert(schema.profileProperties)
+      .values({ profileId, propertyDefId: plain.id });
+    const r = await setLifecycleInitialStatus(db, {
+      propertyDefId: plain.id,
+      initialStatus: "draft",
+    });
+    expect(r).toMatchObject({ status: "refused" });
+    expect((r as { reason: string }).reason).toMatch(
+      /not a declared lifecycle/
+    );
   });
 });

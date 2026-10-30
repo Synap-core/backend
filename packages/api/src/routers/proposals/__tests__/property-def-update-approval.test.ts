@@ -111,6 +111,20 @@ describe("property_def/update approval", () => {
     });
   });
 
+  it("applies a lifecycle's initial status, and a null that clears it", async () => {
+    await run({ propertyDefId: "def-1", initialStatus: "new" });
+    expect(applyUpdate).toHaveBeenLastCalledWith({
+      userId: APPROVER,
+      workspaceId: "ws-1",
+      propertyDefId: "def-1",
+      initialStatus: "new",
+    });
+    await run({ propertyDefId: "def-1", initialStatus: null });
+    expect(applyUpdate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ initialStatus: null })
+    );
+  });
+
   it("falls back to the proposal's own workspace when the payload names none", async () => {
     await run({ propertyDefId: "def-1", uiHints: { displayName: "EK" } });
     expect(applyUpdate).toHaveBeenCalledWith(
