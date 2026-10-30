@@ -251,3 +251,21 @@ describe("MarkdownView — embeds are drawn from the shared model", () => {
     expect(failed).toContain("Try again");
   });
 });
+
+describe("MarkdownView — a ```mermaid fence", () => {
+  const source = "flowchart LR\n  A[Start] --> B{Ok?}";
+
+  it("shows its source until the diagram is drawn, never markup", () => {
+    const out = html(["```mermaid", source, "```"].join("\n"));
+    expect(out).toContain("flowchart LR");
+    expect(out).toContain("A[Start] --&gt; B{Ok?}");
+    expect(out).not.toContain("<img");
+    expect(out).not.toContain("<svg");
+  });
+
+  it("leaves every other fence a code block", () => {
+    const out = html(["```ts", "const a = 1;", "```"].join("\n"));
+    expect(out).toContain("<pre");
+    expect(out).toContain("const a = 1;");
+  });
+});
