@@ -16,6 +16,7 @@ import { playbooksRouter } from "../../playbooks.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import { toViewDigest, VIEWS_DIGEST_NOTE } from "./read-lean.js";
 import { isUuid, resolveProposalId } from "../../hub-protocol/rest/_shared.js";
+import { revisionReplyFields } from "../../hub-protocol/rest/_codecs/proposal.js";
 import { type ProposalRejectionReasonCode } from "@synap-core/types/proposals";
 import { CONTENT_KINDS } from "@synap/database/schema";
 import type {
@@ -889,7 +890,7 @@ export const buildHandlers: McpHandlerMap = {
     // (`computeCanReviewApproval`) and cannot drift apart.
     const { reviseProposal } =
       await import("../../../services/proposals/proposals-service.js");
-    await reviseProposal({
+    const redecision = await reviseProposal({
       proposalId,
       summary: args.summary as string | undefined,
       reasoning: args.reasoning as string | undefined,
@@ -898,7 +899,13 @@ export const buildHandlers: McpHandlerMap = {
       // The author rung: authorizes an agent amending the proposal IT authored.
       ...(agentUserId ? { actingAgentUserId: agentUserId } : {}),
     });
-    return ok({ success: true, proposalId });
+    // Say where it stands now: an agent's own graph revision is decided again
+    // and may have been applied (status `auto_approved`, with its ids).
+    return ok({
+      success: true,
+      proposalId,
+      ...revisionReplyFields(redecision),
+    });
   },
   synap_reject_proposal: async (
     ctx: McpToolContext

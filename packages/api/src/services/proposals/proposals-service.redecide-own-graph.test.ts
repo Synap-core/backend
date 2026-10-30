@@ -24,6 +24,8 @@ const h = vi.hoisted(() => ({
   row: undefined as Record<string, unknown> | undefined,
   written: [] as Array<Record<string, unknown>>,
   redecided: [] as Array<{ input: unknown; writtenBefore: number }>,
+  /** What the fake re-decision answers. */
+  redecision: null as unknown,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -71,7 +73,7 @@ vi.mock(
 vi.mock("./redecide-graph-revision.js", () => ({
   redecideOwnGraphRevision: vi.fn(async (input: unknown) => {
     h.redecided.push({ input, writtenBefore: h.written.length });
-    return null;
+    return h.redecision;
   }),
 }));
 
@@ -89,6 +91,7 @@ const operations = [
 beforeEach(() => {
   h.written.length = 0;
   h.redecided.length = 0;
+  h.redecision = null;
   h.row = {
     data: { operations, source: "agent", graphSource: "capture" },
     status: "pending",
@@ -147,5 +150,33 @@ describe("mergeProposalRevision — an agent's own revision is decided again", (
     });
     expect(h.written).toHaveLength(1);
     expect(h.redecided).toEqual([]);
+  });
+
+  it("hands the re-decision back to the revise door (it says what happened)", async () => {
+    const applied = {
+      outcome: "applied",
+      proposalId: PROPOSAL,
+      materialized: { entityIds: ["ent-1"] },
+    };
+    h.redecision = applied;
+    await expect(
+      mergeProposalRevision({
+        proposalId: PROPOSAL,
+        actorId: OWNER,
+        actingAgentUserId: AGENT,
+        patch: { kind: "inner", fields: { operations } },
+      })
+    ).resolves.toEqual(applied);
+  });
+
+  it("answers null when nothing was re-decided", async () => {
+    await expect(
+      mergeProposalRevision({
+        proposalId: PROPOSAL,
+        actorId: OWNER,
+        actingAgentUserId: AGENT,
+        summary: "clearer words",
+      })
+    ).resolves.toBeNull();
   });
 });
