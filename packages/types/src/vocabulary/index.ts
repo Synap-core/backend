@@ -1418,14 +1418,16 @@ export const PROPOSAL_KIND_LABELS: Readonly<Record<string, string>> = {
  *
  * These are the three DB kinds behind the one word, named for what they are
  * to a user: a `skill` is instructions an agent follows, a `capability` is an
- * action the pod can run, a `tool` row is a connected integration (the
+ * installed package of actions, a `tool` row is a connected integration (the
  * `tools` table holds integrations — CLAUDE.md "tools (integrations)").
+ * "Action" is NOT a kind here: it means one of a capability's verbs, and only
+ * that, everywhere (founder, 2026-10-30, decision 79f5b7a2).
  * Anything else humanizes; it is never "Tool", which would say nothing on a
  * page already titled as one.
  */
 export const TOOL_KIND_LABELS: Readonly<Record<string, string>> = {
   skill: "Skill",
-  capability: "Action",
+  capability: "Capability",
   tool: "Integration",
 };
 

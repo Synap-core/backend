@@ -69,8 +69,8 @@ describe("bounceSummary", () => {
   });
 
   it("never says the web shows the word the bounced kind reads as", () => {
-    // A skill and a tool read as "Tool", like a (hosted) capability.
-    for (const type of ["tool", "skill"]) {
+    // A tool reads as "Tool", like a (hosted) capability or skill.
+    for (const type of ["tool"]) {
       expect(bounceSummary(type)).toBe(
         "The web shows entities, views, rules, sessions, templates, runs, agents, documents, channels and goals. Open this one in the Synap app for the full surface."
       );

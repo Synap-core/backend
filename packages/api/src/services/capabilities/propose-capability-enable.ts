@@ -103,16 +103,16 @@ export const ENABLE_REQUESTED_NOT_RUN =
   "Nothing ran: this needs a capability that is installed but not enabled. A request to enable it is waiting for review — run the action again after it is approved.";
 
 export const ENABLE_REQUEST_FAILED_NOT_RUN =
-  "Nothing ran: this needs a capability that is installed but not enabled, and the request to enable it could not be filed. Ask the user to enable it (Settings → Capabilities).";
+  "Nothing ran: this needs a capability that is installed but not enabled, and the request to enable it could not be filed. Ask the user to enable it (Tools).";
 
 /** A human's refusal: nothing ran, and where they fix it. */
 export function notEnabledHumanMessage(name: string): string {
-  return `Nothing ran: "${name}" is installed but not enabled. Enable it in Settings → Capabilities, then run it again.`;
+  return `Nothing ran: "${name}" is installed but not enabled. Enable it in Tools, then run it again.`;
 }
 
 /** A synthesized capability (no row): there is nothing to enable. */
 export function notInstalledMessage(name: string): string {
-  return `Nothing ran: "${name}" has no installed capability on this pod that could be enabled. Ask the user to install or connect it (Settings → Capabilities).`;
+  return `Nothing ran: "${name}" has no installed capability on this pod that could be enabled. Ask the user to install or connect it (Marketplace).`;
 }
 
 const kindOf = (c: CapabilityRef) => c.kind ?? "skill";
