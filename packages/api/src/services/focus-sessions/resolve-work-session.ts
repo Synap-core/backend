@@ -48,6 +48,7 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import { workClockIn } from "@synap-core/types/work-clock";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
 import { ambientWorkWhere } from "./session-kind.js";
 
@@ -122,9 +123,10 @@ async function checkOwnership(
  * working in (B4 2026-10-21). The pile of open sessions nobody closed (93 on
  * the founder's pod, 30 untouched for days) made every write say "several
  * sessions are open" — a number that meant nothing. "Touched" is the receipt
- * window's own definition (`sessionLastActivitySql`).
+ * window's own definition (`sessionLastActivitySql`). The work clock's `stale`
+ * rung: untouched longer, a session is presumed abandoned.
  */
-export const UNCLAIMED_TOUCHED_WITHIN_HOURS = 24;
+export const UNCLAIMED_TOUCHED_WITHIN_HOURS = workClockIn("stale", "hours");
 
 /** The rung-3 population: open, unclaimed WORK sessions touched recently. */
 function unclaimedOpenWorkWhere(userId: string) {

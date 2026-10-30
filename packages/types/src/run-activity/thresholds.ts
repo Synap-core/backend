@@ -4,6 +4,8 @@
  * and "stuck" mean the same thing on the server and in the console.
  */
 
+import { workClockIn } from "../work-clock/index.js";
+
 /**
  * Days a failure counts as CURRENT for health: a flow is "failing" when it
  * has a failed run in this window, never on lifetime runs (lifetime stays on
@@ -15,8 +17,11 @@
  */
 export const RECENT_FAILURE_WINDOW_DAYS = 7;
 
-/** Hours a run may stay `running` before it is "stuck". */
-export const DEFAULT_STUCK_THRESHOLD_HOURS = 24;
+/**
+ * Hours a run may stay `running` before it is "stuck": the work clock's
+ * `stale` rung (a run this old is presumed abandoned).
+ */
+export const DEFAULT_STUCK_THRESHOLD_HOURS = workClockIn("stale", "hours");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
