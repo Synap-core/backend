@@ -98,13 +98,32 @@ describe("content is drawn, never injected", () => {
     expect(hits.map((h) => h.path)).toEqual([]);
   });
 
-  it("loads no image from content (no <img> in the renderer)", () => {
+  it("loads no image from content (the renderer's one <img> is a diagram's blob)", () => {
+    // A ```mermaid fence is drawn by the console's own mermaid, strict, as an
+    // SVG Blob in an <img>: an image document runs no script and loads no
+    // outside address. That file is the only <img> in the renderer, and its
+    // only source is the object URL of that Blob.
+    const fence = join("app", "_lib", "object", "content", "mermaid-fence.tsx");
+    const model = join("app", "_lib", "object", "content", "mermaid-model.ts");
     const renderer = FILES.filter(
       (f) => f.path.startsWith(CONTENT_DIR) && !f.test
     );
     expect(renderer.length).toBeGreaterThan(2);
     const hits = renderer.filter((f) => /<img\b/.test(f.body));
-    expect(hits.map((h) => h.path)).toEqual([]);
+    expect(hits.map((h) => h.path)).toEqual([fence]);
+    const fenceBody = FILES.find((f) => f.path === fence)!.body;
+    expect(fenceBody.match(/\bsrc=/g)).toEqual(["src="]);
+    expect(fenceBody).toContain("src={state.url}");
+    expect(fenceBody.match(/status: "ready", url\b/g)).toEqual([
+      'status: "ready", url',
+    ]);
+    expect(fenceBody).toContain(
+      'URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }))'
+    );
+    const modelBody = FILES.find((f) => f.path === model)!.body;
+    expect(modelBody).toContain('securityLevel: "strict"');
+    expect(modelBody).toContain("htmlLabels: false");
+    expect(modelBody).toContain("flowchart: { htmlLabels: false }");
   });
 
   it("runs HTML only in the one frame, never same-origin", () => {
@@ -168,9 +187,17 @@ describe("content is drawn, never injected", () => {
     // only allowlisted rasters and never loads an outside address. A second
     // `<img>` (or `next/image`, which would fetch and cache a signed URL on
     // the console's server) would skip all three.
+    // The diagram's blob image (pinned above) is the one other site.
     const door = join("app", "_lib", "media", "media-view.tsx");
+    const diagram = join(
+      "app",
+      "_lib",
+      "object",
+      "content",
+      "mermaid-fence.tsx"
+    );
     const imgs = FILES.filter((f) => !f.test && /<img\b/.test(f.body));
-    expect(imgs.map((f) => f.path)).toEqual([door]);
+    expect(imgs.map((f) => f.path).sort()).toEqual([door, diagram].sort());
     const nextImage = FILES.filter((f) =>
       /["']next\/image["']|\bnew Image\(/.test(f.body)
     );

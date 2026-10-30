@@ -9,7 +9,8 @@
  * every node becomes an element React escapes. There is no HTML path at all:
  * raw HTML in the source shows as the text it is, a link is followed only when
  * `contentHref` allows it, and an image is never loaded — the reader sees its
- * description and, for a web address, a link to open it.
+ * description and, for a web address, a link to open it. A ```mermaid fence is
+ * drawn by `MermaidFence` as an inert `<img src=blob:>`.
  */
 
 import { Fragment, useMemo, type ReactNode } from "react";
@@ -27,6 +28,8 @@ import {
   EXTERNAL_REL,
   type ContentMeasure,
 } from "./markdown-model";
+import { MermaidFence } from "./mermaid-fence";
+import { isMermaidFence } from "./mermaid-model";
 
 /** The loose shape every node shares — what the fallthrough reads. */
 interface AnyNode {
@@ -197,6 +200,8 @@ function renderNode(node: MdastNode): ReactNode {
         <li className="[&>p]:mb-1 [&>p:last-child]:mb-0">{children(node)}</li>
       );
     case "code":
+      if (isMermaidFence(node.lang))
+        return <MermaidFence source={node.value} />;
       return (
         <pre className="overflow-x-auto rounded-lg bg-foreground/[0.05] px-3 py-2.5 font-mono text-[12.5px] leading-relaxed text-foreground/90">
           <code>{node.value}</code>
