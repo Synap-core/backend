@@ -65,6 +65,7 @@ import {
 // `block-output.ts` has always imported this module statically.
 import {
   findUnreachableOutputRefs,
+  isOutputRefVisible,
   unreachableOutputRefError,
 } from "./assert-output-ref-visible.js";
 import {
@@ -573,6 +574,27 @@ export async function createFocusSession(
     throw new TRPCError({
       code: "NOT_FOUND",
       message: `No channel ${channelId} you can access`,
+    });
+  }
+
+  // The SUBJECT is the same kind of pointer: the room resolves its live title
+  // by bare id, and the project ladder below reads its filing. A subject the
+  // caller cannot already see is refused here, NOT_FOUND, through the SAME
+  // predicate an output's ref goes through (`isOutputRefVisible`), for every
+  // start door. The tRPC and Hub doors used to floor it themselves and MCP
+  // `start_session` did not, so an agent could anchor a session on any entity
+  // id in the pod and read its title back: a read oracle.
+  if (
+    subjectEntityId &&
+    !(await isOutputRefVisible({
+      userId,
+      kind: "entity",
+      refId: subjectEntityId,
+    }))
+  ) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `No entity ${subjectEntityId} you can access`,
     });
   }
 
