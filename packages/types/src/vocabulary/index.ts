@@ -54,6 +54,10 @@ import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
 import type {
+  PackageFieldState,
+  PackageUpdateNeeds,
+} from "../package-updates/index.js";
+import type {
   CheckVerdict,
   RepoMainHealth,
   ShipFold,
@@ -2374,6 +2378,72 @@ export function resolveTemplateStepLabel(
     (TEMPLATE_STEP_LABELS as Readonly<Record<string, string>>)[step] ??
     humanizeToken(step)
   );
+}
+
+/**
+ * What a package update does to ONE field, as the words of its mark — the
+ * state the pod's plan computes (`@synap-core/types/package-updates`). One
+ * table for pod admin, the CLI, Relay and MCP, so a field never reads two ways.
+ * Keyed by `PackageFieldState`: a new state is a BUILD error until it is named.
+ */
+export const PACKAGE_FIELD_STATE_LABELS: Readonly<
+  Record<PackageFieldState, string>
+> = {
+  updates: "Updates",
+  yours: "Stays yours",
+  both: "Both changed",
+  same: "Same",
+};
+
+/** A field state's words; an unknown state humanizes rather than leaks. */
+export function resolvePackageFieldStateLabel(
+  state: PackageFieldState | (string & {})
+): string {
+  return (
+    (PACKAGE_FIELD_STATE_LABELS as Readonly<Record<string, string>>)[state] ??
+    humanizeToken(state)
+  );
+}
+
+/** What a package update needs from a person, as the words of its group. */
+export const PACKAGE_UPDATE_NEEDS_LABELS: Readonly<
+  Record<PackageUpdateNeeds, string>
+> = {
+  consent: "Needs your OK",
+  choice: "Needs your choice",
+  review: "Updates on its own",
+  nothing: "Yours, nothing to update",
+};
+
+/** An update's group words; an unknown value humanizes rather than leaks. */
+export function resolvePackageUpdateNeedsLabel(
+  needs: PackageUpdateNeeds | (string & {})
+): string {
+  return (
+    (PACKAGE_UPDATE_NEEDS_LABELS as Readonly<Record<string, string>>)[needs] ??
+    humanizeToken(needs)
+  );
+}
+
+/**
+ * A package field's name for a person. The row field names the install wrote
+ * are code (`body`, `flowDefinition`); these are the ones whose humanized form
+ * would mislead. Every other key humanizes.
+ */
+const PACKAGE_FIELD_LABELS: Readonly<Record<string, string>> = {
+  body: "Instructions",
+  code: "Code",
+  flowDefinition: "Steps",
+  triggerConfig: "Trigger",
+  providerSpec: "Provider",
+  config: "Settings",
+  query: "Query",
+  executionMode: "Run mode",
+  timeoutSeconds: "Time limit",
+};
+
+export function resolvePackageFieldLabel(key: string): string {
+  return PACKAGE_FIELD_LABELS[key] ?? humanizeToken(key);
 }
 
 /**
