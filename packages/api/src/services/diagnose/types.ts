@@ -77,6 +77,13 @@ export type ObjectKind =
   | "playbook"
   | "automation"
   /**
+   * A GOAL (`project_tracks`; people say "Goal", the machine name stays
+   * `track`). Every `/open/<id>` an agent hands out for a goal resolved to
+   * `unknown` — pod-admin said "Nothing here" for a live goal, and the apps'
+   * bare-id links dead-ended — though each app has a `track` door.
+   */
+  | "track"
+  /**
    * A completed external-dispatch send (messaging.external.send / provider
    * proxy call) — resolved ONLY via its `correlationId` (there is no separate
    * row; see resolve-object-kind.ts's correlationId fallback). Wave 2 of the

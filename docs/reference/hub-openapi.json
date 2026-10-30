@@ -5252,7 +5252,7 @@
         "properties": {
           "type": {
             "type": "string",
-            "description": "Browser-routable label for the given ID — an `object-nav.ts` case label, one of: agent, automation, capability, channel, document, entity, playbook, project, proposal, run, session, skill, tool, view, workspace, unknown. Never a free string: see resolve-browser-route.ts."
+            "description": "Browser-routable label for the given ID — an `object-nav.ts` case label, one of: agent, automation, capability, channel, document, entity, playbook, project, proposal, run, session, skill, tool, track, view, workspace, unknown. Never a free string: see resolve-browser-route.ts."
           },
           "id": {
             "type": "string",

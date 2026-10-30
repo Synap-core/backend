@@ -64,7 +64,7 @@ describe("bounceReceipt — diagnose.resolveOpen names the bounced object", () =
 describe("bounceSummary", () => {
   it("names every hosted kind, from HOST_TYPES", () => {
     expect(bounceSummary("project")).toBe(
-      "The web shows entities, views, rules, sessions, templates, runs, tools, agents, documents and channels. Open this one in the Synap app for the full surface."
+      "The web shows entities, views, rules, sessions, templates, runs, tools, agents, documents, channels and goals. Open this one in the Synap app for the full surface."
     );
   });
 
@@ -72,7 +72,7 @@ describe("bounceSummary", () => {
     // A skill and a tool read as "Tool", like a (hosted) capability.
     for (const type of ["tool", "skill"]) {
       expect(bounceSummary(type)).toBe(
-        "The web shows entities, views, rules, sessions, templates, runs, agents, documents and channels. Open this one in the Synap app for the full surface."
+        "The web shows entities, views, rules, sessions, templates, runs, agents, documents, channels and goals. Open this one in the Synap app for the full surface."
       );
     }
   });

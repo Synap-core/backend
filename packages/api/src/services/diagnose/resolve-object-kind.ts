@@ -44,6 +44,7 @@ import {
   events,
   workspaces,
   projects,
+  projectTracks,
   channels,
   playbooks,
   automations,
@@ -128,6 +129,9 @@ export const PROBE_ORDER: ObjectKind[] = [
   // which opens a profile-entity page that can never load the project (the
   // same precedence the public `/open/:id` bounce has always encoded).
   "project",
+  // A GOAL id (`project_tracks`). Disjoint table; beside its project, above
+  // the broad `entity` catch like every specific probe.
+  "track",
   // A CHANNEL id (rooms, threads, feeds). Disjoint table; sits with the other
   // specific probes above the broad `entity` catch.
   "channel",
@@ -471,6 +475,37 @@ export async function resolveObjectKind(
           .where(
             and(
               eq(projects.id, id),
+              projectVisibleWhere(AccessContext.operator({ userId }))
+            )
+          )
+          .limit(1);
+        return r
+          ? {
+              displayName: r.name ?? null,
+              workspaceId: r.workspaceId ?? null,
+              updatedAt: r.updatedAt ?? null,
+            }
+          : null;
+      },
+    },
+    {
+      kind: "track",
+      run: async () => {
+        const [r] = await db
+          .select({
+            name: projectTracks.name,
+            workspaceId: projects.workspaceId,
+            updatedAt: projectTracks.updatedAt,
+          })
+          .from(projectTracks)
+          .innerJoin(projects, eq(projects.id, projectTracks.projectId))
+          // A goal is exactly as visible as its project: the registered
+          // `project_tracks` VisibilityRule (access/registry.ts) is this same
+          // `projectVisibleWhere`, so the prober never names a goal
+          // `tracks.get` would refuse.
+          .where(
+            and(
+              eq(projectTracks.id, id),
               projectVisibleWhere(AccessContext.operator({ userId }))
             )
           )

@@ -61,6 +61,8 @@ export const TYPED_OPEN_KINDS = [
   // 302 and on the bounce (`OPEN_FLOW_TYPE_VALUES`). Without it the web page
   // asks the resolver and the app defaults to `automation`.
   "run",
+  // A goal (`project_tracks`): the prober resolves it, the apps open it.
+  "track",
 ] as const;
 
 export type TypedOpenKind = (typeof TYPED_OPEN_KINDS)[number];
@@ -120,6 +122,7 @@ export const WEB_HOSTED_OPEN_KINDS = [
   "agent",
   "document",
   "channel",
+  "track",
 ] as const;
 export type WebHostedOpenKind = (typeof WEB_HOSTED_OPEN_KINDS)[number];
 

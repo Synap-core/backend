@@ -25,6 +25,7 @@ import { EntityView } from "../../_views/entity-view";
 import { PlaybookView } from "../../_views/playbook-view";
 import { RunView } from "../../_views/run-view";
 import { SessionView } from "../../_views/session-view";
+import { TrackView } from "../../_views/track-view";
 import { ViewView } from "../../_views/view-view";
 
 interface SurfaceProps {
@@ -112,6 +113,8 @@ function OpenSurfaceBody({ parsed, flowType, viewerIsPodAdmin }: SurfaceProps) {
           return <DocumentView id={parsed.id} />;
         case "channel":
           return <ChannelView id={parsed.id} />;
+        case "track":
+          return <TrackView id={parsed.id} />;
       }
   }
 }

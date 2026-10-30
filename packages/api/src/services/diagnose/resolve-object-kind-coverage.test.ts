@@ -81,6 +81,7 @@ import {
   channels,
   playbooks,
   projects,
+  projectTracks,
   documents,
   entities,
   events,
@@ -315,6 +316,7 @@ describe("resolveObjectKind — every PROBE_ORDER kind actually resolves", () =>
       "agent",
       "workspace",
       "project",
+      "track",
       "channel",
       "view",
       "document",
@@ -352,6 +354,18 @@ describe("resolveObjectKind — the definition/container kinds the public /open 
       kind: "project",
       id: ID,
       displayName: "Synap",
+    });
+  });
+
+  it("track: a `project_tracks` row (a goal) resolves to kind 'track'", async () => {
+    mockDb.__push(projectTracks, [
+      { name: "Intent-first work model", workspaceId: "ws-1" },
+    ]);
+    expect(await resolveObjectKind(ID, USER_ID)).toMatchObject({
+      kind: "track",
+      id: ID,
+      displayName: "Intent-first work model",
+      workspaceId: "ws-1",
     });
   });
 
