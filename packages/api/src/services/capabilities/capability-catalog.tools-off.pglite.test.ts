@@ -104,6 +104,8 @@ beforeAll(async () => {
   );
   const byName = new Map(tables.map((t) => [getTableConfig(t).name, t]));
   for (const t of byName.values()) await h.client!.exec(ddlFor(t));
+  // A pod-wide row is visible to a known pod user (`podReaderWhere`).
+  await q(`insert into users (id) values ($1)`, [VIEWER]);
   // Every action on in both; only Hetzner's tool row is off.
   await container(HETZNER, "Hetzner Cloud");
   await tool(HETZNER_TOOL, "hetzner_cloud", false, HETZNER);

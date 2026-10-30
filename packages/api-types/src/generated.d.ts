@@ -13324,6 +13324,22 @@ export interface CapabilityCard {
 		tools: string[];
 	};
 	/**
+	 * Its member TOOL rows the run gate refuses (`approvalRefusesRun` on
+	 * `tools.approved`, the same predicate `gateCapabilityExecution` denies on),
+	 * so every action that calls through one is refused "installed but not
+	 * enabled" however many of its verbs are on. Present only when one is off.
+	 *
+	 * Founder dogfood 2026-10-30: Hetzner Cloud read "6 of 6 on" while its
+	 * `hetzner_cloud` row had never been approved (the CLI's one-shot approve
+	 * timed out), and the run failed with nothing on any screen to turn on.
+	 * Turned on by `tools.setApproved` / `POST /tools/:id/approve`, a person's
+	 * step (an agent is refused).
+	 */
+	toolsOff?: Array<{
+		id: string;
+		name: string;
+	}>;
+	/**
 	 * The template's INSTALL params — what the caller must supply to apply it (e.g.
 	 * a vault credential, a baseUrl). Surfaced so the CLI can prompt for them and
 	 * apply WITH params (which wires the credential into the tool), instead of a
