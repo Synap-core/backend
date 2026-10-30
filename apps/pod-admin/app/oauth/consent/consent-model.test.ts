@@ -46,6 +46,11 @@ import {
   newAsks,
   newAsksAllowed,
   allowNewAsks,
+  initialPodWide,
+  newPodWideAsks,
+  podWideLabel,
+  podWideToApproved,
+  togglePodWide,
   type OfferedPermission,
   type Selection,
 } from "./consent-model";
@@ -204,7 +209,7 @@ describe("the reach line under the space choice", () => {
 
   it("says what a member sees, and that nothing else is reached (rv-ui U1)", () => {
     expect(SPACE_REACH_NOTE).toBe(
-      "It sees what a member of these spaces sees: what is stored there, plus the people, companies and other records of your pod that have a role there. Nothing else in your pod."
+      "It sees what a member of these spaces sees: what is stored there, plus the people, companies and other records of your pod that have a role there or were filed there. Nothing else in your pod."
     );
     expect(SPACE_REACH_NOTE).not.toContain("\u2014");
   });
@@ -1036,7 +1041,7 @@ describe("where a row is given", () => {
     ).toBe("in Brand, Builder and 3 more spaces");
   });
 
-  it("a pod-wide kind's note says it reaches the app only through a role in a given space", () => {
+  it("a pod-wide kind's note says it reaches the app only through a role in a given space, or when filed there", () => {
     expect(
       podWideNote(
         row(
@@ -1045,7 +1050,7 @@ describe("where a row is given", () => {
         )
       )
     ).toBe(
-      "People kept across your whole pod, not in one space, reach it only through a role in a space you give it."
+      "People kept across your whole pod, not in one space, reach it only through a role in a space you give it, or when filed there."
     );
   });
 });
@@ -1346,6 +1351,86 @@ describe("adding and removing roles on records", () => {
     const approved = toApproved(initialSelection(ROLES, []), ROLES);
     expect(approved.map((a) => a.permission)).toEqual(
       ROLES.map((o) => o.permission)
+    );
+  });
+});
+
+describe("pod-wide reads (decision e1b59d38 B)", () => {
+  const POD_WIDE = [
+    { permission: "entity.decision.read" },
+    { permission: "entity.finding.read" },
+  ];
+
+  it("first consent ticks every pod-wide read; Allow sends each with no space", () => {
+    const sel = initialPodWide(POD_WIDE, []);
+    expect(podWideToApproved(sel, POD_WIDE)).toEqual([
+      { permission: "entity.decision.read", workspaceId: null },
+      { permission: "entity.finding.read", workspaceId: null },
+    ]);
+  });
+
+  it("re-consent ticks only what was given pod-wide before: a per-space grant of the same permission does not count", () => {
+    const current = [
+      { permission: "entity.decision.read", workspaceId: null },
+      { permission: "entity.finding.read", workspaceId: "brand" },
+    ];
+    expect([...initialPodWide(POD_WIDE, current)]).toEqual([
+      "entity.decision.read",
+    ]);
+    expect(newPodWideAsks(POD_WIDE, current)).toEqual([
+      { permission: "entity.finding.read" },
+    ]);
+    expect(newPodWideAsks(POD_WIDE, [])).toEqual([]);
+  });
+
+  it("a toggle never adds a read the offer does not hold", () => {
+    const none = new Set<string>();
+    expect([...togglePodWide(none, POD_WIDE, "entity.task.update")]).toEqual(
+      []
+    );
+    const one = togglePodWide(none, POD_WIDE, "entity.decision.read");
+    expect([...one]).toEqual(["entity.decision.read"]);
+    expect([...togglePodWide(one, POD_WIDE, "entity.decision.read")]).toEqual(
+      []
+    );
+    expect([
+      ...togglePodWide(one, POD_WIDE, "entity.decision.read", true),
+    ]).toEqual(["entity.decision.read"]);
+    // Whatever the selection holds, Allow sends only what is on offer.
+    expect(
+      podWideToApproved(new Set(["entity.task.update"]), POD_WIDE)
+    ).toEqual([]);
+  });
+
+  it("the per-space selection never carries a pod-wide pair", () => {
+    const offer: OfferedPermission[] = [
+      {
+        permission: "entity.task.read",
+        workspaces: [{ workspaceId: "brand", workspaceName: "Brand" }],
+      },
+    ];
+    const sel = initialSelection(offer, [
+      { permission: "entity.task.read", workspaceId: null },
+    ]);
+    expect(toApproved(sel, offer)).toEqual([]);
+  });
+
+  it("names a pod-wide read as such", () => {
+    expect(podWideLabel("entity.decision.read")).toBe(
+      "Read decisions, everywhere in your pod"
+    );
+  });
+
+  it("Allow is blocked only when nothing at all is ticked", () => {
+    const offer: OfferedPermission[] = [];
+    expect(
+      allowBlockedReason(offer, new Set(), { offered: 2, ticked: 1 })
+    ).toBeNull();
+    expect(
+      allowBlockedReason(offer, new Set(), { offered: 2, ticked: 0 })
+    ).toBe("Turn on at least one thing it asks for.");
+    expect(allowBlockedReason(offer, new Set())).toBe(
+      "You have no space to give it yet."
     );
   });
 });

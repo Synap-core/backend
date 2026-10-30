@@ -48,6 +48,8 @@ export interface StoredClient {
   requestedReasons?: Record<string, string>;
   /** CIMD only: the workspace-template slugs the document declares (0338b). */
   requestedTemplates?: string[];
+  /** CIMD only: the permissions the document declares POD-WIDE (0379). */
+  requestedPodWide?: string[];
   clientUri?: string | null;
   initiateLoginUri?: string | null;
   metadataFetchedAt?: Date | null;
@@ -65,6 +67,7 @@ export interface CimdClientInput {
   requestedPermissions: string[];
   requestedReasons: Record<string, string>;
   requestedTemplates: string[];
+  requestedPodWide: string[];
   clientUri: string | null;
   initiateLoginUri: string | null;
   metadataFetchedAt: Date;
@@ -109,10 +112,13 @@ export interface IssuedCodeInput {
   stepUp?: boolean;
 }
 
-/** One permission in one space — the shape of `apps.approved_requests`. */
+/**
+ * One permission in one space — the shape of `apps.approved_requests`; a null
+ * space is a pod-wide read (`isPodWideReadPermission`, decision e1b59d38).
+ */
 export interface AppGrantRequest {
   permission: string;
-  workspaceId: string;
+  workspaceId: string | null;
 }
 
 export interface ClaimedCode {
@@ -186,6 +192,7 @@ export async function upsertCimdClient(
     requestedPermissions: input.requestedPermissions,
     requestedReasons: input.requestedReasons,
     requestedTemplates: input.requestedTemplates,
+    requestedPodWide: input.requestedPodWide,
     clientUri: input.clientUri,
     initiateLoginUri: input.initiateLoginUri,
     metadataFetchedAt: input.metadataFetchedAt,

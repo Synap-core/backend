@@ -67,7 +67,8 @@ const PublicId = z.string().min(1).max(200);
 /** One (permission, space) pair of an approval, as the doors send it. */
 const ApprovedPair = z.object({
   permission: z.string().min(1).max(120),
-  workspaceId: z.string().uuid(),
+  // null: a pod-wide read (decision e1b59d38 "B"), narrowed like any pair.
+  workspaceId: z.string().uuid().nullable(),
 });
 
 /**

@@ -17,11 +17,13 @@ import {
   actsAsHeadline,
   allowBlockedReason,
   allowNewAsks,
+  initialPodWide,
   initialSelection,
   newAsks,
   SPACE_REACH_NOTE,
   toggle,
   type OfferedPermission,
+  type PodWideSelection,
   type Selection,
 } from "./consent-model";
 
@@ -64,13 +66,19 @@ const APP: App = {
       reason: null,
     },
   ],
+  podWide: [],
   approved: [],
   templates: [],
   podWideKinds: [],
   ignoredScopes: [],
 };
 
-const html = (selection: Selection, customize = true, app: App = APP) =>
+const html = (
+  selection: Selection,
+  customize = true,
+  app: App = APP,
+  podWideSelection: PodWideSelection = new Set()
+) =>
   render(
     <Card>
       <AppConsent
@@ -83,12 +91,17 @@ const html = (selection: Selection, customize = true, app: App = APP) =>
         onSetLevel={() => {}}
         onToggleObjectSpace={() => {}}
         onAllowNewAsks={() => {}}
+        podWideSelection={podWideSelection}
+        onTogglePodWide={() => {}}
         customize={customize}
         onCustomize={() => {}}
         onSpaceCreated={() => {}}
         busy={false}
         step={{ kind: "idle" }}
-        blockedReason={allowBlockedReason(app.permissions, selection)}
+        blockedReason={allowBlockedReason(app.permissions, selection, {
+          offered: app.podWide.length,
+          ticked: podWideSelection.size,
+        })}
         onDecide={() => {}}
       />
     </Card>
@@ -436,5 +449,105 @@ describe("AppConsent: a re-consent says what is new, first", () => {
     );
     expect(block(out)).toBe("");
     expect(out).not.toContain("New since you last allowed");
+  });
+});
+
+describe("pod-wide reads (decision e1b59d38 B): their own section, everywhere in your pod", () => {
+  const DEVPLANE: App = {
+    ...APP,
+    permissions: [
+      {
+        permission: "entity.task.read",
+        workspaces: [BRAND],
+        reason: null,
+      },
+    ],
+    podWide: [
+      { permission: "entity.decision.read", reason: "Show every decision." },
+      { permission: "entity.finding.read", reason: null },
+    ],
+  };
+  /** The pod-wide section, or "" when it is not on screen. */
+  const section = (out: string) => {
+    const at = out.indexOf("data-pod-wide");
+    return at === -1 ? "" : out.slice(at, out.indexOf("</section>", at));
+  };
+  const box = (out: string, name: string) => sectionBox(out, name);
+
+  it("first consent: one tick per read, each named everywhere in your pod, all ticked", () => {
+    const pw = initialPodWide(DEVPLANE.podWide, []);
+    const out = html(
+      initialSelection(DEVPLANE.permissions, []),
+      false,
+      DEVPLANE,
+      pw
+    );
+    const s = section(out);
+    expect(s).toContain("Everywhere in your pod");
+    expect(s).toContain("entity.decision.read");
+    expect(s).toContain("Show every decision.");
+    expect(s).toContain("It cannot change them");
+    expect(box(out, "Read decisions, everywhere in your pod")).toContain(
+      'data-selected="true"'
+    );
+    expect(box(out, "Read findings, everywhere in your pod")).toContain(
+      'data-selected="true"'
+    );
+    // Never offered per space: no space checkbox or row names it.
+    expect(out).not.toContain('aria-label="Read decisions in Brand"');
+  });
+
+  it("shown in Customize too, and unticked boxes read unticked", () => {
+    const out = html(new Set(), true, DEVPLANE, new Set());
+    expect(section(out)).toContain("Everywhere in your pod");
+    expect(box(out, "Read decisions, everywhere in your pod")).not.toContain(
+      "data-selected"
+    );
+  });
+
+  it("only pod-wide reads ticked: Allow may be pressed", () => {
+    const out = html(
+      new Set(),
+      false,
+      DEVPLANE,
+      new Set(["entity.decision.read"])
+    );
+    expect(out).not.toContain("Turn on at least one thing it asks for.");
+    const none = html(new Set(), false, DEVPLANE, new Set());
+    expect(none).toContain("Turn on at least one thing it asks for.");
+  });
+
+  it("re-consent: a pod-wide read given before stays ticked; a new one is named under New since you last allowed, off", () => {
+    const again: App = {
+      ...DEVPLANE,
+      approved: [
+        { permission: "entity.task.read", workspaceId: "brand" },
+        { permission: "entity.decision.read", workspaceId: null },
+      ],
+    };
+    const pw = initialPodWide(again.podWide, again.approved);
+    expect([...pw]).toEqual(["entity.decision.read"]);
+    const out = html(
+      initialSelection(again.permissions, again.approved),
+      false,
+      again,
+      pw
+    );
+    const at = out.indexOf("data-new-asks");
+    expect(at).toBeGreaterThan(-1);
+    const block = out.slice(at, out.indexOf("</section>", at));
+    expect(block).toContain("entity.finding.read");
+    expect(block).toContain("Everywhere in your pod");
+    expect(block).not.toContain("entity.decision.read");
+    expect(box(out, "Read findings, everywhere in your pod")).not.toContain(
+      "data-selected"
+    );
+    expect(box(out, "Read decisions, everywhere in your pod")).toContain(
+      'data-selected="true"'
+    );
+  });
+
+  it("an app that asks for nothing pod-wide shows no such section", () => {
+    expect(section(html(new Set(), false, APP))).toBe("");
   });
 });

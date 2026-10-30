@@ -75,7 +75,8 @@ export type ActsAs = "person" | "agent";
 
 export interface ApprovedPair {
   permission: string;
-  workspaceId: string;
+  /** null: given everywhere in the pod (a pod-wide read, `PodWideOffer`). */
+  workspaceId: string | null;
 }
 
 /** The ticked pairs, keyed `permission\u0000workspaceId`. */
@@ -236,6 +237,8 @@ export function initialSelection(
   const out = new Set<string>();
   if (current.length > 0) {
     for (const c of current) {
+      // A pod-wide pair is the pod-wide section's (`initialPodWide`).
+      if (c.workspaceId === null) continue;
       if (offered(offer, c.permission, c.workspaceId)) {
         out.add(key(c.permission, c.workspaceId));
       }
@@ -399,10 +402,12 @@ export function sectionCheckboxLabel(section: "grants" | "decisions"): string {
  */
 export function allowBlockedReason(
   offer: readonly OfferedPermission[],
-  selection: Selection
+  selection: Selection,
+  podWide: { offered: number; ticked: number } = { offered: 0, ticked: 0 }
 ): string | null {
-  if (toApproved(selection, offer).length > 0) return null;
-  if (offer.every((o) => o.workspaces.length === 0)) {
+  if (toApproved(selection, offer).length > 0 || podWide.ticked > 0)
+    return null;
+  if (podWide.offered === 0 && offer.every((o) => o.workspaces.length === 0)) {
     return "You have no space to give it yet.";
   }
   return "Turn on at least one thing it asks for.";
@@ -493,8 +498,8 @@ export function isTicked(
 export function toApproved(
   selection: Selection,
   offer: readonly OfferedPermission[]
-): ApprovedPair[] {
-  const out: ApprovedPair[] = [];
+): Array<ApprovedPair & { workspaceId: string }> {
+  const out: Array<ApprovedPair & { workspaceId: string }> = [];
   for (const o of offer) {
     for (const w of o.workspaces) {
       if (selection.has(key(o.permission, w.workspaceId))) {
@@ -512,7 +517,7 @@ export function toApproved(
  * there (a pod-wide person or company, or a record of another space).
  */
 export const SPACE_REACH_NOTE =
-  "It sees what a member of these spaces sees: what is stored there, plus the people, companies and other records of your pod that have a role there. Nothing else in your pod.";
+  "It sees what a member of these spaces sees: what is stored there, plus the people, companies and other records of your pod that have a role there or were filed there. Nothing else in your pod.";
 
 /**
  * Whether any permission on offer reads records (entities) of ANY kind: the
@@ -1068,9 +1073,96 @@ export function alsoSeeLine(selection: Selection, row: ConsentObject): string {
 
 /**
  * A pod-wide kind's note (SDK 1.5.1 reach rule): such an entity is in no
- * single space, so the app reaches it only through a role in a space it was
- * given. Grants stay (permission, space) pairs; nothing here is pod-wide.
+ * single space, so a grant in a space reaches it only through a role there,
+ * or when it was filed there (its home space, decision e1b59d38 "A"). An app
+ * that needs the kind everywhere asks for it pod-wide (`PodWideOffer`).
  */
 export function podWideNote(row: ConsentObject): string {
-  return `${row.label} kept across your whole pod, not in one space, reach it only through a role in a space you give it.`;
+  return `${row.label} kept across your whole pod, not in one space, reach it only through a role in a space you give it, or when filed there.`;
+}
+
+// ─── Pod-wide reads (decision e1b59d38 "B", 2026-10-30) ─────────────────────
+
+/** Where a pod-wide read applies, after its verb. */
+export const EVERYWHERE_IN_POD = "everywhere in your pod";
+
+/** The heading of the pod-wide section, and of its entry on the app page. */
+export const POD_WIDE_HEADING = "Everywhere in your pod";
+
+/** Under the pod-wide section: what such a read does, and what it never does. */
+export const POD_WIDE_NOTE =
+  "It reads these in every space and outside any space, as you can. It cannot change them, and it reads nothing else beyond the spaces you give it.";
+
+/**
+ * A permission the app asks for EVERYWHERE in the pod (the server's
+ * `podWide`): a read of one kind, one tick, no space. Never also in the
+ * per-space offer.
+ */
+export interface PodWideOffer {
+  permission: string;
+  reason?: string | null;
+}
+
+/** The ticked pod-wide reads, by permission. */
+export type PodWideSelection = ReadonlySet<string>;
+
+/**
+ * What starts ticked, by the rule of the per-space reads (`initialSelection`):
+ * a first consent ticks every pod-wide read (each is a read); a re-consent
+ * ticks exactly those the person gave pod-wide last time, never a new one.
+ */
+export function initialPodWide(
+  podWide: readonly PodWideOffer[],
+  current: readonly ApprovedPair[]
+): PodWideSelection {
+  if (current.length === 0) return new Set(podWide.map((o) => o.permission));
+  const held = new Set(
+    current.filter((c) => c.workspaceId === null).map((c) => c.permission)
+  );
+  return new Set(podWide.map((o) => o.permission).filter((p) => held.has(p)));
+}
+
+/**
+ * A re-consent's NEW pod-wide asks: on offer, not given pod-wide last time.
+ * Listed with the per-space new asks ("New since you last allowed"), off.
+ */
+export function newPodWideAsks(
+  podWide: readonly PodWideOffer[],
+  current: readonly ApprovedPair[]
+): PodWideOffer[] {
+  if (current.length === 0) return [];
+  const held = new Set(
+    current.filter((c) => c.workspaceId === null).map((c) => c.permission)
+  );
+  return podWide.filter((o) => !held.has(o.permission));
+}
+
+/** Tick or untick one pod-wide read. One the offer does not hold is never added. */
+export function togglePodWide(
+  selection: PodWideSelection,
+  podWide: readonly PodWideOffer[],
+  permission: string,
+  on?: boolean
+): PodWideSelection {
+  const next = new Set(selection);
+  const tick = on ?? !next.has(permission);
+  if (!tick) next.delete(permission);
+  else if (podWide.some((o) => o.permission === permission))
+    next.add(permission);
+  return next;
+}
+
+/** What Allow sends for them: `{ permission, workspaceId: null }`, in offer order. */
+export function podWideToApproved(
+  selection: PodWideSelection,
+  podWide: readonly PodWideOffer[]
+): Array<ApprovedPair & { workspaceId: null }> {
+  return podWide
+    .filter((o) => selection.has(o.permission))
+    .map((o) => ({ permission: o.permission, workspaceId: null }));
+}
+
+/** "Read decisions, everywhere in your pod". */
+export function podWideLabel(permission: string): string {
+  return `${permissionLabel(permission)}, ${EVERYWHERE_IN_POD}`;
 }

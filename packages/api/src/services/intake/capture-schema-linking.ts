@@ -15,6 +15,7 @@
  * of the space the capture started in. Deterministic, no model call.
  */
 
+import { isPodWideReadScope } from "@synap/database/schema";
 import { COMMON_STOPWORDS } from "../retrieval/stopwords.js";
 import {
   scoreProfileCatalog,
@@ -70,16 +71,29 @@ export interface LinkableLifecycle {
  * The spaces a request may route into, from its key grant: `null` = not
  * narrowed (no grant, or a scope without a space list); otherwise the union of
  * the scopes' spaces — a key granted on Content and CRM sees exactly those.
+ *
+ * A POD-WIDE READ scope (`isPodWideReadScope`: an app's "read decisions
+ * everywhere", decision e1b59d38 "B") reads its kinds and nothing else, so it
+ * never lifts the space narrowing its grant's other scopes set (facet reach,
+ * capture routing). A grant of such scopes alone keeps today's reading.
  */
 export function grantedWorkspaceIdsOf(
   grant:
-    | { scopes: ReadonlyArray<{ workspaceIds?: readonly string[] | null }> }
+    | {
+        scopes: ReadonlyArray<{
+          permissions: readonly string[];
+          workspaceIds?: readonly string[] | null;
+          projectIds?: readonly string[] | null;
+          entityIds?: readonly string[] | null;
+        }>;
+      }
     | null
     | undefined
 ): ReadonlySet<string> | null {
   if (!grant) return null;
+  const spaced = grant.scopes.filter((scope) => !isPodWideReadScope(scope));
   const out = new Set<string>();
-  for (const scope of grant.scopes) {
+  for (const scope of spaced.length > 0 ? spaced : grant.scopes) {
     if (!scope.workspaceIds) return null;
     for (const id of scope.workspaceIds) out.add(id);
   }

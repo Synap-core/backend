@@ -17,7 +17,11 @@
 
 import { createHash } from "node:crypto";
 import { and, db, eq, inArray, isNull, type KeyGrant } from "@synap/database";
-import { apps, workspaces } from "@synap/database/schema";
+import {
+  apps,
+  isPodWideReadPermission,
+  workspaces,
+} from "@synap/database/schema";
 import { isAppPublicId } from "@synap-core/types/membrane";
 import { summarizeGrant } from "@synap-core/types/grants";
 import {
@@ -211,7 +215,13 @@ export async function appSignInReach(
   const reach = new Set(await getUserWorkspaceIds(personUserId));
   return intersectAppGrant(
     approved,
-    grantable.filter((r) => reach.has(r.workspaceId))
+    grantable.filter((r) =>
+      r.workspaceId === null
+        ? // A pod-wide read is its owner's own (a pod app connection):
+          // never handed to another member signing in.
+          personUserId === app.ownerUserId
+        : reach.has(r.workspaceId)
+    )
   );
 }
 
@@ -232,7 +242,17 @@ export function narrowKeyGrant(
   const ok = new Set(reach.map((r) => `${r.workspaceId} ${r.permission}`));
   const scopes: KeyGrant["scopes"][number][] = [];
   for (const scope of grant.scopes) {
-    for (const ws of scope.workspaceIds ?? []) {
+    // A scope with no space holds the pod-wide reads: kept only as the
+    // reach's own pod-wide pairs (`workspaceId: null`), never anything else.
+    if (!scope.workspaceIds) {
+      if (scope.projectIds || scope.entityIds) continue;
+      const permissions = scope.permissions.filter(
+        (p) => isPodWideReadPermission(p) && ok.has(`null ${p}`)
+      );
+      if (permissions.length > 0) scopes.push({ ...scope, permissions });
+      continue;
+    }
+    for (const ws of scope.workspaceIds) {
       const permissions = scope.permissions.filter((p) => ok.has(`${ws} ${p}`));
       if (permissions.length > 0)
         scopes.push({ ...scope, permissions, workspaceIds: [ws] });
@@ -314,7 +334,10 @@ export async function describeAppSignIn(
   registeredBy: string,
   requests: readonly AppGrantRequest[]
 ): Promise<AppSignInDescription> {
-  const ids = [...new Set(requests.map((r) => r.workspaceId))];
+  // A sign-in is per space: a pod-wide pair never reaches one (`appSignInReach`).
+  const ids = [
+    ...new Set(requests.flatMap((r) => (r.workspaceId ? [r.workspaceId] : []))),
+  ];
   const rows =
     ids.length > 0
       ? await db

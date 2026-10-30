@@ -43,6 +43,7 @@ import {
   decisionsHeading,
   groupByObject,
   holdsSpace,
+  initialPodWide,
   initialSelection,
   invalidRequestHint,
   isTicked,
@@ -50,12 +51,17 @@ import {
   levelControlLabel,
   newAsks,
   newAsksAllowed,
+  newPodWideAsks,
   objectLevel,
   objectSpaceLabel,
   objectSpaces,
   otherSpaces,
   permissionLabel,
+  POD_WIDE_HEADING,
+  POD_WIDE_NOTE,
+  podWideLabel,
   podWideNote,
+  podWideToApproved,
   readsSpaceRecords,
   reasonOf,
   scopeLabel,
@@ -70,12 +76,15 @@ import {
   toApproved,
   toggle,
   toggleObjectSpace,
+  togglePodWide,
   toggleSection,
   withoutSpace,
   type AccessLevel,
   type ActsAs,
   type ConsentObject,
   type OfferedPermission,
+  type PodWideOffer,
+  type PodWideSelection,
   type Selection,
 } from "./consent-model";
 
@@ -210,15 +219,25 @@ export function ConsentForm({
     [offered, spaceHint]
   );
   const [selection, setSelection] = useState<Selection>(new Set());
+  // The pod-wide reads it asks for, ticked apart: one tick each, no space.
+  const [podWideSelection, setPodWideSelection] = useState<PodWideSelection>(
+    new Set()
+  );
   const [customize, setCustomize] = useState(false);
   useEffect(() => {
     if (app) {
       setSelection(
         initialSelection(app.permissions, app.approved, app.templates)
       );
+      setPodWideSelection(initialPodWide(app.podWide, app.approved));
     }
   }, [app]);
-  const approved = app ? toApproved(selection, app.permissions) : [];
+  const approved = app
+    ? [
+        ...toApproved(selection, app.permissions),
+        ...podWideToApproved(podWideSelection, app.podWide),
+      ]
+    : [];
 
   const act = useCallback(
     (approve: boolean) => {
@@ -434,12 +453,29 @@ export function ConsentForm({
                       allowNewAsks(s, app.permissions, asks, allow)
                     )
                   }
+                  podWideSelection={podWideSelection}
+                  onTogglePodWide={(permissions, on) =>
+                    setPodWideSelection((s) =>
+                      permissions.reduce(
+                        (next, p) => togglePodWide(next, app.podWide, p, on),
+                        s
+                      )
+                    )
+                  }
                   customize={customize}
                   onCustomize={setCustomize}
                   onSpaceCreated={() => void context.refetch()}
                   busy={busy}
                   step={step}
-                  blockedReason={allowBlockedReason(app.permissions, selection)}
+                  blockedReason={allowBlockedReason(
+                    app.permissions,
+                    selection,
+                    {
+                      offered: app.podWide.length,
+                      ticked: podWideToApproved(podWideSelection, app.podWide)
+                        .length,
+                    }
+                  )}
                   onDecide={act}
                 />
               )}
@@ -1214,6 +1250,8 @@ export function AppConsent({
   onSetLevel,
   onToggleObjectSpace,
   onAllowNewAsks,
+  podWideSelection,
+  onTogglePodWide,
   customize,
   onCustomize,
   onSpaceCreated,
@@ -1235,6 +1273,13 @@ export function AppConsent({
   onToggleObjectSpace: (row: ConsentObject, workspaceId: string) => void;
   /** "Allow the new ones" pressed (`allowNewAsks` over these asks). */
   onAllowNewAsks: (asks: readonly OfferedPermission[], allow: boolean) => void;
+  /** The pod-wide reads ticked (`app.podWide`, one tick each, no space). */
+  podWideSelection: PodWideSelection;
+  /**
+   * Pod-wide reads pressed (`togglePodWide`): set to `on`, or flipped when
+   * `on` is omitted.
+   */
+  onTogglePodWide: (permissions: readonly string[], on?: boolean) => void;
   /**
    * The full permission × space matrix is shown instead of the rows. Both
    * edit the same `selection`.
@@ -1263,6 +1308,10 @@ export function AppConsent({
     () => newAsks(app.permissions, app.approved, app.templates),
     [app.permissions, app.approved, app.templates]
   );
+  const podWideAsks = useMemo(
+    () => newPodWideAsks(app.podWide, app.approved),
+    [app.podWide, app.approved]
+  );
   const groupId = useId();
   // The server's list of pod-wide kinds, never a hand list.
   const podWide = (row: ConsentObject) =>
@@ -1282,12 +1331,23 @@ export function AppConsent({
   );
   return (
     <>
-      {asks.length > 0 && (
+      {asks.length + podWideAsks.length > 0 && (
         <NewAsks
           asks={asks}
-          allowed={newAsksAllowed(selection, asks)}
+          podWide={podWideAsks}
+          allowed={
+            (asks.length === 0 || newAsksAllowed(selection, asks)) &&
+            podWideAsks.every((o) => podWideSelection.has(o.permission))
+          }
           busy={busy}
-          onAllow={(allow) => onAllowNewAsks(asks, allow)}
+          onAllow={(allow) => {
+            if (asks.length > 0) onAllowNewAsks(asks, allow);
+            if (podWideAsks.length > 0)
+              onTogglePodWide(
+                podWideAsks.map((o) => o.permission),
+                allow
+              );
+          }}
         />
       )}
       <div className="flex flex-col gap-3 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
@@ -1369,6 +1429,14 @@ export function AppConsent({
               includes it: tick the spaces where you allow it.
             </p>
           </section>
+        )}
+        {app.podWide.length > 0 && (
+          <PodWideReads
+            podWide={app.podWide}
+            selection={podWideSelection}
+            onToggle={(permission) => onTogglePodWide([permission])}
+            busy={busy}
+          />
         )}
         {/* Once, under the rows or the matrix, for any record read (rv-ui U1/U3). */}
         {readsSpaceRecords(app.permissions) && (
@@ -1476,11 +1544,14 @@ export function AppConsent({
  */
 function NewAsks({
   asks,
+  podWide,
   allowed,
   busy,
   onAllow,
 }: {
   asks: readonly OfferedPermission[];
+  /** The new pod-wide reads (`newPodWideAsks`): the same switch ticks them. */
+  podWide: readonly PodWideOffer[];
   allowed: boolean;
   busy: boolean;
   onAllow: (allow: boolean) => void;
@@ -1523,6 +1594,28 @@ function NewAsks({
             </li>
           );
         })}
+        {podWide.map((p) => {
+          const reason = p.reason?.trim();
+          return (
+            <li key={`pod ${p.permission}`} className="flex flex-col gap-0.5">
+              <span className="text-sm text-foreground/90">
+                {permissionLabel(p.permission)}{" "}
+                <span className="font-mono text-xs text-foreground/65">
+                  {p.permission}
+                </span>
+              </span>
+              <span className="text-xs text-foreground/65">
+                {POD_WIDE_HEADING}
+              </span>
+              {reason ? (
+                <span className="text-pretty text-xs leading-relaxed text-foreground/75">
+                  <span className="text-foreground/65">Its reason: </span>
+                  {reason}
+                </span>
+              ) : null}
+            </li>
+          );
+        })}
       </ul>
       <Switch
         size="sm"
@@ -1533,6 +1626,74 @@ function NewAsks({
       >
         <span className="text-sm text-foreground/90">Allow the new ones</span>
       </Switch>
+    </section>
+  );
+}
+
+/**
+ * The reads it asks for EVERYWHERE in the pod (decision e1b59d38 "B"): their
+ * own section, one tick each, worded "everywhere in your pod". Each is a read
+ * of one kind; the pod refuses anything else pod-wide. Shown in the simple
+ * view and in Customize alike: it has no space to customize.
+ */
+function PodWideReads({
+  podWide,
+  selection,
+  onToggle,
+  busy,
+}: {
+  podWide: readonly PodWideOffer[];
+  selection: PodWideSelection;
+  onToggle: (permission: string) => void;
+  busy: boolean;
+}) {
+  const id = useId();
+  return (
+    <section
+      aria-labelledby={`${id}-pod`}
+      data-pod-wide
+      className="flex flex-col gap-1"
+    >
+      <p
+        id={`${id}-pod`}
+        className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/65"
+      >
+        <ShieldCheck className="h-3 w-3" aria-hidden /> {POD_WIDE_HEADING}
+      </p>
+      <ul className="flex flex-col">
+        {podWide.map((p) => {
+          const reason = p.reason?.trim();
+          return (
+            <li key={p.permission} className="flex flex-col">
+              <Checkbox
+                size="sm"
+                classNames={CONSENT_CHECKBOX}
+                aria-label={podWideLabel(p.permission)}
+                isSelected={selection.has(p.permission)}
+                isDisabled={busy}
+                onValueChange={() => onToggle(p.permission)}
+              >
+                <span className="text-sm text-foreground/85">
+                  {permissionLabel(p.permission)}{" "}
+                  <span className="font-mono text-xs text-foreground/65">
+                    {p.permission}
+                  </span>
+                </span>
+              </Checkbox>
+              {reason ? (
+                <p className="text-pretty pb-1 text-xs leading-relaxed text-foreground/75">
+                  {/* The developer's words, as text: why it asks. */}
+                  <span className="text-foreground/65">Its reason: </span>
+                  {reason}
+                </p>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+      <p className="text-pretty text-xs leading-relaxed text-foreground/75">
+        {POD_WIDE_NOTE}
+      </p>
     </section>
   );
 }

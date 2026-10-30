@@ -38,6 +38,7 @@ import {
   currentOAuthApproval,
   oauthAppOffer,
   oauthAppPodWideKinds,
+  oauthAppPodWideOffer,
   type OAuthAppOfferItem,
 } from "../../services/app-connect.js";
 import { podAppMayConnect } from "../../services/pod-app-policy.js";
@@ -558,6 +559,13 @@ export interface OAuthAppConsent {
    * the developer's words, shown as text, never a reason to trust the app.
    */
   permissions: Array<OAuthAppOfferItem & { reason: string | null }>;
+  /**
+   * The permissions it asks for EVERYWHERE IN THE POD (`synap_requests[].scope
+   * = "pod"`, decision e1b59d38 "B"): each a read of one named kind, one tick
+   * each, shown in their own section. Ticked, each is sent as
+   * `{ permission, workspaceId: null }`. Never also in `permissions`.
+   */
+  podWide: Array<{ permission: string; reason: string | null }>;
   /** What this person approved for this app before (re-consent pre-ticks it). */
   approved: AppApprovedRequest[];
   /**
@@ -746,6 +754,11 @@ export async function getOAuthConsentContext(
   }
 
   const { permissions, ignoredScopes } = appPermissions(req);
+  const podWide = oauthAppPodWideOffer(
+    permissions,
+    req.client.requestedPodWide ?? []
+  );
+  const perSpace = permissions.filter((p) => !podWide.includes(p));
   return {
     ...base,
     app: {
@@ -757,12 +770,17 @@ export async function getOAuthConsentContext(
         permissions
       ),
       homepage: req.client.clientUri ?? null,
-      permissions: (await oauthAppOffer(callerUserId, permissions)).map(
+      permissions: (await oauthAppOffer(callerUserId, perSpace)).map(
         (item) => ({ ...item, reason: reasonFor(req.client, item.permission) })
       ),
+      podWide: podWide.map((permission) => ({
+        permission,
+        reason: reasonFor(req.client, permission),
+      })),
       approved: await currentOAuthApproval(callerUserId, req.client.clientId),
       templates: req.client.requestedTemplates ?? [],
-      podWideKinds: await oauthAppPodWideKinds(permissions),
+      // A kind asked pod-wide reaches the app everywhere: no role note.
+      podWideKinds: await oauthAppPodWideKinds(perSpace),
       ignoredScopes,
     },
   };
@@ -888,6 +906,7 @@ export async function decideOAuthAuthorization(
       oauthClientId: req.client.clientId,
       name: `${req.client.clientName} (${new URL(req.client.clientId).host})`,
       permissions,
+      podWide: req.client.requestedPodWide ?? [],
       approved: input.approved ?? [],
       ctx,
     });
