@@ -781,8 +781,8 @@ describe("cleanup pack v2 (filer + executor)", () => {
     expect(h.closeCalls).toEqual([]);
     expect(result.refusals).toEqual(
       expect.arrayContaining([
-        "Resumed work (session): Active again since this pack was filed",
-        "Touched work (session): Active again since this pack was filed",
+        "Resumed work (job): Active again since this pack was filed",
+        "Touched work (job): Active again since this pack was filed",
       ])
     );
 
@@ -854,7 +854,7 @@ describe("cleanup pack v2 (filer + executor)", () => {
         .$item0!.outcome
     ).toBe("applied");
     // The refusal is the door's sentence, never the stored v1 `reason` (it promised undo).
-    expect(result.refusals).toEqual(["Gone (session): No longer exists"]);
+    expect(result.refusals).toEqual(["Gone (job): No longer exists"]);
   });
 
   async function endedSession(
@@ -925,7 +925,7 @@ describe("cleanup pack v2 (filer + executor)", () => {
     const result = await approve(packA.id, A);
 
     expect(result.refusals).toEqual([
-      "Pick a logo · Brand refresh (session): No longer owed",
+      "Pick a logo · Brand refresh (job): No longer owed",
     ]);
   });
 
