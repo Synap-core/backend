@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   deriveGovernanceGrantOptions,
+  deriveGovernanceNeverOption,
   isNonWidenableGovernanceReason,
   type GovernanceGrantContext,
 } from "../index.js";
@@ -85,5 +86,74 @@ describe("deriveGovernanceGrantOptions — the outward floor (finding c173cc51)"
         false
       );
     }
+  });
+});
+
+describe("deriveGovernanceNeverOption — a request's 'Never' (decision G3)", () => {
+  it("writes a deny for this agent and this exact action", () => {
+    expect(deriveGovernanceNeverOption(BASE)).toEqual({
+      id: "never",
+      value: "profile.create",
+      rule: {
+        principalKind: "agent",
+        agentUserId: "agent-1",
+        scopeKind: "workspace",
+        workspaceId: BASE.workspaceId,
+        targetKind: "action",
+        targetPattern: "profile.create",
+        verdict: "deny",
+        sourceProposalId: BASE.proposalId,
+      },
+    });
+  });
+
+  it("a capability run names the capability, never the generic capability.run", () => {
+    const never = deriveGovernanceNeverOption({
+      ...BASE,
+      actionKey: "capability.run",
+      capabilityTarget: "messaging://unipile",
+    });
+    expect(never?.rule).toMatchObject({
+      principalKind: "agent",
+      agentUserId: "agent-1",
+      targetKind: "capability",
+      targetPattern: "messaging://unipile",
+      verdict: "deny",
+    });
+    expect(
+      deriveGovernanceNeverOption({ ...BASE, actionKey: "capability.run" })
+    ).toBeNull();
+  });
+
+  it("is offered on a floored request too: a deny refuses above the floors", () => {
+    expect(
+      deriveGovernanceNeverOption({
+        ...BASE,
+        governanceReason: "AGENT_SCHEMA_DEFINITION",
+      })?.rule.targetPattern
+    ).toBe("profile.create");
+  });
+
+  it("never a wildcard: no agent, a '*' or a glob action offers nothing", () => {
+    expect(
+      deriveGovernanceNeverOption({ ...BASE, agentUserId: null })
+    ).toBeNull();
+    expect(deriveGovernanceNeverOption({ ...BASE, actionKey: "*" })).toBeNull();
+    expect(
+      deriveGovernanceNeverOption({ ...BASE, actionKey: "entity.*" })
+    ).toBeNull();
+    expect(
+      deriveGovernanceNeverOption({ ...BASE, actionKey: null })
+    ).toBeNull();
+  });
+
+  it("a request with no space writes a pod-wide deny, still for one agent", () => {
+    const never = deriveGovernanceNeverOption({ ...BASE, workspaceId: null });
+    expect(never?.rule).toMatchObject({
+      scopeKind: "pod",
+      principalKind: "agent",
+      agentUserId: "agent-1",
+    });
+    expect(never?.rule.workspaceId).toBeUndefined();
   });
 });

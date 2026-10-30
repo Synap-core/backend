@@ -341,6 +341,27 @@ describe("a create with no twin", () => {
   });
 });
 
+describe("Reject & never (decision G3)", () => {
+  it("an agent's change offers it beside Reject", () => {
+    state.proposal = personCreate(null);
+    const seen = text(render());
+    expect(seen).toContain("Reject…");
+    expect(seen).toContain("Reject & never");
+  });
+
+  it("a person's own change does not: a person is never refused", () => {
+    state.proposal = { ...personCreate(null), agentUserId: null };
+    expect(text(render())).not.toContain("Reject & never");
+  });
+
+  it("stays beside a change that acts on its own: never narrows", () => {
+    state.proposal = skillUpdate();
+    const seen = text(render());
+    expect(seen).not.toContain("Approve & always");
+    expect(seen).toContain("Reject & never");
+  });
+});
+
 describe("the approve is bound to the revision this page drew", () => {
   it("sends the length of the revision history it rendered", () => {
     // An agent revised it twice before the page loaded; a third revise after
