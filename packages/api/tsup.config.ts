@@ -1,8 +1,25 @@
 import { defineConfig } from "tsup";
 
-import { schemaHashOfFile } from "./scripts/schema-hash.mjs";
+/**
+ * The api-types schema hash /health serves, as the api `build` script passed it
+ * (scripts/print-schema-hash.mjs). This config never reads generated.d.ts: the
+ * CI test selection treats a package's tsup config as a dependency of every
+ * test of every importer, so a config that read it sent every type-changing PR
+ * to ~2,170 api tests. A bundle without the hash would read the file at run
+ * time, and the image does not carry it: refuse to build instead.
+ */
+export function bakedSchemaHash(env: NodeJS.ProcessEnv = process.env): string {
+  const hash = env.API_TYPES_SCHEMA_HASH;
+  if (!hash || !/^[0-9a-f]{16}$/.test(hash))
+    throw new Error(
+      `API_TYPES_SCHEMA_HASH is ${hash ? `"${hash}", not a 16-hex schema hash` : "unset"}: build @synap/api with its build script (pnpm --filter @synap/api build), which passes \`node scripts/print-schema-hash.mjs\` to tsup`
+    );
+  return hash;
+}
 
-export default defineConfig({
+// A function, so the hash is read when tsup builds, not when a test imports
+// this file.
+export default defineConfig(() => ({
   entry: {
     index: "src/index.ts",
     // The document read/edit floor for the realtime (Yjs) room gate — the ONE
@@ -30,7 +47,7 @@ export default defineConfig({
   // /health serves the hash of the committed api-types contract; bake it in so
   // the shipped bundle never reads the file (the image does not carry it).
   define: {
-    __API_TYPES_SCHEMA_HASH__: JSON.stringify(schemaHashOfFile()),
+    __API_TYPES_SCHEMA_HASH__: JSON.stringify(bakedSchemaHash()),
   },
   sourcemap: true,
   clean: false,
@@ -44,4 +61,4 @@ export default defineConfig({
     "drizzle-orm",
     "bcrypt",
   ],
-});
+}));

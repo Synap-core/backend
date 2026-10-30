@@ -3,7 +3,8 @@
 // DERIVED wherever it is needed, never committed: a committed hash is a
 // one-line file that every type-changing PR rewrites, so any two such PRs
 // conflicted on it, while generated.d.ts itself merges cleanly. Every producer
-// goes through this one function: the pod bundle (tsup.config.ts `define`),
+// goes through this one function: the pod bundle (print-schema-hash.mjs, run
+// by the api build script for tsup's `define`),
 // /health under tsx/vitest (health.ts), the api-types build
 // (dist/build-schema-hash.js) and CI's check of the booted pod's /health.
 

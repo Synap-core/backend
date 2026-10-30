@@ -53,7 +53,7 @@
   "scripts": {
     "dev": "export $(grep -v '^#' ../../.env | xargs) && tsx watch src/index.ts",
     "start": "export $(grep -v '^#' ../../.env | xargs) && tsx src/index.ts",
-    "build": "node ../../skills/build.mjs && rm -rf dist && tsc -p tsconfig.types.json && tsup && pnpm gen-types",
+    "build": "node ../../skills/build.mjs && rm -rf dist && tsc -p tsconfig.types.json && API_TYPES_SCHEMA_HASH=$(node scripts/print-schema-hash.mjs) tsup && pnpm gen-types",
     "gen-types": "node scripts/gen-types.mjs",
     "gen:capability-schema": "tsx src/contracts/gen-capability-execute-schema.ts",
     "gen:mcp-manifest": "export $(grep -v '^#' ../../.env | xargs) && PINO_PRETTY=false tsx src/routers/mcp/tools/gen-manifest.ts",
