@@ -374,15 +374,13 @@ const OBJECT_KIND_ROWS = {
     label: "Step",
     labelPlural: "Steps",
   },
-  // Founder G1 (2026-10-30): a person's unit of work is a "Job" ("Travail");
-  // `session` stays the kind token, table, API param and MCP tool stem.
   session: {
     kind: "session",
     category: "session",
     icon: "Rss",
     color: ID(11),
-    label: "Job",
-    labelPlural: "Jobs",
+    label: "Session",
+    labelPlural: "Sessions",
   },
   workspace: {
     kind: "workspace",
@@ -568,15 +566,13 @@ const OBJECT_KIND_ROWS = {
     label: "Approval",
     labelPlural: "Approvals",
   },
-  // Founder G1 (2026-10-30): what waits for a person's yes is a "Request"
-  // ("Demande"); `proposal` stays the kind token, table and tool stem.
   proposal: {
     kind: "proposal",
     category: "proposal",
     icon: "GitPullRequest",
     color: ID(4),
-    label: "Request",
-    labelPlural: "Requests",
+    label: "Proposal",
+    labelPlural: "Proposals",
   },
   notification: {
     kind: "notification",
@@ -588,23 +584,21 @@ const OBJECT_KIND_ROWS = {
   },
 
   // ── Account setup / landing page kinds ──
-  // Founder G1 (2026-10-30): a client reads their pod as "Your company"
-  // ("Votre entreprise"); `pod` / `data-pod` stay the kind tokens.
   pod: {
     kind: "pod",
     category: "workspace",
     icon: "Server",
     color: ID(6),
-    label: "Your company",
-    labelPlural: "Your companies",
+    label: "Data Pod",
+    labelPlural: "Data Pods",
   },
   "data-pod": {
     kind: "data-pod",
     category: "workspace",
     icon: "Server",
     color: ID(6),
-    label: "Your company",
-    labelPlural: "Your companies",
+    label: "Data Pod",
+    labelPlural: "Data Pods",
   },
 
   // ── Surface kinds (landing page) ──

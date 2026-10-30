@@ -58,11 +58,9 @@ export const vocabularySentencesEn = {
   // between them when the verb names the part it acts within
   // (`ACTION_OBJECT_PREPOSITIONS`), and the object's name quoted after it.
   // Keyed by mood because only English can say both moods in one order.
-  // With no verb, the title names the request itself (founder G1, 30 Oct):
-  // "Request" is also a verb, so the noun is set apart by a colon.
-  "vocabulary.title.fallbackVerb": "Request",
-  "vocabulary.title.noVerb": "Request: {Obj}",
-  "vocabulary.title.noVerb.named": 'Request: {Obj} "{name}"',
+  "vocabulary.title.fallbackVerb": "Proposal",
+  "vocabulary.title.noVerb": "Proposal {Obj}",
+  "vocabulary.title.noVerb.named": 'Proposal {Obj} "{name}"',
   "vocabulary.title.lead": "{verb}: {name}",
   "vocabulary.title.verbOnly.named": '{verb} "{name}"',
   "vocabulary.title.imperative": "{verb} {Obj}",

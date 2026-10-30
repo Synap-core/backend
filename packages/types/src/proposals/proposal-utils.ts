@@ -118,9 +118,11 @@ export function buildFallbackTitle(params: {
     params;
 
   if (!changeType && !proposalType) {
-    // With no action at all the title names the request itself ("Request",
-    // "Request: Task"), never a bare noun: the door's no-verb sentence.
-    return buildObjectActionTitle({ objectKind: profileSlug ?? targetType });
+    // Preserve the historical shape: with no action at all this produced
+    // "Proposal" (optionally with a type label), never a bare noun.
+    const noun =
+      profileSlug ?? (targetType !== "entity" ? targetType : undefined);
+    return noun ? `Proposal ${resolveObjectNoun(noun)}` : "Proposal";
   }
 
   return buildObjectActionTitle({
