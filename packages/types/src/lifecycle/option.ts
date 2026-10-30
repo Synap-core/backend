@@ -1,6 +1,5 @@
 /**
  * The lifecycle OPTION model: categories, an option, and its words and tone.
- * The tone itself comes from THE tone table (`../units/state.ts`).
  *
  * A leaf module so `./steps.ts` can read it without importing `./index.ts`,
  * which re-exports `./steps.ts` — that cycle left `STEP_POSITIONS` in its
@@ -8,11 +7,7 @@
  * `./index.ts` mid-load, and relay web would not boot. Re-exported unchanged
  * from `./index.ts`; import it from `@synap-core/types/lifecycle`.
  */
-import {
-  isUnitTone,
-  LIFECYCLE_CATEGORY_TONE,
-  type UnitTone,
-} from "../units/state.js";
+import type { UnitTone } from "../units/state.js";
 import { resolveStatusLabel } from "../vocabulary/index.js";
 
 export const LIFECYCLE_CATEGORIES = [
@@ -48,8 +43,27 @@ export interface LifecycleOption {
   dateBinding?: string;
 }
 
-/** The default mark of each category: THE tone table's (`../units/state.ts`). */
-export { LIFECYCLE_CATEGORY_TONE };
+/** The default mark of each category — a tone TOKEN, never a colour. */
+export const LIFECYCLE_CATEGORY_TONE: Readonly<
+  Record<LifecycleCategory, UnitTone>
+> = {
+  open: "textSecondary",
+  active: "primary",
+  paused: "warning",
+  done: "success",
+  lost: "error",
+};
+
+const UNIT_TONES: readonly string[] = [
+  "primary",
+  "ai",
+  "info",
+  "error",
+  "success",
+  "warning",
+  "textSecondary",
+  "textMuted",
+] satisfies readonly UnitTone[];
 
 /** The words for an option: its authored label, else the shared vocabulary. */
 export function lifecycleOptionLabel(
@@ -62,7 +76,7 @@ export function lifecycleOptionLabel(
 export function lifecycleOptionTone(
   option: Pick<LifecycleOption, "category" | "tone">
 ): UnitTone {
-  return isUnitTone(option.tone)
-    ? option.tone
+  return option.tone && UNIT_TONES.includes(option.tone)
+    ? (option.tone as UnitTone)
     : LIFECYCLE_CATEGORY_TONE[option.category];
 }

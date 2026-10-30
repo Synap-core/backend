@@ -65,7 +65,7 @@ export const FOCUS_SESSION_REAPER_QUEUE = "focus-session-reaper";
 export const FOCUS_SESSION_REAPER_CRON = "0 * * * *"; // every hour
 
 /** An `active`/`paused` session untouched this long is presumed abandoned. */
-export const REAPER_STALE_HOURS = workClockIn("stale", "hours");
+export const REAPER_STALE_HOURS = 24;
 
 /**
  * The staleness predicate, exported so a test can lock its SHAPE: it must key
