@@ -20089,6 +20089,18 @@ export interface UnlinkReach {
 	cloudSignIn: boolean;
 }
 /**
+ * What one person is left to sign in with once unlinked, for the confirm —
+ * read before anything happens, never guessed:
+ *  - `keeps_a_way_in`: the unlink takes no sign-in method (another issuer), or
+ *    they hold a pod-held factor — a password or passkey on this Pod, or an
+ *    unused recovery code (`accountHasPodHeldFactor`, the one rule);
+ *  - `email_recovery_only`: none of those, but this Pod's mail goes out, so
+ *    recovering the account by email still gets them back in;
+ *  - `no_way_in`: none of those, and no mail: they cannot sign in at all;
+ *  - `unknown`: a read failed. The confirm says it could not check.
+ */
+export type UnlinkImpact = "email_recovery_only" | "keeps_a_way_in" | "no_way_in" | "unknown";
+/**
  * The clients the pod's OWN OAuth authorization server registered (Path B:
  * claude.ai pointed straight at `https://<pod>/mcp`; `routers/oauth/*`), read
  * and cut off as a pod admin sees them — the service behind `oauthClients.*`.
@@ -24897,14 +24909,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				issuerId: string;
 				issuerUrl: string;
 				lastUsedAt: Date | null;
-				people: ({
+				people: {
 					email: string;
 					linkedAt: Date;
-					name: string | null;
-					userId: string;
-				} & {
 					linkedByInvite: boolean;
-				})[];
+					name: string | null;
+					unlinkImpact: UnlinkImpact;
+					userId: string;
+				}[];
 				peopleCount: number;
 				publisherUrl: string | null;
 				rejectionReason: string | null;
