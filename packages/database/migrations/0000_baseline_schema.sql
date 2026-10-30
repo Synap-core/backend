@@ -4645,7 +4645,8 @@ CREATE TABLE IF NOT EXISTS "governance_rules" (
   "created_by"          text NOT NULL,
   "created_at"          timestamptz NOT NULL DEFAULT now(),
   "revoked_at"          timestamptz,
-  "expires_at"          timestamptz
+  "expires_at"          timestamptz,
+  "revoked_reason"      text
 );
 ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "principal_kind" governance_principal;
 ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "agent_user_id" text;
@@ -4660,6 +4661,7 @@ ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "source_proposal_id" uui
 ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "created_by" text;
 ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "revoked_at" timestamptz;
 ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "expires_at" timestamptz;
+ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "revoked_reason" text; -- 0379
 
 CREATE INDEX IF NOT EXISTS "governance_rules_scope_principal_idx"
   ON "governance_rules" ("scope_kind", "workspace_id", "principal_kind", "agent_user_id")

@@ -192,8 +192,7 @@ export async function applyGovConfigChange(
       const targetPattern = spec.targetPattern ?? "*";
       const verdict = spec.verdict ?? "propose";
       // A rule that can never fire is refused, not stored — the SAME refusal
-      // `governanceRules.create` (B3) and the legacy `governance.widen_lane`
-      // approval branch give. The unified door is now the ONE every recommender
+      // `governanceRules.create` (B3) gives. The unified door is now the ONE every recommender
       // files through, so the check has to live HERE: an exact action key behind
       // a non-widenable floor resolves ABOVE the rule store (rung 2.8), so an
       // `auto` row there is a success receipt for a grant that does nothing.

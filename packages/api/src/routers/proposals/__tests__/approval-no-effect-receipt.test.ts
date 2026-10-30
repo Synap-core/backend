@@ -4,8 +4,9 @@
  * THE DEFECT this pins: every inline branch of `applyProposalApproval` returned
  * a bare `{ success: true }` — a value authored by the SAME optimistic code path
  * that decided to return it. `governance.advisory` writes no row at all (by
- * design), and `governance.widen_lane` writes exactly one; both read GREEN and
- * IDENTICAL to the reviewer.
+ * design), and `governance.tighten_lane` writes exactly one; both read GREEN and
+ * IDENTICAL to the reviewer. (`governance.widen_lane` was the original writer;
+ * it is retired, S3 — its approval now writes nothing, pinned below.)
  *
  * The fix is the `ProposalEffect` receipt (execution-registry.ts) sourced from
  * the STORAGE ENGINE — `.returning()` rows, never a service-layer boolean —
@@ -220,12 +221,12 @@ describe("(a) an approval that writes nothing reports no_effect", () => {
 // (b) AN APPROVAL THAT WRITES → applied, with a NON-ZERO engine row count.
 // ───────────────────────────────────────────────────────────────────────────
 describe("(b) an approval that writes reports applied with a non-zero count", () => {
-  it("governance.widen_lane returns applied:'verified' rows:1 + the engine's id", async () => {
+  it("governance.tighten_lane returns applied:'verified' rows:1 + the engine's id", async () => {
     // The engine's RETURNING row for the governance_rules INSERT.
     insertReturning = [[{ id: "rule-1" }]];
 
     const result = await applyProposalApproval(
-      approveArgs("governance.widen_lane", {
+      approveArgs("governance.tighten_lane", {
         agentUserId: "agent-1",
         targetKind: "action",
         targetPattern: "entity/create",
@@ -242,10 +243,32 @@ describe("(b) an approval that writes reports applied with a non-zero count", ()
     });
     expect(inserts).toHaveLength(1);
     expect(inserts[0].values).toMatchObject({
-      verdict: "auto",
+      verdict: "propose",
       sourceProposalId: "prop-1",
     });
     expect(receiptStateForEffect(result.effect!)).toBe("applied");
+  });
+
+  it("a retired governance.widen_lane is never applied: no rule is written (S3)", async () => {
+    // Grants are made from the card (`proposeNextRung` → `fileRuleGrant`); the
+    // daily filer and its direct insert are gone. A stray row is refused.
+    insertReturning = [[{ id: "rule-1" }]];
+    await expect(
+      applyProposalApproval(
+        approveArgs("governance.widen_lane", {
+          agentUserId: "agent-1",
+          targetKind: "action",
+          targetPattern: "entity.create",
+          scopeKind: "pod",
+          verdict: "auto",
+        })
+      )
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(/retired/),
+    });
+    expect(inserts).toEqual([]);
+    expect(updates.some((u) => u.status === "approved")).toBe(false);
   });
 
   it("the count comes from the STATEMENT: an insert that returns no row reports rows:0 → no_effect", async () => {

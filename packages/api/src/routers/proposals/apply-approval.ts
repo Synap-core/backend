@@ -132,7 +132,6 @@ import {
   governanceApprovalFloorFor,
 } from "../../services/guidelines/guideline-versions.js";
 import { createLogger } from "@synap-core/core";
-import { nonWidenableFloorFor } from "@synap/governance-policy";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { relationsRouter } from "../relations.js";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
@@ -376,7 +375,7 @@ export async function resolveMessagingAccountForPlatform(
  * MATERIALIZATION. Order is the historical top-down if-chain:
  *   1. composite (multi-op graph)  — keyed off PAYLOAD SHAPE, not a type string
  *   2. document-content (AI edit)  — same
- *   3. governance.widen_lane (trusted-lane widen) — keyed off proposalType
+ *   3. the inline `governance.*` executors — keyed off proposalType
  *   4. the proposal-execution registry (every typed key + the catch-all)
  *
  * Extracted because `batchApprove` used to inline ONLY step 3's generic
@@ -390,34 +389,8 @@ export async function resolveMessagingAccountForPlatform(
  */
 
 /**
- * `governance.widen_lane` proposal payload (Governance Convergence Plan,
- * Phase D). Emitted ONLY by the trusted-lane scanner job (never inserted
- * directly) — approval here is the ONE door that turns it into a
- * `governance_rules` row. `verdict` is always "auto": a widen proposal only
- * ever opens the auto-approve door, never denies.
- */
-export interface GovernanceWidenLaneProposalData {
-  agentUserId: string;
-  targetKind: GovernanceTarget;
-  targetPattern: string;
-  targetProfile?: string | null;
-  scopeKind: GovernanceScope;
-  workspaceId?: string | null;
-  verdict: "auto";
-  evidence: {
-    /** Agent-wide: rows in the window. Per-motif: the motif's human decisions. */
-    total: number;
-    approveRate: number;
-    duplicateRate: number;
-    /** Which gate qualified it (absent on rows filed before per-motif widening). */
-    basis?: "agent" | "motif";
-    motif?: { targetType: string; proposalType: string };
-  };
-}
-
-/**
- * `governance.tighten_lane` proposal payload — the TIGHTEN mirror of
- * `GovernanceWidenLaneProposalData`. Emitted ONLY by the tighten recommender
+ * `governance.tighten_lane` proposal payload — the TIGHTEN mirror of the
+ * retired `governance.widen_lane` (S3). Emitted ONLY by the tighten recommender
  * (`services/proposals/recommend-tighten.ts`); approval here is the ONE door
  * that turns it into a `governance_rules` row. `verdict` is always "propose": a
  * tighten proposal only ever pins a motif to review, never widens (floor-safe by
@@ -525,7 +498,7 @@ export interface GovernanceTightenPostureProposalData {
  * blocked-slot recurrence scanner
  * (`packages/jobs/src/workers/blocked-slot-recurrence-scanner.ts`, which keeps
  * the authoritative copy of this interface; jobs cannot import api, so the two
- * are hand-mirrored exactly as `GovernanceWidenLaneProposalData` is).
+ * are hand-mirrored).
  *
  * Approval here is the ONE door that turns it into a `config_settings`
  * guideline at `scopeKind:'workKind'`.
@@ -1738,105 +1711,24 @@ async function applyProposalApprovalInner(
   // record "gov-config executors B4a–B4g deprecated 2026-09-15".
   // ═══════════════════════════════════════════════════════════════════════
 
-  // B4: governance.widen_lane — Phase D trusted-lane widen. Keyed off
-  // proposalType (not payload shape) so it stays inline rather than in the
-  // registry (execution-registry.ts is out of scope for this change). The
-  // ONLY place a `governance_rules` row is ever inserted — the scanner job
-  // that emits this proposal type never writes the table directly.
+  // B4: governance.widen_lane is RETIRED (structural plan S3, founder Q3).
+  // Its filer, the daily lane scanner, is gone, and no row was pending when it
+  // went. A grant is made from the card (`proposeNextRung` → `fileRuleGrant`),
+  // the ladder's ONE back half, with its guards. This branch only REFUSES, so
+  // a stray row can never widen an agent through a second rule-writing path.
+  // The approved rows keep their rules; revoke one from its page.
   if (proposal.proposalType === "governance.widen_lane") {
-    const widenData = payload as GovernanceWidenLaneProposalData | null;
-    if (
-      !widenData ||
-      typeof widenData !== "object" ||
-      !widenData.agentUserId ||
-      !widenData.targetKind ||
-      !widenData.targetPattern ||
-      !widenData.scopeKind
-    ) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: "Malformed governance.widen_lane proposal data.",
-      });
-    }
-
-    // A rule that can never fire is refused, not stored — the SAME check and
-    // message as `governanceRules.create` (B3). An exact action key behind a
-    // non-widenable floor resolves above the rule store, so approving would
-    // store an "auto" grant that does nothing. Nothing is written; the proposal
-    // stays pending for a person to reject.
-    if (widenData.targetKind === "action") {
-      const floor = nonWidenableFloorFor(widenData.targetPattern);
-      if (floor) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `NON_WIDENABLE_FLOOR (${floor}): "${widenData.targetPattern}" always needs review — no governance rule can auto-approve it.`,
-        });
-      }
-    }
-
-    // EVIDENCE (storage engine): the INSERT's own RETURNING row is the receipt
-    // that the rule row exists. Nothing here is inferred from reaching this line.
-    const insertedWidenRules = await db
-      .insert(governanceRules)
-      .values({
-        principalKind: "agent",
-        agentUserId: widenData.agentUserId,
-        scopeKind: widenData.scopeKind,
-        workspaceId:
-          widenData.scopeKind === "workspace"
-            ? (widenData.workspaceId ?? null)
-            : null,
-        targetKind: widenData.targetKind,
-        targetPattern: widenData.targetPattern,
-        targetProfile: widenData.targetProfile ?? null,
-        verdict: "auto",
-        sourceProposalId: proposal.id,
-        createdBy: userId,
-      })
-      .returning({ id: governanceRules.id });
-
-    await transitionProposal(db, {
-      to: ProposalStatus.APPROVED,
-      set: {
-        reviewedBy: userId,
-        reviewedAt: new Date(),
-        updatedAt: new Date(),
-      },
-      where: eq(proposals.id, input.proposalId),
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        'This kind of request is retired: an agent\'s lane is widened from a card it earned ("Next time, do it and tell me"), never by approving this. Reject it.',
     });
-
-    reportProposalOutcome({
-      proposalId: input.proposalId,
-      outcome: "approved",
-      sourceMessageId: proposal.sourceMessageId,
-      agentUserId: proposal.agentUserId,
-      targetType: proposal.targetType,
-      proposalType: proposal.proposalType,
-      source: (proposal.data as Record<string, unknown> | null)?.source as
-        string | undefined,
-    });
-
-    emitProposalReviewed(
-      input.proposalId,
-      proposal.workspaceId,
-      "approved",
-      userId
-    );
-    return {
-      success: true,
-      effect: {
-        applied: "verified",
-        rows: insertedWidenRules.length,
-        ids: insertedWidenRules.map((r) => r.id),
-        subject: "governance_rules",
-      },
-    };
   }
 
-  // B4b: governance.tighten_lane — the TIGHTEN mirror of B4. Approving inserts
-  // ONE governance_rules row with `verdict:'propose'` (vs widen's 'auto') +
-  // source_proposal_id lineage — an EXACT mirror of the widen branch above,
-  // differing only in the verdict. Floor-safe by construction: a rule resolves
+  // B4b: governance.tighten_lane — the TIGHTEN mirror of the retired B4.
+  // Approving inserts ONE governance_rules row with `verdict:'propose'` +
+  // source_proposal_id lineage. NB a second direct `governance_rules` insert
+  // beside `applyGovConfigChange` — tolerable only because it can only narrow. Floor-safe by construction: a rule resolves
   // at rung 2.8, BELOW every floor, so a propose rule can only pin-to-review,
   // never widen a delete/admin/scope-change. Keyed off proposalType (not payload
   // shape), inline like widen — the recommender that emits this type never
@@ -1857,7 +1749,7 @@ async function applyProposalApprovalInner(
       });
     }
 
-    // EVIDENCE (storage engine): same as widen — the INSERT's RETURNING row.
+    // EVIDENCE (storage engine): the INSERT's RETURNING row.
     const insertedTightenRules = await db
       .insert(governanceRules)
       .values({

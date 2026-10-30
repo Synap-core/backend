@@ -7,8 +7,11 @@
  * may read it — so every card's offer is PROJECTED here, never re-derived by a
  * client from a copied list.
  *
- * `readNextRungs` is the read (a card asks "what is my next rung?");
- * `fileNextRung` is the write the `governanceRules.proposeNextRung` door runs
+ * `readNextRungs` is the read (a card asks "what is my next rung?", and how far
+ * the agent has EARNED it: `streak`, the one rule `earnedStreak`);
+ * `readAlwaysApproved` is the Calibration read of the same projection (kinds
+ * with a met streak and no rule yet); `fileNextRung` is the write the
+ * `governanceRules.proposeNextRung` door runs
  * once the router has decided WHO may grant it (direct rule vs a proposal for
  * the agent's owner). No new store: the rule lands in `governance_rules`
  * through the ONE store-write `applyGovConfigChange`, or as a pending
@@ -20,7 +23,10 @@ import {
   db,
   and,
   eq,
+  desc,
+  drizzleSql,
   inArray,
+  isNotNull,
   isNull,
   or,
   gt,
@@ -37,15 +43,21 @@ import {
   nonWidenableFloorFor,
 } from "@synap/governance-policy";
 import {
+  earnedStreak,
   nextRung,
   nextRungRuleDraft,
   proposalEventKey,
   resolveTrustRung,
   NO_NEXT_RUNG_CODE,
+  RULE_PAUSED_AFTER_REVERTS,
+  type EarnedStreak,
   type NextRungCovered,
   type NextRungOffer,
+  type NextRungPaused,
+  type StreakDecision,
   type TrustRung,
 } from "@synap-core/types/trust-ladder";
+import { createLogger } from "@synap-core/core";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 
 /** The exact `governanceRules.create`-shaped rule a grant writes. */
@@ -61,6 +73,18 @@ import { notifyProposalCreatedOrdered } from "../../notifications/notify-proposa
 
 /** A batch read is per card on one screen, never a scan. */
 export const NEXT_RUNG_BATCH_MAX = 50;
+
+/**
+ * The newest decisions read per grant key. Every row the evidence read keeps
+ * counts or breaks the run, so this bounds the longest run reported, never
+ * whether ten are met.
+ */
+const STREAK_LOOKBACK = 50;
+
+/** Calibration's "Always approved": the newest approvals scanned for kinds. */
+const ALWAYS_APPROVED_SCAN = 500;
+
+const logger = createLogger({ module: "next-rung" });
 
 /** The proposal columns the ladder reads. */
 export interface NextRungRow {
@@ -170,6 +194,18 @@ export interface NextRungProjection {
    * "Already a rule" as a DOOR to it. `null` when nothing covers the card.
    */
   covered: NextRungCovered | null;
+  /**
+   * How far the agent has EARNED this offer (`earnedStreak`), set only where
+   * there is an offer. `null` WITH an offer = the history could not be read —
+   * never an empty streak (decision e8939070). A streak never creates an offer
+   * the ladder refuses.
+   */
+  streak: EarnedStreak | null;
+  /**
+   * The grant on this kind PAUSED itself after undos: the card offers "Ask me
+   * again" and names the rule (a door). Only approvals after the pause count.
+   */
+  paused: NextRungPaused | null;
 }
 
 /**
@@ -228,6 +264,8 @@ export function projectNextRung(row: NextRungRow): NextRungProjection {
           })
         : null,
     covered: null,
+    streak: null,
+    paused: null,
   };
 }
 
@@ -266,10 +304,237 @@ export async function readNextRungs(params: {
   const covering = await findCoveringRules(
     projections.flatMap((p) => (p.rule ? [p.rule] : []))
   );
-  return projections.map((p) => {
+  const open = projections.map((p) => {
     const ruleId = p.rule ? covering.get(ruleKey(p.rule)) : undefined;
     return ruleId ? { ...p, offer: null, rule: null, covered: { ruleId } } : p;
   });
+  return withEarnedEvidence(open);
+}
+
+/** A projection with its streak and pause read, when it carries an offer. */
+async function withEarnedEvidence(
+  projections: NextRungProjection[]
+): Promise<NextRungProjection[]> {
+  const drafts = projections.flatMap((p) =>
+    p.offer && p.rule ? [p.rule] : []
+  );
+  if (drafts.length === 0) return projections;
+  const evidence = await readEarnedEvidence(drafts);
+  return projections.map((p) => {
+    if (!p.offer || !p.rule) return p;
+    const e = evidence?.get(ruleKey(p.rule));
+    return { ...p, streak: e?.streak ?? null, paused: e?.paused ?? null };
+  });
+}
+
+/** A stored `auto` action rule as the draft it would be — its {@link ruleKey}. */
+function draftOfRow(r: {
+  agentUserId: string | null;
+  workspaceId: string | null;
+  targetPattern: string;
+  targetProfile: string | null;
+}): RuleGrantDraft {
+  return {
+    principalKind: "agent",
+    agentUserId: r.agentUserId ?? undefined,
+    scopeKind: r.workspaceId ? "workspace" : "pod",
+    ...(r.workspaceId ? { workspaceId: r.workspaceId } : {}),
+    targetKind: "action",
+    targetPattern: r.targetPattern,
+    ...(r.targetProfile ? { targetProfile: r.targetProfile } : {}),
+    verdict: "auto",
+  };
+}
+
+type EarnedEvidence = { streak: EarnedStreak; paused: NextRungPaused | null };
+
+/**
+ * The streak and the pause for each drafted grant, in TWO queries whatever the
+ * batch: the newest {@link STREAK_LOOKBACK} decisions per grant key (agent ×
+ * space × exact action × the kind the gate saw — {@link ruleKey}, so what is
+ * counted is exactly what accepting would grant), and the paused rules of
+ * those agents.
+ *
+ * Only rows that COUNT or BREAK in `earnedStreak` are read (approved,
+ * rejected, reverted, or undone and re-proposed): receipts, withdrawn and
+ * expired rows are never evidence.
+ *
+ * `null` when the history could not be read: the caller shows NO streak,
+ * never an empty one (decision e8939070).
+ */
+async function readEarnedEvidence(
+  drafts: readonly RuleGrantDraft[]
+): Promise<Map<string, EarnedEvidence> | null> {
+  const agentIds = [
+    ...new Set(
+      drafts.map((d) => d.agentUserId).filter((a): a is string => !!a)
+    ),
+  ];
+  if (agentIds.length === 0) return new Map();
+  try {
+    // `proposalEventKey`: a receipt's dotted type, a pending row's bare verb.
+    const eventKey = drizzleSql<string>`case when left(${proposals.proposalType}, length(${proposals.targetType}) + 1) = ${proposals.targetType} || '.' then ${proposals.proposalType} else ${proposals.targetType} || '.' || ${proposals.proposalType} end`;
+    // The kind the GATE saw (`gateProfileSlug`): a receipt — a reverted one
+    // too — spreads it flat; a reviewed row nests it in the request envelope.
+    const profileSlug = drizzleSql<
+      string | null
+    >`nullif(case when ${proposals.data} ? '_autoApprove' then ${proposals.data}->>'profileSlug' else ${proposals.data}->'data'->>'profileSlug' end, '')`;
+    const decidedAt = drizzleSql`coalesce(${proposals.reviewedAt}, ${proposals.updatedAt}, ${proposals.createdAt})`;
+    const ranked = db
+      .select({
+        agentUserId: proposals.agentUserId,
+        workspaceId: proposals.workspaceId,
+        eventKey: eventKey.as("event_key"),
+        profileSlug: profileSlug.as("profile_slug"),
+        status: proposals.status,
+        data: proposals.data,
+        revisionHistory: proposals.revisionHistory,
+        createdAt: proposals.createdAt,
+        reviewedAt: proposals.reviewedAt,
+        reviewedBy: proposals.reviewedBy,
+        rank: drizzleSql<number>`row_number() over (partition by ${proposals.agentUserId}, ${proposals.workspaceId}, ${eventKey}, ${profileSlug} order by ${decidedAt} desc)`.as(
+          "streak_rank"
+        ),
+      })
+      .from(proposals)
+      .where(
+        and(
+          inArray(proposals.agentUserId, agentIds),
+          or(
+            inArray(proposals.status, ["approved", "rejected", "reverted"]),
+            drizzleSql`${proposals.data} ? 'revertedAt'`
+          )
+        )
+      )
+      .as("streak_evidence");
+    const rows = await db
+      .select()
+      .from(ranked)
+      .where(drizzleSql`${ranked.rank} <= ${STREAK_LOOKBACK}`);
+
+    const pausedRows = await db
+      .select({
+        id: governanceRules.id,
+        agentUserId: governanceRules.agentUserId,
+        workspaceId: governanceRules.workspaceId,
+        targetPattern: governanceRules.targetPattern,
+        targetProfile: governanceRules.targetProfile,
+        revokedAt: governanceRules.revokedAt,
+      })
+      .from(governanceRules)
+      .where(
+        and(
+          eq(governanceRules.revokedReason, RULE_PAUSED_AFTER_REVERTS),
+          isNotNull(governanceRules.revokedAt),
+          eq(governanceRules.principalKind, "agent"),
+          inArray(governanceRules.agentUserId, agentIds),
+          eq(governanceRules.targetKind, "action"),
+          eq(governanceRules.verdict, "auto")
+        )
+      );
+    // The LATEST pause per key is the one the card names.
+    const pausedByKey = new Map<string, NextRungPaused>();
+    for (const r of pausedRows) {
+      const key = ruleKey(draftOfRow(r));
+      const prior = pausedByKey.get(key);
+      if (!prior || r.revokedAt!.getTime() > Date.parse(prior.revokedAt)) {
+        pausedByKey.set(key, {
+          ruleId: r.id,
+          revokedAt: r.revokedAt!.toISOString(),
+        });
+      }
+    }
+
+    const decisionsByKey = new Map<string, StreakDecision[]>();
+    for (const r of rows) {
+      const key = ruleKey(
+        draftOfRow({
+          agentUserId: r.agentUserId,
+          workspaceId: r.workspaceId,
+          targetPattern: r.eventKey,
+          targetProfile: r.profileSlug,
+        })
+      );
+      const list = decisionsByKey.get(key) ?? [];
+      list.push(r);
+      decisionsByKey.set(key, list);
+    }
+
+    const out = new Map<string, EarnedEvidence>();
+    for (const d of drafts) {
+      const key = ruleKey(d);
+      const paused = pausedByKey.get(key) ?? null;
+      // After a pause the agent earns it again from scratch: the approvals
+      // that earned the paused grant are spent.
+      const after = paused ? Date.parse(paused.revokedAt) : null;
+      const decisions = (decisionsByKey.get(key) ?? []).filter(
+        (r) =>
+          after === null ||
+          new Date(r.reviewedAt ?? r.createdAt).getTime() > after
+      );
+      out.set(key, {
+        streak: earnedStreak(decisions, d.agentUserId),
+        paused,
+      });
+    }
+    return out;
+  } catch (err) {
+    logger.warn({ err }, "next-rung: streak history unreadable — no streak");
+    return null;
+  }
+}
+
+/**
+ * Settings › Trust rules › Calibration, "Always approved": the kinds of work
+ * the caller can see whose earned streak is MET and that no active rule covers
+ * yet — each as the projection of its newest approval (the exemplar), so
+ * accepting one is `proposeNextRung` on that card: the same guards, the same
+ * back half (`fileRuleGrant`). Bounded: the newest
+ * {@link ALWAYS_APPROVED_SCAN} approvals, at most {@link NEXT_RUNG_BATCH_MAX}
+ * kinds. `readable: false` when the history could not be read.
+ */
+export async function readAlwaysApproved(params: {
+  userId: string;
+}): Promise<{ readable: boolean; kinds: NextRungProjection[] }> {
+  const recent = (await db
+    .select(ROW_COLUMNS)
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.status, "approved"),
+        isNotNull(proposals.agentUserId),
+        isNotNull(proposals.reviewedBy)
+      )
+    )
+    .orderBy(desc(proposals.reviewedAt))
+    .limit(ALWAYS_APPROVED_SCAN)) as NextRungRow[];
+  const visible = await visibleProposalIds(
+    recent.map((r) => r.id),
+    params.userId
+  );
+  const exemplars = new Map<string, NextRungProjection>();
+  for (const row of recent) {
+    if (!visible.has(row.id)) continue;
+    const p = projectNextRung(row);
+    if (!p.offer || !p.rule) continue;
+    const key = ruleKey(p.rule);
+    if (!exemplars.has(key)) exemplars.set(key, p);
+    if (exemplars.size >= NEXT_RUNG_BATCH_MAX) break;
+  }
+  const covering = await findCoveringRules(
+    [...exemplars.values()].map((p) => p.rule!)
+  );
+  const open = [...exemplars.entries()]
+    .filter(([key]) => !covering.has(key))
+    .map(([, p]) => p);
+  if (open.length === 0) return { readable: true, kinds: [] };
+  const evidence = await readEarnedEvidence(open.map((p) => p.rule!));
+  if (!evidence) return { readable: false, kinds: [] };
+  const kinds = open.flatMap((p) => {
+    const e = evidence.get(ruleKey(p.rule!));
+    return e?.streak.met ? [{ ...p, streak: e.streak, paused: e.paused }] : [];
+  });
+  return { readable: true, kinds };
 }
 
 /** The identity of a drafted rule — what "already covered" compares. */

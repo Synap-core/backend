@@ -20,8 +20,8 @@
  *
  * 1. KEYED ON MOTIF, NEVER ON FINGERPRINT. The key is
  *    `${eventType}` × `${targetType}.${proposalType}` — the SAME motif
- *    vocabulary `recommend-tighten` and the widen scanner speak, so all three
- *    lanes glob-match against one language. The structural fingerprint
+ *    vocabulary `recommend-tighten` and the trust ladder's event key speak, so
+ *    every lane glob-matches against one language. The structural fingerprint
  *    (`computeProposalFingerprint`) embeds OBJECT identity (`id:<targetId>` for
  *    every non-create class), which is right for duplicate detection and fatal
  *    here: "same shape, different objects" would shatter into clusters of one.
@@ -70,17 +70,11 @@ import {
   automationStepRuns,
   ProposalStatus,
 } from "@synap/database";
+import { MIN_DELIBERATION_MS } from "@synap-core/types/trust-ladder";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 
 /** Rows scanned before grouping — mirrors `recommend-tighten`'s SCAN_LIMIT. */
 const SCAN_LIMIT = 1000;
-
-/**
- * A verdict faster than this is a rubber stamp, not a decision. Deliberately
- * generous: the point is to drop bulk "approve all" and reflex clicks, not to
- * judge a reviewer who genuinely recognised the row on sight.
- */
-const MIN_DELIBERATION_MS = 3_000;
 
 /** One (event shape → action shape) pair and how humans have decided on it. */
 export interface ApprovalPattern {

@@ -269,10 +269,6 @@ export {
   PROPERTY_KEY_ALIASES,
 } from "./hygiene-identity-patterns.js";
 import {
-  handleGovernanceLaneScan,
-  GOVERNANCE_LANE_SCANNER_QUEUE,
-} from "./governance-lane-scanner.js";
-import {
   handleGovernanceTightenScan,
   GOVERNANCE_TIGHTEN_SCAN_QUEUE,
 } from "./governance-tighten-cron.js";
@@ -334,24 +330,17 @@ const ALL_QUEUES = [
   "side-effects",
   "search-reindex",
   A2AI_TRIGGER_QUEUE,
-  // The daily trust-widening scanner. It was imported, `work()`ed AND
-  // `schedule()`d but never createQueue()'d, so pg-boss v10's FK rejected the
-  // schedule on EVERY boot ("Queue governance.lane-scan not found") and the
-  // scanner never ran once — no agent could ever earn a widened lane. Same
-  // class as cal-backfill-cron (2026-07-12); `queues-are-created.tripwire.test.ts`
-  // now pins it so a third recurrence is a red gate, not a log line nobody reads.
-  GOVERNANCE_LANE_SCANNER_QUEUE,
   // The daily blocked-slot recurrence scanner. Files PENDING
   // governance.work_guideline proposals only. A queue that is worked and
   // scheduled but never createQueue()'d fails pg-boss v10's FK on EVERY boot,
   // and `scheduleSafe` swallows it, so the worker silently never runs — that
-  // has happened twice here (cal-backfill 2026-07-12, and the lane scanner
-  // above). `queues-are-created.tripwire.test.ts` derives THIS list from
+  // has happened twice here (cal-backfill 2026-07-12, and the since-retired
+  // widen-lane scanner). `queues-are-created.tripwire.test.ts` derives THIS list from
   // source and cross-checks it against every worked and scheduled queue.
   BLOCKED_SLOT_RECURRENCE_QUEUE,
   // The daily structure-guideline scanner. Files PENDING
   // governance.structure_guideline proposals only (same created-queue class as
-  // the two scanners above — pinned by queues-are-created.tripwire.test.ts).
+  // the scanner above — pinned by queues-are-created.tripwire.test.ts).
   STRUCTURE_GUIDELINE_SCAN_QUEUE,
   // The WEEKLY playbook lessons scanner. Files PENDING playbook/update
   // proposals that replace stages[].lessons (same created-queue class as the
@@ -478,6 +467,14 @@ const RETIRED_QUEUES: string[] = [
   // grant's approval also read "rejected" after an hour, and the agent
   // scorecard counted each one as a rejection (finding 73ac3ee8).
   "vault-grant-expiry",
+  // Removed 2026-10-30 (structural plan S3, founder Q3): the daily trust-
+  // widening scanner filed a pending `governance.widen_lane` proposal — one
+  // more card in the queue it meant to shrink, granted pod-wide, past the
+  // ladder's reversibility and kind guards, through a second rule-writing
+  // path. The offer is now the earned streak on the card itself
+  // (`earnedStreak`, read by `governanceRules.nextRungs`), granted through
+  // `fileRuleGrant`.
+  "governance.lane-scan",
 ];
 
 /**
@@ -1203,13 +1200,6 @@ export async function registerAllWorkers(): Promise<void> {
     handlePodHygieneNearDupScan()
   );
   logger.info("Registered worker: pod-hygiene.near-dup-scan");
-
-  // Governance trusted-lane scanner (cron: daily 03:30 UTC — files
-  // governance.widen_lane proposals only; never writes governance_rules)
-  await boss.work(GOVERNANCE_LANE_SCANNER_QUEUE, async () =>
-    handleGovernanceLaneScan()
-  );
-  logger.info("Registered worker: governance.lane-scan");
 
   // Governance tighten scan (cron: daily 03:35 UTC — files governance.tighten_lane
   // / governance.advisory proposals only, via the api-filled slot)

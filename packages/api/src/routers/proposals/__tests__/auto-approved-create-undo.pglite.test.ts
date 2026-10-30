@@ -476,3 +476,53 @@ describe("an AUTO-APPROVED link create is undoable", () => {
     expect(after).toEqual([]);
   });
 });
+
+describe("undoing receipts under an EARNED rule pauses it (S3, founder Q3)", () => {
+  /** An earned grant: the ladder wrote it from a card (`source_proposal_id`). */
+  async function earnedRule(): Promise<string> {
+    const id = randomUUID();
+    await q(
+      `insert into governance_rules (id, principal_kind, agent_user_id, scope_kind, target_kind, target_pattern, target_profile, verdict, source_proposal_id, created_by)
+       values ($1, 'agent', $2, 'pod', 'action', 'entity.create', 'person', 'auto', $3, $4)`,
+      [id, AGENT, randomUUID(), `user:${USER}`]
+    );
+    return id;
+  }
+
+  /** A real auto-approved create, re-stamped as decided by `ruleId`. */
+  async function receiptUnder(ruleId: string, title: string): Promise<string> {
+    await createEntity(title);
+    const row = await lastReceipt();
+    await q(
+      `update proposals set data = jsonb_set(data, '{_autoApprove,governanceRuleId}', to_jsonb($1::text)) where id = $2`,
+      [ruleId, row.id]
+    );
+    return row.id;
+  }
+
+  async function ruleState(id: string) {
+    return (
+      await q<{ revoked_at: unknown; revoked_reason: string | null }>(
+        `select revoked_at, revoked_reason from governance_rules where id = $1`,
+        [id]
+      )
+    ).rows[0]!;
+  }
+
+  it("one undo leaves the rule standing; the second within 30 days pauses it with its reason", async () => {
+    const ruleId = await earnedRule();
+    const first = await receiptUnder(ruleId, "Pause One");
+    const second = await receiptUnder(ruleId, "Pause Two");
+
+    expect(await revert(first)).toMatchObject({ success: true });
+    expect(await ruleState(ruleId)).toEqual({
+      revoked_at: null,
+      revoked_reason: null,
+    });
+
+    expect(await revert(second)).toMatchObject({ success: true });
+    const paused = await ruleState(ruleId);
+    expect(paused.revoked_at).not.toBeNull();
+    expect(paused.revoked_reason).toBe("paused_after_reverts");
+  });
+});
