@@ -765,6 +765,20 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     openSessions: z.record(z.string(), z.unknown()),
   });
 
+  // `ask()`'s lens block — what recall ran under: `filter` (the scope the
+  // caller passed), `boost` (the agent's declared focus, re-ordering only).
+  const askLensIdsSchema = z.object({
+    workspaceId: z.string().nullable(),
+    projectId: z.string().nullable(),
+  });
+  const askLensSchema = z
+    .object({
+      filter: askLensIdsSchema,
+      boost: askLensIdsSchema.nullable(),
+      source: z.enum(["agent_focus", "none"]),
+    })
+    .openapi("KnowledgeAppliedLens");
+
   const retrievalResponseSchema = z.object({
     query: z.string(),
     routedTo: z.array(z.string()),
@@ -780,6 +794,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     degraded: z.array(z.string()),
     understanding: z.record(z.string(), z.unknown()),
     verdict: z.enum(["confident", "ambiguous", "empty"]),
+    lens: askLensSchema,
     // The caller's OWN pending captures that text-match the query. `ask()`
     // already computes this block and `handleRetrieval` returns its result
     // verbatim — but a field absent from THIS declared schema is absent from
@@ -834,6 +849,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
    */
   async function handleRetrieval(
     userId: string,
+    agentUserId: string | undefined,
     body: {
       query: string;
       workspaceId?: string;
@@ -856,9 +872,12 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     // living anywhere else was unnameable, the enumerative gate never fired,
     // and `ask` answered "you have no clients" over a pod holding 20 of them in
     // another workspace. Null = the pod-wide profile union.
-    const { workspaceId, catalog } = await resolveKnowledgeLens(
+    //
+    // The calling agent's declared focus is a BOOST only (same helper).
+    const { workspaceId, catalog, focus } = await resolveKnowledgeLens(
       userId,
-      body.workspaceId
+      body.workspaceId,
+      { projectId: body.projectId ?? null, agentUserId }
     );
 
     return ask({
@@ -866,6 +885,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       userId,
       workspaceId,
       projectId: body.projectId ?? null,
+      focus,
       limit: body.limit,
       catalog,
       // Additive A/B diagnostic — attaches `comparison` only when set.
@@ -919,7 +939,11 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
 
     try {
-      const result = await handleRetrieval(userId, c.req.valid("json"));
+      const result = await handleRetrieval(
+        userId,
+        c.get("agentUserId") as string | undefined,
+        c.req.valid("json")
+      );
       return c.json(result, 200);
     } catch (err) {
       logger.error({ err, userId }, "POST /knowledge/search failed");
@@ -977,7 +1001,11 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
 
     try {
-      const result = await handleRetrieval(userId, c.req.valid("json"));
+      const result = await handleRetrieval(
+        userId,
+        c.get("agentUserId") as string | undefined,
+        c.req.valid("json")
+      );
       return c.json(result, 200);
     } catch (err) {
       logger.error({ err, userId }, "POST /knowledge/ask failed");
@@ -1064,6 +1092,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
               // provider down ⇒ measurably thinner recall) from a healthy
               // empty result. Both rendered as "nothing found".
               degraded: z.array(z.string()),
+              // What recall ran under (see retrieval schema).
+              lens: askLensSchema,
               // Where the asked-about kinds live (see retrieval schema).
               spaces: askSpacesHintSchema.optional(),
               queue: askQueueSchema.optional(),
@@ -1117,9 +1147,13 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       // id degrades to pod-wide rather than leaking a foreign workspace's
       // knowledge; a pod-wide query type-infers against the pod-wide profile
       // union, not against whichever workspace happened to sort first.
-      const { workspaceId, catalog } = await resolveKnowledgeLens(
+      const { workspaceId, catalog, focus } = await resolveKnowledgeLens(
         userId,
-        body.workspaceId
+        body.workspaceId,
+        {
+          projectId: body.projectId ?? null,
+          agentUserId: c.get("agentUserId") as string | undefined,
+        }
       );
 
       const result = await ask({
@@ -1127,6 +1161,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
         userId,
         workspaceId,
         projectId: body.projectId ?? null,
+        focus,
         limit: body.limit,
         catalog,
       });
@@ -1173,6 +1208,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
           // withholding it is what let a keyword-only fallback render as a
           // clean empty result.
           degraded: result.degraded,
+          // What recall ran under: the filter passed, the focus that boosted.
+          lens: result.lens,
           // DOOR PARITY (the inverse of `degraded`): the MCP door forwards the
           // pending block and this one did not, so a CLI/REST caller saw only
           // `prependPendingNotice`'s one sentence and never the matches

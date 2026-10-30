@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   horizonScore,
+  HORIZON_WEIGHTS,
   type HorizonRow,
   type HorizonOpts,
 } from "./horizon-rerank.js";
@@ -52,5 +53,51 @@ describe("horizonScore", () => {
     ]);
     // Unparseable string → toDate(null) on lastTouch, falls back to updatedAt.
     expect(() => horizonScore(rows, opts({ lastTouch }))).not.toThrow();
+  });
+});
+
+// ── Lens (S1): L is the shared lens signal, no longer folded to 0 ──
+describe("horizonScore — lens term L", () => {
+  const same = new Date("2026-07-10T00:00:00.000Z");
+  // Two rows equal on every signal but fused position; the second is in focus.
+  const pair: HorizonRow[] = [
+    { id: "out", updatedAt: same, workspaceId: "ws-other" },
+    { id: "in", updatedAt: same, workspaceId: "ws-focus" },
+  ];
+
+  it("each lens profile's weights sum to 1 with L restored", () => {
+    for (const w of Object.values(HORIZON_WEIGHTS)) {
+      expect(w.L).toBeGreaterThan(0);
+      expect(w.R + w.F + w.C + w.Q + w.L).toBeCloseTo(1, 10);
+    }
+  });
+
+  it("a row in focus outranks an otherwise equal row out of focus (project profile)", () => {
+    const out = horizonScore(
+      pair,
+      opts({ lens: "project", focus: { workspaceId: "ws-focus" } })
+    );
+    expect(out.map((x) => x.row.id)).toEqual(["in", "out"]);
+    expect(out).toHaveLength(2); // the out-of-focus row is still returned
+  });
+
+  it("the bound holds: a far more relevant out-of-focus row still wins (workspace profile)", () => {
+    // Q gives the top hit 0.25 over the bottom; L can add at most 0.05.
+    const out = horizonScore(
+      pair,
+      opts({ lens: "workspace", focus: { workspaceId: "ws-focus" } })
+    );
+    expect(out.map((x) => x.row.id)).toEqual(["out", "in"]);
+    const lift = out[1].score - horizonScore(pair, opts())[1].score;
+    expect(lift).toBeCloseTo(HORIZON_WEIGHTS.workspace.L, 10);
+  });
+
+  it("L is 0 with no focus: scores are unchanged", () => {
+    const a = horizonScore(pair, opts({ lens: "project" }));
+    const b = horizonScore(
+      pair,
+      opts({ lens: "project", focus: { workspaceId: "ws-none" } })
+    );
+    expect(a.map((x) => x.score)).toEqual(b.map((x) => x.score));
   });
 });

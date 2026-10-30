@@ -11,7 +11,8 @@
  * Semantics mirror the hub REST door (rest/knowledge.ts): userId is the
  * authenticated caller; `workspaceId` is the lens — it NARROWS recall, and a
  * null/absent lens means pod-wide (the caller's full floor). The lens is carried,
- * never forced. `parseOnly` returns just the understanding + routing (no
+ * never forced. An AGENT's declared focus only boosts (resolveKnowledgeLens);
+ * a person has none. `parseOnly` returns just the understanding + routing (no
  * retrieval) for a caller that needs to route a query before fetching results.
  */
 
@@ -50,15 +51,19 @@ export const knowledgeRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const { workspaceId: lensWs, catalog } = await resolveKnowledgeLens(
-        ctx.userId,
-        input.workspaceId
-      );
+      const {
+        workspaceId: lensWs,
+        catalog,
+        focus,
+      } = await resolveKnowledgeLens(ctx.userId, input.workspaceId, {
+        agentUserId: ctx.agentUserId,
+      });
 
       return ask({
         query: input.query,
         userId: ctx.userId,
         workspaceId: lensWs,
+        focus,
         limit: input.limit,
         catalog,
         parseOnly: input.parseOnly || undefined,
@@ -94,15 +99,19 @@ export const knowledgeRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const { workspaceId: lensWs, catalog } = await resolveKnowledgeLens(
-        ctx.userId,
-        input.workspaceId
-      );
+      const {
+        workspaceId: lensWs,
+        catalog,
+        focus,
+      } = await resolveKnowledgeLens(ctx.userId, input.workspaceId, {
+        agentUserId: ctx.agentUserId,
+      });
 
       const result = await ask({
         query: input.query,
         userId: ctx.userId,
         workspaceId: lensWs,
+        focus,
         limit: input.limit,
         catalog,
       });
@@ -150,6 +159,11 @@ export const knowledgeRouter = router({
          * WHY retrieval was thin; `verdict` says how much to trust the result.
          */
         verdict: result.verdict,
+        /**
+         * What recall ran under: `filter` (the scope passed), `boost` (an
+         * agent's declared focus, re-ordering only; a person has none).
+         */
+        lens: result.lens,
         /**
          * WHY synthesis failed, not merely THAT it did. `synthesisFailed` above
          * is the boolean this collapses out of, kept because callers already

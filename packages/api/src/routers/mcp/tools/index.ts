@@ -729,7 +729,7 @@ export const tools = {
             workspaceId: {
               type: "string",
               description:
-                "Optional: scope to one workspace. Omit for pod-wide recall across everything the user has.",
+                "Optional: scope to one workspace. Omit for pod-wide recall across everything the user has. Your declared focus (synap_set_workspace_focus / synap_set_project_focus) is NOT a scope: it only ranks matching results first and hides nothing. The answer's `lens` says what was applied ({ filter, boost, source }).",
             },
             projectId: {
               type: "string",
