@@ -161,10 +161,6 @@ const LEDGER_EXEMPT: Record<string, string> = {
     "declaration of the stage the work is ALREADY in, not a move",
   "api:services/event-end/run-event-end.ts":
     "argument to updateFocusSession (the door appends)",
-  "api:routers/mcp/handlers/session.ts":
-    "argument to updateFocusSession (the door appends)",
-  "api:services/playbooks/executors/external-agent-executor.ts":
-    "payload field, not a write",
   "api:routers/mcp/tools/index.ts": "JSON-schema property declaration",
   "api:services/tracks/tracks-service.ts":
     "project_tracks.current_stage: the track keeps its own ledger (0274)",
