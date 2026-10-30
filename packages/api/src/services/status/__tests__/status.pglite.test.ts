@@ -1,11 +1,14 @@
 /**
  * The status read and the rollups (status-flow W0b) on real SQL (PGlite):
  *
- *   - `readStatusOf`: an entity's status, words and category; since = its
- *     last transition, else its creation, said as NOT measured; stuck only
- *     past its step's `stuckAfterDays`; a goal's and a session's since from
- *     their own transitions; a session's owed slot is what it waits on; an id
- *     the caller cannot see, or that is not a uuid, is `unknown`;
+ *   - `readStatusOf`: an entity's status, words, category and tone; since =
+ *     its last transition, else its creation, said as NOT measured; stuck
+ *     only past its step's `stuckAfterDays`; a goal's and a session's since
+ *     from their own transitions; a session's owed slot is what it waits on;
+ *     an id the caller cannot see, or that is not a uuid, is `unknown`;
+ *   - a step that DECLARES a wait (`waits`) is what its thing waits on, its
+ *     `refFrom` thing named only when the reader may read it; `include:
+ *     ["moves"]` lists the moves its step offers, and nothing else does;
  *   - `readGoalRollups`: a goal's sessions per category, its moves this
  *     week, what it waits on;
  *   - `readScopeRollup`: a space's things per category, its stuck things
@@ -44,7 +47,20 @@ vi.mock("@synap/database", async (importOriginal) => {
               label: "In talks",
               stuckAfterDays: 3,
             },
+            {
+              key: "sent",
+              category: "active",
+              label: "Proposal sent",
+              waits: {
+                on: "person",
+                waitKind: "their_reply",
+                refFrom: "contactId",
+              },
+            },
             { key: "won", category: "done" },
+            // A pause that declares a wait of its own: its hold names it first.
+            { key: "on_hold", category: "paused", waits: { on: "date" } },
+            { key: "lost", category: "lost", humanOnly: true },
           ],
           unclassified: [],
         };
@@ -64,6 +80,9 @@ import { SQL, is } from "drizzle-orm";
 import { PgTable, getTableConfig } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { readStatusOf } from "../status-read.js";
+import { LIFECYCLE_CATEGORY_TONE } from "@synap-core/types/lifecycle";
+import { resolveStatusTone } from "@synap-core/types/units";
+import { resolveWaitingOnReasonLabel } from "@synap-core/types/vocabulary";
 import { listOpenGoalTracks } from "../../discover/open-goals.js";
 import {
   readGoalRollups,
@@ -87,6 +106,15 @@ const G_QUIET = randomUUID();
 const G_THEIRS = randomUUID();
 const S_THEIRS = randomUUID();
 const NOTE = "33333333-3333-4333-8333-333333333333";
+const PERSON = randomUUID();
+// Two deals in a step that waits on their contact: mine, and another
+// person's contact I may not read. Pod-personal, so no space counts them.
+const E_SENT = randomUUID();
+const E_SENT_HIDDEN = randomUUID();
+const C_MINE = randomUUID();
+const C_THEIRS = randomUUID();
+// A deal paused on a hold, in a pause that declares a wait of its own.
+const E_HELD = randomUUID();
 
 let client: PGlite;
 const q = (sql: string, params: unknown[] = []) => client.query(sql, params);
@@ -235,6 +263,53 @@ beforeAll(async () => {
       [id, owner, owner === ME ? W : null, DEAL, `Deal ${id.slice(0, 4)}`]
     );
   }
+  await q(
+    `insert into profiles (id, slug, display_name, profile_kind, entity_scope) values ($1, 'person', 'Person', 'kind', 'workspace')`,
+    [PERSON]
+  );
+  for (const [id, owner, title] of [
+    [C_MINE, ME, "Ada Lovelace"],
+    [C_THEIRS, OTHER, "Their secret client"],
+  ] as const) {
+    await q(
+      `insert into entities (id, user_id, workspace_id, profile_id, title, properties, created_at, updated_at)
+       values ($1, $2, null, $3, $4, '{}'::jsonb, now(), now())`,
+      [id, owner, PERSON, title]
+    );
+  }
+  for (const [id, contact] of [
+    [E_SENT, C_MINE],
+    [E_SENT_HIDDEN, C_THEIRS],
+  ] as const) {
+    await q(
+      `insert into entities (id, user_id, workspace_id, profile_id, title, status, status_category, properties, created_at, updated_at)
+       values ($1, $2, null, $3, 'A deal', 'sent', 'active', $4::jsonb, now(), now())`,
+      [id, ME, DEAL, JSON.stringify({ stage: "sent", contactId: contact })]
+    );
+  }
+  await q(
+    `insert into entities (id, user_id, workspace_id, profile_id, title, status, status_category, properties, created_at, updated_at)
+     values ($1, $2, null, $3, 'A held deal', 'on_hold', 'paused', '{}'::jsonb, now(), now())`,
+    [E_HELD, ME, DEAL]
+  );
+  const heldSince = new Date().toISOString();
+  await q(
+    `insert into lifecycle_transition_outbox (transition_id, transition, created_at) values ($1, $2::jsonb, now())`,
+    [
+      randomUUID(),
+      JSON.stringify({
+        transitionId: randomUUID(),
+        subjectType: "entity",
+        subjectId: E_HELD,
+        to: "on_hold",
+        category: "paused",
+        userId: ME,
+        workspaceId: null,
+        recordedAt: heldSince,
+        hold: { on: "external", resumeTo: "sent", since: heldSince },
+      }),
+    ]
+  );
   // E_MOVED entered `negotiating` a day ago; E_STUCK never moved.
   await transition("entity", E_MOVED, "entity.transition.completed", 1, {
     role: null,
@@ -313,6 +388,124 @@ describe("readStatusOf", () => {
     }
     expect(by.get("not-an-id")).toEqual({ id: "not-an-id", type: "unknown" });
     expect(out).toHaveLength(10);
+  });
+});
+
+describe("readStatusOf: a step that waits, its tone, its moves", () => {
+  it("a step's declared wait is what the thing waits on, its contact named", async () => {
+    const [sent] = await readStatusOf(ME, [E_SENT]);
+    expect(sent).toMatchObject({
+      type: "entity",
+      status: "sent",
+      label: "Proposal sent",
+      category: "active",
+      tone: LIFECYCLE_CATEGORY_TONE.active,
+      waitingOn: [
+        {
+          reason: "input",
+          count: 1,
+          refs: [
+            {
+              kind: "person",
+              id: C_MINE,
+              label: "Ada Lovelace",
+              waitKind: "their_reply",
+            },
+          ],
+        },
+      ],
+    });
+    // No include: no moves.
+    expect(sent).not.toHaveProperty("moves");
+  });
+
+  it("a contact the reader may not read is counted, never named", async () => {
+    const [hidden] = await readStatusOf(ME, [E_SENT_HIDDEN]);
+    expect(hidden).toMatchObject({
+      type: "entity",
+      waitingOn: [
+        {
+          reason: "input",
+          count: 1,
+          refs: [
+            {
+              kind: "thing",
+              label: resolveWaitingOnReasonLabel("input"),
+              waitKind: "their_reply",
+            },
+          ],
+        },
+      ],
+    });
+    const said = JSON.stringify(hidden);
+    expect(said).not.toContain(C_THEIRS);
+    expect(said).not.toContain("Their secret client");
+  });
+
+  it("a thing held in a pause waits on its hold, not on the step's own wait", async () => {
+    const [held] = await readStatusOf(ME, [E_HELD]);
+    expect(held).toMatchObject({
+      category: "paused",
+      tone: LIFECYCLE_CATEGORY_TONE.paused,
+      hold: { on: "external" },
+      waitingOn: [{ reason: "external", count: 1 }],
+    });
+  });
+
+  it("every answer carries its tone: the option's, else the status word's", async () => {
+    const out = await readStatusOf(ME, [E_STUCK, E_PLAIN, G, S_ACTIVE]);
+    const by = new Map(out.map((a) => [a.id, a]));
+    expect(by.get(E_STUCK)).toMatchObject({
+      tone: LIFECYCLE_CATEGORY_TONE.active,
+    });
+    expect(by.get(E_PLAIN)).toMatchObject({ tone: resolveStatusTone("draft") });
+    expect(by.get(G)).toMatchObject({ tone: resolveStatusTone("active") });
+    expect(by.get(S_ACTIVE)).toMatchObject({
+      tone: resolveStatusTone("active"),
+    });
+  });
+
+  it('include: ["moves"] lists the moves its step offers, a pause needing a hold', async () => {
+    const out = await readStatusOf(ME, [E_SENT, E_PLAIN, G], {
+      include: ["moves"],
+    });
+    const by = new Map(out.map((a) => [a.id, a]));
+    const sent = by.get(E_SENT);
+    expect(sent && "moves" in sent ? sent.moves : null).toEqual([
+      {
+        to: "draft",
+        label: expect.any(String),
+        humanOnly: false,
+        needsHold: false,
+      },
+      {
+        to: "negotiating",
+        label: "In talks",
+        humanOnly: false,
+        needsHold: false,
+      },
+      {
+        to: "won",
+        label: expect.any(String),
+        humanOnly: false,
+        needsHold: false,
+      },
+      {
+        to: "on_hold",
+        label: expect.any(String),
+        humanOnly: false,
+        needsHold: true,
+      },
+      {
+        to: "lost",
+        label: expect.any(String),
+        humanOnly: true,
+        needsHold: false,
+      },
+    ]);
+    // No declared lifecycle (a note), or not a thing (a goal): no moves.
+    expect(by.get(E_PLAIN)).not.toHaveProperty("moves");
+    expect(by.get(G)).not.toHaveProperty("moves");
   });
 });
 
