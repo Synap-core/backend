@@ -40,6 +40,7 @@ import { resolveRankStrategy } from "./rank-strategy.js";
 import { viewCountsByEntity } from "./reinforcement-signal.js";
 import { centralityByEntity } from "./centrality-signal.js";
 import { horizonScore, type HorizonScored } from "./horizon-rerank.js";
+import type { LensFocus } from "./lens-signal.js";
 import { queryIsEnumerative } from "../knowledge/classify.js";
 import { gradeResults, rekey, type RetrievalVerdict } from "./grade.js";
 import {
@@ -63,6 +64,13 @@ export interface RetrieveParams {
    * only restrict, never widen. Orthogonal to workspaceId.
    */
   projectId?: string | null;
+  /**
+   * The caller's FOCUS (an agent's declared workspace / project, a session's
+   * own). It only RE-ORDERS the pool (`lensAffinity`, lens-signal.ts) — every
+   * recall pass runs exactly as without it, so nothing out of focus is hidden.
+   * Never pass an explicit scope here: that is `workspaceId` / `projectId`.
+   */
+  focus?: { workspaceId?: string | null; projectId?: string | null } | null;
   limit?: number;
   /** The workspace's real profile catalog (drives type inference). */
   catalog: ProfileCatalogEntry[];
@@ -228,8 +236,11 @@ export async function fetchOrdered(
  * entity linked to it via `belongs_to_project`. Returned as a Set so recall
  * passes can constrain in-query. The recall halves already gate by userId, so
  * this only resolves membership. Empty set ⇒ nothing belongs to the project.
+ * Also the membership half of a focus (`LensFocus.projectIds`).
  */
-async function resolveProjectIds(projectId: string): Promise<Set<string>> {
+export async function resolveProjectIds(
+  projectId: string
+): Promise<Set<string>> {
   const memberRows = await db
     .select({ id: relations.sourceEntityId })
     .from(relations)
@@ -316,6 +327,19 @@ export async function retrieve(
   // rows and the project's matches never enter the pool (the post-filter alone
   // starves focus mode on a populated pod). Computed once, reused across passes.
   const projectIds = projectId ? await resolveProjectIds(projectId) : undefined;
+  // The focus, resolved once for both rankers. Its project set is read only to
+  // weigh rows, never to constrain a pass.
+  const focusProjectId = params.focus?.projectId ?? null;
+  const focusProjectIds = focusProjectId
+    ? focusProjectId === projectId && projectIds
+      ? projectIds
+      : await resolveProjectIds(focusProjectId)
+    : null;
+  const focusWorkspaceId = params.focus?.workspaceId ?? null;
+  const lensFocus: LensFocus | undefined =
+    focusWorkspaceId || focusProjectIds
+      ? { workspaceId: focusWorkspaceId, projectIds: focusProjectIds }
+      : undefined;
 
   // 1. Recall passes — semantic + lexical, unscoped baseline + type-scoped.
   const passes = await Promise.all([
@@ -446,11 +470,12 @@ export async function retrieve(
       temporal: understanding.temporal,
       now,
       eventTs,
+      focus: lensFocus,
     });
   };
 
   // horizon = the lens-weighted scorer (recency + reinforcement + centrality +
-  // query relevance; L=0 this phase). Batches its signals over the pool ids.
+  // query relevance + lens affinity L). Batches its signals over the pool ids.
   const runHorizon = async (): Promise<HorizonScored<EntityRow>[]> => {
     const ids = ordered.map((r) => r.id);
     // Each Horizon signal degrades independently: a failed fetch (e.g. the
@@ -489,6 +514,7 @@ export async function retrieve(
       viewCounts,
       lastTouch,
       centrality,
+      focus: lensFocus,
     });
   };
 

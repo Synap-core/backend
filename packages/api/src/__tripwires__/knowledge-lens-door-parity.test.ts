@@ -20,7 +20,11 @@
  *      correctness (guards-and-tests.md): three doors agreeing on "first
  *      workspace" would pass (1) and fail (2);
  *   3. a workspace lens narrows the catalog on every door, and a NON-member
- *      workspace degrades to pod-wide on every door (never honoured).
+ *      workspace degrades to pod-wide on every door (never honoured);
+ *   4. an AGENT caller's declared focus reaches `ask()` as a BOOST (`focus`),
+ *      never as the lens, on every door, and the `lens` block `ask()` returns
+ *      reaches every door's response (structural plan S1). A door that drops
+ *      the agent id, or forwards the focus as `workspaceId`, fails here.
  *
  * The repository is stubbed so the catalog DIFFERS by lens: `""` (pod-wide)
  * returns ws-A ∪ ws-B profiles, `ws-A` returns only ws-A's. A door that
@@ -48,10 +52,27 @@ const PROFILES_B = [
   { slug: "client", displayName: "Client", plural: "Clients" },
 ];
 
+const AGENT = "agent-1";
+const LENS = {
+  filter: { workspaceId: null, projectId: null },
+  boost: { workspaceId: WS_B, projectId: null },
+  source: "agent_focus",
+};
+
 const { askMock, synthesizeMock, getAccessibleProfiles } = vi.hoisted(() => ({
   askMock: vi.fn(),
   synthesizeMock: vi.fn(),
   getAccessibleProfiles: vi.fn(),
+}));
+
+// The agent's declared focus: a workspace the caller can see.
+vi.mock("../services/agent-identity-service.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../services/agent-identity-service.js")
+  >()),
+  getAgentFocusWorkspaceId: async (agentUserId: string) =>
+    agentUserId === AGENT ? WS_B : null,
+  getAgentFocusProjectId: async () => null,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -98,6 +119,8 @@ const hubApp = (() => {
   app.use("*", async (c, next) => {
     c.set("scopes" as never, ["hub-protocol.read"] as never);
     c.set("userId" as never, USER as never);
+    const agent = c.req.header("x-test-agent");
+    if (agent) c.set("agentUserId" as never, agent as never);
     await next();
   });
   registerKnowledgeRoutes(app as never);
@@ -105,58 +128,90 @@ const hubApp = (() => {
 })();
 
 type Captured = { catalog: unknown; workspaceId: unknown };
+type Driven = Captured & { focus: unknown; response: unknown };
 
-function lastAsk(): Captured {
-  const call = askMock.mock.calls.at(-1)?.[0] as Captured | undefined;
+function lastAsk(response: unknown): Driven {
+  const call = askMock.mock.calls.at(-1)?.[0] as
+    (Captured & { focus?: unknown }) | undefined;
   if (!call) throw new Error("door never reached ask()");
-  return { catalog: call.catalog, workspaceId: call.workspaceId };
+  return {
+    catalog: call.catalog,
+    workspaceId: call.workspaceId,
+    focus: call.focus ?? null,
+    response,
+  };
 }
 
-/** Each door, driven for real, returns what it handed `ask()`. */
-const DOORS: Record<string, (ws?: string) => Promise<Captured>> = {
-  "tRPC knowledge.answer": async (ws) => {
-    await knowledgeRouter
-      .createCaller({ authenticated: true, userId: USER } as never)
-      .answer({ query: "who are my clients", workspaceId: ws });
-    return lastAsk();
-  },
-  "tRPC knowledge.search": async (ws) => {
-    await knowledgeRouter
-      .createCaller({ authenticated: true, userId: USER } as never)
-      .search({ query: "who are my clients", workspaceId: ws });
-    return lastAsk();
-  },
-  "Hub POST /knowledge/answer": async (ws) => {
-    const res = await hubApp.request("/knowledge/answer", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ question: "who are my clients", workspaceId: ws }),
-    });
-    expect(res.status).toBe(200);
-    return lastAsk();
-  },
-  "Hub POST /knowledge/search": async (ws) => {
-    const res = await hubApp.request("/knowledge/search", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ query: "who are my clients", workspaceId: ws }),
-    });
-    expect(res.status).toBe(200);
-    return lastAsk();
-  },
-  "MCP synap_ask": async (ws) => {
-    await readHandlers.synap_ask!({
-      toolName: "synap_ask",
-      args: { query: "who are my clients", ...(ws ? { workspaceId: ws } : {}) },
-      userId: USER,
-      apiKeyScopes: ["mcp.read"],
-      caller: {} as never,
-      lensCaller: {} as never,
-      workspaceAccessible: false,
-    });
-    return lastAsk();
-  },
+const trpc = (agent?: string) =>
+  knowledgeRouter.createCaller({
+    authenticated: true,
+    userId: USER,
+    ...(agent ? { agentUserId: agent } : {}),
+  } as never);
+const hub = async (path: string, body: object, agent?: string) => {
+  const res = await hubApp.request(path, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(agent ? { "x-test-agent": agent } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  expect(res.status).toBe(200);
+  return res.json();
 };
+
+/** Each door, driven for real, returns what it handed `ask()` + its response. */
+const DOORS: Record<string, (ws?: string, agent?: string) => Promise<Driven>> =
+  {
+    "tRPC knowledge.answer": async (ws, agent) =>
+      lastAsk(
+        await trpc(agent).answer({
+          query: "who are my clients",
+          workspaceId: ws,
+        })
+      ),
+    "tRPC knowledge.search": async (ws, agent) =>
+      lastAsk(
+        await trpc(agent).search({
+          query: "who are my clients",
+          workspaceId: ws,
+        })
+      ),
+    "Hub POST /knowledge/answer": async (ws, agent) =>
+      lastAsk(
+        await hub(
+          "/knowledge/answer",
+          { question: "who are my clients", workspaceId: ws },
+          agent
+        )
+      ),
+    "Hub POST /knowledge/search": async (ws, agent) =>
+      lastAsk(
+        await hub(
+          "/knowledge/search",
+          { query: "who are my clients", workspaceId: ws },
+          agent
+        )
+      ),
+    "MCP synap_ask": async (ws, agent) => {
+      const result = await readHandlers.synap_ask!({
+        toolName: "synap_ask",
+        args: {
+          query: "who are my clients",
+          ...(ws ? { workspaceId: ws } : {}),
+        },
+        userId: USER,
+        ...(agent ? { agentUserId: agent } : {}),
+        apiKeyScopes: ["mcp.read"],
+        caller: {} as never,
+        lensCaller: {} as never,
+        workspaceAccessible: false,
+      });
+      const text = (result.content?.[0] as { text?: string } | undefined)?.text;
+      return lastAsk(text ? JSON.parse(text) : null);
+    },
+  };
 
 beforeEach(() => {
   askMock.mockReset();
@@ -166,6 +221,7 @@ beforeEach(() => {
     pending: null,
     degraded: [],
     verdict: "empty",
+    lens: LENS,
   });
   synthesizeMock.mockReset();
   synthesizeMock.mockResolvedValue({
@@ -198,7 +254,11 @@ describe("knowledge doors — ONE lens + catalog resolution", () => {
       seen[name] = await drive(undefined);
     }
     for (const [name, got] of Object.entries(seen)) {
-      expect({ door: name, ...got }).toEqual({
+      expect({
+        door: name,
+        catalog: got.catalog,
+        workspaceId: got.workspaceId,
+      }).toEqual({
         door: name,
         catalog: UNION,
         workspaceId: null,
@@ -209,7 +269,11 @@ describe("knowledge doors — ONE lens + catalog resolution", () => {
   it("WORKSPACE lens narrows the catalog to that workspace on every door", async () => {
     for (const [name, drive] of Object.entries(DOORS)) {
       const got = await drive(WS_B);
-      expect({ door: name, ...got }).toEqual({
+      expect({
+        door: name,
+        catalog: got.catalog,
+        workspaceId: got.workspaceId,
+      }).toEqual({
         door: name,
         catalog: [{ slug: "client", displayName: "Client", plural: "Clients" }],
         workspaceId: WS_B,
@@ -220,12 +284,43 @@ describe("knowledge doors — ONE lens + catalog resolution", () => {
   it("a NON-member workspace degrades to pod-wide on every door (never honoured)", async () => {
     for (const [name, drive] of Object.entries(DOORS)) {
       const got = await drive(WS_FOREIGN);
-      expect({ door: name, ...got }).toEqual({
+      expect({
+        door: name,
+        catalog: got.catalog,
+        workspaceId: got.workspaceId,
+      }).toEqual({
         door: name,
         catalog: UNION,
         workspaceId: null,
       });
     }
     expect(getAccessibleProfiles).not.toHaveBeenCalledWith(USER, WS_FOREIGN);
+  });
+
+  it("an AGENT's declared focus reaches ask() as a boost, never the lens, and `lens` reaches the response", async () => {
+    for (const [name, drive] of Object.entries(DOORS)) {
+      const got = await drive(undefined, AGENT);
+      expect({
+        door: name,
+        workspaceId: got.workspaceId,
+        focus: got.focus,
+        lens: (got.response as { lens?: unknown } | null)?.lens,
+      }).toEqual({
+        door: name,
+        workspaceId: null, // still pod-wide: the focus is not a filter
+        focus: { workspaceId: WS_B, projectId: null, source: "agent_focus" },
+        lens: LENS,
+      });
+    }
+  });
+
+  it("a PERSON (no agent) gets no focus on any door", async () => {
+    for (const [name, drive] of Object.entries(DOORS)) {
+      const got = await drive(undefined);
+      expect({ door: name, focus: got.focus }).toEqual({
+        door: name,
+        focus: null,
+      });
+    }
   });
 });

@@ -33,8 +33,10 @@
  *    lexical + graph, owner/visibility floored — the same engine behind
  *    `synap_ask` / knowledge search). Pod-wide on purpose: raw captures are
  *    rarely filed into the session's workspace or project, so a lensed recall
- *    would starve exactly the case this exists for; the session's workspace is
- *    a small PREFERENCE instead (`WORKSPACE_BONUS`).
+ *    would starve exactly the case this exists for; the session's workspace
+ *    and project are its FOCUS instead: they re-order the pool (`retrieve`'s
+ *    `focus`) and add a small PREFERENCE (`LENS_BONUS` × `lensAffinity`, the
+ *    one lens signal the rankers share).
  * 3. Relevance floor. `retrieve()` returns an ORDER, not a score, and its graph
  *    leg can pull in neighbours with no evidence of their own. So each
  *    candidate is scored on its own evidence: cosine similarity of its stored
@@ -96,6 +98,7 @@ import {
 } from "@synap-core/types/focus-sessions";
 import { startedByAutomation } from "./session-kind.js";
 import { tokenize } from "../routing/suggest-routes.js";
+import { lensAffinity, type LensFocus } from "../retrieval/lens-signal.js";
 
 const logger = createLogger({ module: "focus-sessions/session-recall" });
 
@@ -105,7 +108,10 @@ export const RECALL_MAX = 5;
 export const RECALL_MIN_SCORE = 0.35;
 /** Retrieval pool: wide enough that the floor, not the pool, decides. */
 const RECALL_POOL = 20;
-const WORKSPACE_BONUS = 0.03;
+/** Preference for an item in the session's focus, scaled by `lensAffinity`
+ *  (1 / 0.75 / 0.5). 0.04 keeps it under `NOTE_BONUS` and keeps the three
+ *  levels apart once the score is rounded to two decimals. */
+const LENS_BONUS = 0.04;
 const NOTE_BONUS = 0.05;
 const NOTE_KINDS: ReadonlySet<string> = new Set(["note", "idea"]);
 const QUERY_MAX = 600;
@@ -151,6 +157,8 @@ export interface RecallCandidate {
   title: string | null;
   type: string;
   workspaceId: string | null;
+  /** The space a pod-wide row was written from, where one was stamped. */
+  homeWorkspaceId?: string | null;
   /** Searchable text of the candidate (title + preview). */
   text: string;
   /** Cosine similarity of its stored embedding to the query; null = no vector. */
@@ -174,7 +182,8 @@ export function selectRecalled(input: {
   query: string;
   candidates: readonly RecallCandidate[];
   excludeIds: ReadonlySet<string>;
-  sessionWorkspaceId: string | null;
+  /** The session's workspace + project members (`lensAffinity`). */
+  focus: LensFocus | null;
   now: Date;
   max?: number;
   minScore?: number;
@@ -196,9 +205,7 @@ export function selectRecalled(input: {
     if (evidence < floor) return;
     const bonus =
       (NOTE_KINDS.has(c.type) ? NOTE_BONUS : 0) +
-      (input.sessionWorkspaceId && c.workspaceId === input.sessionWorkspaceId
-        ? WORKSPACE_BONUS
-        : 0);
+      lensAffinity(c, input.focus) * LENS_BONUS;
     const reason =
       semantic >= lexical.score
         ? "Close in meaning to this session"
@@ -257,7 +264,11 @@ export interface RecallDeps {
     query: string;
     userId: string;
     limit: number;
+    /** The session's own workspace / project: re-orders, never filters. */
+    focus?: { workspaceId: string | null; projectId: string | null };
   }) => Promise<Array<Omit<RecallCandidate, "semantic">>>;
+  /** A project's entity-id set (the project + its members). */
+  projectMembers: (projectId: string) => Promise<ReadonlySet<string>>;
   /** Cosine similarity per entity id; an absent id has no vector. */
   similarity: (
     query: string,
@@ -282,6 +293,7 @@ async function defaultRetrieve(args: {
   query: string;
   userId: string;
   limit: number;
+  focus?: { workspaceId: string | null; projectId: string | null };
 }): Promise<Array<Omit<RecallCandidate, "semantic">>> {
   const { resolveKnowledgeLens } = await import("../knowledge/resolve-lens.js");
   const { retrieve } = await import("../retrieval/retrieve.js");
@@ -291,6 +303,7 @@ async function defaultRetrieve(args: {
     query: args.query,
     userId: args.userId,
     workspaceId: null,
+    focus: args.focus,
     limit: args.limit,
     catalog,
   });
@@ -299,11 +312,19 @@ async function defaultRetrieve(args: {
     title: (e.title as string | null) ?? null,
     type: String(e.type ?? ""),
     workspaceId: (e.workspaceId as string | null) ?? null,
+    homeWorkspaceId: (e.homeWorkspaceId as string | null) ?? null,
     text: [e.title, e.preview, e.content]
       .filter((t): t is string => typeof t === "string")
       .join(" ")
       .slice(0, 4000),
   }));
+}
+
+async function defaultProjectMembers(
+  projectId: string
+): Promise<ReadonlySet<string>> {
+  const { resolveProjectIds } = await import("../retrieval/retrieve.js");
+  return resolveProjectIds(projectId);
 }
 
 async function defaultSimilarity(
@@ -392,6 +413,7 @@ async function defaultSharedWithOthers(session: {
 
 const DEFAULT_DEPS: RecallDeps = {
   retrieve: defaultRetrieve,
+  projectMembers: defaultProjectMembers,
   similarity: defaultSimilarity,
   post: defaultPost,
   sharedWithOthers: defaultSharedWithOthers,
@@ -509,8 +531,18 @@ export async function runSessionRecall(
     const excludeIds = new Set<string>(linked.map((l) => l.toId));
     if (session.subjectEntityId) excludeIds.add(session.subjectEntityId);
 
+    // FOCUS: the session's own workspace and project boost, never filter.
+    const sessionFocus = {
+      workspaceId: session.workspaceId ?? null,
+      projectId: session.projectId ?? null,
+    };
     const pool = query
-      ? await d.retrieve({ query, userId: session.userId, limit: RECALL_POOL })
+      ? await d.retrieve({
+          query,
+          userId: session.userId,
+          limit: RECALL_POOL,
+          focus: sessionFocus,
+        })
       : [];
     const open = pool.filter(
       (c) =>
@@ -526,7 +558,12 @@ export async function runSessionRecall(
       query,
       candidates: open.map((c) => ({ ...c, semantic: sims.get(c.id) ?? null })),
       excludeIds,
-      sessionWorkspaceId: session.workspaceId ?? null,
+      focus: {
+        workspaceId: sessionFocus.workspaceId,
+        projectIds: sessionFocus.projectId
+          ? await d.projectMembers(sessionFocus.projectId)
+          : null,
+      },
       now,
     });
 

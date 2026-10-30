@@ -90,7 +90,7 @@ function isInvalidUuidInput(err: unknown): boolean {
 
 export const readHandlers: McpHandlerMap = {
   synap_ask: async (ctx: McpToolContext): Promise<CallToolResult> => {
-    const { toolName, args, userId, apiKeyScopes } = ctx;
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     if (typeof args.query !== "string" || args.query.trim() === "") {
       return ok({ error: "query is required" });
@@ -113,10 +113,14 @@ export const readHandlers: McpHandlerMap = {
     //    the pod-wide profile UNION. This door used to pass NO catalog when
     //    unscoped (and before that, the first-membership workspace), so the
     //    same pod-wide question type-inferred differently here than on the
-    //    Hub and tRPC doors.
-    const { workspaceId, catalog } = await resolveKnowledgeLens(
+    //    Hub and tRPC doors;
+    //  - the agent's declared focus is a BOOST (re-orders, never hides); the
+    //    explicit `workspaceId` / `projectId` args stay the filter.
+    const projectId = (args.projectId as string | undefined) ?? null;
+    const { workspaceId, catalog, focus } = await resolveKnowledgeLens(
       userId,
-      args.workspaceId as string | undefined
+      args.workspaceId as string | undefined,
+      { projectId, agentUserId }
     );
     const compare = args.compare === true;
     // Retrieve across all substrates (same call as /knowledge/search).
@@ -124,7 +128,8 @@ export const readHandlers: McpHandlerMap = {
       query: args.query as string,
       userId,
       workspaceId,
-      projectId: (args.projectId as string | undefined) ?? null,
+      projectId,
+      focus,
       limit: (args.limit as number) || undefined,
       catalog,
       compare: compare || undefined,
@@ -138,6 +143,7 @@ export const readHandlers: McpHandlerMap = {
         mode: "compare",
         query: args.query,
         understanding: retrieved.understanding,
+        lens: retrieved.lens,
         comparison: retrieved.comparison ?? null,
       });
     }
@@ -206,6 +212,7 @@ export const readHandlers: McpHandlerMap = {
         ...spacesBlock,
         ...queueBlock,
         degraded: retrieved.degraded,
+        lens: retrieved.lens,
         message:
           `⚠️ AI synthesis did not run. ${failure.message} ` +
           (failure.retryable
@@ -242,6 +249,7 @@ export const readHandlers: McpHandlerMap = {
       ...spacesBlock,
       ...queueBlock,
       degraded: retrieved.degraded,
+      lens: retrieved.lens,
     });
   },
   synap_get_entities: async (ctx: McpToolContext): Promise<CallToolResult> => {

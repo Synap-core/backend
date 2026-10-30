@@ -16659,6 +16659,34 @@ export interface StartHere {
 }
 export type AskQueueBlock = Pick<StartHere, "openSessions" | "owedByPerson" | "pendingReview">;
 /**
+ * The lens an answer reports — `lens: { filter, boost, source }` on `ask`'s
+ * envelope, on every door that returns it (MCP `synap_ask`, Hub
+ * `/knowledge/search` + `/knowledge/answer`, tRPC `knowledge.search` +
+ * `knowledge.answer`). PURE, and kept apart from `resolve-lens.ts` (which reads
+ * the DB) so `ask()` can build it without that module's imports.
+ */
+/** What only RE-ORDERS recall: the calling agent's declared focus. */
+export interface KnowledgeFocus {
+	workspaceId: string | null;
+	projectId: string | null;
+	source: "agent_focus";
+}
+/** The lens an answer reports (`lens` on ask's envelope): what was applied. */
+export interface AppliedLens {
+	/** What NARROWED recall — the scope the caller passed (null = pod-wide). */
+	filter: {
+		projectId: string | null;
+		workspaceId: string | null;
+	};
+	/** What only RE-ORDERED recall; null when nothing was boosted. */
+	boost: {
+		projectId: string | null;
+		workspaceId: string | null;
+	} | null;
+	/** Where the boost came from. */
+	source: KnowledgeFocus["source"] | "none";
+}
+/**
  * A degradation tag on the response. Substrate outages use the substrate name;
  * the semantic backbone additionally reports `"semantic:vector-down"` when its
  * vector leg was EXPECTED but ran keyword-only (the embedding provider failed) —
@@ -16713,6 +16741,12 @@ export interface AskResult {
 	degraded: DegradedTag[];
 	/** The semantic engine's query understanding (glass-box). */
 	understanding: QueryUnderstanding;
+	/**
+	 * What lens this answer ran under: `filter` (the scope the caller passed),
+	 * `boost` (the agent's declared focus, re-ordering only) and its `source`.
+	 * Always present, so an agent never has to guess whether its focus applied.
+	 */
+	lens: AppliedLens;
 	/** The semantic engine's CRAG verdict. */
 	verdict: RetrievalVerdict;
 	/** A/B ranker comparison — present only when `compare` was requested. */
@@ -38184,6 +38218,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				degraded: DegradedTag[];
 				detail: "brief" | "full" | "sources" | undefined;
 				failureClass: AiFailureClass | undefined;
+				lens: AppliedLens;
 				queue: AskQueueBlock | undefined;
 				routedTo: string[];
 				sources: SynthesisSource[];

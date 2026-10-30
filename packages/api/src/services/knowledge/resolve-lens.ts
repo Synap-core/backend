@@ -21,6 +21,13 @@
  *    caller's floor (`getAccessibleProfiles` workspace-less branch: system +
  *    user + member/owned/pod-visible workspace + shared). A workspace lens =
  *    that workspace's accessible profiles.
+ *  - FOCUS (structural plan S1, decision 756c740f): an explicit `workspaceId` /
+ *    `projectId` from the caller is a FILTER. The calling agent's DECLARED
+ *    focus (`synap_set_workspace_focus` / `synap_set_project_focus`) is only a
+ *    BOOST: it re-orders recall and never hides anything. Read here, once, for
+ *    every door; never guessed (a person has no focus, a session's project is
+ *    never an agent's focus). An axis the filter already covers is not boosted
+ *    again, and a focus workspace the caller cannot see is dropped.
  */
 
 import { getDb, ProfileRepository } from "@synap/database";
@@ -29,17 +36,62 @@ import {
   toProfileCatalogEntry,
   type ProfileCatalogEntry,
 } from "../retrieval/index.js";
+import type { KnowledgeFocus } from "./applied-lens.js";
+
+export type { KnowledgeFocus } from "./applied-lens.js";
 
 export interface KnowledgeLens {
   /** The lens recall runs under. null = pod-wide (the caller's full floor). */
   workspaceId: string | null;
   /** Type-inference catalog, exactly as wide as `workspaceId`. */
   catalog: ProfileCatalogEntry[];
+  /** The boost (never a filter). null = no agent, or no declared focus. */
+  focus: KnowledgeFocus | null;
+}
+
+/**
+ * The calling agent's declared focus, as a boost. A failed read degrades to no
+ * focus: a boost is advisory and must never fail recall.
+ */
+async function resolveAgentFocus(
+  userId: string,
+  agentUserId: string,
+  filter: { workspaceId: string | null; projectId: string | null }
+): Promise<KnowledgeFocus | null> {
+  const { getAgentFocusWorkspaceId, getAgentFocusProjectId } =
+    await import("../agent-identity-service.js");
+  const [declaredWs, declaredProject] = await Promise.all([
+    getAgentFocusWorkspaceId(agentUserId).catch(() => null),
+    getAgentFocusProjectId(agentUserId).catch(() => null),
+  ]);
+  const ws =
+    declaredWs &&
+    declaredWs !== filter.workspaceId &&
+    (
+      await validateWorkspaceAccess(userId, [declaredWs]).catch(
+        (): string[] => []
+      )
+    ).includes(declaredWs)
+      ? declaredWs
+      : null;
+  const projectId =
+    declaredProject && declaredProject !== filter.projectId
+      ? declaredProject
+      : null;
+  return ws || projectId
+    ? { workspaceId: ws, projectId, source: "agent_focus" }
+    : null;
 }
 
 export async function resolveKnowledgeLens(
   userId: string,
-  requestedWorkspaceId: string | null | undefined
+  requestedWorkspaceId: string | null | undefined,
+  opts: {
+    /** The caller's explicit project filter, so the focus does not repeat it. */
+    projectId?: string | null;
+    /** The authenticated agent behind the call, if any (its focus boosts). */
+    agentUserId?: string | null;
+  } = {}
 ): Promise<KnowledgeLens> {
   let workspaceId: string | null = null;
   if (requestedWorkspaceId) {
@@ -64,5 +116,12 @@ export async function resolveKnowledgeLens(
     return entry ? [entry] : [];
   });
 
-  return { workspaceId, catalog };
+  const focus = opts.agentUserId
+    ? await resolveAgentFocus(userId, opts.agentUserId, {
+        workspaceId,
+        projectId: opts.projectId ?? null,
+      }).catch(() => null)
+    : null;
+
+  return { workspaceId, catalog, focus };
 }

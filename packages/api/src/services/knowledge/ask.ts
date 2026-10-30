@@ -60,6 +60,11 @@ import { structuredLookup } from "./structured.js";
 import { searchLibraryForAsk } from "../library/ask-lane.js";
 import type { AskSpacesHint } from "../discover/space-catalog.js";
 import { isQueueQuestion, type AskQueueBlock } from "./queue-question.js";
+import {
+  describeAppliedLens,
+  type AppliedLens,
+  type KnowledgeFocus,
+} from "./applied-lens.js";
 
 /**
  * A degradation tag on the response. Substrate outages use the substrate name;
@@ -83,6 +88,11 @@ export interface AskParams {
    * Orthogonal to workspaceId, pure-narrowing. Forwarded to the retrieval engine.
    */
   projectId?: string | null;
+  /**
+   * The calling agent's declared focus (`resolveKnowledgeLens`). A BOOST only:
+   * it re-orders the semantic substrate and never narrows any substrate.
+   */
+  focus?: KnowledgeFocus | null;
   /** Profile catalog for the semantic engine's type inference. */
   catalog: ProfileCatalogEntry[];
   limit?: number;
@@ -150,6 +160,12 @@ export interface AskResult {
   degraded: DegradedTag[];
   /** The semantic engine's query understanding (glass-box). */
   understanding: QueryUnderstanding;
+  /**
+   * What lens this answer ran under: `filter` (the scope the caller passed),
+   * `boost` (the agent's declared focus, re-ordering only) and its `source`.
+   * Always present, so an agent never has to guess whether its focus applied.
+   */
+  lens: AppliedLens;
   /** The semantic engine's CRAG verdict. */
   verdict: RetrievalVerdict;
   /** A/B ranker comparison — present only when `compare` was requested. */
@@ -217,9 +233,18 @@ async function settle(p: Promise<unknown[]>): Promise<Settled> {
 }
 
 export async function ask(params: AskParams): Promise<AskResult> {
-  const { query, userId, workspaceId, projectId, catalog, compare, parseOnly } =
-    params;
+  const {
+    query,
+    userId,
+    workspaceId,
+    projectId,
+    focus,
+    catalog,
+    compare,
+    parseOnly,
+  } = params;
   const limit = params.limit ?? 10;
+  const lens = describeAppliedLens({ workspaceId, projectId }, focus);
   const {
     substrates,
     primary: intent,
@@ -245,6 +270,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
       degraded: [],
       understanding: understandQuery(query, catalog),
       verdict: "empty",
+      lens,
     };
   }
 
@@ -256,6 +282,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
     userId,
     workspaceId,
     projectId,
+    focus,
     catalog,
     limit,
     compare,
@@ -491,6 +518,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
     degraded,
     understanding: semantic.understanding,
     verdict: semantic.verdict,
+    lens,
     ...(semantic.comparison ? { comparison: semantic.comparison } : {}),
     // Distinct, labeled block — NEVER folded into `answers`. Present only when
     // the caller has matching pending captures of their own.

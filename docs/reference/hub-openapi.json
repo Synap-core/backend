@@ -2941,6 +2941,29 @@
         "type": "array",
         "items": { "type": "object", "additionalProperties": {} }
       },
+      "KnowledgeAppliedLens": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "properties": {
+              "workspaceId": { "type": ["string", "null"] },
+              "projectId": { "type": ["string", "null"] }
+            },
+            "required": ["workspaceId", "projectId"]
+          },
+          "boost": {
+            "type": ["object", "null"],
+            "properties": {
+              "workspaceId": { "type": ["string", "null"] },
+              "projectId": { "type": ["string", "null"] }
+            },
+            "required": ["workspaceId", "projectId"]
+          },
+          "source": { "type": "string", "enum": ["agent_focus", "none"] }
+        },
+        "required": ["filter", "boost", "source"]
+      },
       "KnowledgeAnswerSource": {
         "type": "object",
         "properties": {
@@ -18415,6 +18438,9 @@
                       "type": "string",
                       "enum": ["confident", "ambiguous", "empty"]
                     },
+                    "lens": {
+                      "$ref": "#/components/schemas/KnowledgeAppliedLens"
+                    },
                     "pending": {
                       "type": "object",
                       "properties": {
@@ -18574,7 +18600,8 @@
                     "answers",
                     "degraded",
                     "understanding",
-                    "verdict"
+                    "verdict",
+                    "lens"
                   ]
                 }
               }
@@ -19026,6 +19053,9 @@
                       "type": "string",
                       "enum": ["confident", "ambiguous", "empty"]
                     },
+                    "lens": {
+                      "$ref": "#/components/schemas/KnowledgeAppliedLens"
+                    },
                     "pending": {
                       "type": "object",
                       "properties": {
@@ -19185,7 +19215,8 @@
                     "answers",
                     "degraded",
                     "understanding",
-                    "verdict"
+                    "verdict",
+                    "lens"
                   ]
                 }
               }
@@ -19300,6 +19331,9 @@
                       "type": "array",
                       "items": { "type": "string" }
                     },
+                    "lens": {
+                      "$ref": "#/components/schemas/KnowledgeAppliedLens"
+                    },
                     "spaces": {
                       "anyOf": [
                         {
@@ -19376,7 +19410,13 @@
                       "required": ["code", "message", "retryable"]
                     }
                   },
-                  "required": ["answer", "sources", "routedTo", "degraded"]
+                  "required": [
+                    "answer",
+                    "sources",
+                    "routedTo",
+                    "degraded",
+                    "lens"
+                  ]
                 }
               }
             }
