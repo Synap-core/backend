@@ -149,7 +149,11 @@ export interface ProposalToolRun {
   tool?: string;
   /** The verb's own description, when it has one. */
   description?: string;
-  /** Every argument, in the order the verb declares them, then the rest. */
+  /**
+   * Every argument: the ones the verb declares first, then the rest. Within
+   * each group, the stored order (jsonb sorts object keys, so neither the
+   * schema's nor the agent's own order survives a stored row).
+   */
   parameters: ProposalToolRunParameter[];
 }
 

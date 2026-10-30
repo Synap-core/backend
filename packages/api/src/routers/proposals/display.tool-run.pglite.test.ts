@@ -148,14 +148,12 @@ describe("a capability.run reads as the call it makes", () => {
     expect(run?.action).toBe("Create server");
     expect(run?.tool).toBe("Hetzner cloud");
     expect(run?.description).toBe("Create a server on Hetzner Cloud");
-    expect(run?.parameters.map((p) => p.key)).toEqual([
-      "serverType",
-      "name",
-      "image",
-      "location",
-      "userData",
-      "apiToken",
-    ]);
+    // The declared arguments lead, then the rest. Within each, the order is
+    // what jsonb kept (it sorts object keys: shorter first), never the order
+    // the schema or the agent wrote — so this asserts groups, not positions.
+    const keys = run!.parameters.map((p) => p.key);
+    expect(keys.slice(0, 2).sort()).toEqual(["name", "serverType"]);
+    expect([...keys].sort()).toEqual(Object.keys(PARAMETERS).sort());
     const byKey = new Map(run!.parameters.map((p) => [p.key, p]));
     expect(byKey.get("serverType")).toEqual({
       key: "serverType",
