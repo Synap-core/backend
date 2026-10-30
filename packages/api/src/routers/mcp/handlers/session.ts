@@ -46,10 +46,7 @@ import {
 import { readAgentsForHandoff } from "../../../services/agent-dispatch/agents-for-handoff.js";
 import { WORK_GRAPH_MAX_WINDOW_HOURS } from "../../../services/focus-sessions/work-graph-window.js";
 import type { UpdateFocusSessionParams } from "../../../services/focus-sessions/update-session.js";
-import {
-  SESSION_STATUSES,
-  SESSION_TITLE_MAX,
-} from "@synap-core/types/focus-sessions";
+import { SESSION_TITLE_MAX } from "@synap-core/types/focus-sessions";
 import {
   SESSION_KINDS,
   attachSessionKind,
