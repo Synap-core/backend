@@ -8503,6 +8503,37 @@ export interface ProposalPartReach {
 	/** Steps whose reach could not be read. Non-zero: the lists may be short. */
 	unreadSteps: number;
 }
+/** One argument of a tool run, as the reviewer reads it. */
+export interface ProposalToolRunParameter {
+	/** The key the agent passed (`serverType`). */
+	key: string;
+	/** The schema's `title`, else the key in words ("Server type"). */
+	label: string;
+	/** What the verb's schema says the argument is, when it says. */
+	description?: string;
+	/** The value the agent passed, whole. Absent when `secret`. */
+	value?: unknown;
+	/** The argument names a credential: its value never leaves the pod. */
+	secret?: true;
+}
+/**
+ * A `capability.run` as the call it makes (`ProposalReviewModel.toolRun`):
+ * WHAT it does, THROUGH which tool, WITH which arguments.
+ */
+export interface ProposalToolRun {
+	/** The action in words, imperative: "Create server". */
+	action: string;
+	/** The tool(s) it runs through, in words ("Hetzner cloud"); absent = none readable. */
+	tool?: string;
+	/** The verb's own description, when it has one. */
+	description?: string;
+	/**
+	 * Every argument: the ones the verb declares first, then the rest. Within
+	 * each group, the stored order (jsonb sorts object keys, so neither the
+	 * schema's nor the agent's own order survives a stored row).
+	 */
+	parameters: ProposalToolRunParameter[];
+}
 /**
  * Governance grant-option derivation — "always approve for…" menu.
  *
@@ -9133,6 +9164,12 @@ export interface ProposalReviewModel {
 	 * on — see {@link ProposalTurnsOn}.
 	 */
 	turnsOn?: ProposalTurnsOn;
+	/**
+	 * Present ONLY for a `capability.run`: the call it makes — its action, the
+	 * tool it runs through, and every argument with its value (secrets never
+	 * leave the pod) — see {@link ProposalToolRun}.
+	 */
+	toolRun?: ProposalToolRun;
 	events: ProposalReviewEvent[];
 }
 /**
