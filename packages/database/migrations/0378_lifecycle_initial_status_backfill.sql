@@ -10,11 +10,17 @@
 -- without one the same value.
 --
 -- Scope: live rows (entities, and role facets) whose nearest lifecycle
--- declaration has a string `default_value` naming a categorized option, whose
+-- declaration has a string `default_value` naming an open, active or paused
+-- option that is not person-only, whose
 -- `status` is NULL AND whose read projection `properties[<slug>]` is absent or
 -- empty. A row holding ANY value (even one no option declares) is untouched.
 -- Column and projection are written together, so the boot-time
 -- `projectLifecycleColumns` keeps agreeing.
+--
+-- A done/lost or person-only initial (`decision` → `accepted`) is NOT filled
+-- here: at the create door an agent born there is a person's call (the
+-- lifecycle floor, rungs 2.075 / 2.85), and a migration has no person. Those
+-- rows stay "no status" until someone sets them.
 --
 -- A birth value, NOT a move: no `lifecycle_transition_outbox` row is written
 -- (a born status has no "from"). `updated_at` is left alone so recent-activity
@@ -44,7 +50,8 @@ initial AS (
     FROM decl d CROSS JOIN LATERAL jsonb_array_elements(d.opts) o
    WHERE jsonb_typeof(d.default_value) = 'string'
      AND o->>'key' = d.default_value #>> '{}'
-     AND o->>'category' IN ('open','active','paused','done','lost')
+     AND o->>'category' IN ('open','active','paused')
+     AND (o->'humanOnly') IS DISTINCT FROM 'true'::jsonb
    ORDER BY d.profile_id
 )
 UPDATE "entities" x
@@ -80,7 +87,8 @@ initial AS (
     FROM decl d CROSS JOIN LATERAL jsonb_array_elements(d.opts) o
    WHERE jsonb_typeof(d.default_value) = 'string'
      AND o->>'key' = d.default_value #>> '{}'
-     AND o->>'category' IN ('open','active','paused','done','lost')
+     AND o->>'category' IN ('open','active','paused')
+     AND (o->'humanOnly') IS DISTINCT FROM 'true'::jsonb
    ORDER BY d.profile_id
 )
 UPDATE "entity_facets" x

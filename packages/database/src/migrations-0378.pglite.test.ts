@@ -8,7 +8,7 @@
  *  - a role facet is filled the same way;
  *  - untouched: a row with a status, a row whose projection holds any value,
  *    a deleted row, a kind with no declared initial, a default that names no
- *    categorized option;
+ *    categorized option, a done/lost or person-only initial;
  *  - no transition is written, `updated_at` is kept;
  *  - idempotent (applied twice).
  */
@@ -32,6 +32,7 @@ const OPTIONS = [
   { key: "todo", category: "open" },
   { key: "doing", category: "active" },
   { key: "done", category: "done" },
+  { key: "signed", category: "active", humanOnly: true },
 ];
 const LONG_AGO = new Date("2026-10-01T00:00:00Z");
 
@@ -117,6 +118,13 @@ beforeAll(async () => {
   const errand = await profile("errand", "kind", "errandStatus");
   const stray = await profile("stray", "kind", "strayStatus", "someday");
   const lead = await profile("lead", "role", "leadStage", "todo");
+  const verdict = await profile("verdict", "kind", "verdictStatus", "done");
+  const contract = await profile(
+    "contract",
+    "kind",
+    "contractStatus",
+    "signed"
+  );
 
   await entity("born-null", task);
   await entity("inherits", subtask);
@@ -128,6 +136,8 @@ beforeAll(async () => {
   await entity("deleted", task, { deletedAt: LONG_AGO });
   await entity("no-initial", errand);
   await entity("stray-default", stray);
+  await entity("terminal-initial", verdict);
+  await entity("person-only-initial", contract);
 
   const [person] = await db
     .insert(schema.entities)
@@ -179,6 +189,11 @@ describe("0378 lifecycle initial status backfill", () => {
     expect(none.status).toBeNull();
     expect(none.properties).toEqual({ priority: "low" });
     expect((await read("stray-default")).status).toBeNull();
+  });
+
+  it("leaves a done/lost or person-only initial to a person", async () => {
+    expect((await read("terminal-initial")).status).toBeNull();
+    expect((await read("person-only-initial")).status).toBeNull();
   });
 
   it("writes no transition", async () => {
