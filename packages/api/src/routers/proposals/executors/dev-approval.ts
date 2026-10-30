@@ -10,7 +10,6 @@ import {
   playbookRuns,
   liveRunStatusWhere,
   transitionProposal,
-  appendSessionStageHistory,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import {
@@ -181,7 +180,6 @@ async function applyDevApproval(
       workspaceId: true,
       goal: true,
       playbookId: true,
-      currentStage: true,
     },
   });
   if (!session) {
@@ -206,27 +204,13 @@ async function applyDevApproval(
   );
   const mergedDevLoop = { ...existingDevLoop, ...stamp };
 
-  // The approval IS the gate: the stage after it is entered here, and the
-  // stage ledger (0382) records it in this same UPDATE.
-  const nextStage = await stageAfterApproval(session, type);
   const updated = await db
     .update(focusSessions)
     .set({
       metadata: mergeSessionMetadata({
         [DEV_LOOP_METADATA_KEY]: mergedDevLoop,
       }),
-      currentStage: nextStage,
-      ...(nextStage !== (session.currentStage ?? null)
-        ? {
-            stageHistory: appendSessionStageHistory({
-              fromStage: session.currentStage ?? null,
-              toStage: nextStage,
-              userId,
-              via: "approval",
-              at: approvedAt,
-            }),
-          }
-        : {}),
+      currentStage: await stageAfterApproval(session, type),
       updatedAt: approvedAt,
     })
     .where(eq(focusSessions.id, sessionId))

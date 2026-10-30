@@ -25,7 +25,6 @@ import {
   workUnitActorOf,
   writeSessionPatch,
   transitionProposal,
-  appendSessionStageHistory,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
@@ -815,10 +814,7 @@ export function registerFocusSessionExecutors(): void {
           throw new TRPCError({ code: "BAD_REQUEST", message: reopening });
         }
         // Non-close update: apply only defined scalar fields from gate data.
-        const set: Omit<
-          Partial<typeof focusSessions.$inferInsert>,
-          "stageHistory"
-        > & { stageHistory?: ReturnType<typeof appendSessionStageHistory> } = {
+        const set: Partial<typeof focusSessions.$inferInsert> = {
           updatedAt: new Date(),
         };
         if (typeof innerData.status === "string") {
@@ -848,16 +844,6 @@ export function registerFocusSessionExecutors(): void {
         }
         if (typeof innerData.currentStage === "string") {
           set.currentStage = innerData.currentStage;
-          // The stage ledger (0382), in this same UPDATE: the approver moved
-          // it (an agent proposed; a person decided). A no-op appends none.
-          if (innerData.currentStage !== (session.currentStage ?? null)) {
-            set.stageHistory = appendSessionStageHistory({
-              fromStage: session.currentStage ?? null,
-              toStage: innerData.currentStage,
-              userId,
-              via: "approval",
-            });
-          }
         }
         // SUBJECT anchor. Carried by both proposing doors; hand-listing the set
         // above is exactly how the deliverables half went unapplied for months,

@@ -15,13 +15,13 @@
  *                          reverted. NOT `withdrawn` (the proposer's own act)
  *                          and NOT `auto_approved` (never pending).
  *                          `humanDecided` = the reviewer is a human user.
- *   - `stage_moved`      — CURSORED from the session's stage ledger
- *                          (`focus_sessions.stage_history`, 0382): one event
- *                          per stage entered after the cursor, so A→B→A
- *                          between two reads is two events. Fallback for a
- *                          move before 0382 (no entry): the state-derived
- *                          event when `currentStage` differs from the
- *                          caller's `knownStage`.
+ *   - `stage_moved`      — the session's `currentStage` differs from the
+ *                          caller's `knownStage`. STATE-derived, not cursored:
+ *                          the pod keeps no stage ledger (the `stage_changed`
+ *                          emit is a fan-out, not a row). Pass back
+ *                          `state.currentStage` as `knownStage`. Stated limit:
+ *                          a move and a move back between two reads (A→B→A)
+ *                          is invisible.
  *   - `owner_message`    — a message the session OWNER typed in the session's
  *                          room: role `user` + author `human` + author = owner.
  *                          NOT the pod's recall notices (role `assistant`,
@@ -81,7 +81,7 @@
  * the UNREAD ones (`listSessionAnswers`' contract) and the other kinds count
  * from `floor` (the moment the wait began); an empty page then hands back
  * `floor` as `nextSince`, so a caller looping on it loses nothing between two
- * calls. Only the pre-0382 `stage_moved` fallback sits outside the cursor.
+ * calls. `stage_moved` sits outside the cursor and the limit.
  *
  * WAKE: a status move writes the session row, whose NOTIFY (0277) wakes a held
  * wait at once; a CI fact or a blocker's end does not touch this session's
@@ -221,7 +221,7 @@ export type ProposalDecision = (typeof DECIDED_PROPOSAL_STATUSES)[number];
 interface EventBase {
   /** Stable id — dedupe on it across waits. */
   id: string;
-  /** Millisecond ISO; the cursor axis (except the pre-0382 `stage_moved` fallback). */
+  /** Millisecond ISO; the cursor axis (except `stage_moved`). */
   at: string;
 }
 
@@ -523,7 +523,6 @@ export async function listSessionChanges(p: {
       userId: true,
       channelId: true,
       currentStage: true,
-      stageHistory: true,
       status: true,
       updatedAt: true,
       expectedOutputs: true,
@@ -534,30 +533,6 @@ export async function listSessionChanges(p: {
 
   const cursored: SessionChangeEvent[] = [];
   let sourceHasMore = false;
-
-  // STAGE MOVES from the ledger (0382): cursored like every other kind, one
-  // event per stage entered after the floor — so a move and a move back
-  // between two reads (A→B→A) are both seen. Moves before 0382 have no entry;
-  // the state-derived fallback below still covers them.
-  let ledgerStageMoves = 0;
-  if (p.kinds.has("stage_moved")) {
-    const entries = Array.isArray(session.stageHistory)
-      ? session.stageHistory
-      : [];
-    for (const e of entries) {
-      if (!e || typeof e.stageKey !== "string") continue;
-      if (typeof e.enteredAt !== "string") continue;
-      if (floor && !(e.enteredAt > floor)) continue;
-      ledgerStageMoves++;
-      cursored.push({
-        kind: "stage_moved",
-        id: `stage:${session.id}:${e.enteredAt}:${e.stageKey}`,
-        at: e.enteredAt,
-        from: typeof e.fromStage === "string" ? e.fromStage : null,
-        to: e.stageKey,
-      });
-    }
-  }
 
   if (p.kinds.has("answer")) {
     const page = await listSessionAnswers({
@@ -999,11 +974,9 @@ export async function listSessionChanges(p: {
   const currentStage = session.currentStage ?? null;
   if (
     p.kinds.has("stage_moved") &&
-    ledgerStageMoves === 0 &&
     p.knownStage !== undefined &&
     p.knownStage !== currentStage
   ) {
-    // No ledger entry since the floor (a move before 0382): derive it.
     const at = session.updatedAt.toISOString();
     events.push({
       kind: "stage_moved",
