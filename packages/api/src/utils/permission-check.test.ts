@@ -323,7 +323,7 @@ describe("buildProposalSummary", () => {
       criteria: [{ key: "k", statement: "s" }],
     });
     // Clipped at a WORD boundary by the shared resolver, never mid-word.
-    expect(withoutTitle).toContain("Session");
+    expect(withoutTitle).toContain("Job");
     expect(withoutTitle).not.toContain("structured report");
     expect(withoutTitle).toMatch(/…"$/);
     expect(withoutTitle.length).toBeLessThan(longGoal.length);
@@ -414,7 +414,7 @@ describe("buildProposalSummary", () => {
   it("resolves the verb AND noun through the vocabulary, not call-site capitalisation", () => {
     expect(
       buildProposalSummary("focus_session", "plan_approval", { name: "Wave 2" })
-    ).toBe('Approve plan Session "Wave 2"');
+    ).toBe('Approve plan Job "Wave 2"');
   });
 
   // A PENDING proposal titles what approving it WILL do — imperative mood.
@@ -435,7 +435,7 @@ describe("buildProposalSummary", () => {
       goal: "Ship phase A",
       progress: 50,
     });
-    expect(summary).toBe('Update Session "Ship phase A"');
+    expect(summary).toBe('Update Job "Ship phase A"');
   });
 
   // No raw subjectType (a DB token, often snake_case) may reach a reviewer
@@ -453,22 +453,22 @@ describe("buildProposalSummary", () => {
     const summary = buildProposalSummary("focus_session", "create", {
       goal: "Triage inbox",
     });
-    expect(summary).toBe('Start session "Triage inbox"');
+    expect(summary).toBe('Start job "Triage inbox"');
   });
 
-  it("focus_session update closed with goal → Complete session", () => {
+  it("focus_session update closed with goal → Complete job", () => {
     const summary = buildProposalSummary("focus_session", "update", {
       status: "closed",
       goal: "Triage inbox",
     });
-    expect(summary).toBe('Complete session "Triage inbox"');
+    expect(summary).toBe('Complete job "Triage inbox"');
   });
 
-  it("focus_session update closed without goal → Complete focus session", () => {
+  it("focus_session update closed without goal → Complete job", () => {
     const summary = buildProposalSummary("focus_session", "update", {
       status: "closed",
     });
-    expect(summary).toBe("Complete focus session");
+    expect(summary).toBe("Complete job");
   });
 });
 

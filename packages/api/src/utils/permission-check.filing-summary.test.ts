@@ -16,7 +16,7 @@ describe("buildProposalSummary — filing a session", () => {
         projectId: "p",
         projectName: "Synap",
       })
-    ).toBe('File session "Ship the work shell" into "Synap"');
+    ).toBe('File job "Ship the work shell" into "Synap"');
   });
 
   it("says unfile for a null projectId", () => {
@@ -26,7 +26,7 @@ describe("buildProposalSummary — filing a session", () => {
         goal: "Ship the work shell",
         projectId: null,
       })
-    ).toBe('Unfile session "Ship the work shell"');
+    ).toBe('Unfile job "Ship the work shell"');
   });
 
   it("an update that does not touch the project keeps its old title", () => {
@@ -47,7 +47,7 @@ describe("buildProposalSummary — filing a session", () => {
         status: "closed",
         projectId: "p",
       })
-    ).toBe('Complete session "Ship"');
+    ).toBe('Complete job "Ship"');
   });
 });
 
@@ -67,7 +67,7 @@ describe("buildProposalSummary — a session update names the session", () => {
         projectId: "p",
         projectName: "Launch",
       })
-    ).toBe('File session "Commercial foundations" into "Launch"');
+    ).toBe('File job "Commercial foundations" into "Launch"');
   });
 
   it("a track filing with no goal in the payload still names the session", () => {
@@ -102,7 +102,7 @@ describe("buildProposalSummary — close and hand-off name the session too", () 
         goal: "Map and lock the commercial foundations (ICP, offer and pricing)",
         status: "closed",
       })
-    ).toBe('Complete session "Commercial foundations"');
+    ).toBe('Complete job "Commercial foundations"');
   });
 
   it("a hand-off is named by sessionName over its goal", () => {
@@ -114,7 +114,7 @@ describe("buildProposalSummary — close and hand-off name the session too", () 
         addAgentId: "a",
         agentName: "Worker",
       })
-    ).toBe('Hand session "Commercial foundations" to Worker');
+    ).toBe('Hand job "Commercial foundations" to Worker');
   });
 });
 
@@ -133,9 +133,7 @@ describe("buildProposalSummary — a filing names every place it changes", () =>
         workspaceId: "w",
         workspaceName: "Builder",
       })
-    ).toBe(
-      'File session "Shell work" into "Synap" and move it to Space "Builder"'
-    );
+    ).toBe('File job "Shell work" into "Synap" and move it to Space "Builder"');
   });
 
   it("a space move alone says move, not update", () => {
@@ -146,7 +144,7 @@ describe("buildProposalSummary — a filing names every place it changes", () =>
         workspaceId: "w",
         workspaceName: "Builder",
       })
-    ).toBe('Move Session "Shell work" to Space "Builder"');
+    ).toBe('Move Job "Shell work" to Space "Builder"');
   });
 
   it("make it personal", () => {
@@ -156,7 +154,7 @@ describe("buildProposalSummary — a filing names every place it changes", () =>
         sessionName: "Shell work",
         workspaceId: null,
       })
-    ).toBe('Make session "Shell work" personal');
+    ).toBe('Make job "Shell work" personal');
   });
 
   it("track + an explicit project the track did not set + space", () => {

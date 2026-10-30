@@ -428,7 +428,7 @@ describe("Done when", () => {
       goalCriterionRows(goal({ criteria: [bare] }), person(JUDGE))[0]!.claim
     ).toMatchObject({
       by: "Claimed by someone",
-      session: { id: "s2", title: "Session" },
+      session: { id: "s2", title: "Job" },
       evidence: null,
     });
   });

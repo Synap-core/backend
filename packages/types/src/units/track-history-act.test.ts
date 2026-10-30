@@ -192,7 +192,7 @@ describe("trackHistorySummaryWords", () => {
         openAsks: 0,
         failures: 0,
       })
-    ).toBe("1 session · 1 decision · Moved ×2");
+    ).toBe("1 job · 1 decision · Moved ×2");
     expect(
       trackHistorySummaryWords({
         moves: 0,

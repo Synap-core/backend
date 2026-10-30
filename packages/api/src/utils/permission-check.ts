@@ -3158,7 +3158,8 @@ export function buildProposalSummary(
     data.status === "closed"
   ) {
     const name = sessionLabelOf(data);
-    return name ? `Complete session "${name}"` : "Complete focus session";
+    const noun = resolveObjectNoun("session").toLowerCase();
+    return name ? `Complete ${noun} "${name}"` : `Complete ${noun}`;
   }
   // focus_session HAND-OFF — an agent putting another agent on the roster
   // (`services/focus-sessions/agent-hand-off.ts`). Names who gets the work.
@@ -3168,9 +3169,10 @@ export function buildProposalSummary(
       typeof data.agentName === "string" && data.agentName.trim()
         ? data.agentName
         : "another agent";
+    const noun = resolveObjectNoun("session").toLowerCase();
     return name
-      ? `Hand session "${name}" to ${agent}`
-      : `Hand a session to ${agent}`;
+      ? `Hand ${noun} "${name}" to ${agent}`
+      : `Hand a ${noun} to ${agent}`;
   }
   // WHO IS ON A GOAL (W3) — the goal hand-off (`track/assign_agent`) and an
   // agent's participant change under `track/update`: names the goal, who, and
@@ -3202,7 +3204,9 @@ export function buildProposalSummary(
       (typeof data.targetName === "string" && data.targetName.trim()
         ? data.targetName
         : undefined);
-    if (goal) return `Start session "${goal}"`;
+    if (goal) {
+      return `Start ${resolveObjectNoun("session").toLowerCase()} "${goal}"`;
+    }
   }
 
   // `settings.update` — a gov-config settings change. The store + op + a

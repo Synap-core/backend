@@ -279,12 +279,8 @@ describe("readPackItems", () => {
 
 describe("describeCleanupAction (moved from api, same output)", () => {
   it("names each group through the vocabulary, singular and plural", () => {
-    expect(describeCleanupAction("close_session", 1)).toBe(
-      "Close 1 idle session"
-    );
-    expect(describeCleanupAction("close_session", 3)).toBe(
-      "Close 3 idle sessions"
-    );
+    expect(describeCleanupAction("close_session", 1)).toBe("Close 1 idle job");
+    expect(describeCleanupAction("close_session", 3)).toBe("Close 3 idle jobs");
     expect(describeCleanupAction("retire_profile", 12)).toBe(
       "Retire 12 unused kinds"
     );
@@ -299,7 +295,7 @@ describe("describeCleanupAction (moved from api, same output)", () => {
       "Pause 2 rules that never ran"
     );
     expect(describeCleanupAction("expire_proposal", 1)).toBe(
-      "Expire 1 old proposal"
+      "Expire 1 old request"
     );
   });
 });

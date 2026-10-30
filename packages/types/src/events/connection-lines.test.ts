@@ -146,7 +146,7 @@ const ROWS: Row[] = [
   [
     "focus_session.stage_changed.completed",
     { toStage: "review" },
-    'Moved session to "Review"',
+    'Moved job to "Review"',
   ],
   [
     "focus_session.slot_asked.completed",
@@ -164,7 +164,7 @@ const ROWS: Row[] = [
     { label: "Deck" },
     'Marked done "Deck"',
   ],
-  ["focus_session.closed.completed", undefined, "Closed session"],
+  ["focus_session.closed.completed", undefined, "Closed job"],
   [
     "track.stage_changed.completed",
     { toStage: "Launch prep" },
