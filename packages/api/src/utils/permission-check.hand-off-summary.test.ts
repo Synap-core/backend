@@ -16,7 +16,7 @@ describe("buildProposalSummary — handing a session to an agent", () => {
         addAgentId: "a",
         agentName: "Claude Code devbox",
       })
-    ).toBe('Hand session "Fix the worker" to Claude Code devbox');
+    ).toBe('Hand job "Fix the worker" to Claude Code devbox');
   });
 
   it("an unnamed agent still reads as a hand-off", () => {
@@ -27,6 +27,6 @@ describe("buildProposalSummary — handing a session to an agent", () => {
         addAgentId: "a",
         agentName: null,
       })
-    ).toBe("Hand a session to another agent");
+    ).toBe("Hand a job to another agent");
   });
 });

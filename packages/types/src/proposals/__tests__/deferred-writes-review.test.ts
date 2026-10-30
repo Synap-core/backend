@@ -75,7 +75,7 @@ describe("deriveDeferredWritesReview", () => {
     expect(review.rows.map((r) => r.title)).toEqual([
       'Create Task "Ship v2"',
       "Create Note",
-      'Create Session "Draft the launch post"',
+      'Create Job "Draft the launch post"',
       'Update Task "Ship v3"',
     ]);
   });

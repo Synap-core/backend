@@ -59,7 +59,7 @@ export const REVIEW_LAYOUT_LABELS = {
   diff: "Diff",
   gallery: "Gallery",
   "by-agent": "By agent",
-  "by-session": "By session",
+  "by-session": "By job",
 } as const satisfies Readonly<Record<string, string>>;
 
 export function resolveReviewLayoutLabel(

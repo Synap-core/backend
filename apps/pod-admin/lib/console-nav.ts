@@ -135,7 +135,7 @@ export const CONSOLE_NAV = [
       {
         id: "sessions",
         href: "/sessions",
-        label: "Sessions",
+        label: "Jobs",
         icon: "MessagesSquare",
         kind: "session",
         audience: "admin",

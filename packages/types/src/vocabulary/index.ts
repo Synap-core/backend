@@ -37,6 +37,7 @@ import { createT, type TFunction } from "../i18n/translator.js";
 import type { Noun, NounParams } from "../i18n/noun.js";
 import {
   buildVocabularyEn,
+  vocabularySentencesEn,
   type VocabularyEn,
   type VocabularySentencesEn,
 } from "./catalog.en.js";
@@ -1191,7 +1192,11 @@ export function buildObjectActionTitle(params: {
     objectKind && objectKind.toLowerCase() !== "entity" ? objectKind : null;
   const nounEn = kind ? resolveObjectNoun(kind, "en") : "";
   const preposition = kind ? titlePreposition(actionToken) : "";
-  const headEn = [verbEn || "Proposal", preposition, nounEn]
+  const headEn = [
+    verbEn || vocabularySentencesEn["vocabulary.title.fallbackVerb"],
+    preposition,
+    nounEn,
+  ]
     .filter(Boolean)
     .join(" ");
   const name = nameSlot(objectName, headEn, verbEn, nounEn);
@@ -1382,7 +1387,7 @@ export const PROPOSAL_KIND_LABELS: Readonly<Record<string, string>> = {
   link: "Link",
   facet: "Role",
   composite: "Bundle",
-  session: "Session",
+  session: "Job",
   merge: "Merge",
   install: "Install",
   // Governance recommender kinds — reviewer never approved these before; the
@@ -2595,7 +2600,7 @@ export function resolveBlockedReasonLabel(
  */
 export const OUTPUT_RETIRED_REASON_LABELS: Readonly<Record<string, string>> = {
   /** The session was cancelled with the slot still owed. */
-  session_cancelled: "Session cancelled",
+  session_cancelled: "Job cancelled",
   /**
    * The decision this slot asked about was settled on the decision itself
    * (accepted / rejected / superseded), so the question is moot.
@@ -2604,7 +2609,7 @@ export const OUTPUT_RETIRED_REASON_LABELS: Readonly<Record<string, string>> = {
   /** The agent withdrew a deliverable it had declared (`retireOutput`). */
   withdrawn: "Withdrawn",
   /** The session ended with the agent's own question (confirm / choose) still open. */
-  session_ended: "Session ended",
+  session_ended: "Job ended",
   /** A proposed decision a person wrote asked them with no agent behind it. */
   not_asked: "Not asked by anyone",
 };

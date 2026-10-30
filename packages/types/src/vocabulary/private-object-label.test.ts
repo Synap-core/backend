@@ -6,9 +6,9 @@ import {
 } from "./index.js";
 
 describe("resolvePrivateObjectLabel (decision D1 placeholder)", () => {
-  it("names a withheld session without its title", () => {
-    expect(resolvePrivateObjectLabel("focus_session")).toBe("Private session");
-    expect(resolvePrivateObjectLabel("session")).toBe("Private session");
+  it("names a withheld job without its title", () => {
+    expect(resolvePrivateObjectLabel("focus_session")).toBe("Private job");
+    expect(resolvePrivateObjectLabel("session")).toBe("Private job");
   });
 
   it("derives the noun from the one noun door, never a second table", () => {
@@ -29,7 +29,7 @@ describe("resolvePrivateObjectLabel (decision D1 placeholder)", () => {
 describe("resolveMembersDecideLabel (decision 2026-09-27 decide gate)", () => {
   it("names who may decide, from the one noun door", () => {
     expect(resolveMembersDecideLabel("focus_session")).toBe(
-      "Session members decide"
+      "Job members decide"
     );
     expect(resolveMembersDecideLabel("focus_session")).toBe(
       `${resolveObjectNoun("focus_session")} members decide`
