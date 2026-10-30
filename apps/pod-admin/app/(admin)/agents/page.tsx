@@ -42,10 +42,11 @@ import {
   standingLine,
   type AgentRowView,
 } from "./_lib/agent-roster";
+import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
+import { useT } from "../../../lib/i18n/locale-provider";
+import { en, fr } from "./_lib/copy";
 
-const TITLE = "Agents";
-const DESCRIPTION =
-  "Every agent that can reach this pod, how it is doing, and who answers for it.";
+const CATALOGS = { en, fr };
 
 /** Where every waiting access request is decided. */
 const ACCESS_REVIEW_HREF = navHref("review", { type: "access" });
@@ -59,6 +60,7 @@ export default function AgentsPage() {
 }
 
 function AgentsInner() {
+  const t = useT(CATALOGS);
   // Computers have their own page (Computers); their agents stay here.
   const list = trpc.agentUsers.list.useQuery(
     { includeComputers: false },
@@ -97,7 +99,10 @@ function AgentsInner() {
 
   return (
     <PageShell>
-      <PageHeader title={TITLE} description={DESCRIPTION} />
+      <PageHeader
+        title={resolveObjectNounPlural("agent")}
+        description={t("description")}
+      />
 
       <div className="flex flex-col gap-4">
         {waiting > 0 && (

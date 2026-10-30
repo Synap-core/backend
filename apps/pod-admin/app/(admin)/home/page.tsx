@@ -1,18 +1,25 @@
 "use client";
 
 /**
- * Home — where the console opens. It answers "what needs me?" first.
+ * Home — where the console opens. It answers "what did our AIs do, and what
+ * waits for me?" first.
  *
+ *   0. Morning brief — the person's latest brief (PA-D-03), with a door to
+ *                      Historique (`_lib/morning-brief.tsx`).
  *   1. Status line   — one sentence from `diagnose.global` + failing sync
  *                      peers, when the pod was last checked, and "Check
  *                      again".
  *   2. Needs you     — the non-ok diagnose sections plus failing sync peers,
  *                      ranked and capped (`_lib/needs-you.ts`). Passing
  *                      checks collapse into one disclosure. Pending trusted
- *                      issuers are decisions: they wait in Review.
- *   3. Approval queue — a short peek into Review, never a second queue:
- *                      every row and the count lead into `/review`.
- *   4. Pod at a glance — sync, backups and contents as three compact rows.
+ *                      issuers are decisions: they wait in Review. The review
+ *                      backlog is left to the requests card (`homeSections`).
+ *   3. Requests      — a short peek into Review, never a second queue: the
+ *                      SAME read as Review (`signals.list` needs-you) and its
+ *                      count (`signals.count`), so Home shows one number
+ *                      (PA-D-13). Every row and the count lead into `/review`.
+ *   4. Pod at a glance — sync, backups and contents as three compact rows;
+ *                      the operator's, shown with "All tools" on.
  *
  * Members (D8) get 1–3 scoped to themselves: `diagnose` and `signals` are
  * user-floored, the sync peers and the glance band read admin-only
@@ -44,11 +51,8 @@ import {
   Wrench,
   type LucideIcon,
 } from "lucide-react";
-import {
-  buildObjectActionTitle,
-  resolveObjectNoun,
-  resolveObjectNounPlural,
-} from "@synap-core/types/vocabulary";
+import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
+import { formatRelative as formatRelativeIn } from "@synap-core/types/value-format";
 import Link from "next/link";
 import { Suspense, useState } from "react";
 
@@ -63,7 +67,8 @@ import {
   humanizeBytes,
   truncateMiddle,
 } from "../../../lib/format";
-import { navHref, navLabel } from "../../../lib/console-nav";
+import { navHref } from "../../../lib/console-nav";
+import { useConsoleLocale, useT } from "../../../lib/i18n/locale-provider";
 import type { Exit } from "../../../lib/open-in";
 import { trpc } from "../../../lib/trpc";
 import { PageHeader, PageShell } from "../components/page-header";
@@ -78,9 +83,19 @@ import { SectionCard } from "../components/section-card";
 import { DIAGNOSE_QUERY_OPTIONS } from "../../../lib/diagnose-query";
 import { useConsoleBadges } from "../components/side-nav-badges";
 import { useConsoleRole } from "../components/side-nav-role";
+import { useAllTools } from "../components/all-tools";
+import { kindIcon } from "../../_lib/object/kind-icon";
+import { reviewRows } from "../review/_lib/review-rows";
+import { en, fr } from "./_lib/copy";
+import { MorningBriefCard } from "./_lib/morning-brief";
 import { StatusPill, type StatusKind } from "../components/status-pill";
 import { HEALTH_PILL } from "../components/status-tone";
-import { buildNeedsYou, statusLine, type NeedsYouRow } from "./_lib/needs-you";
+import {
+  buildNeedsYou,
+  homeSections,
+  statusLine,
+  type NeedsYouRow,
+} from "./_lib/needs-you";
 import { StartUnavailableBand } from "./_lib/start-unavailable-band";
 import { updateIssue } from "../updates/_lib/updates-model";
 import {
@@ -88,17 +103,17 @@ import {
   usePodUpdates,
 } from "../updates/_lib/use-pod-updates";
 
+const CATALOGS = { en, fr };
+
 export default function HomePage() {
   const isAdmin = useConsoleRole() === "admin";
+  const [allTools] = useAllTools();
+  const t = useT(CATALOGS);
   return (
     <PageShell>
       <PageHeader
-        title={navLabel("home")}
-        description={
-          isAdmin
-            ? "What needs you, then the pod at a glance."
-            : "What needs you on this pod."
-        }
+        title={t("title")}
+        description={isAdmin ? t("description.admin") : t("description.member")}
       />
 
       <Suspense fallback={null}>
@@ -107,12 +122,18 @@ export default function HomePage() {
 
       <RecoveryCodesNudge />
 
+      <div className="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <MorningBriefCard />
+        <RequestsCard />
+      </div>
+
       <NeedsYouBand isAdmin={isAdmin} />
 
-      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <ApprovalQueueCard isAdmin={isAdmin} />
-        {isAdmin && <GlanceCard />}
-      </div>
+      {isAdmin && allTools && (
+        <div className="mt-4">
+          <GlanceCard />
+        </div>
+      )}
     </PageShell>
   );
 }
@@ -135,6 +156,8 @@ const SECTION_ICONS: Record<string, LucideIcon> = {
 };
 
 function NeedsYouBand({ isAdmin }: { isAdmin: boolean }) {
+  const t = useT(CATALOGS);
+  const locale = useConsoleLocale();
   const diagnose = trpc.diagnose.global.useQuery(
     undefined,
     DIAGNOSE_QUERY_OPTIONS
@@ -156,7 +179,7 @@ function NeedsYouBand({ isAdmin }: { isAdmin: boolean }) {
   const needsYou = buildNeedsYou({
     audience: isAdmin ? "admin" : "member",
     updateIssue: updates.data ? updateIssue(updates.data.lastUpdate) : null,
-    sections: diagnose.data?.sections ?? [],
+    sections: homeSections(diagnose.data?.sections ?? []),
     syncErrors: (sync.data ?? []).flatMap((p) =>
       p.syncState?.lastError
         ? [
@@ -177,14 +200,14 @@ function NeedsYouBand({ isAdmin }: { isAdmin: boolean }) {
   if (diagnose.isError) {
     failures.push({
       key: "diagnose",
-      message: "Couldn't run the pod health checks.",
+      message: t("failed.health"),
       retry: () => void diagnose.refetch(),
     });
   }
   if (sync.isError) {
     failures.push({
       key: "sync",
-      message: "Couldn't load sync peers.",
+      message: t("failed.sync"),
       retry: () => void sync.refetch(),
     });
   }
@@ -192,7 +215,7 @@ function NeedsYouBand({ isAdmin }: { isAdmin: boolean }) {
   if (updatesFailed) {
     failures.push({
       key: "updates",
-      message: "Couldn't read the pod's update status.",
+      message: t("failed.updates"),
       retry: () => void updates.refetch(),
     });
   }
@@ -224,7 +247,7 @@ function NeedsYouBand({ isAdmin }: { isAdmin: boolean }) {
           </>
         ) : (
           <p className="text-[13px] text-foreground/65">
-            Pod health is unknown right now.
+            {t("health.unknown")}
           </p>
         )}
         {!diagnose.isLoading && (
@@ -232,7 +255,11 @@ function NeedsYouBand({ isAdmin }: { isAdmin: boolean }) {
             {diagnose.dataUpdatedAt > 0 && (
               <>
                 <span>
-                  Checked {formatRelative(new Date(diagnose.dataUpdatedAt))}
+                  {t("health.checked", {
+                    when: formatRelativeIn(diagnose.dataUpdatedAt, Date.now(), {
+                      locale,
+                    }),
+                  })}
                 </span>
                 <span aria-hidden>·</span>
               </>
@@ -245,13 +272,13 @@ function NeedsYouBand({ isAdmin }: { isAdmin: boolean }) {
               onPress={checkAgain}
               className="h-8 min-w-0 px-2 text-[12.5px] text-foreground/80"
             >
-              Check again
+              {t("health.checkAgain")}
             </Button>
           </p>
         )}
       </div>
 
-      <SectionCard title="Needs you" hint="Ranked: most urgent first">
+      <SectionCard title={t("needsYou.title")} hint={t("needsYou.hint")}>
         {loading && needsYou.rows.length === 0 ? (
           <ResourceRowSkeleton count={3} />
         ) : (
@@ -264,7 +291,7 @@ function NeedsYouBand({ isAdmin }: { isAdmin: boolean }) {
                   aria-hidden
                 />
                 <p className="text-[12.5px] text-foreground/65">
-                  Nothing needs you.
+                  {t("needsYou.none")}
                 </p>
               </div>
             )}
@@ -430,6 +457,7 @@ function DesktopFallbackOnce({ rows }: { rows: NeedsYouRow[] }) {
 
 /** "+N more, less urgent" — a disclosure that reveals the rows past the cap. */
 function HiddenRows({ rows }: { rows: NeedsYouRow[] }) {
+  const t = useT(CATALOGS);
   const [open, setOpen] = useState(false);
   if (rows.length === 0) return null;
   return (
@@ -440,7 +468,7 @@ function HiddenRows({ rows }: { rows: NeedsYouRow[] }) {
         onClick={() => setOpen((v) => !v)}
         className="inline-flex min-h-8 items-center gap-1.5 rounded-md px-1 text-[12.5px] text-foreground/65 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
       >
-        +{rows.length} more, less urgent
+        {t("needsYou.more", { n: rows.length })}
         <ChevronDown
           className={`h-3 w-3 transition-transform ${open ? "rotate-180" : ""}`}
           aria-hidden
@@ -462,6 +490,7 @@ function PassingChecks({
 }: {
   passing: Array<{ key: string; headline: string }>;
 }) {
+  const t = useT(CATALOGS);
   const [open, setOpen] = useState(false);
   if (passing.length === 0) return null;
   return (
@@ -477,7 +506,7 @@ function PassingChecks({
           strokeWidth={2}
           aria-hidden
         />
-        {passing.length} check{passing.length === 1 ? "" : "s"} passing
+        {t("needsYou.passing", { n: passing.length })}
         <ChevronDown
           className={`h-3 w-3 transition-transform ${open ? "rotate-180" : ""}`}
           aria-hidden
@@ -496,42 +525,30 @@ function PassingChecks({
   );
 }
 
-// ─── 3. Approval queue (a peek into Review) ───────────────────────────
+// ─── 3. Requests (a peek into Review) ─────────────────────────────────
 
-/** How many pending changes the peek names before "See all in Review". */
+/** How many waiting requests the peek names before "See all". */
 const QUEUE_PEEK = 4;
 
-function ApprovalQueueCard({ isAdmin }: { isAdmin: boolean }) {
-  // `workspaceId` is OMITTED, not `null`. `null` means "pod-wide only", which
-  // hid every workspace-scoped proposal — nearly the whole queue, since almost
-  // every governed AI write is workspace-scoped. Omitted, the server falls to
-  // `proposalUserFloor`: the viewer's own lens ∪ what they authored. Same
-  // entitlement, honest count.
-  const { data, isLoading, isError, refetch } = trpc.proposals.list.useQuery(
-    { status: "pending", limit: QUEUE_PEEK },
-    { staleTime: 30_000 }
+function RequestsCard() {
+  const t = useT(CATALOGS);
+  const locale = useConsoleLocale();
+  // THE needs-you read Review draws (`signals.list`), so the peek and the
+  // count below range over the same population (PA-D-13): it can never say
+  // "nothing waiting" beside "See all 3".
+  const { data, isLoading, isError, refetch } = trpc.signals.list.useQuery(
+    { lens: "needs-you", limit: QUEUE_PEEK },
+    { staleTime: 15_000 }
   );
   // The count is Review's own (`signals.count`, via the nav's badge read), so
-  // "See all N" always equals the number on the Review badge.
+  // "See all N" always equals the number on the Requests badge.
   const reviewCount = useConsoleBadges().review;
-
-  // The row carries only `workspaceId`; `proposals.list` resolves author and
-  // target names but no workspace name. The name lookup is admin-only, so a
-  // member's peek reads "Space" instead.
-  const workspaces = trpc.workspaces.adminListAll.useQuery(undefined, {
-    staleTime: 60_000,
-    enabled: isAdmin,
-  });
-  const workspaceNames = new Map(
-    (workspaces.data ?? []).map((w) => [w.id, w.name] as const)
-  );
-
-  const pending = data?.items ?? [];
+  const rows = reviewRows(data?.signals ?? [], new Map());
 
   return (
     <SectionCard
-      title="Approval queue"
-      hint="The oldest decisions waiting in Review"
+      title={t("requests.title")}
+      hint={t("requests.hint")}
       actions={
         <Button
           as={Link}
@@ -541,9 +558,11 @@ function ApprovalQueueCard({ isAdmin }: { isAdmin: boolean }) {
           radius="md"
           endContent={<ChevronRight className="h-3 w-3" />}
         >
-          {reviewCount
-            ? `See all ${reviewCount.text} in ${navLabel("review")}`
-            : `Open ${navLabel("review")}`}
+          {!reviewCount
+            ? t("requests.open")
+            : reviewCount.text.endsWith("+")
+              ? t("requests.seeAllFloor", { n: reviewCount.count })
+              : t("requests.seeAll", { n: reviewCount.count })}
         </Button>
       }
     >
@@ -551,51 +570,35 @@ function ApprovalQueueCard({ isAdmin }: { isAdmin: boolean }) {
         <ResourceRowSkeleton count={2} />
       ) : isError || !data ? (
         <ResourceRowError
-          message="Couldn't load proposals."
+          message={t("requests.failed")}
           onRetry={() => void refetch()}
         />
-      ) : pending.length === 0 ? (
-        <ResourceRowEmpty message="Nothing waiting for your review." />
+      ) : rows.length === 0 ? (
+        <ResourceRowEmpty message={t("requests.empty")} />
       ) : (
         <div className="-mx-2 divide-y divide-foreground/[0.05]">
-          {pending.map((proposal) => {
-            const workspaceLabel =
-              proposal.workspaceId == null
-                ? "Pod-wide"
-                : (workspaceNames.get(proposal.workspaceId) ??
-                  resolveObjectNoun("workspace"));
-            return (
-              // Each row opens the same change inside Review — one queue,
-              // with its drawer and batch rules, rather than a second one.
-              <Link
-                key={proposal.id}
-                href={navHref("review", { focus: proposal.id })}
-                className="block rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 hover:bg-content2/50"
-              >
-                <ResourceRow
-                  Icon={Mailbox}
-                  // The row has no `title` column — the old read of one fell
-                  // back to a UUID slice on every row. Labelled through the
-                  // ONE vocabulary door, as the search palette does.
-                  primary={buildObjectActionTitle({
-                    action: proposal.proposalType,
-                    objectKind: proposal.targetType,
-                    objectName: proposal.targetName ?? undefined,
-                  })}
-                  secondary={[
-                    resolveObjectNoun(proposal.targetType),
-                    workspaceLabel,
-                    proposal.createdAt
-                      ? formatRelative(proposal.createdAt)
-                      : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                  wrap
-                />
-              </Link>
-            );
-          })}
+          {rows.map((row) => (
+            // Each row opens the same request inside Review — one queue,
+            // with its drawer and batch rules, rather than a second one.
+            <Link
+              key={row.key}
+              href={navHref("review", { focus: row.key })}
+              className="block rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 hover:bg-content2/50"
+            >
+              <ResourceRow
+                Icon={kindIcon(row.nounKind)}
+                primary={row.title}
+                secondary={[
+                  row.who,
+                  row.where,
+                  formatRelativeIn(row.occurredAt, Date.now(), { locale }),
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+                wrap
+              />
+            </Link>
+          ))}
         </div>
       )}
     </SectionCard>

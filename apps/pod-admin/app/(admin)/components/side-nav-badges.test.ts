@@ -25,7 +25,8 @@ describe("buildNavBadges", () => {
       review: undefined,
       role: "admin",
     });
-    expect(badges.home).toEqual({ count: 3, text: "3", tone: "down" });
+    // The review backlog is Requests' number (`signals.count`), never Home's.
+    expect(badges.home).toEqual({ count: 2, text: "2", tone: "down" });
   });
 
   it("badges the pages that own a counted section", () => {
@@ -56,15 +57,16 @@ describe("buildNavBadges", () => {
     ).toBeUndefined();
   });
 
-  it("gives a member only Home and Review, counting only their rows", () => {
+  it("gives a member only Requests, counting only their rows", () => {
     const badges = buildNavBadges({
       sections: SECTIONS,
       review: { needsYou: 4, truncated: false },
       role: "member",
     });
-    expect(Object.keys(badges).sort()).toEqual(["home", "review"]);
-    // Only review_backlog leads somewhere a member can open.
-    expect(badges.home).toEqual({ count: 1, text: "1", tone: "stale" });
+    // Only review_backlog leads somewhere a member can open, and its
+    // number is the Requests badge's: Home carries none.
+    expect(Object.keys(badges).sort()).toEqual(["review"]);
+    expect(badges.review).toEqual({ count: 4, text: "4", tone: "review" });
   });
 
   it("badges nothing when every check passes", () => {

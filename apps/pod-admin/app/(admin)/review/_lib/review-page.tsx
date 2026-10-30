@@ -92,21 +92,22 @@ import { useReviewPreferences } from "./review-preferences";
 import { handOffRuleFor } from "./hand-off-rule";
 import { ReviewOnboarding } from "./review-onboarding";
 import { showReviewOnboarding } from "./review-onboarding-model";
-import { ReviewHistory } from "./review-history";
+import { HistoryList } from "../../history/_lib/history-list";
 import { SessionFilter } from "./review-session-filter";
 import { nextRowKey } from "./ask-detail";
+import { useT } from "../../../../lib/i18n/locale-provider";
+import { en, fr } from "./copy";
 
-const TITLE = "Review";
-const DESCRIPTION = "Everything waiting on your decision, in one place.";
+const CATALOGS = { en, fr };
 
 /**
  * What is waiting, or what was decided. The packages replaced the old
  * Access · Changes · Asks chips (founder B-1); a link naming one of those
  * still narrows the list and keeps "Waiting" pressed.
  */
-const CHIPS: Array<{ key: "all" | "history"; label: string }> = [
-  { key: "all", label: "Waiting" },
-  { key: "history", label: "History" },
+const CHIPS: Array<{ key: "all" | "history"; label: keyof typeof en }> = [
+  { key: "all", label: "view.waiting" },
+  { key: "history", label: "view.history" },
 ];
 
 /**
@@ -118,6 +119,8 @@ function groupByOf(param: string | null, saved: ReviewGroupBy): ReviewGroupBy {
 }
 
 export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
+  const t = useT(CATALOGS);
+  const title = t("title");
   const searchParams = useSearchParams();
   const replaceParams = useReplaceParams();
   const filter = reviewFilterOf(searchParams.get("type"));
@@ -181,6 +184,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
       : rowsInView(rows, filter);
   const visible = view.headline;
   const [laterOpen, setLaterOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   // ── The drawer, and the `?focus=` receiver ────────────────────────────────
   const [open, setOpen] = useState<OpenReview | null>(null);
@@ -200,10 +204,10 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
       // opens its decision, which says how it ended.
       setOpen({
         detail: { kind: "proposal", proposalId: focusId },
-        title: TITLE,
+        title,
       });
     }
-  }, [focusId, rows, signals.isLoading]);
+  }, [focusId, rows, signals.isLoading, title]);
 
   function closeDrawer() {
     setOpen(null);
@@ -371,29 +375,30 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
 
   const activeKey = open ? detailKey(open.detail) : null;
 
-  // The one onboarding step (B-4): once, to a person with items waiting who
-  // never chose — never over a link that names a session, view or decision.
-  if (
-    showReviewOnboarding({
-      prefsLoaded: !reviewPrefs.isLoading,
-      prefsFailed: reviewPrefs.isError,
-      hasSavedChoice: reviewPrefs.saved !== null,
-      waiting: rows.length,
-      narrowed:
-        !!sessionId ||
-        !!focusId ||
-        filter !== "all" ||
-        searchParams.get("group") !== null,
-    })
-  ) {
+  // The layout step (B-4) is an OFFER, never a gate (PA-D-11, value before
+  // setup): the requests show at once in the default layout, and a person
+  // who never chose sees one quiet line to choose another, or keep it.
+  const offerLayout = showReviewOnboarding({
+    prefsLoaded: !reviewPrefs.isLoading,
+    prefsFailed: reviewPrefs.isError,
+    hasSavedChoice: reviewPrefs.saved !== null,
+    waiting: rows.length,
+    narrowed:
+      !!sessionId ||
+      !!focusId ||
+      filter !== "all" ||
+      searchParams.get("group") !== null,
+  });
+  if (pickerOpen) {
     return (
       <PageShell>
         <ReviewOnboarding
           rows={rows}
           saving={reviewPrefs.isSaving}
-          onChoose={(g) =>
-            void reviewPrefs.save({ groupBy: g }).catch(() => {})
-          }
+          onChoose={(g) => {
+            setPickerOpen(false);
+            void reviewPrefs.save({ groupBy: g }).catch(() => {});
+          }}
         />
       </PageShell>
     );
@@ -402,16 +407,16 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
   return (
     <PageShell>
       <PageHeader
-        title={TITLE}
-        description={DESCRIPTION}
+        title={title}
+        description={t("description")}
         actions={
           filter !== "history" && (
             <>
               <span className="text-[12px] font-medium text-foreground/65">
-                Group by
+                {t("groupBy")}
               </span>
               <FilterChips
-                ariaLabel="Group by"
+                ariaLabel={t("groupBy")}
                 className=""
                 active={groupBy}
                 chips={REVIEW_GROUP_BYS.map((g) => ({
@@ -433,7 +438,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
                   <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
                 }
               >
-                Review settings
+                {t("settings")}
               </Button>
             </>
           )
@@ -465,10 +470,34 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
             active={filter === "history" ? "history" : "all"}
             chips={CHIPS.map((c) => ({
               ...c,
+              label: t(c.label),
               count:
                 c.key === "history" || !signals.data ? undefined : counts.all,
             }))}
           />
+
+          {offerLayout && (
+            <div className="mb-3 flex flex-wrap items-center gap-2 px-1 text-[12.5px] text-foreground/65">
+              <span className="flex-1">{t("layout.note")}</span>
+              <Button
+                size="sm"
+                variant="light"
+                isDisabled={reviewPrefs.isSaving}
+                onPress={() =>
+                  void reviewPrefs.save({ groupBy }).catch(() => {})
+                }
+              >
+                {t("layout.keep")}
+              </Button>
+              <Button
+                size="sm"
+                variant="flat"
+                onPress={() => setPickerOpen(true)}
+              >
+                {t("layout.choose")}
+              </Button>
+            </div>
+          )}
 
           {suggestion && (
             <Alert
@@ -613,7 +642,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
           ) : (
             <section className="divide-y divide-foreground/[0.05] rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10">
               {filter === "history" ? (
-                <ReviewHistory
+                <HistoryList
                   sessionId={sessionId}
                   onOpen={(proposalId, title) =>
                     setOpen({ detail: { kind: "proposal", proposalId }, title })
@@ -623,7 +652,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
                 <ResourceRowSkeleton count={5} />
               ) : signals.isError ? (
                 <ResourceRowError
-                  message="Couldn't load what is waiting for you."
+                  message={t("failed")}
                   onRetry={() => void signals.refetch()}
                 />
               ) : (
@@ -634,10 +663,10 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
                     view.reviewLater.length > 0
                       ? FATE_COPY.nothingNewWaiting
                       : sessionId
-                        ? "Nothing from this session waits for you."
+                        ? t("empty.session")
                         : filter === "all"
-                          ? "Nothing is waiting on you."
-                          : "Nothing waiting here."
+                          ? t("empty.all")
+                          : t("empty.filtered")
                   }
                 />
               )}
