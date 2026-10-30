@@ -38783,6 +38783,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						label: string;
 						stuckAfterDays?: number | undefined;
 						tone: string;
+						waits?: {
+							dateBinding?: string | undefined;
+							on: "agent" | "date" | "decision" | "external" | "nobody" | "person" | "thing" | "unspecified";
+							refFrom?: string | undefined;
+							waitKind?: "access" | "agent_stopped" | "agent_work" | "another_work" | "answer" | "approval" | "ci" | "date" | "decide" | "deploy" | "devbox_job" | "merge_queue" | "nobody" | "payment" | "red_main" | "send" | "signature" | "their_document" | "their_reply" | "try_it" | "vendor" | undefined;
+						} | undefined;
 					}[];
 					profileKind: "kind" | "role";
 					profileSlug: string;
@@ -38814,6 +38820,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					label: string;
 					stuckAfterDays?: number | undefined;
 					tone: string;
+					waits?: {
+						dateBinding?: string | undefined;
+						on: "agent" | "date" | "decision" | "external" | "nobody" | "person" | "thing" | "unspecified";
+						refFrom?: string | undefined;
+						waitKind?: "access" | "agent_stopped" | "agent_work" | "another_work" | "answer" | "approval" | "ci" | "date" | "decide" | "deploy" | "devbox_job" | "merge_queue" | "nobody" | "payment" | "red_main" | "send" | "signature" | "their_document" | "their_reply" | "try_it" | "vendor" | undefined;
+					} | undefined;
 				}[];
 				profileKind: "kind" | "role";
 				profileSlug: string;
