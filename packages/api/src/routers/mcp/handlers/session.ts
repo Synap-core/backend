@@ -46,7 +46,10 @@ import {
 import { readAgentsForHandoff } from "../../../services/agent-dispatch/agents-for-handoff.js";
 import { WORK_GRAPH_MAX_WINDOW_HOURS } from "../../../services/focus-sessions/work-graph-window.js";
 import type { UpdateFocusSessionParams } from "../../../services/focus-sessions/update-session.js";
-import { SESSION_TITLE_MAX } from "@synap-core/types/focus-sessions";
+import {
+  SESSION_STATUSES,
+  SESSION_TITLE_MAX,
+} from "@synap-core/types/focus-sessions";
 import {
   SESSION_KINDS,
   attachSessionKind,
@@ -1507,6 +1510,16 @@ export const sessionHandlers: McpHandlerMap = {
       }
       outcomeLists = resolved;
     }
+    // The status the agent SAW (compare-and-set); a value that is no session
+    // status is refused with the list, never read as "no expectation".
+    const expectedStatus = SESSION_STATUSES.find(
+      (st) => st === args.expectedStatus
+    );
+    if (args.expectedStatus != null && !expectedStatus) {
+      return reply({
+        error: `expectedStatus must be one of ${SESSION_STATUSES.join(" | ")}.`,
+      });
+    }
     const result = await updateFocusSession({
       sessionId: args.sessionId as string,
       userId,
@@ -1527,6 +1540,7 @@ export const sessionHandlers: McpHandlerMap = {
           ? { criteria: args.criteria as SessionCriterion[] }
           : {}),
       status: args.status as "active" | "paused" | undefined,
+      ...(expectedStatus ? { expectedStatus } : {}),
       // A pause's hold and the move's time (W4), checked by the service.
       ...moveHoldToolArgs(args),
       progress: args.progress as number | undefined,
@@ -1620,6 +1634,9 @@ export const sessionHandlers: McpHandlerMap = {
           error: `Focus session ${args.sessionId as string} not found`,
           ...blockersNotApplied,
         });
+      case "conflict":
+        // A result to re-plan on (read the status, decide again), not an error.
+        return reply({ ...result, ...blockersNotApplied });
       case "denied":
         // A filing the pod applied on its own receipt still landed.
         return reply({
