@@ -54,7 +54,11 @@ vi.mock("@synap/database", async (importOriginal) => {
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   cpCatalogCache,
+  entities,
+  profileRelations,
+  profiles,
   proposals,
+  relationDefs,
   skills,
   workspaces,
 } from "@synap/database/schema";
@@ -151,6 +155,10 @@ beforeAll(async () => {
   await h.client!.exec(ddlFor(workspaces));
   // Template health reads the pending update proposals of every space.
   await h.client!.exec(ddlFor(proposals));
+  // It also lists the rows missing a required link (entities, profiles,
+  // profile_relations, relation_defs); empty here, so it adds no warning.
+  for (const t of [entities, profiles, profileRelations, relationDefs])
+    await h.client!.exec(ddlFor(t));
   await h.client!.query(
     `insert into workspaces (id, name, owner_id, settings) values ($1,$2,$3,'{}'::jsonb)`,
     [WS, "Probe space", "user-1"]
