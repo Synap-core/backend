@@ -4,6 +4,7 @@ import { openIn } from "../../../../lib/open-in";
 import {
   buildNeedsYou,
   formatAgeHours,
+  homeSections,
   NEEDS_YOU_CAP,
   statusLine,
   type DiagnoseSection,
@@ -160,7 +161,7 @@ describe("buildNeedsYou unknown and malformed sections", () => {
       headline: "15 pending",
       action: {
         kind: "link",
-        label: "Open review",
+        label: "Open requests",
         exit: { href: "/review", isDesktopLink: false },
       },
     });
@@ -423,5 +424,18 @@ describe("formatAgeHours", () => {
     expect(formatAgeHours(0.2)).toBe("under an hour");
     expect(formatAgeHours(5.4)).toBe("5h");
     expect(formatAgeHours(200)).toBe("8 days");
+  });
+});
+
+describe("homeSections", () => {
+  it("leaves the review backlog to Requests: one number, one source", () => {
+    const sections = [
+      section("review_backlog", "attention", { pending: 3 }),
+      section("failed_flows", "degraded", { failingFlows: 1 }),
+    ];
+    expect(homeSections(sections).map((s) => s.key)).toEqual(["failed_flows"]);
+    expect(
+      buildNeedsYou({ sections: homeSections(sections) }).rows.map((r) => r.key)
+    ).not.toContain("review_backlog");
   });
 });

@@ -252,8 +252,8 @@ export const CONSOLE_NAV = [
       {
         id: "members",
         href: "/members",
-        // The client's word: the people of the company, "Équipe".
-        label: "Team",
+        // French says the client's word, "Équipe" (the shell's copy.ts).
+        label: "Members",
         icon: "Users",
         legacy: [{ source: "/people" }],
         audience: "admin",

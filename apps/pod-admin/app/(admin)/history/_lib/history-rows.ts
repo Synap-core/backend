@@ -152,6 +152,8 @@ export interface RevertAnswer {
   nothingReverted?: boolean;
   partialFailures?: readonly string[];
   skipped?: readonly unknown[];
+  /** Something it did outside cannot be taken back (a message sent). */
+  permanent?: unknown;
 }
 
 /**
