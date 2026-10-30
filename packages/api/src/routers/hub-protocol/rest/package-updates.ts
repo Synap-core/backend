@@ -14,7 +14,6 @@
  */
 
 import { z } from "zod";
-import { TRPCError } from "@trpc/server";
 import {
   applyPackageUpdateInputSchema,
   PACKAGE_FIELD_STATES,
@@ -24,6 +23,7 @@ import {
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
+  errCode,
   hasScope,
   httpStatusForTrpcError,
   logger,
@@ -151,8 +151,8 @@ async function refuseNonAdmin(userId: string): Promise<string | null> {
     await assertPodAdmin(userId);
     return null;
   } catch (err) {
-    if (err instanceof TRPCError && err.code === "FORBIDDEN")
-      return err.message;
+    if (errCode(err) === "FORBIDDEN")
+      return err instanceof Error ? err.message : "Forbidden";
     throw err;
   }
 }
