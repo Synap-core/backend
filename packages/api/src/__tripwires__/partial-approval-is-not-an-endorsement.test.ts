@@ -128,13 +128,16 @@ describe("partial approval is not an endorsement — the earned streak", () => {
   });
 
   it("a partially applied approval breaks the run", () => {
-    const rows = ten();
-    rows[0] = approval(21, 0, {
-      dispositions: { $op0: { status: "reject" } },
-    });
-    const s = earnedStreak(rows);
-    expect(s.met).toBe(false);
-    expect(s.count).toBe(0);
+    const gutted = { dispositions: { $op0: { status: "reject" } } };
+    // The NEWEST decision (day 21, minute 4) is a gutted package: nothing counts.
+    const newest = ten();
+    newest[4] = approval(21, 4, gutted);
+    expect(earnedStreak(newest)).toMatchObject({ met: false, count: 0 });
+    // The 5th newest (day 21, minute 0): the four after it count, and the run
+    // ENDS there. Skipped instead of breaking, it would count nine.
+    const fifth = ten();
+    fifth[0] = approval(21, 0, gutted);
+    expect(earnedStreak(fifth)).toMatchObject({ met: false, count: 4 });
   });
 });
 
