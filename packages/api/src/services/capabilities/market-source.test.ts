@@ -143,4 +143,64 @@ describe("threeWayMergeFields — field-level owner-ownership (the safety proper
     expect(r.changed).toBe(false);
     expect(r.applied).toEqual([]);
   });
+
+  it("a field edited TO the template's value is SAME: no write, baseline catches up", () => {
+    // Founder pod 2026-10-30: facecam-edit's body equalled the catalog byte for
+    // byte and `market update` still said "owner-owned [body]".
+    const r = threeWayMergeFields(
+      { body: "catalog v2" }, // live: the owner pasted the new catalog body
+      { body: "catalog v1" }, // base: what we installed
+      { body: "catalog v2" } // desired
+    );
+    expect(r.applied).toEqual([]);
+    expect(r.ownerOwned).toEqual([]);
+    expect(r.conflicted).toEqual([]);
+    expect(r.changed).toBe(false);
+    expect(r.merged.body).toBe("catalog v2");
+    expect(r.nextBaseline.body).toBe("catalog v2");
+  });
+
+  it("splits owner-owned into conflicted (catalog moved too) and yours only", () => {
+    const r = threeWayMergeFields(
+      { body: "mine", description: "my words" },
+      { body: "v1", description: "same upstream" },
+      { body: "v2", description: "same upstream" }
+    );
+    expect(r.ownerOwned).toEqual(["body", "description"]);
+    expect(r.conflicted).toEqual(["body"]); // description: only the owner moved
+    expect(r.nextBaseline).toEqual({
+      body: "v1",
+      description: "same upstream",
+    });
+  });
+
+  it("a pre-existing value under a newly-managed key is conflicted", () => {
+    const r = threeWayMergeFields(
+      { name: "N", added: "user-set" },
+      { name: "N" },
+      { name: "N", added: "template-v" }
+    );
+    expect(r.ownerOwned).toEqual(["added"]);
+    expect(r.conflicted).toEqual(["added"]);
+  });
+});
+
+describe("readMarketSource — comparatorVersion", () => {
+  it("keeps the comparator a reconcile stamped beside the version", () => {
+    const read = readMarketSource({
+      marketSource: {
+        packageSlug: "s",
+        packageVersion: "h-2",
+        comparatorVersion: 1,
+        installedAt: AT,
+        baseline: {},
+      },
+    });
+    expect(read?.comparatorVersion).toBe(1);
+    expect(
+      readMarketSource({
+        marketSource: { packageSlug: "s", installedAt: AT, baseline: {} },
+      })
+    ).not.toHaveProperty("comparatorVersion");
+  });
 });
