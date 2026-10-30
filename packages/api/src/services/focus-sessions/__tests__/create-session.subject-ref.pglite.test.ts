@@ -104,10 +104,19 @@ const stored = async (goal: string) =>
     )
   ).rows;
 
+// An agent's NEW session must declare a criterion (F11, NO_CRITERIA refused
+// otherwise), so every MCP start here carries one.
 const mcpStart = async (args: Record<string, unknown>) => {
   const res = await sessionHandlers.synap_start_session!({
     toolName: "synap_start_session",
-    args: { matchTemplate: false, forceCreate: true, ...args },
+    args: {
+      matchTemplate: false,
+      forceCreate: true,
+      criteria: [
+        { key: "done", statement: "The test ran", check: { kind: "human" } },
+      ],
+      ...args,
+    },
     userId: USER,
     agentUserId: AGENT,
     apiKeyScopes: ["mcp.read", "mcp.write"],
