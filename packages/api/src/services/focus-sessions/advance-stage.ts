@@ -72,7 +72,14 @@
  * wave 5: gate executor + routers, with L7.
  */
 
-import { db, focusSessions, eq, setSessionStatus } from "@synap/database";
+import {
+  and,
+  appendSessionStageHistory,
+  db,
+  focusSessions,
+  eq,
+  setSessionStatus,
+} from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import {
@@ -221,11 +228,38 @@ export async function advanceSessionStage(
     }
   }
 
+  // THE STAGE LEDGER (0382): one entry per move that lands, in the write that
+  // sets the column. A "door" write carries it in its own UPDATE; a "caller"
+  // door already wrote `current_stage` in its multi-field UPDATE, so the entry
+  // is appended only while the stage it entered still stands (a racing
+  // advance appends its own). The subject-first return above appends nothing:
+  // process-sync's follow comes back through here and writes it once.
+  const move = {
+    fromStage,
+    toStage,
+    userId,
+    agentUserId: input.agentUserId ?? null,
+    via: "advance" as const,
+  };
   if (input.stageWrite === "door") {
     await db
       .update(focusSessions)
-      .set({ currentStage: toStage, updatedAt: new Date() })
+      .set({
+        currentStage: toStage,
+        stageHistory: appendSessionStageHistory(move),
+        updatedAt: new Date(),
+      })
       .where(eq(focusSessions.id, session.id));
+  } else {
+    await db
+      .update(focusSessions)
+      .set({ stageHistory: appendSessionStageHistory(move) })
+      .where(
+        and(
+          eq(focusSessions.id, session.id),
+          eq(focusSessions.currentStage, toStage)
+        )
+      );
   }
 
   // The stage is ENTERED: what it owes becomes the session's slots, gated or
