@@ -563,6 +563,7 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "proposalIds",
   "convertible",
   "package",
+  "waitKind",
 ] as const satisfies ReadonlyArray<keyof Signal>;
 
 type _SignalFieldsClassified =
