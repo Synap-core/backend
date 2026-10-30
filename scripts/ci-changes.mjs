@@ -18,12 +18,12 @@
  *
  * ── THREE TIERS (founder, 2026-10-29, "One trunk, three CI tiers") ──────────
  *   PR       Preflight, the Release gate, and the tests of what the change can
- *            break: the touched packages, every workspace package that
- *            depends on them, the test files of other packages that read them
- *            by path, and every tripwire (scripts/ci/affected.mjs). A change
- *            to shared or core code (outside a package, packages/database,
- *            types, core) runs the full suite. API e2e only when the API
- *            surface changed (affected.mjs API_SURFACE).
+ *            break: the test files it reaches through the import graph, the
+ *            tests that name a changed package by path, and every tripwire
+ *            (scripts/ci/affected.mjs, scope "selected"), in 1 to 8 shards
+ *            sized from their measured cost. Root config and the test runner
+ *            run the full suite (affected.mjs ROOT_FULL). API e2e only when
+ *            the API surface changed (affected.mjs API_SURFACE).
  *   main     every push runs everything; nobody waits on it.
  *   release  a pod updates only to a main commit whose post-merge run was
  *            all green (scripts/ci/release-gate-wait.mjs).
@@ -67,11 +67,16 @@
  *   suites        the Full suite shards run   false: draft, stack, negctl,
  *                                             docs-only, a same-tree or a
  *                                             light queue entry
- *   scope         what the shards run: "full" | "affected" | "none"
- *   affected      scope=affected: the package dirs whose whole suite runs,
- *                 comma-separated (test-ratchet.mjs --affected=)
- *   also          scope=affected: test files of other packages that read an
- *                 affected package by path, comma-separated (--also=)
+ *   scope         what the shards run: "full" | "selected" | "none"
+ *   shards        the shard matrix, JSON (`[1,2,3,4]`; scope=selected: 1 to
+ *                 SELECTION_MAX_SHARDS, sized from the selection's measured
+ *                 cost, scripts/test-ratchet-shards.mjs planSelection)
+ *   shard_count   the number of shards (the job name's "k/N")
+ *   selected      scope=selected: how many test files run
+ *   The selection itself (which files, in which shard, under which report id)
+ *   is written to SELECTION_OUT (default coverage/selection.json); ci.yml
+ *   uploads it, and the shards and the judge read that one file
+ *   (test-ratchet.mjs --select=).
  *   e2e           API e2e runs (the API surface changed, or everything runs)
  *   reuse         a queue entry re-runs nothing (same tree as its PR's
  *                 all-green run)
@@ -93,11 +98,33 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, readdirSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadGraph, selectTier } from "./ci/affected.mjs";
+import {
+  BASELINE,
+  PACKAGE_JSON,
+  baselineFiles,
+  loadGraph,
+  packageJsonInert,
+  selectTier,
+  suiteDirs,
+} from "./ci/affected.mjs";
+import {
+  loadShardPlan,
+  ownerDir,
+  planSelection,
+} from "./test-ratchet-shards.mjs";
 import { isTripwire } from "./tripwire-discovery.mjs";
+// THE test-file pattern (the import graph's): the selection, everyTest and
+// the negctl tests agree on what a test file is.
+import { TEST_FILE } from "./ci/import-graph.mjs";
 
 // Paths no test, build or image reads. Narrow on purpose: tests read
 // docs/decisions/*.md, skills/**/SKILL.md, CLAUDE.md and .claude/rules/*.md,
@@ -149,8 +176,6 @@ const IMAGE_INPUTS = [
   /^apps\/api\/src\/(index\.ts|routers\/provision\.ts|webhooks\/kratos[^/]*\.ts)$/,
   /^apps\/pod-admin\/app\/(recovery|settings\/security)\/page\.tsx$/,
 ];
-
-const TEST_FILE = /\.test\.(ts|tsx|mts|mjs|js)$/;
 
 // Paths the other repos link by source (app-bases, browser and relay-app read
 // @synap-core/types, api-types and markdown-core from this checkout; #372 broke
@@ -272,8 +297,7 @@ export function decide({
     image: true,
     suites: true,
     scope: "full",
-    affected: [],
-    also: [],
+    selection: null,
     e2e: true,
     why: [],
     negctl: false,
@@ -322,14 +346,12 @@ export function decide({
   // The tier: what the change can break (scripts/ci/affected.mjs). No graph
   // (it failed to load) is the full suite, never a guess.
   const pick = () => {
-    if (docsOnly)
-      return { scope: "none", dirs: [], tests: [], e2e: false, why: [] };
+    if (docsOnly) return { scope: "none", tests: [], e2e: false, why: [] };
     // Docs-only paths read by no test (DOCS_ONLY) never widen the tier.
     const t = tier ? tier(files.filter((f) => !isDocsOnly(f))) : null;
     return (
       t ?? {
         scope: "full",
-        dirs: [],
         tests: [],
         e2e: true,
         why: ["full suite: the dependency graph could not be read"],
@@ -339,8 +361,7 @@ export function decide({
   const tierFields = (t) => ({
     suites: t.scope !== "none",
     scope: t.scope,
-    affected: t.dirs,
-    also: t.tests,
+    selection: t.selection ?? null,
     e2e: t.e2e,
     why: t.why,
   });
@@ -364,11 +385,21 @@ export function decide({
         .join("; "),
     };
 
-  // A queue entry whose PR run did not pass both: the Release gate, and the
-  // tier of what it changes on top of the main it lands on, run on the
-  // combined tree.
+  // A queue entry whose PR run did not pass both: the Release gate and the
+  // FULL suite on the combined tree (rare: the PR's own suites were red,
+  // skipped or unreadable, so nothing vouches for a selection). Docs only
+  // still runs no suite.
   if (event === "merge_group") {
-    const t = pick();
+    const t = docsOnly
+      ? pick()
+      : {
+          scope: "full",
+          tests: [],
+          e2e: true,
+          why: [
+            "full suite: the PR's own Full suite and API e2e did not both pass, so the entry is checked whole",
+          ],
+        };
     return {
       ...all,
       image,
@@ -452,7 +483,7 @@ export function tierText(t) {
       ? "the full suite"
       : t.scope === "none"
         ? "no test suite"
-        : `the suites of ${t.dirs.length} package(s) (${t.dirs.join(", ")})${t.tests.length ? `, ${t.tests.length} test file(s) of other packages that read them` : ""} and every tripwire`;
+        : `${t.tests.length} selected test file(s), every tripwire included${t.selection ? `, in ${t.selection.shards} shard(s)` : ""}`;
   return `${suite}${t.why?.length ? ` [${t.why.join("; ")}]` : ""}; API e2e ${t.e2e ? "runs" : "not affected (no API surface path changed)"}`;
 }
 
@@ -479,9 +510,9 @@ export function summary(d, files) {
         : d.reuse
           ? "reused"
           : d.scope === "full"
-            ? "runs: everything"
-            : d.scope === "affected"
-              ? `runs: ${d.affected.join(", ")}${d.also.length ? ` + ${d.also.length} file(s) of other packages` : ""} + every tripwire`
+            ? `runs: everything${d.selection ? ` (${d.selection.tests.length} test files in ${d.selection.shards} cost-sized shard(s))` : " (4 shards)"}`
+            : d.scope === "selected"
+              ? `runs: ${d.selection?.tests.length ?? "?"} selected test file(s) (every tripwire included) in ${d.selection?.shards ?? "?"} shard(s)`
               : "not affected",
     ],
     [
@@ -512,12 +543,22 @@ export function summary(d, files) {
     "",
     `Why: ${d.reason}.`,
     ...(d.why?.length ? ["", ...d.why.map((w) => `- ${w}`)] : []),
-    ...(d.also?.length
+    ...(d.selection
       ? [
           "",
-          "<details><summary>Test files of other packages that run</summary>",
+          `Shards: ${d.selection.shards}, predicted test seconds per shard ${d.selection.predictedSeconds.join(" / ")} (budget ${d.selection.budgetSeconds} s; scripts/test-ratchet-shards.mjs planSelection).`,
+          ...(d.selection.dropped.length
+            ? [
+                "",
+                `${d.selection.dropped.length} selected file(s) run nowhere, on main either (no \`vitest run\` suite in their package): ${d.selection.dropped.slice(0, 10).join(", ")}`,
+              ]
+            : []),
           "",
-          ...d.also.map((f) => `- \`${f}\``),
+          "<details><summary>The selected test files that are not tripwires</summary>",
+          "",
+          ...d.selection.tests
+            .filter((f) => !isTripwire(f))
+            .map((f) => `- \`${f}\``),
           "",
           "</details>",
         ]
@@ -529,17 +570,95 @@ export function summary(d, files) {
   ].join("\n");
 }
 
-function changedFiles(base, head) {
+/**
+ * The paths a change touched, or null when git cannot say. `--no-renames`: a
+ * rename lists its OLD path too, so the tests that still read the old path are
+ * selected (a rename detected by git would hide it).
+ */
+export function changedFiles(base, head, cwd = undefined) {
   if (!base || !head) return null;
   try {
-    return execFileSync("git", ["diff", "--name-only", `${base}...${head}`], {
-      encoding: "utf8",
-    })
+    return execFileSync(
+      "git",
+      ["diff", "--name-only", "--no-renames", `${base}...${head}`],
+      { encoding: "utf8", cwd }
+    )
       .split("\n")
       .filter(Boolean);
   } catch {
     return null;
   }
+}
+
+/**
+ * The changed package.json files whose diff touches only fields that decide
+ * nothing about collection (affected.mjs INERT_PACKAGE_KEYS). `read(path)`
+ * returns [before, after] texts (null for a side that does not exist).
+ */
+export function collectionInert(files, read) {
+  return files.filter((f) => {
+    if (!PACKAGE_JSON.test(f)) return false;
+    const [before, after] = read(f);
+    return packageJsonInert(before, after);
+  });
+}
+
+/**
+ * The paths a change ADDS (`base...head`, renames as delete + add), or [] when
+ * git cannot say. The judge is red when vitest collects one of them nowhere.
+ */
+export function addedFiles(base, head, cwd = undefined) {
+  if (!base || !head) return [];
+  try {
+    return execFileSync(
+      "git",
+      [
+        "diff",
+        "--name-only",
+        "--no-renames",
+        "--diff-filter=A",
+        `${base}...${head}`,
+      ],
+      { encoding: "utf8", cwd, stdio: ["ignore", "pipe", "ignore"] }
+    )
+      .split("\n")
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/** A file at a commit, or null (absent, or git cannot say). */
+function showAt(ref, path, cwd) {
+  try {
+    return execFileSync("git", ["show", `${ref}:${path}`], {
+      encoding: "utf8",
+      cwd,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * [before, after] of a path over `base...head` (the merge base, as
+ * changedFiles diffs), or [null, null] when the merge base cannot be read.
+ */
+export function sidesOf(base, head, cwd = undefined) {
+  let mb = null;
+  try {
+    if (base && head)
+      mb = execFileSync("git", ["merge-base", base, head], {
+        encoding: "utf8",
+        cwd,
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+  } catch {
+    mb = null;
+  }
+  return (path) =>
+    mb ? [showAt(mb, path, cwd), showAt(head, path, cwd)] : [null, null];
 }
 
 // `src/x/foo.ts` → `src/x/foo.test.ts`, `src/x/foo.*.test.ts` that exist.
@@ -620,17 +739,94 @@ async function reuseEvidence(get, checkRuns) {
   }
 }
 
+// The files the known-red baseline names at a commit ([] when unreadable).
+function baselineAt(sha) {
+  if (!sha) return [];
+  try {
+    return baselineFiles(
+      execFileSync("git", ["show", `${sha}:${BASELINE}`], { encoding: "utf8" })
+    );
+  } catch {
+    return [];
+  }
+}
+
 // The tier function over this checkout's graph, or null when the graph cannot
-// be read (decide() then runs the full suite).
-function tierOfCheckout() {
+// be read (decide() then runs the full suite on the 4-shard plan). A selection
+// comes with its shard plan (scripts/test-ratchet-shards.mjs planSelection).
+// So does a PR's FULL tier (lead decision, 29 Oct): every test file, planned
+// by cost in up to 8 shards, judged with the full mode's floors (`full`).
+// Main pushes and the merge queue never reach this function: they keep the
+// 4-shard plan.
+function tierOfCheckout(baseSha, headSha) {
   try {
     const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
     const g = loadGraph(root, isTripwire);
-    return (files) => selectTier(files, g);
+    const suites = suiteDirs(root);
+    const countByDir = {};
+    for (const f of g.imports.files)
+      if (TEST_FILE.test(f))
+        countByDir[ownerDir(f)] = (countByDir[ownerDir(f)] ?? 0) + 1;
+    const plan = loadShardPlan();
+    const baseBaseline = baselineAt(baseSha);
+    const everyTest = g.imports.files.filter((f) => TEST_FILE.test(f));
+    const sides = sidesOf(baseSha, headSha);
+    const added = addedFiles(baseSha, headSha).filter((f) => TEST_FILE.test(f));
+    return (files) =>
+      withPlan(
+        selectTier(files, g, {
+          baseBaseline,
+          collectionInert: collectionInert(files, sides),
+        }),
+        {
+          everyTest,
+          suiteDirs: suites,
+          plan,
+          countByDir,
+          added,
+        }
+      );
   } catch (err) {
     console.log(`dependency graph unreadable (${err.message}): full suite`);
     return null;
   }
+}
+
+/**
+ * A PR tier with its shard plan: a selection plans its files; the full tier
+ * plans `everyTest` (marked `full`: the judge adds the 2,000-file floor),
+ * unless it is a COMMITTED_PLAN change. `ctx` = { everyTest, suiteDirs, plan,
+ * countByDir, added (the test files the PR adds) }.
+ */
+export function withPlan(t, ctx) {
+  if (t.scope !== "selected" && t.scope !== "full") return t;
+  // A full tier a cost-sized plan cannot vouch for (affected.mjs
+  // COMMITTED_PLAN: the runner, the selector, ci.yml, what vitest collects)
+  // gets no plan: the shards run the committed 4-shard plan in the full mode,
+  // with its floors.
+  if (t.scope === "full" && t.committedPlan) return t;
+  const full = t.scope === "full";
+  return {
+    ...t,
+    selection: planSelection({
+      tests: full ? ctx.everyTest : t.tests,
+      suiteDirs: ctx.suiteDirs,
+      isTripwire,
+      plan: ctx.plan,
+      countByDir: ctx.countByDir,
+      full,
+      added: ctx.added ?? [],
+    }),
+  };
+}
+
+/**
+ * The shard matrix of a decision: a selection's own count (a PR's selected or
+ * full tier), else the committed plan's 4 (main, the merge queue, fail-safe).
+ */
+export function shardMatrix(d) {
+  const n = d.selection ? d.selection.shards : 4;
+  return Array.from({ length: n }, (_, i) => i + 1);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
@@ -647,17 +843,35 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     draft: process.env.DRAFT === "true",
     files,
     siblingTests,
-    tier: tierOfCheckout(),
+    tier: tierOfCheckout(
+      event === "merge_group"
+        ? process.env.QUEUE_BASE_SHA
+        : process.env.BASE_SHA,
+      event === "merge_group"
+        ? process.env.QUEUE_HEAD_SHA
+        : process.env.HEAD_SHA
+    ),
     queue,
   });
+  // A selection reaches the shards and the judge as one file (ci.yml uploads
+  // it); without it they fail, they never run something else.
+  if (d.selection) {
+    const outFile = resolve(
+      process.env.SELECTION_OUT ?? "coverage/selection.json"
+    );
+    mkdirSync(dirname(outFile), { recursive: true });
+    writeFileSync(outFile, `${JSON.stringify(d.selection, null, 1)}\n`);
+  }
   const out = [
     `gate=${d.gate}`,
     `image=${d.image}`,
     `image_reason=${d.imageWhy}`,
     `suites=${d.suites}`,
     `scope=${d.scope}`,
-    `affected=${d.affected.join(",")}`,
-    `also=${d.also.join(",")}`,
+    `shards=${JSON.stringify(shardMatrix(d))}`,
+    `shard_count=${shardMatrix(d).length}`,
+    `selected=${d.selection?.tests.length ?? ""}`,
+    `select=${!!d.selection}`,
     `e2e=${d.e2e}`,
     `negctl=${d.negctl}`,
     `negctl_tests=${d.negctlTests.join(" ")}`,

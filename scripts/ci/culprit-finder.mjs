@@ -51,7 +51,7 @@ import {
   TEST_FILE,
   loadGraph,
   packageOf,
-  selectTier,
+  selectPackageTier,
   workspacePackages,
 } from "./affected.mjs";
 import {
@@ -194,16 +194,18 @@ const neutralPath = (f) =>
   /^[^/]+\.md$/.test(f);
 
 /**
- * May a change of `prFiles` make `file` fail? Through the affected graph
- * (selectTier): the full suite reaches everything; otherwise its packages,
- * their dependents and the test files that read them. A tripwire reads across
- * the tree, so every change reaches it.
+ * May a change of `prFiles` make `file` fail? Through the package graph
+ * (affected.mjs selectPackageTier: the tier PRs ran before lane L8, wider
+ * than the file-level selection they run now): the full suite reaches
+ * everything; otherwise its packages, their dependents and the test files
+ * that read them. A tripwire reads across the tree, so every change reaches
+ * it.
  */
 export function reaches(prFiles, file, { graph, refs, isTripwire: trip }) {
   const files = (prFiles ?? []).filter((f) => !neutralPath(f));
   if (files.length === 0) return false;
   if (trip?.(file)) return true;
-  const t = selectTier(files, { graph, refs });
+  const t = selectPackageTier(files, { graph, refs });
   if (t.scope === "full") return true;
   const pkg = packageOf(file, [...graph.keys()]);
   return (pkg != null && t.dirs.includes(pkg)) || t.tests.includes(file);
@@ -1080,7 +1082,7 @@ export function nameRun({
         : prFiles(gh, repo, pr, log);
     return { sha, pr, subject: subject.get(sha) ?? "", ...read };
   });
-  const g = loadGraph(root, isTripwire);
+  const g = loadGraph(root, isTripwire, { imports: false });
   const attribution = attribute(failing, candidates, { ...g, isTripwire });
   const toBisect = range.lastGreen ? needsBisect(failing, attribution) : [];
   if (!range.lastGreen)

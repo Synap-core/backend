@@ -14,7 +14,6 @@ import {
   hashShard,
   loadShardPlan,
   mergeShardReports,
-  mustRunFiles,
   parseShard,
   planFits,
   runsForShard,
@@ -188,6 +187,33 @@ describe("test-ratchet shards: the measured plan", () => {
     ).toThrow(/no packages\/api file/);
   });
 
+  it("a plan that places a package outside 1..N does not fit: the old split runs it", () => {
+    const committed = loadShardPlan();
+    // A refresh that wrote 5 for a 4-shard run would run packages/jobs
+    // nowhere, and the PR would read green.
+    const off = {
+      ...committed,
+      packages: { ...committed.packages, "packages/jobs": 5 },
+    };
+    expect(planFits(off, 4)).toBe(false);
+    for (const bad of [0, 2.5, "2", null])
+      expect(
+        planFits(
+          { ...committed, packages: { ...committed.packages, x: bad } },
+          4
+        ),
+        String(bad)
+      ).toBe(false);
+    const jobs = { id: "packages/jobs", dir: "packages/jobs", args: [] };
+    const placed = [1, 2, 3, 4].flatMap((k) =>
+      runsForShard([jobs], { k, n: 4 }, { plan: off, apiFiles: [] }).map(
+        () => k
+      )
+    );
+    // Exactly one shard runs it (the fallback: shard 1).
+    expect(placed).toEqual([1]);
+  });
+
   it("the committed plan fits the CI shard count and names real files", () => {
     const committed = loadShardPlan();
     expect(planFits(committed, 4)).toBe(true);
@@ -206,46 +232,12 @@ describe("test-ratchet shards: the measured plan", () => {
   });
 });
 
-describe("test-ratchet shards: the PR tier's must-run files", () => {
+describe("test-ratchet shards: shard 1's own runs", () => {
   const discovered = [
     "packages/api/src/__tripwires__/a.test.ts",
     "packages/jobs/src/b.tripwire.test.ts",
     "scripts/c.tripwire.test.ts",
   ];
-  const suiteDirs = ["packages/api", "packages/jobs", "apps/pod-admin"];
-  const inScope = (p: string) => p.startsWith("apps/pod-admin/");
-  const exists = (f: string) => !f.includes("gone");
-
-  it("under --affected: EVERY tripwire, and only the --also files that can run", () => {
-    const { files, also } = mustRunFiles({
-      discovered,
-      affected: ["apps/pod-admin"],
-      also: [
-        "packages/api/src/x.test.ts", // kept
-        "apps/pod-admin/y.test.ts", // its package runs whole: not solo
-        "packages/api/src/gone.test.ts", // deleted
-        "packages/core/src/z.test.ts", // a package with no suite
-      ],
-      inScope,
-      suiteDirs,
-      exists,
-    });
-    expect(also).toEqual(["packages/api/src/x.test.ts"]);
-    expect(files).toEqual([...discovered, "packages/api/src/x.test.ts"].sort());
-  });
-
-  it("not the PR tier: the in-scope tripwires only, as before", () => {
-    expect(
-      mustRunFiles({
-        discovered,
-        affected: null,
-        also: ["packages/api/src/x.test.ts"],
-        inScope: (p: string) => p.startsWith("packages/jobs/"),
-        suiteDirs,
-        exists,
-      })
-    ).toEqual({ files: ["packages/jobs/src/b.tripwire.test.ts"], also: [] });
-  });
 
   it("shard 1 runs, per owning dir, what no package run reaches", () => {
     expect(

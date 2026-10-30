@@ -57,12 +57,15 @@
  * ── USAGE ────────────────────────────────────────────────────────────────────
  *   node scripts/test-ratchet.mjs                 run everything, then check
  *   node scripts/test-ratchet.mjs --only=packages/api,packages/jobs
- *   node scripts/test-ratchet.mjs --affected=packages/api,apps/api --also=F,G
- *                                                 the PR tier (ci-changes.mjs
- *                                                 outputs affected / also):
- *                                                 those packages' suites, the
- *                                                 files F,G of other packages,
- *                                                 and EVERY tripwire
+ *   node scripts/test-ratchet.mjs --select=selection.json [--shard=k/N]
+ *                                                 the PR tier since lane L8
+ *                                                 (ci-changes.mjs writes the
+ *                                                 file, scope "selected"): the
+ *                                                 planned test files, in the
+ *                                                 planned shards; see
+ *                                                 selectMode() below
+ *   node scripts/test-ratchet.mjs --reports=DIR --select=selection.json
+ *                                                 judge a selection's shards
  *   node scripts/test-ratchet.mjs --script=test:e2e --only=packages/test-e2e
  *                                                 a lane run by its own CI job
  *                                                 (the package script to read;
@@ -100,11 +103,13 @@ import {
   SHARDED_DIRS,
   loadShardPlan,
   mergeShardReports,
-  mustRunFiles,
   soloRuns,
   parseShard,
   planFits,
   runsForShard,
+  selectRunArgs,
+  selectionProblems,
+  shardDoneId,
   shardReportId,
 } from "./test-ratchet-shards.mjs";
 import {
@@ -130,27 +135,18 @@ const flag = (name) =>
   args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
 const RECORD = args.includes("--record");
 const REPORTS_IN = flag("reports");
-// --affected=<dirs>: the PR tier (scripts/ci/affected.mjs). Like --only for
-// the package suites, but EVERY tripwire still runs, and so does each
-// --also=<files> test (a test of an unaffected package that reads an affected
-// one by path). The shards and the judge get the same two, in CI through
-// TEST_RATCHET_AFFECTED / TEST_RATCHET_ALSO (a path with `[id]` never meets a
-// shell glob). TEST_RATCHET_SCOPE=affected (ci-changes.mjs `scope`) makes an
-// EMPTY list mean "no package suite, every tripwire" (a change that
-// touches no package: only docs/reference/, or an empty diff).
-// Otherwise empty or absent = not the PR tier: everything in scope runs.
-const list = (v) => (v ? v.split(",").filter(Boolean) : []);
-const affectedList = list(
-  flag("affected") ?? process.env.TEST_RATCHET_AFFECTED
-);
-const AFFECTED =
-  affectedList.length || process.env.TEST_RATCHET_SCOPE === "affected"
-    ? affectedList
-    : undefined;
-const ALSO = list(flag("also") ?? process.env.TEST_RATCHET_ALSO);
-if (AFFECTED && flag("only"))
-  throw new Error("--affected and --only are two scopes: pass one");
-const ONLY = flag("only")?.split(",").filter(Boolean) ?? AFFECTED;
+// --select=<selection.json>: the PR tier since lane L8 (ci-changes.mjs writes
+// it, scope "selected"): a list of test files, planned into shards. No
+// package suite runs whole; see selectMode() below. An unreadable selection
+// throws: the shard or the judge fails, it never runs something else.
+const SELECT_PATH = flag("select") ?? process.env.TEST_RATCHET_SELECT;
+const SELECTION = SELECT_PATH
+  ? JSON.parse(readFileSync(resolve(SELECT_PATH), "utf8"))
+  : null;
+if (SELECTION && (flag("only") || RECORD))
+  throw new Error("--select is its own scope: no --only or --record");
+const ONLY =
+  flag("only")?.split(",").filter(Boolean) ?? (SELECTION ? [] : undefined);
 const SCRIPT = flag("script") ?? "test";
 const SHARD = parseShard(flag("shard"));
 const SHARDS = flag("shards") ? Number(flag("shards")) : null;
@@ -354,8 +350,8 @@ function readReport(dir, id) {
 
 // A sharded package's report is its N shard reports merged; one missing shard
 // makes the whole package a `no-report`. Only the PACKAGE run is sharded:
-// shard 1 runs a package's must-run files that no package run reached (the
-// PR tier, packages/api not affected) as one `tripwires:<dir>` report.
+// shard 1 runs the tripwires that no package run reaches (the repo root's, a
+// package with no `vitest run` script) as one `tripwires:<dir>` report.
 const isShardedRun = (run) =>
   !!SHARDS && SHARDED_DIRS.includes(run.dir) && run.id === run.dir;
 function readRunReport(dir, run) {
@@ -391,24 +387,14 @@ const inScope = (path) =>
 const { runs: allRuns, skipped } = packageRuns();
 const runs = allRuns.filter((r) => inScope(r.dir));
 
-// The files that run on their own, under their package's config, wherever no
-// package run reaches them: the tripwires (all of them under --affected, the
-// in-scope ones otherwise) and the --also files of packages that have a suite
-// (a test of a package with no `vitest run` script runs nowhere, on main
-// either). Shard 1 runs them; the judge expects their reports.
+// The tripwires in scope run on their own, under their package's config,
+// wherever no package run reaches them. Shard 1 runs them; the judge expects
+// their reports.
 const discovered = discoverTripwires(REPO_ROOT).map((f) =>
   relative(REPO_ROOT, f)
 );
-const { files: mustRun, also: alsoFiles } = mustRunFiles({
-  discovered,
-  affected: AFFECTED ?? null,
-  also: ALSO,
-  inScope,
-  suiteDirs: allRuns.map((r) => r.dir),
-  exists: (f) => existsSync(join(REPO_ROOT, f)),
-});
+const mustRun = discovered.filter(inScope).sort();
 const mustRunSet = new Set(mustRun);
-const alsoSet = new Set(alsoFiles);
 const reportsDir = REPORTS_IN ? resolve(REPORTS_IN) : DEFAULT_REPORTS;
 mkdirSync(reportsDir, { recursive: true });
 
@@ -467,11 +453,12 @@ async function retryNewFailures(executed) {
 }
 
 // Every test file of a package, as vitest itself resolves them (its own
-// include/exclude), relative to the package; null when the listing fails.
-function listVitestFiles(run) {
+// include/exclude), relative to the package; null when the listing fails (or,
+// unless `emptyIsList`, when it lists nothing).
+function listVitestFiles(run, { emptyIsList = false } = {}) {
   const out = join(
     reportsDir,
-    `${run.id.replace(/[^a-z0-9]+/gi, "_")}.list.json`
+    `${run.id.replace(/[^a-z0-9]+/gi, "_")}.vitest-list.json`
   );
   return new Promise((done) => {
     const child = spawn(
@@ -487,13 +474,298 @@ function listVitestFiles(run) {
         const files = JSON.parse(readFileSync(out, "utf8")).map((e) =>
           relative(base, e.file).replaceAll("\\", "/")
         );
-        done(files.length ? files.sort() : null);
+        done(files.length || emptyIsList ? files.sort() : null);
       } catch {
         done(null);
       }
     });
   });
 }
+
+// ── the PR selection (--select) ──────────────────────────────────────────────
+// The plan (scripts/test-ratchet-shards.mjs planSelection) names every run:
+// { id, dir, shard, files }. A shard lists each of its runs with vitest's own
+// include/exclude first (`<id>.list.json`: the files vitest would collect, or
+// null when listing failed), runs the ones that collect something, retries new
+// failures once, and writes `select-shard-<k>.done.json`. The judge reads the
+// same plan and is red on: a broken plan (a tripwire planned nowhere), a shard
+// with no done marker, a run with no report (unless its listing was empty), a
+// planned file that vitest collected (or could not list) but no report holds,
+// a tripwire in no report, a new failure, a fixed or stale baseline entry of
+// a planned file. A planned file its package's config does not collect is
+// listed, not red: main's full suite does not run it either.
+async function selectMode() {
+  const scriptArgs = new Map(allRuns.map((r) => [r.dir, r.args]));
+  const planned = SELECTION.runs.map((r) => ({
+    id: r.id,
+    dir: r.dir,
+    shard: r.shard,
+    files: r.files,
+    args: selectRunArgs(r, scriptArgs.get(r.dir) ?? []),
+    allowEmpty: true,
+  }));
+  const listPath = (id) =>
+    join(reportsDir, `${id.replace(/[^a-z0-9]+/gi, "_")}.list.json`);
+  if (!REPORTS_IN) {
+    if (SHARD && SHARD.n !== SELECTION.shards)
+      throw new Error(
+        `--shard=${SHARD.k}/${SHARD.n} but the selection plans ${SELECTION.shards} shard(s)`
+      );
+    const ks = SHARD
+      ? [SHARD.k]
+      : Array.from({ length: SELECTION.shards }, (_, i) => i + 1);
+    const mine = planned.filter((r) => ks.includes(r.shard));
+    clearRetry(mine);
+    const toRun = [];
+    for (const r of mine) {
+      const listed = await listVitestFiles(r, { emptyIsList: true });
+      const repoRel = listed?.map((f) => (r.dir === "." ? f : `${r.dir}/${f}`));
+      // Nothing collected: does the package's config collect anything at
+      // all? Main's full mode is red on a package that runs 0 files.
+      let packageListed;
+      if (repoRel && repoRel.length === 0 && scriptArgs.has(r.dir)) {
+        const all = await listVitestFiles(
+          { ...r, id: `${r.id}#package`, args: scriptArgs.get(r.dir) },
+          { emptyIsList: true }
+        );
+        packageListed = all ? all.length : null;
+      }
+      writeFileSync(
+        listPath(r.id),
+        `${JSON.stringify({ listed: repoRel ?? null, ...(packageListed !== undefined ? { packageListed } : {}) })}\n`
+      );
+      if (repoRel && repoRel.length === 0) continue;
+      rmSync(reportFile(reportsDir, r.id), { force: true });
+      toRun.push(r);
+    }
+    console.log(
+      `test-ratchet: selection of ${SELECTION.tests.length} file(s) in ${SELECTION.shards} shard(s); running ${toRun.length} of ${mine.length} planned run(s)${SHARD ? ` (shard ${SHARD.k}/${SHARD.n})` : ""}, ${CONCURRENCY} at a time`
+    );
+    await pool(toRun, CONCURRENCY, (r) =>
+      runVitest(r, reportFile(reportsDir, r.id))
+    );
+    await retryNewFailures(toRun);
+    for (const k of ks)
+      writeFileSync(
+        join(reportsDir, `${shardDoneId(k)}.json`),
+        `${JSON.stringify({ shard: k, runs: mine.filter((r) => r.shard === k).map((r) => r.id) })}\n`
+      );
+    if (SHARD) {
+      console.log(
+        `\ntest-ratchet: shard ${SHARD.k}/${SHARD.n} done; reports in ${relative(REPO_ROOT, reportsDir)}. The "Full suite" job judges them.`
+      );
+      process.exit(0);
+    }
+  }
+
+  const problems = [];
+  for (const p of selectionProblems(SELECTION, discovered))
+    problems.push({ kind: "selection", detail: p });
+  for (let k = 1; k <= SELECTION.shards; k++)
+    if (!existsSync(join(reportsDir, `${shardDoneId(k)}.json`)))
+      problems.push({
+        kind: "no-report",
+        detail: `shard ${k}/${SELECTION.shards} wrote no done marker (${shardDoneId(k)}.json): it crashed or never ran`,
+      });
+  const results = new Map();
+  const flaky = [];
+  const perRun = [];
+  const notCollected = [];
+  const unrun = [];
+  for (const r of planned) {
+    let listed = null;
+    let packageListed = null;
+    try {
+      const l = JSON.parse(readFileSync(listPath(r.id), "utf8"));
+      listed = l.listed;
+      packageListed = l.packageListed ?? null;
+    } catch {
+      // no listing: the shard did not reach this run; its report decides
+    }
+    if (Array.isArray(listed) && listed.length === 0) {
+      notCollected.push(...r.files);
+      // A package whose config collects nothing at all is red, as in the
+      // full mode (unless its script passes with no tests); a listing that
+      // failed is red too, never a guess.
+      const args = scriptArgs.get(r.dir);
+      if (args && packageListed !== null && packageListed > 0) continue;
+      if (args && packageListed === 0 && args.includes("--passWithNoTests"))
+        continue;
+      if (args)
+        problems.push({
+          kind: "vacuous",
+          detail: `${r.dir}: its vitest config ${packageListed === 0 ? "collects 0 test files" : "could not be listed"} (${r.id} planned ${r.files.length} file(s)); main's full suite is red on this too`,
+        });
+      continue;
+    }
+    const report = readReport(reportsDir, r.id);
+    if (!report) {
+      problems.push({
+        kind: "no-report",
+        detail: `${r.id}: no report (shard ${r.shard} crashed before it, or the suite crashed before reporting). Reproduce: cd ${r.dir} && npx vitest run ${r.args.length > 8 ? `<${r.args.length} args>` : r.args.join(" ")}`,
+      });
+      continue;
+    }
+    const first = classifyReport(report);
+    const retry = readReport(reportsDir, retryReportId(r.id));
+    const retried = applyRetry(
+      first.files,
+      retry ? classifyReport(retry).files : null,
+      baseline
+    );
+    for (const fl of retried.flaky) flaky.push({ ...fl, run: r.id });
+    // A file two runs reached (vitest's filters are substrings): any red wins,
+    // a later green never overwrites it.
+    for (const [f, v] of retried.files)
+      if (results.get(f)?.ok !== false) results.set(f, v);
+    // A run with tests and not one passing: skipped (no database) or broken.
+    // A run of known-red baseline files only is exempt (they fail on main).
+    if (
+      first.total > 0 &&
+      first.passed === 0 &&
+      [...first.files.keys()].some((f) => !baseline.has(f))
+    )
+      problems.push({
+        kind: "vacuous",
+        detail: `${r.id}: 0 of ${first.total} tests passed — every test skipped or failed. Is Postgres up and migrated (DATABASE_URL)?`,
+      });
+    perRun.push({
+      id: r.id,
+      dir: r.dir,
+      files: retried.files.size,
+      failedFiles: [...retried.files.values()].filter((v) => !v.ok).length,
+      passed: first.passed,
+      total: first.total,
+    });
+    const listedSet = Array.isArray(listed) ? new Set(listed) : null;
+    for (const f of r.files)
+      if (!retried.files.has(f))
+        (listedSet && !listedSet.has(f) ? notCollected : unrun).push(f);
+  }
+  if (unrun.length)
+    problems.push({
+      kind: "select-unrun",
+      detail: `${unrun.length} planned test file(s) that vitest collects (or could not list) appear in no report:\n${unrun
+        .slice(0, 20)
+        .map((f) => `      ${f}`)
+        .join("\n")}`,
+    });
+  // A test file this PR ADDS that vitest collects nowhere would never run,
+  // here or on main: red, not a log line. (An existing path's collection only
+  // changes with a config, which runs the committed plan, not this judge.)
+  const addedSet = new Set(SELECTION.added ?? []);
+  const addedUncollected = [...new Set(notCollected)].filter((f) =>
+    addedSet.has(f)
+  );
+  if (addedUncollected.length)
+    problems.push({
+      kind: "not-collected-new",
+      detail: `${addedUncollected.length} test file(s) this PR adds that their package's vitest config does not collect: they would never run, here or on main. Move each under a path the config includes, or change the config:\n${addedUncollected
+        .slice(0, 20)
+        .map((f) => `      ${f}`)
+        .join("\n")}`,
+    });
+  const twUnrun = discovered.filter((t) => !results.has(t));
+  if (twUnrun.length)
+    problems.push({
+      kind: "tripwire-unrun",
+      detail: `${twUnrun.length} tripwire file(s) appear in no report (every PR runs every tripwire):\n${twUnrun
+        .slice(0, 20)
+        .map((f) => `      ${f}`)
+        .join("\n")}`,
+    });
+  if (discovered.length < 100)
+    problems.push({
+      kind: "vacuous",
+      detail: `only ${discovered.length} tripwire files discovered (326 on 2026-10-21) — did the naming convention or the walk change?`,
+    });
+  const plannedSet = new Set(planned.flatMap((r) => r.files));
+  const failing = [...results].filter(([, v]) => !v.ok);
+  const newRed = failing.filter(([f]) => !baseline.has(f));
+  const fixed = [];
+  const stale = [];
+  for (const [f] of baseline) {
+    if (!existsSync(join(REPO_ROOT, f))) {
+      stale.push(f);
+      continue;
+    }
+    if (!plannedSet.has(f) || notCollected.includes(f)) continue;
+    const r = results.get(f);
+    if (r?.ok) fixed.push(f);
+  }
+  // A PR's FULL tier, planned as a selection: the full mode's file floor
+  // holds too. Not the per-package floors: the full mode counts what vitest
+  // collects (packages/auth's compiled dist/*.test.js included), the plan
+  // names test files; a change that can alter collection never gets a plan
+  // (affected.mjs COMMITTED_PLAN).
+  if (SELECTION.full && results.size < PLAUSIBLE_MIN_FILES)
+    problems.push({
+      kind: "vacuous",
+      detail: `only ${results.size} test files ran (floor ${PLAUSIBLE_MIN_FILES}). Whole packages went missing.`,
+    });
+  for (const p of parseProblems)
+    problems.push({ kind: "baseline-format", detail: p });
+  if (newRed.length)
+    problems.push({
+      kind: "new-failure",
+      detail: `${newRed.length} file(s) fail that are not in the baseline (failed twice where a retry ran). Fix them; the baseline is not a place to park new red:\n${newRed.map(([f, v]) => `      ${f}\n        ↳ ${v.reason}`).join("\n")}`,
+    });
+  if (fixed.length)
+    problems.push({
+      kind: "fixed",
+      detail: `${fixed.length} baseline file(s) now pass — remove them from scripts/test-ratchet-baseline.txt so they can never regress unseen:\n${fixed.map((f) => `      ${f}`).join("\n")}`,
+    });
+  if (stale.length)
+    problems.push({
+      kind: "stale-baseline",
+      detail: `${stale.length} baseline file(s) no longer exist — remove them:\n${stale.map((f) => `      ${f}`).join("\n")}`,
+    });
+
+  console.log(
+    "\n─── test ratchet (PR selection) ──────────────────────────────"
+  );
+  for (const r of perRun)
+    console.log(
+      `  ${r.id.padEnd(44)} ${String(r.files).padStart(5)} files  ${String(r.failedFiles).padStart(4)} red  ${String(r.passed).padStart(6)}/${r.total} tests passed`
+    );
+  console.log(
+    `  ${results.size} files ran of ${plannedSet.size} planned in ${SELECTION.shards} shard(s), ${failing.length} red, ${discovered.length} tripwires discovered${flaky.length ? `, ${flaky.length} flaky` : ""}`
+  );
+  if (notCollected.length)
+    console.log(
+      `\n  [not-collected] ${notCollected.length} planned file(s) their package's vitest config does not collect (main's full suite does not run them either):\n${notCollected
+        .slice(0, 20)
+        .map((f) => `      ${f}`)
+        .join("\n")}`
+    );
+  if (SELECTION.dropped?.length)
+    console.log(
+      `\n  [no-suite] ${SELECTION.dropped.length} selected file(s) in a dir with no \`vitest run\` suite (run nowhere, on main either):\n${SELECTION.dropped
+        .slice(0, 20)
+        .map((f) => `      ${f}`)
+        .join("\n")}`
+    );
+  if (flaky.length) {
+    console.log(
+      `\n  [flaky]\n      ${flaky.length} file(s) failed, then passed when re-run alone in the same job. Not counted; own and fix them:\n${flaky.map((f) => `      ${f.file}\n        ↳ first run: ${f.firstReason}`).join("\n")}`
+    );
+    if (IN_CI)
+      for (const f of flaky)
+        console.log(
+          `::warning file=${f.file},title=Flaky test file::failed, then passed on the retry (not counted). First run: ${f.firstReason}`
+        );
+  }
+  if (problems.length === 0) {
+    console.log(
+      `\n✓ test ratchet OK — every planned file ran, every red file is a known, owned baseline entry.\n`
+    );
+    process.exit(0);
+  }
+  console.error(`\n✗ TEST RATCHET — ${problems.length} problem(s)\n`);
+  for (const p of problems) console.error(`  [${p.kind}]\n      ${p.detail}\n`);
+  process.exit(1);
+}
+if (SELECTION) await selectMode();
 
 let executed = [];
 if (!REPORTS_IN) {
@@ -606,11 +878,10 @@ const collect = (run) => {
 };
 runs.forEach(collect);
 
-// Tripwires (and --also files) no package run reached (packages without a
-// `test` script, the repo root, packages outside --affected). Run them where
-// they live, like `pnpm tripwires` does.
+// Tripwires no package run reached (packages without a `test` script, the
+// repo root). Run them where they live, like `pnpm tripwires` does.
 const tripwires = mustRun;
-if ((!ONLY || AFFECTED) && discovered.length < 100) {
+if (!ONLY && discovered.length < 100) {
   problems.push({
     kind: "vacuous",
     detail: `only ${discovered.length} tripwire files discovered (326 on 2026-10-21) — did the naming convention or the walk change?`,
@@ -637,14 +908,8 @@ if (!REPORTS_IN && tripwireRuns.length) {
   await retryNewFailures(tripwireRuns);
 }
 tripwireRuns.forEach(collect);
-// An --also file its package's config excludes runs on main neither: noted,
-// not red. A tripwire that ran nowhere is red.
-const alsoUnrun = tripwires.filter((t) => alsoSet.has(t) && !results.has(t));
-if (alsoUnrun.length)
-  console.log(
-    `\n  [also-unrun] ${alsoUnrun.length} --also file(s) appear in no report (their package's vitest config excludes them, so the full suite does not run them either):\n${alsoUnrun.map((f) => `      ${f}`).join("\n")}`
-  );
-const unrun = tripwires.filter((t) => !alsoSet.has(t) && !results.has(t));
+// A tripwire that ran nowhere is red.
+const unrun = tripwires.filter((t) => !results.has(t));
 if (unrun.length) {
   problems.push({
     kind: "tripwire-unrun",

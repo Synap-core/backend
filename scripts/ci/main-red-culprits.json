@@ -1,0 +1,200 @@
+{
+  "source": "gh api repos/Synap-core/backend/pulls/<n>/files --paginate (2026-10-29, lane L8). Each row: a non-tripwire test file that went red on main after a merge, the PR that broke it (named by the fix PR), and that PR's real file list. Tripwires are left out: every PR runs every tripwire. Not here: packages/api/src/services/focus-sessions/__tests__/conversation-change-feed.pglite.test.ts (main run 40853339771), red because a fixture aged out (#502), no PR caused it.",
+  "culprits": [
+    {
+      "pr": "#446",
+      "red": "packages/api/src/routers/mcp/instructions-budget.test.ts",
+      "evidence": "main run 40711527490; #451 names #446 (capture-as-you-go reflex, +36 bytes)",
+      "files": [
+        "packages/api/src/routers/mcp/entry-instructions.ts",
+        "packages/api/src/routers/mcp/tools/mcp-tools.manifest.json",
+        "skills/synap/SKILL.md",
+        "skills/synap/reflexes.md"
+      ]
+    },
+    {
+      "pr": "#446",
+      "red": "packages/api/src/routers/mcp/instructions-work-loop.test.ts",
+      "evidence": "main run 40711527490; #451 names #446",
+      "files": [
+        "packages/api/src/routers/mcp/entry-instructions.ts",
+        "packages/api/src/routers/mcp/tools/mcp-tools.manifest.json",
+        "skills/synap/SKILL.md",
+        "skills/synap/reflexes.md"
+      ]
+    },
+    {
+      "pr": "#446",
+      "red": "packages/api/src/routers/mcp/instructions-entry.test.ts",
+      "evidence": "found by #451's devbox gate; #451 names #446 (+36 bytes in entry-instructions.ts)",
+      "files": [
+        "packages/api/src/routers/mcp/entry-instructions.ts",
+        "packages/api/src/routers/mcp/tools/mcp-tools.manifest.json",
+        "skills/synap/SKILL.md",
+        "skills/synap/reflexes.md"
+      ]
+    },
+    {
+      "pr": "#476",
+      "red": "packages/api/src/routers/hub-protocol/observations.contract.test.ts",
+      "evidence": "main run 40797830929; #489 names #476",
+      "files": [
+        "docs/architecture/webhooks.md",
+        "packages/api/src/access/registry.ts",
+        "packages/api/src/routers/webhooks-inbound.test.ts",
+        "packages/api/src/routers/webhooks-inbound.ts",
+        "packages/api/src/services/observations/fact-key.test.ts",
+        "packages/api/src/services/observations/fact-key.ts",
+        "packages/api/src/services/observations/record-observation-from-automation.test.ts",
+        "packages/api/src/services/observations/record-observation-from-automation.ts",
+        "packages/api/src/services/observations/record-observation.ts",
+        "packages/database/migrations/0000_baseline_schema.sql",
+        "packages/database/migrations/0372_inbound_deliveries_and_observation_keys.sql",
+        "packages/database/src/index.ts",
+        "packages/database/src/migrations-0372.pglite.test.ts",
+        "packages/database/src/schema/inbound-deliveries.ts",
+        "packages/database/src/schema/index.ts",
+        "packages/database/src/services/inbound-delivery-outbox.ts",
+        "packages/database/src/services/observation-keys.ts",
+        "packages/database/src/utils/schema-coherence.ts",
+        "packages/events/src/__tests__/inbound-delivery.test.ts",
+        "packages/events/src/inbound-delivery.ts",
+        "packages/events/src/index.ts",
+        "packages/jobs/src/cron.ts",
+        "packages/jobs/src/workers/automation-trigger-matcher.delivery-fingerprint.test.ts",
+        "packages/jobs/src/workers/automation-trigger-matcher.ts",
+        "packages/jobs/src/workers/automation-trigger-matcher.webhook.test.ts",
+        "packages/jobs/src/workers/inbound-delivery-sweeper.ts",
+        "packages/jobs/src/workers/index.ts",
+        "scripts/dev-pr-gap-filler.mjs",
+        "scripts/dev-pr-gap-filler.test.mjs",
+        "scripts/devbox/devbox-pr-gap-filler.service",
+        "scripts/devbox/devbox-pr-gap-filler.timer"
+      ]
+    },
+    {
+      "pr": "#495",
+      "red": "packages/api/src/services/profiles/create-and-link-property-def.test.ts",
+      "evidence": "main run 40859086993; #505 names #495",
+      "files": [
+        "docs/reference/mcp-tools.json",
+        "docs/reference/mcp-tools.md",
+        "packages/api-types/src/generated.d.ts",
+        "packages/api/src/routers/hub-protocol/define-profile.seam.test.ts",
+        "packages/api/src/routers/hub-protocol/define-profile.shared-role-overlay.test.ts",
+        "packages/api/src/routers/hub-protocol/define-profile.ts",
+        "packages/api/src/routers/hub-protocol/profiles.ts",
+        "packages/api/src/routers/hub-protocol/property-defs.batch.pglite.test.ts",
+        "packages/api/src/routers/hub-protocol/rest/agent-skills.ts",
+        "packages/api/src/routers/mcp/handlers/build.ts",
+        "packages/api/src/routers/mcp/handlers/build.update-skill-code.pglite.test.ts",
+        "packages/api/src/routers/mcp/handlers/build.update-skill.test.ts",
+        "packages/api/src/routers/mcp/handlers/capability.ts",
+        "packages/api/src/routers/mcp/tools/index.ts",
+        "packages/api/src/routers/mcp/tools/mcp-tools.manifest.json",
+        "packages/api/src/routers/mcp/validate-automation-flow.test.ts",
+        "packages/api/src/routers/mcp/validate-automation-flow.ts",
+        "packages/api/src/routers/proposals/__tests__/skill-create-approval-wiring.test.ts",
+        "packages/api/src/routers/proposals/executors/property-def.ts",
+        "packages/api/src/routers/proposals/executors/skill.ts",
+        "packages/api/src/routers/skills.ts",
+        "packages/api/src/services/profiles/create-and-link-property-def.ts",
+        "packages/api/src/services/skills/required-tool-names.ts",
+        "packages/api/src/services/skills/same-name-skill.ts",
+        "packages/api/src/services/skills/update-skill-governed.ts",
+        "packages/api/src/utils/permission-check.ts",
+        "skills/synap/code-skills.md"
+      ]
+    },
+    {
+      "pr": "#483",
+      "red": "packages/api/src/services/focus-sessions/__tests__/create-session-lineage.pglite.test.ts",
+      "evidence": "main run 40859086993; #509 names #482/#483",
+      "files": [
+        "packages/api/src/routers/mcp/handlers/session.start-workspace-lens.test.ts",
+        "packages/api/src/routers/mcp/handlers/session.ts",
+        "packages/api/src/routers/proposals/revert.ts",
+        "packages/api/src/services/focus-sessions/__tests__/create-session.focus-project.pglite.test.ts",
+        "packages/api/src/services/focus-sessions/__tests__/goal-filing-own-organise.pglite.test.ts",
+        "packages/api/src/services/focus-sessions/create-session.ts",
+        "packages/api/src/services/focus-sessions/session-filing-gate.ts",
+        "packages/api/src/services/focus-sessions/session-undo.ts",
+        "packages/api/src/services/focus-sessions/update-session.ts",
+        "packages/api/src/services/governance/__tests__/own-organise.test.ts",
+        "packages/api/src/services/governance/own-organise.ts",
+        "packages/api/src/services/proposals/stamp-materialized.ts",
+        "packages/api/src/services/tracks/session-track-filing.ts",
+        "packages/database/src/utils/resolve-session-project.test.ts",
+        "packages/database/src/utils/resolve-session-project.ts",
+        "packages/governance-policy/src/index.ts"
+      ]
+    },
+    {
+      "pr": "#483",
+      "red": "packages/api/src/services/focus-sessions/__tests__/create-session-id-seam.test.ts",
+      "evidence": "main run 40859086993; #509 names #482/#483",
+      "files": [
+        "packages/api/src/routers/mcp/handlers/session.start-workspace-lens.test.ts",
+        "packages/api/src/routers/mcp/handlers/session.ts",
+        "packages/api/src/routers/proposals/revert.ts",
+        "packages/api/src/services/focus-sessions/__tests__/create-session.focus-project.pglite.test.ts",
+        "packages/api/src/services/focus-sessions/__tests__/goal-filing-own-organise.pglite.test.ts",
+        "packages/api/src/services/focus-sessions/create-session.ts",
+        "packages/api/src/services/focus-sessions/session-filing-gate.ts",
+        "packages/api/src/services/focus-sessions/session-undo.ts",
+        "packages/api/src/services/focus-sessions/update-session.ts",
+        "packages/api/src/services/governance/__tests__/own-organise.test.ts",
+        "packages/api/src/services/governance/own-organise.ts",
+        "packages/api/src/services/proposals/stamp-materialized.ts",
+        "packages/api/src/services/tracks/session-track-filing.ts",
+        "packages/database/src/utils/resolve-session-project.test.ts",
+        "packages/database/src/utils/resolve-session-project.ts",
+        "packages/governance-policy/src/index.ts"
+      ]
+    },
+    {
+      "pr": "#482",
+      "red": "packages/api/src/services/focus-sessions/__tests__/create-session-lineage.pglite.test.ts",
+      "evidence": "main run 40859086993; #509 names #482/#483",
+      "files": [
+        "packages/api/src/services/knowledge/__tests__/ask-structured-order.test.ts",
+        "packages/api/src/services/knowledge/__tests__/brief-envelope.test.ts",
+        "packages/api/src/services/knowledge/__tests__/synthesize-procedural-cap.test.ts",
+        "packages/api/src/services/knowledge/ask.test.ts",
+        "packages/api/src/services/knowledge/ask.ts",
+        "packages/api/src/services/knowledge/brief-envelope.ts",
+        "packages/api/src/services/knowledge/classify.test.ts",
+        "packages/api/src/services/knowledge/classify.ts",
+        "packages/api/src/services/knowledge/synthesize.ts",
+        "packages/api/src/services/retrieval/hybrid-recall.ts",
+        "packages/api/src/services/retrieval/hybrid-recall.workspace-lens.test.ts",
+        "packages/api/src/services/retrieval/retrieve.ts",
+        "packages/api/src/services/retrieval/retrieve.type-passes.test.ts",
+        "packages/api/src/services/retrieval/understand-query.test.ts",
+        "packages/api/src/services/retrieval/understand-query.ts"
+      ]
+    },
+    {
+      "pr": "#482",
+      "red": "packages/api/src/services/focus-sessions/__tests__/create-session-id-seam.test.ts",
+      "evidence": "main run 40859086993; #509 names #482/#483",
+      "files": [
+        "packages/api/src/services/knowledge/__tests__/ask-structured-order.test.ts",
+        "packages/api/src/services/knowledge/__tests__/brief-envelope.test.ts",
+        "packages/api/src/services/knowledge/__tests__/synthesize-procedural-cap.test.ts",
+        "packages/api/src/services/knowledge/ask.test.ts",
+        "packages/api/src/services/knowledge/ask.ts",
+        "packages/api/src/services/knowledge/brief-envelope.ts",
+        "packages/api/src/services/knowledge/classify.test.ts",
+        "packages/api/src/services/knowledge/classify.ts",
+        "packages/api/src/services/knowledge/synthesize.ts",
+        "packages/api/src/services/retrieval/hybrid-recall.ts",
+        "packages/api/src/services/retrieval/hybrid-recall.workspace-lens.test.ts",
+        "packages/api/src/services/retrieval/retrieve.ts",
+        "packages/api/src/services/retrieval/retrieve.type-passes.test.ts",
+        "packages/api/src/services/retrieval/understand-query.test.ts",
+        "packages/api/src/services/retrieval/understand-query.ts"
+      ]
+    }
+  ]
+}

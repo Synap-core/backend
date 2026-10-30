@@ -149,6 +149,7 @@ export const INFRA_PATHS = [
   /^scripts\/tripwires?[^/]*\.mjs$/, // which tripwires run
   /^scripts\/preflight\.mjs$/, // the "Preflight red" hold
   /^scripts\/check-[^/]+\.mjs$/, // check-* verdict scripts CI runs
+  /^scripts\/strip-comments\.mjs$/, // the import graph reads code through it (which tests a PR runs)
   /^scripts\/smoke-test\.sh$/,
   /(^|\/)vitest[^/]*\.config\.[^/]+$/,
   /^turbo\.json$/,
