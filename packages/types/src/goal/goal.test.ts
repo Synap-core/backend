@@ -208,7 +208,7 @@ describe("goal marks", () => {
     ).toBe("Review slot frees up · for 3h · resumes tomorrow");
     expect(
       holdLine({ since, until: { moves: "focus_session:s1", to: "done" } }, now)
-    ).toBe("for 3h · resumes when the session moves to done");
+    ).toBe("for 3h · resumes when the job moves to done");
     expect(holdLine(null, now)).toBeNull();
     expect(holdLine({ since: "not a date", reason: "  " }, now)).toBeNull();
   });
