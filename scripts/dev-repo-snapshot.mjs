@@ -29,7 +29,8 @@
  * Env: SYNAP_POD_URL, SYNAP_OBS_KEY (never printed or logged), SNAPSHOT_REPOS (slugs), SNAPSHOT_STATE (state
  *      file), SNAPSHOT_DEVBOX_STATUS (reader command), SNAPSHOT_POD_HEALTH_URL, SNAPSHOT_CP_HEALTH_URL,
  *      SNAPSHOT_IS_HEALTH_URL (env-only; the hub's build is on its private /health/details), SNAPSHOT_TZ (day for
- *      mergedToday, default Europe/Paris), SNAPSHOT_DRY=1.
+ *      mergedToday, default Europe/Paris), SNAPSHOT_DRY=1, SNAPSHOT_WORKSPACE_ID (the space the snapshots are
+ *      recorded in, so that space's apps read them; unset = pod-wide, read by the person and unpinned keys only).
  * A repo whose read fails is SKIPPED this cycle (logged), never posted as empty: an unreadable GitHub is not
  * an empty repo. A pod that refuses the key (401/403, no `event.create` grant) is a warning, exit 0.
  *
@@ -621,14 +622,20 @@ export function fingerprint(snapshot) {
   return createHash("sha1").update(JSON.stringify(rest)).digest("hex");
 }
 
-/** The observation `observations.append` takes: one per repo, subject = the repo. */
-export function snapshotObservation(snapshot) {
+/**
+ * The observation `observations.append` takes: one per repo, subject = the repo.
+ * `workspaceId` stamps it in that space: a key pinned to the space (a pod app)
+ * reads only the snapshots recorded there; without it the snapshot is the
+ * person's own, pod-wide, and no pinned key reads it.
+ */
+export function snapshotObservation(snapshot, workspaceId) {
   return {
     type: "dev.repo_snapshot",
     subjectId: snapshot.repo,
     subjectType: "repo_snapshot",
     occurredAt: snapshot.observedAt,
     data: { ...snapshot, source: SOURCE },
+    ...(workspaceId ? { workspaceId } : {}),
   };
 }
 
@@ -995,6 +1002,7 @@ async function main() {
       ? process.env.SNAPSHOT_REPOS.split(/\s+/).filter(Boolean)
       : DEFAULT_REPOS;
   const tz = process.env.SNAPSHOT_TZ || "Europe/Paris";
+  const workspaceId = process.env.SNAPSHOT_WORKSPACE_ID || undefined;
   const heartbeatMs = Number(process.env.SNAPSHOT_HEARTBEAT_S || 300) * 1000;
   const state = dry ? {} : loadState();
   const devbox = await readDevboxStatus();
@@ -1024,13 +1032,15 @@ async function main() {
       continue;
     }
     if (dry) {
-      console.log(JSON.stringify(snapshotObservation(snapshot), null, 2));
+      console.log(
+        JSON.stringify(snapshotObservation(snapshot, workspaceId), null, 2)
+      );
       continue;
     }
     const fp = fingerprint(snapshot);
     const prev = state[repo];
     if (prev && prev.fp === fp && now - prev.postedAt < heartbeatMs) continue;
-    const obs = snapshotObservation(snapshot);
+    const obs = snapshotObservation(snapshot, workspaceId);
     let error;
     try {
       error = await postObservation(podUrl, key, obs);

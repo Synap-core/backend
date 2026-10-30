@@ -36,6 +36,7 @@ import {
   QUALIFIED_GRANT_SUBJECTS,
   type GrantScope,
 } from "@synap/governance-policy/grants";
+import type { WorkReleasePart } from "@synap-core/types/work-release";
 
 /** How a fenced read door is bounded by a grant. */
 export type FencedReadDoor =
@@ -275,6 +276,85 @@ export function sessionPacketReadable(
 }
 
 /**
+ * What `readWorkRelease` (services/dev-loop/work-release.ts) reads: the
+ * `dev.repo_snapshot` events, the sessions the PRs belong to, and their
+ * liveness (chat turns, events, proposals, room notes).
+ */
+export const WORK_RELEASE_SUBJECTS: readonly string[] = [
+  "event",
+  "session",
+  "channel",
+  "proposal",
+];
+
+/** What one key's grant lets the release read draw. */
+export interface WorkReleaseReach {
+  /**
+   * Nothing narrowed: a person, an unfenced key, or a key with one scope
+   * that reads every subject unbounded (the door's rule before it was
+   * narrowed).
+   */
+  full: boolean;
+  /**
+   * The spaces whose snapshots it reads: the pins of every scope that reads
+   * `event` on the `dev` family (or every family); `"all"` when one such
+   * scope has no space pin, or when `full`. Empty = none (withheld).
+   */
+  snapshotSpaces: "all" | readonly string[];
+  /** The parts it does not reach. Empty when `full`. */
+  withheld: readonly WorkReleasePart[];
+}
+
+/**
+ * Does this scope read the `dev.*` events (the snapshots)? Its `event` read
+ * names the `dev` family or every family, and it is pinned to nothing an
+ * event row cannot be matched on: an event has a space but no project path
+ * and no object id a project or object pin could name.
+ */
+function scopeReadsDevEvents(scope: GrantScope): boolean {
+  if (scope.projectIds || scope.entityIds) return false;
+  const families = allowedQualifiers(scope, "event", "read");
+  return families === "all" || families.includes("dev");
+}
+
+/**
+ * THE release read's rule for a key (founder finding 4d14ce47, 2026-10-30).
+ * A key that reads every subject unbounded keeps the whole read. Any other
+ * key the fence admitted (`NARROWED("event", …)`) reads:
+ *  - SNAPSHOTS stamped in the spaces of a scope that reads `dev` events. A
+ *    snapshot posted pod-wide (no space) is a personal event, which no pinned
+ *    grant reaches, as for every event: the producer stamps a space
+ *    (`SNAPSHOT_WORKSPACE_ID`) for that space's apps to read it. A scope
+ *    reading `dev` events with no space pin reads every snapshot.
+ *  - SESSIONS through their grant clause (`sessionReadableWhere`), when a
+ *    scope reads `session`.
+ *  - never the HOLDERS: "working now" is measured from activity anywhere in
+ *    the pod (events, proposals, room turns of the session), which a narrowed
+ *    key cannot all see, and a partial measure would read "quiet" while an
+ *    agent works. Withheld, never guessed.
+ */
+export function workReleaseReach(
+  grant: KeyGrant | null | undefined
+): WorkReleaseReach {
+  if (
+    !isFencedGrant(grant) ||
+    grantBoundsDoor(READS(...WORK_RELEASE_SUBJECTS), grant!)
+  ) {
+    return { full: true, snapshotSpaces: "all", withheld: [] };
+  }
+  const snapshotScopes = grant!.scopes.filter(scopeReadsDevEvents);
+  const snapshotSpaces = snapshotScopes.some((s) => !s.workspaceIds)
+    ? "all"
+    : [...new Set(snapshotScopes.flatMap((s) => [...s.workspaceIds!]))];
+  const withheld: WorkReleasePart[] = [];
+  if (snapshotSpaces !== "all" && snapshotSpaces.length === 0)
+    withheld.push("snapshots");
+  if (!grantReadsSubject(grant!, "session")) withheld.push("sessions");
+  withheld.push("holders");
+  return { full: false, snapshotSpaces, withheld };
+}
+
+/**
  * Hub REST GET routes that are AGGREGATE reads (P2b): each DECLARES the grant
  * subjects it reads, like `GRANT_REST_POST_READS` and `MCP_READ_TOOL_DOORS`. A
  * fenced key passes when one of its scopes reads EVERY declared subject with
@@ -363,10 +443,12 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // the kinds it may already read, never another kind's. Admitted when one live
   // scope grants `entity.<some kind>.read`.
   [/^\/lifecycle\/?$/, NARROWED("entity", [])],
-  // `readWorkRelease` (services/dev-loop/work-release.ts): `dev.repo_snapshot`
-  // events, the sessions the PRs belong to, and their liveness (chat turns,
-  // events, proposals, room notes). Same as MCP `synap_get_work_release`.
-  [/^\/work-release\/?$/, READS("event", "session", "channel", "proposal")],
+  // `readWorkRelease` (services/dev-loop/work-release.ts), narrowed by the
+  // read itself (`workReleaseReach`): a key reading every subject unbounded
+  // gets it whole; one pinned to spaces gets the snapshots and sessions its
+  // grant reaches and the rest said withheld. Admitted when one scope reads
+  // some `event` family. Same as MCP `synap_get_work_release`.
+  [/^\/work-release\/?$/, NARROWED("event", WORK_RELEASE_SUBJECTS)],
 ];
 
 /**
@@ -475,8 +557,9 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_governance: READS("proposal", "agent", "tool"),
   // The roster of agents (+ their computers and dispatch tool) for hand-off.
   synap_list_agents: READS("agent", "tool"),
-  // Same subjects as `GET /work-release` (GRANT_REST_GET_READS).
-  synap_get_work_release: READS("event", "session", "channel", "proposal"),
+  // Same door as `GET /work-release` (GRANT_REST_GET_READS): the read
+  // narrows itself (`workReleaseReach`).
+  synap_get_work_release: NARROWED("event", WORK_RELEASE_SUBJECTS),
   synap_export_project_pack: READS(
     "project",
     "entity",
