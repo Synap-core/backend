@@ -15,7 +15,16 @@
  *    kind that declares no link of the type (note `relates_to` person) stays
  *    quiet (rules out "every undeclared pair warns");
  *  - a graph whose own edge carries the link does not warn (the brief's "a
- *    create with its links in the same call must not warn").
+ *    create with its links in the same call must not warn");
+ *  - a create whose entity_id property syncs to the required relation is
+ *    clear, while one whose synced property points to a note, or is unset,
+ *    still warns (rules out "the door's own edges are never counted" AND "any
+ *    synced property counts");
+ *  - template health matches both ends by kind SLUG: in a third space, a row
+ *    of a workspace COPY of the touch kind with no edge is debt, a touch
+ *    linked to a workspace copy of `company` is not, and the copy's own mark
+ *    does not count a row twice (rules out matching by profile id at either
+ *    end, and one debt line per copy of a rule).
  *
  * What this CANNOT see: production Postgres constraints (no FKs or NOT NULL
  * here), and the doors' wiring (create door: create.required-links test; hub
@@ -57,6 +66,7 @@ import {
 const USER = "user-required-links";
 const WS = randomUUID();
 const OTHER_WS = randomUUID();
+const COPY_WS = randomUUID(); // a space with its own copies of two kinds
 const ids = {
   touchKind: randomUUID(),
   person: randomUUID(),
@@ -64,6 +74,8 @@ const ids = {
   note: randomUUID(),
   relatesTo: randomUUID(),
   sentTo: randomUUID(),
+  touchCopy: randomUUID(), // outreach-touch, copied into COPY_WS
+  companyCopy: randomUUID(), // company, copied into COPY_WS
 };
 const ADA = randomUUID(); // a person
 const ACME = randomUUID(); // a company
@@ -73,6 +85,10 @@ const WRONG_KIND = randomUUID(); // touch → relates_to → note
 const BARE = randomUUID(); // touch with no edge
 const DELETED = randomUUID(); // deleted touch with no edge
 const ELSEWHERE = randomUUID(); // touch in another space, no edge
+const COPY_BARE = randomUUID(); // copy-kind touch, no edge
+const TO_COPY = randomUUID(); // touch → relates_to → copy-kind company
+const COPY_TO_COPY = randomUUID(); // copy-kind touch → copy-kind company
+const COPY_ACME = randomUUID(); // a company of the copied kind
 
 const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
 
@@ -95,6 +111,15 @@ beforeAll(async () => {
       [id, slug, USER]
     );
   }
+  for (const [id, slug] of [
+    [ids.touchCopy, "outreach-touch"],
+    [ids.companyCopy, "company"],
+  ] as const) {
+    await q(
+      `insert into profiles (id, slug, display_name, scope, user_id, is_active, workspace_id) values ($1,$2,$2,'workspace',$3,true,$4)`,
+      [id, slug, USER, COPY_WS]
+    );
+  }
   await q(
     `insert into relation_defs (id, slug, display_name, user_id) values ($1,'relates_to','Relates to',$3),($2,'sent_to','Sent to',$3)`,
     [ids.relatesTo, ids.sentTo, USER]
@@ -102,7 +127,8 @@ beforeAll(async () => {
   const required = JSON.stringify({ required: true, requiredBy: "crm" });
   await q(
     `insert into profile_relations (source_profile_id, target_profile_id, relation_def_id, metadata) values
-       ($1,$2,$4,$6::jsonb),($1,$3,$4,$6::jsonb),($1,$2,$5,'{}'::jsonb)`,
+       ($1,$2,$4,$6::jsonb),($1,$3,$4,$6::jsonb),($1,$2,$5,'{}'::jsonb),
+       ($7,$2,$4,$6::jsonb),($7,$8,$4,$6::jsonb)`,
     [
       ids.touchKind,
       ids.person,
@@ -110,8 +136,23 @@ beforeAll(async () => {
       ids.relatesTo,
       ids.sentTo,
       required,
+      ids.touchCopy,
+      ids.companyCopy,
     ]
   );
+  // The touch's entity_id properties: `contact` syncs to relates_to → person,
+  // `memo` syncs to relates_to → note, `recipient` to sent_to (not required).
+  for (const [slug, relationDefId, target] of [
+    ["contact", ids.relatesTo, ids.person],
+    ["memo", ids.relatesTo, ids.note],
+    ["recipient", ids.sentTo, ids.person],
+  ] as const) {
+    await q(
+      `insert into property_defs (id, slug, profile_id, value_type, relation_def_id, target_profile_id)
+       values (gen_random_uuid(),$1,$2,'entity_id',$3,$4)`,
+      [slug, ids.touchKind, relationDefId, target]
+    );
+  }
 
   const entity = (
     id: string,
@@ -133,6 +174,10 @@ beforeAll(async () => {
   await entity(BARE, ids.touchKind, "Hello nobody", WS);
   await entity(DELETED, ids.touchKind, "Gone", WS, true);
   await entity(ELSEWHERE, ids.touchKind, "Elsewhere", OTHER_WS);
+  await entity(COPY_ACME, ids.companyCopy, "Copy Acme", COPY_WS);
+  await entity(COPY_BARE, ids.touchCopy, "Copy, nobody", COPY_WS);
+  await entity(TO_COPY, ids.touchKind, "Hello copy Acme", COPY_WS);
+  await entity(COPY_TO_COPY, ids.touchCopy, "Copy, hello copy Acme", COPY_WS);
   const edge = (source: string, target: string, type: string) =>
     q(
       `insert into relations (id, user_id, source_entity_id, target_entity_id, type) values (gen_random_uuid(),$1,$2,$3,$4)`,
@@ -140,6 +185,8 @@ beforeAll(async () => {
     );
   await edge(LINKED, ADA, "relates_to");
   await edge(WRONG_KIND, MEMO, "relates_to");
+  await edge(TO_COPY, COPY_ACME, "relates_to");
+  await edge(COPY_TO_COPY, COPY_ACME, "relates_to");
 }, 120_000);
 
 const RELATES_TO_LEAD = {
@@ -165,6 +212,28 @@ describe("checkRequiredLinksForCreate — what a new record leaves out", () => {
       status: "clear",
       missing: [],
     });
+  });
+
+  it("an entity_id property the door syncs to the required relation is the link", async () => {
+    const properties = (values: Record<string, unknown>) => ({
+      kind: "outreach-touch",
+      properties: { profileId: ids.touchKind, values },
+    });
+    expect(
+      await checkRequiredLinksForCreate(properties({ contact: ADA }))
+    ).toEqual({ status: "clear", missing: [] });
+    // A synced edge of the type to a kind the rule does not name is no link,
+    // and neither is a property left unset or one of another type.
+    for (const values of [
+      { memo: MEMO },
+      { contact: "" },
+      { recipient: ADA },
+    ]) {
+      expect(await checkRequiredLinksForCreate(properties(values))).toEqual({
+        status: "missing",
+        missing: [RELATES_TO_LEAD],
+      });
+    }
   });
 
   it("a failed read is unchecked, never clear", async () => {
@@ -287,6 +356,16 @@ describe("requiredLinkDebtByWorkspace — template health's list", () => {
   it("a space outside the lens it is handed is never read", async () => {
     const debt = await requiredLinkDebtByWorkspace([OTHER_WS]);
     expect(debt.has(WS)).toBe(false);
+  });
+
+  it("both ends match by kind slug: workspace copies count as the kind, once", async () => {
+    const debt = await requiredLinkDebtByWorkspace([COPY_WS]);
+    // COPY_BARE is a touch (a copy of the kind) with no edge; TO_COPY and
+    // COPY_TO_COPY reach a company (a copy of the kind). One line, not one per
+    // copy of the rule.
+    expect(debt.get(COPY_WS)).toEqual([
+      { ...RELATES_TO_LEAD, count: 1, entityIds: [COPY_BARE] },
+    ]);
   });
 
   it("the sample is capped", async () => {

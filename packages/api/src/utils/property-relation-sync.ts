@@ -15,11 +15,12 @@
  *   - Neither path triggers the other's sync hook
  */
 
-import { getDb, drizzleSql, eq, and, isNotNull } from "@synap/database";
+import { getDb, drizzleSql, eq, and } from "@synap/database";
 import {
   propertyDefs,
   relations,
   entities,
+  profiles,
   relationDefs,
   PropertyValueType,
 } from "@synap/database/schema";
@@ -29,6 +30,56 @@ import { EXPOSURE_RELATION_TYPES } from "./project-scope.js";
 const logger = createLogger({ module: "property-relation-sync" });
 
 // ─── Forward Sync: Property → Relation ────────────────────────────────────
+
+/** An entity_id property whose value is written as a `relations` row. */
+export interface SyncedRelationDef {
+  /** The property's slug (the key in `entities.properties`). */
+  slug: string;
+  /** The relation type its value syncs to (the relation_def's slug). */
+  type: string;
+  /** The kind its value points to (`targetProfileId`), when the def names one. */
+  targetKind: string | null;
+}
+
+/**
+ * The property defs of `profileId` that the forward sync writes as relations:
+ * valueType ENTITY_ID with a relationDefId, exposure types left out (below).
+ * Read by the sync and by the create door's required-link check, so the check
+ * counts exactly the edges the sync writes.
+ */
+export async function readSyncedRelationDefs(
+  profileId: string,
+  database?: Awaited<ReturnType<typeof getDb>>
+): Promise<SyncedRelationDef[]> {
+  const db = database ?? (await getDb());
+  const rows = await db
+    .select({
+      slug: propertyDefs.slug,
+      type: relationDefs.slug,
+      targetKind: profiles.slug,
+    })
+    .from(propertyDefs)
+    .innerJoin(relationDefs, eq(relationDefs.id, propertyDefs.relationDefId))
+    .leftJoin(profiles, eq(profiles.id, propertyDefs.targetProfileId))
+    .where(
+      and(
+        eq(propertyDefs.profileId, profileId),
+        eq(propertyDefs.valueType, PropertyValueType.ENTITY_ID)
+      )
+    );
+  // A property must never mint or drop ANY exposure edge — `visible_to`
+  // (would share a record with a project's guests without the share door) or
+  // `belongs_to_project` (would file a record into a project, exposing it to
+  // every project member, without `linkEntityToProject`'s existence and
+  // visibility checks or the governed filing door). The set is IMPORTED, never
+  // re-listed, so a third exposure type is skipped here by existing.
+  //
+  // The PROPERTY VALUE itself is left as written: it is plain data and grants
+  // nothing. Filing is `projects.fileEntities` / MCP `synap_file_into_project`.
+  return rows.filter(
+    (r) => !(EXPOSURE_RELATION_TYPES as readonly string[]).includes(r.type)
+  );
+}
 
 /**
  * After an entity's properties change, sync entity_id property values
@@ -49,49 +100,11 @@ export async function syncPropertyToRelations(
 ): Promise<void> {
   const db = await getDb();
 
-  // Find property_defs for this profile with auto-sync enabled
-  const syncableDefs = await db
-    .select({
-      slug: propertyDefs.slug,
-      relationDefId: propertyDefs.relationDefId,
-    })
-    .from(propertyDefs)
-    .where(
-      and(
-        eq(propertyDefs.profileId, profileId),
-        eq(propertyDefs.valueType, PropertyValueType.ENTITY_ID),
-        isNotNull(propertyDefs.relationDefId)
-      )
-    );
-
-  if (syncableDefs.length === 0) return;
-
-  // Fetch relation def slugs for all mapped defs
-  const relDefIds = [...new Set(syncableDefs.map((d) => d.relationDefId!))];
-  const relDefSlugMap = new Map<string, string>();
-
-  for (const id of relDefIds) {
-    const rd = await db.query.relationDefs.findFirst({
-      where: eq(relationDefs.id, id),
-      columns: { id: true, slug: true },
-    });
-    if (rd) relDefSlugMap.set(rd.id, rd.slug);
-  }
+  // The property_defs of this profile with auto-sync enabled
+  const syncableDefs = await readSyncedRelationDefs(profileId, db);
 
   for (const propDef of syncableDefs) {
-    const relTypeSlug = relDefSlugMap.get(propDef.relationDefId!);
-    if (!relTypeSlug) continue;
-    // A property must never mint or drop ANY exposure edge — `visible_to`
-    // (would share a record with a project's guests without the share door) or
-    // `belongs_to_project` (would file a record into a project, exposing it to
-    // every project member, without `linkEntityToProject`'s existence and
-    // visibility checks or the governed filing door). The set is IMPORTED, never
-    // re-listed, so a third exposure type is skipped here by existing.
-    //
-    // The PROPERTY VALUE itself is left as written: it is plain data and grants
-    // nothing. Filing is `projects.fileEntities` / MCP `synap_file_into_project`.
-    if ((EXPOSURE_RELATION_TYPES as readonly string[]).includes(relTypeSlug))
-      continue;
+    const relTypeSlug = propDef.type;
 
     const oldValue = (oldProperties[propDef.slug] as string) ?? null;
     const newValue = (newProperties[propDef.slug] as string) ?? null;

@@ -10,7 +10,11 @@
  *  - the same create filed as a proposal carries the check to the gate AND
  *    the reply — rules out a card with nothing to show;
  *  - a kind with no required link carries nothing — rules out a warning on
- *    every create.
+ *    every create;
+ *  - a touch whose entity_id property syncs to the required relation, and a
+ *    record filed into a project whose kind requires `belongs_to_project`,
+ *    carry nothing — rules out a door that warns about the edges it writes
+ *    itself (an agent told to add an edge that exists adds a duplicate).
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -65,6 +69,8 @@ import { entitiesRouter } from "../entities.js";
 
 const USER = randomUUID();
 const AGENT = randomUUID();
+const ADA = randomUUID(); // a person
+const PROJECT = randomUUID(); // a project the user owns
 const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
 
 beforeAll(async () => {
@@ -82,7 +88,9 @@ beforeAll(async () => {
   const { rows } = await q(
     `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, workspace_id, is_active, ui_hints)
      values (gen_random_uuid(),'outreach-touch','Message','kind','system','pod',null,true,'{}'::jsonb),
-            (gen_random_uuid(),'person','Person','kind','system','pod',null,true,'{}'::jsonb)
+            (gen_random_uuid(),'person','Person','kind','system','pod',null,true,'{}'::jsonb),
+            (gen_random_uuid(),'deliverable','Deliverable','kind','system','pod',null,true,'{}'::jsonb),
+            (gen_random_uuid(),'project','Project','kind','system','pod',null,true,'{}'::jsonb)
      returning id, slug`
   );
   const kind = (slug: string) =>
@@ -97,6 +105,35 @@ beforeAll(async () => {
      values ($1,$2,$3,'{"required":true,"requiredBy":"crm"}'::jsonb)`,
     [kind("outreach-touch"), kind("person"), (def.rows[0] as { id: string }).id]
   );
+  // The touch's `contact` property syncs to relates_to → person.
+  await q(
+    `insert into property_defs (id, slug, profile_id, value_type, relation_def_id, target_profile_id)
+     values (gen_random_uuid(),'contact',$1,'entity_id',$2,$3)`,
+    [kind("outreach-touch"), (def.rows[0] as { id: string }).id, kind("person")]
+  );
+  // A deliverable must belong to a project (required by template studio).
+  const filing = await q(
+    `insert into relation_defs (id, slug, display_name, user_id) values (gen_random_uuid(),'belongs_to_project','Belongs to project',$1) returning id`,
+    [USER]
+  );
+  await q(
+    `insert into profile_relations (source_profile_id, target_profile_id, relation_def_id, metadata)
+     values ($1,$2,$3,'{"required":true,"requiredBy":"studio"}'::jsonb)`,
+    [
+      kind("deliverable"),
+      kind("project"),
+      (filing.rows[0] as { id: string }).id,
+    ]
+  );
+  await q(
+    `insert into entities (id, user_id, type, profile_id, title, properties)
+     values ($1,$2,'person',$3,'Ada','{}'::jsonb)`,
+    [ADA, USER, kind("person")]
+  );
+  await q(`insert into projects (id, user_id, name) values ($1,$2,'Launch')`, [
+    PROJECT,
+    USER,
+  ]);
 }, 120_000);
 
 beforeEach(() => {
@@ -168,5 +205,45 @@ describe("entities.create: a missing required link warns, never refuses", () => 
     expect(res.status).toBe("created");
     expect(res).not.toHaveProperty("requiredLinks");
     expect(h.gate.mock.calls[0]![0]).not.toHaveProperty("requiredLinks");
+  });
+
+  it("a touch whose contact property syncs to the required relates_to carries nothing", async () => {
+    const res = await create({
+      profileSlug: "outreach-touch",
+      title: "Note to Ada",
+      properties: { contact: ADA },
+      source: "user",
+    });
+    expect(res.status).toBe("created");
+    expect(res).not.toHaveProperty("requiredLinks");
+    expect(h.gate.mock.calls[0]![0]).not.toHaveProperty("requiredLinks");
+  });
+
+  it("a deliverable filed into a project carries nothing; one filed nowhere warns", async () => {
+    const filed = await create({
+      profileSlug: "deliverable",
+      title: "Launch deck",
+      projectId: PROJECT,
+      source: "user",
+    });
+    expect(filed.status).toBe("created");
+    expect(filed).not.toHaveProperty("requiredLinks");
+
+    const loose = await create({
+      profileSlug: "deliverable",
+      title: "Loose deck",
+      source: "user",
+    });
+    expect(loose.requiredLinks).toEqual({
+      status: "missing",
+      missing: [
+        {
+          kind: "deliverable",
+          type: "belongs_to_project",
+          targetKinds: ["project"],
+          requiredBy: "studio",
+        },
+      ],
+    });
   });
 });

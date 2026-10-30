@@ -43,6 +43,7 @@ import {
   type RequiredLinkCheck,
 } from "@synap-core/types/proposals";
 import { createLogger } from "@synap-core/core";
+import { readSyncedRelationDefs } from "../../utils/property-relation-sync.js";
 
 const logger = createLogger({ module: "required-links" });
 
@@ -51,7 +52,6 @@ export interface RequiredLinkRule {
   sourceProfileId: string;
   kind: string;
   type: string;
-  targetProfileIds: string[];
   targetKinds: string[];
   requiredBy: string | null;
 }
@@ -119,11 +119,9 @@ export async function readRequiredLinkRules(
       sourceProfileId: r.sourceProfileId,
       kind,
       type: r.type,
-      targetProfileIds: [],
       targetKinds: [],
       requiredBy: null,
     };
-    rule.targetProfileIds.push(r.targetProfileId);
     if (!rule.targetKinds.includes(target)) rule.targetKinds.push(target);
     rule.requiredBy ??= r.requiredBy;
     rules.set(key, rule);
@@ -168,7 +166,9 @@ export function requiredLinkCheckOf(
 
 /**
  * The required links a NEW record of `kind` leaves out, given the edges the
- * same write carries (`present`; a plain create carries none). Read by kind
+ * same write carries (`present`) and the ones its `properties` sync: each set
+ * entity_id property the forward sync writes as a relation
+ * (`readSyncedRelationDefs`, read only when the kind has a rule). Read by kind
  * SLUG, like the graph check: the create door and the reconcile may resolve
  * different rows of one kind (a workspace copy), and either row's mark
  * counts. Never throws: a failed read is `unchecked`, never `clear`.
@@ -176,6 +176,8 @@ export function requiredLinkCheckOf(
 export async function checkRequiredLinksForCreate(params: {
   kind: string | null | undefined;
   present?: readonly PresentLink[];
+  /** The profile the properties were written against, and their values. */
+  properties?: { profileId: string; values: Record<string, unknown> };
   database?: Database;
 }): Promise<RequiredLinkCheck> {
   if (!params.kind) return { status: "clear", missing: [] };
@@ -184,8 +186,20 @@ export async function checkRequiredLinksForCreate(params: {
       [params.kind],
       params.database
     );
+    const properties = params.properties;
+    const synced =
+      rules.length > 0 && properties
+        ? (await readSyncedRelationDefs(properties.profileId, params.database))
+            .filter((def) => {
+              const value = properties.values[def.slug];
+              return typeof value === "string" && value.length > 0;
+            })
+            .map((def) => ({ type: def.type, targetKind: def.targetKind }))
+        : [];
     return requiredLinkCheckOf(
-      dedupeMissing(missingRequiredLinks(rules, params.present ?? []))
+      dedupeMissing(
+        missingRequiredLinks(rules, [...(params.present ?? []), ...synced])
+      )
     );
   } catch (err) {
     logger.warn({ err, kind: params.kind }, "required-link check failed");
@@ -395,7 +409,10 @@ export function requiredLinkDebtWarning(debt: RequiredLinkDebt): string {
 /**
  * Template health's LIST: for each space in `workspaceIds`, the live rows of a
  * kind with a required link that carry no edge of that type to a live record
- * of a target kind. Throws on a failed read (health reports it as unchecked).
+ * of a target kind. Matched by kind SLUG at both ends, like the create check:
+ * a row of a workspace copy of the kind is a row of the kind, and an edge to a
+ * workspace copy of a target kind meets the rule. Throws on a failed read
+ * (health reports it as unchecked).
  */
 export async function requiredLinkDebtByWorkspace(
   workspaceIds: readonly string[],
@@ -404,11 +421,20 @@ export async function requiredLinkDebtByWorkspace(
 ): Promise<Map<string, RequiredLinkDebt[]>> {
   const out = new Map<string, RequiredLinkDebt[]>();
   if (workspaceIds.length === 0) return out;
-  const rules = await readRequiredLinkRules(undefined, database);
+  // One rule per (kind, type): the copies of a kind share it, so a row is
+  // counted once.
+  const rules = dedupeMissing(
+    (await readRequiredLinkRules(undefined, database)).map((rule) => ({
+      kind: rule.kind,
+      type: rule.type,
+      targetKinds: rule.targetKinds,
+      requiredBy: rule.requiredBy,
+    }))
+  );
   const limit = Math.max(1, Math.floor(sample));
   for (const rule of rules) {
-    const targetIds = drizzleSql.join(
-      rule.targetProfileIds.map((id) => drizzleSql`${id}::uuid`),
+    const targetKinds = drizzleSql.join(
+      rule.targetKinds.map((kind) => drizzleSql`${kind}`),
       drizzleSql`, `
     );
     const rows = await database
@@ -420,24 +446,27 @@ export async function requiredLinkDebtByWorkspace(
         >`(array_agg(${entities.id} order by ${entities.createdAt} desc))[1:${drizzleSql.raw(String(limit))}]`,
       })
       .from(entities)
+      .innerJoin(profiles, eq(profiles.id, entities.profileId))
       .where(
         and(
           inArray(entities.workspaceId, [...workspaceIds]),
-          eq(entities.profileId, rule.sourceProfileId),
+          eq(profiles.slug, rule.kind),
           isNull(entities.deletedAt),
           drizzleSql`not exists (
             select 1 from relations r
             join entities t on t.id = r.target_entity_id
+            join profiles tp on tp.id = t.profile_id
             where r.source_entity_id = ${entities.id}
               and r.type = ${rule.type}
               and t.deleted_at is null
-              and t.profile_id in (${targetIds})
+              and tp.slug in (${targetKinds})
           )`
         )
       )
       .groupBy(entities.workspaceId);
     for (const row of rows) {
-      if (!row.workspaceId || Number(row.count) === 0) continue;
+      // The query reads only the listed spaces; this narrows the type.
+      if (!row.workspaceId) continue;
       const list = out.get(row.workspaceId) ?? [];
       list.push({
         kind: rule.kind,
