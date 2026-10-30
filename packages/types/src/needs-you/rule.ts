@@ -64,11 +64,12 @@ import { deliverableOwedBy } from "../units/deliverable.js";
 import { REVIEW_LATER_AFTER_MS } from "../proposals/fate.js";
 import type { ProposalWaits } from "../proposals/fate.js";
 import { SESSION_WORKING_WINDOW_MS } from "../run-activity/live.js";
+import { WORK_CLOCK } from "../work-clock/index.js";
 
 // ─── Constants (the SQL twin composes these, never a copy) ──────────────────
 
 /** No agent evidence for 7 days ⇒ the session is Stopped (E1). */
-export const NEEDS_YOU_STOPPED_AFTER_MS = 7 * 24 * 3_600_000;
+export const NEEDS_YOU_STOPPED_AFTER_MS = WORK_CLOCK.stuck;
 
 /** A real ask owed longer than this leaves the headline (Resolve-XP decision 3). */
 export const NEEDS_YOU_REVIEW_LATER_AFTER_MS = REVIEW_LATER_AFTER_MS;

@@ -65,9 +65,10 @@ import { isTerminalSessionStatus } from "../focus-sessions/statuses.js";
 import type { SessionLiveFacts } from "../run-activity/live.js";
 import type { NeedsYouFacts } from "./needs-you.js";
 import { aggregateNeedsYou } from "./session.js";
+import { WORK_CLOCK } from "../work-clock/index.js";
 
 /** No recorded activity for this long ⇒ an open session has gone quiet (decision 12). */
-export const SESSION_GONE_QUIET_MS = 30 * 60_000;
+export const SESSION_GONE_QUIET_MS = WORK_CLOCK.quiet;
 
 /** Why a chain stands still — who has to move it. */
 export type StuckCause = "needs_you" | "blocker_dropped" | "gone_quiet";

@@ -53,6 +53,7 @@ import type { GovernanceRung, MatrixMark } from "../agent-matrix/index.js";
 import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
+import type { StuckCause } from "../units/stuck.js";
 import type {
   CheckVerdict,
   RepoMainHealth,
@@ -1756,6 +1757,21 @@ export const REPO_MAIN_HEALTH_LABELS: Readonly<Record<RepoMainHealth, string>> =
 
 export function resolvePullRequestStateLabel(state: PullRequestState): string {
   return PULL_REQUEST_STATE_LABELS[state];
+}
+
+/**
+ * Why a chain of work stands still (`StuckCause`, `@synap-core/types/units`
+ * `deriveStuckChains`) — the heading of each group in a "What's stuck"
+ * reading. Keyed by every cause, so a new one cannot render a raw token.
+ */
+export const STUCK_CAUSE_LABELS: Readonly<Record<StuckCause, string>> = {
+  needs_you: "Waiting on you",
+  blocker_dropped: "Blocker dropped",
+  gone_quiet: "Gone quiet",
+};
+
+export function resolveStuckCauseLabel(cause: StuckCause): string {
+  return STUCK_CAUSE_LABELS[cause];
 }
 
 /**

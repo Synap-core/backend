@@ -43,6 +43,7 @@ import {
   personTouchedSubjectIds,
 } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import { workClockIn } from "@synap-core/types/work-clock";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { openLink } from "../../utils/deep-links.js";
 import { isOwedSlot } from "../focus-sessions/owed-outputs.js";
@@ -57,7 +58,7 @@ import {
 import { loadRunCounts } from "../proposals/automation-health.js";
 
 /** Idle this long, a session or a pending proposal is a loose end. */
-export const LOOSE_END_IDLE_DAYS = 7;
+export const LOOSE_END_IDLE_DAYS = workClockIn("stuck", "days");
 /** Rows listed per section; `count` is the whole population. */
 export const LOOSE_ENDS_ITEMS = 5;
 /** Open sessions read for their next move before "at least this many". */

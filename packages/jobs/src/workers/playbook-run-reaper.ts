@@ -49,6 +49,7 @@ import {
   setSessionStatus,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { workClockIn } from "@synap-core/types/work-clock";
 import { closeSessionViaDoor } from "../utils/session-close.js";
 import { settleParentAutomationRunFromChild } from "../utils/automation-parent-settle.js";
 
@@ -64,7 +65,7 @@ export const PLAYBOOK_RUN_REAPER_CRON = "*/30 * * * *";
  * external-agent turn is legitimately long, so we wait a full day before
  * force-failing to avoid abandoning live work.
  */
-export const PLAYBOOK_RUN_REAPER_STALE_HOURS = 24;
+export const PLAYBOOK_RUN_REAPER_STALE_HOURS = workClockIn("stale", "hours");
 
 const STALE_RUN_ERROR_MESSAGE =
   "Timed out: the run never finalized (worker died, or the external agent never captured back). Auto-failed by the playbook run reaper.";
