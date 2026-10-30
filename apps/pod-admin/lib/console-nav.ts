@@ -421,7 +421,7 @@ export const CLIENT_NAV = [
 ] as const satisfies readonly NavId[];
 
 /** The head group's id: the client scope, first in every view. */
-export const CLIENT_GROUP_ID = "main";
+export const CLIENT_GROUP_ID = "client";
 
 const CLIENT_IDS: ReadonlySet<string> = new Set(CLIENT_NAV);
 
@@ -450,15 +450,15 @@ export function navFor(
     items: CLIENT_NAV.map(navItem).filter((i) => navVisibleTo(i, role)),
   };
   if (role !== "admin" || !allTools) return [client];
-  const operator = CONSOLE_NAV.filter((g) => g.id !== CLIENT_GROUP_ID).map(
-    (g) => ({
-      id: g.id,
-      label: g.label,
-      items: (g.items as readonly NavItem[]).filter(
-        (i) => !isClientNavItem(i) && navVisibleTo(i, role)
-      ),
-    })
-  );
+  // Every other item, in its own group; a group left empty (the head one,
+  // whose items are all client places) is dropped.
+  const operator = CONSOLE_NAV.map((g) => ({
+    id: g.id,
+    label: g.label,
+    items: (g.items as readonly NavItem[]).filter(
+      (i) => !isClientNavItem(i) && navVisibleTo(i, role)
+    ),
+  }));
   return [client, ...operator].filter((g) => g.items.length > 0);
 }
 
