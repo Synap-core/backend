@@ -159,6 +159,18 @@ export interface AskAnswerProps {
   showContext?: boolean;
 }
 
+/** Every read an answer changes: the rows, the badges, Sessions, Home. */
+export function refreshAfterAnswer(
+  utils: ReturnType<typeof trpc.useUtils>,
+  sessionId: string
+): void {
+  void utils.signals.invalidate();
+  void utils.focusSessions.owed.invalidate();
+  void utils.focusSessions.get.invalidate({ id: sessionId });
+  void utils.focusSessions.browse.invalidate();
+  void utils.diagnose.global.invalidate();
+}
+
 export function AskAnswer({
   slot,
   live,
@@ -178,13 +190,8 @@ export function AskAnswer({
 
   const utils = trpc.useUtils();
 
-  /** Every read an answer changes: the rows, the badges, Sessions, Home. */
   function refresh() {
-    void utils.signals.invalidate();
-    void utils.focusSessions.owed.invalidate();
-    void utils.focusSessions.get.invalidate({ id: seen.sessionId });
-    void utils.focusSessions.browse.invalidate();
-    void utils.diagnose.global.invalidate();
+    refreshAfterAnswer(utils, seen.sessionId);
   }
 
   function settled(receipt: ProvideReceipt) {

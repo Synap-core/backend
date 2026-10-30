@@ -535,15 +535,19 @@ describe("A criterion's grade — once, in the rail", () => {
     ).toBe("");
   });
 
-  it("the rail draws the grade with Review's answer card: Pass, Fail, Send answer", () => {
+  it("the rail draws the grade as two buttons, Pass and Fail — no answer card", () => {
     seen.signals = [owedHere, criterionSlot];
     const html = render(
       <CriterionGrade sessionId={SESSION_ID} criterionKey="relay-approve" />
     );
     const seenText = text(html);
-    expect(seenText).toContain("Pass");
-    expect(seenText).toContain("Fail");
-    expect(buttons.some((b) => b.children === "Send answer")).toBe(true);
+    const labels = buttons.map((b) => b.children);
+    expect(labels).toEqual(["Pass", "Fail", "Add a note"]);
+    // Founder, 2026-10-30: two clicks, not the generic answer card.
+    expect(labels).not.toContain("Send answer");
+    expect(labels).not.toContain("Message the agent");
+    expect(seenText).not.toContain("Your answer");
+    expect(seenText).not.toContain("From the session");
     // Under its own statement: the why is not said a second time.
     expect(seenText).not.toContain("Checked 2 times");
     // It reads Needs you's own query, never a second one.
@@ -551,6 +555,34 @@ describe("A criterion's grade — once, in the rail", () => {
       "signals.list",
       expect.objectContaining({ lens: "needs-you", sessionId: SESSION_ID }),
     ]);
+  });
+
+  it("one click grades: Pass and Fail each send the answer door with the ask the reader saw", () => {
+    seen.signals = [criterionSlot];
+    const ask = (criterionSlot as unknown as { ask: Ask }).ask;
+    for (const [label, value] of [
+      ["Pass", "pass"],
+      ["Fail", "fail"],
+    ] as const) {
+      render(
+        <CriterionGrade sessionId={SESSION_ID} criterionKey="relay-approve" />
+      );
+      const press = buttons.find((b) => b.children === label)?.onPress;
+      expect(press).toBeTypeOf("function");
+      calls.length = 0;
+      press!();
+      expect(calls).toEqual([
+        [
+          "focusSessions.answerOutput",
+          {
+            sessionId: SESSION_ID,
+            expectedLabel: "Check: Relay offers the same turn-on doors",
+            value: { type: "chip", chip: { label, value } },
+            askFingerprint: askFingerprint(ask),
+          },
+        ],
+      ]);
+    }
   });
 
   it("draws nothing for a criterion with no grade waiting on the person", () => {

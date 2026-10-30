@@ -28,6 +28,9 @@
  */
 
 import { useState } from "react";
+import { Button, Input, addToast } from "@heroui/react";
+import { Check, X } from "lucide-react";
+import { ASK_COPY, classifyAskRefusal } from "@synap-core/types/ask";
 import Link from "next/link";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import {
@@ -39,7 +42,17 @@ import { formatRelative } from "../../../../lib/format";
 import { ExitLink } from "../../../../lib/exit-link";
 import { SectionCard } from "../../../(admin)/components/section-card";
 import { ResourceRowError } from "../../../(admin)/components/resource-row";
-import { AskAnswer } from "../../../(admin)/review/_lib/ask-answer";
+import {
+  AskAnswer,
+  refreshAfterAnswer,
+} from "../../../(admin)/review/_lib/ask-answer";
+import {
+  answerCall,
+  askView,
+  type AskSlot,
+} from "../../../(admin)/review/_lib/ask-detail";
+import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
+import { ErrorNote } from "../../copy-button";
 import {
   exitOf,
   liveAskSlot,
@@ -195,12 +208,18 @@ export function NeedsYouSection({
 }
 
 /**
- * A criterion's grade, drawn under the criterion in the page's rail: the
- * SAME `AskAnswer` Needs you and Review draw, on the criterion's escalated
- * slot, so the grade goes through `focusSessions.answerOutput` like any
- * answer (the pod records it as the grade, `gradeCriterionAsOwner`). Nothing
- * when the criterion has no slot waiting on the person. Its read is Needs
- * you's own (one query key, one request).
+ * A criterion's grade, drawn under the criterion in the page's rail: two
+ * buttons, Pass and Fail, each the whole answer (founder, 2026-10-30: "just
+ * two clicks"). The statement above already says what is graded, so nothing
+ * else is drawn: no asker line, no radio list, no Send answer. "Add a note"
+ * opens one line that rides with the click, as the grade's rationale.
+ *
+ * The grade goes through `focusSessions.answerOutput` like any answer (the
+ * pod records it as the grade, `gradeCriterionAsOwner`), with the fingerprint
+ * of the ask the reader saw, so a question the agent changed is refused as
+ * stale. Drawn only for a slot whose ask IS the grade (`criterionGradeSignals`,
+ * `isCriterionGradeAsk`); nothing when no grade waits on the person. Its read
+ * is Needs you's own (one query key, one request).
  */
 export function CriterionGrade({
   sessionId,
@@ -219,19 +238,113 @@ export function CriterionGrade({
   if (!row || row.detail?.kind !== "ask") return null;
   // Answered here: gone until a read newer than the answer says otherwise.
   if (answeredAt !== null && answeredAt >= signals.dataUpdatedAt) return null;
-  const settle = () => setAnsweredAt(Date.now());
   return (
-    <div className={`${BOX} mt-1 px-3 pt-3`}>
-      <AskAnswer
-        key={`${row.detail.sessionId}:${row.detail.label}`}
-        slot={row.detail.slot}
-        live={liveAskSlot(sessionAskRows(read), row.detail)}
-        onSettled={settle}
-        onClose={settle}
-        sessionDoor={false}
-        showHeading={false}
-        showContext={false}
-      />
+    <CriterionVerdictButtons
+      key={`${row.detail.sessionId}:${row.detail.label}`}
+      slot={row.detail.slot}
+      onSettled={() => setAnsweredAt(Date.now())}
+    />
+  );
+}
+
+/** The grade's two buttons, in the order the ask lists them. */
+function CriterionVerdictButtons({
+  slot,
+  onSettled,
+}: {
+  slot: AskSlot;
+  onSettled: () => void;
+}) {
+  const utils = trpc.useUtils();
+  const [note, setNote] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const answer = trpc.focusSessions.answerOutput.useMutation({
+    onSuccess: () => {
+      refreshAfterAnswer(utils, slot.sessionId);
+      onSettled();
+    },
+    onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err)) return;
+      const refusal = classifyAskRefusal(err.message);
+      if (refusal.kind === "failed") {
+        setFailure(refusal.message);
+        return;
+      }
+      addToast({
+        title:
+          refusal.kind === "ask_changed"
+            ? ASK_COPY.askChanged
+            : ASK_COPY.movedOn,
+        color: "default",
+      });
+      refreshAfterAnswer(utils, slot.sessionId);
+    },
+  });
+  const control = askView(slot).control;
+  if (control.mode !== "choose") return null;
+
+  const grade = (key: string) => {
+    setFailure(null);
+    const built = answerCall(slot, {
+      type: "choose",
+      key,
+      other: "",
+      note: note ?? "",
+    });
+    if (!built.ok) {
+      setFailure(built.message);
+      return;
+    }
+    answer.mutate(built.call);
+  };
+
+  return (
+    <div className="mt-1 flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {control.options.map((o) => {
+          // A grade ask's option key IS its value (`askOptionKey`): pass / fail.
+          const pass = o.key === "pass";
+          return (
+            <Button
+              key={o.key}
+              size="sm"
+              radius="md"
+              variant="flat"
+              color={pass ? "success" : "danger"}
+              startContent={
+                pass ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />
+              }
+              isDisabled={answer.isPending}
+              onPress={() => grade(o.key)}
+            >
+              {o.label}
+            </Button>
+          );
+        })}
+        {note === null && (
+          <Button
+            size="sm"
+            radius="md"
+            variant="light"
+            isDisabled={answer.isPending}
+            onPress={() => setNote("")}
+          >
+            Add a note
+          </Button>
+        )}
+      </div>
+      {note !== null && (
+        <Input
+          size="sm"
+          aria-label="Note with your grade"
+          placeholder="Why (optional), sent with Pass or Fail"
+          value={note}
+          onValueChange={setNote}
+          isDisabled={answer.isPending}
+          autoFocus
+        />
+      )}
+      {failure && <ErrorNote message={failure} />}
     </div>
   );
 }
