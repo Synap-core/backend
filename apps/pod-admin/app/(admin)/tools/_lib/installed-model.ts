@@ -53,6 +53,12 @@ export interface CardLike {
   source: "installed" | "available";
   builtIn?: true;
   verbs: readonly CardVerbLike[];
+  /**
+   * Its member tool rows the run gate refuses (`CapabilityCard.toolsOff`):
+   * its ACCESS to the service is off, so no action runs whatever the
+   * actions say. Absent when none is (or from an older pod).
+   */
+  toolsOff?: ReadonlyArray<{ id: string; name: string }>;
 }
 
 export interface ToolGroup {

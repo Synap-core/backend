@@ -125,6 +125,10 @@ const CapabilityCardSchema = z.object({
   // What the caller must supply to APPLY an available template. Without these
   // a REST client cannot prompt for them and installs without a credential.
   installParams: z.array(InstallParamSchema),
+  // Its member tool rows the run gate refuses: every run through one is
+  // refused until a person turns it on (POST /tools/:id/approve). Present only
+  // when one is off.
+  toolsOff: z.array(z.object({ id: z.string(), name: z.string() })).optional(),
   // The pod-wide Synap Core pack (first-party verbs, not a connector). Absent
   // on every other card — agent listings summarise it as one line and expand
   // it with `?key=`.
