@@ -84,6 +84,7 @@ import {
 } from "@synap-core/types/proposals/review-package";
 import type { ProposalClass } from "../proposals/proposal-class.js";
 import { needsYouFoldBy, needsYouRole } from "../../notifications/registry.js";
+import { waitKindOf, type WaitKind } from "@synap-core/types/units";
 
 /** What a signal points AT — an object-nav address the browser can dispatch. */
 export interface SignalTarget {
@@ -233,6 +234,15 @@ export interface Signal {
    * mapping, which is the fork the lens helper exists to prevent.
    */
   blockedReason?: ExpectedOutput["blockedReason"];
+  /**
+   * What kind of wait this row is (`WAIT_KINDS`, `@synap-core/types/units`):
+   * the ball a needs-you row wears (`resolveWaitKindState`). Set on the rows
+   * that wait on the person (`owed-slot` by its blocked reason, a
+   * `proposal-cluster`'s approval, a `draft-asks`' answer, a
+   * `session-review`'s try-it), through THE map table (`waitKindOf`);
+   * absent on every other kind.
+   */
+  waitKind?: WaitKind;
   /** One line naming WHICH thing is missing — the resumption cue. `owed-slot` only. */
   why?: string;
   /** The agent's own (unverified) claim it produced this after all. `owed-slot` only. */
@@ -796,6 +806,7 @@ export function signalFromCluster(
         ? `cluster:${cluster.fingerprint}@${sampleId}`
         : `cluster:${cluster.fingerprint}${reviewLaterSuffix(cluster)}`,
     kind: "proposal-cluster",
+    waitKind: waitKindOf({ kind: "pending_proposal" }),
     title: buildObjectActionTitle({
       action: cluster.proposalType,
       objectKind: cluster.targetType,
@@ -1215,6 +1226,7 @@ export function signalsFromDraftAsks(
     return {
       id: `draft:${sessionId}`,
       kind: "draft-asks" as const,
+      waitKind: waitKindOf({ kind: "owed_slot" }),
       title: ASK_COPY.draftStarted(
         input.starterNames.get(sessionId) ?? null,
         goal ?? "a session"
@@ -1273,6 +1285,10 @@ export function signalFromOwedSlot(
   return {
     id: `slot:${row.sessionId}:${normalizeExpectedLabel(row.label) ?? ""}`,
     kind: "owed-slot",
+    waitKind: waitKindOf({
+      kind: "owed_slot",
+      blockedReason: row.blockedReason ?? null,
+    }),
     title: row.label,
     count: 1,
     occurredAt,
@@ -1385,6 +1401,8 @@ export function signalFromReviewSession(
   return {
     id: `review:${row.id}`,
     kind: "session-review",
+    // A person grades it: the judgement a try-it is.
+    waitKind: "try_it",
     title,
     count: 1,
     occurredAt: row.updatedAt,

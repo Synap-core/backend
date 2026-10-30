@@ -79,6 +79,40 @@ import {
 } from "./status-groups.js";
 import { asksYouSessionIds } from "../signals/needs-you-owed.js";
 import {
+  readWaitingOnFor,
+  sessionWaitingOnQuestion,
+} from "../status/status-facts.js";
+import { leadWaitKind, type WaitKind } from "@synap-core/types/units";
+
+/**
+ * Each moving session's lead wait kind, through THE waiting-on collector
+ * (`readWaitingOnFor`, one bounded batch for the page). A failed read leaves
+ * the lines without one (the line then wears its live / quiet mark), never
+ * fails the Home read.
+ */
+async function movingWaitKinds(
+  userId: string,
+  sessionIds: readonly string[]
+): Promise<Map<string, WaitKind>> {
+  const out = new Map<string, WaitKind>();
+  if (sessionIds.length === 0) return out;
+  try {
+    const marks = await readWaitingOnFor(
+      { userId },
+      new Map(
+        [...new Set(sessionIds)].map((id) => [id, sessionWaitingOnQuestion(id)])
+      )
+    );
+    for (const [id, m] of marks) {
+      const k = leadWaitKind(m);
+      if (k) out.set(id, k);
+    }
+  } catch {
+    // The lines keep their live / quiet mark.
+  }
+  return out;
+}
+import {
   newBoardLensMemo,
   resolveBoardLens,
   type BoardLensMemo,
@@ -180,6 +214,8 @@ export interface MovingItem {
     live: boolean;
     asksYou: boolean;
     since: string;
+    /** What it waits on, as one kind (`leadWaitKind`); absent = nothing named. */
+    waitKind?: WaitKind;
   }>;
 }
 
@@ -1111,7 +1147,7 @@ export async function readMoving(
     return { items: [], unattached: [] };
 
   const onThings = things.flatMap((t) => work.get(t.id) ?? []);
-  const [identities, names, asksYou] = await Promise.all([
+  const [identities, names, asksYou, waitKinds] = await Promise.all([
     resolveMovingIdentities(
       ctx.userId,
       things,
@@ -1123,6 +1159,10 @@ export async function readMoving(
     ),
     // THE needs-you owed predicate (owner floor, drafts out), never a slot scan.
     asksYouSessionIds(
+      ctx.userId,
+      [...onThings, ...loose].map((w) => w.sessionId)
+    ),
+    movingWaitKinds(
       ctx.userId,
       [...onThings, ...loose].map((w) => w.sessionId)
     ),
@@ -1138,6 +1178,9 @@ export async function readMoving(
       live: w.live,
       asksYou: asksYou.has(w.sessionId),
       since: w.startedAt.toISOString(),
+      ...(waitKinds.get(w.sessionId)
+        ? { waitKind: waitKinds.get(w.sessionId)! }
+        : {}),
     };
   };
   const inScope = things.filter(
