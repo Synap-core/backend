@@ -3,7 +3,7 @@
  *
  * `BLOCKED_REASONS` (`@synap/playbooks`) is the closed set of why a slot is
  * owed to a person; `BLOCKED_REASON_WAITING_ON` (`@synap-core/types/units`)
- * maps each one to the five waiting-on reasons a goal shows (input · approval
+ * maps each one to the waiting-on reasons a goal shows (input · approval
  * · access · another_work · outside_world). The mapping function falls back
  * to "input" for a reason it does not know — right for a slot that recorded
  * no reason, WRONG for a seventh blocked reason nobody mapped (a missing

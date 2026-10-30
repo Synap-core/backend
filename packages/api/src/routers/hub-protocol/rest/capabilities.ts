@@ -371,6 +371,10 @@ const StandaloneKindSchema = z.enum(["view", "skill", "automation"]);
 
 const ReconcileConfigsRequestSchema = z.object({
   dryRun: z.boolean().optional(),
+  /** Only the rows installed from these packages. */
+  packageSlugs: z.array(z.string().min(1)).optional(),
+  /** Only these view / skill / automation rows. */
+  ids: z.array(z.string().uuid()).optional(),
 });
 
 const StandaloneReconcileEntrySchema = z.object({
@@ -1064,8 +1068,10 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       "Advances each standalone-installed view/skill/automation's untouched " +
       "fields to its source marketplace template through the governed per-kind " +
       "`.update` door. A user-edited field is owner-owned — left alone and " +
-      "reported. A private/unsynced package is skipped. `dryRun:true` computes " +
-      "the report without writing. Requires hub-protocol.write scope.",
+      "reported. A private/unsynced package is skipped. `packageSlugs` and " +
+      "`ids` narrow the pass to those packages and rows (an empty list " +
+      "reconciles nothing). `dryRun:true` computes the report without " +
+      "writing. Requires hub-protocol.write scope.",
     request: { body: ReconcileConfigsRequestSchema },
     responses: {
       200: {
@@ -1123,6 +1129,8 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
     try {
       const report = await reconcileStandaloneConfigsToTemplates({
         dryRun: parsed.data.dryRun,
+        packageSlugs: parsed.data.packageSlugs,
+        ids: parsed.data.ids,
       });
       return c.json(report, 200);
     } catch (err) {

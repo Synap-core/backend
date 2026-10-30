@@ -144,7 +144,12 @@ vi.mock("../../focus-sessions/block-guidelines.js", async (orig) => ({
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
+  channelMembers,
+  channels,
+  chatTurns,
+  events,
   focusSessions,
+  messages,
   playbooks,
   projects,
   lifecycleTransitionOutbox,
@@ -312,6 +317,15 @@ beforeAll(async () => {
     projectMembers,
     // Who is on a goal (0348): `startTrack` seeds the owner row.
     trackParticipants,
+    // The waiting-on collector reads owed slots through the needs-you lens
+    // (a session's agent activity).
+    chatTurns,
+    messages,
+    events,
+    // A member's run on a team goal is read through the room roster
+    // (`sessionReadableWhere` with `roster`).
+    channels,
+    channelMembers,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }

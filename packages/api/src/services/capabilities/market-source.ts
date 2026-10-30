@@ -34,8 +34,17 @@
 export interface MarketSource {
   /** The CP package slug this config was installed from — the reconcile key. */
   packageSlug: string;
-  /** The package version at install time, or null when unknown. */
+  /** The package version the row last converged to (install, or a reconcile
+   *  pass whose managed fields all matched it), or null when unknown. */
   packageVersion: string | null;
+  /**
+   * The `MARKET_SOURCE_COMPARATOR_VERSION` that judged the row converged when a
+   * reconcile stamped `packageVersion`. Absent on an install stamp. The version
+   * hash covers fields this comparator never reads (`meta`, `dependencies`), so
+   * the stamp means "converged as judged by the managed fields" — the same
+   * honesty `metadata.comparatorVersion` gives a capability's `contentHash`.
+   */
+  comparatorVersion?: number;
   /** ISO timestamp of install. Supplied by the caller (this module reads no clock). */
   installedAt: string;
   /**
@@ -48,6 +57,15 @@ export interface MarketSource {
 }
 
 const MARKET_SOURCE_KEY = "marketSource";
+
+/**
+ * Bump when `threeWayMergeFields` changes what it calls converged, so a stamp
+ * written under an older judgement can be told apart.
+ *
+ * v1 = the per-field 3-way merge over the baseline's keys, where a field whose
+ *      live value already equals the template's is SAME (not owner-owned).
+ */
+export const MARKET_SOURCE_COMPARATOR_VERSION = 1;
 
 /** JSON round-trip clone — every value we handle is jsonb (JSON-serializable). */
 function jsonClone<T>(value: T): T {
@@ -125,6 +143,9 @@ export function readMarketSource(
     packageSlug: s.packageSlug,
     packageVersion:
       typeof s.packageVersion === "string" ? s.packageVersion : null,
+    ...(typeof s.comparatorVersion === "number"
+      ? { comparatorVersion: s.comparatorVersion }
+      : {}),
     installedAt: typeof s.installedAt === "string" ? s.installedAt : "",
     baseline: s.baseline as Record<string, unknown>,
   };
@@ -149,11 +170,17 @@ export interface ThreeWayMergeResult {
   merged: Record<string, unknown>;
   /** Field names updated from the template (were untouched since install). */
   applied: string[];
-  /** Field names the user edited since install — LEFT ALONE, never overwritten. */
+  /** Field names the user edited since install — LEFT ALONE, never overwritten.
+   *  A field the user edited TO the template's value is not here: it is the
+   *  same as the template, and its baseline advances. */
   ownerOwned: string[];
-  /** The `baseline` to persist next: applied fields advance to `desired`;
-   *  owner-owned fields KEEP the old base (so their divergence stays detected —
-   *  a later revert to base correctly re-enables reconcile). */
+  /** The owner-owned fields the template ALSO changed (`base ≠ desired`): two
+   *  edits of one field, the user's kept. The rest of `ownerOwned` is the
+   *  user's edit alone — the template has nothing new for it. */
+  conflicted: string[];
+  /** The `baseline` to persist next: applied and same fields advance to
+   *  `desired`; owner-owned fields KEEP the old base (so their divergence stays
+   *  detected — a later revert to base correctly re-enables reconcile). */
   nextBaseline: Record<string, unknown>;
   /** True when at least one field changed (`applied` non-empty) — the caller
    *  only writes the row when something actually moved. */
@@ -176,7 +203,12 @@ export interface ThreeWayMergeResult {
  *     value, it is OWNER-OWNED — we never stomp a pre-existing value we didn't set.
  *   • base present, `live` deep-equals `base` (untouched since we wrote it): apply
  *     `desired[k]`.
- *   • base present, `live` diverges from `base` (user edited): OWNER-OWNED, skip.
+ *   • base present, `live` diverges from `base` but deep-equals `desired` (the
+ *     user's edit and the template's change agree): SAME — nothing to write, the
+ *     baseline advances to `desired`, reported in neither `applied` nor
+ *     `ownerOwned`.
+ *   • base present, `live` diverges from both (user edited): OWNER-OWNED, skip;
+ *     also CONFLICTED when the template moved it too (`base ≠ desired`).
  */
 export function threeWayMergeFields(
   live: Record<string, unknown>,
@@ -186,6 +218,7 @@ export function threeWayMergeFields(
   const merged: Record<string, unknown> = {};
   const applied: string[] = [];
   const ownerOwned: string[] = [];
+  const conflicted: string[] = [];
   const nextBaseline: Record<string, unknown> = { ...base };
 
   const keys = new Set([...Object.keys(desired), ...Object.keys(base)]);
@@ -213,6 +246,7 @@ export function threeWayMergeFields(
       } else {
         merged[k] = liveVal; // pre-existing user value — do not stomp
         ownerOwned.push(k);
+        conflicted.push(k); // the template brought a value of its own
       }
       continue;
     }
@@ -223,11 +257,17 @@ export function threeWayMergeFields(
       merged[k] = desiredVal;
       nextBaseline[k] = jsonClone(desiredVal);
       if (!deepEqual(baseVal, desiredVal)) applied.push(k);
+    } else if (deepEqual(liveVal, desiredVal)) {
+      // Edited to exactly the template's value → same. Nothing to write; the
+      // baseline catches up so the next pass sees the field as untouched.
+      merged[k] = liveVal;
+      nextBaseline[k] = jsonClone(desiredVal);
     } else {
       // User edited it → owner-owned. Leave live, keep the old base so the
       // divergence stays detected on the next pass.
       merged[k] = liveVal;
       ownerOwned.push(k);
+      if (!deepEqual(baseVal, desiredVal)) conflicted.push(k);
     }
   }
 
@@ -235,6 +275,7 @@ export function threeWayMergeFields(
     merged,
     applied,
     ownerOwned,
+    conflicted,
     nextBaseline,
     changed: applied.length > 0,
   };

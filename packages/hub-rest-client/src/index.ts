@@ -274,6 +274,7 @@ export type {
   HubGoalCriterionMark,
   HubGoalAcceptanceDecision,
   HubWaitingOnReason,
+  HubWaitingOnRef,
   UpdateTrackInput,
   AcceptTrackCriterionInput,
   TrackCloseInput,

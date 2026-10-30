@@ -54,6 +54,7 @@ import {
   workspaceMembers,
   workspaces,
   KEY_PREFIXES,
+  isPodWideReadPermission,
   type AppApprovedRequest,
 } from "@synap/database/schema";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
@@ -108,6 +109,13 @@ import { requestsWithin } from "./agent-connect.js";
 export type AccessRequestInput =
   | { permission: string; workspaceId: string }
   | { permission: string; workspace: string };
+
+/**
+ * A request in ONE space: what the asking door (`requestAccess`, the CLI and
+ * Hub REST) files. Only a pod app's consent offers a pod-wide read
+ * (`connectOAuthApp`, decision e1b59d38 "B"); nothing here can ask for one.
+ */
+type SpaceRequest = AppApprovedRequest & { workspaceId: string };
 
 /** The wire shape of an app — snake_case, the fields the CLI + UI read. */
 export function serializeApp(row: AppWithGrants) {
@@ -174,11 +182,12 @@ export async function serializeAppsForAdmin(rows: readonly AppWithGrants[]) {
     .from(users)
     .where(inArray(users.id, ownerIds));
   const ownerById = new Map(owners.map((o) => [o.id, o]));
-  const spaceIdsOf = (row: AppWithGrants): string[] => [
-    ...row.grants.flatMap((g) => g.workspaceIds ?? []),
-    ...(row.pendingRequest?.requests ?? []).map((r) => r.workspaceId),
-    ...(row.app.approvedRequests ?? []).map((r) => r.workspaceId),
-  ];
+  const spaceIdsOf = (row: AppWithGrants): string[] =>
+    [
+      ...row.grants.flatMap((g) => g.workspaceIds ?? []),
+      ...(row.pendingRequest?.requests ?? []).map((r) => r.workspaceId),
+      ...(row.app.approvedRequests ?? []).map((r) => r.workspaceId),
+    ].filter((id): id is string => id !== null);
   const spaceIds = [...new Set(rows.flatMap(spaceIdsOf))];
   const spaces =
     spaceIds.length > 0
@@ -361,7 +370,7 @@ async function recordAppEvent(
 async function resolveRequests(
   ownerUserId: string,
   requests: AccessRequestInput[]
-): Promise<Array<AppApprovedRequest & { workspaceName: string }>> {
+): Promise<Array<SpaceRequest & { workspaceName: string }>> {
   try {
     assertPermissions(requests.map((r) => r.permission));
   } catch (err) {
@@ -469,9 +478,12 @@ async function writesBeyondOwner<T extends AppApprovedRequest>(
   const writes = requests.filter((r) => !isReadPermission(r.permission));
   if (writes.length === 0) return [];
   const may = await spacesOwnerMayWriteIn(ownerUserId, [
-    ...new Set(writes.map((r) => r.workspaceId)),
+    ...new Set(writes.flatMap((r) => (r.workspaceId ? [r.workspaceId] : []))),
   ]);
-  return writes.filter((r) => !may.has(r.workspaceId));
+  // A write is never given pod-wide: one with no space is always beyond.
+  return writes.filter(
+    (r) => r.workspaceId === null || !may.has(r.workspaceId)
+  );
 }
 
 /**
@@ -491,17 +503,22 @@ export async function ownerGrantableNow(
       (r) => `${r.workspaceId} ${r.permission}`
     )
   );
-  return approved.filter(
-    (r) =>
-      readable.has(r.workspaceId) &&
-      !beyond.has(`${r.workspaceId} ${r.permission}`)
+  return approved.filter((r) =>
+    r.workspaceId === null
+      ? // A pod-wide read reads only what the person reads (grant ∩ floor).
+        isPodWideReadPermission(r.permission)
+      : readable.has(r.workspaceId) &&
+        !beyond.has(`${r.workspaceId} ${r.permission}`)
   );
 }
 
 export async function assertOwnerMayGrant(
   ownerUserId: string,
-  requests: ReadonlyArray<AppApprovedRequest & { workspaceName?: string }>
+  requests: ReadonlyArray<
+    AppApprovedRequest & { workspaceName?: string | null }
+  >
 ): Promise<void> {
+  assertPodWideReadsOnly(requests);
   const beyond = await writesBeyondOwner(ownerUserId, requests);
   if (beyond.length > 0) {
     throw new TRPCError({
@@ -518,6 +535,28 @@ export async function assertOwnerMayGrant(
 }
 
 /**
+ * A pod-wide pair (no space) is a READ of one named kind and nothing else
+ * (`isPodWideReadPermission`, decision e1b59d38 "B"): every write stays
+ * pinned to a space. Run wherever an approval is checked (consent, the
+ * `app/connect` executor, through `assertOwnerMayGrant`).
+ */
+export function assertPodWideReadsOnly(
+  requests: readonly AppApprovedRequest[]
+): void {
+  const beyond = requests.filter(
+    (r) => r.workspaceId === null && !isPodWideReadPermission(r.permission)
+  );
+  if (beyond.length > 0) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Only a read of one kind can be given everywhere in your pod (entity.<kind>.read); every other permission is given in a space: ${beyond
+        .map((r) => r.permission)
+        .join(", ")}.`,
+    });
+  }
+}
+
+/**
  * A request may never be wider than the credential that files it (invariant
  * 1 at the ASKING door). A signed-in session or the owner's own unbounded `*`
  * key asks with the owner's whole reach (`resolveRequests` bounds that to
@@ -528,7 +567,7 @@ export async function assertOwnerMayGrant(
  * would launder a wider credential than the asker holds.
  */
 function assertRequestsWithinCaller(
-  requests: ReadonlyArray<AppApprovedRequest & { workspaceName: string }>
+  requests: ReadonlyArray<SpaceRequest & { workspaceName: string }>
 ): void {
   const grant = getRequestGrant();
   if (!grant || isFullAccessGrant(grant)) return;
@@ -644,7 +683,8 @@ export function appApprovalWithinAsked(args: {
 
 /**
  * The grants an app's key carries for what its owner approved: ONE grant per
- * workspace, holding exactly the permissions approved IN that workspace.
+ * workspace, holding exactly the permissions approved IN that workspace, plus
+ * ONE grant with no workspace for the pod-wide reads, if any.
  *
  * Never one grant of (all permissions × all workspaces): approving "create
  * People in Sales" and "read Notes in Finance" would then also allow creating
@@ -655,15 +695,28 @@ export function grantsForApprovedRequests(
   approved: readonly AppApprovedRequest[]
 ): GrantInput[] {
   const byWorkspace = new Map<string, Set<string>>();
+  const podWide = new Set<string>();
   for (const r of approved) {
+    if (r.workspaceId === null) {
+      // Pod-wide: a read of one kind, never anything else (dropped if so).
+      if (isPodWideReadPermission(r.permission)) podWide.add(r.permission);
+      continue;
+    }
     const perms = byWorkspace.get(r.workspaceId) ?? new Set<string>();
     perms.add(r.permission);
     byWorkspace.set(r.workspaceId, perms);
   }
-  return [...byWorkspace].map(([workspaceId, perms]) => ({
+  const grants: GrantInput[] = [...byWorkspace].map(([workspaceId, perms]) => ({
     permissions: [...perms],
     workspaceIds: [workspaceId],
   }));
+  // ONE unpinned scope holding exactly the pod-wide reads (decision
+  // e1b59d38 "B"): it reads those kinds everywhere the person reads, and
+  // writes nothing, so no write is ever checked against it.
+  if (podWide.size > 0) {
+    grants.push({ permissions: [...podWide] });
+  }
+  return grants;
 }
 
 /** Which door issued an app's key — the provenance its agent user records. */
@@ -714,6 +767,8 @@ async function syncAppAgentMemberships(
 ): Promise<void> {
   const roles = new Map<string, "viewer" | "editor">();
   for (const r of approved) {
+    // A pod-wide read is no space's membership: the grant alone carries it.
+    if (r.workspaceId === null) continue;
     const isRead = parsePermission(r.permission).at(-1) === "read";
     const prior = roles.get(r.workspaceId);
     roles.set(
@@ -864,18 +919,18 @@ async function narrowAppPersonTokens(
       continue;
     const live = await liveGrantsOfKey(token.id);
     const kept: AppApprovedRequest[] = [];
+    let before = 0;
     for (const scope of live) {
-      for (const workspaceId of scope.workspaceIds ?? []) {
+      // A scope with no space is the pod-wide reads (`workspaceId: null`).
+      const places: Array<string | null> = scope.workspaceIds ?? [null];
+      for (const workspaceId of places) {
         for (const permission of scope.permissions) {
+          before += 1;
           if (allowed.has(`${workspaceId} ${permission}`))
             kept.push({ permission, workspaceId });
         }
       }
     }
-    const before = live.reduce(
-      (n, s) => n + s.permissions.length * (s.workspaceIds?.length ?? 0),
-      0
-    );
     if (kept.length === before) continue;
     if (kept.length === 0) {
       await new GrantRepository(db).revokeForKeys([token.id], app.ownerUserId);
@@ -1197,6 +1252,25 @@ export async function oauthAppOffer(
   }));
 }
 
+/** How a pod-wide pair names its place, where a space's name would go. */
+export const EVERYWHERE_IN_POD = "everywhere in your pod";
+
+/**
+ * The permissions a pod app may be given POD-WIDE: those it asked for that
+ * its document declared pod-wide (`requestedPodWide`) AND that are a read of
+ * one named kind (`isPodWideReadPermission`, re-checked here whatever the
+ * cache holds). Offered as one tick each, with no space; never also per space.
+ */
+export function oauthAppPodWideOffer(
+  permissions: readonly string[],
+  declaredPodWide: readonly string[]
+): string[] {
+  const declared = new Set(declaredPodWide);
+  return permissions.filter(
+    (p) => declared.has(p) && isPodWideReadPermission(p)
+  );
+}
+
 /**
  * The kinds a pod app asks for (`entity.<kind>[.<action>]`) whose profile is
  * pod-wide: a system or shared profile with `entity_scope = 'pod'`. An entity
@@ -1261,6 +1335,11 @@ export async function connectOAuthApp(args: {
   name: string;
   /** What the app asked for AND declared, re-derived server-side. */
   permissions: readonly string[];
+  /**
+   * Of those, the ones the app declared POD-WIDE (`synap_requests[].scope =
+   * "pod"`, re-derived server-side): offered as one pair each with no space.
+   */
+  podWide?: readonly string[];
   /** The person's ticks — untrusted. */
   approved: readonly AppApprovedRequest[];
   /** The caller's request context — the approve door's agent floor reads it. */
@@ -1277,18 +1356,27 @@ export async function connectOAuthApp(args: {
       message: "Choose at least one space to give this app access to.",
     });
   }
-  const offer = await oauthAppOffer(args.ownerUserId, args.permissions);
-  const asked = offer.flatMap((o) =>
-    o.workspaces.map((w) => ({
-      permission: o.permission,
-      workspaceId: w.workspaceId,
-    }))
+  const podWide = oauthAppPodWideOffer(args.permissions, args.podWide ?? []);
+  const offer = await oauthAppOffer(
+    args.ownerUserId,
+    args.permissions.filter((p) => !podWide.includes(p))
   );
-  const nameOf = new Map(
-    offer.flatMap((o) =>
-      o.workspaces.map((w) => [w.workspaceId, w.workspaceName])
-    )
-  );
+  const asked: AppApprovedRequest[] = [
+    ...offer.flatMap((o) =>
+      o.workspaces.map((w) => ({
+        permission: o.permission,
+        workspaceId: w.workspaceId,
+      }))
+    ),
+    ...podWide.map((permission) => ({ permission, workspaceId: null })),
+  ];
+  const nameOf = new Map<string | null, string>([
+    ...offer.flatMap((o) =>
+      o.workspaces.map((w) => [w.workspaceId, w.workspaceName] as const)
+    ),
+    [null, EVERYWHERE_IN_POD],
+  ]);
+  assertPodWideReadsOnly(approved);
   if (!requestsWithin(approved, asked)) {
     const beyond = approved.filter((r) => !requestsWithin([r], asked));
     throw new TRPCError({
@@ -1318,7 +1406,7 @@ export async function connectOAuthApp(args: {
 
   const requests = approved.map((r) => ({
     ...r,
-    workspaceName: nameOf.get(r.workspaceId)!,
+    workspaceName: nameOf.get(r.workspaceId) ?? null,
   }));
   // Filed inside a transaction so `createPendingProposal` skips its "is
   // asking for access" notification: the person is answering it right now,
@@ -1551,7 +1639,7 @@ async function appOAuthAnswer(
           .where(
             inArray(
               workspaces.id,
-              grant.map((r) => r.workspaceId)
+              grant.flatMap((r) => (r.workspaceId ? [r.workspaceId] : []))
             )
           )
       : []
@@ -1564,8 +1652,9 @@ async function appOAuthAnswer(
     actsAs,
     agentUserId: key.agentUserId,
     publicId: conn.app.publicId,
+    // A pod-wide read answers `workspaceId: null, workspaceName: null`.
     grant: grant.map((r) => {
-      const space = spaces.get(r.workspaceId);
+      const space = r.workspaceId ? spaces.get(r.workspaceId) : undefined;
       return {
         permission: r.permission,
         workspaceId: r.workspaceId,
@@ -2230,7 +2319,7 @@ export async function narrowApp(args: {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: `Narrowing can only take access away. Not approved for this app: ${beyond
-        .map((r) => `${r.permission} in ${r.workspaceId}`)
+        .map((r) => `${r.permission} in ${r.workspaceId ?? EVERYWHERE_IN_POD}`)
         .join(", ")}.`,
     });
   }
@@ -2393,7 +2482,9 @@ export async function podAppViews(
   const spaceIds = [
     ...new Set(
       pod.flatMap((r) =>
-        (r.app.approvedRequests ?? []).map((a) => a.workspaceId)
+        (r.app.approvedRequests ?? []).flatMap((a) =>
+          a.workspaceId ? [a.workspaceId] : []
+        )
       )
     ),
   ];
@@ -2458,7 +2549,10 @@ export async function podAppViews(
       approved: (row.app.approvedRequests ?? []).map((a) => ({
         permission: a.permission,
         workspaceId: a.workspaceId,
-        workspaceName: names.get(a.workspaceId) ?? null,
+        // A pod-wide read has no space: the page words it "everywhere".
+        workspaceName: a.workspaceId
+          ? (names.get(a.workspaceId) ?? null)
+          : null,
       })),
       connected_at: connectedAt.get(row.app.id) ?? null,
       last_used_at: newestOf([

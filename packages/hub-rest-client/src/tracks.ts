@@ -69,7 +69,28 @@ export type HubGoalAcceptanceDecision =
 
 /** What a goal waits on (R4). Mirror of `WaitingOnReason`, pinned by the floor. */
 export type HubWaitingOnReason =
-  "input" | "approval" | "access" | "another_work" | "outside_world";
+  | "input"
+  | "approval"
+  | "access"
+  | "another_work"
+  | "outside_world"
+  | "external"
+  | "date";
+
+/** What a mark waits on (`WaitingOnRef`): words, and a door when there is one. */
+export interface HubWaitingOnRef {
+  kind:
+    | "session"
+    | "pull_request"
+    | "person"
+    | "decision"
+    | "proposal"
+    | "slot"
+    | "thing";
+  id?: string;
+  url?: string;
+  label: string;
+}
 
 /** One goal criterion as the pod returns it — stored fields + derived state. */
 export interface HubGoalCriterion extends HubSessionCriterion {
@@ -151,8 +172,12 @@ export interface HubTrack {
     to: string;
     mark: "met" | "not_met" | "unmeasured";
   } | null;
-  /** What the goal waits on — derived; `[]` = nothing. */
-  waitingOn?: Array<{ reason: HubWaitingOnReason; count: number }> | null;
+  /** What the goal waits on — derived; `[]` = nothing. `refs`: at most 5. */
+  waitingOn?: Array<{
+    reason: HubWaitingOnReason;
+    count: number;
+    refs?: HubWaitingOnRef[];
+  }> | null;
   /**
    * Who is on the goal: owner, judge, delegates (with their commitment),
    * integrator. Absent on a pod before 0348, or when not read.

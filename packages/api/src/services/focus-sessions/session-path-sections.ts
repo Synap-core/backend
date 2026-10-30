@@ -52,13 +52,16 @@ import {
   sessionLastAgentActivitySql,
   sessionLastAgentWorkSql,
   sessionTurnInFlightSql,
+  listHolds,
 } from "@synap/database";
 import {
   buildObjectActionTitle,
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
+import type { SessionReader } from "../../access/session-visibility.js";
 import {
   resolveSessionTitle,
+  sessionStatusCategory,
   type SessionVerdict,
 } from "@synap-core/types/focus-sessions";
 import type { ExpectedOutput } from "@synap/playbooks";
@@ -75,6 +78,8 @@ import {
   type PacketProposalItem,
   type PacketSection,
   type PacketSlotFacts,
+  withPullRequestStatesFor,
+  workUnitsSection,
 } from "./continuation-packet.js";
 import { projectOwedSlots, type OwedSlot } from "./owed-outputs.js";
 import { attachSessionVerdicts } from "./evaluations/record.js";
@@ -497,6 +502,9 @@ export async function attachPathSections<R extends PathSourceRow>(
     logContext?: Record<string, unknown>;
     /** The clock the needs-you rule reads. Absent ⇒ now. */
     now?: Date;
+    /** The caller's reader floor for the PR facts (`SessionReader`). */
+    roster?: SessionReader["roster"];
+    lens?: SessionReader["lens"];
   }
 ): Promise<Array<R & SessionPathSections>> {
   if (rows.length === 0) return [];
@@ -514,6 +522,8 @@ export async function attachPathSections<R extends PathSourceRow>(
     inboxes,
     needsYou,
     verdicts,
+    workUnits,
+    holds,
   ] = await Promise.all([
     settle(
       ctx,
@@ -580,6 +590,35 @@ export async function attachPathSections<R extends PathSourceRow>(
         );
       }
     ),
+    // The page's pull requests with what the pod recorded (rung 3), in ONE
+    // state read for every row — the packet's own rule and reader, uncapped:
+    // the next move reads every PR, never the packet's top few. A failed
+    // read marks each PR `unavailable` inside the section, never the page.
+    withPullRequestStatesFor(
+      rows.map((r) => workUnitsSection(slotsOf(r), { uncapped: true })),
+      { userId: opts.userId, roster: opts.roster, lens: opts.lens },
+      database
+    ),
+    // The current holds of the page's PAUSED sessions (rung 2c), one read.
+    settle(
+      ctx,
+      "holds",
+      "What these paused sessions wait on could not be read.",
+      async () => {
+        const paused = rows.filter(
+          (r) => sessionStatusCategory(r.status) === "paused"
+        );
+        const current = paused.length
+          ? await listHolds(database, {
+              subjects: paused.map((r) => ({
+                subjectType: "focus_session" as const,
+                subjectId: r.id,
+              })),
+            })
+          : [];
+        return new Map(current.map((h) => [h.subjectId, h.hold]));
+      }
+    ),
   ]);
 
   /** A section from a settled page-wide map, or that read's `unavailable`. */
@@ -591,7 +630,7 @@ export async function attachPathSections<R extends PathSourceRow>(
   const countOf = (s: PacketSection<unknown>): PathCount =>
     s.status === "ok" ? { status: "ok", total: s.total } : s;
 
-  return rows.map((row) => {
+  return rows.map((row, rowIndex) => {
     const all = slotsOf(row);
     const owedList = projectOwedSlots({
       id: row.id,
@@ -664,6 +703,11 @@ export async function attachPathSections<R extends PathSourceRow>(
       children,
       inbox,
       criteria,
+      workUnits: workUnits[rowIndex]!,
+      hold:
+        holds.status === "ok"
+          ? { status: "ok", hold: holds.value.get(row.id) ?? null }
+          : holds,
     });
     return {
       ...row,

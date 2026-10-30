@@ -27,7 +27,11 @@ import type {
   TRACK_WORK_KIND_LABELS,
   WAITING_ON_REASON_LABELS,
 } from "../vocabulary/index.js";
-import { deliverableOwedBy, type DeliverableFacts } from "./deliverable.js";
+import type {
+  PullRequestChecks,
+  PullRequestState,
+} from "../events/pr-state.js";
+import type { HoldOn } from "../lifecycle/hold.js";
 
 // ── kind of work and uncertainty (decision 4) ──────────────────────────────
 
@@ -704,9 +708,12 @@ export function operationPeriodReading(
 // ── R4: waiting on ─────────────────────────────────────────────────────────
 
 /**
- * What a goal is WAITING ON (R4) — a derived mark with a reason, never a
- * status, distinct from `paused` (chosen). Read from what exists: the owed
- * slots of its open runs, pending proposals, and `blocked_by` edges.
+ * What a goal or a session is WAITING ON (R4) — a derived mark with a reason,
+ * never a status, distinct from `paused` (chosen). Read from what exists: the
+ * owed slots of its open runs, pending proposals, `blocked_by` edges, the
+ * current hold of a pause, open pull requests and open sub-sessions. `external`
+ * (an outside party: a vendor, a client, CI) and `date` (a calendar date) were
+ * added for holds and PRs (decision D4, 2026-10-30).
  */
 export const WAITING_ON_REASONS = [
   "input",
@@ -714,6 +721,8 @@ export const WAITING_ON_REASONS = [
   "access",
   "another_work",
   "outside_world",
+  "external",
+  "date",
 ] as const;
 export type WaitingOnReason = (typeof WAITING_ON_REASONS)[number];
 
@@ -732,23 +741,95 @@ export const BLOCKED_REASON_WAITING_ON = {
   physical: "outside_world",
 } as const satisfies Record<string, WaitingOnReason>;
 
-/** One thing a goal waits on, as the pod found it. */
-export type WaitingOnSource =
+/**
+ * What a pause's hold (`HOLD_ON`, `../lifecycle/hold.ts`) waits on, as a
+ * waiting-on reason (decision D4). `null` = no mark: a hold on `nobody` is a
+ * deliberate park, and an `unspecified` one (a person's or the system's pause
+ * that said nothing) names nothing to wait on; the status already says paused.
+ * Typed by every hold value, and pinned row by row by
+ * `api/__tripwires__/waiting-on-hold-reasons.test.ts`.
+ */
+export const HOLD_ON_WAITING_ON = {
+  person: "input",
+  agent: "another_work",
+  external: "external",
+  thing: "another_work",
+  decision: "input",
+  date: "date",
+  nobody: null,
+  unspecified: null,
+} as const satisfies Record<HoldOn, WaitingOnReason | null>;
+
+/**
+ * What a recorded pull request work unit waits on, by its state
+ * (`PullRequestStateFacts`): an open PR whose checks have not settled waits on
+ * CI, and an open PR whose checks passed waits on the merge queue, which the
+ * merge bot fills by itself (backend decision 6fb4f9e2): both are `external`,
+ * never a person's `approval`. A red PR is the agent's own work and a merged
+ * or closed one waits on nothing: no mark.
+ */
+export function pullRequestWaitingOn(pr: {
+  state: PullRequestState;
+  checks?: PullRequestChecks;
+}): WaitingOnReason | null {
+  if (pr.state !== "open") return null;
+  if (pr.checks === "failed") return null;
+  return "external";
+}
+
+/** Refs one mark carries at most (the count is whole). */
+export const WAITING_ON_REFS_MAX = 5;
+
+/**
+ * WHAT is waited on: the session, PR, person, decision, proposal, owed slot
+ * or thing behind a mark. `label` is words a surface can show; `id` (a pod
+ * id) and `url` (an outside page) are doors when present. A slot's `id` is
+ * the session that declares it.
+ */
+export interface WaitingOnRef {
+  kind:
+    | "session"
+    | "pull_request"
+    | "person"
+    | "decision"
+    | "proposal"
+    | "slot"
+    | "thing";
+  id?: string;
+  url?: string;
+  label: string;
+}
+
+/** One thing a goal or a session waits on, as the pod found it. */
+export type WaitingOnSource = (
   | {
       kind: "owed_slot";
       /** The slot's blocked reason; absent = a question, a param, an ask. */
       blockedReason?: string | null;
     }
   | { kind: "pending_proposal" }
-  | { kind: "blocked_by" };
+  | { kind: "blocked_by" }
+  | { kind: "hold"; on: HoldOn }
+  | { kind: "work_unit"; state: PullRequestState; checks?: PullRequestChecks }
+  | { kind: "child_session" }
+) & { ref?: WaitingOnRef };
 
-/** THE mapping from one source to its reason. */
-export function waitingOnReasonOf(source: WaitingOnSource): WaitingOnReason {
+/** THE mapping from one source to its reason; `null` = it makes no mark. */
+export function waitingOnReasonOf(
+  source: WaitingOnSource
+): WaitingOnReason | null {
   switch (source.kind) {
     case "pending_proposal":
       return "approval";
     case "blocked_by":
+    case "child_session":
       return "another_work";
+    case "hold":
+      return Object.hasOwn(HOLD_ON_WAITING_ON, source.on)
+        ? HOLD_ON_WAITING_ON[source.on]
+        : null;
+    case "work_unit":
+      return pullRequestWaitingOn(source);
     case "owed_slot": {
       const r = source.blockedReason?.trim().toLowerCase();
       return r && Object.hasOwn(BLOCKED_REASON_WAITING_ON, r)
@@ -761,40 +842,34 @@ export function waitingOnReasonOf(source: WaitingOnSource): WaitingOnReason {
 export interface WaitingOnMark {
   reason: WaitingOnReason;
   count: number;
+  /**
+   * What is waited on, at most {@link WAITING_ON_REFS_MAX}, in source order.
+   * Absent when no source named one; a reader must work without it.
+   */
+  refs?: WaitingOnRef[];
 }
 
-/** The goal's waiting-on marks — one per reason present, in reason order. */
+/** The waiting-on marks — one per reason present, in reason order. */
 export function deriveWaitingOn(
   sources: readonly WaitingOnSource[]
 ): WaitingOnMark[] {
   const counts = new Map<WaitingOnReason, number>();
+  const refs = new Map<WaitingOnReason, WaitingOnRef[]>();
   for (const s of sources) {
     const reason = waitingOnReasonOf(s);
+    if (reason === null) continue;
     counts.set(reason, (counts.get(reason) ?? 0) + 1);
+    const named = refs.get(reason) ?? [];
+    if (s.ref && named.length < WAITING_ON_REFS_MAX) {
+      named.push(s.ref);
+      refs.set(reason, named);
+    }
   }
   return WAITING_ON_REASONS.filter((r) => counts.has(r)).map((reason) => ({
     reason,
     count: counts.get(reason)!,
+    ...(refs.has(reason) ? { refs: refs.get(reason)! } : {}),
   }));
-}
-
-/**
- * The owed slots of an OPEN run as waiting-on sources: a slot a PERSON owes
- * (`deliverableOwedBy === "you"`, the shared deliverable rule).
- */
-export function owedSlotWaitingSources(
-  slots: ReadonlyArray<
-    Pick<DeliverableFacts, "status" | "retiredAt" | "owner" | "optional"> & {
-      blockedReason?: string | null;
-    }
-  >
-): WaitingOnSource[] {
-  return slots
-    .filter((s) => deliverableOwedBy(s) === "you")
-    .map((s) => ({
-      kind: "owed_slot",
-      blockedReason: s.blockedReason ?? null,
-    }));
 }
 
 // Every value has its words in the vocabulary, and the vocabulary names

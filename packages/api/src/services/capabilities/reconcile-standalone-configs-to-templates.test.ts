@@ -13,10 +13,10 @@
  * ACTUAL update payload handed to the governed door (that the merge LANDED — the
  * new value AND the advanced baseline), so the pass is never vacuous.
  *
- * The `view` kind is exercised because its governed `.update` door threads
- * `metadata` (as does `automation`); `skill` shares the identical engine path
- * but its router `.update` does not yet accept `metadata` (see the NOTE in the
- * engine), so its baseline persistence is a separate router concern.
+ * `view` and `skill` are exercised; `automation` shares the identical engine
+ * path. That the real `skills.update` door persists the metadata this engine
+ * hands it is pinned on PGlite in
+ * `reconcile-standalone-configs-to-templates.skill-metadata.pglite.test.ts`.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -227,6 +227,12 @@ describe("reconcileStandaloneConfigsToTemplates", () => {
       (call.metadata as { marketSource: { baseline: { config: unknown } } })
         .marketSource.baseline.config
     ).toEqual({ color: "red" });
+    // …and the version it converged to is stamped, so a list that compares
+    // versions agrees with this pass.
+    expect(
+      (call.metadata as { marketSource: { packageVersion: string } })
+        .marketSource.packageVersion
+    ).toBe("1.1.0");
   });
 
   it("leaves a USER-EDITED field alone (owner-owned) and reports it", async () => {
@@ -300,5 +306,252 @@ describe("reconcileStandaloneConfigsToTemplates", () => {
     expect(report.checked).toBe(0);
     expect(lookupCatalogEntry).not.toHaveBeenCalled();
     expect(viewUpdate).not.toHaveBeenCalled();
+  });
+
+  // ── the list and the apply agree (founder pod, 2026-10-30) ──────────────────
+
+  /** A skill row installed at `version` with `baseline`, live = `live`. */
+  function skillRow(opts: {
+    slug: string;
+    version: string;
+    baseline: Record<string, unknown>;
+    live: Record<string, unknown>;
+  }): Row {
+    return {
+      id: `skill-${opts.slug}`,
+      name: opts.slug,
+      userId: "u1",
+      workspaceId: null,
+      ...opts.live,
+      metadata: {
+        marketSource: {
+          ...marketSource(opts.baseline),
+          packageSlug: opts.slug,
+          packageVersion: opts.version,
+        },
+      },
+    };
+  }
+
+  function catalogSkill(version: string, fields: Record<string, unknown>) {
+    lookupCatalogEntry.mockResolvedValue({
+      source: "https://cp.example",
+      version,
+      definition: { skill: { name: "any", ...fields } },
+    });
+  }
+
+  type Stamp = {
+    packageVersion: string;
+    comparatorVersion?: number;
+    baseline: Record<string, unknown>;
+  };
+  const stampOf = (call: Row) =>
+    (call.metadata as { marketSource: Stamp }).marketSource;
+
+  it("a body the owner set to the catalog's is SAME, not owner-owned (facecam-edit)", async () => {
+    state.skillRows = [
+      skillRow({
+        slug: "facecam-edit",
+        version: "h-1",
+        baseline: { body: "installed body" },
+        live: { body: "catalog body" },
+      }),
+    ];
+    catalogSkill("h-2", { body: "catalog body" });
+
+    const { reconcileStandaloneConfigsToTemplates } =
+      await import("./reconcile-standalone-configs-to-templates.js");
+    const report = await reconcileStandaloneConfigsToTemplates({});
+
+    expect(report.ownerOwnedSkipped).toEqual([]);
+    expect(report.updated).toEqual([]);
+    expect(report.skipped).toHaveLength(1);
+    expect(report.skipped[0]!.reason).toContain("up to date");
+    // One metadata-only write: no field is rewritten, the baseline catches up
+    // and the version is stamped.
+    expect(skillUpdate).toHaveBeenCalledTimes(1);
+    const call = state.updateCalls[0]!;
+    expect(call).not.toHaveProperty("body");
+    expect(stampOf(call).baseline).toEqual({ body: "catalog body" });
+    expect(stampOf(call).packageVersion).toBe("h-2");
+  });
+
+  it("stamps the catalog version on a row already equal to it (video-toolbox)", async () => {
+    // Every managed field already equals the catalog, only the version stamp
+    // is old: the list said "content changed" and the apply "no drift", forever.
+    state.skillRows = [
+      skillRow({
+        slug: "video-toolbox",
+        version: "h-old",
+        baseline: { body: "b", description: "d" },
+        live: { body: "b", description: "d" },
+      }),
+    ];
+    catalogSkill("h-7b0c46", { body: "b", description: "d" });
+
+    const { reconcileStandaloneConfigsToTemplates } =
+      await import("./reconcile-standalone-configs-to-templates.js");
+    const report = await reconcileStandaloneConfigsToTemplates({});
+
+    expect(skillUpdate).toHaveBeenCalledTimes(1);
+    const stamp = stampOf(state.updateCalls[0]!);
+    expect(stamp.packageVersion).toBe("h-7b0c46");
+    expect(stamp.comparatorVersion).toBe(1);
+    expect(report.skipped[0]!.reason).toContain("up to date");
+    expect(report.skipped[0]!.reason).toContain("h-7b0c46");
+  });
+
+  it("a dry run reports the stamp it would write and writes nothing", async () => {
+    state.skillRows = [
+      skillRow({
+        slug: "video-toolbox",
+        version: "h-old",
+        baseline: { body: "b" },
+        live: { body: "b" },
+      }),
+    ];
+    catalogSkill("h-7b0c46", { body: "b" });
+
+    const { reconcileStandaloneConfigsToTemplates } =
+      await import("./reconcile-standalone-configs-to-templates.js");
+    const report = await reconcileStandaloneConfigsToTemplates({
+      dryRun: true,
+    });
+
+    expect(skillUpdate).not.toHaveBeenCalled();
+    expect(report.skipped[0]!.reason).toContain(
+      "would record version h-7b0c46"
+    );
+  });
+
+  it("writes nothing once the stamp and baseline are current", async () => {
+    state.skillRows = [
+      skillRow({
+        slug: "video-toolbox",
+        version: "h-7b0c46",
+        baseline: { body: "b" },
+        live: { body: "b" },
+      }),
+    ];
+    catalogSkill("h-7b0c46", { body: "b" });
+
+    const { reconcileStandaloneConfigsToTemplates } =
+      await import("./reconcile-standalone-configs-to-templates.js");
+    const report = await reconcileStandaloneConfigsToTemplates({});
+
+    expect(skillUpdate).not.toHaveBeenCalled();
+    expect(report.skipped[0]!.reason).toBe("up to date (no drift)");
+  });
+
+  it("says which kept fields the catalog changed too and which are yours only", async () => {
+    state.skillRows = [
+      skillRow({
+        slug: "content-taste",
+        version: "h-1",
+        baseline: { body: "v1", description: "same upstream" },
+        live: { body: "mine", description: "my words" },
+      }),
+    ];
+    catalogSkill("h-2", { body: "v2", description: "same upstream" });
+
+    const { reconcileStandaloneConfigsToTemplates } =
+      await import("./reconcile-standalone-configs-to-templates.js");
+    const report = await reconcileStandaloneConfigsToTemplates({
+      dryRun: true,
+    });
+
+    expect(report.ownerOwnedSkipped).toHaveLength(1);
+    const reason = report.ownerOwnedSkipped[0]!.reason;
+    expect(reason).toContain(
+      "conflicted (the catalog changed them too): [body]"
+    );
+    expect(reason).toContain("yours only: [description]");
+  });
+
+  it("an edit of yours alone still earns the stamp; a conflict keeps the old version", async () => {
+    state.skillRows = [
+      skillRow({
+        slug: "designing-with-real-components",
+        version: "h-1",
+        baseline: { body: "v1", description: "upstream" },
+        live: { body: "v1", description: "my words" },
+      }),
+    ];
+    catalogSkill("h-2", { body: "v1", description: "upstream" });
+
+    const { reconcileStandaloneConfigsToTemplates } =
+      await import("./reconcile-standalone-configs-to-templates.js");
+    await reconcileStandaloneConfigsToTemplates({});
+
+    expect(skillUpdate).toHaveBeenCalledTimes(1);
+    const call = state.updateCalls[0]!;
+    expect(call).not.toHaveProperty("description"); // the owner's words stay
+    expect(stampOf(call).packageVersion).toBe("h-2");
+    expect(stampOf(call).baseline).toEqual({
+      body: "v1",
+      description: "upstream",
+    });
+
+    // The same row once the catalog changes the owner's field too: conflicted,
+    // nothing written, the version stays where it was.
+    vi.clearAllMocks();
+    state.updateCalls.length = 0;
+    catalogSkill("h-3", { body: "v1", description: "upstream v3" });
+    const report = await reconcileStandaloneConfigsToTemplates({});
+    expect(skillUpdate).not.toHaveBeenCalled();
+    expect(report.ownerOwnedSkipped[0]!.reason).toContain(
+      "conflicted (the catalog changed them too): [description]"
+    );
+  });
+
+  it("naming packages reconciles only the rows installed from them", async () => {
+    state.viewRows = [
+      {
+        id: "v-named",
+        name: "Board",
+        userId: "u1",
+        workspaceId: "w1",
+        config: { color: "blue" },
+        metadata: { marketSource: marketSource({ config: { color: "blue" } }) },
+      },
+      {
+        id: "v-other",
+        name: "Board",
+        userId: "u1",
+        workspaceId: "w1",
+        config: { color: "blue" },
+        metadata: {
+          marketSource: {
+            ...marketSource({ config: { color: "blue" } }),
+            packageSlug: "other-views",
+          },
+        },
+      },
+    ];
+    lookupCatalogEntry.mockResolvedValue({
+      source: "https://cp.example",
+      version: "1.1.0",
+      definition: { views: [{ name: "Board", config: { color: "red" } }] },
+    });
+
+    const { reconcileStandaloneConfigsToTemplates } =
+      await import("./reconcile-standalone-configs-to-templates.js");
+    const report = await reconcileStandaloneConfigsToTemplates({
+      packageSlugs: ["task-views"],
+    });
+
+    expect(report.checked).toBe(1);
+    expect(lookupCatalogEntry).toHaveBeenCalledTimes(1);
+    expect(lookupCatalogEntry).toHaveBeenCalledWith("view", "task-views");
+    expect(viewUpdate).toHaveBeenCalledTimes(1);
+    expect(state.updateCalls[0]!.id).toBe("v-named");
+
+    vi.clearAllMocks();
+    const none = await reconcileStandaloneConfigsToTemplates({
+      packageSlugs: [],
+    });
+    expect(none.checked).toBe(0);
+    expect(lookupCatalogEntry).not.toHaveBeenCalled();
   });
 });

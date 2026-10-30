@@ -238,13 +238,36 @@ describe("the kind floor — live spaces, inside the request's grant", () => {
     expect(grantedWorkspaceIdsOf(undefined)).toBeNull();
     expect(
       grantedWorkspaceIdsOf({
-        scopes: [{ workspaceIds: [CONTENT] }, { workspaceIds: null }],
+        scopes: [
+          { permissions: ["entity.read"], workspaceIds: [CONTENT] },
+          { permissions: ["entity.read"], workspaceIds: null },
+        ],
       })
     ).toBeNull();
     expect([
       ...grantedWorkspaceIdsOf({
-        scopes: [{ workspaceIds: [CONTENT] }, { workspaceIds: [BUILDER] }],
+        scopes: [
+          { permissions: ["entity.read"], workspaceIds: [CONTENT] },
+          { permissions: ["entity.read"], workspaceIds: [BUILDER] },
+        ],
       })!,
     ]).toEqual([CONTENT, BUILDER]);
+  });
+
+  it("a pod-wide read of one kind (decision e1b59d38 B) does not lift the narrowing", () => {
+    expect([
+      ...grantedWorkspaceIdsOf({
+        scopes: [
+          { permissions: ["entity.read"], workspaceIds: [CONTENT] },
+          { permissions: ["entity.decision.read"], workspaceIds: null },
+        ],
+      })!,
+    ]).toEqual([CONTENT]);
+    // A grant of pod-wide reads ALONE keeps today's reading (not narrowed).
+    expect(
+      grantedWorkspaceIdsOf({
+        scopes: [{ permissions: ["entity.decision.read"], workspaceIds: null }],
+      })
+    ).toBeNull();
   });
 });

@@ -18,12 +18,14 @@ import {
   deriveNextMove,
   type NextMoveBlockers,
   type NextMoveCriteria,
+  type NextMoveHold,
   type NextMoveInbox,
   type PacketChildItem,
   type PacketOutputItem,
   type PacketProposalItem,
   type PacketSection,
   type PacketSlotItem,
+  type PacketWorkUnitItem,
 } from "../continuation-packet.js";
 
 const ok = <T>(items: T[]): PacketSection<T> => ({
@@ -103,6 +105,8 @@ function input(over: Partial<Parameters<typeof deriveNextMove>[0]> = {}) {
     children: ok<PacketChildItem>([]),
     inbox: { status: "ok", total: 0, waiting: null } as NextMoveInbox,
     criteria: graded("none", 0),
+    workUnits: ok<PacketWorkUnitItem>([]),
+    hold: { status: "ok", hold: null } as NextMoveHold,
     ...over,
   };
 }
@@ -611,6 +615,228 @@ describe("deriveNextMove — a message from another session (message_waiting)", 
         input({
           aiCanDo: ok([{ label: "Brief", kind: "document" } as PacketSlotItem]),
           inbox: down,
+        })
+      ).kind
+    ).toBe("agent_slot");
+  });
+});
+
+describe("deriveNextMove — a session's pull requests (dev-work plan P0.4)", () => {
+  const URL47 = "https://github.com/Synap-core/synap-cli/pull/47";
+  /** The PR outcome as the packet lists it: an open agent slot AND a work unit. */
+  const prSlot = {
+    label: "synap-cli#47",
+    kind: "pull_request",
+  } as PacketSlotItem;
+  const unit = (
+    prState?: PacketWorkUnitItem["prState"],
+    state: PacketWorkUnitItem["state"] = "open"
+  ): PacketWorkUnitItem => ({
+    key: "pr-synap-cli-47",
+    label: "synap-cli#47",
+    kind: "pull_request",
+    noun: "Pull request",
+    glyph: "⑂",
+    url: URL47,
+    state,
+    ...(prState ? { prState } : {}),
+  });
+  const recorded = (
+    state: "open" | "merged" | "closed",
+    checks?: "passed" | "failed"
+  ): PacketWorkUnitItem["prState"] => ({
+    status: "ok",
+    label: state,
+    state,
+    ...(checks ? { checks } : {}),
+    at: "2026-10-30T10:00:00.000Z",
+  });
+  const withPr = (
+    prState?: PacketWorkUnitItem["prState"],
+    over: Partial<Parameters<typeof deriveNextMove>[0]> = {}
+  ) =>
+    input({
+      aiCanDo: ok([prSlot]),
+      expectedOutputs: [{ ...prSlot } as ExpectedOutput],
+      workUnits: ok([unit(prState)]),
+      ...over,
+    });
+
+  it("an open GREEN PR is landed by the person, never 'produced' (c04bca72)", () => {
+    const move = deriveNextMove(withPr(recorded("open", "passed")));
+    expect(move).toMatchObject({
+      kind: "pull_request",
+      actor: "user",
+      reasonCode: "ready_to_land",
+      url: URL47,
+    });
+    expect(move.label).not.toMatch(/^Produce/);
+  });
+
+  it("an open RED PR is the AI's to fix, ahead of its other deliverables", () => {
+    const move = deriveNextMove(
+      withPr(recorded("open", "failed"), {
+        aiCanDo: ok([
+          { label: "Docs", kind: "document" } as PacketSlotItem,
+          prSlot,
+        ]),
+      })
+    );
+    expect(move).toMatchObject({
+      kind: "pull_request",
+      actor: "ai",
+      reasonCode: "checks_failed",
+    });
+  });
+
+  it("the agent's own other work goes before a green PR waits on the person", () => {
+    const move = deriveNextMove(
+      withPr(recorded("open", "passed"), {
+        aiCanDo: ok([
+          prSlot,
+          { label: "Docs", kind: "document" } as PacketSlotItem,
+        ]),
+      })
+    );
+    expect(move).toMatchObject({ kind: "agent_slot", label: 'Produce "Docs"' });
+  });
+
+  it("an open PR with no check result waits on CI, nobody acts", () => {
+    expect(deriveNextMove(withPr(recorded("open")))).toMatchObject({
+      kind: "pull_request",
+      actor: "none",
+      reasonCode: "checks_pending",
+    });
+  });
+
+  it("a MERGED PR whose outcome is still open is recorded by the AI; on a closed session, nothing", () => {
+    expect(deriveNextMove(withPr(recorded("merged", "passed")))).toMatchObject({
+      kind: "pull_request",
+      actor: "ai",
+      reasonCode: "merged",
+    });
+    expect(deriveNextMove(withPr(recorded("closed")))).toMatchObject({
+      reasonCode: "closed",
+    });
+    expect(
+      deriveNextMove(withPr(recorded("merged", "passed"), { status: "closed" }))
+        .kind
+    ).toBe("none");
+  });
+
+  it("a CLOSED session's open PR, red, green or pending, is no move: nothing", () => {
+    for (const prState of [
+      recorded("open", "failed"),
+      recorded("open", "passed"),
+      recorded("open"),
+      { status: "unavailable", reason: "down" } as const,
+    ]) {
+      expect(
+        deriveNextMove(withPr(prState, { status: "closed", aiCanDo: ok([]) }))
+      ).toMatchObject({ kind: "none", actor: "none" });
+    }
+  });
+
+  it("a CLAIMED PR outcome still open on GitHub is landed, never 'ready to close'", () => {
+    expect(
+      deriveNextMove(
+        input({
+          expectedOutputs: [{ ...prSlot, claimedDone: true } as ExpectedOutput],
+          workUnits: ok([unit(recorded("open", "passed"), "claimed")]),
+        })
+      )
+    ).toMatchObject({ kind: "pull_request", reasonCode: "ready_to_land" });
+  });
+
+  it("a PR the pod recorded nothing about keeps today's move; an unreadable one is unknown", () => {
+    expect(deriveNextMove(withPr(undefined))).toMatchObject({
+      kind: "agent_slot",
+      label: 'Produce "synap-cli#47"',
+    });
+    expect(
+      deriveNextMove(withPr({ status: "unavailable", reason: "events down" }))
+        .kind
+    ).toBe("unknown");
+  });
+
+  it("what the person must do still comes first", () => {
+    expect(
+      deriveNextMove(
+        withPr(recorded("open", "failed"), {
+          owedSlots: ok([{ label: "Key", kind: "secret" } as PacketSlotItem]),
+        })
+      ).kind
+    ).toBe("owed_slot");
+  });
+});
+
+describe("deriveNextMove — a paused session's hold (dev-work plan P0.4)", () => {
+  const held = (hold: Record<string, unknown>): NextMoveHold => ({
+    status: "ok",
+    hold: {
+      resumeTo: "active",
+      since: "2026-10-30T10:00:00.000Z",
+      ...hold,
+    } as NonNullable<Extract<NextMoveHold, { status: "ok" }>["hold"]>,
+  });
+  const paused = (hold: NextMoveHold) =>
+    input({
+      status: "paused",
+      hold,
+      aiCanDo: ok([{ label: "Brief", kind: "document" } as PacketSlotItem]),
+    });
+
+  it("a hold with a date: paused until then, nobody acts — not 'Produce'", () => {
+    const move = deriveNextMove(
+      paused(held({ on: "date", until: { date: "2026-11-10T00:00:00.000Z" } }))
+    );
+    expect(move).toMatchObject({
+      kind: "waiting_on_hold",
+      actor: "none",
+      label: "Paused until 2026-11-10",
+    });
+    expect(move.reason).toMatch(/resumes on its own on 2026-11-10/);
+  });
+
+  it("a hold on a session names it and opens it", () => {
+    const S = "11111111-2222-4333-8444-555555555555";
+    expect(
+      deriveNextMove(
+        paused(
+          held({
+            on: "thing",
+            reason: "Lane A lands",
+            until: { moves: `focus_session:${S}`, to: "done" },
+          })
+        )
+      )
+    ).toMatchObject({
+      kind: "waiting_on_hold",
+      label: "Waiting on Lane A lands",
+      sessionId: S,
+    });
+  });
+
+  it("a park on nobody reads Paused; an unreadable hold is unknown; no hold keeps the old rule", () => {
+    expect(
+      deriveNextMove(
+        paused(held({ on: "nobody", reviewBy: "2026-11-13T00:00:00.000Z" }))
+      )
+    ).toMatchObject({ kind: "waiting_on_hold", label: "Paused" });
+    expect(
+      deriveNextMove(paused({ status: "unavailable", reason: "log down" })).kind
+    ).toBe("unknown");
+    expect(deriveNextMove(paused({ status: "ok", hold: null })).kind).toBe(
+      "agent_slot"
+    );
+  });
+
+  it("an ACTIVE session never reads a hold (only a pause has one)", () => {
+    expect(
+      deriveNextMove(
+        input({
+          hold: { status: "unavailable", reason: "never read" },
+          aiCanDo: ok([{ label: "Brief", kind: "document" } as PacketSlotItem]),
         })
       ).kind
     ).toBe("agent_slot");

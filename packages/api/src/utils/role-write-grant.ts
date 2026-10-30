@@ -53,6 +53,7 @@ import {
 import {
   entities,
   entityFacets,
+  isPodWideReadScope,
   profiles,
   profileWorkspaceAccess,
 } from "@synap/database/schema";
@@ -153,13 +154,21 @@ export async function roleWriteGrantSpace(
  * of them, or a shared row they read (`sharedRoleRowsInSpacesWhere`). Outside
  * it the row is not found, as an attach onto a record the key cannot read is,
  * never a refusal that names another space. No grant, or a scope not limited
- * to spaces: every row the person's floor finds.
+ * to spaces: every row the person's floor finds. A pod-wide READ scope
+ * (`isPodWideReadScope`, decision e1b59d38 "B") writes nothing, so it does
+ * not count as one.
  */
 export async function roleRowInKeyReach(
   facetId: string,
   grant: KeyGrant | undefined = getRequestGrant()
 ): Promise<boolean> {
-  if (!grant || grant.scopes.some((scope) => !scope.workspaceIds)) return true;
+  if (
+    !grant ||
+    grant.scopes.some(
+      (scope) => !scope.workspaceIds && !isPodWideReadScope(scope)
+    )
+  )
+    return true;
   const spaces = keySpaces(grant);
   if (spaces.length === 0) return false;
   const [row] = await db

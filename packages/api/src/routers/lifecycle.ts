@@ -11,6 +11,13 @@
  *                     surface should default to (W17: a list below ~10 live
  *                     things or with no worker).
  *
+ *   lifecycle.statusOf — WHERE DOES IT STAND for up to 10 ids (things, goals,
+ *                     sessions, runs): status, category, since, what it waits
+ *                     on (with refs), the current hold, and for a session
+ *                     `live` + `nextMove`. The screens' door to the SAME read
+ *                     orient's `statusOf` serves on MCP and Hub REST
+ *                     (`services/status/status-read.ts`, `readStatusOf`).
+ *
  * Grouping is THE ONE status grouping (`services/lifecycle/status-groups.ts`, shared with
  * `entities.groupByFacetStatus`); visibility is the access layer's (entity
  * floor + facet lens + project narrow). A failed read throws — never `[]`.
@@ -44,6 +51,7 @@ import { listEnabledWorkers } from "../services/playbooks/workers.js";
 import { loadWorkedBy } from "../services/lifecycle/worked-by.js";
 import { loadCardFaces } from "../services/lifecycle/card-face.js";
 import { rosterReadFor } from "../access/session-visibility.js";
+import { readStatusOf, statusOfInput } from "../services/status/status-read.js";
 import {
   countStuckThings,
   countTerminalEntriesByBucket,
@@ -410,6 +418,10 @@ const throughputWire = z.object({
 export type LifecycleThroughputWire = z.infer<typeof throughputWire>;
 
 export const lifecycleRouter = router({
+  statusOf: podProcedure
+    .input(z.object({ ids: statusOfInput.unwrap().min(1) }))
+    .query(({ input, ctx }) => readStatusOf(ctx.userId, input.ids)),
+
   get: podProcedure
     .input(
       z.object({

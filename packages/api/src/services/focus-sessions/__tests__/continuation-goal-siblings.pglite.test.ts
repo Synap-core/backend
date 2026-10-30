@@ -77,6 +77,9 @@ import {
   projectTracks,
   projectMembers,
   messages,
+  chatTurns,
+  events,
+  lifecycleTransitionOutbox,
   workspaces,
   workspaceMembers,
   podMembers,
@@ -189,6 +192,11 @@ beforeAll(async () => {
     podMembers,
     sessionEvaluations,
     trackParticipants,
+    // The waiting-on collector reads owed slots through the needs-you lens
+    // (a session's agent activity) and the current hold of each run.
+    chatTurns,
+    events,
+    lifecycleTransitionOutbox,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
