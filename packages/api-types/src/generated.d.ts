@@ -3,6 +3,14 @@
 import { Column, SQL } from 'drizzle-orm';
 import { z } from 'zod';
 
+declare const LIFECYCLE_CATEGORIES: readonly [
+	"open",
+	"active",
+	"paused",
+	"done",
+	"lost"
+];
+export type LifecycleCategory = (typeof LIFECYCLE_CATEGORIES)[number];
 declare const UNIT_STATES: readonly [
 	"not_started",
 	"working",
@@ -16,17 +24,17 @@ declare const UNIT_STATES: readonly [
 	"failed"
 ];
 export type UnitState = (typeof UNIT_STATES)[number];
-/**
- * A palette token NAME. Every one of these already exists in Relay's theme
- * (`relay-theme.ts`) and in the browser's `--synap-*` set; this list may not
- * grow without a token existing on BOTH surfaces first.
- *
- * `warning` is a heads-up — "you need to act, nothing broke yet" (a sign-in
- * that expired, a connection asking for access). It joined once both palettes
- * carried it (`--synap-tone-warning-fill|ink`, relay `warning` / `warningInk`);
- * no unit-of-work state wears it, `resolveUnitState` never returns it.
- */
-export type UnitTone = "ai" | "error" | "info" | "primary" | "success" | "textMuted" | "textSecondary" | "warning";
+declare const UNIT_TONES: readonly [
+	"primary",
+	"ai",
+	"info",
+	"error",
+	"success",
+	"warning",
+	"textSecondary",
+	"textMuted"
+];
+export type UnitTone = (typeof UNIT_TONES)[number];
 /** Which mark the state wears. Surfaces map these to their own icon set. */
 export type UnitGlyph = "alert" | "check" | "clock" | "dashed-circle" | "globe" | "link" | "lock" | "pause" | "person" | "question" | "scales" | "spark" | "users";
 /**
@@ -5917,14 +5925,6 @@ export interface PlaybookRunExternalAgent {
 	};
 	startedAt: string;
 }
-declare const LIFECYCLE_CATEGORIES: readonly [
-	"open",
-	"active",
-	"paused",
-	"done",
-	"lost"
-];
-export type LifecycleCategory = (typeof LIFECYCLE_CATEGORIES)[number];
 declare const HOLD_ON: readonly [
 	"person",
 	"agent",
