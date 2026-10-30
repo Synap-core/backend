@@ -23228,6 +23228,178 @@ export interface MarketplacePreflight extends MarketInstallSummary {
 		network: boolean;
 	};
 }
+declare const PACKAGE_FIELD_STATES: readonly [
+	"updates",
+	"yours",
+	"both",
+	"same"
+];
+export type PackageFieldState = (typeof PACKAGE_FIELD_STATES)[number];
+declare const PACKAGE_UPDATE_NEEDS: readonly [
+	"consent",
+	"choice",
+	"review",
+	"nothing"
+];
+export type PackageUpdateNeeds = (typeof PACKAGE_UPDATE_NEEDS)[number];
+/** How many fields of a package are in each state. */
+export type PackageFieldCounts = Record<PackageFieldState, number>;
+/** The kinds of installed row a plan compares today. */
+export type PackageUpdateRowKind = "automation" | "skill" | "view";
+/** One row of `GET /package-updates` / `packageUpdates.list`. */
+export interface PackageUpdateSummary {
+	slug: string;
+	/** The catalog kind of the package (`skill`, `view`, `automation`). */
+	kind: string;
+	name: string;
+	/** The version the pod's rows last converged to; null when never recorded. */
+	installedVersion: string | null;
+	latestVersion: string | null;
+	counts: PackageFieldCounts;
+	/** Records the update would change (space updates only; 0 otherwise). */
+	dataChanges: number;
+	needs: PackageUpdateNeeds;
+	/** The pod path that opens the review page (`/open/update/<slug>`). */
+	reviewUrl: string;
+}
+/**
+ * `GET /package-updates` / `packageUpdates.list`: every installed package
+ * whose catalog version moved, and every one whose catalog could not be read
+ * (named with the reason, never folded into "nothing waiting").
+ */
+export interface PackageUpdateList {
+	updates: PackageUpdateSummary[];
+	unreadable: Array<{
+		kind: string;
+		name: string;
+		reason: string;
+		slug: string;
+	}>;
+}
+/** One pending change to existing records a space update would run. */
+export interface PackageDataChange {
+	/** The op key `acceptDataChanges` names. */
+	id: string;
+	/** One plain sentence. */
+	sentence: string;
+	/** How many records it changes; null when the count failed (never 0). */
+	affected: number | null;
+	/** Never run by an update: an operator step. */
+	destructive: boolean;
+}
+/** One compared field of one installed row. */
+export interface PackageUpdateField {
+	/** The row field name (`body`, `description`, `flowDefinition`, …). */
+	key: string;
+	/** Its words for a person (`resolvePackageFieldLabel`). */
+	label: string;
+	state: PackageFieldState;
+	/** The catalog's value when installed (or last decided). */
+	base: unknown;
+	/** The catalog's value now. */
+	desired: unknown;
+	/** The pod's value now. */
+	live: unknown;
+	/**
+	 * `both` text fields only: the line-level 3-way merge of the two edits, or
+	 * null when they overlap (D2: "Combine both" is offered only without an
+	 * overlap). Absent for every other field.
+	 */
+	merged?: string | null;
+	/** `both` text fields only: the two edits touch the same lines. */
+	overlap?: boolean;
+}
+/** `GET /package-updates/:slug` / `packageUpdates.get`. */
+export interface PackageUpdatePlan {
+	slug: string;
+	kind: string;
+	name: string;
+	installedVersion: string | null;
+	latestVersion: string | null;
+	/** The catalog's change notes since the installed version, when it has any. */
+	notes?: string[];
+	rows: Array<{
+		fields: PackageUpdateField[];
+		name: string;
+		rowId: string;
+		rowKind: PackageUpdateRowKind;
+	}>;
+	/**
+	 * A space update's changes to existing records (the conversion engine's
+	 * pending ops, as `/packages/preflight` reports them). The person agrees by
+	 * sending each consentable item's `id` in `acceptDataChanges`. A
+	 * `destructive` item is never run by an update: it is an operator step on
+	 * pod admin (`needsPodAdmin`).
+	 */
+	dataChanges?: {
+		count: number;
+		items: PackageDataChange[];
+		needsPodAdmin: boolean;
+	};
+	/**
+	 * The choice the pod recommends per `both` field, keyed `<rowId>:<field>`:
+	 * `catalog` when the pod's edit is already inside the catalog's text,
+	 * `combine` when the two edits merge without overlapping. Absent = no
+	 * recommendation; a person decides.
+	 */
+	recommended?: Record<string, PackageUpdateChoiceName>;
+	counts: PackageFieldCounts;
+	needs: PackageUpdateNeeds;
+}
+declare const PACKAGE_UPDATE_CHOICE_NAMES: readonly [
+	"catalog",
+	"mine",
+	"combine"
+];
+export type PackageUpdateChoiceName = (typeof PACKAGE_UPDATE_CHOICE_NAMES)[number];
+/** One field an apply (or an undo) changed. */
+export interface PackageUpdateChange {
+	rowKind: PackageUpdateRowKind;
+	rowId: string;
+	field: string;
+	before: unknown;
+	after: unknown;
+}
+/**
+ * The receipt of one package update — kept in the pod's event log as a
+ * `package.updated` event. `source: 'automatic'` is the start-up pass applying
+ * fields nobody edited (D3); `person` is an apply from a door.
+ */
+export interface PackageUpdateReceipt {
+	id: string;
+	slug: string;
+	kind: string;
+	name: string;
+	fromVersion: string | null;
+	toVersion: string | null;
+	appliedAt: string;
+	source: "automatic" | "person";
+	changes: PackageUpdateChange[];
+	/** Undo refuses after this instant (D5: 30 days). */
+	undoUntil: string;
+	/** When it was undone, or null. */
+	undoneAt: string | null;
+}
+/**
+ * The answer of an apply or an undo. A person's write lands and returns its
+ * receipt; an agent's write is filed as proposals through each row's own
+ * governed `.update` door, and lands only when a person approves them.
+ */
+export type PackageUpdateApplyResult = {
+	receipt: PackageUpdateReceipt | null;
+	status: "applied";
+} | {
+	proposalIds: string[];
+	status: "proposed";
+};
+export type StandaloneKind = "automation" | "skill" | "view";
+export interface DetachResult {
+	detached: boolean;
+	kind: StandaloneKind;
+	id: string;
+	outcome?: "proposed" | "updated";
+	reason?: string;
+}
 /**
  * Core API Router
  */
@@ -40711,6 +40883,82 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: LandedObjectsPage;
+		}>;
+	}>>;
+	packageUpdates: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
+				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		applyUpdate: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				acceptDataChanges?: string[] | undefined;
+				choices?: Record<string, "catalog" | "combine" | "mine" | {
+					value: unknown;
+				}> | undefined;
+				expectedVersion: string;
+				slug: string;
+			};
+			meta: object;
+			output: PackageUpdateApplyResult;
+		}>;
+		detach: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				kind: "automation" | "skill" | "view";
+			};
+			meta: object;
+			output: DetachResult;
+		}>;
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				slug: string;
+			};
+			meta: object;
+			output: PackageUpdatePlan;
+		}>;
+		history: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				limit?: number | undefined;
+				slug?: string | undefined;
+			} | undefined;
+			meta: object;
+			output: PackageUpdateReceipt[];
+		}>;
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: PackageUpdateList;
+		}>;
+		undo: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				receiptId: string;
+			};
+			meta: object;
+			output: PackageUpdateApplyResult;
 		}>;
 	}>>;
 	places: import("@trpc/server").TRPCBuiltRouter<{
