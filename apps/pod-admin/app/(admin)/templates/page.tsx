@@ -28,8 +28,14 @@ import {
 } from "../components/resource-row";
 import { SectionCard } from "../components/section-card";
 import { useFocusRow } from "../components/use-focus-row";
+import { filterBySearch } from "../components/list-search";
+import { ListSearch, useDebouncedQuery } from "../components/list-search-box";
+import { useT } from "../../../lib/i18n/locale-provider";
+import { en, fr } from "../components/copy";
 import { useDrainPages } from "../../../lib/use-drain-pages";
 import { flowHealthPill, flowHealthSentence } from "../runs/_lib/run-board";
+
+const CATALOGS = { en, fr };
 
 const TITLE = "Templates";
 const DESCRIPTION =
@@ -47,6 +53,8 @@ export default function TemplatesPage() {
 
 function TemplatesInner() {
   const router = useRouter();
+  const t = useT(CATALOGS);
+  const search = useDebouncedQuery();
   const list = trpc.playbooks.listAllPage.useInfiniteQuery(
     { limit: 50 },
     {
@@ -93,6 +101,15 @@ function TemplatesInner() {
       id ? (byId.get(id) ?? "A space") : "All spaces";
   }, [spaces.data]);
 
+  const shownRows = useMemo(
+    () =>
+      filterBySearch(rows, search.query, (p) => [
+        p.name,
+        spaceName(p.workspaceId),
+      ]),
+    [rows, search.query, spaceName]
+  );
+
   const loading = list.isLoading || isAuthRedirecting;
   useFocusRow({ ready: !loading });
 
@@ -123,35 +140,53 @@ function TemplatesInner() {
         ) : rows.length === 0 ? (
           <ResourceRowEmpty message="No templates yet. Templates are made in the Synap app, or saved from a session that went well." />
         ) : (
-          <div className="-mx-2 divide-y divide-foreground/[0.05]">
-            {rows.map((p) => {
-              const g = groupById.get(p.id);
-              const secondary = [
-                spaceName(p.workspaceId),
-                g
-                  ? `${flowHealthSentence({ ...g, flowType: "playbook" })} · last ran ${formatRelative(g.latestStartedAt)}`
-                  : "Never ran",
-              ].join(" · ");
-              return (
-                <div
-                  key={p.id}
-                  data-row-id={p.id}
-                  className="rounded-md transition-shadow"
-                >
-                  <ResourceRow
-                    Icon={BookOpen}
-                    primary={p.name}
-                    secondary={secondary}
-                    status={flowHealthPill(p.status, g)}
-                    onSelect={() =>
-                      router.push(`/templates/${encodeURIComponent(p.id)}`)
-                    }
-                    wrap
-                  />
-                </div>
-              );
-            })}
-          </div>
+          <>
+            <ListSearch
+              value={search.input}
+              onChange={search.setInput}
+              label={t("listSearch.templates")}
+            />
+            {list.hasNextPage && search.query && (
+              <p className="mb-2 text-[12px] text-foreground/65">
+                {t("listSearch.partial.templates", { n: rows.length })}
+              </p>
+            )}
+            {shownRows.length === 0 ? (
+              <ResourceRowEmpty
+                message={t("listSearch.none", { query: search.query })}
+              />
+            ) : (
+              <div className="-mx-2 divide-y divide-foreground/[0.05]">
+                {shownRows.map((p) => {
+                  const g = groupById.get(p.id);
+                  const secondary = [
+                    spaceName(p.workspaceId),
+                    g
+                      ? `${flowHealthSentence({ ...g, flowType: "playbook" })} · last ran ${formatRelative(g.latestStartedAt)}`
+                      : "Never ran",
+                  ].join(" · ");
+                  return (
+                    <div
+                      key={p.id}
+                      data-row-id={p.id}
+                      className="rounded-md transition-shadow"
+                    >
+                      <ResourceRow
+                        Icon={BookOpen}
+                        primary={p.name}
+                        secondary={secondary}
+                        status={flowHealthPill(p.status, g)}
+                        onSelect={() =>
+                          router.push(`/templates/${encodeURIComponent(p.id)}`)
+                        }
+                        wrap
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
         )}
         {list.hasNextPage && (
           <div className="px-1 pt-3">
