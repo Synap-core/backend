@@ -14,12 +14,21 @@ import {
   ResourceRowSkeleton,
 } from "../../components/resource-row";
 import { SectionCard } from "../../components/section-card";
+import { filterBySearch } from "../../components/list-search";
+import {
+  ListSearch,
+  useDebouncedQuery,
+} from "../../components/list-search-box";
+import { useT } from "../../../../lib/i18n/locale-provider";
+import { en, fr } from "../../components/copy";
 import {
   groupByPrimaryRole,
   MEMBER_ROLES,
   rolePillKind,
   type PodMember,
 } from "./helpers";
+
+const CATALOGS = { en, fr };
 
 export function MembersByRoleSection({
   members,
@@ -32,7 +41,19 @@ export function MembersByRoleSection({
   isError: boolean;
   onOpenMember: (member: PodMember) => void;
 }) {
-  const grouped = useMemo(() => groupByPrimaryRole(members), [members]);
+  const t = useT(CATALOGS);
+  const search = useDebouncedQuery();
+  const found = useMemo(
+    () =>
+      filterBySearch(members, search.query, (m) => [
+        m.name,
+        m.email,
+        m.primaryRole,
+        ...m.workspaces.map((w) => w.name),
+      ]),
+    [members, search.query]
+  );
+  const grouped = useMemo(() => groupByPrimaryRole(found), [found]);
 
   return (
     <SectionCard
@@ -54,6 +75,16 @@ export function MembersByRoleSection({
         <ResourceRowEmpty message="No workspace members yet." />
       ) : (
         <div className="flex flex-col gap-3">
+          <ListSearch
+            value={search.input}
+            onChange={search.setInput}
+            label={t("listSearch.members")}
+          />
+          {found.length === 0 && (
+            <ResourceRowEmpty
+              message={t("listSearch.none", { query: search.query })}
+            />
+          )}
           {MEMBER_ROLES.map((role) => {
             const bucket = grouped[role];
             if (!bucket || bucket.length === 0) return null;

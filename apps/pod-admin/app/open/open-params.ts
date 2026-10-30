@@ -111,6 +111,23 @@ export function parseOpenParams(type: string, id: string): ParsedOpen {
   return { status: "not-found", type: kind || type, id: rawId };
 }
 
+/**
+ * Where `/open/:type/:id` goes instead of drawing a card, or `null` to draw
+ * it. A proposal has its review page; a space has its console page, which only
+ * a pod admin may open (a member keeps the bounce card).
+ */
+export function openRedirect(
+  parsed: ParsedOpen,
+  viewerIsPodAdmin: boolean
+): string | null {
+  if (parsed.status !== "bounce") return null;
+  if (parsed.type === "proposal") return `/proposal/${parsed.id}`;
+  if (parsed.type === "workspace" && viewerIsPodAdmin) {
+    return `/workspaces/${encodeURIComponent(parsed.id)}`;
+  }
+  return null;
+}
+
 export function openDocumentTitle(parsed: ParsedOpen): string {
   switch (parsed.status) {
     case "host":

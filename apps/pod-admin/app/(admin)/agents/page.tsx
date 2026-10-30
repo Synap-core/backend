@@ -9,8 +9,8 @@
  * refuse standing). Both reads are floored to the viewer (D1a): agents in
  * workspaces the viewer cannot see are not listed, and standings exist only
  * for agents the viewer owns (a pod admin opens any agent's scorecard from
- * its drawer). Each row is identity + one sentence + at most
- * one action; detail opens in a drawer.
+ * its page). Each row is identity + one sentence + at most
+ * one action; detail opens the agent's page.
  *
  * Pending keys and connect requests are NOT approved here — the row's one
  * action goes to Review, the one attention door. `?focus=<agentUserId>` (⌘K)
@@ -20,7 +20,9 @@
 import { Button } from "@heroui/react";
 import { ArrowRight, Bot } from "lucide-react";
 import Link from "next/link";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useMemo } from "react";
+import { openIn } from "../../../lib/open-in";
 import { navHref } from "../../../lib/console-nav";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
@@ -34,8 +36,10 @@ import {
 } from "../components/resource-row";
 import { SectionCard } from "../components/section-card";
 import { useFocusRow } from "../components/use-focus-row";
+import { filterBySearch } from "../components/list-search";
+import { ListSearch, useDebouncedQuery } from "../components/list-search-box";
+import { en as shellEn, fr as shellFr } from "../components/copy";
 import { useAgentPeople } from "../../_lib/object/views/agent-object";
-import { AgentDrawer } from "./_lib/agent-drawer";
 import {
   agentReviewHref,
   buildAgentRoster,
@@ -47,6 +51,7 @@ import { useT } from "../../../lib/i18n/locale-provider";
 import { en, fr } from "./_lib/copy";
 
 const CATALOGS = { en, fr };
+const SEARCH_CATALOGS = { en: shellEn, fr: shellFr };
 
 /** Where every waiting access request is decided. */
 const ACCESS_REVIEW_HREF = navHref("review", { type: "access" });
@@ -61,6 +66,8 @@ export default function AgentsPage() {
 
 function AgentsInner() {
   const t = useT(CATALOGS);
+  const ts = useT(SEARCH_CATALOGS);
+  const search = useDebouncedQuery();
   // Computers have their own page (Computers); their agents stay here.
   const list = trpc.agentUsers.list.useQuery(
     { includeComputers: false },
@@ -71,7 +78,7 @@ function AgentsInner() {
   const standings = trpc.diagnose.agents.useQuery(undefined, {
     staleTime: 60_000,
   });
-  const { viewerId, ownerName } = useAgentPeople();
+  const { viewerId } = useAgentPeople();
 
   useEffect(() => {
     if (list.isError) redirectToLoginIfUnauthorized(list.error);
@@ -88,11 +95,23 @@ function AgentsInner() {
     [list.data, standings.data, viewerId]
   );
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const selected = roster.find((v) => v.row.id === selectedId) ?? null;
+  // A row opens the agent's page (`/open/agent/:id`): the same sections the
+  // drawer drew, with the same acts, at an address that can be shared.
+  const router = useRouter();
+  const openAgent = (id: string) =>
+    router.push(openIn({ kind: "object", objectKind: "agent", id }).href);
 
-  const connected = roster.filter((v) => v.direction === "external");
-  const podOwn = roster.filter((v) => v.direction === "house");
+  const found = useMemo(
+    () =>
+      filterBySearch(roster, search.query, (v) => [
+        v.row.name,
+        v.row.email,
+        v.sentence,
+      ]),
+    [roster, search.query]
+  );
+  const connected = found.filter((v) => v.direction === "external");
+  const podOwn = found.filter((v) => v.direction === "house");
   const waiting = roster.filter((v) => v.needsReview).length;
 
   const isLoading = list.isLoading || isAuthRedirecting;
@@ -105,6 +124,13 @@ function AgentsInner() {
       />
 
       <div className="flex flex-col gap-4">
+        {roster.length > 0 && (
+          <ListSearch
+            value={search.input}
+            onChange={search.setInput}
+            label={ts("listSearch.agents")}
+          />
+        )}
         {waiting > 0 && (
           <Link
             href={ACCESS_REVIEW_HREF}
@@ -142,15 +168,19 @@ function AgentsInner() {
           ) : connected.length === 0 ? (
             <ResourceRowEmpty
               message={
-                <>
-                  No agent has been connected yet. Run{" "}
-                  <code className="font-mono">npx @synap-core/cli init</code> on
-                  a computer to connect one.
-                </>
+                search.query ? (
+                  ts("listSearch.none", { query: search.query })
+                ) : (
+                  <>
+                    No agent has been connected yet. Run{" "}
+                    <code className="font-mono">npx @synap-core/cli init</code>{" "}
+                    on a computer to connect one.
+                  </>
+                )
               }
             />
           ) : (
-            <AgentRows views={connected} onSelect={setSelectedId} />
+            <AgentRows views={connected} onSelect={openAgent} />
           )}
         </SectionCard>
 
@@ -159,19 +189,10 @@ function AgentsInner() {
             title="The pod's own agents"
             hint="The twin, capture agents and Intelligence personas"
           >
-            <AgentRows views={podOwn} onSelect={setSelectedId} />
+            <AgentRows views={podOwn} onSelect={openAgent} />
           </SectionCard>
         )}
       </div>
-
-      <AgentDrawer
-        view={selected}
-        roster={roster}
-        viewerId={viewerId}
-        ownerName={ownerName}
-        isOpen={selected !== null}
-        onClose={() => setSelectedId(null)}
-      />
     </PageShell>
   );
 }

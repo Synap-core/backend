@@ -24,7 +24,11 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { podAdminRole } from "../../../../lib/kratos";
 import { OpenSurface } from "./OpenSurface";
-import { openDocumentTitle, parseOpenParams } from "../../open-params";
+import {
+  openDocumentTitle,
+  openRedirect,
+  parseOpenParams,
+} from "../../open-params";
 
 export const dynamic = "force-dynamic";
 
@@ -61,19 +65,19 @@ export default async function OpenPage({
   const { type, id } = await params;
   const { flowType } = await searchParams;
   const parsed = parseOpenParams(type, id);
-  // The review surface already lives at /proposal/:id — don't show a bounce
-  // card if a typed /open/proposal link lands here.
-  if (parsed.status === "bounce" && parsed.type === "proposal") {
-    redirect(`/proposal/${parsed.id}`);
-  }
-  // Same identity plumbing as /proposal: an object link arriving from an
-  // email or a CLI must say which pod it belongs to before it shows content.
   const h = await headers();
-  // An unanswered role question offers the member's page, never more.
+  // A role question only a space's page needs: it is pod-admin only, so a
+  // member keeps the bounce card (`openRedirect`).
   const viewerIsPodAdmin =
     parsed.status !== "not-found" &&
     ROLE_AWARE_KINDS.has(parsed.type) &&
     (await podAdminRole(h)) === "admin";
+  // The review surface lives at /proposal/:id, a space's page at
+  // /workspaces/:id: don't show a bounce card to the desktop app for either.
+  const to = openRedirect(parsed, viewerIsPodAdmin);
+  if (to) redirect(to);
+  // Same identity plumbing as /proposal: an object link arriving from an
+  // email or a CLI must say which pod it belongs to before it shows content.
   return (
     <OpenSurface
       parsed={parsed}

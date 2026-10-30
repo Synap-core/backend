@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { openDocumentTitle, parseOpenParams } from "./open-params";
+import {
+  openDocumentTitle,
+  openRedirect,
+  parseOpenParams,
+} from "./open-params";
 
 const UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 
@@ -85,5 +89,29 @@ describe("open helpers", () => {
     expect(openDocumentTitle(parseOpenParams("view", UUID))).toBe("View");
     expect(openDocumentTitle(parseOpenParams("automation", UUID))).toBe("Rule");
     expect(openDocumentTitle(parseOpenParams("nope", UUID))).toBe("Not found");
+  });
+});
+
+describe("openRedirect", () => {
+  it("sends a pod admin from a space link to the space's console page", () => {
+    expect(openRedirect(parseOpenParams("workspace", UUID), true)).toBe(
+      `/workspaces/${UUID}`
+    );
+  });
+
+  it("leaves a member on the bounce card (the space page is pod-admin only)", () => {
+    expect(openRedirect(parseOpenParams("workspace", UUID), false)).toBeNull();
+  });
+
+  it("sends a proposal link to its review page whoever asks", () => {
+    expect(openRedirect(parseOpenParams("proposal", UUID), false)).toBe(
+      `/proposal/${UUID}`
+    );
+  });
+
+  it("draws every other kind", () => {
+    for (const type of ["entity", "agent", "project", "cell", "widget"]) {
+      expect(openRedirect(parseOpenParams(type, UUID), true)).toBeNull();
+    }
   });
 });

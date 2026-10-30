@@ -2,8 +2,8 @@
 
 /**
  * One agent, the one body — drawn by `/open/agent/:id` as an object page in
- * the receiver card (`AgentObject`) and by the console's agent drawer
- * (`AgentDrawer`, opened from Agents). Both draw the same sections: where it
+ * the receiver card (`AgentObject`), which a row on Agents opens (it was a
+ * drawer until 2026-10-30; the drawer drew these same sections). Where it
  * stands, its scorecard, how its writes land, and what the viewer may do to it.
  *
  *   • Facts — the roster row (`agentUsers.list`, floored to the viewer: an
