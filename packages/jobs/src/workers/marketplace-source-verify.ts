@@ -24,7 +24,9 @@
  *      EARLIER than it is refused: the pod never steps back to an older,
  *      still-valid copy a mirror or a man-in-the-middle replays. `expires` is
  *      the index's own clock, so it is the monotonic stamp (the format carries
- *      no separate issue time).
+ *      no separate issue time). An index with the SAME `expires` is the same
+ *      file or nothing: when the caller recorded the accepted file's sha256,
+ *      a different file under an equal stamp is refused too.
  *
  * Synap's own catalog goes through the SAME index checks
  * (`verifyOfficialIndex`): its index must be signed by one of the online
@@ -153,6 +155,11 @@ export interface VerifyIndexInput {
    * that expires earlier is an older copy and is refused.
    */
   lastAcceptedExpires?: string | null;
+  /**
+   * sha256 of the exact bytes of that index, when recorded: an index with the
+   * same `expires` and other bytes is refused (two files under one stamp).
+   */
+  lastAcceptedSha256?: string | null;
   now: Date;
   /** Override for tests only. */
   maxBytes?: number;
@@ -177,6 +184,7 @@ export interface VerifyOfficialIndexInput {
   /** The online catalog keys a verified keys statement names, or the operator's keys. */
   trustedKeys: readonly string[];
   lastAcceptedExpires?: string | null;
+  lastAcceptedSha256?: string | null;
   /** `SYNAP_CATALOG_ALLOW_EXPIRED`: an index past its `expires` is still accepted. */
   allowExpired?: boolean;
   now: Date;
@@ -198,6 +206,7 @@ export function verifyOfficialIndex(
     trustedKeys: input.trustedKeys,
     requireSignature: true,
     lastAcceptedExpires: input.lastAcceptedExpires,
+    lastAcceptedSha256: input.lastAcceptedSha256,
     allowExpired: input.allowExpired,
     now: input.now,
   });
@@ -329,6 +338,16 @@ function verifyIndexWith<
       "The source served an older copy of its index than the one this pod already has, so the pod kept the newer one."
     );
   }
+  if (
+    expires === floor &&
+    input.lastAcceptedSha256 &&
+    sha256Hex(input.indexBytes) !== input.lastAcceptedSha256
+  ) {
+    return reject(
+      "replayed",
+      "The source served a different index under the same expiry as the one this pod already has, so the pod kept the one it has."
+    );
+  }
 
   // Only a key the signature was CHECKED under is reported (an unpinned
   // showcase with no key reports none).
@@ -419,6 +438,11 @@ export interface VerifyKeysStatementInput {
   /** `version` of the last statement this pod accepted. */
   lastVersion?: number | null;
   /**
+   * sha256 of the exact bytes of that statement, when recorded: a statement
+   * with the same `version` and other bytes is refused.
+   */
+  lastSha256?: string | null;
+  /**
    * `SYNAP_CATALOG_ALLOW_EXPIRED` (air-gapped pods). Honoured only over a
    * `lastVersion` floor, for a statement at or above it: past expiry, only
    * the freshness floor still keeps a retired key out, so with no floor an
@@ -436,8 +460,12 @@ export interface VerifyKeysStatementInput {
  *      `lastVersion` floor the statement meets), and when `expires` is more
  *      than `CATALOG_KEYS_MAX_LIFETIME_DAYS` ahead;
  *   4. freshness — `version` never moves back (an older statement, still
- *      signed and unexpired, cannot be replayed to bring back a retired key);
- *   5. the keys — only those whose `notAfter` is still ahead and at most
+ *      signed and unexpired, cannot be replayed to bring back a retired key),
+ *      and an equal `version` is the same file or refused: two root-signed
+ *      statements under one version (a redone first ceremony) cannot be
+ *      switched between;
+ *   5. the keys — never a root key (the offline and online roles stay
+ *      apart), and only those whose `notAfter` is still ahead and at most
  *      `CATALOG_KEY_MAX_LIFETIME_DAYS` away count: an online key is
  *      short-lived by rule, so a long-lived one is never trusted.
  */
@@ -509,6 +537,22 @@ export function verifyKeysStatement(
     return fail(
       "replayed",
       "The Control Plane served an older catalog keys statement than the one this pod already has."
+    );
+  }
+  if (
+    statement.version === input.lastVersion &&
+    input.lastSha256 &&
+    sha256Hex(input.statementBytes) !== input.lastSha256
+  ) {
+    return fail(
+      "replayed",
+      `The Control Plane served a different catalog keys statement under version ${statement.version}, the one this pod already has.`
+    );
+  }
+  if (statement.keys.some((k) => input.rootKeys.includes(k.publicKey))) {
+    return fail(
+      "invalid",
+      "The catalog keys statement names a root key as an online key — a root never signs the index."
     );
   }
   const keys = statement.keys

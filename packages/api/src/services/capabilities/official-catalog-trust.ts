@@ -131,12 +131,34 @@ export async function assertOfficialDefinition(input: {
  * index, because they cannot be in it; their trust is that connection. The
  * exemption never covers a public catalog row: when the signed index lists
  * the key (or the listing cannot be read), the definition is checked like
- * any other official one. Call it ONLY for the owner door's private answer.
+ * any other official one. It is tied to what was asked for: a definition
+ * whose own `key` (or `_meta.slug`) names another capability is refused. And
+ * it obeys the freeze: while enforcement pauses Synap's catalog, a private
+ * capability does not install either. Call it ONLY for the owner door's
+ * private answer.
  */
 export async function admitPrivateCapability(input: {
   key: string;
-  definition: Record<string, unknown>;
+  definition: { key?: unknown; _meta?: unknown };
 }): Promise<void> {
+  const definition = input.definition as Record<string, unknown>;
+  const meta = input.definition._meta;
+  const metaSlug =
+    meta && typeof meta === "object" && !Array.isArray(meta)
+      ? (meta as Record<string, unknown>).slug
+      : undefined;
+  if (
+    input.definition.key !== input.key ||
+    (metaSlug !== undefined && metaSlug !== input.key)
+  ) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `The private capability served for "${input.key}" names itself "${String(
+        input.definition.key !== input.key ? input.definition.key : metaSlug
+      )}". Nothing was installed.`,
+      cause: { code: "MARKET_OFFICIAL_UNVERIFIED" },
+    });
+  }
   const listed = await readOfficialCatalogDigest("capability", input.key).then(
     (row) => row !== null,
     () => true
@@ -145,12 +167,25 @@ export async function admitPrivateCapability(input: {
     await assertOfficialDefinition({
       kind: "capability",
       slug: input.key,
-      definition: input.definition,
+      definition,
     });
     return;
   }
+  const standing = await officialCatalogStandingNow();
+  if (standing.blocked) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `${standing.blocked} Nothing was installed.`,
+      cause: { code: "MARKET_OFFICIAL_UNVERIFIED" },
+    });
+  }
   logger.info(
-    { kind: "capability", slug: input.key, trust: PRIVATE_CAPABILITY_TRUST },
+    {
+      kind: "capability",
+      slug: input.key,
+      podId: process.env.POD_ID ?? null,
+      trust: PRIVATE_CAPABILITY_TRUST,
+    },
     `Capability "${input.key}": ${PRIVATE_CAPABILITY_TRUST} (not in Synap's public signed index)`
   );
 }

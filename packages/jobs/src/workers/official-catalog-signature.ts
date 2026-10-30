@@ -50,6 +50,7 @@ import {
   checkOfficialListing,
   ed25519PublicKey,
   keyFingerprint,
+  sha256Hex,
   verifyKeysStatement,
   verifyOfficialIndex,
 } from "./marketplace-source-verify.js";
@@ -327,12 +328,15 @@ export async function checkOfficialCatalogSignature(
     keyFingerprint: previous?.keyFingerprint ?? null,
     packageCount: previous?.packageCount ?? 0,
     unverifiedRows: previous?.unverifiedRows ?? null,
+    keysSha256: previous?.keysSha256 ?? null,
+    indexSha256: previous?.indexSha256 ?? null,
     message: null,
   };
 
   const status = await (async (): Promise<OfficialCatalogSignature> => {
     let catalogKeys = trust.keys;
     let keysVersion: number | null = null;
+    let keysSha256: string | null = null;
     if (trust.anchors === "roots") {
       const keysFile = await fetchSignedFile(
         `${baseUrl}${OFFICIAL_KEYS_PATH}`,
@@ -347,6 +351,7 @@ export async function checkOfficialCatalogSignature(
         signature: keysFile.signature,
         rootKeys: trust.keys,
         lastVersion: previous?.keysVersion ?? null,
+        lastSha256: previous?.keysSha256 ?? null,
         allowExpired: trust.allowExpired,
         now,
       });
@@ -359,6 +364,7 @@ export async function checkOfficialCatalogSignature(
       }
       catalogKeys = keys.keys;
       keysVersion = keys.statement.version;
+      keysSha256 = sha256Hex(keysFile.bytes);
     }
 
     const indexFile = await fetchSignedFile(
@@ -374,6 +380,7 @@ export async function checkOfficialCatalogSignature(
       signature: indexFile.signature,
       trustedKeys: catalogKeys,
       lastAcceptedExpires: previous?.validUntil ?? null,
+      lastAcceptedSha256: previous?.indexSha256 ?? null,
       allowExpired: trust.allowExpired,
       now,
     });
@@ -414,6 +421,8 @@ export async function checkOfficialCatalogSignature(
       keysVersion,
       keyFingerprint: verdict.fingerprint,
       packageCount: verdict.index.packages.length,
+      keysSha256,
+      indexSha256: sha256Hex(indexFile.bytes),
     };
   })();
 

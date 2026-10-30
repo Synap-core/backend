@@ -163,6 +163,22 @@ grep -qE '^ *domain: *\.?(pod\.)?synap\.live *$' "$C" && bad "pod.synap.live pod
 [ -z "$(lib kratos_config_errors "$C")" ] && ok "pod.synap.live pod: the render passes the structural check" || bad "current: $(lib kratos_config_errors "$C")"
 [ ! -s "$TMP/current/err" ] && ok "pod.synap.live pod: no warning" || bad "pod.synap.live pod warned: $(cat "$TMP/current/err")"
 
+# Return URLs on a production pod: no page on the user's machine, and of the
+# app schemes only the exact callback the desktop and phone apps use.
+section "$C" allowed_return_urls | grep -q 'localhost' && bad "pod.synap.live pod: a localhost return URL is rendered: $(section "$C" allowed_return_urls | grep localhost | head -2)" \
+  || ok "pod.synap.live pod: no localhost return URL"
+schemes="$(section "$C" allowed_return_urls | grep -vE '^ *- https://' | sed 's/^ *- //')"
+[ "$schemes" = "synap://auth/callback" ] && ok "pod.synap.live pod: the only app return URL is synap://auth/callback" \
+  || bad "pod.synap.live pod: app return URLs: $(echo $schemes)"
+
+render "$TMP/local" localhost; rc=$?
+L="$TMP/local/kratos/kratos.yml"
+[ "$rc" = 0 ] && [ -s "$L" ] && ok "localhost pod: kratos.yml rendered" || bad "localhost render failed: $(cat "$TMP/local/err")"
+section "$L" allowed_return_urls | grep -qx '    - http://localhost:3000/\*' && ok "localhost pod: the dev apps may be returned to" \
+  || bad "localhost pod: localhost:3000 missing from return URLs"
+section "$L" allowed_return_urls | grep -qx '    - synap://auth/callback' && ok "localhost pod: the app callback is kept" \
+  || bad "localhost pod: synap://auth/callback missing"
+
 render "$TMP/nested" pod.alice.synap.live; rc=$?
 N="$TMP/nested/kratos/kratos.yml"
 [ "$rc" = 0 ] && [ -s "$N" ] && ok "nested pod: kratos.yml rendered" || { bad "nested render failed: $(cat "$TMP/nested/err")"; exit 1; }
