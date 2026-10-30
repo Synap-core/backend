@@ -375,7 +375,8 @@ describe.each([
         `href="/open/session/${SESSION_ID}"[^>]*title="Partly checked"`
       )
     );
-    expect(strip).toContain(`href="synap://open/track/${TRACK_ID}"`);
+    // A goal is hosted on the web (`/open/track/:id`), so its door stays here.
+    expect(strip).toContain(`href="/open/track/${TRACK_ID}"`);
     expect(strip).toContain(`href="synap://open/project/${PROJECT_ID}"`);
     expect(strip).toContain(`href="/review?session=${SESSION_ID}"`);
   });

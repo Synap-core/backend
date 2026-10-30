@@ -120,3 +120,62 @@ describe("compositeRerank — bounded-nudge invariant (the over-boost guard)", (
     expect(out.map((x) => x.id)).toEqual(["a", "b"]);
   });
 });
+
+// ── Lens (S1): the caller's focus is a bounded nudge, never a filter ──
+describe("compositeRerank — lens focus", () => {
+  const FOCUS = { workspaceId: "ws-focus" };
+  // n=10, fused order; only the BOTTOM row lives in the focus workspace.
+  const pool = (): RerankRow[] =>
+    Array.from({ length: 10 }, (_, i) => ({
+      id: i === 9 ? "focused" : `r${i}`,
+      properties: null,
+      updatedAt: daysAgo(100),
+      workspaceId: i === 9 ? "ws-focus" : "ws-other",
+    }));
+  const opts = { propertyHints: [], temporal: false, now: NOW };
+
+  it("a focused row is boosted, and every unfocused row is still returned", () => {
+    const out = compositeRerank(pool(), { ...opts, focus: FOCUS });
+    expect(out.findIndex((x) => x.id === "focused")).toBeLessThan(9); // rose
+    expect(out).toHaveLength(10); // nothing hidden
+    expect(new Set(out.map((x) => x.id))).toEqual(
+      new Set(pool().map((x) => x.id))
+    );
+  });
+
+  it("a row in focus outranks an equal row out of focus", () => {
+    const r: RerankRow[] = [
+      { id: "out", properties: null, updatedAt: daysAgo(100) },
+      {
+        id: "in",
+        properties: null,
+        updatedAt: daysAgo(100),
+        workspaceId: "ws-focus",
+      },
+    ];
+    // Equal evidence = adjacent fused positions; the in-focus one is behind.
+    expect(compositeRerank(r, opts).map((x) => x.id)).toEqual(["out", "in"]);
+    const n = 11; // a span wide enough for the 0.3 nudge to pass one row
+    const wide: RerankRow[] = Array.from({ length: n }, (_, i) => ({
+      id: `p${i}`,
+      properties: null,
+      updatedAt: daysAgo(100),
+      workspaceId: i === n - 1 ? "ws-focus" : null,
+    }));
+    const out = compositeRerank(wide, { ...opts, focus: FOCUS });
+    expect(out.indexOf(wide[n - 1])).toBeLessThan(out.indexOf(wide[n - 2]));
+  });
+
+  it("the nudge is bounded: a far more relevant out-of-focus row still wins", () => {
+    const out = compositeRerank(pool(), { ...opts, focus: FOCUS });
+    expect(out[0].id).toBe("r0"); // the top recall hit is untouchable
+    // The lift is at most LENS_FRACTION of the span (0.3 × 9 = 2.7 positions).
+    expect(out.findIndex((x) => x.id === "focused")).toBeGreaterThanOrEqual(6);
+  });
+
+  it("is inert with no focus (order unchanged)", () => {
+    expect(compositeRerank(pool(), opts).map((x) => x.id)).toEqual(
+      pool().map((x) => x.id)
+    );
+  });
+});

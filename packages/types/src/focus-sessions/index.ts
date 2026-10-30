@@ -6,3 +6,4 @@ export * from "./suspended.js";
 export * from "./title.js";
 export * from "./verdict.js";
 export * from "./recall.js";
+export * from "./scorecard.js";

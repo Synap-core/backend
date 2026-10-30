@@ -36,6 +36,7 @@ import {
   tools,
   events,
   projects,
+  projectTracks,
   channels,
   playbooks,
   automations,
@@ -809,6 +810,43 @@ async function diagnoseObject(
         state: {
           name: row.name,
           status: row.status,
+          workspaceId: row.workspaceId,
+        },
+        why: null,
+      };
+    }
+
+    case "track": {
+      const [row] = await db
+        .select({
+          name: projectTracks.name,
+          status: projectTracks.status,
+          verdict: projectTracks.verdict,
+          projectId: projectTracks.projectId,
+          workspaceId: projects.workspaceId,
+        })
+        .from(projectTracks)
+        .innerJoin(projects, eq(projects.id, projectTracks.projectId))
+        .where(
+          and(
+            eq(projectTracks.id, id),
+            projectVisibleWhere(AccessContext.operator({ userId }))
+          )
+        )
+        .limit(1);
+      if (!row) return { error: "Goal not found" };
+      return {
+        mode: "object",
+        kind,
+        id,
+        summary:
+          `Goal "${row.name}" is ${row.status}` +
+          (row.verdict ? ` (${row.verdict})` : ""),
+        state: {
+          name: row.name,
+          status: row.status,
+          verdict: row.verdict,
+          projectId: row.projectId,
           workspaceId: row.workspaceId,
         },
         why: null,

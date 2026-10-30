@@ -80,6 +80,9 @@ const ROUTE_BY_KIND: Record<ObjectKind, BrowserRoute | null> = {
   channel: { label: "channel" },
   playbook: { label: "playbook" },
   automation: { label: "automation" },
+  // A goal: object-nav's `track` arm (the `track-detail` cell, main
+  // placement); the phone's `/track/:id`.
+  track: { label: "track" },
   // NO BROWSER DOOR. Not an oversight: an external send has no row and no
   // surface — object-nav has no arm for it and inventing one here would be a
   // link into nothing.

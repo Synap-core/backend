@@ -5,8 +5,9 @@
  * `document` (its body, read-only) and `channel` (its recent messages,
  * read-only), and the operational kinds a link must land on from any device —
  * `automation` (pause), `session` (cancel / run again), `playbook` (archive),
- * `run` (cancel / run again), `capability` (turn its verbs on) and `agent`
- * (disconnect). Authoring stays in the app. Bounce kinds match the Hono
+ * `run` (cancel / run again), `capability` (turn its verbs on), `agent`
+ * (disconnect) and `track` (a goal: its judge accepts, sends back, declares
+ * done). Authoring stays in the app. Bounce kinds match the Hono
  * `/open/:type/:id` ALLOWED set minus host types: we never render them here,
  * we point at `synap://open/{type}/{id}`.
  *
@@ -29,6 +30,7 @@ export const HOST_TYPES = [
   "agent",
   "document",
   "channel",
+  "track",
 ] as const;
 export type HostType = (typeof HOST_TYPES)[number];
 
