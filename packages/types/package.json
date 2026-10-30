@@ -353,6 +353,10 @@
       "types": "./dist/lens/index.d.ts",
       "import": "./dist/lens/index.js"
     },
+    "./goal": {
+      "types": "./dist/goal/index.d.ts",
+      "import": "./dist/goal/index.js"
+    },
     "./ai-availability": {
       "types": "./dist/ai-availability/index.d.ts",
       "import": "./dist/ai-availability/index.js"
