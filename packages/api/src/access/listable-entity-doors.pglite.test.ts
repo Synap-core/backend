@@ -753,6 +753,8 @@ const WITHHELD_FILES: Record<string, string> = {
   "services/proposals/redecide-graph-revision.ts":
     "the capture duplicate door's record scope, re-run for a revised graph (dedup)",
   "services/runs/index.ts": "one run's produced records, by id",
+  "services/status/status-facts.ts":
+    "a step's wait: the asked things and the one each step names, by id",
   "services/status/status-read.ts": "statusOf: the named ids, by id",
   "services/surfaces/renderer-usage.ts":
     "renderer-removal impact count: a demo row's override is affected too",
