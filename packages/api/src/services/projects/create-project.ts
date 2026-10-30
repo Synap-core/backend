@@ -97,6 +97,12 @@ export interface CreateProjectGovernedInput {
   evidenceEntityIds?: string[];
   source?: string;
   reasoning?: string;
+  /**
+   * The session the caller works in (MCP: the one it named, or the one its
+   * door derived). Without it the gate files the write under the client's
+   * receipt — a teammate's session when agents share one conversation.
+   */
+  sessionId?: string | null;
 }
 
 /** What became of one requested used space, after the project was created. */
@@ -283,6 +289,7 @@ export async function createProjectGoverned(
     workspaceId: workspaceId ?? undefined,
     subjectType: "project",
     action: "create",
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.source ? { source: input.source } : {}),
     ...(input.reasoning ? { reasoning: input.reasoning } : {}),
     ...(duplicateCheck

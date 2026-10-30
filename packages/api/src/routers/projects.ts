@@ -512,6 +512,8 @@ export const projectsRouter = router({
         userId: ctx.userId,
         agentUserId: ctx.agentUserId ?? undefined,
         workspaceId: ctx.workspaceId ?? null,
+        // The session the caller named (or its door derived), as `update` does.
+        sessionId: ctx.sessionId ?? null,
         door: input.door ?? "trpc",
         name: input.name,
         description: input.description,
