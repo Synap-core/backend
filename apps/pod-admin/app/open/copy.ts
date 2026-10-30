@@ -11,18 +11,13 @@ import {
 
 export const en = {
   "bounce.noWebPage": "No web page",
-  "bounce.operator":
-    "It has no page on the web yet. It lives in the Synap desktop app.",
-  "bounce.member":
-    "It has no page on the web yet. An admin of your company’s Synap can open it for you.",
+  "bounce.inApp": "It has no page on the web yet. Open it in the Synap app.",
 } as const;
 
 export const fr: Catalog<typeof en> = {
   "bounce.noWebPage": "Pas de page web",
-  "bounce.operator":
-    "Il n’a pas encore de page sur le web. Il se trouve dans l’application Synap pour ordinateur.",
-  "bounce.member":
-    "Il n’a pas encore de page sur le web. Un administrateur du Synap de votre entreprise peut l’ouvrir pour vous.",
+  "bounce.inApp":
+    "Il n’a pas encore de page sur le web. Ouvrez-le dans l’application Synap.",
 };
 
 /** `/open`'s translator, in the ambient catalog locale. */

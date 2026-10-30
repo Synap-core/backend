@@ -18,11 +18,11 @@
  *
  * A kind the console also has an admin page for (a space, a Settings section
  * the console covers) leads with that page ("See this space here"); the app
- * link is then the operator's quiet second. A member is not offered the page:
- * it is pod-admin only and would answer /forbidden (`objectWebAlternative`
- * asks the console's audience rule). What the card says and offers is
- * `bounceCard`: never a list of our object kinds, never a desktop app to a
- * client (decision 7c832a88).
+ * link is then the second door. A member is not offered the page: it is
+ * pod-admin only and would answer /forbidden (`objectWebAlternative` asks the
+ * console's audience rule). What the card says and offers is `bounceCard`:
+ * never a list of our object kinds, and always the app, where the work is
+ * done (decision 94cd8636).
  */
 
 import { Button } from "@heroui/react";
@@ -83,14 +83,14 @@ export function BounceView({
     id,
     viewerIsPodAdmin ? "admin" : "member"
   );
-  const card = bounceCard({ consolePage: !!consolePage, viewerIsPodAdmin });
-  const appLink = card.desktop ? (
+  const card = bounceCard({ consolePage: !!consolePage });
+  const appLink = (
     <OpenInAppLink
       type={type}
       id={id}
       params={bounceAddressParams(type, resolved.data)}
     />
-  ) : undefined;
+  );
   return (
     <OpenObject
       header={{
@@ -108,10 +108,10 @@ export function BounceView({
           >
             {consolePage.label}
           </Button>
-        ) : card.desktop === "primary" ? (
+        ) : (
           appLink
-        ) : undefined,
-        secondaryActions: card.desktop === "secondary" ? appLink : undefined,
+        ),
+        secondaryActions: card.app === "secondary" ? appLink : undefined,
       }}
       facts={facts.length > 0 ? facts : undefined}
       advanced={

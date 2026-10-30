@@ -40,8 +40,15 @@ import {
 } from "./join-ways";
 import { trpc, POD_URL } from "../../../lib/trpc";
 import { formatRelative, formatTimestamp } from "../../../lib/format";
-import { joinedDoors, type JoinedDoor } from "../../../lib/open-in";
-import { ExitLink, externalProps, useIsPhone } from "../../../lib/exit-link";
+import { joinedDoors, type Exit, type JoinedDoor } from "../../../lib/open-in";
+import {
+  ExitLink,
+  externalProps,
+  PlacedFallback,
+  useAppOpenAttempt,
+  useIsPhone,
+  usePlacedExit,
+} from "../../../lib/exit-link";
 import { inviteT } from "./copy";
 import {
   acceptInviteRefusal,
@@ -1152,11 +1159,12 @@ const SIGN_IN_WITH: Record<SignInWay, string> = {
 };
 
 /**
- * Joined. What a client has leads (`joinedDoors`): this pod's console home,
- * then the company's own apps when the reader may list them, then the phone.
- * The desktop app is not offered: it is the operator's workbench, not part of
- * a client's offer (decision 7c832a88). Focus moves to the headline so a
- * screen reader hears the outcome.
+ * Joined. Where the work is done leads (`joinedDoors`, decision 94cd8636):
+ * "Open in Synap", the Synap app on this device (`pairExit`: it opens THIS
+ * pod's sign-in with the email filled in; a hint, never a secret), with the
+ * device's install hatch beside it. Then the company's own apps when the
+ * reader may list them, the phone off a phone, and last the console. Focus
+ * moves to the headline so a screen reader hears the outcome.
  */
 function DoneBody({
   subject,
@@ -1190,8 +1198,17 @@ function DoneBody({
     onPhone,
     apps: apps.data ?? [],
   });
+  const synap = doors.find(
+    (d): d is Extract<JoinedDoor, { kind: "synap" }> => d.kind === "synap"
+  );
   const appDoors = doors.filter(
     (d): d is Extract<JoinedDoor, { kind: "app" }> => d.kind === "app"
+  );
+  const phone = doors.find(
+    (d): d is Extract<JoinedDoor, { kind: "phone" }> => d.kind === "phone"
+  );
+  const consoleDoor = doors.find(
+    (d): d is Extract<JoinedDoor, { kind: "console" }> => d.kind === "console"
   );
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
@@ -1209,27 +1226,13 @@ function DoneBody({
           {joinedHeadline(subject, host)}
         </h1>
         <p className="text-[13.5px] leading-relaxed text-foreground/65">
-          Sign in to {host ?? "this pod"} as{" "}
-          <span className="font-medium text-foreground/85">{email}</span>
+          {synap ? "In the Synap app, sign" : "Sign"} in to {host ?? "this pod"}{" "}
+          as <span className="font-medium text-foreground/85">{email}</span>
           {way ? ` ${SIGN_IN_WITH[way]}` : ""}.
         </p>
       </div>
       {way === "synap_cloud" ? <LinkCloudStep /> : null}
-      {doors.map((door) =>
-        door.kind === "console" ? (
-          <Button
-            key="console"
-            as="a"
-            href={door.href}
-            color="primary"
-            radius="md"
-            size="md"
-            className="self-start"
-          >
-            {door.signIn ? t("done.signIn") : t("done.home")}
-          </Button>
-        ) : null
-      )}
+      {synap ? <OpenInSynap exit={synap.exit} label={t("done.open")} /> : null}
       {appDoors.length > 0 ? (
         <div className="flex flex-col gap-1.5">
           <p className="text-[12.5px] font-medium text-foreground/75">
@@ -1267,22 +1270,23 @@ function DoneBody({
         </div>
       ) : null}
       {way === "synap_cloud" ? <AddPasskeyInvite /> : null}
-      {doors.map((door) =>
-        door.kind === "phone" ? (
-          <div key="phone" className="flex flex-col gap-1">
-            <p className="text-[12.5px] text-foreground/65">
-              {t("done.phoneHint")}
-            </p>
-            <ExitLink
-              exit={door.exit}
-              label={
-                door.opens === "app" ? t("done.phoneOpen") : t("done.phoneGet")
-              }
-            />
-          </div>
-        ) : null
-      )}
+      {phone ? (
+        <div className="flex flex-col gap-1">
+          <p className="text-[12.5px] text-foreground/65">
+            {t("done.phoneHint")}
+          </p>
+          <ExitLink exit={phone.exit} label={t("done.phoneGet")} />
+        </div>
+      ) : null}
       {POD_URL ? <PodAddress origin={new URL(POD_URL).origin} /> : null}
+      {consoleDoor ? (
+        <a
+          href={consoleDoor.href}
+          className="inline-flex min-h-10 items-center self-start text-[13px] text-foreground/70 underline-offset-2 hover:text-foreground hover:underline"
+        >
+          {consoleDoor.signIn ? t("done.signIn") : t("done.home")}
+        </a>
+      ) : null}
     </>
   );
 }
@@ -1362,6 +1366,30 @@ function PodAddress({ origin }: { origin: string }) {
           ariaLabel="Copy this pod's address"
         />
       </div>
+    </div>
+  );
+}
+
+function OpenInSynap({ exit, label }: { exit: Exit; label: string }) {
+  const placed = usePlacedExit(exit);
+  const open = useAppOpenAttempt(placed);
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+      {placed.href !== null ? (
+        <Button
+          as="a"
+          href={placed.href}
+          {...externalProps(placed.href)}
+          onPress={open.onOpen}
+          color="primary"
+          radius="md"
+          size="md"
+        >
+          {label}
+        </Button>
+      ) : null}
+      <PlacedFallback placed={placed} />
+      {open.offer}
     </div>
   );
 }

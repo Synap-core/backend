@@ -14,8 +14,6 @@ import { OpenFailure, OpenLoading, OpenObject } from "../open-shell";
 import { couldNotLoad, loadFailure } from "../../_lib/object/load-failure";
 import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
 import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
-import { useConsoleRole } from "../../(admin)/components/side-nav-role";
-import { bounceCard } from "../open-model";
 
 /** Canvas lenses have no prose description worth showing on the web. */
 const CANVAS_VIEW_TYPES = new Set(["whiteboard", "mindmap"]);
@@ -33,7 +31,6 @@ type ViewPayload = {
 
 export function ViewView({ id }: { id: string }) {
   const query = trpc.views.get.useQuery({ id });
-  const viewerIsPodAdmin = useConsoleRole() === "admin";
   useReauthOnUnauthorized(query.error);
 
   if (query.isLoading) return <OpenLoading label="Loading view…" />;
@@ -54,7 +51,7 @@ export function ViewView({ id }: { id: string }) {
         kind: "view",
         title: view.name?.trim() || "Untitled view",
         summary: canvas
-          ? bounceCard({ consolePage: false, viewerIsPodAdmin }).summary
+          ? "This view opens in the Synap app."
           : shortDescription(view.description),
         primaryAction: <OpenInAppLink type="view" id={id} />,
       }}

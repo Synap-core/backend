@@ -471,23 +471,26 @@ export function pairExit(podUrl: string, email?: string): Exit | null {
 
 /**
  * Where a person who has just joined this pod goes next (the invite's Done
- * screen), most useful first. A client has this pod's console and, when the
- * company uses one, its own app; the phone is a second way in; the desktop
- * app is the operator's workbench and not part of a client's offer (decision
- * 7c832a88), so it is not here.
+ * screen), most useful first. The work is done in the Synap app, on a
+ * computer and on a phone (decision 94cd8636); the console runs the pod.
  *
- *   1. `console` — this pod's console home (signed in) or its sign-in.
+ *   1. `synap` — the Synap app on THIS device (`pairExit`: it opens this
+ *      pod's sign-in with the email filled in; the desktop app on a computer,
+ *      the mobile app on a phone, each with its install hatch through
+ *      `placeExit`). Absent when the pod has no public https address.
  *   2. `app` — each app the company uses on this pod (a pod app with live
  *      connections, `apps.adminPodApps`), at its own https origin. Only what
  *      the caller could read: a member cannot list the pod's apps.
- *   3. `phone` — on a phone, `synap://pair` (`pairExit`: the mobile app opens
- *      this pod's sign-in, with its install hatch through `placeExit`); off a
- *      phone, the mobile app's install page.
+ *   3. `phone` — off a phone, the mobile app's install page: the phone is the
+ *      second place the work is done. On a phone, `synap` already is it,
+ *      unless there is no `synap` door: then this is the install page.
+ *   4. `console` — this pod's console home (signed in) or its sign-in.
  */
 export type JoinedDoor =
-  | { kind: "console"; href: string; signIn: boolean }
+  | { kind: "synap"; exit: Exit }
   | { kind: "app"; href: string; name: string }
-  | { kind: "phone"; exit: Exit; opens: "app" | "install" };
+  | { kind: "phone"; exit: Exit }
+  | { kind: "console"; href: string; signIn: boolean };
 
 /** A pod app as `apps.adminPodApps` lists it (the fields a door reads). */
 export interface JoinedPodApp {
@@ -510,13 +513,9 @@ export function joinedDoors({
   onPhone: boolean;
   apps?: readonly JoinedPodApp[];
 }): JoinedDoor[] {
-  const doors: JoinedDoor[] = [
-    {
-      kind: "console",
-      href: signedIn ? "/" : "/login?return=/",
-      signIn: !signedIn,
-    },
-  ];
+  const doors: JoinedDoor[] = [];
+  const pair = pairExit(podUrl, email);
+  if (pair) doors.push({ kind: "synap", exit: pair });
   const seen = new Set<string>();
   for (const app of apps) {
     if (app.live <= 0) continue;
@@ -533,12 +532,14 @@ export function joinedDoors({
     seen.add(exit.href);
     doors.push({ kind: "app", href: exit.href, name: app.name || app.domain });
   }
-  const pair = onPhone ? pairExit(podUrl, email) : null;
-  doors.push(
-    pair
-      ? { kind: "phone", exit: pair, opens: "app" }
-      : { kind: "phone", exit: web(MOBILE_FALLBACK.href), opens: "install" }
-  );
+  if (!onPhone || !pair) {
+    doors.push({ kind: "phone", exit: web(MOBILE_FALLBACK.href) });
+  }
+  doors.push({
+    kind: "console",
+    href: signedIn ? "/" : "/login?return=/",
+    signIn: !signedIn,
+  });
   return doors;
 }
 

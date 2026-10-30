@@ -62,41 +62,28 @@ describe("bounceReceipt — diagnose.resolveOpen names the bounced object", () =
 });
 
 describe("bounceCard: what a card for an object with no web page says", () => {
-  it("an object with a console page leads with it; the desktop link is the operator's quiet second", () => {
-    expect(bounceCard({ consolePage: true, viewerIsPodAdmin: true })).toEqual({
+  it("an object with a console page leads with it; the Synap app is the second door", () => {
+    expect(bounceCard({ consolePage: true })).toEqual({
       summary: null,
       status: null,
-      desktop: "secondary",
+      app: "secondary",
     });
   });
 
-  it("the operator is told it lives in the desktop app, and gets the link", () => {
-    const card = bounceCard({ consolePage: false, viewerIsPodAdmin: true });
-    expect(card.desktop).toBe("primary");
-    expect(card.summary).toBe(
-      "It has no page on the web yet. It lives in the Synap desktop app."
-    );
-  });
-
-  it("anyone else is told who can open it, and is never offered the desktop app", () => {
-    for (const consolePage of [true, false]) {
-      const card = bounceCard({ consolePage, viewerIsPodAdmin: false });
-      expect(card.desktop).toBeNull();
-      expect(card.summary ?? "").not.toMatch(/desktop|Synap app/);
-    }
-    expect(
-      bounceCard({ consolePage: false, viewerIsPodAdmin: false }).summary
-    ).toMatch(/admin of your company’s Synap can open it/);
+  it("an object with none says so, and the Synap app is the door", () => {
+    expect(bounceCard({ consolePage: false })).toEqual({
+      summary: "It has no page on the web yet. Open it in the Synap app.",
+      status: "No web page",
+      app: "primary",
+    });
   });
 
   it("never lists our object kinds", () => {
     for (const consolePage of [true, false]) {
-      for (const viewerIsPodAdmin of [true, false]) {
-        const { summary } = bounceCard({ consolePage, viewerIsPodAdmin });
-        expect(summary ?? "").not.toMatch(
-          /entities|sessions|runs|capabilities|channels|The web shows/
-        );
-      }
+      const { summary } = bounceCard({ consolePage });
+      expect(summary ?? "").not.toMatch(
+        /entities|sessions|runs|capabilities|channels|The web shows/
+      );
     }
   });
 });

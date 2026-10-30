@@ -1,9 +1,9 @@
 /**
  * Where an agent's trust is changed, for this viewer. The page that widens or
  * revokes what an agent may do alone is the console's agents × work matrix
- * (`/governance/agents`: each cell's Widen / Revoke). Before 2026-10-30 the
- * agent's own panel sent everyone to the desktop app instead, which a client
- * does not have (decision 7c832a88).
+ * (`/governance/agents`: each cell's Widen / Revoke). What an agent may do is
+ * running the pod, and pod admin runs the pod (decision 94cd8636), yet the
+ * agent's own panel sent everyone away to the desktop app's Settings.
  *
  * The page is pod-admin only, so a member is told who can change it rather
  * than handed a link that answers /forbidden (`consoleTargetVisibleTo`).

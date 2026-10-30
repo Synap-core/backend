@@ -445,7 +445,7 @@ describe("joinedDoors — where a person who just joined goes next", () => {
     live: 3,
   };
 
-  it("leads with the console, then the company's apps, then the phone; never the desktop app", () => {
+  it("on a computer: the Synap app leads, then the company's apps, the phone, and the console last", () => {
     const doors = joinedDoors({
       podUrl: POD,
       email: "lea@acme.example",
@@ -453,14 +453,31 @@ describe("joinedDoors — where a person who just joined goes next", () => {
       onPhone: false,
       apps: [CRM],
     });
-    expect(doors.map((d) => d.kind)).toEqual(["console", "app", "phone"]);
-    expect(doors[0]).toEqual({ kind: "console", href: "/", signIn: false });
+    expect(doors.map((d) => d.kind)).toEqual([
+      "synap",
+      "app",
+      "phone",
+      "console",
+    ]);
     expect(doors[1]).toEqual({
       kind: "app",
       href: "https://crm.acme.example/",
       name: "Acme CRM",
     });
-    expect(JSON.stringify(doors)).not.toMatch(/download\/browser|desktop/);
+    expect(doors.at(-1)).toEqual({ kind: "console", href: "/", signIn: false });
+  });
+
+  it("the Synap door opens this pod's sign-in in the desktop app, with its download hatch", () => {
+    const synap = joinedDoors({
+      podUrl: POD,
+      email: "lea@acme.example",
+      signedIn: false,
+      onPhone: false,
+    })[0];
+    if (synap?.kind !== "synap") throw new Error("no Synap door");
+    expect(synap.exit.href).toMatch(/^synap:\/\/pair\?v=1&pod=/);
+    const placed = placeExit(synap.exit, false, "member");
+    expect(placed.ifNotOpened?.href).toMatch(/\/download\/browser$/);
   });
 
   it("off a phone, the phone door is the mobile app's install page, not synap://", () => {
@@ -468,31 +485,38 @@ describe("joinedDoors — where a person who just joined goes next", () => {
       podUrl: POD,
       signedIn: true,
       onPhone: false,
-    }).at(-1);
-    expect(phone).toMatchObject({ kind: "phone", opens: "install" });
+    }).find((d) => d.kind === "phone");
     expect(phone?.kind === "phone" && phone.exit).toEqual({
       href: MOBILE_FALLBACK.href,
       isDesktopLink: false,
     });
   });
 
-  it("on a phone, it opens this pod's sign-in in the mobile app, with its install hatch", () => {
-    const phone = joinedDoors({
+  it("on a phone, the Synap door is the mobile app, with its install hatch, and no second phone door", () => {
+    const doors = joinedDoors({
       podUrl: POD,
       email: "lea@acme.example",
       signedIn: false,
       onPhone: true,
-    }).at(-1);
-    expect(phone).toMatchObject({ kind: "phone", opens: "app" });
-    if (phone?.kind !== "phone") throw new Error("no phone door");
-    expect(phone.exit.href).toMatch(/^synap:\/\/pair\?v=1&pod=/);
-    const placed = placeExit(phone.exit, true, "member");
+    });
+    expect(doors.map((d) => d.kind)).toEqual(["synap", "console"]);
+    if (doors[0]?.kind !== "synap") throw new Error("no Synap door");
+    const placed = placeExit(doors[0].exit, true, "member");
     expect(placed.fallback).toEqual(MOBILE_FALLBACK);
+  });
+
+  it("a pod with no public https address has no Synap door; the phone install page stays", () => {
+    const doors = joinedDoors({
+      podUrl: "http://localhost:4000",
+      signedIn: false,
+      onPhone: true,
+    });
+    expect(doors.map((d) => d.kind)).toEqual(["phone", "console"]);
   });
 
   it("not signed in, the console door is its sign-in", () => {
     expect(
-      joinedDoors({ podUrl: POD, signedIn: false, onPhone: false })[0]
+      joinedDoors({ podUrl: POD, signedIn: false, onPhone: false }).at(-1)
     ).toEqual({ kind: "console", href: "/login?return=/", signIn: true });
   });
 

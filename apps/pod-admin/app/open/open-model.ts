@@ -16,50 +16,35 @@ import { BOUNCE_TYPES, HOST_TYPES } from "./open-params";
 import { openT } from "./copy";
 
 /**
- * What a bounce card says and offers, for this viewer. The card used to say
- * "The web shows entities, views, rules, sessions, … Open this one in the
- * Synap app", listing our object kinds and leading with a desktop app a
- * client does not have (decision 7c832a88).
+ * What a bounce card says and offers. The card used to say "The web shows
+ * entities, views, rules, sessions, … Open this one in the Synap app",
+ * listing our object kinds.
  *
- *   - The object has a console page this viewer may open: that page is the
- *     door, nothing else is said; the desktop link stays a quiet second for
- *     the operator.
- *   - It has none: the card says so plainly. A pod admin (the operator) is
- *     told it lives in the desktop app and gets the link; anyone else is told
- *     who can open it, and no link.
+ *   - The object has a console page this viewer may open: that page leads,
+ *     and the Synap app is the second door.
+ *   - It has none: the card says so plainly, and the Synap app is the door.
+ *
+ * Either way the app is offered to everyone: the desktop app and the phone
+ * are where the work is done (decision 94cd8636).
  */
 export interface BounceCard {
   summary: string | null;
   status: string | null;
-  desktop: "primary" | "secondary" | null;
+  app: "primary" | "secondary";
 }
 
 export function bounceCard({
   consolePage,
-  viewerIsPodAdmin,
 }: {
   consolePage: boolean;
-  viewerIsPodAdmin: boolean;
 }): BounceCard {
+  if (consolePage) return { summary: null, status: null, app: "secondary" };
   const t = openT();
-  if (consolePage) {
-    return {
-      summary: null,
-      status: null,
-      desktop: viewerIsPodAdmin ? "secondary" : null,
-    };
-  }
-  return viewerIsPodAdmin
-    ? {
-        summary: t("bounce.operator"),
-        status: t("bounce.noWebPage"),
-        desktop: "primary",
-      }
-    : {
-        summary: t("bounce.member"),
-        status: t("bounce.noWebPage"),
-        desktop: null,
-      };
+  return {
+    summary: t("bounce.inApp"),
+    status: t("bounce.noWebPage"),
+    app: "primary",
+  };
 }
 
 /** `diagnose.resolveOpen`'s body (`OpenTarget`, resolve-open-target.ts). */

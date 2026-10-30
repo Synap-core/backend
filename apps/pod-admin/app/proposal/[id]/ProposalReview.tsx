@@ -18,7 +18,6 @@ import {
 } from "./ProposalReviewCard";
 import { AfterDecision } from "./ProposalSessionContext";
 import { afterDecisionShown } from "./proposal-session-model";
-import { useConsoleRole } from "../../(admin)/components/side-nav-role";
 import { proposalPageT } from "./copy";
 import { requestReadFailure } from "./request-read-failure";
 import { RequestUnreadable } from "./RequestUnreadable";
@@ -65,20 +64,13 @@ export function ProposalReview({
      does nothing at all when the app isn't installed, and this page is often
      someone's FIRST contact with Synap — arriving from an email or a CLI
      link — so "nothing happened" is the worst possible outcome here. */
-  /* The desktop app is the operator's workbench, not part of a client's
-     offer (decision 7c832a88): only a pod admin is offered it, as the quiet
-     footer. Everyone decides here. */
-  const role = useConsoleRole();
   const t = proposalPageT();
   const appExit = openIn({
     kind: "objectInApp",
     objectKind: "proposal",
     id: proposalId,
   });
-  const openInApp =
-    role === "admin" ? (
-      <ExitLink exit={appExit} label={t("openInDesktop")} />
-    ) : undefined;
+  const openInApp = <ExitLink exit={appExit} label={t("openInDesktop")} />;
 
   /* Shared with the other inbound routes — /open, invite, agent approval and
      OAuth consent — so a reader who lands on two of them recognises the
