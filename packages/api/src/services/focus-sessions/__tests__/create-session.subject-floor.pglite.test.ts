@@ -131,10 +131,20 @@ const hubStart = (body: Record<string, unknown>) =>
     body: JSON.stringify({ userId: USER, workspaceId: MY_SPACE, ...body }),
   });
 
+// An agent start must declare what done means (backend#514: NO_CRITERIA
+// otherwise), so every MCP start here carries one criterion. The subject floor
+// is then the only thing that can refuse it.
 const mcpStart = (args: Record<string, unknown>) =>
   sessionHandlers.synap_start_session!({
     toolName: "synap_start_session",
-    args: { matchTemplate: false, forceCreate: true, ...args },
+    args: {
+      matchTemplate: false,
+      forceCreate: true,
+      criteria: [
+        { key: "done", statement: "The test ran", check: { kind: "human" } },
+      ],
+      ...args,
+    },
     userId: USER,
     agentUserId: AGENT,
     apiKeyScopes: ["mcp.read", "mcp.write"],
