@@ -52,6 +52,11 @@ export function proposalPageT() {
  * tool run (the outward floor, `resolveGovernanceRule`), and deletes sit
  * under the destructive floor. A rule is taken back from a space's Governance
  * tab, which lists the space's rules and the pod-wide ones.
+ *
+ * "Reject & never…" (`RejectNeverMenu`, same file): rejects the request and
+ * stores a deny rule for THIS agent and THIS act (`deriveGovernanceNeverOption`),
+ * which the pod refuses from then on without asking (decision 956930ad).
+ * `never.reason` is the rejection reason the agent reads.
  */
 export const alwaysEn = {
   "always.trigger": "Approve & always…",
@@ -74,6 +79,21 @@ export const alwaysEn = {
   "always.ruleFailed": "Approved, but the rule wasn’t saved: {reason}",
   "always.approveFailed": "Couldn’t approve",
   "always.noReason": "no reason given",
+  "never.trigger": "Reject & never…",
+  "never.menu": "Reject and refuse this from now on",
+  "never.action.label": "This change from this agent, never",
+  "never.action.covers":
+    "Refused from now on, without asking you. Other agents and other changes still ask.",
+  "never.capability.label": "Never let this agent use “{name}”",
+  "never.capability.covers":
+    "This agent can no longer use this tool, even to read. Other agents still ask you.",
+  "never.reason":
+    "Refused for good: you will not be allowed to make this change again.",
+  "never.done.title": "Rejected",
+  "never.done.body":
+    "From now on: {label}. Take it back in Spaces › the space › Governance.",
+  "never.ruleFailed": "Rejected, but the rule wasn’t saved: {reason}",
+  "never.rejectFailed": "Couldn’t reject",
 } as const;
 
 export const alwaysFr: Catalog<typeof alwaysEn> = {
@@ -98,9 +118,25 @@ export const alwaysFr: Catalog<typeof alwaysEn> = {
     "Approuvé, mais la règle n’a pas été enregistrée : {reason}",
   "always.approveFailed": "Impossible d’approuver",
   "always.noReason": "sans raison donnée",
+  "never.trigger": "Refuser et jamais…",
+  "never.menu": "Refuser et le refuser désormais",
+  "never.action.label": "Ce changement par cet agent, jamais",
+  "never.action.covers":
+    "Refusé désormais, sans vous demander. Les autres agents et les autres changements vous sont toujours demandés.",
+  "never.capability.label": "Ne jamais laisser cet agent utiliser « {name} »",
+  "never.capability.covers":
+    "Cet agent ne peut plus utiliser cet outil, même pour lire. Les autres agents vous demandent toujours.",
+  "never.reason":
+    "Refusé définitivement\u00a0: vous ne pourrez plus faire ce changement.",
+  "never.done.title": "Refusé",
+  "never.done.body":
+    "Désormais : {label}. Vous pouvez le retirer dans Espaces › l’espace › Gouvernance.",
+  "never.ruleFailed":
+    "Refusé, mais la règle n’a pas été enregistrée : {reason}",
+  "never.rejectFailed": "Impossible de refuser",
 };
 
-/** The "Approve & always…" menu's translator, in the ambient catalog locale. */
+/** The "Approve & always…" and "Reject & never…" menus' translator, in the ambient catalog locale. */
 export function alwaysApproveT() {
   return createT(ambientCatalogLocale(), { en: alwaysEn, fr: alwaysFr });
 }
