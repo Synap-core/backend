@@ -7,6 +7,7 @@
 import type { EventAction } from "../events/unified.js";
 import { isLikelyUUID } from "./proposal-utils.js";
 import type { ProposalPartReach } from "./reach.js";
+import type { ProposalToolRun } from "./capability-run.js";
 export { isLikelyUUID };
 
 // Governance grant-option derivation (pure, browser-safe) — the SSOT the
@@ -36,6 +37,10 @@ export * from "./page-only.js";
 // What a part that acts on its own can reach, and the words for it (the
 // marketplace preflight says the same).
 export * from "./reach.js";
+export type {
+  ProposalToolRun,
+  ProposalToolRunParameter,
+} from "./capability-run.js";
 
 /**
  * The pod's cap on one batch decision (`proposals.batchApprove` /
@@ -675,6 +680,12 @@ export interface ProposalReviewModel {
    * on — see {@link ProposalTurnsOn}.
    */
   turnsOn?: ProposalTurnsOn;
+  /**
+   * Present ONLY for a `capability.run`: the call it makes — its action, the
+   * tool it runs through, and every argument with its value (secrets never
+   * leave the pod) — see {@link ProposalToolRun}.
+   */
+  toolRun?: ProposalToolRun;
   events: ProposalReviewEvent[];
 }
 

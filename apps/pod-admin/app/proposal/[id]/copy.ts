@@ -15,6 +15,13 @@ export const en = {
     "Show all {n, plural, one {# write} other {# writes}}",
   "deferredWrites.unreadable":
     "{n, plural, one {# write} other {# writes}} could not be read — the raw request is under Advanced.",
+  "toolRun.heading": "{action} · {tool}",
+  "toolRun.sends": "What it sends",
+  "toolRun.noArguments": "It sends no arguments.",
+  "toolRun.secret": "Hidden — a credential",
+  "toolRun.empty": "empty",
+  "toolRun.yes": "Yes",
+  "toolRun.no": "No",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -24,6 +31,13 @@ export const fr: Catalog<typeof en> = {
     "{n, plural, one {Afficher l’écriture} other {Afficher les # écritures}}",
   "deferredWrites.unreadable":
     "{n, plural, one {# écriture n’a pas pu être lue} other {# écritures n’ont pas pu être lues}}\u00a0: la requête brute est dans Avancé.",
+  "toolRun.heading": "{action} · {tool}",
+  "toolRun.sends": "Ce qu’il envoie",
+  "toolRun.noArguments": "Il n’envoie aucun argument.",
+  "toolRun.secret": "Masqué\u00a0: un identifiant",
+  "toolRun.empty": "vide",
+  "toolRun.yes": "Oui",
+  "toolRun.no": "Non",
 };
 
 /** The page's translator, in the ambient catalog locale. */

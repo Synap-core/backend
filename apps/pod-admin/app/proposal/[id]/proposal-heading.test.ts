@@ -28,6 +28,33 @@ const payload = {
 };
 
 describe("the review page heading", () => {
+  it("a tool run reads as its action and its tool, never 'Run Tool'", () => {
+    const row = {
+      targetType: "capability",
+      targetName: null,
+      proposalType: "capability.run",
+      review: {
+        toolRun: {
+          action: "Create server",
+          tool: "Hetzner cloud",
+          parameters: [],
+        },
+      },
+    };
+    expect(proposalHeading(row, {}).heading).toBe(
+      "Create server · Hetzner cloud"
+    );
+    expect(
+      proposalHeading(
+        {
+          ...row,
+          review: { toolRun: { action: "Create server", parameters: [] } },
+        },
+        {}
+      ).heading
+    ).toBe("Create server");
+  });
+
   it("an app/connect request reads '<app> asks for access', one line per space", () => {
     const h = proposalHeading(appConnectRow, payload);
     expect(h.heading).toBe("synap.live asks for access");
