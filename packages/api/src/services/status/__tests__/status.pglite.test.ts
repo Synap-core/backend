@@ -7,7 +7,8 @@
  *     their own transitions; a session's owed slot is what it waits on; an id
  *     the caller cannot see, or that is not a uuid, is `unknown`; a paused
  *     thing, session or run (its session's) shows its current hold, a resumed
- *     one none, and a failed hold read is `unavailable`;
+ *     one none, and a failed hold read is `unavailable`; a closed session
+ *     waits on nothing, the criterion owed after its close said apart;
  *   - `readGoalRollups`: a goal's sessions per category, its moves this
  *     week, what it waits on;
  *   - `readScopeRollup`: a space's things per category, its stuck things
@@ -93,6 +94,7 @@ const E_HELD = randomUUID();
 const E_RESUMED = randomUUID();
 const S_PAUSED = randomUUID();
 const RUN = randomUUID();
+const S_GRADED = randomUUID();
 const LATER = new Date(Date.now() + 7 * 86_400_000).toISOString();
 
 let client: PGlite;
@@ -322,6 +324,26 @@ beforeAll(async () => {
     reason: "Needs the brief",
     reviewBy: LATER,
   });
+  // Closed, with a criterion a person still grades (W3's close).
+  await q(
+    `insert into focus_sessions (id, user_id, workspace_id, goal, status, origin, expected_outputs, metadata, started_at, closed_at, created_at, updated_at)
+     values ($1, $2, null, 'Shipped', 'closed', 'agent', $3::jsonb, '{}'::jsonb, ${ago(4)}, now(), now(), now())`,
+    [
+      S_GRADED,
+      ME,
+      JSON.stringify([
+        {
+          key: "grade",
+          label: "Pass or fail: it ships",
+          kind: "decision",
+          owner: "human",
+          status: "pending",
+          criterionKey: "ships",
+          owedSince: new Date().toISOString(),
+        },
+      ]),
+    ]
+  );
   await q(
     `insert into playbook_runs (id, workspace_id, playbook_id, session_id, executor, status, created_by)
      values ($1, $2, $3, $4, 'is-agent', 'waiting_on_you', $5)`,
@@ -439,6 +461,21 @@ describe("readStatusOf: holds", () => {
       hold: null,
     });
     expect(by.get(E_MOVED)).toMatchObject({ hold: null });
+  });
+
+  it("a closed session waits on nothing; what is owed after its close is said apart", async () => {
+    const [graded, active] = await readStatusOf(ME, [S_GRADED, S_ACTIVE]);
+    expect(graded).toMatchObject({
+      type: "session",
+      category: "done",
+      waitingOn: [],
+      owedAfterClose: 1,
+    });
+    // An open one still waits on what it is owed, and owes nothing "after".
+    expect(active).toMatchObject({
+      waitingOn: [{ reason: "input", count: 1 }],
+    });
+    expect(active).not.toHaveProperty("owedAfterClose");
   });
 
   it("a FAILED hold read is unavailable, never `null`", async () => {

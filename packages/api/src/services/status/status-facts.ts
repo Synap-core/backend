@@ -142,13 +142,8 @@ export async function countMovesSince(
   return out;
 }
 
-/**
- * What a set of things WAITS ON, in the goal's own vocabulary (R4,
- * `deriveWaitingOn`): slots the person owes (THE owed-slot read), proposals
- * pending about them, and their open `blocked_by` blockers (THE dependency
- * read). One mark list for the whole set.
- */
-export async function readWaitingOn(input: {
+/** What a set of things waits on: the input of `readWaitingSources`. */
+export interface WaitingOnRead {
   userId: string;
   /** Owed slots: of these sessions, of sessions about these things, or in a scope. */
   owed?:
@@ -159,7 +154,24 @@ export async function readWaitingOn(input: {
   proposals?: { sessionIds?: string[]; targetIds?: string[] };
   /** Nodes whose open `blocked_by` blockers count. */
   blockedNodes?: Array<{ kind: "session" | "entity" | "track"; id: string }>;
-}): Promise<WaitingOnMark[]> {
+}
+
+/**
+ * What a set of things WAITS ON, in the goal's own vocabulary (R4,
+ * `deriveWaitingOn`): slots the person owes (THE owed-slot read), proposals
+ * pending about them, and their open `blocked_by` blockers (THE dependency
+ * read). One mark list for the whole set.
+ */
+export async function readWaitingOn(
+  input: WaitingOnRead
+): Promise<WaitingOnMark[]> {
+  return deriveWaitingOn(await readWaitingSources(input));
+}
+
+/** The sources `readWaitingOn` derives its marks from, one per thing found. */
+export async function readWaitingSources(
+  input: WaitingOnRead
+): Promise<WaitingOnSource[]> {
   const sources: WaitingOnSource[] = [];
   const sessionIds = input.proposals?.sessionIds ?? [];
   const targetIds = input.proposals?.targetIds ?? [];
@@ -217,7 +229,7 @@ export async function readWaitingOn(input: {
       sources.push({ kind: "blocked_by" });
     }
   }
-  return deriveWaitingOn(sources);
+  return sources;
 }
 
 /** Owed slots read per waiting-on question (a count past it is a floor). */

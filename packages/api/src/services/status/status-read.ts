@@ -6,7 +6,8 @@
  * said as not measured), whether it is stuck (only where the lifecycle
  * declares `stuckAfterDays`), what it waits on (`status-facts.ts`) and, while
  * it is paused, its HOLD: what the pause waits on, why and until when (the
- * current hold, `listHolds`; a run's is its session's).
+ * current hold, `listHolds`; a run's is its session's). A settled one (done ·
+ * lost) waits on nothing it could still move: see `waitingOf`.
  *
  * Served by orient's `statusOf` (no tool of its own). An id the caller cannot
  * see reads exactly like one that does not exist: `type: "unknown"`.
@@ -35,6 +36,7 @@ import {
   type RecordedHold,
 } from "@synap-core/types/lifecycle";
 import {
+  deriveWaitingOn,
   trackStatusCategory,
   type WaitingOnMark,
 } from "@synap-core/types/units";
@@ -54,7 +56,9 @@ import { stuckAfterDaysOf, stuckForDays } from "../lifecycle/status-groups.js";
 import {
   lastTransitionAt,
   readWaitingOn,
+  readWaitingSources,
   runStatusCategory,
+  type WaitingOnRead,
 } from "./status-facts.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -98,6 +102,12 @@ export interface StatusOf {
   /** Present only when its step declares a stuck rule and it is past it. */
   stuck?: { afterDays: number; forDays: number };
   waitingOn: WaitingOnMark[] | Unavailable;
+  /**
+   * Settled (done · lost) only, when there are some: the slots a person still
+   * owes it, e.g. the criteria to grade after its close (W3). Never counted
+   * in `waitingOn`.
+   */
+  owedAfterClose?: number | Unavailable;
   /** Its current hold while paused; null when it stands in no held pause. */
   hold: StatusHold | null | Unavailable;
   link: string;
@@ -124,6 +134,32 @@ async function orUnavailable<T>(p: Promise<T>): Promise<T | Unavailable> {
   } catch {
     return { status: "unavailable" };
   }
+}
+
+/**
+ * What a subject waits on, by its category. A settled one (done · lost) waits
+ * on nothing it could still move: its `blocked_by` blockers no longer count,
+ * the slots owed after its close are said apart (`owedAfterClose`), and only
+ * a proposal pending about it stays in `waitingOn` (a review it waits on).
+ */
+async function waitingOf(
+  read: WaitingOnRead,
+  category: LifecycleCategory | null
+): Promise<Pick<StatusOf, "waitingOn" | "owedAfterClose">> {
+  if (category !== "done" && category !== "lost") {
+    return { waitingOn: await orUnavailable(readWaitingOn(read)) };
+  }
+  const sources = await orUnavailable(
+    readWaitingSources({ ...read, blockedNodes: undefined })
+  );
+  if (!Array.isArray(sources)) {
+    return { waitingOn: sources, owedAfterClose: sources };
+  }
+  const owed = sources.filter((s) => s.kind === "owed_slot").length;
+  return {
+    waitingOn: deriveWaitingOn(sources.filter((s) => s.kind !== "owed_slot")),
+    ...(owed > 0 ? { owedAfterClose: owed } : {}),
+  };
 }
 
 export async function readStatusOf(
@@ -261,6 +297,11 @@ export async function readStatusOf(
           since.since && afterDays !== undefined
             ? stuckForDays(since.since, afterDays)
             : null;
+        // The declared option first (the rollups read it too), else the
+        // stored projection, so the two can never disagree.
+        const category =
+          option?.category ??
+          (isLifecycleCategory(t.statusCategory) ? t.statusCategory : null);
         return {
           id: t.id,
           type: "entity",
@@ -271,23 +312,20 @@ export async function readStatusOf(
             : t.status
               ? resolveStatusLabel(t.status)
               : null,
-          // The declared option first (the rollups read it too), else the
-          // stored projection, so the two can never disagree.
-          category:
-            option?.category ??
-            (isLifecycleCategory(t.statusCategory) ? t.statusCategory : null),
+          category,
           ...since,
           ...(forDays !== null && afterDays !== undefined
             ? { stuck: { afterDays, forDays } }
             : {}),
-          waitingOn: await orUnavailable(
-            readWaitingOn({
+          ...(await waitingOf(
+            {
               userId,
               owed: { subject: { kind: "entities", entityIds: [t.id] } },
               proposals: { targetIds: [t.id] },
               blockedNodes: [{ kind: "entity", id: t.id }],
-            })
-          ),
+            },
+            category
+          )),
           hold: await holdOf(`entity:${t.id}`),
           link: openLink(t.id),
         };
@@ -313,17 +351,22 @@ export async function readStatusOf(
       }))()
     );
   }
-  const sessionWaitingOn = (sessionId: string) =>
-    orUnavailable(
-      readWaitingOn({
+  const sessionWaitingOn = (
+    sessionId: string,
+    category: LifecycleCategory | null
+  ) =>
+    waitingOf(
+      {
         userId,
         owed: { sessionIds: [sessionId] },
         proposals: { sessionIds: [sessionId] },
         blockedNodes: [{ kind: "session", id: sessionId }],
-      })
+      },
+      category
     );
   for (const s of sessions) {
     const done = s.closedAt != null;
+    const category = sessionStatusCategory(s.status);
     answers.set(
       s.id,
       (async (): Promise<StatusOf> => ({
@@ -332,9 +375,9 @@ export async function readStatusOf(
         name: resolveSessionTitle(s) || null,
         status: s.status,
         label: resolveStatusLabel(s.status),
-        category: sessionStatusCategory(s.status),
+        category,
         ...sinceOf(`focus_session:${s.id}`, done ? s.closedAt : s.startedAt),
-        waitingOn: await sessionWaitingOn(s.id),
+        ...(await sessionWaitingOn(s.id, category)),
         hold: await holdOf(`focus_session:${s.id}`),
         link: openLink(s.id),
       }))()
@@ -344,6 +387,7 @@ export async function readStatusOf(
     // A run moves through no door, so it has no transition: a settled run's
     // completion time is when it entered its status; a live one's is unknown.
     const settled = r.completedAt != null;
+    const category = runStatusCategory(r.status);
     answers.set(
       r.id,
       (async (): Promise<StatusOf> => ({
@@ -352,10 +396,12 @@ export async function readStatusOf(
         name: null,
         status: r.status,
         label: resolveStatusLabel(r.status),
-        category: runStatusCategory(r.status),
+        category,
         since: iso(r.completedAt ?? r.startedAt),
         sinceMeasured: settled,
-        waitingOn: r.sessionId ? await sessionWaitingOn(r.sessionId) : [],
+        ...(r.sessionId
+          ? await sessionWaitingOn(r.sessionId, category)
+          : { waitingOn: [] }),
         hold: r.sessionId ? await holdOf(`focus_session:${r.sessionId}`) : null,
         link: openLink(r.sessionId ?? r.id),
       }))()
