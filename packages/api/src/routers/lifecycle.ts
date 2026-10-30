@@ -14,7 +14,9 @@
  *   lifecycle.statusOf — WHERE DOES IT STAND for up to 10 ids (things, goals,
  *                     sessions, runs): status, category, since, what it waits
  *                     on (with refs), the current hold, and for a session
- *                     `live` + `nextMove`. The screens' door to the SAME read
+ *                     `live` + `nextMove`; its tone, and with
+ *                     `include: ["moves"]` a thing's offered moves. The
+ *                     screens' door to the SAME read
  *                     orient's `statusOf` serves on MCP and Hub REST
  *                     (`services/status/status-read.ts`, `readStatusOf`).
  *
@@ -53,7 +55,11 @@ import { listEnabledWorkers } from "../services/playbooks/workers.js";
 import { loadWorkedBy } from "../services/lifecycle/worked-by.js";
 import { loadCardFaces } from "../services/lifecycle/card-face.js";
 import { rosterReadFor } from "../access/session-visibility.js";
-import { readStatusOf, statusOfInput } from "../services/status/status-read.js";
+import {
+  readStatusOf,
+  statusOfIncludeInput,
+  statusOfInput,
+} from "../services/status/status-read.js";
 import {
   countStuckThings,
   countTerminalEntriesByBucket,
@@ -430,8 +436,16 @@ export type LifecycleThroughputWire = z.infer<typeof throughputWire>;
 
 export const lifecycleRouter = router({
   statusOf: podProcedure
-    .input(z.object({ ids: statusOfInput.unwrap().min(1) }))
-    .query(({ input, ctx }) => readStatusOf(ctx.userId, input.ids)),
+    .input(
+      z.object({
+        ids: statusOfInput.unwrap().min(1),
+        /** Parts beyond the status, on request: `moves` (a thing's step's moves). */
+        include: statusOfIncludeInput,
+      })
+    )
+    .query(({ input, ctx }) =>
+      readStatusOf(ctx.userId, input.ids, { include: input.include })
+    ),
 
   get: podProcedure
     .input(
