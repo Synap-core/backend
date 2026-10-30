@@ -155,10 +155,11 @@ export const oauthAuthorizationCodes = pgTable(
     // "Sign in with Synap" (0339): the `[{ permission, workspaceId }]` the
     // person saw and approved for an APP client (`client_id` = `app_…`). /token
     // mints this ∩ the app's approval ∩ the person's reach at mint time, so the
-    // token is never wider than the consent. NULL for every other client.
+    // token is never wider than the consent. NULL for every other client. A
+    // null space is the app owner's own pod-wide read (decision e1b59d38).
     appGrant:
       jsonb("app_grant").$type<
-        Array<{ permission: string; workspaceId: string }>
+        Array<{ permission: string; workspaceId: string | null }>
       >(),
 
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })

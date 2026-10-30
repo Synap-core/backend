@@ -3339,10 +3339,16 @@ export interface CatalogSyncStamp {
  *
  * ONE write door: `AppRepository` (repositories/app-repository.ts).
  */
-/** One entry of `apps.approved_requests` — a permission bounded to a workspace. */
+/**
+ * One entry of `apps.approved_requests` — a permission bounded to a workspace,
+ * or, with `workspaceId: null`, a POD-WIDE read ("everywhere in your pod",
+ * founder decision e1b59d38 "B", 2026-10-30). Null is allowed ONLY for a
+ * permission `isPodWideReadPermission` accepts: every reader refuses (drops)
+ * any other null pair, so a write is always bounded to a workspace.
+ */
 export interface AppApprovedRequest {
 	permission: string;
-	workspaceId: string;
+	workspaceId: string | null;
 }
 /**
  * Cell Instances Schema — The Universal Rendering Unit (persisted)
@@ -14719,6 +14725,16 @@ export interface OAuthAppConsent {
 	permissions: Array<OAuthAppOfferItem & {
 		reason: string | null;
 	}>;
+	/**
+	 * The permissions it asks for EVERYWHERE IN THE POD (`synap_requests[].scope
+	 * = "pod"`, decision e1b59d38 "B"): each a read of one named kind, one tick
+	 * each, shown in their own section. Ticked, each is sent as
+	 * `{ permission, workspaceId: null }`. Never also in `permissions`.
+	 */
+	podWide: Array<{
+		permission: string;
+		reason: string | null;
+	}>;
 	/** What this person approved for this app before (re-consent pre-ticks it). */
 	approved: AppApprovedRequest[];
 	/**
@@ -24372,7 +24388,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				approve: boolean;
 				approved?: {
 					permission: string;
-					workspaceId: string;
+					workspaceId: string | null;
 				}[] | undefined;
 				authRequest?: string | undefined;
 				clientId: string;
@@ -25192,7 +25208,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				approved: {
 					permission: string;
-					workspaceId: string;
+					workspaceId: string | null;
 				}[];
 				publicId: string;
 			};

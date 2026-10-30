@@ -546,7 +546,7 @@ export function homeSpaceDocumentWhere(
  */
 export function homeSpaceInSpacesMemberWhere(
   workspaceIdColumn: AnyPgColumn,
-  spaces: SpaceIds
+  spaces: readonly string[]
 ): SQL {
   return homeSpaceInSpacesWhere(
     workspaceIdColumn,
@@ -564,7 +564,7 @@ export function homeSpaceInSpacesMemberWhere(
 export function homeSpaceDocumentInSpacesWhere(
   documentWorkspaceIdColumn: AnyPgColumn,
   documentIdColumn: AnyPgColumn,
-  spaces: SpaceIds
+  spaces: readonly string[]
 ): SQL {
   return podWideBodyOfWhere(
     documentWorkspaceIdColumn,

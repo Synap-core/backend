@@ -528,10 +528,13 @@ export interface AppKeyLike {
   lastUsedAt?: string | Date | null;
 }
 
-/** An app's open request for access (the pending `app/connect` proposal). */
+/**
+ * An app's open request for access (the pending `app/connect` proposal). A
+ * null space is a pod-wide read (decision e1b59d38).
+ */
 export interface AppPendingRequestLike {
   proposal_id: string;
-  requests: ReadonlyArray<{ permission: string; workspaceId: string }>;
+  requests: ReadonlyArray<{ permission: string; workspaceId: string | null }>;
   /** A `Date` through tRPC (superjson), an ISO string through a JSON proxy. */
   requested_at: string | Date;
 }
