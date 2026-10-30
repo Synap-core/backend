@@ -14660,24 +14660,14 @@
       "post": {
         "tags": ["Capabilities"],
         "summary": "Reconcile standalone-installed views/skills/automations to their templates",
-        "description": "Advances each standalone-installed view/skill/automation's untouched fields to its source marketplace template through the governed per-kind `.update` door. A user-edited field is owner-owned — left alone and reported. A private/unsynced package is skipped. `packageSlugs` and `ids` narrow the pass to those packages and rows (an empty list reconciles nothing). `dryRun:true` computes the report without writing. Requires hub-protocol.write scope.",
+        "description": "Advances each standalone-installed view/skill/automation's untouched fields to its source marketplace template through the governed per-kind `.update` door. A user-edited field is owner-owned — left alone and reported. A private/unsynced package is skipped. `dryRun:true` computes the report without writing. Requires hub-protocol.write scope.",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "properties": {
-                  "dryRun": { "type": "boolean" },
-                  "packageSlugs": {
-                    "type": "array",
-                    "items": { "type": "string", "minLength": 1 }
-                  },
-                  "ids": {
-                    "type": "array",
-                    "items": { "type": "string", "format": "uuid" }
-                  }
-                }
+                "properties": { "dryRun": { "type": "boolean" } }
               }
             }
           }

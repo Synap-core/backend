@@ -58,8 +58,6 @@ import {
   readMarketSource,
   threeWayMergeFields,
   detachMarketSource,
-  deepEqual,
-  MARKET_SOURCE_COMPARATOR_VERSION,
 } from "./market-source.js";
 import { lookupCatalogEntry } from "./marketplace-install.js";
 import { admitOfficialDefinition } from "./official-catalog-trust.js";
@@ -86,9 +84,7 @@ export interface StandaloneReconcileReport {
   /** Rows whose untouched-since-install fields advanced to the template. */
   updated: StandaloneReconcileEntry[];
   /** Rows carrying at least one field the user EDITED since install — left
-   *  alone, never overwritten, surfaced so the divergence is visible. The
-   *  reason names the fields the catalog changed too ("conflicted") apart from
-   *  those only the user changed ("yours only"). */
+   *  alone, never overwritten, surfaced so the divergence is visible. */
   ownerOwnedSkipped: StandaloneReconcileEntry[];
   /** Nothing to do — no source-link, cache miss, unresolved definition, no
    *  matching element in the package, or already up to date. */
@@ -175,20 +171,6 @@ interface KindAdapter {
     merged: Record<string, unknown>;
     metadata: Record<string, unknown>;
   }): Promise<"updated" | "proposed">;
-}
-
-/** The owner-owned report line: every kept field, then which of them the
- *  catalog changed too (conflicted) and which only the user changed. */
-function ownerOwnedReason(ownerOwned: string[], conflicted: string[]): string {
-  const yoursOnly = ownerOwned.filter((k) => !conflicted.includes(k));
-  const parts = [`owner-owned (left alone): [${ownerOwned.join(",")}]`];
-  if (conflicted.length > 0) {
-    parts.push(
-      `conflicted (the catalog changed them too): [${conflicted.join(",")}]`
-    );
-  }
-  if (yoursOnly.length > 0) parts.push(`yours only: [${yoursOnly.join(",")}]`);
-  return parts.join("; ");
 }
 
 /** Match a row to its element: exact name, else the sole element in the pack. */
@@ -320,8 +302,6 @@ export async function reconcileStandaloneConfigsToTemplates(
     dryRun?: boolean;
     /** NARROW to specific row ids across all three kinds. */
     ids?: string[];
-    /** NARROW to rows installed from these packages (`marketSource.packageSlug`). */
-    packageSlugs?: string[];
   } = {}
 ): Promise<StandaloneReconcileReport> {
   const dryRun = !!opts.dryRun;
@@ -338,13 +318,9 @@ export async function reconcileStandaloneConfigsToTemplates(
   // ("reconcile everything"). Return the empty report rather than silently
   // falling through to a full pod-wide reconcile (the same landmine the
   // capability reconcile guards, for a future "apply selected" caller).
-  if (
-    (opts.ids && opts.ids.length === 0) ||
-    (opts.packageSlugs && opts.packageSlugs.length === 0)
-  ) {
+  if (opts.ids && opts.ids.length === 0) {
     return report;
   }
-  const slugFilter = opts.packageSlugs ? new Set(opts.packageSlugs) : null;
 
   for (const adapter of ADAPTERS) {
     let rows: Record<string, unknown>[];
@@ -364,8 +340,6 @@ export async function reconcileStandaloneConfigsToTemplates(
       );
       // Not a marketplace-installed config — not our concern, not "checked".
       if (!source) continue;
-      // Installed from a package the caller did not name — not "checked".
-      if (slugFilter && !slugFilter.has(source.packageSlug)) continue;
 
       report.checked++;
       const id = row.id as string;
@@ -460,25 +434,11 @@ export async function reconcileStandaloneConfigsToTemplates(
         if (r.ownerOwned.length > 0) {
           report.ownerOwnedSkipped.push({
             ...base,
-            reason: ownerOwnedReason(r.ownerOwned, r.conflicted),
+            reason: `owner-owned (left alone): [${r.ownerOwned.join(",")}]`,
           });
         }
 
-        // The stamp is earned: the row is at the catalog's version once this
-        // pass leaves no field CONFLICTED — every managed field applied, already
-        // the same, or the owner's own edit of a field the catalog did not
-        // change. Without it a row whose fields already matched kept its
-        // install version, and a version-comparing list read "content changed"
-        // forever while this pass answered "no drift". A conflicted field keeps
-        // the old version, so the list and this pass both still flag the row.
-        const version =
-          r.conflicted.length === 0
-            ? (cacheRow.version ?? source.packageVersion)
-            : source.packageVersion;
-        const baselineMoved = !deepEqual(r.nextBaseline, source.baseline);
-        const stampStale = version !== source.packageVersion;
-
-        if (!baselineMoved && !stampStale) {
+        if (!r.changed) {
           // Nothing advanced. Only record a plain "no drift" skip when there was
           // also no owner-owned divergence (already reported above).
           if (r.ownerOwned.length === 0) {
@@ -487,41 +447,20 @@ export async function reconcileStandaloneConfigsToTemplates(
           continue;
         }
 
-        const bookkeeping = stampStale
-          ? `version ${version ?? "(unknown)"}`
-          : "the baseline";
-
         if (dryRun) {
-          if (r.changed) {
-            report.updated.push({
-              ...base,
-              reason: `would update: [${r.applied.join(",")}]`,
-            });
-          } else if (r.ownerOwned.length === 0) {
-            report.skipped.push({
-              ...base,
-              reason: `up to date (no drift); would record ${bookkeeping}`,
-            });
-          }
+          report.updated.push({
+            ...base,
+            reason: `would update: [${r.applied.join(",")}]`,
+          });
           continue;
         }
 
-        // Advance the baseline for the fields that moved or already match
-        // (owner-owned fields keep their old base so their divergence stays
-        // detected next pass) and stamp the version when earned, preserving
-        // packageSlug / installedAt.
+        // Advance the baseline for the fields that moved (owner-owned fields keep
+        // their old base so their divergence stays detected next pass), preserving
+        // packageSlug / packageVersion / installedAt.
         const nextMetadata: Record<string, unknown> = {
           ...((row.metadata as Record<string, unknown> | null) ?? {}),
-          marketSource: {
-            ...source,
-            ...(stampStale
-              ? {
-                  packageVersion: version,
-                  comparatorVersion: MARKET_SOURCE_COMPARATOR_VERSION,
-                }
-              : {}),
-            baseline: r.nextBaseline,
-          },
+          marketSource: { ...source, baseline: r.nextBaseline },
         };
         const ctx = buildRowCtx(
           adapter.creatorOf(row),
@@ -530,27 +469,19 @@ export async function reconcileStandaloneConfigsToTemplates(
         const outcome = await adapter.applyUpdate({
           ctx,
           id,
-          // Bookkeeping alone writes no field.
-          merged: r.changed ? r.merged : {},
+          merged: r.merged,
           metadata: nextMetadata,
         });
 
         if (outcome === "proposed") {
           report.skipped.push({
             ...base,
-            reason: r.changed
-              ? `update proposed for review: [${r.applied.join(",")}]`
-              : `${bookkeeping} proposed for review`,
+            reason: `update proposed for review: [${r.applied.join(",")}]`,
           });
-        } else if (r.changed) {
+        } else {
           report.updated.push({
             ...base,
             reason: `updated: [${r.applied.join(",")}]`,
-          });
-        } else if (r.ownerOwned.length === 0) {
-          report.skipped.push({
-            ...base,
-            reason: `up to date (no drift); recorded ${bookkeeping}`,
           });
         }
       } catch (err) {
@@ -604,6 +535,10 @@ export interface DetachResult {
  * Attributed to the ACTING user (a user action, unlike the system-attributed
  * reconcile) so the governed door authorizes against the caller's real write
  * access to the row's workspace.
+ *
+ * NOTE (same gap as the skill reconcile above): `skillsRouter.update` carries
+ * no `metadata` field, so a skill detach does NOT yet persist — it will the
+ * moment that door threads `metadata`. Views and automations detach today.
  */
 export async function detachStandaloneConfigSource(args: {
   kind: StandaloneKind;
