@@ -114,6 +114,7 @@ export function toLifecycleWire(
         ? { stuckAfterDays: o.stuckAfterDays }
         : {}),
       ...(o.dateBinding !== undefined ? { dateBinding: o.dateBinding } : {}),
+      ...(o.waits !== undefined ? { waits: o.waits } : {}),
     })),
   };
 }

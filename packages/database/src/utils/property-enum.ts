@@ -69,6 +69,12 @@ export interface StoredEnumOption {
   stuckAfterDays?: number;
   /** The date property the option is bound to (`utils/lifecycle-model.ts`). */
   dateBinding?: string;
+  /**
+   * The wait the step declares (`utils/lifecycle-model.ts`): kept as an
+   * object here, validated by the lifecycle declaration. A field this mapper
+   * drops is silently stripped from every stored option.
+   */
+  waits?: Record<string, unknown>;
 }
 
 /** The authoring shape a template property arrives in. */
@@ -135,6 +141,9 @@ export function normalizeEnumOptions(
       opt.stuckAfterDays = raw.stuckAfterDays;
     if (typeof raw.dateBinding === "string" && raw.dateBinding.trim())
       opt.dateBinding = raw.dateBinding.trim();
+    // Kept when it is an object; its VALIDITY is the lifecycle declaration's.
+    if (raw.waits && typeof raw.waits === "object" && !Array.isArray(raw.waits))
+      opt.waits = { ...(raw.waits as Record<string, unknown>) };
     out.push(opt);
   }
   return out.length ? out : undefined;

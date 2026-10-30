@@ -78,34 +78,72 @@ export function withLifecycleOptions<
 }
 
 /**
- * Each option's `dateBinding` must name a DATE property of EVERY profile the
- * lifecycle is declared on (each one's own def, one linked to it, or an
- * ancestor's): a profile without it would carry a date rule it cannot read.
- * One problem line per (binding, profile) that fails. Shared by
- * `declareLifecycle` and `changeLifecycleOptions`.
+ * Each option's `dateBinding`, and its step wait's `waits.dateBinding`, must
+ * name a DATE property of EVERY profile the lifecycle is declared on (each
+ * one's own def, one linked to it, or an ancestor's): a profile without it
+ * would carry a date rule it cannot read. A step wait's `waits.refFrom` must
+ * name a property of each, of any type (who or what is waited on). One
+ * problem line per (field, profile) that fails. Shared by `declareLifecycle`
+ * and `changeLifecycleOptions`.
  */
 export async function dateBindingProblems(
   db: Db,
   profileIds: readonly string[],
-  options: ReadonlyArray<{ key: string; dateBinding?: string }>
+  options: ReadonlyArray<{
+    key: string;
+    dateBinding?: string;
+    waits?: { dateBinding?: string; refFrom?: string };
+  }>
 ): Promise<string[]> {
+  const named: NamedProperty[] = options.flatMap((o) => [
+    ...(o.dateBinding
+      ? [{ key: o.key, field: "dateBinding", slug: o.dateBinding, date: true }]
+      : []),
+    ...(o.waits?.dateBinding
+      ? [
+          {
+            key: o.key,
+            field: "waits.dateBinding",
+            slug: o.waits.dateBinding,
+            date: true,
+          },
+        ]
+      : []),
+    ...(o.waits?.refFrom
+      ? [
+          {
+            key: o.key,
+            field: "waits.refFrom",
+            slug: o.waits.refFrom,
+            date: false,
+          },
+        ]
+      : []),
+  ]);
+  if (named.length === 0) return [];
   const problems: string[] = [];
   for (const profileId of profileIds) {
-    problems.push(...(await profileDateProblems(db, profileId, options)));
+    problems.push(...(await profilePropertyProblems(db, profileId, named)));
   }
   return problems;
 }
 
-async function profileDateProblems(
+interface NamedProperty {
+  key: string;
+  field: string;
+  slug: string;
+  /** Must be a `date` property; otherwise any property. */
+  date: boolean;
+}
+
+async function profilePropertyProblems(
   db: Db,
   profileId: string,
-  options: ReadonlyArray<{ key: string; dateBinding?: string }>
+  named: readonly NamedProperty[]
 ): Promise<string[]> {
-  const bound = options.filter((o) => o.dateBinding);
-  if (bound.length === 0) return [];
   const ids = sql`${profileId}::uuid`;
   const slugs = sql.join(
-    [...new Set(bound.map((o) => o.dateBinding!))].map((v) => sql`${v}`),
+    [...new Set(named.map((n) => n.slug))].map((v) => sql`${v}`),
     sql`, `
   );
   const res = (await db.execute(sql`
@@ -116,23 +154,25 @@ async function profileDateProblems(
         FROM profiles p JOIN chain c ON p.id = c.parent_profile_id
        WHERE c.depth < 16
     )
-    SELECT DISTINCT pd.slug
+    SELECT DISTINCT pd.slug, pd.value_type
       FROM property_defs pd
-     WHERE pd.value_type = 'date'
-       AND pd.slug IN (${slugs})
+     WHERE pd.slug IN (${slugs})
        AND (pd.profile_id IN (SELECT id FROM chain)
             OR EXISTS (SELECT 1 FROM profile_properties pp
                         WHERE pp.property_def_id = pd.id
                           AND pp.profile_id IN (SELECT id FROM chain)))`)) as
-    Array<{ slug: string }> | { rows: Array<{ slug: string }> };
+    | Array<{ slug: string; value_type: string }>
+    | { rows: Array<{ slug: string; value_type: string }> };
+  const rows = Array.isArray(res) ? res : res.rows;
+  const any = new Set(rows.map((r) => r.slug));
   const dates = new Set(
-    (Array.isArray(res) ? res : res.rows).map((r) => r.slug)
+    rows.filter((r) => r.value_type === "date").map((r) => r.slug)
   );
-  return bound
-    .filter((o) => !dates.has(o.dateBinding!))
+  return named
+    .filter((n) => !(n.date ? dates : any).has(n.slug))
     .map(
-      (o) =>
-        `option "${o.key}" dateBinding "${o.dateBinding}" is not a date property of this profile`
+      (n) =>
+        `option "${n.key}" ${n.field} "${n.slug}" is not a ${n.date ? "date " : ""}property of this profile`
     );
 }
 

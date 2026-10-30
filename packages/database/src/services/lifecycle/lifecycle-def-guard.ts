@@ -129,6 +129,16 @@ export function checkLifecycleDefUpdate(
         `"${o.key}" dateBinding is set through the lifecycle door (it must name a date property)`
       );
     }
+    // A step wait names properties too (`waits.refFrom`, `waits.dateBinding`):
+    // the same door, for the same reason.
+    if (
+      o.waits !== undefined &&
+      JSON.stringify(o.waits) !== JSON.stringify(prev?.waits)
+    ) {
+      reasons.push(
+        `"${o.key}" waits is set through the lifecycle door (it names the profile's properties)`
+      );
+    }
     if (!prev) {
       if (!isLifecycleCategory(o.category)) {
         reasons.push(`the new option "${o.key}" needs a category`);
@@ -243,7 +253,8 @@ export async function changeLifecycleOptions(
         b.tone === o.tone &&
         Boolean(b.humanOnly) === Boolean(o.humanOnly) &&
         b.stuckAfterDays === o.stuckAfterDays &&
-        b.dateBinding === o.dateBinding
+        b.dateBinding === o.dateBinding &&
+        JSON.stringify(b.waits) === JSON.stringify(o.waits)
       );
     });
   if (same) return { status: "unchanged" };
