@@ -161,9 +161,10 @@ export const readHandlers: McpHandlerMap = {
     );
     // `brief` caps the envelope too (sources, pending summaries, no spaces):
     // the prose budget alone left one ask at 62,594 chars.
-    // Both replies below spread `capped`, never `synthesis`: under brief the
-    // cap also shortens `truncated.omittedSources`, and spreading the uncapped
-    // result put the full list back (a live brief carried 8 against a cap of 5).
+    // The service result stays `synthesis` and is spread whole below; the cap
+    // overrides `sources` (+ `sourcesOmitted`) and `truncated` on top of it.
+    // Without the `truncated` override the spread put the full omitted list
+    // back (a live brief carried 8 against a cap of 5).
     const {
       synthesis: capped,
       pending,
@@ -174,6 +175,7 @@ export const readHandlers: McpHandlerMap = {
       ...(capped.sourcesOmitted
         ? { sourcesOmitted: capped.sourcesOmitted }
         : {}),
+      ...(capped.truncated ? { truncated: capped.truncated } : {}),
     };
     // The PENDING block (`ask`'s Wave-3 lane): the caller's own pending
     // proposals whose content matches this query — surfaced SEPARATELY from the
@@ -198,7 +200,7 @@ export const readHandlers: McpHandlerMap = {
       // the agent to retry a failure no retry can fix.
       const failure = describeAiFailure(synthesis.failureClass ?? "unknown");
       return ok({
-        ...capped,
+        ...synthesis,
         ...sourcesBlock,
         ...pendingBlock,
         ...spacesBlock,
@@ -223,9 +225,10 @@ export const readHandlers: McpHandlerMap = {
     // index went down). The hub `/answer` door has forwarded it since the
     // keyword-fallback incident; this door never did, so an MCP caller — the
     // primary agent surface — could not tell a healthy empty result from a
-    // degraded one. `truncated` rides along inside `...capped`.
+    // degraded one. `truncated` rides along inside `...synthesis`, and under
+    // brief `sourcesBlock` replaces it with the capped one.
     return ok({
-      ...capped,
+      ...synthesis,
       ...(fromLibrary
         ? {
             answer: untrusted(
