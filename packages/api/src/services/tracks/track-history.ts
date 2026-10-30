@@ -56,10 +56,10 @@ import {
   type TrackHistoryEvent,
   type TrackHistoryWire,
 } from "@synap-core/types/units";
-import { readProposalReviewComments } from "@synap-core/types/proposals";
 import type { ActivityActor } from "@synap-core/types/activity";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { workAndTrackedRunsWhere } from "../focus-sessions/session-list-conditions.js";
+import { decisionEvents } from "../activity/decision-events.js";
 import { activityActorOf, loadActorRows } from "../activity/activity-actors.js";
 import { TRACK_STAGE_GATE_TARGET_TYPE } from "../playbooks/stage-gate.js";
 import { getTrack, type TrackActor } from "./tracks-service.js";
@@ -426,49 +426,20 @@ export async function readTrackHistory(
     truncated = true;
     decisionRows.length = cap;
   }
-  for (const p of decisionRows) {
-    const stageKey =
-      p.targetType === TRACK_STAGE_GATE_TARGET_TYPE && p.gateStage
-        ? p.gateStage
-        : ((p.sessionId ? sessionStage.get(p.sessionId) : null) ?? null);
-    const refs = {
-      proposalId: p.id,
-      ...(p.sessionId ? { sessionId: p.sessionId } : {}),
-    };
-    if (p.status === "pending") {
-      out.push({
-        event: {
-          id: `proposal:${p.id}:ask`,
-          kind: "decision_asked",
-          at: iso(p.createdAt)!,
-          stageKey,
-          refs,
-          title: p.summary ?? null,
-        },
-        actorId: p.authorId,
-        isAgent: Boolean(p.agentUserId),
-      });
-      continue;
-    }
-    const approvalNote = readProposalReviewComments(p.comments)
-      .filter((c) => c.kind === "approval")
-      .at(-1)?.text;
-    out.push({
-      event: {
-        id: `proposal:${p.id}:answer`,
-        kind: "decision_answered",
-        at: iso(p.reviewedAt)!,
-        stageKey,
-        refs,
-        title: p.summary ?? null,
-        decision: p.status,
-        note:
-          (p.status === "rejected" ? p.rejectionReason : approvalNote) ?? null,
+  out.push(
+    ...decisionEvents(decisionRows, (p) => ({
+      refs: {
+        proposalId: p.id,
+        ...(p.sessionId ? { sessionId: p.sessionId } : {}),
       },
-      actorId: p.reviewedBy,
-      isAgent: false,
-    });
-  }
+      extra: {
+        stageKey:
+          p.targetType === TRACK_STAGE_GATE_TARGET_TYPE && p.gateStage
+            ? p.gateStage
+            : ((p.sessionId ? sessionStage.get(p.sessionId) : null) ?? null),
+      },
+    }))
+  );
 
   // ── name every actor, in one read ─────────────────────────────────────────
   const rows = await loadActorRows(out.map((p) => p.actorId));

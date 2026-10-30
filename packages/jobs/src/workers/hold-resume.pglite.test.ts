@@ -48,6 +48,7 @@ vi.mock("@synap/events", () => ({
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
+  events,
   focusSessions,
   lifecycleTransitionOutbox,
   projectTracks,
@@ -108,6 +109,7 @@ beforeAll(async () => {
     h.followUps.push(r);
   });
   for (const t of [
+    events,
     focusSessions,
     lifecycleTransitionOutbox,
     projects,
@@ -255,5 +257,98 @@ describe("the awaited thing moved (until.moves)", () => {
       actorKind: "system",
       reason: `What it waited on (focus_session:${awaited}) moved to closed.`,
     });
+  });
+});
+
+describe("a dev fact (until.moves = pr: / main: / job:)", () => {
+  const PR_REF = "pr:synap-core/backend#47";
+  const BE = "Synap-core/backend";
+  async function devFact(
+    user: string,
+    type: string,
+    data: Record<string, unknown>,
+    at = new Date(Date.now() + 1_000)
+  ) {
+    await q(
+      `insert into events (id, type, user_id, subject_id, subject_type, data, timestamp)
+       values ($1, $2, $3, $4, 'observation', $5::jsonb, $6)`,
+      [randomUUID(), type, user, randomUUID(), JSON.stringify(data), at]
+    );
+  }
+  async function pausedOn(moves: string, to?: string): Promise<string> {
+    const id = await session();
+    await setSessionStatus(db, {
+      sessionId: id,
+      from: "active",
+      to: "paused",
+      actor: HUMAN,
+      hold: { on: "external", until: { moves, ...(to ? { to } : {}) } },
+    });
+    return id;
+  }
+
+  it("the fact's job resumes the hold that names it, once the owner's fact is in", async () => {
+    const waiter = await pausedOn("pr:Synap-core/Backend#47");
+    // Recorded in ONE spelling, so the fact's ref finds it.
+    expect((await lastOwed(waiter)).hold).toMatchObject({
+      until: { moves: PR_REF },
+    });
+    const pr = {
+      repo: BE,
+      number: 47,
+      url: `https://github.com/${BE}/pull/47`,
+    };
+
+    // No fact yet; then another person's merge: nothing moves.
+    expect((await handleHoldResume({ devFact: PR_REF })).resumed).toBe(0);
+    await devFact("u2", "dev.pr_merged", { ...pr, intoDefault: true });
+    expect((await handleHoldResume({ devFact: PR_REF })).resumed).toBe(0);
+    expect(await statusOf("focus_sessions", waiter)).toBe("paused");
+
+    await devFact("u1", "dev.pr_merged", { ...pr, intoDefault: true });
+    expect((await handleHoldResume({ devFact: PR_REF })).resumed).toBe(1);
+    expect(await statusOf("focus_sessions", waiter)).toBe("active");
+    expect(await lastOwed(waiter)).toMatchObject({
+      from: "paused",
+      to: "active",
+      actorKind: "system",
+      reason: `What it waited on (${PR_REF}) is in.`,
+    });
+  });
+
+  it("the hourly sweep resumes a job hold whose run ended after the pause, and a main hold once main is green", async () => {
+    const onJob = await pausedOn("job:dev-feed-h", "failed");
+    const onMain = await pausedOn(`main:${BE}`);
+    const ci = (status: string, at?: Date) =>
+      devFact(
+        "u1",
+        "ci.finished",
+        {
+          repo: BE,
+          sha: "a".repeat(40),
+          status,
+          workflow: "devbox dev-feed-h",
+        },
+        at
+      );
+    // A run of the same name BEFORE the pause, and a pass after it: the hold
+    // waits for a failure.
+    await ci("failure", new Date(Date.now() - DAY));
+    await ci("success");
+    const snapshot = (health: string, observedAt: Date) =>
+      devFact(
+        "u1",
+        "dev.repo_snapshot",
+        { repo: BE, observedAt: observedAt.toISOString(), main: { health } },
+        observedAt
+      );
+    await snapshot("red", new Date(Date.now() + 1_000));
+    expect((await handleHoldResume({}, new Date())).resumed).toBe(0);
+
+    await ci("failure", new Date(Date.now() + 2_000));
+    await snapshot("ok", new Date(Date.now() + 3_000));
+    expect((await handleHoldResume({}, new Date())).resumed).toBe(2);
+    expect(await statusOf("focus_sessions", onJob)).toBe("active");
+    expect(await statusOf("focus_sessions", onMain)).toBe("active");
   });
 });

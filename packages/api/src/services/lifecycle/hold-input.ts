@@ -10,6 +10,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
+  HOLD_DEV_MOVES_HELP,
   HOLD_ON,
   OCCURRED_AT_MAX_PAST_DAYS,
   type Hold,
@@ -61,7 +62,7 @@ const AGENT_HOLD_ON = HOLD_ON.filter((on) => on !== "unspecified");
 export const MOVE_HOLD_TOOL_PROPERTIES = {
   hold: {
     type: "object",
-    description: `Required when the move pauses. Say what it waits on. on: ${AGENT_HOLD_ON.join(" | ")}. ref: who or what ('person:<id>', 'company:<id>', a label). reason: why. until: { date: ISO } resumes on that day; { moves: '<entity|track|focus_session>:<id>', to?: status or category } resumes when that thing moves. reviewBy: an ISO date to look again (14 days by default when nothing resumes it on a date). Leave it out when the move does not pause.`,
+    description: `Required when the move pauses. Say what it waits on. on: ${AGENT_HOLD_ON.join(" | ")}. ref: who or what ('person:<id>', 'company:<id>', a label). reason: why. until: { date: ISO } resumes on that day; { moves: '<entity|track|focus_session>:<id>', to?: status or category } resumes when that thing moves; a dev fact: ${HOLD_DEV_MOVES_HELP}. reviewBy: an ISO date to look again (14 days by default when nothing resumes it on a date). Leave it out when the move does not pause.`,
     properties: {
       on: { type: "string", enum: AGENT_HOLD_ON },
       ref: { type: ["string", "null"] },

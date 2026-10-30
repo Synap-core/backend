@@ -321,10 +321,12 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
     READS("session", "channel"),
   ],
   // `waitForSessionAnswers` / `listSessionChanges`: answers + room messages +
-  // proposals filed under the session (`proposal_decided`).
+  // proposals filed under the session (`proposal_decided`), the dev facts of
+  // its PRs and jobs (`pr_*`, `checks_finished`: events) and the ends of the
+  // sessions it waits on (`blocker_ended`: its `blocked_by` links).
   [
     new RegExp(`^/focus-sessions/${SESSION_ID}/answers/wait/?$`),
-    READS("session", "channel", "proposal"),
+    READS("session", "channel", "proposal", "event", "link"),
   ],
   // `readSessionDocument`: the row, the designating artifact, the document.
   [
@@ -367,6 +369,11 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // events, the sessions the PRs belong to, and their liveness (chat turns,
   // events, proposals, room notes). Same as MCP `synap_get_work_release`.
   [/^\/work-release\/?$/, READS("event", "session", "channel", "proposal")],
+  // `readTimeline` (services/timeline/read-timeline.ts): a goal's history (the
+  // track, its sessions, their proposals and evaluations), a session's
+  // transition log, dev facts and proposals, or a PR's dev facts. Same as MCP
+  // `synap_get_timeline`.
+  [/^\/timeline\/?$/, READS("track", "session", "event", "proposal")],
 ];
 
 /**
@@ -477,6 +484,8 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_list_agents: READS("agent", "tool"),
   // Same subjects as `GET /work-release` (GRANT_REST_GET_READS).
   synap_get_work_release: READS("event", "session", "channel", "proposal"),
+  // Same subjects as `GET /timeline` (GRANT_REST_GET_READS).
+  synap_get_timeline: READS("track", "session", "event", "proposal"),
   synap_export_project_pack: READS(
     "project",
     "entity",

@@ -6,7 +6,14 @@
  *     current hold whose date has come;
  *   - `until.moves`: the reactor below sends this queue the transition of
  *     every move; the job resumes the holds that waited on that thing (and,
- *     with `until.to`, on it reaching that status or category).
+ *     with `until.to`, on it reaching that status or category);
+ *   - `until.moves` naming a DEV FACT (`pr:<owner/name>#<n>`,
+ *     `main:<owner/name>`, `job:<name>`, plan P1.4): the observation door
+ *     (api `record-observation.ts`) sends this queue `devFact` = that ref
+ *     when a fact that may be it is recorded, and the hourly sweep re-checks
+ *     every dev hold (a fact recorded while the queue was down, or before
+ *     the pause). Either way the ONE rule decides (`holdDevRefMet`,
+ *     `@synap-core/types`) over the facts the hold's owner recorded.
  *
  * A passed `reviewBy` is NOT a move: it is a signal the watcher reads
  * (`CurrentHold.reviewDue`). The holds are read with the one helper
@@ -21,8 +28,15 @@
 import {
   EventRepository,
   TrackRepository,
+  and,
   applyStatusMove,
   db,
+  desc,
+  drizzleSql,
+  eq,
+  events,
+  gt,
+  inArray,
   listHolds,
   resolveStatusMoveTarget,
   setSessionStatus,
@@ -38,7 +52,17 @@ import {
 import { createLogger } from "@synap-core/core";
 import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
 import type { SessionStatus } from "@synap-core/types/focus-sessions";
-import { holdWokenBy } from "@synap-core/types/lifecycle";
+import {
+  holdWokenBy,
+  parseHoldDevRef,
+  type HoldDevRef,
+} from "@synap-core/types/lifecycle";
+import {
+  DEV_LOOP_EVENT_TYPES,
+  devboxJobWorkflow,
+  holdDevRefMet,
+  type DevLoopEventRowLike,
+} from "@synap-core/types";
 import type { ProjectTrackStatus } from "@synap/database/schema";
 
 const logger = createLogger({ module: "hold-resume" });
@@ -47,7 +71,11 @@ export const HOLD_RESUME_QUEUE = "hold-resume";
 /** Hourly: a hold whose date has come resumes within the hour. */
 export const HOLD_RESUME_CRON = "23 * * * *";
 
-/** What moved, when the job was sent by the reactor (absent: the date sweep). */
+/**
+ * What moved, when the job was sent by the reactor, or the dev fact that may
+ * have landed, when the observation door sent it (both absent: the hourly
+ * sweep).
+ */
 export interface HoldResumeJobData {
   awaiting?: {
     subjectType: string;
@@ -55,6 +83,97 @@ export interface HoldResumeJobData {
     to: string;
     category: string;
   };
+  /** A dev ref in its stored spelling (`holdDevMovesRef`): `pr:owner/name#12`. */
+  devFact?: string;
+}
+
+/**
+ * The facts a dev hold is decided on: its owner's, newest first, bounded.
+ *
+ * Deliberately the OWNER floor (`events.userId = h.userId`), not the shared
+ * `eventVisibleWhere` the PR fold reads with: a read shows a fact, a hold
+ * ACTS on it (moves a status). Under the shared floor any workspace member's
+ * key (an agent's included) could record a forged `dev.pr_merged` and resume
+ * someone else's hold. The producers post under the owner's key, so the owner
+ * floor loses no real fact. (`eventVisibleWhere` also lives in `@synap/api`,
+ * which depends on this package.)
+ */
+async function readDevFactRows(
+  ref: HoldDevRef,
+  h: CurrentHold
+): Promise<DevLoopEventRowLike[]> {
+  const select = {
+    type: events.type,
+    timestamp: events.timestamp,
+    data: events.data,
+  };
+  const mine = eq(events.userId, h.userId);
+  const repoIs = (repo: string) =>
+    drizzleSql`lower(${events.data}->>'repo') = ${repo.toLowerCase()}`;
+  switch (ref.kind) {
+    case "pr":
+      return db
+        .select(select)
+        .from(events)
+        .where(
+          and(
+            mine,
+            inArray(events.type, [
+              DEV_LOOP_EVENT_TYPES.prOpened,
+              DEV_LOOP_EVENT_TYPES.prMerged,
+              DEV_LOOP_EVENT_TYPES.prClosed,
+            ]),
+            repoIs(ref.repo),
+            drizzleSql`${events.data}->>'number' = ${String(ref.number)}`
+          )
+        );
+    case "main":
+      return db
+        .select(select)
+        .from(events)
+        .where(
+          and(
+            mine,
+            eq(events.type, DEV_LOOP_EVENT_TYPES.repoSnapshot),
+            repoIs(ref.repo),
+            gt(events.timestamp, new Date(h.hold.since))
+          )
+        )
+        .orderBy(desc(events.timestamp))
+        .limit(1);
+    case "job":
+      return db
+        .select(select)
+        .from(events)
+        .where(
+          and(
+            mine,
+            eq(events.type, DEV_LOOP_EVENT_TYPES.ciFinished),
+            drizzleSql`${events.data}->>'workflow' = ${devboxJobWorkflow(ref.name)}`,
+            gt(events.timestamp, new Date(h.hold.since))
+          )
+        )
+        .orderBy(desc(events.timestamp))
+        .limit(1);
+  }
+}
+
+/** The dev holds whose fact is in, with the ref each waited on. */
+async function devHoldsMet(
+  held: readonly CurrentHold[]
+): Promise<Array<{ h: CurrentHold; moves: string }>> {
+  const met: Array<{ h: CurrentHold; moves: string }> = [];
+  for (const h of held) {
+    const until = h.hold.until;
+    if (!until || !("moves" in until)) continue;
+    const ref = parseHoldDevRef(until.moves);
+    if (!ref) continue;
+    const rows = await readDevFactRows(ref, h);
+    if (holdDevRefMet(ref, until, h.hold.since, rows)) {
+      met.push({ h, moves: until.moves });
+    }
+  }
+  return met;
 }
 
 export async function handleHoldResume(
@@ -62,40 +181,93 @@ export async function handleHoldResume(
   now: Date = new Date()
 ): Promise<{ resumed: number; skipped: number }> {
   const moved = data.awaiting;
-  const held = moved
-    ? (await listHolds(db, { awaiting: moved }, now)).filter((h) =>
-        holdWokenBy(h.hold.until, moved)
-      )
-    : await listHolds(db, { resumeDueBy: now }, now);
+  const devFact = data.devFact ? parseHoldDevRef(data.devFact) : null;
+  let held: Array<{ h: CurrentHold; reason: string }>;
+  if (moved) {
+    held = (await listHolds(db, { awaiting: moved }, now))
+      .filter((h) => holdWokenBy(h.hold.until, moved))
+      .map((h) => ({
+        h,
+        reason: `What it waited on (${moved.subjectType}:${moved.subjectId}) moved to ${moved.to}.`,
+      }));
+  } else if (data.devFact) {
+    const i = data.devFact.indexOf(":");
+    held = devFact
+      ? (
+          await devHoldsMet(
+            await listHolds(
+              db,
+              {
+                awaiting: {
+                  subjectType: data.devFact.slice(0, i),
+                  subjectId: data.devFact.slice(i + 1),
+                },
+              },
+              now
+            )
+          )
+        ).map(({ h, moves }) => ({ h, reason: devFactReason(moves) }))
+      : [];
+  } else {
+    const [dated, dev] = await Promise.allSettled([
+      listHolds(db, { resumeDueBy: now }, now),
+      listHolds(db, { awaitingDevFacts: true }, now).then(devHoldsMet),
+    ]);
+    // The date holds never wait on the dev half: a failed dev-fact read is
+    // logged and retried on the next tick, and the due dates still resume.
+    if (dev.status === "rejected") {
+      logger.warn(
+        { err: dev.reason },
+        "dev-fact hold read failed — retried on the next tick"
+      );
+    }
+    if (dated.status === "rejected") throw dated.reason;
+    held = [
+      ...dated.value.map((h) => ({
+        h,
+        reason: `Its hold ran until ${(h.hold.until as { date: string }).date}.`,
+      })),
+      ...(dev.status === "fulfilled" ? dev.value : []).map(({ h, moves }) => ({
+        h,
+        reason: devFactReason(moves),
+      })),
+    ];
+  }
+  const woken = Boolean(moved || data.devFact);
   let resumed = 0;
   let failure: unknown = null;
-  for (const h of held) {
-    const reason = moved
-      ? `What it waited on (${moved.subjectType}:${moved.subjectId}) moved to ${moved.to}.`
-      : `Its hold ran until ${(h.hold.until as { date: string }).date}.`;
+  for (const { h, reason } of held) {
     try {
       if (await resumeHold(h, reason)) resumed++;
     } catch (err) {
       failure = err;
       logger.warn(
         { err, subjectType: h.subjectType, subjectId: h.subjectId },
-        moved
+        woken
           ? "hold resume failed — the job is retried"
           : "hold resume failed — retried on the next tick"
       );
     }
   }
   // A move happens once: a failed wake is retried by pg-boss (what already
-  // resumed is no longer held, so a retry never moves it twice). The date
-  // sweep needs no retry: the next hourly tick finds the hold still due.
-  if (moved && failure) throw failure;
+  // resumed is no longer held, so a retry never moves it twice). The hourly
+  // sweep needs no retry: the next tick finds the hold still due.
+  if (woken && failure) throw failure;
   if (held.length > 0) {
     logger.info(
-      { resumed, skipped: held.length - resumed, by: moved ? "move" : "date" },
+      {
+        resumed,
+        skipped: held.length - resumed,
+        by: moved ? "move" : data.devFact ? "dev_fact" : "sweep",
+      },
       "Resumed held things"
     );
   }
   return { resumed, skipped: held.length - resumed };
+}
+
+function devFactReason(moves: string): string {
+  return `What it waited on (${moves}) is in.`;
 }
 
 /** Move one held thing back to the status its pause began from; false when it did not move. */

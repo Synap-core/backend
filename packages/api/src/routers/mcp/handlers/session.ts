@@ -1235,6 +1235,39 @@ export const sessionHandlers: McpHandlerMap = {
     // An agent door reads sessions owner-only (decision C v1, `rosterReadFor`).
     return ok(await readWorkRelease({ userId, roster: false }));
   },
+  synap_get_timeline: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, userId, apiKeyScopes, agentUserId, keyWorkspaceId } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    const { readTimeline, timelineSubjectOf } =
+      await import("../../../services/timeline/read-timeline.js");
+    const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+    const subject = timelineSubjectOf({
+      goalId: str(ctx.args.goalId),
+      sessionId: str(ctx.args.sessionId),
+      pr: str(ctx.args.pr),
+    });
+    if (!subject.ok) return ok({ error: subject.error });
+    // Same rule as Hub `GET /timeline`: a goal's history has no workspace
+    // lens yet, so a workspace-bound key is refused it.
+    if (keyWorkspaceId && subject.subject.kind === "goal") {
+      return ok({
+        error:
+          "A workspace-bound key cannot read a goal's history: it has no workspace lens yet.",
+      });
+    }
+    const timeline = await readTimeline(subject.subject, {
+      userId,
+      agentUserId: agentUserId ?? null,
+      isHubProtocol: true,
+      ...(keyWorkspaceId ? { lens: keyWorkspaceId } : {}),
+    });
+    if (!timeline) {
+      return ok({
+        error: `No ${subject.subject.kind === "goal" ? "goal" : "session"} with that id is yours.`,
+      });
+    }
+    return ok(timeline);
+  },
   synap_update_session: async (
     ctx: McpToolContext
   ): Promise<CallToolResult> => {

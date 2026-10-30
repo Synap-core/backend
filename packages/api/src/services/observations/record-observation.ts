@@ -19,7 +19,11 @@
 import { createHash } from "crypto";
 
 import { createLogger, createSynapEvent } from "@synap-core/core";
-import { DEV_LOOP_EVENT_TYPES, isDevLoopEventType } from "@synap-core/types";
+import {
+  DEV_LOOP_EVENT_TYPES,
+  holdDevFactOf,
+  isDevLoopEventType,
+} from "@synap-core/types";
 import {
   claimObservationKey,
   db,
@@ -34,6 +38,10 @@ import {
   DEV_LOOP_SEND_OPTIONS,
   type DevLoopObservationJobData,
 } from "@synap/jobs/workers/dev-loop-worker.js";
+import {
+  HOLD_RESUME_QUEUE,
+  type HoldResumeJobData,
+} from "@synap/jobs/workers/hold-resume.js";
 
 import { apiKeyService } from "../api-keys.js";
 import { sessionForDevLoopFact } from "../dev-loop/pr-session-resolver.js";
@@ -405,6 +413,26 @@ export async function recordObservation(
       logger.error(
         { err, type: input.type, eventId: row.id },
         "observation: enqueueing the dev-loop sweep failed — recorded, the session did not move"
+      );
+    }
+  }
+
+  // A pause may wait on this fact (`until.moves` = `pr:` / `main:` / `job:`):
+  // the hold-resume job re-checks the holds that name it, so the work resumes
+  // now rather than at the hourly sweep. Best-effort for the same reason as
+  // the sweep above: the sweep is the floor that finds it anyway.
+  const devFact = holdDevFactOf(input.type, event.data);
+  if (devFact) {
+    try {
+      await getBoss().send(
+        HOLD_RESUME_QUEUE,
+        { devFact } satisfies HoldResumeJobData,
+        { singletonKey: `hold-resume:${row.id}` }
+      );
+    } catch (err) {
+      logger.error(
+        { err, type: input.type, eventId: row.id },
+        "observation: enqueueing the hold resume failed — recorded, the hourly sweep resumes what waited on it"
       );
     }
   }

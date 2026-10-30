@@ -180,6 +180,41 @@ export const CI_FINISHED_STATUSES = [
 ] as const;
 export type CiFinishedStatus = (typeof CI_FINISHED_STATUSES)[number];
 
+/**
+ * The ONE verdict of a finished run: `passed` / `failed`, or undefined when the
+ * run settled nothing (cancelled, skipped, neutral). Every fold, feed and hold
+ * reads a `ci.finished` status through this.
+ */
+export function ciVerdictOf(
+  status: string | null | undefined
+): "passed" | "failed" | undefined {
+  switch (status) {
+    case "success":
+      return "passed";
+    case "failure":
+    case "timed_out":
+      return "failed";
+    default:
+      return undefined;
+  }
+}
+
+/** The `ci.finished` workflow the devbox producer posts for a gate job. */
+export function devboxJobWorkflow(name: string): string {
+  return `devbox ${name}`;
+}
+
+const DEVBOX_WORKFLOW_PREFIX = devboxJobWorkflow("");
+
+/** The devbox job a `ci.finished` workflow names; null for a CI workflow. */
+export function devboxJobOf(workflow: unknown): string | null {
+  return typeof workflow === "string" &&
+    workflow.startsWith(DEVBOX_WORKFLOW_PREFIX) &&
+    workflow.length > DEVBOX_WORKFLOW_PREFIX.length
+    ? workflow.slice(DEVBOX_WORKFLOW_PREFIX.length)
+    : null;
+}
+
 /** `ci.finished` — a CI run ended; `status` says how. */
 export const ciFinishedEventSchema = z.object({
   status: z.enum(CI_FINISHED_STATUSES),

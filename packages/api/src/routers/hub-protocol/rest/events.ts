@@ -87,7 +87,7 @@ export function registerEventsRoutes(app: HubHono): void {
     tags: ["Events"],
     summary: "List recent events for a user",
     description:
-      "Returns events from the event log filtered by type/subject/window, and optionally by producer: `agentUserId` (everything one agent did), `isAgent` (agent- vs human-produced) and `correlationId` (one request chain). Default window is 7 days; default limit is 50, hard-capped at 200.",
+      "Returns events from the event log filtered by type/subject/window, and optionally by producer: `agentUserId` (everything one agent did), `isAgent` (agent- vs human-produced), `correlationId` (one request chain) and `sessionId` (what one focus session produced). Default window is 7 days; default limit is 50, hard-capped at 200.",
     request: {
       query: ListEventsQuerySchema,
     },
@@ -108,7 +108,7 @@ export function registerEventsRoutes(app: HubHono): void {
   /**
    * GET /events
    * Query the event log for IS agents (query_recent_events tool).
-   * Supports: userId, workspaceId, type, subjectType, subjectId, fromDate, toDate, offset, limit.
+   * Supports: userId, workspaceId, type, subjectType, subjectId, sessionId, fromDate, toDate, offset, limit.
    */
   app.get("/events", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
@@ -154,6 +154,12 @@ export function registerEventsRoutes(app: HubHono): void {
     if (correlationId && !isUuid(correlationId)) {
       return c.json({ error: "correlationId must be a UUID" }, 400);
     }
+    // "Everything one session produced" (`events.session_id`, indexed since
+    // 0241); a uuid column, so shape-checked like `correlationId`.
+    const sessionId = c.req.query("sessionId");
+    if (sessionId && !isUuid(sessionId)) {
+      return c.json({ error: "sessionId must be a UUID" }, 400);
+    }
     const isAgentRaw = c.req.query("isAgent");
     if (isAgentRaw !== undefined && !["true", "false"].includes(isAgentRaw)) {
       return c.json({ error: "isAgent must be 'true' or 'false'" }, 400);
@@ -183,6 +189,7 @@ export function registerEventsRoutes(app: HubHono): void {
         subjectId,
         agentUserId,
         correlationId,
+        sessionId,
         isAgent,
         ungoverned,
         fromDate: fromDate ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),

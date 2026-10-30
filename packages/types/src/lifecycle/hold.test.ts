@@ -9,6 +9,7 @@ import {
   HOLD_UNSPECIFIED_BY_AGENT_MESSAGE,
   decideMoveHold,
   holdWokenBy,
+  parseHoldDevRef,
   resolveOccurredAt,
   type RecordedHold,
 } from "./hold.js";
@@ -301,5 +302,84 @@ describe("holdWokenBy", () => {
     expect(holdWokenBy({ moves: "entity:e1", to: "lost" }, moved)).toBe(false);
     expect(holdWokenBy({ moves: "entity:e2" }, moved)).toBe(false);
     expect(holdWokenBy({ date: "2026-11-10" }, moved)).toBe(false);
+  });
+});
+
+describe("a hold on a DEV FACT (pr: / main: / job:)", () => {
+  const pauseOn = (until: { moves: string; to?: string }) =>
+    decideMoveHold({
+      ...pause,
+      actorKind: "agent",
+      given: { on: "external", until },
+    });
+
+  it("parses the three forms, and nothing else", () => {
+    expect(parseHoldDevRef("pr:Synap-core/backend#47")).toEqual({
+      kind: "pr",
+      repo: "Synap-core/backend",
+      number: 47,
+    });
+    expect(parseHoldDevRef("main:Synap-core/backend")).toEqual({
+      kind: "main",
+      repo: "Synap-core/backend",
+    });
+    expect(parseHoldDevRef("job:dev-feed-h")).toEqual({
+      kind: "job",
+      name: "dev-feed-h",
+    });
+    for (const bad of [
+      "pr:backend#47",
+      "pr:Synap-core/backend",
+      "pr:Synap-core/backend#0",
+      "main:backend",
+      "job:",
+      "job:has space",
+      "ci:Synap-core/backend",
+    ]) {
+      expect(parseHoldDevRef(bad), bad).toBeNull();
+    }
+  });
+
+  it("is recorded in ONE spelling, so its fact finds it by exact match", () => {
+    const d = pauseOn({ moves: "pr:Synap-core/Backend#47" });
+    expect(d.ok && d.hold?.until).toEqual({
+      moves: "pr:synap-core/backend#47",
+    });
+    const m = pauseOn({ moves: "main:Synap-core/Backend" });
+    expect(m.ok && m.hold?.until).toEqual({ moves: "main:synap-core/backend" });
+    // An open-ended wait still gets its review date.
+    expect(d.ok && d.hold?.reviewBy).toBe(
+      new Date(NOW.getTime() + 14 * DAY).toISOString()
+    );
+  });
+
+  it("checks `to` against what the fact can say", () => {
+    expect(
+      pauseOn({ moves: "pr:Synap-core/backend#47", to: "closed" })
+    ).toMatchObject({
+      ok: true,
+    });
+    expect(pauseOn({ moves: "job:dev-feed-h", to: "failed" })).toMatchObject({
+      ok: true,
+    });
+    expect(
+      pauseOn({ moves: "pr:Synap-core/backend#47", to: "done" })
+    ).toMatchObject({
+      ok: false,
+      code: "HOLD_INVALID",
+    });
+    expect(
+      pauseOn({ moves: "main:Synap-core/backend", to: "ok" })
+    ).toMatchObject({
+      ok: false,
+      code: "HOLD_INVALID",
+    });
+  });
+
+  it("a malformed dev ref is refused with the forms spelled out", () => {
+    const d = pauseOn({ moves: "pr:backend#47" });
+    expect(d).toMatchObject({ ok: false, code: "HOLD_INVALID" });
+    expect(!d.ok && d.message).toContain("pr:<owner/name>#<n>");
+    expect(HOLD_REQUIRED_MESSAGE).toContain("job:<devbox job name>");
   });
 });

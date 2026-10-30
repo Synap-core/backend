@@ -5940,7 +5940,9 @@ export type HoldOn = (typeof HOLD_ON)[number];
  * How a hold resumes: on a calendar date (ISO), or when the awaited thing moves
  * (`moves` = `<subjectType>:<id>`, e.g. `entity:…`, `track:…`,
  * `focus_session:…`), optionally only when it reaches `to` (a status key, or a
- * category such as `done`).
+ * category such as `done`). `moves` may also name a DEV FACT
+ * ({@link HoldDevRef}: `pr:<owner/name>#<n>`, `main:<owner/name>`,
+ * `job:<name>`): the hold then resumes when a producer posts that fact.
  */
 export type HoldUntil = {
 	date: string;
@@ -6580,6 +6582,121 @@ export interface TrackHistoryWire {
 	events: TrackHistoryEvent[];
 	/** A source hit its scan cap — older events exist and are not listed. */
 	truncated: boolean;
+}
+declare const repoSnapshotEventSchema: z.ZodObject<{
+	live: z.ZodOptional<z.ZodNullable<z.ZodObject<{
+		behindBy: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
+		kind: z.ZodEnum<{
+			desktop: "desktop";
+			image: "image";
+			npm: "npm";
+			pod: "pod";
+			site: "site";
+		}>;
+		label: z.ZodString;
+		sha: z.ZodNullable<z.ZodString>;
+	}, z.core.$strip>>>;
+	main: z.ZodObject<{
+		fixedBy: z.ZodOptional<z.ZodNullable<z.ZodObject<{
+			number: z.ZodNumber;
+			repo: z.ZodString;
+		}, z.core.$strip>>>;
+		health: z.ZodEnum<{
+			infra: "infra";
+			ok: "ok";
+			red: "red";
+			unmeasured: "unmeasured";
+		}>;
+		reason: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+		redSince: z.ZodOptional<z.ZodNullable<z.ZodObject<{
+			at: z.ZodOptional<z.ZodString>;
+			prNumber: z.ZodOptional<z.ZodNumber>;
+			sha: z.ZodString;
+		}, z.core.$strip>>>;
+		sha: z.ZodNullable<z.ZodString>;
+		source: z.ZodEnum<{
+			"devbox-baseline": "devbox-baseline";
+			"github-checks": "github-checks";
+			none: "none";
+		}>;
+	}, z.core.$strip>;
+	mergedToday: z.ZodArray<z.ZodObject<{
+		mergedAt: z.ZodString;
+		number: z.ZodNumber;
+		podSessionId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+		title: z.ZodString;
+		url: z.ZodString;
+	}, z.core.$strip>>;
+	observedAt: z.ZodString;
+	prs: z.ZodArray<z.ZodObject<{
+		author: z.ZodString;
+		autoMerge: z.ZodBoolean;
+		branch: z.ZodOptional<z.ZodString>;
+		checks: z.ZodEnum<{
+			green: "green";
+			infra: "infra";
+			none: "none";
+			queued: "queued";
+			red: "red";
+			running: "running";
+		}>;
+		dependsOn: z.ZodOptional<z.ZodArray<z.ZodObject<{
+			number: z.ZodNumber;
+			repo: z.ZodString;
+		}, z.core.$strip>>>;
+		draft: z.ZodBoolean;
+		headSha: z.ZodString;
+		mergeable: z.ZodEnum<{
+			blocked: "blocked";
+			clean: "clean";
+			dirty: "dirty";
+			unknown: "unknown";
+		}>;
+		number: z.ZodNumber;
+		podSessionId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+		redInheritedFromMain: z.ZodOptional<z.ZodBoolean>;
+		title: z.ZodString;
+		updatedAt: z.ZodString;
+		url: z.ZodString;
+	}, z.core.$strip>>;
+	repo: z.ZodString;
+	visibility: z.ZodEnum<{
+		private: "private";
+		public: "public";
+	}>;
+}, z.core.$strip>;
+export type RepoSnapshotFact = z.infer<typeof repoSnapshotEventSchema>;
+declare const PULL_REQUEST_STATES: readonly [
+	"open",
+	"merged",
+	"closed"
+];
+export type PullRequestState = (typeof PULL_REQUEST_STATES)[number];
+declare const PULL_REQUEST_CHECKS: readonly [
+	"passed",
+	"failed"
+];
+export type PullRequestChecks = (typeof PULL_REQUEST_CHECKS)[number];
+/** What the recorded facts say about one PR. */
+export interface PullRequestStateFacts {
+	state: PullRequestState;
+	/** The newest CI result on the PR's newest run sha; absent when none settles it. */
+	checks?: PullRequestChecks;
+	/** The sha `checks` is about — compare it with a newer head before trusting it. */
+	checksOn?: string;
+	/**
+	 * A merge into the repository's default branch (the producer said so). Only
+	 * on `merged`; absent when the fact did not say (a stacked PR merged into
+	 * its parent branch is not on main).
+	 */
+	intoDefault?: boolean;
+	/**
+	 * A deploy contains the merge (built from a later commit of the repo, or
+	 * from the merge commit). Never `false`: see the file header.
+	 */
+	deployed?: true;
+	/** When the fact that set `state` happened (ISO). */
+	at: string;
 }
 declare const TRACK_PARTICIPANT_ROLES: readonly [
 	"owner",
@@ -9503,113 +9620,6 @@ declare enum MessageLinkRelationshipType {
 	RESPONDS_TO = "responds_to",// Message responds to another message
 	QUOTES = "quotes",// Message quotes this object
 	CONTEXT = "context"
-}
-declare const repoSnapshotEventSchema: z.ZodObject<{
-	live: z.ZodOptional<z.ZodNullable<z.ZodObject<{
-		behindBy: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
-		kind: z.ZodEnum<{
-			desktop: "desktop";
-			image: "image";
-			npm: "npm";
-			pod: "pod";
-			site: "site";
-		}>;
-		label: z.ZodString;
-		sha: z.ZodNullable<z.ZodString>;
-	}, z.core.$strip>>>;
-	main: z.ZodObject<{
-		fixedBy: z.ZodOptional<z.ZodNullable<z.ZodObject<{
-			number: z.ZodNumber;
-			repo: z.ZodString;
-		}, z.core.$strip>>>;
-		health: z.ZodEnum<{
-			infra: "infra";
-			ok: "ok";
-			red: "red";
-			unmeasured: "unmeasured";
-		}>;
-		reason: z.ZodOptional<z.ZodNullable<z.ZodString>>;
-		redSince: z.ZodOptional<z.ZodNullable<z.ZodObject<{
-			at: z.ZodOptional<z.ZodString>;
-			prNumber: z.ZodOptional<z.ZodNumber>;
-			sha: z.ZodString;
-		}, z.core.$strip>>>;
-		sha: z.ZodNullable<z.ZodString>;
-		source: z.ZodEnum<{
-			"devbox-baseline": "devbox-baseline";
-			"github-checks": "github-checks";
-			none: "none";
-		}>;
-	}, z.core.$strip>;
-	mergedToday: z.ZodArray<z.ZodObject<{
-		mergedAt: z.ZodString;
-		number: z.ZodNumber;
-		podSessionId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
-		title: z.ZodString;
-		url: z.ZodString;
-	}, z.core.$strip>>;
-	observedAt: z.ZodString;
-	prs: z.ZodArray<z.ZodObject<{
-		author: z.ZodString;
-		autoMerge: z.ZodBoolean;
-		branch: z.ZodOptional<z.ZodString>;
-		checks: z.ZodEnum<{
-			green: "green";
-			infra: "infra";
-			none: "none";
-			queued: "queued";
-			red: "red";
-			running: "running";
-		}>;
-		dependsOn: z.ZodOptional<z.ZodArray<z.ZodObject<{
-			number: z.ZodNumber;
-			repo: z.ZodString;
-		}, z.core.$strip>>>;
-		draft: z.ZodBoolean;
-		headSha: z.ZodString;
-		mergeable: z.ZodEnum<{
-			blocked: "blocked";
-			clean: "clean";
-			dirty: "dirty";
-			unknown: "unknown";
-		}>;
-		number: z.ZodNumber;
-		podSessionId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
-		redInheritedFromMain: z.ZodOptional<z.ZodBoolean>;
-		title: z.ZodString;
-		updatedAt: z.ZodString;
-		url: z.ZodString;
-	}, z.core.$strip>>;
-	repo: z.ZodString;
-	visibility: z.ZodEnum<{
-		private: "private";
-		public: "public";
-	}>;
-}, z.core.$strip>;
-export type RepoSnapshotFact = z.infer<typeof repoSnapshotEventSchema>;
-declare const PULL_REQUEST_STATES: readonly [
-	"open",
-	"merged",
-	"closed"
-];
-export type PullRequestState = (typeof PULL_REQUEST_STATES)[number];
-declare const PULL_REQUEST_CHECKS: readonly [
-	"passed",
-	"failed"
-];
-export type PullRequestChecks = (typeof PULL_REQUEST_CHECKS)[number];
-/** What the recorded facts say about one PR. */
-export interface PullRequestStateFacts {
-	state: PullRequestState;
-	/** The newest CI result on the PR's newest run sha; absent when none settles it. */
-	checks?: PullRequestChecks;
-	/**
-	 * A deploy contains the merge (built from a later commit of the repo, or
-	 * from the merge commit). Never `false`: see the file header.
-	 */
-	deployed?: true;
-	/** When the fact that set `state` happened (ISO). */
-	at: string;
 }
 export type ActionType = "call_webhook" | "create_entity" | "notify" | "post_message" | "run_command" | "update_entity";
 export interface SentenceAction {
@@ -22830,6 +22840,10 @@ declare const WORK_RELEASE_SOURCE_STATES: {
 		"ok",
 		"unavailable"
 	];
+	readonly pullRequests: readonly [
+		"ok",
+		"unavailable"
+	];
 	readonly sessions: readonly [
 		"ok",
 		"unavailable"
@@ -22845,6 +22859,8 @@ export interface WorkReleaseSources {
 	snapshots: (typeof WORK_RELEASE_SOURCE_STATES.snapshots)[number];
 	sessions: (typeof WORK_RELEASE_SOURCE_STATES.sessions)[number];
 	holders: (typeof WORK_RELEASE_SOURCE_STATES.holders)[number];
+	/** The recorded PR facts; `unavailable` = the rows are the snapshot's alone. */
+	pullRequests: (typeof WORK_RELEASE_SOURCE_STATES.pullRequests)[number];
 }
 export interface WorkReleaseRepo {
 	/** `owner/name`, as the producer spelled it. */

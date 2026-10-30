@@ -111,6 +111,7 @@ export { registerResolveRoutes } from "./resolve.js";
 export { registerGraphRoutes } from "./graph.js";
 export { registerCentralityRoutes } from "./centrality.js";
 export { registerWorkReleaseRoutes } from "./work-release.js";
+export { registerTimelineRoutes } from "./timeline.js";
 export { registerObservabilityRoutes } from "./observability.js";
 export { registerPublicProjectionRoutes } from "./public-projection.js";
 export { registerPublicSharesRoutes } from "./public-shares.js";

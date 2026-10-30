@@ -48,6 +48,31 @@
  *                          (`data.ingestedAt`, else the row time), so a late
  *                          webhook is not dropped behind the cursor. The PR
  *                          title is the author's words: `fenced`, untrusted.
+ *   - `checks_finished`  — a CI run or a devbox gate job of the session ended
+ *                          with a verdict (`ci.finished`, status success /
+ *                          failure / timed_out; a cancelled or skipped run
+ *                          settles nothing and is not reported). "Of the
+ *                          session" = the fact names it (`data.sessionId`: a
+ *                          PR body's `Pod session:` line, a devbox job's
+ *                          `GATE_POD_SESSION`) or it ran for a PR the session
+ *                          declared as an outcome (`data.pr`). ONE per (PR,
+ *                          head sha), or per (devbox job, sha) — a re-run on
+ *                          the same sha does not wake again. `at` = when the
+ *                          pod heard of it, as for a PR.
+ *   - `status_moved`     — the session's status moved (the transition log,
+ *                          `lifecycle_transition_outbox`: every move through
+ *                          the session doors, the reaper's and a hold's resume
+ *                          included). `at` = when the move was RECORDED;
+ *                          `move.occurredAt` = when it happened (a backdated
+ *                          move says so).
+ *   - `hold_set`         — a move that carries a hold (a pause, or a move
+ *                          between two pauses): `move.hold` says what it waits
+ *                          on and how it resumes. When both kinds are asked
+ *                          for, such a move is reported once, as `hold_set`.
+ *   - `blocker_ended`    — a session this one waits on (`blocked_by`) ended:
+ *                          `delivered` = it closed, false = it was cancelled
+ *                          or failed (re-plan: the edge does not clear by
+ *                          itself). `at` = when its end was recorded.
  *
  * CURSOR: `since` is EXCLUSIVE over each event's `at` (millisecond ISO — the
  * database's microseconds are truncated BEFORE the comparison, or a row would
@@ -57,6 +82,11 @@
  * from `floor` (the moment the wait began); an empty page then hands back
  * `floor` as `nextSince`, so a caller looping on it loses nothing between two
  * calls. `stage_moved` sits outside the cursor and the limit.
+ *
+ * WAKE: a status move writes the session row, whose NOTIFY (0277) wakes a held
+ * wait at once; a CI fact or a blocker's end does not touch this session's
+ * row, so a held wait sees it on its fallback poll (5 s, 15 s for a
+ * conversation), as it sees a PR's merge.
  *
  * PERSON-AUTHORED TEXT (an answer, an owner message, a rejection reason) is
  * DATA, never instructions: such an event carries `untrusted: true` and a
@@ -70,6 +100,8 @@ import {
   db,
   events as eventsTable,
   focusSessions,
+  lifecycleTransitionOutbox,
+  links,
   messages,
   proposals,
   users,
@@ -88,9 +120,21 @@ import type { SQLWrapper } from "drizzle-orm";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import {
   DEV_LOOP_EVENT_TYPES,
+  ciVerdictOf,
+  devboxJobOf,
   parsePullRequestRef,
+  pullRequestUrl,
+  type CiFinishedStatus,
+  type PullRequestChecks,
   type PullRequestRef,
 } from "@synap-core/types";
+import { DEPENDENCY_LINK_TYPE } from "@synap-core/types/connections";
+import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import type {
+  LifecycleCategory,
+  RecordedHold,
+  TransitionBase,
+} from "@synap-core/types/lifecycle";
 import {
   listSessionAnswers,
   SESSION_ANSWERS_DEFAULT_LIMIT,
@@ -120,6 +164,10 @@ export const SESSION_CHANGE_KINDS = [
   "session_message",
   "pr_merged",
   "pr_closed",
+  "checks_finished",
+  "status_moved",
+  "hold_set",
+  "blocker_ended",
 ] as const;
 export type SessionChangeKind = (typeof SESSION_CHANGE_KINDS)[number];
 
@@ -250,6 +298,53 @@ export type SessionChangeEvent =
         intoDefault: boolean | null;
         base: string | null;
       };
+    })
+  | (EventBase & {
+      kind: "checks_finished";
+      checks: {
+        repo: string;
+        sha: string;
+        /** What the run says: `passed` (success) or `failed` (failure, timed out). */
+        result: PullRequestChecks;
+        status: CiFinishedStatus;
+        /** The PR the run was for; null for a devbox job tied to none. */
+        pr: { number: number; url: string } | null;
+        /** The devbox job (a `devbox <name>` run); null for a CI workflow. */
+        job: string | null;
+        workflow: string | null;
+        /** The run's page, when the producer gave one. */
+        url: string | null;
+      };
+    })
+  | (EventBase & {
+      kind: "status_moved" | "hold_set";
+      /** True when the mover's reason (or the hold's) is in `fenced`. */
+      untrusted: boolean;
+      /** The hold's reason, else the move's, fenced; null when there is none. */
+      fenced: string | null;
+      move: {
+        from: string | null;
+        to: string;
+        category: LifecycleCategory;
+        actor: TransitionBase["actorKind"];
+        reason: string | null;
+        /** When it happened; `at` is when it was recorded. */
+        occurredAt: string;
+        backdated: boolean;
+        /** What the pause waits on and how it resumes; null on `status_moved`. */
+        hold: RecordedHold | null;
+      };
+    })
+  | (EventBase & {
+      kind: "blocker_ended";
+      blocker: {
+        sessionId: string;
+        /** Null when the reader may not see that session. */
+        title: string | null;
+        status: string;
+        /** It closed (done). False: cancelled or failed — re-plan the wait. */
+        delivered: boolean;
+      };
     });
 
 export interface SessionChangesPage {
@@ -281,6 +376,29 @@ export function sessionPullRequestRefs(
   return [...out.values()];
 }
 
+/**
+ * The dev facts (`dev.pr_*`, `ci.finished`) OF a session: the fact names it
+ * (`data.sessionId`: a PR body's `Pod session:` line, a devbox job's pod
+ * session, or the resolver's stamp), or — only when the fact names NO session —
+ * it is about a PR the session declared as an outcome (a PR fact by its
+ * `number`, a CI run by its `pr`). A fact stamped for session A never wakes B
+ * through a shared PR, and appears once in a feed. ONE rule for the change
+ * feed and the session timeline.
+ */
+export function sessionDevFactWhere(
+  sessionId: string,
+  refs: readonly PullRequestRef[]
+) {
+  const ci = DEV_LOOP_EVENT_TYPES.ciFinished;
+  return or(
+    drizzleSql`${eventsTable.data}->>'sessionId' = ${sessionId}`,
+    ...refs.map(
+      (r) =>
+        drizzleSql`(${eventsTable.data}->>'sessionId' is null and lower(${eventsTable.data}->>'repo') = ${r.repo.toLowerCase()} and ${eventsTable.data}->>(case when ${eventsTable.type} = ${ci} then 'pr' else 'number' end) = ${String(r.number)})`
+    )
+  )!;
+}
+
 /** A timestamp column truncated to the millisecond, as a UTC ISO string. */
 function msIso(col: SQLWrapper) {
   return drizzleSql<string>`to_char(date_trunc('milliseconds', ${col}) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
@@ -296,6 +414,78 @@ function byAtThenId(x: EventBase, y: EventBase): number {
         : x.id > y.id
           ? 1
           : 0;
+}
+
+const SETTLED_RUN_STATUSES: readonly CiFinishedStatus[] = [
+  "success",
+  "failure",
+  "timed_out",
+];
+
+/**
+ * Keep a `ci.finished` row only when it settled something AND is the FIRST
+ * settled run of its key — (repo, sha, PR) for a PR's run, (repo, sha,
+ * workflow) for a devbox job or a run tied to no PR — so a re-run on the same
+ * sha wakes nobody again. Other types pass. The subject id (`repo@sha`, both
+ * producers) walks the subject index.
+ */
+function firstSettledRunWhere(ci: string) {
+  const e = eventsTable;
+  const key = (data: SQLWrapper) =>
+    drizzleSql`coalesce('pr:' || (${data}->>'pr'), 'wf:' || (${data}->>'workflow'), '')`;
+  const heard = (t: string) =>
+    drizzleSql.raw(
+      `coalesce((${t}.data->>'ingestedAt')::timestamptz, ${t}.timestamp)`
+    );
+  const settled = SETTLED_RUN_STATUSES.map((st) => drizzleSql`${st}`);
+  return drizzleSql`(${e.type} <> ${ci} or (
+    ${e.data}->>'status' in (${drizzleSql.join(settled, drizzleSql`, `)})
+    and not exists (
+      select 1 from events prior
+       where prior.type = ${ci}
+         and prior.subject_id = ${e.subjectId}
+         and lower(prior.data->>'repo') = lower(${e.data}->>'repo')
+         and lower(prior.data->>'sha') = lower(${e.data}->>'sha')
+         and prior.data->>'status' in (${drizzleSql.join(settled, drizzleSql`, `)})
+         and ${key(drizzleSql.raw("prior.data"))} = ${key(e.data)}
+         and (${heard("prior")}, prior.id) < (${heard("events")}, ${e.id})
+    )))`;
+}
+
+/** A `ci.finished` payload as the feed carries it; null when it settles nothing. */
+function checksOf(
+  d: Record<string, unknown>
+): Extract<SessionChangeEvent, { kind: "checks_finished" }>["checks"] | null {
+  const status = d.status as CiFinishedStatus;
+  const result = ciVerdictOf(status);
+  const repo = typeof d.repo === "string" ? d.repo : null;
+  const sha = typeof d.sha === "string" ? d.sha : null;
+  if (!result || !repo || !sha) return null;
+  const workflow = typeof d.workflow === "string" ? d.workflow : null;
+  const number = typeof d.pr === "number" ? d.pr : null;
+  return {
+    repo,
+    sha,
+    result,
+    status,
+    pr:
+      number === null
+        ? null
+        : { number, url: pullRequestUrl({ repo, number }) },
+    job: devboxJobOf(workflow),
+    workflow,
+    url: typeof d.url === "string" ? d.url : null,
+  };
+}
+
+/** A transition row as recorded (`StatusTransition`); null when it is not one. */
+function readTransition(raw: unknown): TransitionBase | null {
+  const t = (
+    typeof raw === "string" ? JSON.parse(raw) : raw
+  ) as TransitionBase | null;
+  return t && typeof t.to === "string" && typeof t.subjectId === "string"
+    ? t
+    : null;
 }
 
 export async function listSessionChanges(p: {
@@ -544,18 +734,19 @@ export async function listSessionChanges(p: {
   const prKinds = (["pr_merged", "pr_closed"] as const).filter((k) =>
     p.kinds.has(k)
   );
-  if (prKinds.length > 0) {
+  const checksKind = p.kinds.has("checks_finished");
+  if (prKinds.length > 0 || checksKind) {
     const types = prKinds.map((k) =>
       k === "pr_merged"
         ? DEV_LOOP_EVENT_TYPES.prMerged
         : DEV_LOOP_EVENT_TYPES.prClosed
     );
+    const ci = DEV_LOOP_EVENT_TYPES.ciFinished;
     // When the pod HEARD of it, not when it happened: a webhook that lands
     // after the caller's cursor moved past `merged_at` is still news.
     const heardAt = msIso(
       drizzleSql`coalesce((${eventsTable.data}->>'ingestedAt')::timestamptz, ${eventsTable.timestamp})`
     );
-    const refs = sessionPullRequestRefs(session.expectedOutputs);
     const rows = await db
       .select({
         id: eventsTable.id,
@@ -566,15 +757,13 @@ export async function listSessionChanges(p: {
       .from(eventsTable)
       .where(
         and(
-          inArray(eventsTable.type, types),
-          or(
-            drizzleSql`${eventsTable.data}->>'sessionId' = ${session.id}`,
-            ...refs.map(
-              (r) =>
-                drizzleSql`(lower(${eventsTable.data}->>'repo') = ${r.repo.toLowerCase()} and ${eventsTable.data}->>'number' = ${String(r.number)})`
-            )
+          inArray(eventsTable.type, checksKind ? [...types, ci] : types),
+          sessionDevFactWhere(
+            session.id,
+            sessionPullRequestRefs(session.expectedOutputs)
           ),
           eventVisibleWhere({ userId: p.userId, roster: false }),
+          ...(checksKind ? [firstSettledRunWhere(ci)] : []),
           ...(floor
             ? [
                 // The raw column first: it walks the timestamp index (and the
@@ -591,6 +780,18 @@ export async function listSessionChanges(p: {
     sourceHasMore ||= rows.length > limit;
     for (const r of rows.slice(0, limit)) {
       const d = (r.data ?? {}) as Record<string, unknown>;
+      if (r.type === ci) {
+        const checks = checksOf(d);
+        if (checks) {
+          cursored.push({
+            kind: "checks_finished",
+            id: `event:${r.id}`,
+            at: r.at,
+            checks,
+          });
+        }
+        continue;
+      }
       const repo = typeof d.repo === "string" ? d.repo : null;
       const number = typeof d.number === "number" ? d.number : null;
       const url = typeof d.url === "string" ? d.url : null;
@@ -616,6 +817,153 @@ export async function listSessionChanges(p: {
           base: typeof d.base === "string" ? d.base : null,
         },
       });
+    }
+  }
+
+  const moveKinds = p.kinds.has("status_moved") || p.kinds.has("hold_set");
+  if (moveKinds) {
+    const recordedAt = msIso(
+      drizzleSql`coalesce((${lifecycleTransitionOutbox.transition}->>'recordedAt')::timestamptz, ${lifecycleTransitionOutbox.createdAt})`
+    );
+    const rows = await db
+      .select({
+        id: lifecycleTransitionOutbox.transitionId,
+        transition: lifecycleTransitionOutbox.transition,
+        at: recordedAt,
+      })
+      .from(lifecycleTransitionOutbox)
+      .where(
+        and(
+          // The subject index (0374): coalesce(subjectId, entityId), created_at.
+          drizzleSql`coalesce(${lifecycleTransitionOutbox.transition}->>'subjectId', ${lifecycleTransitionOutbox.transition}->>'entityId') = ${session.id}`,
+          drizzleSql`${lifecycleTransitionOutbox.transition}->>'subjectType' = 'focus_session'`,
+          ...(p.kinds.has("status_moved")
+            ? []
+            : [
+                drizzleSql`jsonb_typeof(${lifecycleTransitionOutbox.transition}->'hold') = 'object'`,
+              ]),
+          ...(floor
+            ? [
+                drizzleSql`${lifecycleTransitionOutbox.createdAt} > ${floor}::timestamptz - interval '1 minute'`,
+                drizzleSql`${recordedAt} > ${floor}`,
+              ]
+            : [])
+        )
+      )
+      .orderBy(asc(recordedAt), asc(lifecycleTransitionOutbox.transitionId))
+      .limit(limit + 1);
+    sourceHasMore ||= rows.length > limit;
+    for (const r of rows.slice(0, limit)) {
+      const t = readTransition(r.transition);
+      if (!t) continue;
+      const held = t.hold && p.kinds.has("hold_set") ? t.hold : null;
+      const reason = t.hold?.reason?.trim() || t.reason?.trim() || null;
+      cursored.push({
+        kind: held ? "hold_set" : "status_moved",
+        id: `transition:${r.id}`,
+        at: r.at,
+        untrusted: reason !== null,
+        fenced: reason
+          ? fenceUntrustedData(reason, "synap status move reason")
+          : null,
+        move: {
+          from: t.from,
+          to: t.to,
+          category: t.category,
+          actor: t.actorKind,
+          reason: t.reason ?? null,
+          occurredAt: t.occurredAt,
+          backdated: t.backdated === true,
+          hold: held,
+        },
+      });
+    }
+  }
+
+  if (p.kinds.has("blocker_ended")) {
+    // The sessions this one waits on (its `blocked_by` edges), then their
+    // ends through the subject index — never a scan of the whole log.
+    const blockerIds = (
+      await db
+        .select({ id: links.toId })
+        .from(links)
+        .where(
+          and(
+            eq(links.fromType, "session" as never),
+            eq(links.fromId, session.id),
+            eq(links.linkType, DEPENDENCY_LINK_TYPE),
+            eq(links.toType, "session" as never)
+          )
+        )
+    ).map((r) => r.id);
+    if (blockerIds.length > 0) {
+      const recordedAt = msIso(
+        drizzleSql`coalesce((${lifecycleTransitionOutbox.transition}->>'recordedAt')::timestamptz, ${lifecycleTransitionOutbox.createdAt})`
+      );
+      const [rows, named] = await Promise.all([
+        db
+          .select({
+            id: lifecycleTransitionOutbox.transitionId,
+            transition: lifecycleTransitionOutbox.transition,
+            at: recordedAt,
+          })
+          .from(lifecycleTransitionOutbox)
+          .where(
+            and(
+              inArray(
+                drizzleSql`coalesce(${lifecycleTransitionOutbox.transition}->>'subjectId', ${lifecycleTransitionOutbox.transition}->>'entityId')`,
+                blockerIds
+              ),
+              drizzleSql`${lifecycleTransitionOutbox.transition}->>'subjectType' = 'focus_session'`,
+              inArray(
+                drizzleSql`${lifecycleTransitionOutbox.transition}->>'category'`,
+                ["done", "lost"]
+              ),
+              ...(floor
+                ? [
+                    drizzleSql`${lifecycleTransitionOutbox.createdAt} > ${floor}::timestamptz - interval '1 minute'`,
+                    drizzleSql`${recordedAt} > ${floor}`,
+                  ]
+                : [])
+            )
+          )
+          .orderBy(asc(recordedAt), asc(lifecycleTransitionOutbox.transitionId))
+          .limit(limit + 1),
+        db
+          .select({
+            id: focusSessions.id,
+            title: focusSessions.title,
+            goal: focusSessions.goal,
+          })
+          .from(focusSessions)
+          .where(
+            and(
+              inArray(focusSessions.id, blockerIds),
+              sessionReadableWhere({ userId: p.userId })
+            )
+          ),
+      ]);
+      const titleOf = new Map(
+        named.map((r) => [r.id, resolveSessionTitle(r) || null])
+      );
+      sourceHasMore ||= rows.length > limit;
+      for (const r of rows.slice(0, limit)) {
+        const t = readTransition(r.transition);
+        if (!t) continue;
+        cursored.push({
+          kind: "blocker_ended",
+          // Not `transition:<id>`: in a conversation's feed the blocker's own
+          // `status_moved` carries that id, and one id must name one event.
+          id: `blocker:${r.id}`,
+          at: r.at,
+          blocker: {
+            sessionId: t.subjectId,
+            title: titleOf.get(t.subjectId) ?? null,
+            status: t.to,
+            delivered: t.category === "done",
+          },
+        });
+      }
     }
   }
 
