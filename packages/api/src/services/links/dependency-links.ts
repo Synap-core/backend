@@ -1,6 +1,10 @@
 /**
  * THE dependency door — `X --blocked_by--> Y` and `A --replaces--> B` across
- * unit-of-work kinds (session · entity · track).
+ * unit-of-work kinds (session · entity · track) — and THE door for the other
+ * work edge, `X --serves--> G` (session | track → track): the work X is done
+ * FOR goal G. `serves` is not a dependency (no blocker reader follows it); it
+ * shares this door's floor, governance, store write and events, plus its own
+ * checks ({@link validateServesEdge}).
  *
  * ONE edge for "this waits on that": a task blocked by a task, an entity by a
  * session, a session by a track, a track by a track. Entity relations `blocks`
@@ -64,17 +68,20 @@ import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import {
   DEPENDENCY_LINK_TYPE,
   REPLACES_LINK_TYPE,
+  SERVES_LINK_TYPE,
   deriveOpenBlockers,
   isDependencyEndpointKind,
   isDependencyEnded,
-  isDependencyLinkType,
+  isServesPair,
+  isWorkLinkType,
   normaliseDependencyRelation,
   type DependencyEdge,
-  type DependencyLinkType,
   type DependencyNodeRef,
   type DependencyNodeState,
   type OpenBlocker,
+  type WorkLinkType,
 } from "@synap-core/types/connections";
+import { readCriteria } from "@synap/playbooks";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import {
@@ -100,7 +107,7 @@ export interface DependencyEdgeInput {
   fromId: string;
   toType: string;
   toId: string;
-  linkType: DependencyLinkType;
+  linkType: WorkLinkType;
 }
 
 /** Who/what the write is attributed to, for the event spine. */
@@ -290,7 +297,7 @@ async function endpointHome(
   return null;
 }
 
-/** How deep the cycle walk follows `blocked_by` before giving up. */
+/** How deep the cycle walk follows `blocked_by` (or `serves`) before giving up. */
 const MAX_CYCLE_HOPS = 32;
 
 /**
@@ -300,18 +307,26 @@ const MAX_CYCLE_HOPS = 32;
  * that closes one is refused at every door (the generic floor below and the
  * session door's `validateSessionBlocker`).
  *
- * Walks `to`'s outgoing `blocked_by` edges breadth-first, bounded by
+ * The same walk answers it for `serves` (`walk: "serves"`): does goal `to`
+ * already serve, through `serves` edges, goal `from`? A goal tree with a loop
+ * would roll a goal up into itself.
+ *
+ * Walks `to`'s outgoing `walk` edges breadth-first, bounded by
  * {@link MAX_CYCLE_HOPS}. Measured limits: `replaces` edges are not walked (a
  * cycle closed only through a replacement is not seen), and a chain deeper
  * than the bound is not called a cycle. No authorization here — callers floor
  * both ends first, so the answer is a yes/no about units the caller may see.
  */
-export async function closesDependencyCycle(edge: {
-  fromType: string;
-  fromId: string;
-  toType: string;
-  toId: string;
-}): Promise<boolean> {
+export async function closesDependencyCycle(
+  edge: {
+    fromType: string;
+    fromId: string;
+    toType: string;
+    toId: string;
+  },
+  walk:
+    typeof DEPENDENCY_LINK_TYPE | typeof SERVES_LINK_TYPE = DEPENDENCY_LINK_TYPE
+): Promise<boolean> {
   const target = refKey({ kind: edge.fromType, id: edge.fromId });
   const start = { kind: edge.toType, id: edge.toId };
   const seen = new Set([refKey(start)]);
@@ -322,7 +337,7 @@ export async function closesDependencyCycle(edge: {
       .from(links)
       .where(
         and(
-          eq(links.linkType, DEPENDENCY_LINK_TYPE),
+          eq(links.linkType, walk),
           or(
             ...frontier.map((r) =>
               and(eq(links.fromType, r.kind as never), eq(links.fromId, r.id))
@@ -348,6 +363,63 @@ export async function closesDependencyCycle(edge: {
 export const DEPENDENCY_CYCLE_ERROR =
   "This would make the two wait on each other: the blocker already waits, directly or through others, on the work you want to block. Remove one of those dependencies first.";
 
+/** The refusal for a `serves` edge that would loop a goal into itself. */
+export const SERVES_CYCLE_ERROR =
+  "This goal cannot serve that one, because that goal already serves it, directly or through other goals.";
+
+/**
+ * The `serves` checks the generic floor does not make, on CREATE, after the
+ * endpoint floor (so nothing is read about a goal the caller cannot see):
+ *
+ *   - `metadata.criterionKey`, when given, is allowed only on a session →
+ *     goal edge and must name one of the goal's criteria (`readCriteria`
+ *     over `project_tracks.criteria`, the reader every goal surface uses);
+ *   - a goal → goal edge must not close a loop of `serves` edges.
+ *
+ * `null` = fine; otherwise the refusal.
+ */
+async function validateServesEdge(
+  edge: DependencyEdgeInput,
+  metadata: Record<string, unknown> | undefined
+): Promise<DependencyRefusal | null> {
+  const criterionKey = metadata?.criterionKey;
+  if (criterionKey !== undefined) {
+    if (edge.fromType !== "session") {
+      return {
+        reason: "invalid_pair",
+        httpStatus: 400,
+        error: "Only a session can name a criterion of the goal it serves.",
+      };
+    }
+    if (typeof criterionKey !== "string" || criterionKey.trim() === "") {
+      return {
+        reason: "invalid_pair",
+        httpStatus: 400,
+        error: "The criterion must be named by its key.",
+      };
+    }
+    const [goal] = await db
+      .select({ criteria: projectTracks.criteria })
+      .from(projectTracks)
+      .where(eq(projectTracks.id, edge.toId))
+      .limit(1);
+    if (!readCriteria(goal?.criteria).some((c) => c.key === criterionKey)) {
+      return {
+        reason: "invalid_pair",
+        httpStatus: 400,
+        error: `The goal has no criterion with the key "${criterionKey}".`,
+      };
+    }
+  }
+  if (
+    edge.fromType === "track" &&
+    (await closesDependencyCycle(edge, SERVES_LINK_TYPE))
+  ) {
+    return { reason: "cycle", httpStatus: 400, error: SERVES_CYCLE_ERROR };
+  }
+  return null;
+}
+
 /**
  * The endpoint floor. Returns the edge's workspace (the FROM end's) on
  * success. An invisible and a nonexistent endpoint get the identical refusal.
@@ -360,7 +432,9 @@ export const DEPENDENCY_CYCLE_ERROR =
  *
  * CREATE floors BOTH ends on visibility: you cannot declare a dependency on
  * something you cannot see — and, once the caller may write it, refuses a
- * `blocked_by` that would close a cycle ({@link closesDependencyCycle}).
+ * `blocked_by` that would close a cycle ({@link closesDependencyCycle}), and
+ * makes the `serves` checks ({@link validateServesEdge}: the named criterion,
+ * the goal loop) with the edge's `metadata`.
  * DELETE floors only the BLOCKED end: a blocker the
  * reader cannot see (`hidden` in the neighbourhood, its status never
  * revealed) would otherwise hold their unit forever with no way out — the
@@ -370,12 +444,22 @@ export async function validateDependencyEdge(
   edge: DependencyEdgeInput,
   userId: string,
   requestWorkspaceId: string | null = null,
-  action: "create" | "delete" = "create"
+  action: "create" | "delete" = "create",
+  metadata?: Record<string, unknown>
 ): Promise<
   { ok: true; workspaceId: string | null } | ({ ok: false } & DependencyRefusal)
 > {
-  if (
-    !isDependencyLinkType(edge.linkType) ||
+  if (edge.linkType === SERVES_LINK_TYPE) {
+    if (!isServesPair(edge.fromType, edge.toType)) {
+      return {
+        ok: false,
+        reason: "invalid_pair",
+        httpStatus: 400,
+        error: "Only a session or a goal can serve a goal.",
+      };
+    }
+  } else if (
+    !isWorkLinkType(edge.linkType) ||
     !isDependencyEndpointKind(edge.fromType) ||
     !isDependencyEndpointKind(edge.toType)
   ) {
@@ -394,7 +478,9 @@ export async function validateDependencyEdge(
       error:
         edge.linkType === DEPENDENCY_LINK_TYPE
           ? "A unit of work cannot be blocked by itself"
-          : "A unit of work cannot replace itself",
+          : edge.linkType === SERVES_LINK_TYPE
+            ? "A goal cannot serve itself."
+            : "A unit of work cannot replace itself",
     };
   }
   const refusal =
@@ -443,6 +529,10 @@ export async function validateDependencyEdge(
       error: DEPENDENCY_CYCLE_ERROR,
     };
   }
+  if (action === "create" && edge.linkType === SERVES_LINK_TYPE) {
+    const servesRefusal = await validateServesEdge(edge, metadata);
+    if (servesRefusal) return { ok: false, ...servesRefusal };
+  }
   return { ok: true, workspaceId: home?.workspaceId ?? null };
 }
 
@@ -461,7 +551,13 @@ export async function writeDependencyLink(input: {
     }
   | ({ ok: false } & DependencyRefusal)
 > {
-  const valid = await validateDependencyEdge(input.edge, input.userId);
+  const valid = await validateDependencyEdge(
+    input.edge,
+    input.userId,
+    null,
+    "create",
+    input.metadata
+  );
   if (!valid.ok) return valid;
   const written = await insertDependencyEdge({
     edge: input.edge,
@@ -577,7 +673,9 @@ export async function governedDependencyLink(
   const valid = await validateDependencyEdge(
     input.edge,
     input.userId,
-    input.requestWorkspaceId ?? null
+    input.requestWorkspaceId ?? null,
+    "create",
+    input.metadata
   );
   if (!valid.ok) {
     const { ok: _ok, ...refusal } = valid;
@@ -659,7 +757,7 @@ export async function applyApprovedDependencyLink(input: {
     typeof d.fromId !== "string" ||
     typeof d.toType !== "string" ||
     typeof d.toId !== "string" ||
-    !isDependencyLinkType(d.linkType as string)
+    !isWorkLinkType(d.linkType as string)
   ) {
     return { ok: false, why: "the proposal does not name a dependency edge." };
   }
@@ -674,13 +772,18 @@ export async function applyApprovedDependencyLink(input: {
     fromId: d.fromId,
     toType: d.toType,
     toId: d.toId,
-    linkType: d.linkType as DependencyLinkType,
+    linkType: d.linkType as WorkLinkType,
   };
+  const metadata =
+    d.metadata && typeof d.metadata === "object" && !Array.isArray(d.metadata)
+      ? (d.metadata as Record<string, unknown>)
+      : undefined;
   const valid = await validateDependencyEdge(
     edge,
     input.ownerUserId,
     null,
-    input.action
+    input.action,
+    metadata
   );
   if (!valid.ok) {
     return {
@@ -700,10 +803,6 @@ export async function applyApprovedDependencyLink(input: {
     });
     return { ok: true, rows: removed };
   }
-  const metadata =
-    d.metadata && typeof d.metadata === "object" && !Array.isArray(d.metadata)
-      ? (d.metadata as Record<string, unknown>)
-      : undefined;
   const written = await insertDependencyEdge({
     edge,
     workspaceId: valid.workspaceId,

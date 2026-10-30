@@ -72,6 +72,7 @@ import {
 } from "../../../__tests__/pglite-ddl.js";
 import { readStatusOf } from "../status-read.js";
 import { readWaitingOn } from "../status-facts.js";
+import { readDependencyState } from "../../links/dependency-links.js";
 import { readScopeRollup } from "../status-rollup.js";
 
 const ME = "user-me";
@@ -225,6 +226,12 @@ beforeAll(async () => {
   await session(S_CHILD, { title: "Lane B" });
   await link(S_WORK, "blocked_by", S_BLOCKER);
   await link(S_CHILD, "spawned_from", S_WORK);
+  // S_WORK serves the (open) goal G: work FOR it, not a wait on it.
+  await q(
+    `insert into links (id, created_by, from_type, from_id, to_type, to_id, link_type, created_at)
+     values ($1, $2, 'session', $3, 'track', $4, 'serves', now())`,
+    [randomUUID(), ME, S_WORK, G]
+  );
   await q(
     `insert into proposals (id, workspace_id, created_by, session_id, proposal_type, target_type, target_id, status, data, created_at, updated_at)
      values ($1, $2, $3, $4, 'create', 'entity', $5, 'pending', '{"title":"Pricing note"}'::jsonb, now(), now())`,
@@ -418,6 +425,7 @@ describe("one waiting-on collector", () => {
         ],
       },
       {
+        // The open goal S_WORK SERVES is not among them: `serves` is no wait.
         reason: "another_work",
         count: 2,
         refs: [
@@ -456,6 +464,12 @@ describe("one waiting-on collector", () => {
         ],
       },
     ]);
+    // THE blocker read itself: the `serves` edge is neither declared nor open.
+    const state = await readDependencyState(
+      { kind: "session", id: S_WORK },
+      ME
+    );
+    expect(state.declared).toEqual([{ kind: "session", id: S_BLOCKER }]);
   });
 
   it("a draft's ask-less slot waits on nobody: the needs-you lens", async () => {
