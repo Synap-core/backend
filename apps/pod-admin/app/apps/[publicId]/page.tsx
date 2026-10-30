@@ -54,7 +54,10 @@ import { summarizeAppConnectRequest } from "@synap-core/types/proposals/intent";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import {
   approvalBySpace,
+  EVERYWHERE_IN_POD,
   keepWithout,
+  placePhrase,
+  POD_WIDE_HEADING,
   podAppOf,
   podAppRevokeNote,
   tierLabel,
@@ -462,7 +465,8 @@ async function patchApp(
 /** A pair (or a whole space) the person is about to take away. */
 interface PendingDrop {
   permission?: string;
-  workspaceId: string;
+  /** null: the reads it was given everywhere in the pod. */
+  workspaceId: string | null;
   /** "Create posts in Brand" / "everything in Brand". */
   what: string;
 }
@@ -552,12 +556,14 @@ function PodAppSettings({
         <ul className="flex flex-col gap-3">
           {spaces.map((space) => (
             <li
-              key={space.workspaceId}
+              key={space.workspaceId ?? "pod"}
               className="rounded-lg border border-foreground/10 bg-content1 px-4 py-3"
             >
               <div className="flex items-center justify-between gap-3">
                 <p className="text-sm font-medium text-foreground/85">
-                  {space.workspaceName}
+                  {space.workspaceId === null
+                    ? POD_WIDE_HEADING
+                    : space.workspaceName}
                 </p>
                 {spaces.length > 1 ? (
                   <Button
@@ -567,11 +573,16 @@ function PodAppSettings({
                     onPress={() =>
                       setDrop({
                         workspaceId: space.workspaceId,
-                        what: `everything in ${space.workspaceName}`,
+                        what:
+                          space.workspaceId === null
+                            ? `everything it reads ${EVERYWHERE_IN_POD}`
+                            : `everything in ${space.workspaceName}`,
                       })
                     }
                   >
-                    Remove this space
+                    {space.workspaceId === null
+                      ? "Remove these reads"
+                      : "Remove this space"}
                   </Button>
                 ) : null}
               </div>
@@ -599,11 +610,11 @@ function PodAppSettings({
                           variant="light"
                           isIconOnly
                           className="min-h-10 min-w-10"
-                          aria-label={`Remove ${p.label} in ${space.workspaceName}`}
+                          aria-label={`Remove ${p.label} ${placePhrase(space)}`}
                           onPress={() =>
                             setDrop({
                               ...pair,
-                              what: `${p.label} in ${space.workspaceName}`,
+                              what: `${p.label} ${placePhrase(space)}`,
                             })
                           }
                         >

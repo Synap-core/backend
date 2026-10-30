@@ -754,3 +754,76 @@ describe("CIMD — cache freshness", () => {
     expect(client.redirectUris).toEqual([CALLBACK]);
   });
 });
+
+describe("synap_requests[].scope: a pod-wide READ of one kind, nothing else (decision e1b59d38 B)", () => {
+  const asked = (...entries: Array<Record<string, unknown>>) =>
+    validateClientMetadataDocument(doc({ synap_requests: entries }), CLIENT_ID);
+
+  it("keeps the reads declared pod-wide, apart from the per-space ones", () => {
+    const v = asked(
+      {
+        permission: "entity.decision.read",
+        scope: "pod",
+        reason: "All of them",
+      },
+      { permission: "entity.finding.read", scope: "pod" },
+      { permission: "entity.task.update", scope: "space" },
+      { permission: "entity.task.read" }
+    );
+    expect(v.requestedPodWide).toEqual([
+      "entity.decision.read",
+      "entity.finding.read",
+    ]);
+    // A pod-wide request is still a request: listed, reason kept.
+    expect(v.requestedPermissions).toEqual([
+      "entity.decision.read",
+      "entity.finding.read",
+      "entity.task.update",
+      "entity.task.read",
+    ]);
+    expect(v.requestedReasons["entity.decision.read"]).toBe("All of them");
+    expect(asked({ permission: "entity.task.read" }).requestedPodWide).toEqual(
+      []
+    );
+  });
+
+  it.each([
+    ["a write verb", "entity.decision.create"],
+    ["an update", "entity.decision.update"],
+    ["a delete", "entity.decision.delete"],
+    ["a gate verb", "entity.deal.transition"],
+    ["a whole kind (every verb)", "entity.decision"],
+    ["every kind", "entity.read"],
+    ["every kind, spelled *", "entity.*.read"],
+    ["full access", "*"],
+    ["another subject's read", "document.read"],
+    ["a relation read", "relation.read"],
+    ["a proposal decision", "proposal.approve"],
+  ])("refuses %s asked pod-wide (%s)", (_label, permission) => {
+    expect(() => asked({ permission, scope: "pod" })).toThrow(
+      ClientMetadataError
+    );
+    expect(() => asked({ permission, scope: "pod" })).toThrow(
+      /cannot be asked pod-wide|Invalid permission/
+    );
+  });
+
+  it("refuses an unknown scope value, and one permission declared both pod-wide and per space", () => {
+    expect(() =>
+      asked({ permission: "entity.decision.read", scope: "everywhere" })
+    ).toThrow(/scope must be "space" or "pod"/);
+    expect(() =>
+      asked(
+        { permission: "entity.decision.read", scope: "pod" },
+        { permission: "entity.decision.read" }
+      )
+    ).toThrow(/both pod-wide and per space/);
+    // The same scope twice is one request, as before.
+    expect(
+      asked(
+        { permission: "entity.decision.read", scope: "pod" },
+        { permission: "entity.decision.read", scope: "pod" }
+      ).requestedPodWide
+    ).toEqual(["entity.decision.read"]);
+  });
+});

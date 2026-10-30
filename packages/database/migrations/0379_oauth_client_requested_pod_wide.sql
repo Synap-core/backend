@@ -1,0 +1,17 @@
+-- 0379 — the permissions a pod app asks for POD-WIDE (founder decision
+-- e1b59d38 "B", 2026-10-30): `synap_requests[].scope = "pod"` in its client
+-- metadata document, accepted only on a read of one named kind
+-- (`entity.<kind>.read`, `isPodWideReadPermission`). The consent screen
+-- offers each as one tick, "everywhere in your pod".
+--
+-- 0378 is taken by an open PR (lifecycle initial status backfill); the
+-- migrator records applied files by NAME, so the order of the two is free.
+--
+-- Additive + idempotent: IF NOT EXISTS. Fresh installs also get the column
+-- from 0000_baseline_schema.sql.
+--
+-- oauth_clients.requested_pod_wide — a subset of `requested_permissions`.
+-- '{}' for a DCR row and for a document cached before this ran; the next
+-- refresh of the document (within 24 h) fills it, and until then the app's
+-- pod-wide asks are offered per space, as before.
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_pod_wide" text[] NOT NULL DEFAULT '{}';

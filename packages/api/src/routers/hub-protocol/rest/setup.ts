@@ -99,6 +99,7 @@ import {
   API_KEY_TOOL_PROFILES,
   APP_PERSON_KEY_TYPE,
   type ApiKeyToolProfile,
+  isPodWideReadScope,
   isValidScope,
   isPrivilegedMintScope,
 } from "@synap/database/schema";
@@ -1029,8 +1030,12 @@ export function registerSetupRoutes(app: HubHono): void {
             404
           );
         }
+        // A pod-wide read (decision e1b59d38 "B") reaches no space to add
+        // an AI to: only a scope about spaces does.
         const withinGrant = surfaceCallerGrants.some(
-          (g) => g.workspaceIds === null || g.workspaceIds.includes(ws.id)
+          (g) =>
+            (g.workspaceIds === null && !isPodWideReadScope(g)) ||
+            (g.workspaceIds?.includes(ws.id) ?? false)
         );
         if (
           !["owner", "admin"].includes(callerMembership.role) ||

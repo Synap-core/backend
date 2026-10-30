@@ -125,3 +125,47 @@ describe("revoking a pod app here stops it everywhere", () => {
     expect(POD_APP_ACCESS_LINE).toMatch(/revoke the app/);
   });
 });
+
+describe("pod-wide reads on the app page (decision e1b59d38 B)", () => {
+  const WITH_POD: PodAppPair[] = [
+    ...APPROVED,
+    {
+      permission: "entity.decision.read",
+      workspaceId: null,
+      workspaceName: null,
+    },
+  ];
+
+  it("are one entry of their own, first, worded everywhere in your pod", () => {
+    const groups = approvalBySpace(WITH_POD);
+    expect(groups[0]).toEqual({
+      workspaceId: null,
+      workspaceName: "everywhere in your pod",
+      permissions: [
+        { permission: "entity.decision.read", label: "Read decisions" },
+      ],
+    });
+    expect(groups.map((g) => g.workspaceId)).toEqual([null, BRAND, SHARED]);
+    expect(approvalSentence(WITH_POD)).toBe(
+      "Read decisions everywhere in your pod · Read posts, Create posts in Brand · Read posts in Shared"
+    );
+  });
+
+  it("can be taken away like any pair, and dropping them keeps every space", () => {
+    expect(keepWithout(WITH_POD, { workspaceId: null })).toEqual(
+      APPROVED.map((p) => ({
+        permission: p.permission,
+        workspaceId: p.workspaceId,
+      }))
+    );
+    expect(
+      keepWithout(WITH_POD, {
+        permission: "entity.post.read",
+        workspaceId: BRAND,
+      })
+    ).toContainEqual({
+      permission: "entity.decision.read",
+      workspaceId: null,
+    });
+  });
+});

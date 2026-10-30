@@ -146,6 +146,9 @@ const DOC = "/.well-known/synap-client.json";
 const VERIFIED = `https://content-studio.synap.live${DOC}`;
 const UNVERIFIED = `https://studio.example.com${DOC}`;
 const LOOKALIKE = `https://content-studio.synap.live.evil.com${DOC}`;
+/** A Synap app that asks to read decisions everywhere (decision e1b59d38 B). */
+const DEVPLANE = `https://devplane.synap.live${DOC}`;
+const DECISIONS = "entity.decision.read";
 const callbackOf = (clientId: string) =>
   `${new URL(clientId).origin}/api/synap/callback`;
 
@@ -171,6 +174,7 @@ const DECLARED: Record<string, string[]> = {
   [VERIFIED]: [READ, CREATE, APPROVE],
   [UNVERIFIED]: [READ, CREATE],
   [LOOKALIKE]: [READ, CREATE],
+  [DEVPLANE]: [READ, CREATE, DECISIONS],
 };
 
 /** OWNER ticks Content OS + Ecosystem; Finance (theirs too) is left out. */
@@ -305,7 +309,7 @@ const params = (clientId: string): AuthorizeParams => ({
 async function consent(
   person: string,
   clientId: string,
-  approved: Array<{ permission: string; workspaceId: string }>
+  approved: Array<{ permission: string; workspaceId: string | null }>
 ): Promise<string> {
   const { redirectTo } = await decideOAuthAuthorization(
     { ...params(clientId), approve: true, approved },
@@ -328,7 +332,7 @@ async function tokenRequest(body: Record<string, string>) {
 async function connect(
   person: string,
   clientId: string,
-  approved: Array<{ permission: string; workspaceId: string }>
+  approved: Array<{ permission: string; workspaceId: string | null }>
 ) {
   const code = await consent(person, clientId, approved);
   const res = await tokenRequest({
@@ -817,5 +821,95 @@ describe("refresh keeps the person; revoking ends it", () => {
     const after = await refresh(pair.refresh_token, VERIFIED);
     expect(after.status).toBe(400);
     expect(after.body.error).toBe("invalid_grant");
+  });
+});
+
+// ─── a pod-wide read (decision e1b59d38 B) ──────────────────────────────────
+
+describe("a pod-wide read: asked in the document, ticked once, held with no space", () => {
+  beforeAll(async () => {
+    // Its document declares DECISIONS pod-wide (`synap_requests[].scope`).
+    await q(
+      `insert into oauth_clients (client_id, client_kind, client_name, redirect_uris, scopes,
+         requested_permissions, requested_templates, requested_pod_wide, metadata_fetched_at, metadata_expires_at, created_at)
+       values ($1, 'cimd', 'DevPlane', $2, '{}', $3, '{}', $4, now(), now() + interval '1 hour', now())`,
+      [DEVPLANE, [callbackOf(DEVPLANE)], DECLARED[DEVPLANE], [DECISIONS]]
+    );
+  });
+
+  const unpinned = async (keyId: string) =>
+    (
+      await q<{ permissions: string[] }>(
+        `select permissions from grants where api_key_id = $1 and revoked_at is null and workspace_ids is null`,
+        [keyId]
+      )
+    ).rows.map((r) => r.permissions);
+
+  it("the consent offers it in its own list, never per space", async () => {
+    const ctx = await getOAuthConsentContext(params(DEVPLANE), OWNER);
+    expect(ctx.app?.podWide).toEqual([{ permission: DECISIONS, reason: null }]);
+    expect(ctx.app?.permissions.map((p) => p.permission).sort()).toEqual(
+      [CREATE, READ].sort()
+    );
+  });
+
+  it("refuses a pod-wide tick the app did not declare pod-wide, and any write pod-wide", async () => {
+    await expect(
+      consent(OWNER, DEVPLANE, [{ permission: READ, workspaceId: null }])
+    ).rejects.toThrow(/not on offer/);
+    await expect(
+      consent(OWNER, DEVPLANE, [{ permission: CREATE, workspaceId: null }])
+    ).rejects.toThrow(/Only a read of one kind/);
+  });
+
+  let first: any;
+  it("ticked: /token says so (workspaceId null), and the key holds ONE unpinned scope of it", async () => {
+    first = await connect(OWNER, DEVPLANE, [
+      { permission: DECISIONS, workspaceId: null },
+      { permission: READ, workspaceId: CONTENT },
+      { permission: CREATE, workspaceId: CONTENT },
+    ]);
+    expect(first.synap_acts_as).toBe("person");
+    expect(first.synap_grant).toContainEqual({
+      permission: DECISIONS,
+      workspaceId: null,
+      workspaceName: null,
+    });
+    const row = await keyRow(first.access_token);
+    expect(await unpinned(row.id)).toEqual([[DECISIONS]]);
+    expect(await livePairs(row.id)).toEqual([
+      "Content OS:entity.person.create",
+      "Content OS:entity.person.read",
+    ]);
+    // Read on every request through the reach rule: the pod-wide scope stays.
+    const status = await apiKeyService.getApiKeyStatus(first.access_token);
+    const id = await resolveKeyIdentity((status as any).record);
+    expect(
+      id.grant?.scopes
+        .filter((s) => !s.workspaceIds)
+        .map((s) => [...s.permissions])
+    ).toEqual([[DECISIONS]]);
+  });
+
+  it("writes stay where they were given: Content only, never Finance", async () => {
+    expect((await write(first.access_token, CONTENT)).decision).toMatchObject({
+      granted: true,
+    });
+    const res = await write(first.access_token, FINANCE);
+    expect(res.decision).toMatchObject({ denied: true });
+    expect(res.decision.reason).toMatch(/grant does not allow/);
+  });
+
+  it("a re-consent without it takes it off the live token at once", async () => {
+    const row = await keyRow(first.access_token);
+    await consent(OWNER, DEVPLANE, [
+      { permission: READ, workspaceId: CONTENT },
+      { permission: CREATE, workspaceId: CONTENT },
+    ]);
+    expect(await unpinned(row.id)).toEqual([]);
+    expect(await livePairs(row.id)).toEqual([
+      "Content OS:entity.person.create",
+      "Content OS:entity.person.read",
+    ]);
   });
 });

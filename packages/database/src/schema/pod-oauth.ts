@@ -113,6 +113,10 @@ export const oauthClients = pgTable("oauth_clients", {
     .$type<Record<string, string>>()
     .notNull()
     .default({}),
+  // The permissions the document declares POD-WIDE (`synap_requests[].scope
+  // = "pod"`, 0379, decision e1b59d38): a subset of `requested_permissions`,
+  // each a read of one named kind. Empty for DCR rows.
+  requestedPodWide: text("requested_pod_wide").array().notNull().default([]),
 });
 
 export const oauthAuthorizationCodes = pgTable(

@@ -32,10 +32,52 @@ import {
 import { sql } from "drizzle-orm";
 import { users } from "./users.js";
 
-/** One entry of `apps.approved_requests` — a permission bounded to a workspace. */
+/**
+ * One entry of `apps.approved_requests` — a permission bounded to a workspace,
+ * or, with `workspaceId: null`, a POD-WIDE read ("everywhere in your pod",
+ * founder decision e1b59d38 "B", 2026-10-30). Null is allowed ONLY for a
+ * permission `isPodWideReadPermission` accepts: every reader refuses (drops)
+ * any other null pair, so a write is always bounded to a workspace.
+ */
 export interface AppApprovedRequest {
   permission: string;
-  workspaceId: string;
+  workspaceId: string | null;
+}
+
+/**
+ * The ONE rule for what an app may hold pod-wide (decision e1b59d38 "B"):
+ * a READ of ONE named kind, `entity.<kind>.read`. Never a write or a gate
+ * verb, never a whole kind (`entity.decision` = every verb), never every kind
+ * (`entity.read`, `entity.*.read`), never `*`, never another subject. Checked
+ * where an app declares it (the client metadata document), where the person
+ * ticks it (consent, the `app/connect` executor), where it is stored and
+ * read back (`readAppConnectRequests`) and where it becomes a grant
+ * (`grantsForApprovedRequests`).
+ */
+export function isPodWideReadPermission(permission: string): boolean {
+  return /^entity\.[a-z0-9][a-z0-9_-]*\.read$/.test(permission);
+}
+
+/**
+ * A grant scope that is only a pod-wide read: no space, project or object
+ * limit, and every permission `isPodWideReadPermission`. Such a scope reads
+ * its kinds everywhere and does nothing else, so the doors that treat a scope
+ * with no space as "not limited to spaces" (facet reach, capture routing, a
+ * role write, a space-level check) must not count it as one.
+ */
+export function isPodWideReadScope(scope: {
+  permissions: readonly string[];
+  workspaceIds?: readonly string[] | null;
+  projectIds?: readonly string[] | null;
+  entityIds?: readonly string[] | null;
+}): boolean {
+  return (
+    !scope.workspaceIds &&
+    !scope.projectIds &&
+    !scope.entityIds &&
+    scope.permissions.length > 0 &&
+    scope.permissions.every(isPodWideReadPermission)
+  );
 }
 
 export const apps = pgTable(
@@ -64,7 +106,7 @@ export const apps = pgTable(
      * for `mode = 'oauth'` only. One row per (owner, oauth_client_id).
      */
     oauthClientId: text("oauth_client_id"),
-    /** Set on approval: `[{ permission, workspaceId }]`. */
+    /** Set on approval: `[{ permission, workspaceId }]` (null = pod-wide read). */
     approvedRequests: jsonb("approved_requests").$type<
       AppApprovedRequest[] | null
     >(),
