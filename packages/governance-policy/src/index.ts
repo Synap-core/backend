@@ -21,6 +21,9 @@
  * Precedence ladder (applied only after RBAC passes and the actor is confirmed
  * to be an agent user):
  *   1. CBAC capability allowlist  → deny if the agent lacks the capability
+ *   1.5 a person's "Never"         → deny (`DENIED_BY_RULE`): a `deny` rule
+ *                                    resolved by the caller (0381). Above every
+ *                                    floor: refusing never loosens one.
  *   2. ADMIN_ACTIONS              → always propose (even for owned workspace)
  *   2.05 HUMAN_GATE_EVENT_KEYS   → always propose; unwidenable by any rung below
  *   2.06 ARBITRARY_EXECUTION_EVENT_KEYS → always propose; a shell inside the API
@@ -1457,10 +1460,12 @@ export interface AgentPolicyInput {
    * (`resolveGovernanceRule` in @synap/database, which has `db`; this engine
    * stays pure). `"auto"` executes, `"propose"` proposes; absent/undefined
    * means no rule matched and the rung no-ops, falling through
-   * byte-identical to every rung below. NEVER `"deny"` — a rule can only
-   * widen or keep-reviewable, never close a door a floor already opened.
+   * byte-identical to every rung below. `"deny"` (0381, founder decision G3)
+   * is a person's stored "Never": it refuses at rung 1.5, ABOVE every floor,
+   * with {@link DENIED_BY_RULE} — refusing can only be stricter than a floor
+   * that proposes, so no floor is ever loosened by it.
    */
-  governanceRuleVerdict?: "auto" | "propose";
+  governanceRuleVerdict?: "auto" | "propose" | "deny";
   /**
    * The id of the `governance_rules` row behind `governanceRuleVerdict`. Pure
    * attribution: never read to decide, only echoed on the `execute` verdict
@@ -1602,7 +1607,27 @@ export type AgentPolicyVerdict =
    */
   | { verdict: "execute"; governanceRuleId?: string }
   | { verdict: "propose"; reason?: string; reasonCode?: string }
-  | { verdict: "deny"; reason: string };
+  /**
+   * `reasonCode` is set when the refusal is a TYPED one an agent can branch
+   * on — today {@link DENIED_BY_RULE}. The CBAC and channel/capability blocks
+   * carry only their sentence, as before.
+   */
+  | { verdict: "deny"; reason: string; reasonCode?: string };
+
+/**
+ * The reason code of a write refused by a person's stored "Never" (a
+ * `governance_rules` row with `verdict: "deny"`, founder decision G3). Typed
+ * so an agent reads it instead of parsing a sentence: do not retry, and do not
+ * route around it.
+ */
+export const DENIED_BY_RULE = "DENIED_BY_RULE";
+
+/**
+ * The sentence an agent reads with {@link DENIED_BY_RULE}. It OPENS with the
+ * code, so every door that forwards only the reason text (a tRPC FORBIDDEN, a
+ * 403 `error`) still hands the agent the typed reason.
+ */
+export const DENIED_BY_RULE_REASON = `${DENIED_BY_RULE}: the person said never for this agent and this kind of act. It was not done. Do not retry it or do it another way; ask the person if it is needed.`;
 
 /**
  * The sentence a person reads for each reason code, written for them: what
@@ -1667,6 +1692,21 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     return {
       verdict: "deny",
       reason: `Agent capability check failed for "${eventKey}". Allowed: ${caps.join(", ")}.`,
+    };
+  }
+
+  // 1.5 A PERSON'S "NEVER" (founder decision G3, 0381). A matching
+  // `governance_rules` row with `verdict: "deny"` refuses the write. It sits
+  // ABOVE the floors on purpose: a floor proposes (asks the person), "Never"
+  // is the person's answer given in advance, and refusing is stricter than
+  // proposing — so no floor is loosened. Which rule matched (and whether a
+  // more specific `auto` outranks a broad deny) is decided by
+  // `resolveGovernanceRule`'s specificity score, deny winning ties.
+  if (input.governanceRuleVerdict === "deny") {
+    return {
+      verdict: "deny",
+      reason: DENIED_BY_RULE_REASON,
+      reasonCode: DENIED_BY_RULE,
     };
   }
 
@@ -1961,8 +2001,8 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // ownership (rung 3) and autoApproveFor (rungs 4/8): a stored rule is a more
   // specific, operator-authored signal than the routing workspace's ownership
   // or blanket whitelist, so it should win over them — but it can never
-  // override a floor (all four floors already returned above) and can never
-  // deny (the store's verdict enum is auto|propose only, never deny). When no
+  // override a floor (all four floors already returned above). A `deny` rule
+  // never reaches here: it refused at rung 1.5. When no
   // rule matched, `governanceRuleVerdict` is undefined and this rung no-ops,
   // falling through byte-identical to every rung below.
   //

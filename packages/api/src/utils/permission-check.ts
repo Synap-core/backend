@@ -621,6 +621,12 @@ export type PermissionResult =
       denied: true;
       reason: string;
       /**
+       * A typed refusal: `DENIED_BY_RULE` = a person's stored "Never" for this
+       * agent and this kind of act (0381). The reason text opens with it too,
+       * for doors that forward only the text.
+       */
+      reasonCode?: string;
+      /**
        * F2 CAP REFUSAL ONLY — the open `settings.update` cap-raise request the
        * refusal filed (or found already open) for this agent. The link is
        * ALSO inlined in `reason`, deliberately: every door surfaces the reason
@@ -796,11 +802,18 @@ export async function getEffectiveGovernance(workspaceId: string): Promise<{
       .map((r) => r.targetPattern)
   );
 
+  // A person's "Never" (`deny`, 0381) on an action is not auto either.
+  const denyRulePatterns = new Set(
+    anyPrincipalRows
+      .filter((r) => r.verdict === "deny")
+      .map((r) => r.targetPattern)
+  );
+
   // Additive union (rung 8 default ∪ rung 2.8 auto rules), then subtract any
-  // action a propose rule pins back to review (exact-pattern match).
+  // action a propose or deny rule takes back (exact-pattern match).
   const effectiveAutoApproveFor = Array.from(
     new Set<string>([...DEFAULT_AUTO_APPROVE, ...autoRulePatterns])
-  ).filter((p) => !proposeRulePatterns.has(p));
+  ).filter((p) => !proposeRulePatterns.has(p) && !denyRulePatterns.has(p));
 
   // Agent-principal rules — the SEPARATE field. Read through the shared
   // `governance-rule-reads` module (same active predicate + same pod ∪
@@ -1269,7 +1282,7 @@ interface AnonymousPolicyFacts {
   /** rung 2.07 — 4d's pod-admin schema-change floor, resolved on the human principal. */
   podAdminSchemaChange: boolean;
   /** rung 2.8 — the resolved `governance_rules` verdict ("any"-principal rules only). */
-  governanceRuleVerdict: "auto" | "propose" | undefined;
+  governanceRuleVerdict: "auto" | "propose" | "deny" | undefined;
   /** rung 2.8 attribution — the rule behind the verdict (echoed on execute, never decides). */
   governanceRuleId: string | undefined;
   /** rung 2.8/2.85 — the rule names this exact write (may widen a terminal lifecycle move). */
@@ -2042,7 +2055,11 @@ async function evaluatePermission(
       });
 
       if (gov.decision === "deny") {
-        return { denied: true, reason: gov.reason };
+        return {
+          denied: true,
+          reason: gov.reason,
+          ...(gov.reasonCode ? { reasonCode: gov.reasonCode } : {}),
+        };
       }
 
       // ── PROVENANCE HOIST (P1) ────────────────────────────────────────────
@@ -2515,13 +2532,17 @@ async function evaluatePermission(
         })
       );
 
-      // `deny` is structurally unreachable for the anonymous principal: all
-      // three denying rungs (1 CBAC, 2.7 per-capability, 7 per-channel) require
-      // an input `anonymousPolicyInput` pins to `undefined`. Handled rather than
-      // cast away, so that if a future rung learns to deny on an input the
-      // anonymous principal DOES carry, it denies instead of falling through.
+      // `deny` reaches the anonymous principal through ONE rung: a person's
+      // "Never" (1.5) on an `any`-principal rule, which the store resolves for
+      // it like any other `any` row. The other denying rungs (1 CBAC, 2.7
+      // per-capability, 7 per-channel) need an input `anonymousPolicyInput`
+      // pins to `undefined`.
       if (gov.verdict === "deny") {
-        return { denied: true, reason: gov.reason };
+        return {
+          denied: true,
+          reason: gov.reason,
+          ...(gov.reasonCode ? { reasonCode: gov.reasonCode } : {}),
+        };
       }
 
       // The propose-only fields, read ONCE through the discriminant so the rest

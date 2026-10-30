@@ -4632,6 +4632,8 @@ DO $$ BEGIN
   CREATE TYPE governance_verdict AS ENUM ('auto', 'propose');
 EXCEPTION WHEN duplicate_object THEN null;
 END $$;
+-- 0381: `deny`, a person's stored "Never" (founder decision G3).
+ALTER TYPE governance_verdict ADD VALUE IF NOT EXISTS 'deny';
 
 CREATE TABLE IF NOT EXISTS "governance_rules" (
   "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -5549,3 +5551,16 @@ CREATE TABLE IF NOT EXISTS "status_signal_raised" (
   "raised_at"    timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY ("subject_type", "subject_id", "signal", "episode_key")
 );
+
+-- 0381: "Later" on a request, per person (founder decision G3) — mirrors
+-- 0381_governance_deny_and_request_later.sql. (Its `deny` verdict value sits
+-- beside the governance_verdict type above.)
+CREATE TABLE IF NOT EXISTS "proposal_snoozes" (
+  "proposal_id"    uuid NOT NULL REFERENCES "proposals"("id") ON DELETE CASCADE,
+  "user_id"        text NOT NULL,
+  "snoozed_until"  timestamptz NOT NULL,
+  "created_at"     timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY ("proposal_id", "user_id")
+);
+CREATE INDEX IF NOT EXISTS "proposal_snoozes_user_idx"
+  ON "proposal_snoozes" ("user_id", "snoozed_until");
