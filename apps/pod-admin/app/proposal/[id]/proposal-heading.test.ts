@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { proposalHeading } from "./proposal-heading";
 
 /** The row `requestAccess` files (`services/app-connect.ts`). */
@@ -124,7 +125,13 @@ describe("the review page heading", () => {
     );
     expect(h.heading).not.toMatch(/Session|Deploy/);
     // A payload that cannot say what ships keeps the generic title.
-    expect(proposalHeading(row, {}).heading).toMatch(/Session/);
+    expect(proposalHeading(row, {}).heading).toBe(
+      buildObjectActionTitle({
+        action: "dev.deploy_approval",
+        objectKind: "focus_session",
+        objectName: "Ship the publish gate",
+      })
+    );
   });
 
   it("the decision card (page and Review drawer) renders the lines in place of the raw payload", () => {
