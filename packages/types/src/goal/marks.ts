@@ -24,8 +24,10 @@
  */
 import type { UnitGlyph, UnitTone } from "../units/index.js";
 import {
+  isWaitKind,
   trackStatusCategory,
   type GoalCriterionMark,
+  type WaitKind,
   type TrackCommitmentState,
   type TrackVerdict,
   type TrackWorkKind,
@@ -198,6 +200,8 @@ export interface WaitingOnRefInput {
   id?: string | null;
   url?: string | null;
   label: string;
+  /** What kind of wait it is (`WAIT_KINDS`); absent from an older pod. */
+  waitKind?: string | null;
 }
 
 /** A named thing, ready to draw: a door to its own page, an outside link, or (neither) just its name. */
@@ -208,6 +212,12 @@ export interface WaitingOnRefView {
   door: LensDoor | null;
   /** An outside page (a PR on GitHub), only an http(s) one. */
   url: string | null;
+  /**
+   * What kind of wait it is (`WAIT_KINDS`, `@synap-core/types/units`): the
+   * chip's icon and who holds the ball (`waitKindHolder`). Null when the pod
+   * did not say, or said a kind this build does not know.
+   */
+  waitKind: WaitKind | null;
 }
 
 /** A "Waiting on …" mark, and what it waits on by name (empty when the pod named nothing). */
@@ -243,6 +253,7 @@ export function waitingOnRefView(
     label: ref.label,
     door,
     url: !door && isHttpUrl(ref.url) ? ref.url : null,
+    waitKind: isWaitKind(ref.waitKind) ? ref.waitKind : null,
   };
 }
 

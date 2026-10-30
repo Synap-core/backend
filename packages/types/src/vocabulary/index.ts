@@ -54,6 +54,7 @@ import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
 import type { StuckCause } from "../units/stuck.js";
+import type { WaitKind } from "../units/wait-kind.js";
 import type {
   CheckVerdict,
   RepoMainHealth,
@@ -1575,6 +1576,11 @@ const STATUS_LABEL_ROWS = {
   ready: "Ready",
   waiting: "Waiting",
   blocked: "Blocked",
+  // unit states (`resolveUnitState`) for a wait someone else holds: a person
+  // outside (a client's reply, a signature) or a machine (CI, the merge
+  // queue, a devbox job, a deploy). Derived, never stored.
+  with_them: "With them",
+  on_machine: "On a machine",
   done: "Done",
   // an agent- or automation-originated session not yet accepted from triage
   drafted: "Drafted",
@@ -2120,6 +2126,40 @@ export const WAITING_ON_REASON_LABELS = {
   external: "Outside party",
   date: "A date",
 } as const satisfies Readonly<Record<string, string>>;
+
+/**
+ * Each wait kind's words (`WAIT_KINDS`, `@synap-core/types/units`, decision
+ * 2): what a "Waiting on" chip says. Keyed by EVERY kind: a kind added
+ * without its words stops the build.
+ */
+export const WAIT_KIND_LABELS = {
+  answer: "Your answer",
+  approval: "Your approval",
+  send: "To send",
+  try_it: "To try",
+  access: "Access",
+  decide: "Your decision",
+  their_reply: "Their reply",
+  their_document: "Their document",
+  signature: "Signature",
+  payment: "Payment",
+  vendor: "Outside party",
+  agent_work: "Agent at work",
+  agent_stopped: "Agent stopped",
+  ci: "CI",
+  devbox_job: "Devbox job",
+  merge_queue: "Merge queue",
+  red_main: "Red main",
+  deploy: "Deploy",
+  another_work: "Other work",
+  date: "A date",
+  nobody: "Nobody",
+} as const satisfies Readonly<Record<WaitKind, string>>;
+
+/** The words for a wait kind; unknown values humanize, never leak. */
+export function resolveWaitKindLabel(v: string | null | undefined) {
+  return resolveFrom(WAIT_KIND_LABELS, v);
+}
 
 function resolveFrom<T extends Readonly<Record<string, string>>>(
   table: T,

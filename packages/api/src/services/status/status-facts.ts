@@ -27,6 +27,7 @@ import {
 import type { PlaybookRunStatus } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
 import {
+  parseHoldDevRef,
   parseHoldMovesRef,
   type LifecycleCategory,
   type RecordedHold,
@@ -462,7 +463,16 @@ export async function readWaitingOnFor<K>(
     for (const h of q.holds ?? []) {
       const held = holdOf.get(holdKey(h));
       if (!held) continue;
-      const source: WaitingOnSource = { kind: "hold", on: held.hold.on };
+      const moves =
+        held.hold.until && "moves" in held.hold.until
+          ? held.hold.until.moves
+          : null;
+      // The dev fact it waits on (pr / main / job) names its wait kind.
+      const source: WaitingOnSource = {
+        kind: "hold",
+        on: held.hold.on,
+        devRef: moves ? (parseHoldDevRef(moves)?.kind ?? null) : null,
+      };
       sources.push(
         h.subjectType === "focus_session" && !readable.has(h.subjectId)
           ? unnamed(source)

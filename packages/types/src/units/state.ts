@@ -6,9 +6,10 @@
  * surface answered it locally, so "waiting on you" and "working" looked
  * identical in the session room while Relay's list said something else again.
  *
- * This module is PURE and dependency-free at run time (its one import is a
- * type) so Relay (React Native), the browser (Electron), the CLI and the pod
- * can all import the same answer. It is also THE tone table: the tone of a
+ * This module is PURE and dependency-free at run time (it imports a type
+ * and the leaf wait table `./wait-kind.ts`, itself import-free) so Relay
+ * (React Native), the browser (Electron), the CLI and the pod can all import
+ * the same answer. It is also THE tone table: the tone of a
  * status word ({@link STATUS_TONE}) and of a lifecycle category
  * ({@link LIFECYCLE_CATEGORY_TONE}) live here, beside the unit states'.
  * It returns a TONE TOKEN NAME, never a colour: each surface maps the token
@@ -27,6 +28,7 @@
  * is no third accent token in the palette, and inventing one would fork it.
  */
 import type { LifecycleCategory } from "../lifecycle/option.js";
+import { waitKindBall, type WaitKind } from "./wait-kind.js";
 
 export const UNIT_STATES = [
   "not_started",
@@ -34,6 +36,8 @@ export const UNIT_STATES = [
   "needs_you",
   "needs_review",
   "blocked",
+  "with_them",
+  "on_machine",
   "scheduled",
   "paused",
   "done",
@@ -201,7 +205,9 @@ export type UnitGlyph =
   // Share state (`resolveShareState`, ./share.ts): private / public / guests.
   | "lock"
   | "globe"
-  | "users";
+  | "users"
+  // A machine holds it (CI, the merge queue, a devbox job, a deploy).
+  | "cpu";
 
 /**
  * The progress rail. `none` is not "0%" — a rail implies motion, so a unit
@@ -245,6 +251,14 @@ export interface UnitStateInput {
   pendingDecisions?: number | null;
   /** The title of whatever this is waiting on. Waiting on X is not waiting on YOU. */
   blockedBy?: string | null;
+  /**
+   * WHAT it waits on, on the finer axis ({@link WaitKind}, `./wait-kind.ts`).
+   * A wait whose ball is `them` (a person outside) reads `with_them`; one
+   * whose ball is `machine` (CI, the merge queue, a devbox job, a deploy)
+   * reads `on_machine`. Any other ball changes nothing here: your turn already has its arms
+   * above, and other work is `blockedBy`.
+   */
+  waitKind?: WaitKind | null;
   /** An agent is actively working right now. */
   running?: boolean;
   /**
@@ -359,6 +373,27 @@ export function resolveUnitState(input: UnitStateInput): UnitStateView {
       state: "needs_review",
       tone: "primary",
       glyph: "scales",
+      rail: determinate(0),
+    };
+  }
+  // Somebody or something ELSE holds it: neither your turn nor a chain of
+  // work. A person outside (a client's answer, a signature) reads "With
+  // them"; a machine (CI, the merge queue, a devbox job, a deploy) reads "On
+  // a machine", quiet, because it moves by itself.
+  const ball = waitKindBall(input.waitKind);
+  if (ball === "them") {
+    return {
+      state: "with_them",
+      tone: "info",
+      glyph: "users",
+      rail: determinate(0),
+    };
+  }
+  if (ball === "machine") {
+    return {
+      state: "on_machine",
+      tone: "textSecondary",
+      glyph: "cpu",
       rail: determinate(0),
     };
   }

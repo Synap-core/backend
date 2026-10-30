@@ -18,9 +18,25 @@ import { describe, it, expect } from "vitest";
 import { BLOCKED_REASONS } from "@synap/playbooks";
 import {
   BLOCKED_REASON_WAITING_ON,
+  WAIT_KIND_FROM,
   WAITING_ON_REASONS,
   waitingOnReasonOf,
+  waitKindOf,
 } from "@synap-core/types/units";
+
+/**
+ * The wait kind each blocked reason gives (decision 2), spelled out once more
+ * on purpose: a change here is a decision. `none` is a slot with no reason.
+ */
+const DECIDED_WAIT_KIND = {
+  credential: "access",
+  permission: "access",
+  capability: "access",
+  policy: "access",
+  decision: "decide",
+  physical: "vendor",
+  none: "answer",
+} as const;
 
 describe("blocked reasons ↔ waiting-on reasons", () => {
   it("every blocked reason has its OWN row (never the input fallback)", () => {
@@ -61,5 +77,25 @@ describe("blocked reasons ↔ waiting-on reasons", () => {
     expect(waitingOnReasonOf({ kind: "owed_slot" })).toBe("input");
     expect(waitingOnReasonOf({ kind: "pending_proposal" })).toBe("approval");
     expect(waitingOnReasonOf({ kind: "blocked_by" })).toBe("another_work");
+  });
+});
+
+describe("blocked reasons ↔ wait kinds", () => {
+  it("every blocked reason has its OWN waitKind row, and the table names nothing else", () => {
+    const rows = Object.keys(WAIT_KIND_FROM.blockedReason).filter(
+      (k) => k !== "none"
+    );
+    expect(rows.sort()).toEqual([...BLOCKED_REASONS].sort());
+  });
+
+  it("the mapping function gives each blocked reason its decided kind", () => {
+    for (const r of [...BLOCKED_REASONS, "none"] as const) {
+      expect(
+        waitKindOf({
+          kind: "owed_slot",
+          blockedReason: r === "none" ? undefined : r,
+        })
+      ).toBe(DECIDED_WAIT_KIND[r]);
+    }
   });
 });

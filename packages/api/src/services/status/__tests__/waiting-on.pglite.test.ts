@@ -401,19 +401,38 @@ describe("one waiting-on collector", () => {
       {
         reason: "approval",
         count: 1,
-        refs: [{ kind: "proposal", id: PROPOSAL, label: expect.any(String) }],
+        refs: [
+          {
+            kind: "proposal",
+            id: PROPOSAL,
+            label: expect.any(String),
+            waitKind: "approval",
+          },
+        ],
       },
       {
         reason: "access",
         count: 1,
-        refs: [{ kind: "slot", id: S_WORK, label: "Stripe key" }],
+        refs: [
+          { kind: "slot", id: S_WORK, label: "Stripe key", waitKind: "access" },
+        ],
       },
       {
         reason: "another_work",
         count: 2,
         refs: [
-          { kind: "session", id: S_BLOCKER, label: "Lane A" },
-          { kind: "session", id: S_CHILD, label: "Lane B" },
+          {
+            kind: "session",
+            id: S_BLOCKER,
+            label: "Lane A",
+            waitKind: "another_work",
+          },
+          {
+            kind: "session",
+            id: S_CHILD,
+            label: "Lane B",
+            waitKind: "another_work",
+          },
         ],
       },
       {
@@ -422,8 +441,18 @@ describe("one waiting-on collector", () => {
         reason: "external",
         count: 2,
         refs: [
-          { kind: "pull_request", url: pr(1), label: "backend#1" },
-          { kind: "pull_request", url: pr(2), label: "backend#2" },
+          {
+            kind: "pull_request",
+            url: pr(1),
+            label: "backend#1",
+            waitKind: "merge_queue",
+          },
+          {
+            kind: "pull_request",
+            url: pr(2),
+            label: "backend#2",
+            waitKind: "ci",
+          },
         ],
       },
     ]);
@@ -457,6 +486,7 @@ describe("statusOf — hold, live, next move", () => {
               kind: "person",
               id: expect.any(String),
               label: "the founder's go",
+              waitKind: "answer",
             },
           ],
         },
@@ -528,7 +558,9 @@ describe("what the reader may not read is counted, never named", () => {
       {
         reason: "input",
         count: 1,
-        refs: [{ kind: "thing", label: expect.any(String) }],
+        refs: [
+          { kind: "thing", label: expect.any(String), waitKind: "answer" },
+        ],
       },
     ]);
     expect(JSON.stringify(marks)).not.toContain("their secret plan");
