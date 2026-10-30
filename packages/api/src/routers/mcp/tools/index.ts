@@ -2210,7 +2210,7 @@ export const tools = {
               items: { type: "string" },
               maxItems: 10,
               description:
-                "Optional: up to 10 ids (thing, goal, session or run). `startHere.statusOf` says where each stands: status, how long it has been there, whether it is stuck, and what it waits on.",
+                "Optional: up to 10 ids (thing, goal, session or run). `startHere.statusOf` says where each stands: status, how long it has been there, whether it is stuck, what it waits on, and while it is paused its `hold` (what the pause waits on, why, until when).",
             },
           },
           required: [],

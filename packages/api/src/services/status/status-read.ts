@@ -4,7 +4,9 @@
  * answer carries its status and words, its fixed CATEGORY (open · active ·
  * paused · done · lost), since when (the transition log, else a stored date,
  * said as not measured), whether it is stuck (only where the lifecycle
- * declares `stuckAfterDays`) and what it waits on (`status-facts.ts`).
+ * declares `stuckAfterDays`), what it waits on (`status-facts.ts`) and, while
+ * it is paused, its HOLD: what the pause waits on, why and until when (the
+ * current hold, `listHolds`; a run's is its session's).
  *
  * Served by orient's `statusOf` (no tool of its own). An id the caller cannot
  * see reads exactly like one that does not exist: `type: "unknown"`.
@@ -18,6 +20,7 @@ import {
   inArray,
   isLifecycleCategory,
   isNull,
+  listHolds,
   playbookRuns,
   projectTracks,
   ProfileResolutionService,
@@ -26,7 +29,10 @@ import type { ProjectTrack } from "@synap/database/schema";
 import {
   findLifecycleOption,
   lifecycleOptionLabel,
+  type HoldOn,
+  type HoldUntil,
   type LifecycleCategory,
+  type RecordedHold,
 } from "@synap-core/types/lifecycle";
 import {
   trackStatusCategory,
@@ -64,6 +70,20 @@ export const statusOfInput = z
 
 type Unavailable = { status: "unavailable" };
 
+/** What a pause waits on, as the move that entered it recorded it. */
+export interface StatusHold {
+  on: HoldOn;
+  /** Who or what: `person:<id>`, `company:<id>`, a free label. */
+  ref: string | null;
+  reason: string | null;
+  /** How it resumes: on a date, or when another thing moves. */
+  until: HoldUntil | null;
+  /** When someone looks at it again (never a move). */
+  reviewBy: string | null;
+  /** When the pause began. */
+  since: string;
+}
+
 export interface StatusOf {
   id: string;
   type: "entity" | "goal" | "session" | "run";
@@ -78,6 +98,8 @@ export interface StatusOf {
   /** Present only when its step declares a stuck rule and it is past it. */
   stuck?: { afterDays: number; forDays: number };
   waitingOn: WaitingOnMark[] | Unavailable;
+  /** Its current hold while paused; null when it stands in no held pause. */
+  hold: StatusHold | null | Unavailable;
   link: string;
 }
 
@@ -85,6 +107,15 @@ export type StatusOfAnswer = StatusOf | { id: string; type: "unknown" };
 
 const iso = (d: Date | string | null | undefined) =>
   d ? new Date(d).toISOString() : null;
+
+const statusHold = (h: RecordedHold): StatusHold => ({
+  on: h.on,
+  ref: h.ref ?? null,
+  reason: h.reason ?? null,
+  until: h.until ?? null,
+  reviewBy: h.reviewBy ?? null,
+  since: h.since,
+});
 
 /** A part of the answer that could not be read is `unavailable`, never empty. */
 async function orUnavailable<T>(p: Promise<T>): Promise<T | Unavailable> {
@@ -144,6 +175,41 @@ export async function readStatusOf(
       where: inArray(playbookRuns.id, ids),
     }),
   ]);
+
+  // One hold read for the whole call; a run's hold is its session's.
+  const holds = orUnavailable(
+    listHolds(db, {
+      subjects: [
+        ...things.map((t) => ({
+          subjectType: "entity" as const,
+          subjectId: t.id,
+        })),
+        ...goals.map((g) => ({
+          subjectType: "track" as const,
+          subjectId: g.id,
+        })),
+        ...[
+          ...sessions.map((s) => s.id),
+          ...runs.flatMap((r) => (r.sessionId ? [r.sessionId] : [])),
+        ].map((id) => ({
+          subjectType: "focus_session" as const,
+          subjectId: id,
+        })),
+      ],
+    }).then(
+      (held) =>
+        new Map(
+          held.map((h) => [
+            `${h.subjectType}:${h.subjectId}`,
+            statusHold(h.hold),
+          ])
+        )
+    )
+  );
+  const holdOf = async (key: string) => {
+    const read = await holds;
+    return read instanceof Map ? (read.get(key) ?? null) : read;
+  };
 
   const moved = await lastTransitionAt([
     ...things.map((t) => ({ type: "entity" as const, id: t.id })),
@@ -222,6 +288,7 @@ export async function readStatusOf(
               blockedNodes: [{ kind: "entity", id: t.id }],
             })
           ),
+          hold: await holdOf(`entity:${t.id}`),
           link: openLink(t.id),
         };
       })()
@@ -241,6 +308,7 @@ export async function readStatusOf(
         waitingOn: await orUnavailable(
           goalFacts!.then((f) => f.get(g.id)?.waitingOn ?? [])
         ),
+        hold: await holdOf(`track:${g.id}`),
         link: openLink(g.id),
       }))()
     );
@@ -267,6 +335,7 @@ export async function readStatusOf(
         category: sessionStatusCategory(s.status),
         ...sinceOf(`focus_session:${s.id}`, done ? s.closedAt : s.startedAt),
         waitingOn: await sessionWaitingOn(s.id),
+        hold: await holdOf(`focus_session:${s.id}`),
         link: openLink(s.id),
       }))()
     );
@@ -287,6 +356,7 @@ export async function readStatusOf(
         since: iso(r.completedAt ?? r.startedAt),
         sinceMeasured: settled,
         waitingOn: r.sessionId ? await sessionWaitingOn(r.sessionId) : [],
+        hold: r.sessionId ? await holdOf(`focus_session:${r.sessionId}`) : null,
         link: openLink(r.sessionId ?? r.id),
       }))()
     );

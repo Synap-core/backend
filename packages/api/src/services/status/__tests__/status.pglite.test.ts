@@ -5,7 +5,9 @@
  *     last transition, else its creation, said as NOT measured; stuck only
  *     past its step's `stuckAfterDays`; a goal's and a session's since from
  *     their own transitions; a session's owed slot is what it waits on; an id
- *     the caller cannot see, or that is not a uuid, is `unknown`;
+ *     the caller cannot see, or that is not a uuid, is `unknown`; a paused
+ *     thing, session or run (its session's) shows its current hold, a resumed
+ *     one none, and a failed hold read is `unavailable`;
  *   - `readGoalRollups`: a goal's sessions per category, its moves this
  *     week, what it waits on;
  *   - `readScopeRollup`: a space's things per category, its stuck things
@@ -42,6 +44,7 @@ vi.mock("@synap/database", async (importOriginal) => {
               label: "In talks",
               stuckAfterDays: 3,
             },
+            { key: "on_hold", category: "paused" },
             { key: "won", category: "done" },
           ],
           unclassified: [],
@@ -85,6 +88,12 @@ const G_QUIET = randomUUID();
 const G_THEIRS = randomUUID();
 const S_THEIRS = randomUUID();
 const NOTE = "33333333-3333-4333-8333-333333333333";
+// Pod-personal (no space), so the space and project rollups never see them.
+const E_HELD = randomUUID();
+const E_RESUMED = randomUUID();
+const S_PAUSED = randomUUID();
+const RUN = randomUUID();
+const LATER = new Date(Date.now() + 7 * 86_400_000).toISOString();
 
 let client: PGlite;
 const q = (sql: string, params: unknown[] = []) => client.query(sql, params);
@@ -113,6 +122,38 @@ function ddlFor(table: PgTable): string {
 }
 
 const ago = (days: number) => `now() - interval '${days} days'`;
+
+/** A move as the doors log it (`lifecycle_transition_outbox`), `daysAgo`. */
+async function logged(
+  subjectType: string,
+  subjectId: string,
+  to: string,
+  category: string,
+  daysAgo: number,
+  hold?: Record<string, unknown>
+) {
+  const at = new Date(Date.now() - daysAgo * 86_400_000).toISOString();
+  const transitionId = randomUUID();
+  await q(
+    `insert into lifecycle_transition_outbox (transition_id, transition) values ($1, $2::jsonb)`,
+    [
+      transitionId,
+      JSON.stringify({
+        transitionId,
+        subjectType,
+        subjectId,
+        to,
+        category,
+        recordedAt: at,
+        userId: ME,
+        workspaceId: null,
+        ...(hold
+          ? { hold: { resumeTo: "negotiating", since: at, ...hold } }
+          : {}),
+      }),
+    ]
+  );
+}
 
 async function transition(
   subjectType: string,
@@ -249,6 +290,43 @@ beforeAll(async () => {
     1,
     { trackId: G, projectId: P }
   );
+  // Paused with a hold; another paused, then resumed (its hold is spent).
+  for (const [id, status, category] of [
+    [E_HELD, "on_hold", "paused"],
+    [E_RESUMED, "negotiating", "active"],
+  ] as const) {
+    await q(
+      `insert into entities (id, user_id, workspace_id, profile_id, title, status, status_category, properties, created_at, updated_at)
+       values ($1, $2, null, $3, 'Held deal', $4, $5, '{}'::jsonb, ${ago(10)}, now())`,
+      [id, ME, DEAL, status, category]
+    );
+  }
+  await logged("entity", E_HELD, "on_hold", "paused", 2, {
+    on: "external",
+    ref: "company:acme",
+    reason: "Their legal team reviews the contract",
+    until: { date: LATER },
+  });
+  await logged("entity", E_RESUMED, "on_hold", "paused", 3, {
+    on: "decision",
+  });
+  await logged("entity", E_RESUMED, "negotiating", "active", 1);
+  await q(
+    `insert into focus_sessions (id, user_id, workspace_id, goal, status, origin, expected_outputs, metadata, started_at, created_at, updated_at)
+     values ($1, $2, null, 'Wait for the brief', 'paused', 'agent', '[]'::jsonb, '{}'::jsonb, ${ago(4)}, now(), now())`,
+    [S_PAUSED, ME]
+  );
+  await logged("focus_session", S_PAUSED, "paused", "paused", 1, {
+    on: "person",
+    ref: `person:${ME}`,
+    reason: "Needs the brief",
+    reviewBy: LATER,
+  });
+  await q(
+    `insert into playbook_runs (id, workspace_id, playbook_id, session_id, executor, status, created_by)
+     values ($1, $2, $3, $4, 'is-agent', 'waiting_on_you', $5)`,
+    [RUN, W, randomUUID(), S_PAUSED, ME]
+  );
   // Outside the 7-day window: not "moved".
   await transition(
     "focus_session",
@@ -311,6 +389,73 @@ describe("readStatusOf", () => {
     }
     expect(by.get("not-an-id")).toEqual({ id: "not-an-id", type: "unknown" });
     expect(out).toHaveLength(10);
+  });
+});
+
+describe("readStatusOf: holds", () => {
+  it("a paused thing, session and run show what the pause waits on; a resumed one none", async () => {
+    const out = await readStatusOf(ME, [
+      E_HELD,
+      E_RESUMED,
+      S_PAUSED,
+      RUN,
+      E_MOVED,
+    ]);
+    const by = new Map(out.map((a) => [a.id, a]));
+    expect(by.get(E_HELD)).toMatchObject({
+      type: "entity",
+      category: "paused",
+      hold: {
+        on: "external",
+        ref: "company:acme",
+        reason: "Their legal team reviews the contract",
+        until: { date: LATER },
+        reviewBy: null,
+        since: expect.any(String),
+      },
+    });
+    const session = {
+      on: "person",
+      ref: `person:${ME}`,
+      reason: "Needs the brief",
+      until: null,
+      reviewBy: LATER,
+      since: expect.any(String),
+    };
+    expect(by.get(S_PAUSED)).toMatchObject({
+      type: "session",
+      category: "paused",
+      hold: session,
+    });
+    // A run waits on what its session's pause waits on.
+    expect(by.get(RUN)).toMatchObject({
+      type: "run",
+      category: "paused",
+      hold: session,
+    });
+    // Resumed since: its last move is not a pause, so it holds nothing.
+    expect(by.get(E_RESUMED)).toMatchObject({
+      category: "active",
+      hold: null,
+    });
+    expect(by.get(E_MOVED)).toMatchObject({ hold: null });
+  });
+
+  it("a FAILED hold read is unavailable, never `null`", async () => {
+    await client.exec(
+      `alter table lifecycle_transition_outbox rename to outbox_gone`
+    );
+    try {
+      const [held] = await readStatusOf(ME, [E_HELD]);
+      expect(held).toMatchObject({
+        category: "paused",
+        hold: { status: "unavailable" },
+      });
+    } finally {
+      await client.exec(
+        `alter table outbox_gone rename to lifecycle_transition_outbox`
+      );
+    }
   });
 });
 

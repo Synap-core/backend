@@ -542,7 +542,7 @@ The session BRIEFING — call first in every session. Leads with `startHere`: pr
 | `scope`       | array<enum>   | no       | Optional: restrict the map to these sections. Omit for all three.                                                                                                                                                                                                                    |
 | `workspaceId` | string        | no       | Optional: pin the map (and the profile sample) to one workspace.                                                                                                                                                                                                                     |
 | `projectId`   | string        | no       | Optional: pin the projects section to one project (its goals and `startHere.statusRollup`).                                                                                                                                                                                          |
-| `statusOf`    | array<string> | no       | Optional: up to 10 ids (thing, goal, session or run). `startHere.statusOf` says where each stands: status, how long it has been there, whether it is stuck, and what it waits on.                                                                                                    |
+| `statusOf`    | array<string> | no       | Optional: up to 10 ids (thing, goal, session or run). `startHere.statusOf` says where each stands: status, how long it has been there, whether it is stuck, what it waits on, and while it is paused its `hold` (what the pause waits on, why, until when).                          |
 
 ## synap_start_session
 
