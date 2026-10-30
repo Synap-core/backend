@@ -40,7 +40,9 @@ import {
 } from "./app-object-parts";
 import { ConfirmModal } from "../../components/confirm-modal";
 import { SectionCard } from "../../components/section-card";
+import { StatusPill } from "../../components/status-pill";
 import { appActivityLine } from "./app-activity";
+import { unlinkSignInNotice } from "./unlink-impact";
 import { ViaChip } from "./via-chip";
 
 export function SignInAppObject({
@@ -83,8 +85,19 @@ export function SignInAppObject({
 
   const state = signInState(conn);
   // The other APPS "Unlink" takes away: the link is per sign-in service, not
-  // per app. Cloud sign-in is not an app; it has its own callout below.
+  // per app. Cloud sign-in is not an app; it has its own sentence below.
   const alsoGoes = conn.unlinkReach.otherApps.map((app) => app.displayName);
+  // What the person is left to sign in with: the server's fact, per person.
+  const unlinkingWho =
+    unlinking?.email ?? personName(unlinking) ?? "This person";
+  const signInNotice = unlinking
+    ? unlinkSignInNotice(
+        conn.people.find((p) => p.userId === unlinking.id)?.unlinkImpact ??
+          "unknown",
+        conn.unlinkReach.cloudSignIn,
+        unlinkingWho
+      )
+    : null;
   const publisher = hostOf(conn.publisherUrl);
   // Only an https address is followed (`publisherExit`); anything else is
   // named, never linked.
@@ -204,18 +217,23 @@ export function SignInAppObject({
                   : "."}
               </p>
               {conn.unlinkReach.cloudSignIn ? (
-                <div
-                  className="mt-3 rounded-medium bg-danger/10 p-3 text-[13px] text-danger ring-1 ring-inset ring-danger/30"
-                  role="alert"
-                >
+                <p className="mt-2">
                   This also removes their Continue with Synap Cloud sign-in.
-                  Without a password on this Pod, they can no longer sign in at
-                  all.
+                </p>
+              ) : null}
+              {signInNotice ? (
+                <div className="mt-3 flex items-start gap-2" role="alert">
+                  <StatusPill
+                    kind={signInNotice.kind}
+                    label={signInNotice.label}
+                    className="shrink-0"
+                  />
+                  <p className="text-[13px]">{signInNotice.sentence}</p>
                 </div>
               ) : null}
               <p className="mt-2 text-foreground/65">
-                Their Pod account, memberships and password stay. Everyone else
-                keeps using {conn.displayName}.
+                Their Pod account, memberships and any password stay. Everyone
+                else keeps using {conn.displayName}.
               </p>
             </>
           }
