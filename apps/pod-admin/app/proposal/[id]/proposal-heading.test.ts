@@ -102,6 +102,31 @@ describe("the review page heading", () => {
     );
   });
 
+  it("a deploy approval names the step, commit and repo, never 'Approve deploy Session'", () => {
+    const row = {
+      targetType: "focus_session",
+      targetName: "Ship the publish gate",
+      proposalType: "dev.deploy_approval",
+    };
+    const data = {
+      sessionId: "63bc4338-0000-4000-8000-000000000000",
+      repo: "Synap-core/control-plane-api",
+      branch: "main",
+      commitSha: "a524c103d1e2f3a4b5c6",
+      gateReport: { passed: true },
+      targetHost: "control-plane-api main",
+      deployCommand: "git push origin a524c103:main",
+      step: "push",
+    };
+    const h = proposalHeading(row, data);
+    expect(h.heading).toBe(
+      "Push a524c103 to main in Synap-core/control-plane-api"
+    );
+    expect(h.heading).not.toMatch(/Session|Deploy/);
+    // A payload that cannot say what ships keeps the generic title.
+    expect(proposalHeading(row, {}).heading).toMatch(/Session/);
+  });
+
   it("the decision card (page and Review drawer) renders the lines in place of the raw payload", () => {
     const src = readFileSync(join(__dirname, "ProposalReviewCard.tsx"), "utf8");
     expect(src).toMatch(/proposalHeading\(p, payload\)/);
