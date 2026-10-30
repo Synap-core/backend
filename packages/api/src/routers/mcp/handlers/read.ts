@@ -161,8 +161,9 @@ export const readHandlers: McpHandlerMap = {
     );
     // `brief` caps the envelope too (sources, pending summaries, no spaces):
     // the prose budget alone left one ask at 62,594 chars.
-    // The service result stays `synthesis` and is spread whole below; the cap
-    // only overrides `sources` (+ `sourcesOmitted`) on top of it.
+    // Both replies below spread `capped`, never `synthesis`: under brief the
+    // cap also shortens `truncated.omittedSources`, and spreading the uncapped
+    // result put the full list back (a live brief carried 8 against a cap of 5).
     const {
       synthesis: capped,
       pending,
@@ -197,7 +198,7 @@ export const readHandlers: McpHandlerMap = {
       // the agent to retry a failure no retry can fix.
       const failure = describeAiFailure(synthesis.failureClass ?? "unknown");
       return ok({
-        ...synthesis,
+        ...capped,
         ...sourcesBlock,
         ...pendingBlock,
         ...spacesBlock,
@@ -222,9 +223,9 @@ export const readHandlers: McpHandlerMap = {
     // index went down). The hub `/answer` door has forwarded it since the
     // keyword-fallback incident; this door never did, so an MCP caller — the
     // primary agent surface — could not tell a healthy empty result from a
-    // degraded one. `truncated` rides along inside `...synthesis`.
+    // degraded one. `truncated` rides along inside `...capped`.
     return ok({
-      ...synthesis,
+      ...capped,
       ...(fromLibrary
         ? {
             answer: untrusted(
