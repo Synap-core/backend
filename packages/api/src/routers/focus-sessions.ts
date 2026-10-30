@@ -688,21 +688,30 @@ export const focusSessionsRouter = router({
    * plus the room roster on this human door), same WHERE, same row
    * projection; edges flat. At most 500 window sessions, and `window` says
    * when it cut. Same defaults as `list`: `kind: "work"`, `lens: "default"`.
+   * `trackId` narrows it to one goal's sessions, `rootSessionId` to one wave
+   * (the root and every session spawned under it); one or the other. It also
+   * carries the PRs, holds and goals its sessions point at.
    */
   graph: protectedProcedure
     .input(
-      z.object({
-        workspaceId: ScopeFilterShape.workspaceId,
-        projectId: ScopeFilterShape.projectId,
-        windowHours: z
-          .number()
-          .int()
-          .min(1)
-          .max(WORK_GRAPH_MAX_WINDOW_HOURS)
-          .default(WORK_GRAPH_DEFAULT_WINDOW_HOURS),
-        kind: sessionKindFilterSchema,
-        lens: sessionLensSchema,
-      })
+      z
+        .object({
+          workspaceId: ScopeFilterShape.workspaceId,
+          projectId: ScopeFilterShape.projectId,
+          windowHours: z
+            .number()
+            .int()
+            .min(1)
+            .max(WORK_GRAPH_MAX_WINDOW_HOURS)
+            .default(WORK_GRAPH_DEFAULT_WINDOW_HOURS),
+          kind: sessionKindFilterSchema,
+          lens: sessionLensSchema,
+          trackId: z.string().uuid().optional(),
+          rootSessionId: z.string().uuid().optional(),
+        })
+        .refine((i) => !(i.trackId && i.rootSessionId), {
+          message: "Pass trackId or rootSessionId, not both.",
+        })
     )
     .query(async ({ ctx, input }) => {
       return buildWorkGraph({
@@ -713,6 +722,11 @@ export const focusSessionsRouter = router({
         lens: input.lens,
         // Shared sessions (human roster of the room) too, as `list` — decision C.
         roster: rosterReadFor(ctx),
+        focus: input.trackId
+          ? { trackId: input.trackId }
+          : input.rootSessionId
+            ? { rootSessionId: input.rootSessionId }
+            : undefined,
       });
     }),
   /**

@@ -33,6 +33,7 @@ import {
   isNull,
   or,
   focusSessions,
+  links,
 } from "@synap/database";
 import type { SQL } from "@synap/database";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
@@ -115,6 +116,12 @@ export interface SessionListQuery {
    */
   trackId?: string;
   /**
+   * Only one WAVE: this session and every session spawned under it, followed
+   * parent → child over `spawned_from` (the edge lineage is derived from). The
+   * work graph's `focus: { rootSessionId }`.
+   */
+  waveRootId?: string;
+  /**
    * Also list sessions the caller reads through the HUMAN ROSTER of the
    * session's room (`sessionReadableWhere`, founder decision C). Default false:
    * a door that does not opt in keeps the owner-only population — which is
@@ -165,6 +172,7 @@ export function sessionListConditions({
   unfiled,
   includeTrackedRuns,
   trackId,
+  waveRootId,
   roster,
   subject,
 }: SessionListQuery): SQL[] {
@@ -181,6 +189,20 @@ export function sessionListConditions({
   }
   if (trackId) {
     conditions.push(eq(focusSessions.trackId, trackId));
+  }
+  if (waveRootId) {
+    conditions.push(drizzleSql`${focusSessions.id}::text IN (
+      WITH RECURSIVE wave(id) AS (
+        SELECT ${waveRootId}::text
+        UNION
+        SELECT w_l.from_id
+          FROM ${links} w_l
+          JOIN wave ON w_l.to_id = wave.id
+         WHERE w_l.from_type = 'session'
+           AND w_l.to_type = 'session'
+           AND w_l.link_type = 'spawned_from'
+      )
+      SELECT id FROM wave)`);
   }
   if (subject) {
     conditions.push(sessionSubjectWhere(subject));

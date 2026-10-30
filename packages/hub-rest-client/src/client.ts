@@ -2234,6 +2234,9 @@ export class HubRestClient {
       params.set("windowHours", String(options.windowHours));
     if (options?.kind) params.set("kind", options.kind);
     if (options?.lens) params.set("lens", options.lens);
+    if (options?.trackId) params.set("trackId", options.trackId);
+    if (options?.rootSessionId)
+      params.set("rootSessionId", options.rootSessionId);
     const qs = params.toString() ? `?${params}` : "";
     return this.request<HubWorkGraph>(
       "GET",

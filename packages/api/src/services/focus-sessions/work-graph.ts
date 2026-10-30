@@ -42,12 +42,31 @@
  * (`inWindow: false`) and is still counted in `omitted`: `omitted` counts the
  * window's sessions not returned AS window sessions.
  *
+ * ── ONE GOAL OR ONE WAVE ────────────────────────────────────────────────────
+ * `focus` narrows the WINDOW (design rule 8: graph one goal or wave, list the
+ * fleet): `{ trackId }` keeps the sessions filed in that goal (the list's own
+ * `trackId` narrow), `{ rootSessionId }` keeps a wave, the root and every
+ * session spawned under it (`spawned_from`, followed parent → child; the
+ * list's `waveRootId` narrow). Far ends
+ * are still fetched, so a wave blocked by another goal's session still says so.
+ *
+ * ── WHAT THE SESSIONS POINT AT ──────────────────────────────────────────────
+ * Besides sessions, the read carries three kinds of node, each derived by the
+ * rule that already owns it (`work-graph-nodes.ts`), never here:
+ *   - `pullRequests`: one per PR any node recorded as an outcome
+ *     (`workUnitsSection`), with the PR's own state (`withPullRequestStates`,
+ *     `foldPullRequestState`), read ONCE for every node;
+ *   - `holds`: the standing hold of each paused node (`listHolds`): what it
+ *     waits on, why, and what resumes it;
+ *   - `goals`: the goal (track) each node is filed into, under the track floor.
+ *
  * ── A FAILED READ IS NOT AN EMPTY ONE ───────────────────────────────────────
  * Each edge read is settled on its own (`settle`): a failure marks its
  * `sections` entry `unavailable` and contributes no edge, so "no line" and
- * "could not look" never render the same. `nextMove` and `live` carry their
- * own unavailable states per node. The node read itself (and lineage) has no
- * partial answer: if it fails, the read fails.
+ * "could not look" never render the same. The PR, hold and goal reads do the
+ * same. `nextMove` and `live` carry their own unavailable states per node. The
+ * node read itself (and lineage) has no partial answer: if it fails, the read
+ * fails.
  */
 
 import type { FocusSession } from "@synap/database/schema";
@@ -76,6 +95,14 @@ import {
   type SessionUnitCounts,
 } from "./session-path-sections.js";
 import type { ContinuationNextMove } from "./continuation-packet.js";
+import {
+  readGraphGoals,
+  readGraphHolds,
+  readGraphPullRequests,
+  type WorkGraphGoal,
+  type WorkGraphHold,
+  type WorkGraphPullRequest,
+} from "./work-graph-nodes.js";
 import { withViewerRole, type SessionViewerRole } from "./viewer-role.js";
 
 import {
@@ -89,6 +116,7 @@ export {
   WORK_GRAPH_DEFAULT_WINDOW_HOURS,
   WORK_GRAPH_MAX_WINDOW_HOURS,
 };
+export type { WorkGraphGoal, WorkGraphHold, WorkGraphPullRequest };
 
 /**
  * One edge, flat. Direction follows the stored or derived relation:
@@ -147,6 +175,12 @@ export interface WorkGraphSections {
   interactions: WorkGraphSection;
   /** The off-window sessions at the far end of an edge. */
   farEnds: WorkGraphSection;
+  /** The PRs the nodes recorded, and their state. */
+  pullRequests: WorkGraphSection;
+  /** The standing holds of the nodes. */
+  holds: WorkGraphSection;
+  /** The goals the nodes are filed into. */
+  goals: WorkGraphSection;
 }
 
 export interface WorkGraphWindow {
@@ -174,9 +208,15 @@ export type WorkGraphNode = Awaited<
 export interface WorkGraph {
   nodes: WorkGraphNode[];
   edges: WorkGraphEdge[];
+  pullRequests: WorkGraphPullRequest[];
+  holds: WorkGraphHold[];
+  goals: WorkGraphGoal[];
   sections: WorkGraphSections;
   window: WorkGraphWindow;
 }
+
+/** ONE goal's sessions, or ONE wave: a root and every session spawned under it. */
+export type WorkGraphFocus = { trackId: string } | { rootSessionId: string };
 
 export interface BuildWorkGraphInput {
   /** The person whose graph this is (the floor). */
@@ -198,6 +238,8 @@ export interface BuildWorkGraphInput {
    * for an unbound key: its far ends are read with no lens.
    */
   boundWorkspaceId?: string;
+  /** Narrow the window to one goal or one wave (see the header). */
+  focus?: WorkGraphFocus;
 }
 
 const LOG = { door: "focusSessions.graph" };
@@ -226,6 +268,7 @@ export async function buildWorkGraph(
 
   // ── The window: one WHERE, open first, at most the ceiling; a full page
   // asks the count (same WHERE) how many it left out.
+  const focus = input.focus;
   const windowQuery: SessionListQuery = {
     userId,
     scope,
@@ -234,6 +277,10 @@ export async function buildWorkGraph(
     kind,
     lens,
     roster,
+    ...(focus && "trackId" in focus ? { trackId: focus.trackId } : {}),
+    ...(focus && "rootSessionId" in focus
+      ? { waveRootId: focus.rootSessionId }
+      : {}),
   };
   const windowRows = await queryUserSessions(
     windowQuery,
@@ -398,14 +445,46 @@ export async function buildWorkGraph(
   const held = new Set(nodes.map((n) => n.id));
   const drawn = edges.filter((e) => held.has(e.from) && held.has(e.to));
 
+  // ── What the nodes point at: PRs, holds, goals, each read settled on its own.
+  const trackIds = [
+    ...new Set(nodes.flatMap((n) => (n.trackId ? [n.trackId] : []))),
+  ];
+  const [prs, holds, goals] = await Promise.all([
+    // The PR facts are events: a workspace-bound key reads them under its own
+    // workspace floor, the one the far ends already use.
+    readGraphPullRequests(nodes, {
+      userId,
+      roster,
+      lens: input.boundWorkspaceId,
+    }),
+    settle(
+      LOG,
+      "holds",
+      "What the paused sessions wait on could not be read.",
+      () => readGraphHolds(nodes.map((n) => n.id))
+    ),
+    settle(
+      LOG,
+      "goals",
+      "The goals these sessions serve could not be read.",
+      () => readGraphGoals(trackIds, userId)
+    ),
+  ]);
+
   return {
     nodes,
     edges: drawn,
+    pullRequests: prs.items,
+    holds: holds.status === "ok" ? holds.value : [],
+    goals: goals.status === "ok" ? goals.value : [],
     sections: {
       blockedBy: sectionOf(declared),
       waitsOnOutputs: sectionOf(outputs),
       interactions,
       farEnds,
+      pullRequests: prs.section,
+      holds: sectionOf(holds),
+      goals: sectionOf(goals),
     },
     window: {
       since,

@@ -271,11 +271,49 @@ const WorkGraphWireSchema = z.object({
       lastAt: z.string().nullable().optional(),
     })
   ),
+  /** One per PR a node recorded; `prState` absent = the pod recorded no fact about it. */
+  pullRequests: z.array(
+    z.object({
+      id: z.string(),
+      url: z.string(),
+      label: z.string(),
+      sessions: z.array(
+        z.object({
+          sessionId: z.string(),
+          key: z.string().nullable(),
+          state: z.enum(["met", "claimed", "open", "retired"]),
+        })
+      ),
+      prState: z.unknown().optional(),
+    })
+  ),
+  /** The standing hold of each paused node (`listHolds`). */
+  holds: z.array(
+    z.object({
+      sessionId: z.string(),
+      status: z.string(),
+      hold: z.unknown(),
+      resumeDue: z.boolean(),
+      reviewDue: z.boolean(),
+    })
+  ),
+  /** The goals (tracks) the nodes are filed into. */
+  goals: z.array(
+    z.object({
+      id: z.string(),
+      name: z.string(),
+      status: z.string(),
+      projectId: z.string(),
+    })
+  ),
   sections: z.object({
     blockedBy: WorkGraphSectionWireSchema,
     waitsOnOutputs: WorkGraphSectionWireSchema,
     interactions: WorkGraphSectionWireSchema,
     farEnds: WorkGraphSectionWireSchema,
+    pullRequests: WorkGraphSectionWireSchema,
+    holds: WorkGraphSectionWireSchema,
+    goals: WorkGraphSectionWireSchema,
   }),
   window: z.object({
     since: z.string(),
@@ -830,7 +868,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "every OPEN session, plus every session settled in the last " +
       "`windowHours` (default 72), plus the far end of every edge of those, " +
       "with the edges flat (`blocked_by`, `spawned_from`, `waits_on_output`, " +
-      "`triggered`, `updated`). For an unbound key, pod-wide when neither " +
+      "`triggered`, `updated`), and the PRs, holds and goals its sessions " +
+      "point at. `trackId` narrows it to one goal's sessions, " +
+      "`rootSessionId` to one wave (the root and every session spawned " +
+      "under it); one or the other. For an unbound key, pod-wide when neither " +
       "`workspaceId` nor `projectId` is given. A workspace-bound key reads " +
       "its own workspace, far ends included, and another `workspaceId` is a " +
       "403. Floored at the sessions the caller can read, " +
@@ -850,6 +891,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // Same vocabularies and agent-door defaults as the list: `all`.
         kind: z.enum([...SESSION_KINDS, "all"]).optional(),
         lens: z.enum(["default", "triage", "all"]).optional(),
+        trackId: uuidQueryParam.optional(),
+        rootSessionId: uuidQueryParam.optional(),
       }),
     },
     responses: {
@@ -1461,9 +1504,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
   });
 
   /**
-   * GET /focus-sessions/graph?workspaceId=&projectId=&windowHours=&kind=&lens=
+   * GET /focus-sessions/graph?workspaceId=&projectId=&windowHours=&kind=&lens=&trackId=&rootSessionId=
    *
-   * The work graph (`buildWorkGraph`). STATIC, so it is registered before
+   * The work graph (`buildWorkGraph`); `trackId` narrows it to one goal,
+   * `rootSessionId` to one wave (one or the other). STATIC, so it is registered before
    * `/focus-sessions/:id` (Hono is first-match). Unlike the list, neither lens
    * is required: a pod-wide graph is the point. Owner-floored on the acting
    * person: agent doors read no roster (`rosterReadFor`).
@@ -1539,6 +1583,19 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       );
     }
     const lens = lensRaw;
+    const trackId = c.req.query("trackId") || undefined;
+    const rootSessionId = c.req.query("rootSessionId") || undefined;
+    if (trackId && rootSessionId) {
+      return c.json({ error: "Pass trackId or rootSessionId, not both." }, 400);
+    }
+    for (const [name, value] of [
+      ["trackId", trackId],
+      ["rootSessionId", rootSessionId],
+    ] as const) {
+      if (value && !isUuid(value)) {
+        return c.json({ error: `${name} is not a valid id: ${value}` }, 400);
+      }
+    }
 
     try {
       const graph = await buildWorkGraph({
@@ -1551,6 +1608,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // (decision C v1: `rosterReadFor` is false for every Hub caller).
         roster: false,
         boundWorkspaceId: c.get("keyWorkspaceId") ?? undefined,
+        focus: trackId
+          ? { trackId }
+          : rootSessionId
+            ? { rootSessionId }
+            : undefined,
       });
       return c.json(graph);
     } catch (err) {
