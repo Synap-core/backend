@@ -21,6 +21,7 @@ import {
   TRPC_KEY_MUTATION_DOORS,
   trpcProcedureAllowed,
   trpcRefusalMessage,
+  workReleaseReach,
 } from "./grant-door-fence.js";
 
 describe("isFencedGrant", () => {
@@ -464,6 +465,87 @@ describe("agent roster door: the person's agents, by a named read", () => {
       "/agent-users/7455fd94-e6bc-4da4-ad98-6a75e021634d/keys",
     ])
       expect(restDoorAllowed("GET", path, READER), path).toBe(false);
+  });
+});
+
+describe("the release door (finding 4d14ce47): an app reads Ship, narrowed", () => {
+  // DevPlane's grant: pinned to Builder, as every app's.
+  const app = (...permissions: string[]) =>
+    key({ permissions, workspaceIds: ["builder"] });
+  it.each([
+    [["event.dev.read", "session.read"], true],
+    [["event.read"], true], // every family, sessions withheld by the read
+    [["event.dev.read"], true],
+    [["session.read", "channel.read", "proposal.read"], false], // no event
+    [["entity.read"], false],
+    [[], false], // deny-all (a revoked or expired grant)
+  ] as const)("a pinned key holding %j → %s", (permissions, ok) => {
+    expect(restDoorAllowed("GET", "/work-release", app(...permissions))).toBe(
+      ok
+    );
+    expect(
+      mcpToolAllowed("synap_get_work_release", true, app(...permissions))
+    ).toBe(ok);
+  });
+
+  it("the read: snapshots of the scope's spaces, sessions when read, holders never", () => {
+    expect(workReleaseReach(app("event.dev.read", "session.read"))).toEqual({
+      full: false,
+      snapshotSpaces: ["builder"],
+      withheld: ["holders"],
+    });
+    // A CI-only event read reaches no snapshot (they are `dev`).
+    expect(workReleaseReach(app("event.ci.read", "session.read"))).toEqual({
+      full: false,
+      snapshotSpaces: [],
+      withheld: ["snapshots", "holders"],
+    });
+    expect(workReleaseReach(app("event.dev.read")).withheld).toEqual([
+      "sessions",
+      "holders",
+    ]);
+    // A project or object pin names no event row: no snapshot.
+    expect(
+      workReleaseReach(key({ permissions: ["event.read"], projectIds: ["p1"] }))
+        .snapshotSpaces
+    ).toEqual([]);
+    // Two pinned scopes: the union of their spaces.
+    expect(
+      workReleaseReach(
+        key(
+          { permissions: ["event.dev.read"], workspaceIds: ["a"] },
+          { permissions: ["event.read"], workspaceIds: ["b"] }
+        )
+      ).snapshotSpaces
+    ).toEqual(["a", "b"]);
+    // A dev-event scope with no space pin reads every snapshot, but the key
+    // still does not read every subject unbounded: holders stay withheld.
+    expect(
+      workReleaseReach(
+        key(
+          { permissions: ["event.dev.read"] },
+          { permissions: ["session.read"], workspaceIds: ["a"] }
+        )
+      )
+    ).toEqual({ full: false, snapshotSpaces: "all", withheld: ["holders"] });
+  });
+
+  it("CONTROL: a person, a full key, or one reading every subject unbounded keeps the whole read", () => {
+    const whole = { full: true, snapshotSpaces: "all", withheld: [] };
+    expect(workReleaseReach(null)).toEqual(whole);
+    expect(workReleaseReach(key({ permissions: ["*"] }))).toEqual(whole);
+    expect(
+      workReleaseReach(
+        key({
+          permissions: [
+            "event.read",
+            "session.read",
+            "channel.read",
+            "proposal.read",
+          ],
+        })
+      )
+    ).toEqual(whole);
   });
 });
 

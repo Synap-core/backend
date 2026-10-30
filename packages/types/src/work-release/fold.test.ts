@@ -491,6 +491,26 @@ describe("sessions and holders", () => {
       holder: null,
     });
   });
+
+  it("a part the grant does not reach says withheld — not none, not failed", () => {
+    // Inputs where the three readings DISAGREE: an empty snapshot list reads
+    // "missing", an empty sessions list "ok", a null holders list
+    // "unavailable"; withheld overrides each.
+    const read = foldWorkRelease([], [], null, {
+      now: NOW,
+      withheld: ["snapshots", "sessions", "holders"],
+    });
+    expect(read.sources).toEqual({
+      snapshots: "withheld",
+      sessions: "withheld",
+      holders: "withheld",
+    });
+    // Only the named parts: the others keep their own reading.
+    expect(
+      foldWorkRelease(TONIGHT(), [], [], { now: NOW, withheld: ["holders"] })
+        .sources
+    ).toEqual({ snapshots: "ok", sessions: "ok", holders: "withheld" });
+  });
 });
 
 describe("snapshots: newest per repo, stale, missing", () => {

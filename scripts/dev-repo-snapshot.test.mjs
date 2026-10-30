@@ -425,6 +425,10 @@ test("fingerprint ignores observedAt; observation shape", () => {
     [o.type, o.subjectId, o.data.repo],
     ["dev.repo_snapshot", R, R]
   );
+  // Pod-wide unless a space is named; a named space is stamped on the event.
+  assert.equal("workspaceId" in o, false);
+  const WS = "808939d1-86b3-4c52-a153-ae06ece2c54e";
+  assert.equal(snapshotObservation(s, WS).workspaceId, WS);
 });
 
 test("mainFailingNames: a pending head does not hide a slow check that fails on main", () => {
