@@ -3,11 +3,13 @@
  * (packages/api-types/src/generated.d.ts), derived, never read from a
  * committed hash file. Two producers, two tests:
  *   - under vitest (no bundle define) health.ts hashes the file itself;
- *   - the shipped bundle gets it from tsup.config.ts `define`.
+ *   - the shipped bundle gets it from tsup.config.ts `define`, which bakes the
+ *     hash the build script computed (scripts/print-schema-hash.mjs).
  * The booted bundle is checked end to end in ci.yml ("Health serves the
  * derived schema hash").
  */
 
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -43,16 +45,59 @@ describe("/health schemaHash", () => {
     expect(body.schemaHash).toBe(EXPECTED);
   });
 
-  it("the bundle bakes the same hash in (tsup define)", async () => {
-    // A runtime path, so tsc does not pull tsup.config.ts into this program.
-    const configPath = fileURLToPath(
-      new URL("../../../../tsup.config.ts", import.meta.url)
+  it("the bundle bakes the same hash in (build script -> tsup define)", async () => {
+    // The build script computes it with print-schema-hash.mjs...
+    const pkg = JSON.parse(
+      readFileSync(new URL("../../../../package.json", import.meta.url), "utf8")
+    ) as { scripts: { build: string } };
+    expect(pkg.scripts.build).toContain(
+      "API_TYPES_SCHEMA_HASH=$(node scripts/print-schema-hash.mjs) tsup"
     );
-    const mod = (await import(configPath)) as {
-      default: { define?: Record<string, string> };
-    };
-    expect(mod.default.define?.__API_TYPES_SCHEMA_HASH__).toBe(
-      JSON.stringify(EXPECTED)
+    const printed = execFileSync(
+      process.execPath,
+      [
+        fileURLToPath(
+          new URL("../../../../scripts/print-schema-hash.mjs", import.meta.url)
+        ),
+      ],
+      { encoding: "utf8" }
+    ).trim();
+    expect(printed).toBe(EXPECTED);
+    // ...and tsup.config.ts bakes what it was passed.
+    const config = await loadTsupConfig();
+    const define = withHashEnv(printed, () => config.default({}).define);
+    expect(define?.__API_TYPES_SCHEMA_HASH__).toBe(JSON.stringify(EXPECTED));
+  });
+
+  it("the bundle refuses to build without the hash", async () => {
+    const config = await loadTsupConfig();
+    expect(() => withHashEnv(undefined, () => config.default({}))).toThrow(
+      /API_TYPES_SCHEMA_HASH is unset/
+    );
+    expect(() => withHashEnv("not-a-hash", () => config.default({}))).toThrow(
+      /not a 16-hex schema hash/
     );
   });
 });
+
+async function loadTsupConfig() {
+  // A runtime path, so tsc does not pull tsup.config.ts into this program.
+  const configPath = fileURLToPath(
+    new URL("../../../../tsup.config.ts", import.meta.url)
+  );
+  return (await import(configPath)) as {
+    default: (options: object) => { define?: Record<string, string> };
+  };
+}
+
+function withHashEnv<T>(value: string | undefined, run: () => T): T {
+  const before = process.env.API_TYPES_SCHEMA_HASH;
+  if (value === undefined) delete process.env.API_TYPES_SCHEMA_HASH;
+  else process.env.API_TYPES_SCHEMA_HASH = value;
+  try {
+    return run();
+  } finally {
+    if (before === undefined) delete process.env.API_TYPES_SCHEMA_HASH;
+    else process.env.API_TYPES_SCHEMA_HASH = before;
+  }
+}
