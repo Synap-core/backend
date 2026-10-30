@@ -176,6 +176,8 @@ describe("a floored write stays floored after the agent's revise", () => {
       await expect(redecide()).resolves.toEqual({
         outcome: "applied",
         proposalId: "prop-1",
+        // The record stamped on the receipt, handed back to the revise door.
+        materialized: { entityIds: ["ent-1"] },
       });
       expect(h.materialize).toHaveBeenCalledTimes(1);
     });

@@ -11,7 +11,9 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const h = vi.hoisted(() => ({ merge: vi.fn(async () => undefined) }));
+const h = vi.hoisted(() => ({
+  merge: vi.fn(async (): Promise<unknown> => undefined),
+}));
 
 vi.mock("../../middleware/api-key-auth.js", async (importOriginal) => {
   const actual =
@@ -63,5 +65,38 @@ describe("hub proposals.updateProposal expectedRevision", () => {
       })
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(h.merge).not.toHaveBeenCalled();
+  });
+});
+
+// Door parity with `synap_revise_proposal` (30 Oct live test, item 1): the
+// Hub revise door also says what the re-decision of the agent's own graph did.
+describe("hub proposals.updateProposal reply", () => {
+  it("an applied re-decision answers auto_approved with the ids it created", async () => {
+    h.merge.mockResolvedValueOnce({
+      outcome: "applied",
+      proposalId: PROPOSAL,
+      materialized: {
+        entityIds: ["ent-1"],
+        byOp: { u1: { op: "create_entity", entityId: "ent-1" } },
+      },
+    });
+    const out = await caller().updateProposal({
+      proposalId: PROPOSAL,
+      data: { operations: [] },
+    });
+    expect(out).toMatchObject({
+      success: true,
+      proposalId: PROPOSAL,
+      status: "auto_approved",
+      materializedIds: { u1: { op: "create_entity", id: "ent-1" } },
+    });
+  });
+
+  it("nothing re-decided: pending", async () => {
+    const out = await caller().updateProposal({
+      proposalId: PROPOSAL,
+      data: { title: "B" },
+    });
+    expect(out).toMatchObject({ success: true, status: "pending" });
   });
 });
