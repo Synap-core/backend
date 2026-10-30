@@ -42,6 +42,8 @@ export interface UpdatePropertyDefInput {
     | "entity_id";
   constraints?: Record<string, unknown>;
   uiHints?: Record<string, unknown>;
+  /** A declared lifecycle's initial status (`null` clears it). */
+  initialStatus?: string | null;
 }
 
 export interface UpdatePropertyDefResult {
@@ -72,6 +74,9 @@ export async function updatePropertyDef(
         ? { constraints: input.constraints }
         : {}),
       ...(input.uiHints !== undefined ? { uiHints: input.uiHints } : {}),
+      ...(input.initialStatus !== undefined
+        ? { initialStatus: input.initialStatus }
+        : {}),
     });
 
   return {
