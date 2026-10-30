@@ -1421,9 +1421,13 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     const limit = Number.isFinite(limitRaw)
       ? Math.min(Math.max(limitRaw, 1), 50)
       : 20;
-    const offsetRaw = Number(c.req.query("offset") ?? "0");
-    const offset =
-      Number.isFinite(offsetRaw) && offsetRaw > 0 ? Math.trunc(offsetRaw) : 0;
+    // Refused, never clamped (as `GET /events`): a page the caller did not
+    // ask for, answered as if it were the first, reads as "no more rows".
+    const offsetRaw = c.req.query("offset");
+    const offset = offsetRaw === undefined ? 0 : Number(offsetRaw);
+    if (!Number.isInteger(offset) || offset < 0) {
+      return c.json({ error: "offset must be a non-negative integer" }, 400);
+    }
     // ONE status vocabulary (session-statuses.ts) — this door used to carry a
     // hand-mirrored copy that would silently reject any status the schema
     // later learned.
