@@ -2261,6 +2261,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "stage_history",
     addedBy: "0274_track_stage_and_params.sql",
   },
+  // 0382 — a session's stage ledger (status-first PR-E). Every session read
+  // selects the whole row, so a missing column 500s every session door.
+  {
+    table: "focus_sessions",
+    column: "stage_history",
+    addedBy: "0382_focus_session_stage_history.sql",
+  },
   // 0302 — a track's direction + optional KPI. Every track read selects the
   // whole row, so a missing column 500s every track door (`project_tracks` is
   // not in the baseline: these are its only startup guards).
