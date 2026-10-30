@@ -3,6 +3,289 @@
 import { Column, SQL } from 'drizzle-orm';
 import { z } from 'zod';
 
+declare const WAIT_KINDS: readonly [
+	"answer",
+	"approval",
+	"send",
+	"try_it",
+	"access",
+	"decide",
+	"their_reply",
+	"their_document",
+	"signature",
+	"payment",
+	"vendor",
+	"agent_work",
+	"agent_stopped",
+	"ci",
+	"devbox_job",
+	"merge_queue",
+	"red_main",
+	"deploy",
+	"another_work",
+	"date",
+	"nobody"
+];
+export type WaitKind = (typeof WAIT_KINDS)[number];
+declare const TRACK_STATUSES: readonly [
+	"proposed",
+	"agreed",
+	"ready",
+	"active",
+	"paused",
+	"completed",
+	"archived"
+];
+export type TrackStatus = (typeof TRACK_STATUSES)[number];
+declare const TRACK_STAGE_POSITIONS: readonly [
+	"done",
+	"active",
+	"not_started"
+];
+export type TrackStagePosition = (typeof TRACK_STAGE_POSITIONS)[number];
+export interface TrackStage {
+	key: string;
+	name: string;
+	/** The stage's closed rollup category, when the pinned stage declares one. */
+	category: string | null;
+	position: TrackStagePosition;
+	/** Sessions filed in this track at this stage — only when counts were given. */
+	sessionCount?: number;
+	/** The stage's own goal — the brief of a session started at this stage. */
+	goal?: string;
+	description?: string;
+	suggestedTasks?: string[];
+	/** Deliverables expected from this stage, as pinned (untyped jsonb objects). */
+	expectedOutputs?: Array<Record<string, unknown>>;
+	/** Acceptance criteria of this stage, as pinned (objects with a `key`). */
+	criteria?: Array<Record<string, unknown> & {
+		key: string;
+	}>;
+	/** The entry gate's kind — a person approves (`human`) or a check measures. */
+	gate?: "check" | "human";
+	/** May the track sit in this stage indefinitely? */
+	indefinite?: boolean;
+	/**
+	 * The DOMAIN this stage is worked in: a workspace TEMPLATE slug
+	 * (`workspaces.package_slug`), never a workspace id, so a method stays
+	 * portable across pods. `startStageSession` resolves it to a live workspace.
+	 */
+	domain?: string;
+	/**
+	 * ISO-8601 — present only on an EMERGENT stage: one added to the running
+	 * track (`addTrackStage`) rather than pinned from its method at start.
+	 */
+	addedAt?: string;
+}
+/**
+ * One stage a track ENTERED (`project_tracks.stage_history`, 0274), oldest
+ * first. A re-entered stage appears again — this is a timeline, not a map.
+ */
+export interface TrackStageHistoryEntry {
+	stageKey: string;
+	/** Where it came from — `null` for the entry recorded at birth/backfill. */
+	fromStage: string | null;
+	/** ISO-8601. */
+	enteredAt: string;
+	/** The user (or agent) id that moved it. */
+	actor: string;
+	/**
+	 * The verdict of the entered step's `check` ENTRY gate, which measured the
+	 * step LEFT (`fromStage`). Present only when such a gate ran on this move;
+	 * absent = no check gate ran (or the move predates the stamp, U5).
+	 */
+	check?: TrackStageCheckVerdict;
+}
+/** A check gate's verdict on one move (`stage_history[].check`). */
+export interface TrackStageCheckVerdict {
+	passed: boolean;
+	/** Required criteria / outcomes not met; `CHECK_GATE_UNEVALUATED` = not measured. */
+	failing: string[];
+	reason?: string;
+}
+declare const TRACK_VERDICTS: readonly [
+	"met",
+	"partly_met",
+	"not_met",
+	"retired",
+	"no_longer_needed",
+	"impossible",
+	"replaced",
+	"mistake"
+];
+export type TrackVerdict = (typeof TRACK_VERDICTS)[number];
+/**
+ * WHY a paused track is paused — projected by the pod on every track read.
+ *   - `check` — a check stage gate held it (the gate's `metadata.checkGate`
+ *     marker, cleared on every status change);
+ *   - `human` — a person paused it, or a human stage gate awaits review;
+ *   - `null`  — the track is not paused (a stale marker never leaks).
+ */
+export type TrackPausedBy = "check" | "human" | null;
+/**
+ * What a check gate that HELD the track recorded (`metadata.checkGate`): the
+ * step entered (`stageKey`, whose entry gate it is), the step it measured
+ * (`fromStage`), what failed and why. Projected on every track read while the
+ * track is paused by it — `null` otherwise (the marker is cleared on every
+ * status change, so a stale one never leaks).
+ */
+export interface TrackCheckGate {
+	stageKey: string;
+	fromStage: string;
+	failing: string[];
+	reason: string | null;
+}
+/**
+ * The number a track steers by (`project_tracks.kpi`, 0302).
+ *
+ * `current` is STATED, never measured: nothing in the pod derives "qualified
+ * leads per month", so the value always travels with WHEN it was stated
+ * (`updatedAt`) and by whom (`updatedBy`). A surface must never present it as
+ * a live measurement.
+ *
+ * The target is REACHED when `current >= target` — a KPI is a number to grow
+ * toward. (A lower-is-better KPI is not modelled yet; state it as the number
+ * to reach, e.g. "days saved", not "days taken".)
+ *
+ * The pod types `project_tracks.kpi` with this declaration (re-exported as
+ * `ProjectTrackKpi`, `@synap/database`).
+ */
+export interface TrackKpi {
+	label: string;
+	unit?: string;
+	target: number;
+	current?: number;
+	/** ISO-8601 — when `current` was last stated. */
+	updatedAt?: string;
+	/** The user (or agent) id that stated `current`. */
+	updatedBy?: string;
+}
+/**
+ * What a transition is ABOUT. An entity (a kind's lifecycle, or a role's on
+ * its facet) moves through the `moveStatus` door; a goal (`project_tracks`)
+ * through its own compare-and-set; a focus session through `setSessionStatus`.
+ * All three write the SAME shape below, through the same outbox.
+ */
+export type TransitionSubjectType = "entity" | "focus_session" | "track";
+/**
+ * ONE TRANSITION SHAPE (status-flow plan W1): what every status move carries,
+ * whatever moved. Emitted as `<subjectType>.transition.completed`
+ * (`entity.transition.completed`, `track.…`, `focus_session.…`).
+ */
+export interface TransitionBase {
+	transitionId: string;
+	subjectType: TransitionSubjectType;
+	subjectId: string;
+	/** The status property (`status` for a goal or a session). */
+	property: string;
+	from: string | null;
+	to: string;
+	fromCategory: LifecycleCategory | null;
+	category: LifecycleCategory;
+	/** How the move was governed and compare-and-set (who wins a race). */
+	actorKind: "agent" | "human" | "system";
+	/**
+	 * Who made it, for attribution: `actorKind`, except a move made with an
+	 * APP's key (`grants.client_id`, the same attribution `events.app_id`
+	 * carries, 0310) is the app's: the CRM app moving a deal is neither the
+	 * person who connected it nor an agent.
+	 */
+	actorClass: TransitionActorClass;
+	/** The app's `public_id` when `actorClass` is `app`, else null. */
+	appId: string | null;
+	/** The person the move is attributed to (the owner of an agent's move). */
+	userId: string;
+	agentUserId: string | null;
+	sessionId: string | null;
+	reason: string | null;
+	/** A person moved it from a value they had not seen ("moved meanwhile"). */
+	staleExpected: boolean;
+	proposalId: string | null;
+	/** The lens the move happened in. */
+	workspaceId: string | null;
+	/**
+	 * When it happened (ISO): now, or up to 30 days back when the mover says so
+	 * (`resolveOccurredAt`). Time in a status is measured from here.
+	 */
+	occurredAt: string;
+	/** When it was recorded (ISO), stamped at the move, never at delivery. */
+	recordedAt: string;
+	/** `occurredAt` was given and lies before `recordedAt`. */
+	backdated: boolean;
+	/**
+	 * What a move into a paused status waits on (`./hold.ts`); null for any
+	 * other move. The transition log is the hold's only store.
+	 */
+	hold: RecordedHold | null;
+}
+/** Who made a move, for attribution (`TransitionBase.actorClass`). */
+export type TransitionActorClass = "agent" | "app" | "human" | "system";
+/**
+ * The payload of `entity.transition.completed` — the ONE event every entity
+ * status move emits (the `moveStatus` door). `role` is the role-profile slug
+ * when the status is a role's (stored on the facet), null for the kind's own
+ * lifecycle. `subjectId` is the entity.
+ */
+export interface LifecycleTransitionPayload extends TransitionBase {
+	subjectType: "entity";
+	entityId: string;
+	profileSlug: string | null;
+	role: string | null;
+	facetId: string | null;
+}
+declare const HOLD_ON: readonly [
+	"person",
+	"agent",
+	"external",
+	"thing",
+	"decision",
+	"date",
+	"nobody",
+	"unspecified"
+];
+export type HoldOn = (typeof HOLD_ON)[number];
+/**
+ * How a hold resumes: on a calendar date (ISO), or when the awaited thing moves
+ * (`moves` = `<subjectType>:<id>`, e.g. `entity:…`, `track:…`,
+ * `focus_session:…`), optionally only when it reaches `to` (a status key, or a
+ * category such as `done`). `moves` may also name a DEV FACT
+ * ({@link HoldDevRef}: `pr:<owner/name>#<n>`, `main:<owner/name>`,
+ * `job:<name>`): the hold then resumes when a producer posts that fact.
+ */
+export type HoldUntil = {
+	date: string;
+} | {
+	moves: string;
+	to?: string;
+};
+/** A hold as a mover gives it. */
+export interface Hold {
+	on: HoldOn;
+	/** Who or what: `person:<id>`, `company:<id>`, `check:<stage>`, a free label. */
+	ref?: string | null;
+	reason?: string | null;
+	until?: HoldUntil | null;
+	/** ISO date by which someone looks at it again (never a move). */
+	reviewBy?: string | null;
+}
+/**
+ * A hold as the transition records it: the mover's hold plus what the server
+ * knows. `resumeTo` is the status the thing left when the pause BEGAN (a
+ * carried hold keeps it), so a resume by date or by move goes back there;
+ * `since` is when the pause began (its occurred time).
+ */
+export interface RecordedHold extends Hold {
+	resumeTo: string | null;
+	since: string;
+}
+export type MoveHoldDecision = {
+	hold: RecordedHold | null;
+	ok: true;
+} | {
+	code: "HOLD_INVALID" | "HOLD_NOT_A_PAUSE" | "HOLD_REQUIRED";
+	message: string;
+	ok: false;
+};
 declare const LIFECYCLE_CATEGORIES: readonly [
 	"open",
 	"active",
@@ -17,6 +300,8 @@ declare const UNIT_STATES: readonly [
 	"needs_you",
 	"needs_review",
 	"blocked",
+	"with_them",
+	"on_machine",
 	"scheduled",
 	"paused",
 	"done",
@@ -36,7 +321,7 @@ declare const UNIT_TONES: readonly [
 ];
 export type UnitTone = (typeof UNIT_TONES)[number];
 /** Which mark the state wears. Surfaces map these to their own icon set. */
-export type UnitGlyph = "alert" | "check" | "clock" | "dashed-circle" | "globe" | "link" | "lock" | "pause" | "person" | "question" | "scales" | "spark" | "users";
+export type UnitGlyph = "alert" | "check" | "clock" | "cpu" | "dashed-circle" | "globe" | "link" | "lock" | "pause" | "person" | "question" | "scales" | "spark" | "users";
 /**
  * The progress rail. `none` is not "0%" — a rail implies motion, so a unit
  * that has never started shows none at all. `dashed` means the progress is
@@ -5931,265 +6216,6 @@ export interface PlaybookRunExternalAgent {
 	};
 	startedAt: string;
 }
-declare const HOLD_ON: readonly [
-	"person",
-	"agent",
-	"external",
-	"thing",
-	"decision",
-	"date",
-	"nobody",
-	"unspecified"
-];
-export type HoldOn = (typeof HOLD_ON)[number];
-/**
- * How a hold resumes: on a calendar date (ISO), or when the awaited thing moves
- * (`moves` = `<subjectType>:<id>`, e.g. `entity:…`, `track:…`,
- * `focus_session:…`), optionally only when it reaches `to` (a status key, or a
- * category such as `done`). `moves` may also name a DEV FACT
- * ({@link HoldDevRef}: `pr:<owner/name>#<n>`, `main:<owner/name>`,
- * `job:<name>`): the hold then resumes when a producer posts that fact.
- */
-export type HoldUntil = {
-	date: string;
-} | {
-	moves: string;
-	to?: string;
-};
-/** A hold as a mover gives it. */
-export interface Hold {
-	on: HoldOn;
-	/** Who or what: `person:<id>`, `company:<id>`, `check:<stage>`, a free label. */
-	ref?: string | null;
-	reason?: string | null;
-	until?: HoldUntil | null;
-	/** ISO date by which someone looks at it again (never a move). */
-	reviewBy?: string | null;
-}
-/**
- * A hold as the transition records it: the mover's hold plus what the server
- * knows. `resumeTo` is the status the thing left when the pause BEGAN (a
- * carried hold keeps it), so a resume by date or by move goes back there;
- * `since` is when the pause began (its occurred time).
- */
-export interface RecordedHold extends Hold {
-	resumeTo: string | null;
-	since: string;
-}
-export type MoveHoldDecision = {
-	hold: RecordedHold | null;
-	ok: true;
-} | {
-	code: "HOLD_INVALID" | "HOLD_NOT_A_PAUSE" | "HOLD_REQUIRED";
-	message: string;
-	ok: false;
-};
-/**
- * What a transition is ABOUT. An entity (a kind's lifecycle, or a role's on
- * its facet) moves through the `moveStatus` door; a goal (`project_tracks`)
- * through its own compare-and-set; a focus session through `setSessionStatus`.
- * All three write the SAME shape below, through the same outbox.
- */
-export type TransitionSubjectType = "entity" | "focus_session" | "track";
-/**
- * ONE TRANSITION SHAPE (status-flow plan W1): what every status move carries,
- * whatever moved. Emitted as `<subjectType>.transition.completed`
- * (`entity.transition.completed`, `track.…`, `focus_session.…`).
- */
-export interface TransitionBase {
-	transitionId: string;
-	subjectType: TransitionSubjectType;
-	subjectId: string;
-	/** The status property (`status` for a goal or a session). */
-	property: string;
-	from: string | null;
-	to: string;
-	fromCategory: LifecycleCategory | null;
-	category: LifecycleCategory;
-	/** How the move was governed and compare-and-set (who wins a race). */
-	actorKind: "agent" | "human" | "system";
-	/**
-	 * Who made it, for attribution: `actorKind`, except a move made with an
-	 * APP's key (`grants.client_id`, the same attribution `events.app_id`
-	 * carries, 0310) is the app's: the CRM app moving a deal is neither the
-	 * person who connected it nor an agent.
-	 */
-	actorClass: TransitionActorClass;
-	/** The app's `public_id` when `actorClass` is `app`, else null. */
-	appId: string | null;
-	/** The person the move is attributed to (the owner of an agent's move). */
-	userId: string;
-	agentUserId: string | null;
-	sessionId: string | null;
-	reason: string | null;
-	/** A person moved it from a value they had not seen ("moved meanwhile"). */
-	staleExpected: boolean;
-	proposalId: string | null;
-	/** The lens the move happened in. */
-	workspaceId: string | null;
-	/**
-	 * When it happened (ISO): now, or up to 30 days back when the mover says so
-	 * (`resolveOccurredAt`). Time in a status is measured from here.
-	 */
-	occurredAt: string;
-	/** When it was recorded (ISO), stamped at the move, never at delivery. */
-	recordedAt: string;
-	/** `occurredAt` was given and lies before `recordedAt`. */
-	backdated: boolean;
-	/**
-	 * What a move into a paused status waits on (`./hold.ts`); null for any
-	 * other move. The transition log is the hold's only store.
-	 */
-	hold: RecordedHold | null;
-}
-/** Who made a move, for attribution (`TransitionBase.actorClass`). */
-export type TransitionActorClass = "agent" | "app" | "human" | "system";
-/**
- * The payload of `entity.transition.completed` — the ONE event every entity
- * status move emits (the `moveStatus` door). `role` is the role-profile slug
- * when the status is a role's (stored on the facet), null for the kind's own
- * lifecycle. `subjectId` is the entity.
- */
-export interface LifecycleTransitionPayload extends TransitionBase {
-	subjectType: "entity";
-	entityId: string;
-	profileSlug: string | null;
-	role: string | null;
-	facetId: string | null;
-}
-declare const TRACK_STATUSES: readonly [
-	"proposed",
-	"agreed",
-	"ready",
-	"active",
-	"paused",
-	"completed",
-	"archived"
-];
-export type TrackStatus = (typeof TRACK_STATUSES)[number];
-declare const TRACK_STAGE_POSITIONS: readonly [
-	"done",
-	"active",
-	"not_started"
-];
-export type TrackStagePosition = (typeof TRACK_STAGE_POSITIONS)[number];
-export interface TrackStage {
-	key: string;
-	name: string;
-	/** The stage's closed rollup category, when the pinned stage declares one. */
-	category: string | null;
-	position: TrackStagePosition;
-	/** Sessions filed in this track at this stage — only when counts were given. */
-	sessionCount?: number;
-	/** The stage's own goal — the brief of a session started at this stage. */
-	goal?: string;
-	description?: string;
-	suggestedTasks?: string[];
-	/** Deliverables expected from this stage, as pinned (untyped jsonb objects). */
-	expectedOutputs?: Array<Record<string, unknown>>;
-	/** Acceptance criteria of this stage, as pinned (objects with a `key`). */
-	criteria?: Array<Record<string, unknown> & {
-		key: string;
-	}>;
-	/** The entry gate's kind — a person approves (`human`) or a check measures. */
-	gate?: "check" | "human";
-	/** May the track sit in this stage indefinitely? */
-	indefinite?: boolean;
-	/**
-	 * The DOMAIN this stage is worked in: a workspace TEMPLATE slug
-	 * (`workspaces.package_slug`), never a workspace id, so a method stays
-	 * portable across pods. `startStageSession` resolves it to a live workspace.
-	 */
-	domain?: string;
-	/**
-	 * ISO-8601 — present only on an EMERGENT stage: one added to the running
-	 * track (`addTrackStage`) rather than pinned from its method at start.
-	 */
-	addedAt?: string;
-}
-/**
- * One stage a track ENTERED (`project_tracks.stage_history`, 0274), oldest
- * first. A re-entered stage appears again — this is a timeline, not a map.
- */
-export interface TrackStageHistoryEntry {
-	stageKey: string;
-	/** Where it came from — `null` for the entry recorded at birth/backfill. */
-	fromStage: string | null;
-	/** ISO-8601. */
-	enteredAt: string;
-	/** The user (or agent) id that moved it. */
-	actor: string;
-	/**
-	 * The verdict of the entered step's `check` ENTRY gate, which measured the
-	 * step LEFT (`fromStage`). Present only when such a gate ran on this move;
-	 * absent = no check gate ran (or the move predates the stamp, U5).
-	 */
-	check?: TrackStageCheckVerdict;
-}
-/** A check gate's verdict on one move (`stage_history[].check`). */
-export interface TrackStageCheckVerdict {
-	passed: boolean;
-	/** Required criteria / outcomes not met; `CHECK_GATE_UNEVALUATED` = not measured. */
-	failing: string[];
-	reason?: string;
-}
-declare const TRACK_VERDICTS: readonly [
-	"met",
-	"partly_met",
-	"not_met",
-	"retired",
-	"no_longer_needed",
-	"impossible",
-	"replaced",
-	"mistake"
-];
-export type TrackVerdict = (typeof TRACK_VERDICTS)[number];
-/**
- * WHY a paused track is paused — projected by the pod on every track read.
- *   - `check` — a check stage gate held it (the gate's `metadata.checkGate`
- *     marker, cleared on every status change);
- *   - `human` — a person paused it, or a human stage gate awaits review;
- *   - `null`  — the track is not paused (a stale marker never leaks).
- */
-export type TrackPausedBy = "check" | "human" | null;
-/**
- * What a check gate that HELD the track recorded (`metadata.checkGate`): the
- * step entered (`stageKey`, whose entry gate it is), the step it measured
- * (`fromStage`), what failed and why. Projected on every track read while the
- * track is paused by it — `null` otherwise (the marker is cleared on every
- * status change, so a stale one never leaks).
- */
-export interface TrackCheckGate {
-	stageKey: string;
-	fromStage: string;
-	failing: string[];
-	reason: string | null;
-}
-/**
- * The number a track steers by (`project_tracks.kpi`, 0302).
- *
- * `current` is STATED, never measured: nothing in the pod derives "qualified
- * leads per month", so the value always travels with WHEN it was stated
- * (`updatedAt`) and by whom (`updatedBy`). A surface must never present it as
- * a live measurement.
- *
- * The target is REACHED when `current >= target` — a KPI is a number to grow
- * toward. (A lower-is-better KPI is not modelled yet; state it as the number
- * to reach, e.g. "days saved", not "days taken".)
- *
- * The pod types `project_tracks.kpi` with this declaration (re-exported as
- * `ProjectTrackKpi`, `@synap/database`).
- */
-export interface TrackKpi {
-	label: string;
-	unit?: string;
-	target: number;
-	current?: number;
-	/** ISO-8601 — when `current` was last stated. */
-	updatedAt?: string;
-	/** The user (or agent) id that stated `current`. */
-	updatedBy?: string;
-}
 declare const EVALUATION_VERDICTS: readonly [
 	"pass",
 	"fail",
@@ -6490,6 +6516,12 @@ export interface WaitingOnRef {
 	id?: string;
 	url?: string;
 	label: string;
+	/**
+	 * What kind of wait it is (`WAIT_KINDS`, `./wait-kind.ts`), from the
+	 * source that named this ref ({@link waitKindOf}). Absent from an older
+	 * pod; a reader must work without it.
+	 */
+	waitKind?: WaitKind;
 }
 export interface WaitingOnMark {
 	reason: WaitingOnReason;
