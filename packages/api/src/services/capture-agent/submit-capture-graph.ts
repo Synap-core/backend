@@ -95,7 +95,12 @@ import {
   computeCaptureGraphIdempotencyKey,
   findPriorCaptureGraphProposal,
 } from "../../utils/pending-capture-dedup.js";
-import type { DuplicateCheck } from "@synap-core/types/proposals";
+import {
+  requiredLinkWarnings,
+  type DuplicateCheck,
+  type RequiredLinkCheck,
+} from "@synap-core/types/proposals";
+import { checkRequiredLinksForGraph } from "../links/required-links.js";
 import {
   findDuplicateCandidates,
   loadOwnPendingCreates,
@@ -537,6 +542,14 @@ export interface SubmitCaptureGraphResult {
    * Omitted when the door found nothing (`clear`).
    */
   duplicateCheck?: DuplicateCheck;
+  /**
+   * The required-link check (`checkRequiredLinksForGraph`): links the new
+   * records' kinds require that no edge of this graph carries. Warned, never
+   * refused (D3.2). Omitted when nothing is missing (`clear`).
+   */
+  requiredLinks?: RequiredLinkCheck;
+  /** One sentence per missing required link (`requiredLinkWarnings`). */
+  warnings?: string[];
   /**
    * Per-coordinate PROJECT outcome — `linked` when a real pin stamped
    * membership. Omitted when no project was requested. Neither a dead UUID
@@ -1441,6 +1454,18 @@ export async function submitCaptureGraph(
   // entity); `clear` is stored too — "we looked" is not "we did not look".
   const duplicateAdvisory = duplicateCheck ? { duplicateCheck } : {};
 
+  // ── REQUIRED LINKS (D3.2: warned, never refused) ─────────────────────────
+  // Each new record's kind may require links its template declares; an edge
+  // in THIS graph meets one. Persisted beside `duplicateCheck` (both
+  // terminals) and returned with one `warnings[]` sentence per missing link.
+  const requiredLinks = await checkRequiredLinksForGraph(operations, db);
+  const requiredLinkAdvisory =
+    requiredLinks.status !== "clear" ? { requiredLinks } : {};
+  const requiredLinkReply =
+    requiredLinks.status !== "clear"
+      ? { requiredLinks, warnings: requiredLinkWarnings(requiredLinks) }
+      : {};
+
   // Reusable proposal-provenance block (rawSource is bounded, proposal-data-only).
   const proposalProvenance = input.rawSource
     ? {
@@ -1616,6 +1641,7 @@ export async function submitCaptureGraph(
                 : {}),
               ...proposalProvenance,
               ...duplicateAdvisory,
+              ...requiredLinkAdvisory,
               ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
             },
           });
@@ -1756,6 +1782,7 @@ export async function submitCaptureGraph(
           ...(duplicateCheck && duplicateCheck.status !== "clear"
             ? { duplicateCheck }
             : {}),
+          ...requiredLinkReply,
           ...(projectOutcome ? { project: projectOutcome } : {}),
           // Relation ops submitted but never created (bad ref / DB failure) —
           // named, not just a shortfall between relationCount and the
@@ -1858,6 +1885,7 @@ export async function submitCaptureGraph(
         : {}),
       ...proposalProvenance,
       ...duplicateAdvisory,
+      ...requiredLinkAdvisory,
       ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
     },
   });
@@ -1892,6 +1920,7 @@ export async function submitCaptureGraph(
     ...(duplicateCheck && duplicateCheck.status !== "clear"
       ? { duplicateCheck }
       : {}),
+    ...requiredLinkReply,
     ...(projectOutcome ? { project: projectOutcome } : {}),
     ...placementReceipt,
     writeReceipt: {

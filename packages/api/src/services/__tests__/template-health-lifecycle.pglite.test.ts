@@ -54,8 +54,12 @@ vi.mock("@synap/database", async (importOriginal) => {
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   cpCatalogCache,
+  entities,
   podSettings,
+  profileRelations,
+  profiles,
   proposals,
+  relationDefs,
   skills,
   workspaces,
 } from "@synap/database/schema";
@@ -176,7 +180,19 @@ async function healthOf(id: string) {
 }
 
 beforeAll(async () => {
-  for (const t of [skills, workspaces, cpCatalogCache, podSettings, proposals])
+  // Health also lists the rows missing a required link (entities, profiles,
+  // profile_relations, relation_defs); empty here, so it adds no warning.
+  for (const t of [
+    skills,
+    workspaces,
+    cpCatalogCache,
+    podSettings,
+    proposals,
+    entities,
+    profiles,
+    profileRelations,
+    relationDefs,
+  ])
     await h.client!.exec(ddlFor(t));
   await seedWorkspace(WS_CURRENT, "Ecosystem", {
     packageSlug: "ecosystem",

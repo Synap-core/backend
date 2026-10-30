@@ -512,6 +512,8 @@ export const definitionEngineProcedures = {
                   targetProfileSlug: z.string(),
                   type: z.string(),
                   label: z.string().optional(),
+                  /** `entityLinks[].required` — see the WorkspaceDefinitionInput type. */
+                  required: z.boolean().optional(),
                 })
               )
               .optional(),
@@ -965,6 +967,8 @@ export const definitionEngineProcedures = {
                 targetProfileSlug: z.string(),
                 type: z.string(),
                 label: z.string().optional(),
+                /** `entityLinks[].required` — see the WorkspaceDefinitionInput type. */
+                required: z.boolean().optional(),
               })
             )
             .optional(),

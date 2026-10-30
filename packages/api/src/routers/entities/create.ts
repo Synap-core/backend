@@ -65,6 +65,7 @@ import {
   findDuplicateCandidates,
   toDuplicateCheck,
 } from "../../services/duplicates/find-duplicate-candidates.js";
+import { checkRequiredLinksForCreate } from "../../services/links/required-links.js";
 import { entities, workspaces, links } from "@synap/database/schema";
 import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
 import { TRPCError } from "@trpc/server";
@@ -1472,6 +1473,15 @@ export const createProcs = {
           : {}),
       };
 
+      // The links this kind's template marks REQUIRED (D3.2: warn, never
+      // refuse). A plain create carries no edge, so each one is missing; the
+      // answer rides the reply and, on a proposal, the card.
+      const requiredLinks = await checkRequiredLinksForCreate({
+        kind: profileSlug,
+      });
+      const requiredLinksToReport =
+        requiredLinks.status !== "clear" ? { requiredLinks } : {};
+
       // A possible twin turns an agent's filing into a proposal (B2c). The
       // RETRY class is not a duplicate question and never reaches here: the
       // retry-safe dedup above answered an exact retry with the original write
@@ -1533,6 +1543,7 @@ export const createProcs = {
         // auto-approved filing into a proposal; the card shows the candidates.
         possibleDuplicate: proposeAsDuplicate,
         ...(duplicateCheck ? { duplicateCheck } : {}),
+        ...requiredLinksToReport,
         data: gateRecord,
       });
 
@@ -1592,6 +1603,7 @@ export const createProcs = {
           ...(duplicateCheck && duplicateCheck.status !== "clear"
             ? { duplicateCheck }
             : {}),
+          ...requiredLinksToReport,
           // Facets ride the proposal payload and attach on approve (R2).
           // outcome "pending" = will attach after approval (not dropped).
           facets: (input.facets ?? []).map((f) => ({
@@ -2050,6 +2062,8 @@ export const createProcs = {
         ...(duplicateCheck && duplicateCheck.status !== "clear"
           ? { duplicateCheck }
           : {}),
+        // The links this kind requires and the create left out (warned, D3.2).
+        ...requiredLinksToReport,
       };
     }),
   batchCreate: podProcedure

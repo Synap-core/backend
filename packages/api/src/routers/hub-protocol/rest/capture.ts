@@ -797,6 +797,9 @@ export function registerCaptureRoutes(app: HubHono): void {
           ...(graph.duplicateCheck
             ? { duplicateCheck: graph.duplicateCheck }
             : {}),
+          ...(graph.requiredLinks
+            ? { requiredLinks: graph.requiredLinks, warnings: graph.warnings }
+            : {}),
           ...(graph.relationsFailed
             ? { relationsFailed: graph.relationsFailed }
             : {}),

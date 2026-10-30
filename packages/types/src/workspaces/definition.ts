@@ -352,6 +352,15 @@ export interface WorkspaceDefinitionInput {
     targetProfileSlug: string;
     type: string;
     label?: string;
+    /**
+     * Every record of the source kind should carry this link (to one of the
+     * target kinds declaring the same `type`). Stored on
+     * `profile_relations.metadata.required`; reconcile writes it on an
+     * installed link too. Today the pod WARNS on a create that lacks it and
+     * lists the rows missing it in template health; it never refuses yet.
+     * `false` clears a stored mark; absent leaves the stored mark as it is.
+     */
+    required?: boolean;
   }>;
 
   /**

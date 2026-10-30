@@ -8,7 +8,9 @@
  * a reviewer concluded the applier writes a strict subset of what the caller
  * stamps):
  *   1 settings · 2/2b profiles + property-defs · 3 views · 4 entity links ·
- *   5 home bento · 6 layout — all ADD-ONLY / additive-merge.
+ *   5 home bento · 6 layout — all ADD-ONLY / additive-merge, except that an
+ *   installed entity link's `required` mark is rewritten to the template's
+ *   (`required-link-mark.ts`: compared and written key for key).
  *   7 automations — VERSION-AWARE: stamps `metadata.seedVersion = defHash`,
  *     hashing exactly the fields its update writes, and re-converges on drift.
  *     This is the correct marker pattern; copy it, not the ones below.
@@ -107,6 +109,7 @@ import { createLogger } from "@synap-core/core";
 import { writeTemplateState } from "./template-state.js";
 import { projectTemplateIntent } from "./workspace-intent.js";
 import { isUniqueViolation } from "./pg-errors.js";
+import { withRequiredLinkMark } from "./required-link-mark.js";
 import {
   bindWebhookSourceDeclaration,
   readWebhookSourceDeclaration,
@@ -296,11 +299,18 @@ export interface ReconcileReport {
   /**
    * Schema-level links between entity types (relation_defs + profile_relations).
    * `added` = a (source, target, type) edge that did not exist and was created.
+   * `updated` = already present, and its `required` mark was rewritten to
+   * what the template declares now (`withRequiredLinkMark`).
    * `skipped` = already present (idempotent no-op).
    * `unresolved` = a source/target profile slug could not be resolved to a live
    * profile in this workspace — left untouched, non-fatal.
    */
-  entityLinks: { added: string[]; skipped: string[]; unresolved: string[] };
+  entityLinks: {
+    added: string[];
+    updated: string[];
+    skipped: string[];
+    unresolved: string[];
+  };
   /**
    * Home bento dashboard merge (an overlay's `bentoLayout` widgets +
    * `bentoViewBlocks` views). ADDITIVE: an overlay never overwrites the base's
@@ -501,7 +511,7 @@ export async function reconcileWorkspaceFromDefinition(
       targets: { set: [], unresolved: [] },
     },
     views: { added: [], skipped: [], deferred: [] },
-    entityLinks: { added: [], skipped: [], unresolved: [] },
+    entityLinks: { added: [], updated: [], skipped: [], unresolved: [] },
     home: { created: false, blocksAdded: [], skipped: true },
     layout: { sidebarItemsAdded: [], primarySurfaceChanged: false },
     automations: { created: [], updated: [], skipped: [] },
@@ -1070,7 +1080,7 @@ export async function reconcileWorkspaceFromDefinition(
     }
   }
 
-  // ── 4. Entity links (schema relations) — idempotent add-only ────────────────
+  // ── 4. Entity links (schema relations) — add-only, `required` converges ─────
   // Each entityLink = a relation_def (find-or-create by slug=type) + a
   // profile_relation edge (source → target). Adding a link that already exists
   // is a no-op; a re-run adds only the NEW edges (e.g. CRM's client/partner
@@ -1085,6 +1095,9 @@ export async function reconcileWorkspaceFromDefinition(
     if (p) profileMap[slug] = p.id;
     return p?.id ?? null;
   };
+  // Who asks for a required link: the template this pass binds, else the one
+  // the space is already stamped with.
+  const requiredByTemplate = opts.packageSlug ?? ws.packageSlug ?? null;
   for (const link of definition.entityLinks ?? []) {
     const key = `${link.sourceProfileSlug}->${link.targetProfileSlug}:${link.type}`;
     const sourceId = await resolveProfileId(link.sourceProfileSlug);
@@ -1098,19 +1111,44 @@ export async function reconcileWorkspaceFromDefinition(
     // def is looked up by slug within this workspace lens; if it exists, check
     // for the profile_relation row before treating this as new.
     const existingDef = await relDefRepo.getBySlug(link.type, workspaceId);
-    let alreadyLinked = false;
+    let existingEdge: { metadata: unknown } | undefined;
     if (existingDef) {
-      const existingEdge = await dbConn.query.profileRelations.findFirst({
+      existingEdge = await dbConn.query.profileRelations.findFirst({
         where: and(
           eq(profileRelations.sourceProfileId, sourceId),
           eq(profileRelations.targetProfileId, targetId),
           eq(profileRelations.relationDefId, existingDef.id)
         ),
+        columns: { metadata: true },
       });
-      alreadyLinked = !!existingEdge;
     }
-    if (alreadyLinked) {
-      report.entityLinks.skipped.push(key);
+    // The `required` mark is the one part of an installed link a template
+    // changes later: compared and rewritten here, key for key
+    // (`withRequiredLinkMark`), so a link marked required after install
+    // reaches the pods that already hold it.
+    const mark = withRequiredLinkMark(
+      existingEdge?.metadata,
+      link.required,
+      requiredByTemplate
+    );
+    if (existingEdge) {
+      if (!mark.changed) {
+        report.entityLinks.skipped.push(key);
+        continue;
+      }
+      report.entityLinks.updated.push(key);
+      if (!dryRun) {
+        await dbConn
+          .update(profileRelations)
+          .set({ metadata: mark.metadata })
+          .where(
+            and(
+              eq(profileRelations.sourceProfileId, sourceId),
+              eq(profileRelations.targetProfileId, targetId),
+              eq(profileRelations.relationDefId, existingDef!.id)
+            )
+          );
+      }
       continue;
     }
 
@@ -1133,6 +1171,7 @@ export async function reconcileWorkspaceFromDefinition(
         sourceProfileId: sourceId,
         targetProfileId: targetId,
         relationDefId: relDef.id,
+        ...(mark.changed ? { metadata: mark.metadata } : {}),
       });
     }
   }

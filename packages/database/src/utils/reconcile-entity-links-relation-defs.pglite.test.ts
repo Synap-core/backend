@@ -13,6 +13,9 @@
  *     fields the caller supplied — an omitted description/uiHints/
  *     isDirectional is never wiped.
  *
+ *   - an installed link's `required` mark converges to the template's
+ *     (`required-link-mark.ts`): set, kept on silence, cleared by `false`.
+ *
  * Schema: derived from the drizzle tables; the two partial unique indexes and
  * the profile_relations primary key the doors depend on are created explicitly,
  * mirroring 0000_baseline_schema.sql / 0118.
@@ -234,6 +237,63 @@ describe("reconcile entityLinks reuse the pod-wide relation def", () => {
         ui_hints: { inverseLabel: "Traversed by" },
       },
     ]);
+  });
+});
+
+describe("reconcile entityLinks: the `required` mark converges on an installed link", () => {
+  const link = {
+    sourceProfileSlug: "task",
+    targetProfileSlug: "project",
+    type: "depends_on",
+  };
+  const metadataOf = async () =>
+    (
+      await q<{ metadata: unknown }>(
+        `select metadata from profile_relations where source_profile_id = $1 and target_profile_id = $2`,
+        [task, project]
+      )
+    ).map((r) => r.metadata);
+
+  it("a link marked required after install is rewritten; silence keeps it; false clears it", async () => {
+    await seedGlobalDependsOn();
+    await q(`update workspaces set package_slug = 'crm' where id = $1`, [WS]);
+
+    const installed = await reconcile({ entityLinks: [link] });
+    expect(installed.entityLinks.added).toHaveLength(1);
+    expect(await metadataOf()).toEqual([{}]);
+
+    const marked = await reconcile({
+      entityLinks: [{ ...link, required: true }],
+    });
+    expect(marked.entityLinks.updated).toEqual(["task->project:depends_on"]);
+    expect(await metadataOf()).toEqual([{ required: true, requiredBy: "crm" }]);
+
+    const again = await reconcile({
+      entityLinks: [{ ...link, required: true }],
+    });
+    expect(again.entityLinks.skipped).toHaveLength(1);
+    expect(again.entityLinks.updated).toHaveLength(0);
+
+    // A template that says nothing about `required` leaves the mark alone.
+    const silent = await reconcile({ entityLinks: [link] });
+    expect(silent.entityLinks.skipped).toHaveLength(1);
+    expect(await metadataOf()).toEqual([{ required: true, requiredBy: "crm" }]);
+
+    const cleared = await reconcile({
+      entityLinks: [{ ...link, required: false }],
+    });
+    expect(cleared.entityLinks.updated).toHaveLength(1);
+    expect(await metadataOf()).toEqual([{}]);
+  });
+
+  it("a new link declared required is installed with the mark", async () => {
+    await seedGlobalDependsOn();
+    await q(`update workspaces set package_slug = 'crm' where id = $1`, [WS]);
+    const report = await reconcile({
+      entityLinks: [{ ...link, required: true }],
+    });
+    expect(report.entityLinks.added).toHaveLength(1);
+    expect(await metadataOf()).toEqual([{ required: true, requiredBy: "crm" }]);
   });
 });
 

@@ -9,7 +9,9 @@
  *  - ticket d39eb826 — the door names where the row lives
  *    (`entityWorkspaceId`, `null` = pod-wide) and, for a pod-wide row, the
  *    space it is filed for (`entityHomeWorkspaceId`, 0355), beside the
- *    governance lens it has always echoed as `workspaceId`.
+ *    governance lens it has always echoed as `workspaceId`;
+ *  - D3.2 (wave e4cd5f18) — the create's `requiredLinks` reaches the reply,
+ *    with one `warnings[]` sentence per missing required link.
  *
  * The REAL hub procedure; the regular `entities.create` is replaced by its
  * answer, and records the input it was handed.
@@ -162,5 +164,49 @@ describe("hub createEntity — where the row lives (d39eb826)", () => {
     const out = await createAs(USER);
     expect(out).not.toHaveProperty("entityWorkspaceId");
     expect(out).not.toHaveProperty("entityHomeWorkspaceId");
+  });
+});
+
+describe("hub createEntity — a missing required link is a warning (D3.2)", () => {
+  const missing = {
+    kind: "outreach-touch",
+    type: "relates_to",
+    targetKinds: ["company", "person"],
+    requiredBy: "crm",
+  };
+
+  it("the create's check reaches the reply: the structured answer and one sentence", async () => {
+    h.answer = {
+      status: "created",
+      id: ENTITY,
+      entity: { workspaceId: SPACE },
+      requiredLinks: { status: "missing", missing: [missing] },
+    };
+    const out = await createAs(USER);
+    expect(out.requiredLinks).toEqual({
+      status: "missing",
+      missing: [missing],
+    });
+    expect(out.warnings).toEqual([
+      "outreach-touch has no relates_to to company or person: required by template crm. Add the link (synap_link_entities) once the record exists.",
+    ]);
+  });
+
+  it("a check that could not run says so", async () => {
+    h.answer = {
+      status: "proposed",
+      proposalId: "p-1",
+      entity: null,
+      requiredLinks: { status: "unchecked", missing: [] },
+    };
+    expect((await createAs(USER)).warnings).toEqual([
+      "The links this kind requires could not be checked.",
+    ]);
+  });
+
+  it("nothing required, nothing said", async () => {
+    const out = await createAs(USER);
+    expect(out).not.toHaveProperty("warnings");
+    expect(out).not.toHaveProperty("requiredLinks");
   });
 });

@@ -27,6 +27,9 @@ export * from "./action.js";
 export * from "./duplicate-check.js";
 // How a review card reads that answer: the twins, the approve verbs (B2).
 export * from "./duplicate-review.js";
+// The required-link check's answer (a template's `entityLinks[].required`),
+// persisted on the proposal like `duplicateCheck` + its accessor and sentences.
+export * from "./required-links.js";
 // Which proposals only their own page may approve: the one rule every surface
 // and the pod's batch door read.
 export * from "./page-only.js";

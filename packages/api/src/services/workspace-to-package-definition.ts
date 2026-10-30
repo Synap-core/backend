@@ -59,6 +59,7 @@ import {
   type PackageDefinition,
   type PackageCellDef,
   readTemplateState,
+  readRequiredLinkMark,
   type WorkspaceSettings,
 } from "@synap/database";
 import { isPackageCellRendererType } from "@synap/database/schema";
@@ -313,6 +314,8 @@ export async function workspaceToPackageDefinition(opts: {
         targetProfileSlug: targetSlug,
         type: relDef.slug,
         label: relDef.displayName,
+        // An exported template keeps the links it marks required.
+        ...(readRequiredLinkMark(r.metadata) ? { required: true } : {}),
       });
     }
     if (entityLinks.length > 0) def.entityLinks = entityLinks;

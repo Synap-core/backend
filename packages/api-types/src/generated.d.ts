@@ -7723,6 +7723,8 @@ export interface ReconcileReport {
 	/**
 	 * Schema-level links between entity types (relation_defs + profile_relations).
 	 * `added` = a (source, target, type) edge that did not exist and was created.
+	 * `updated` = already present, and its `required` mark was rewritten to
+	 * what the template declares now (`withRequiredLinkMark`).
 	 * `skipped` = already present (idempotent no-op).
 	 * `unresolved` = a source/target profile slug could not be resolved to a live
 	 * profile in this workspace — left untouched, non-fatal.
@@ -7731,6 +7733,7 @@ export interface ReconcileReport {
 		added: string[];
 		skipped: string[];
 		unresolved: string[];
+		updated: string[];
 	};
 	/**
 	 * Home bento dashboard merge (an overlay's `bentoLayout` widgets +
@@ -8415,6 +8418,46 @@ export interface DuplicateCheck {
 	candidates: DuplicateCandidate[];
 	/** True when an item matched more candidates than {@link DUPLICATE_CHECK_MAX_CANDIDATES}. */
 	truncated?: boolean;
+}
+/**
+ * `requiredLinks` — the answer of the required-link check
+ * (`@synap/api` services/links/required-links.ts) for a record a write
+ * creates: which of the links its kind's template marks REQUIRED
+ * (`entityLinks[].required`) the write leaves out. Persisted at the TOP LEVEL
+ * of `proposals.data` (beside the request envelope, like `duplicateCheck`) and
+ * returned on the create receipt, where each missing link is also one
+ * `warnings[]` sentence ({@link missingLinkWarning}).
+ *
+ * Founder decisions (wave e4cd5f18, plan 38fb38a7 §3): a missing required
+ * link WARNS, it never refuses yet (D3.2); the order is warn → list → check →
+ * refuse.
+ *
+ * Pure and dependency-free: the backend writes it, the shared proposal
+ * presentation and any client read it through {@link readRequiredLinkCheck}.
+ */
+/**
+ * - `clear`     — the check ran and nothing required is missing.
+ * - `missing`   — at least one required link is missing.
+ * - `unchecked` — the check FAILED. Never folded into `clear`.
+ */
+export type RequiredLinkCheckStatus = "clear" | "missing" | "unchecked";
+export interface MissingRequiredLink {
+	/** The record's kind (profile slug). */
+	kind: string;
+	/** The relation slug the link must carry, e.g. `relates_to`. */
+	type: string;
+	/** The kinds the link may point at (any one satisfies it). */
+	targetKinds: string[];
+	/** The template that marked it required, when known. */
+	requiredBy: string | null;
+	/** Capture graphs only: the op `ref` of the proposed record. */
+	forRef?: string;
+	/** Capture graphs only: that proposed record's title. */
+	forTitle?: string;
+}
+export interface RequiredLinkCheck {
+	status: RequiredLinkCheckStatus;
+	missing: MissingRequiredLink[];
 }
 declare const PROPOSAL_SOURCES: readonly [
 	"user",
@@ -11357,6 +11400,14 @@ export interface SubmitCaptureGraphResult {
 	 * Omitted when the door found nothing (`clear`).
 	 */
 	duplicateCheck?: DuplicateCheck;
+	/**
+	 * The required-link check (`checkRequiredLinksForGraph`): links the new
+	 * records' kinds require that no edge of this graph carries. Warned, never
+	 * refused (D3.2). Omitted when nothing is missing (`clear`).
+	 */
+	requiredLinks?: RequiredLinkCheck;
+	/** One sentence per missing required link (`requiredLinkWarnings`). */
+	warnings?: string[];
 	/**
 	 * Per-coordinate PROJECT outcome — `linked` when a real pin stamped
 	 * membership. Omitted when no project was requested. Neither a dead UUID
@@ -18247,6 +18298,17 @@ export interface DependencyState {
 	/** Every declared blocker (outgoing `blocked_by`), open or cleared. */
 	declared: DependencyNodeRef[];
 }
+/** Per space and kind: the rows missing one required link. */
+export interface RequiredLinkDebt {
+	kind: string;
+	type: string;
+	targetKinds: string[];
+	requiredBy: string | null;
+	/** How many live rows of the kind in this space lack the link. */
+	count: number;
+	/** Up to `sample` of them, newest first. */
+	entityIds: string[];
+}
 /**
  * Where a workspace's template stands in the catalog (TEMPLATE-LIFECYCLE
  * Contract A):
@@ -18363,10 +18425,18 @@ export interface WorkspaceTemplateHealth extends TemplateHealth {
 	/** An agent's pending "update this space" proposal — its door. `null` = none. */
 	updateProposal: TemplateUpdateProposal | null;
 	/**
+	 * The LIST of required links (D3.2, warn → list): per kind, the live rows
+	 * of this space missing a link its template marks required — count + the
+	 * newest ids, the backfill worklist (`requiredLinkDebtByWorkspace`). `[]` =
+	 * none missing; `null` = could not be read (said in `warnings`).
+	 */
+	missingRequiredLinks: RequiredLinkDebt[] | null;
+	/**
 	 * Non-fatal template problems in this space — the apply warning, a retired /
 	 * unlisted template (`lifecycleWarning`), each overlay's warning, a read
 	 * that could not be checked, and an `always` skill whose body is over the
-	 * per-skill budget (it loads on demand instead). Empty when there are none.
+	 * per-skill budget (it loads on demand instead), and one line per kind
+	 * missing a required link. Empty when there are none.
 	 */
 	warnings: string[];
 }
@@ -31782,6 +31852,31 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalType: string;
 				proposedEntityId?: string | undefined;
 				ref?: string | undefined;
+				requiredLinks: RequiredLinkCheck;
+				reviewUrl: string;
+				status: string;
+				workspaceId: string | null;
+			} | {
+				ackState?: undefined;
+				deduplicated?: undefined;
+				deferred?: true | undefined;
+				duplicateCheck?: DuplicateCheck | undefined;
+				effectiveHomeWorkspaceId: string | null;
+				effectiveWorkspaceId: string | null;
+				entity: Record<string, unknown> | null;
+				facets: {
+					message: string;
+					outcome: string;
+					slug: string;
+					status: string;
+				}[];
+				id?: undefined;
+				message: string;
+				proposalId: string;
+				proposalType: string;
+				proposedEntityId?: string | undefined;
+				ref?: string | undefined;
+				requiredLinks?: undefined;
 				reviewUrl: string;
 				status: string;
 				workspaceId: string | null;
@@ -31827,6 +31922,52 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 				id: any;
 				message: string;
+				requiredLinks: RequiredLinkCheck;
+				status: string;
+				unmodeled?: any;
+			} | {
+				ackState?: undefined;
+				deduplicated?: undefined;
+				duplicateCheck?: DuplicateCheck | undefined;
+				entity: {
+					checksum: string | null;
+					createdAt: Date;
+					deletedAt: Date | null;
+					documentId: string | null;
+					facetSlugs?: string[] | undefined;
+					facets?: {
+						facetId: string;
+						properties: Record<string, unknown>;
+						slug: string;
+						status: string | null;
+					}[] | undefined;
+					filePath: string | null;
+					fileSize: number | null;
+					fileType: string | null;
+					fileUrl: string | null;
+					id: string;
+					preview: string | null;
+					profileId: string | null;
+					properties: Record<string, unknown>;
+					systemData?: Record<string, unknown> | undefined;
+					title: string | null;
+					type: string;
+					updatedAt: Date;
+					userId: string;
+					version: number;
+					workspaceId: string | null;
+				};
+				facets: {
+					error?: string;
+					facetId?: string;
+					outcome: string;
+					proposalId?: string;
+					slug: string;
+					status: string;
+				}[];
+				id: any;
+				message: string;
+				requiredLinks?: undefined;
 				status: string;
 				unmodeled?: any;
 			};
@@ -44895,6 +45036,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				id: string;
 				status: "created";
+				warnings: string[];
+			} | {
+				id: string;
+				status: "created";
+				warnings?: undefined;
 			};
 		}>;
 		delete: import("@trpc/server").TRPCMutationProcedure<{
@@ -51082,6 +51228,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}> | undefined;
 					entityLinks?: {
 						label?: string | undefined;
+						required?: boolean | undefined;
 						sourceProfileSlug: string;
 						targetProfileSlug: string;
 						type: string;
@@ -51768,6 +51915,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					capabilities?: Record<string, unknown>[] | undefined;
 					entityLinks?: {
 						label?: string | undefined;
+						required?: boolean | undefined;
 						sourceProfileSlug: string;
 						targetProfileSlug: string;
 						type: string;
