@@ -253,7 +253,7 @@ export async function writeSessionPatch(
   const expected = input.expectedStatus ?? null;
   const { rows } = await setSessionStatus(db, {
     sessionId: input.sessionId,
-    from: expected ? [expected] : SESSION_STATUSES,
+    from: SESSION_STATUSES,
     to: status,
     actor: input.actor,
     proposalId: input.proposalId,
