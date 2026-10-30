@@ -890,7 +890,6 @@ export function waitKindOf(source: WaitingOnSource): WaitKind {
         : WAIT_KIND_FROM.hold.unspecified;
     case "step":
       // The step's declared kind first ("their_reply"), else its `on`.
-      if (isWaitKind(source.waitKind)) return source.waitKind;
       return Object.hasOwn(WAIT_KIND_FROM.hold, source.on)
         ? WAIT_KIND_FROM.hold[source.on]
         : WAIT_KIND_FROM.hold.unspecified;

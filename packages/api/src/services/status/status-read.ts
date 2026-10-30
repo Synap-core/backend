@@ -380,7 +380,7 @@ export async function readStatusOf(
               ? resolveStatusLabel(t.status)
               : null,
           category,
-          tone: option ? lifecycleOptionTone(option) : toneOf(t.status),
+          tone: toneOf(t.status),
           ...since,
           ...(forDays !== null && afterDays !== undefined
             ? { stuck: { afterDays, forDays } }
