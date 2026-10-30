@@ -11,7 +11,7 @@
  * guideline.
  *
  * CLONED FROM `blocked-slot-recurrence-scanner.ts` (itself generalised from
- * `governance-lane-scanner.ts` / `recommend-tighten.ts`): a daily cron,
+ * the retired widen-lane scanner / `recommend-tighten.ts`): a daily cron,
  * clustering, an N-threshold, duplicate guards, and — the property that
  * matters — it only ever FILES A PENDING PROPOSAL. The one place a guideline is
  * written from one of these is `approveStructureGuidelineProposal`

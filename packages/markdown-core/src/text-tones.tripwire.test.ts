@@ -5,7 +5,7 @@
  * backend package, so the tone FAMILY is derived here from its two sources of
  * truth and every member must be classified:
  *   - the token JSON: each `tone-<slug>-fill` with a `tone-<slug>-ink` pair;
- *   - `UnitTone`, the type the pair family is keyed by (types/units/state.ts).
+ *   - `UNIT_TONES`, the list `UnitTone` is read from (types/units/state.ts).
  * A tone in either that is neither in `TEXT_TONES` nor `WITHHELD_TEXT_TONES`
  * fails here; so does a listed tone with no token pair (a document would name
  * a colour no surface can paint).
@@ -44,10 +44,12 @@ function tokenTones(): string[] {
   return fills.filter((s) => keys.includes(`tone-${s}-ink`)).map(camel);
 }
 
+// `UnitTone` is `(typeof UNIT_TONES)[number]`: the array is the list.
 function unitTones(): string[] {
   const src = readFileSync(UNIT_STATE, "utf8");
-  const union = /export type UnitTone\s*=([^;]+);/.exec(src)?.[1] ?? "";
-  return [...union.matchAll(/"([A-Za-z]+)"/g)].map((m) => m[1]!);
+  const list =
+    /export const UNIT_TONES\s*=\s*\[([^\]]+)\]/.exec(src)?.[1] ?? "";
+  return [...list.matchAll(/"([A-Za-z]+)"/g)].map((m) => m[1]!);
 }
 
 // The token package lives in a sibling repo; absent ⇒ SKIPPED, never green.

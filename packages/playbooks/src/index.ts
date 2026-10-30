@@ -253,7 +253,7 @@ export type BlockedReason = (typeof BLOCKED_REASONS)[number];
  * Each exclusion is a decision, not an oversight:
  *   - `permission` — a recurrence proposal for it is the agent arguing for its
  *     own power; one over-broad approval propagates silently. Its remedy
- *     already has a door (`governance.widen_lane`).
+ *     already has a door (the trust ladder's next-rung grant, on the card).
  *   - `policy`     — the remedy is editing a rule a human already wrote.
  *   - `decision` / `physical` — honestly terminal: a human has to choose, or
  *     act in the world. Proposing a remedy would manufacture busywork.

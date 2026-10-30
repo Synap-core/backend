@@ -209,7 +209,7 @@ describe("buildNeedsYou link building", () => {
     expect(row.action).toEqual({
       kind: "link",
       label: "Turn on in Tools",
-      exit: { href: "/tools?tab=actions", isDesktopLink: false },
+      exit: { href: "/tools?type=capabilities", isDesktopLink: false },
     });
   });
 

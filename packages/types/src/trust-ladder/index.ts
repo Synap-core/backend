@@ -71,6 +71,10 @@ import {
   isNonWidenableGovernanceReason,
   type GovernanceRuleDraft,
 } from "../proposals/governance-grant-options.js";
+import {
+  isHumanRevision,
+  isPartiallyApprovedData,
+} from "../proposals/index.js";
 
 // ─── Rungs ──────────────────────────────────────────────────────────────────
 
@@ -472,5 +476,142 @@ export function nextRungRuleDraft(
     ...(input.profileSlug ? { targetProfile: input.profileSlug } : {}),
     verdict: "auto",
     sourceProposalId: input.proposalId,
+  };
+}
+
+// ─── The earned streak (structural plan S3, founder decision Q3) ────────────
+
+/**
+ * A verdict faster than this is a rubber stamp, not a decision: bulk "approve
+ * all" and reflex clicks. Measured as `reviewedAt − createdAt` (no "shown at"
+ * is stored). THE one constant: the approval-pattern scan reads it too.
+ */
+export const MIN_DELIBERATION_MS = 3_000;
+
+/** Approvals in a row that earn the offer. */
+export const STREAK_NEEDED = 10;
+
+/** …spread over at least this many distinct (UTC) days, so a burst is not trust. */
+export const STREAK_MIN_DAYS = 2;
+
+/**
+ * `governance_rules.revoked_reason` when a grant PAUSED itself: two receipts it
+ * decided were undone within 30 days. The next card of that kind asks again
+ * and names the paused rule ({@link NextRungPaused}).
+ */
+export const RULE_PAUSED_AFTER_REVERTS = "paused_after_reverts";
+
+/** One past decision on a grant's key — the stored proposal columns. */
+export interface StreakDecision {
+  status: string;
+  data: unknown;
+  /** `proposals.revision_history`. */
+  revisionHistory?: unknown;
+  createdAt: Date | string;
+  reviewedAt: Date | string | null;
+  reviewedBy: string | null;
+}
+
+/**
+ * How far an agent has earned one kind of work: `count` human approvals in a
+ * row (newest backwards), `met` once {@link STREAK_NEEDED} of them span
+ * {@link STREAK_MIN_DAYS} days. `since` is the oldest counted decision.
+ */
+export interface EarnedStreak {
+  met: boolean;
+  count: number;
+  needed: number;
+  since: string | null;
+}
+
+/**
+ * A grant on this card's kind that paused itself after undos
+ * ({@link RULE_PAUSED_AFTER_REVERTS}): the card offers "Ask me again" and the
+ * rule is a door. `governanceRules.nextRungs` rows carry `paused`.
+ */
+export interface NextRungPaused {
+  ruleId: string;
+  revokedAt: string;
+}
+
+const instant = (v: Date | string | null): number | null => {
+  if (v === null) return null;
+  const t = v instanceof Date ? v.getTime() : Date.parse(v);
+  return Number.isFinite(t) ? t : null;
+};
+
+/** How one decision weighs on the run. */
+function streakWeight(
+  d: StreakDecision,
+  agentUserId?: string
+): "counts" | "breaks" | "skip" {
+  // An undo happened, whatever the row's status says now (a reverted row can
+  // be re-proposed and approved again; `revertedAt` stays in its data).
+  const reverted =
+    d.status === "reverted" ||
+    (!!d.data &&
+      typeof d.data === "object" &&
+      typeof (d.data as { revertedAt?: unknown }).revertedAt === "string");
+  if (reverted || d.status === "rejected") return "breaks";
+  // Receipts (the pod's own decision), withdrawn, expired, pending, failed:
+  // never evidence, and no person said no.
+  if (d.status !== "approved") return "skip";
+  const decided = instant(d.reviewedAt);
+  const filed = instant(d.createdAt);
+  const deliberate =
+    !!d.reviewedBy &&
+    decided !== null &&
+    filed !== null &&
+    decided - filed >= MIN_DELIBERATION_MS;
+  const edited =
+    Array.isArray(d.revisionHistory) &&
+    d.revisionHistory.some((rev) => isHumanRevision(rev, agentUserId));
+  return deliberate && !edited && !isPartiallyApprovedData(d.data)
+    ? "counts"
+    : "breaks";
+}
+
+/**
+ * THE streak rule: one definition for every reader (the card's offer, the
+ * Calibration "Always approved" kind). The caller passes the decisions on ONE
+ * grant key — agent × space × exact action × kind, exactly what
+ * {@link nextRungRuleDraft} would grant — in any order; they are walked from
+ * the newest DECIDED instant backwards.
+ *
+ *   counts — a person's full approval (not partial), unedited by a person,
+ *            decided at least {@link MIN_DELIBERATION_MS} after it was filed;
+ *   breaks — a rejection, an undo, a partial approval, an approval a person
+ *            edited, an approval faster than that (a rubber stamp is no
+ *            evidence, and the run is "in a row");
+ *   skip   — receipts, withdrawn, expired, pending: never evidence.
+ *
+ * Pure. The streak only adds weight to an offer {@link nextRung} already
+ * makes; it never creates one. An unreadable history is the caller's to map
+ * to NO streak (decision e8939070), never to an empty one that could be met.
+ */
+export function earnedStreak(
+  decisions: readonly StreakDecision[],
+  agentUserId?: string
+): EarnedStreak {
+  const ordered = [...decisions].sort(
+    (a, b) =>
+      (instant(b.reviewedAt) ?? instant(b.createdAt) ?? 0) -
+      (instant(a.reviewedAt) ?? instant(a.createdAt) ?? 0)
+  );
+  const counted: number[] = [];
+  for (const d of ordered) {
+    const weight = streakWeight(d, agentUserId);
+    if (weight === "breaks") break;
+    if (weight === "counts") counted.push(instant(d.reviewedAt)!);
+  }
+  const days = new Set(
+    counted.map((t) => new Date(t).toISOString().slice(0, 10))
+  );
+  const oldest = counted.length > 0 ? Math.min(...counted) : null;
+  return {
+    met: counted.length >= STREAK_NEEDED && days.size >= STREAK_MIN_DAYS,
+    count: counted.length,
+    needed: STREAK_NEEDED,
+    since: oldest === null ? null : new Date(oldest).toISOString(),
   };
 }

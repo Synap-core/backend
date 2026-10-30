@@ -79,6 +79,7 @@ import {
   type StepSkillLookup,
 } from "../../services/proposals/part-reach.js";
 import { readEnableTurnsOn } from "../../services/proposals/enable-turns-on.js";
+import { readToolRuns } from "../../services/proposals/tool-run.js";
 import type { EventRecord } from "@synap/database";
 import type {
   ProposalRemoval,
@@ -1271,6 +1272,9 @@ export async function enrichProposalsForDisplay(
     rows.filter((row) => isLiveProposalStatus(row.status)),
     userId
   );
+  // What a tool run will call: its action, its tool, every argument's value.
+  // Every status: a decided run still reads as the call it was.
+  const toolRunById = await readToolRuns(rows, userId);
   // NEW: Populate batch-joined lookup maps
   const playbookById = new Map<
     string,
@@ -2045,6 +2049,7 @@ export async function enrichProposalsForDisplay(
           ? { stepSkills: stepSkillsFor(row.workspaceId) }
           : {}),
         turnsOn: turnsOnById.get(row.id),
+        toolRun: toolRunById.get(row.id),
         events: request.correlationId
           ? (traceByCorrelationId.get(request.correlationId) ?? [])
           : [],
@@ -2251,6 +2256,8 @@ function buildProposalReviewModel(params: {
   stepSkills?: StepSkillLookup;
   /** A pending `capability.enable` only: what it would turn on. */
   turnsOn?: ProposalReviewModel["turnsOn"];
+  /** A `capability.run` only: the call it makes. */
+  toolRun?: ProposalReviewModel["toolRun"];
   events: Awaited<ReturnType<EventRepository["getCorrelatedEvents"]>>;
 }): ProposalReviewModel {
   const {
@@ -2266,6 +2273,7 @@ function buildProposalReviewModel(params: {
     targetBefore,
     stepSkills,
     turnsOn,
+    toolRun,
     events,
   } = params;
   const requestData =
@@ -2335,6 +2343,7 @@ function buildProposalReviewModel(params: {
     ...(graph ? { graph } : {}),
     ...(removal ? { removal } : {}),
     ...(turnsOn ? { turnsOn } : {}),
+    ...(toolRun ? { toolRun } : {}),
     events: reviewEvents,
   };
 }

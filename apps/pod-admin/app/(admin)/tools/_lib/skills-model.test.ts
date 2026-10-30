@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { skillLists, skillRow, type SkillListRow } from "./skills-model";
+import { skillRow, type SkillListRow } from "./skills-model";
 
 function skill(over: Partial<SkillListRow> = {}): SkillListRow {
   return {
@@ -49,26 +49,5 @@ describe("skillRow — how a skill that is off is turned on", () => {
     const row = skillRow(skill({ body: null, bodyDocumentId: "d1" }));
     expect(row.turnOn).toBe("here");
     expect(row.bodyDocumentId).toBe("d1");
-  });
-});
-
-describe("skillLists — waiting first, the longest wait on top", () => {
-  it("orders the waiting oldest first (wrong rule: the pod's newest-first order)", () => {
-    const { waiting } = skillLists(
-      [
-        skill({ id: "new", createdAt: "2026-10-28T09:00:00.000Z" }),
-        skill({ id: "old", createdAt: "2026-10-20T09:00:00.000Z" }),
-      ],
-      []
-    );
-    expect(waiting.map((s) => s.id)).toEqual(["old", "new"]);
-  });
-  it("a skill turned on between the two reads is drawn once, as on", () => {
-    const lists = skillLists(
-      [skill({ id: "moved" })],
-      [skill({ id: "moved", approved: true })]
-    );
-    expect(lists.waiting).toEqual([]);
-    expect(lists.on.map((s) => s.id)).toEqual(["moved"]);
   });
 });

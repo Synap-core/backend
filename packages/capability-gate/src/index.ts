@@ -338,7 +338,7 @@ export async function gateCapabilityExecution(
       // (`proposeCapabilityEnable`, services/capabilities/propose-capability-enable.ts).
       // The reason text below is what a human caller still reads.
       reason:
-        "This capability is installed but not yet enabled. Ask the user to enable it (Settings → Capabilities), or run with dryRun to preview.",
+        "This capability is installed but not yet enabled. Ask the user to enable it (Tools), or run with dryRun to preview.",
     };
   }
 

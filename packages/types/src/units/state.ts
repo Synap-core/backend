@@ -6,8 +6,12 @@
  * surface answered it locally, so "waiting on you" and "working" looked
  * identical in the session room while Relay's list said something else again.
  *
- * This module is PURE and dependency-free so Relay (React Native), the
- * browser (Electron), the CLI and the pod can all import the same answer.
+ * This module is PURE and dependency-free at run time (it imports a type
+ * and the leaf wait table `./wait-kind.ts`, itself import-free) so Relay
+ * (React Native), the browser (Electron), the CLI and the pod can all import
+ * the same answer. It is also THE tone table: the tone of a
+ * status word ({@link STATUS_TONE}) and of a lifecycle category
+ * ({@link LIFECYCLE_CATEGORY_TONE}) live here, beside the unit states'.
  * It returns a TONE TOKEN NAME, never a colour: each surface maps the token
  * through its own palette, which is what keeps light and dark honest and
  * stops a hex literal being invented at a call site.
@@ -23,6 +27,8 @@
  * tone deliberately (both are your turn) and differ by glyph and label. There
  * is no third accent token in the palette, and inventing one would fork it.
  */
+import type { LifecycleCategory } from "../lifecycle/option.js";
+import { waitKindBall, type WaitKind } from "./wait-kind.js";
 
 export const UNIT_STATES = [
   "not_started",
@@ -30,6 +36,8 @@ export const UNIT_STATES = [
   "needs_you",
   "needs_review",
   "blocked",
+  "with_them",
+  "on_machine",
   "scheduled",
   "paused",
   "done",
@@ -48,15 +56,139 @@ export type UnitState = (typeof UNIT_STATES)[number];
  * carried it (`--synap-tone-warning-fill|ink`, relay `warning` / `warningInk`);
  * no unit-of-work state wears it, `resolveUnitState` never returns it.
  */
-export type UnitTone =
-  | "primary"
-  | "ai"
-  | "info"
-  | "error"
-  | "success"
-  | "warning"
-  | "textSecondary"
-  | "textMuted";
+export const UNIT_TONES = [
+  "primary",
+  "ai",
+  "info",
+  "error",
+  "success",
+  "warning",
+  "textSecondary",
+  "textMuted",
+] as const;
+export type UnitTone = (typeof UNIT_TONES)[number];
+
+/** True when `value` is a real tone token (an authored tone may be anything). */
+export function isUnitTone(value: unknown): value is UnitTone {
+  return (
+    typeof value === "string" &&
+    (UNIT_TONES as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * The default tone of each lifecycle CATEGORY — what an option with no
+ * authored tone wears (`lifecycleOptionTone`, `@synap-core/types/lifecycle`).
+ */
+export const LIFECYCLE_CATEGORY_TONE: Readonly<
+  Record<LifecycleCategory, UnitTone>
+> = {
+  open: "textSecondary",
+  active: "primary",
+  paused: "warning",
+  done: "success",
+  lost: "error",
+};
+
+/**
+ * THE STATUS TONE TABLE — the tone of a status WORD, for every surface that
+ * paints a stored status it did not derive (a badge, a dot, an enum chip, a
+ * property value). The union of the app's two tables (`spatial-ui`
+ * `SPATIAL_STATUS_TONE`, `property-renderer` `ENUM_TONE_MAP`), which disagreed
+ * on three words; where they did, the calm reading is kept:
+ *
+ *   rejected   textMuted — a person's decision, not a failure (the activity
+ *              outcome rule, `resolveActivityOutcomeView`, says the same);
+ *   cancelled  textMuted — it ended without failing (`canceled` likewise);
+ *   draft      textMuted — quiet, nothing is pending on anyone.
+ *
+ * The five lifecycle category words (open, active, paused, done, lost) take
+ * their tone from {@link LIFECYCLE_CATEGORY_TONE}, the canonical table, so a
+ * status and a lifecycle option never paint one category two ways.
+ * `stale` is `paused`'s tone: the reaper's `stale` READS as paused
+ * (`SESSION_STATUS_DECLARATION`). `drafting` is the one `ai` word (AI
+ * provenance). Keys are lower case; {@link resolveStatusTone} normalises.
+ * A word that is not here paints `textMuted`, never a guessed colour.
+ */
+export const STATUS_TONE: Readonly<Record<string, UnitTone>> = {
+  // Succeeded / healthy
+  done: LIFECYCLE_CATEGORY_TONE.done,
+  complete: "success",
+  completed: "success",
+  success: "success",
+  enabled: "success",
+  healthy: "success",
+  live: "success",
+  applied: "success",
+  approved: "success",
+  auto_approved: "success",
+  accepted: "success",
+  published: "success",
+  won: "success",
+  pass: "success",
+  // Failed / broken
+  blocked: "error",
+  error: "error",
+  failed: "error",
+  approval_failed: "error",
+  fail: "error",
+  past_due: "error",
+  lost: LIFECYCLE_CATEGORY_TONE.lost,
+  unqualified: "error",
+  // In flight, or your turn (calm, never red)
+  active: LIFECYCLE_CATEGORY_TONE.active,
+  open: LIFECYCLE_CATEGORY_TONE.open,
+  running: "primary",
+  doing: "primary",
+  "in-progress": "primary",
+  "in progress": "primary",
+  in_progress: "primary",
+  contacted: "primary",
+  qualified: "primary",
+  negotiation: "primary",
+  blocked_by_policy: "primary",
+  waiting_on_you: "primary",
+  partial: "primary",
+  no_effect: "primary",
+  trialing: "primary",
+  // On hold, or awaiting a decision
+  paused: LIFECYCLE_CATEGORY_TONE.paused,
+  stale: LIFECYCLE_CATEGORY_TONE.paused,
+  pending: "info",
+  proposed: "info",
+  review: "info",
+  "in-review": "info",
+  "in review": "info",
+  todo: "info",
+  new: "info",
+  lead: "info",
+  scheduled: "info",
+  forming: "info",
+  // Quiet / inactive
+  draft: "textMuted",
+  queued: "textMuted",
+  idle: "textMuted",
+  disabled: "textMuted",
+  cancelled: "textMuted",
+  canceled: "textMuted",
+  skipped: "textMuted",
+  rejected: "textMuted",
+  reverted: "textMuted",
+  unmeasured: "textMuted",
+  // AI provenance
+  drafting: "ai",
+};
+
+/** The tone of a status word ({@link STATUS_TONE}); unknown or absent ⇒ `textMuted`. */
+export function resolveStatusTone(status: string | null | undefined): UnitTone {
+  if (!status) return "textMuted";
+  const key = status.trim().toLowerCase();
+  if (Object.hasOwn(STATUS_TONE, key)) return STATUS_TONE[key]!;
+  const dashed = key.replace(/\s+/g, "-");
+  return Object.hasOwn(STATUS_TONE, dashed)
+    ? STATUS_TONE[dashed]!
+    : "textMuted";
+}
 
 /** Which mark the state wears. Surfaces map these to their own icon set. */
 export type UnitGlyph =
@@ -73,7 +205,9 @@ export type UnitGlyph =
   // Share state (`resolveShareState`, ./share.ts): private / public / guests.
   | "lock"
   | "globe"
-  | "users";
+  | "users"
+  // A machine holds it (CI, the merge queue, a devbox job, a deploy).
+  | "cpu";
 
 /**
  * The progress rail. `none` is not "0%" — a rail implies motion, so a unit
@@ -117,6 +251,14 @@ export interface UnitStateInput {
   pendingDecisions?: number | null;
   /** The title of whatever this is waiting on. Waiting on X is not waiting on YOU. */
   blockedBy?: string | null;
+  /**
+   * WHAT it waits on, on the finer axis ({@link WaitKind}, `./wait-kind.ts`).
+   * A wait whose ball is `them` (a person outside) reads `with_them`; one
+   * whose ball is `machine` (CI, the merge queue, a devbox job, a deploy)
+   * reads `on_machine`. Any other ball changes nothing here: your turn already has its arms
+   * above, and other work is `blockedBy`.
+   */
+  waitKind?: WaitKind | null;
   /** An agent is actively working right now. */
   running?: boolean;
   /**
@@ -231,6 +373,27 @@ export function resolveUnitState(input: UnitStateInput): UnitStateView {
       state: "needs_review",
       tone: "primary",
       glyph: "scales",
+      rail: determinate(0),
+    };
+  }
+  // Somebody or something ELSE holds it: neither your turn nor a chain of
+  // work. A person outside (a client's answer, a signature) reads "With
+  // them"; a machine (CI, the merge queue, a devbox job, a deploy) reads "On
+  // a machine", quiet, because it moves by itself.
+  const ball = waitKindBall(input.waitKind);
+  if (ball === "them") {
+    return {
+      state: "with_them",
+      tone: "info",
+      glyph: "users",
+      rail: determinate(0),
+    };
+  }
+  if (ball === "machine") {
+    return {
+      state: "on_machine",
+      tone: "textSecondary",
+      glyph: "cpu",
       rail: determinate(0),
     };
   }

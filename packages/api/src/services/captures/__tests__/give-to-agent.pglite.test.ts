@@ -70,6 +70,18 @@ vi.mock("@synap/database", async (importOriginal) => {
     resolveSessionProjectPlacement: async () => ({ projectId: null }),
   };
 });
+// Since #556 createFocusSession floors the subject through isOutputRefVisible,
+// which reads `entities` through the access layer. This suite's PGlite schema
+// holds no `entities`, and what it checks is WHICH subject give-to-agent passes,
+// not who may see it (create-session.subject-floor.pglite.test.ts owns that).
+vi.mock(
+  "../../focus-sessions/assert-output-ref-visible.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    isOutputRefVisible: async () => true,
+  })
+);
+
 vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
@@ -656,5 +668,118 @@ describe("captures.giveToAgent — a BOUND agent is pushed", () => {
     if (r.status !== "agent_not_wakeable") throw new Error("unreachable");
     expect(r.message).toMatch(/ships no hand-off playbook/);
     expect(h.runs).toHaveLength(0);
+  });
+});
+
+// W2 door 2 (founder decision 2 A): a session's work type is its subject's
+// kind. The session a capture is given as is ABOUT what that capture filed —
+// only when that is ONE entity of a kind that declares a lifecycle.
+describe("captures.giveToAgent — the session is about what the capture filed", () => {
+  const TASK_KIND = "d0000000-0000-4000-8000-000000000001";
+  const NOTE_KIND = "d0000000-0000-4000-8000-000000000002";
+  const STATUS_DEF = "d0000000-0000-4000-8000-000000000003";
+
+  beforeAll(async () => {
+    await q(
+      `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, workspace_id, is_active, ui_hints, created_at, updated_at)
+       values ($1, 'task', 'Task', 'kind', 'system', 'pod', null, true, '{}'::jsonb, now(), now()),
+              ($2, 'note', 'Note', 'kind', 'system', 'pod', null, true, '{}'::jsonb, now(), now())`,
+      [TASK_KIND, NOTE_KIND]
+    );
+    await q(
+      `insert into property_defs (id, slug, value_type, constraints, created_at, updated_at)
+       values ($1, 'status', 'enum', $2::jsonb, now(), now())`,
+      [
+        STATUS_DEF,
+        JSON.stringify({
+          enumOptions: [
+            { key: "todo", label: "To do", category: "open" },
+            { key: "done", label: "Done", category: "done" },
+          ],
+        }),
+      ]
+    );
+    // Only the task kind DECLARES a lifecycle; the note kind declares none.
+    await q(
+      `insert into profile_properties (profile_id, property_def_id, is_lifecycle) values ($1, $2, true)`,
+      [TASK_KIND, STATUS_DEF]
+    );
+  });
+
+  beforeEach(async () => {
+    h.runs.length = 0;
+    await q(`delete from focus_sessions`);
+  });
+
+  const entity = async (profileId: string) => {
+    const id = randomUUID();
+    await q(
+      `insert into entities (id, user_id, profile_id, type, title, properties, created_at, updated_at)
+       values ($1, $2, $3, 'x', 'Thing', '{}'::jsonb, now(), now())`,
+      [id, USER, profileId]
+    );
+    return id;
+  };
+  /** An intake run that filed these entities (`session --produced--> entity`). */
+  const runThatFiled = async (...entityIds: string[]) => {
+    const runId = await seedRun();
+    for (const e of entityIds) {
+      await q(
+        `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata, created_at) values ($1, 'session', $2, 'entity', $3, 'produced', '{}'::jsonb, now())`,
+        [randomUUID(), runId, e]
+      );
+    }
+    return runId;
+  };
+  const subjectOf = async (sessionId: string) =>
+    (
+      await q<{ subject_entity_id: string | null }>(
+        `select subject_entity_id from focus_sessions where id = $1`,
+        [sessionId]
+      )
+    ).rows[0]!.subject_entity_id;
+  const give = async (runId: string, text: string, agentUserId = AGENT) => {
+    const captureId = await seedCapture({ runId, text });
+    const r = await giveCaptureToAgent({
+      access,
+      userId: USER,
+      captureId,
+      agentUserId,
+    });
+    if (r.status !== "given") throw new Error(r.status);
+    return r;
+  };
+
+  it("one task filed ⇒ the session's subject is that task", async () => {
+    const task = await entity(TASK_KIND);
+    const r = await give(await runThatFiled(task), "Ship the task");
+    expect(await subjectOf(r.sessionId)).toBe(task);
+  });
+
+  it("one note filed ⇒ no subject (its kind declares no lifecycle)", async () => {
+    const note = await entity(NOTE_KIND);
+    const r = await give(await runThatFiled(note), "Read the note");
+    expect(await subjectOf(r.sessionId)).toBeNull();
+  });
+
+  it("two tasks filed ⇒ no subject (never a guess)", async () => {
+    const a = await entity(TASK_KIND);
+    const b = await entity(TASK_KIND);
+    const r = await give(await runThatFiled(a, b), "Do both tasks");
+    expect(await subjectOf(r.sessionId)).toBeNull();
+  });
+
+  it("a task and a note filed ⇒ the task (only lifecycle kinds count)", async () => {
+    const task = await entity(TASK_KIND);
+    const note = await entity(NOTE_KIND);
+    const r = await give(await runThatFiled(task, note), "Task with a note");
+    expect(await subjectOf(r.sessionId)).toBe(task);
+  });
+
+  it("a BOUND agent's hand-off run carries the same subject", async () => {
+    const task = await entity(TASK_KIND);
+    await give(await runThatFiled(task), "Hand the task off", BOUND);
+    expect(h.runs).toHaveLength(1);
+    expect(h.runs[0]).toMatchObject({ subjectId: task });
   });
 });

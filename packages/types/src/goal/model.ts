@@ -50,6 +50,7 @@ import {
   type TrackStatusVerb,
   type TrackVerdict,
   type WaitingOnMark,
+  waitsOnAPerson,
 } from "../units/index.js";
 import { lensScopeFactLabel, type LensRow } from "../lens/index.js";
 import {
@@ -195,9 +196,6 @@ export function viewerMayDrop(
   );
 }
 
-/** What a person's act unblocks — "Other work" and "Outside world" are nobody's here. */
-const WAITS_ON_A_PERSON = new Set(["input", "approval", "access"]);
-
 /** The goal wears a "Waiting on …" mark: some reason it waits on still counts (`waitingOnMarks` drops a zero). */
 export function goalIsWaiting(goal: Pick<GoalLike, "waitingOn">): boolean {
   return (goal.waitingOn ?? []).some((w) => w.count > 0);
@@ -218,7 +216,7 @@ export function goalWaitsOnViewer(
   const { ownerId, judgeId } = goalRoles(goal);
   const mine = ownerId === viewerId || judgeId === viewerId;
   const waits = (goal.waitingOn ?? []).some(
-    (w) => w.count > 0 && WAITS_ON_A_PERSON.has(w.reason)
+    (w) => w.count > 0 && waitsOnAPerson(w.reason)
   );
   const asked = (goal.participants ?? []).some(
     (p) =>

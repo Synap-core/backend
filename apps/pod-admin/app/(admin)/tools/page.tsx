@@ -1,56 +1,47 @@
 "use client";
 
 /**
- * Tools — what is ON this pod. "Tools" is the user word for capabilities and
- * skills (concepts.md, founder D2). Three views on `?tab=` (UrlTabs):
- * `installed` (default: every installed capability), `actions` (each
- * capability's verbs, turned on or off) and `skills` (every skill, the ones
- * waiting to be turned on first). What can be installed is Marketplace.
- * Home's "verbs not turned on" row and the Installed tab's "Turn on" land on
- * `?tab=actions`; the old Marketplace `?tab=installed` / `?tab=tools` links
- * redirect here (`console-nav.ts`).
+ * Tools — every tool on this pod in ONE list (decision 79f5b7a2, contract
+ * a0f787b7): search, type chips (All · Capabilities · Instructions · Code),
+ * a list / gallery switch, and every row opens its tool's own page. "Tools"
+ * is the user word for capabilities and skills (concepts.md, founder D2); a
+ * capability's actions live on its page. What can be installed is
+ * Marketplace.
+ *
+ * The three tabs this page had (`?tab=installed|actions|skills`) are gone:
+ * an old link lands on its filter, or on the capability it focused
+ * (`legacyToolsHref`).
  */
 
-import { Suspense } from "react";
-import { trpc } from "../../../lib/trpc";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect } from "react";
+import { useT } from "../../../lib/i18n/locale-provider";
 import { PageHeader, PageShell } from "../components/page-header";
-import { UrlTabs } from "../components/url-tabs";
 import { ResourceRowSkeleton } from "../components/resource-row";
-import { tabLabel } from "../marketplace/_lib/catalog-model";
-import { InstalledTab } from "./_lib/installed-tab";
-import { ActionsTab } from "./_lib/actions-tab";
-import { SkillsTab } from "./_lib/skills-tab";
-
-const TITLE = "Tools";
-const DESCRIPTION =
-  "What this pod can do: installed capabilities, their actions, and skills.";
+import { TOOLS_CATALOGS } from "./_lib/copy";
+import { legacyToolsHref } from "./_lib/tools-model";
+import { ToolsList } from "./_lib/tools-list";
 
 export default function ToolsPage() {
-  // Tab counts read the cache the tabs fill (same query keys), never a fetch
-  // of their own: a count appears once its tab has loaded, and stays.
-  const installed = trpc.capabilities.compositions.useQuery(undefined, {
-    enabled: false,
-  });
-
+  const t = useT(TOOLS_CATALOGS);
   return (
     <PageShell>
-      <PageHeader title={TITLE} description={DESCRIPTION} />
-      {/* `UrlTabs` and the tabs' `?focus=` receivers read the URL. */}
-      <Suspense fallback={<ResourceRowSkeleton count={4} />}>
-        <UrlTabs
-          param="tab"
-          ariaLabel="Tools sections"
-          tabs={[
-            {
-              key: "installed",
-              label: tabLabel("Installed", installed.data?.length),
-              content: <InstalledTab />,
-            },
-            { key: "actions", label: "Actions", content: <ActionsTab /> },
-            { key: "skills", label: "Skills", content: <SkillsTab /> },
-          ]}
-        />
+      <PageHeader title={t("title")} description={t("description")} />
+      {/* The list and the old-link receiver read the URL. */}
+      <Suspense fallback={<ResourceRowSkeleton count={5} />}>
+        <ToolsBody />
       </Suspense>
     </PageShell>
   );
+}
+
+function ToolsBody() {
+  const router = useRouter();
+  const params = useSearchParams();
+  const legacy = legacyToolsHref(new URLSearchParams(params.toString()));
+  useEffect(() => {
+    if (legacy) router.replace(legacy);
+  }, [legacy, router]);
+  if (legacy) return <ResourceRowSkeleton count={5} />;
+  return <ToolsList />;
 }

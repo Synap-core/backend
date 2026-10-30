@@ -464,8 +464,10 @@ export {
   lifecycleProfilesOfDef,
   reprojectLifecycleProfiles,
   changeLifecycleOptions,
+  setLifecycleInitialStatus,
   assertNotLifecycleDef,
   type ChangeLifecycleOptionsResult,
+  type SetLifecycleInitialStatusResult,
 } from "./services/lifecycle/lifecycle-def-guard.js";
 export { declaredLifecycleProfilesStatement } from "./services/lifecycle/project-lifecycle-columns.js";
 export { expireProposalsStaleAfterMove } from "./services/lifecycle/stale-proposals.js";

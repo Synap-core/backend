@@ -124,15 +124,18 @@ function classHandler(
 }
 
 /**
- * `classHandler` plus `Retry-After` in delta-seconds, for the public doors.
- * In hono-rate-limiter 0.4.2 the only switch to its own Retry-After is
- * `standardHeaders`, which also stamps `RateLimit-*` on every counted response;
- * the public doors want the one header only. The limiter puts this bucket's
- * info on the context (`rateLimit`) just before calling the handler, so the
- * wait is the bucket's real reset, never under one second.
+ * `classHandler` plus `Retry-After` in delta-seconds, for the limiters that
+ * send no `RateLimit-*` (`standardHeaders: false`): the public doors and the
+ * address-wide ceilings. In hono-rate-limiter 0.4.2 the only switch to its own
+ * Retry-After is `standardHeaders`, which also stamps `RateLimit-*` on every
+ * counted response; these want the one header only (a ceiling's numbers on
+ * every answer would overwrite the caller's own bucket's). The limiter puts
+ * this bucket's info on the context (`rateLimit`) just before calling the
+ * handler, so the wait is the bucket's real reset, never under one second.
+ * Without it a client cannot say how long to wait.
  */
-function publicDoorHandler(
-  className: "public_read" | "public_submit",
+function retryAfterHandler(
+  className: Exclude<RateLimitClass, "free">,
   limit: number,
   retryAfter: string
 ) {
@@ -222,7 +225,7 @@ function buildRateLimiters() {
     standardHeaders: false,
     skip: (c) => crudIpCeilingKey(c) === null,
     keyGenerator: (c) => crudIpCeilingKey(c) ?? "crud:ipall:none",
-    handler: classHandler(
+    handler: retryAfterHandler(
       "crud",
       crudIpCeiling,
       rateLimitClassConfig.crud.retryAfter
@@ -286,7 +289,7 @@ function buildRateLimiters() {
       }
       return `calendar_feed_ip:${ip}`;
     },
-    handler: classHandler(
+    handler: retryAfterHandler(
       "calendar_feed",
       calendarFeedIpCeiling.max,
       calendarFeedIpCeiling.retryAfter
@@ -318,7 +321,7 @@ function buildRateLimiters() {
     limit: publicDoorRate.readIp.max,
     standardHeaders: false,
     keyGenerator: publicDoorKeyGenerator("read_ip"),
-    handler: publicDoorHandler(
+    handler: retryAfterHandler(
       "public_read",
       publicDoorRate.readIp.max,
       publicDoorRate.readIp.retryAfter
@@ -330,7 +333,7 @@ function buildRateLimiters() {
     limit: publicDoorRate.submitIp.max,
     standardHeaders: false,
     keyGenerator: publicDoorKeyGenerator("submit_ip"),
-    handler: publicDoorHandler(
+    handler: retryAfterHandler(
       "public_submit",
       publicDoorRate.submitIp.max,
       publicDoorRate.submitIp.retryAfter
@@ -342,7 +345,7 @@ function buildRateLimiters() {
     limit: publicDoorRate.submitShare.max,
     standardHeaders: false,
     keyGenerator: publicDoorKeyGenerator("submit_share"),
-    handler: publicDoorHandler(
+    handler: retryAfterHandler(
       "public_submit",
       publicDoorRate.submitShare.max,
       publicDoorRate.submitShare.retryAfter
@@ -446,7 +449,7 @@ function buildRateLimiters() {
     standardHeaders: false,
     skip: (c) => oauthTokenIpCeilingKey(c) === null,
     keyGenerator: (c) => oauthTokenIpCeilingKey(c) ?? "oauth_token:ipall:none",
-    handler: classHandler(
+    handler: retryAfterHandler(
       "oauth_token",
       oauthTokenRate.ipCeiling,
       oauthTokenRate.retryAfter

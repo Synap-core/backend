@@ -53,6 +53,8 @@ import type { GovernanceRung, MatrixMark } from "../agent-matrix/index.js";
 import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
+import type { StuckCause } from "../units/stuck.js";
+import type { WaitKind } from "../units/wait-kind.js";
 import type {
   CheckVerdict,
   RepoMainHealth,
@@ -1417,14 +1419,16 @@ export const PROPOSAL_KIND_LABELS: Readonly<Record<string, string>> = {
  *
  * These are the three DB kinds behind the one word, named for what they are
  * to a user: a `skill` is instructions an agent follows, a `capability` is an
- * action the pod can run, a `tool` row is a connected integration (the
+ * installed package of actions, a `tool` row is a connected integration (the
  * `tools` table holds integrations — CLAUDE.md "tools (integrations)").
+ * "Action" is NOT a kind here: it means one of a capability's verbs, and only
+ * that, everywhere (founder, 2026-10-30, decision 79f5b7a2).
  * Anything else humanizes; it is never "Tool", which would say nothing on a
  * page already titled as one.
  */
 export const TOOL_KIND_LABELS: Readonly<Record<string, string>> = {
   skill: "Skill",
-  capability: "Action",
+  capability: "Capability",
   tool: "Integration",
 };
 
@@ -1572,6 +1576,11 @@ const STATUS_LABEL_ROWS = {
   ready: "Ready",
   waiting: "Waiting",
   blocked: "Blocked",
+  // unit states (`resolveUnitState`) for a wait someone else holds: a person
+  // outside (a client's reply, a signature) or a machine (CI, the merge
+  // queue, a devbox job, a deploy). Derived, never stored.
+  with_them: "With them",
+  on_machine: "On a machine",
   done: "Done",
   // an agent- or automation-originated session not yet accepted from triage
   drafted: "Drafted",
@@ -1756,6 +1765,21 @@ export const REPO_MAIN_HEALTH_LABELS: Readonly<Record<RepoMainHealth, string>> =
 
 export function resolvePullRequestStateLabel(state: PullRequestState): string {
   return PULL_REQUEST_STATE_LABELS[state];
+}
+
+/**
+ * Why a chain of work stands still (`StuckCause`, `@synap-core/types/units`
+ * `deriveStuckChains`) — the heading of each group in a "What's stuck"
+ * reading. Keyed by every cause, so a new one cannot render a raw token.
+ */
+export const STUCK_CAUSE_LABELS: Readonly<Record<StuckCause, string>> = {
+  needs_you: "Waiting on you",
+  blocker_dropped: "Blocker dropped",
+  gone_quiet: "Gone quiet",
+};
+
+export function resolveStuckCauseLabel(cause: StuckCause): string {
+  return STUCK_CAUSE_LABELS[cause];
 }
 
 /**
@@ -2102,6 +2126,40 @@ export const WAITING_ON_REASON_LABELS = {
   external: "Outside party",
   date: "A date",
 } as const satisfies Readonly<Record<string, string>>;
+
+/**
+ * Each wait kind's words (`WAIT_KINDS`, `@synap-core/types/units`, decision
+ * 2): what a "Waiting on" chip says. Keyed by EVERY kind: a kind added
+ * without its words stops the build.
+ */
+export const WAIT_KIND_LABELS = {
+  answer: "Your answer",
+  approval: "Your approval",
+  send: "To send",
+  try_it: "To try",
+  access: "Access",
+  decide: "Your decision",
+  their_reply: "Their reply",
+  their_document: "Their document",
+  signature: "Signature",
+  payment: "Payment",
+  vendor: "Outside party",
+  agent_work: "Agent at work",
+  agent_stopped: "Agent stopped",
+  ci: "CI",
+  devbox_job: "Devbox job",
+  merge_queue: "Merge queue",
+  red_main: "Red main",
+  deploy: "Deploy",
+  another_work: "Other work",
+  date: "A date",
+  nobody: "Nobody",
+} as const satisfies Readonly<Record<WaitKind, string>>;
+
+/** The words for a wait kind; unknown values humanize, never leak. */
+export function resolveWaitKindLabel(v: string | null | undefined) {
+  return resolveFrom(WAIT_KIND_LABELS, v);
+}
 
 function resolveFrom<T extends Readonly<Record<string, string>>>(
   table: T,

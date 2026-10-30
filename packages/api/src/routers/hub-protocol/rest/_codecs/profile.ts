@@ -203,7 +203,7 @@ export const CreatePropertyDefRequestSchema = z
  * PATCH /property-defs/:id request — the EDIT door.
  *
  * Every field is optional, but at least one of slug / valueType / constraints /
- * uiHints must be present: an update naming nothing would apply nothing and
+ * uiHints / initialStatus must be present: an update naming nothing would apply nothing and
  * report success, which is the receipt lie this door exists to retire.
  */
 export const UpdatePropertyDefRequestSchema = z
@@ -217,6 +217,13 @@ export const UpdatePropertyDefRequestSchema = z
     valueType: z.string().optional(),
     constraints: z.record(z.string(), z.unknown()).optional(),
     uiHints: z.record(z.string(), z.unknown()).optional(),
+    initialStatus: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        "A declared lifecycle's initial status: the option key a new thing or role starts in when its creator names none; null clears it. Refused on a property that is not a lifecycle, or a key that is not one of its options."
+      ),
     agentUserId: z.string().optional(),
     sourceMessageId: z.string().optional(),
     reasoning: z.string().optional(),

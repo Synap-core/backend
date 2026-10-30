@@ -647,13 +647,15 @@ export const structureGuidelineApprovalDbDeps: StructureGuidelineApprovalDeps =
     },
     // The ONE revise core: row lock, PENDING assertion (CONFLICT otherwise),
     // reviewer authority, and a `revisionHistory` entry recording the rebase.
-    rebaseProposal: ({ proposalId, reviewerId, fields, reason }) =>
-      mergeProposalRevision({
+    // A reviewer's rebase is never re-decided, so its answer is not read.
+    rebaseProposal: async ({ proposalId, reviewerId, fields, reason }) => {
+      await mergeProposalRevision({
         proposalId,
         actorId: reviewerId,
         patch: { kind: "envelope", fields },
         reasoning: reason,
-      }),
+      });
+    },
   };
 
 /**

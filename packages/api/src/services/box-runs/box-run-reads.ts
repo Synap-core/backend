@@ -136,6 +136,8 @@ export interface BoxRunLens {
   projectId?: string;
   subjectEntityId?: string;
   sessionId?: string;
+  /** The runs of these skills (`ListRunsInput.skillIds`); empty matches nothing. */
+  skillIds?: readonly string[];
   startedBefore?: Date;
 }
 
@@ -148,6 +150,7 @@ export async function listBoxRunsForFeed(
   exactRunId?: string
 ): Promise<UnifiedRun[]> {
   if (lens.projectId || lens.subjectEntityId) return [];
+  if (lens.skillIds && lens.skillIds.length === 0) return [];
   if (exactRunId !== undefined && !UUID_SHAPE.test(exactRunId)) return [];
   const stored = status ? storedStatusesFor(status) : null;
   if (stored && stored.length === 0) return [];
@@ -156,6 +159,7 @@ export async function listBoxRunsForFeed(
     exactRunId ? eq(boxRuns.id, exactRunId) : undefined,
     lens.workspaceId ? eq(boxRuns.workspaceId, lens.workspaceId) : undefined,
     lens.sessionId ? eq(boxRuns.sessionId, lens.sessionId) : undefined,
+    lens.skillIds ? inArray(boxRuns.skillId, [...lens.skillIds]) : undefined,
     lens.startedBefore ? lt(boxRuns.queuedAt, lens.startedBefore) : undefined,
     stored ? inArray(boxRuns.status, stored) : undefined,
   ];

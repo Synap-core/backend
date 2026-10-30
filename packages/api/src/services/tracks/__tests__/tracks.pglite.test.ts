@@ -1945,12 +1945,12 @@ describe("what a goal holds (W2) — content, derived marks, acceptance, the clo
       {
         reason: "input",
         count: 1,
-        refs: [{ kind: "slot", id: s1, label: "Pick" }],
+        refs: [{ kind: "slot", id: s1, label: "Pick", waitKind: "decide" }],
       },
       {
         reason: "access",
         count: 1,
-        refs: [{ kind: "slot", id: s1, label: "Key" }],
+        refs: [{ kind: "slot", id: s1, label: "Key", waitKind: "access" }],
       },
     ]);
     // An AI judge passes both: two CLAIMS, waiting on the judge — in review.

@@ -60,7 +60,8 @@ beforeAll(async () => {
       created_by text NOT NULL,
       created_at timestamptz NOT NULL DEFAULT now(),
       revoked_at timestamptz,
-      expires_at timestamptz
+      expires_at timestamptz,
+      revoked_reason text
     );
     CREATE TABLE governance_ceilings (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

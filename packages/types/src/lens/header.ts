@@ -39,6 +39,7 @@ import type { LensDoor, LensRow, LensVerb } from "./rows.js";
 import type { LensScopeKind } from "./scope.js";
 // The CP / IS action vocabulary — the same `AiAction` `ai-availability` re-exports.
 import type { IsFailureAction as AiAction } from "../hub-protocol/index.js";
+import { WORK_CLOCK } from "../work-clock/index.js";
 
 export interface LensCounts {
   blocking: number | null;
@@ -156,9 +157,9 @@ export const LENS_TARGET_LABEL = "Target";
  * "stated …" fact as OLD (the warning ink + a clock: a mark, not a sentence).
  * ONE rule for the web and the phone header (moved here from relay
  * `components/lens/kpi-fact.ts`, W5 2026-10-23). Worded "old", never
- * "stale": stale already means an unreadable session.
+ * "stale": stale already means a session the reaper found quiet.
  */
-export const LENS_KPI_STATED_OLD_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+export const LENS_KPI_STATED_OLD_AFTER_MS = WORK_CLOCK.stuck;
 
 /** Whether a KPI value stated at `statedAt` is past {@link LENS_KPI_STATED_OLD_AFTER_MS}. */
 export function lensKpiStatedIsOld(

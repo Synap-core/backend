@@ -14,7 +14,7 @@ vi.mock("../services/capabilities/gate-capability-execution.js", () => ({
   gateCapabilityExecution: async () => ({
     decision: "deny",
     reason:
-      "This capability is installed but not yet enabled. Ask the user to enable it (Settings → Capabilities), or run with dryRun to preview.",
+      "This capability is installed but not yet enabled. Ask the user to enable it (Tools), or run with dryRun to preview.",
   }),
 }));
 // The one skill door (R2): a refused run must never reach it.
@@ -51,7 +51,7 @@ describe("skills.execute — not-enabled skill", () => {
     expect(err).toBeInstanceOf(TRPCError);
     expect(err.code, String(err.message)).toBe("FORBIDDEN");
     expect(err.message).toBe(
-      'Nothing ran: "source-triage" is installed but not enabled. Enable it in Settings → Capabilities, then run it again.'
+      'Nothing ran: "source-triage" is installed but not enabled. Enable it in Tools, then run it again.'
     );
     expect(runSkill).not.toHaveBeenCalled();
   });

@@ -109,10 +109,10 @@ describe("approving an agent's run proposal", () => {
     h.result = {
       status: "blocked",
       message:
-        '"Evaluate tools" uses skills that are not enabled yet: Web reader. Enable them in Settings → Capabilities, then approve again.',
+        '"Evaluate tools" uses skills that are not enabled yet: Web reader. Enable them in Tools, then approve again.',
     };
     await expect(approve()).rejects.toThrow(
-      'Couldn\'t apply — "Evaluate tools" uses skills that are not enabled yet: Web reader. Enable them in Settings → Capabilities, then approve again.'
+      'Couldn\'t apply — "Evaluate tools" uses skills that are not enabled yet: Web reader. Enable them in Tools, then approve again.'
     );
   });
 

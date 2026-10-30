@@ -40,7 +40,7 @@ export const RECORD_GRID_CLASS =
 /** Lines of code shown before "Show all N lines": folded, never cut. */
 export const CODE_LINES_SHOWN = 40;
 
-function CodeValue({ text, lines }: { text: string; lines: number }) {
+export function CodeValue({ text, lines }: { text: string; lines: number }) {
   const [all, setAll] = useState(false);
   const folded = !all && lines > CODE_LINES_SHOWN;
   return (

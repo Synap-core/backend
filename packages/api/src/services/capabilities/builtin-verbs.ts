@@ -4059,7 +4059,7 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   // ONE governed send door (sendExternalMessage). Agent sends propose; owner
   // sends go direct. Provider-agnostic (routes by the channel's externalSource).
   "messaging.send": messagingSendHandler,
-  // Governance TIGHTEN recommender — mirror of the widen scanner. Scans rejected
+  // Governance TIGHTEN recommender — mirror of the earned streak. Scans rejected
   // agent proposals and files governance.tighten_lane review items. No params.
   "governance.recommend_tighten": governanceRecommendTightenHandler,
   // Governance RAISE-CEILING recommender — numeric-limit twin. Files

@@ -29,7 +29,10 @@ import {
   deleteLink,
 } from "../services/links/links-service.js";
 import { requireUserId } from "../utils/user-scoped.js";
-import { visibleSkillsWhere } from "../services/skills/visibility.js";
+import {
+  visibleSkillsAnyWorkspaceWhere,
+  visibleSkillsWhere,
+} from "../services/skills/visibility.js";
 import {
   assertMayChangeSkill,
   defaultSkillScope,
@@ -514,6 +517,12 @@ export const skillsRouter = router({
           status: z.enum(["active", "inactive", "error", "all"]).optional(),
           /** When true, return only approved skills (the agent-tool loader uses this). */
           approved: z.boolean().optional(),
+          /**
+           * Every space the reader can see, not one (`visibleSkillsAnyWorkspaceWhere`):
+           * the pod-wide lens of a control-plane list. Without it and without
+           * `workspaceId`, a space's skills are not listed. Wins over `workspaceId`.
+           */
+          allSpaces: z.boolean().optional(),
           limit: z.number().min(1).max(100).default(50),
           offset: z.number().min(0).default(0),
         })
@@ -523,7 +532,11 @@ export const skillsRouter = router({
       const userId = requireUserId(ctx.userId);
       const conditions: SQL[] = [];
 
-      conditions.push(visibleSkillsWhere(userId, input?.workspaceId));
+      conditions.push(
+        input?.allSpaces
+          ? visibleSkillsAnyWorkspaceWhere(userId)
+          : visibleSkillsWhere(userId, input?.workspaceId)
+      );
       // An EXPIRED rule must stop acting. This is the read the IS
       // `dynamic-skill-loader` reaches through `/agent-skills/executable`, so
       // filtering here is what stops a lapsed standing intent from being
@@ -569,6 +582,8 @@ export const skillsRouter = router({
         id: z.string().uuid(),
         /** Required to resolve a workspace-scoped skill; omitted = pod + own only. */
         workspaceId: z.string().uuid().optional(),
+        /** Resolve it in any space the reader can see (a page reached by id alone). */
+        allSpaces: z.boolean().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -576,7 +591,9 @@ export const skillsRouter = router({
       const skill = await ctx.db.query.skills.findFirst({
         where: and(
           eq(skills.id, input.id),
-          visibleSkillsWhere(userId, input.workspaceId)
+          input.allSpaces
+            ? visibleSkillsAnyWorkspaceWhere(userId)
+            : visibleSkillsWhere(userId, input.workspaceId)
         ),
       });
 

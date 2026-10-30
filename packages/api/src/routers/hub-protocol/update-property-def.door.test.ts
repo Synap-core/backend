@@ -153,6 +153,29 @@ describe("hub profiles.updatePropertyDef — governance", () => {
   });
 });
 
+describe("hub profiles.updatePropertyDef — a lifecycle's initial status", () => {
+  it("an initialStatus alone is an update: it reaches the gate data and the apply", async () => {
+    h.gateResult = { proposalId: "prop-2" };
+    const proposed = await edit({ initialStatus: "new" });
+    expect(proposed).toMatchObject({ status: "proposed" });
+    // The proposal carries it, so the executor can apply it on approval.
+    expect(h.gateCalls[0]).toMatchObject({
+      data: { propertyDefId: DEF, initialStatus: "new" },
+    });
+    expect(h.updateCalls).toHaveLength(0);
+
+    h.gateResult = { granted: true };
+    await edit({ initialStatus: "new" });
+    expect(h.updateCalls).toEqual([{ id: DEF, initialStatus: "new" }]);
+  });
+
+  it("null clears it, and is carried as null (not dropped as absent)", async () => {
+    await edit({ initialStatus: null });
+    expect(h.updateCalls).toEqual([{ id: DEF, initialStatus: null }]);
+    expect(h.gateCalls[0]).toMatchObject({ data: { initialStatus: null } });
+  });
+});
+
 describe("hub profiles.updatePropertyDef — input floors", () => {
   it("refuses an update that names nothing, instead of reporting success", async () => {
     await expect(edit({})).rejects.toMatchObject({ code: "BAD_REQUEST" });

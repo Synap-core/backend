@@ -37,10 +37,6 @@ import {
   POD_HYGIENE_NEAR_DUP_CRON,
 } from "./workers/pod-hygiene-near-dup.js";
 import {
-  GOVERNANCE_LANE_SCANNER_QUEUE,
-  GOVERNANCE_LANE_SCANNER_CRON,
-} from "./workers/governance-lane-scanner.js";
-import {
   GOVERNANCE_TIGHTEN_SCAN_QUEUE,
   GOVERNANCE_TIGHTEN_SCAN_CRON,
 } from "./workers/governance-tighten-cron.js";
@@ -379,18 +375,8 @@ export async function registerCronSchedules(): Promise<void> {
     "Registered cron: pod-hygiene.near-dup-scan (daily at 3:15 AM UTC)"
   );
 
-  // Governance trusted-lane scanner (daily at 3:30 AM UTC — after near-dup).
-  // Files PENDING governance.widen_lane proposals only; never writes
-  // governance_rules directly — only proposal approval does.
-  await scheduleSafe(
-    boss,
-    GOVERNANCE_LANE_SCANNER_QUEUE,
-    GOVERNANCE_LANE_SCANNER_CRON,
-    {}
-  );
-  logger.info("Registered cron: governance.lane-scan (daily at 3:30 AM UTC)");
-
-  // Governance tighten scan (daily at 3:35 AM UTC — after the widen scan).
+  // Governance tighten scan (daily at 3:35 AM UTC). It also pauses an earned
+  // grant whose receipts were undone twice in 30 days (backstop to the undo).
   // The tighten recommender was reachable only through a pod-admin verb; files
   // PENDING governance.tighten_lane / governance.advisory proposals only.
   await scheduleSafe(

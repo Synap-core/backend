@@ -7,10 +7,17 @@
  * answers the one question those refusals raise: what is blocking it, and can
  * I fix it here?
  *
- * Reads (both user-floored): `capabilities.containers.get` — the container, its
- * space, and NOT_FOUND for one the reader cannot see — and the catalog card
- * (`capabilities.catalog`, the same cached read Tools › Actions uses) for
- * its state, its verbs and the pod's own next-step sentence.
+ * It is also every capability's own page from Tools (one row, one click), so
+ * it answers the rest too: is it on, is something running now, what did it
+ * run (`ToolRuns`).
+ *
+ * Reads (all user-floored): `capabilities.containers.get` — the container, its
+ * space, and NOT_FOUND for one the reader cannot see — the catalog card
+ * (`capabilities.catalog`, the same cached read Tools uses) for its state, its
+ * verbs and the pod's own next-step sentence, and its composition
+ * (`capabilities.compositions`) for its run health and its rules and
+ * templates. The status mark is THE one (`tool-status.ts`), the same the Tools
+ * row shows.
  *
  * The one act on the web is turning verbs on or off
  * (`capabilities.setToolEnabled`, the same gate as everywhere: a space's
@@ -35,16 +42,18 @@ import {
 import {
   CAPABILITY_READ_OPTIONS,
   CATALOG_INPUT,
-} from "../../../(admin)/tools/_lib/installed-tab";
+} from "../../../(admin)/tools/_lib/tools-model";
 import {
   toolGroups,
   type CardVerbLike,
 } from "../../../(admin)/tools/_lib/installed-model";
+import { capabilityStatus } from "../../../(admin)/tools/_lib/tool-status";
 import {
-  capabilityStatusPill,
-  mayTurnVerbsOn,
-  whoTurnsVerbsOn,
-} from "../capability-model";
+  actionLabelFor,
+  capabilityFlows,
+} from "../../../(admin)/tools/_lib/tool-runs-model";
+import { mayTurnVerbsOn, whoTurnsVerbsOn } from "../capability-model";
+import { ToolRuns } from "./tool-runs";
 import { couldNotLoad, loadFailure } from "../load-failure";
 import { useReauthOnUnauthorized } from "../use-reauth";
 import type { ObjectFrame } from "./object-frame";
@@ -65,6 +74,10 @@ export function CapabilityObject({
     { retry: false }
   );
   const catalog = trpc.capabilities.catalog.useQuery(CATALOG_INPUT, {
+    ...CAPABILITY_READ_OPTIONS,
+    enabled: container.isSuccess,
+  });
+  const compositions = trpc.capabilities.compositions.useQuery(undefined, {
     ...CAPABILITY_READ_OPTIONS,
     enabled: container.isSuccess,
   });
@@ -110,6 +123,7 @@ export function CapabilityObject({
   }
 
   const card = (catalog.data ?? []).find((c) => c.id === id);
+  const composition = (compositions.data ?? []).find((c) => c.id === id);
   const space = workspaceId
     ? (spaces.data ?? []).find((s) => s.id === workspaceId)
     : undefined;
@@ -163,7 +177,15 @@ export function CapabilityObject({
       summary:
         next?.hint ??
         (catalog.isLoading ? undefined : "Its state couldn’t be read."),
-      status: card ? capabilityStatusPill(card.status) : null,
+      // Nothing until both halves answered or failed: a mark that flips from
+      // "On" to "2 failed runs" a second later would be read as the answer.
+      status:
+        catalog.isLoading || compositions.isLoading
+          ? null
+          : capabilityStatus({
+              card: card ?? null,
+              health: composition?.health ?? null,
+            }),
       breadcrumb: frame.breadcrumb?.(card?.name ?? cap.name),
       primaryAction:
         next?.kind === "connect" ? (
@@ -189,15 +211,22 @@ export function CapabilityObject({
         : []),
     ],
     children: (
-      <section className="flex flex-col gap-2">
-        <h2 className="text-[13px] font-medium text-foreground">Actions</h2>
-        {!canToggle && verbs.length > 0 && (
-          <p className="text-[12.5px] text-foreground/65">
-            {whoTurnsVerbsOn(workspaceId ? spaceName : null)}
-          </p>
-        )}
-        {verbsBody}
-      </section>
+      <>
+        <section className="flex flex-col gap-2">
+          <h2 className="text-[13px] font-medium text-foreground">Actions</h2>
+          {!canToggle && verbs.length > 0 && (
+            <p className="text-[12.5px] text-foreground/65">
+              {whoTurnsVerbsOn(workspaceId ? spaceName : null)}
+            </p>
+          )}
+          {verbsBody}
+        </section>
+        <ToolRuns
+          tool={{ capabilityId: id }}
+          flows={capabilityFlows(composition?.members ?? [])}
+          actionLabel={actionLabelFor(card?.verbs ?? [])}
+        />
+      </>
     ),
     advanced: {
       ids: [
