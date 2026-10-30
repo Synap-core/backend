@@ -91,6 +91,7 @@ import type {
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import { sessionScopeConditions } from "./session-scope.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
+import { grantReadPredicate } from "../../access/grant-read.js";
 import {
   sessionSubjectWhere,
   type SessionSubject,
@@ -332,6 +333,15 @@ export interface ListOwedSlotsParams {
   /** Only these sessions' slots (the homes' "asks you" over open work). */
   sessionIds?: readonly string[];
   /**
+   * A CONTAINER read (the waiting-on collector's goal question,
+   * `readWaitingOnFor` `container`): the caller floored `sessionIds` at a
+   * container the reader may count — a goal's open runs, every member's, like
+   * its criterion marks — so the owner floor gives way to exactly those ids;
+   * the calling key's grant still narrows. The caller names only the slots of
+   * sessions the reader may read. Requires `sessionIds`.
+   */
+  containerFloored?: boolean;
+  /**
    * Only slots of sessions ON these things (`sessionSubjectWhere`) — an intent
    * surface's needs-you. In SQL, for the same reason as the container lenses.
    */
@@ -505,6 +515,9 @@ export async function listOwedSlots(
   params: ListOwedSlotsParams
 ): Promise<OwedSlot[]> {
   const { userId, scope, limit } = params;
+  if (params.containerFloored && !params.sessionIds) {
+    throw new Error("listOwedSlots: a container read names its sessionIds");
+  }
 
   const conditions: SQL[] = [
     // THE session read predicate, owner-only (`roster` off: what the person
@@ -512,7 +525,10 @@ export async function listOwedSlots(
     // bare owner floor; under a scoped key it ANDs the key's grant (`session`
     // subject), so this read is bounded by the grant like `GET /focus-sessions`
     // and a space-scoped key (a pod app) reads only its granted spaces' asks.
-    sessionReadableWhere({ userId }),
+    // A container read keeps the grant alone: its ids are the caller's floor.
+    params.containerFloored
+      ? (grantReadPredicate(focusSessions) ?? drizzleSql`true`)
+      : sessionReadableWhere({ userId }),
     ...sessionScopeConditions(scope),
     owedSlotPrefilter(),
     owedSlotWhere(),

@@ -22,6 +22,7 @@ import type {
   TrackUncertainty,
   TrackWorkKind,
   WaitingOnReason,
+  WaitingOnRef,
 } from "../../types/src/units/goal.js";
 import type { GoalLoopSettings } from "../../types/src/units/goal-loop.js";
 import type {
@@ -33,6 +34,7 @@ import type {
   HubTrackVerdict,
   HubTrackWorkKind,
   HubWaitingOnReason,
+  HubWaitingOnRef,
 } from "../src/tracks.js";
 import type { HubSessionCriterion } from "../src/types.js";
 import type {
@@ -61,6 +63,7 @@ export const _decision: Same<
   GoalAcceptanceDecision
 > = true;
 export const _waitingOn: Same<HubWaitingOnReason, WaitingOnReason> = true;
+export const _waitingOnRef: Same<HubWaitingOnRef, WaitingOnRef> = true;
 export const _meaning: Same<
   NonNullable<HubSessionCriterion["checkKind"]>,
   CriterionCheckMeaning

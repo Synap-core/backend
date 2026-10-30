@@ -12,9 +12,9 @@
  *   · the READ of a goal's criteria (`readGoalCriteria` — the session reader
  *     `readCriteria`, plus each entry's stored `acceptance`);
  *   · the DERIVED facts every track read returns (`loadTrackGoalFacts`):
- *     each criterion's mark, `inReview` and `waitingOn` — computed by the
- *     pure rules in `@synap-core/types/units` (`deriveGoalCriteria`,
- *     `goalInReview`, `deriveWaitingOn`), never stored;
+ *     each criterion's mark, `inReview` (the pure rules in
+ *     `@synap-core/types/units`, `deriveGoalCriteria`, `goalInReview`) and
+ *     `waitingOn` (THE collector, `readWaitingOnFor`), never stored;
  *   · WHO JUDGES a goal (`isGoalJudge`) — the participants' answer
  *     (`loadGoalJudge`: the judge seat, else the owner), never re-derived.
  */
@@ -24,20 +24,17 @@ import { z } from "zod";
 import {
   and,
   drizzleSql,
-  eq,
   inArray,
   notInArray,
   or,
   focusSessions,
   getDb,
-  proposals,
   sessionEvaluations,
   type TrackGoalPatch,
 } from "@synap/database";
 import {
   PROJECT_TRACK_UNCERTAINTY_LEVELS,
   PROJECT_TRACK_WORK_KINDS,
-  ProposalStatus,
   type ProjectTrack,
   type ProjectTrackUncertainty,
   type ProjectTrackWorkKind,
@@ -46,13 +43,11 @@ import { readCriteria, type SessionCriterion } from "@synap/playbooks";
 import {
   checkGoalCriteriaCount,
   deriveGoalCriteria,
-  deriveWaitingOn,
   goalInReview,
   operationPeriodReading,
   operationWeekStart,
   isTrackUncertainty,
   isTrackWorkKind,
-  owedSlotWaitingSources,
   readGoalCriterionAcceptance,
   type GoalCriterionAcceptance,
   type GoalCriterionClaim,
@@ -62,7 +57,6 @@ import {
   type TrackUncertainty,
   type TrackWorkKind,
   type WaitingOnMark,
-  type WaitingOnSource,
 } from "@synap-core/types/units";
 import {
   TERMINAL_SESSION_STATUSES,
@@ -751,9 +745,11 @@ export async function loadGoalRunsForRead(
 /**
  * The goal facts for MANY tracks in a bounded number of queries: the sessions
  * filed into them (every member's — the goal is the project's, like its check
- * gate; marks and counts only), their evaluation rows, the pending proposals
- * about the goal or its open runs the reader can see, and `blocked_by` edges
- * on the goal and its open runs. What BACKS a criterion (its claim's run
+ * gate; marks and counts only), their evaluation rows, and what the goal
+ * waits on (THE collector, `readWaitingOnFor`, a container question: the
+ * owed slots, holds and open pull requests of the goal and every member's
+ * open runs, each named only when the reader may read that run; proposals
+ * about it or them the reader can see; `blocked_by` edges). What BACKS a criterion (its claim's run
  * title, evidence and note, its measured value) is a run's content: shown
  * only to the goal's owner, its judge and whoever may read that run (D-6,
  * `evidenceWithheld`). `reader.roster` is the door's session read rule
@@ -771,58 +767,54 @@ export async function loadTrackGoalFacts(
   const out = new Map<string, TrackGoalFacts>();
   if (tracks.length === 0) return out;
   const db = await getDb();
-  const trackIds = tracks.map((t) => t.id);
 
   const [{ openSessions, titleOf, runsOf }, seats] = await Promise.all([
     loadGoalRunsForRead(tracks),
     loadGoalSeats(tracks),
   ]);
-  const openSessionIds = openSessions.map((s) => s.id);
 
-  // Loaded on first use, never at module init: `dependency-links` reaches the
-  // router layer and, through it, `permission-check`, which sits on an import
-  // cycle with the session services. Imported eagerly here, it changed the
-  // order every importer of the tracks service initialises in, and suites that
-  // stub `checkPermissionOrPropose` got the real ladder in the hand-off gate.
-  const [{ readDependencyFacts }, { proposalUserFloor }] = await Promise.all([
-    import("../links/dependency-links.js"),
-    // THE proposal user floor (lens ∪ own, the key's grant): loaded late for
-    // the same import-order reason.
-    import("../../routers/proposals/scope-conditions.js"),
-  ]);
-  const [pending, deps] = await Promise.all([
-    db
-      .select({
-        targetType: proposals.targetType,
-        targetId: proposals.targetId,
-        sessionId: proposals.sessionId,
+  // THE waiting-on collector, one question per goal, a CONTAINER question:
+  // the goal's open runs (every member's) are its floor. Their owed slots
+  // (the needs-you lens), proposals about the goal or its open runs,
+  // `blocked_by` on the goal and its open runs, their holds and their open
+  // pull requests. Loaded on first use, never at module init: the collector
+  // reaches the router layer and, through it, `permission-check`, which sits
+  // on an import cycle with the session services; imported eagerly here, it
+  // changed the order every importer of the tracks service initialises in.
+  const { readWaitingOnFor } = await import("../status/status-facts.js");
+  const waiting = readWaitingOnFor(
+    { userId, roster: reader.roster },
+    new Map(
+      tracks.map((track) => {
+        const runIds = openSessions
+          .filter((s) => s.trackId === track.id)
+          .map((s) => s.id);
+        return [
+          track.id,
+          {
+            // Every member's runs count, as the criterion marks do; a ref
+            // names a run only when this reader may read it.
+            container: true,
+            owed: { sessionIds: runIds },
+            proposals: { sessionIds: runIds, targetIds: [track.id] },
+            blockedNodes: [
+              { kind: "track" as const, id: track.id },
+              ...runIds.map((id) => ({ kind: "session" as const, id })),
+            ],
+            holds: [
+              { subjectType: "track" as const, subjectId: track.id },
+              ...runIds.map((id) => ({
+                subjectType: "focus_session" as const,
+                subjectId: id,
+              })),
+            ],
+            workUnitsOf: runIds,
+          },
+        ];
       })
-      .from(proposals)
-      .where(
-        and(
-          eq(proposals.status, ProposalStatus.PENDING),
-          proposalUserFloor(userId),
-          or(
-            and(
-              eq(proposals.targetType, "track"),
-              inArray(proposals.targetId, trackIds)
-            ),
-            ...(openSessionIds.length > 0
-              ? [inArray(proposals.sessionId, openSessionIds)]
-              : [])
-          )
-        )
-      ),
-    readDependencyFacts(
-      [
-        ...trackIds.map((id) => ({ kind: "track", id })),
-        ...openSessionIds.map((id) => ({ kind: "session", id })),
-      ],
-      userId
-    ),
-  ]);
-
-  const trackOfSession = new Map(openSessions.map((s) => [s.id, s.trackId]));
+    )
+  );
+  waiting.catch(() => undefined);
 
   const statesOf = new Map(
     tracks.map((track) => [
@@ -926,37 +918,11 @@ export async function loadTrackGoalFacts(
     to: new Date(weekFrom.getTime() + 7 * 24 * 60 * 60 * 1000),
   };
 
+  const waitingOf = await waiting;
   for (const track of tracks) {
     const criteria = readGoalCriteria(track.criteria);
-    const filed = openSessions.filter((s) => s.trackId === track.id);
     const states = statesOf.get(track.id)!;
     const stateOf = new Map(states.map((s) => [s.key, s]));
-
-    const sources: WaitingOnSource[] = [];
-    for (const s of filed) {
-      if (isTerminalSessionStatus(s.status)) continue;
-      sources.push(
-        ...owedSlotWaitingSources(
-          Array.isArray(s.expectedOutputs)
-            ? (s.expectedOutputs as Parameters<
-                typeof owedSlotWaitingSources
-              >[0][number][])
-            : []
-        )
-      );
-      const blockers = deps.get(`session:${s.id}`)?.openBlockers ?? 0;
-      for (let i = 0; i < blockers; i++) sources.push({ kind: "blocked_by" });
-    }
-    const trackBlockers = deps.get(`track:${track.id}`)?.openBlockers ?? 0;
-    for (let i = 0; i < trackBlockers; i++)
-      sources.push({ kind: "blocked_by" });
-    for (const p of pending) {
-      const about =
-        p.targetType === "track" && p.targetId === track.id
-          ? true
-          : p.sessionId != null && trackOfSession.get(p.sessionId) === track.id;
-      if (about) sources.push({ kind: "pending_proposal" });
-    }
 
     out.set(track.id, {
       criteria: criteria.map((c) => {
@@ -983,7 +949,7 @@ export async function loadTrackGoalFacts(
         track.workKind === "operation"
           ? operationPeriodReading(criteria, runsOf.get(track.id) ?? [], week)
           : null,
-      waitingOn: deriveWaitingOn(sources),
+      waitingOn: waitingOf.get(track.id) ?? [],
     });
   }
   return out;

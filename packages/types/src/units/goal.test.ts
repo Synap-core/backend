@@ -14,7 +14,8 @@ import {
   mayAcceptGoalCriterion,
   operationPeriodReading,
   operationWeekStart,
-  owedSlotWaitingSources,
+  pullRequestWaitingOn,
+  WAITING_ON_REFS_MAX,
   readGoalCriterionAcceptance,
   type GoalCriterionAcceptance,
   type GoalRunFacts,
@@ -433,15 +434,56 @@ describe("waiting on (R4)", () => {
     ]);
     expect(deriveWaitingOn([])).toEqual([]);
   });
-  it("only slots a PERSON owes count — not the agent's, not done or retired ones", () => {
+  it("a hold, an open PR and an open sub-session each make their mark", () => {
     expect(
-      owedSlotWaitingSources([
-        { owner: "human", blockedReason: "decision" },
-        { owner: "agent", blockedReason: "decision" },
-        { owner: "human", status: "done" },
-        { owner: "human", retiredAt: T0 },
+      deriveWaitingOn([
+        { kind: "hold", on: "date" },
+        { kind: "hold", on: "external" },
+        { kind: "hold", on: "person" },
+        { kind: "work_unit", state: "open", checks: "passed" },
+        { kind: "work_unit", state: "open" },
+        { kind: "child_session" },
       ])
-    ).toEqual([{ kind: "owed_slot", blockedReason: "decision" }]);
+    ).toEqual([
+      { reason: "input", count: 1 },
+      { reason: "another_work", count: 1 },
+      { reason: "external", count: 3 },
+      { reason: "date", count: 1 },
+    ]);
+  });
+  it("a hold on nobody, an unspecified hold, a red / merged / closed PR make no mark", () => {
+    // Rules out counting every source: these name nothing anyone waits on.
+    expect(
+      deriveWaitingOn([
+        { kind: "hold", on: "nobody" },
+        { kind: "hold", on: "unspecified" },
+        { kind: "work_unit", state: "open", checks: "failed" },
+        { kind: "work_unit", state: "merged", checks: "passed" },
+        { kind: "work_unit", state: "closed" },
+      ])
+    ).toEqual([]);
+    expect(pullRequestWaitingOn({ state: "open" })).toBe("external");
+    // A green PR waits on the merge queue (the bot enqueues it), not a person.
+    expect(pullRequestWaitingOn({ state: "open", checks: "passed" })).toBe(
+      "external"
+    );
+  });
+  it("refs say WHAT is waited on, capped per mark; the count stays whole", () => {
+    const refs = Array.from({ length: WAITING_ON_REFS_MAX + 2 }, (_, i) => ({
+      kind: "session" as const,
+      id: `s${i}`,
+      label: `Lane ${i}`,
+    }));
+    const [mark] = deriveWaitingOn([
+      ...refs.map((ref) => ({ kind: "child_session" as const, ref })),
+      { kind: "blocked_by" },
+    ]);
+    expect(mark!.count).toBe(WAITING_ON_REFS_MAX + 3);
+    expect(mark!.refs).toEqual(refs.slice(0, WAITING_ON_REFS_MAX));
+    // A mark no source named carries no refs at all (never `[]`).
+    expect(deriveWaitingOn([{ kind: "pending_proposal" }])).toEqual([
+      { reason: "approval", count: 1 },
+    ]);
   });
 });
 

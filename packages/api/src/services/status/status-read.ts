@@ -4,12 +4,17 @@
  * answer carries its status and words, its fixed CATEGORY (open · active ·
  * paused · done · lost), since when (the transition log, else a stored date,
  * said as not measured), whether it is stuck (only where the lifecycle
- * declares `stuckAfterDays`) and what it waits on (`status-facts.ts`).
+ * declares `stuckAfterDays`) and what it waits on (`status-facts.ts`). A
+ * paused thing also carries its current `hold`; a session carries `live` (the
+ * 5-minute working rule, `isSessionWorkingNow`) and its `nextMove` (THE packet
+ * rule, read through the list rows' batched sections).
  *
- * Served by orient's `statusOf` (no tool of its own). An id the caller cannot
- * see reads exactly like one that does not exist: `type: "unknown"`.
+ * Served by orient's `statusOf` (MCP, Hub REST) and tRPC `lifecycle.statusOf`
+ * (the screens' door): one function, three doors. An id the caller cannot see
+ * reads exactly like one that does not exist: `type: "unknown"`.
  */
 import { z } from "zod";
+import { createLogger } from "@synap-core/core";
 import {
   and,
   db,
@@ -18,6 +23,7 @@ import {
   inArray,
   isLifecycleCategory,
   isNull,
+  listHolds,
   playbookRuns,
   projectTracks,
   ProfileResolutionService,
@@ -27,7 +33,9 @@ import {
   findLifecycleOption,
   lifecycleOptionLabel,
   type LifecycleCategory,
+  type RecordedHold,
 } from "@synap-core/types/lifecycle";
+import { isSessionWorkingNow } from "@synap-core/types/run-activity";
 import {
   trackStatusCategory,
   type WaitingOnMark,
@@ -45,11 +53,25 @@ import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { openLink } from "../../utils/deep-links.js";
 import { stuckAfterDaysOf, stuckForDays } from "../lifecycle/status-groups.js";
+import type { ContinuationNextMove } from "../focus-sessions/continuation-packet.js";
+// Static, not loaded late: this pulls the continuation packet in with this
+// module, so the waiting-on collector's own late import of the packet never
+// meets it half-evaluated (vitest's module runner hands a module caught in an
+// import cycle back before it finished).
+import {
+  attachNextMove,
+  type PathSourceRow,
+} from "../focus-sessions/session-path-sections.js";
+import { loadSessionLiveness } from "../runs/session-liveness.js";
 import {
   lastTransitionAt,
-  readWaitingOn,
+  readWaitingOnFor,
   runStatusCategory,
+  sessionWaitingOnQuestion,
+  type WaitingOnQuestion,
 } from "./status-facts.js";
+
+const logger = createLogger({ module: "status-read" });
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -63,6 +85,7 @@ export const statusOfInput = z
   .optional();
 
 type Unavailable = { status: "unavailable" };
+const UNAVAILABLE: Unavailable = { status: "unavailable" };
 
 export interface StatusOf {
   id: string;
@@ -78,6 +101,17 @@ export interface StatusOf {
   /** Present only when its step declares a stuck rule and it is past it. */
   stuck?: { afterDays: number; forDays: number };
   waitingOn: WaitingOnMark[] | Unavailable;
+  /**
+   * Its CURRENT hold — what the pause waits on and how it resumes — when it
+   * stands in a paused status under one (`listHolds`); absent otherwise.
+   */
+  hold?: RecordedHold | Unavailable;
+  /** Sessions only: is an agent working on it now (the 5-minute rule). */
+  live?:
+    | { status: "ok"; state: "working" | "idle"; lastActivityAt: string | null }
+    | Unavailable;
+  /** Sessions only: THE next move (`deriveNextMove`). */
+  nextMove?: ContinuationNextMove;
   link: string;
 }
 
@@ -90,7 +124,8 @@ const iso = (d: Date | string | null | undefined) =>
 async function orUnavailable<T>(p: Promise<T>): Promise<T | Unavailable> {
   try {
     return await p;
-  } catch {
+  } catch (err) {
+    logger.warn({ err }, "statusOf: a part of the answer could not be read");
     return { status: "unavailable" };
   }
 }
@@ -135,6 +170,15 @@ export async function readStatusOf(
         status: focusSessions.status,
         startedAt: focusSessions.startedAt,
         closedAt: focusSessions.closedAt,
+        // What the next move and liveness read (`sessionFacts`).
+        workspaceId: focusSessions.workspaceId,
+        projectId: focusSessions.projectId,
+        expectedOutputs: focusSessions.expectedOutputs,
+        origin: focusSessions.origin,
+        metadata: focusSessions.metadata,
+        userId: focusSessions.userId,
+        criteria: focusSessions.criteria,
+        channelId: focusSessions.channelId,
       })
       .from(focusSessions)
       .where(
@@ -178,6 +222,61 @@ export async function readStatusOf(
     : null;
   goalFacts?.catch(() => undefined);
 
+  // ONE waiting-on read for every thing, session and run asked about.
+  const questions = new Map<string, WaitingOnQuestion>();
+  for (const t of things) {
+    questions.set(t.id, {
+      owed: { subject: { kind: "entities", entityIds: [t.id] } },
+      proposals: { targetIds: [t.id] },
+      blockedNodes: [{ kind: "entity", id: t.id }],
+      holds: [{ subjectType: "entity", subjectId: t.id }],
+    });
+  }
+  for (const sid of new Set([
+    ...sessions.map((s) => s.id),
+    ...runs.flatMap((r) => (r.sessionId ? [r.sessionId] : [])),
+  ])) {
+    questions.set(`session:${sid}`, sessionWaitingOnQuestion(sid));
+  }
+  const waiting = questions.size
+    ? readWaitingOnFor({ userId }, questions)
+    : Promise.resolve(new Map<string, WaitingOnMark[]>());
+  waiting.catch(() => undefined);
+  const waitingOf = (key: string) =>
+    orUnavailable(waiting.then((m) => m.get(key) ?? []));
+
+  // The current hold of everything asked about, one read; shown only for a
+  // thing in a paused status (a hold is current only while it stands there).
+  const held = listHolds(db, {
+    subjects: [
+      ...things.map((t) => ({
+        subjectType: "entity" as const,
+        subjectId: t.id,
+      })),
+      ...goals.map((g) => ({ subjectType: "track" as const, subjectId: g.id })),
+      ...sessions.map((s) => ({
+        subjectType: "focus_session" as const,
+        subjectId: s.id,
+      })),
+    ],
+  }).then(
+    (holds) =>
+      new Map(
+        holds
+          .filter((h) => h.facetId == null)
+          .map((h) => [`${h.subjectType}:${h.subjectId}`, h.hold])
+      )
+  );
+  held.catch(() => undefined);
+  const holdOf = async (
+    key: string,
+    category: LifecycleCategory | null
+  ): Promise<{ hold?: RecordedHold | Unavailable }> => {
+    if (category !== "paused") return {};
+    const hold = await orUnavailable(held.then((m) => m.get(key) ?? null));
+    return hold ? { hold } : {};
+  };
+
   for (const t of things) {
     answers.set(
       t.id,
@@ -186,6 +285,11 @@ export async function readStatusOf(
           ? await lifecycleOf(t.profileId, t.workspaceId)
           : null;
         const option = findLifecycleOption(lifecycle, t.status);
+        // The declared option first (the rollups read it too), else the
+        // stored projection, so the two can never disagree.
+        const category =
+          option?.category ??
+          (isLifecycleCategory(t.statusCategory) ? t.statusCategory : null);
         const since = sinceOf(`entity:${t.id}`, t.createdAt);
         const afterDays =
           lifecycle && t.status
@@ -205,23 +309,13 @@ export async function readStatusOf(
             : t.status
               ? resolveStatusLabel(t.status)
               : null,
-          // The declared option first (the rollups read it too), else the
-          // stored projection, so the two can never disagree.
-          category:
-            option?.category ??
-            (isLifecycleCategory(t.statusCategory) ? t.statusCategory : null),
+          category,
           ...since,
           ...(forDays !== null && afterDays !== undefined
             ? { stuck: { afterDays, forDays } }
             : {}),
-          waitingOn: await orUnavailable(
-            readWaitingOn({
-              userId,
-              owed: { subject: { kind: "entities", entityIds: [t.id] } },
-              proposals: { targetIds: [t.id] },
-              blockedNodes: [{ kind: "entity", id: t.id }],
-            })
-          ),
+          waitingOn: await waitingOf(t.id),
+          ...(await holdOf(`entity:${t.id}`, category)),
           link: openLink(t.id),
         };
       })()
@@ -230,45 +324,50 @@ export async function readStatusOf(
   for (const g of goals) {
     answers.set(
       g.id,
-      (async (): Promise<StatusOf> => ({
-        id: g.id,
-        type: "goal",
-        name: g.name,
-        status: g.status,
-        label: resolveTrackStatusLabel(g.status),
-        category: trackStatusCategory(g.status),
-        ...sinceOf(`track:${g.id}`, g.createdAt),
-        waitingOn: await orUnavailable(
-          goalFacts!.then((f) => f.get(g.id)?.waitingOn ?? [])
-        ),
-        link: openLink(g.id),
-      }))()
+      (async (): Promise<StatusOf> => {
+        const category = trackStatusCategory(g.status);
+        return {
+          id: g.id,
+          type: "goal",
+          name: g.name,
+          status: g.status,
+          label: resolveTrackStatusLabel(g.status),
+          category,
+          ...sinceOf(`track:${g.id}`, g.createdAt),
+          waitingOn: await orUnavailable(
+            goalFacts!.then((f) => f.get(g.id)?.waitingOn ?? [])
+          ),
+          ...(await holdOf(`track:${g.id}`, category)),
+          link: openLink(g.id),
+        };
+      })()
     );
   }
-  const sessionWaitingOn = (sessionId: string) =>
-    orUnavailable(
-      readWaitingOn({
-        userId,
-        owed: { sessionIds: [sessionId] },
-        proposals: { sessionIds: [sessionId] },
-        blockedNodes: [{ kind: "session", id: sessionId }],
-      })
-    );
+  const sessionLive = sessionFacts(userId, sessions);
   for (const s of sessions) {
     const done = s.closedAt != null;
+    const category = sessionStatusCategory(s.status);
     answers.set(
       s.id,
-      (async (): Promise<StatusOf> => ({
-        id: s.id,
-        type: "session",
-        name: resolveSessionTitle(s) || null,
-        status: s.status,
-        label: resolveStatusLabel(s.status),
-        category: sessionStatusCategory(s.status),
-        ...sinceOf(`focus_session:${s.id}`, done ? s.closedAt : s.startedAt),
-        waitingOn: await sessionWaitingOn(s.id),
-        link: openLink(s.id),
-      }))()
+      (async (): Promise<StatusOf> => {
+        const facts = await sessionLive;
+        return {
+          id: s.id,
+          type: "session",
+          name: resolveSessionTitle(s) || null,
+          status: s.status,
+          label: resolveStatusLabel(s.status),
+          category,
+          ...sinceOf(`focus_session:${s.id}`, done ? s.closedAt : s.startedAt),
+          waitingOn: await waitingOf(`session:${s.id}`),
+          ...(await holdOf(`focus_session:${s.id}`, category)),
+          live: facts.live.get(s.id) ?? UNAVAILABLE,
+          ...(facts.nextMove.has(s.id)
+            ? { nextMove: facts.nextMove.get(s.id)! }
+            : {}),
+          link: openLink(s.id),
+        };
+      })()
     );
   }
   for (const r of runs) {
@@ -286,7 +385,7 @@ export async function readStatusOf(
         category: runStatusCategory(r.status),
         since: iso(r.completedAt ?? r.startedAt),
         sinceMeasured: settled,
-        waitingOn: r.sessionId ? await sessionWaitingOn(r.sessionId) : [],
+        waitingOn: r.sessionId ? await waitingOf(`session:${r.sessionId}`) : [],
         link: openLink(r.sessionId ?? r.id),
       }))()
     );
@@ -298,4 +397,59 @@ export async function readStatusOf(
         answers.get(id) ?? Promise.resolve({ id, type: "unknown" })
     )
   );
+}
+
+type SessionFactsRow = PathSourceRow & {
+  channelId: string | null;
+  startedAt: Date | string | null;
+};
+
+/**
+ * Liveness and THE next move of the asked sessions, each in one batched read
+ * — the same readers the list rows and the graph use (`loadSessionLiveness`,
+ * `attachNextMove`), so a session reads alike on every surface.
+ */
+async function sessionFacts(
+  userId: string,
+  rows: readonly SessionFactsRow[]
+): Promise<{
+  live: Map<string, NonNullable<StatusOf["live"]>>;
+  nextMove: Map<string, ContinuationNextMove>;
+}> {
+  if (rows.length === 0) return { live: new Map(), nextMove: new Map() };
+  const [facts, moved] = await Promise.all([
+    loadSessionLiveness({ userId, roster: false }, rows).catch(
+      () => new Map<string, null>()
+    ),
+    attachNextMove(rows, { userId, logContext: { door: "statusOf" } }).catch(
+      () => null
+    ),
+  ]);
+  const now = Date.now();
+  const live = new Map<string, NonNullable<StatusOf["live"]>>();
+  for (const r of rows) {
+    const f = facts.get(r.id);
+    live.set(
+      r.id,
+      f
+        ? {
+            status: "ok",
+            state: isSessionWorkingNow(f, now) ? "working" : "idle",
+            lastActivityAt: iso(f.lastAt),
+          }
+        : UNAVAILABLE
+    );
+  }
+  const nextMove = new Map<string, ContinuationNextMove>(
+    rows.map((r, i) => [
+      r.id,
+      moved?.[i]?.nextMove ?? {
+        kind: "unknown",
+        actor: "none",
+        label: "Next move unknown",
+        reason: "What this session's next move is could not be read.",
+      },
+    ])
+  );
+  return { live, nextMove };
 }

@@ -85,12 +85,16 @@ export interface OpenOutcomeAtClose {
 }
 
 /** Why a required item that is not done does not hold the close. */
-export type WaitingOn =
+export type AwaitingPerson =
   "person_check" | "person_graded" | "escalated" | "review" | "proposal";
 
 export interface WaitingAtClose {
-  criteria: Array<{ key: string; statement: string; waitingOn: WaitingOn }>;
-  outcomes: Array<{ key: string; label: string; waitingOn: WaitingOn }>;
+  criteria: Array<{
+    key: string;
+    statement: string;
+    waitingOn: AwaitingPerson;
+  }>;
+  outcomes: Array<{ key: string; label: string; waitingOn: AwaitingPerson }>;
 }
 
 export interface NotDoneAtClose {
@@ -238,7 +242,7 @@ export function openRequiredWork(args: {
     if (key && criterionKeys.has(key)) return;
     // Awaiting the person's review: the agent's claim, or its proposal in
     // pack mode. Listed, never refusing.
-    const awaiting: WaitingOn | null =
+    const awaiting: AwaitingPerson | null =
       s.claimedDone === true
         ? "review"
         : args.pendingClaims?.has(key) || args.pendingClaims?.has(label)
@@ -326,7 +330,7 @@ export async function loadOpenRequiredWork(
   });
 }
 
-const WAITING_WORDS: Record<WaitingOn, string> = {
+const WAITING_WORDS: Record<AwaitingPerson, string> = {
   person_check: "the person checks it",
   person_graded: "graded by the person",
   escalated: "escalated to the person",

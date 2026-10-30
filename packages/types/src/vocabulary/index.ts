@@ -2092,13 +2092,15 @@ export const GOAL_ACCEPTANCE_LABELS = {
   rejected: "Rejected",
 } as const satisfies Readonly<Record<string, string>>;
 
-/** What a goal waits on (R4, `WAITING_ON_REASONS`) — read after "Waiting on". */
+/** What a goal or a session waits on (R4, `WAITING_ON_REASONS`) — read after "Waiting on". */
 export const WAITING_ON_REASON_LABELS = {
   input: "Input",
   approval: "Approval",
   access: "Access",
   another_work: "Other work",
   outside_world: "Outside world",
+  external: "Outside party",
+  date: "A date",
 } as const satisfies Readonly<Record<string, string>>;
 
 function resolveFrom<T extends Readonly<Record<string, string>>>(

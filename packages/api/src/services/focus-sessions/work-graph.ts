@@ -412,7 +412,12 @@ export async function buildWorkGraph(
     ...windowNodes.map((n) => ({ ...n, inWindow: true })),
     ...farNodes.map((n) => ({ ...n, inWindow: false })),
   ];
-  const withMove = await attachNextMove(all, { userId, logContext: LOG });
+  const withMove = await attachNextMove(all, {
+    userId,
+    roster,
+    lens: input.boundWorkspaceId,
+    logContext: LOG,
+  });
   const withLive = await attachSessionLiveness<
     (typeof withMove)[number] & { live?: SessionActivityLive | null }
   >(withMove, { userId, roster });
