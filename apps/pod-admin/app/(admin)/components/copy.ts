@@ -2,9 +2,9 @@
  * The console shell's words (side nav, phone drawer, top bar, shared row
  * states), as catalogs (`@synap-core/types/i18n`): English is the source and
  * the type. The client scope's places speak the client's words (decision
- * G1): Requests ("Demandes"), History ("Historique"), Team ("Équipe"); the
- * operator's groups behind "All tools" stay English (rule i18n §7: a tool
- * stays English until it goes to clients). DRAFT French ("vous"), awaiting
+ * G1): Requests ("Demandes"), History ("Historique"), and in French the
+ * team ("Équipe"); the operator's groups behind "All tools" stay English
+ * (rule i18n §7: a tool stays English until it goes to clients). DRAFT French ("vous"), awaiting
  * the founder's review.
  *
  * `nav.<id>` holds the label of each client place that is not a kind's
@@ -18,7 +18,7 @@ export const en = {
   "nav.home": "Home",
   "nav.review": "Requests",
   "nav.history": "History",
-  "nav.members": "Team",
+  "nav.members": "Members",
   "nav.settings": "Settings",
   "nav.label": "Console",
   "nav.allTools": "All tools",
@@ -47,7 +47,7 @@ export const en = {
   "user.support": "Support",
   "user.docs": "Documentation",
   "user.signOut": "Sign out",
-  retry: "Try again",
+  retry: "Retry",
 } as const;
 
 export const fr: Catalog<typeof en> = {

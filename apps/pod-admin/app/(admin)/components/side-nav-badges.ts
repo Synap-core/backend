@@ -4,7 +4,8 @@
  * The nav's badges — actionable counts only (decisions §4: never badge what
  * the owner cannot act on), from the SAME reads the pages under them show:
  *
- *   • Home     — the "Needs you" rows Home builds from `diagnose.global`;
+ *   • Home     — the "Needs you" rows Home builds from `diagnose.global`
+ *                (the review backlog left to Requests, `homeSections`);
  *   • Review   — `signals.count`, the number browser and relay badge too;
  *   • Sessions — the stuck-runs section; Runs — the failing-flows section.
  *
@@ -19,7 +20,11 @@ import {
 } from "../../../lib/console-nav";
 import { trpc } from "../../../lib/trpc";
 import { DIAGNOSE_QUERY_OPTIONS } from "../../../lib/diagnose-query";
-import { buildNeedsYou, type DiagnoseSection } from "../home/_lib/needs-you";
+import {
+  buildNeedsYou,
+  homeSections,
+  type DiagnoseSection,
+} from "../home/_lib/needs-you";
 import { useConsoleRole } from "./side-nav-role";
 
 /** `down`/`stale` follow StatusPill's palette; `review` is a decision, not a fault. */
@@ -64,7 +69,10 @@ export function buildNavBadges({
   const badges: NavBadges = {};
 
   if (sections) {
-    const needsYou = buildNeedsYou({ sections, audience: role });
+    const needsYou = buildNeedsYou({
+      sections: homeSections(sections),
+      audience: role,
+    });
     const all = [...needsYou.rows, ...needsYou.hiddenRows];
     if (all.length > 0) {
       badges.home = {

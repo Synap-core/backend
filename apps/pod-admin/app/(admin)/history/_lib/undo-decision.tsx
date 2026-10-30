@@ -11,7 +11,7 @@ import { Button, addToast } from "@heroui/react";
 import { useT } from "../../../../lib/i18n/locale-provider";
 import { trpc } from "../../../../lib/trpc";
 import { en, fr } from "./copy";
-import { undoOutcome } from "./history-rows";
+import { undoOutcome, type RevertAnswer } from "./history-rows";
 
 const CATALOGS = { en, fr };
 
@@ -19,7 +19,8 @@ export function UndoDecision({ proposalId }: { proposalId: string }) {
   const t = useT(CATALOGS);
   const utils = trpc.useUtils();
   const revert = trpc.proposals.revert.useMutation({
-    onSuccess: (answer) => {
+    onSuccess: (reply) => {
+      const answer: RevertAnswer = reply;
       const outcome = undoOutcome(answer);
       addToast({
         title: t(`undo.${outcome}`),

@@ -23,13 +23,13 @@ import { useFocusRow } from "../components/use-focus-row";
 import { AddPeopleModal } from "./_lib/add-people-modal";
 import type { PodMember } from "./_lib/helpers";
 import { MemberDrawer } from "./_lib/member-drawer";
+import { useT } from "../../../lib/i18n/locale-provider";
+import { en, fr } from "./_lib/copy";
 import { MembersByRoleSection } from "./_lib/members-by-role-section";
 import { PendingInvitesSection } from "./_lib/pending-invites-section";
 import { PodAdminsSection } from "./_lib/pod-admins-section";
 
-const TITLE = "Members";
-const DESCRIPTION =
-  "The people who can sign in to this pod, what they can do, and the invites still open.";
+const CATALOGS = { en, fr };
 
 export default function MembersPage() {
   return (
@@ -63,6 +63,8 @@ function MembersInner() {
   } | null>(null);
   const drawerDisclosure = useDisclosure();
 
+  const t = useT(CATALOGS);
+
   function openMember(member: PodMember, isPodAdmin: boolean) {
     setSelected({ member, isPodAdmin });
     drawerDisclosure.onOpen();
@@ -71,8 +73,8 @@ function MembersInner() {
   return (
     <PageShell>
       <PageHeader
-        title={TITLE}
-        description={DESCRIPTION}
+        title={t("title")}
+        description={t("description")}
         actions={
           <Button
             color="primary"
@@ -82,7 +84,7 @@ function MembersInner() {
             startContent={<Plus className="h-3.5 w-3.5" />}
             onPress={inviteDisclosure.onOpen}
           >
-            Add people
+            {t("add")}
           </Button>
         }
       />
