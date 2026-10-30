@@ -63,6 +63,9 @@ const UNDOABLE_KEYS: ReadonlySet<string> = new Set<string>([
   "projectName",
   "sessionName",
   "previousGoal",
+  // The open sub-sessions a filing carries (`session-tree-filing.ts`): each
+  // one's filing columns are stamped as its own row patch on the same record.
+  "subSessionIds",
 ]);
 
 const TRACK_FILING_KEYS: ReadonlySet<string> = new Set<string>(

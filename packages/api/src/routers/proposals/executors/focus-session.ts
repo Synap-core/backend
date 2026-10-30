@@ -1051,6 +1051,47 @@ export function registerFocusSessionExecutors(): void {
           });
         }
 
+        // THE TREE (structural plan S5, Q7): the open sub-sessions the filing
+        // carried land with it, compare-and-set on where they sat, and on
+        // this proposal's record when the root's change is undoable — one
+        // Undo for the batch (`session-tree-filing.ts`).
+        const carried = Array.isArray(innerData.subSessionIds)
+          ? innerData.subSessionIds.filter(
+              (id): id is string => typeof id === "string"
+            )
+          : [];
+        if (
+          carried.length > 0 &&
+          updated &&
+          (typeof innerData.projectId === "string" ||
+            !!trackFiling?.set.trackId)
+        ) {
+          const { fileFollowingSubSessions, findFollowingSubSessions } =
+            await import("../../../services/focus-sessions/session-tree-filing.js");
+          // Never the stored ids blindly: re-read the tree NOW (from where the
+          // root sat before this write) and keep only those still open, still
+          // under this root and still where it sat.
+          const stillFollowing = new Set(
+            await findFollowingSubSessions(session)
+          );
+          await fileFollowingSubSessions({
+            ids: carried.filter((id) => stillFollowing.has(id)),
+            userId: session.userId,
+            from: {
+              workspaceId: session.workspaceId ?? null,
+              projectId: session.projectId ?? null,
+              trackId: session.trackId ?? null,
+            },
+            set: {
+              ...(typeof innerData.projectId === "string"
+                ? { projectId: innerData.projectId }
+                : {}),
+              ...(trackFiling ? trackFiling.set : {}),
+            },
+            proposalId: undoBefore ? input.proposalId : undefined,
+          });
+        }
+
         // FOLLOW / RELEASE A PLAYBOOK. Carried into the gate payload by all
         // three proposing doors, so it is applied HERE in the same hunk — a
         // field added to the payload and not to this list is exactly how the

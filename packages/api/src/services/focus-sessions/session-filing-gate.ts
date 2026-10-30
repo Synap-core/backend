@@ -60,6 +60,11 @@ export interface SessionFilingPatch {
   workspaceName?: string | null;
   /** Resolved by `resolveSessionTrackFiling`. */
   trackFiling?: SessionTrackFiling;
+  /**
+   * The open sub-sessions this filing carries (`session-tree-filing.ts`, S5
+   * Q7): filed in the same write, under the same receipt or proposal.
+   */
+  subSessionIds?: string[];
 }
 
 export function hasSessionFiling(p: SessionFilingPatch): boolean {
@@ -103,6 +108,12 @@ export function sessionFilingFields(
             ? { trackProjectName: p.trackFiling.projectName }
             : {}),
         }
+      : {}),
+    // Only beside the filing that carries them: a patch whose filing left it
+    // (proposed on its own) carries no tree.
+    ...(p.subSessionIds?.length &&
+    (typeof p.projectId === "string" || !!p.trackFiling?.set.trackId)
+      ? { subSessionIds: p.subSessionIds }
       : {}),
   };
 }

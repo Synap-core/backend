@@ -87,7 +87,9 @@ export async function ownWorkOrganiseForFiling(input: {
 /**
  * File its own session into a project, or into a goal of that project
  * (`session-filing-gate.ts`). A space move in the same patch, an unfile, and a
- * goal filing that would stamp `project --uses--> space` stay a proposal.
+ * goal filing that would stamp `project --uses--> space` stay a proposal. A
+ * filing that carries open sub-sessions (S5 Q7) is proven only when every one
+ * of them is its own fresh work too; otherwise the whole batch is proposed.
  */
 export async function ownWorkOrganiseForSessionFiling(input: {
   agentUserId: string | null | undefined;
@@ -107,6 +109,8 @@ export async function ownWorkOrganiseForSessionFiling(input: {
       trackProjectId: string | null;
       projectWorkspaceId: string | null;
     };
+    /** The open sub-sessions the filing carries (they share its space). */
+    subSessionIds?: readonly string[];
   };
 }): Promise<boolean> {
   const { filing } = input;
@@ -143,7 +147,7 @@ export async function ownWorkOrganiseForSessionFiling(input: {
     agentUserId: input.agentUserId,
     apiKeyId,
     subjectType: "focus_session",
-    subjectIds: [input.sessionId],
+    subjectIds: [input.sessionId, ...(filing.subSessionIds ?? [])],
   });
 }
 
