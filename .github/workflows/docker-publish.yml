@@ -17,10 +17,19 @@ on:
   #               was all green, so the lab pod (channel fast) stays within ~24 h of
   #               main without a hand-made tag. This consciously amends the
   #               2026-10-18 "on demand only" decision, for the fast channel
-  #               only: one run a day, one approval tap a day. It skips (no
-  #               build, no approval request) when that commit is already
-  #               released, and cancels an older nightly still waiting for
-  #               approval so only the newest commit is ever offered.
+  #               only. Since 2026-10-30 (decision c4978f50, Q4: the dogfood
+  #               pod updates nightly, no approval for the nightly) the
+  #               scheduled build jobs use the `nightly-fast` environment (no
+  #               reviewer, main only) instead of `production`, and the
+  #               nightly does NOT notify the Control Plane: the CP marks any
+  #               notified tag isLatest, which new and legacy client pods
+  #               follow, and client pods stay on stable. The dogfood pod's
+  #               update timer reads channel-fast itself. A tag and a "Run
+  #               workflow" keep `production` and the CP notification. It
+  #               skips (no build) when that commit is already released, and
+  #               cancels an older nightly still waiting for approval (runs
+  #               from before this change) so only the newest commit is ever
+  #               offered.
   # The old `workflow_run: CI completed` trigger built a fast release (and asked
   # for a production approval) after every merge.
   push:
@@ -28,7 +37,12 @@ on:
       - "v*"
   workflow_dispatch:
   schedule:
-    - cron: "30 2 * * *" # 02:30 UTC
+    # 18:30 UTC (decision c4978f50, Q4): GitHub starts this schedule hours
+    # late (02:30 UTC ran at 08:11-08:51 UTC, 27-30 Oct 2026). With that delay
+    # 18:30 starts around 00:30 UTC and publishes before the dogfood pod's
+    # update window (03:00-05:00 host time, 02:00-03:50 UTC in winter) and
+    # the 08:00 UTC morning brief.
+    - cron: "30 18 * * *"
 
 # Branch → image tag mapping (update-door plan P1 — pods never consume :latest):
 #   develop  → :dev + :develop-<sha7> + :sha-<full>  (staging ring — no release, no CP notification)
@@ -191,7 +205,9 @@ jobs:
     # `production` environment's required reviewer; develop builds do not use
     # an environment at all (empty name = none). publish-release and
     # notify-control-plane `needs` these jobs, so one approval gates the release.
-    environment: ${{ ((github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'main') || (github.event_name != 'workflow_run' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))) && 'production' || '' }}
+    # The nightly (schedule) uses `nightly-fast` instead: no reviewer, main
+    # only (decision c4978f50, see the header).
+    environment: ${{ github.event_name == 'schedule' && 'nightly-fast' || (((github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'main') || (github.event_name != 'workflow_run' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))) && 'production' || '') }}
     permissions:
       contents: read
       packages: write
@@ -384,7 +400,9 @@ jobs:
     # `production` environment's required reviewer; develop builds do not use
     # an environment at all (empty name = none). publish-release and
     # notify-control-plane `needs` these jobs, so one approval gates the release.
-    environment: ${{ ((github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'main') || (github.event_name != 'workflow_run' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))) && 'production' || '' }}
+    # The nightly (schedule) uses `nightly-fast` instead: no reviewer, main
+    # only (decision c4978f50, see the header).
+    environment: ${{ github.event_name == 'schedule' && 'nightly-fast' || (((github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'main') || (github.event_name != 'workflow_run' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))) && 'production' || '') }}
     permissions:
       contents: read
       packages: write
@@ -489,7 +507,9 @@ jobs:
     # `production` environment's required reviewer; develop builds do not use
     # an environment at all (empty name = none). publish-release and
     # notify-control-plane `needs` these jobs, so one approval gates the release.
-    environment: ${{ ((github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'main') || (github.event_name != 'workflow_run' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))) && 'production' || '' }}
+    # The nightly (schedule) uses `nightly-fast` instead: no reviewer, main
+    # only (decision c4978f50, see the header).
+    environment: ${{ github.event_name == 'schedule' && 'nightly-fast' || (((github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'main') || (github.event_name != 'workflow_run' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))) && 'production' || '') }}
     permissions:
       contents: read
       packages: write
@@ -706,6 +726,11 @@ jobs:
     needs:
       - build-and-push-backend-api
       - publish-release
+    # Never for the nightly: the CP marks the notified tag isLatest, and
+    # claim-warm-pod plus legacy auto_latest pods would then take a fast build
+    # (decision c4978f50: client pods unchanged). The dogfood pod reads
+    # channel-fast on its own timer.
+    if: github.event_name != 'schedule'
 
     steps:
       - name: Compute image tag
