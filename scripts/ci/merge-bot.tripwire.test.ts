@@ -30,15 +30,19 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   ALREADY_QUEUED,
   GITHUB_ACTIONS_APP_ID,
+  INFRA_HOLD_HOURS,
   INFRA_PATHS,
   INFRA_REASON,
   MAX_QUEUE_FAILURES_PER_HEAD,
   MAX_TOGGLES_PER_SWEEP,
   RERUN_CHECK_NAME,
+  dependabotOnly,
   dependsState,
   enqueueDecision,
   ghTransport,
+  greenSince,
   headCiSince,
+  holdOf,
   infraFilesOf,
   isInfraPath,
   isMainRedFix,
@@ -97,6 +101,8 @@ const checkRun = (
 });
 const greenRuns = () => REQUIRED_CHECKS.map((n: string) => checkRun(n));
 const greenChecks = () => requiredChecksState(greenRuns(), HEAD);
+// The required checks of greenRuns() went green at 10:00Z.
+const GREEN_AT = Date.parse("2026-10-29T10:00:00Z");
 const LANDED = { state: "landed", behind: [] };
 const SOURCE_FILES = [{ filename: "packages/api/src/x.ts" }];
 const decide = (p: Pr, over: Pr = {}) =>
@@ -295,7 +301,7 @@ describe("merge-bot: while main is red, only jumpers are enqueued (founder defau
   });
 });
 
-describe("merge-bot: a PR touching CI or test infrastructure needs the founder", () => {
+describe("merge-bot: a PR touching CI or test infrastructure waits 2 h after green, or a /hold", () => {
   it.each([
     [".github/workflows/ci.yml"],
     [".github/actions/monorepo-setup/action.yml"],
@@ -316,11 +322,77 @@ describe("merge-bot: a PR touching CI or test infrastructure needs the founder",
     ["turbo.json"],
     [".husky/pre-push"],
     ["ci/scripts/check.mjs"],
-  ])("refused: %s", (path) => {
+  ])("held until 2 h after green: %s", (path) => {
     expect(isInfraPath(path)).toBe(true);
-    const d = decide(pr(), { files: [{ filename: path }] });
+    const d = decide(pr(), {
+      files: [{ filename: path }],
+      green: GREEN_AT,
+      now: GREEN_AT + 60_000,
+    });
     expect(d.enqueue).toBe(false);
     expect(d.reasons.join("; ")).toContain(INFRA_REASON);
+    expect(d.reasons.join("; ")).toContain("enqueued from 12:00Z");
+  });
+  const infra = [{ filename: ".github/workflows/ci.yml" }];
+  const HOUR = 3600_000;
+  it("enqueued once the hold is over, and not a minute before", () => {
+    expect(INFRA_HOLD_HOURS).toBe(2);
+    const at = (now: number) =>
+      decide(pr(), { files: infra, green: GREEN_AT, now });
+    expect(at(GREEN_AT + 2 * HOUR - 60_000).enqueue).toBe(false);
+    expect(at(GREEN_AT + 2 * HOUR).enqueue).toBe(true);
+  });
+  it("an unknown green time holds it (never read as 'long ago')", () => {
+    for (const green of [null, undefined])
+      expect(
+        decide(pr(), {
+          files: infra,
+          green,
+          now: GREEN_AT + 9 * HOUR,
+        }).reasons.join("; ")
+      ).toContain("went green is unknown");
+  });
+  const comment = (body: string, at: string, assoc = "OWNER") => ({
+    body,
+    createdAt: at,
+    authorAssociation: assoc,
+    author: { login: "Antoinesrvt" },
+  });
+  const withComments = (...nodes: Pr[]) => pr({ comments: { nodes } });
+  it("a maintainer's /hold keeps it out after the 2 h; a later /unhold lets it go", () => {
+    const late = GREEN_AT + 5 * HOUR;
+    const held = withComments(comment("/hold", "2026-10-29T10:30:00Z"));
+    const d = decide(held, { files: infra, green: GREEN_AT, now: late });
+    expect(d.enqueue).toBe(false);
+    expect(d.reasons.join("; ")).toContain("on hold: /hold by Antoinesrvt");
+    const released = withComments(
+      comment("/hold", "2026-10-29T10:30:00Z"),
+      comment("looked at it\n/unhold", "2026-10-29T11:00:00Z")
+    );
+    expect(
+      decide(released, { files: infra, green: GREEN_AT, now: late }).enqueue
+    ).toBe(true);
+  });
+  it("a /hold counts only from someone with write access, and only on its own line", () => {
+    expect(
+      holdOf(withComments(comment("/hold", "2026-10-29T10:30:00Z", "NONE")))
+    ).toBeNull();
+    expect(
+      holdOf(
+        withComments(
+          comment("please do not /hold this", "2026-10-29T10:30:00Z")
+        )
+      )
+    ).toBeNull();
+    for (const assoc of ["OWNER", "MEMBER", "COLLABORATOR"])
+      expect(
+        holdOf(withComments(comment(" /hold ", "2026-10-29T10:30:00Z", assoc)))
+      ).toMatchObject({ by: "Antoinesrvt" });
+  });
+  it("a /hold holds any PR, not only an infrastructure one", () => {
+    const held = withComments(comment("/hold", "2026-10-29T10:30:00Z"));
+    expect(decide(held).reasons.join("; ")).toContain("on hold");
+    expect(decide(withComments()).enqueue).toBe(true);
   });
   it.each([
     ["packages/api/src/routers/x.ts"],
@@ -394,6 +466,107 @@ describe("merge-bot: a PR touching CI or test infrastructure needs the founder",
     expect(unclassified).toEqual([]);
     for (const p of PRODUCT) expect(isInfraPath(p)).toBe(false);
     expect(INFRA_PATHS.length).toBeGreaterThan(5);
+  });
+});
+
+// A Dependabot commit as REST pulls/<n>/commits returns it.
+const depCommit = (over: Pr = {}) => ({
+  author: { login: "dependabot[bot]" },
+  commit: { verification: { verified: true } },
+  ...over,
+});
+describe("merge-bot: Dependabot's PRs are enqueued once green (founder, 2026-10-30)", () => {
+  const dep = pr({
+    author: { login: "dependabot" },
+    headRefName: "dependabot/github_actions/actions/checkout-7.0.1",
+    body: "Bumps actions/checkout from 4.4.0 to 7.0.1.",
+  });
+  const files = [{ filename: ".github/workflows/ci.yml" }];
+  it("no Pod session line and a workflow file: enqueued at once, no 2 h hold", () => {
+    const d = decide(dep, {
+      files,
+      commits: true,
+      green: GREEN_AT,
+      now: GREEN_AT,
+    });
+    expect(d).toMatchObject({ enqueue: true, reasons: [] });
+  });
+  it("still needs its required checks green", () => {
+    const d = decide(dep, {
+      files,
+      commits: true,
+      checks: requiredChecksState([], HEAD),
+    });
+    expect(d.enqueue).toBe(false);
+  });
+  it("dependabotOnly: every commit by dependabot[bot] AND verified", () => {
+    expect(dependabotOnly([depCommit(), depCommit()])).toBe(true);
+    expect(
+      dependabotOnly([
+        depCommit(),
+        depCommit({ author: { login: "Antoinesrvt" } }),
+      ])
+    ).toBe(false);
+    expect(
+      dependabotOnly([
+        depCommit({ commit: { verification: { verified: false } } }),
+      ])
+    ).toBe(false);
+    // An unlinked author (a spoofed email GitHub cannot tie to the bot).
+    expect(dependabotOnly([depCommit({ author: null })])).toBe(false);
+    expect(dependabotOnly([])).toBeNull();
+    expect(dependabotOnly(null)).toBeNull();
+  });
+});
+
+describe("merge-bot: greenSince, when the required checks all went green", () => {
+  const done = (name: string, at: string, over: Pr = {}) =>
+    checkRun(name, "success", { completed_at: at, ...over });
+  it("the latest finish among the required checks", () => {
+    const runs = REQUIRED_CHECKS.map((n: string, i: number) =>
+      done(n, `2026-10-29T10:0${i}:00Z`)
+    );
+    expect(greenSince(runs, HEAD)).toBe(
+      Date.parse(`2026-10-29T10:0${REQUIRED_CHECKS.length - 1}:00Z`)
+    );
+  });
+  it("null when one is missing, not green, or has no finish time", () => {
+    const runs = () =>
+      REQUIRED_CHECKS.map((n: string) => done(n, "2026-10-29T10:00:00Z"));
+    expect(greenSince(runs().slice(1), HEAD)).toBeNull();
+    expect(
+      greenSince(
+        runs().map((c: Pr, i: number) =>
+          i ? c : { ...c, conclusion: "failure" }
+        ),
+        HEAD
+      )
+    ).toBeNull();
+    expect(
+      greenSince(
+        runs().map((c: Pr, i: number) =>
+          i ? c : { ...c, completed_at: null }
+        ),
+        HEAD
+      )
+    ).toBeNull();
+  });
+  it("a re-run's newer finish counts, another head's does not", () => {
+    const runs = REQUIRED_CHECKS.map((n: string) =>
+      done(n, "2026-10-29T10:00:00Z")
+    );
+    runs.push(
+      done(REQUIRED_CHECKS[0], "2026-10-29T11:30:00Z", {
+        id: 2,
+        started_at: "2026-10-29T11:00:00Z",
+      }),
+      done(REQUIRED_CHECKS[0], "2026-10-29T15:00:00Z", {
+        id: 3,
+        head_sha: "b".repeat(40),
+        started_at: "2026-10-29T14:00:00Z",
+      })
+    );
+    expect(greenSince(runs, HEAD)).toBe(Date.parse("2026-10-29T11:30:00Z"));
   });
 });
 
@@ -500,14 +673,24 @@ describe("merge-bot: enqueue eligibility, each condition both ways", () => {
       "negctl",
     ],
     [
-      "dependabot (author)",
-      { pr: pr({ author: { login: "dependabot" } }) },
-      "dependabot",
+      "a dependabot/ branch a person opened",
+      { pr: pr({ headRefName: "dependabot/github_actions/x-1.2" }) },
+      "not opened by Dependabot",
     ],
     [
-      "dependabot (branch)",
-      { pr: pr({ headRefName: "dependabot/github_actions/x-1.2" }) },
-      "dependabot",
+      "Dependabot's PR with a commit a person pushed",
+      { pr: pr({ author: { login: "dependabot" } }), commits: false },
+      "not made and signed by Dependabot",
+    ],
+    [
+      "Dependabot's PR whose commits could not be read",
+      { pr: pr({ author: { login: "dependabot" } }), commits: null },
+      "commits could not be read",
+    ],
+    [
+      "Dependabot's PR, commits not read",
+      { pr: pr({ author: { login: "dependabot" } }) },
+      "commits: not read",
     ],
     ["from a fork", { pr: pr({ isCrossRepository: true }) }, "fork"],
     [
@@ -927,6 +1110,10 @@ if ((m = /pulls\\/(\\d+)\\/files\\?per_page=100&page=(\\d+)/.exec(path))) {
   if ((data.unreadableFiles || []).includes(Number(m[1]))) die("gh: HTTP 502");
   say(m[2] === "1" ? ((data.files || {})[m[1]] || [{ filename: "packages/api/src/x.ts" }]) : []);
 }
+if ((m = /pulls\\/(\\d+)\\/commits\\?per_page=100$/.exec(path))) {
+  if ((data.unreadableCommits || []).includes(Number(m[1]))) die("gh: HTTP 502");
+  say((data.commits || {})[m[1]] || []);
+}
 if ((m = /pulls\\/(\\d+)$/.exec(path))) say((data.pulls || {})[m[1]] || {});
 if ((m = /commits\\/([0-9a-f]+)$/.exec(path))) say({ parents: [{ sha: (data.mergeBase || {})[m[1]] }] });
 die("fake gh: unknown path " + path);
@@ -1104,7 +1291,7 @@ describe(
       expect(out).toMatch(/#3 not enqueued: draft/);
       expect(out).toMatch(/#5 not enqueued: Depends-On: waiting/);
       expect(out).toContain(
-        `#6 not enqueued: ${INFRA_REASON} (.github/workflows/ci.yml)`
+        `#6 not enqueued: ${INFRA_REASON} (.github/workflows/ci.yml): the time its checks went green is unknown`
       );
     });
 
@@ -1117,6 +1304,75 @@ describe(
       });
       expect(r.enqueued).toEqual([]);
       expect(out).toMatch(/#1 not enqueued: its files could not be read/);
+    });
+
+    it("a CI-path PR green since 09:00Z is enqueued at 12:00Z; one held by /hold, or green at 11:00Z, is not", async () => {
+      const ci = [{ filename: ".github/workflows/ci.yml" }];
+      const greenAt = (h: string, at: string) =>
+        greenOn(h).map((c: Pr) => ({ ...c, completed_at: at }));
+      const hold = {
+        comments: {
+          nodes: [
+            {
+              body: "/hold",
+              createdAt: "2026-10-29T09:30:00Z",
+              authorAssociation: "OWNER",
+              author: { login: "Antoinesrvt" },
+            },
+          ],
+        },
+      };
+      const { r, out } = await bot({
+        prs: [
+          pr({ number: 1, id: "PR_1", headRefOid: sha("1") }),
+          pr({ number: 2, id: "PR_2", headRefOid: sha("2"), ...hold }),
+          pr({ number: 3, id: "PR_3", headRefOid: sha("3") }),
+        ],
+        checks: {
+          [sha("1")]: greenAt(sha("1"), "2026-10-29T09:00:00Z"),
+          [sha("2")]: greenAt(sha("2"), "2026-10-29T09:00:00Z"),
+          [sha("3")]: greenAt(sha("3"), "2026-10-29T11:00:00Z"),
+        },
+        files: { 1: ci, 2: ci, 3: ci },
+      });
+      expect(r.enqueued).toEqual([1]);
+      expect(out).toMatch(/#2 not enqueued: on hold: \/hold by Antoinesrvt/);
+      expect(out).toMatch(/#3 not enqueued: .*enqueued from 13:00Z/);
+    });
+
+    it("Dependabot's green PR is enqueued; one a person pushed to is not (the commits are read)", async () => {
+      const dep = (n: number) =>
+        pr({
+          number: n,
+          id: `PR_${n}`,
+          headRefOid: sha(String(n)),
+          author: { login: "dependabot" },
+          headRefName: `dependabot/github_actions/x-${n}`,
+          body: "Bumps x.",
+        });
+      const { r, calls, out } = await bot({
+        prs: [dep(1), dep(2)],
+        checks: {
+          [sha("1")]: greenOn(sha("1")),
+          [sha("2")]: greenOn(sha("2")),
+        },
+        files: {
+          1: [{ filename: ".github/workflows/ci.yml" }],
+          2: [{ filename: ".github/workflows/ci.yml" }],
+        },
+        commits: {
+          1: [depCommit()],
+          2: [depCommit(), depCommit({ author: { login: "someone" } })],
+        },
+      });
+      expect(r.enqueued).toEqual([1]);
+      expect(out).toMatch(
+        /#2 not enqueued: a commit not made and signed by Dependabot/
+      );
+      expect(
+        calls.filter((c) => (c.args[3] ?? "").includes("/commits?per_page=100"))
+          .length
+      ).toBe(2);
     });
 
     it("main RED: only the jumpers enter (a main-red fix and the security fix), an ordinary green PR waits", async () => {
