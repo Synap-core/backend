@@ -739,6 +739,24 @@ describe("ci-changes: the merge queue", () => {
     expect(suitesPassed(null as never)).toBe(false);
   });
 
+  it("a commit run twice: the newest run of each check decides, as GitHub reads it", () => {
+    // #485 on 29 Oct: a red run at 00:15, a green re-run at 01:58, one head.
+    const red = { ...check("Full suite", "failure", 40792366320), id: 1 };
+    const e2eRed = { ...check("API e2e", "failure", 40792366320), id: 2 };
+    const green = allGreen().map((r: object, i: number) => ({
+      ...r,
+      id: 10 + i,
+    }));
+    expect(suitesPassed([red, e2eRed, ...green])).toBe(true);
+    expect(reusableRun([red, e2eRed, ...green])).toBe(40776509345);
+    // The newer run red (or still running): no reuse, whatever came before.
+    const newerRed = { ...check("Full suite", "failure", 40792366320), id: 99 };
+    expect(suitesPassed([...green, newerRed])).toBe(false);
+    expect(reusableRun([...green, newerRed])).toBeNull();
+    const running = { ...check("API e2e", null, 1, "in_progress"), id: 99 };
+    expect(suitesPassed([...green, running])).toBe(false);
+  });
+
   it("all 4 required checks success on one run: that run", () => {
     expect(reusableRun(allGreen())).toBe(40776509345);
   });

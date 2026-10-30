@@ -194,7 +194,14 @@ jobs:
 
   sweep:
     name: Revert a culprit nobody fixes
-    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'sweep') }}
+    # Every finished CI run is a tick, the schedule too when GitHub fires it:
+    # `schedule` is best effort and fired 0 times from 16:35 to 20:00Z on
+    # 29 Oct, so a culprit's 30-min grace never ended. One sweep at a time;
+    # a newer pending tick replaces an older one.
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_run' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'sweep') }}
+    concurrency:
+      group: red-main-sweep
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # The merge bot app's secrets live only here (main only).

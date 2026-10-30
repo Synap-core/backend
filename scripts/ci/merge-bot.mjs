@@ -144,6 +144,7 @@ export const INFRA_PATHS = [
   /^scripts\/ci\//,
   /^scripts\/ci-changes\.mjs$/,
   /^scripts\/test-ratchet/, // the ratchet, its shards, retry and baseline
+  /^scripts\/test-floors?\.[a-z]+$/, // the per-package test floors and their reader
   /^scripts\/layout\//, // the Depends-On hold and the CI sibling layout
   /^scripts\/tripwires?[^/]*\.mjs$/, // which tripwires run
   /^scripts\/preflight\.mjs$/, // the "Preflight red" hold
@@ -243,6 +244,38 @@ export function requiredChecksState(
 }
 
 /**
+ * A PR the merge queue took out on a red ("failed_checks") is held once the
+ * queue has failed it MAX_QUEUE_FAILURES_PER_HEAD times at its current head:
+ * its own checks stay green, so without this the bot enqueued the same head
+ * again after every red. 29 Oct 2026: #310 was enqueued at an unchanged head
+ * three times (20:15, 20:35, 20:58Z) on a real type error, and each red
+ * restarted the builds behind it. One failure is retried (an infrastructure
+ * flake, like #310's at 20:15); a push resets the count.
+ */
+export const MAX_QUEUE_FAILURES_PER_HEAD = 2;
+
+/** When the head's CI began: the earliest GitHub Actions check run on it, or null. Pure. */
+export function headCiSince(checkRuns, headSha) {
+  let since = null;
+  for (const c of checkRuns ?? []) {
+    if (c?.app?.id !== GITHUB_ACTIONS_APP_ID) continue;
+    if (headSha && c.head_sha && c.head_sha !== headSha) continue;
+    const t = Date.parse(c.started_at ?? "");
+    if (Number.isFinite(t) && (since === null || t < since)) since = t;
+  }
+  return since;
+}
+
+/** The queue's red removals of a PR since `since` (ms), from its GraphQL timeline. Pure. */
+export function queueFailuresSince(pr, since) {
+  if (since === null) return 0;
+  return (pr?.timelineItems?.nodes ?? []).filter(
+    (e) =>
+      e?.reason === "failed_checks" && Date.parse(e.createdAt ?? "") > since
+  ).length;
+}
+
+/**
  * One Depends-On state from the resolver's results (layout.mjs evaluateAll).
  * A waiting dependency on a PR of `repo` that is in `queued` (Map of PR number
  * -> head sha) RIDES (hold.mjs rideTheQueue, the one copy of the rule).
@@ -271,12 +304,17 @@ export function enqueueReasons({
   riding = false,
   mainRed = "green",
   whileRed = false,
+  queueFailures = 0,
 }) {
   const r = prGates(pr);
   if (isDependabot(pr)) r.push("dependabot");
   if (!podSessionFromBody(pr.body)) r.push("no `Pod session: <uuid>` line");
   if (pr.mergeable === "CONFLICTING") r.push("conflicting");
   if (pr.isInMergeQueue) r.push("already queued");
+  if (queueFailures >= MAX_QUEUE_FAILURES_PER_HEAD)
+    r.push(
+      `the merge queue failed it ${queueFailures} times at this head: push a fix (a new head is enqueued again)`
+    );
   if (
     mainRed !== "green" &&
     !whileRed &&
@@ -498,6 +536,9 @@ const PRS_QUERY = `query($owner: String!, $name: String!, $after: String) {
         isCrossRepository mergeable isInMergeQueue
         author { login }
         labels(first: 20) { nodes { name } }
+        timelineItems(last: 20, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) {
+          nodes { ... on RemovedFromMergeQueueEvent { createdAt reason } }
+        }
       }
     }
   }
@@ -698,13 +739,27 @@ export async function runBot({
         pr.headRefOid,
         names
       );
+      const queueFailures = queueFailuresSince(
+        pr,
+        headCiSince(runs?.check_runs, pr.headRefOid)
+      );
       // Depends-On and the files are read only for a PR whose checks are green.
       if (checks.ok) {
         const dep = dependsState(await depends(pr, repo), { repo, queued });
         const files = listPrFiles(gh, repo, pr.number, readToken);
-        d = enqueueDecision({ pr, checks, depends: dep, files, ...ctx });
+        d = enqueueDecision({
+          pr,
+          checks,
+          depends: dep,
+          files,
+          queueFailures,
+          ...ctx,
+        });
       } else
-        d = { enqueue: false, reasons: enqueueReasons({ pr, checks, ...ctx }) };
+        d = {
+          enqueue: false,
+          reasons: enqueueReasons({ pr, checks, queueFailures, ...ctx }),
+        };
     } catch (e) {
       log(`${tag} not enqueued: a read failed (${e.message})`);
       continue;

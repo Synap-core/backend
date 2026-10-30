@@ -764,12 +764,31 @@ export function ghTransport({ ghBin = "gh", env = process.env } = {}) {
     }
   }
   return {
-    rest: (path, { token, method = "GET", body, raw } = {}) =>
-      call(["api", "-X", method, path, ...(body ? ["--input", "-"] : [])], {
+    rest: (path, { token, method = "GET", body, raw } = {}) => {
+      const args = [
+        "api",
+        "-X",
+        method,
+        path,
+        ...(body ? ["--input", "-"] : []),
+      ];
+      const opts = {
         token,
         input: body ? JSON.stringify(body) : undefined,
         raw,
-      }),
+      };
+      if (!raw) return call(args, opts);
+      // A job log carries ANSI colour codes, and gh refuses to print terminal
+      // escape sequences without this flag (29 Oct 2026: run 40937265099
+      // could not read the Full suite log of red main 8fa00a6b, so it named
+      // no culprit). An older gh rejects the unknown flag: then plain.
+      try {
+        return call([...args, "--allow-escape-sequences"], opts);
+      } catch (e) {
+        if (!/unknown flag: --allow-escape-sequences/.test(e.message)) throw e;
+        return call(args, opts);
+      }
+    },
   };
 }
 

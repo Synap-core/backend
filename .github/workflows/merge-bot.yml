@@ -25,6 +25,19 @@ on:
   workflow_run:
     workflows: [CI]
     types: [completed]
+    # A merge-queue run (head branch gh-readonly-queue/main/pr-<n>-<sha>)
+    # makes no PR eligible. Filtered here, it starts no run at all: a run the
+    # job's `if` skipped still took the one pending slot of the concurrency
+    # group below and replaced a real pending pass (29 Oct, 6 queue builds at
+    # once: two live sweeps lost to skipped runs within one minute).
+    branches-ignore:
+      - "gh-readonly-queue/**"
+  # Every landing re-judges every PR: a PR whose Depends-On just landed, and
+  # main's red-window victims once main is green. GitHub's `schedule` is
+  # best effort: it fired 0 times from 16:35 to 20:00Z on 29 Oct, so a PR
+  # whose own CI had finished before its dependency landed was never judged.
+  push:
+    branches: [main]
   schedule:
     - cron: "4,19,34,49 * * * *"
   workflow_dispatch:
