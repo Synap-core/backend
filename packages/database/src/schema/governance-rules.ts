@@ -104,7 +104,7 @@ export const governanceRules = pgTable(
       .notNull(),
     revokedAt: timestamp("revoked_at", { mode: "date", withTimezone: true }),
     expiresAt: timestamp("expires_at", { mode: "date", withTimezone: true }),
-    // Why it stopped acting (0379). NULL for a person's own revoke; the trust
+    // Why it stopped acting (0380). NULL for a person's own revoke; the trust
     // ladder's pause writes `RULE_PAUSED_AFTER_REVERTS`.
     revokedReason: text("revoked_reason"),
   },

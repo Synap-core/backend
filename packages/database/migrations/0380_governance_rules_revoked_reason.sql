@@ -1,4 +1,4 @@
--- 0379 — governance_rules.revoked_reason: why a rule stopped acting
+-- 0380 — governance_rules.revoked_reason: why a rule stopped acting
 -- (structural plan S3, founder decision Q3, 29 Oct).
 --
 -- A grant the trust ladder earned (`source_proposal_id` set) PAUSES when two

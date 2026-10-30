@@ -1,5 +1,5 @@
 /**
- * REAL-POSTGRES (PGlite) test for migration 0379 — `governance_rules.revoked_reason`
+ * REAL-POSTGRES (PGlite) test for migration 0380 — `governance_rules.revoked_reason`
  * (structural plan S3, founder Q3): why a rule stopped acting. The trust
  * ladder's pause writes `paused_after_reverts`; the person's own revoke leaves
  * it NULL. The migration is idempotent, and the baseline carries the column,
@@ -16,7 +16,7 @@ import { governanceRules } from "./schema/governance-rules.js";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const read = (f: string) =>
   readFileSync(resolve(HERE, "../migrations", f), "utf8");
-const M0379 = read("0379_governance_rules_revoked_reason.sql");
+const M0380 = read("0380_governance_rules_revoked_reason.sql");
 const BASELINE = read("0000_baseline_schema.sql");
 
 /** The baseline's governance_rules block: its enums, table and indexes. */
@@ -32,10 +32,10 @@ const columns = async (client: PGlite) =>
     )
   ).rows.map((r) => r.column_name);
 
-describe("migration 0379 — governance_rules.revoked_reason", () => {
+describe("migration 0380 — governance_rules.revoked_reason", () => {
   it("adds the nullable column, twice without error, keeping existing rows", async () => {
     const pg = new PGlite();
-    // A pod before 0379: the baseline table WITHOUT the new column.
+    // A pod before 0380: the baseline table WITHOUT the new column.
     await pg.exec(
       RULES_BLOCK.split("\n")
         .filter((l) => !l.includes("revoked_reason"))
@@ -49,8 +49,8 @@ describe("migration 0379 — governance_rules.revoked_reason", () => {
        VALUES ('any', 'pod', 'action', 'entity.create', 'auto', 'system:test')`
     );
 
-    await pg.exec(M0379);
-    await pg.exec(M0379);
+    await pg.exec(M0380);
+    await pg.exec(M0380);
 
     const { rows } = await pg.query<{ revoked_reason: string | null }>(
       `SELECT revoked_reason FROM governance_rules`
@@ -68,7 +68,7 @@ describe("migration 0379 — governance_rules.revoked_reason", () => {
     const base = new PGlite();
     await base.exec(RULES_BLOCK);
     expect((await columns(base)).sort()).toEqual(declared);
-    await base.exec(M0379);
+    await base.exec(M0380);
     expect((await columns(base)).sort()).toEqual(declared);
     await base.close();
   });

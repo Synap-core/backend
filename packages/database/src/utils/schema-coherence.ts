@@ -1202,7 +1202,7 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
   {
     table: "governance_rules",
     column: "revoked_reason",
-    addedBy: "0379_governance_rules_revoked_reason.sql",
+    addedBy: "0380_governance_rules_revoked_reason.sql",
   },
   {
     table: "governance_ceilings",
