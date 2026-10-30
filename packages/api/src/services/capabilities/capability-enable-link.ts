@@ -204,8 +204,14 @@ export function resolveCapabilityBlock(input: {
   connection?: CapabilityCardConnection | null;
   /** Whether the capability may actually run (granted / approved). */
   enabled: boolean;
+  /**
+   * Not enabled, but SOME of its verbs still run (a draft tool's declarative
+   * reads) — the card's `partial`, not `draft`/`connected`. Ignored when
+   * `enabled`.
+   */
+  partial?: boolean;
 }): CapabilityNextAction | undefined {
-  const { name, containerId, connection, enabled } = input;
+  const { name, containerId, connection, enabled, partial } = input;
 
   if (connection?.required && connection.state !== "connected") {
     return capabilityNextAction(
@@ -217,7 +223,7 @@ export function resolveCapabilityBlock(input: {
   }
   if (!enabled) {
     return capabilityNextAction(
-      connection?.required ? "connected" : "draft",
+      partial ? "partial" : connection?.required ? "connected" : "draft",
       name,
       connection ?? undefined,
       containerId

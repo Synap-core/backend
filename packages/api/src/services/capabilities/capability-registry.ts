@@ -63,7 +63,11 @@ import {
   visibleSkillsAnyWorkspaceWhere,
   visibleSkillsWhere,
 } from "../skills/visibility.js";
-import { isToolRowLaunchable } from "./verb-launchable.js";
+import {
+  draftToolRefusesVerb,
+  isToolRowLaunchable,
+  isVerbLaunchable,
+} from "./verb-launchable.js";
 import { declaredReadOnly } from "./capability-drift.js";
 import { verbType } from "./capability-catalog.js";
 import { toolNotRetiredWhere } from "../tools/visibility.js";
@@ -216,6 +220,41 @@ export function withEnableBlocks(
         }
       : v
   );
+}
+
+/**
+ * The verbs of ONE tool row the run would refuse as not enabled, by either of
+ * a verb's two switches:
+ *   - its SKILL (`approvalRefused`, pod-wide by name: no approved copy);
+ *   - its TOOL (`draftToolRefusesVerb`): a draft tool is refused at dispatch
+ *     for every verb but a declarative read — so the reads stay unblocked,
+ *     because they DO run. Only for a verb whose skill passes the run door:
+ *     one with no active skill answers `not_found`, which enabling can't fix.
+ * Before this, the second switch was invisible per verb: hetzner_cloud's
+ * writes read unblocked, were proposed, approved, and failed at apply with
+ * "installed but not enabled" (live pod, 2026-10-30).
+ */
+export function notEnabledVerbNames(
+  catalog: ToolVerbCatalogEntry[] | null | undefined,
+  toolApproved: boolean | null | undefined,
+  approvalRefused: ReadonlySet<string>,
+  backingSkillExecutableByName: ReadonlyMap<string, boolean>,
+  providerSpecByName: ReadonlyMap<string, ProviderVerbSpec>
+): ReadonlySet<string> {
+  if (toolApproved !== false || !Array.isArray(catalog)) return approvalRefused;
+  const out = new Set(approvalRefused);
+  for (const v of catalog) {
+    if (backingSkillExecutableByName.get(v.id) !== true) continue;
+    if (
+      draftToolRefusesVerb({
+        toolApproved,
+        providerSpec: providerSpecByName.get(v.id),
+      })
+    ) {
+      out.add(v.id);
+    }
+  }
+  return out;
 }
 
 /**
@@ -657,7 +696,16 @@ export function buildVerbStates(
       ...v,
       ...(intent ? { intent } : {}),
       granted,
-      effectiveExecMode: grant ? grant.execMode : v.govDefault,
+      // A verb that DECLARES itself read-only runs at the gate whatever the
+      // grant says (its `readOnly` short-circuit precedes every grant rung),
+      // so its effective mode is `auto` — `propose` here listed reads that
+      // ran with no proposal (hcloud_list_*, 2026-10-30).
+      effectiveExecMode:
+        declaredReadOnlyByName.get(v.id) === true
+          ? ("auto" as ExecMode)
+          : grant
+            ? grant.execMode
+            : v.govDefault,
       ...(paramsSchema ? { paramsSchema } : {}),
       // What this verb RETURNS — read off the same declarative spec the executor
       // applies (`execute-provider-verb.ts`), never re-derived or fabricated.
@@ -1244,7 +1292,13 @@ export async function listCapabilities(
         ),
         credentialedByName
       ),
-      approvalRefusedByName,
+      notEnabledVerbNames(
+        row.capabilities as ToolVerbCatalogEntry[] | null,
+        row.approved,
+        approvalRefusedByName,
+        backingSkillExecutableByName,
+        providerSpecByName
+      ),
       {
         id:
           containerByMember.get(containerMemberKey("tool", row.id))?.id ?? null,
@@ -1765,6 +1819,12 @@ export function sectionCapabilities(
       // an agent run PROPOSE (already said by `governance`), and no enable
       // switch issues a grant — so a grant-derived block could never clear.
       enabled: isToolRowLaunchable(row),
+      // A draft tool still runs its declarative reads (see
+      // `notEnabledVerbNames`): "some of its actions are off", never "its
+      // actions are off" while a verb here runs.
+      partial:
+        !row.enabled &&
+        row.verbs.some((v) => v.blocked === undefined && isVerbLaunchable(v)),
     });
     if (blocked) row.blocked = blocked;
   }
@@ -1817,6 +1877,10 @@ function stampRunPosture(
       skillKind,
       granted: v.granted,
       execMode: v.effectiveExecMode,
+      // The gate runs a declared read outright — without this the section's
+      // verbs said `propose` while the flat row (`capabilityRowPosture`) and
+      // the gate said `auto`.
+      declaredReadOnly: v.declaredReadOnly,
     }),
   }));
   row.governance =

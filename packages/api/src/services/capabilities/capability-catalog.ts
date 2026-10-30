@@ -46,6 +46,7 @@ import {
 } from "./cp-template-client.js";
 import { READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
 import { approvalRefusesRun } from "@synap/capability-gate";
+import { draftToolRefusesVerb } from "./verb-launchable.js";
 
 // ── Contract (matched verbatim by the CLI being built in parallel) ────────────
 
@@ -841,6 +842,9 @@ export async function buildCapabilityCatalog(
             // The verb catalog is where `intent` is persisted (`skills` has no
             // such column) — without it the card verbs drop the routing axis.
             capabilities: tools.capabilities,
+            // A verb's second switch: a draft tool refuses its writes at
+            // dispatch (`draftToolRefusesVerb`).
+            approved: tools.approved,
           })
           .from(tools)
           .where(inArray(tools.id, memberToolIds))
@@ -857,6 +861,8 @@ export async function buildCapabilityCatalog(
             metadata: skills.metadata,
             category: skills.category,
             kind: skills.kind,
+            // Read or write, for a declarative verb (`providerCallIsRead`).
+            providerSpec: skills.providerSpec,
           })
           .from(skills)
           .where(inArray(skills.id, memberSkillIds))
@@ -936,16 +942,34 @@ export async function buildCapabilityCatalog(
     // name, which is exactly the `verbId` a card verb carries, so the join is
     // by that key and nothing else.
     const intentByVerbId = new Map<string, string>();
+    // verbId → its member tool is a DRAFT (`tools.approved = false`), off the
+    // same verb catalogs: the switch the page used to leave out.
+    const draftToolVerbIds = new Set<string>();
     for (const t of myTools) {
       for (const entry of t.capabilities ?? []) {
         if (entry?.intent) intentByVerbId.set(entry.id, entry.intent);
+        if (entry?.id && t.approved === false) draftToolVerbIds.add(entry.id);
       }
     }
 
     const verbs: CapabilityCardVerb[] = mySkills.map((s) => {
       const type = verbType(s.name, s.metadata, s.kind);
-      // The gate's own predicate, never a second spelling of it (509c9358).
-      const enabled = !approvalRefusesRun(s);
+      // The gate's own predicate, never a second spelling of it (509c9358) —
+      // for BOTH of a verb's switches: its skill, and its tool, which the
+      // dispatch checks for every verb but a declarative read. Reading the skill
+      // alone showed hetzner_cloud "6 of 6 on" while each approved write failed
+      // at apply with "installed but not enabled" (2026-10-30); now the page
+      // shows those verbs off, and turning one on turns its tool on too
+      // (`setSkillApproved`).
+      const enabled =
+        !approvalRefusesRun(s) &&
+        !(
+          draftToolVerbIds.has(s.name) &&
+          draftToolRefusesVerb({
+            toolApproved: false,
+            providerSpec: s.kind === "declarative" ? s.providerSpec : null,
+          })
+        );
       // `skills.category` is the first-class column the capability applier
       // persists from the definition; `metadata.category` is a tolerated
       // fallback for rows tagged out-of-band.

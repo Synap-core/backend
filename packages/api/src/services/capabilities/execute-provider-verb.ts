@@ -28,6 +28,7 @@ import {
   type FailureErrorClass,
 } from "../../connectors/external-dispatch.js";
 import { interpolateString, interpolateDeep } from "../_shared/interpolate.js";
+import { providerCallIsRead } from "./verb-launchable.js";
 
 type DetailSpec = Omit<ProviderVerbSpec, "tool" | "expand">;
 
@@ -311,9 +312,13 @@ async function executeSingleCall(
   // POST). `graphql.operation:"query"` is a READ; anything else (default
   // "mutation") is a WRITE — fail-closed, same as REST.
   const isGraphql = spec.transport === "graphql";
-  const isReadMethod = isGraphql
-    ? (spec.graphql?.operation ?? "mutation") === "query"
-    : /^(GET|HEAD)$/i.test(method ?? "");
+  // The ONE spelling (`verb-launchable.ts`): the listing reads the same
+  // predicate to say which verbs still run while their tool is a draft.
+  const isReadMethod = providerCallIsRead({
+    transport: spec.transport,
+    graphql: spec.graphql,
+    method,
+  });
 
   const result = await triggerProviderAction({
     userId: ctx.userId,

@@ -7,6 +7,8 @@ import {
   indexContainerLinks,
   containerMemberKey,
   loadContainerRefs,
+  notEnabledVerbNames,
+  withEnableBlocks,
 } from "./capability-registry.js";
 import type { ProviderVerbSpec } from "@synap/database/schema";
 
@@ -561,5 +563,139 @@ describe("buildVerbStates — empty catalog with tool-scoped skill intents", () 
     );
 
     expect(verbs).toEqual([]);
+  });
+});
+
+// ── A verb's TWO switches: its skill, and its tool ───────────────────────────
+// Live pod 2026-10-30, hetzner_cloud: every hcloud_* skill on, the tool row a
+// draft (`tools.approved = false`). The listing said the whole integration was
+// off and every verb `propose`; in fact the reads RAN (a declarative GET skips
+// the tool gate, and a declared read skips the grant), while each write the
+// person approved failed at apply with "installed but not enabled".
+describe("hetzner_cloud: a draft tool under switched-on skills", () => {
+  const catalog = [
+    {
+      id: "hcloud_list_locations",
+      kind: "read",
+      label: "l",
+      govDefault: "propose",
+    },
+    {
+      id: "hcloud_create_server",
+      kind: "action",
+      label: "c",
+      govDefault: "propose",
+    },
+    {
+      id: "hcloud_delete_server",
+      kind: "action",
+      label: "d",
+      govDefault: "propose",
+    },
+  ] as unknown as Parameters<typeof buildVerbStates>[0];
+  const specs = new Map<string, ProviderVerbSpec>([
+    [
+      "hcloud_list_locations",
+      {
+        tool: "hetzner_cloud",
+        method: "GET",
+        pathTemplate: "/locations",
+      } as ProviderVerbSpec,
+    ],
+    [
+      "hcloud_create_server",
+      {
+        tool: "hetzner_cloud",
+        method: "POST",
+        pathTemplate: "/servers",
+      } as ProviderVerbSpec,
+    ],
+    [
+      "hcloud_delete_server",
+      {
+        tool: "hetzner_cloud",
+        method: "DELETE",
+        pathTemplate: "/servers/{id}",
+      } as ProviderVerbSpec,
+    ],
+  ]);
+  const executable = new Map([
+    ["hcloud_list_locations", true],
+    ["hcloud_create_server", true],
+    ["hcloud_delete_server", true],
+  ]);
+  const declaredReadOnly = new Map([["hcloud_list_locations", true]]);
+
+  function listedRow(toolApproved: boolean) {
+    const verbs = withEnableBlocks(
+      buildVerbStates(
+        catalog,
+        { execMode: "propose" },
+        "api",
+        specs,
+        executable,
+        declaredReadOnly
+      ),
+      notEnabledVerbNames(catalog, toolApproved, new Set(), executable, specs),
+      { id: "3e4ac1b4", name: "Hetzner Cloud" }
+    );
+    return sectionCapabilities([
+      {
+        id: "d26aa29b",
+        name: "hetzner_cloud",
+        kind: "tool",
+        description: null,
+        governance: "none",
+        enabled: toolApproved,
+        containerId: "3e4ac1b4",
+        containerName: "Hetzner Cloud",
+        verbs,
+      },
+    ] as never).integrations[0]!;
+  }
+
+  it("blocks the writes the dispatch refuses, and leaves the reads that run unblocked", () => {
+    const row = listedRow(false);
+    const byId = new Map(row.verbs.map((v) => [v.id, v]));
+    expect(byId.get("hcloud_list_locations")?.blocked).toBeUndefined();
+    expect(byId.get("hcloud_create_server")?.blocked).toBe("not_enabled");
+    expect(byId.get("hcloud_delete_server")?.blocked).toBe("not_enabled");
+    expect(byId.get("hcloud_create_server")?.enable?.kind).toBe("enable");
+    // The row: some of its actions are off — not "its actions are off".
+    expect(row.enabled).toBe(false);
+    expect(row.blocked?.kind).toBe("enable");
+    expect(row.blocked?.hint).toBe(
+      "Some of its actions are off. Turn them on to use them."
+    );
+  });
+
+  it("lists a declared read as running now, whatever the grant says", () => {
+    const row = listedRow(false);
+    const read = row.verbs.find((v) => v.id === "hcloud_list_locations")!;
+    expect(read.effectiveExecMode).toBe("auto");
+    expect(read.governance).toBe("auto");
+    const write = row.verbs.find((v) => v.id === "hcloud_create_server")!;
+    expect(write.effectiveExecMode).toBe("propose");
+    expect(write.governance).toBe("propose");
+  });
+
+  it("once the tool is on, nothing is blocked", () => {
+    const row = listedRow(true);
+    expect(row.verbs.every((v) => v.blocked === undefined)).toBe(true);
+    expect(row.blocked).toBeUndefined();
+  });
+
+  it("a draft tool refuses a non-declarative verb, read or not (code verbs dispatch through the tool gate)", () => {
+    const codeCatalog = [
+      { id: "exa_search", kind: "read", label: "s", govDefault: "propose" },
+    ] as unknown as Parameters<typeof buildVerbStates>[0];
+    const names = notEnabledVerbNames(
+      codeCatalog,
+      false,
+      new Set(),
+      new Map([["exa_search", true]]),
+      new Map()
+    );
+    expect([...names]).toEqual(["exa_search"]);
   });
 });

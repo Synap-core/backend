@@ -40,3 +40,45 @@ export function isToolRowLaunchable(row: {
   if (row.enabled !== true) return false;
   return row.verbs.length === 0 || row.verbs.some(isVerbLaunchable);
 }
+
+/** The part of a declarative verb's `providerSpec` that says read or write. */
+export interface ProviderCallFacts {
+  method?: string | null;
+  transport?: string | null;
+  graphql?: { operation?: string | null } | null;
+}
+
+/**
+ * The provider call is a READ: GET/HEAD, or a GraphQL `query` (all GraphQL is
+ * a POST, so its OPERATION decides; the default "mutation" is a write).
+ * Fail-closed: an absent method is a write. The ONE spelling — the dispatch
+ * (`execute-provider-verb.ts`) skips the tool's approval gate on exactly this,
+ * and the listing reads it to say which verbs a draft tool still lets run.
+ */
+export function providerCallIsRead(
+  spec: ProviderCallFacts | null | undefined
+): boolean {
+  if (!spec) return false;
+  if (spec.transport === "graphql") {
+    return (spec.graphql?.operation ?? "mutation") === "query";
+  }
+  return /^(GET|HEAD)$/i.test(spec.method ?? "");
+}
+
+/**
+ * The dispatch refuses this verb because its TOOL is not turned on
+ * (`tools.approved === false`). A verb has two switches: its skill (judged when
+ * it is asked for, `backingSkillExecutable`) and its tool (judged when the call
+ * is dispatched, `triggerProviderAction` → the gate's approval step). Only a
+ * declarative READ skips the second (`alreadyApproved`), so on a draft tool the
+ * reads run and every other verb — each write, each code verb — is refused,
+ * after its proposal was approved (live pod, hetzner_cloud, 2026-10-30).
+ * `providerSpec` is absent for a non-declarative verb, which is never a read.
+ */
+export function draftToolRefusesVerb(input: {
+  toolApproved: boolean | null | undefined;
+  providerSpec?: ProviderCallFacts | null;
+}): boolean {
+  if (input.toolApproved !== false) return false;
+  return !providerCallIsRead(input.providerSpec);
+}
