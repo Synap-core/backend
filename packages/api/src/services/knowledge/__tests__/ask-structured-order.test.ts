@@ -71,3 +71,40 @@ describe("ask — structured block order", () => {
     ]);
   });
 });
+
+// B1-b (30 Oct live test, item 5): a brief ask answers in a few sentences over
+// at most five sources, yet the structured lane read 200 rows it then dropped.
+// Under brief it reads the caller's limit; full keeps the complete set (S1).
+describe("ask — structured lane size follows detail", () => {
+  const structuredLimitFor = async (detail?: "brief" | "full") => {
+    retrieveMock.mockReset().mockResolvedValue({
+      entities: [],
+      understanding: { confidence: 0.9, profileTypes: ["task"] },
+      verdict: "confident",
+      source: "hybrid",
+    });
+    searchFullTextMock.mockReset().mockResolvedValue([]);
+    searchFactsMock.mockReset().mockResolvedValue([]);
+    libraryLaneMock.mockReset().mockResolvedValue({ items: [] });
+    structuredLookupMock.mockReset().mockResolvedValue([]);
+    await ask({
+      userId: "user-1",
+      workspaceId: null,
+      catalog: [{ slug: "task", displayName: "Task" }],
+      limit: 5,
+      query: "list my tasks",
+      ...(detail ? { detail } : {}),
+    });
+    expect(structuredLookupMock).toHaveBeenCalledTimes(1);
+    return (structuredLookupMock.mock.calls[0]![0] as { limit: number }).limit;
+  };
+
+  it("brief reads the caller's limit", async () => {
+    expect(await structuredLimitFor("brief")).toBe(5);
+  });
+
+  it("full (and no detail) keeps the complete enumeration ceiling", async () => {
+    expect(await structuredLimitFor("full")).toBe(200);
+    expect(await structuredLimitFor()).toBe(200);
+  });
+});

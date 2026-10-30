@@ -161,3 +161,23 @@ describe("synap_ask — catalog lens", () => {
     );
   });
 });
+
+// B1-b (30 Oct live test, item 5): `detail` reaches retrieval, so a brief ask
+// sizes its structured lane to the caller's limit (`ask.ts`).
+describe("synap_ask — detail reaches retrieval", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getAccessibleProfiles.mockResolvedValue([]);
+    askMock.mockResolvedValue({ answers: [], routedTo: [], pending: null });
+    synthesizeAnswerMock.mockResolvedValue({ answer: "ok", sources: [] });
+  });
+
+  it("forwards brief", async () => {
+    await readHandlers.synap_ask!(
+      makeCtx({ args: { query: "list my tasks", detail: "brief" } })
+    );
+    expect(askMock).toHaveBeenCalledWith(
+      expect.objectContaining({ detail: "brief" })
+    );
+  });
+});
