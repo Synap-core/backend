@@ -71,7 +71,7 @@ import {
   pgliteTableDdl,
 } from "../../../__tests__/pglite-ddl.js";
 import { readStatusOf } from "../status-read.js";
-import { readWaitingOn } from "../status-facts.js";
+import { holdWaitingOnRef, readWaitingOn } from "../status-facts.js";
 import { readDependencyState } from "../../links/dependency-links.js";
 import { readScopeRollup } from "../status-rollup.js";
 
@@ -689,5 +689,36 @@ describe("the rollup reads PR states once", () => {
     console.log(
       `[waiting-on timing] 40 sessions: without holds+PRs ${msBefore.toFixed(0)} ms, with ${msAfter.toFixed(0)} ms; whole space rollup ${msRollup.toFixed(0)} ms`
     );
+  });
+});
+
+describe("a hold on a dev fact names that fact", () => {
+  const since = "2026-10-30T10:00:00.000Z";
+  const held = (moves: string, reason: string | null = "CI must pass") =>
+    holdWaitingOnRef({
+      on: "thing",
+      reason,
+      until: { moves },
+      since,
+      resumeTo: "active",
+    });
+
+  it("a PR: its name in the hold line's words, and its GitHub page as the door", () => {
+    expect(held("pr:synap-core/backend#539")).toEqual({
+      kind: "pull_request",
+      url: "https://github.com/synap-core/backend/pull/539",
+      label: "backend#539",
+    });
+  });
+
+  it("main and a devbox job: named, never a raw `main:` / `job:` ref or the reason", () => {
+    expect(held("main:synap-core/app-bases")).toEqual({
+      kind: "thing",
+      label: "app-bases main",
+    });
+    expect(held("job:kit-h", null)).toEqual({
+      kind: "thing",
+      label: "job kit-h",
+    });
   });
 });
