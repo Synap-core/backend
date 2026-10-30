@@ -471,6 +471,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "status.ready": "Prêt",
   "status.waiting": "En attente",
   "status.blocked": "Bloqué",
+  "status.with_them": "Chez eux",
+  "status.on_machine": "Sur une machine",
   "status.done": "Fait",
   "status.drafted": "Rédigé",
   "status.scheduled": "Planifié",

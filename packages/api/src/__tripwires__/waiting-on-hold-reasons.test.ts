@@ -17,8 +17,10 @@ import { HOLD_ON } from "@synap-core/types/lifecycle";
 import {
   deriveWaitingOn,
   HOLD_ON_WAITING_ON,
+  WAIT_KIND_FROM,
   WAITING_ON_REASONS,
   waitingOnReasonOf,
+  waitKindOf,
 } from "@synap-core/types/units";
 import { WAITING_ON_REASON_LABELS } from "@synap-core/types/vocabulary";
 
@@ -59,5 +61,41 @@ describe("holds ↔ waiting-on reasons", () => {
         { kind: "hold", on: "unspecified" },
       ])
     ).toEqual([]);
+  });
+});
+
+/** The wait kind each hold gives (decision 2): a change here is a decision. */
+const DECIDED_WAIT_KIND = {
+  person: "answer",
+  agent: "agent_work",
+  external: "vendor",
+  thing: "another_work",
+  decision: "decide",
+  date: "date",
+  nobody: "nobody",
+  unspecified: "nobody",
+} as const;
+
+describe("holds ↔ wait kinds", () => {
+  it("every hold value has its own waitKind row, and the table names nothing else", () => {
+    expect(Object.keys(WAIT_KIND_FROM.hold).sort()).toEqual(
+      [...HOLD_ON].sort()
+    );
+  });
+
+  it("each hold maps to the decided kind, through the mapping function", () => {
+    for (const on of HOLD_ON) {
+      expect(waitKindOf({ kind: "hold", on })).toBe(DECIDED_WAIT_KIND[on]);
+    }
+  });
+
+  it("a dev ref (pr / main / job) outranks the hold's on", () => {
+    for (const on of HOLD_ON) {
+      expect(waitKindOf({ kind: "hold", on, devRef: "pr" })).toBe("ci");
+      expect(waitKindOf({ kind: "hold", on, devRef: "main" })).toBe("red_main");
+      expect(waitKindOf({ kind: "hold", on, devRef: "job" })).toBe(
+        "devbox_job"
+      );
+    }
   });
 });

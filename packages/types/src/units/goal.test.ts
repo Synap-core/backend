@@ -479,7 +479,11 @@ describe("waiting on (R4)", () => {
       { kind: "blocked_by" },
     ]);
     expect(mark!.count).toBe(WAITING_ON_REFS_MAX + 3);
-    expect(mark!.refs).toEqual(refs.slice(0, WAITING_ON_REFS_MAX));
+    expect(mark!.refs).toEqual(
+      refs
+        .slice(0, WAITING_ON_REFS_MAX)
+        .map((r) => ({ ...r, waitKind: "another_work" }))
+    );
     // A mark no source named carries no refs at all (never `[]`).
     expect(deriveWaitingOn([{ kind: "pending_proposal" }])).toEqual([
       { reason: "approval", count: 1 },
