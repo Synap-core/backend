@@ -124,6 +124,7 @@ export const WEB_HOSTED_OPEN_KINDS = [
   "channel",
   "track",
   "skill",
+  "tool",
 ] as const;
 export type WebHostedOpenKind = (typeof WEB_HOSTED_OPEN_KINDS)[number];
 

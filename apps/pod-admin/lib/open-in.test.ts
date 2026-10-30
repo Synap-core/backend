@@ -31,6 +31,7 @@ describe("openIn — web-hosted objects", () => {
     "document",
     "channel",
     "skill",
+    "tool",
   ])("hosts %s on /open", (objectKind) => {
     const exit = openIn({ kind: "object", objectKind, id: ID });
     expect(exit.href).toBe(`/open/${objectKind}/${ID}`);
@@ -62,7 +63,7 @@ describe("openIn — web-hosted objects", () => {
 });
 
 describe("openIn — desktop links always carry a fallback", () => {
-  it.each(["workspace", "project", "cell", "tool"])(
+  it.each(["workspace", "project", "cell"])(
     "%s bounces to the desktop app with a download fallback",
     (objectKind) => {
       const exit = openIn({ kind: "object", objectKind, id: ID });

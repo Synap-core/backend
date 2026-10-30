@@ -49201,6 +49201,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				capabilityId: string | null;
 				skills: {
 					agentTypes: string[] | null;
 					alwaysOn: boolean;

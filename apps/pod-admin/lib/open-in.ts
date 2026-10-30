@@ -370,7 +370,7 @@ export function openIn(target: ExitTarget): Exit {
           : "";
         return web(search ? `${path}?${search}` : path);
       }
-      // Everything else — workspace, cell, project, tool — has no web
+      // Everything else — workspace, cell, project — has no web
       // renderer. Be honest about it. (The operational kinds, documents and
       // channels are hosted; a caller that means "in the desktop app" asks
       // for `objectInApp`.)
