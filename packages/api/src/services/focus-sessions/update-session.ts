@@ -24,9 +24,14 @@ import {
   eq,
   and,
   drizzleSql,
+  LifecycleConflictError,
   workUnitActorOf,
   writeSessionPatch,
 } from "@synap/database";
+import {
+  lifecycleConflictOf,
+  type LifecycleConflictResult,
+} from "../lifecycle/conflict.js";
 import {
   BLOCKED_REASONS,
   OUTPUT_RETIRED_REASONS,
@@ -145,6 +150,12 @@ export interface UpdateFocusSessionParams {
   title?: string | null;
   goal?: string;
   status?: "active" | "paused";
+  /**
+   * With `status`: the status the caller SAW. A session that moved meanwhile
+   * answers `conflict` and nothing is written (compare-and-set), like an
+   * entity's `expectedStatus`.
+   */
+  expectedStatus?: SessionStatus;
   /**
    * With `status: paused`: what the pause waits on (W4) — required from an
    * agent, `unspecified` for a person when absent.
@@ -274,6 +285,8 @@ export interface UpdateFocusSessionParams {
 
 export type UpdateFocusSessionResult =
   | { status: "not_found" }
+  /** A stale move (`expectedStatus` no longer holds): nothing was written. */
+  | LifecycleConflictResult
   | {
       status: "denied";
       reason: string;
@@ -1792,6 +1805,12 @@ export async function updateFocusSession(
 
   // R8 — a closed run stays closed: never moved back to an open status
   // (the MCP door's `status` is active|paused, both open).
+  // A stale move: the caller decided on a status the session left.
+  if (params.expectedStatus && params.expectedStatus !== existing.status) {
+    return lifecycleConflictOf(
+      new LifecycleConflictError(params.expectedStatus, existing.status)
+    )!;
+  }
   const reopening = closedRunRefusal(existing.status, params.status);
   if (reopening) return { status: "denied", reason: reopening };
   // WHEN and WHAT IT WAITS ON (W4), refused before anything is filed; the
@@ -2295,6 +2314,9 @@ export async function updateFocusSession(
           ...(params.title !== undefined ? { title: params.title } : {}),
           ...(params.status !== undefined ? { status: params.status } : {}),
           // Replayed with the move (the approval keeps them).
+          ...(params.expectedStatus
+            ? { expectedStatus: params.expectedStatus }
+            : {}),
           ...(params.hold ? { hold: params.hold } : {}),
           ...(params.occurredAt ? { occurredAt: params.occurredAt } : {}),
           ...(params.progress !== undefined
@@ -2454,52 +2476,62 @@ export async function updateFocusSession(
   const undoBefore =
     receiptId && undoable ? await readSessionUndoSnapshot(db, sessionId) : null;
 
-  const [updated] = await db.transaction(async (tx) => {
-    if (params.workspaceId !== undefined) {
-      const { applySessionWorkspaceMove } =
-        await import("./move-session-workspace.js");
-      await applySessionWorkspaceMove(tx, {
+  const written = await db
+    .transaction(async (tx) => {
+      if (params.workspaceId !== undefined) {
+        const { applySessionWorkspaceMove } =
+          await import("./move-session-workspace.js");
+        await applySessionWorkspaceMove(tx, {
+          sessionId,
+          channelId: existing.channelId,
+          workspaceId: params.workspaceId,
+        });
+      }
+      if (mutatesOutputs) {
+        const [locked] = await tx
+          .select({ expectedOutputs: focusSessions.expectedOutputs })
+          .from(focusSessions)
+          .where(eq(focusSessions.id, sessionId))
+          .for("update");
+        const current: OutputItem[] = Array.isArray(locked?.expectedOutputs)
+          ? (locked.expectedOutputs as OutputItem[])
+          : [];
+        const applied = applyOutputMutations(
+          current,
+          {
+            expectedOutputs: params.expectedOutputs,
+            addOutput: params.addOutput,
+            completeOutput: params.completeOutput,
+            retireOutput: params.retireOutput,
+          },
+          // An agent's list adds and updates, never deletes (C6).
+          { keepUnlisted: !!agentUserId, askedBy: agentUserId }
+        );
+        set.expectedOutputs = applied.outputs;
+        completeOutputOutcome = applied.completeOutput;
+        retireOutputOutcome = applied.retireOutput;
+        blockedByThisPatch = newlyBlockedSlots(current, applied.outputs);
+        outputsBefore = current;
+        outputsAfter = applied.outputs;
+      }
+      // The one session status write when `set` carries a status.
+      return writeSessionPatch(tx, {
         sessionId,
-        channelId: existing.channelId,
-        workspaceId: params.workspaceId,
+        set,
+        actor: workUnitActorOf(userId, agentUserId),
+        hold: params.hold,
+        occurredAt: params.occurredAt ? new Date(params.occurredAt) : null,
+        expectedStatus: params.expectedStatus ?? null,
       });
-    }
-    if (mutatesOutputs) {
-      const [locked] = await tx
-        .select({ expectedOutputs: focusSessions.expectedOutputs })
-        .from(focusSessions)
-        .where(eq(focusSessions.id, sessionId))
-        .for("update");
-      const current: OutputItem[] = Array.isArray(locked?.expectedOutputs)
-        ? (locked.expectedOutputs as OutputItem[])
-        : [];
-      const applied = applyOutputMutations(
-        current,
-        {
-          expectedOutputs: params.expectedOutputs,
-          addOutput: params.addOutput,
-          completeOutput: params.completeOutput,
-          retireOutput: params.retireOutput,
-        },
-        // An agent's list adds and updates, never deletes (C6).
-        { keepUnlisted: !!agentUserId, askedBy: agentUserId }
-      );
-      set.expectedOutputs = applied.outputs;
-      completeOutputOutcome = applied.completeOutput;
-      retireOutputOutcome = applied.retireOutput;
-      blockedByThisPatch = newlyBlockedSlots(current, applied.outputs);
-      outputsBefore = current;
-      outputsAfter = applied.outputs;
-    }
-    // The one session status write when `set` carries a status.
-    return writeSessionPatch(tx, {
-      sessionId,
-      set,
-      actor: workUnitActorOf(userId, agentUserId),
-      hold: params.hold,
-      occurredAt: params.occurredAt ? new Date(params.occurredAt) : null,
+    })
+    .catch((err: unknown) => {
+      // Moved between the read above and the write: the same conflict.
+      const stale = lifecycleConflictOf(err);
+      if (stale) return stale;
+      throw err;
     });
-  });
+  if (!Array.isArray(written)) return written;
+  const [updated] = written;
   await stampSessionUpdate({
     proposalId: receiptId && undoable ? receiptId : undefined,
     sessionId,

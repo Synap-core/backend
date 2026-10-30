@@ -33,7 +33,10 @@ import {
   SESSION_POST_REFS_MAX,
 } from "@synap-core/types/agents";
 import { PROPOSAL_REJECTION_REASONS } from "@synap-core/types/proposals";
-import { TERMINAL_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
+import {
+  SESSION_STATUSES,
+  TERMINAL_SESSION_STATUSES,
+} from "@synap-core/types/focus-sessions";
 // View types an agent may CREATE — the renderables catalog's creation door
 // (the same list the browser's "New view" chooser offers), never a local enum.
 import {
@@ -2431,6 +2434,12 @@ export const tools = {
               enum: ["active", "paused"],
               description:
                 "New lifecycle status (optional). To CLOSE a session use synap_complete_session — update_session cannot close, since a raw close would orphan a running playbook_run.",
+            },
+            expectedStatus: {
+              type: "string",
+              enum: [...SESSION_STATUSES],
+              description:
+                "With `status`: the status you read the session in (synap_get_session) — send it. Compare-and-set: if it moved meanwhile the call answers status='conflict' with the current status and writes nothing.",
             },
             ...MOVE_HOLD_TOOL_PROPERTIES,
             progress: {
