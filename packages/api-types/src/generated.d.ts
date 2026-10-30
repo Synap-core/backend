@@ -44479,6 +44479,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				success: boolean;
+				rejected: number;
+				rejectedIds: string[];
 			};
 		}>;
 		createDocumentEdit: import("@trpc/server").TRPCMutationProcedure<{

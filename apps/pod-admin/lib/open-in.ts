@@ -274,6 +274,10 @@ function desktopPlaceCover(desktopPath: string): ConsoleCover | undefined {
 /** An object's own ADMIN page in the console, when it has one. */
 function objectCover(objectKind: string, id: string): ConsoleCover | undefined {
   switch (objectKind) {
+    // `synap://open/settings/<section>` names a Settings section; the console
+    // page that does its job, when one does (the same table as `settings`).
+    case "settings":
+      return desktopPlaceCover(`settings/${id}`);
     case "workspace":
       return { target: { page: "space", id }, label: "See this space here" };
     case "agent":
@@ -463,6 +467,79 @@ export function pairExit(podUrl: string, email?: string): Exit | null {
     `synap://pair?${params.toString()}`,
     phoneExit("relay", undefined)
   );
+}
+
+/**
+ * Where a person who has just joined this pod goes next (the invite's Done
+ * screen), most useful first. A client has this pod's console and, when the
+ * company uses one, its own app; the phone is a second way in; the desktop
+ * app is the operator's workbench and not part of a client's offer (decision
+ * 7c832a88), so it is not here.
+ *
+ *   1. `console` — this pod's console home (signed in) or its sign-in.
+ *   2. `app` — each app the company uses on this pod (a pod app with live
+ *      connections, `apps.adminPodApps`), at its own https origin. Only what
+ *      the caller could read: a member cannot list the pod's apps.
+ *   3. `phone` — on a phone, `synap://pair` (`pairExit`: the mobile app opens
+ *      this pod's sign-in, with its install hatch through `placeExit`); off a
+ *      phone, the mobile app's install page.
+ */
+export type JoinedDoor =
+  | { kind: "console"; href: string; signIn: boolean }
+  | { kind: "app"; href: string; name: string }
+  | { kind: "phone"; exit: Exit; opens: "app" | "install" };
+
+/** A pod app as `apps.adminPodApps` lists it (the fields a door reads). */
+export interface JoinedPodApp {
+  client_id: string;
+  name: string;
+  domain: string;
+  live: number;
+}
+
+export function joinedDoors({
+  podUrl,
+  email,
+  signedIn,
+  onPhone,
+  apps = [],
+}: {
+  podUrl: string;
+  email?: string;
+  signedIn: boolean;
+  onPhone: boolean;
+  apps?: readonly JoinedPodApp[];
+}): JoinedDoor[] {
+  const doors: JoinedDoor[] = [
+    {
+      kind: "console",
+      href: signedIn ? "/" : "/login?return=/",
+      signIn: !signedIn,
+    },
+  ];
+  const seen = new Set<string>();
+  for (const app of apps) {
+    if (app.live <= 0) continue;
+    let origin: string;
+    try {
+      origin = new URL(app.client_id).origin;
+    } catch {
+      continue;
+    }
+    // Only a plain https page: `publisherExit` is the one door to an origin
+    // that is not ours.
+    const exit = publisherExit(origin);
+    if (!exit || seen.has(exit.href)) continue;
+    seen.add(exit.href);
+    doors.push({ kind: "app", href: exit.href, name: app.name || app.domain });
+  }
+  const pair = onPhone ? pairExit(podUrl, email) : null;
+  doors.push(
+    pair
+      ? { kind: "phone", exit: pair, opens: "app" }
+      : { kind: "phone", exit: web(MOBILE_FALLBACK.href), opens: "install" }
+  );
+  return doors;
 }
 
 /**

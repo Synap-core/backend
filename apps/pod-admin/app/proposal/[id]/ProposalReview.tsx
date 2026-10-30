@@ -18,6 +18,10 @@ import {
 } from "./ProposalReviewCard";
 import { AfterDecision } from "./ProposalSessionContext";
 import { afterDecisionShown } from "./proposal-session-model";
+import { useConsoleRole } from "../../(admin)/components/side-nav-role";
+import { proposalPageT } from "./copy";
+import { requestReadFailure } from "./request-read-failure";
+import { RequestUnreadable } from "./RequestUnreadable";
 
 const STATUS_COLOR: Record<
   string,
@@ -61,14 +65,20 @@ export function ProposalReview({
      does nothing at all when the app isn't installed, and this page is often
      someone's FIRST contact with Synap — arriving from an email or a CLI
      link — so "nothing happened" is the worst possible outcome here. */
+  /* The desktop app is the operator's workbench, not part of a client's
+     offer (decision 7c832a88): only a pod admin is offered it, as the quiet
+     footer. Everyone decides here. */
+  const role = useConsoleRole();
+  const t = proposalPageT();
   const appExit = openIn({
     kind: "objectInApp",
     objectKind: "proposal",
     id: proposalId,
   });
-  const openInApp = (
-    <ExitLink exit={appExit} label="Open in the Synap desktop app" />
-  );
+  const openInApp =
+    role === "admin" ? (
+      <ExitLink exit={appExit} label={t("openInDesktop")} />
+    ) : undefined;
 
   /* Shared with the other inbound routes — /open, invite, agent approval and
      OAuth consent — so a reader who lands on two of them recognises the
@@ -100,14 +110,15 @@ export function ProposalReview({
   }
 
   const p = query.data;
-  if (query.error || !p) {
+  const failure = requestReadFailure(query.error, !!p);
+  if (failure || !p) {
     return shell(
-      <CardBody className="gap-4 px-7 py-8">
-        <p className="text-[13px] leading-relaxed text-foreground/70">
-          This proposal couldn&apos;t be loaded — it may have been withdrawn, or
-          you may not have access to it.
-        </p>
-        {openInApp}
+      <CardBody className="px-7 py-8">
+        <RequestUnreadable
+          failure={failure}
+          retrying={query.isFetching}
+          onRetry={() => void query.refetch()}
+        />
       </CardBody>
     );
   }

@@ -5,7 +5,6 @@
  */
 
 import type { AppRouter } from "@synap-core/api-types";
-import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
 import {
   presentationFromUiHints,
   resolveEntityMedia,
@@ -14,24 +13,53 @@ import {
 import type { inferRouterInputs } from "@trpc/server";
 import { shortDescription } from "../_lib/object/object-summaries";
 import { BOUNCE_TYPES, HOST_TYPES } from "./open-params";
+import { openT } from "./copy";
 
 /**
- * The bounce card's sentence, DERIVED from `HOST_TYPES` so it cannot keep
- * saying "only entities and views" after a kind joins the web host (it did).
- * Several kinds share one user word (a capability, a skill and a tool are all
- * "Tools"), so the word the bounced kind itself reads as is left out: a tool's
- * card must not say the web shows tools.
+ * What a bounce card says and offers, for this viewer. The card used to say
+ * "The web shows entities, views, rules, sessions, … Open this one in the
+ * Synap app", listing our object kinds and leading with a desktop app a
+ * client does not have (decision 7c832a88).
+ *
+ *   - The object has a console page this viewer may open: that page is the
+ *     door, nothing else is said; the desktop link stays a quiet second for
+ *     the operator.
+ *   - It has none: the card says so plainly. A pod admin (the operator) is
+ *     told it lives in the desktop app and gets the link; anyone else is told
+ *     who can open it, and no link.
  */
-export function bounceSummary(bouncedType: string): string {
-  const own = resolveObjectNounPlural(bouncedType).toLowerCase();
-  const nouns = [
-    ...new Set(HOST_TYPES.map((t) => resolveObjectNounPlural(t).toLowerCase())),
-  ].filter((noun) => noun !== own);
-  const list =
-    nouns.length > 1
-      ? `${nouns.slice(0, -1).join(", ")} and ${nouns[nouns.length - 1]}`
-      : nouns.join("");
-  return `The web shows ${list}. Open this one in the Synap app for the full surface.`;
+export interface BounceCard {
+  summary: string | null;
+  status: string | null;
+  desktop: "primary" | "secondary" | null;
+}
+
+export function bounceCard({
+  consolePage,
+  viewerIsPodAdmin,
+}: {
+  consolePage: boolean;
+  viewerIsPodAdmin: boolean;
+}): BounceCard {
+  const t = openT();
+  if (consolePage) {
+    return {
+      summary: null,
+      status: null,
+      desktop: viewerIsPodAdmin ? "secondary" : null,
+    };
+  }
+  return viewerIsPodAdmin
+    ? {
+        summary: t("bounce.operator"),
+        status: t("bounce.noWebPage"),
+        desktop: "primary",
+      }
+    : {
+        summary: t("bounce.member"),
+        status: t("bounce.noWebPage"),
+        desktop: null,
+      };
 }
 
 /** `diagnose.resolveOpen`'s body (`OpenTarget`, resolve-open-target.ts). */

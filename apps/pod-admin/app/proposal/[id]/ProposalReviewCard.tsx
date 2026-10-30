@@ -584,6 +584,7 @@ function DecisionButtons({
   const decision = useProposalDecision(p.id, onDecided, {
     onRejected: () => setRejecting(false),
     expectedRevision: renderedRevision(p),
+    revertable: (p as { revertable?: boolean | null }).revertable,
   });
   const { busy } = decision;
 

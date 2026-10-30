@@ -8,6 +8,7 @@ import {
   PHONE_UNAVAILABLE_NOTE,
   objectWebAlternative,
   publisherExit,
+  joinedDoors,
 } from "./open-in";
 
 const ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
@@ -392,6 +393,20 @@ describe("objectWebAlternative — an object's console page, for this viewer", (
     expect(objectWebAlternative("agent", ID, "member")).toBeUndefined();
   });
 
+  it("a Settings section's link points at the console page that does its job", () => {
+    expect(objectWebAlternative("settings", "developer", "admin")).toEqual({
+      href: "/keys",
+      label: "Keys",
+    });
+    expect(objectWebAlternative("settings", "vault", "member")).toEqual({
+      href: "/my-vault",
+      label: "My vault",
+    });
+    expect(
+      objectWebAlternative("settings", "subscription", "admin")
+    ).toBeUndefined();
+  });
+
   it("is nothing for a kind with no console page", () => {
     expect(objectWebAlternative("cell", ID, "admin")).toBeUndefined();
   });
@@ -418,5 +433,82 @@ describe("publisherExit — a showcase listing's own page", () => {
     ]) {
       expect(publisherExit(bad)).toBeNull();
     }
+  });
+});
+
+describe("joinedDoors — where a person who just joined goes next", () => {
+  const POD = "https://pod.acme.example";
+  const CRM = {
+    client_id: "https://crm.acme.example/oauth/client.json",
+    name: "Acme CRM",
+    domain: "crm.acme.example",
+    live: 3,
+  };
+
+  it("leads with the console, then the company's apps, then the phone; never the desktop app", () => {
+    const doors = joinedDoors({
+      podUrl: POD,
+      email: "lea@acme.example",
+      signedIn: true,
+      onPhone: false,
+      apps: [CRM],
+    });
+    expect(doors.map((d) => d.kind)).toEqual(["console", "app", "phone"]);
+    expect(doors[0]).toEqual({ kind: "console", href: "/", signIn: false });
+    expect(doors[1]).toEqual({
+      kind: "app",
+      href: "https://crm.acme.example/",
+      name: "Acme CRM",
+    });
+    expect(JSON.stringify(doors)).not.toMatch(/download\/browser|desktop/);
+  });
+
+  it("off a phone, the phone door is the mobile app's install page, not synap://", () => {
+    const phone = joinedDoors({
+      podUrl: POD,
+      signedIn: true,
+      onPhone: false,
+    }).at(-1);
+    expect(phone).toMatchObject({ kind: "phone", opens: "install" });
+    expect(phone?.kind === "phone" && phone.exit).toEqual({
+      href: MOBILE_FALLBACK.href,
+      isDesktopLink: false,
+    });
+  });
+
+  it("on a phone, it opens this pod's sign-in in the mobile app, with its install hatch", () => {
+    const phone = joinedDoors({
+      podUrl: POD,
+      email: "lea@acme.example",
+      signedIn: false,
+      onPhone: true,
+    }).at(-1);
+    expect(phone).toMatchObject({ kind: "phone", opens: "app" });
+    if (phone?.kind !== "phone") throw new Error("no phone door");
+    expect(phone.exit.href).toMatch(/^synap:\/\/pair\?v=1&pod=/);
+    const placed = placeExit(phone.exit, true, "member");
+    expect(placed.fallback).toEqual(MOBILE_FALLBACK);
+  });
+
+  it("not signed in, the console door is its sign-in", () => {
+    expect(
+      joinedDoors({ podUrl: POD, signedIn: false, onPhone: false })[0]
+    ).toEqual({ kind: "console", href: "/login?return=/", signIn: true });
+  });
+
+  it("an app with no live connection, or not on plain https, is not a door; one door per origin", () => {
+    const doors = joinedDoors({
+      podUrl: POD,
+      signedIn: true,
+      onPhone: false,
+      apps: [
+        CRM,
+        { ...CRM, client_id: "https://crm.acme.example/other.json" },
+        { ...CRM, client_id: "https://old.acme.example/c.json", live: 0 },
+        { ...CRM, client_id: "http://plain.acme.example/c.json" },
+        { ...CRM, client_id: "not a url" },
+      ],
+    });
+    expect(doors.filter((d) => d.kind === "app")).toHaveLength(1);
   });
 });
