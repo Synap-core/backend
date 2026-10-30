@@ -1131,7 +1131,7 @@ jobs:
       - name: Checkout browser
         id: co-browser
         continue-on-error: true
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: Synap-core/browser
           token: ${{ steps.app-token.outputs.token || secrets.CROSS_REPO_TOKEN }}
@@ -1140,7 +1140,7 @@ jobs:
       - name: Checkout relay-app
         id: co-relay
         continue-on-error: true
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: Synap-core/relay-app
           token: ${{ steps.app-token.outputs.token || secrets.CROSS_REPO_TOKEN }}

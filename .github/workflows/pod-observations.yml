@@ -64,7 +64,7 @@ jobs:
       # Only the script. A pull_request event checks out the PR head (its
       # merge ref may be gone once merged); a workflow_run checks out the
       # default branch, never the run's code.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.repository.default_branch }}
           sparse-checkout: scripts/pod-observation.mjs
