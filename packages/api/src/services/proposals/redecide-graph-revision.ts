@@ -60,7 +60,6 @@ import {
 import {
   buildMaterializedRecord,
   stampMaterialized,
-  type CompleteMaterializedRecord,
 } from "./stamp-materialized.js";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 
@@ -70,15 +69,8 @@ const logger = createLogger({ module: "redecide-graph-revision" });
 export type GraphRedecision =
   /** Still waits for a person; `reason` is why (the stored code when a floor held). */
   | { outcome: "pending"; reason: string | null }
-  /**
-   * Every member executes now: applied, the row is its `auto_approved` receipt.
-   * `materialized` is the record stamped on it (what the revise door reports).
-   */
-  | {
-      outcome: "applied";
-      proposalId: string;
-      materialized: CompleteMaterializedRecord;
-    }
+  /** Every member executes now: applied, the row is its `auto_approved` receipt. */
+  | { outcome: "applied"; proposalId: string }
   /** The claim matched nothing: someone decided or revised it first. */
   | { outcome: "superseded" }
   /** Claimed but did not materialize: the row is `approval_failed` with why. */
@@ -348,11 +340,10 @@ async function redecide(input: {
     );
     return { outcome: "failed", proposalId };
   }
-  const record = buildMaterializedRecord(materialized);
   try {
     await stampMaterialized({
       proposalId: claimed.id,
-      record,
+      record: buildMaterializedRecord(materialized),
       baseData: receipt.data,
     });
   } catch (err) {
@@ -361,5 +352,5 @@ async function redecide(input: {
       "re-decide: receipt materialized-ids update failed (graph applied)"
     );
   }
-  return { outcome: "applied", proposalId: claimed.id, materialized: record };
+  return { outcome: "applied", proposalId: claimed.id };
 }

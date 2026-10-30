@@ -16,7 +16,6 @@ import { projectProposalRowForViewer } from "../../../proposals/failure-projecti
 import { proposalFateFields } from "../../../../services/proposals/proposal-fate.js";
 import { PROPOSAL_WAIT_REASONS } from "@synap-core/types/proposals/fate";
 import { uuidQueryParam } from "./_openapi.js";
-import type { GraphRedecision } from "../../../../services/proposals/redecide-graph-revision.js";
 
 /**
  * The selectable `status` filters for a proposal listing — the SSOT every
@@ -426,7 +425,7 @@ const BY_OP_ID_KEYS = [
  * approval there is no record, so the key is absent — never a guessed id.
  * Bounded by {@link PROPOSAL_MATERIALIZED_IDS_MAX}.
  */
-export function materializedIdsOf(
+function materializedIdsOf(
   data: Record<string, unknown>
 ): ProposalBasic["materializedIds"] | undefined {
   const byOp = (data.materialized as { byOp?: unknown } | undefined)?.byOp;
@@ -448,53 +447,6 @@ export function materializedIdsOf(
     count++;
   }
   return count > 0 ? out : undefined;
-}
-
-/**
- * What a revise door answers after the revision committed: the proposal's
- * status now, and one plain sentence. An agent's own graph revision is
- * decided again (`redecideOwnGraphRevision`) and may have been APPLIED; a
- * bare `success: true` let the agent believe it still waited for a person.
- * Built from the re-decision the revise core returns, never a second read.
- * Shared by the MCP and Hub revise doors so they say the same thing.
- */
-export function revisionReplyFields(
-  redecision: GraphRedecision | null | undefined
-): {
-  status: (typeof PROPOSAL_ROW_STATUSES)[number] | null;
-  message: string;
-  materializedIds?: ProposalBasic["materializedIds"];
-} {
-  switch (redecision?.outcome) {
-    case "applied": {
-      const materializedIds = materializedIdsOf({
-        materialized: redecision.materialized,
-      });
-      return {
-        status: "auto_approved",
-        message:
-          "Your revision no longer needed a review, so it was applied: the proposal is now its receipt.",
-        ...(materializedIds ? { materializedIds } : {}),
-      };
-    }
-    case "failed":
-      return {
-        status: "approval_failed",
-        message:
-          "Your revision no longer needed a review, but applying it failed: read the proposal for why, then revise it again.",
-      };
-    case "superseded":
-      return {
-        status: null,
-        message:
-          "Revised, but someone decided or revised this proposal at the same moment: read it to see where it stands.",
-      };
-    default:
-      return {
-        status: "pending",
-        message: "Revised. It still waits for a person's review.",
-      };
-  }
 }
 
 export function toProposalBasic(row: Record<string, unknown>): ProposalBasic {

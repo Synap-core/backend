@@ -114,7 +114,6 @@ export const knowledgeRouter = router({
         focus,
         limit: input.limit,
         catalog,
-        detail: input.detail,
       });
 
       // Pending count is forwarded so a query that matches the caller's own

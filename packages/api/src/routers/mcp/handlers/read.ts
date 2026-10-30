@@ -133,7 +133,6 @@ export const readHandlers: McpHandlerMap = {
       limit: (args.limit as number) || undefined,
       catalog,
       compare: compare || undefined,
-      detail,
     });
 
     // A/B DIAGNOSTIC — when `compare` is set, return the ranker comparison

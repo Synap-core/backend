@@ -21,7 +21,6 @@ import { redactUnreadableSessionTargets } from "../../services/proposals/session
 import { mergeProposalRevision } from "../../services/proposals/proposals-service.js";
 import {
   PROPOSAL_STATUS_FILTERS,
-  revisionReplyFields,
   withProposalClass,
   type ProposalStatusFilter,
 } from "./rest/_codecs/proposal.js";
@@ -238,7 +237,7 @@ export const proposalsRouter = router({
       // (document / composite / capability.* / workspace/*) still merge at the
       // top level. The core row-locks + asserts PENDING (CONFLICT, not silent
       // success) and appends a `revisionHistory` entry.
-      const redecision = await mergeProposalRevision({
+      await mergeProposalRevision({
         proposalId: input.proposalId,
         actorId: ctx.userId as string,
         // The acting agent: the author rung when it filed this proposal, and
@@ -252,12 +251,10 @@ export const proposalsRouter = router({
         expectedRevision: input.expectedRevision,
       });
 
-      // Same answer as `synap_revise_proposal`: an agent's own graph revision
-      // is decided again and may have been applied.
       return {
         success: true,
         proposalId: input.proposalId,
-        ...revisionReplyFields(redecision),
+        message: "Proposal updated successfully",
       };
     }),
 });

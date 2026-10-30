@@ -195,16 +195,6 @@ const PROPOSAL_DUPLICATE_HINT =
   "An identical proposal is already pending review — this did NOT create a new one. Do not re-propose; give the user this link to the existing proposal.";
 
 /**
- * The hint for the OWN-TWIN case (D3, #491): what was sent differs from the
- * returned proposal, but every new entity already waits in it, in the
- * caller's own queue. "Identical" would be false there.
- */
-function ownTwinDuplicateHint(link: unknown): string {
-  const where = typeof link === "string" && link ? `${link} ` : "";
-  return `Your pending proposal ${where}already holds this; it was returned instead of filing a second one.`;
-}
-
-/**
  * Text a person other than the caller, or the outside world, wrote: a
  * teammate's document, an external channel message, an answer built from
  * pages kept in the Library. A handler marks it with {@link untrusted}; `ok()`
@@ -269,9 +259,7 @@ export function ok(data: unknown): CallToolResult {
       ...p,
       ...(deduped ? { status: "duplicate" } : {}),
       hint: deduped
-        ? p.dedupedAs === "own_pending_twin"
-          ? ownTwinDuplicateHint(p.link)
-          : PROPOSAL_DUPLICATE_HINT
+        ? PROPOSAL_DUPLICATE_HINT
         : "hint" in p
           ? p.hint
           : PROPOSAL_REINFORCEMENT_HINT,

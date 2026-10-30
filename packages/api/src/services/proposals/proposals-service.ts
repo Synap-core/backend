@@ -35,7 +35,6 @@ import {
   isNestedEnvelope,
 } from "@synap-core/types/proposals";
 import type { ProposalStatusFilter } from "../../routers/hub-protocol/rest/_codecs/proposal.js";
-import type { GraphRedecision } from "./redecide-graph-revision.js";
 import { ownAgentUserFilter } from "../agent-identity-service.js";
 import {
   reviewPackageOfRow,
@@ -674,14 +673,10 @@ export interface MergeProposalRevisionParams {
  * or concurrently-flipped proposal throws CONFLICT — never a silent no-op that
  * would drop the reviser's edits while approve materializes the original), then
  * writes the merged envelope + appended `revisionHistory` atomically.
- *
- * Returns what the re-decision of an agent's own graph revision did (S4), so
- * a revise door can say it; `null` when nothing was re-decided (the row then
- * waits as revised).
  */
 export async function mergeProposalRevision(
   params: MergeProposalRevisionParams
-): Promise<GraphRedecision | null> {
+): Promise<void> {
   // ── Composite / plan revisions are RE-VALIDATED ─────────────────────────
   // A revision that replaces `operations` runs the SAME preflight a submit
   // runs (properties, reserved kinds, relation types, plan refs / cycles /
@@ -965,10 +960,10 @@ export async function mergeProposalRevision(
 
   // AFTER the commit, never inside the lock: the re-decision reads through
   // the shared pool, and it never throws (a failure leaves it pending).
-  if (!redecide) return null;
+  if (!redecide) return;
   const { redecideOwnGraphRevision } =
     await import("./redecide-graph-revision.js");
-  return redecideOwnGraphRevision({
+  await redecideOwnGraphRevision({
     proposalId: params.proposalId,
     ...redecide,
   });
@@ -1180,8 +1175,8 @@ export async function reviseProposal(params: {
   actorId?: string | null;
   /** The acting AGENT principal, enabling the author rung (see the core). */
   actingAgentUserId?: string | null;
-}): Promise<GraphRedecision | null> {
-  return mergeProposalRevision({
+}): Promise<void> {
+  await mergeProposalRevision({
     proposalId: params.proposalId,
     summary: params.summary,
     reasoning: params.reasoning,

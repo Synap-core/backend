@@ -502,12 +502,6 @@ export interface SubmitCaptureGraphResult {
   /** True when this call returned a PRIOR proposal instead of filing one. */
   deduped?: true;
   /**
-   * Set when that prior proposal is the caller's own pending TWIN (D3): a
-   * different payload whose entities already wait there, not an identical
-   * re-send. The MCP door's hint says which (`ok()` in mcp/handlers/shared.ts).
-   */
-  dedupedAs?: "own_pending_twin";
-  /**
    * How the graph was placed when the caller gave no workspace (D14): each
    * entity resolves on its OWN kind and roles; unanimous → placed, split →
    * abstain (`workspaceId` null) with every workspace the entities named in
@@ -1382,11 +1376,7 @@ export async function submitCaptureGraph(
         );
       const first = twins.find((t) => t.id === twinIds[0]);
       if (first && twins.length === twinIds.length) {
-        return {
-          ...priorProposalReceipt(first),
-          duplicateCheck,
-          dedupedAs: "own_pending_twin",
-        };
+        return { ...priorProposalReceipt(first), duplicateCheck };
       }
     } catch (err) {
       logger.warn(

@@ -1164,7 +1164,6 @@ export function registerKnowledgeRoutes(app: HubHono): void {
         focus,
         limit: body.limit,
         catalog,
-        detail: body.detail,
       });
 
       // Build context + sources, then synthesize via IS. Pass the pending count
