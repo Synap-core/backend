@@ -22,6 +22,12 @@ export const en = {
   "toolRun.empty": "empty",
   "toolRun.yes": "Yes",
   "toolRun.no": "No",
+  "read.notFound": "It may have been withdrawn, or the link is out of date.",
+  "read.forbidden":
+    "You’re signed in, but this request isn’t one you can see. Ask the person who sent you the link.",
+  "read.failed": "It didn’t load. Check your connection and try again.",
+  "read.retry": "Try again",
+  openInDesktop: "Open in the Synap desktop app",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -38,6 +44,14 @@ export const fr: Catalog<typeof en> = {
   "toolRun.empty": "vide",
   "toolRun.yes": "Oui",
   "toolRun.no": "Non",
+  "read.notFound":
+    "Elle a peut-être été retirée, ou le lien n’est plus à jour.",
+  "read.forbidden":
+    "Votre session est ouverte, mais cette demande ne vous est pas visible. Demandez à la personne qui vous a envoyé le lien.",
+  "read.failed":
+    "Elle ne s’est pas chargée. Vérifiez votre connexion et réessayez.",
+  "read.retry": "Réessayer",
+  openInDesktop: "Ouvrir dans l’application Synap pour ordinateur",
 };
 
 /** The page's translator, in the ambient catalog locale. */

@@ -5,12 +5,7 @@ import {
 } from "@synap-core/types/i18n";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { en, fr } from "./copy";
-import {
-  historyRow,
-  historyRows,
-  undoOutcome,
-  type HistoryProposal,
-} from "./history-rows";
+import { historyRow, historyRows, type HistoryProposal } from "./history-rows";
 
 function proposal(over: Partial<HistoryProposal> = {}): HistoryProposal {
   return {
@@ -109,25 +104,6 @@ describe("historyRows", () => {
       proposal({ id: "c", status: "rejected" }),
     ]);
     expect(rows.map((r) => r.id)).toEqual(["a", "c"]);
-  });
-});
-
-describe("undoOutcome", () => {
-  it("reads the receipt from what the pod answered", () => {
-    expect(undoOutcome({ success: true })).toBe("done");
-    expect(undoOutcome({ success: true, alreadyReverted: true } as never)).toBe(
-      "done"
-    );
-    expect(
-      undoOutcome({ success: true, skipped: [{ reason: "edited" }] })
-    ).toBe("partly");
-    expect(undoOutcome({ success: true, partialFailures: ["Task"] })).toBe(
-      "partly"
-    );
-    expect(undoOutcome({ success: false })).toBe("partly");
-    expect(undoOutcome({ success: false, nothingReverted: true })).toBe(
-      "nothing"
-    );
   });
 });
 

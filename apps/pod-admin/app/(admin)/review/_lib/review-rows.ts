@@ -704,7 +704,9 @@ export interface BatchItemResult {
 
 /**
  * A batch approve's outcome, per ROW: a row is approved when every member
- * landed; a failed member names its row's title and the pod's own reason.
+ * landed; a failed member names its row's title and the pod's own reason. A
+ * member the answer does not mention did not land: it is never counted as
+ * approved.
  */
 export function summarizeBatch(
   rows: readonly ReviewRow[],
@@ -715,8 +717,8 @@ export function summarizeBatch(
   const failures: Array<{ title: string; error: string }> = [];
   for (const row of rows) {
     const failed = (row.batchIds ?? [])
-      .map((id) => byId.get(id))
-      .find((r) => r && !r.success);
+      .map((id) => byId.get(id) ?? { proposalId: id, success: false })
+      .find((r) => !r.success);
     if (failed) {
       failures.push({
         title: row.title,

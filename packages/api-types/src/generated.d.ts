@@ -44518,6 +44518,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				rejected: number;
+				rejectedIds: string[];
 				success: boolean;
 			};
 		}>;
