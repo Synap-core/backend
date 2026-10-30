@@ -36,6 +36,7 @@ import {
   setSessionStatus,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { workClockIn } from "@synap-core/types/work-clock";
 import {
   closeSessionViaDoor,
   staleStoppedSessionViaDoor,
@@ -64,7 +65,7 @@ export const FOCUS_SESSION_REAPER_QUEUE = "focus-session-reaper";
 export const FOCUS_SESSION_REAPER_CRON = "0 * * * *"; // every hour
 
 /** An `active`/`paused` session untouched this long is presumed abandoned. */
-export const REAPER_STALE_HOURS = 24;
+export const REAPER_STALE_HOURS = workClockIn("stale", "hours");
 
 /**
  * The staleness predicate, exported so a test can lock its SHAPE: it must key

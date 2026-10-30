@@ -26,6 +26,7 @@ import {
 import { resolveServiceName } from "../service-marks/index.js";
 import type { SessionPostIntent } from "./session-post.js";
 import { resolveUnitState, type UnitStateView } from "../units/state.js";
+import { workClockIn } from "../work-clock/index.js";
 
 /**
  * The one command that connects a person's own agents (Claude Code, Codex,
@@ -112,7 +113,7 @@ export function resolveAgentConnection(
  * A week is one working cycle — an agent a person uses at all calls at least
  * that often, so older silence is worth noticing, not yet an error.
  */
-export const AGENT_STALE_AFTER_DAYS = 7;
+export const AGENT_STALE_AFTER_DAYS = workClockIn("stuck", "days");
 
 /** The slice of an `agentUsers.list` row the mark reads. */
 export interface AgentMarkRowLike extends AgentPresenceLike {

@@ -18,9 +18,14 @@
  * fact; the empty cron is a placeholder, never a fabricated cadence
  * (`describeCadence('')` returns `''`, which is falsy).
  *
- * **`stale` maps to `unreadable`, not to working.** The reaper stamps `stale`
- * because nothing could be observed happening. `unreadable` yields `unmeasured`,
- * the honest reading; the default arm would have claimed `working`.
+ * **`stale` reads as paused, never working and never unmeasured.** The reaper
+ * stamps `stale` on a session quiet for the ladder's `stale` rung
+ * (`WORK_CLOCK.stale`, `@synap-core/types/work-clock`). That is a measured
+ * fact, not an unknown: the session lifecycle files it under the `paused`
+ * category (`SESSION_STATUS_DECLARATION`), so it is handed `idle` (the quiet
+ * `paused` state) like every suspended session (`isSuspendedSessionStatus`).
+ * It once mapped to `unreadable` (`unmeasured`), which made the phone draw a
+ * reaped session as "could not read" while the pod filed it as paused.
  *
  * **"Working" needs a LIVE fact (founder decision D1, 2026-10-04).** An open
  * lifecycle (`active` / `forming`) is not "an agent is working". When the
@@ -37,7 +42,10 @@
  * unless something live outranks it), a number = the count.
  */
 
-import { isTerminalSessionStatus } from "../focus-sessions/statuses.js";
+import {
+  isSuspendedSessionStatus,
+  isTerminalSessionStatus,
+} from "../focus-sessions/statuses.js";
 import { classifyDependencyBlocker } from "../connections/dependency.js";
 import {
   isSessionWorkingNow,
@@ -136,9 +144,11 @@ export function sessionUnitInput(facts: SessionUnitFacts): UnitStateInput {
     // the card and the rule's Working fold cannot fork; the D1 liveness for
     // an older pod; never the lifecycle reading.
     agentAtWork: open && agentAtWork(facts.live, facts.now ?? Date.now()),
-    idle: open && !working && !liveUnread,
+    idle:
+      isSuspendedSessionStatus(facts.status) ||
+      (open && !working && !liveUnread),
     schedule: cadence,
-    unreadable: facts.status === "stale" || (open && liveUnread),
+    unreadable: open && liveUnread,
     progress:
       typeof facts.progress === "number"
         ? { done: Math.max(0, Math.min(100, facts.progress)), total: 100 }
