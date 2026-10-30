@@ -276,6 +276,8 @@ describe("a graph whose twin is the caller's own pending proposal (D3)", () => {
     expect(pending).not.toHaveBeenCalled();
     expect(receipt).not.toHaveBeenCalled();
     expect(result.deduped).toBe(true);
+    // A twin, not an identical re-send: the MCP hint says which (item 3).
+    expect(result.dedupedAs).toBe("own_pending_twin");
     expect(result.proposalId).toBe(MY_PENDING_ADA);
     expect(result.applied).toBe(false);
     expect(result.entityCount).toBe(1);

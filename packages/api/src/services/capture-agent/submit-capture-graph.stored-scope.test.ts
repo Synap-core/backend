@@ -113,6 +113,8 @@ describe("submitCaptureGraph — the receipt reports the STORED row", () => {
     expect(insert).not.toHaveBeenCalled();
     expect(result.proposalId).toBe("prop-prior");
     expect(result.deduped).toBe(true);
+    // An identical re-send, not an own pending twin (item 3).
+    expect(result.dedupedAs).toBeUndefined();
     expect(result.scope).toEqual({
       workspaceId: null,
       projectId: "P-PRIOR",
