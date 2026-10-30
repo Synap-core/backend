@@ -15,17 +15,6 @@ export const en = {
   "row.decidedBy": "Decided by {who}",
   "row.decidedByRule": "Approved by a standing rule",
   "row.noUndo": "Can’t be undone",
-  undo: "Undo",
-  "undo.done": "Decision undone",
-  "undo.doneHint":
-    "The change was taken back. The request waits for you again.",
-  "undo.partly": "Partly undone",
-  "undo.partlyHint": "Some of it changed since the decision, so it was kept.",
-  "undo.nothing": "Nothing was undone",
-  "undo.nothingHint": "It changed since the decision, so it was kept.",
-  "undo.permanentHint": "What was already sent stays sent.",
-  "undo.failed": "Couldn’t undo this decision",
-  "undo.failedHint": "Nothing changed. Try again.",
   showAll: "{n, plural, one {Show # decision} other {Show all # decisions}}",
   showOlder: "Show older decisions",
   olderFailed: "Couldn’t load older decisions.",
@@ -42,19 +31,6 @@ export const fr: Catalog<typeof en> = {
   "row.decidedBy": "Décidé par {who}",
   "row.decidedByRule": "Approuvé par une règle permanente",
   "row.noUndo": "Ne peut pas être annulé",
-  undo: "Annuler",
-  "undo.done": "Décision annulée",
-  "undo.doneHint":
-    "La modification a été retirée. La demande vous attend de nouveau.",
-  "undo.partly": "Annulée en partie",
-  "undo.partlyHint":
-    "Une partie a changé depuis la décision, elle a donc été gardée.",
-  "undo.nothing": "Rien n’a été annulé",
-  "undo.nothingHint":
-    "Elle a changé depuis la décision, elle a donc été gardée.",
-  "undo.permanentHint": "Ce qui a déjà été envoyé le reste.",
-  "undo.failed": "Impossible d’annuler cette décision",
-  "undo.failedHint": "Rien n’a changé. Réessayez.",
   showAll:
     "{n, plural, one {Afficher la décision} other {Afficher les # décisions}}",
   showOlder: "Afficher les décisions plus anciennes",

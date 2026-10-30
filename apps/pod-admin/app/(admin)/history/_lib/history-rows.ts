@@ -145,32 +145,3 @@ export function historyRow(p: HistoryProposal): HistoryRow {
 export function historyRows(items: readonly HistoryProposal[]): HistoryRow[] {
   return items.filter((p) => p.status !== "pending").map(historyRow);
 }
-
-/** What `proposals.revert` answered, read structurally. */
-export interface RevertAnswer {
-  success?: boolean;
-  nothingReverted?: boolean;
-  partialFailures?: readonly string[];
-  skipped?: readonly unknown[];
-  /** Something it did outside cannot be taken back (a message sent). */
-  permanent?: unknown;
-}
-
-/**
- * The receipt of an Undo, from the pod's answer (never from the click):
- * `nothing` when nothing was taken back, `partly` when some of it was kept
- * (changed since) or failed, else `done`.
- */
-export function undoOutcome(
-  answer: RevertAnswer
-): "done" | "partly" | "nothing" {
-  if (answer.nothingReverted) return "nothing";
-  if (
-    answer.success === false ||
-    (answer.partialFailures?.length ?? 0) > 0 ||
-    (answer.skipped?.length ?? 0) > 0
-  ) {
-    return "partly";
-  }
-  return "done";
-}
