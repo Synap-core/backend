@@ -86,6 +86,18 @@ export interface PackageUpdateList {
   }>;
 }
 
+/** One pending change to existing records a space update would run. */
+export interface PackageDataChange {
+  /** The op key `acceptDataChanges` names. */
+  id: string;
+  /** One plain sentence. */
+  sentence: string;
+  /** How many records it changes; null when the count failed (never 0). */
+  affected: number | null;
+  /** Never run by an update: an operator step. */
+  destructive: boolean;
+}
+
 /** One compared field of one installed row. */
 export interface PackageUpdateField {
   /** The row field name (`body`, `description`, `flowDefinition`, …). */
@@ -124,7 +136,18 @@ export interface PackageUpdatePlan {
     name: string;
     fields: PackageUpdateField[];
   }>;
-  dataChanges?: { count: number; sentences: string[]; needsPodAdmin: boolean };
+  /**
+   * A space update's changes to existing records (the conversion engine's
+   * pending ops, as `/packages/preflight` reports them). The person agrees by
+   * sending each consentable item's `id` in `acceptDataChanges`. A
+   * `destructive` item is never run by an update: it is an operator step on
+   * pod admin (`needsPodAdmin`).
+   */
+  dataChanges?: {
+    count: number;
+    items: PackageDataChange[];
+    needsPodAdmin: boolean;
+  };
   /**
    * The choice the pod recommends per `both` field, keyed `<rowId>:<field>`:
    * `catalog` when the pod's edit is already inside the catalog's text,
