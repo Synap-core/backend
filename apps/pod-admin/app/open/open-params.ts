@@ -41,6 +41,7 @@ export const BOUNCE_TYPES = [
   "settings",
   "skill",
   "tool",
+  "track",
 ] as const;
 export type BounceType = (typeof BOUNCE_TYPES)[number];
 
