@@ -4,7 +4,9 @@
  * The same read as tRPC `workRelease.get` and MCP `synap_get_work_release`
  * (`services/dev-loop/work-release.ts`, folded by `foldWorkRelease`). An agent
  * door: the sessions are read owner-only (`rosterReadFor`), and a
- * workspace-bound key reads only the facts of its own workspace.
+ * workspace-bound key reads only the facts of its own workspace. A key pinned
+ * to spaces (a pod app) gets the read narrowed to its grant
+ * (`workReleaseReach`): the parts it does not reach say `withheld`.
  */
 
 import { z } from "@hono/zod-openapi";
@@ -20,6 +22,7 @@ import {
   type HubHono,
 } from "./_shared.js";
 import { readWorkRelease } from "../../../services/dev-loop/work-release.js";
+import { WORK_RELEASE_SOURCE_STATES } from "@synap-core/types/work-release";
 
 const BlockRefWireSchema = z.union([
   z.object({
@@ -35,9 +38,9 @@ const WorkReleaseWireSchema = z
   .object({
     generatedAt: z.string(),
     sources: z.object({
-      snapshots: z.enum(["ok", "stale", "missing"]),
-      sessions: z.enum(["ok", "unavailable"]),
-      holders: z.enum(["ok", "unavailable"]),
+      snapshots: z.enum(WORK_RELEASE_SOURCE_STATES.snapshots),
+      sessions: z.enum(WORK_RELEASE_SOURCE_STATES.sessions),
+      holders: z.enum(WORK_RELEASE_SOURCE_STATES.holders),
     }),
     /** Per repo: main health, what is live, when it was observed. */
     repos: z.array(z.object({}).passthrough()),
@@ -54,6 +57,14 @@ const WorkReleaseWireSchema = z
         })
         .passthrough()
     ),
+    /** Present only when the key's grant narrowed the read. */
+    narrowed: z
+      .object({
+        snapshotSpaces: z.array(z.string()),
+        withheld: z.array(z.enum(["snapshots", "sessions", "holders"])),
+        reason: z.string(),
+      })
+      .optional(),
   })
   .openapi("WorkRelease");
 
@@ -72,7 +83,12 @@ export function registerWorkReleaseRoutes(app: HubHono): void {
       "whether that session is working now, and the blockers ranked by how " +
       "much waits behind them transitively. `sources` says which read was " +
       "stale, missing or failed: a failed read is `unavailable`, never an " +
-      "empty list. A workspace-bound key reads its own workspace's facts.",
+      "empty list. A workspace-bound key reads its own workspace's facts. " +
+      "A key pinned to spaces (a pod app) reads the snapshots recorded in " +
+      "those spaces when it reads `dev` events (`event.dev.read`), the " +
+      "sessions its `session` grant reaches, and never the holders: each " +
+      "part it does not reach is `withheld` in `sources`, and `narrowed` " +
+      "says what was read.",
     responses: {
       200: { description: "Work release", schema: WorkReleaseWireSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
