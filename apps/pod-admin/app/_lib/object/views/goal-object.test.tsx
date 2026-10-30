@@ -42,7 +42,9 @@ vi.mock("../../../../lib/trpc", () => {
         reopen: mutation,
       },
       users: { me: query(() => ({ id: h.viewerId })) },
-      projects: { get: query(() => ({ id: PROJECT, name: "Synap" })) },
+      projects: {
+        get: query(() => ({ project: { id: PROJECT, name: "Synap" } })),
+      },
       focusSessions: {
         list: query(() => [
           {

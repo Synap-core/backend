@@ -186,7 +186,7 @@ export function GoalObject({ id, frame }: { id: string; frame: ObjectFrame }) {
     );
 
   const header = view.header;
-  const projectName = project.data?.name ?? null;
+  const projectName = project.data?.project.name ?? null;
   const plainMoves = view.moves.filter(
     (m): m is Extract<GoalStatusMove, { kind: "move" }> => m.kind === "move"
   );
