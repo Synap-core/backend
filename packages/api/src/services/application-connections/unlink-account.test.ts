@@ -10,24 +10,19 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@synap/auth", async (importOriginal) => ({
+  // The one pod-held-factor rule stays real; Kratos admin writes are stubbed.
+  ...(await importOriginal<typeof import("@synap/auth")>()),
   kratosAdmin: {},
-  // The one pod-held-factor rule stays real.
-  accountHasPodHeldFactor: (
-    await importOriginal<typeof import("@synap/auth")>()
-  ).accountHasPodHeldFactor,
 }));
 vi.mock("../../utils/workspace-role.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getPodAdminRole: vi.fn(),
 }));
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   db: {},
   eq: vi.fn(),
-  federatedApplicationConnections: {},
-  podSettings: {},
-  trustedIssuers: {},
   unlinkFederatedIdentity: vi.fn(),
-  users: {},
 }));
 
 import {

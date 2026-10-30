@@ -76,10 +76,16 @@ vi.mock("@synap/database/person-devices", () => ({
 vi.mock("../services/application-connections/invite-consent.js", () => ({
   approveByInviteIfConsented: h.consent,
 }));
-vi.mock("../services/application-connections/unlink-account.js", () => ({
-  unlinkConnectionAccount: h.unlink,
-  unlinkReach: vi.fn(),
-}));
+vi.mock(
+  "../services/application-connections/unlink-account.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../services/application-connections/unlink-account.js")
+    >()),
+    unlinkConnectionAccount: h.unlink,
+    unlinkReach: vi.fn(),
+  })
+);
 
 import { applicationConnectionsRouter } from "./application-connections.js";
 import { requesterAccountView } from "../utils/application-connection.js";
