@@ -137,8 +137,10 @@ export function outstandingSlotExistsIn(
   )`;
 }
 
+// Never NULL: a slot with no kind or no url must read "not a PR", or the
+// `NOT (…)` below is NULL and the slot silently drops out of NOT EXISTS.
 const PULL_REQUEST_SLOT_SQL = drizzleSql.raw(
-  `slot->>'kind' = 'pull_request' AND (slot->'ref'->>'url') ~ '${PULL_REQUEST_URL_PATTERN}'`
+  `coalesce(slot->>'kind' = 'pull_request' AND (slot->'ref'->>'url') ~ '${PULL_REQUEST_URL_PATTERN}', false)`
 );
 
 /**
