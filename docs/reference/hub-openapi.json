@@ -12715,7 +12715,7 @@
                             },
                             "executionMode": {
                               "type": "string",
-                              "enum": ["sync", "async"]
+                              "enum": ["sync", "async", "box"]
                             },
                             "timeoutSeconds": {
                               "type": "number",
