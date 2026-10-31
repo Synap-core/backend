@@ -115,7 +115,7 @@ async function deployApproval(sessionId: string, sha: string, ago: number) {
   const at = minutesAgo(ago).toISOString();
   await q(
     `insert into proposals (id, target_type, target_id, proposal_type, data, status, session_id, created_by, reviewed_by, reviewed_at, created_at, updated_at)
-     values ($1, 'focus_session', $2, 'dev.deploy_approval', $3::jsonb, 'approved', $2, $4, $4, $5, $5, $5)`,
+     values ($1, 'focus_session', $2, 'dev.deploy_approval', $3::jsonb, 'approved', $6, $4, $4, $5, $5, $5)`,
     [
       randomUUID(),
       sessionId,
@@ -131,6 +131,7 @@ async function deployApproval(sessionId: string, sha: string, ago: number) {
       }),
       OWNER,
       at,
+      sessionId,
     ]
   );
 }
