@@ -93,6 +93,47 @@ describe("observationFactKey", () => {
     );
   });
 
+  it("a run's start is one fact per run and attempt; it never merges with its finish", () => {
+    const base = {
+      repo: "Synap-core/backend",
+      sha: "B".repeat(40),
+      url: "https://github.com/Synap-core/backend/actions/runs/1",
+      workflow: "CI",
+    };
+    const start = observationFactKey("ci.started", base, AT);
+    expect(start).toBe(
+      `ci.started:synap-core/backend@${"b".repeat(40)}:https://github.com/Synap-core/backend/actions/runs/1@${AT.toISOString()}`
+    );
+    expect(observationFactKey("ci.started", { ...base }, new Date(AT))).toBe(
+      start
+    );
+    // A re-run attempt of the same run starts again: another fact.
+    expect(
+      observationFactKey("ci.started", base, new Date("2026-10-28T21:00:00Z"))
+    ).not.toBe(start);
+    expect(
+      observationFactKey("ci.finished", { ...base, status: "success" }, AT)
+    ).not.toBe(start);
+    expect(
+      observationFactKey("ci.started", { repo: "Synap-core/backend" })
+    ).toBeNull();
+  });
+
+  it("each entry into the merge queue is its own fact", () => {
+    const q1 = observationFactKey("dev.merge_queued", PR, AT);
+    expect(q1).toBe(
+      `dev.merge_queued:synap-core/backend#12@${AT.toISOString()}`
+    );
+    expect(
+      observationFactKey(
+        "dev.merge_queued",
+        PR,
+        new Date("2026-10-29T08:00:00Z")
+      )
+    ).not.toBe(q1);
+    expect(observationFactKey("dev.pr_opened", PR, AT)).not.toBe(q1);
+  });
+
   it("facts the pod reads newest-wins, or that may repeat, carry no key", () => {
     expect(
       observationFactKey("dev.repo_snapshot", { repo: "Synap-core/backend" })
