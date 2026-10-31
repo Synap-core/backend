@@ -24,7 +24,15 @@
  * the side-effect fan-out (no transport here).
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterAll,
+  vi,
+} from "vitest";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -90,7 +98,12 @@ import {
 import { registerFocusSessionsRoutes } from "../../../routers/hub-protocol/rest/focus-sessions.js";
 import { sessionHandlers } from "../../../routers/mcp/handlers/session.js";
 import { startSessionChangedListener } from "../../../utils/session-changed-listener.js";
-import { loadSessionRunners, stampSessionRunner } from "../session-runners.js";
+import {
+  foldRunnerState,
+  loadSessionRunners,
+  reportRunnerState,
+  stampSessionRunner,
+} from "../session-runners.js";
 
 const OWNER = "11111111-1111-4111-8111-111111111111";
 const TEAMMATE = "33333333-3333-4333-8333-333333333333";
@@ -266,6 +279,7 @@ beforeAll(async () => {
   await h.client!.exec(migration("0341_session_owner_message_notify.sql"));
   await h.client!.exec(migration("0342_session_runners.sql"));
   await h.client!.exec(migration("0373_session_runners_process.sql"));
+  await h.client!.exec(migration("0384_session_runners_state.sql"));
   await q(
     `insert into users (id, email, name, timezone, user_type, agent_type, host_user_id) values
       ($1, 'o@example.test', 'Owner', 'UTC', 'human', null, null),
@@ -753,5 +767,154 @@ describe("session runners", () => {
       });
     }
     expect(await loadSessionRunners(sessionId)).toEqual([]);
+  });
+});
+
+describe("runner state (0384)", () => {
+  const MAC = "mac-a:4242:1761600000000";
+  // A report moves EVERY live row of its process (one per session it waits
+  // on), and earlier tests leave this client key's rows live: each test here
+  // starts with none, so a count is this test's rows only.
+  beforeEach(async () => {
+    await q(`delete from session_runners where client_key = $1`, [CLIENT_KEY]);
+  });
+  /** One call from the runner's process, saying `state` (or nothing). */
+  const as = <T>(fn: () => Promise<T>, state?: string, proc = MAC) =>
+    runWithClientKey(CLIENT_KEY, fn, CWD, proc, state);
+  const stamp = (sessionId: string, state?: string, proc = MAC) =>
+    as(
+      () =>
+        stampSessionRunner({ sessionId, ownerId: OWNER, agentUserId: AGENT }),
+      state,
+      proc
+    );
+  const row = async (sessionId: string, proc = MAC) =>
+    (
+      await q<{ state: string | null; since: string | null; seen: string }>(
+        `select state, state_since::text as since, last_seen_at::text as seen from session_runners where session_id = $1 and process_key = $2`,
+        [sessionId, proc]
+      )
+    ).rows[0];
+
+  it("the wait's stamp records the state; a changed state is written at once, past the once-a-minute throttle", async () => {
+    const { sessionId } = await seed();
+    expect(await stamp(sessionId, "busy")).toBe(true);
+    expect((await row(sessionId))!.state).toBe("busy");
+    // Same word inside the minute: throttled, nothing written.
+    expect(await stamp(sessionId, "busy")).toBe(false);
+    // A new word inside the minute: written now.
+    expect(await stamp(sessionId, "needs_permission")).toBe(true);
+    const [r] = await loadSessionRunners(sessionId);
+    expect(r).toMatchObject({ state: "needs_permission", live: true });
+    expect(Date.parse(r!.stateSince!)).toBeGreaterThan(Date.now() - 60_000);
+  });
+
+  it("any other call names the state on the runner's live rows, off the wait — once per change, every session it waits on, never another process's", async () => {
+    const { sessionId } = await seed();
+    const { sessionId: other } = await seed();
+    const BOX = "devbox:77:1761650000000";
+    await stamp(sessionId, "busy");
+    await stamp(other, "busy");
+    await stamp(sessionId, "busy", BOX);
+    // A call that is not the wait: the turn ended — on both of MAC's rows.
+    expect(await as(() => reportRunnerState(), "idle")).toBe(2);
+    expect((await row(other))!.state).toBe("idle");
+    // The same word again moves nothing (no write per call).
+    expect(await as(() => reportRunnerState(), "idle")).toBe(0);
+    // No state named, or a word the pod does not know: no write.
+    expect(await as(() => reportRunnerState())).toBe(0);
+    expect(await as(() => reportRunnerState(), "asleep")).toBe(0);
+    expect((await row(sessionId))!.state).toBe("idle");
+    expect((await row(sessionId, BOX))!.state).toBe("busy");
+    // The report is telemetry about the runner, not its presence: last_seen_at is the wait's.
+    const seen = (await row(sessionId))!.seen;
+    expect(await as(() => reportRunnerState(), "busy")).toBe(2);
+    expect((await row(sessionId))!.seen).toBe(seen);
+  });
+
+  it("an older report never overwrites a newer one (a long wait re-stamps the state it opened with)", async () => {
+    const { sessionId } = await seed();
+    // The wait opens while the turn runs...
+    const stale = await as(async () => {
+      expect(
+        await stampSessionRunner({
+          sessionId,
+          ownerId: OWNER,
+          agentUserId: AGENT,
+        })
+      ).toBe(true);
+      // ...the turn ends: another call says idle...
+      await new Promise((r) => setTimeout(r, 5));
+      expect(await as(() => reportRunnerState(), "idle")).toBe(1);
+      // ...and a minute later the same wait re-stamps with its busy report.
+      await q(
+        `update session_runners set last_seen_at = now() - interval '2 minutes' where session_id = $1`,
+        [sessionId]
+      );
+      return stampSessionRunner({
+        sessionId,
+        ownerId: OWNER,
+        agentUserId: AGENT,
+      });
+    }, "busy");
+    // The re-stamp refreshed presence, and kept the newer word.
+    expect(stale).toBe(true);
+    expect((await row(sessionId))!.state).toBe("idle");
+  });
+
+  it("reads: ended when said or gone quiet (not live, never a twin); null while live with no word; the fold picks the most urgent live word", async () => {
+    const { sessionId } = await seed();
+    const BOX = "devbox:77:1761650000000";
+    const OLD = "devbox:78:1761650000001";
+    await stamp(sessionId); // a client that names no state
+    let [r] = await loadSessionRunners(sessionId);
+    expect(r).toMatchObject({ state: null, stateSince: null, live: true });
+    expect(foldRunnerState([r!])).toEqual({ state: null, since: null });
+
+    await stamp(sessionId, "busy", BOX);
+    await stamp(sessionId, "needs_permission", OLD);
+    await q(
+      `update session_runners set last_seen_at = now() - interval '3 minutes' where session_id = $1 and process_key = $2`,
+      [sessionId, OLD]
+    );
+    let all = await loadSessionRunners(sessionId);
+    const old = all.find((x) => x.processId === OLD)!;
+    // Gone quiet: ended, since it was last seen — and its stale word does not count.
+    expect(old).toMatchObject({
+      state: "ended",
+      live: false,
+      stateSince: old.lastSeenAt,
+    });
+    expect(foldRunnerState(all).state).toBe("busy");
+
+    // MAC asks for permission: it outranks BOX at work.
+    await as(() => reportRunnerState(), "needs_permission");
+    all = await loadSessionRunners(sessionId);
+    expect(foldRunnerState(all).state).toBe("needs_permission");
+
+    // MAC says it ended: not live, so not a twin of BOX, and out of the fold.
+    await as(() => reportRunnerState(), "ended");
+    all = await loadSessionRunners(sessionId);
+    [r] = all.filter((x) => x.processId === MAC);
+    expect(r).toMatchObject({ state: "ended", live: false, twin: [] });
+    expect(all.find((x) => x.processId === BOX)!.twin).toEqual([]);
+    expect(foldRunnerState(all).state).toBe("busy");
+  });
+
+  it("a state report never writes the session row: no NOTIFY on the session channel", async () => {
+    const { sessionId } = await seed();
+    await stamp(sessionId, "busy");
+    const heard: string[] = [];
+    const unlisten = await h.client!.listen("focus_session_changed", (p) =>
+      heard.push(p)
+    );
+    try {
+      expect(await as(() => reportRunnerState(), "idle")).toBe(1);
+      expect(await stamp(sessionId, "busy")).toBe(true);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(heard.filter((p) => p === sessionId)).toEqual([]);
+    } finally {
+      await unlisten();
+    }
   });
 });

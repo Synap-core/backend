@@ -72,6 +72,7 @@ import {
   projectTracks,
   projects,
   proposals,
+  proposalSnoozes,
   trackParticipants,
   relationDefs,
   relations,
@@ -193,6 +194,12 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
     spec("track", {}, { idColumn: trackParticipants.trackId }),
   ],
   [proposals, spec("proposal", proposals)],
+  // "Later" (0381): one person's setting aside of a request. No workspace of
+  // its own: a grant on the REQUEST reads it; a space grant reads none.
+  [
+    proposalSnoozes,
+    spec("proposal", {}, { idColumn: proposalSnoozes.proposalId }),
+  ],
   [focusSessions, spec("session", focusSessions)],
   [sessionEvaluations, spec("session", sessionEvaluations)],
   // No id column (PK session × client key): a grant on the SESSION reads its

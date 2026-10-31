@@ -12,7 +12,9 @@
  * Stubbed: the key lookup, the key→principal remap, the guest probe, the tool
  * profile read and `createMCPServer` — replaced by a one-tool SDK server whose
  * handler REPORTS `getRequestClientKey()`, so the assertion reads the value the
- * real resolver and focus door would read, not a shape.
+ * real resolver and focus door would read, not a shape. The runner state
+ * (0384) is checked the same way, plus the door's call to the one writer
+ * (`reportRunnerState`), made inside the request's context.
  */
 import { describe, it, expect, vi } from "vitest";
 
@@ -39,6 +41,20 @@ vi.mock("../../../access/guest-containment.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   isGuestPrincipal: vi.fn(async () => false),
 }));
+const reported = vi.hoisted(() => [] as Array<string | null>);
+vi.mock(
+  "../../../services/focus-sessions/session-runners.js",
+  async (importOriginal) => {
+    const { getRequestRunnerState } = await import("@synap/database");
+    return {
+      ...(await importOriginal<Record<string, unknown>>()),
+      reportRunnerState: vi.fn(async () => {
+        reported.push(getRequestRunnerState()?.state ?? null);
+        return 0;
+      }),
+    };
+  }
+);
 vi.mock("../tool-access.js", () => ({
   loadKeyToolAccess: vi.fn(async () => ({ profile: "full" })),
 }));
@@ -46,8 +62,11 @@ vi.mock("../index.js", async () => {
   const { Server } = await import("@modelcontextprotocol/sdk/server/index.js");
   const { CallToolRequestSchema, ListToolsRequestSchema } =
     await import("@modelcontextprotocol/sdk/types.js");
-  const { getRequestClientKey, getRequestConversationCwd } =
-    await import("@synap/database");
+  const {
+    getRequestClientKey,
+    getRequestConversationCwd,
+    getRequestRunnerState,
+  } = await import("@synap/database");
   return {
     groundingBudgetBytes: () => 0,
     createMCPServer: () => {
@@ -65,6 +84,7 @@ vi.mock("../index.js", async () => {
             text: JSON.stringify({
               key: String(getRequestClientKey()),
               cwd: getRequestConversationCwd() ?? null,
+              state: getRequestRunnerState()?.state ?? null,
             }),
           },
         ],
@@ -94,7 +114,7 @@ async function post(body: unknown, extra: Record<string, string> = {}) {
 async function contextOfCall(
   extra: Record<string, string> = {},
   meta?: Record<string, unknown>
-): Promise<{ key: string; cwd: string | null }> {
+): Promise<{ key: string; cwd: string | null; state: string | null }> {
   const res = await post(
     {
       jsonrpc: "2.0",
@@ -171,7 +191,11 @@ describe("MCP conversation identity (Mcp-Session-Id)", () => {
           "live.synap/conversationCwd": "/Users/a/code",
         }
       )
-    ).toEqual({ key: `key:key-1|conv:${CC}`, cwd: "/Users/a/code" });
+    ).toEqual({
+      key: `key:key-1|conv:${CC}`,
+      cwd: "/Users/a/code",
+      state: null,
+    });
   });
 
   it("the X-Synap-Conversation header outranks _meta when both are sent", async () => {
@@ -201,6 +225,43 @@ describe("MCP conversation identity (Mcp-Session-Id)", () => {
         "x-synap-conversation": CC,
         "x-synap-conversation-cwd": "/Users/a/code/synap",
       })
-    ).toEqual({ key: `key:key-1|conv:${CC}`, cwd: "/Users/a/code/synap" });
+    ).toEqual({
+      key: `key:key-1|conv:${CC}`,
+      cwd: "/Users/a/code/synap",
+      state: null,
+    });
+  });
+
+  // 0384: any harness adapter says what its runner is doing, on any call.
+  it("X-Synap-Runner-State reaches the request with the conversation, and the door hands it to the runner writer", async () => {
+    const CC = "claude-code:8c34a72b-b1c1-4c37-9c1f-02920b69ccb2";
+    reported.length = 0;
+    expect(
+      await contextOfCall({
+        "x-synap-conversation": CC,
+        "x-synap-runner-state": "needs_permission",
+      })
+    ).toMatchObject({ key: `key:key-1|conv:${CC}`, state: "needs_permission" });
+    expect(reported).toContain("needs_permission");
+  });
+
+  it("_meta live.synap/runnerState names it for a client that cannot set headers; an unknown word is none", async () => {
+    const CC = "claude-code:8c34a72b-b1c1-4c37-9c1f-02920b69ccb2";
+    expect(
+      (
+        await contextOfCall(
+          { "x-synap-conversation": CC },
+          { "live.synap/runnerState": "busy" }
+        )
+      ).state
+    ).toBe("busy");
+    expect(
+      (
+        await contextOfCall({
+          "x-synap-conversation": CC,
+          "x-synap-runner-state": "asleep",
+        })
+      ).state
+    ).toBeNull();
   });
 });

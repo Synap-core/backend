@@ -257,6 +257,7 @@ beforeAll(async () => {
   await h.client!.exec(migration("0341_session_owner_message_notify.sql"));
   await h.client!.exec(migration("0342_session_runners.sql"));
   await h.client!.exec(migration("0373_session_runners_process.sql"));
+  await h.client!.exec(migration("0384_session_runners_state.sql"));
   await q(
     `insert into users (id, email, name, timezone, user_type, agent_type) values
       ($1, 'o@example.test', 'Owner', 'UTC', 'human', null),

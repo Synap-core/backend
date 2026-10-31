@@ -24,8 +24,10 @@
  *   - scopeKind "workspace" -> editor/admin/owner membership in that workspace
  *   - principalKind "agent" -> caller must own the agent (users.createdByUserId)
  *                              or be pod-admin; otherwise FORBIDDEN
- * `verdict` is never "deny" at the schema level (enforced by the DB enum) —
- * denial stays a CBAC/floor concern, never a user-authored rule.
+ * `verdict: "deny"` (0381, founder decision G3) is a person's stored "Never":
+ * the resolver refuses the matching write with `DENIED_BY_RULE`. Refusing more
+ * is always safe, so a deny may be as broad as the caller may manage; the
+ * request's "Never" option writes the narrow one (this agent × this act).
  */
 
 import { z } from "zod";
@@ -233,7 +235,7 @@ const CreateInputSchema = z
     targetKind: z.enum(["action", "profile", "capability", "connection"]),
     targetPattern: z.string().min(1),
     targetProfile: z.string().min(1).optional(),
-    verdict: z.enum(["auto", "propose"]),
+    verdict: z.enum(["auto", "propose", "deny"]),
     sourceProposalId: z.string().uuid().optional(),
     expiresAt: z.coerce.date().optional(),
   })
@@ -259,6 +261,12 @@ const CreateInputSchema = z
   .refine((v) => v.targetKind !== "connection" || v.principalKind === "any", {
     message: "a connection rule applies to any principal (principalKind 'any')",
     path: ["principalKind"],
+  })
+  // A connection's sync is kept or stopped by the person who connected it
+  // (auto | propose); "Never" is disconnecting, not a rule.
+  .refine((v) => v.targetKind !== "connection" || v.verdict !== "deny", {
+    message: "a connection rule is 'auto' or 'propose', never 'deny'",
+    path: ["verdict"],
   });
 
 export const governanceRulesRouter = router({

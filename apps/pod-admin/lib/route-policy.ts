@@ -66,6 +66,10 @@ export function isSelfService(path: string): boolean {
     // reach — it only stops `pod_admin` being required to manage secrets that
     // are already yours.
     path === "/my-vault" ||
+    // The page of ONE of your secrets: `secretsVault.getDetailBundle`,
+    // `revokeGrant` and `markCompromised` all filter on `ctx.userId` (a
+    // secret that is not yours is NOT_FOUND), so the sub-path grants no reach.
+    path.startsWith("/my-vault/") ||
     // Your OWN computers and the page of each. `machines.list` is floored
     // to the computers you approved, and `rename` / `setKeyTtl` / `revoke`
     // re-load the computer and refuse anyone but its owner or a pod admin
