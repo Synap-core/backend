@@ -22530,6 +22530,15 @@ export interface Signal {
 	 * mapping, which is the fork the lens helper exists to prevent.
 	 */
 	blockedReason?: ExpectedOutput["blockedReason"];
+	/**
+	 * What kind of wait this row is (`WAIT_KINDS`, `@synap-core/types/units`):
+	 * the ball a needs-you row wears (`resolveWaitKindState`). Set on the rows
+	 * that wait on the person (`owed-slot` by its blocked reason, a
+	 * `proposal-cluster`'s approval, a `draft-asks`' answer, a
+	 * `session-review`'s try-it), through THE map table (`waitKindOf`);
+	 * absent on every other kind.
+	 */
+	waitKind?: WaitKind;
 	/** One line naming WHICH thing is missing — the resumption cue. `owed-slot` only. */
 	why?: string;
 	/** The agent's own (unverified) claim it produced this after all. `owed-slot` only. */
@@ -38920,6 +38929,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						live: boolean;
 						sessionId: string;
 						since: string;
+						waitKind?: "access" | "agent_stopped" | "agent_work" | "another_work" | "answer" | "approval" | "ci" | "date" | "decide" | "deploy" | "devbox_job" | "merge_queue" | "nobody" | "payment" | "red_main" | "send" | "signature" | "their_document" | "their_reply" | "try_it" | "vendor" | undefined;
 					}[];
 					workspaceId: string | null;
 				}[];
@@ -38930,6 +38940,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					live: boolean;
 					sessionId: string;
 					since: string;
+					waitKind?: "access" | "agent_stopped" | "agent_work" | "another_work" | "answer" | "approval" | "ci" | "date" | "decide" | "deploy" | "devbox_job" | "merge_queue" | "nobody" | "payment" | "red_main" | "send" | "signature" | "their_document" | "their_reply" | "try_it" | "vendor" | undefined;
 					workspaceId: string | null;
 				}[];
 			};

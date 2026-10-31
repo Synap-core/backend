@@ -32,7 +32,13 @@ import type {
   PullRequestState,
 } from "../events/pr-state.js";
 import type { HoldDevRef, HoldOn } from "../lifecycle/hold.js";
-import { WAIT_KIND_FROM, type WaitKind } from "./wait-kind.js";
+import {
+  WAIT_BALLS,
+  WAIT_KIND_BALL,
+  WAIT_KIND_FROM,
+  isWaitKind,
+  type WaitKind,
+} from "./wait-kind.js";
 
 // ── kind of work and uncertainty (decision 4) ──────────────────────────────
 
@@ -918,6 +924,33 @@ export function deriveWaitingOn(
     count: counts.get(reason)!,
     ...(refs.has(reason) ? { refs: refs.get(reason)! } : {}),
   }));
+}
+
+/**
+ * The ONE wait kind a row leads with, from its waiting-on marks: the named
+ * ref whose ball comes first in {@link WAIT_BALLS} (yours, then theirs, an
+ * agent's, a machine's, other work, a date, nobody), in source order within a
+ * ball. `null` when no ref names a kind (nothing waited on, or an older pod).
+ */
+export function leadWaitKind(
+  marks:
+    | ReadonlyArray<{
+        refs?: ReadonlyArray<{ waitKind?: string | null }> | null;
+      }>
+    | null
+    | undefined
+): WaitKind | null {
+  let best = null as WaitKind | null;
+  for (const m of marks ?? []) {
+    for (const r of m.refs ?? []) {
+      if (!isWaitKind(r.waitKind)) continue;
+      const rank = WAIT_BALLS.indexOf(WAIT_KIND_BALL[r.waitKind]);
+      if (best === null || rank < WAIT_BALLS.indexOf(WAIT_KIND_BALL[best])) {
+        best = r.waitKind;
+      }
+    }
+  }
+  return best;
 }
 
 // Every value has its words in the vocabulary, and the vocabulary names

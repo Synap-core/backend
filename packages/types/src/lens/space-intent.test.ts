@@ -447,6 +447,42 @@ describe("movingNowRowModel", () => {
     expect(m.row.reason).toBe("Devplane feature · Building");
   });
 
+  it("a quiet line that waits on something wears its wait kind's mark", () => {
+    const m = movingNowRowModel({
+      ...base,
+      work: [
+        {
+          kind: "session",
+          sessionId: "s1",
+          label: "Ship",
+          live: false,
+          asksYou: false,
+          since: "x",
+          waitKind: "merge_queue",
+        },
+        {
+          kind: "session",
+          sessionId: "s2",
+          label: "Contract",
+          live: false,
+          asksYou: false,
+          since: "x",
+          waitKind: "signature",
+        },
+      ],
+    });
+    expect(m.work.map((w) => [w.waitKind, w.state])).toEqual([
+      [
+        "merge_queue",
+        { owedFromYou: 0, pendingDecisions: 0, waitKind: "merge_queue" },
+      ],
+      [
+        "signature",
+        { owedFromYou: 0, pendingDecisions: 0, waitKind: "signature" },
+      ],
+    ]);
+  });
+
   it("open but quiet work (a scheduled prep): the quiet row, no being-worked mark", () => {
     const m = movingNowRowModel(
       {
