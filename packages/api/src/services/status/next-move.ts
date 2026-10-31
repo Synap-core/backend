@@ -259,6 +259,8 @@ export interface ThingNextMoveInput {
 export function deriveThingNextMove(
   input: ThingNextMoveInput
 ): ContinuationNextMove {
+  // NEGATIVE CONTROL: the derivation stubbed out.
+  if (input) return UNKNOWN("negctl");
   const { category } = input;
   if (category === "done" || category === "lost") {
     return endedMove("thing", input.label);
@@ -351,6 +353,8 @@ export interface GoalNextMoveInput {
 export function deriveGoalNextMove(
   input: GoalNextMoveInput
 ): ContinuationNextMove {
+  // NEGATIVE CONTROL: the derivation stubbed out.
+  if (input) return UNKNOWN("negctl");
   const { category, facts } = input;
   if (category === "done" || category === "lost") {
     return endedMove("goal", input.label);
