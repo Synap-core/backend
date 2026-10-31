@@ -330,18 +330,27 @@ describe("test-ratchet --select: the PR selection, judged as CI judges it", () =
   });
 
   it("a file two runs reached: its red is never overwritten by a later green", () => {
-    // EXTRA[0] is red in its own run and passes in a run collected AFTER it
-    // (vitest's file filters are substrings: one file can run twice).
-    const own = large.runs.findIndex((x) => x.files.includes(EXTRA[0]));
+    // A file is red in its own run (the first) and passes in a run collected
+    // AFTER it (the last): vitest's file filters are substrings, so one file
+    // can run twice. Chosen from the plan, not from EXTRA: where EXTRA lands
+    // moves with the number of tripwires.
     const later = large.runs[large.runs.length - 1];
-    expect(large.runs.indexOf(later)).toBeGreaterThan(own);
+    const own = large.runs[0];
+    expect(
+      large.runs.length,
+      "the plan needs two runs for a file to run twice"
+    ).toBeGreaterThan(1);
+    const file = own.files.find(
+      (f) => !later.files.includes(f) && !baseline.has(f)
+    )!;
+    expect(file).toBeTruthy();
     const r = judge(large, {
-      red: [EXTRA[0]],
-      echo: { file: EXTRA[0], into: later.id },
+      red: [file],
+      echo: { file, into: later.id },
     });
     expect(r.status).toBe(1);
     expect(r.out).toContain("[new-failure]");
-    expect(r.out).toContain(EXTRA[0]);
+    expect(r.out).toContain(file);
   });
 
   it("a plan whose runs are not its selection, or that runs a file twice: red", () => {
@@ -406,20 +415,9 @@ describe("test-ratchet shards: planning a PR selection", () => {
       { budgetSeconds: 60 }
     );
     expect(many.shards).toBe(SELECTION_MAX_SHARDS);
-    // The budget decides: half the budget, about twice the shards. A FIXED
-    // set (the first 300 planned api files, no tripwires): planning the real
-    // tripwire set made this depend on repo size, and each new tripwire pushed
-    // the 120 s plan toward the cap until `b` could no longer exceed `a`.
-    const fixed = Object.keys(plan.api)
-      .sort()
-      .slice(0, 300)
-      .map((f) => `packages/api/${f}`);
-    const a = planOf(fixed, { budgetSeconds: 120 });
-    const b = planOf(fixed, { budgetSeconds: 60 });
-    expect(
-      a.shards,
-      "the fixed set no longer fits under the cap: pick a smaller one"
-    ).toBeLessThan(SELECTION_MAX_SHARDS);
+    // The budget decides: half the budget, about twice the shards.
+    const a = planOf([...tripwires, ...EXTRA], { budgetSeconds: 120 });
+    const b = planOf([...tripwires, ...EXTRA], { budgetSeconds: 60 });
     expect(b.shards).toBeGreaterThan(a.shards);
   });
 
