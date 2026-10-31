@@ -86,7 +86,6 @@ import {
   skillsRouter,
   SKILL_DEFINITION_APPLIER,
   assertSkillCodeAllowed,
-  assertBoxNotReadOnly,
   boxSkillMetadata,
   skillRequiresEdges,
 } from "../../routers/skills.js";
@@ -492,6 +491,7 @@ export function definitionSkillChangesExecution(
     },
     existing
   );
+  const box = declaredBox(s.metadata);
   return (
     execContentChanged ||
     // Widening (or narrowing) the sandbox's egress allowlist is an
@@ -511,9 +511,7 @@ export function definitionSkillChangesExecution(
     // `boxDeclarationChanged` the skill edit door applies. Compared on the
     // NORMALISED declaration, as stored.
     boxDeclarationChanged(
-      declaredBox(s.metadata) !== undefined
-        ? { box: declaredBox(s.metadata) }
-        : undefined,
+      box !== undefined ? { box } : undefined,
       existing.metadata as Record<string, unknown> | null
     ) ||
     // Same blind spot, same bag, same both-doors rule: turning
@@ -1047,7 +1045,6 @@ export async function createCapabilityFromDefinition(
     // direct update, so without this a template could store a box skill the
     // doors would refuse.
     if (s.executionMode === "box") {
-      assertBoxNotReadOnly(s.metadata);
       boxSkillMetadata({
         executionMode: "box",
         kind: s.kind ?? "code",
