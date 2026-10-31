@@ -29,6 +29,7 @@ import {
 } from "../../../services/messaging/room-post-kind.js";
 import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
+import { newSessionClientKey } from "../../../services/focus-sessions/session-client-binding.js";
 import { refuseUndeclaredArgs } from "../undeclared-args.js";
 import {
   waitForConversationChanges,
@@ -632,8 +633,18 @@ export const sessionHandlers: McpHandlerMap = {
         // service, with the same pure function the run funnel uses.
         params: readParamsArg(args.params),
         // Binds the session to THIS client and adopts the session the gate
-        // auto-opened for it, if any (never a duplicate).
-        clientKey: requestClientKey(agentUserId) ?? null,
+        // auto-opened for it, if any (never a duplicate) — unless it is
+        // started for another agent or a teammate (C7, `session-client-binding.ts`).
+        clientKey: await newSessionClientKey({
+          clientKey: requestClientKey(agentUserId),
+          agentUserId,
+          userId,
+          agentIds: Array.isArray(args.agentIds)
+            ? (args.agentIds as string[])
+            : null,
+          parentSessionId: args.parentSessionId as string | undefined,
+          suspendedIntent: args.suspendedIntent as string | undefined,
+        }),
         // An agent's NEW session declares what done means (F11, NO_CRITERIA).
         requireCriteria: !!agentUserId,
         // Validated by the service with the shared criteria schema.

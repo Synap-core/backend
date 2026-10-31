@@ -207,6 +207,25 @@ describe("an AI update that writes CRITERIA is floored to a proposal", () => {
     expect(mockInsertPendingProposal).not.toHaveBeenCalled();
   });
 
+  it("the agent's OWN session (the door proved it, C6): its criteria change applies directly", async () => {
+    const perm = await checkPermissionOrPropose({
+      ...aiUpdate({ criteria: [CRITERION] }),
+      ownSessionCriteria: true,
+    });
+    expect(criteriaChangeArg()).toBe(false);
+    expect(mockInsertPendingProposal).not.toHaveBeenCalled();
+    expect(perm).toMatchObject({ granted: true });
+  });
+
+  it("the own-session proof never lifts a GOAL's criteria floor", async () => {
+    await checkPermissionOrPropose({
+      ...aiUpdate({ criteria: [CRITERION] }),
+      subjectType: "track" as const,
+      ownSessionCriteria: true,
+    });
+    expect(criteriaChangeArg()).toBe(true);
+  });
+
   it("a HUMAN writing their own criteria stays immediate — no proposal to themselves", async () => {
     const perm = await checkPermissionOrPropose({
       ...aiUpdate({ criteria: [CRITERION] }),

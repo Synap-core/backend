@@ -34,7 +34,9 @@ import {
   sessionStoppedOnItsAsksWhere,
   personTouchedSubjectIds,
   setSessionStatus,
+  onlyOpenPullRequestsWhere,
 } from "@synap/database";
+import type { SQL } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { workClockIn } from "@synap-core/types/work-clock";
 import {
@@ -59,6 +61,47 @@ export type GoalLoopSweeper = () => Promise<{
 let goalLoopSweeper: GoalLoopSweeper | null = null;
 export function registerGoalLoopSweeper(fn: GoalLoopSweeper): void {
   goalLoopSweeper = fn;
+}
+
+/**
+ * The session lifecycle sweep (plan d679e92c C6) — `sweepSessionLifecycle` in
+ * @synap/api: closes met work, holds work waiting on a merge, cancels work
+ * stale for a week that nobody owes or wrote on, and closes runs whose own run
+ * ended. It rides THIS tick (not a second reaper) and hands back the session
+ * kind's RUN predicate, so every stale sweep below leaves runs to their run.
+ * apps/api fills the slot at boot. Unfilled (a jobs-only process), the tick
+ * skips the sweep and the stale sweeps run as they did before, and says so.
+ */
+export interface SessionLifecycleSweeper {
+  sweep: () => Promise<{
+    metClosed: number;
+    heldOnMerge: number;
+    longStaleCancelled: number;
+    runsClosed: number;
+    failed: string[];
+  }>;
+  /** SQL, NULL-safe: the row is a RUN session (`sessionKindWhere("run")`). */
+  runSessionWhere: () => SQL;
+}
+let lifecycleSweeper: SessionLifecycleSweeper | null = null;
+export function registerSessionLifecycleSweeper(
+  s: SessionLifecycleSweeper | null
+): void {
+  lifecycleSweeper = s;
+}
+
+/**
+ * What every stale sweep leaves alone (C6): a RUN (it closes when its run
+ * ends; the work reaper never touches it) and a work session whose only open
+ * outcomes are pull requests (it waits on a merge, it is not abandoned).
+ */
+export function workReaperScope(): SQL {
+  return and(
+    drizzleSql`NOT ${onlyOpenPullRequestsWhere()}`,
+    lifecycleSweeper
+      ? drizzleSql`NOT ${lifecycleSweeper.runSessionWhere()}`
+      : undefined
+  ) as SQL;
 }
 
 export const FOCUS_SESSION_REAPER_QUEUE = "focus-session-reaper";
@@ -132,7 +175,7 @@ export async function staleAbandonedAgentSessions(): Promise<number> {
   const candidates = await db
     .select({ id: focusSessions.id })
     .from(focusSessions)
-    .where(AGENT_SESSION_MAY_BE_ABANDONED)
+    .where(and(AGENT_SESSION_MAY_BE_ABANDONED, workReaperScope()))
     .limit(ABANDONED_BATCH);
   if (candidates.length === 0) return 0;
   const ids = candidates.map((c) => c.id);
@@ -144,7 +187,8 @@ export async function staleAbandonedAgentSessions(): Promise<number> {
   const { rows: staled } = await setSessionStatus(db, {
     where: and(
       inArray(focusSessions.id, abandoned),
-      AGENT_SESSION_MAY_BE_ABANDONED
+      AGENT_SESSION_MAY_BE_ABANDONED,
+      workReaperScope()
     )!,
     from: ["active", "paused"],
     to: "stale",
@@ -230,7 +274,7 @@ export async function staleSessionsStoppedOnTheirAsks(): Promise<number> {
   const stopped = await db
     .select({ id: focusSessions.id })
     .from(focusSessions)
-    .where(sessionStoppedOnItsAsksWhere(new Date()))
+    .where(and(sessionStoppedOnItsAsksWhere(new Date()), workReaperScope()))
     // A stable order, oldest first: the batch is the same rows the SQL and
     // the in-lock re-check agree on, never an arbitrary 200.
     .orderBy(asc(focusSessions.startedAt), asc(focusSessions.id))
@@ -287,6 +331,31 @@ export async function handleFocusSessionReaper(): Promise<void> {
       );
     }
 
+    // Then the session lifecycle (C6): runs whose run ended, met work, work
+    // waiting on a merge, work stale for a week. Its own failure never stops
+    // the sweep.
+    if (lifecycleSweeper) {
+      try {
+        const swept = await lifecycleSweeper.sweep();
+        if (
+          swept.metClosed +
+            swept.heldOnMerge +
+            swept.longStaleCancelled +
+            swept.runsClosed >
+            0 ||
+          swept.failed.length > 0
+        ) {
+          logger.info(swept, "Focus session reaper: session lifecycle sweep");
+        }
+      } catch (err) {
+        logger.error({ err }, "Session lifecycle sweep failed");
+      }
+    } else {
+      logger.debug(
+        "Session lifecycle sweeper not registered — skipped; runs are staled like work"
+      );
+    }
+
     // Then the sessions whose agent left them waiting on its own questions:
     // their asks end with them (decision E1).
     const stoppedStaled = await staleSessionsStoppedOnTheirAsks();
@@ -324,7 +393,7 @@ export async function handleFocusSessionReaper(): Promise<void> {
     // Through the one session status write: each staled session owes its
     // transition, the system's move.
     const { rows: reaped } = await setSessionStatus(db, {
-      where: SESSION_IS_STALE,
+      where: and(SESSION_IS_STALE, workReaperScope())!,
       from: ["active", "paused"],
       to: "stale",
       actor: { kind: "system" },
