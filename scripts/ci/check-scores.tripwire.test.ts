@@ -150,6 +150,37 @@ describe("check-scores", () => {
     expect(s.c_min).toBeCloseTo(2.5, 4); // median of 1,2,3,4 min
   });
 
+  it("a draft's api-types red is expected (kept as draftFailures); its lint red and a ready PR's api-types red still count", () => {
+    const rg = (name: string, steps: Array<[string, string]>) =>
+      job(name, "failure", steps);
+    const hold = job("Full suite", "failure", [
+      ["Suites not run (draft)", "failure"],
+    ]);
+    const types: Array<[string, string]> = [
+      ["Verify generated API types are up to date", "failure"],
+    ];
+    const lint: Array<[string, string]> = [["Lint", "failure"]];
+    const { units, steps } = observe([
+      pr(1, [rg("Release gate", types), hold]), // draft, api-types
+      pr(2, [rg("Release gate", lint), hold]), // draft, lint
+      pr(3, [rg("Release gate", types)]), // ready, api-types
+    ]);
+    const key = "Release gate › Verify generated API types are up to date";
+    const apiSteps = steps.filter((s: { key: string }) => s.key === key);
+    expect(apiSteps.map((s: { draft: boolean }) => s.draft)).toEqual([
+      true,
+      false,
+    ]);
+    const su = score(apiSteps, () => false);
+    expect(su).toMatchObject({ n: 2, f: 1, draftFailures: 1 });
+    const un = score(
+      units.filter((u: { key: string }) => u.key === "Release gate"),
+      () => false
+    );
+    // run 1 expected, run 2 (draft lint) and run 3 (ready api-types) real
+    expect(un).toMatchObject({ n: 3, f: 2, draftFailures: 1 });
+  });
+
   it("negctl branches and main pushes are not PR runs", () => {
     const obs = [
       {
