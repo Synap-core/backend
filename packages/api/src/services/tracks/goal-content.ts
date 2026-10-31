@@ -24,11 +24,13 @@ import { z } from "zod";
 import {
   and,
   drizzleSql,
+  eq,
   inArray,
   notInArray,
   or,
   focusSessions,
   getDb,
+  links,
   sessionEvaluations,
   type TrackGoalPatch,
 } from "@synap/database";
@@ -51,6 +53,7 @@ import {
   readGoalCriterionAcceptance,
   type GoalCriterionAcceptance,
   type GoalCriterionClaim,
+  type GoalCriterionServer,
   type GoalCriterionView,
   type GoalRunFacts,
   type OperationPeriodReading,
@@ -59,8 +62,10 @@ import {
   type WaitingOnMark,
 } from "@synap-core/types/units";
 import {
+  OPEN_SESSION_STATUSES,
   TERMINAL_SESSION_STATUSES,
   isTerminalSessionStatus,
+  resolveSessionTitle,
 } from "@synap-core/types/focus-sessions";
 import {
   GOAL_LOOP_DEFAULT_ON,
@@ -919,6 +924,12 @@ export async function loadTrackGoalFacts(
   };
 
   const waitingOf = await waiting;
+  const servedOf = await readCriterionServers(
+    db,
+    tracks.map((t) => t.id),
+    userId,
+    reader
+  );
   for (const track of tracks) {
     const criteria = readGoalCriteria(track.criteria);
     const states = statesOf.get(track.id)!;
@@ -940,6 +951,7 @@ export async function loadTrackGoalFacts(
           evidenceWithheld:
             !valueShown ||
             (s.claim !== null && !shownRuns.has(s.claim.sessionId)),
+          servedBy: servedOf.get(`${track.id}:${c.key}`) ?? [],
         };
       }),
       inReview: goalInReview(criteria, states),
@@ -951,6 +963,59 @@ export async function loadTrackGoalFacts(
           : null,
       waitingOn: waitingOf.get(track.id) ?? [],
     });
+  }
+  return out;
+}
+
+/**
+ * WHO WORKS EACH CRITERION: the OPEN sessions with a `serves` edge to the goal
+ * naming that criterion (`links.metadata.criterionKey`, written by THE
+ * dependency door), under THE session read rule (`sessionReadableWhere`): a
+ * session the reader may not read is left out, never named. Keyed
+ * `<trackId>:<criterionKey>`, oldest first. One query for every goal.
+ */
+async function readCriterionServers(
+  db: Awaited<ReturnType<typeof getDb>>,
+  trackIds: readonly string[],
+  userId: string,
+  reader: { roster?: boolean }
+): Promise<Map<string, GoalCriterionServer[]>> {
+  const out = new Map<string, GoalCriterionServer[]>();
+  if (trackIds.length === 0) return out;
+  const rows = await db
+    .select({
+      trackId: links.toId,
+      criterionKey: drizzleSql<
+        string | null
+      >`${links.metadata}->>'criterionKey'`,
+      sessionId: focusSessions.id,
+      title: focusSessions.title,
+      goal: focusSessions.goal,
+      status: focusSessions.status,
+    })
+    .from(links)
+    .innerJoin(focusSessions, eq(focusSessions.id, links.fromId))
+    .where(
+      and(
+        eq(links.linkType, "serves"),
+        eq(links.fromType, "session"),
+        eq(links.toType, "track"),
+        inArray(links.toId, [...trackIds]),
+        inArray(focusSessions.status, [...OPEN_SESSION_STATUSES]),
+        sessionReadableWhere({ userId, roster: reader.roster })
+      )
+    )
+    .orderBy(focusSessions.createdAt);
+  for (const r of rows) {
+    if (!r.criterionKey) continue;
+    const key = `${r.trackId}:${r.criterionKey}`;
+    const list = out.get(key) ?? [];
+    list.push({
+      sessionId: r.sessionId,
+      title: resolveSessionTitle({ title: r.title, goal: r.goal }),
+      status: r.status,
+    });
+    out.set(key, list);
   }
   return out;
 }
