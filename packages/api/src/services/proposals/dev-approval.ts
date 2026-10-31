@@ -34,7 +34,11 @@
 
 import { z } from "zod";
 import { resolveStageGate } from "@synap/playbooks";
-import { describeDevDeployProposal } from "@synap-core/types/proposals/dev-deploy";
+import {
+  DEV_DEPLOY_APPROVAL_TYPE,
+  DEV_DEPLOY_STEPS,
+  describeDevDeployProposal,
+} from "@synap-core/types/proposals/dev-deploy";
 import { TRPCError } from "@trpc/server";
 import { db, eq, focusSessions, getRequestGrant } from "@synap/database";
 import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
@@ -43,16 +47,14 @@ import { grantWriteDenial } from "../../utils/grant-write-check.js";
 
 /** Proposal type filed before the agent writes any code. */
 export const DEV_PLAN_APPROVAL_TYPE = "dev.plan_approval";
-/** Proposal type filed before the agent deploys a verified commit. */
-export const DEV_DEPLOY_APPROVAL_TYPE = "dev.deploy_approval";
-
-/**
- * What a deploy approval lets ship: a push to a protected branch, a package
- * publish, or a deploy. An approval covers its commit for its step only
- * (founder, 2026-10-28): approving "push to main" does not approve a publish.
- */
-export const DEV_DEPLOY_STEPS = ["push", "publish", "deploy"] as const;
-export type DevDeployStep = (typeof DEV_DEPLOY_STEPS)[number];
+// The deploy type and its steps have ONE source, the module that words the
+// approval's heading: a step added here and not there would be accepted and
+// then mis-titled.
+export {
+  DEV_DEPLOY_APPROVAL_TYPE,
+  DEV_DEPLOY_STEPS,
+  type DevDeployStep,
+} from "@synap-core/types/proposals/dev-deploy";
 
 /**
  * The LEGACY stage a session sits at once a gate clears — used only when the

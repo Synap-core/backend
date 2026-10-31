@@ -64,9 +64,33 @@ describe("historyRow", () => {
       })
     );
     expect(row.title).toBe(
-      "Approved push of a524c103 to main in Synap-core/control-plane-api"
+      "Push of a524c103 to main in Synap-core/control-plane-api"
     );
     expect(row.title).not.toMatch(/Session|deploy/);
+  });
+
+  it("a rejected or withdrawn deploy approval never reads as approved", () => {
+    for (const status of ["rejected", "withdrawn", "failed"]) {
+      const row = historyRow(
+        proposal({
+          status,
+          proposalType: "dev.deploy_approval",
+          targetType: "focus_session",
+          data: {
+            repo: "Synap-core/control-plane-api",
+            branch: "main",
+            commitSha: "a524c103d1e2f3a4b5c6",
+            targetHost: "control-plane-api main",
+            deployCommand: "git push origin a524c103:main",
+            step: "push",
+          },
+        })
+      );
+      expect(row.title).not.toMatch(/approved/i);
+      expect(row.title).toBe(
+        "Push of a524c103 to main in Synap-core/control-plane-api"
+      );
+    }
   });
 
   it("names who asked, who decided, when, and where", () => {

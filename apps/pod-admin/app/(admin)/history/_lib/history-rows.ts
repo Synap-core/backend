@@ -106,7 +106,10 @@ function pastTitle(p: HistoryProposal): string {
     proposalType: p.proposalType,
     data: payload,
   });
-  if (deploy) return deploy.pastTitle;
+  // The act as a record ("Push of a524c103 to main in …"): the row's status
+  // mark says whether it was approved, rejected or withdrawn, so the title
+  // never claims "Approved" for a row that was not.
+  if (deploy) return deploy.recordTitle;
   return buildObjectActionTitle({
     action: String(p.proposalType ?? "change"),
     objectKind: String(p.targetType ?? ""),
