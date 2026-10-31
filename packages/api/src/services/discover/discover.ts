@@ -403,8 +403,9 @@ export interface DiscoverParams extends DiscoverOptions {
   authScopes: string[];
   /**
    * The AGENT principal calling (an agent key), if any — `startHere.
-   * handedToYou` lists the open sessions the person handed to it. Omit for a
-   * person's own orient.
+   * handedToYou` lists the open sessions the person handed to it, then the
+   * ones that went `stale` inside `HANDED_STALE_RESUME_DAYS`, marked `resume`.
+   * Omit for a person's own orient.
    */
   agentUserId?: string | null;
 }

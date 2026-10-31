@@ -98,9 +98,11 @@ export interface HandoffAgent {
   servedAt: string | null;
   /**
    * A pull agent on a computer that nothing runs now: `true` = a runner served
-   * it, but not within `PULL_LIVE_WINDOW_MS`; `false` = served within it, or
-   * not a pull agent on a computer; `null` = not measured (no runner ever
-   * stamped any of its keys). A presence fact, never a route refusal.
+   * it, but not within `PULL_LIVE_WINDOW_MS`; `false` = served within it;
+   * `null` = not measured (no runner ever stamped any of its keys) or not
+   * applicable (a dispatch or pod agent, or a pull agent on no computer):
+   * `false` is never said of an agent nobody measured. A presence fact, never
+   * a route refusal.
    */
   nobodyRuns: boolean | null;
   /** direct = lands on the roster now; asks_you = the person approves first. */
@@ -233,7 +235,7 @@ export async function readAgentsForHandoff(
     const servedAt = seen?.servedAt ?? null;
     const nobodyRuns =
       reach !== "pull" || !computer
-        ? false
+        ? null
         : servedAt
           ? now.getTime() - Date.parse(servedAt) > PULL_LIVE_WINDOW_MS
           : null;

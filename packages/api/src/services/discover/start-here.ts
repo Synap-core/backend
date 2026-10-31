@@ -116,7 +116,7 @@ async function readHandedToYou(
     } = await import("@synap/database");
     const { OPEN_SESSION_STATUSES } =
       await import("@synap-core/types/focus-sessions");
-    const { TRANSITION_EVENT_TYPES } = await import("@synap/events");
+    const { movedWithinDaysSql } = await import("../status/status-facts.js");
     // Reach is exclusive (THE route): a bound agent is handed work through its
     // provider, so it is never also handed the same work to pull.
     const { resolveAgentReach } =
@@ -131,16 +131,14 @@ async function readHandedToYou(
       .limit(1);
     if (agent?.pausedAt) return { status: "paused" };
     const stale = eq(focusSessions.status, "stale");
-    // Went stale inside the window: its move to `stale` is its latest status
-    // transition (the one status write records each), on the event log's
-    // (subject_type, subject_id, timestamp) index.
-    const staleInWindow = drizzleSql`EXISTS (
-      SELECT 1 FROM events hy_e
-      WHERE hy_e.subject_type = 'focus_session'
-        AND hy_e.subject_id = ${focusSessions.id}::text
-        AND hy_e.type = ${TRANSITION_EVENT_TYPES.focus_session}
-        AND hy_e.timestamp >= now() - (${HANDED_STALE_RESUME_DAYS}::int * interval '1 day')
-    )`;
+    // Went stale inside the window: a stale session's latest status move is
+    // its move INTO `stale`, so "moved inside the window" is "went stale
+    // inside it" (the transition log, read by the one shared predicate).
+    const staleInWindow = await movedWithinDaysSql(
+      "focus_session",
+      focusSessions.id,
+      HANDED_STALE_RESUME_DAYS
+    );
     const rows = await db
       .select({
         id: focusSessions.id,
@@ -185,7 +183,11 @@ async function readHandedToYou(
           : {}),
       })),
     };
-  } catch {
+  } catch (err) {
+    logger.warn(
+      { err, agentUserId },
+      "orient: handed-to-you NOT read — unavailable"
+    );
     return UNAVAILABLE;
   }
 }

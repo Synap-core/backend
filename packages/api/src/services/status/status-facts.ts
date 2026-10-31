@@ -29,7 +29,7 @@ import {
 } from "@synap/database";
 import { profiles } from "@synap/database/schema";
 import type { PlaybookRunStatus } from "@synap/database/schema";
-import type { SQL } from "drizzle-orm";
+import type { AnyColumn, SQL } from "drizzle-orm";
 import {
   findLifecycleOption,
   parseHoldDevRef,
@@ -138,6 +138,28 @@ export async function lastTransitionAt(
     out.set(`${r.subjectType}:${r.subjectId}`, new Date(r.at));
   }
   return out;
+}
+
+/**
+ * SQL predicate: the subject made a status move in the last `days` days — a
+ * transition event of its type on the same log `lastTransitionAt` reads, on
+ * the (subject_type, subject_id, timestamp) index. Any move in the window
+ * counts; for a subject whose status is NOW `stale`, its latest move is the one
+ * INTO `stale`, so for it this reads "went stale inside the window".
+ */
+export async function movedWithinDaysSql(
+  subjectType: TransitionSubjectType,
+  subjectId: AnyColumn | SQL,
+  days: number
+): Promise<SQL> {
+  const { TRANSITION_EVENT_TYPES } = await import("@synap/events");
+  return drizzleSql`EXISTS (
+    SELECT 1 FROM events mw_e
+    WHERE mw_e.subject_type = ${subjectType}
+      AND mw_e.subject_id = ${subjectId}::text
+      AND mw_e.type = ${TRANSITION_EVENT_TYPES[subjectType]}
+      AND mw_e.timestamp >= now() - (${days}::int * interval '1 day')
+  )`;
 }
 
 /**

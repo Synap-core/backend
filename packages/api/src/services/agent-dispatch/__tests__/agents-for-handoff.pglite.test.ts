@@ -15,7 +15,8 @@
  *     dispatch agent only when its binding resolves;
  *   - servedAt / nobodyRuns: the newest runner stamp over the agent's keys; a
  *     pull agent on a computer served outside the window is run by nobody,
- *     one never stamped is NOT MEASURED (null), and `live` ignores both;
+ *     one never stamped is NOT MEASURED (null), an agent the question does not
+ *     apply to (dispatch, pod, no computer) is null too, and `live` ignores both;
  *   - handOff: what a hand-off FROM THE CALLING AGENT would do — the route's
  *     refusal ⇒ blocked; else the governance dry run for
  *     `focus_session.assign_agent` (no rule ⇒ proposes ⇒ asks_you); the
@@ -269,12 +270,12 @@ describe("readAgentsForHandoff — is anything running it (servedAt)", () => {
     expect(row(ON_LABEL_DEVBOX).live).toBe(true);
   });
 
-  it("not a pull agent on a computer: the question does not arise (false)", () => {
-    expect(row(HOUSE).nobodyRuns).toBe(false);
-    expect(row(BOUND).nobodyRuns).toBe(false);
+  it("not a pull agent on a computer: not applicable (null), never 'somebody runs it'", () => {
+    expect(row(HOUSE).nobodyRuns).toBeNull();
+    expect(row(BOUND).nobodyRuns).toBeNull();
     // Pull, but no computer at all.
     expect(row(NEVER).computer).toBeNull();
-    expect(row(NEVER).nobodyRuns).toBe(false);
+    expect(row(NEVER).nobodyRuns).toBeNull();
   });
 });
 
