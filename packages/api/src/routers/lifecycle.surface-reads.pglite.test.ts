@@ -61,6 +61,7 @@ vi.mock("@synap/database", async (importOriginal) => {
             { key: "lost", category: "lost" },
           ],
           unclassified: [],
+          initialStatus: null,
         };
       }
     },

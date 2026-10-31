@@ -9,7 +9,9 @@
  *  - W17: below ~10 live things / no worker → `list`;
  *  - the shared grouping still answers `entities.groupByFacetStatus`;
  *  - no declared lifecycle / unknown slug THROW (never empty columns).
- * Only `getEffectiveLifecycle` is stubbed (its own suites prove it).
+ * Only `getEffectiveLifecycle` is stubbed (its own suites prove it), except
+ * for TICKET and BUG: they read through the REAL resolver, so `lifecycle.get`'s
+ * `initialStatus` is pinned from the column the def door writes to the wire.
  */
 import { describe, it, expect, vi } from "vitest";
 
@@ -22,16 +24,24 @@ const holder = vi.hoisted(() => ({ db: undefined as unknown }));
 const DEAL = "11111111-1111-4111-8111-111111111111";
 const CLIENT = "22222222-2222-4222-8222-222222222222";
 const NOTE = "33333333-3333-4333-8333-333333333333";
+const TICKET = "44444444-4444-4444-8444-444444444444";
+const BUG = "55555555-5555-4555-8555-555555555555";
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
+  const Real = actual.ProfileResolutionService as new (db: unknown) => object;
+  const realLifecycle = (
+    Real.prototype as {
+      getEffectiveLifecycle(id: string): Promise<unknown>;
+    }
+  ).getEffectiveLifecycle;
   const mocked = {
     ...actual,
     getDb: async () => holder.db,
-    ProfileResolutionService: class extends (actual.ProfileResolutionService as new (
-      db: unknown
-    ) => object) {
+    ProfileResolutionService: class extends Real {
       async getEffectiveLifecycle(profileId: string) {
+        if (profileId === TICKET || profileId === BUG)
+          return realLifecycle.call(this, profileId);
         if (profileId === DEAL)
           return {
             propertySlug: "commercialStage",
@@ -42,6 +52,7 @@ vi.mock("@synap/database", async (importOriginal) => {
               { key: "lost", category: "lost" },
             ],
             unclassified: [],
+            initialStatus: null,
           };
         if (profileId === CLIENT)
           return {
@@ -51,6 +62,7 @@ vi.mock("@synap/database", async (importOriginal) => {
               { key: "churned", category: "lost", humanOnly: true },
             ],
             unclassified: [],
+            initialStatus: null,
           };
         return null;
       }
@@ -89,9 +101,12 @@ import {
   profiles,
   profileProperties,
   profileWorkspaceAccess,
+  propertyDefs,
   playbooks,
   skills,
   automations,
+  buildStoredConstraints,
+  setLifecycleInitialStatus,
   type db as DatabaseHandle,
 } from "@synap/database";
 
@@ -371,6 +386,80 @@ describe("lifecycle.board — a kind", () => {
       category: "lost",
       humanOnly: true,
     });
+  });
+});
+
+describe("lifecycle.get — the initial status reads back what the def door wrote", () => {
+  /** A kind whose lifecycle is a REAL def + declaring link (no stub). */
+  async function realKind(
+    client: PGlite,
+    o: { id: string; slug: string; property: string }
+  ): Promise<string> {
+    const defId = randomUUID();
+    await client.query(
+      `insert into property_defs (id, slug, value_type, constraints) values ($1, $2, 'string', $3::jsonb)`,
+      [
+        defId,
+        o.property,
+        JSON.stringify(
+          buildStoredConstraints({
+            enumOptions: [
+              { key: "new", category: "open" },
+              { key: "triage", category: "active" },
+              { key: "closed", category: "done" },
+            ],
+          })
+        ),
+      ]
+    );
+    await client.query(
+      `insert into profiles (id, slug, display_name, profile_kind, entity_scope) values ($1, $2, $2, 'kind', 'workspace')`,
+      [o.id, o.slug]
+    );
+    await client.query(
+      `insert into profile_properties (profile_id, property_def_id, is_lifecycle) values ($1, $2, true)`,
+      [o.id, defId]
+    );
+    return defId;
+  }
+
+  it("answers the declaring link's initial status, and null for a lifecycle with none", async () => {
+    const client = await freshDb();
+    await client.exec(ddlFor(propertyDefs as unknown as PgTable));
+    const ticketDef = await realKind(client, {
+      id: TICKET,
+      slug: "ticket",
+      property: "ticketStatus",
+    });
+    await realKind(client, { id: BUG, slug: "bug", property: "bugStatus" });
+    const caller = await lifecycleCaller();
+
+    // Nothing set yet: null, never a guessed first option.
+    expect(
+      (await caller.get({ profileSlug: "ticket" })).initialStatus
+    ).toBeNull();
+
+    // The def door writes it (`profile_properties.default_value`); the read
+    // door answers it. A second option, so "the first option" cannot pass.
+    expect(
+      await setLifecycleInitialStatus(holder.db as never, {
+        propertyDefId: ticketDef,
+        initialStatus: "triage",
+      })
+    ).toEqual({ status: "changed", links: 1 });
+    const ticket = await caller.get({ profileSlug: "ticket" });
+    // The REAL resolver answered (not a stub): its declared property.
+    expect(ticket.property).toBe("ticketStatus");
+    expect(ticket.initialStatus).toBe("triage");
+
+    // Another lifecycle with none set stays null.
+    const bug = await caller.get({ profileSlug: "bug" });
+    expect(bug.property).toBe("bugStatus");
+    expect(bug.initialStatus).toBeNull();
+
+    // The board's lifecycle is the same wire.
+    const board = await caller.board({ profileSlug: "ticket" });
+    expect(board.lifecycle.initialStatus).toBe("triage");
   });
 });
 
