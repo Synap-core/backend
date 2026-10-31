@@ -47,6 +47,7 @@ export const PUSH_CATEGORIES = [
   "late-or-stuck",
   "mention",
   "morning-brief",
+  "sent-by-you",
   "system",
 ] as const;
 export type PushCategory = (typeof PUSH_CATEGORIES)[number];
@@ -119,6 +120,14 @@ export const PUSH_CATEGORY_POLICY: Readonly<
     level: "passive",
     interruptionLevel: "passive",
   },
+  // The person pressed "Send to phone" on their desktop a moment ago: the
+  // push is the delivery they asked for (decision D5, be431bee). On, with a
+  // sound, never time-sensitive (they are holding the other device).
+  "sent-by-you": {
+    defaultOn: true,
+    level: "interruptive",
+    interruptionLevel: "active",
+  },
   system: { defaultOn: false, level: "passive", interruptionLevel: "passive" },
 };
 
@@ -162,6 +171,10 @@ export const PUSH_CATEGORY_LABELS: Readonly<
   "morning-brief": {
     name: "Your morning brief",
     hint: "One quiet summary a day of what waits on you",
+  },
+  "sent-by-you": {
+    name: "What you send to this phone",
+    hint: "Things you send from your desktop with Send to phone",
   },
   system: {
     name: "System notices",
@@ -247,6 +260,8 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
   "workspace.invite": "mention",
   // The once-a-day summary of what waits on you (passive, never rings).
   "ai.proactive.morning_briefing": "morning-brief",
+  // The person sent it from their desktop ("Send to phone", decision D5).
+  "handoff.to_phone": "sent-by-you",
   // Health — the Settings mark carries it; a push only if opted in.
   "pod.storage_warning": "system",
   "system.intelligence_degraded": "system",
@@ -268,10 +283,13 @@ export const PUSH_DAILY_CAP = 3;
 
 /**
  * Categories the cap never holds back and never counts: "something you own
- * broke" (incidents and failures, plan Q5.2) always reaches the phone.
+ * broke" (incidents and failures, plan Q5.2) always reaches the phone, and
+ * so does what the person sent to it themselves (`sent-by-you`): the budget
+ * limits how often the POD interrupts, never the person's own ask.
  */
 export const PUSH_CAP_EXEMPT_CATEGORIES: readonly PushCategory[] = [
   "work-broke",
+  "sent-by-you",
 ];
 
 /** The notification types whose push the cap never counts (derived, never listed). */
