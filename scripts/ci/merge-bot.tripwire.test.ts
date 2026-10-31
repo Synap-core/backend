@@ -36,6 +36,7 @@ import {
   MAX_QUEUE_FAILURES_PER_HEAD,
   MAX_TOGGLES_PER_SWEEP,
   RERUN_CHECK_NAME,
+  commitCarriers,
   dependabotOnly,
   dependsState,
   enqueueDecision,
@@ -54,6 +55,7 @@ import {
   queueFailuresSince,
   requiredChecksState,
   runBot,
+  sharedCommitOf,
   victimDecision,
   // @ts-expect-error — plain ESM script, no declarations
 } from "./merge-bot.mjs";
@@ -80,6 +82,8 @@ const pr = (over: Pr = {}): Pr => ({
   isInMergeQueue: false,
   author: { login: "Antoinesrvt" },
   labels: { nodes: [] },
+  // One commit of its own, as the GraphQL listing returns it.
+  commits: { nodes: [{ commit: { oid: `own-${over.number ?? 500}` } }] },
   ...over,
 });
 const labelled = (...names: string[]) => ({
@@ -111,6 +115,7 @@ const decide = (p: Pr, over: Pr = {}) =>
     checks: greenChecks(),
     depends: LANDED,
     files: SOURCE_FILES,
+    shared: null,
     ...over,
   });
 
@@ -1676,6 +1681,121 @@ describe(
       );
       expect(r.rerun).toHaveLength(MAX_TOGGLES_PER_SWEEP);
       expect(out).toMatch(/wait for the next sweep/);
+    });
+  }
+);
+
+// 29 Oct 2026: all 5 `invalid_merge_commit` queue removals were PRs carrying
+// the commits of another PR still unmerged in the queue: #515 and #516 both
+// carried 2be3cd7fd, #503's commit (#335 carried #332's). PRs sharing commits
+// only with an already-merged PR were never removed.
+const C503 = "2be3cd7fd" + "0".repeat(31);
+const commitsOf = (...oids: string[]) => ({
+  commits: { nodes: oids.map((oid) => ({ commit: { oid } })) },
+});
+const sharedData = () => ({
+  prs: [
+    pr({ number: 499, id: "PR_499", state: "MERGED", ...commitsOf("m499") }),
+    pr({
+      number: 503,
+      id: "PR_503",
+      headRefOid: sha("3"),
+      ...commitsOf(C503, "o503"),
+    }),
+    pr({
+      number: 515,
+      id: "PR_515",
+      headRefOid: sha("5"),
+      ...commitsOf(C503, "o515"),
+    }),
+    pr({
+      number: 516,
+      id: "PR_516",
+      headRefOid: sha("6"),
+      ...commitsOf(C503, "o516"),
+    }),
+    pr({
+      number: 520,
+      id: "PR_520",
+      headRefOid: sha("7"),
+      ...commitsOf("m499", "o520"),
+    }),
+  ],
+  checks: {
+    [sha("3")]: greenOn(sha("3")),
+    [sha("5")]: greenOn(sha("5")),
+    [sha("6")]: greenOn(sha("6")),
+    [sha("7")]: greenOn(sha("7")),
+  },
+});
+
+describe(
+  "merge-bot: a PR carrying another open PR's commits waits for it to land",
+  { timeout: 30_000 },
+  () => {
+    it("pure: #515 and #516 carry #503's commit and wait for #503; #503 itself does not wait", () => {
+      const prs = sharedData().prs;
+      const carriers = commitCarriers(prs);
+      const by = (n: number) => prs.find((p) => p.number === n);
+      expect(sharedCommitOf(by(515), carriers)).toEqual({
+        owner: 503,
+        oid: C503,
+      });
+      expect(sharedCommitOf(by(516), carriers)).toEqual({
+        owner: 503,
+        oid: C503,
+      });
+      expect(sharedCommitOf(by(503), carriers)).toBeNull();
+    });
+    it("pure: a commit shared only with a MERGED PR holds nothing", () => {
+      const prs = sharedData().prs;
+      expect(
+        sharedCommitOf(
+          prs.find((p) => p.number === 520),
+          commitCarriers(prs)
+        )
+      ).toBeNull();
+    });
+    it("pure: a PR whose commits were not read is not enqueued, and the decision needs the read", () => {
+      expect(
+        sharedCommitOf(pr({ commits: undefined }), commitCarriers([]))
+      ).toBe("unread");
+      expect(decide(pr(), { shared: "unread" }).reasons).toContain(
+        "its commits could not be read"
+      );
+      expect(decide(pr(), { shared: undefined }).reasons).toContain(
+        "commits of the open PRs: not read"
+      );
+    });
+    it("a sweep enqueues #503 and #520 (shares only with merged #499), holds #515 and #516 naming #503", async () => {
+      const { r, calls, out } = await bot(sharedData());
+      expect(r).toMatchObject({ code: 0, enqueued: [503, 520] });
+      expect(out).toMatch(
+        /#515 not enqueued: carries #503's commit 2be3cd7f; waits for #503 to land/
+      );
+      expect(out).toMatch(
+        /#516 not enqueued: carries #503's commit 2be3cd7f; waits for #503 to land/
+      );
+      // The commits come with the open-PR listing: no extra call per PR.
+      const query = (c: Call) =>
+        c.args.find((a) => a.startsWith("query=")) ?? "";
+      const listing = calls.find((c) => query(c).includes("pullRequests("));
+      expect(listing && query(listing)).toMatch(
+        /commits\(first: 100\) \{ nodes \{ commit \{ oid \} \} \}/
+      );
+      expect(
+        calls.filter((c) => /pulls\/\d+\/commits/.test(c.args[3] ?? ""))
+      ).toEqual([]);
+    });
+    it("a PR's own CI run (judged alone) still sees the other open PRs' commits", async () => {
+      const { r, out } = await bot(sharedData(), {
+        vars: { GITHUB_EVENT_NAME: "workflow_run" },
+        payload: {
+          workflow_run: { id: 9, event: "pull_request", head_sha: sha("5") },
+        },
+      });
+      expect(r.enqueued).toEqual([]);
+      expect(out).toMatch(/#515 not enqueued: carries #503's commit 2be3cd7f/);
     });
   }
 );
