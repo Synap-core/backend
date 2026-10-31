@@ -189,19 +189,19 @@ const MAKE: Record<
     );
     return id;
   },
-  automation: async (owner, ws, name) => {
+  automation: async (_owner, ws, name) => {
     const id = randomUUID();
     await q(
-      `insert into automations (id, user_id, workspace_id, name) values ($1, $2, $3, $4)`,
-      [id, owner, ws, name]
+      `insert into automations (id, workspace_id, name) values ($1, $2, $3)`,
+      [id, ws, name]
     );
     return id;
   },
-  playbook: async (owner, ws, name) => {
+  playbook: async (_owner, ws, name) => {
     const id = randomUUID();
     await q(
-      `insert into playbooks (id, user_id, workspace_id, name) values ($1, $2, $3, $4)`,
-      [id, owner, ws, name]
+      `insert into playbooks (id, workspace_id, name) values ($1, $2, $3)`,
+      [id, ws, name]
     );
     return id;
   },
