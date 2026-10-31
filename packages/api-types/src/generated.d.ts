@@ -16608,6 +16608,20 @@ export interface ScopeRollup {
 	};
 	waitingOn: WaitingOnMark[];
 }
+/**
+ * A move a thing's step offers: every declared option but the one it stands
+ * on, the main path first (declared order), then the off-path ones. It moves
+ * only through `moveStatus`; this is what a surface may offer.
+ */
+export interface StatusOfMove {
+	/** The option key a move targets. */
+	to: string;
+	label: string;
+	/** Only a person may move a thing INTO it. */
+	humanOnly: boolean;
+	/** It is a pause: the move must say what it waits on (a hold). */
+	needsHold: boolean;
+}
 type Unavailable$1 = {
 	status: "unavailable";
 };
@@ -16618,6 +16632,11 @@ export interface StatusOf {
 	status: string | null;
 	label: string | null;
 	category: LifecycleCategory | null;
+	/**
+	 * THE tone of its status: the declared option's (`lifecycleOptionTone`),
+	 * else the status word's (`resolveStatusTone`); null with no status.
+	 */
+	tone: UnitTone | null;
 	/** When it entered this status (ISO), or a stored fallback (below). */
 	since: string | null;
 	/** False: no move was recorded, so `since` is when it was created or started. */
@@ -16641,6 +16660,11 @@ export interface StatusOf {
 	} | Unavailable$1;
 	/** Sessions only: THE next move (`deriveNextMove`). */
 	nextMove?: ContinuationNextMove;
+	/**
+	 * Things with a declared lifecycle, on `include: ["moves"]` only: the
+	 * moves its step offers ({@link StatusOfMove}).
+	 */
+	moves?: StatusOfMove[];
 	link: string;
 }
 export type StatusOfAnswer = StatusOf | {
@@ -39169,6 +39193,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		statusOf: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				ids: string[];
+				include?: "moves"[] | undefined;
 			};
 			meta: object;
 			output: StatusOfAnswer[];
