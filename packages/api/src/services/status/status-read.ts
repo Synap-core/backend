@@ -358,6 +358,25 @@ export async function readStatusOf(
       )
     : null;
   goalFacts?.catch(() => undefined);
+  // The goals' judges by name, one read: what a goal's next move names. A
+  // failed read names nobody ("its judge"), never fails the answer.
+  const judgeNames = goalFacts
+    ? goalFacts
+        .then(async (f) => {
+          const { participantDisplayNames } =
+            await import("../tracks/track-participant-store.js");
+          return participantDisplayNames(
+            [...f.values()].flatMap((x) => (x.judgeId ? [x.judgeId] : []))
+          );
+        })
+        .catch((err) => {
+          logger.warn(
+            { err },
+            "statusOf: the goals' judges could not be named"
+          );
+          return new Map<string, string>();
+        })
+    : null;
 
   // ONE waiting-on read for every thing, session and run asked about.
   const questions = new Map<string, WaitingOnQuestion>();
@@ -780,7 +799,18 @@ export async function readStatusOf(
             category,
             label,
             hold: holdFact(held.hold),
-            facts: "status" in facts ? "unavailable" : facts,
+            facts:
+              "status" in facts
+                ? "unavailable"
+                : {
+                    ...facts,
+                    judge: facts.judgeId
+                      ? {
+                          id: facts.judgeId,
+                          name: (await judgeNames!).get(facts.judgeId) ?? null,
+                        }
+                      : null,
+                  },
             // The tree's open sessions, when the rollup was asked for (it
             // counts those serving it and its sub-goals too).
             ...(tree.rollup && !("status" in tree.rollup)

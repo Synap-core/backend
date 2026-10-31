@@ -451,10 +451,11 @@ export interface TrackGoalFacts {
   /** Its open runs (sessions filed into it, every member's): a count only. */
   openRuns: number;
   /**
-   * Who judges it (`goalJudge`: the judge seat, else the owner), named; what
-   * a goal's next move names (`deriveGoalNextMove`).
+   * Who judges it (`goalJudge`: the judge seat, else the owner), from the
+   * seats this read already loads; a goal's next move names them
+   * (`deriveGoalNextMove`, through statusOf's own name read).
    */
-  judge: { id: string; name: string | null } | null;
+  judgeId: string | null;
 }
 
 /**
@@ -895,15 +896,7 @@ export async function loadTrackGoalFacts(
           .from(sessionEvaluations)
           .where(inArray(sessionEvaluations.id, claimEvaluationIds))
       : Promise.resolve([]),
-    // The judges ride the same name read (one query): each goal's next move
-    // names its judge.
-    participantDisplayNames([
-      ...claims.flatMap((c) => (c.by ? [c.by] : [])),
-      ...tracks.flatMap((t) => {
-        const judge = seats.get(t.id)?.judge;
-        return judge ? [judge] : [];
-      }),
-    ]),
+    participantDisplayNames(claims.flatMap((c) => (c.by ? [c.by] : []))),
   ]);
   const evidenceOf = new Map(
     evidenceRows.map((r) => [r.id, readClaimEvidence(r.evidence)])
@@ -966,10 +959,7 @@ export async function loadTrackGoalFacts(
           : null,
       waitingOn: waitingOf.get(track.id) ?? [],
       openRuns: openSessions.filter((s) => s.trackId === track.id).length,
-      judge: (() => {
-        const id = seats.get(track.id)?.judge;
-        return id ? { id, name: claimNames.get(id) ?? null } : null;
-      })(),
+      judgeId: seats.get(track.id)?.judge ?? null,
     });
   }
   return out;
