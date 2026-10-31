@@ -627,7 +627,7 @@ async function readAttention(
     inContainerLens(containers.value.get(r.id), container ?? {})
   );
 
-  // The live state of the `session.needs_you` pointer rows.
+  // The live state of the session-pointer rows (registry `needsYou`).
   const pointerIds = notifications.flatMap((r) =>
     needsYouRole(r.type) === "session-pointer" && r.sourceId ? [r.sourceId] : []
   );
