@@ -1605,6 +1605,12 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     ttl: 0,
     groupBy: "sessionId",
     dedupeWindowMs: SESSION_ATTENTION_DEDUPE_WINDOW_MS,
+    // The push is the interrupt; the live need is the criterion's owed slot.
+    // As an "item" the row kept the session in needs-you after the person
+    // graded it, and after the session closed, until someone read the bell
+    // (16 of 92 needs-you rows on 31 Oct 2026, every one already graded or
+    // still double-counted beside its slot).
+    needsYou: "session-pointer",
     actions: [
       {
         id: "view",
