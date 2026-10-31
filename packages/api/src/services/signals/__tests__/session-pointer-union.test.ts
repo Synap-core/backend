@@ -87,6 +87,27 @@ describe("registry needsYou roles in the union", () => {
     ).toEqual(["ai.proactive.nudge"]);
   });
 
+  it("a criterion's escalation alert counts only while its session waits on the person", () => {
+    // Founder, 31 Oct 2026: a session closed with its criterion graded Pass
+    // still showed "Needs your call: …" in needs-you, with nothing to act on.
+    expect(needsYouRole("session.criterion_escalated")).toBe("session-pointer");
+    // Graded and nothing else open: the alert is history, not a need.
+    expect(count([row("session.criterion_escalated")], new Set())).toBe(0);
+    // The criterion's slot is still owed: the alert folds into that one row.
+    const r = countNeedsYou({
+      distinctClusters: 0,
+      clustersTruncated: false,
+      clusters: [],
+      notifications: [row("session.criterion_escalated")],
+      notificationsTruncated: false,
+      owedSlots: [],
+      owedTruncated: false,
+      openQuestionSessionIds: new Set(),
+      measuredOwedSessionIds: new Set([S]),
+    });
+    expect(r.notifications).toBe(0);
+  });
+
   it("an UNMEASURED question read keeps a pointer row counting, never hides it", () => {
     expect(count([row("session.needs_you")])).toBe(1);
     expect(count([row("session.needs_you")], new Set())).toBe(0);
