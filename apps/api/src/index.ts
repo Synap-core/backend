@@ -96,6 +96,7 @@ import {
   isSafeOpenId,
   isTypedOpenKind,
   normalizeOpenId,
+  packageUpdateOpenTarget,
   podAdminBrowserUrl,
 } from "./open-dispatch.js";
 import {
@@ -703,12 +704,27 @@ function applyOpenDispatch(
   return c.html(renderDeepLinkPage(result.deep, browserUrl));
 }
 
+// A template update's link (`/open/update/<slug>`, `/open/updates`): the page
+// lives on pod-admin only, so a pod without it has nowhere to send the reader.
+function applyPackageUpdateOpen(
+  c: HonoContext,
+  type: string | undefined,
+  id: string
+) {
+  const admin = configuredPodAdminBase();
+  c.header("Cache-Control", "private, no-store");
+  if (!admin.ok) return c.text("This pod has no admin website", 404);
+  const target = packageUpdateOpenTarget(type, id, admin.base.toString());
+  return target ? c.redirect(target, 302) : c.text("Invalid deep link", 400);
+}
+
 app.get("/open/:type/:id", (c) => {
   // `project` / `workspace` are lens targets (not rows the app "opens" as a
   // surface) — the browser deep-link handler switches the active lens and lands
   // on that lens's home dashboard. Backs clickable statusline links (synap-cli).
   const type = c.req.param("type").trim().toLowerCase();
   const id = normalizeOpenId(c.req.param("id"));
+  if (type === "update") return applyPackageUpdateOpen(c, type, id);
   // id is a UUID or a cell typeKey — allow only url/HTML-safe chars so it can be
   // interpolated into href/JS without escaping concerns.
   if (!isTypedOpenKind(type) || !isSafeOpenId(id)) {
@@ -754,6 +770,7 @@ app.get("/open/:id", async (c) => {
   if (!isSafeOpenId(id)) {
     return c.text("Invalid deep link", 400);
   }
+  if (id === "updates") return applyPackageUpdateOpen(c, undefined, id);
   const inferred = inferOpenTypeFromId(id);
   if (inferred) {
     return applyOpenDispatch(c, inferred, id);

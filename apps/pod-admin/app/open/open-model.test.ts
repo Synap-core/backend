@@ -6,6 +6,7 @@ import {
   entityPageMedia,
   entitySummary,
   openPathForResolved,
+  packageUpdateOpenPath,
   redactSecretProperties,
   runFlowTypeOf,
   type ResolvedOpen,
@@ -281,5 +282,26 @@ describe("entityPageMedia — what an entity's page leads with", () => {
         null
       )
     ).toEqual({ media: null, bodyIsMedia: false });
+  });
+});
+
+describe("packageUpdateOpenPath — the links the CLI and agents print", () => {
+  it("sends /open/update/<slug> to its Review page", () => {
+    expect(packageUpdateOpenPath(["update", "facecam-edit"])).toBe(
+      "/marketplace/updates/facecam-edit"
+    );
+  });
+
+  it("sends /open/updates to Marketplace › Updates", () => {
+    expect(packageUpdateOpenPath(["updates"])).toBe("/marketplace?tab=updates");
+  });
+
+  it("leaves every other address to the object routes", () => {
+    expect(packageUpdateOpenPath(["entity", ID])).toBeNull();
+    expect(packageUpdateOpenPath([ID])).toBeNull();
+    expect(packageUpdateOpenPath(["update"])).toBeNull();
+    expect(packageUpdateOpenPath(["updates", "x"])).toBeNull();
+    expect(packageUpdateOpenPath(["update", "a/b"])).toBeNull();
+    expect(packageUpdateOpenPath(["update", "<script>"])).toBeNull();
   });
 });
