@@ -77,19 +77,44 @@ export async function readOpenSessions(
 }
 
 /**
- * Open sessions owned by the person with THIS agent on the roster. Owner-
- * floored (`focus_sessions` is owner-private); `scheduled` is excluded for the
- * same reason `listOpenFocusSessions` excludes it (future work, not now).
+ * How long after a session handed to the agent went `stale` it still comes
+ * back in `handedToYou`, marked `resume`. Bounded so a worker with an empty
+ * local state (or one just moved to a new identity) never relaunches every
+ * stale session ever handed to it (plan v2 S7).
+ */
+export const HANDED_STALE_RESUME_DAYS = 7;
+
+/**
+ * Sessions owned by the person with THIS agent on the roster: the open ones,
+ * then the ones that went `stale` in the last {@link HANDED_STALE_RESUME_DAYS}
+ * days, each marked `resume` with `quietSince`. Never one the agent STARTED
+ * itself (`sessionStartedByAgentSql`): the starter is always on the roster,
+ * and that is not work handed to it (plan v2 S8). Owner-floored
+ * (`focus_sessions` is owner-private); `scheduled` is excluded for the same
+ * reason `listOpenFocusSessions` excludes it (future work, not now).
  */
 async function readHandedToYou(
   userId: string,
   agentUserId: string
 ): Promise<NonNullable<StartHere["handedToYou"]>> {
   try {
-    const { db, and, eq, inArray, desc, drizzleSql, focusSessions, users } =
-      await import("@synap/database");
+    const {
+      db,
+      and,
+      eq,
+      or,
+      not,
+      inArray,
+      asc,
+      desc,
+      drizzleSql,
+      focusSessions,
+      users,
+      sessionStartedByAgentSql,
+    } = await import("@synap/database");
     const { OPEN_SESSION_STATUSES } =
       await import("@synap-core/types/focus-sessions");
+    const { TRANSITION_EVENT_TYPES } = await import("@synap/events");
     // Reach is exclusive (THE route): a bound agent is handed work through its
     // provider, so it is never also handed the same work to pull.
     const { resolveAgentReach } =
@@ -103,27 +128,49 @@ async function readHandedToYou(
       .where(eq(users.id, agentUserId))
       .limit(1);
     if (agent?.pausedAt) return { status: "paused" };
+    const stale = eq(focusSessions.status, "stale");
+    // Went stale inside the window: its move to `stale` is its latest status
+    // transition (the one status write records each), on the event log's
+    // (subject_type, subject_id, timestamp) index.
+    const staleInWindow = drizzleSql`EXISTS (
+      SELECT 1 FROM events hy_e
+      WHERE hy_e.subject_type = 'focus_session'
+        AND hy_e.subject_id = ${focusSessions.id}::text
+        AND hy_e.type = ${TRANSITION_EVENT_TYPES.focus_session}
+        AND hy_e.timestamp >= now() - (${HANDED_STALE_RESUME_DAYS}::int * interval '1 day')
+    )`;
     const rows = await db
       .select({
         id: focusSessions.id,
         goal: focusSessions.goal,
         startedAt: focusSessions.startedAt,
+        status: focusSessions.status,
+        channelId: focusSessions.channelId,
+        expectedOutputs: focusSessions.expectedOutputs,
       })
       .from(focusSessions)
       .where(
         and(
           eq(focusSessions.userId, userId),
-          inArray(
-            focusSessions.status,
-            OPEN_SESSION_STATUSES.filter((s) => s !== "scheduled")
+          or(
+            inArray(
+              focusSessions.status,
+              OPEN_SESSION_STATUSES.filter((s) => s !== "scheduled")
+            ),
+            and(stale, staleInWindow)
           ),
-          drizzleSql`${agentUserId} = ANY(${focusSessions.agentIds})`
+          drizzleSql`${agentUserId} = ANY(${focusSessions.agentIds})`,
+          not(sessionStartedByAgentSql(agentUserId))
         )
       )
       // SESSION-KIND-LENS-EXEMPT: a roster read for ONE agent — every kind the
-      // person put it on is work it was given.
-      .orderBy(desc(focusSessions.startedAt))
+      // person put it on is work it was given. Open work first.
+      .orderBy(asc(drizzleSql`(${stale})`), desc(focusSessions.startedAt))
       .limit(HANDED_TO_YOU_READ_CAP);
+    const quietSince = await readQuietSince(
+      userId,
+      rows.filter((r) => r.status === "stale")
+    );
     return {
       count: rows.length,
       countIsLowerBound: rows.length >= HANDED_TO_YOU_READ_CAP,
@@ -131,11 +178,47 @@ async function readHandedToYou(
         id: r.id,
         goal: r.goal,
         startedAt: r.startedAt ? new Date(r.startedAt).toISOString() : null,
+        ...(r.status === "stale"
+          ? { resume: true as const, quietSince: quietSince.get(r.id) ?? null }
+          : {}),
       })),
     };
   } catch {
     return UNAVAILABLE;
   }
+}
+
+/**
+ * "Quiet since" for stale sessions: the newest activity the liveness rule
+ * measures (`loadSessionLiveness`, decision D1), else the moment the session
+ * went stale (its latest transition). Null only when neither is known.
+ */
+async function readQuietSince(
+  userId: string,
+  sessions: Array<{
+    id: string;
+    channelId: string | null;
+    expectedOutputs: unknown;
+    startedAt: Date | null;
+  }>
+): Promise<Map<string, string | null>> {
+  const out = new Map<string, string | null>();
+  if (sessions.length === 0) return out;
+  const [{ loadSessionLiveness }, { lastTransitionAt }] = await Promise.all([
+    import("../runs/session-liveness.js"),
+    import("../status/status-facts.js"),
+  ]);
+  const [live, staleAt] = await Promise.all([
+    loadSessionLiveness({ userId, roster: false }, sessions),
+    lastTransitionAt(
+      sessions.map((s) => ({ type: "focus_session" as const, id: s.id }))
+    ),
+  ]);
+  for (const s of sessions) {
+    const last = live.get(s.id)?.lastAt ?? staleAt.get(`focus_session:${s.id}`);
+    out.set(s.id, last ? new Date(last).toISOString() : null);
+  }
+  return out;
 }
 
 /** What the person owes; a failed read is `unavailable`, never "nothing". */

@@ -1,4 +1,8 @@
-import { drizzleSql, focusSessions } from "@synap/database";
+import {
+  drizzleSql,
+  focusSessions,
+  SESSION_STARTED_BY_AGENT_KEY,
+} from "@synap/database";
 import type { SQL } from "@synap/database";
 import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
 
@@ -52,7 +56,9 @@ export const HELD_RUN_META_KEY = "heldRun";
  * (`stage-gate.ts`, cleared only by `resumeCheckGateIfMet` — clearing it
  * un-holds the gate). And the provenance stamps, written only by the door that
  * did the thing: `triage` (also `acceptedBy`), `conversion` (the session →
- * object receipt) and `recalled` (what the recall door posted). A client or
+ * object receipt), `recalled` (what the recall door posted) and the agent that
+ * started it (`SESSION_STARTED_BY_AGENT_KEY` — a forged one hides handed work
+ * from that agent's `handedToYou`, or shows it its own). A client or
  * agent metadata write never carries them
  * ({@link withoutServerOwnedSessionMetadata}).
  */
@@ -70,6 +76,7 @@ export const SERVER_OWNED_SESSION_METADATA_KEYS = [
   "triage",
   "conversion",
   "recalled",
+  SESSION_STARTED_BY_AGENT_KEY,
 ] as const;
 
 /** A client/agent metadata bag with every server-owned key dropped. Pure. */
