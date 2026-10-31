@@ -5,7 +5,7 @@ import { auditLog } from "../../../utils/audit-log.js";
 import { addSessionBlocker } from "../../../services/focus-sessions/session-blocked-by.js";
 import { applyApprovedDependencyLink } from "../../../services/links/dependency-links.js";
 import {
-  isDependencyLinkType,
+  isWorkLinkType,
   normaliseDependencyRelation,
 } from "@synap-core/types/connections";
 import {
@@ -327,15 +327,15 @@ export function registerCatchAllExecutor(): void {
             await applyApprovedBlockedBy(proposal, eventPayload, doorKey)
           );
         }
-        // Every OTHER dependency edge (cross-kind `blocked_by`, `replaces`;
-        // create or delete) is applied through THE dependency door, floored on
+        // Every OTHER dependency edge (cross-kind `blocked_by`, `replaces`)
+        // and the `serves` work edge (create or delete) is applied through THE dependency door, floored on
         // the proposal's owner against today's rows — never handed to the raw
         // materializer, which would skip the endpoint floor and the
         // `link.*.completed` event.
         if (
           targetType === "link" &&
           (changeType === "create" || changeType === "delete") &&
-          isDependencyLinkType(eventPayload.linkType as string)
+          isWorkLinkType(eventPayload.linkType as string)
         ) {
           const applied = await applyApprovedDependencyLink({
             action: changeType,

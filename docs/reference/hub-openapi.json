@@ -20765,7 +20765,8 @@
                       "replaces",
                       "uses",
                       "dispatched_via",
-                      "assigned_to"
+                      "assigned_to",
+                      "serves"
                     ]
                   },
                   "metadata": { "type": "object", "additionalProperties": {} },
