@@ -14,12 +14,15 @@
  * ONE derivation for every surface (browser, relay). Pure.
  */
 
+import { AGENT_HARNESSES } from "./harnesses.js";
+
 const CONVERSATION_SEP = "|conv:";
 
-/** Harnesses whose conversation id we can turn into a reopen door. */
-export const AGENT_CONVERSATION_HARNESSES = ["claude-code"] as const;
-export type AgentConversationHarness =
-  (typeof AGENT_CONVERSATION_HARNESSES)[number];
+/** Harnesses whose conversation id we can turn into a reopen door (the registry's `reopen`). */
+export type AgentConversationHarness = Extract<
+  (typeof AGENT_HARNESSES)[number],
+  { reopen: unknown }
+>["slug"];
 
 export interface AgentConversationRef {
   harness: AgentConversationHarness;
@@ -33,9 +36,6 @@ export interface AgentConversationRef {
    */
   resumeCommand: string;
 }
-
-const CLAUDE_CODE_ID =
-  /^claude-code:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
 /** The conversation half of a client key, or null (key scope / none). */
 export function conversationOfClientKey(
@@ -59,17 +59,22 @@ export function resolveAgentConversation(
 ): AgentConversationRef | null {
   const clientKey =
     typeof metadata?.clientKey === "string" ? metadata.clientKey : null;
-  const match = CLAUDE_CODE_ID.exec(conversationOfClientKey(clientKey) ?? "");
-  if (!match) return null;
-  const conversationId = match[1]!.toLowerCase();
+  const half = conversationOfClientKey(clientKey) ?? "";
+  const at = half.indexOf(":");
+  const slug = at === -1 ? "" : half.slice(0, at);
+  const harness = AGENT_HARNESSES.find((h) => h.slug === slug && "reopen" in h);
+  if (!harness || !("reopen" in harness)) return null;
+  const id = half.slice(at + 1);
+  if (!harness.reopen.idPattern.test(id)) return null;
+  const conversationId = id.toLowerCase();
   const cwd =
     typeof metadata?.conversationCwd === "string" && metadata.conversationCwd
       ? metadata.conversationCwd
       : null;
   return {
-    harness: "claude-code",
+    harness: harness.slug as AgentConversationHarness,
     conversationId,
     cwd,
-    resumeCommand: `claude --resume ${conversationId}`,
+    resumeCommand: harness.reopen.command(conversationId),
   };
 }
