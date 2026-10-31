@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { getNotificationDef } from "../../../notifications/registry.js";
+import { materializeActions } from "../../../notifications/NotificationService.js";
 import {
   targetFromNotification,
   unionNeedsYou,
@@ -45,8 +46,17 @@ function targetOf(n: NotificationSignalInput) {
 
 describe("notification signal target view", () => {
   it("a handoff.continue row opens the session's ROOM from the inbox", () => {
-    expect(getNotificationDef("handoff.continue")).toBeDefined();
-    expect(targetOf(row("handoff.continue", "session"))).toEqual({
+    // The handoff types name the row's OWN object: `create()` writes the
+    // producer's kind + view into the stored action (`materializeActions`).
+    const def = getNotificationDef("handoff.continue");
+    expect(def).toBeDefined();
+    const stored = materializeActions(def!.actions, {
+      sourceType: "session",
+      target: { kind: "session", id: SESSION, view: "room" },
+    });
+    expect(
+      targetOf(row("handoff.continue", "session", { actions: stored }))
+    ).toEqual({
       kind: "session",
       id: SESSION,
       view: "room",

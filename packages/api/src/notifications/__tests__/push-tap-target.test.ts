@@ -172,26 +172,40 @@ describe("push tap target — the payload carries {kind,id}", () => {
     expect(routeForPushData(pushData())).toBe(`/session/${SESSION}`);
   });
 
-  it("(c) the `view` reading survives the wire — handoff.continue opens the ROOM, not the session", async () => {
-    // `handoff.continue` declares `view: 'room'`. Dropping `view` would land the
-    // tap on the session screen: plausible, wrong, and invisible.
+  it("(c) the `view` reading survives the wire — a session sent to the phone in its room opens the ROOM, not the session", async () => {
+    // `handoff.to_phone` names the row's OWN object; the producer's target
+    // carries `view: 'room'`. Dropping `view` would land the tap on the
+    // session screen: plausible, wrong, and invisible.
+    await NotificationService.create({
+      type: "handoff.to_phone",
+      userId: USER,
+      workspaceId: WORKSPACE,
+      sourceType: "session",
+      sourceId: SESSION,
+      target: { kind: "session", id: SESSION, view: "room" },
+      data: { title: "Finish the import" },
+    });
+    expect(routeForPushData(pushData())).toBe(`/room/${SESSION}`);
+    // With no target, the own-object action reads the row's sourceType.
+    expect(
+      pushTarget(getNotificationDef("handoff.to_phone")!, {
+        sourceId: SESSION,
+        sourceType: "session",
+      })
+    ).toEqual({ kind: "session", id: SESSION });
+  });
+
+  it("(c2) handoff.continue is ceilinged to in_app: never pushed back to the phone that sent it", async () => {
     await NotificationService.create({
       type: "handoff.continue",
       userId: USER,
       workspaceId: WORKSPACE,
       sourceType: "session",
       sourceId: SESSION,
-      data: { goal: "Finish the import" },
+      target: { kind: "session", id: SESSION, view: "room" },
+      data: { title: "Finish the import" },
     });
-    // `handoff.continue` is ceilinged to in_app, so nothing is pushed — the
-    // target derivation is still asserted directly, which is the unit under
-    // test here.
     expect(mockSendExpoPush).not.toHaveBeenCalled();
-    const target = pushTarget(getNotificationDef("handoff.continue")!, {
-      sourceId: SESSION,
-    });
-    expect(target).toEqual({ kind: "session", id: SESSION, view: "room" });
-    expect(routeForPushData({ ...target })).toBe(`/room/${SESSION}`);
   });
 
   it("(d) an explicit `target` overrides the registry's action", async () => {

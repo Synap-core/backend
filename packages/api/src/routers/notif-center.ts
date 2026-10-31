@@ -15,8 +15,6 @@ import {
   db,
   notifications,
   notificationPreferences,
-  focusSessions,
-  libraryGroups,
   eq,
   and,
   or,
@@ -26,13 +24,16 @@ import {
   isNull,
   isNotNull,
   lte,
-  gte,
 } from "@synap/database";
-import { NotificationService } from "../notifications/NotificationService.js";
 import { NotificationStatus } from "@synap/database";
 import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
 import { requireUserId } from "../utils/user-scoped.js";
-import { OBJECT_NAV_VIEWS } from "@synap-core/types/navigation";
+import {
+  HANDOFF_DEVICES,
+  HANDOFF_KINDS,
+  OBJECT_NAV_VIEWS,
+} from "@synap-core/types/navigation";
+import { handOff, handoffReach } from "../services/handoff/handoff.js";
 import { buildNotificationCatalogue } from "../notifications/catalogue.js";
 import {
   resolveEffectivePrefs,
@@ -92,12 +93,7 @@ async function assertPersonOwnsPhones(agentUserId: string | null | undefined) {
   await assertKeyMayWrite({ subjectType: "preference", action: "update" });
 }
 
-const HANDOFF_NOTIFICATION_TYPE = "handoff.continue";
-/** A Library group's "Continue on desktop" (its own row: the button opens the group). */
-const HANDOFF_LIBRARY_NOTIFICATION_TYPE = "handoff.continue_library";
-const HANDOFF_TARGET_KINDS = ["session", "library_group"] as const;
-/** A repeat request for the same target inside this window reuses the unread row. */
-export const HANDOFF_DEDUP_WINDOW_MS = 60_000;
+export { HANDOFF_DEDUP_WINDOW_MS } from "../services/handoff/handoff.js";
 
 export const notifCenterRouter = router({
   /**
@@ -672,27 +668,73 @@ export const notifCenterRouter = router({
     ),
 
   /**
-   * "Continue on desktop" — ask the caller's OWN desktops to pick up a run.
+   * THE handoff door (decision D5, be431bee): the person asks their OTHER
+   * device to pick up an object — `to: "desktop"` ("Continue on desktop",
+   * from relay) or `to: "phone"` ("Send to phone", from the desktop; where the
+   * verb shows: plan call 11, d28ab079).
    *
-   * Writes one `handoff.continue` notification (in-app only, see the registry
-   * row). Every signed-in desktop is in the `user:<id>` room and gets it live; a
-   * closed desktop finds it unread in the inbox. The answer says the request
-   * was DELIVERED to the pod's notification record — never that a desktop
-   * opened anything, because nothing here can know that.
+   * A pointer, never a URL: `{kind, id, view?}` with `kind` one of
+   * `HANDOFF_KINDS` (`@synap-core/types/navigation`; a client folds its own
+   * spelling with `canonicalNavKind` first). Stored as one notification
+   * (`services/handoff/handoff.ts`): a desktop gets it live or unread in its
+   * inbox; a phone gets a push when it has one, else finds it in the app.
    *
-   * - Allowlisted: kind `session`, view `room`. Anything else fails validation.
-   * - Owner floor, same as `focusSessions.get`. Someone else's session and a
-   *   missing one answer the SAME `NOT_FOUND`.
-   * - Dedup: the same target within {@link HANDOFF_DEDUP_WINDOW_MS} reuses the
-   *   still-unread notification, so a double tap does not ring twice.
-   * - A notification the pod did not write (notifications off, category muted,
-   *   write failed) is an error, never a quiet success.
+   * The answer says the request was STORED, and `reach` says what the pod
+   * knows of the person's devices of that class — never that one opened it.
+   * The object must be one the person can read (its own read floor); someone
+   * else's and a missing one answer the SAME `NOT_FOUND`.
+   */
+  handoff: protectedProcedure
+    .input(
+      z.object({
+        target: z.object({
+          kind: z.enum(HANDOFF_KINDS),
+          id: z.string().uuid(),
+          /** Only where it applies: `room` for a session. */
+          view: z.enum(OBJECT_NAV_VIEWS).optional(),
+        }),
+        to: z.enum(HANDOFF_DEVICES),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      // A handoff is a PERSON asking their own device to pick something up —
+      // a device act. An agent key cannot make that ask on their behalf.
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only you can send something to your other device — an agent can't ask for this on your behalf.",
+        });
+      }
+      await assertKeyMayWrite({
+        subjectType: "notification",
+        action: "create",
+      });
+      return handOff(requireUserId(ctx.userId), input);
+    }),
+
+  /**
+   * Which of the person's device classes the pod can reach, read BEFORE a
+   * handoff so the button says where it goes ("No desktop signed in" rather
+   * than a "Sent" into the void). From their Synap app sign-ins
+   * (`person_devices`) and, for a phone, its push registration. A hint for
+   * the words, never a gate. Owner-floored: the caller's own devices only.
+   */
+  handoffTargets: protectedProcedure.query(async ({ ctx }) =>
+    handoffReach(requireUserId(ctx.userId))
+  ),
+
+  /**
+   * "Continue on desktop", the first door: a session (view `room`) or a
+   * Library group. Kept as a thin wrapper over {@link handoff} until relay's
+   * pin passes the new door; same answer shape as before (`status`,
+   * `notificationId`). New callers use `handoff`.
    */
   requestHandoff: protectedProcedure
     .input(
       z.object({
         target: z.object({
-          kind: z.enum(HANDOFF_TARGET_KINDS),
+          kind: z.enum(["session", "library_group"]),
           id: z.string().uuid(),
         }),
         /** `room` for a session; a Library group has no view. */
@@ -700,7 +742,6 @@ export const notifCenterRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const userId = requireUserId(ctx.userId);
       const isGroup = input.target.kind === "library_group";
       if (isGroup ? input.view !== undefined : input.view !== "room") {
         throw new TRPCError({
@@ -710,8 +751,6 @@ export const notifCenterRouter = router({
             : "A session opens in its room (view: room).",
         });
       }
-      // A handoff is a PERSON asking their own desktop to pick up a run — a
-      // device act. An agent key cannot make that ask on their behalf.
       if (ctx.agentUserId) {
         throw new TRPCError({
           code: "FORBIDDEN",
@@ -720,131 +759,13 @@ export const notifCenterRouter = router({
         });
       }
       await assertKeyMayWrite({
-        subjectType: "focus_session",
-        action: "update",
+        subjectType: "notification",
+        action: "create",
       });
-
-      if (isGroup) {
-        return handOffLibraryGroup(userId, input.target.id);
-      }
-
-      const session = await db.query.focusSessions.findFirst({
-        where: and(
-          eq(focusSessions.id, input.target.id),
-          eq(focusSessions.userId, userId)
-        ),
-        columns: { id: true, goal: true, workspaceId: true },
+      const result = await handOff(requireUserId(ctx.userId), {
+        target: { ...input.target, view: input.view },
+        to: "desktop",
       });
-      if (!session) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Session not found",
-        });
-      }
-
-      const [recent] = await db
-        .select({ id: notifications.id })
-        .from(notifications)
-        .where(
-          and(
-            eq(notifications.userId, userId),
-            eq(notifications.type, HANDOFF_NOTIFICATION_TYPE),
-            eq(notifications.sourceType, "session"),
-            eq(notifications.sourceId, session.id),
-            eq(notifications.status, NotificationStatus.UNREAD),
-            gte(
-              notifications.createdAt,
-              new Date(Date.now() - HANDOFF_DEDUP_WINDOW_MS)
-            )
-          )
-        )
-        .orderBy(desc(notifications.createdAt))
-        .limit(1);
-      if (recent) {
-        return { status: "already_sent" as const, notificationId: recent.id };
-      }
-
-      const goal = session.goal.trim();
-      const notificationId = await NotificationService.create({
-        // Literal, not the const: the producer-allowlist scan reads `type: "<t>"`.
-        type: "handoff.continue",
-        userId,
-        workspaceId: session.workspaceId ?? null,
-        sourceType: "session",
-        sourceId: session.id,
-        data: {
-          goal: goal.length > 120 ? `${goal.slice(0, 119)}…` : goal,
-        },
-      });
-      if (!notificationId) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message:
-            "Your pod didn't send this to your desktop. Notifications may be turned off or muted.",
-        });
-      }
-      return { status: "sent" as const, notificationId };
+      return { status: result.status, notificationId: result.notificationId };
     }),
 });
-
-/**
- * "Continue on desktop" for a Library group: owner-floored on `library_groups`
- * (someone else's group and a missing one answer the SAME NOT_FOUND), the
- * same dedup window, and a `handoff.continue_library` notification whose
- * button and tap open the group (`library_group`, needs-you's door).
- */
-async function handOffLibraryGroup(userId: string, groupId: string) {
-  const [group] = await db
-    .select({
-      id: libraryGroups.id,
-      name: libraryGroups.name,
-      workspaceId: libraryGroups.workspaceId,
-    })
-    .from(libraryGroups)
-    .where(and(eq(libraryGroups.id, groupId), eq(libraryGroups.userId, userId)))
-    .limit(1);
-  if (!group) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Group not found" });
-  }
-  const [recent] = await db
-    .select({ id: notifications.id })
-    .from(notifications)
-    .where(
-      and(
-        eq(notifications.userId, userId),
-        eq(notifications.type, HANDOFF_LIBRARY_NOTIFICATION_TYPE),
-        eq(notifications.sourceType, "library_group"),
-        eq(notifications.sourceId, group.id),
-        eq(notifications.status, NotificationStatus.UNREAD),
-        gte(
-          notifications.createdAt,
-          new Date(Date.now() - HANDOFF_DEDUP_WINDOW_MS)
-        )
-      )
-    )
-    .orderBy(desc(notifications.createdAt))
-    .limit(1);
-  if (recent) {
-    return { status: "already_sent" as const, notificationId: recent.id };
-  }
-  const name = group.name.trim();
-  const notificationId = await NotificationService.create({
-    // Literal, not the const: the producer-allowlist scan reads `type: "<t>"`.
-    type: "handoff.continue_library",
-    userId,
-    workspaceId: group.workspaceId ?? null,
-    sourceType: "library_group",
-    sourceId: group.id,
-    data: {
-      groupName: name.length > 120 ? `${name.slice(0, 119)}…` : name,
-    },
-  });
-  if (!notificationId) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message:
-        "Your pod didn't send this to your desktop. Notifications may be turned off or muted.",
-    });
-  }
-  return { status: "sent" as const, notificationId };
-}
