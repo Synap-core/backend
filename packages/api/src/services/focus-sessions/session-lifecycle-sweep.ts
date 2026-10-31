@@ -73,7 +73,7 @@ const logger = createLogger({ module: "session-lifecycle-sweep" });
 /** Quiet time before a met session is closed for its agent. */
 export const MET_CLOSE_QUIET_HOURS = 1;
 /** Days a stale, unowed, untouched agent session waits before it is cancelled. */
-export const LONG_STALE_DAYS = 7;
+export const LONG_STALE_DAYS = workClockIn("stuck", "days");
 /** The reaper's own idle clock — when a session would go stale. */
 const STALE_HOURS = workClockIn("stale", "hours");
 /** Most sessions each move handles per tick (each runs a full door). */
