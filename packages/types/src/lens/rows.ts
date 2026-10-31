@@ -27,9 +27,11 @@ import {
 } from "../needs-you/index.js";
 import {
   resolveUnitState,
+  unitStateInputOfWaitKind,
   type UnitStateInput,
   type UnitTone,
 } from "../units/state.js";
+import { isWaitKind } from "../units/wait-kind.js";
 import {
   pathRowSessionFact,
   sessionRowInput,
@@ -298,6 +300,16 @@ export interface LensNeedsYouSignal extends GroupableSignal {
   paramName?: string | null;
   /** `owed-slot`: a relayed answer waiting for the tap — its own clock. */
   pendingRelay?: AskCardPendingRelay | null;
+  /**
+   * What kind of wait the row is (`WAIT_KINDS`), stamped by the pod on the
+   * rows that wait on the person (`owed-slot` by its blocked reason,
+   * `proposal-cluster` `approval`, `draft-asks` `answer`, `session-review`
+   * `try_it`). Its mark is THE wait-kind map's (`unitStateInputOfWaitKind`);
+   * absent (an older pod, any other kind) or unknown, the row keeps its
+   * kind's own state. A string, not `WaitKind`: a newer pod may name a kind
+   * this build does not know.
+   */
+  waitKind?: string | null;
 }
 
 /** A work-broke notification: ONE rule, owned by the Inbox buckets (`needs-you/buckets.ts`). */
@@ -431,6 +443,38 @@ export function lensRowsChangeMessage(
 /** The criterion slot kind (`CRITERION_SLOT_KIND`) — a grade owed, not an answer. */
 const CRITERION_SLOT = "criterion";
 
+/**
+ * How many things ONE item row stands for: a proposal cluster's members (at
+ * least one), one for every other kind. A session card sums the same count.
+ */
+function itemCount(s: LensNeedsYouSignal): number {
+  return s.kind === "proposal-cluster" ? Math.max(1, s.count) : 1;
+}
+
+/**
+ * An item row's state. A known `waitKind` wears THE wait-kind map's mark
+ * (`unitStateInputOfWaitKind`), so an owed slot waiting on their reply reads
+ * `with_them`, not your turn. The map says ONE of a thing; a row standing for
+ * several ({@link itemCount}) scales the count the map already set, so no
+ * second kind → state table says which field counts. Absent or unknown, the
+ * kind's own state ({@link itemShape}) stays — never `unreadable`: an older
+ * pod stamps no kind, and its rows were readable before.
+ */
+function itemState(
+  s: LensNeedsYouSignal,
+  ownState: UnitStateInput
+): UnitStateInput {
+  if (!isWaitKind(s.waitKind)) return ownState;
+  const input = unitStateInputOfWaitKind(s.waitKind);
+  const n = itemCount(s);
+  const scaled = (v: number | null | undefined) => (v ? v * n : v);
+  return {
+    ...input,
+    owedFromYou: scaled(input.owedFromYou),
+    pendingDecisions: scaled(input.pendingDecisions),
+  };
+}
+
 function itemShape(
   s: LensNeedsYouSignal
 ): Pick<LensRow, "state" | "objectKind" | "reason" | "verb"> {
@@ -462,7 +506,7 @@ function itemShape(
       };
     case "proposal-cluster":
       return {
-        state: { pendingDecisions: Math.max(1, s.count) },
+        state: { pendingDecisions: itemCount(s) },
         objectKind: "proposal",
         reason: null,
         verb: verb("approve"),
@@ -487,6 +531,17 @@ function itemShape(
         verb: verb(s.captureStatus === "needs_answer" ? "answer" : "file"),
       };
     case "access-request":
+      // A broken tool connection: nothing to decide, one act owed — sign in
+      // again. The pod stamps its wait kind (`access`), so its state is the
+      // wait-kind map's; this is the fallback for a row without one.
+      if (s.access?.subject === "capability") {
+        return {
+          state: { owedFromYou: 1 },
+          objectKind: "capability",
+          reason: null,
+          verb: verb("reconnect"),
+        };
+      }
       // Someone outside asks to be let in (an issuer, an app's origin): a
       // decision, worn like a pending proposal. The noun is WHAT would be
       // trusted, never the request record; the pod names the asker in the
@@ -525,7 +580,8 @@ function itemShape(
     case "draft-asks":
       return {
         // Not accepted yet ⇒ nothing has happened in it: `not_started`, never
-        // `working` (an agent drafted it; nobody is at it).
+        // `working` (an agent drafted it; nobody is at it). A pod that stamps
+        // its `answer` wait kind makes it your turn instead (`itemState`).
         state: { everStarted: false },
         objectKind: "session",
         // No ask count: since the founder decision of 2026-10-22 a draft's
@@ -623,6 +679,8 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
           : card
             ? card.heading
             : s.title,
+      // The wait kind's mark when the pod stamped one (`itemState`).
+      state: itemState(s, shape.state),
       // An owed slot's title and detail are the ask card's (`askCardView`):
       // the question once, and its `why` only when it adds.
       ...(card?.context ? { detail: card.context } : {}),
@@ -675,7 +733,7 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
   const owed = row.items.filter((s) => s.kind === "owed-slot").length;
   const decisions = row.items
     .filter((s) => s.kind === "proposal-cluster")
-    .reduce((n, s) => n + Math.max(1, s.count), 0);
+    .reduce((n, s) => n + itemCount(s), 0);
   return {
     key: row.key,
     cls,

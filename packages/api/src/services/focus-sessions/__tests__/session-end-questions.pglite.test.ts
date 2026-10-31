@@ -293,12 +293,13 @@ describe("a person's close stamps what the session leaves open", () => {
   });
 
   it("settles the session's needs-you rows once nothing is left — and only then", async () => {
-    const note = async (sessionId: string) => {
+    // Every pointer type settles: a graded criterion's "Needs your call" too.
+    const note = async (sessionId: string, type = "session.needs_you") => {
       const id = randomUUID();
       await q(
         `insert into notifications (id, user_id, type, source_type, source_id, status)
-         values ($1, $2, 'session.needs_you', 'session', $3, 'unread')`,
-        [id, USER, sessionId]
+         values ($1, $2, $3, 'session', $4, 'unread')`,
+        [id, USER, type, sessionId]
       );
       return id;
     };
@@ -313,15 +314,19 @@ describe("a person's close stamps what the session leaves open", () => {
     const done = await session();
     await question(done.channel);
     const doneNote = await note(done.id);
+    const doneEscalation = await note(done.id, "session.criterion_escalated");
     await completeFocusSession({ sessionId: done.id, userId: USER });
     expect(await statusOfNote(doneNote)).toBe("actioned");
+    expect(await statusOfNote(doneEscalation)).toBe("actioned");
 
     // The person still owes the act: the row stays.
     const owing = await session([ACT]);
     await question(owing.channel);
     const owingNote = await note(owing.id);
+    const owingEscalation = await note(owing.id, "session.criterion_escalated");
     await completeFocusSession({ sessionId: owing.id, userId: USER });
     expect(await statusOfNote(owingNote)).toBe("unread");
+    expect(await statusOfNote(owingEscalation)).toBe("unread");
   });
 });
 

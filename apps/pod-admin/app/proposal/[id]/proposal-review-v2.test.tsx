@@ -341,6 +341,27 @@ describe("a create with no twin", () => {
   });
 });
 
+describe("Reject and never allow (decision G3)", () => {
+  it("an agent's change offers it beside Reject", () => {
+    state.proposal = personCreate(null);
+    const seen = text(render());
+    expect(seen).toContain("Reject…");
+    expect(seen).toContain("Reject and never allow");
+  });
+
+  it("a person's own change does not: a person is never refused", () => {
+    state.proposal = { ...personCreate(null), agentUserId: null };
+    expect(text(render())).not.toContain("Reject and never allow");
+  });
+
+  it("stays beside a change that acts on its own: never narrows", () => {
+    state.proposal = skillUpdate();
+    const seen = text(render());
+    expect(seen).not.toContain("Approve and always allow");
+    expect(seen).toContain("Reject and never allow");
+  });
+});
+
 describe("the approve is bound to the revision this page drew", () => {
   it("sends the length of the revision history it rendered", () => {
     // An agent revised it twice before the page loaded; a third revise after
@@ -521,14 +542,14 @@ describe("a skill rewrite (acts on its own)", () => {
     expect(seen).toMatch(/\bcaption\b/);
   });
 
-  it("offers Approve, never 'Approve & always…' beside it", () => {
+  it("offers Approve, never 'Approve and always allow…' beside it", () => {
     state.proposal = skillUpdate();
     const seen = text(render());
     expect(presses.has("Approve")).toBe(true);
-    expect(seen).not.toContain("Approve & always");
+    expect(seen).not.toContain("Approve and always allow");
     // A plain change keeps the split.
     state.proposal = personCreate(null);
-    expect(text(render())).toContain("Approve & always");
+    expect(text(render())).toContain("Approve and always allow");
   });
 });
 
@@ -538,7 +559,7 @@ describe("a proposal whose moment passed", () => {
     const seen = text(render());
     expect(seen).toContain("Expired");
     expect(presses.has("Approve")).toBe(false);
-    expect(seen).not.toContain("Approve & always");
+    expect(seen).not.toContain("Approve and always allow");
   });
 
   it("inside its lifetime it is still a decision", () => {

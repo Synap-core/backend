@@ -153,8 +153,9 @@ export async function resolvePullRequestSessions(input: {
  * The ONE session a dev-loop fact is about, to stamp on the fact as
  * `data.sessionId` before automations match it — so an automation keyed on
  * `trigger.payload.data.sessionId` fires for a PR that names its session only
- * through an outcome ref (no `Pod session:` line), and for a `ci.finished` of
- * that PR (the contract's `pr` field). Same resolver, same owner floor as the
+ * through an outcome ref (no `Pod session:` line), for a `ci.started` /
+ * `ci.finished` of that PR (the contract's `pr` field) and for its
+ * `dev.merge_queued`. Same resolver, same owner floor as the
  * sweeper.
  *
  * `null` when the fact already carries a session, is not about a PR, or the
@@ -172,11 +173,13 @@ export async function sessionForDevLoopFact(input: {
   }
   const repo = typeof data.repo === "string" ? data.repo : null;
   const number =
-    input.type === DEV_LOOP_EVENT_TYPES.ciFinished
+    input.type === DEV_LOOP_EVENT_TYPES.ciFinished ||
+    input.type === DEV_LOOP_EVENT_TYPES.ciStarted
       ? data.pr
       : input.type === DEV_LOOP_EVENT_TYPES.prOpened ||
           input.type === DEV_LOOP_EVENT_TYPES.prMerged ||
-          input.type === DEV_LOOP_EVENT_TYPES.prClosed
+          input.type === DEV_LOOP_EVENT_TYPES.prClosed ||
+          input.type === DEV_LOOP_EVENT_TYPES.mergeQueued
         ? data.number
         : null;
   if (!repo || typeof number !== "number") return null;

@@ -27,6 +27,7 @@ import {
 const key = (over: Record<string, unknown>) => ({
   userId: "agent-a",
   lastUsedAt: null,
+  workerServedAt: null,
   instanceId: null,
   instanceLabel: null,
   isActive: true,
@@ -61,11 +62,32 @@ describe("agent presence", () => {
       lastSeenAt: "2026-09-28T09:00:00.000Z",
       host: "desktop",
       hostLabel: "devbox",
+      servedAt: null,
       activeKeys: 2,
       pendingKeys: 1,
       revokedKeys: 1,
       pendingKeyIds: ["pending-key"],
     });
+  });
+
+  it("servedAt = the newest runner stamp over the agent's keys, independent of key use; never stamped → null", async () => {
+    rows.push(
+      key({
+        lastUsedAt: new Date("2026-09-28T09:00:00Z"),
+        workerServedAt: new Date("2026-09-27T10:00:00Z"),
+      }),
+      key({
+        lastUsedAt: new Date("2026-09-27T09:00:00Z"),
+        workerServedAt: new Date("2026-09-27T11:00:00Z"),
+      }),
+      key({ lastUsedAt: new Date("2026-09-28T10:00:00Z") })
+    );
+    const p = (await loadAgentPresence(["agent-a"])).get("agent-a")!;
+    expect(p.servedAt).toBe("2026-09-27T11:00:00.000Z");
+    expect(p.lastSeenAt).toBe("2026-09-28T10:00:00.000Z");
+
+    const [never] = await withAgentPresence([{ id: "agent-new" }]);
+    expect(never.servedAt).toBeNull();
   });
 
   it("an EXPIRED key is neither live nor pending; a future expiry still counts", async () => {

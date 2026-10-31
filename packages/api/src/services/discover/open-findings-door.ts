@@ -19,15 +19,45 @@ import {
   db,
   entities,
   and,
+  or,
+  inArray,
   isNull,
   drizzleSql,
   desc,
   profileSlugScopeCondition,
 } from "@synap/database";
+import type { LifecycleCategory } from "@synap-core/types/lifecycle";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 
 /** Open BLOCKER findings read before reporting "at least N". */
 export const OPEN_FINDINGS_READ_CAP = 5;
+
+/**
+ * The categories a finding still stands in: not yet resolved (done) or
+ * dropped (lost), and not parked (paused).
+ */
+const OPEN_FINDING_CATEGORIES: LifecycleCategory[] = ["open", "active"];
+
+/**
+ * THE open predicate, shared by the blocker page and the total so the two
+ * numbers can never be derived from different populations.
+ *
+ * Read from the lifecycle COLUMNS (`moveStatus` writes them), never a
+ * property key. It used to read `properties->>'finding-status' = 'open'`, a
+ * key no profile declares and no finding carries, so `openTotal` was 0 on a
+ * pod with 296 findings and none of them resolved.
+ *
+ * A finding with NO status counts as open: nothing has resolved it. That is
+ * every finding while the kind declares no lifecycle, and every finding a
+ * declaration has not given a value yet (the projection copies only the
+ * values rows already carry, so declaring one does not move old rows). A
+ * status no option declares (`status` set, category NULL) is not counted: it
+ * is a claim this read cannot place.
+ */
+const openFinding = or(
+  inArray(entities.statusCategory, OPEN_FINDING_CATEGORIES),
+  isNull(entities.status)
+);
 
 /** One row as the door returns it — the raw bag, not yet projected. */
 export interface OpenFindingRow {
@@ -99,11 +129,7 @@ export async function readOpenBlockerFindings(
       and(
         isNull(entities.deletedAt),
         kindMatch,
-        // Read the two discriminating fields out of the JSONB bag directly.
-        // `->>` yields NULL for an absent key, and `= 'open'` is NULL-safe in
-        // the direction that matters: a finding with no status is NOT reported
-        // as open, because an unset status is not a claim.
-        drizzleSql`${entities.properties}->>'finding-status' = 'open'`,
+        openFinding,
         drizzleSql`${entities.properties}->>'severity' = 'blocker'`
       )
     )
@@ -116,13 +142,7 @@ export async function readOpenBlockerFindings(
   const [total] = await db
     .select({ n: drizzleSql<number>`count(*)::int` })
     .from(entities)
-    .where(
-      and(
-        isNull(entities.deletedAt),
-        kindMatch,
-        drizzleSql`${entities.properties}->>'finding-status' = 'open'`
-      )
-    );
+    .where(and(isNull(entities.deletedAt), kindMatch, openFinding));
 
   return {
     blockers: rows as OpenFindingRow[],

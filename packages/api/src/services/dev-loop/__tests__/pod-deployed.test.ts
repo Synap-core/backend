@@ -14,10 +14,13 @@ import {
 } from "../pod-deployed.js";
 import type { RecordObservationInput } from "../../observations/record-observation.js";
 
+/** The running build: the whole commit, as the image stamps it. */
+const BUILD_SHA = "91de41c34abc0f1e2d3c4b5a69788796a5b4c3d2";
+
 function fakeDeps(over: Partial<PodDeployedDeps> = {}) {
   const recorded: RecordObservationInput[] = [];
   const deps: PodDeployedDeps = {
-    buildSha: () => "91de41c34abc",
+    buildSha: () => BUILD_SHA,
     buildRepo: () => null,
     builtAt: () => null,
     target: () => "pod.antoinesrvt.synap.live",
@@ -55,7 +58,7 @@ describe("recordPodDeployed", () => {
       userId: "owner-1",
       data: {
         target: "pod.antoinesrvt.synap.live",
-        sha: "91de41c34abc",
+        sha: BUILD_SHA,
         updateId: "u-42",
         from: "v1.4.0",
         to: "main-91de41c",
@@ -128,6 +131,23 @@ describe("recordPodDeployed", () => {
     });
     expect(recorded).toHaveLength(1);
     expect([...seen]).toEqual([podDeployedSubjectRef("u-42")]);
+  });
+
+  it("the receipt names the WHOLE commit: a short build sha is refused, nothing recorded", async () => {
+    const { deps, recorded } = fakeDeps({ buildSha: () => "91de41c" });
+    expect(await recordPodDeployed(success, deps)).toEqual({
+      status: "skipped",
+      reason: "invalid",
+    });
+    expect(recorded).toHaveLength(0);
+  });
+
+  it("the pod's bare target (`pod`, no public url) passes the contract", async () => {
+    const { deps, recorded } = fakeDeps({ target: () => "pod" });
+    expect(await recordPodDeployed(success, deps)).toMatchObject({
+      status: "recorded",
+    });
+    expect(recorded[0]!.data).toMatchObject({ target: "pod" });
   });
 
   it("records nothing without a build sha (never a guessed one)", async () => {

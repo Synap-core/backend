@@ -1131,6 +1131,7 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
         dryRun: parsed.data.dryRun,
         packageSlugs: parsed.data.packageSlugs,
         ids: parsed.data.ids,
+        receipt: { source: "person", userId: acting.userId },
       });
       return c.json(report, 200);
     } catch (err) {

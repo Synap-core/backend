@@ -1731,7 +1731,10 @@ export type LinkType =
   // BINDING (tools.config.agentBinding). Human-written only (agentUsers.setBinding).
   | "dispatched_via"
   // participant(agent) --assigned_to--> playbook|profile|project|workspace.
-  | "assigned_to";
+  | "assigned_to"
+  // session|track --serves--> track: the work is done FOR that goal (a
+  // sub-goal serves its parent). NOT a dependency; goal rollups follow it.
+  | "serves";
 
 /** A request to create a link edge (id/createdAt assigned by the store). */
 export interface LinkInput {

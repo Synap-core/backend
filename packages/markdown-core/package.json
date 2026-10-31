@@ -55,6 +55,10 @@
       "types": "./dist/diff.d.ts",
       "import": "./dist/diff.js"
     },
+    "./merge": {
+      "types": "./dist/merge.d.ts",
+      "import": "./dist/merge.js"
+    },
     "./readable": {
       "types": "./dist/readable.d.ts",
       "import": "./dist/readable.js"

@@ -26,6 +26,10 @@ import {
 } from "@synap/database";
 import type { FocusSession } from "@synap/database/schema";
 import { withParentSessionId } from "../services/focus-sessions/parent-lineage.js";
+import {
+  readLeanSession,
+  readSessionDeploys,
+} from "../services/focus-sessions/session-lean.js";
 import { sessionListConditions } from "../services/focus-sessions/session-list-conditions.js";
 import {
   resolveSessionSubject,
@@ -193,6 +197,10 @@ import {
   WORK_GRAPH_MAX_WINDOW_HOURS,
 } from "../services/focus-sessions/work-graph.js";
 import { moveHoldInputShape } from "../services/lifecycle/hold-input.js";
+import {
+  lifecycleConflictError,
+  lifecycleConflictOf,
+} from "../services/lifecycle/conflict.js";
 import { sessionMoveRefusal } from "../services/focus-sessions/update-session.js";
 
 // ── Shared input fragment ──────────────────────────────────────────────────
@@ -1659,6 +1667,63 @@ export const focusSessionsRouter = router({
     }),
 
   /**
+   * The LEAN read of one session (C8): what a wake needs (outcomes, next move,
+   * asks, work units, the room's last 3 + unread, own gates) with none of the
+   * owner's other deploys. Same projection as Hub `GET /focus-sessions/:id`
+   * `?detail=lean` and MCP `synap_get_session` `detail:'lean'`. A procedure of
+   * its own, not a `detail` input on `get`, so `get`'s output type stays one
+   * shape for its typed callers.
+   */
+  getLean: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const roster = rosterReadFor(ctx);
+      const row = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, input.id),
+          sessionReadableWhere({ userId, roster })
+        ),
+      });
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.id} not found`,
+        });
+      }
+      return readLeanSession(row, { userId, roster });
+    }),
+
+  /**
+   * The deploys a person approved on any of the owner's sessions, by commit
+   * (C8): the gate read that `getLean` leaves out. Same read as Hub
+   * `?detail=deploys` and MCP `detail:'deploys'`.
+   */
+  deploys: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        commitSha: z.string().min(1).max(64).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const row = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, input.id),
+          sessionReadableWhere({ userId, roster: rosterReadFor(ctx) })
+        ),
+      });
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.id} not found`,
+        });
+      }
+      return readSessionDeploys(row, { userId, commitSha: input.commitSha });
+    }),
+
+  /**
    * A session's criteria, its verdict, the CURRENT evaluation per criterion
    * (human wins) and the full append-only `history` of attempts.
    */
@@ -1972,6 +2037,11 @@ export const focusSessionsRouter = router({
       z.object({
         id: z.string().uuid(),
         status: updatableStatusSchema.optional(),
+        /**
+         * With `status`: the status the caller SAW. A session that moved
+         * meanwhile is a CONFLICT and nothing is written (compare-and-set).
+         */
+        expectedStatus: z.enum(SESSION_STATUSES).optional(),
         /** With a pause: what it waits on, and when the move happened (W4). */
         ...moveHoldInputShape,
         progress: z.number().int().min(0).max(100).optional(),
@@ -2106,7 +2176,12 @@ export const focusSessionsRouter = router({
         });
       }
 
-      const { id: _id, ...patch } = input;
+      const { id: _id, expectedStatus, ...patch } = input;
+
+      // A stale move: the caller decided on a status the session left.
+      if (expectedStatus && expectedStatus !== existing.status) {
+        throw lifecycleConflictError(expectedStatus, existing.status);
+      }
 
       // R8 — a closed run stays closed: never moved back to an open status.
       const reopening = closedRunRefusal(existing.status, patch.status);
@@ -2248,6 +2323,17 @@ export const focusSessionsRouter = router({
         actor: workUnitActorOf(ctx.userId, ctx.agentUserId),
         hold: patch.hold,
         occurredAt: patch.occurredAt ? new Date(patch.occurredAt) : null,
+        expectedStatus: expectedStatus ?? null,
+      }).catch((err: unknown) => {
+        // Moved between the read above and the write: the same CONFLICT.
+        const stale = lifecycleConflictOf(err);
+        if (stale) {
+          throw lifecycleConflictError(
+            stale.conflict.expectedStatus,
+            stale.conflict.currentStatus
+          );
+        }
+        throw err;
       });
 
       // The spine record of this edit — the signal "touched by a person

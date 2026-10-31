@@ -2,14 +2,25 @@
  * THE STATUS WATCHER — every hour it notices what is late, nearly due, stuck
  * in its step, or paused past its review date, and raises each ONCE per
  * episode: the derived event `<subjectType>.signal.completed` (automations
- * trigger on it; nothing here moves a thing) and a notification to the
- * thing's owner, else its goal's owner.
+ * trigger on it; nothing here moves a thing), a notification to the
+ * thing's owner, else its goal's owner, and the realtime event
+ * `status:signal:raised` to each user who may read that status
+ * (`status-realtime.ts`, under statusOf's floor).
  *
  * EPISODE = (subject, signal, anchor); the anchor is what changes when an
  * episode ends: the step and when it was entered, the bound date, the pause
  * and its review date. The episode is claimed in `status_signal_raised`
  * before it is raised, so two racing ticks raise it once; a raise that fails
  * gives its claim back. Residual: a crash between claim and raise loses it.
+ *
+ * DEV WORK (plan 5513a09a P4.1): a PR left green and unmerged, a PR left red
+ * with no push, a red main nobody owns — each a signal for the session that
+ * owns it, read off the newest `dev.repo_snapshot` of each repo (the rules:
+ * `dev-signals.ts`). Its first raise is in-app only; it escalates once.
+ *
+ * WAIT EPISODES (status-first PR-H, `./wait-episodes.ts`): the same tick opens
+ * an episode for each wait THE waiting-on collector finds and closes the ones
+ * it no longer finds. History only: an episode notifies nobody.
  */
 import {
   and,
@@ -21,11 +32,15 @@ import {
   entities,
   entityFacets,
   eq,
+  events,
   EventRepository,
   focusSessions,
+  gte,
+  ilike,
   inArray,
   isNotNull,
   isNull,
+  notInArray,
   listableEntityWhere,
   listHolds,
   profiles,
@@ -42,6 +57,7 @@ import {
 import type { ProjectTrack } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
 import { emitSideEffects } from "@synap/events";
+import { pushStatusSignal } from "./status-realtime.js";
 import { createLogger } from "@synap-core/core";
 import {
   DATE_APPROACHING_DAYS,
@@ -60,13 +76,28 @@ import {
   resolveStatusLabel,
   resolveTrackStatusLabel,
 } from "@synap-core/types/vocabulary";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  resolveSessionTitle,
+  TERMINAL_SESSION_STATUSES,
+} from "@synap-core/types/focus-sessions";
+import {
+  DEV_LOOP_EVENT_TYPES,
+  repoSnapshotEventSchema,
+} from "@synap-core/types";
+import { formatElapsed } from "@synap-core/types/value-format";
 import { randomUUID } from "node:crypto";
 import { NotificationService } from "../../notifications/NotificationService.js";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { BELONGS_TO_PROJECT } from "../../utils/project-scope.js";
+import { SNAPSHOT_LOOKBACK_MS } from "../dev-loop/work-release.js";
+import {
+  devSignalsOf,
+  mainRedOwnedRepos,
+  type DevSignalCandidate,
+} from "./dev-signals.js";
+import { syncWaitEpisodesTick } from "./wait-episodes.js";
 import {
   dateBindingsOf,
   pageThingsInColumn,
@@ -109,6 +140,8 @@ export interface SignalCandidate {
   beganAt: string;
   /** A hold's move lens: a goal has no lens of its own. */
   workspaceId?: string | null;
+  /** Never pushed, whatever its age: a dev signal's first raise. */
+  inAppOnly?: boolean;
   facts: Record<string, unknown>;
 }
 
@@ -388,6 +421,101 @@ async function holdCandidates(now: Date): Promise<SignalCandidate[]> {
         holdReason: h.hold.reason ?? null,
       },
     }));
+}
+
+/**
+ * Dev work standing still (`dev-signals.ts`): the newest snapshot of each
+ * repo, the open `main red: …` sessions that own a red main, then each signal
+ * on its session — only a session the snapshot's poster may read (a fact
+ * names only work its producer can see). `unrouted` counts a red main whose
+ * culprit names no session: nobody to tell, never a guess.
+ */
+async function devCandidates(
+  now: Date,
+  result: { unrouted: number }
+): Promise<SignalCandidate[]> {
+  const repoOf = drizzleSql`lower(${events.data}->>'repo')`;
+  const rows = await db
+    .selectDistinctOn([repoOf], {
+      id: events.id,
+      data: events.data,
+      userId: events.userId,
+    })
+    .from(events)
+    .where(
+      and(
+        eq(events.type, DEV_LOOP_EVENT_TYPES.repoSnapshot),
+        gte(events.timestamp, new Date(now.getTime() - SNAPSHOT_LOOKBACK_MS))
+      )
+    )
+    .orderBy(repoOf, desc(events.timestamp));
+  if (rows.length === 0) return [];
+  const owners = await db
+    .select({ title: focusSessions.title })
+    .from(focusSessions)
+    .where(
+      and(
+        ilike(focusSessions.title, "main red:%"),
+        notInArray(focusSessions.status, [...TERMINAL_SESSION_STATUSES])
+      )
+    );
+  const ownedMains = mainRedOwnedRepos(owners.map((o) => o.title));
+
+  const byPoster = new Map<string, DevSignalCandidate[]>();
+  for (const row of rows) {
+    const parsed = repoSnapshotEventSchema.safeParse(row.data);
+    if (!parsed.success) {
+      logger.warn(
+        { eventId: row.id },
+        "status watcher: a dev.repo_snapshot no longer parses — its dev signals are skipped"
+      );
+      continue;
+    }
+    for (const d of devSignalsOf(parsed.data, { now, ownedMains })) {
+      if (!d.sessionId) {
+        result.unrouted++;
+        continue;
+      }
+      byPoster.set(row.userId, [...(byPoster.get(row.userId) ?? []), d]);
+    }
+  }
+
+  const out: SignalCandidate[] = [];
+  for (const [poster, ds] of byPoster) {
+    const ids = [...new Set(ds.map((d) => d.sessionId!))];
+    const sessions = new Map<string, string>();
+    for (const part of chunks(ids)) {
+      for (const s of await db
+        .select({ id: focusSessions.id, status: focusSessions.status })
+        .from(focusSessions)
+        .where(
+          and(
+            inArray(focusSessions.id, part),
+            sessionReadableWhere({ userId: poster, roster: true })
+          )
+        ))
+        sessions.set(s.id, s.status);
+    }
+    for (const d of ds) {
+      const status = sessions.get(d.sessionId!);
+      if (status === undefined) continue;
+      out.push({
+        signal: d.signal,
+        subjectType: "focus_session",
+        subjectId: d.sessionId!,
+        facetId: null,
+        role: null,
+        status,
+        statusLabel: resolveStatusLabel(status),
+        category: null,
+        episodeKey: d.episodeKey,
+        beganAt: d.beganAt,
+        inAppOnly: !d.escalated,
+        facts: { ...d.facts, escalated: d.escalated },
+      });
+    }
+  }
+  return out;
 }
 
 // ── Where it sits, who is told ──────────────────────────────────────────────
@@ -705,6 +833,23 @@ export function signalWords(
         headline: `${name} has been paused longer than planned`,
         detail: `Paused since ${dateWords(f.pausedSince)}${f.holdReason ? `: ${String(f.holdReason)}` : ""}. Resume it, or note what it is still waiting on.`,
       };
+    // Dev work (`dev-signals.ts`): `label` names the PR or main, `name` the
+    // session that owns it.
+    case "pr_green_unmerged":
+      return {
+        headline: `${String(f.label)} is green and not merged`,
+        detail: `${name}: its checks passed and nothing has changed it for ${formatElapsed(String(f.since), now.getTime())}. Find what holds the merge, or pause the session with a reason.`,
+      };
+    case "pr_red_idle":
+      return {
+        headline: `${String(f.label)} has been red for ${formatElapsed(String(f.since), now.getTime())} with no push`,
+        detail: `${name}: fix it and push once, or hand it over.`,
+      };
+    case "main_red_unowned":
+      return {
+        headline: `${String(f.label)} has been red for ${formatElapsed(String(f.since), now.getTime())} and nobody owns the fix`,
+        detail: `${f.culpritLabel ? `It turned red with ${String(f.culpritLabel)}` : "It turned red"}${f.reason ? `: ${String(f.reason)}` : ""}. Own it with a session titled "main red: ${String(f.repo).split("/").pop()} …", or name the PR that fixes it.`,
+      };
   }
 }
 
@@ -727,6 +872,10 @@ export interface StatusWatcherResult {
   raised: number;
   /** Raised with nobody to tell. */
   unowned: number;
+  /** Dev signals that name no session to raise on (a red main's culprit unknown). */
+  unrouted: number;
+  /** Wait episodes opened and closed this tick (null: their write failed). */
+  waitEpisodes: { opened: number; closed: number; unread: number } | null;
 }
 
 /** One tick. A read that fails is logged and skipped, never the whole tick. */
@@ -741,10 +890,27 @@ export async function runStatusWatcher(
       );
       return [] as SignalCandidate[];
     });
+  const dev = { unrouted: 0 };
   const noticed = [
     ...(await read("lifecycles", lifecycleCandidates(now))),
     ...(await read("holds", holdCandidates(now))),
+    ...(await read("dev work", devCandidates(now, dev))),
   ];
+  // Wait episodes first: a failure there is logged, never the signals'.
+  const waitEpisodes = await syncWaitEpisodesTick(
+    now,
+    noticed.map((c) => ({
+      subjectType: c.subjectType,
+      subjectId: c.subjectId,
+      facetId: c.facetId,
+    }))
+  ).catch((err) => {
+    logger.error(
+      { err },
+      "status watcher: wait episodes could not be written — they catch up on the next tick"
+    );
+    return null;
+  });
   const claims = await claimStatusSignals(
     db,
     noticed.map((c) => ({
@@ -759,6 +925,8 @@ export async function runStatusWatcher(
     noticed: noticed.length,
     raised: 0,
     unowned: 0,
+    unrouted: dev.unrouted,
+    waitEpisodes,
   };
   if (claims.length === 0) return result;
 
@@ -821,6 +989,9 @@ async function raise(
   // The person the event is about: who is told, else the thing's holder
   // (possibly an agent). `source: "system"` records that the watcher raised it.
   const userId = ownerId ?? place.holderId;
+  // The words travel with the event: the session feed (`signal_raised`)
+  // hands them to the agent as the person reads them.
+  const words = signalWords(c, place.name, now);
   const data = {
     signal: c.signal,
     subjectType: c.subjectType,
@@ -835,6 +1006,8 @@ async function raise(
     trackId: place.trackId,
     beganAt: c.beganAt,
     ...c.facts,
+    headline: words.headline,
+    detail: words.detail,
   };
   await new EventRepository(sql).append({
     id: eventId,
@@ -858,6 +1031,17 @@ async function raise(
     eventId,
     data: { ...data, profileSlug: place.profileSlug },
   });
+  // Realtime: `status:signal:raised` to each user who may read this status
+  // (statusOf's floor, `status-realtime.ts`). Fire-and-forget; never throws.
+  void pushStatusSignal({
+    signal: c.signal,
+    subjectType: c.subjectType,
+    subjectId: c.subjectId,
+    facetId: c.facetId,
+    role: c.role,
+    beganAt: c.beganAt,
+    raisedAt: now,
+  });
   if (!ownerId) return;
   const { type, sourceType } = SIGNAL_NOTIFICATION[c.subjectType];
   // `create` logs its own failures and does not throw: a lost notification is
@@ -870,7 +1054,9 @@ async function raise(
     sourceId: c.subjectId,
     // One needs-you row per signal and kind of thing ("and 4 more like it").
     groupKey: `status-signal:${c.signal}:${c.role ?? place.profileSlug ?? c.subjectType}`,
-    inAppOnly: now.getTime() - Date.parse(c.beganAt) > SIGNAL_BACKLOG_AFTER_MS,
-    data: signalWords(c, place.name, now),
+    inAppOnly:
+      c.inAppOnly === true ||
+      now.getTime() - Date.parse(c.beganAt) > SIGNAL_BACKLOG_AFTER_MS,
+    data: words,
   });
 }

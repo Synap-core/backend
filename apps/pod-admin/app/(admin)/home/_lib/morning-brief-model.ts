@@ -1,5 +1,5 @@
 /**
- * Which notification is the person's morning brief (PA-D-03): the newest
+ * Which notification is the person's morning brief (audit abbc7a19 PA-D-03): the newest
  * `ai.proactive.morning_briefing` (producer `services/morning-brief`,
  * backend#492). Pure; `morning-brief.tsx` reads and draws it.
  */

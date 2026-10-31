@@ -79,6 +79,11 @@ vi.mock("../services/signals/access-requests.js", async (orig) => ({
   listPendingAppRequests: async () => ({ rows: [], truncated: false }),
   listPendingKeyRequests: async () => ({ rows: [], truncated: false }),
 }));
+// The broken-connection half: pinned by its own PGlite suite
+// (`broken-connections.pglite.test.ts`); none here.
+vi.mock("../services/signals/broken-connections.js", () => ({
+  listBrokenConnections: async () => ({ rows: [], truncated: false }),
+}));
 // The viewer's open space invites: pinned by their own PGlite suite
 // (`space-invites.pglite.test.ts`); none here.
 vi.mock("../services/signals/space-invites.js", () => ({
@@ -360,18 +365,21 @@ describe("signals: session.needs_you in needs-you (session.room_update retired)"
     expect((await count()).needsYou).toBe(0);
   });
 
-  it("the fold is keyed on the registry role, never on the session id: session.unblocked stays", async () => {
+  it("the fold is keyed on the registry role, never on the session id: session.unblocked is From the system, not folded away", async () => {
     const s = await seedSession({ owed: true });
     await notify("session.unblocked", s, "system");
     await notify("session.needs_you", s);
 
     const c = await count();
     expect(c.blocked).toBe(1);
-    expect(c.notifications).toBe(1);
-    expect(c.needsYou).toBe(2);
-    expect((await list()).map((r) => r.kind).sort()).toEqual([
-      "notification",
-      "owed-slot",
+    expect(c.notifications).toBe(0);
+    expect(c.needsYou).toBe(1);
+    // No real asker: in the from_system fold, drawn and counted there.
+    expect(c.folds.fromSystem).toBe(1);
+    const rows = await list();
+    expect(rows.map((r) => [r.kind, r.needsYouClass ?? null]).sort()).toEqual([
+      ["notification", "from_system"],
+      ["owed-slot", "needs_you"],
     ]);
   });
 

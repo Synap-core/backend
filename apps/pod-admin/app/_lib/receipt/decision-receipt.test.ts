@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { setAmbientCatalogLocale } from "@synap-core/types/i18n";
+import { resolveActionLabel } from "@synap-core/types/vocabulary";
+import { afterEach, describe, expect, it } from "vitest";
 import {
+  batchApproveReceipt,
   batchRejectReceipt,
   decisionFailure,
   decisionReceipt,
@@ -8,6 +11,9 @@ import {
   undoFailureReceipt,
   undoReceipt,
 } from "./decision-receipt";
+import { fr } from "./copy";
+
+afterEach(() => setAmbientCatalogLocale("en"));
 
 const BANNED = /Error|Oops|Please|Sorry|Something went wrong|proposal|pod\b/;
 
@@ -36,6 +42,42 @@ describe("readApproveAnswer: what the pod answered an approve", () => {
     expect(readApproveAnswer({ success: true, alreadyApproved: true })).toEqual(
       { state: "no_effect", verb: "approve", already: true }
     );
+  });
+
+  it("a partial application is not 'Request approved'", () => {
+    expect(
+      readApproveAnswer({
+        success: true,
+        refusals: ["The status stays as it is: a person moves it."],
+      })
+    ).toEqual({
+      state: "partial",
+      verb: "approve",
+      left: 1,
+      detail: "The status stays as it is: a person moves it.",
+    });
+    expect(
+      readApproveAnswer({
+        success: true,
+        relationsFailed: [{ reason: "x" }, { reason: "y" }],
+      })
+    ).toEqual({ state: "partial", verb: "approve", left: 2 });
+    const r = decisionReceipt(
+      readApproveAnswer({ success: true, relationsFailed: [{}, {}] }),
+      { revertable: true }
+    );
+    expect(r).toMatchObject({
+      title: "Approved, but not all of it",
+      description: "2 parts weren’t applied.",
+      tone: "default",
+      undo: true,
+    });
+    // A refusal that is not a sentence is counted, never shown.
+    expect(
+      decisionReceipt(
+        readApproveAnswer({ success: true, refusals: ['{"code":"x"}'] })
+      ).description
+    ).toBe("1 part wasn’t applied.");
   });
 
   it("success false, or no success at all, is a failure", () => {
@@ -140,8 +182,11 @@ describe("decisionReceipt: each outcome, its words", () => {
         message: "boom",
         data: { code: "INTERNAL_SERVER_ERROR" },
       }),
-      batchRejectReceipt(3, { rejected: 2 }),
-      batchRejectReceipt(3, { rejected: 0 }),
+      batchRejectReceipt(3, 2),
+      batchRejectReceipt(3, 0),
+      batchApproveReceipt({ approved: 2, failed: 1 }),
+      batchApproveReceipt({ approved: 0, failed: 2 }),
+      decisionReceipt(readApproveAnswer({ success: true, refusals: ["x y"] })),
     ];
     for (const r of receipts) expect(words(r)).not.toMatch(BANNED);
   });
@@ -194,23 +239,70 @@ describe("undoReceipt: what the pod answered an Undo", () => {
 
 describe("batchRejectReceipt: counts the pod's answer, not the rows picked", () => {
   it("all of them", () => {
-    expect(batchRejectReceipt(3, { rejected: 3 })).toMatchObject({
+    expect(batchRejectReceipt(3, 3)).toMatchObject({
       title: "Rejected 3 requests",
     });
-    expect(batchRejectReceipt(1, { rejected: 1 }).title).toBe(
-      "Rejected 1 request"
-    );
+    expect(batchRejectReceipt(1, 1).title).toBe("Rejected 1 request");
   });
 
   it("some of them, and why the rest were not", () => {
-    const r = batchRejectReceipt(3, { rejected: 2 });
+    const r = batchRejectReceipt(3, 2);
     expect(r.title).toBe("Rejected 2 of 3 requests");
     expect(r.description).toBe("1 was already decided or withdrawn.");
   });
 
   it("none of them is never 'Rejected 3'", () => {
-    const r = batchRejectReceipt(3, { rejected: 0 });
+    const r = batchRejectReceipt(3, 0);
     expect(r.title).toBe("Nothing rejected");
     expect(r.description).toBe("3 were already decided or withdrawn.");
+  });
+});
+
+describe("batchApproveReceipt: per row, like the page lists them", () => {
+  it("all, some, none", () => {
+    expect(batchApproveReceipt({ approved: 2, failed: 0 })).toMatchObject({
+      title: "Approved 2 requests",
+      tone: "success",
+    });
+    expect(batchApproveReceipt({ approved: 1, failed: 0 }).title).toBe(
+      "Approved 1 request"
+    );
+    const some = batchApproveReceipt({ approved: 2, failed: 1 });
+    expect(some.title).toBe("Approved 2 of 3 requests");
+    expect(some.description).toMatch(/^1 couldn’t be approved/);
+    expect(some.tone).toBe("default");
+    // Nothing approved is a failure: it waits until it is closed.
+    expect(batchApproveReceipt({ approved: 0, failed: 2 })).toMatchObject({
+      title: "Nothing approved",
+      tone: "danger",
+    });
+  });
+});
+
+describe("batch counts in French agree with their number", () => {
+  it("one request is singular", () => {
+    setAmbientCatalogLocale("fr");
+    expect(batchRejectReceipt(3, 1).title).toBe("1 demande rejetée sur 3");
+    expect(batchApproveReceipt({ approved: 1, failed: 2 }).title).toBe(
+      "1 demande approuvée sur 3"
+    );
+  });
+});
+
+describe("the reject verb is the vocabulary door's, in French too", () => {
+  it("every reject receipt says the door's verb, never a twin", () => {
+    // The door's past verb ("Rejeté"), without its ending: the receipt
+    // agrees it with "demande".
+    const stem = resolveActionLabel("reject", "past", "fr")
+      .toLowerCase()
+      .slice(0, -1);
+    const rejectKeys = (Object.keys(fr) as Array<keyof typeof fr>).filter(
+      (k) => /^(reject|batchReject)\./.test(k) && !/Hint$/.test(k)
+    );
+    expect(rejectKeys.length).toBeGreaterThan(3);
+    for (const k of rejectKeys) {
+      expect(fr[k].toLowerCase(), k).toContain(stem);
+      expect(fr[k], k).not.toMatch(/refus/i);
+    }
   });
 });

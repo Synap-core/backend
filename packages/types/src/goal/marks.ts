@@ -36,6 +36,7 @@ import {
 } from "../units/index.js";
 import {
   LIFECYCLE_CATEGORY_TONE,
+  holdDevRefLabel,
   parseHoldDevRef,
   parseHoldMovesRef,
   type LifecycleCategory,
@@ -305,21 +306,20 @@ function devHoldResumes(
 ): string | null {
   const dev = parseHoldDevRef(moves);
   if (!dev) return null;
+  const name = holdDevRefLabel(dev);
   switch (dev.kind) {
-    case "pr": {
-      const pr = `${dev.repo.split("/").pop()}#${dev.number}`;
+    case "pr":
       return to === "closed"
-        ? `resumes when ${pr} is closed`
-        : `resumes when ${pr} merges`;
-    }
+        ? `resumes when ${name} is closed`
+        : `resumes when ${name} merges`;
     case "main":
-      return `resumes when ${dev.repo.split("/").pop()} main is green`;
+      return `resumes when ${name} is green`;
     case "job":
       return to === "passed"
-        ? `resumes when job ${dev.name} passes`
+        ? `resumes when ${name} passes`
         : to === "failed"
-          ? `resumes when job ${dev.name} fails`
-          : `resumes when job ${dev.name} finishes`;
+          ? `resumes when ${name} fails`
+          : `resumes when ${name} finishes`;
   }
 }
 

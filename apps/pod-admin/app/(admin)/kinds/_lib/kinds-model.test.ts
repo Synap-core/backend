@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { openIn } from "../../../../lib/open-in";
 import {
+  kindAppTarget,
   kindPill,
   kindRows,
   recordsLine,
@@ -232,5 +234,18 @@ describe("retireOutcome", () => {
         noMergeReason: "Only a pod admin can merge kinds.",
       }).message
     ).toBe("Only a pod admin can merge kinds.");
+  });
+});
+
+describe("kindAppTarget", () => {
+  it("opens the desktop Data app on the Kinds tab, filtered to the slug", () => {
+    expect(openIn(kindAppTarget("contact")).href).toBe(
+      "synap://open/app/data?tab=profiles&kindSlugs=contact"
+    );
+  });
+
+  it("keeps a slug with a separator in ONE param, never a second one", () => {
+    const href = openIn(kindAppTarget("a&b=c,d")).href;
+    expect(new URL(href).searchParams.getAll("kindSlugs")).toEqual(["a&b=c,d"]);
   });
 });

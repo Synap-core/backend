@@ -16,6 +16,7 @@ import {
   consoleRedirects,
   DIAGNOSE_DESTINATION,
   NAV_ITEMS,
+  navItem,
   navHref,
   pendingIssuerHref,
   SEARCH_DESTINATION,
@@ -114,6 +115,20 @@ describe("console nav", () => {
       (i) => i.kind && resolveObjectNounPlural(i.kind) !== i.label
     ).map((i) => `${i.id}: ${i.label} ≠ ${resolveObjectNounPlural(i.kind)}`);
     expect(forked).toEqual([]);
+  });
+
+  it("uses the registry's plural for every kind-backed palette heading", () => {
+    const forked = Object.entries(SEARCH_DESTINATION)
+      .filter(([, d]) => d.kind && resolveObjectNounPlural(d.kind) !== d.label)
+      .map(([c, d]) => `${c}: ${d.label} ≠ ${resolveObjectNounPlural(d.kind)}`);
+    expect(forked).toEqual([]);
+  });
+
+  it("pins the client places that name a kind", () => {
+    // Requests IS the proposal kind's word: without `kind` the guard above
+    // could not see it fork.
+    expect(navItem("review").kind).toBe("proposal");
+    expect(SEARCH_DESTINATION.proposal.kind).toBe("proposal");
   });
 });
 

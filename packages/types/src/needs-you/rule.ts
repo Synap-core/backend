@@ -392,10 +392,18 @@ export interface NeedsYouProposalFacts {
    * `null` / absent = not measured, which never demotes (as above).
    */
   sessionClass?: NeedsYouSessionClass | null;
+  /**
+   * "Later": the time until which THIS reader set the request aside
+   * (`proposal_snoozes`, founder decision G3). Per person — another reader's
+   * facts never carry it. Absent / `null` / past = not set aside.
+   */
+  snoozedUntil?: Date | string | null;
 }
 
 /**
- * THE rule for one pending proposal. Needs you only when something WAITS on
+ * THE rule for one pending proposal. A request the reader set aside ("Later")
+ * is Review later for them until that time, whatever else holds: they chose
+ * it. Otherwise it needs you only when something WAITS on
  * it (a gate, an owed slot, a parked run) on work that has not ended. A gate
  * is a commitment: it never waits behind a working agent and never ages. Any
  * other wait waits with its session while an agent works it (F2, E2's
@@ -408,13 +416,15 @@ export function classifyPendingProposal(
   now: Date | number = Date.now()
 ): NeedsYouProposalClass | null {
   if (p.status !== "pending") return null;
+  const at = now instanceof Date ? now.getTime() : now;
+  const snoozedUntil = timeOf(p.snoozedUntil);
+  if (snoozedUntil !== null && snoozedUntil > at) return "review_later";
   if (!p.waits.waits) return "changes_to_review";
   if (p.sessionId !== null && sessionEnded(p.sessionStatus)) {
     return "changes_to_review";
   }
   if (p.waits.reason !== "gate") {
     if (p.sessionClass === "working") return "working";
-    const at = now instanceof Date ? now.getTime() : now;
     const created = timeOf(p.createdAt);
     if (created !== null && created < at - NEEDS_YOU_REVIEW_LATER_AFTER_MS) {
       return "review_later";

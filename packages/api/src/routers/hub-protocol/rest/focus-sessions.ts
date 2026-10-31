@@ -39,6 +39,7 @@ import {
   and,
   desc,
   focusSessions,
+  LifecycleConflictError,
   playbookRuns,
   drizzleSql,
   liveRunStatusWhere,
@@ -197,7 +198,14 @@ import {
   settleRunTurnEnd,
 } from "../../../services/runs/run-turn-end.js";
 import { moveHoldInputShape } from "../../../services/lifecycle/hold-input.js";
+import { lifecycleConflictOf } from "../../../services/lifecycle/conflict.js";
 import { sessionMoveRefusal } from "../../../services/focus-sessions/update-session.js";
+import {
+  parseSessionReadDetail,
+  readLeanSession,
+  readSessionDeploys,
+  SESSION_READ_DETAIL_ERROR,
+} from "../../../services/focus-sessions/session-lean.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
@@ -474,6 +482,9 @@ const UpdateBodySchema = z.object({
   // ONE status vocabulary — the same list the tRPC `focus_sessions.update` door
   // takes, so the two write doors can never drift apart.
   status: z.enum(UPDATABLE_SESSION_STATUSES).optional(),
+  // With `status`: the status the caller SAW. A session that moved meanwhile
+  // answers 409 `conflict` and nothing is written (compare-and-set).
+  expectedStatus: z.enum(SESSION_STATUSES).optional(),
   // With a pause: what it waits on, and when the move happened (W4).
   ...moveHoldInputShape,
   progress: z.number().int().min(0).max(100).optional(),
@@ -1766,6 +1777,41 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         });
       }
 
+      // `?detail=` (C8), the same three values as MCP `synap_get_session`:
+      // `full` (default) · `lean` (a wake's read) · `deploys` (by `commitSha`).
+      const detail = parseSessionReadDetail(c.req.query("detail"));
+      if (detail === null) {
+        return c.json(
+          { error: SESSION_READ_DETAIL_ERROR(c.req.query("detail")) },
+          400
+        );
+      }
+      if (detail === "deploys") {
+        return c.json(
+          await readSessionDeploys(row, {
+            userId: acting.userId,
+            commitSha: c.req.query("commitSha") || undefined,
+          })
+        );
+      }
+      if (detail === "lean") {
+        const lean = await readLeanSession(row, { userId: acting.userId });
+        // The row's long columns (goal, criteria, stages, metadata) are not
+        // repeated: `continuation.session` carries the identity a wake needs.
+        return c.json({
+          id: row.id,
+          title: row.title,
+          status: row.status,
+          kind: attachSessionKind(attachTriage([row]))[0]?.kind,
+          workspaceId: row.workspaceId,
+          projectId: row.projectId,
+          trackId: row.trackId,
+          channelId: row.channelId,
+          updatedAt: row.updatedAt,
+          ...lean,
+        });
+      }
+
       // Same projection as tRPC `focusSessions.get` and MCP `synap_get_session`:
       // the continuation packet, which carries the rerun door's own rule.
       const { projectContinuationPacket } =
@@ -2072,6 +2118,15 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // 409: the session's state, not the caller's rights, refuses it.
       const reopening = closedRunRefusal(existing.status, patch.status);
       if (reopening) return c.json({ error: reopening }, 409);
+      // A stale move: the caller decided on a status the session left.
+      if (patch.expectedStatus && patch.expectedStatus !== existing.status) {
+        return c.json(
+          lifecycleConflictOf(
+            new LifecycleConflictError(patch.expectedStatus, existing.status)
+          ),
+          409
+        );
+      }
 
       // `outcomes` → the same two fields, UPSERTED by key onto the
       // loaded row (or onto the wholesale lists this same PATCH sent). From
@@ -2326,6 +2381,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           ...(patch.title !== undefined ? { title: patch.title } : {}),
           ...(patch.status !== undefined ? { status: patch.status } : {}),
           // Replayed with the move (the approval keeps them).
+          ...(patch.expectedStatus
+            ? { expectedStatus: patch.expectedStatus }
+            : {}),
           ...(patch.hold ? { hold: patch.hold } : {}),
           ...(patch.occurredAt ? { occurredAt: patch.occurredAt } : {}),
           ...(patch.progress !== undefined ? { progress: patch.progress } : {}),
@@ -2503,13 +2561,22 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         set.metadata = drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(metadataPatch)}::jsonb`;
       }
 
-      let [updated] = await writeSessionPatch(db, {
-        sessionId: id,
-        set,
-        actor: workUnitActorOf(userId, agentUserId),
-        hold: patch.hold,
-        occurredAt: patch.occurredAt ? new Date(patch.occurredAt) : null,
-      });
+      let updated: typeof focusSessions.$inferSelect | undefined;
+      try {
+        [updated] = await writeSessionPatch(db, {
+          sessionId: id,
+          set,
+          actor: workUnitActorOf(userId, agentUserId),
+          hold: patch.hold,
+          occurredAt: patch.occurredAt ? new Date(patch.occurredAt) : null,
+          expectedStatus: patch.expectedStatus ?? null,
+        });
+      } catch (err) {
+        // Moved between the read above and the write: the same conflict.
+        const stale = lifecycleConflictOf(err);
+        if (stale) return c.json(stale, 409);
+        throw err;
+      }
 
       const usesStamped =
         trackFiling && updated

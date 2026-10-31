@@ -6,6 +6,9 @@
  * project and is fanned out; old news is not pushed; it is told only to a
  * person who owns the thing or its goal and can read it; it shows up in
  * needs-you (`signals.count`, the real read); a bad hold row is skipped.
+ * DEV WORK: a PR left green, a PR left red, a red main nobody owns, each on
+ * the session that owns it, in-app first, escalated once, in the session's
+ * change feed.
  *
  * Stubbed: `getEffectiveLifecycle` (its own suites prove it), the event log
  * writer (to the same PGlite `events` table), Expo, the socket, and the
@@ -27,6 +30,7 @@ const h = vi.hoisted(() => ({
   tables: [] as unknown[],
   fannedOut: [] as Array<Record<string, unknown>>,
   pushes: [] as Array<Record<string, unknown>>,
+  statusPushes: [] as Array<Record<string, unknown>>,
   db: null as unknown as Record<string, unknown>,
 }));
 
@@ -116,14 +120,24 @@ vi.mock("../../../notifications/expo-push.js", () => ({
 vi.mock("../../../utils/chat-realtime-broadcast.js", () => ({
   emitChatEvent: () => undefined,
 }));
+// The realtime push of a raised signal (its audience and wire have their own
+// suite, status-realtime.pglite.test.ts): recorded here, so a raise that
+// stops pushing goes red.
+vi.mock("../status-realtime.js", () => ({
+  pushStatusSignal: async (s: Record<string, unknown>) => {
+    h.statusPushes.push(s);
+  },
+}));
 vi.mock("../../projects/project-needs-you.js", () => ({
   listSessionsAwaitingReview: async () => ({ sessions: [], truncated: false }),
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { shortDate } from "@synap-core/types/lens";
+import { WORK_CLOCK } from "@synap-core/types/work-clock";
 import { runStatusWatcher, signalWords } from "../watcher.js";
 import { signalsRouter } from "../../../routers/signals.js";
+import { listSessionChanges } from "../../focus-sessions/session-changes.js";
 
 const ME = "user-me";
 const AGENT = "user-agent";
@@ -521,6 +535,19 @@ describe("the status watcher", () => {
       [...Array(7).fill("entity"), "focus_session", "track"].sort()
     );
     expect(signals.every((p) => p.eventId)).toBe(true);
+    // Pushed in realtime once per episode, to its readers (status-realtime).
+    expect(
+      h.statusPushes
+        .map((p) => `${p.subjectType}:${p.subjectId}:${p.signal}`)
+        .sort()
+    ).toEqual(
+      raised
+        .map(
+          (e) => `${e.data.subjectType}:${e.data.subjectId}:${e.data.signal}`
+        )
+        .sort()
+    );
+    expect(h.statusPushes).toHaveLength(9);
   });
 
   it("pushes only fresh news: a signal that began over a day ago lands in-app only", async () => {
@@ -695,5 +722,231 @@ describe("signalWords", () => {
       headline: "Invoice 102 has been paused longer than planned",
       detail: `Paused since ${shortDate("2026-10-01")}: Client disputes the amount. Resume it, or note what it is still waiting on.`,
     });
+  });
+});
+
+describe("the status watcher, on dev work standing still", () => {
+  const T1 = at(6);
+  const HOUR = 3_600_000;
+  const before = (ms: number) => new Date(T1.getTime() - ms).toISOString();
+  const S_GREEN = randomUUID();
+  const S_RED = randomUUID();
+  const S_CULPRIT = randomUUID();
+  const S_ESCALATED = randomUUID();
+  const S_NOT_POSTERS = randomUUID();
+  const S_OWNS_BROWSER = randomUUID();
+  const BE = "Synap-core/backend";
+
+  const session = (id: string, title: string, owner = ME, status = "active") =>
+    q(
+      `insert into focus_sessions (id, user_id, workspace_id, goal, title, status, origin, expected_outputs, metadata, started_at, created_at, updated_at)
+       values ($1, $2, $3, $4, $5, $6, 'agent', '[]'::jsonb, '{}'::jsonb, now(), now(), now())`,
+      // goal (text) and title (varchar) each get their own parameter: one
+      // parameter in both makes Postgres deduce two types for it.
+      [id, owner, W, title, title, status]
+    );
+  const pr = (number: number, podSessionId: string, over = {}) => ({
+    number,
+    title: `PR ${number}`,
+    url: `https://github.com/${BE}/pull/${number}`,
+    headSha: `${String(number)}${"a".repeat(37)}`,
+    draft: false,
+    author: "agent",
+    updatedAt: before(WORK_CLOCK.stale + HOUR),
+    mergeable: "clean",
+    checks: "green",
+    podSessionId,
+    autoMerge: false,
+    ...over,
+  });
+  const snapshotAt = (when: Date, data: Record<string, unknown>) =>
+    q(
+      `insert into events (id, type, subject_id, subject_type, data, user_id, workspace_id, source, timestamp)
+       values ($1, 'dev.repo_snapshot', $2, 'repo', $3::jsonb, $4, $5, 'observation', $6)`,
+      [
+        randomUUID(),
+        String(data.repo),
+        JSON.stringify(data),
+        ME,
+        W,
+        when.toISOString(),
+      ]
+    );
+  const titlesTo = async (sessionId: string) =>
+    (
+      await q<{ title: string }>(
+        `select title from notifications where source_id = $1 order by created_at`,
+        [sessionId]
+      )
+    ).rows.map((r) => r.title);
+
+  beforeAll(async () => {
+    await session(S_GREEN, "Ship the dev watcher");
+    await session(S_RED, "Fix the feed");
+    await session(S_CULPRIT, "Land the types", ME, "closed");
+    await session(S_ESCALATED, "An old PR");
+    // A session the snapshot's poster may not read: its PR says nothing.
+    await session(S_NOT_POSTERS, "Someone else's", GOAL_OWNER);
+    // An open session that owns browser's red main.
+    await session(S_OWNS_BROWSER, "main red: browser tsc @1234abcd");
+    await snapshotAt(T1, {
+      repo: BE,
+      observedAt: T1.toISOString(),
+      visibility: "public",
+      main: {
+        sha: "b".repeat(40),
+        health: "red",
+        source: "github-checks",
+        redSince: {
+          sha: "c".repeat(40),
+          prNumber: 530,
+          at: before(WORK_CLOCK.quiet + HOUR),
+        },
+        reason: "typecheck: proposalType",
+      },
+      prs: [
+        pr(539, S_GREEN),
+        pr(540, S_RED, { checks: "red" }),
+        // Red because main is: not this PR's red.
+        pr(541, S_RED, { checks: "red", redInheritedFromMain: true }),
+        pr(542, S_NOT_POSTERS),
+        // Past the escalate rung a while: escalated, fresh news, pushed.
+        pr(600, S_ESCALATED, {
+          updatedAt: before(WORK_CLOCK.stuck + HOUR),
+        }),
+      ],
+      mergedToday: [
+        {
+          number: 530,
+          title: "feat(types)",
+          url: `https://github.com/${BE}/pull/530`,
+          mergedAt: before(2 * HOUR),
+          podSessionId: S_CULPRIT,
+        },
+      ],
+    });
+    await snapshotAt(T1, {
+      repo: "Synap-core/browser",
+      observedAt: T1.toISOString(),
+      visibility: "private",
+      main: {
+        sha: "d".repeat(40),
+        health: "red",
+        source: "devbox-baseline",
+        redSince: {
+          sha: "e".repeat(40),
+          prNumber: 12,
+          at: before(WORK_CLOCK.stale - HOUR),
+        },
+      },
+      prs: [],
+      mergedToday: [
+        {
+          number: 12,
+          title: "x",
+          url: "https://github.com/Synap-core/browser/pull/12",
+          mergedAt: before(30 * HOUR),
+          podSessionId: S_CULPRIT,
+        },
+      ],
+    });
+  });
+
+  it("raises each on the session that owns it, in-app first; the escalation is pushed", async () => {
+    h.pushes.length = 0;
+    await q(`update notifications set pushed_at = null`);
+    const r = await runStatusWatcher(T1);
+    expect(r.unrouted).toBe(0);
+    const raised = (await signalEvents()).filter((e) =>
+      String(e.data.signal).match(/^(pr_|main_)/)
+    );
+    expect(
+      raised
+        .map((e) => [e.data.signal, e.data.subjectId, e.data.escalated])
+        .sort()
+    ).toEqual(
+      [
+        ["pr_green_unmerged", S_GREEN, false],
+        ["pr_red_idle", S_RED, false],
+        ["main_red_unowned", S_CULPRIT, false],
+        ["pr_green_unmerged", S_ESCALATED, true],
+      ].sort()
+    );
+    for (const e of raised) {
+      expect(e.type).toBe("focus_session.signal.completed");
+      expect(e.data.ownerId).toBe(ME);
+    }
+    expect(await titlesTo(S_GREEN)).toEqual([
+      "backend#539 is green and not merged",
+    ]);
+    expect(await titlesTo(S_RED)).toEqual([
+      expect.stringMatching(/^backend#540 has been red for .+ with no push$/),
+    ]);
+    expect(await titlesTo(S_CULPRIT)).toEqual([
+      expect.stringMatching(
+        /^backend main has been red for .+ and nobody owns the fix$/
+      ),
+    ]);
+    // Nothing for a session the poster cannot read, a red that is main's, or
+    // a main that has an owner session.
+    expect(await titlesTo(S_NOT_POSTERS)).toEqual([]);
+    expect(raised.filter((e) => e.data.repo === "synap-core/browser")).toEqual(
+      []
+    );
+    // First raises are in-app only; only the escalation was pushed.
+    expect(h.pushes.map((p) => p.title)).toEqual([
+      "backend#600 is green and not merged",
+    ]);
+  });
+
+  it("does not raise the same episode again, and escalates once when it still stands", async () => {
+    await runStatusWatcher(new Date(T1.getTime() + HOUR));
+    const once = (await signalEvents(S_GREEN)).filter(
+      (e) => e.data.signal === "pr_green_unmerged"
+    );
+    expect(once).toHaveLength(1);
+    // Past the escalate rung, the same PR and head: raised once more.
+    const later = new Date(T1.getTime() + WORK_CLOCK.stuck - WORK_CLOCK.stale);
+    await runStatusWatcher(later);
+    await runStatusWatcher(new Date(later.getTime() + HOUR));
+    const twice = (await signalEvents(S_GREEN)).filter(
+      (e) => e.data.signal === "pr_green_unmerged"
+    );
+    expect(twice.map((e) => e.data.escalated)).toEqual([false, true]);
+  });
+
+  it("an open `main red: <repo>` session owns the red: nothing is raised; once it closes, it is", async () => {
+    await q(`update focus_sessions set status = 'closed' where id = $1`, [
+      S_OWNS_BROWSER,
+    ]);
+    await runStatusWatcher(new Date(T1.getTime() + 2 * HOUR));
+    const browser = (await signalEvents(S_CULPRIT)).filter(
+      (e) => e.data.repo === "synap-core/browser"
+    );
+    expect(browser.map((e) => e.data.signal)).toEqual(["main_red_unowned"]);
+  });
+
+  it("reaches the agent through the session's change feed, with the words its person reads", async () => {
+    const page = await listSessionChanges({
+      sessionId: S_GREEN,
+      userId: ME,
+      kinds: new Set(["signal_raised"] as const),
+    });
+    expect(page?.events).toEqual([
+      expect.objectContaining({
+        kind: "signal_raised",
+        signal: expect.objectContaining({
+          signal: "pr_green_unmerged",
+          headline: "backend#539 is green and not merged",
+          detail: expect.stringContaining("Ship the dev watcher:"),
+          escalated: false,
+          url: `https://github.com/${BE}/pull/539`,
+        }),
+      }),
+      expect.objectContaining({
+        kind: "signal_raised",
+        signal: expect.objectContaining({ escalated: true }),
+      }),
+    ]);
   });
 });

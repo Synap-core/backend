@@ -304,6 +304,11 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // space holds, so it is a PERSON door: the app asks for `agent.read` and the
   // person ticks it. `agent` is the subject `agent_configs` reads under.
   [/^\/agent-users\/?$/, PERSON("agent")],
+  // Which of those agents the person assigned to one target (a playbook, a
+  // kind, a project, a space): the person's own `assigned_to` row on a target
+  // they can see (`readAgentAssignment`), the read half of
+  // PUT /agent-users/:id/assignment. Same subject, same PERSON door.
+  [/^\/agent-users\/assignments\/?$/, PERSON("agent")],
   // The session row, narrowed by the route (`sessionPacketReadable`): the
   // packet is added only for a key that reads all of it.
   [

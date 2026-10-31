@@ -83,6 +83,8 @@ export {
 
 // NEW: Universal Proposals
 export * from "./proposals.js";
+// "Later" on a request, per person (0381)
+export * from "./proposal-snoozes.js";
 export * from "./proposal-cluster-mutes.js";
 
 // NEW: Entity Templates
@@ -269,6 +271,7 @@ export * from "./calendar-feed-tokens.js";
 // written in the move's own transaction; dispatched + retried from here.
 export * from "./lifecycle-transition-outbox.js";
 export * from "./status-signal-raised.js";
+export * from "./status-wait-episode.js";
 
 // Inbound webhook deliveries + observation keys (0372, pipeline-health W1):
 // stored before the door answers, and one row per observed fact.

@@ -801,6 +801,8 @@ describe("continuation packet — runners", () => {
           cwd: "/work/synap",
           machineId: MACHINE,
           agentUserId: AGENT,
+          // Live, and its client names no state: unknown, never "idle".
+          state: null,
           firstSeenAt: expect.any(String),
           lastSeenAt: expect.any(String),
           live: true,
@@ -811,11 +813,64 @@ describe("continuation packet — runners", () => {
           conversationId: "thread-42",
           cwd: null,
           agentUserId: AGENT,
+          // Gone quiet: ended, since it was last seen.
+          state: "ended",
+          stateSince: expect.any(String),
           firstSeenAt: expect.any(String),
           lastSeenAt: expect.any(String),
           live: false,
         },
       ],
+    });
+    if (packet.runners.status !== "ok") return;
+    const quiet = packet.runners.items[1]!;
+    expect(quiet.stateSince).toBe(quiet.lastSeenAt);
+  });
+
+  it("each runner carries its own word (0384); live.runner folds the LIVE ones, the most urgent first", async () => {
+    const sid = randomUUID();
+    await session(sid);
+    const keyId = randomUUID();
+    const said = (proc: string, state: string, since: Date, seen: Date) =>
+      q(
+        `insert into session_runners (session_id, client_key, process_key, user_id, api_key_id, harness, conversation_id, state, state_since, state_reported_at, first_seen_at, last_seen_at)
+         values ($1, $2, $3, $4, $5, 'claude-code', $6, $7, $8, $8, $9, $9)`,
+        [
+          sid,
+          `key:${keyId}|conv:claude-code:${CC_CONV}`,
+          proc,
+          OWNER,
+          keyId,
+          CC_CONV,
+          state,
+          since.toISOString(),
+          seen.toISOString(),
+        ]
+      );
+    const since = minutesAgo(1);
+    await said("mac:1:1761600000000", "busy", since, new Date());
+    await said("mac:2:1761600000000", "needs_permission", since, new Date());
+    // A stale permission dialog is history: it must not win the fold.
+    await said(
+      "mac:3:1761600000000",
+      "needs_permission",
+      minutesAgo(20),
+      minutesAgo(10)
+    );
+    const packet = await packetFor(sid);
+    if (packet.runners.status !== "ok") throw new Error("runners unavailable");
+    expect(
+      packet.runners.items.map((i) => [i.processId, i.state, i.live]).sort()
+    ).toEqual([
+      ["mac:1:1761600000000", "busy", true],
+      ["mac:2:1761600000000", "needs_permission", true],
+      ["mac:3:1761600000000", "ended", false],
+    ]);
+    if (packet.live.status !== "ok") throw new Error("live unavailable");
+    expect(packet.live.runner).toEqual({
+      status: "ok",
+      state: "needs_permission",
+      since: since.toISOString(),
     });
   });
 
@@ -921,6 +976,12 @@ describe("continuation packet — a failed read is unavailable, never empty", ()
       packetFor(S.room)
     );
     expect(packet.runners).toEqual({
+      status: "unavailable",
+      reason: expect.any(String),
+    });
+    // The fold is unmeasured, never "no runner said anything".
+    if (packet.live.status !== "ok") throw new Error("live unavailable");
+    expect(packet.live.runner).toEqual({
       status: "unavailable",
       reason: expect.any(String),
     });

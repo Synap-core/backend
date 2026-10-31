@@ -703,6 +703,21 @@ export interface BatchItemResult {
 }
 
 /**
+ * A batch reject's count, per ROW like `summarizeBatch`: a row is rejected
+ * when the pod's answer (`rejectedIds`) holds every member of it.
+ */
+export function rejectedRows(
+  rows: readonly ReviewRow[],
+  rejectedIds: readonly string[]
+): number {
+  const rejected = new Set(rejectedIds);
+  return rows.filter((row) => {
+    const ids = row.batchIds ?? [];
+    return ids.length > 0 && ids.every((id) => rejected.has(id));
+  }).length;
+}
+
+/**
  * A batch approve's outcome, per ROW: a row is approved when every member
  * landed; a failed member names its row's title and the pod's own reason. A
  * member the answer does not mention did not land: it is never counted as

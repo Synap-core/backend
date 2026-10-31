@@ -58,6 +58,11 @@ vi.mock("../services/signals/access-requests.js", async (orig) => ({
   listPendingAppRequests: async () => ({ rows: [], truncated: false }),
   listPendingKeyRequests: async () => ({ rows: [], truncated: false }),
 }));
+// The broken-connection half: pinned by its own PGlite suite
+// (`broken-connections.pglite.test.ts`); none here.
+vi.mock("../services/signals/broken-connections.js", () => ({
+  listBrokenConnections: async () => ({ rows: [], truncated: false }),
+}));
 // The viewer's open space invites: pinned by their own PGlite suite
 // (`space-invites.pglite.test.ts`); none here.
 vi.mock("../services/signals/space-invites.js", () => ({
@@ -101,6 +106,7 @@ import {
   podMembers,
   projectMembers,
   proposals,
+  proposalSnoozes,
   projects,
   events,
   chatTurns,
@@ -278,6 +284,8 @@ beforeAll(async () => {
     podMembers,
     projectMembers,
     proposals,
+    // "Later" (0381): the needs-you rule reads the reader's own snoozes.
+    proposalSnoozes,
     projects,
     events,
     chatTurns,

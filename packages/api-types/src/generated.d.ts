@@ -27,6 +27,16 @@ declare const WAIT_KINDS: readonly [
 	"nobody"
 ];
 export type WaitKind = (typeof WAIT_KINDS)[number];
+declare const STATUS_SIGNALS: readonly [
+	"stuck",
+	"late",
+	"approaching",
+	"hold_review_due",
+	"pr_green_unmerged",
+	"pr_red_idle",
+	"main_red_unowned"
+];
+export type StatusSignal = (typeof STATUS_SIGNALS)[number];
 declare const TRACK_STATUSES: readonly [
 	"proposed",
 	"agreed",
@@ -217,6 +227,12 @@ export interface TransitionBase {
 	 * other move. The transition log is the hold's only store.
 	 */
 	hold: RecordedHold | null;
+	/**
+	 * The wait the target step declares (`LifecycleOption.waits`), stamped by
+	 * the mover; absent when the step declares none (and on goal and session
+	 * moves, whose statuses declare no waits).
+	 */
+	wait?: TransitionWait;
 }
 /** Who made a move, for attribution (`TransitionBase.actorClass`). */
 export type TransitionActorClass = "agent" | "app" | "human" | "system";
@@ -294,6 +310,19 @@ declare const LIFECYCLE_CATEGORIES: readonly [
 	"lost"
 ];
 export type LifecycleCategory = (typeof LIFECYCLE_CATEGORIES)[number];
+/**
+ * The wait a MOVE lands in (`TransitionBase.wait`, status-first PR-H): stamped
+ * by the mover when the target step declares one (`LifecycleOption.waits`),
+ * absent otherwise. A step wait is not a pause: the hold (`hold`) stays null
+ * for an active step; the wait's history (`status_wait_episode`) starts here.
+ */
+export interface TransitionWait {
+	waitKind: WaitKind;
+	/** The step's `waits.on`. */
+	on?: HoldOn;
+	/** What `waits.refFrom` held on the thing at the move (an id, a name). */
+	ref?: string;
+}
 declare const UNIT_STATES: readonly [
 	"not_started",
 	"working",
@@ -3704,6 +3733,75 @@ export interface AiProviderModelEntry {
 	costPer1MInput?: number;
 	costPer1MOutput?: number;
 }
+/**
+ * Focus Sessions Schema
+ *
+ * A focus session is a goal-bound user work session — a discrete "working
+ * mode" where the user (and optionally IS agents) collaborate toward a
+ * stated objective.
+ *
+ * This is WORKFLOW-SIDE infrastructure, not data-side. It has no relationship
+ * to the `sessions` table, which is IS memory/compaction machinery.
+ *
+ * ── LIFECYCLE ───────────────────────────────────────────────────────────────
+ * This block must account for EVERY member of `FocusSessionStatus`. It did not:
+ * it described `active → paused ↔ active → closed (or → stale)` while the enum
+ * also carried `forming` and `scheduled`, two pre-start states the prose had
+ * never heard of. A guard now derives both sets and fails when they diverge
+ * (`__tests__/focus-session-lifecycle-doc.test.ts`), so a new status cannot be
+ * added without this paragraph being updated in the same commit — prose alone
+ * decays exactly the way the first version of this note did.
+ *
+ * PRE-START (a row exists; the work has not begun):
+ *   - scheduled — waits for a CLOCK. The session was materialized ahead of time
+ *     for a moment it is FOR; a person opens it when that moment arrives.
+ *     Produced by `materializeScheduledSession`
+ *     (api services/focus-sessions/schedule-session.ts) from a playbook whose
+ *     `schedule.mode` is `"appointment"`. This is its ONLY producer.
+ *   - forming — waits for a PERSON. Reserved for a session that has been drafted
+ *     but not yet constituted. ⚠️ STILL UNPRODUCED: nothing in any repo assigns
+ *     it (verified 2026-09-08 across the monorepo; the only occurrences are one
+ *     browser test fixture and an unrelated content status). It is NOT redundant
+ *     with triage — `services/focus-sessions/triage.ts` states outright that
+ *     acceptance is a RECEIPT (`metadata.triage.acceptedAt`), not a status,
+ *     precisely so a session can be `forming`/`scheduled` AND triage-pending at
+ *     once. Status and acceptance are orthogonal axes. `forming` is unbuilt, not
+ *     superfluous; do not repurpose or delete it without deciding what it means.
+ *
+ * RUNNING:  active → paused ↔ active
+ *
+ * EXITS (terminal — every one MUST go through `completeFocusSession`):
+ *   closed · failed · cancelled
+ *
+ * NON-TERMINAL DECAY:
+ *   - stale — auto-set by the focus-session reaper (C8 lifecycle hygiene) when
+ *     an `active`/`paused` row has had no `updatedAt` activity for
+ *     REAPER_STALE_HOURS. Non-destructive: the row can still be
+ *     completed/reopened like any other session; it only stops counting as a
+ *     live "in progress" session. The reaper is scoped to `('active','paused')`
+ *     ONLY — a `scheduled` row is never aged out, which is why the appointment
+ *     producer owns its own non-accumulation policy (roll-forward) rather than
+ *     relying on the reaper.
+ */
+/**
+ * One stage a session ENTERED (0382), oldest first — the shape of a goal's
+ * `ProjectTrackStageHistoryEntry` (0274) plus where the move came from.
+ * Appended by `appendSessionStageHistory` in the write that sets
+ * `current_stage`. A re-entered stage is a NEW entry.
+ */
+export interface SessionStageHistoryEntry {
+	stageKey: string;
+	/** The stage it came from; `null` when the session had none. */
+	fromStage: string | null;
+	/** ISO-8601. */
+	enteredAt: string;
+	/** Who moved it: the agent's user id when an agent drove it, else the human. */
+	actor: string;
+	/** The human the move is attributed to (the reviewer, on an approval). */
+	userId: string;
+	/** Which writer recorded it: the stage door, or a re-applied approval. */
+	via: "advance" | "approval";
+}
 declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	columns: {
 		agentIds: import("drizzle-orm/pg-core").PgColumn<{
@@ -4010,6 +4108,25 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			notNull: false;
 			tableName: "focus_sessions";
 		}, {}, {}>;
+		stageHistory: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgJsonb";
+			data: SessionStageHistoryEntry[];
+			dataType: "json";
+			driverParam: unknown;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: true;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "stage_history";
+			notNull: true;
+			tableName: "focus_sessions";
+		}, {}, {
+			$type: SessionStageHistoryEntry[];
+		}>;
 		stages: import("drizzle-orm/pg-core").PgColumn<{
 			baseColumn: never;
 			columnType: "PgJsonb";
@@ -6131,7 +6248,18 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  * ONLY, through `agentUsers.setAssignment` — an agent that could write it
  * could staff itself onto anyone's work. The Hub REST door lists and refuses it.
  */
- | "assigned_to";
+ | "assigned_to"
+/**
+ * session|track --serves--> track. The work is done FOR that goal: a session
+ * serving a goal (optionally naming ONE of the goal's criteria in
+ * `metadata.criterionKey`), or a sub-goal serving its parent goal. Written
+ * by THE dependency door (`services/links/dependency-links.ts`: pair, self,
+ * criterion and track→track cycle floors). NOT a dependency — no blocker
+ * reader follows it. Goal rollups do (`services/status/status-rollup.ts`):
+ * a goal's work counts the sessions filed in it OR serving it, each once,
+ * and its sub-goals are listed as `children`.
+ */
+ | "serves";
 /**
  * Playbook Runs Schema — the run ledger (executor spine, Phase 3)
  *
@@ -6244,6 +6372,15 @@ export interface SessionVerdict {
 	 */
 	state: "failing" | "incomplete" | "none" | "passing";
 }
+declare const CI_FINISHED_STATUSES: readonly [
+	"success",
+	"failure",
+	"cancelled",
+	"skipped",
+	"neutral",
+	"timed_out"
+];
+export type CiFinishedStatus = (typeof CI_FINISHED_STATUSES)[number];
 declare const repoSnapshotEventSchema: z.ZodObject<{
 	live: z.ZodOptional<z.ZodNullable<z.ZodObject<{
 		behindBy: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
@@ -6345,6 +6482,17 @@ export interface PullRequestStateFacts {
 	checks?: PullRequestChecks;
 	/** The sha `checks` is about — compare it with a newer head before trusting it. */
 	checksOn?: string;
+	/**
+	 * A check on `checksOn` is running: a `ci.started` with no later
+	 * `ci.finished` of its workflow on that sha. `checks` then holds a failure
+	 * already settled, never `passed`. Never `false`.
+	 */
+	checksRunning?: true;
+	/**
+	 * The PR is in its repository's merge queue: open, with a
+	 * `dev.merge_queued` at or after the fact that (re)opened it. Never `false`.
+	 */
+	queued?: true;
 	/**
 	 * A merge into the repository's default branch (the producer said so). Only
 	 * on `merged`; absent when the fact did not say (a stacked PR merged into
@@ -6481,6 +6629,19 @@ export interface GoalCriterionView {
 	 * (`mark: null`).
 	 */
 	evidenceWithheld?: boolean;
+	/**
+	 * WHO WORKS IT: the open sessions that serve this criterion
+	 * (`session --serves--> goal` with `metadata.criterionKey`), only those the
+	 * reader may read, oldest first. Empty = nobody on it. Absent on a write's
+	 * fallback view, which read no goal facts.
+	 */
+	servedBy?: GoalCriterionServer[];
+}
+/** One session serving a criterion, as the goal page names it. */
+export interface GoalCriterionServer {
+	sessionId: string;
+	title: string;
+	status: string;
 }
 declare const OPERATION_PERIOD_MARKS: readonly [
 	"met",
@@ -6746,6 +6907,70 @@ export interface TrackHistoryWire {
 	/** A source hit its scan cap — older events exist and are not listed. */
 	truncated: boolean;
 }
+/** Doors the event names — each opens that object's own page. */
+export interface DevTimelineRefs {
+	sessionId?: string;
+	proposalId?: string;
+	/** A pull request or a CI run's page. */
+	url?: string;
+}
+export interface DevTimelineEventBase {
+	/** Stable across reads — a client may key rows by it. */
+	id: string;
+	/** When it happened (ISO-8601). */
+	at: string;
+	/** When the pod recorded it, only when later than `at` by 1 s or more. */
+	recordedAt?: string;
+	/** Who acted, named by the pod. A producer's fact is `system`. */
+	actor: ActivityActor;
+	refs: DevTimelineRefs;
+}
+export type DevTimelineEvent = DevTimelineEventBase & ({
+	kind: "session_started";
+	title: string;
+} | {
+	category: LifecycleCategory;
+	from: string | null;
+	/** What a pause waits on and how it resumes; null for any other move. */
+	hold: RecordedHold | null;
+	kind: "status_moved";
+	reason: string | null;
+	/** A thing's ROLE moved (its slug); absent for its own status. */
+	role?: string;
+	to: string;
+} | {
+	/** A merge into the default branch; null when the fact did not say. */
+	intoDefault: boolean | null;
+	kind: "pr_closed" | "pr_merged" | "pr_opened";
+	pr: {
+		number: number;
+		repo: string;
+		title: string | null;
+		url: string;
+	};
+} | {
+	checks: {
+		/** The devbox job (a `devbox <name>` run); null for a CI workflow. */
+		job: string | null;
+		pr: number | null;
+		repo: string;
+		/** null: the run settled nothing (cancelled, skipped, neutral). */
+		result: PullRequestChecks | null;
+		sha: string;
+		status: CiFinishedStatus;
+		workflow: string | null;
+	};
+	kind: "checks_finished";
+} | {
+	kind: "decision_asked";
+	title: string | null;
+} | {
+	/** `approved` | `rejected` | `reverted` | `approval_failed`. */
+	decision: string;
+	kind: "decision_answered";
+	note: string | null;
+	title: string | null;
+});
 declare const TRACK_PARTICIPANT_ROLES: readonly [
 	"owner",
 	"judge",
@@ -6902,6 +7127,131 @@ export interface SessionInput {
 	criterionKey?: string;
 	/** The stored slot's label — what the label-matching answer doors address. */
 	slotLabel: string;
+}
+/**
+ * A stage a SESSION entered, read from its stage ledger
+ * (`focus_sessions.stage_history`, 0382; the shape of a goal's `step_moved`).
+ * Only `include: ["history"]` carries it; the timeline does not.
+ */
+export interface StatusOfStageEntered {
+	/** Stable across reads — a client may key rows by it. */
+	id: string;
+	kind: "stage_entered";
+	/** When it entered the stage (ISO-8601). */
+	at: string;
+	/** Who moved it, named by the pod: the agent when one drove it. */
+	actor: ActivityActor;
+	refs: {
+		sessionId: string;
+	};
+	/** The stage entered. */
+	stageKey: string;
+	/** The stage left; `null` when the session stood on none. */
+	fromStage: string | null;
+	/** Which writer recorded it: the stage door, or a re-applied approval. */
+	via: "advance" | "approval";
+}
+/** One entry of `include: ["history"]`. */
+export type StatusOfHistoryEvent = DevTimelineEvent | TrackHistoryEvent | StatusOfStageEntered;
+/** One role a thing wears, with the role's own status (stored on the facet). */
+export interface StatusOfRole {
+	facetId: string;
+	/** The role's slug (`lead`, `client`). */
+	role: string;
+	/** The role's display name. */
+	roleName: string;
+	status: string | null;
+	label: string | null;
+	category: LifecycleCategory | null;
+	tone: UnitTone | null;
+	/** Its CURRENT hold, when the role stands in a paused status under one. */
+	hold?: RecordedHold;
+}
+/**
+ * The account a thing works at (`works_at`), when the reader may read it: its
+ * own status and the roles it wears. A person's stage is read off its account.
+ */
+export interface StatusOfAccount {
+	id: string;
+	name: string | null;
+	status: string | null;
+	label: string | null;
+	category: LifecycleCategory | null;
+	tone: UnitTone | null;
+	roles: StatusOfRole[];
+	link: string;
+}
+/**
+ * `include: ["history"]`: THE timeline, kept to its status events, with a
+ * session's stage ledger merged in by time.
+ */
+export interface StatusOfHistory {
+	/**
+	 * Newest first: a goal's are `TrackHistoryEvent`s, a session's
+	 * `status_moved` and `stage_entered`, a thing's `status_moved`.
+	 */
+	events: StatusOfHistoryEvent[];
+	/** Older events exist and are not listed. */
+	truncated: boolean;
+}
+/** One end of a `serves` edge, as the reader may see it. */
+export interface StatusOfLinkEnd {
+	type: "goal" | "session";
+	id: string;
+	name: string | null;
+	status: string | null;
+	category: LifecycleCategory | null;
+	tone: UnitTone | null;
+	/** The goal criterion a session serves, when the edge names one. */
+	criterionKey?: string;
+}
+/** `include: ["links"]` on a goal or a session: its `serves` edges. */
+export interface StatusOfLinks {
+	/** What it serves (a goal it is done for). */
+	serves: StatusOfLinkEnd[];
+	/** What serves it (its sessions and sub-goals). */
+	servedBy: StatusOfLinkEnd[];
+}
+/** Waits counted per wait kind; a kind with none is left out. */
+export type WaitKindCounts = Partial<Record<WaitKind, number>>;
+/** The numbers a goal's bars are drawn from, for one node of its tree. */
+export interface StatusOfRollupCounts {
+	/** Its work sessions per category, each session once. */
+	byCategory: Partial<Record<LifecycleCategory, number>>;
+	/** Sessions the reaper found quiet (`stale`): nobody is moving them. */
+	stuck: number;
+	/** What its goals and open sessions wait on, per wait kind (the chips). */
+	waits: WaitKindCounts;
+}
+/** A sub-goal (`track --serves--> goal`), rolled up over its own subtree. */
+export interface StatusOfRollupChild extends StatusOfRollupCounts {
+	id: string;
+	name: string | null;
+	status: string | null;
+	category: LifecycleCategory | null;
+	tone: UnitTone | null;
+}
+/**
+ * `include: ["rollup"]` on a goal: the goal and every goal that serves it,
+ * down the tree. A node reached twice counts once; a loop of `serves` edges
+ * (the door refuses them; an old row may hold one) is walked once and named.
+ */
+export interface StatusOfRollup extends StatusOfRollupCounts {
+	/** Goals in the tree the reader may see, this one included. */
+	goals: number;
+	/** Work sessions counted, filed in or serving a goal of the tree. */
+	sessions: number;
+	/** Its direct sub-goals, each over its own subtree. */
+	children: StatusOfRollupChild[];
+	/** The walk met a loop of `serves` edges and cut it. */
+	cycle?: true;
+}
+/** `include: ["signals"]`: a status signal whose episode is still open. */
+export interface StatusOfSignal {
+	signal: StatusSignal;
+	/** The role whose lifecycle raised it; null for the thing's own. */
+	role: string | null;
+	raisedAt: string;
 }
 /**
  * `@synap-core/types/renderer-ref` — what a profile or workspace stores as its
@@ -7670,834 +8020,6 @@ export type RecordSessionSpawnResult = {
 	linked: false;
 	reason: "parent_not_found" | "self_parent";
 };
-export interface ReversibleDefaultState {
-	enabled: boolean;
-	/** The active row, so a surface can open it; null when off. */
-	ruleId: string | null;
-}
-declare const SPACE_BRIEF_SEEDED_FIELDS: readonly [
-	"purpose",
-	"goal",
-	"framing",
-	"expertise",
-	"collect",
-	"openingQuestions",
-	"doneWhen",
-	"anchors",
-	"fetch"
-];
-export type SpaceBriefSeededField = (typeof SPACE_BRIEF_SEEDED_FIELDS)[number];
-export type BriefFieldOutcome = "adopted" | "kept" | "removed" | "updated" | "written";
-export interface BriefFieldConflict {
-	field: SpaceBriefSeededField;
-	/** `edited` = the user changed a value the template since changed too;
-	 *  `unstamped` = a value written before the stamp existed differs from the
-	 *  template, so this pass cannot tell template from user. */
-	reason: "edited" | "unstamped";
-}
-export interface SpaceBriefConvergence {
-	/** The brief to store; `null` when nothing changes (no write needed). */
-	next: WorkspaceSpaceBrief | null;
-	/** The marker to store alongside `next` (or alone, when only stamps move). */
-	nextSeed: SpaceBriefSeed | null;
-	outcomes: Partial<Record<SpaceBriefSeededField, BriefFieldOutcome>>;
-	conflicts: BriefFieldConflict[];
-}
-/** Why a declared `targetProfileSlug` did not become a `target_profile_id`. */
-export type PropertyTargetUnresolvedReason = 
-/** The owning profile never entered `profileMap` (kind conflict → skipped). */
-"owner-profile-unresolved"
-/** The target slug resolves to no profile visible in this workspace's lens. */
- | "target-profile-unresolved"
-/** No property-def with this slug exists on the owning profile. */
- | "property-def-not-found"
-/** The live def is not an `entity_id` — a target would be meaningless. */
- | "property-not-entity-id"
-/** Reading the live def failed (transient) — retried on the next reconcile. */
- | "read-failed"
-/** The def resolved but the UPDATE failed — retried on the next reconcile. */
- | "write-failed";
-export interface PropertyTargetEntry {
-	profile: string;
-	slug: string;
-	targetProfileSlug: string;
-}
-export interface PropertyTargetResolutionReport {
-	/** Defs whose NULL `target_profile_id` was filled in by this pass. */
-	set: PropertyTargetEntry[];
-	/** Declared targets left NULL — non-fatal, surfaced rather than swallowed. */
-	unresolved: Array<PropertyTargetEntry & {
-		reason: PropertyTargetUnresolvedReason;
-	}>;
-}
-/**
- * INSTALL LAYER — one axis of "did this install fully land?".
- *
- * Prior art is K8s `status.conditions[]`: a LIST of typed axes, not a boolean,
- * so an object can honestly report "the workspace exists and is usable, but
- * this layer is degraded". dpkg's `iF` half-configured state and Terraform's
- * partially-updated state are the same idea — record the partial, name it, and
- * give the caller a read door, rather than rolling back or claiming success.
- *
- * WHY THIS EXISTS. A workspace install has two layers:
- *   1. `template-reconcile` — profiles / property-defs / views / entity links
- *      (`reconcileWorkspaceFromDefinition`).
- *   2. `post-workspace` — capabilities / playbooks / automations / loops / cells
- *      / action placements (`applyPackagePostWorkspace`).
- * Layer 2 failing does NOT make the workspace unusable, so `createFromDefinition`
- * deliberately does not throw — but it also had nowhere to SAY so, and therefore
- * returned a clean report for an install whose living layers all failed. The
- * applier already stamps the durable half of this truth into
- * `workspace.settings` (`provisioningStatus:"failed"`, `failedStep`,
- * `failedStepError`, projected by Hub `GET /workspaces`); this is the
- * response-shaped half, for the caller that is holding the install result right
- * now.
- *
- * OPTIONAL BY CONTRACT. Both UI consumers derive their type via
- * `RouterOutputs[...]`, so an optional field keeps them compiling and lets each
- * surface opt in to rendering it. ABSENT means "no layer reported a failure",
- * never "unknown".
- */
-export interface InstallLayerReport {
-	/** Which install layer this axis describes. */
-	layer: "post-workspace" | "template-reconcile";
-	/** `applied` = the layer ran to completion. `failed` = it threw; the workspace
-	 *  itself still exists and the install is resumable (re-run to resume). */
-	status: "applied" | "failed";
-	/** Operator-facing failure detail. Present only for `failed`. */
-	message?: string;
-}
-export interface ReconcileReport {
-	workspaceId: string;
-	dryRun: boolean;
-	settings: {
-		merged: string[];
-	};
-	/**
-	 * The space brief's three-way convergence (`settings.onboarding`). Absent
-	 * when this reconcile does not own the brief (no identity: a compose
-	 * overlay or the base-defaults pass). `conflicts` are fields the user edited
-	 * while the template moved too — left alone, reported here.
-	 */
-	brief?: {
-		conflicts: SpaceBriefConvergence["conflicts"];
-		outcomes: SpaceBriefConvergence["outcomes"];
-		/** A concurrent brief write won the compare-and-set; retried next pass. */
-		raced?: true;
-	};
-	profiles: {
-		added: string[];
-		/**
-		 * Declared slug matched an existing profile of a DIFFERENT profileKind
-		 * (kind vs role). The merge was SKIPPED and the existing row left untouched
-		 * — the caller decides (never a silent kind flip).
-		 */
-		conflicts: Array<{
-			declaredKind: string;
-			existingKind: string;
-			slug: string;
-		}>;
-		/**
-		 * Slugs where an existing same-slug profile was found but could NOT be
-		 * safely promoted (another user's private row, or the pod-wide slug seat is
-		 * held by a soft-deleted shared row), so a DUPLICATE workspace-scoped
-		 * profile was created instead. This is the one branch where the dedup
-		 * keystone knowingly fails to dedup — surfaced, never silent.
-		 */
-		deferred: string[];
-		/**
-		 * Profiles whose `uiHints.presentation` this run wrote (new or changed),
-		 * through `setProfilePresentation`. Absent when none moved.
-		 */
-		presentations?: string[];
-		/** Existing workspace-scoped profiles promoted to shared to resolve-and-share. */
-		promoted: string[];
-		reused: string[];
-		/**
-		 * Declared `scope`/`entityScope` on a REUSED slug diverged from the live
-		 * row. ADVISORY (unlike `conflicts`, which skips): the profile was still
-		 * reused and the live row left untouched — the declared scope was NOT
-		 * applied. Surfaced so `market install`/reconcile callers can decide whether
-		 * to escalate; the first creator owns placement/visibility.
-		 */
-		scopeConflicts: Array<{
-			declaredEntityScope: "pod" | "workspace" | null;
-			declaredScope: string;
-			existingEntityScope: string;
-			existingScope: string;
-			slug: string;
-		}>;
-	};
-	properties: {
-		/** New overlay/base property-defs added. */
-		added: Array<{
-			profile: string;
-			slug: string;
-		}>;
-		/** Template type differs from the live type — NOT changed; needs a decision. */
-		conflicts: Array<{
-			liveType: string;
-			profile: string;
-			slug: string;
-			templateType: string;
-		}>;
-		/** Existing property whose enum options were synced to the template (values added). */
-		enumsUpdated: Array<{
-			profile: string;
-			slug: string;
-		}>;
-		/**
-		 * The profile already links a POD-WIDE GLOBAL def (profile_id + workspace_id
-		 * NULL) with this slug, so the template's declaration was NOT applied: a
-		 * global def is shared by every kind that links it, and one template's
-		 * enum/constraints must never narrow it for all of them (the 2026-10-12
-		 * `source` incident). Rename the template's property to claim it. Optional
-		 * so older report fixtures stay valid.
-		 */
-		globalsKept?: Array<{
-			profile: string;
-			slug: string;
-		}>;
-		/**
-		 * Lifecycle declarations (0319, work model L1): `declared` = the profile's
-		 * lifecycle link was set (or already was — `unchanged` is not listed);
-		 * `refused` = the template's declaration could not be applied, with why.
-		 * Optional so pre-0319 report fixtures stay valid.
-		 */
-		lifecycles?: {
-			declared: Array<{
-				profile: string;
-				property: string;
-			}>;
-			refused: Array<{
-				profile: string;
-				reason: string;
-			}>;
-		};
-		/** Already present (same slug, same type) — left as-is. */
-		skipped: Array<{
-			profile: string;
-			slug: string;
-		}>;
-		/**
-		 * `entity_id` properties whose declared `targetProfileSlug` was resolved to
-		 * a live profile and written to `property_defs.target_profile_id` — the key
-		 * the entity picker constrains on. `set` covers defs this run created AND
-		 * pre-existing defs that were still NULL (the backfill); `unresolved` is
-		 * non-fatal, mirroring `entityLinks.unresolved`. See
-		 * `resolve-property-target-profiles.ts`.
-		 */
-		targets: PropertyTargetResolutionReport;
-	};
-	views: {
-		added: string[];
-		deferred: string[];
-		skipped: string[];
-	};
-	/**
-	 * Schema-level links between entity types (relation_defs + profile_relations).
-	 * `added` = a (source, target, type) edge that did not exist and was created.
-	 * `updated` = already present, and its `required` mark was rewritten to
-	 * what the template declares now (`withRequiredLinkMark`).
-	 * `skipped` = already present (idempotent no-op).
-	 * `unresolved` = a source/target profile slug could not be resolved to a live
-	 * profile in this workspace — left untouched, non-fatal.
-	 */
-	entityLinks: {
-		added: string[];
-		skipped: string[];
-		unresolved: string[];
-		updated: string[];
-	};
-	/**
-	 * Home bento dashboard merge (an overlay's `bentoLayout` widgets +
-	 * `bentoViewBlocks` views). ADDITIVE: an overlay never overwrites the base's
-	 * dashboard.
-	 *   `created`   = the workspace had no home view yet, so one was created from
-	 *                 the overlay's bento (mirrors the create path).
-	 *   `blocksAdded` = block ids appended below the base blocks (see the merge
-	 *                 semantics in the step-5 comment).
-	 *   `skipped`   = overlay declared no bento, or an existing home view already
-	 *                 rendered every declared view block (nothing to append).
-	 */
-	home: {
-		blocksAdded: string[];
-		created: boolean;
-		skipped: boolean;
-	};
-	/**
-	 * Sidebar layout merge (an overlay's `layoutConfig.sidebarItems`). Base items
-	 * kept, overlay items appended, deduped by a stable per-kind key. `added` =
-	 * the dedup keys of overlay items appended to the workspace's sidebar.
-	 *
-	 * `primarySurfaceChanged` follows the replacement contract: absent preserves
-	 * the live value, null clears to workspace home, and a descriptor replaces it.
-	 */
-	layout: {
-		primarySurfaceChanged: boolean;
-		sidebarItemsAdded: string[];
-	};
-	/**
-	 * Flow automations reconciled version-aware (keyed on `(workspaceId, name)`).
-	 *   `created` = no row for that name → inserted.
-	 *   `updated` = a row existed but its stored `metadata.seedVersion` (content
-	 *               hash, or a legacy int) differed from the definition's hash →
-	 *               `flowDefinition`+`description` overwritten, hash re-stamped,
-	 *               `automations.version` bumped.
-	 *   `skipped` = stored hash equals the definition hash → no-op.
-	 * Values are automation names.
-	 */
-	automations: {
-		created: string[];
-		/** Flows refused by `opts.validateFlow` — not stored; `error` says why. */
-		rejected?: Array<{
-			error: string;
-			name: string;
-		}>;
-		skipped: string[];
-		updated: string[];
-	};
-	/**
-	 * Default intelligence commands seeded create-if-missing (keyed on `title`).
-	 * `created` = title absent → inserted; `skipped` = title already present
-	 * (left untouched — a seeded command is owned by the user after first seed).
-	 */
-	commands: {
-		created: string[];
-		skipped: string[];
-	};
-	/**
-	 * Relation defs seeded create-if-missing (keyed on `slug`), carrying full
-	 * metadata (description/isDirectional/uiHints). DISTINCT from `entityLinks`,
-	 * which reuses the def that resolves for a slug and creates one only when
-	 * nothing does.
-	 * `created` = slug absent → inserted; `skipped` = slug already present
-	 * (workspace-scoped or pod-wide) → left untouched.
-	 */
-	relationDefs: {
-		created: string[];
-		skipped: string[];
-	};
-	/**
-	 * PER-LAYER install health — see `InstallLayerReport`. OPTIONAL and additive:
-	 * absent means no layer reported a failure. Populated by the callers that own
-	 * the multi-layer install (`createFromDefinition`), not by this reconciler
-	 * itself — layer 2 is not the reconciler's business, but the report is the
-	 * only channel the caller has back to the installer.
-	 */
-	layers?: InstallLayerReport[];
-}
-/**
- * SESSION RECALL — the ONE reader of what recall left on a session.
- *
- * When a session starts, the pod looks for raw captures and notes that could
- * help it (api `services/focus-sessions/session-recall.ts`, the runner) and
- * writes its result onto `focus_sessions.metadata`:
- *   `recalled: RecalledItem[]`, `recalledAt`, `recallError?`, `recallSkipped?`.
- * Every surface (pod MCP + Hub + tRPC `focusSessions.get` `recall`, web, relay,
- * the intelligence service) reads it through {@link projectSessionRecall}, so
- * the five states can never fold into one another — above all, a FAILED recall
- * never reads as "nothing found".
- *
- *   pending   recall has not run yet (no `recalledAt`)
- *   ok        it found items (`recalled` non-empty)
- *   empty     it ran and found nothing
- *   skipped   it deliberately did not run (`recallSkipped`): a session an
- *             automation started (cost), or a shared session with no
- *             workspace to recall from (privacy)
- *   failed    it errored (`recallError`); what an EARLIER run found is kept
- *
- * Pure and dependency-free (web, relay, Electron, Node, IS).
- */
-export interface RecalledItem {
-	entityId: string;
-	title: string;
-	kind: string;
-	/** 0..1, two decimals — the candidate's own evidence. */
-	score: number;
-	/** One human line: why this was recalled. */
-	reason: string;
-	recalledAt: string;
-}
-/** Why recall deliberately did not run on a session. */
-export type RecallSkipReason = 
-/** Started by an automation with no person (cost); a manual recall still runs. */
-"automation"
-/** Others can read the session and it has no workspace to recall from. */
- | "shared_without_workspace";
-export type SessionRecallView = {
-	status: "pending";
-} | {
-	recalled: RecalledItem[];
-	recalledAt: string;
-	status: "ok";
-} | {
-	recalledAt: string;
-	status: "empty";
-} | {
-	reason: RecallSkipReason;
-	recalledAt: string;
-	status: "skipped";
-} | {
-	error: string;
-	/** What an EARLIER run found, kept across the failure. */
-	recalled: RecalledItem[];
-	recalledAt: string;
-	status: "failed";
-};
-/** A thing that can be held: an entity (kind lifecycle, or a role's facet), a goal, a session. */
-export interface HoldSubjectRef {
-	subjectType: TransitionSubjectType;
-	subjectId: string;
-	/** A role's lifecycle lives on its facet; null for the kind's own. */
-	facetId?: string | null;
-}
-export interface CurrentHold extends Required<HoldSubjectRef> {
-	role: string | null;
-	/** The paused status it stands in. */
-	status: string;
-	hold: RecordedHold;
-	transitionId: string;
-	/** The person the paused thing's move was attributed to. */
-	userId: string;
-	workspaceId: string | null;
-	/** `until.date` has come: the hourly sweep resumes it. */
-	resumeDue: boolean;
-	/** `reviewBy` has passed: a signal for the watcher, never a move. */
-	reviewDue: boolean;
-}
-/**
- * What a merge wrote onto a PRE-EXISTING entity, with the values it replaced.
- *
- * A strong-identity dedup does not create a row — it enriches one that was
- * already there. Revert must never delete that entity (it is somebody's), but
- * it must be able to put back what the run overwrote. So the merge records,
- * per key, the prior value and the value it wrote; revert restores a key only
- * while it still holds the written value (a key edited since is left alone).
- *
- * JSON cannot hold `undefined`, so "the key did not exist before" is a list
- * (`absentBefore`), never a missing entry in `before`.
- */
-export interface EntityPropertyDiff {
-	entityId: string;
-	/** Prior value of every changed key that EXISTED before the merge. */
-	before: Record<string, unknown>;
-	/** Value the merge wrote, for every changed key. */
-	after: Record<string, unknown>;
-	/** Changed keys that did not exist before the merge. */
-	absentBefore: string[];
-	/**
-	 * Body document the write linked onto the entity. Revert takes it off only
-	 * while the entity still points at it.
-	 */
-	bodyDocumentId?: string;
-	/**
-	 * The body the write REPLACED or unlinked (decision B9g), `null` when the
-	 * entity had none. Present only when an update changed the body link; revert
-	 * puts it back while the entity still points at what the write left
-	 * (`bodyDocumentId`, or no body). Absent on a merge record, which only ever
-	 * links onto an entity with no body.
-	 */
-	bodyDocumentIdBefore?: string | null;
-	/**
-	 * Keys the write REMOVED (an update's `deleteProperties`). Their prior value
-	 * is in `before`; revert restores one only while it is still absent.
-	 */
-	absentAfter?: string[];
-	/**
-	 * Entity COLUMNS an update changed (title; `preview` is the description).
-	 * Revert restores one only while it still holds the written value.
-	 */
-	fields?: {
-		after: Partial<Record<EntityDiffField, string | null>>;
-		before: Partial<Record<EntityDiffField, string | null>>;
-	};
-}
-/** The entity columns an update can change and revert can restore. */
-export type EntityDiffField = "preview" | "title";
-export type RevertTarget = {
-	id: string;
-	kind: "entity";
-} | {
-	id: string;
-	kind: "relation";
-} | {
-	id: string;
-	kind: "facet";
-} | {
-	id: string;
-	kind: "automation";
-} | {
-	id: string;
-	kind: "skill";
-}
-/** A rule is a `skills` row; kept distinct so outcomes name it as a rule. */
- | {
-	id: string;
-	kind: "rule";
-} | {
-	id: string;
-	kind: "playbook";
-}
-/** A saved List (`views` row). No soft delete exists: retired by delete. */
- | {
-	id: string;
-	kind: "view";
-} | {
-	id: string;
-	kind: "project";
-	/**
-	 * The subject the SAME work bound to it — its `project --targets-->
-	 * entity` edge is the project's own, not a use by something else.
-	 */
-	subjectEntityId?: string;
-}
-/** A `links` row (a plan's `blocked_by` / `spawned_from` edge). Deleted, like a relation. */
- | {
-	id: string;
-	kind: "link";
-}
-/** One property a merge overwrote on a pre-existing entity. */
- | {
-	/** The run REMOVED the key — restore only while it is still absent. */
-	absentAfter?: boolean;
-	absentBefore: boolean;
-	/** The value the run wrote — restore only while the key still holds it. */
-	after: unknown;
-	/** Prior value (ignored when `absentBefore`). */
-	before: unknown;
-	entityId: string;
-	key: string;
-	kind: "property";
-}
-/**
- * A body-link change: `documentId` is what the write left (null = it
- * unlinked the body), `previousDocumentId` what it replaced (absent/null =
- * the entity had none — the merge case). Revert puts `previousDocumentId`
- * back only while the entity still points at `documentId` (B9g).
- */
- | {
-	documentId: string | null;
-	entityId: string;
-	kind: "entity_body";
-	previousDocumentId?: string | null;
-}
-/**
- * Config columns an `update_*` op (a Library rebuild) rewrote on a row it
- * did NOT create. Restored to `before` only while EVERY column still holds
- * `after` — a column somebody edited since is theirs, and the row is kept.
- */
- | {
-	after: Record<string, unknown>;
-	before: Record<string, unknown>;
-	id: string;
-	kind: "row_patch";
-	table: RowPatchTable;
-}
-/** One entity column (title / preview) an update changed. */
- | {
-	/** The value the run wrote — restore only while the column still holds it. */
-	after: string | null;
-	before: string | null;
-	entityId: string;
-	field: EntityDiffField;
-	kind: "entity_field";
-};
-/**
- * The config tables a `row_patch` may restore, and the ONLY columns it may
- * write on each — the fields the `update_*` ops patch. A stored record naming
- * any other column is refused (`not_owned`), never written: the record is
- * data, and data does not get to pick which columns an undo touches.
- */
-export type RowPatchTable = "automation" | "focus_session" | "playbook" | "rule" | "skill" | "view";
-export type RevertSkipReason = 
-/** Changed after the work that created it. */
-"edited_since"
-/** Something else uses it now (a run, a link, another session). */
- | "in_use"
-/** Already retired — nothing left to undo. */
- | "already_reverted" | "not_found"
-/** Its lineage names different work — it was never this work's row. */
- | "not_owned";
-export interface RevertSkip {
-	target: RevertTarget;
-	reason: RevertSkipReason;
-	detail: string;
-}
-/**
- * One multi-proposal revert pass (a session revert). Undoing an earlier item
- * can itself bump `updated_at` on an entity a later item still has to judge —
- * the relation → property reverse sync rewrites the link's source entity after
- * the commit. Such a bump is the pass's OWN write, not somebody's edit: an
- * entity named here whose `updated_at` moved no earlier than `startedAt` is not
- * read as `edited_since`. A human edit to the same entity during the pass is
- * indistinguishable and is tolerated too — the window is the pass itself.
- */
-export interface RevertPass {
-	startedAt: Date;
-	entityIds: Set<string>;
-}
-/**
- * Context Types
- *
- * Proper type definitions for tRPC context to avoid `any` types.
- */
-/**
- * Database client type
- *
- * Note: Using `any` here to preserve Drizzle's schema inference.
- * Attempting to use PostgresJsDatabase<any> loses the schema generic
- * and breaks db.query.tableName access patterns.
- */
-export type DatabaseClient = any;
-/**
- * Ory Kratos identity
- */
-export interface KratosIdentity {
-	id: string;
-	traits: {
-		email: string;
-		name?: string;
-		[key: string]: unknown;
-	};
-}
-/**
- * Ory Kratos session
- */
-export interface KratosSession {
-	identity: KratosIdentity;
-	active: boolean;
-	expires_at?: string;
-	authenticated_at?: string;
-	/** How it was authenticated (Kratos); the step-up clock reads it. */
-	authentication_methods?: Array<{
-		completed_at?: string;
-		method?: string;
-		provider?: string;
-	}>;
-	/**
-	 * Set ONLY when the person came in on a Synap app's device token
-	 * (`appSessionMiddleware`): the device it was minted
-	 * for, and when the person last really authenticated for it (`authTime`,
-	 * the step-up clock). Absent on a Kratos session. Such a session has no
-	 * `authenticated_at`, so account recovery never counts it as a recent
-	 * sign-in.
-	 */
-	device?: {
-		authTime: Date | null;
-		clientId: string;
-		id: string;
-	};
-}
-/**
- * User object (simplified from Kratos identity)
- */
-export interface User {
-	id: string;
-	email: string;
-	name?: string;
-}
-/**
- * Full tRPC context
- */
-export interface Context {
-	db: DatabaseClient;
-	authenticated: boolean;
-	userId?: string | null;
-	user?: User | null;
-	session?: KratosSession | null;
-	/**
-	 * What kind of PERSON session `session` is: a Kratos session (browser
-	 * cookie, X-Session-Token) or a Synap app's device token. Set ONLY by
-	 * `createContext`, from what the app session gate resolved from the row
-	 * (`middleware/app-session.ts`); null when there is no session. A credential
-	 * door takes a `person_device` session only shortly after a real sign-in
-	 * (`requireFreshAuthentication`, trpc.ts).
-	 */
-	sessionKind?: "kratos" | "person_device" | null;
-	req?: Request;
-	socketIO?: any;
-	workspaceId?: string | null;
-	/**
-	 * Project ID from the X-Project-Id header — the cross-cutting PROJECT lens,
-	 * orthogonal to the workspace lens. Optional narrowing only: it is intersected
-	 * with the user-access floor, so a stale/forged id can never widen access.
-	 * `undefined`/`null` = no project narrowing. See `AccessContext.projectLens`.
-	 */
-	projectId?: string | null;
-	workspaceRole?: string | null;
-	/**
-	 * Request source — "intelligence" when the request comes from the Intelligence Hub
-	 * via API key auth. Set automatically by api-key-auth middleware; never set by humans.
-	 */
-	source?: string | null;
-	/**
-	 * Hard flag — true only when authenticated via a hub-protocol scoped API key.
-	 * Cannot be spoofed by a human JWT session.
-	 */
-	isHubProtocol?: boolean;
-	/**
-	 * The authenticating API key's type (`user_pat` | `service` | `agent` | …) and
-	 * its workspace binding, threaded from api-key-auth middleware. They let the
-	 * hub-protocol tRPC surface apply the SAME service-key workspace confinement
-	 * (resolveConfinedWorkspace) the Hono REST door already applies. NOTE: identity
-	 * is NEVER relaxed on keyType — a `service` key is self-mintable on this pod
-	 * (setup.ts `/setup/service` Path 4), so it grants no impersonation right; see
-	 * `hub-protocol/guard.ts`.
-	 */
-	keyType?: string | null;
-	keyWorkspaceId?: string | null;
-	/**
-	 * The agent user ID acting on behalf of this request, when the caller is an
-	 * AI agent (set from the hub-protocol key's `linkedUserId`). Drives the
-	 * governance membrane: when present, mutations route through
-	 * checkPermissionOrPropose (propose instead of auto-apply). Undefined for
-	 * operator/human-driven requests, which stay synchronous.
-	 */
-	agentUserId?: string | null;
-	/**
-	 * INTERNAL CHANNEL — never from a request. No context factory populates it
-	 * and there is no wire passthrough. **Keep it that way** — a ctx factory that
-	 * ever read this from a header or input would hand any caller an "assume my
-	 * write is already approved" primitive.
-	 *
-	 * ⚠️ CORRECTED 2026-09-07. This docblock previously said "set ONLY by
-	 * `applyProposalApproval`'s composite caller … it arrives solely from that
-	 * internal object literal." That was FALSE on the day it was written. There
-	 * are TWO producers, and the omission mattered because the field is read as a
-	 * security carve-out (below), so the comment understated where that carve-out
-	 * applies:
-	 *   · `routers/proposals/apply-approval.ts` — the approval composite caller.
-	 *   · `services/capture-agent/submit-capture-graph.ts` — the capture
-	 *     auto-apply composite caller (its existence is asserted by
-	 *     `__tripwires__/capture-graph-governance-linkage.test.ts`).
-	 *
-	 * THE INVARIANT, stated so a third producer knows what it is signing up to:
-	 * set this ONLY from an internal caller that has ALREADY obtained a
-	 * governance decision for the write it is about to make. It means "a decision
-	 * exists for this", not merely "an internal caller made this".
-	 *
-	 * Two load-bearing meanings:
-	 *  · PROVENANCE — stamped as `source_proposal_id`, the JOIN that recovers the
-	 *    APPROVER via `proposals.reviewedBy`.
-	 *  · "this write is ALREADY APPROVED" — `relations.create` reads it to skip
-	 *    re-entering the governance membrane. Without that skip the ladder falls
-	 *    to `propose` (relation.create is not in DEFAULT_AUTO_APPROVE) and the
-	 *    edge is silently never created while the receipt reports it linked.
-	 *    `playbooks.run` reads it the same way (set by the `playbook/run`
-	 *    executor): it gates on the APPROVER, while its `agentUserId` input
-	 *    still owns the session.
-	 *
-	 * Declared here rather than cast at each reader: it was read through
-	 * `(ctx as { governanceProposalId?: string })` in seven places across three
-	 * files, one of which now guards the security fix above — so renaming the
-	 * field would have broken all seven with ZERO typecheck signal.
-	 */
-	governanceProposalId?: string;
-	/**
-	 * The message ID that triggered this hub-protocol request.
-	 * When set, proposals created during this request are linked to this message.
-	 */
-	sourceMessageId?: string | null;
-	/**
-	 * Session ID that triggered this hub-protocol request.
-	 * When set, proposals created during this request are linked to this session.
-	 */
-	sessionId?: string | null;
-	/**
-	 * `"sync"` when this request materializes a bulk mirror of an external source
-	 * (a connection sync, or the approval of its grouped import). Forwarded by the
-	 * entity/relation doors to `recordDomainMutation`, so event automations skip
-	 * the fan-out unless they opted in (`triggerConfig.includeSyncOrigin`).
-	 * INTERNAL composite-caller channel — createContext never sets it from HTTP.
-	 */
-	origin?: "sync";
-	/**
-	 * The enclosing session revert pass (`revertSession`), so each per-proposal
-	 * `proposals.revert` in that pass tolerates the pass's OWN `updated_at` bumps.
-	 * INTERNAL composite-caller channel — createContext never sets it from HTTP,
-	 * and it is never read from procedure input: a client must not be able to
-	 * exempt entities from the edit check.
-	 */
-	revertPass?: RevertPass;
-}
-declare const PROMOTE_TO_BODY_REFUSALS: readonly [
-	"not_body_property",
-	"empty_value",
-	"body_exists",
-	"agent_caller"
-];
-export type PromoteToBodyRefusal = (typeof PROMOTE_TO_BODY_REFUSALS)[number];
-declare const UNDO_PROMOTE_TO_BODY_REFUSALS: readonly [
-	"edited_since",
-	"not_promoted"
-];
-export type UndoPromoteToBodyRefusal = (typeof UNDO_PROMOTE_TO_BODY_REFUSALS)[number];
-/**
- * Field errors of a refused input: dotted input path (`items.0.title`) →
- * the messages for that field; `""` is the input as a whole.
- *
- * The pod sends it as tRPC `error.data.fieldErrors` and as `fieldErrors` on a
- * Hub REST 400, built from the Zod refusal (messages only, never the values
- * the caller sent). Absent when the refusal is not a validation one.
- */
-export type FieldErrors = Record<string, string[]>;
-declare enum AgentType {
-	DEFAULT = "default",
-	META = "meta",
-	PROMPTING = "prompting",
-	KNOWLEDGE_SEARCH = "knowledge-search",
-	CODE = "code",
-	WRITING = "writing",
-	ACTION = "action",
-	ONBOARDING = "onboarding",
-	WORKSPACE_CREATION = "workspace-creation"
-}
-/**
- * Agent type as string literal union (for flexibility)
- */
-export type AgentTypeString = `${AgentType}` | (string & {});
-declare enum AIStepType {
-	THINKING = "thinking",
-	TOOL_CALL = "tool_call",
-	TOOL_RESULT = "tool_result",
-	DECISION = "decision",
-	ERROR = "error"
-}
-/**
- * AI step - shows what the AI is doing
- *
- * Represents any step in the AI's reasoning/execution process:
- * - thinking: General analysis and reasoning
- * - tool_call: When AI calls a tool
- * - tool_result: Result from tool execution
- * - decision: AI making a decision
- * - error: Error during processing
- */
-export interface AIStep {
-	id: string;
-	type: AIStepType | string;
-	content: string;
-	toolName?: string;
-	toolInput?: unknown;
-	toolOutput?: unknown;
-	timestamp: string;
-	duration?: number;
-	error?: string;
-	title?: string;
-	description?: string;
-	status?: "complete" | "error" | "pending" | "running";
-}
-/**
- * Branch decision from meta-agent
- */
-export interface BranchDecision {
-	shouldBranch: boolean;
-	reason: string;
-	suggestedAgentType?: AgentTypeString;
-	suggestedTitle?: string;
-	suggestedPurpose?: string;
-}
 /**
  * REACH — what something that acts on its own can touch outside the pod, and
  * the ONE set of words every surface says it with.
@@ -9704,6 +9226,834 @@ export interface ProposalMaterializedRecord {
 		winnerId: string;
 	};
 }
+export interface ReversibleDefaultState {
+	enabled: boolean;
+	/** The active row, so a surface can open it; null when off. */
+	ruleId: string | null;
+}
+declare const SPACE_BRIEF_SEEDED_FIELDS: readonly [
+	"purpose",
+	"goal",
+	"framing",
+	"expertise",
+	"collect",
+	"openingQuestions",
+	"doneWhen",
+	"anchors",
+	"fetch"
+];
+export type SpaceBriefSeededField = (typeof SPACE_BRIEF_SEEDED_FIELDS)[number];
+export type BriefFieldOutcome = "adopted" | "kept" | "removed" | "updated" | "written";
+export interface BriefFieldConflict {
+	field: SpaceBriefSeededField;
+	/** `edited` = the user changed a value the template since changed too;
+	 *  `unstamped` = a value written before the stamp existed differs from the
+	 *  template, so this pass cannot tell template from user. */
+	reason: "edited" | "unstamped";
+}
+export interface SpaceBriefConvergence {
+	/** The brief to store; `null` when nothing changes (no write needed). */
+	next: WorkspaceSpaceBrief | null;
+	/** The marker to store alongside `next` (or alone, when only stamps move). */
+	nextSeed: SpaceBriefSeed | null;
+	outcomes: Partial<Record<SpaceBriefSeededField, BriefFieldOutcome>>;
+	conflicts: BriefFieldConflict[];
+}
+/** Why a declared `targetProfileSlug` did not become a `target_profile_id`. */
+export type PropertyTargetUnresolvedReason = 
+/** The owning profile never entered `profileMap` (kind conflict → skipped). */
+"owner-profile-unresolved"
+/** The target slug resolves to no profile visible in this workspace's lens. */
+ | "target-profile-unresolved"
+/** No property-def with this slug exists on the owning profile. */
+ | "property-def-not-found"
+/** The live def is not an `entity_id` — a target would be meaningless. */
+ | "property-not-entity-id"
+/** Reading the live def failed (transient) — retried on the next reconcile. */
+ | "read-failed"
+/** The def resolved but the UPDATE failed — retried on the next reconcile. */
+ | "write-failed";
+export interface PropertyTargetEntry {
+	profile: string;
+	slug: string;
+	targetProfileSlug: string;
+}
+export interface PropertyTargetResolutionReport {
+	/** Defs whose NULL `target_profile_id` was filled in by this pass. */
+	set: PropertyTargetEntry[];
+	/** Declared targets left NULL — non-fatal, surfaced rather than swallowed. */
+	unresolved: Array<PropertyTargetEntry & {
+		reason: PropertyTargetUnresolvedReason;
+	}>;
+}
+/**
+ * INSTALL LAYER — one axis of "did this install fully land?".
+ *
+ * Prior art is K8s `status.conditions[]`: a LIST of typed axes, not a boolean,
+ * so an object can honestly report "the workspace exists and is usable, but
+ * this layer is degraded". dpkg's `iF` half-configured state and Terraform's
+ * partially-updated state are the same idea — record the partial, name it, and
+ * give the caller a read door, rather than rolling back or claiming success.
+ *
+ * WHY THIS EXISTS. A workspace install has two layers:
+ *   1. `template-reconcile` — profiles / property-defs / views / entity links
+ *      (`reconcileWorkspaceFromDefinition`).
+ *   2. `post-workspace` — capabilities / playbooks / automations / loops / cells
+ *      / action placements (`applyPackagePostWorkspace`).
+ * Layer 2 failing does NOT make the workspace unusable, so `createFromDefinition`
+ * deliberately does not throw — but it also had nowhere to SAY so, and therefore
+ * returned a clean report for an install whose living layers all failed. The
+ * applier already stamps the durable half of this truth into
+ * `workspace.settings` (`provisioningStatus:"failed"`, `failedStep`,
+ * `failedStepError`, projected by Hub `GET /workspaces`); this is the
+ * response-shaped half, for the caller that is holding the install result right
+ * now.
+ *
+ * OPTIONAL BY CONTRACT. Both UI consumers derive their type via
+ * `RouterOutputs[...]`, so an optional field keeps them compiling and lets each
+ * surface opt in to rendering it. ABSENT means "no layer reported a failure",
+ * never "unknown".
+ */
+export interface InstallLayerReport {
+	/** Which install layer this axis describes. */
+	layer: "post-workspace" | "template-reconcile";
+	/** `applied` = the layer ran to completion. `failed` = it threw; the workspace
+	 *  itself still exists and the install is resumable (re-run to resume). */
+	status: "applied" | "failed";
+	/** Operator-facing failure detail. Present only for `failed`. */
+	message?: string;
+}
+export interface ReconcileReport {
+	workspaceId: string;
+	dryRun: boolean;
+	settings: {
+		merged: string[];
+	};
+	/**
+	 * The space brief's three-way convergence (`settings.onboarding`). Absent
+	 * when this reconcile does not own the brief (no identity: a compose
+	 * overlay or the base-defaults pass). `conflicts` are fields the user edited
+	 * while the template moved too — left alone, reported here.
+	 */
+	brief?: {
+		conflicts: SpaceBriefConvergence["conflicts"];
+		outcomes: SpaceBriefConvergence["outcomes"];
+		/** A concurrent brief write won the compare-and-set; retried next pass. */
+		raced?: true;
+	};
+	profiles: {
+		added: string[];
+		/**
+		 * Declared slug matched an existing profile of a DIFFERENT profileKind
+		 * (kind vs role). The merge was SKIPPED and the existing row left untouched
+		 * — the caller decides (never a silent kind flip).
+		 */
+		conflicts: Array<{
+			declaredKind: string;
+			existingKind: string;
+			slug: string;
+		}>;
+		/**
+		 * Slugs where an existing same-slug profile was found but could NOT be
+		 * safely promoted (another user's private row, or the pod-wide slug seat is
+		 * held by a soft-deleted shared row), so a DUPLICATE workspace-scoped
+		 * profile was created instead. This is the one branch where the dedup
+		 * keystone knowingly fails to dedup — surfaced, never silent.
+		 */
+		deferred: string[];
+		/**
+		 * Profiles whose `uiHints.presentation` this run wrote (new or changed),
+		 * through `setProfilePresentation`. Absent when none moved.
+		 */
+		presentations?: string[];
+		/** Existing workspace-scoped profiles promoted to shared to resolve-and-share. */
+		promoted: string[];
+		reused: string[];
+		/**
+		 * Declared `scope`/`entityScope` on a REUSED slug diverged from the live
+		 * row. ADVISORY (unlike `conflicts`, which skips): the profile was still
+		 * reused and the live row left untouched — the declared scope was NOT
+		 * applied. Surfaced so `market install`/reconcile callers can decide whether
+		 * to escalate; the first creator owns placement/visibility.
+		 */
+		scopeConflicts: Array<{
+			declaredEntityScope: "pod" | "workspace" | null;
+			declaredScope: string;
+			existingEntityScope: string;
+			existingScope: string;
+			slug: string;
+		}>;
+	};
+	properties: {
+		/** New overlay/base property-defs added. */
+		added: Array<{
+			profile: string;
+			slug: string;
+		}>;
+		/** Template type differs from the live type — NOT changed; needs a decision. */
+		conflicts: Array<{
+			liveType: string;
+			profile: string;
+			slug: string;
+			templateType: string;
+		}>;
+		/** Existing property whose enum options were synced to the template (values added). */
+		enumsUpdated: Array<{
+			profile: string;
+			slug: string;
+		}>;
+		/**
+		 * The profile already links a POD-WIDE GLOBAL def (profile_id + workspace_id
+		 * NULL) with this slug, so the template's declaration was NOT applied: a
+		 * global def is shared by every kind that links it, and one template's
+		 * enum/constraints must never narrow it for all of them (the 2026-10-12
+		 * `source` incident). Rename the template's property to claim it. Optional
+		 * so older report fixtures stay valid.
+		 */
+		globalsKept?: Array<{
+			profile: string;
+			slug: string;
+		}>;
+		/**
+		 * Lifecycle declarations (0319, work model L1): `declared` = the profile's
+		 * lifecycle link was set (or already was — `unchanged` is not listed);
+		 * `refused` = the template's declaration could not be applied, with why.
+		 * Optional so pre-0319 report fixtures stay valid.
+		 */
+		lifecycles?: {
+			declared: Array<{
+				profile: string;
+				property: string;
+			}>;
+			refused: Array<{
+				profile: string;
+				reason: string;
+			}>;
+		};
+		/** Already present (same slug, same type) — left as-is. */
+		skipped: Array<{
+			profile: string;
+			slug: string;
+		}>;
+		/**
+		 * `entity_id` properties whose declared `targetProfileSlug` was resolved to
+		 * a live profile and written to `property_defs.target_profile_id` — the key
+		 * the entity picker constrains on. `set` covers defs this run created AND
+		 * pre-existing defs that were still NULL (the backfill); `unresolved` is
+		 * non-fatal, mirroring `entityLinks.unresolved`. See
+		 * `resolve-property-target-profiles.ts`.
+		 */
+		targets: PropertyTargetResolutionReport;
+	};
+	views: {
+		added: string[];
+		deferred: string[];
+		skipped: string[];
+	};
+	/**
+	 * Schema-level links between entity types (relation_defs + profile_relations).
+	 * `added` = a (source, target, type) edge that did not exist and was created.
+	 * `updated` = already present, and its `required` mark was rewritten to
+	 * what the template declares now (`withRequiredLinkMark`).
+	 * `skipped` = already present (idempotent no-op).
+	 * `unresolved` = a source/target profile slug could not be resolved to a live
+	 * profile in this workspace — left untouched, non-fatal.
+	 */
+	entityLinks: {
+		added: string[];
+		skipped: string[];
+		unresolved: string[];
+		updated: string[];
+	};
+	/**
+	 * Home bento dashboard merge (an overlay's `bentoLayout` widgets +
+	 * `bentoViewBlocks` views). ADDITIVE: an overlay never overwrites the base's
+	 * dashboard.
+	 *   `created`   = the workspace had no home view yet, so one was created from
+	 *                 the overlay's bento (mirrors the create path).
+	 *   `blocksAdded` = block ids appended below the base blocks (see the merge
+	 *                 semantics in the step-5 comment).
+	 *   `skipped`   = overlay declared no bento, or an existing home view already
+	 *                 rendered every declared view block (nothing to append).
+	 */
+	home: {
+		blocksAdded: string[];
+		created: boolean;
+		skipped: boolean;
+	};
+	/**
+	 * Sidebar layout merge (an overlay's `layoutConfig.sidebarItems`). Base items
+	 * kept, overlay items appended, deduped by a stable per-kind key. `added` =
+	 * the dedup keys of overlay items appended to the workspace's sidebar.
+	 *
+	 * `primarySurfaceChanged` follows the replacement contract: absent preserves
+	 * the live value, null clears to workspace home, and a descriptor replaces it.
+	 */
+	layout: {
+		primarySurfaceChanged: boolean;
+		sidebarItemsAdded: string[];
+	};
+	/**
+	 * Flow automations reconciled version-aware (keyed on `(workspaceId, name)`).
+	 *   `created` = no row for that name → inserted.
+	 *   `updated` = a row existed but its stored `metadata.seedVersion` (content
+	 *               hash, or a legacy int) differed from the definition's hash →
+	 *               `flowDefinition`+`description` overwritten, hash re-stamped,
+	 *               `automations.version` bumped.
+	 *   `skipped` = stored hash equals the definition hash → no-op.
+	 * Values are automation names.
+	 */
+	automations: {
+		created: string[];
+		/** Flows refused by `opts.validateFlow` — not stored; `error` says why. */
+		rejected?: Array<{
+			error: string;
+			name: string;
+		}>;
+		skipped: string[];
+		updated: string[];
+	};
+	/**
+	 * Default intelligence commands seeded create-if-missing (keyed on `title`).
+	 * `created` = title absent → inserted; `skipped` = title already present
+	 * (left untouched — a seeded command is owned by the user after first seed).
+	 */
+	commands: {
+		created: string[];
+		skipped: string[];
+	};
+	/**
+	 * Relation defs seeded create-if-missing (keyed on `slug`), carrying full
+	 * metadata (description/isDirectional/uiHints). DISTINCT from `entityLinks`,
+	 * which reuses the def that resolves for a slug and creates one only when
+	 * nothing does.
+	 * `created` = slug absent → inserted; `skipped` = slug already present
+	 * (workspace-scoped or pod-wide) → left untouched.
+	 */
+	relationDefs: {
+		created: string[];
+		skipped: string[];
+	};
+	/**
+	 * PER-LAYER install health — see `InstallLayerReport`. OPTIONAL and additive:
+	 * absent means no layer reported a failure. Populated by the callers that own
+	 * the multi-layer install (`createFromDefinition`), not by this reconciler
+	 * itself — layer 2 is not the reconciler's business, but the report is the
+	 * only channel the caller has back to the installer.
+	 */
+	layers?: InstallLayerReport[];
+}
+/**
+ * SESSION RECALL — the ONE reader of what recall left on a session.
+ *
+ * When a session starts, the pod looks for raw captures and notes that could
+ * help it (api `services/focus-sessions/session-recall.ts`, the runner) and
+ * writes its result onto `focus_sessions.metadata`:
+ *   `recalled: RecalledItem[]`, `recalledAt`, `recallError?`, `recallSkipped?`.
+ * Every surface (pod MCP + Hub + tRPC `focusSessions.get` `recall`, web, relay,
+ * the intelligence service) reads it through {@link projectSessionRecall}, so
+ * the five states can never fold into one another — above all, a FAILED recall
+ * never reads as "nothing found".
+ *
+ *   pending   recall has not run yet (no `recalledAt`)
+ *   ok        it found items (`recalled` non-empty)
+ *   empty     it ran and found nothing
+ *   skipped   it deliberately did not run (`recallSkipped`): a session an
+ *             automation started (cost), or a shared session with no
+ *             workspace to recall from (privacy)
+ *   failed    it errored (`recallError`); what an EARLIER run found is kept
+ *
+ * Pure and dependency-free (web, relay, Electron, Node, IS).
+ */
+export interface RecalledItem {
+	entityId: string;
+	title: string;
+	kind: string;
+	/** 0..1, two decimals — the candidate's own evidence. */
+	score: number;
+	/** One human line: why this was recalled. */
+	reason: string;
+	recalledAt: string;
+}
+/** Why recall deliberately did not run on a session. */
+export type RecallSkipReason = 
+/** Started by an automation with no person (cost); a manual recall still runs. */
+"automation"
+/** Others can read the session and it has no workspace to recall from. */
+ | "shared_without_workspace";
+export type SessionRecallView = {
+	status: "pending";
+} | {
+	recalled: RecalledItem[];
+	recalledAt: string;
+	status: "ok";
+} | {
+	recalledAt: string;
+	status: "empty";
+} | {
+	reason: RecallSkipReason;
+	recalledAt: string;
+	status: "skipped";
+} | {
+	error: string;
+	/** What an EARLIER run found, kept across the failure. */
+	recalled: RecalledItem[];
+	recalledAt: string;
+	status: "failed";
+};
+/** A thing that can be held: an entity (kind lifecycle, or a role's facet), a goal, a session. */
+export interface HoldSubjectRef {
+	subjectType: TransitionSubjectType;
+	subjectId: string;
+	/** A role's lifecycle lives on its facet; null for the kind's own. */
+	facetId?: string | null;
+}
+export interface CurrentHold extends Required<HoldSubjectRef> {
+	role: string | null;
+	/** The paused status it stands in. */
+	status: string;
+	hold: RecordedHold;
+	transitionId: string;
+	/** The person the paused thing's move was attributed to. */
+	userId: string;
+	workspaceId: string | null;
+	/** `until.date` has come: the hourly sweep resumes it. */
+	resumeDue: boolean;
+	/** `reviewBy` has passed: a signal for the watcher, never a move. */
+	reviewDue: boolean;
+}
+/**
+ * What a merge wrote onto a PRE-EXISTING entity, with the values it replaced.
+ *
+ * A strong-identity dedup does not create a row — it enriches one that was
+ * already there. Revert must never delete that entity (it is somebody's), but
+ * it must be able to put back what the run overwrote. So the merge records,
+ * per key, the prior value and the value it wrote; revert restores a key only
+ * while it still holds the written value (a key edited since is left alone).
+ *
+ * JSON cannot hold `undefined`, so "the key did not exist before" is a list
+ * (`absentBefore`), never a missing entry in `before`.
+ */
+export interface EntityPropertyDiff {
+	entityId: string;
+	/** Prior value of every changed key that EXISTED before the merge. */
+	before: Record<string, unknown>;
+	/** Value the merge wrote, for every changed key. */
+	after: Record<string, unknown>;
+	/** Changed keys that did not exist before the merge. */
+	absentBefore: string[];
+	/**
+	 * Body document the write linked onto the entity. Revert takes it off only
+	 * while the entity still points at it.
+	 */
+	bodyDocumentId?: string;
+	/**
+	 * The body the write REPLACED or unlinked (decision B9g), `null` when the
+	 * entity had none. Present only when an update changed the body link; revert
+	 * puts it back while the entity still points at what the write left
+	 * (`bodyDocumentId`, or no body). Absent on a merge record, which only ever
+	 * links onto an entity with no body.
+	 */
+	bodyDocumentIdBefore?: string | null;
+	/**
+	 * Keys the write REMOVED (an update's `deleteProperties`). Their prior value
+	 * is in `before`; revert restores one only while it is still absent.
+	 */
+	absentAfter?: string[];
+	/**
+	 * Entity COLUMNS an update changed (title; `preview` is the description).
+	 * Revert restores one only while it still holds the written value.
+	 */
+	fields?: {
+		after: Partial<Record<EntityDiffField, string | null>>;
+		before: Partial<Record<EntityDiffField, string | null>>;
+	};
+}
+/** The entity columns an update can change and revert can restore. */
+export type EntityDiffField = "preview" | "title";
+export type RevertTarget = {
+	id: string;
+	kind: "entity";
+} | {
+	id: string;
+	kind: "relation";
+} | {
+	id: string;
+	kind: "facet";
+} | {
+	id: string;
+	kind: "automation";
+} | {
+	id: string;
+	kind: "skill";
+}
+/** A rule is a `skills` row; kept distinct so outcomes name it as a rule. */
+ | {
+	id: string;
+	kind: "rule";
+} | {
+	id: string;
+	kind: "playbook";
+}
+/** A saved List (`views` row). No soft delete exists: retired by delete. */
+ | {
+	id: string;
+	kind: "view";
+} | {
+	id: string;
+	kind: "project";
+	/**
+	 * The subject the SAME work bound to it — its `project --targets-->
+	 * entity` edge is the project's own, not a use by something else.
+	 */
+	subjectEntityId?: string;
+}
+/** A `links` row (a plan's `blocked_by` / `spawned_from` edge). Deleted, like a relation. */
+ | {
+	id: string;
+	kind: "link";
+}
+/** One property a merge overwrote on a pre-existing entity. */
+ | {
+	/** The run REMOVED the key — restore only while it is still absent. */
+	absentAfter?: boolean;
+	absentBefore: boolean;
+	/** The value the run wrote — restore only while the key still holds it. */
+	after: unknown;
+	/** Prior value (ignored when `absentBefore`). */
+	before: unknown;
+	entityId: string;
+	key: string;
+	kind: "property";
+}
+/**
+ * A body-link change: `documentId` is what the write left (null = it
+ * unlinked the body), `previousDocumentId` what it replaced (absent/null =
+ * the entity had none — the merge case). Revert puts `previousDocumentId`
+ * back only while the entity still points at `documentId` (B9g).
+ */
+ | {
+	documentId: string | null;
+	entityId: string;
+	kind: "entity_body";
+	previousDocumentId?: string | null;
+}
+/**
+ * Config columns an `update_*` op (a Library rebuild) rewrote on a row it
+ * did NOT create. Restored to `before` only while EVERY column still holds
+ * `after` — a column somebody edited since is theirs, and the row is kept.
+ */
+ | {
+	after: Record<string, unknown>;
+	before: Record<string, unknown>;
+	id: string;
+	kind: "row_patch";
+	table: RowPatchTable;
+}
+/** One entity column (title / preview) an update changed. */
+ | {
+	/** The value the run wrote — restore only while the column still holds it. */
+	after: string | null;
+	before: string | null;
+	entityId: string;
+	field: EntityDiffField;
+	kind: "entity_field";
+};
+/**
+ * The config tables a `row_patch` may restore, and the ONLY columns it may
+ * write on each — the fields the `update_*` ops patch. A stored record naming
+ * any other column is refused (`not_owned`), never written: the record is
+ * data, and data does not get to pick which columns an undo touches.
+ */
+export type RowPatchTable = "automation" | "focus_session" | "playbook" | "rule" | "skill" | "view";
+export type RevertSkipReason = 
+/** Changed after the work that created it. */
+"edited_since"
+/** Something else uses it now (a run, a link, another session). */
+ | "in_use"
+/** Already retired — nothing left to undo. */
+ | "already_reverted" | "not_found"
+/** Its lineage names different work — it was never this work's row. */
+ | "not_owned";
+export interface RevertSkip {
+	target: RevertTarget;
+	reason: RevertSkipReason;
+	detail: string;
+}
+/**
+ * One multi-proposal revert pass (a session revert). Undoing an earlier item
+ * can itself bump `updated_at` on an entity a later item still has to judge —
+ * the relation → property reverse sync rewrites the link's source entity after
+ * the commit. Such a bump is the pass's OWN write, not somebody's edit: an
+ * entity named here whose `updated_at` moved no earlier than `startedAt` is not
+ * read as `edited_since`. A human edit to the same entity during the pass is
+ * indistinguishable and is tolerated too — the window is the pass itself.
+ */
+export interface RevertPass {
+	startedAt: Date;
+	entityIds: Set<string>;
+}
+/**
+ * Context Types
+ *
+ * Proper type definitions for tRPC context to avoid `any` types.
+ */
+/**
+ * Database client type
+ *
+ * Note: Using `any` here to preserve Drizzle's schema inference.
+ * Attempting to use PostgresJsDatabase<any> loses the schema generic
+ * and breaks db.query.tableName access patterns.
+ */
+export type DatabaseClient = any;
+/**
+ * Ory Kratos identity
+ */
+export interface KratosIdentity {
+	id: string;
+	traits: {
+		email: string;
+		name?: string;
+		[key: string]: unknown;
+	};
+}
+/**
+ * Ory Kratos session
+ */
+export interface KratosSession {
+	identity: KratosIdentity;
+	active: boolean;
+	expires_at?: string;
+	authenticated_at?: string;
+	/** How it was authenticated (Kratos); the step-up clock reads it. */
+	authentication_methods?: Array<{
+		completed_at?: string;
+		method?: string;
+		provider?: string;
+	}>;
+	/**
+	 * Set ONLY when the person came in on a Synap app's device token
+	 * (`appSessionMiddleware`): the device it was minted
+	 * for, and when the person last really authenticated for it (`authTime`,
+	 * the step-up clock). Absent on a Kratos session. Such a session has no
+	 * `authenticated_at`, so account recovery never counts it as a recent
+	 * sign-in.
+	 */
+	device?: {
+		authTime: Date | null;
+		clientId: string;
+		id: string;
+	};
+}
+/**
+ * User object (simplified from Kratos identity)
+ */
+export interface User {
+	id: string;
+	email: string;
+	name?: string;
+}
+/**
+ * Full tRPC context
+ */
+export interface Context {
+	db: DatabaseClient;
+	authenticated: boolean;
+	userId?: string | null;
+	user?: User | null;
+	session?: KratosSession | null;
+	/**
+	 * What kind of PERSON session `session` is: a Kratos session (browser
+	 * cookie, X-Session-Token) or a Synap app's device token. Set ONLY by
+	 * `createContext`, from what the app session gate resolved from the row
+	 * (`middleware/app-session.ts`); null when there is no session. A credential
+	 * door takes a `person_device` session only shortly after a real sign-in
+	 * (`requireFreshAuthentication`, trpc.ts).
+	 */
+	sessionKind?: "kratos" | "person_device" | null;
+	req?: Request;
+	socketIO?: any;
+	workspaceId?: string | null;
+	/**
+	 * Project ID from the X-Project-Id header — the cross-cutting PROJECT lens,
+	 * orthogonal to the workspace lens. Optional narrowing only: it is intersected
+	 * with the user-access floor, so a stale/forged id can never widen access.
+	 * `undefined`/`null` = no project narrowing. See `AccessContext.projectLens`.
+	 */
+	projectId?: string | null;
+	workspaceRole?: string | null;
+	/**
+	 * Request source — "intelligence" when the request comes from the Intelligence Hub
+	 * via API key auth. Set automatically by api-key-auth middleware; never set by humans.
+	 */
+	source?: string | null;
+	/**
+	 * Hard flag — true only when authenticated via a hub-protocol scoped API key.
+	 * Cannot be spoofed by a human JWT session.
+	 */
+	isHubProtocol?: boolean;
+	/**
+	 * The authenticating API key's type (`user_pat` | `service` | `agent` | …) and
+	 * its workspace binding, threaded from api-key-auth middleware. They let the
+	 * hub-protocol tRPC surface apply the SAME service-key workspace confinement
+	 * (resolveConfinedWorkspace) the Hono REST door already applies. NOTE: identity
+	 * is NEVER relaxed on keyType — a `service` key is self-mintable on this pod
+	 * (setup.ts `/setup/service` Path 4), so it grants no impersonation right; see
+	 * `hub-protocol/guard.ts`.
+	 */
+	keyType?: string | null;
+	keyWorkspaceId?: string | null;
+	/**
+	 * The agent user ID acting on behalf of this request, when the caller is an
+	 * AI agent (set from the hub-protocol key's `linkedUserId`). Drives the
+	 * governance membrane: when present, mutations route through
+	 * checkPermissionOrPropose (propose instead of auto-apply). Undefined for
+	 * operator/human-driven requests, which stay synchronous.
+	 */
+	agentUserId?: string | null;
+	/**
+	 * INTERNAL CHANNEL — never from a request. No context factory populates it
+	 * and there is no wire passthrough. **Keep it that way** — a ctx factory that
+	 * ever read this from a header or input would hand any caller an "assume my
+	 * write is already approved" primitive.
+	 *
+	 * ⚠️ CORRECTED 2026-09-07. This docblock previously said "set ONLY by
+	 * `applyProposalApproval`'s composite caller … it arrives solely from that
+	 * internal object literal." That was FALSE on the day it was written. There
+	 * are TWO producers, and the omission mattered because the field is read as a
+	 * security carve-out (below), so the comment understated where that carve-out
+	 * applies:
+	 *   · `routers/proposals/apply-approval.ts` — the approval composite caller.
+	 *   · `services/capture-agent/submit-capture-graph.ts` — the capture
+	 *     auto-apply composite caller (its existence is asserted by
+	 *     `__tripwires__/capture-graph-governance-linkage.test.ts`).
+	 *
+	 * THE INVARIANT, stated so a third producer knows what it is signing up to:
+	 * set this ONLY from an internal caller that has ALREADY obtained a
+	 * governance decision for the write it is about to make. It means "a decision
+	 * exists for this", not merely "an internal caller made this".
+	 *
+	 * Two load-bearing meanings:
+	 *  · PROVENANCE — stamped as `source_proposal_id`, the JOIN that recovers the
+	 *    APPROVER via `proposals.reviewedBy`.
+	 *  · "this write is ALREADY APPROVED" — `relations.create` reads it to skip
+	 *    re-entering the governance membrane. Without that skip the ladder falls
+	 *    to `propose` (relation.create is not in DEFAULT_AUTO_APPROVE) and the
+	 *    edge is silently never created while the receipt reports it linked.
+	 *    `playbooks.run` reads it the same way (set by the `playbook/run`
+	 *    executor): it gates on the APPROVER, while its `agentUserId` input
+	 *    still owns the session.
+	 *
+	 * Declared here rather than cast at each reader: it was read through
+	 * `(ctx as { governanceProposalId?: string })` in seven places across three
+	 * files, one of which now guards the security fix above — so renaming the
+	 * field would have broken all seven with ZERO typecheck signal.
+	 */
+	governanceProposalId?: string;
+	/**
+	 * The message ID that triggered this hub-protocol request.
+	 * When set, proposals created during this request are linked to this message.
+	 */
+	sourceMessageId?: string | null;
+	/**
+	 * Session ID that triggered this hub-protocol request.
+	 * When set, proposals created during this request are linked to this session.
+	 */
+	sessionId?: string | null;
+	/**
+	 * `"sync"` when this request materializes a bulk mirror of an external source
+	 * (a connection sync, or the approval of its grouped import). Forwarded by the
+	 * entity/relation doors to `recordDomainMutation`, so event automations skip
+	 * the fan-out unless they opted in (`triggerConfig.includeSyncOrigin`).
+	 * INTERNAL composite-caller channel — createContext never sets it from HTTP.
+	 */
+	origin?: "sync";
+	/**
+	 * The enclosing session revert pass (`revertSession`), so each per-proposal
+	 * `proposals.revert` in that pass tolerates the pass's OWN `updated_at` bumps.
+	 * INTERNAL composite-caller channel — createContext never sets it from HTTP,
+	 * and it is never read from procedure input: a client must not be able to
+	 * exempt entities from the edit check.
+	 */
+	revertPass?: RevertPass;
+}
+declare const PROMOTE_TO_BODY_REFUSALS: readonly [
+	"not_body_property",
+	"empty_value",
+	"body_exists",
+	"agent_caller"
+];
+export type PromoteToBodyRefusal = (typeof PROMOTE_TO_BODY_REFUSALS)[number];
+declare const UNDO_PROMOTE_TO_BODY_REFUSALS: readonly [
+	"edited_since",
+	"not_promoted"
+];
+export type UndoPromoteToBodyRefusal = (typeof UNDO_PROMOTE_TO_BODY_REFUSALS)[number];
+/**
+ * Field errors of a refused input: dotted input path (`items.0.title`) →
+ * the messages for that field; `""` is the input as a whole.
+ *
+ * The pod sends it as tRPC `error.data.fieldErrors` and as `fieldErrors` on a
+ * Hub REST 400, built from the Zod refusal (messages only, never the values
+ * the caller sent). Absent when the refusal is not a validation one.
+ */
+export type FieldErrors = Record<string, string[]>;
+declare enum AgentType {
+	DEFAULT = "default",
+	META = "meta",
+	PROMPTING = "prompting",
+	KNOWLEDGE_SEARCH = "knowledge-search",
+	CODE = "code",
+	WRITING = "writing",
+	ACTION = "action",
+	ONBOARDING = "onboarding",
+	WORKSPACE_CREATION = "workspace-creation"
+}
+/**
+ * Agent type as string literal union (for flexibility)
+ */
+export type AgentTypeString = `${AgentType}` | (string & {});
+declare enum AIStepType {
+	THINKING = "thinking",
+	TOOL_CALL = "tool_call",
+	TOOL_RESULT = "tool_result",
+	DECISION = "decision",
+	ERROR = "error"
+}
+/**
+ * AI step - shows what the AI is doing
+ *
+ * Represents any step in the AI's reasoning/execution process:
+ * - thinking: General analysis and reasoning
+ * - tool_call: When AI calls a tool
+ * - tool_result: Result from tool execution
+ * - decision: AI making a decision
+ * - error: Error during processing
+ */
+export interface AIStep {
+	id: string;
+	type: AIStepType | string;
+	content: string;
+	toolName?: string;
+	toolInput?: unknown;
+	toolOutput?: unknown;
+	timestamp: string;
+	duration?: number;
+	error?: string;
+	title?: string;
+	description?: string;
+	status?: "complete" | "error" | "pending" | "running";
+}
+/**
+ * Branch decision from meta-agent
+ */
+export interface BranchDecision {
+	shouldBranch: boolean;
+	reason: string;
+	suggestedAgentType?: AgentTypeString;
+	suggestedTitle?: string;
+	suggestedPurpose?: string;
+}
 declare enum MessageLinkTargetType {
 	ENTITY = "entity",
 	DOCUMENT = "document",
@@ -10720,11 +11070,14 @@ export interface NeedsYouAccessRequest {
 	 * What would be granted: issuer trust, an application's browser origin, or
 	 * an API key one of the person's computers asked them for (`api_key`, read
 	 * for its person, not only for admins; decision 68d37853, answer 25).
+	 * `capability`: one of the person's OWN tool connections broke (every
+	 * connection of that tool needs a sign-in again, `secrets.connection_state
+	 * = 'needs_reauth'`); the ask is to reconnect it, read for its person.
 	 */
-	subject: "api_key" | "application" | "issuer";
-	/** The asker's display name (the issuer's host, the app's name; a key's requested name). */
+	subject: "api_key" | "application" | "capability" | "issuer";
+	/** The asker's display name (the issuer's host, the app's name; a key's requested name; the broken tool's name). */
 	name: string;
-	/** Where it asks from: the issuer URL, the app's requested origin, or the computer asking for a key. */
+	/** Where it asks from: the issuer URL, the app's requested origin, the computer asking for a key; "" for a broken connection. */
 	from: string;
 }
 /**
@@ -13111,6 +13464,16 @@ export interface AutomationRunDetail extends UnifiedRunDetailBase {
 	};
 	outputSummary: Record<string, unknown> | null;
 	playbookDetail: null;
+	/**
+	 * The focus session this run opened (`focus_sessions.metadata.automationRunId`),
+	 * or null. The worker opens it ASYNCHRONOUSLY, after `automations.trigger` has
+	 * returned the run id, so null is also "not opened yet": a caller that just
+	 * triggered a run reads this until it is set or the run settles. It stays null
+	 * for a run that never opens one (a `skipped` precondition, a playbook
+	 * delegate, whose playbook run opens its own) and for a session the viewer may
+	 * not read (decision D1: a session is content, `sessionReadableWhere`).
+	 */
+	sessionId: string | null;
 	/** The flow definition this run executed; null only for legacy runs. */
 	definitionSnapshot: RunDefinitionSnapshot | null;
 	/**
@@ -15983,9 +16346,17 @@ export interface PacketRunnerItem {
 		processId: string;
 		startedAt?: string;
 	}>;
+	/**
+	 * What the runner says it is doing (0384, `X-Synap-Runner-State`): `busy`,
+	 * `idle`, `needs_permission`, or `ended` (it said so, or left the live
+	 * window). `null` while live = its client names no state: unknown, not idle.
+	 */
+	state: "busy" | "ended" | "idle" | "needs_permission" | null;
+	/** When it entered that state; for a runner gone quiet, when it was last seen. */
+	stateSince?: string;
 	firstSeenAt: string;
 	lastSeenAt: string;
-	/** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read. */
+	/** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read, and not `ended`. */
 	live: boolean;
 	/** The shell command that reopens it (`resolveAgentConversation`); absent for a harness we cannot reopen. */
 	resume?: string;
@@ -16188,7 +16559,16 @@ export interface PacketDecision {
 	/** The reviewer's rejection reason, when one was given. */
 	reason?: string;
 }
-export type NextMoveKind = "agent_slot" | "blocker_dropped" | "message_waiting" | "none" | "owed_slot" | "pending_proposal" | "pull_request" | "ready_to_close" | "undeclared" | "unknown" | "waiting_on_hold" | "waiting_on_session";
+/**
+ * The kinds of THE next move. A session's come from `deriveNextMove`; a
+ * thing's and a goal's from `deriveThingNextMove` / `deriveGoalNextMove`
+ * (`services/status/next-move.ts`), which reuse these and add four:
+ * `waiting_on` (a wait on someone or something, its `waitKind` saying whose
+ * ball), `step` (a thing's next step on its path, `to`), `judge_review` (a
+ * goal's claims wait on its judge) and `start_work` (no open session works
+ * on a goal).
+ */
+export type NextMoveKind = "agent_slot" | "blocker_dropped" | "judge_review" | "message_waiting" | "none" | "owed_slot" | "pending_proposal" | "pull_request" | "ready_to_close" | "start_work" | "step" | "undeclared" | "unknown" | "waiting_on" | "waiting_on_hold" | "waiting_on_session";
 export interface ContinuationNextMove {
 	kind: NextMoveKind;
 	/** Who acts: the person, the AI, or nobody. */
@@ -16224,6 +16604,15 @@ export interface ContinuationNextMove {
 	 * PR has ended: the AI records it).
 	 */
 	reasonCode?: "checks_failed" | "checks_pending" | "closed" | "criteria_unmet" | "merged" | "ready_to_land";
+	/** The lifecycle option a `step` move targets (it moves through `moveStatus`). */
+	to?: string;
+	/**
+	 * What kind of wait it is (`WAIT_KINDS`), on a move read off a waiting-on
+	 * ref (a thing's or a goal's): its ball says whose move it is.
+	 */
+	waitKind?: WaitKind;
+	/** The person or thing a `waiting_on` move waits on, when the reader may read it. */
+	entityId?: string;
 }
 export interface ContinuationPacket {
 	version: 1;
@@ -16464,6 +16853,21 @@ export interface ContinuationPacket {
 	live: {
 		lastActivityAt: string | null;
 		measuredAt: string;
+		/**
+		 * What the LIVE runners SAY they are doing (0384), folded by
+		 * `foldRunnerState`: `needs_permission` over `busy` over `idle`;
+		 * `state: null` = no live runner named one. The harness's own word,
+		 * beside the pod-activity `state` above and never folded into it. A
+		 * failed runners read is `unavailable` (see `runners`), never null.
+		 */
+		runner: {
+			since: string | null;
+			state: "busy" | "idle" | "needs_permission" | null;
+			status: "ok";
+		} | {
+			reason: string;
+			status: "unavailable";
+		};
 		since: string | null;
 		state: "idle" | "working";
 		status: "ok";
@@ -16547,6 +16951,11 @@ export interface GoalRollup {
 	moved?: number;
 	/** Absent when it waits on nothing. */
 	waitingOn?: WaitingOnMark[];
+	/**
+	 * The goals that SERVE this one (`track --serves--> track`), direct only,
+	 * that the reader may see. Absent when none.
+	 */
+	children?: string[];
 }
 export interface ScopeRollup {
 	lens: "project" | "workspace";
@@ -16569,6 +16978,20 @@ export interface ScopeRollup {
 	};
 	waitingOn: WaitingOnMark[];
 }
+/**
+ * A move a thing's step offers: every declared option but the one it stands
+ * on, the main path first (declared order), then the off-path ones. It moves
+ * only through `moveStatus`; this is what a surface may offer.
+ */
+export interface StatusOfMove {
+	/** The option key a move targets. */
+	to: string;
+	label: string;
+	/** Only a person may move a thing INTO it. */
+	humanOnly: boolean;
+	/** It is a pause: the move must say what it waits on (a hold). */
+	needsHold: boolean;
+}
 type Unavailable$1 = {
 	status: "unavailable";
 };
@@ -16579,6 +17002,11 @@ export interface StatusOf {
 	status: string | null;
 	label: string | null;
 	category: LifecycleCategory | null;
+	/**
+	 * THE tone of its status: the declared option's (`lifecycleOptionTone`),
+	 * else the status word's (`resolveStatusTone`); null with no status.
+	 */
+	tone: UnitTone | null;
 	/** When it entered this status (ISO), or a stored fallback (below). */
 	since: string | null;
 	/** False: no move was recorded, so `since` is when it was created or started. */
@@ -16600,8 +17028,28 @@ export interface StatusOf {
 		state: "idle" | "working";
 		status: "ok";
 	} | Unavailable$1;
-	/** Sessions only: THE next move (`deriveNextMove`). */
+	/**
+	 * THE next move: a session's (`deriveNextMove`), a thing's with a declared
+	 * lifecycle (`deriveThingNextMove`) and a goal's (`deriveGoalNextMove`).
+	 */
 	nextMove?: ContinuationNextMove;
+	/**
+	 * Things with a declared lifecycle, on `include: ["moves"]` only: the
+	 * moves its step offers ({@link StatusOfMove}).
+	 */
+	moves?: StatusOfMove[];
+	/** Things only: the roles it wears that the reader may see. */
+	roles?: StatusOfRole[] | Unavailable$1;
+	/** Things only: the account it works at, when the reader may read it. */
+	account?: StatusOfAccount;
+	/** On `include: ["history"]` (things, goals, sessions). */
+	history?: StatusOfHistory | Unavailable$1;
+	/** On `include: ["links"]` (goals, sessions): its `serves` edges. */
+	links?: StatusOfLinks | Unavailable$1;
+	/** On `include: ["rollup"]` (goals): its tree, down `serves`. */
+	rollup?: StatusOfRollup | Unavailable$1;
+	/** On `include: ["signals"]` (things, goals, sessions): those still open. */
+	signals?: StatusOfSignal[] | Unavailable$1;
 	link: string;
 }
 export type StatusOfAnswer = StatusOf | {
@@ -18130,9 +18578,11 @@ export type ExecuteCapabilityResult = {
 	 * just had no way to make it actionable — 0 of 11 containers on the live
 	 * pod are approved, so this is the wall every run hits today.
 	 *
-	 * A deny from this gate is ALWAYS an approval problem (a dead connection
+	 * A deny from this gate is an approval problem (a dead connection
 	 * surfaces as `kind:"error"` with `errorClass:"no_connection"`, which
-	 * carries its own `connect` block) — the two fixes stay distinct.
+	 * carries its own `connect` block) — the two fixes stay distinct —
+	 * except a person's "Never" (`reasonCode`), which nothing but that
+	 * person can lift.
 	 */
 	enable?: CapabilityNextAction;
 	/**
@@ -18144,6 +18594,12 @@ export type ExecuteCapabilityResult = {
 	enableProposal?: CapabilityEnableOffer;
 	kind: "deny";
 	reason: string;
+	/**
+	 * A typed refusal the caller can branch on: `DENIED_BY_RULE` = a
+	 * person's stored "Never" on this capability for this agent (0381).
+	 * Such a refusal carries no `enable`: enabling would not fix it.
+	 */
+	reasonCode?: string;
 } | {
 	/**
 	 * CONNECTION moment: a `no_connection` / `auth` failure means the
@@ -19933,6 +20389,10 @@ export interface NotificationDef {
 	 *   once when the session has an open room question, and counts ZERO when
 	 *   neither is true, because whatever it announced has been resolved. A
 	 *   pointer row's `sourceId` must be the session id.
+	 * - `"from_system"` — no real asker raised it: news the pod wrote on nobody's
+	 *   behalf (a blocker closed). Never a headline row: it sits in the needs-you
+	 *   rule's `from_system` fold (`needsYouClass: "from_system"`), counted in
+	 *   `count.folds.fromSystem`, never dropped.
 	 * - `"suggestion"` — something an AI offered on its own initiative (a nudge,
 	 *   an insight, a briefing). It NEVER counts toward needs-you. It goes to
 	 *   its own sibling bucket instead: `signals.list({ lens: "suggestions" })`
@@ -19967,7 +20427,7 @@ export interface NotificationDef {
 	 */
 	connectionNotice?: ConnectionNoticeClass;
 }
-export type NotificationNeedsYouRole = "informational" | "item" | "session-pointer" | "status" | "suggestion";
+export type NotificationNeedsYouRole = "from_system" | "informational" | "item" | "session-pointer" | "status" | "suggestion";
 /**
  * The five values `routingRules` has always declared, as read by
  * `NotificationService` (`"mute"` short-circuits before the row is written;
@@ -20476,6 +20936,7 @@ declare function projectSessionRows(sessions: FocusSession[], userId: string | n
 	playbookId: string | null;
 	progress: number | null;
 	projectId: string | null;
+	stageHistory: SessionStageHistoryEntry[];
 	stages: unknown;
 	startedAt: Date;
 	status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -20841,6 +21302,80 @@ export type StructureAgainResult = {
 	sourceDocumentId: string;
 	status: "structured";
 } & Omit<RerunItemResult, "door" | "sourceDocumentIds">);
+export interface LeanRoomMessage {
+	id: string;
+	at: string;
+	author: string;
+	isPerson: boolean;
+	/** The message, fenced as untrusted data (the plain `text` is not repeated). */
+	fenced: string;
+	truncated: boolean;
+}
+export type LeanRoomSection = {
+	channelId: string | null;
+	cursor: string | null;
+	hasMore: boolean;
+	/** The newest {@link LEAN_ROOM_LAST}, newest first. */
+	last: LeanRoomMessage[];
+	status: "ok";
+	/** Open posts other sessions addressed to this one: exact count. */
+	unread: number;
+	/** Those posts, oldest first, fenced. `null` when the inbox failed. */
+	unreadItems: Array<{
+		at: string;
+		fenced: string;
+		fromSessionId: string | null;
+		id: string;
+		intent: string;
+		truncated: boolean;
+	}> | null;
+} | {
+	reason: string;
+	status: "unavailable";
+};
+export interface LeanContinuation {
+	version: 1;
+	detail: "lean";
+	session: ContinuationPacket["session"];
+	nextMove: ContinuationPacket["nextMove"];
+	userMustDecide: ContinuationPacket["userMustDecide"];
+	openRoomQuestions: ContinuationPacket["openRoomQuestions"];
+	blockedBy: ContinuationPacket["blockedBy"];
+	waitingOn: ContinuationPacket["waitingOn"];
+	workUnits: ContinuationPacket["workUnits"];
+	room: LeanRoomSection;
+	/** `ownerDeploys` holds THIS session's deploys only (`detail: 'deploys'` reads the rest). */
+	gates: ContinuationPacket["gates"];
+	live: ContinuationPacket["live"];
+}
+export type LeanOutcomesSection = {
+	counts: {
+		met: number;
+		total: number;
+	};
+	inputs: Array<{
+		answered: boolean;
+		blocksOutcomeKey: string | null;
+		key: string;
+		label: string;
+		need: string;
+		open: boolean;
+		owedSince?: string;
+		slotLabel: string;
+		why?: string;
+	}>;
+	outcomes: Array<{
+		key: string;
+		kind: string;
+		label: string;
+		met: boolean;
+		state: string;
+	}>;
+	status: "ok";
+} | {
+	reason: string;
+	status: "unavailable";
+};
 export interface CriterionRunOutcome {
 	key: string;
 	/** `recorded` wrote a row; `skipped` wrote nothing and says why. */
@@ -22484,7 +23019,9 @@ export type SignalKind =
  * `access-requests.ts`): a pending trusted issuer (`target.kind: "issuer"`)
  * or an app's pending connection request (`target.kind:
  * "connection-request"`); or the person's own pending KEY request
- * (`target.kind: "key-request"`, read for its person). Who asks and from
+ * (`target.kind: "key-request"`, read for its person); or one of the
+ * person's own tools whose connections all need a sign-in again
+ * (`target.kind: "capability"`, `broken-connections.ts`). Who asks and from
  * where ride in `access`.
  */
  | "access-request"
@@ -22948,6 +23485,18 @@ export interface PendingKeyRequestSignalInput {
 	/** Past it the request is expired, never decidable (24 h after filing). */
 	expiresAt: Date;
 }
+/**
+ * One of the person's tools whose connections ALL need a sign-in again, as
+ * `listBrokenConnections` reads it (`broken-connections.ts`).
+ */
+export interface BrokenConnectionSignalInput {
+	/** The capability (tool) id — the row's door. */
+	capabilityId: string;
+	/** The tool's name ("Gmail"); the connection's own label when unnamed. */
+	name: string;
+	/** When it broke: the newest auth failure, else the connection's last change. */
+	brokenAt: Date;
+}
 /** An open invite to another space, as `listOpenSpaceInvites` reads it. */
 export interface SpaceInviteSignalInput {
 	id: string;
@@ -23051,7 +23600,7 @@ export interface ReviewSessionRow {
 	trackId: string | null;
 }
 /** A sub-read's name — what `unreadable` reports. */
-export type SignalSubRead = "activity" | "app-requests" | "captures" | "convertible-goals" | "drafts" | "events" | "invites" | "issuers" | "key-requests" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
+export type SignalSubRead = "activity" | "app-requests" | "broken-connections" | "captures" | "convertible-goals" | "drafts" | "events" | "invites" | "issuers" | "key-requests" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
 /** One class of the lens page. */
 export interface LensClassWire {
 	/** The first `cap` rows, in the class's own order. */
@@ -23387,6 +23936,178 @@ export interface MarketplacePreflight extends MarketInstallSummary {
 		connectors: boolean;
 		network: boolean;
 	};
+}
+declare const PACKAGE_FIELD_STATES: readonly [
+	"updates",
+	"yours",
+	"both",
+	"same"
+];
+export type PackageFieldState = (typeof PACKAGE_FIELD_STATES)[number];
+declare const PACKAGE_UPDATE_NEEDS: readonly [
+	"consent",
+	"choice",
+	"review",
+	"nothing"
+];
+export type PackageUpdateNeeds = (typeof PACKAGE_UPDATE_NEEDS)[number];
+/** How many fields of a package are in each state. */
+export type PackageFieldCounts = Record<PackageFieldState, number>;
+/** The kinds of installed row a plan compares today. */
+export type PackageUpdateRowKind = "automation" | "skill" | "view";
+/** One row of `GET /package-updates` / `packageUpdates.list`. */
+export interface PackageUpdateSummary {
+	slug: string;
+	/** The catalog kind of the package (`skill`, `view`, `automation`). */
+	kind: string;
+	name: string;
+	/** The version the pod's rows last converged to; null when never recorded. */
+	installedVersion: string | null;
+	latestVersion: string | null;
+	counts: PackageFieldCounts;
+	/** Records the update would change (space updates only; 0 otherwise). */
+	dataChanges: number;
+	needs: PackageUpdateNeeds;
+	/** The pod path that opens the review page (`/open/update/<slug>`). */
+	reviewUrl: string;
+}
+/**
+ * `GET /package-updates` / `packageUpdates.list`: every installed package
+ * whose catalog version moved, and every one whose catalog could not be read
+ * (named with the reason, never folded into "nothing waiting").
+ */
+export interface PackageUpdateList {
+	updates: PackageUpdateSummary[];
+	unreadable: Array<{
+		kind: string;
+		name: string;
+		reason: string;
+		slug: string;
+	}>;
+}
+/** One pending change to existing records a space update would run. */
+export interface PackageDataChange {
+	/** The op key `acceptDataChanges` names. */
+	id: string;
+	/** One plain sentence. */
+	sentence: string;
+	/** How many records it changes; null when the count failed (never 0). */
+	affected: number | null;
+	/** Never run by an update: an operator step. */
+	destructive: boolean;
+}
+/** One compared field of one installed row. */
+export interface PackageUpdateField {
+	/** The row field name (`body`, `description`, `flowDefinition`, …). */
+	key: string;
+	/** Its words for a person (`resolvePackageFieldLabel`). */
+	label: string;
+	state: PackageFieldState;
+	/** The catalog's value when installed (or last decided). */
+	base: unknown;
+	/** The catalog's value now. */
+	desired: unknown;
+	/** The pod's value now. */
+	live: unknown;
+	/**
+	 * `both` text fields only: the line-level 3-way merge of the two edits, or
+	 * null when they overlap (D2: "Combine both" is offered only without an
+	 * overlap). Absent for every other field.
+	 */
+	merged?: string | null;
+	/** `both` text fields only: the two edits touch the same lines. */
+	overlap?: boolean;
+}
+/** `GET /package-updates/:slug` / `packageUpdates.get`. */
+export interface PackageUpdatePlan {
+	slug: string;
+	kind: string;
+	name: string;
+	installedVersion: string | null;
+	latestVersion: string | null;
+	/** The catalog's change notes since the installed version, when it has any. */
+	notes?: string[];
+	rows: Array<{
+		fields: PackageUpdateField[];
+		name: string;
+		rowId: string;
+		rowKind: PackageUpdateRowKind;
+	}>;
+	/**
+	 * A space update's changes to existing records (the conversion engine's
+	 * pending ops, as `/packages/preflight` reports them). The person agrees by
+	 * sending each consentable item's `id` in `acceptDataChanges`. A
+	 * `destructive` item is never run by an update: it is an operator step on
+	 * pod admin (`needsPodAdmin`).
+	 */
+	dataChanges?: {
+		count: number;
+		items: PackageDataChange[];
+		needsPodAdmin: boolean;
+	};
+	/**
+	 * The choice the pod recommends per `both` field, keyed `<rowId>:<field>`:
+	 * `catalog` when the pod's edit is already inside the catalog's text,
+	 * `combine` when the two edits merge without overlapping. Absent = no
+	 * recommendation; a person decides.
+	 */
+	recommended?: Record<string, PackageUpdateChoiceName>;
+	counts: PackageFieldCounts;
+	needs: PackageUpdateNeeds;
+}
+declare const PACKAGE_UPDATE_CHOICE_NAMES: readonly [
+	"catalog",
+	"mine",
+	"combine"
+];
+export type PackageUpdateChoiceName = (typeof PACKAGE_UPDATE_CHOICE_NAMES)[number];
+/** One field an apply (or an undo) changed. */
+export interface PackageUpdateChange {
+	rowKind: PackageUpdateRowKind;
+	rowId: string;
+	field: string;
+	before: unknown;
+	after: unknown;
+}
+/**
+ * The receipt of one package update — kept in the pod's event log as a
+ * `package.updated` event. `source: 'automatic'` is the start-up pass applying
+ * fields nobody edited (D3); `person` is an apply from a door.
+ */
+export interface PackageUpdateReceipt {
+	id: string;
+	slug: string;
+	kind: string;
+	name: string;
+	fromVersion: string | null;
+	toVersion: string | null;
+	appliedAt: string;
+	source: "automatic" | "person";
+	changes: PackageUpdateChange[];
+	/** Undo refuses after this instant (D5: 30 days). */
+	undoUntil: string;
+	/** When it was undone, or null. */
+	undoneAt: string | null;
+}
+/**
+ * The answer of an apply or an undo. A person's write lands and returns its
+ * receipt; an agent's write is filed as proposals through each row's own
+ * governed `.update` door, and lands only when a person approves them.
+ */
+export type PackageUpdateApplyResult = {
+	receipt: PackageUpdateReceipt | null;
+	status: "applied";
+} | {
+	proposalIds: string[];
+	status: "proposed";
+};
+export type StandaloneKind = "automation" | "skill" | "view";
+export interface DetachResult {
+	detached: boolean;
+	kind: StandaloneKind;
+	id: string;
+	outcome?: "proposed" | "updated";
+	reason?: string;
 }
 /**
  * Core API Router
@@ -23787,6 +24508,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reach: "dispatch" | "pod" | "pull";
 				revokedKeys: number;
 				role: string | null;
+				servedAt: string | null;
 				viewerCanDisconnect: boolean;
 			}[];
 		}>;
@@ -33343,6 +34065,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -33722,6 +34445,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -33787,6 +34511,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -33826,6 +34551,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34249,6 +34975,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34282,6 +35009,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbooks?: SessionPlaybookCandidates | undefined;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34314,6 +35042,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				triggered: boolean;
 			};
 		}>;
+		deploys: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				commitSha?: string | undefined;
+				id: string;
+			};
+			meta: object;
+			output: {
+				commitSha: string | null;
+				deploys: PacketDeployApproval[];
+				detail: "deploys";
+				sessionId: string;
+				status: "ok";
+			} | {
+				detail: "deploys";
+				reason: string;
+				status: "unavailable";
+			};
+		}>;
 		discardFromTriage: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				sessionId: string;
@@ -34344,6 +35090,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34455,6 +35202,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projectId: string | null;
 				recall: SessionRecallView;
 				rerun: RerunAvailability;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34495,6 +35243,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34507,6 +35256,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				userId: string;
 				verificationReport: unknown;
 				workspaceId: string | null;
+			};
+		}>;
+		getLean: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			meta: object;
+			output: {
+				continuation: LeanContinuation;
+				outcomes: LeanOutcomesSection;
 			};
 		}>;
 		grade: import("@trpc/server").TRPCMutationProcedure<{
@@ -34613,6 +35372,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34736,6 +35496,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -35303,6 +36064,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					unblocks?: string | undefined;
 					why?: string | undefined;
 				}[] | undefined;
+				expectedStatus?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | undefined;
 				followPlaybookId?: string | null | undefined;
 				followStageKey?: string | null | undefined;
 				goal?: string | undefined;
@@ -35498,6 +36260,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -35835,7 +36598,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetKind: "action" | "capability" | "connection" | "profile";
 				targetPattern: string;
 				targetProfile?: string | undefined;
-				verdict: "auto" | "propose";
+				verdict: "auto" | "deny" | "propose";
 				workspaceId?: string | undefined;
 			};
 			meta: object;
@@ -35855,7 +36618,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				};
 			};
@@ -35889,7 +36652,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				} | null;
 			};
@@ -35914,7 +36677,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				}[];
 			};
@@ -35937,7 +36700,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				}[];
 			};
@@ -36078,7 +36841,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				};
 			};
@@ -36292,9 +37055,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		addDependency: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				criterionKey?: string | undefined;
 				fromId: string;
 				fromType: "entity" | "session" | "track";
-				linkType: "blocked_by" | "replaces";
+				linkType: "blocked_by" | "replaces" | "serves";
 				toId: string;
 				toType: "entity" | "session" | "track";
 			};
@@ -36508,7 +37272,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				fromId: string;
 				fromType: "entity" | "session" | "track";
-				linkType: "blocked_by" | "replaces";
+				linkType: "blocked_by" | "replaces" | "serves";
 				toId: string;
 				toType: "entity" | "session" | "track";
 			};
@@ -38784,6 +39548,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				doneWindowed: number;
 				hasWorker: boolean;
 				lifecycle: {
+					initialStatus: string | null;
 					options: {
 						category: "active" | "done" | "lost" | "open" | "paused";
 						dateBinding?: string | undefined;
@@ -38821,6 +39586,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				initialStatus: string | null;
 				options: {
 					category: "active" | "done" | "lost" | "open" | "paused";
 					dateBinding?: string | undefined;
@@ -38948,6 +39714,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		statusOf: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				ids: string[];
+				include?: ("history" | "links" | "moves" | "rollup" | "signals")[] | undefined;
 			};
 			meta: object;
 			output: StatusOfAnswer[];
@@ -40897,6 +41664,82 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: LandedObjectsPage;
 		}>;
 	}>>;
+	packageUpdates: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
+				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		applyUpdate: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				acceptDataChanges?: string[] | undefined;
+				choices?: Record<string, "catalog" | "combine" | "mine" | {
+					value: unknown;
+				}> | undefined;
+				expectedVersion: string;
+				slug: string;
+			};
+			meta: object;
+			output: PackageUpdateApplyResult;
+		}>;
+		detach: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				kind: "automation" | "skill" | "view";
+			};
+			meta: object;
+			output: DetachResult;
+		}>;
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				slug: string;
+			};
+			meta: object;
+			output: PackageUpdatePlan;
+		}>;
+		history: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				limit?: number | undefined;
+				slug?: string | undefined;
+			} | undefined;
+			meta: object;
+			output: PackageUpdateReceipt[];
+		}>;
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: PackageUpdateList;
+		}>;
+		undo: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				receiptId: string;
+			};
+			meta: object;
+			output: PackageUpdateApplyResult;
+		}>;
+	}>>;
 	places: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		errorShape: {
@@ -41976,6 +42819,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -42037,6 +42881,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -44534,6 +45379,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				success: boolean;
 			};
 		}>;
+		clearLater: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				proposalId: string;
+			};
+			meta: object;
+			output: {
+				cleared: boolean;
+			};
+		}>;
 		createDocumentEdit: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				documentId: string;
@@ -44662,6 +45516,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reviewLater: number;
 				scanTruncated: boolean;
 				scanned: number;
+			};
+		}>;
+		later: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				proposalId: string;
+				until: unknown;
+			};
+			meta: object;
+			output: {
+				proposalId: string;
+				snoozedUntil: Date;
 			};
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
@@ -46906,6 +47771,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				count: ReturnType<(a: {
 					accessRequests: {
 						applications: PendingAppRequestSignalInput[];
+						connections: BrokenConnectionSignalInput[];
 						issuers: PendingIssuerSignalInput[];
 						keys: PendingKeyRequestSignalInput[];
 					};

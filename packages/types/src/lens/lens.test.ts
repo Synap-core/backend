@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { needsYouBucketOf, needsYouRows } from "../needs-you/index.js";
-import { resolveUnitState } from "../units/state.js";
+import { resolveUnitState, unitStateInputOfWaitKind } from "../units/state.js";
 import type { ActivityRow } from "../activity/index.js";
 import {
   ATTENTION_CLASSES,
@@ -453,6 +453,23 @@ describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () =>
       "blocking"
     );
   });
+  it("a broken tool connection is an act owed, not a decision: Reconnect, its tool the door", () => {
+    const { recent } = needsYouRows([
+      sig({
+        id: "access:connection:cap-1",
+        kind: "access-request",
+        title: 'Reconnect Tool "Gmail"',
+        category: "data",
+        target: { kind: "capability", id: "cap-1" },
+        access: { subject: "capability", name: "Gmail", from: "" },
+      }),
+    ]);
+    const row = lensRowOfNeedsYou(recent[0]!, "blocking");
+    expect(row.objectKind).toBe("capability");
+    expect(row.verb).toEqual({ action: "reconnect", label: "Reconnect" });
+    expect(row.door).toEqual({ kind: "capability", id: "cap-1" });
+    expect(row.state).toEqual({ owedFromYou: 1 });
+  });
   it("an invite to another space is a decision: Accept on the row, its role the chip, no door before Accept", () => {
     const { recent } = needsYouRows([
       sig({
@@ -536,6 +553,90 @@ describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () =>
     // No ask chip (founder decision 2026-10-22): the draft's asks are Blocking
     // owed-slot rows of their own; counting them here too would be twice.
     expect(row.reason).toBeNull();
+  });
+  // The pod stamps a wait kind on the rows that wait on the person; the row
+  // wears THE wait-kind map's mark, not its kind's. Rows chosen where the two
+  // DISAGREE: an owed slot (kind says "your answer") waiting on an approval
+  // or on their reply, a cluster whose map field is not the kind's, a draft
+  // (kind says not started).
+  describe("a stamped wait kind drives the item row's state", () => {
+    const rowOf = (s: LensNeedsYouSignal) =>
+      lensRowOfNeedsYou(needsYouRows([s]).recent[0]!, "blocking");
+
+    it("an owed slot waiting on an approval wears pendingDecisions, not owedFromYou", () => {
+      const row = rowOf(
+        sig({ id: "o", kind: "owed-slot", waitKind: "approval" })
+      );
+      expect(row.state).toEqual({ owedFromYou: 0, pendingDecisions: 1 });
+      expect(resolveUnitState(row.state).state).toBe("needs_review");
+    });
+
+    it("an owed slot waiting on their reply wears that kind's input: with them, not your turn", () => {
+      const row = rowOf(
+        sig({
+          id: "o",
+          kind: "owed-slot",
+          blockedReason: "decision",
+          waitKind: "their_reply",
+        })
+      );
+      expect(row.state).toEqual(unitStateInputOfWaitKind("their_reply"));
+      expect(row.state.waitKind).toBe("their_reply");
+      expect(resolveUnitState(row.state).state).toBe("with_them");
+      // Verb and reason stay the kind's.
+      expect(row.verb).toEqual({ action: "answer", label: "Decide" });
+      expect(row.reason).toBeNull();
+    });
+
+    it("a cluster scales the count the map's field sets, whichever field that is", () => {
+      const approval = rowOf(
+        sig({
+          id: "c",
+          kind: "proposal-cluster",
+          count: 3,
+          waitKind: "approval",
+        })
+      );
+      expect(approval.state).toEqual({ owedFromYou: 0, pendingDecisions: 3 });
+      // A kind whose map field is `owedFromYou`: the count lands there, so
+      // the scaling reads the map, never a second per-kind field.
+      const answer = rowOf(
+        sig({ id: "c", kind: "proposal-cluster", count: 3, waitKind: "answer" })
+      );
+      expect(answer.state).toEqual({ owedFromYou: 3, pendingDecisions: 0 });
+      expect(answer.verb).toEqual({ action: "approve", label: "Approve" });
+    });
+
+    it("a draft stamped `answer` is your turn, never working", () => {
+      const row = lensRowOfNeedsYou(
+        needsYouRows([sig({ id: "d", kind: "draft-asks", waitKind: "answer" })])
+          .recent[0]!,
+        "proposed"
+      );
+      expect(resolveUnitState(row.state).state).toBe("needs_you");
+      expect(row.reason).toBeNull();
+    });
+
+    it("no wait kind, or one this build does not know, keeps the kind's own state exactly", () => {
+      for (const waitKind of [undefined, null, "not_a_kind"]) {
+        expect(
+          rowOf(sig({ id: "o", kind: "owed-slot", waitKind })).state
+        ).toEqual({ owedFromYou: 1 });
+        expect(
+          rowOf(sig({ id: "c", kind: "proposal-cluster", count: 2, waitKind }))
+            .state
+        ).toEqual({ pendingDecisions: 2 });
+        expect(
+          rowOf(sig({ id: "r", kind: "session-review", waitKind })).state
+        ).toEqual({ pendingDecisions: 1 });
+        // Never `unreadable`: an older pod's rows were readable before.
+        expect(
+          resolveUnitState(
+            rowOf(sig({ id: "o", kind: "owed-slot", waitKind })).state
+          ).state
+        ).toBe("needs_you");
+      }
+    });
   });
   it("an agent-raised ask carries byAgent; a governance one does not", () => {
     // Discriminating pair: same kind, the category alone decides.

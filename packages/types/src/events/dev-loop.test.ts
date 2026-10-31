@@ -170,15 +170,77 @@ describe("checkDevLoopPayload", () => {
     ).toMatchObject({ ok: false });
   });
 
-  it("dev.deployed needs a target and a sha", () => {
+  it("dev.deployed is a receipt: a target and the WHOLE commit sha", () => {
+    const sha = "91de41c34abc0f1e2d3c4b5a69788796a5b4c3d2";
+    for (const target of [
+      "pod",
+      "pod.antoinesrvt.synap.live",
+      "localhost:4000",
+      "site:crm.synap.live",
+      "npm:@synap-core/sdk",
+      "cli",
+    ]) {
+      expect(
+        checkDevLoopPayload("dev.deployed", { target, sha }),
+        target
+      ).toEqual({ contract: true, ok: true });
+    }
     expect(
-      checkDevLoopPayload("dev.deployed", { target: "pod.x", sha: "abc1234" })
-    ).toEqual({
+      checkDevLoopPayload("dev.deployed", {
+        target: "pod",
+        sha: sha.toUpperCase(),
+      })
+    ).toMatchObject({ ok: true });
+    // A prefix, a branch name, an empty sha: not a receipt.
+    for (const bad of ["91de41c", "main", "", `${sha}0`, "g".repeat(40)]) {
+      expect(
+        checkDevLoopPayload("dev.deployed", { target: "pod", sha: bad }),
+        bad
+      ).toMatchObject({ ok: false, error: expect.stringMatching(/sha/) });
+    }
+    // A url, a phrase, or nothing: not a target.
+    for (const bad of ["https://crm.synap.live", "site: crm", "", ":pod"]) {
+      expect(
+        checkDevLoopPayload("dev.deployed", { target: bad, sha }),
+        bad
+      ).toMatchObject({ ok: false, error: expect.stringMatching(/target/) });
+    }
+  });
+
+  it("ci.started carries a run's sha and repo, never a status", () => {
+    const ok = {
+      sha: "abc1234",
+      repo: "Synap-core/backend",
+      pr: 42,
+      workflow: "CI",
+    };
+    expect(checkDevLoopPayload("ci.started", ok)).toEqual({
       contract: true,
       ok: true,
     });
     expect(
-      checkDevLoopPayload("dev.deployed", { target: "pod.x", sha: "" })
+      checkDevLoopPayload("ci.started", { ...ok, sha: "main" })
+    ).toMatchObject({ ok: false });
+    expect(
+      checkDevLoopPayload("ci.started", { ...ok, repo: "backend" })
+    ).toMatchObject({ ok: false });
+  });
+
+  it("dev.merge_queued names its PR like the other PR facts", () => {
+    const pr = {
+      repo: "Synap-core/backend",
+      number: 255,
+      url: "https://github.com/Synap-core/backend/pull/255",
+    };
+    expect(checkDevLoopPayload("dev.merge_queued", pr)).toEqual({
+      contract: true,
+      ok: true,
+    });
+    expect(
+      checkDevLoopPayload("dev.merge_queued", {
+        ...pr,
+        url: "https://github.com/Synap-core/backend/pull/256",
+      })
     ).toMatchObject({ ok: false });
   });
 

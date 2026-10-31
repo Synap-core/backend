@@ -177,6 +177,7 @@ export const OperationalEventTypes = {
     domain: "Focus sessions",
     description: "Runs once when a paused session is ready to be reviewed.",
     filterKeys: [
+      // hold_review_due | pr_green_unmerged | pr_red_idle | main_red_unowned
       "signal",
       "status",
       "category",

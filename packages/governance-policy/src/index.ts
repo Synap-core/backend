@@ -21,6 +21,9 @@
  * Precedence ladder (applied only after RBAC passes and the actor is confirmed
  * to be an agent user):
  *   1. CBAC capability allowlist  → deny if the agent lacks the capability
+ *   1.5 a person's "Never"         → deny (`DENIED_BY_RULE`): a `deny` rule
+ *                                    resolved by the caller (0381). Above every
+ *                                    floor: refusing never loosens one.
  *   2. ADMIN_ACTIONS              → always propose (even for owned workspace)
  *   2.05 HUMAN_GATE_EVENT_KEYS   → always propose; unwidenable by any rung below
  *   2.06 ARBITRARY_EXECUTION_EVENT_KEYS → always propose; a shell inside the API
@@ -74,6 +77,10 @@
  *                                    rule on a move INTO done/lost applies
  *                                    only if it names the write; else 2.85
  *   2.85 lifecycle move into done/lost → propose (2.86 other moves → execute)
+ *   2.88 NAMED_RULE_ONLY_EVENT_KEYS → propose (a capability run or a session's
+ *                                    tool grant that no rule NAMING it widened
+ *                                    at 2.8; ownership and the auto-approve
+ *                                    lists below never execute one)
  *   3. isAgentOwnedWorkspace      → execute (non-destructive) / propose (destructive)
  *   4. explicit autoApproveFor    → execute (overrides writesRequireProposal)
  *   5. writesRequireProposal      → propose on non-pure-read writes
@@ -225,31 +232,13 @@ export const DEFAULT_AUTO_APPROVE: readonly string[] = [
  * branch merges can never auto-execute. Format used by the floor is the bare
  * action verb; event keys are `${subjectType}.${action}` (e.g. `entity.merge`).
  */
-/**
- * Capability verb ids a stored `auto` rule must not widen to a direct run.
- * The policy engine itself never sees a verb id — `capability-gate` consults
- * this before `capabilityRuleAuthorizesRun`. Gmail and every other send stay
- * off the list.
- */
-export const PROPOSE_ONLY_CAPABILITY_VERBS = [
-  "postiz_draft",
-  "postiz_schedule",
-  "postiz_publish",
-  // The code verb that uploads media then creates the post (draft | schedule |
-  // now) — the same public send as the three above. `postiz_upload_from_url`
-  // is deliberately NOT here: it stores a file in the Postiz media library and
-  // publishes nothing, so a person may widen it like any other write.
-  "postiz_schedule_post",
-] as const;
-
-export function capabilityVerbAllowsRuleWiden(
-  verbName: string | null | undefined
-): boolean {
-  if (!verbName) return true;
-  return !(PROPOSE_ONLY_CAPABILITY_VERBS as readonly string[]).includes(
-    verbName
-  );
-}
+// The verbs a stored `auto` rule never widens (a public post): defined beside
+// the "always" menus' derivation in @synap-core/types, which cannot import
+// this engine, so both read ONE list.
+export {
+  PROPOSE_ONLY_CAPABILITY_VERBS,
+  capabilityVerbAllowsRuleWiden,
+} from "@synap-core/types/proposals";
 
 /**
  * THE OUTWARD FLOOR (finding c173cc51, founder 2026-10-30: an act that leaves
@@ -260,7 +249,10 @@ export function capabilityVerbAllowsRuleWiden(
  * `capability.run` action) never widens: only a rule that NAMES the write
  * does — a capability-target row naming that capability for a run, the exact
  * action for a grant. Applied where every caller resolves a rule
- * (`resolveGovernanceRule`, @synap/database); a `propose` rule still tightens.
+ * (`resolveGovernanceRule`, @synap/database), and again in the engine: 2.8
+ * skips a broad `auto` handed in for these keys, and 2.88 proposes them above
+ * ownership (3) and the auto-approve lists (4, 8). A `propose` rule still
+ * tightens.
  */
 export const NAMED_RULE_ONLY_EVENT_KEYS = [
   "capability.run",
@@ -1457,10 +1449,12 @@ export interface AgentPolicyInput {
    * (`resolveGovernanceRule` in @synap/database, which has `db`; this engine
    * stays pure). `"auto"` executes, `"propose"` proposes; absent/undefined
    * means no rule matched and the rung no-ops, falling through
-   * byte-identical to every rung below. NEVER `"deny"` — a rule can only
-   * widen or keep-reviewable, never close a door a floor already opened.
+   * byte-identical to every rung below. `"deny"` (0381, founder decision G3)
+   * is a person's stored "Never": it refuses at rung 1.5, ABOVE every floor,
+   * with {@link DENIED_BY_RULE} — refusing can only be stricter than a floor
+   * that proposes, so no floor is ever loosened by it.
    */
-  governanceRuleVerdict?: "auto" | "propose";
+  governanceRuleVerdict?: "auto" | "propose" | "deny";
   /**
    * The id of the `governance_rules` row behind `governanceRuleVerdict`. Pure
    * attribution: never read to decide, only echoed on the `execute` verdict
@@ -1602,7 +1596,27 @@ export type AgentPolicyVerdict =
    */
   | { verdict: "execute"; governanceRuleId?: string }
   | { verdict: "propose"; reason?: string; reasonCode?: string }
-  | { verdict: "deny"; reason: string };
+  /**
+   * `reasonCode` is set when the refusal is a TYPED one an agent can branch
+   * on — today {@link DENIED_BY_RULE}. The CBAC and channel/capability blocks
+   * carry only their sentence, as before.
+   */
+  | { verdict: "deny"; reason: string; reasonCode?: string };
+
+/**
+ * The reason code of a write refused by a person's stored "Never" (a
+ * `governance_rules` row with `verdict: "deny"`, founder decision G3). Typed
+ * so an agent reads it instead of parsing a sentence: do not retry, and do not
+ * route around it.
+ */
+export const DENIED_BY_RULE = "DENIED_BY_RULE";
+
+/**
+ * The sentence an agent reads with {@link DENIED_BY_RULE}. It OPENS with the
+ * code, so every door that forwards only the reason text (a tRPC FORBIDDEN, a
+ * 403 `error`) still hands the agent the typed reason.
+ */
+export const DENIED_BY_RULE_REASON = `${DENIED_BY_RULE}: the person said never for this agent and this kind of act. It was not done. Do not retry it or do it another way; ask the person if it is needed.`;
 
 /**
  * The sentence a person reads for each reason code, written for them: what
@@ -1667,6 +1681,21 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     return {
       verdict: "deny",
       reason: `Agent capability check failed for "${eventKey}". Allowed: ${caps.join(", ")}.`,
+    };
+  }
+
+  // 1.5 A PERSON'S "NEVER" (founder decision G3, 0381). A matching
+  // `governance_rules` row with `verdict: "deny"` refuses the write. It sits
+  // ABOVE the floors on purpose: a floor proposes (asks the person), "Never"
+  // is the person's answer given in advance, and refusing is stricter than
+  // proposing — so no floor is loosened. Which rule matched (and whether a
+  // more specific `auto` outranks a broad deny) is decided by
+  // `resolveGovernanceRule`'s specificity score, deny winning ties.
+  if (input.governanceRuleVerdict === "deny") {
+    return {
+      verdict: "deny",
+      reason: DENIED_BY_RULE_REASON,
+      reasonCode: DENIED_BY_RULE,
     };
   }
 
@@ -1961,8 +1990,8 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // ownership (rung 3) and autoApproveFor (rungs 4/8): a stored rule is a more
   // specific, operator-authored signal than the routing workspace's ownership
   // or blanket whitelist, so it should win over them — but it can never
-  // override a floor (all four floors already returned above) and can never
-  // deny (the store's verdict enum is auto|propose only, never deny). When no
+  // override a floor (all four floors already returned above). A `deny` rule
+  // never reaches here: it refused at rung 1.5. When no
   // rule matched, `governanceRuleVerdict` is undefined and this rung no-ops,
   // falling through byte-identical to every rung below.
   //
@@ -1981,6 +2010,14 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     organise &&
     input.governanceRuleVerdict === "auto" &&
     input.governanceRuleIsOwnOrganise !== true;
+  // The outward floor (NAMED_RULE_ONLY_EVENT_KEYS): a broad `auto` handed in
+  // for a capability run or a tool grant is skipped like one on a terminal
+  // move; 2.88 then proposes. The resolver already skips it; this holds even
+  // for a caller that resolved the rule some other way.
+  const broadAutoOnNamedRuleOnly =
+    input.governanceRuleVerdict === "auto" &&
+    isNamedRuleOnlyWrite(eventKey) &&
+    input.governanceRuleNamesWrite !== true;
   const broadAutoOnTerminalMove =
     input.governanceRuleVerdict === "auto" &&
     input.lifecycleMove?.intoTerminal === true &&
@@ -1989,6 +2026,7 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   if (
     input.governanceRuleVerdict &&
     !broadAutoOnTerminalMove &&
+    !broadAutoOnNamedRuleOnly &&
     !autoFromOtherRowOnOrganise
   ) {
     return input.governanceRuleVerdict === "auto"
@@ -2036,6 +2074,17 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
           reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE,
           reasonCode: "SCOPE_IDENTITY_CHANGE",
         };
+  }
+
+  // 2.88 THE OUTWARD FLOOR (NAMED_RULE_ONLY_EVENT_KEYS). A capability run or a
+  // session's tool grant that no rule naming it widened at 2.8 proposes here,
+  // above ownership (3) and the auto-approve lists (4, 8): an agent granting
+  // itself a tool in its own space would write an `auto` grant the capability
+  // gate then honours for every send. No reason code, as at rung 9: the same
+  // proposal the write gets in any space the agent does not own, so the next
+  // rung (an exact-action rule) is still offered on it.
+  if (isNamedRuleOnlyWrite(eventKey)) {
+    return { verdict: "propose" };
   }
 
   // 3. Agent owns this workspace (linkedAgentId === agentUserId, workspaceType="agent").
@@ -2147,6 +2196,8 @@ export function nonWidenableFloorFor(eventKey: string): string | null {
     subjectType: eventKey.slice(0, dot),
     action: eventKey.slice(dot + 1),
     governanceRuleVerdict: "auto",
+    // A rule on this exact key names the write (2.8, the outward floor).
+    governanceRuleNamesWrite: true,
   });
   return decided.verdict === "propose" ? (decided.reasonCode ?? null) : null;
 }

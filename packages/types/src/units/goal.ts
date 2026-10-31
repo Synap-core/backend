@@ -480,6 +480,20 @@ export interface GoalCriterionView {
    * (`mark: null`).
    */
   evidenceWithheld?: boolean;
+  /**
+   * WHO WORKS IT: the open sessions that serve this criterion
+   * (`session --serves--> goal` with `metadata.criterionKey`), only those the
+   * reader may read, oldest first. Empty = nobody on it. Absent on a write's
+   * fallback view, which read no goal facts.
+   */
+  servedBy?: GoalCriterionServer[];
+}
+
+/** One session serving a criterion, as the goal page names it. */
+export interface GoalCriterionServer {
+  sessionId: string;
+  title: string;
+  status: string;
 }
 
 function ms(at: Date | string): number {
@@ -718,7 +732,8 @@ export function operationPeriodReading(
  * What a goal or a session is WAITING ON (R4) — a derived mark with a reason,
  * never a status, distinct from `paused` (chosen). Read from what exists: the
  * owed slots of its open runs, pending proposals, `blocked_by` edges, the
- * current hold of a pause, open pull requests and open sub-sessions. `external`
+ * current hold of a pause, the wait a thing's current step declares
+ * (`waits`), open pull requests and open sub-sessions. `external`
  * (an outside party: a vendor, a client, CI) and `date` (a calendar date) were
  * added for holds and PRs (decision D4, 2026-10-30).
  */
@@ -830,6 +845,16 @@ export type WaitingOnSource = (
     }
   | { kind: "work_unit"; state: PullRequestState; checks?: PullRequestChecks }
   | { kind: "child_session" }
+  | {
+      /**
+       * The thing stands in a step that DECLARES a wait (`waits` on its
+       * lifecycle option): "sent" waits on the client's reply without being a
+       * pause. Read like a hold's `on`; `waitKind` is the step's own.
+       */
+      kind: "step";
+      on: HoldOn;
+      waitKind?: WaitKind;
+    }
 ) & { ref?: WaitingOnRef };
 
 /** THE mapping from one source to its reason; `null` = it makes no mark. */
@@ -843,6 +868,7 @@ export function waitingOnReasonOf(
     case "child_session":
       return "another_work";
     case "hold":
+    case "step":
       return Object.hasOwn(HOLD_ON_WAITING_ON, source.on)
         ? HOLD_ON_WAITING_ON[source.on]
         : null;
@@ -882,6 +908,12 @@ export function waitKindOf(source: WaitingOnSource): WaitKind {
       return Object.hasOwn(WAIT_KIND_FROM.hold, source.on)
         ? WAIT_KIND_FROM.hold[source.on]
         : WAIT_KIND_FROM.hold.unspecified;
+    case "step":
+      // The step's declared kind first ("their_reply"), else its `on`.
+      if (isWaitKind(source.waitKind)) return source.waitKind;
+      return Object.hasOwn(WAIT_KIND_FROM.hold, source.on)
+        ? WAIT_KIND_FROM.hold[source.on]
+        : WAIT_KIND_FROM.hold.unspecified;
     case "owed_slot": {
       const r = source.blockedReason?.trim().toLowerCase();
       return r && r !== "none" && Object.hasOwn(WAIT_KIND_FROM.blockedReason, r)
@@ -891,6 +923,22 @@ export function waitKindOf(source: WaitingOnSource): WaitKind {
         : WAIT_KIND_FROM.blockedReason.none;
     }
   }
+}
+
+/**
+ * The waits of a set of sources counted per wait kind ({@link waitKindOf}):
+ * the chips a rollup draws. Every source counts, as `waitKindOf` gives every
+ * source a kind; a kind with none is left out.
+ */
+export function countWaitKinds(
+  sources: readonly WaitingOnSource[]
+): Partial<Record<WaitKind, number>> {
+  const out: Partial<Record<WaitKind, number>> = {};
+  for (const s of sources) {
+    const k = waitKindOf(s);
+    out[k] = (out[k] ?? 0) + 1;
+  }
+  return out;
 }
 
 export interface WaitingOnMark {

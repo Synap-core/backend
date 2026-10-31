@@ -30,6 +30,7 @@ import { sql } from "../client-pg.js";
 import {
   governancePrincipalEnum,
   governanceTargetEnum,
+  governanceVerdictEnum,
 } from "../schema/governance-rules.js";
 import { governanceCeilingAxisEnum } from "../schema/governance-ceilings.js";
 import { entityExternalLinks } from "../schema/entity-external-links.js";
@@ -40,6 +41,7 @@ import { projectTracks } from "../schema/project-tracks.js";
 import { trackParticipants } from "../schema/track-participants.js";
 import { libraryGroups } from "../schema/library-groups.js";
 import { documentPassages } from "../schema/document-passages.js";
+import { statusWaitEpisode } from "../schema/status-wait-episode.js";
 
 /**
  * A single column the runtime requires to exist.
@@ -157,6 +159,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "status_signal_raised",
     column: "episode_key",
     addedBy: "0376_status_signal_raised.sql",
+  },
+  // Wait episodes (0386, status-first PR-H). Absent, every watcher tick's
+  // episode write fails (logged; the signals still raise) and the wait
+  // history reads nothing.
+  {
+    table: "status_wait_episode",
+    column: "ref_key",
+    addedBy: "0386_status_wait_episode.sql",
   },
   // notification_preferences — per-person push categories (0289). The
   // producer reads it on every os-channel notification; missing, the push
@@ -510,6 +520,18 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "api_keys",
     column: "tool_groups",
     addedBy: "0280_api_keys_tool_profile.sql",
+  },
+  // Served-by-a-runner stamp (0385): the presence read selects it for every
+  // agent roster, so without it agent lists 500.
+  {
+    table: "api_keys",
+    column: "worker_served_at",
+    addedBy: "0385_api_keys_worker_served.sql",
+  },
+  {
+    table: "api_keys",
+    column: "worker_served_version",
+    addedBy: "0385_api_keys_worker_served.sql",
   },
 
   // api_key_external_users — sub-token mappings (0018)
@@ -1883,6 +1905,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "process_key",
     addedBy: "0373_session_runners_process.sql",
   },
+  // A runner's state (0384). Absence means every runner stamp fails (its
+  // insert names `state`, logged, never fatal) and the runner loader 42703s.
+  {
+    table: "session_runners",
+    column: "state_reported_at",
+    addedBy: "0384_session_runners_state.sql",
+  },
 
   // proposal_apply_runs — a large approval applied by the background job
   // (0352). Absence means every approve at or above the background threshold
@@ -2261,6 +2290,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "stage_history",
     addedBy: "0274_track_stage_and_params.sql",
   },
+  // 0382 — a session's stage ledger (status-first PR-E). Every session read
+  // selects the whole row, so a missing column 500s every session door.
+  {
+    table: "focus_sessions",
+    column: "stage_history",
+    addedBy: "0382_focus_session_stage_history.sql",
+  },
   // 0302 — a track's direction + optional KPI. Every track read selects the
   // whole row, so a missing column 500s every track door (`project_tracks` is
   // not in the baseline: these are its only startup guards).
@@ -2564,6 +2600,12 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "skills",
     column: "input_map",
     addedBy: "0368_intent_input_schema.sql",
+  }, // "Later" on a request (0381): the needs-you read joins it on every
+  // Review page and count, so a missing table fails every needs-you read.
+  {
+    table: "proposal_snoozes",
+    column: "snoozed_until",
+    addedBy: "0381_governance_deny_and_request_later.sql",
   },
 ];
 
@@ -2580,6 +2622,9 @@ const REQUIRED_ENUMS = [
   // 0320: `class` ("for all computers") — the resolver compares it on every
   // governed agent write, so a pod missing it fails every agent write.
   governancePrincipalEnum,
+  // 0381: `deny` ("Never") — a pod missing it fails the first "Never" a
+  // person taps, and the resolver reads it on every governed agent write.
+  governanceVerdictEnum,
 ] as const;
 
 /** A tagged-template query function shaped like postgres.js's `sql`. */
@@ -2645,6 +2690,10 @@ const REQUIRED_INDEX_TABLES = [
   // Document passages (0358b): the passage worker's upsert conflicts on
   // `uq_document_passages_document_ordinal`.
   documentPassages,
+  // Wait episodes (0386): the open-episode partial unique index IS "one open
+  // episode per subject, facet, wait kind and ref"; the watcher's insert
+  // relies on it (ON CONFLICT DO NOTHING) to keep an episode single.
+  statusWaitEpisode,
 ] as const;
 
 /** Every index declared in the drizzle schema but absent from the live DB. */

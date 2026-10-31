@@ -15,13 +15,13 @@
  *                          reverted. NOT `withdrawn` (the proposer's own act)
  *                          and NOT `auto_approved` (never pending).
  *                          `humanDecided` = the reviewer is a human user.
- *   - `stage_moved`      — the session's `currentStage` differs from the
- *                          caller's `knownStage`. STATE-derived, not cursored:
- *                          the pod keeps no stage ledger (the `stage_changed`
- *                          emit is a fan-out, not a row). Pass back
- *                          `state.currentStage` as `knownStage`. Stated limit:
- *                          a move and a move back between two reads (A→B→A)
- *                          is invisible.
+ *   - `stage_moved`      — CURSORED from the session's stage ledger
+ *                          (`focus_sessions.stage_history`, 0382): one event
+ *                          per stage entered after the cursor, so A→B→A
+ *                          between two reads is two events. Fallback for a
+ *                          move before 0382 (no entry): the state-derived
+ *                          event when `currentStage` differs from the
+ *                          caller's `knownStage`.
  *   - `owner_message`    — a message the session OWNER typed in the session's
  *                          room: role `user` + author `human` + author = owner.
  *                          NOT the pod's recall notices (role `assistant`,
@@ -73,6 +73,15 @@
  *                          `delivered` = it closed, false = it was cancelled
  *                          or failed (re-plan: the edge does not clear by
  *                          itself). `at` = when its end was recorded.
+ *   - `signal_raised`    — the status watcher raised a "Needs a look" on the
+ *                          session (`focus_session.signal.completed`,
+ *                          `services/status/watcher.ts`): its pause is past
+ *                          its review date, or its dev work stands still (a
+ *                          PR green and unmerged, a PR red with no push, a red
+ *                          main nobody owns, `dev-signals.ts`). `signal` =
+ *                          the rule, `headline` / `detail` = the words its
+ *                          person reads, `escalated` = its second raise. `at`
+ *                          = when it was raised.
  *
  * CURSOR: `since` is EXCLUSIVE over each event's `at` (millisecond ISO — the
  * database's microseconds are truncated BEFORE the comparison, or a row would
@@ -81,7 +90,7 @@
  * the UNREAD ones (`listSessionAnswers`' contract) and the other kinds count
  * from `floor` (the moment the wait began); an empty page then hands back
  * `floor` as `nextSince`, so a caller looping on it loses nothing between two
- * calls. `stage_moved` sits outside the cursor and the limit.
+ * calls. Only the pre-0382 `stage_moved` fallback sits outside the cursor.
  *
  * WAKE: a status move writes the session row, whose NOTIFY (0277) wakes a held
  * wait at once; a CI fact or a blocker's end does not touch this session's
@@ -115,17 +124,16 @@ import {
   isNull,
   or,
   drizzleSql,
+  readSessionStageHistory,
 } from "@synap/database";
 import type { SQLWrapper } from "drizzle-orm";
+import { checksOf } from "./checks-finished.js";
+import type { ChecksFinished } from "./checks-finished.js";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import {
   DEV_LOOP_EVENT_TYPES,
-  ciVerdictOf,
-  devboxJobOf,
   parsePullRequestRef,
-  pullRequestUrl,
   type CiFinishedStatus,
-  type PullRequestChecks,
   type PullRequestRef,
 } from "@synap-core/types";
 import { DEPENDENCY_LINK_TYPE } from "@synap-core/types/connections";
@@ -168,6 +176,7 @@ export const SESSION_CHANGE_KINDS = [
   "status_moved",
   "hold_set",
   "blocker_ended",
+  "signal_raised",
 ] as const;
 export type SessionChangeKind = (typeof SESSION_CHANGE_KINDS)[number];
 
@@ -221,7 +230,7 @@ export type ProposalDecision = (typeof DECIDED_PROPOSAL_STATUSES)[number];
 interface EventBase {
   /** Stable id — dedupe on it across waits. */
   id: string;
-  /** Millisecond ISO; the cursor axis (except `stage_moved`). */
+  /** Millisecond ISO; the cursor axis (except the pre-0382 `stage_moved` fallback). */
   at: string;
 }
 
@@ -301,20 +310,7 @@ export type SessionChangeEvent =
     })
   | (EventBase & {
       kind: "checks_finished";
-      checks: {
-        repo: string;
-        sha: string;
-        /** What the run says: `passed` (success) or `failed` (failure, timed out). */
-        result: PullRequestChecks;
-        status: CiFinishedStatus;
-        /** The PR the run was for; null for a devbox job tied to none. */
-        pr: { number: number; url: string } | null;
-        /** The devbox job (a `devbox <name>` run); null for a CI workflow. */
-        job: string | null;
-        workflow: string | null;
-        /** The run's page, when the producer gave one. */
-        url: string | null;
-      };
+      checks: ChecksFinished;
     })
   | (EventBase & {
       kind: "status_moved" | "hold_set";
@@ -344,6 +340,19 @@ export type SessionChangeEvent =
         status: string;
         /** It closed (done). False: cancelled or failed — re-plan the wait. */
         delivered: boolean;
+      };
+    })
+  | (EventBase & {
+      kind: "signal_raised";
+      signal: {
+        /** The watcher's rule (`STATUS_SIGNALS`). */
+        signal: string;
+        headline: string;
+        detail: string;
+        /** The second raise of its episode (dev work escalates once). */
+        escalated: boolean;
+        /** The PR or main it is about (dev work); null otherwise. */
+        url: string | null;
       };
     });
 
@@ -452,32 +461,6 @@ function firstSettledRunWhere(ci: string) {
     )))`;
 }
 
-/** A `ci.finished` payload as the feed carries it; null when it settles nothing. */
-function checksOf(
-  d: Record<string, unknown>
-): Extract<SessionChangeEvent, { kind: "checks_finished" }>["checks"] | null {
-  const status = d.status as CiFinishedStatus;
-  const result = ciVerdictOf(status);
-  const repo = typeof d.repo === "string" ? d.repo : null;
-  const sha = typeof d.sha === "string" ? d.sha : null;
-  if (!result || !repo || !sha) return null;
-  const workflow = typeof d.workflow === "string" ? d.workflow : null;
-  const number = typeof d.pr === "number" ? d.pr : null;
-  return {
-    repo,
-    sha,
-    result,
-    status,
-    pr:
-      number === null
-        ? null
-        : { number, url: pullRequestUrl({ repo, number }) },
-    job: devboxJobOf(workflow),
-    workflow,
-    url: typeof d.url === "string" ? d.url : null,
-  };
-}
-
 /** A transition row as recorded (`StatusTransition`); null when it is not one. */
 function readTransition(raw: unknown): TransitionBase | null {
   const t = (
@@ -523,6 +506,7 @@ export async function listSessionChanges(p: {
       userId: true,
       channelId: true,
       currentStage: true,
+      stageHistory: true,
       status: true,
       updatedAt: true,
       expectedOutputs: true,
@@ -533,6 +517,25 @@ export async function listSessionChanges(p: {
 
   const cursored: SessionChangeEvent[] = [];
   let sourceHasMore = false;
+
+  // STAGE MOVES from the ledger (0382): cursored like every other kind, one
+  // event per stage entered after the floor — so a move and a move back
+  // between two reads (A→B→A) are both seen. Moves before 0382 have no entry;
+  // the state-derived fallback below still covers them.
+  let ledgerStageMoves = 0;
+  if (p.kinds.has("stage_moved")) {
+    for (const e of readSessionStageHistory(session.stageHistory)) {
+      if (floor && !(e.enteredAt > floor)) continue;
+      ledgerStageMoves++;
+      cursored.push({
+        kind: "stage_moved",
+        id: `stage:${session.id}:${e.enteredAt}:${e.stageKey}`,
+        at: e.enteredAt,
+        from: typeof e.fromStage === "string" ? e.fromStage : null,
+        to: e.stageKey,
+      });
+    }
+  }
 
   if (p.kinds.has("answer")) {
     const page = await listSessionAnswers({
@@ -967,6 +970,47 @@ export async function listSessionChanges(p: {
     }
   }
 
+  if (p.kinds.has("signal_raised")) {
+    const raisedAt = msIso(drizzleSql`${eventsTable.timestamp}`);
+    const rows = await db
+      .select({ id: eventsTable.id, data: eventsTable.data, at: raisedAt })
+      .from(eventsTable)
+      .where(
+        and(
+          eq(eventsTable.type, "focus_session.signal.completed"),
+          eq(eventsTable.subjectId, session.id),
+          eventVisibleWhere({ userId: p.userId, roster: false }),
+          ...(floor
+            ? [
+                // The raw column first (the timestamp index), then the
+                // millisecond cursor.
+                drizzleSql`${eventsTable.timestamp} > ${floor}::timestamptz - interval '1 minute'`,
+                drizzleSql`${raisedAt} > ${floor}`,
+              ]
+            : [])
+        )
+      )
+      .orderBy(asc(eventsTable.timestamp), asc(eventsTable.id))
+      .limit(limit + 1);
+    sourceHasMore ||= rows.length > limit;
+    for (const r of rows.slice(0, limit)) {
+      const d = (r.data ?? {}) as Record<string, unknown>;
+      if (typeof d.signal !== "string") continue;
+      cursored.push({
+        kind: "signal_raised",
+        id: `event:${r.id}`,
+        at: r.at,
+        signal: {
+          signal: d.signal,
+          headline: typeof d.headline === "string" ? d.headline : "",
+          detail: typeof d.detail === "string" ? d.detail : "",
+          escalated: d.escalated === true,
+          url: typeof d.url === "string" ? d.url : null,
+        },
+      });
+    }
+  }
+
   cursored.sort(byAtThenId);
   const page = cursored.slice(0, limit);
   const events: SessionChangeEvent[] = [...page];
@@ -974,9 +1018,11 @@ export async function listSessionChanges(p: {
   const currentStage = session.currentStage ?? null;
   if (
     p.kinds.has("stage_moved") &&
+    ledgerStageMoves === 0 &&
     p.knownStage !== undefined &&
     p.knownStage !== currentStage
   ) {
+    // No ledger entry since the floor (a move before 0382): derive it.
     const at = session.updatedAt.toISOString();
     events.push({
       kind: "stage_moved",

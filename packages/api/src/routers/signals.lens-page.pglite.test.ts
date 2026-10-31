@@ -48,6 +48,11 @@ vi.mock("../services/signals/access-requests.js", async (orig) => ({
   listPendingAppRequests: async () => ({ rows: [], truncated: false }),
   listPendingKeyRequests: async () => ({ rows: [], truncated: false }),
 }));
+// The broken-connection half: pinned by its own PGlite suite
+// (`broken-connections.pglite.test.ts`); none here.
+vi.mock("../services/signals/broken-connections.js", () => ({
+  listBrokenConnections: async () => ({ rows: [], truncated: false }),
+}));
 // The viewer's open space invites: pinned by their own PGlite suite
 // (`space-invites.pglite.test.ts`); none here.
 vi.mock("../services/signals/space-invites.js", () => ({
@@ -91,6 +96,7 @@ import {
   podMembers,
   projectMembers,
   proposals,
+  proposalSnoozes,
   projects,
   events,
   chatTurns,
@@ -256,6 +262,8 @@ beforeAll(async () => {
     podMembers,
     projectMembers,
     proposals,
+    // "Later" (0381): the needs-you rule reads the reader's own snoozes.
+    proposalSnoozes,
     projects,
     events,
     chatTurns,
@@ -336,10 +344,14 @@ describe("one population, nested scopes — the totals agree", () => {
       page({ sessionId: S3 }),
       page({ sessionId: S4 }),
     ]);
-    // s1: slot + its proposal part + session.unblocked; s2: the mention only —
+    // s1: slot + its proposal part (its `session.unblocked` has no real asker:
+    // the From the system fold, out of the headline); s2: the mention only —
     // its slot is Working (a turn runs in its room), out of the headline
     // under the needs-you rule (decision E2).
-    expect(s1.blocking.total).toBe(3);
+    expect(s1.blocking.total).toBe(2);
+    expect(s1.blocking.rows.map((r) => needsYouFoldOf(r))).toContain(
+      "from_system"
+    );
     expect(s2.blocking.total).toBe(1);
     expect(s2.blocking.rows.map((r) => needsYouFoldOf(r))).toContain("working");
     expect(s3.blocking.total).toBe(2);

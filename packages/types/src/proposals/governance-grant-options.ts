@@ -85,6 +85,34 @@ export function isNonWidenableGovernanceReason(
 }
 
 /**
+ * Capability verb ids a stored `auto` rule never widens to a direct run: a
+ * public post stays a person's yes. The ONE list: the capability gate reads
+ * it through `@synap/governance-policy`'s re-export and refuses such a rule
+ * (`capabilityRuleAuthorizesRun`), and no "always" menu offers one, since a
+ * rule that never fires would tell the person the next post goes without
+ * asking. Gmail and every other send stay off the list.
+ */
+export const PROPOSE_ONLY_CAPABILITY_VERBS = [
+  "postiz_draft",
+  "postiz_schedule",
+  "postiz_publish",
+  // The code verb that uploads media then creates the post (draft | schedule |
+  // now) — the same public send as the three above. `postiz_upload_from_url`
+  // is deliberately NOT here: it stores a file in the Postiz media library and
+  // publishes nothing, so a person may widen it like any other write.
+  "postiz_schedule_post",
+] as const;
+
+export function capabilityVerbAllowsRuleWiden(
+  verbName: string | null | undefined
+): boolean {
+  if (!verbName) return true;
+  return !(PROPOSE_ONLY_CAPABILITY_VERBS as readonly string[]).includes(
+    verbName
+  );
+}
+
+/**
  * The two menus that consume this derivation offer it with deliberately
  * different reach — an intentional, not-yet-reconciled divergence between
  * the end-user and operator surfaces:
@@ -147,8 +175,14 @@ export function deriveGovernanceGrantOptions(
     isNonWidenableGovernanceReason(ctx.governanceReason) ||
     ctx.actionKey === "capability.run";
 
-  // "This capability" — always principalKind:"any" in both menus.
-  if (ctx.capabilityTarget) {
+  // "This capability" — always principalKind:"any" in both menus. Not for a
+  // verb no rule widens (a public post), nor under a floor no rule widens:
+  // that rule would never fire.
+  if (
+    ctx.capabilityTarget &&
+    capabilityVerbAllowsRuleWiden(ctx.capabilityTarget) &&
+    !isNonWidenableGovernanceReason(ctx.governanceReason)
+  ) {
     opts.push({
       id: "capability",
       value: ctx.capabilityTarget,
@@ -234,11 +268,10 @@ export function deriveGovernanceGrantOptions(
 
   // "Globally" — agent-scoped mode only; server-side `assertCanManageRule`
   // gates it to pod admins, so a non-admin sees the option and gets a clear
-  // FORBIDDEN toast rather than a silently hidden capability. Pod admin, the
-  // client's control plane, does not offer it (wave "client-ready control
-  // plane", finding c173cc51): one click should not let every agent make
-  // every change in the pod. Sending and grants stay asked either way (the
-  // outward floor), and deletes, members and keys sit under floors.
+  // FORBIDDEN toast rather than a silently hidden capability. Pod admin does
+  // not offer it (finding c173cc51): one click should not let every agent
+  // make every change in the pod. Sending and grants stay asked either way
+  // (the outward floor), and deletes, members and keys sit under floors.
   if (isOperator) return opts;
   opts.push({
     id: "global",
@@ -253,4 +286,72 @@ export function deriveGovernanceGrantOptions(
   });
 
   return opts;
+}
+
+/** The `governanceRules.create` input a request's "Never" writes: always ONE
+ * agent and ONE named act, so the types cannot express a wildcard principal. */
+export interface GovernanceDenyDraft {
+  principalKind: "agent";
+  agentUserId: string;
+  scopeKind: "workspace" | "pod";
+  workspaceId?: string;
+  targetKind: "action" | "capability";
+  targetPattern: string;
+  verdict: "deny";
+  sourceProposalId: string;
+}
+
+export interface GovernanceNeverOption {
+  id: "never";
+  /** The capability or action key the deny names (label interpolation). */
+  value: string;
+  rule: GovernanceDenyDraft;
+}
+
+/**
+ * "Never" on a request (founder, audit 110dd4ab G3, 30 Oct 2026): reject it AND
+ * store a `deny` rule, so the pod refuses this agent's same act from then on
+ * with `DENIED_BY_RULE` (decision 956930ad: above the floors, so it is offered
+ * on a floored request too). Narrow by construction: this agent only, and the
+ * capability a run names, else the exact action key. Null when the request
+ * names no agent (a person is never refused) or no single act: a wildcard or
+ * glob action, or a capability run with no capability, whose action key
+ * `capability.run` would refuse every tool. A broad deny stays possible
+ * through `governanceRules.create`; this option never writes one.
+ */
+export function deriveGovernanceNeverOption(
+  ctx: GovernanceGrantContext
+): GovernanceNeverOption | null {
+  const agentUserId = ctx.agentUserId ?? undefined;
+  if (!agentUserId) return null;
+  const workspaceId = ctx.workspaceId ?? undefined;
+  const base = {
+    principalKind: "agent" as const,
+    agentUserId,
+    scopeKind: workspaceId ? ("workspace" as const) : ("pod" as const),
+    workspaceId,
+    verdict: "deny" as const,
+    sourceProposalId: ctx.proposalId,
+  };
+
+  if (ctx.capabilityTarget) {
+    return {
+      id: "never",
+      value: ctx.capabilityTarget,
+      rule: {
+        ...base,
+        targetKind: "capability",
+        targetPattern: ctx.capabilityTarget,
+      },
+    };
+  }
+
+  const actionKey = ctx.actionKey;
+  if (!actionKey || actionKey.includes("*") || actionKey === "capability.run")
+    return null;
+  return {
+    id: "never",
+    value: actionKey,
+    rule: { ...base, targetKind: "action", targetPattern: actionKey },
+  };
 }

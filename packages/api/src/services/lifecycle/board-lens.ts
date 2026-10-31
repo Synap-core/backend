@@ -116,6 +116,7 @@ export function toLifecycleWire(
       ...(o.dateBinding !== undefined ? { dateBinding: o.dateBinding } : {}),
       ...(o.waits !== undefined ? { waits: o.waits } : {}),
     })),
+    initialStatus: p.lifecycle.initialStatus,
   };
 }
 

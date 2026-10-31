@@ -23,15 +23,18 @@ import { OBSERVATION_NAMESPACES } from "../packages/types/src/events/unified.ts"
 import {
   DEV_LOOP_EVENT_TYPES,
   POD_SESSION_LINE_RE,
+  REQUIRED_CHECK_NAMES,
   checkDevLoopPayload,
   podSessionIdFromBody,
 } from "../packages/types/src/events/dev-loop.ts";
 import {
   POD_SESSION_LINE_RE as SCRIPT_POD_SESSION_LINE_RE,
+  REQUIRED_CHECK_NAMES as SCRIPT_REQUIRED_CHECK_NAMES,
   isKeyRefusal,
   observationFromEvent,
   podSessionFromBody,
   postObservation,
+  requiredChecksVerdict,
 } from "./pod-observation.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -78,6 +81,9 @@ const run = (over: Record<string, unknown> = {}) => ({
   head_branch: "feat/x",
   event: "pull_request",
   conclusion: "success",
+  created_at: "2026-10-26T12:10:00Z",
+  run_started_at: "2026-10-26T12:11:00Z",
+  run_attempt: 1,
   updated_at: "2026-10-26T12:30:00Z",
   head_repository: { full_name: "Synap-core/backend" },
   pull_requests: [{ number: 42 }],
@@ -111,6 +117,16 @@ const EVERY_REPORTED = [
     workflow_run: run(),
     repository,
   }),
+  observationFromEvent("pull_request", {
+    action: "enqueued",
+    pull_request: pr(),
+    repository,
+  }),
+  observationFromEvent("workflow_run", {
+    action: "requested",
+    workflow_run: run({ conclusion: null }),
+    repository,
+  }),
 ];
 
 afterEach(() => {
@@ -132,6 +148,8 @@ describe("pod-observation: what the door accepts", () => {
       DEV_LOOP_EVENT_TYPES.prMerged,
       DEV_LOOP_EVENT_TYPES.prClosed,
       DEV_LOOP_EVENT_TYPES.ciFinished,
+      DEV_LOOP_EVENT_TYPES.mergeQueued,
+      DEV_LOOP_EVENT_TYPES.ciStarted,
     ]);
     for (const t of types as string[]) {
       expect(
@@ -229,6 +247,45 @@ describe("pod-observation: the facts it carries", () => {
       workflow: "CI",
       sessionId: SID,
     });
+  });
+
+  it("a PR entering the merge queue is dev.merge_queued, at its update", () => {
+    const o = EVERY_REPORTED[5]!;
+    expect(o.subjectId).toBe("Synap-core/backend#42");
+    expect(o.occurredAt).toBe("2026-10-26T11:00:00Z");
+    expect(o.data).toMatchObject({
+      repo: "Synap-core/backend",
+      number: 42,
+      url: "https://github.com/Synap-core/backend/pull/42",
+      action: "enqueued",
+      sessionId: SID,
+    });
+  });
+
+  it("a requested run is ci.started, named like its ci.finished (the pod pairs them by workflow)", () => {
+    const o = observationFromEvent(
+      "workflow_run",
+      { action: "requested", workflow_run: run(), repository },
+      { sessionId: SID }
+    );
+    expect(o?.subjectId).toBe("Synap-core/backend@bead001");
+    expect(o?.occurredAt).toBe("2026-10-26T12:11:00Z");
+    expect(o?.data).toMatchObject({
+      sha: "bead001",
+      pr: 42,
+      workflow: EVERY_REPORTED[4]!.data.workflow,
+      attempt: 1,
+      sessionId: SID,
+    });
+    expect(o?.data).not.toHaveProperty("status");
+    // An in_progress run is not a second start.
+    expect(
+      observationFromEvent("workflow_run", {
+        action: "in_progress",
+        workflow_run: run(),
+        repository,
+      })
+    ).toBeNull();
   });
 
   it("folds GitHub's other conclusions into the contract's, and skips an unknown one", () => {
@@ -436,5 +493,138 @@ describe("pod-observations.yml: the debounce never drops a PR event or a main ru
       "  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch != 'main' && format('ci-{0}', github.event.workflow_run.head_branch) || github.run_id }}\n"
     );
     expect(wf).toMatch(/^ {2}cancel-in-progress: true$/m);
+  });
+});
+
+/**
+ * Finding 1bff8284: "Checks finished ... passed" was read off one workflow's
+ * conclusion. #584 (conflicting, so no CI; only Depends-On ran green) and #606
+ * (CI finished while its Full suite still ran) both read "passed". The fact now
+ * carries the verdict of the PR head's 4 required checks, and a run of a
+ * workflow other than CI is not a fact at all.
+ */
+describe("ci.finished says whether the required checks are green", () => {
+  const cr = (
+    name: string,
+    status: string,
+    conclusion: string | null,
+    id = 1
+  ) => ({
+    id,
+    name,
+    status,
+    conclusion,
+  });
+  const allGreen = REQUIRED_CHECK_NAMES.map((n, i) =>
+    cr(n, "completed", "success", i + 1)
+  );
+
+  it("the script's required names are the contract's", () => {
+    expect([...SCRIPT_REQUIRED_CHECK_NAMES]).toEqual([...REQUIRED_CHECK_NAMES]);
+  });
+
+  it("all 4 green is green", () => {
+    expect(
+      requiredChecksVerdict({ checkRuns: allGreen, mergeableState: "clean" })
+    ).toEqual({
+      verdict: "green",
+    });
+  });
+
+  it("#606 shape: CI finished but the Full suite still runs is pending", () => {
+    const runs = allGreen.map((c) =>
+      c.name === "Full suite" ? cr("Full suite", "in_progress", null, c.id) : c
+    );
+    expect(
+      requiredChecksVerdict({ checkRuns: runs, mergeableState: "blocked" })
+    ).toEqual({
+      verdict: "pending",
+      pending: ["Full suite"],
+    });
+  });
+
+  it("a required check that never reported (others did) is pending, not green", () => {
+    const runs = allGreen.filter((c) => c.name !== "API e2e");
+    expect(requiredChecksVerdict({ checkRuns: runs }).verdict).toBe("pending");
+  });
+
+  it("a failed required check is red, with its name", () => {
+    const runs = allGreen.map((c) =>
+      c.name === "API e2e" ? cr("API e2e", "completed", "failure", c.id) : c
+    );
+    expect(requiredChecksVerdict({ checkRuns: runs })).toEqual({
+      verdict: "red",
+      failing: ["API e2e"],
+    });
+  });
+
+  it("a rerun's newest check run wins", () => {
+    const runs = [...allGreen, cr("Full suite", "completed", "failure", 0)];
+    expect(requiredChecksVerdict({ checkRuns: runs }).verdict).toBe("green");
+  });
+
+  it("#608 shape: a draft with Release gate pending and Reference docs red, beside green small workflows, is red, never green", () => {
+    const runs = [
+      cr("Release gate", "in_progress", null, 1),
+      cr("Reference docs are current", "completed", "failure", 2),
+      cr("Full suite", "completed", "failure", 3),
+      cr("API e2e", "completed", "failure", 4),
+      cr("Preflight", "completed", "success", 5),
+      cr("What changed", "completed", "success", 6),
+      cr("Dependencies merged", "completed", "success", 7),
+      cr("Depends-On hold", "completed", "success", 8),
+      cr("Post to the pod", "completed", "success", 9),
+    ];
+    const v = requiredChecksVerdict({
+      checkRuns: runs,
+      mergeableState: "blocked",
+    });
+    expect(v.verdict).toBe("red");
+    expect(v.failing).toContain("Reference docs are current");
+  });
+
+  it("#584 shape: a conflicting PR is no_ci, even with a green run on the branch", () => {
+    expect(
+      requiredChecksVerdict({ checkRuns: allGreen, mergeableState: "dirty" })
+    ).toEqual({ verdict: "no_ci" });
+  });
+
+  it("#584 shape: only non-required checks on the head is no_ci", () => {
+    expect(
+      requiredChecksVerdict({
+        checkRuns: [cr("Depends-On hold", "completed", "success")],
+        mergeableState: "unknown",
+      })
+    ).toEqual({ verdict: "no_ci" });
+  });
+
+  it("#584 shape: a Depends-On run finishing green is never a fact", () => {
+    expect(
+      observationFromEvent("workflow_run", {
+        action: "completed",
+        workflow_run: run({ name: "Depends-On", event: "pull_request_target" }),
+        repository,
+      })
+    ).toBeNull();
+    expect(
+      observationFromEvent("workflow_run", {
+        action: "requested",
+        workflow_run: run({ name: "Merge bot", conclusion: null }),
+        repository,
+      })
+    ).toBeNull();
+  });
+
+  it("a CI run carries the verdict it was given, and the contract accepts it", () => {
+    const o = observationFromEvent(
+      "workflow_run",
+      { action: "completed", workflow_run: run(), repository },
+      { requiredChecks: { verdict: "pending", pending: ["Full suite"] } }
+    )!;
+    expect(o.data.requiredChecks).toEqual({
+      verdict: "pending",
+      pending: ["Full suite"],
+    });
+    expect(checkDevLoopPayload("ci.finished", o.data).ok).toBe(true);
   });
 });

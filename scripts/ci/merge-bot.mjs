@@ -24,6 +24,16 @@
  *        every commit made and signed by Dependabot, dependabotOnly; a PR on
  *        a `dependabot/*` branch that fails either waits for the founder);
  *      - it is not CONFLICTING and not already queued;
+ *      - it carries no commit of another OPEN PR that is older than it
+ *        (sharedCommitOf): 29 Oct 2026, all 5 `invalid_merge_commit` queue
+ *        removals were PRs carrying the commits of another PR still unmerged
+ *        in the queue (#515 and #516 carried #503's 2be3cd7fd; #335 carried
+ *        #332's), while PRs sharing commits only with an already-merged PR
+ *        were never removed. It waits for that PR to land. The commits come
+ *        with the open-PR listing (GraphQL, the oldest 100 of each PR: a
+ *        stacked branch's borrowed commits are its oldest), so the check
+ *        costs no extra call. A dependent that rides (C) and carries its
+ *        dependency's commits waits for it to land like any other;
  *      - every live required check of main (at least release-gate-wait.mjs
  *        REQUIRED_CHECKS), posted by GitHub Actions, is `success` on its head;
  *      - every `Depends-On:` line has landed, or rides (C);
@@ -66,16 +76,27 @@
  *    for a pull_request run is GitHub's test merge AS IT WAS, red main
  *    included. Seen on run 40594912129: attempt 1 (22:31Z) and attempt 2
  *    (00:23Z) both checked out `8ffc467 Merge 9052fa2 into bc1ac5e`, while
- *    main had moved on to 9969f07. So the bot marks the PR draft and ready
- *    again: `ready_for_review` is a ci.yml trigger, and that new run tests the
- *    PR merged into TODAY's main. Nothing is pushed; the branch is never
- *    updated. Before it does, it checks GitHub's test merge is already built
- *    on main's current tip (else the next sweep does it). A queued PR is never
- *    toggled: a draft leaves the queue.
- *    ONCE per main red: after the toggle it posts a neutral check run
+ *    main had moved on to 9969f07. A draft→ready toggle alone does not do
+ *    either: GitHub does not rebuild an idle PR's test merge when main moves.
+ *    30 Oct: #561 went red at 20:48Z on main's red, main was green at
+ *    22:01Z, and five sweeps (22:01-22:42Z) all logged "test merge not yet
+ *    rebuilt on main's tip" for every victim; hours later #564's test merge
+ *    still sat on the red 724f54be5. So for a branch BEHIND main the bot
+ *    brings main in: the REST update-branch (a merge, never a rebase, with
+ *    `expected_head_sha` = the head it judged, so a PR pushed meanwhile is
+ *    left alone), which pushes a merge commit and starts a fresh CI on a head
+ *    that holds main's fix. Only a branch already up to date (its head holds
+ *    main's tip, so any test merge has the head's tree) is toggled draft →
+ *    ready instead (`ready_for_review` is a ci.yml trigger). A conflicting
+ *    PR, or one whose mergeability GitHub is still computing, is left for the
+ *    next sweep. A queued PR is never touched: a draft leaves the queue.
+ *    The app has no `workflows` permission, so GitHub may refuse an update
+ *    that brings in a change under .github/workflows/. Any refused update is
+ *    told once, on the marker, and a person runs `gh pr update-branch <n>`.
+ *    ONCE per main red: after the run it posts a neutral check run
  *    "Re-run after main green" on the PR's head with external_id
  *    `main-green-<green run id>`; a PR carrying it for that green run is
- *    skipped. (A toggled PR's newest run is also created after the window, so
+ *    skipped. (A re-run PR's newest run is also created after the window, so
  *    it no longer reads as a victim either.)
  *
  * ── IDENTITY ─────────────────────────────────────────────────────────────────
@@ -225,6 +246,50 @@ export function dependabotOnly(commits) {
       String(c?.author?.login ?? "").toLowerCase() === "dependabot[bot]" &&
       c?.commit?.verification?.verified === true
   );
+}
+
+/** A PR's commit oids from the listing (GraphQL `commits`), or null when it was not read. Pure. */
+export function commitOidsOf(pr) {
+  const nodes = pr?.commits?.nodes;
+  if (!Array.isArray(nodes)) return null;
+  return nodes.map((n) => n?.commit?.oid).filter(Boolean);
+}
+
+/**
+ * Every commit oid of the OPEN PRs → the numbers of the PRs carrying it,
+ * oldest first. A merged or closed PR carries nothing: its commits are on
+ * main or nowhere. Pure.
+ */
+export function commitCarriers(prs) {
+  const carriers = new Map();
+  for (const p of prs ?? []) {
+    if (p?.state !== "OPEN") continue;
+    for (const oid of commitOidsOf(p) ?? []) {
+      const list = carriers.get(oid) ?? [];
+      list.push(p.number);
+      carriers.set(oid, list);
+    }
+  }
+  for (const list of carriers.values()) list.sort((a, b) => a - b);
+  return carriers;
+}
+
+/**
+ * The first commit of `pr` that an OLDER open PR also carries, as
+ * { owner, oid } (owner = the oldest open PR carrying it: the one the commit
+ * belongs to), null when it carries none, "unread" when its own commits were
+ * not read. The older PR is the one enqueued: the newer waits for it to
+ * land. `carriers` (commitCarriers) holds OPEN PRs only, so a commit shared
+ * with an already-merged PR never holds anything. Pure.
+ */
+export function sharedCommitOf(pr, carriers) {
+  const oids = commitOidsOf(pr);
+  if (!oids) return "unread";
+  for (const oid of oids) {
+    const owner = (carriers?.get(oid) ?? []).find((n) => n !== pr.number);
+    if (owner !== undefined && owner < pr.number) return { owner, oid };
+  }
+  return null;
 }
 
 /**
@@ -408,6 +473,7 @@ export function enqueueReasons({
   queueFailures = 0,
   green,
   commits,
+  shared,
   now = Date.now(),
 }) {
   const r = prGates(pr);
@@ -431,6 +497,11 @@ export function enqueueReasons({
     );
   if (pr.mergeable === "CONFLICTING") r.push("conflicting");
   if (pr.isInMergeQueue) r.push("already queued");
+  if (shared === "unread") r.push("its commits could not be read");
+  else if (shared)
+    r.push(
+      `carries #${shared.owner}'s commit ${shared.oid.slice(0, 8)}; waits for #${shared.owner} to land (the merge queue removes a PR holding another open PR's commits)`
+    );
   if (queueFailures >= MAX_QUEUE_FAILURES_PER_HEAD)
     r.push(
       `the merge queue failed it ${queueFailures} times at this head: push a fix (a new head is enqueued again)`
@@ -479,6 +550,8 @@ export function enqueueDecision(input) {
   if (input.checks === undefined) reasons.push("required checks: not read");
   if (input.depends === undefined) reasons.push("Depends-On: not read");
   if (input.files === undefined) reasons.push("files: not read");
+  if (input.shared === undefined)
+    reasons.push("commits of the open PRs: not read");
   if (isDependabotAuthor(input.pr) && input.commits === undefined)
     reasons.push("commits: not read");
   const rides = input.depends?.behind ?? [];
@@ -561,8 +634,10 @@ export function mainRedWindow(
  * reads lazily; victimDecision judges them all.
  *   latestRun  the PR's latest ci.yml pull_request run of its head (or null);
  *   markers    the "Re-run after main green" check runs on its head;
- *   merge      { mergeable, baseSha, mainSha }: GitHub's test merge of the PR,
- *              the main commit it is built on, and main's tip now.
+ *   merge      { mergeable, behindBy }: whether GitHub can merge the PR, and
+ *              how many of main's commits its head lacks (compare API).
+ * NOT a reason: a test merge built on an old main. GitHub does not rebuild
+ * it while the PR is idle, so that wait never ended (30 Oct, #561).
  */
 export function victimReasons({ pr, window, latestRun, markers, merge }) {
   const r = prGates(pr);
@@ -589,18 +664,26 @@ export function victimReasons({ pr, window, latestRun, markers, merge }) {
   if (merge) {
     if (merge.mergeable !== true)
       r.push(`test merge not ready (mergeable: ${merge.mergeable})`);
-    else if (!merge.baseSha || merge.baseSha !== merge.mainSha)
-      r.push("test merge not yet rebuilt on main's tip");
+    else if (!Number.isInteger(merge.behindBy) || merge.behindBy < 0)
+      r.push("could not compare its head with main");
   }
   return r;
 }
 
-/** The victim verdict once every input is read. Pure. */
+/**
+ * The victim verdict once every input is read. Pure. `how`: "update-branch"
+ * (its head lacks main's commits: bring main in) or "toggle" (it holds them).
+ */
 export function victimDecision(input) {
   const reasons = victimReasons(input);
   for (const k of ["latestRun", "markers", "merge"])
     if (input[k] === undefined) reasons.push(`${k}: not read`);
-  return { rerun: reasons.length === 0, reasons };
+  if (reasons.length) return { rerun: false, reasons };
+  return {
+    rerun: true,
+    reasons,
+    how: input.merge.behindBy > 0 ? "update-branch" : "toggle",
+  };
 }
 
 /** An enqueue refused because the PR is already queued (a concurrent pass got there first). */
@@ -661,6 +744,7 @@ const PRS_QUERY = `query($owner: String!, $name: String!, $after: String) {
         isCrossRepository mergeable isInMergeQueue
         author { login }
         labels(first: 20) { nodes { name } }
+        commits(first: 100) { nodes { commit { oid } } }
         comments(last: 50) { nodes { body createdAt authorAssociation author { login } } }
         timelineItems(last: 20, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) {
           nodes { ... on RemovedFromMergeQueueEvent { createdAt reason } }
@@ -815,6 +899,9 @@ export async function runBot({
   const queued = new Map(
     prs.filter((p) => p.isInMergeQueue).map((p) => [p.number, p.headRefOid])
   );
+  // Every open PR's commits, read with the list: a PR judged alone (its own
+  // CI run) is still compared with all of them.
+  const carriers = commitCarriers(prs);
   const live = liveRequiredChecks(gh, repo, readToken);
   const names = [...new Set([...REQUIRED_CHECKS, ...(live ?? [])])];
   const riding = Boolean(live?.includes(HOLD_CHECK));
@@ -861,7 +948,8 @@ export async function runBot({
   const ctx = { riding, mainRed, whileRed };
   for (const pr of ordered) {
     const tag = `#${pr.number}`;
-    const cheap = enqueueReasons({ pr, ...ctx });
+    const shared = sharedCommitOf(pr, carriers);
+    const cheap = enqueueReasons({ pr, shared, ...ctx });
     if (cheap.length) {
       log(`${tag} not enqueued: ${cheap.join("; ")}`);
       continue;
@@ -896,13 +984,20 @@ export async function runBot({
           queueFailures,
           green: greenSince(runs?.check_runs, pr.headRefOid, names),
           commits,
+          shared,
           now,
           ...ctx,
         });
       } else
         d = {
           enqueue: false,
-          reasons: enqueueReasons({ pr, checks, queueFailures, ...ctx }),
+          reasons: enqueueReasons({
+            pr,
+            checks,
+            queueFailures,
+            shared,
+            ...ctx,
+          }),
         };
     } catch (e) {
       log(`${tag} not enqueued: a read failed (${e.message})`);
@@ -1029,35 +1124,54 @@ async function victims({
       const p = gh.rest(`repos/${repo}/pulls/${pr.number}`, {
         token: readToken,
       });
-      let baseSha = null;
-      if (p?.mergeable === true && p.merge_commit_sha)
-        baseSha =
-          gh.rest(`repos/${repo}/commits/${p.merge_commit_sha}`, {
-            token: readToken,
-          })?.parents?.[0]?.sha ?? null;
+      let behindBy = null;
+      if (p?.mergeable === true && mainSha)
+        behindBy =
+          gh.rest(
+            `repos/${repo}/compare/${mainSha}...${pr.headRefOid}?per_page=1`,
+            { token: readToken }
+          )?.behind_by ?? null;
       const d = victimDecision({
         pr,
         window,
         latestRun,
         markers,
-        merge: { mergeable: p?.mergeable ?? null, baseSha, mainSha },
+        merge: { mergeable: p?.mergeable ?? null, behindBy },
       });
       if (!d.rerun) {
         log(`${tag} not run again: ${d.reasons.join("; ")}`);
         continue;
       }
       toggled++;
+      const how =
+        d.how === "update-branch"
+          ? `main brought in (${behindBy} commit(s) behind)`
+          : "draft → ready";
       if (dryRun) {
         log(
-          `${tag} WOULD run CI again (run ${latestRun.id} failed while main was red)`
+          `${tag} WOULD run CI again, ${how} (run ${latestRun.id} failed while main was red)`
         );
         continue;
       }
-      toggleReady(gh, pr, botToken);
-      out.rerun.push(pr.number);
-      log(
-        `${tag} CI started again (draft → ready); run ${latestRun.id} failed while main was red`
-      );
+      // A refused update is said once, on the marker; the run goes red once.
+      let refused = null;
+      if (d.how === "update-branch") {
+        try {
+          updateBranch(gh, repo, pr, botToken);
+        } catch (e) {
+          refused = e.message;
+          out.failures++;
+          log(
+            `::warning::${tag} main could not be brought in (${refused}): run \`gh pr update-branch ${pr.number}\` by hand`
+          );
+        }
+      } else toggleReady(gh, pr, botToken);
+      if (!refused) {
+        out.rerun.push(pr.number);
+        log(
+          `${tag} CI started again (${how}); run ${latestRun.id} failed while main was red`
+        );
+      }
       try {
         gh.rest(`repos/${repo}/check-runs`, {
           token: readToken,
@@ -1068,10 +1182,15 @@ async function victims({
             status: "completed",
             conclusion: "neutral",
             external_id: window.key,
-            output: {
-              title: `CI run again after main went green (run ${window.green.id})`,
-              summary: `Run ${latestRun.id} failed while main was red (runs ${window.firstRed.id}…${window.lastRed.id}). The merge bot marked this PR draft and ready again so CI tests it on today's main (scripts/ci/merge-bot.mjs). Once per main red.`,
-            },
+            output: refused
+              ? {
+                  title: `Main went green (run ${window.green.id}): bring it in by hand`,
+                  summary: `Run ${latestRun.id} failed while main was red (runs ${window.firstRed.id}…${window.lastRed.id}). The merge bot could not bring main into this branch (${refused}). Run \`gh pr update-branch ${pr.number}\` (scripts/ci/merge-bot.mjs). Once per main red.`,
+                }
+              : {
+                  title: `CI run again after main went green (run ${window.green.id})`,
+                  summary: `Run ${latestRun.id} failed while main was red (runs ${window.firstRed.id}…${window.lastRed.id}). The merge bot ${d.how === "update-branch" ? "merged main into this branch" : "marked this PR draft and ready again"} so CI tests it with today's main (scripts/ci/merge-bot.mjs). Once per main red.`,
+                },
           },
         });
       } catch (e) {
@@ -1084,6 +1203,19 @@ async function victims({
       log(`::error::${tag} victim: ${e.message}`);
     }
   }
+}
+
+/**
+ * Merge main into the PR's branch (the REST update-branch always merges; it
+ * never rebases), only at the head the bot judged: a head pushed meanwhile
+ * makes GitHub refuse (422). The new head starts CI itself.
+ */
+function updateBranch(gh, repo, pr, token) {
+  gh.rest(`repos/${repo}/pulls/${pr.number}/update-branch`, {
+    token,
+    method: "PUT",
+    body: { expected_head_sha: pr.headRefOid },
+  });
 }
 
 /** Draft, then ready: a fresh `ready_for_review` CI run. Ready is retried: a PR is never left a draft quietly. */

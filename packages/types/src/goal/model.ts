@@ -43,6 +43,7 @@ import {
   TRACK_VERDICTS_NEEDING_REASON,
   OUTSIDE_DECIDED_MEANINGS,
   type GoalCriterionClaim,
+  type GoalCriterionServer,
   type GoalCriterionView,
   type TrackCommitmentMove,
   type TrackParticipant,
@@ -52,6 +53,7 @@ import {
   type WaitingOnMark,
   waitsOnAPerson,
 } from "../units/index.js";
+import type { Locale } from "../i18n/index.js";
 import { lensScopeFactLabel, type LensRow } from "../lens/index.js";
 import {
   humanizeToken,
@@ -76,6 +78,7 @@ import {
   type GoalMarkView,
   type UncertaintyView,
 } from "./marks.js";
+import { goalT } from "./copy.js";
 
 // ── input ──────────────────────────────────────────────────────────────────
 
@@ -376,6 +379,19 @@ export interface GoalCriterionRow extends Pick<
    * over `OUTSIDE_DECIDED_MEANINGS`, which refuses it without that note.
    */
   acceptWithSource: boolean;
+  /**
+   * WHO WORKS IT: the open sessions serving this criterion, as the pod read
+   * them (`GoalCriterionView.servedBy`, oldest first). `[]` = read, and
+   * nobody is on it; `null` = not read (a write's fallback view, or a pod
+   * older than the read), never a guessed "nobody".
+   */
+  servedBy: GoalCriterionServer[] | null;
+  /**
+   * The words for `servedBy`, the ONE rule web and relay draw: read and
+   * empty, "Nobody on it"; else the first session's title, "+N" when more
+   * serve it. `null` exactly when `servedBy` is: an unread list says nothing.
+   */
+  servedByLabel: string | null;
 }
 
 /** One claim, as the criterion row draws it on Declare done. */
@@ -411,15 +427,40 @@ function claimView(
   };
 }
 
+/**
+ * The words for who works a criterion (`GoalCriterionRow.servedByLabel`):
+ * `null` when not read, "Nobody on it" when read and empty, else the first
+ * session's title (content, as written) and "+N" for the others.
+ */
+function servedByLabel(
+  servers: readonly GoalCriterionServer[] | null,
+  locale?: Locale
+): string | null {
+  if (servers === null) return null;
+  const t = goalT(locale);
+  const [first] = servers;
+  if (!first) return t("goal.criterion.servedBy.nobody");
+  const title = first.title?.trim() || resolveObjectNoun("session", locale);
+  return servers.length === 1
+    ? title
+    : t("goal.criterion.servedBy.more", { title, more: servers.length - 1 });
+}
+
+/**
+ * The "Done when" rows for one viewer. `locale` names the language of the
+ * row's own words (`servedByLabel`); without it, the ambient catalog locale.
+ */
 export function goalCriterionRows(
   goal: GoalLike,
-  viewer: GoalViewer
+  viewer: GoalViewer,
+  locale?: Locale
 ): GoalCriterionRow[] {
   const judge = viewerIsJudge(goal, viewer);
   return goal.criteria.map((c) => {
     const decision = c.acceptance ?? null;
     const raw = c.acceptanceState ?? null;
     const state = raw && !ACCEPTANCE_THE_MARK_SAYS.has(raw) ? raw : null;
+    const servedBy = c.servedBy ? [...c.servedBy] : null;
     return {
       key: c.key,
       statement: c.statement,
@@ -445,6 +486,8 @@ export function goalCriterionRows(
         c.mark !== "claimed" &&
         c.mark !== "met" &&
         c.mark !== null,
+      servedBy,
+      servedByLabel: servedByLabel(servedBy, locale),
     };
   });
 }

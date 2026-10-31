@@ -57,6 +57,11 @@ vi.mock("../services/signals/access-requests.js", async (orig) => ({
   listPendingAppRequests: async (...args: unknown[]) => appRequestsSpy(...args),
   listPendingKeyRequests: async (...args: unknown[]) => keyRequestsSpy(...args),
 }));
+const brokenConnectionsSpy = vi.fn();
+vi.mock("../services/signals/broken-connections.js", () => ({
+  listBrokenConnections: async (...args: unknown[]) =>
+    brokenConnectionsSpy(...args),
+}));
 // The viewer's open space invites: pinned by their own PGlite suite
 // (`space-invites.pglite.test.ts`); none here.
 vi.mock("../services/signals/space-invites.js", () => ({
@@ -122,6 +127,7 @@ beforeEach(() => {
   issuersSpy.mockResolvedValue({ rows: [], truncated: false });
   appRequestsSpy.mockResolvedValue({ rows: [], truncated: false });
   keyRequestsSpy.mockResolvedValue({ rows: [], truncated: false });
+  brokenConnectionsSpy.mockResolvedValue({ rows: [], truncated: false });
   eventsReadSpy.mockResolvedValue([]);
   activitySpy.mockResolvedValue({ items: [], nextCursor: null });
   landedSpy.mockResolvedValue({
@@ -618,6 +624,83 @@ describe("signals — the access-request halves (pending issuers, app requests)"
   it("a capped scan makes the number a floor", async () => {
     appRequestsSpy.mockResolvedValue({ rows: [app], truncated: true });
     expect((await caller().count()).truncated).toBe(true);
+  });
+
+  // UI plan 2026-10-31 (ba328893 DP6): a broken connection was an ask the pod
+  // never counted: the phone drew its own Reconnect card beside the one
+  // number. It is the pod's own health (`secrets.connection_state`), so it is
+  // one row of the population, read for its person at the floor.
+  describe("a broken tool connection", () => {
+    const gmail = {
+      capabilityId: "cap-gmail",
+      name: "Gmail",
+      brokenAt: new Date("2026-10-12T07:00:00Z"),
+    };
+
+    it("is ONE row with its door, its age and its verb, and a part of the one number", async () => {
+      brokenConnectionsSpy.mockResolvedValue({
+        rows: [gmail],
+        truncated: false,
+      });
+      const r = await caller().list({ lens: "needs-you" });
+      expect(
+        r.signals.map((s) => [s.kind, s.target, s.title, s.package, s.waitKind])
+      ).toEqual([
+        [
+          "access-request",
+          { kind: "capability", id: "cap-gmail" },
+          'Reconnect Tool "Gmail"',
+          "access",
+          "access",
+        ],
+      ]);
+      expect(r.signals[0]!.occurredAt).toEqual(gmail.brokenAt);
+      expect(brokenConnectionsSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: expect.any(String) })
+      );
+      const c = await caller().count();
+      expect(c.requests).toBe(1);
+      expect(c.needsYou).toBe(1);
+      // The outside readers' door (Hub GET /needs-you, MCP synap_needs_you)
+      // reads the same population: the row is in the headline.
+      const classified = await caller().needsYou();
+      expect(classified.rows.needs_you.map((s) => s.target)).toEqual([
+        { kind: "capability", id: "cap-gmail" },
+      ]);
+      expect(classified.count.needsYou).toBe(1);
+    });
+
+    it("is read at the FLOOR only — never under a lens", async () => {
+      await caller().list({ lens: "needs-you" });
+      expect(brokenConnectionsSpy).toHaveBeenCalledTimes(1);
+      for (const scope of [
+        { workspaceId: "ws-1" },
+        { projectId: P },
+        { trackId: T },
+        { sessionId: S },
+      ]) {
+        vi.clearAllMocks();
+        await caller().list({ lens: "needs-you", ...scope });
+        expect(
+          brokenConnectionsSpy,
+          JSON.stringify(scope)
+        ).not.toHaveBeenCalled();
+      }
+    });
+
+    it("a FAILED read is unreadable, never an empty answer; a capped scan is a floor", async () => {
+      brokenConnectionsSpy.mockRejectedValue(new Error("secrets down"));
+      await expect(caller().list({ lens: "needs-you" })).rejects.toThrow(
+        "secrets down"
+      );
+      const r = await caller().list({ lens: "page" });
+      expect(r.page?.blocking.unreadable).toEqual(["broken-connections"]);
+      brokenConnectionsSpy.mockResolvedValue({
+        rows: [gmail],
+        truncated: true,
+      });
+      expect((await caller().count()).truncated).toBe(true);
+    });
   });
 
   it("`kinds` keeps just those rows, cut from the one order", async () => {

@@ -18,8 +18,15 @@
  * so no new namespace widens what an agent key may post).
  *
  * Producers: the backend GitHub Actions workflow and the devbox CI watcher
- * (PRs, CI, `dev.repo_snapshot`), and the pod itself on a successful update
- * (`dev.deployed`).
+ * (PRs, CI, `dev.repo_snapshot`), the pod itself on a successful update
+ * (`dev.deployed`, target `pod` or its host), and any agent or script that
+ * shipped something else (`dev.deployed` with `site:…`, `npm:…`, `cli`).
+ *
+ * The facts that END a dev wait: `ci.started` → `ci.finished` (checks
+ * running, then settled), `dev.merge_queued` → `dev.pr_merged` (in the merge
+ * queue, then merged), `dev.deployed` (a build is live). A wait on CI, the
+ * merge queue or a deploy moves when its fact arrives, not when someone looks.
+ *
  * Consumers: the PR sweeper (`dev.pr_merged` into the default branch completes
  * the session outcome that points at the PR, `dev.pr_closed` retires it), the
  * Work › Ship read (`dev.repo_snapshot`, `services/dev-loop/work-release.ts`)
@@ -36,7 +43,19 @@ export const DEV_LOOP_EVENT_TYPES = {
   prOpened: "dev.pr_opened",
   prMerged: "dev.pr_merged",
   prClosed: "dev.pr_closed",
+  /**
+   * A CI run BEGAN (GitHub `workflow_run` requested; each re-run attempt
+   * begins again): the PR's checks are running until the same workflow's
+   * `ci.finished` on that sha.
+   */
+  ciStarted: "ci.started",
   ciFinished: "ci.finished",
+  /**
+   * A PR entered its repository's merge queue (GitHub `pull_request`
+   * `enqueued`). It leaves the queue by merging (`dev.pr_merged`) or closing;
+   * a dequeue is not a fact yet (see `events/pr-state.ts`).
+   */
+  mergeQueued: "dev.merge_queued",
   deployed: "dev.deployed",
   /**
    * A repository's whole release state at one instant (its main, what is
@@ -61,6 +80,15 @@ export function isDevLoopEventType(type: string): type is DevLoopEventType {
 /** `owner/name`, as GitHub spells a repository. */
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const SHA_RE = /^[0-9a-f]{7,40}$/i;
+/** A whole commit id: what a deploy receipt must name (never a prefix). */
+const FULL_SHA_RE = /^[0-9a-f]{40}$/i;
+/**
+ * Where a build is live: `pod` (or the pod's host, what the pod's own
+ * producer posts), `cli`, or `<kind>:<name>` (`site:crm.synap.live`,
+ * `npm:@synap-core/sdk`, `image:ghcr.io/synap-core/backend`). One token: no
+ * whitespace, no scheme (`https://` is refused: name the host).
+ */
+const DEPLOY_TARGET_RE = /^[a-z0-9@][a-z0-9@._:/+~-]*$/i;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -134,7 +162,7 @@ export function podSessionIdFromBody(
 const repoSchema = z.string().regex(REPO_RE, "repo must be `owner/name`");
 const shaSchema = z.string().regex(SHA_RE, "sha must be 7-40 hex characters");
 
-/** `dev.pr_opened` / `dev.pr_merged` / `dev.pr_closed`. */
+/** `dev.pr_opened` / `dev.pr_merged` / `dev.pr_closed` / `dev.merge_queued`. */
 export const pullRequestEventSchema = z
   .object({
     repo: repoSchema,
@@ -215,6 +243,55 @@ export function devboxJobOf(workflow: unknown): string | null {
     : null;
 }
 
+/**
+ * The checks a PR must pass to land (ruleset 25542891). ONE list; the GitHub
+ * workflow script (scripts/pod-observation.mjs) keeps a copy it cannot import
+ * and its tripwire pins the two equal.
+ */
+export const REQUIRED_CHECK_NAMES = [
+  "Release gate",
+  "Full suite",
+  "API e2e",
+  "Reference docs are current",
+] as const;
+
+/**
+ * The verdict of the PR head's REQUIRED checks, computed by the producer from
+ * the head's check runs (finding 1bff8284: "passed" was read off one workflow's
+ * conclusion, so a Depends-On success and a half-run CI both read as green).
+ * `green` only when every required check is success; `pending` while any is
+ * queued, running or not yet reported; `red` with the failing names; `no_ci`
+ * when the PR conflicts with main or its required checks never started.
+ */
+export const REQUIRED_CHECKS_VERDICTS = [
+  "green",
+  "pending",
+  "red",
+  "no_ci",
+] as const;
+export type RequiredChecksVerdict = (typeof REQUIRED_CHECKS_VERDICTS)[number];
+
+export const requiredChecksSchema = z.object({
+  verdict: z.enum(REQUIRED_CHECKS_VERDICTS),
+  /** The required checks that failed (verdict `red`). */
+  failing: z.array(z.string().min(1).max(256)).max(20).optional(),
+  /** The required checks still queued, running or unreported (verdict `pending`). */
+  pending: z.array(z.string().min(1).max(256)).max(20).optional(),
+});
+export type RequiredChecks = z.infer<typeof requiredChecksSchema>;
+
+/**
+ * Does a `ci.finished` of this workflow count as "the PR's checks finished"?
+ * Only the CI workflow and a devbox gate job do. Any other workflow
+ * (Depends-On, merge bot, pod observations) is not CI: its success must never
+ * wake an agent with "checks passed" (#584: Depends-On green, CI never ran).
+ * A fact with no workflow name is kept: nothing says it is not CI.
+ */
+export function ciRunCountsAsChecks(workflow: unknown): boolean {
+  if (typeof workflow !== "string") return true;
+  return workflow === "CI" || devboxJobOf(workflow) !== null;
+}
+
 /** `ci.finished` — a CI run ended; `status` says how. */
 export const ciFinishedEventSchema = z.object({
   status: z.enum(CI_FINISHED_STATUSES),
@@ -224,13 +301,48 @@ export const ciFinishedEventSchema = z.object({
   pr: z.number().int().positive().optional(),
   url: z.string().url().optional(),
   workflow: z.string().min(1).max(256).optional(),
+  /**
+   * The PR head's required-checks verdict, for a run tied to a PR. Absent =
+   * the producer did not compute it: a reader must not say "passed" for it.
+   */
+  requiredChecks: requiredChecksSchema.optional(),
 });
 export type CiFinishedEvent = z.infer<typeof ciFinishedEventSchema>;
 
-/** `dev.deployed` — a build is live on `target` (a pod host, an app url). */
+/**
+ * `ci.started` — a CI run began on `sha`. The same fields as `ci.finished`
+ * without its `status`: the run's `ci.finished` (same `workflow`, same sha)
+ * ends it, so a producer names the workflow the same way in both.
+ */
+export const ciStartedEventSchema = ciFinishedEventSchema.omit({
+  status: true,
+  requiredChecks: true,
+});
+export type CiStartedEvent = z.infer<typeof ciStartedEventSchema>;
+
+/**
+ * `dev.deployed` — a build is live on `target`: the RECEIPT that ends a wait
+ * on a deploy. The pod posts its own (target = its host, `pod` when it has no
+ * public url); an agent or script that shipped a site, a package or the CLI
+ * posts one through the observation door. `sha` is the whole commit the build
+ * was made from: a receipt names exactly what is live, never a prefix.
+ */
 export const deployedEventSchema = z.object({
-  target: z.string().min(1).max(256),
-  sha: shaSchema,
+  target: z
+    .string()
+    .min(1)
+    .max(256)
+    .regex(
+      DEPLOY_TARGET_RE,
+      "target must be `pod`, a host, `cli` or `<kind>:<name>` (site:crm.synap.live, npm:@synap-core/sdk): one token, no scheme"
+    )
+    .refine((t) => !t.includes("://"), "target must name a host, not a url"),
+  sha: z
+    .string()
+    .regex(
+      FULL_SHA_RE,
+      "sha must be the full 40-hex commit the build was made from"
+    ),
   /** The repository the build was made from (`owner/name`). */
   repo: repoSchema.optional(),
   /**
@@ -398,6 +510,8 @@ const SCHEMA_BY_TYPE: Record<DevLoopEventType, z.ZodTypeAny> = {
   [DEV_LOOP_EVENT_TYPES.prOpened]: pullRequestEventSchema,
   [DEV_LOOP_EVENT_TYPES.prMerged]: pullRequestEventSchema,
   [DEV_LOOP_EVENT_TYPES.prClosed]: pullRequestEventSchema,
+  [DEV_LOOP_EVENT_TYPES.mergeQueued]: pullRequestEventSchema,
+  [DEV_LOOP_EVENT_TYPES.ciStarted]: ciStartedEventSchema,
   [DEV_LOOP_EVENT_TYPES.ciFinished]: ciFinishedEventSchema,
   [DEV_LOOP_EVENT_TYPES.deployed]: deployedEventSchema,
   [DEV_LOOP_EVENT_TYPES.repoSnapshot]: repoSnapshotEventSchema,
