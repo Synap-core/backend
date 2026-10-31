@@ -37,6 +37,7 @@ import {
   documents as documentsTable,
   eventRepository,
   createDocumentWithContent,
+  INTAKE_SOURCE_KEY,
   and,
   eq,
   isNull,
@@ -49,7 +50,7 @@ import {
 } from "../../utils/store-entity-source-blob.js";
 import { fileSha256Of } from "./known-source-hashes.js";
 
-export const INTAKE_SOURCE_METADATA_KEY = "intakeSource";
+export const INTAKE_SOURCE_METADATA_KEY = INTAKE_SOURCE_KEY;
 
 export type IntakeSourceKind = "text" | "url" | "file" | "import_item";
 

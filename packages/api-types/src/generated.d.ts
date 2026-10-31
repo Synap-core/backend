@@ -50603,6 +50603,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				documentTypes?: string[] | undefined;
 				entityTypes?: string[] | undefined;
 				facetBy?: string[] | undefined;
+				facetSlugs?: string[] | undefined;
 				limit?: number | undefined;
 				page?: number | undefined;
 				prefix?: boolean | undefined;
@@ -50623,6 +50624,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				documentTypes?: string[] | undefined;
 				entityTypes?: string[] | undefined;
 				facetBy?: string[] | undefined;
+				facetSlugs?: string[] | undefined;
 				limit?: number | undefined;
 				page?: number | undefined;
 				prefix?: boolean | undefined;
