@@ -150,7 +150,10 @@ export const WAIT_KIND_FROM = {
     capability: "access",
     policy: "access",
     decision: "decide",
-    physical: "vendor",
+    // An owed slot is the PERSON's (`owner: 'human'`): a physical act is
+    // theirs to do in the world, so it is their move, never an outside
+    // party's. (The goal's waiting-on reason still says `outside_world`.)
+    physical: "answer",
     none: "answer",
   },
   source: {

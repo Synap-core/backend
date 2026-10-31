@@ -130,11 +130,21 @@ describe("the one map table → waitKind", () => {
       [{ kind: "owed_slot", blockedReason: null }, "answer"],
       [{ kind: "owed_slot", blockedReason: "  Decision " }, "decide"],
       [{ kind: "owed_slot", blockedReason: "credential" }, "access"],
-      [{ kind: "owed_slot", blockedReason: "physical" }, "vendor"],
+      [{ kind: "owed_slot", blockedReason: "physical" }, "answer"],
       [{ kind: "owed_slot", blockedReason: "something-new" }, "answer"],
     ];
     for (const [source, waitKind] of cases) {
       expect(waitKindOf(source)).toBe(waitKind);
+    }
+  });
+
+  it("an owed slot is the person's move, whatever its blocked reason", () => {
+    // An owed slot is `owner: 'human'`: even a physical act in the world is
+    // theirs to do. Before, `physical` read as an outside party (`vendor`,
+    // "With them") and Home dropped it from "Your move".
+    for (const blockedReason of Object.keys(WAIT_KIND_FROM.blockedReason)) {
+      const kind = waitKindOf({ kind: "owed_slot", blockedReason });
+      expect(waitKindBall(kind), blockedReason).toBe("me");
     }
   });
 
