@@ -51,11 +51,52 @@ export function splitGrants(grants: SecretGrantView[]): {
   return { active, ended };
 }
 
-/** Who a grant was given to: the pod's label when it has one, else a short id. */
-export function granteeName(g: SecretGrantView): string {
-  if (g.granteeLabel) return g.granteeLabel;
-  const id = g.grantedTo;
+/** What the page could read to name a grant's holder; each part may be absent. */
+export interface GranteeLookup {
+  /** The owner's `secretsVault.listAllGrants` rows (grantee label + type). */
+  grants?: Pick<SecretGrantView, "grantId" | "granteeLabel" | "granteeType">[];
+  /** The viewer's spaces (`workspaces.list`), for a space-wide grant. */
+  spaces?: { id: string; name: string }[];
+}
+
+function shortRef(id: string): string {
   return id.length > 11 ? `${id.slice(0, 6)}…${id.slice(-4)}` : id;
+}
+
+/**
+ * Who holds a grant, in words. A grant is given to a user or agent
+ * (`grantedTo` = its user id) or, with no `grantedTo`, to a whole space
+ * (`workspaceId`). The name comes from what the page could read; when a read
+ * failed or the holder is not visible, it says what KIND of holder it is with
+ * a short id: never "Unknown", never the bare uuid. The pod's own label falls
+ * back to the raw id when the user row is gone, and that is not a name.
+ */
+export function granteeWords(
+  g: SecretGrantView,
+  lookup: GranteeLookup,
+  t: SecretT
+): string {
+  if (!g.grantedTo) {
+    const space = g.workspaceId
+      ? lookup.spaces?.find((w) => w.id === g.workspaceId)
+      : undefined;
+    if (space) return t("grantee.named.space", { name: space.name });
+    return t("grantee.bare.space", { id: shortRef(g.workspaceId ?? "") });
+  }
+  const row = lookup.grants?.find((x) => x.grantId === g.grantId);
+  const label = row?.granteeLabel?.trim();
+  const kind = row?.granteeType === "agent" ? "agent" : row ? "user" : null;
+  if (label && label !== g.grantedTo) {
+    return kind === "agent"
+      ? t("grantee.named.agent", { name: label })
+      : t("grantee.named.user", { name: label });
+  }
+  const id = shortRef(g.grantedTo);
+  return kind === "agent"
+    ? t("grantee.bare.agent", { id })
+    : kind === "user"
+      ? t("grantee.bare.user", { id })
+      : t("grantee.bare.unknown", { id });
 }
 
 /**

@@ -39,7 +39,8 @@ import { SECRET_CATALOGS } from "./copy";
 import {
   activityLine,
   grantState,
-  granteeName,
+  granteeWords,
+  type GranteeLookup,
   listRowFor,
   secretStatus,
   splitGrants,
@@ -68,7 +69,21 @@ export function SecretObject({
     staleTime: 30_000,
     retry: false,
   });
+  // The grantee's name: the owner's own grants list (label + type) and the
+  // viewer's spaces. A failed read falls back to the holder's kind + short id.
+  const allGrants = trpc.secretsVault.listAllGrants.useQuery(undefined, {
+    staleTime: 30_000,
+    retry: false,
+  });
+  const spaces = trpc.workspaces.list.useQuery(undefined, {
+    staleTime: 60_000,
+    retry: false,
+  });
   useReauthOnUnauthorized(bundle.error, list.error);
+  const lookup: GranteeLookup = {
+    grants: allGrants.data,
+    spaces: spaces.data?.map((w) => ({ id: w.id, name: w.name })),
+  };
 
   const [revoking, setRevoking] = useState<SecretGrantView | null>(null);
   const [showAllActivity, setShowAllActivity] = useState(false);
@@ -304,7 +319,7 @@ export function SecretObject({
                   </h4>
                   <div className="-mx-2 divide-y divide-foreground/[0.05]">
                     {ended.map((g) => (
-                      <GrantRow key={g.grantId} grant={g} />
+                      <GrantRow key={g.grantId} grant={g} lookup={lookup} />
                     ))}
                   </div>
                 </div>
@@ -346,7 +361,9 @@ export function SecretObject({
         title={t("grants.revoke.title")}
         consequence={
           revoking
-            ? t("grants.revoke.consequence", { who: granteeName(revoking) })
+            ? t("grants.revoke.consequence", {
+                who: granteeWords(revoking, lookup, t),
+              })
             : null
         }
         confirmLabel={t("grants.revoke.confirm")}
@@ -360,14 +377,16 @@ export function SecretObject({
 
 function GrantRow({
   grant,
+  lookup,
   onRevoke,
 }: {
   grant: SecretGrantView;
+  lookup: GranteeLookup;
   onRevoke?: (g: SecretGrantView) => void;
 }) {
   const t = useT(SECRET_CATALOGS);
   const state = grantState(grant);
-  const who = granteeName(grant);
+  const who = granteeWords(grant, lookup, t);
   const detail = [
     grant.scope,
     state === "revoked" && grant.revokedAt
