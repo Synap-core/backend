@@ -1473,17 +1473,10 @@
             "type": "array",
             "items": {
               "type": "string",
-              "enum": [
-                "moves",
-                "history",
-                "links",
-                "rollup",
-                "signals",
-                "episodes"
-              ]
+              "enum": ["moves", "history", "links", "rollup", "signals"]
             },
-            "maxItems": 6,
-            "description": "Optional, with statusOf: what each answer carries beyond its status. moves = a thing's next moves; history = its status moves, holds and steps; links = a goal's or session's `serves` edges; rollup = a goal's tree down `serves` (work by category, stuck, waits by kind); signals = its open status signals; episodes = its wait episodes, newest first (an open one has closedAt null). An unknown part is refused."
+            "maxItems": 5,
+            "description": "Optional, with statusOf: what each answer carries beyond its status. moves = a thing's next moves; history = its status moves, holds and steps; links = a goal's or session's `serves` edges; rollup = a goal's tree down `serves` (work by category, stuck, waits by kind); signals = its open status signals. An unknown part is refused."
           }
         },
         "required": []

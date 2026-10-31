@@ -14,7 +14,7 @@
  *   ?statusOf=a,b  — where each id stands (`startHere.statusOf`)
  *   ?include=x,y   — what each of those answers carries beyond its status
  *                    (`STATUS_OF_INCLUDES`: moves, history, links, rollup,
- *                    signals, episodes); an unknown part is refused
+ *                    signals); an unknown part is refused
  */
 
 import { z } from "@hono/zod-openapi";
