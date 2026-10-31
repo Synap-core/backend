@@ -39,7 +39,6 @@ import {
   countWorkerIrreversibleSendsToday,
   countWorkerPendingApprovals,
   listWorkerTargetsInFlight,
-  startedByAgentPatch,
   type PlaybookRunWorkerSpec,
 } from "@synap/database";
 import type {
@@ -344,22 +343,9 @@ type PlaybookRunStarted = {
    * draft (B6; {@link startHeldRun}). `run` is null.
    */
   held?: true;
-  /**
-   * The agent this run was handed to — named by the caller, or the agent a
-   * person assigned to the playbook — so the reply says who has it. Absent
-   * when nobody was, and on a reused session (the hand-off did not apply).
-   */
-  handedTo?: RunHandedTo;
   /** Present only on the no-subject branch, so both union members share the key. */
   skipped?: undefined;
 };
-
-/** Who a run was handed to, as the run reply names it. */
-export interface RunHandedTo {
-  agentUserId: string;
-  name: string | null;
-  via: "named" | "assigned";
-}
 
 export type RunPlaybookResult =
   | PlaybookRunStarted
@@ -381,7 +367,6 @@ export type RunPlaybookResult =
       reused?: undefined;
       parentLink?: undefined;
       held?: undefined;
-      handedTo?: undefined;
     };
 
 /**
@@ -748,15 +733,11 @@ interface RunFiling {
   trackStage: string | null;
 }
 
-/** A run handed to an agent — see `RunPlaybookInput.handToAgentId`. */
+/** A run handed to a named agent — see `RunPlaybookInput.handToAgentId`. */
 interface RunHandOff {
   agentUserId: string;
   /** How the agent takes it: pulled from its orient, or pushed via its binding. */
   reach: "dispatch" | "pull";
-  /** The agent's name, for the reply that says who has the run. */
-  name: string | null;
-  /** Named by the caller, or the agent a person assigned to this playbook. */
-  via: "named" | "assigned";
 }
 
 /**
@@ -771,17 +752,10 @@ interface RunHandOff {
  * than proposed (the same placement as `resolveTrackFiling`).
  */
 export async function resolveRunHandOff(
-  input: Pick<RunPlaybookInput, "handToAgentId" | "agentUserId" | "userId"> & {
-    /** The run's playbook: a run that names nobody goes to its assigned agent. */
-    playbookId?: string;
-  }
+  input: Pick<RunPlaybookInput, "handToAgentId" | "agentUserId" | "userId">
 ): Promise<RunHandOff | null> {
   const agentUserId = input.handToAgentId?.trim();
-  if (!agentUserId) {
-    return input.playbookId
-      ? resolveAssignedRunHandOff(input.userId, input.playbookId)
-      : null;
-  }
+  if (!agentUserId) return null;
   if (input.agentUserId && input.agentUserId !== agentUserId) {
     throw new TRPCError({
       code: "FORBIDDEN",
@@ -824,49 +798,7 @@ export async function resolveRunHandOff(
       `route() did not route the named agent ${agentUserId} (got ${routed.kind})`
     );
   }
-  return {
-    agentUserId,
-    reach: routed.reach,
-    name: agent.name?.trim() || null,
-    via: "named",
-  };
-}
-
-/**
- * A run that names nobody goes to the agent a person ASSIGNED to its playbook
- * (`assigned_to` edge), exactly as a capture goes to its space's assignee
- * (`give-to-agent.ts`). Only the assignment rung: with no assignment, or an
- * assignee the route refuses, the run is unchanged (its own executor).
- */
-async function resolveAssignedRunHandOff(
-  ownerId: string,
-  playbookId: string
-): Promise<RunHandOff | null> {
-  const routed = await route({
-    ownerId,
-    accept: HAND_OFF_ACCEPT,
-    targets: { playbook: playbookId },
-    pool: "owned",
-  });
-  if (
-    routed.kind !== "routed" ||
-    routed.via !== "assigned" ||
-    (routed.reach !== "pull" && routed.reach !== "dispatch")
-  ) {
-    return null;
-  }
-  const db = await getDb();
-  const [agent] = await db
-    .select({ name: users.name })
-    .from(users)
-    .where(eq(users.id, routed.agentUserId))
-    .limit(1);
-  return {
-    agentUserId: routed.agentUserId,
-    reach: routed.reach,
-    name: agent?.name?.trim() || null,
-    via: "assigned",
-  };
+  return { agentUserId, reach: routed.reach };
 }
 
 /**
@@ -1003,10 +935,7 @@ export async function runPlaybook(
 
   // HAND-OFF — who does this run, resolved ONCE for every fan-out item, before
   // anything exists (an unknown / paused / foreign agent refuses the run).
-  const handOff = await resolveRunHandOff({
-    ...input,
-    playbookId: playbook.id,
-  });
+  const handOff = await resolveRunHandOff(input);
 
   // D3 — an UNATTENDED run (the scheduled path) has no caller to answer, so a
   // playbook depending on not-enabled skills files ONE enable request per pack
@@ -1032,10 +961,7 @@ export async function runPlaybook(
     });
     if (skipped) return { run: null, session: null, skipped };
     if (input.worker.size === "per_moment") {
-      return withHandedTo(
-        await runWorkerBatch(playbook, input, input.worker, filing, handOff),
-        handOff
-      );
+      return runWorkerBatch(playbook, input, input.worker, filing, handOff);
     }
   }
 
@@ -1106,35 +1032,7 @@ export async function runPlaybook(
     }
   }
 
-  return withHandedTo(primary, handOff);
-}
-
-/**
- * The run reply's sentence for its hand-off ("" when none), so a run that went
- * to an assigned agent never reads as started by the playbook's own executor.
- */
-export function handedToLine(h: RunHandedTo | undefined): string {
-  if (!h) return "";
-  const who = h.name ?? `agent ${h.agentUserId}`;
-  return h.via === "assigned"
-    ? ` It is handed to ${who}, the agent assigned to this playbook.`
-    : ` It is handed to ${who}.`;
-}
-
-/** Names the hand-off on a run that started or was held with it. */
-function withHandedTo(
-  result: RunPlaybookResult,
-  handOff: RunHandOff | null
-): RunPlaybookResult {
-  if (!handOff || !result.session || result.reused) return result;
-  return {
-    ...result,
-    handedTo: {
-      agentUserId: handOff.agentUserId,
-      name: handOff.name,
-      via: handOff.via,
-    },
-  };
+  return primary;
 }
 
 /**
@@ -1239,12 +1137,6 @@ async function executeSingleRun(
       chainContext: input.chainContext,
       forceProposeWrites,
     }),
-    // The agent that started the run (orient's `handedToYou` leaves it out),
-    // unless the run is handed to that same agent: then it is work handed to
-    // it, which its worker must see.
-    ...startedByAgentPatch(
-      handOff?.agentUserId === input.agentUserId ? null : input.agentUserId
-    ),
     // `profileSlug` = the lifecycle the worker follows: process-sync settles
     // a target only on a move of THAT lifecycle (`listOpenWorkerTargetSessions`).
     ...(input.worker

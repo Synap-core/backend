@@ -26,7 +26,6 @@ import {
   writeSessionPatch,
   transitionProposal,
   appendSessionStageHistory,
-  startedByAgentPatch,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
@@ -286,8 +285,6 @@ export function registerFocusSessionExecutors(): void {
           ...(trackParamValues
             ? { [RUN_PARAMS_METADATA_KEY]: trackParamValues }
             : {}),
-          // The proposing agent started it (orient's `handedToYou` leaves it out).
-          ...startedByAgentPatch(proposal.agentUserId),
         };
         return database
           .insert(focusSessions)
@@ -514,7 +511,6 @@ export function registerFocusSessionExecutors(): void {
             userId,
             innerData,
             ownCriteria,
-            startedByAgentId: proposal.agentUserId ?? null,
           })
         : claimed.rows;
 
@@ -1389,8 +1385,6 @@ async function instantiateApprovedPlaybook(args: {
   innerData: Record<string, unknown>;
   /** The proposer's own criteria (already parsed); the playbook's join after. */
   ownCriteria: SessionCriterion[];
-  /** The proposing agent: it started the session (`startedByAgentPatch`). */
-  startedByAgentId: string | null;
 }) {
   const { innerData } = args;
   if (!args.workspaceId) {
@@ -1445,7 +1439,6 @@ async function instantiateApprovedPlaybook(args: {
     ...(typeof innerData.prompt === "string" && innerData.prompt.trim()
       ? { goalOverride: innerData.prompt }
       : {}),
-    metadata: startedByAgentPatch(args.startedByAgentId),
   });
   return row ? [row] : [];
 }

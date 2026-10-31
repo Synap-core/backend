@@ -5,7 +5,6 @@ import { recordSessionSpawn } from "./session-spawn.js";
 import { resolveSessionProjectPlacement } from "./resolve-session-project.js";
 import { stampProbeMarker } from "./request-write-context.js";
 import { isUniqueViolation } from "./pg-errors.js";
-import { startedByAgentPatch } from "./session-started-by.js";
 
 export interface OpenRunSessionInput {
   /** Owner of the run (the operator on whose behalf the automation/agent acts). */
@@ -184,8 +183,6 @@ export async function openRunSession(
       : {}),
     ...(input.extraMetadata ?? {}),
     ...(input.title ? { titleSource: input.titleSource ?? "derived" } : {}),
-    // The agent authoring the run started it (orient's `handedToYou` leaves it out).
-    ...startedByAgentPatch(input.agentUserId),
   });
 
   const insert = (channelId: string | null) =>
