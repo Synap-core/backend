@@ -192,18 +192,28 @@ describe("handedToYou and the agent that started the session", () => {
   });
 
   it("a row from before the stamp, started through the agent's key, is still not listed", async () => {
-    const legacy = await start({
-      agentUserId: AGENT,
-      clientKey: `key:${AGENT_KEY}|conv:claude-code:${randomUUID()}`,
-    });
-    await h.client!.query(
-      `update focus_sessions set metadata = metadata - 'startedByAgentId' where id = $1`,
-      [legacy]
+    // A pre-stamp row: the agent's start as it was stored before this
+    // existed — no stamp, only the client key the start was made with.
+    const asLegacy = async (clientKey: string) => {
+      const id = await start({ agentUserId: AGENT });
+      await h.client!.query(
+        `update focus_sessions
+            set metadata = (metadata - 'startedByAgentId') || jsonb_build_object('clientKey', $2::text)
+          where id = $1`,
+        [id, clientKey]
+      );
+      expect(await stamp(id)).toBeNull();
+      return id;
+    };
+    const viaKey = await asLegacy(
+      `key:${AGENT_KEY}|conv:claude-code:${randomUUID()}`
     );
-    expect(await stamp(legacy)).toBeNull();
-    expect(await handedTo(AGENT)).not.toContain(legacy);
-    // CONTROL: the same legacy row handed by a person (no client key) is listed.
-    const legacyHanded = await start({ agentIds: [AGENT] });
-    expect(await handedTo(AGENT)).toContain(legacyHanded);
+    const viaAgent = await asLegacy(`agent:${AGENT}`);
+    const listed = await handedTo(AGENT);
+    expect(listed).not.toContain(viaKey);
+    expect(listed).not.toContain(viaAgent);
+    // CONTROL: a row with neither a stamp nor a client key is listed.
+    const unmarked = await start({ agentIds: [AGENT] });
+    expect(await handedTo(AGENT)).toContain(unmarked);
   });
 });

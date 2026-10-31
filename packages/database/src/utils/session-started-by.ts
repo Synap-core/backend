@@ -28,10 +28,14 @@ export function startedByAgentPatch(
   return agentUserId ? { [SESSION_STARTED_BY_AGENT_KEY]: agentUserId } : {};
 }
 
-/** SQL boolean: `agentUserId` started the `focus_sessions` row in scope. */
+/**
+ * SQL boolean, never NULL: `agentUserId` started the `focus_sessions` row in
+ * scope. A row with no stamp and no client key is `false` (not NULL), so a
+ * `NOT (…)` over it keeps the row.
+ */
 export function sessionStartedByAgentSql(agentUserId: string): SQL {
   const meta = focusSessions.metadata;
-  return drizzleSql`(
+  return drizzleSql`coalesce((
     ${meta} ->> ${SESSION_STARTED_BY_AGENT_KEY} = ${agentUserId}
     OR (
       ${meta} ->> ${SESSION_STARTED_BY_AGENT_KEY} IS NULL
@@ -44,5 +48,5 @@ export function sessionStartedByAgentSql(agentUserId: string): SQL {
         )
       )
     )
-  )`;
+  ), false)`;
 }

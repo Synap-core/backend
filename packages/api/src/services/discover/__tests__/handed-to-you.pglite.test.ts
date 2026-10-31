@@ -119,12 +119,13 @@ async function session(p: {
 async function wentStale(sessionId: string, at: Date) {
   await q(
     `insert into events (id, type, subject_id, subject_type, data, user_id, session_id, timestamp)
-     values ($1, 'focus_session.transition.completed', $2, 'focus_session', $3::jsonb, $4, $2, $5)`,
+     values ($1, 'focus_session.transition.completed', $2, 'focus_session', $3::jsonb, $4, $5, $6)`,
     [
       randomUUID(),
       sessionId,
       JSON.stringify({ from: "active", to: "stale" }),
       USER,
+      sessionId,
       at.toISOString(),
     ]
   );
