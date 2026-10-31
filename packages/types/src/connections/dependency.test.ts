@@ -5,12 +5,19 @@
 import { describe, expect, it } from "vitest";
 import {
   LINK_EDGE_ROLES,
+  NODE_ZONES,
   deriveNodeNeighbourhood,
   classifyDependencyBlocker,
   deriveOpenBlockers,
   isBlocked,
   isDependencyEnded,
+  isDependencyLinkType,
+  isServesPair,
+  isWorkLinkType,
   normaliseDependencyRelation,
+  DEPENDENCY_LINK_TYPES,
+  SERVES_LINK_TYPE,
+  WORK_LINK_TYPES,
   type DependencyEdge,
   type DependencyNodeState,
 } from "./index.js";
@@ -474,6 +481,61 @@ describe("neighbourhood labels for the dependency + replaces edges", () => {
       ["new", "Replaced by", false],
     ]);
     expect(resolveLineageEdgeLabel("replaces", "incoming")).toBe("Replaced by");
+  });
+});
+
+describe("serves — a work link, never a dependency", () => {
+  // Rules out "serves joined the dependency list": every blocker reader reads
+  // DEPENDENCY_LINK_TYPES, so it would start treating a goal as a blocker.
+  it("is a work link the door writes, and not a dependency link", () => {
+    expect(isWorkLinkType(SERVES_LINK_TYPE)).toBe(true);
+    expect(isDependencyLinkType(SERVES_LINK_TYPE)).toBe(false);
+    expect(DEPENDENCY_LINK_TYPES).not.toContain("serves");
+    expect(WORK_LINK_TYPES).toEqual(["blocked_by", "replaces", "serves"]);
+    for (const t of DEPENDENCY_LINK_TYPES) expect(isWorkLinkType(t)).toBe(true);
+    expect(isWorkLinkType("targets")).toBe(false);
+    expect(isWorkLinkType(null)).toBe(false);
+  });
+  // Rules out "any dependency pair may serve": only a session or a sub-goal
+  // serves, and only a goal is served.
+  it("joins session|track → track only", () => {
+    expect(isServesPair("session", "track")).toBe(true);
+    expect(isServesPair("track", "track")).toBe(true);
+    expect(isServesPair("entity", "track")).toBe(false);
+    expect(isServesPair("session", "session")).toBe(false);
+    expect(isServesPair("track", "entity")).toBe(false);
+  });
+  // Rules out "the rule reads every edge it is handed": a serves edge to an
+  // open goal must not hold the session up.
+  it("deriveOpenBlockers ignores a serves edge to an open goal", () => {
+    const S = { kind: "session", id: "s" };
+    const edges: DependencyEdge[] = [
+      {
+        fromType: "session",
+        fromId: "s",
+        toType: "track",
+        toId: "g",
+        linkType: "serves",
+      },
+    ];
+    const open = states({ "track:g": { status: "active" } });
+    expect(deriveOpenBlockers(S, edges, open)).toEqual([]);
+    expect(isBlocked(S, edges, open)).toBe(false);
+  });
+  it("reads 'Serves' / 'Served by' in the neighbourhood, never reversed", () => {
+    const nb = deriveNodeNeighbourhood({ kind: "track", id: "g" }, [
+      {
+        id: "s",
+        kind: "session",
+        edgeType: "serves",
+        direction: "incoming",
+        via: "links",
+      },
+    ]);
+    const items = NODE_ZONES.flatMap((z) => nb[z].items);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ label: "Served by", reversed: false });
+    expect(resolveLineageEdgeLabel("serves", "outgoing")).toBe("Serves");
   });
 });
 

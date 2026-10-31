@@ -14,7 +14,12 @@
  * The input types are structural (this package never imports the API's wire),
  * so a pod that sends more fields still fits.
  */
-import type { UnitStateInput, UnitTone } from "../units/state.js";
+import {
+  unitStateInputOfWaitKind,
+  type UnitStateInput,
+  type UnitTone,
+} from "../units/state.js";
+import type { WaitKind } from "../units/wait-kind.js";
 import {
   lifecycleOptionTone,
   type LifecycleCategory,
@@ -433,6 +438,11 @@ export interface MovingItemInput {
     live: boolean;
     asksYou: boolean;
     since: string;
+    /**
+     * What the work waits on, as one kind (`leadWaitKind` over its session's
+     * waiting-on marks). Absent: it waits on nothing named, or an older pod.
+     */
+    waitKind?: WaitKind | null;
   }>;
 }
 
@@ -443,8 +453,13 @@ export interface MovingWorkLineModel {
   kind: MovingWorkKind;
   /** "Build: pin a pipeline · Claude Code · Asks you". */
   text: string;
-  /** The line's mark (asks you ⇒ needs you; live ⇒ working; else quiet). */
+  /**
+   * The line's mark: asks you ⇒ needs you; live ⇒ working; else what it
+   * waits on (`unitStateInputOfWaitKind`); else quiet.
+   */
   state: UnitStateInput;
+  /** What the work waits on (`WAIT_KINDS`); null when nothing is named. */
+  waitKind: WaitKind | null;
   asksYou: boolean;
   live: boolean;
   since: string;
@@ -479,7 +494,9 @@ export function movingNowRowModel(
       ? { owedFromYou: 1 }
       : w.live
         ? { running: true }
-        : { idle: true };
+        : w.waitKind
+          ? unitStateInputOfWaitKind(w.waitKind)
+          : { idle: true };
     return {
       key: `${w.kind}:${w.sessionId}`,
       sessionId: w.sessionId,
@@ -495,6 +512,7 @@ export function movingNowRowModel(
       asksYou: w.asksYou,
       live: w.live,
       since: w.since,
+      waitKind: w.waitKind ?? null,
     };
   });
   const asksYou = work.some((w) => w.asksYou);

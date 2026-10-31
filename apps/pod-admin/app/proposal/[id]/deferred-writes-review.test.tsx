@@ -224,7 +224,7 @@ describe("a held-writes pack", () => {
     const seen = text(html);
     expect(seen).toContain('Create Task "Ship v2"');
     expect(seen).toContain('Create Note "Launch notes"');
-    expect(seen).toContain('Create Session "Draft the launch post"');
+    expect(seen).toContain('Create Job "Draft the launch post"');
     expect(seen).not.toContain("Untitled");
     expect(seen).not.toMatch(/Deferred outcomes|Deferred writes|\bDay\b/i);
     expect(seen).not.toMatch(UUID);

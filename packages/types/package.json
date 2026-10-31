@@ -241,6 +241,10 @@
       "types": "./dist/proposals/capability-run.d.ts",
       "import": "./dist/proposals/capability-run.js"
     },
+    "./proposals/dev-deploy": {
+      "types": "./dist/proposals/dev-deploy.d.ts",
+      "import": "./dist/proposals/dev-deploy.js"
+    },
     "./proposals/review-package": {
       "types": "./dist/proposals/review-package.d.ts",
       "import": "./dist/proposals/review-package.js"

@@ -420,12 +420,12 @@ describe("resolveActionLabel — two moods", () => {
 describe("resolveObjectNoun", () => {
   it("de-underscores kinds that used to render raw", () => {
     // Canonical names come from OBJECT_KIND_ALIASES + OBJECT_KINDS, NOT from
-    // naive humanization — the registry calls this kind "Session", so we must
+    // naive humanization — the registry calls this kind "Job", so we must
     // too. These pairs used to be a hand-mirrored table guarded by a drift test
     // in synap-app; there is now ONE table, so they are asserted here.
-    expect(resolveObjectNoun("focus_session")).toBe("Session");
+    expect(resolveObjectNoun("focus_session")).toBe("Job");
     expect(resolveObjectNoun("ui-design")).toBe("UI design");
-    expect(resolveObjectNoun("focus_sessions")).toBe("Session");
+    expect(resolveObjectNoun("focus_sessions")).toBe("Job");
     expect(resolveObjectNoun("entity_facet")).toBe("Facet");
     expect(resolveObjectNoun("entity_facets")).toBe("Facet");
     expect(resolveObjectNoun("property_def")).toBe("Field");
@@ -540,7 +540,7 @@ describe("buildFallbackTitle — the regressions it shipped", () => {
     // Users saw "Focus_session" / "Property_def".
     expect(
       buildFallbackTitle({ changeType: "create", targetType: "focus_session" })
-    ).toBe("Create Session");
+    ).toBe("Create Job");
     expect(
       buildFallbackTitle({ changeType: "update", targetType: "property_def" })
     ).toBe("Update Field");
@@ -570,7 +570,7 @@ describe("buildFallbackTitle — the regressions it shipped", () => {
     expect(
       buildFallbackTitle({ changeType: "create", targetType: "entity" })
     ).toBe("Create");
-    expect(buildFallbackTitle({})).toBe("Proposal");
+    expect(buildFallbackTitle({})).toBe("Request");
   });
 
   it("never emits the double-space the old concat band-aided away", () => {

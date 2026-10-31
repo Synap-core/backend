@@ -536,9 +536,7 @@ describe("a filing carries the session's name, not its goal", () => {
     expect(gate).not.toHaveProperty("goal");
     expect(gate).not.toHaveProperty("previousGoal");
     expect(gate.sessionName).toBe("Shell work");
-    expect(await summaryOf(gate)).toBe(
-      'File session "Shell work" into "Synap"'
-    );
+    expect(await summaryOf(gate)).toBe('File job "Shell work" into "Synap"');
 
     // The person re-goals the session after the filing was proposed.
     await updateFocusSession({
@@ -575,7 +573,7 @@ describe("a filing carries the session's name, not its goal", () => {
     expect(gate.goal).toBe("Map the commercial foundations");
     expect(gate.previousGoal).toBe("Ship the work shell");
     // Named by what the reviewer knows it as, not by the goal it is changing.
-    expect(await summaryOf(gate)).toBe('Update Session "Shell work"');
+    expect(await summaryOf(gate)).toBe('Update Job "Shell work"');
 
     await approve(sessionId, gate);
     expect(await goalOf(sessionId)).toBe("Map the commercial foundations");
@@ -693,7 +691,7 @@ describe("a filing is proposed on its own; the rest of the call is not held", ()
       typeof import("../../../utils/permission-check.js")
     >("../../../utils/permission-check.js");
     expect(buildProposalSummary("focus_session", "update", filingGate)).toBe(
-      'File session "Shell work" into "Synap"'
+      'File job "Shell work" into "Synap"'
     );
 
     let row = await rowOf(sessionId);

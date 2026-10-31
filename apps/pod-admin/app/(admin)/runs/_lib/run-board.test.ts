@@ -10,6 +10,7 @@ import {
   runFilterOf,
   runListInput,
   runRowSecondary,
+  toolRunsInput,
   triggeredByLabel,
   type FlowGroupFacts,
 } from "./run-board";
@@ -46,6 +47,25 @@ describe("filters", () => {
     });
     expect(runListInput("all")).toBeNull();
     expect(runListInput("failing")).toBeNull();
+  });
+});
+
+describe("toolRunsInput — one tool's runs", () => {
+  const ID = "11111111-1111-4111-8111-111111111111";
+  const params = (qs: string) => new URLSearchParams(qs);
+  it("a capability or a skill id is the tool lens", () => {
+    expect(toolRunsInput(params(`capability=${ID}`))).toEqual({
+      flowType: "capability",
+      scope: { capabilityId: ID },
+    });
+    expect(toolRunsInput(params(`skill=${ID}`))).toEqual({
+      flowType: "capability",
+      scope: { skillId: ID },
+    });
+  });
+  it("no id, or a malformed one, is no lens", () => {
+    expect(toolRunsInput(params("filter=running"))).toBeNull();
+    expect(toolRunsInput(params("capability=not-an-id"))).toBeNull();
   });
 });
 

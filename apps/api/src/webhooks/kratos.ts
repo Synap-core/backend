@@ -33,11 +33,14 @@ import {
   readFederationOidcIssuer,
 } from "../routers/federation.js";
 import { createRegistrationGateRouter } from "./kratos-registration-gate.js";
-import { getKratosSession } from "@synap/auth";
+import {
+  accountHasPodHeldFactor,
+  getKratosSession,
+  kratosIdentityHasPodHeldCredential,
+} from "@synap/auth";
 import { createCloudTrustHookRouter } from "./kratos-cloud-trust.js";
 import {
   findAccountByIdentity,
-  kratosIdentityHasPodHeldCredential,
   readCloudTrust,
   recoveryCodeSummary,
 } from "../routers/account-recovery-deps.js";
@@ -182,12 +185,17 @@ kratosWebhookRouter.route(
     readCloudTrust,
     resolveSession: (cookieValue) =>
       getKratosSession(`ory_kratos_session=${cookieValue}`),
-    async accountHasPodHeldFactor(identityId) {
-      if (await kratosIdentityHasPodHeldCredential(identityId)) return true;
-      const account = await findAccountByIdentity(identityId);
-      if (!account) return false;
-      return (await recoveryCodeSummary(account.userId)).remaining > 0;
-    },
+    accountHasPodHeldFactor: (identityId) =>
+      accountHasPodHeldFactor(identityId, {
+        podHeldCredential: kratosIdentityHasPodHeldCredential,
+        // Recovery codes are kept per Pod account: no account, no codes.
+        unusedRecoveryCodes: async () => {
+          const account = await findAccountByIdentity(identityId);
+          return account
+            ? (await recoveryCodeSummary(account.userId)).remaining
+            : 0;
+        },
+      }),
     logger,
   })
 );

@@ -270,4 +270,46 @@ describe("declareLifecycle + getEffectiveLifecycle", () => {
       ).status
     ).toBe("declared");
   });
+
+  it("refuses a step wait whose refFrom or dateBinding the profile does not carry", async () => {
+    const options = [
+      { key: "draft", category: "open" },
+      {
+        key: "sent",
+        category: "active",
+        waits: {
+          on: "person",
+          refFrom: "contactId",
+          dateBinding: "followUpAt",
+        },
+      },
+      { key: "won", category: "done" },
+    ];
+    const deal = await profile("deal-w");
+    await prop(
+      deal,
+      "dealStage",
+      buildStoredConstraints({ enumOptions: options })
+    );
+    const none = await declareLifecycle(db, {
+      profileId: deal,
+      propertySlug: "dealStage",
+    });
+    expect(none.status).toBe("refused");
+    const reason = (none as { reason: string }).reason;
+    expect(reason).toMatch(/waits\.refFrom "contactId"/);
+    expect(reason).toMatch(/waits\.dateBinding "followUpAt"/);
+    // Any property names who; only a DATE property ends the wait.
+    await prop(deal, "contactId", {});
+    await prop(deal, "followUpAt", {});
+    const notDate = await declareLifecycle(db, {
+      profileId: deal,
+      propertySlug: "dealStage",
+    });
+    expect(notDate.status).toBe("refused");
+    expect((notDate as { reason: string }).reason).not.toMatch(/refFrom/);
+    expect((notDate as { reason: string }).reason).toMatch(
+      /waits\.dateBinding "followUpAt" is not a date property/
+    );
+  });
 });

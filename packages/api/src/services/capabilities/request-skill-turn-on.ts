@@ -55,5 +55,5 @@ export function turnOnRequestMessage(
 ): string {
   return offer.status === "proposed"
     ? `Created "${name}", switched off: it runs or loads only once the person turns it on. A request to turn it on is waiting for their review: ${offer.reviewUrl}`
-    : `Created "${name}", switched off: it runs or loads only once the person turns it on, and the request to turn it on could not be filed. Ask the person to turn it on (Settings → Capabilities).`;
+    : `Created "${name}", switched off: it runs or loads only once the person turns it on, and the request to turn it on could not be filed. Ask the person to turn it on (Tools).`;
 }

@@ -219,6 +219,8 @@ describe("resolveUnitState — tones stay inside the palette", () => {
       { ...base, checkGate: true },
       { ...base, pendingDecisions: 1 },
       { ...base, blockedBy: "X" },
+      { ...base, waitKind: "their_reply" },
+      { ...base, waitKind: "ci" },
       { ...base, running: true },
       { ...base, schedule: { cron: "0 8 * * *", enabled: true } },
       { ...base, schedule: { cron: "0 8 * * *", enabled: false } },

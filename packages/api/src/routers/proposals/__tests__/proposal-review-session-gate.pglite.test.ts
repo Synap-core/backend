@@ -357,6 +357,20 @@ describe("(2) the owner and a roster editor CAN decide", () => {
     expect(await statusOf(id)).toBe("rejected");
   });
 
+  it("a batch reject answers what it rejected, not the ids it was sent", async () => {
+    const pending = await fileCloseProposal();
+    const decided = await fileCloseProposal();
+    await caller(human(OWNER)).reject({ proposalId: decided });
+    await expect(
+      caller(human(OWNER)).batchReject({ proposalIds: [pending, decided] })
+    ).resolves.toEqual({
+      success: true,
+      rejected: 1,
+      rejectedIds: [pending],
+    });
+    expect(await statusOf(pending)).toBe("rejected");
+  });
+
   it("a roster editor revises (tRPC)", async () => {
     const id = await fileCloseProposal();
     await expect(

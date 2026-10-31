@@ -42,7 +42,7 @@ describe("secondaryLine", () => {
       secondaryLine(row({ package: "bookkeeping", nounKind: "session" }), {
         showPackage: true,
       })
-    ).toBe("Bookkeeping · Session · Claude Code");
+    ).toBe("Bookkeeping · Job · Claude Code");
   });
 
   it("leaves the package out under Group by Package", () => {

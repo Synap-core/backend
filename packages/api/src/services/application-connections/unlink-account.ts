@@ -32,8 +32,14 @@
  * holds the authority.
  */
 
-import { kratosAdmin } from "@synap/auth";
 import {
+  accountHasPodHeldFactor,
+  courierStatus,
+  kratosAdmin,
+  kratosIdentityHasPodHeldCredential,
+} from "@synap/auth";
+import {
+  AccountRecoveryCodeRepository,
   db,
   eq,
   federatedApplicationConnections,
@@ -205,6 +211,74 @@ export async function unlinkReach(
       .map(({ id, displayName }) => ({ id, displayName })),
     cloudSignIn: isCloudSignInIssuer(cloudIssuer, connection.issuerUrl),
   };
+}
+
+/**
+ * What one person is left to sign in with once unlinked, for the confirm —
+ * read before anything happens, never guessed:
+ *  - `keeps_a_way_in`: the unlink takes no sign-in method (another issuer), or
+ *    they hold a pod-held factor — a password or passkey on this Pod, or an
+ *    unused recovery code (`accountHasPodHeldFactor`, the one rule);
+ *  - `email_recovery_only`: none of those, but this Pod's mail goes out, so
+ *    recovering the account by email still gets them back in;
+ *  - `no_way_in`: none of those, and no mail: they cannot sign in at all;
+ *  - `unknown`: a read failed. The confirm says it could not check.
+ */
+export type UnlinkImpact =
+  "keeps_a_way_in" | "email_recovery_only" | "no_way_in" | "unknown";
+
+export interface UnlinkImpactDeps {
+  /** Throws on a failed read (`kratosIdentityHasPodHeldCredential`). */
+  podHeldCredential(kratosIdentityId: string): Promise<boolean>;
+  /** Throws on a failed read (`AccountRecoveryCodeRepository`). */
+  unusedRecoveryCodes(userId: string): Promise<number>;
+  /** The same fact as account recovery's "Email me a code" door. */
+  emailRecovery(): boolean;
+}
+
+const defaultImpactDeps: UnlinkImpactDeps = {
+  podHeldCredential: (kratosIdentityId) =>
+    kratosIdentityHasPodHeldCredential(kratosIdentityId),
+  unusedRecoveryCodes: async (userId) =>
+    (await new AccountRecoveryCodeRepository(db).summary(userId)).remaining,
+  emailRecovery: () => courierStatus().status === "configured",
+};
+
+/**
+ * `UnlinkImpact` for each person (keyed by `userId`) when unlinked from a
+ * connection with `reach`. `identityId` is their Kratos identity
+ * (`users.kratos_identity_id`, else `users.id`). Only the Cloud issuer takes a
+ * sign-in method away (its Kratos credential); any other issuer is answered
+ * without a read.
+ */
+export async function unlinkImpacts(
+  people: ReadonlyArray<{ userId: string; identityId: string }>,
+  reach: Pick<UnlinkReach, "cloudSignIn">,
+  deps: UnlinkImpactDeps = defaultImpactDeps
+): Promise<Map<string, UnlinkImpact>> {
+  if (!reach.cloudSignIn) {
+    return new Map(
+      people.map(({ userId }) => [userId, "keeps_a_way_in" as const])
+    );
+  }
+  const emailRecovery = deps.emailRecovery();
+  const impacts = await Promise.all(
+    people.map(
+      async ({ userId, identityId }): Promise<[string, UnlinkImpact]> => {
+        try {
+          const podHeld = await accountHasPodHeldFactor(identityId, {
+            podHeldCredential: deps.podHeldCredential,
+            unusedRecoveryCodes: () => deps.unusedRecoveryCodes(userId),
+          });
+          if (podHeld) return [userId, "keeps_a_way_in"];
+          return [userId, emailRecovery ? "email_recovery_only" : "no_way_in"];
+        } catch {
+          return [userId, "unknown"];
+        }
+      }
+    )
+  );
+  return new Map(impacts);
 }
 
 export async function unlinkConnectionAccount(

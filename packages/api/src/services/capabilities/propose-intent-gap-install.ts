@@ -174,7 +174,7 @@ export const GAP_INSTALL_PROPOSED_NOT_RUN =
   "Nothing ran: a request to install a capability providing this intent is waiting for review.";
 
 export const GAP_INSTALL_FAILED_NOT_RUN =
-  "Nothing ran: the install request could not be filed. Ask the user to install a capability that provides this intent (Settings → Capabilities).";
+  "Nothing ran: the install request could not be filed. Ask the user to install a capability that provides this intent (Marketplace).";
 
 /**
  * File ONE `capability.install` proposal for a gap, using the SAME pending-row

@@ -5,7 +5,6 @@
  */
 
 import type { AppRouter } from "@synap-core/api-types";
-import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
 import {
   presentationFromUiHints,
   resolveEntityMedia,
@@ -14,24 +13,38 @@ import {
 import type { inferRouterInputs } from "@trpc/server";
 import { shortDescription } from "../_lib/object/object-summaries";
 import { BOUNCE_TYPES, HOST_TYPES } from "./open-params";
+import { openT } from "./copy";
 
 /**
- * The bounce card's sentence, DERIVED from `HOST_TYPES` so it cannot keep
- * saying "only entities and views" after a kind joins the web host (it did).
- * Several kinds share one user word (a capability, a skill and a tool are all
- * "Tools"), so the word the bounced kind itself reads as is left out: a tool's
- * card must not say the web shows tools.
+ * What a bounce card says and offers. The card used to say "The web shows
+ * entities, views, rules, sessions, … Open this one in the Synap app",
+ * listing our object kinds.
+ *
+ *   - The object has a console page this viewer may open: that page leads,
+ *     and the Synap app is the second door.
+ *   - It has none: the card says so plainly, and the Synap app is the door.
+ *
+ * Either way the app is offered to everyone: the desktop app and the phone
+ * are where the work is done (decision 94cd8636).
  */
-export function bounceSummary(bouncedType: string): string {
-  const own = resolveObjectNounPlural(bouncedType).toLowerCase();
-  const nouns = [
-    ...new Set(HOST_TYPES.map((t) => resolveObjectNounPlural(t).toLowerCase())),
-  ].filter((noun) => noun !== own);
-  const list =
-    nouns.length > 1
-      ? `${nouns.slice(0, -1).join(", ")} and ${nouns[nouns.length - 1]}`
-      : nouns.join("");
-  return `The web shows ${list}. Open this one in the Synap app for the full surface.`;
+export interface BounceCard {
+  summary: string | null;
+  status: string | null;
+  app: "primary" | "secondary";
+}
+
+export function bounceCard({
+  consolePage,
+}: {
+  consolePage: boolean;
+}): BounceCard {
+  if (consolePage) return { summary: null, status: null, app: "secondary" };
+  const t = openT();
+  return {
+    summary: t("bounce.inApp"),
+    status: t("bounce.noWebPage"),
+    app: "primary",
+  };
 }
 
 /** `diagnose.resolveOpen`'s body (`OpenTarget`, resolve-open-target.ts). */

@@ -107,7 +107,9 @@ import { dirname, join, relative } from "node:path";
 // 46 → 45 on 2026-10-29 (#456, one door owns proposals.status):
 // `routers/proposals/__tests__/rule-create-approval.test.ts` now takes the real
 // `transitionProposal` through importOriginal.
-const BASELINE = 45;
+// 45 → 44 on 2026-10-30 (#559): `services/application-connections/unlink-account.test.ts`
+// converted — its service now reads `AccountRecoveryCodeRepository`.
+const BASELINE = 44;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = join(here, "..");

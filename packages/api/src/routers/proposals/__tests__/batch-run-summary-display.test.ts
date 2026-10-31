@@ -41,6 +41,6 @@ describe("a batch run proposal reads as the sessions it starts", () => {
   });
 
   it("keeps the count when no subject resolved", () => {
-    expect(displayOf()).toBe("Qualify a lead · 12 sessions");
+    expect(displayOf()).toBe("Qualify a lead · 12 jobs");
   });
 });

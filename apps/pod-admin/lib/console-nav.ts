@@ -135,7 +135,7 @@ export const CONSOLE_NAV = [
       {
         id: "sessions",
         href: "/sessions",
-        label: "Sessions",
+        label: "Jobs",
         icon: "MessagesSquare",
         kind: "session",
         audience: "admin",
@@ -281,10 +281,10 @@ export const CONSOLE_NAV = [
         audience: "admin",
       },
       {
-        // What is ON the pod: installed capabilities, their actions (turn them
-        // on or off) and every skill, those waiting to be turned on first.
-        // "Tools" is the user word for capabilities and skills (concepts.md,
-        // founder D2). Marketplace is what can be installed.
+        // What is ON the pod, in one list: capabilities (their actions on
+        // their own page), instructions and code. "Tools" is the user word for
+        // capabilities and skills (concepts.md, founder D2). Marketplace is
+        // what can be installed.
         id: "tools",
         href: "/tools",
         label: "Tools",
@@ -294,12 +294,12 @@ export const CONSOLE_NAV = [
           {
             source: "/marketplace",
             query: { key: "tab", value: "installed" },
-            destination: "/tools?tab=installed",
+            destination: "/tools?type=capabilities",
           },
           {
             source: "/marketplace",
             query: { key: "tab", value: "tools" },
-            destination: "/tools?tab=actions",
+            destination: "/tools?type=capabilities",
           },
         ],
         audience: "admin",

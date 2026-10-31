@@ -38,6 +38,8 @@ import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { DetailDrawer } from "../../components/detail-drawer";
 import { proposalRequester } from "../../../proposal/[id]/proposal-requester";
+import { requestReadFailure } from "../../../proposal/[id]/request-read-failure";
+import { RequestUnreadable } from "../../../proposal/[id]/RequestUnreadable";
 import {
   ProposalReviewBody,
   isActionable,
@@ -449,9 +451,16 @@ function ProposalBody({
 
   if (query.isLoading) return <Loading label="Reading the proposal…" />;
   const p = query.data;
-  if (query.error || !p)
+  const failure = requestReadFailure(query.error, !!p);
+  if (failure || !p)
     return (
-      <Unreadable message="This proposal couldn't be loaded — it may have been withdrawn, or you may not have access to it." />
+      <div className="py-6">
+        <RequestUnreadable
+          failure={failure}
+          retrying={query.isFetching}
+          onRetry={() => void query.refetch()}
+        />
+      </div>
     );
 
   // A decided connection shows its outcome on the proposal review below; only

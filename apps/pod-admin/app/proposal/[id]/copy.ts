@@ -22,6 +22,12 @@ export const en = {
   "toolRun.empty": "empty",
   "toolRun.yes": "Yes",
   "toolRun.no": "No",
+  "read.notFound": "It may have been withdrawn, or the link is out of date.",
+  "read.forbidden":
+    "You’re signed in, but this request isn’t one you can see. Ask the person who sent you the link.",
+  "read.failed": "It didn’t load. Check your connection and try again.",
+  "read.retry": "Try again",
+  openInDesktop: "Open in the Synap desktop app",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -38,9 +44,77 @@ export const fr: Catalog<typeof en> = {
   "toolRun.empty": "vide",
   "toolRun.yes": "Oui",
   "toolRun.no": "Non",
+  "read.notFound":
+    "Elle a peut-être été retirée, ou le lien n’est plus à jour.",
+  "read.forbidden":
+    "Votre session est ouverte, mais cette demande ne vous est pas visible. Demandez à la personne qui vous a envoyé le lien.",
+  "read.failed":
+    "Elle ne s’est pas chargée. Vérifiez votre connexion et réessayez.",
+  "read.retry": "Réessayer",
+  openInDesktop: "Ouvrir dans l’application Synap pour ordinateur",
 };
 
 /** The page's translator, in the ambient catalog locale. */
 export function proposalPageT() {
   return createT(ambientCatalogLocale(), { en, fr });
+}
+
+/**
+ * "Approve & always…" (`AlwaysApproveMenu.tsx`): each option says what it
+ * covers and what still asks. "Sending, publishing and deleting still ask"
+ * is true for every option but "this tool": a broad rule never authorizes a
+ * tool run (the outward floor, `resolveGovernanceRule`), and deletes sit
+ * under the destructive floor. A rule is taken back from a space's Governance
+ * tab, which lists the space's rules and the pod-wide ones.
+ */
+export const alwaysEn = {
+  "always.trigger": "Approve & always…",
+  "always.menu": "Approve and keep allowing this",
+  "always.capability.label": "Always let agents use “{name}”",
+  "always.capability.covers":
+    "Agents use this tool without asking you, even when it sends outside your company. Other tools still ask.",
+  "always.action.label": "{change}, always",
+  "always.action.covers":
+    "Any agent makes this change without asking you. Sending, publishing and deleting still ask.",
+  "always.profile.label": "Changes to any “{kind}”, always",
+  "always.profile.covers":
+    "Any agent changes this kind of record without asking you. Sending, publishing and deleting still ask.",
+  "always.agent.label": "This change from this agent, always",
+  "always.agent.covers":
+    "Only this agent, only this change. Other agents still ask you.",
+  "always.done.title": "Approved",
+  "always.done.body":
+    "From now on: {label}. Take it back in Spaces › the space › Governance.",
+  "always.ruleFailed": "Approved, but the rule wasn’t saved: {reason}",
+  "always.approveFailed": "Couldn’t approve",
+  "always.noReason": "no reason given",
+} as const;
+
+export const alwaysFr: Catalog<typeof alwaysEn> = {
+  "always.trigger": "Approuver et toujours…",
+  "always.menu": "Approuver et continuer à l’autoriser",
+  "always.capability.label": "Toujours laisser les agents utiliser « {name} »",
+  "always.capability.covers":
+    "Les agents utilisent cet outil sans vous demander, même pour envoyer hors de votre entreprise. Les autres outils vous sont toujours demandés.",
+  "always.action.label": "{change}, toujours",
+  "always.action.covers":
+    "Tout agent fait ce changement sans vous demander. Envoyer, publier et supprimer vous sont toujours demandés.",
+  "always.profile.label": "Les changements de tout « {kind} », toujours",
+  "always.profile.covers":
+    "Tout agent modifie ce type de fiche sans vous demander. Envoyer, publier et supprimer vous sont toujours demandés.",
+  "always.agent.label": "Ce changement par cet agent, toujours",
+  "always.agent.covers":
+    "Seulement cet agent, seulement ce changement. Les autres agents vous demandent toujours.",
+  "always.done.title": "Approuvé",
+  "always.done.body":
+    "Désormais : {label}. Vous pouvez le retirer dans Espaces › l’espace › Gouvernance.",
+  "always.ruleFailed":
+    "Approuvé, mais la règle n’a pas été enregistrée : {reason}",
+  "always.approveFailed": "Impossible d’approuver",
+  "always.noReason": "sans raison donnée",
+};
+
+/** The "Approve & always…" menu's translator, in the ambient catalog locale. */
+export function alwaysApproveT() {
+  return createT(ambientCatalogLocale(), { en: alwaysEn, fr: alwaysFr });
 }

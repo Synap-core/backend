@@ -109,10 +109,28 @@ export function capabilityNextAction(
   name: string,
   connection?: CapabilityCardConnection,
   containerId?: string | null,
-  launchable?: boolean
+  launchable?: boolean,
+  /** Member tool rows the run gate refuses (`CapabilityCard.toolsOff`). */
+  toolsOff = 0
 ): CapabilityNextAction {
   const link = (kind: CapabilityNextAction["kind"]) =>
     capabilityCardLink(containerId, kind);
+  // Connected (or needing none), but a tool row it calls through is off (the
+  // person's word: its ACCESS to the service): every run is refused until a
+  // person turns it on, whatever its actions say.
+  if (
+    toolsOff > 0 &&
+    (status === "connected" ||
+      status === "draft" ||
+      status === "partial" ||
+      status === "ready")
+  ) {
+    return {
+      kind: "enable",
+      hint: "Its access to the service is off, so none of its actions can run. Turn it on to use it.",
+      ...link("enable"),
+    };
+  }
   switch (status) {
     case "available":
       return { kind: "add", hint: `Add "${name}" to install its verbs.` };

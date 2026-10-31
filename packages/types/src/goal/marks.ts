@@ -24,8 +24,10 @@
  */
 import type { UnitGlyph, UnitTone } from "../units/index.js";
 import {
+  isWaitKind,
   trackStatusCategory,
   type GoalCriterionMark,
+  type WaitKind,
   type TrackCommitmentState,
   type TrackVerdict,
   type TrackWorkKind,
@@ -34,6 +36,7 @@ import {
 } from "../units/index.js";
 import {
   LIFECYCLE_CATEGORY_TONE,
+  holdDevRefLabel,
   parseHoldDevRef,
   parseHoldMovesRef,
   type LifecycleCategory,
@@ -198,6 +201,8 @@ export interface WaitingOnRefInput {
   id?: string | null;
   url?: string | null;
   label: string;
+  /** What kind of wait it is (`WAIT_KINDS`); absent from an older pod. */
+  waitKind?: string | null;
 }
 
 /** A named thing, ready to draw: a door to its own page, an outside link, or (neither) just its name. */
@@ -208,6 +213,12 @@ export interface WaitingOnRefView {
   door: LensDoor | null;
   /** An outside page (a PR on GitHub), only an http(s) one. */
   url: string | null;
+  /**
+   * What kind of wait it is (`WAIT_KINDS`, `@synap-core/types/units`): the
+   * chip's icon and who holds the ball (`waitKindHolder`). Null when the pod
+   * did not say, or said a kind this build does not know.
+   */
+  waitKind: WaitKind | null;
 }
 
 /** A "Waiting on …" mark, and what it waits on by name (empty when the pod named nothing). */
@@ -243,6 +254,7 @@ export function waitingOnRefView(
     label: ref.label,
     door,
     url: !door && isHttpUrl(ref.url) ? ref.url : null,
+    waitKind: isWaitKind(ref.waitKind) ? ref.waitKind : null,
   };
 }
 
@@ -294,21 +306,20 @@ function devHoldResumes(
 ): string | null {
   const dev = parseHoldDevRef(moves);
   if (!dev) return null;
+  const name = holdDevRefLabel(dev);
   switch (dev.kind) {
-    case "pr": {
-      const pr = `${dev.repo.split("/").pop()}#${dev.number}`;
+    case "pr":
       return to === "closed"
-        ? `resumes when ${pr} is closed`
-        : `resumes when ${pr} merges`;
-    }
+        ? `resumes when ${name} is closed`
+        : `resumes when ${name} merges`;
     case "main":
-      return `resumes when ${dev.repo.split("/").pop()} main is green`;
+      return `resumes when ${name} is green`;
     case "job":
       return to === "passed"
-        ? `resumes when job ${dev.name} passes`
+        ? `resumes when ${name} passes`
         : to === "failed"
-          ? `resumes when job ${dev.name} fails`
-          : `resumes when job ${dev.name} finishes`;
+          ? `resumes when ${name} fails`
+          : `resumes when ${name} finishes`;
   }
 }
 

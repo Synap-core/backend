@@ -28,6 +28,10 @@ import { navHref } from "../../../lib/console-nav";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { formatRelative } from "../../../lib/format";
+import { filterBySearch } from "../components/list-search";
+import { ListSearch, useDebouncedQuery } from "../components/list-search-box";
+import { useT } from "../../../lib/i18n/locale-provider";
+import { en, fr } from "../components/copy";
 import { openIn } from "../../../lib/open-in";
 import { ExitLink } from "../../../lib/exit-link";
 import { ConfirmModal } from "../components/confirm-modal";
@@ -58,6 +62,8 @@ import {
 } from "./_lib/rule-rows";
 import { useDrainPages } from "../../../lib/use-drain-pages";
 
+const CATALOGS = { en, fr };
+
 const TITLE = "Rules";
 const DESCRIPTION = "What runs on its own, and whether it worked.";
 /** 20 pages × 100 rows: past this the counts say they are partial. */
@@ -82,6 +88,8 @@ type PendingAct = {
 function RulesInner() {
   const searchParams = useSearchParams();
   const filter = ruleFilterOf(searchParams.get("filter"));
+  const t = useT(CATALOGS);
+  const search = useDebouncedQuery();
   const utils = trpc.useUtils();
 
   const rules = trpc.automations.listPage.useInfiniteQuery(
@@ -137,7 +145,11 @@ function RulesInner() {
   const healthReady = !groups.isLoading && !groupDrain.draining;
   const counting = ruleDrain.draining || !healthReady;
   const counts = ruleCounts(all, healthOf);
-  const visible = all.filter((r) => ruleMatches(filter, r, healthOf(r.id)));
+  const visible = filterBySearch(
+    all.filter((r) => ruleMatches(filter, r, healthOf(r.id))),
+    search.query,
+    (r) => [r.name, spaceName(r.workspaceId)]
+  );
   const focusId = useFocusRow({ ready: !loading });
   const [expanded, setExpanded] = useState(false);
   // A focused row past the fold must still be drawn for the highlight to land.
@@ -286,9 +298,32 @@ function RulesInner() {
             onRetry={() => void rules.refetch()}
           />
         ) : visible.length === 0 ? (
-          <ResourceRowEmpty message={emptyMessage(filter, all.length)} />
+          <>
+            <ListSearch
+              value={search.input}
+              onChange={search.setInput}
+              label={t("listSearch.rules")}
+            />
+            <ResourceRowEmpty
+              message={
+                search.query
+                  ? t("listSearch.none", { query: search.query })
+                  : emptyMessage(filter, all.length)
+              }
+            />
+          </>
         ) : (
           <>
+            <ListSearch
+              value={search.input}
+              onChange={search.setInput}
+              label={t("listSearch.rules")}
+            />
+            {search.query && (ruleDrain.draining || ruleDrain.capped) && (
+              <p className="mb-2 text-[12px] text-foreground/65">
+                {t("listSearch.partial.rules", { n: all.length })}
+              </p>
+            )}
             <ResponsiveTable
               ariaLabel="Rules"
               rows={shown}

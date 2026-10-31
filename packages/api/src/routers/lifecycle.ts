@@ -35,11 +35,13 @@ import {
 } from "@synap/database";
 import { profiles } from "@synap/database/schema";
 import {
+  HOLD_ON,
   LIFECYCLE_CATEGORIES,
   isTerminalLifecycleCategory,
   type LifecycleOption,
   UNCLASSIFIED_STATUS,
 } from "@synap-core/types/lifecycle";
+import { WAIT_KINDS } from "@synap-core/types/units";
 import {
   resolveBoardLens,
   resolveProfileLifecycle,
@@ -82,6 +84,15 @@ const lifecycleOptionWire = z.object({
   stuckAfterDays: z.number().optional(),
   /** The date property the option is bound to (late / approaching); absent = none. */
   dateBinding: z.string().optional(),
+  /** The wait the step declares (`LifecycleOptionWaits`); absent = none. */
+  waits: z
+    .object({
+      on: z.enum(HOLD_ON),
+      waitKind: z.enum(WAIT_KINDS).optional(),
+      refFrom: z.string().optional(),
+      dateBinding: z.string().optional(),
+    })
+    .optional(),
 });
 
 const lifecycleWire = z.object({
@@ -297,6 +308,8 @@ const movingLineWire = z.object({
   /** The session holds a deliverable owed by you (THE needs-you predicate). */
   asksYou: z.boolean(),
   since: z.string(),
+  /** What it waits on, as one kind (`leadWaitKind`); absent = nothing named. */
+  waitKind: z.enum(WAIT_KINDS).optional(),
 });
 
 const movingWire = z.object({

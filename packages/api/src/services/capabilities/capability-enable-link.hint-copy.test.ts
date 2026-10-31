@@ -44,3 +44,36 @@ describe("enable hints are human copy", () => {
     }
   );
 });
+
+describe("a tool row that is off (its access to the service)", () => {
+  // `toolsOff` (the card's member tool rows the run gate refuses) wins over
+  // what the actions say: with every action on, nothing can still run.
+  const states = ["ready", "partial", "draft", "connected"] as const;
+
+  it.each(states)("%s with its access off asks to turn it on", (status) => {
+    const next = capabilityNextAction(status, RAW, undefined, "c-1", true, 1);
+    expect(next.kind).toBe("enable");
+    expect(next.hint).toMatch(/access to the service is off/);
+    expect(next.hint).not.toContain(RAW);
+    expect(next.hint).not.toMatch(/\bverbs?\b/i);
+    expect(next.hint).not.toContain("—");
+  });
+
+  it("a card that cannot connect keeps its own next step", () => {
+    const next = capabilityNextAction(
+      "needs_connection",
+      RAW,
+      { required: true, kind: "provider", provider: RAW, state: "missing" },
+      "c-1",
+      undefined,
+      1
+    );
+    expect(next.kind).toBe("connect");
+  });
+
+  it("no tool off leaves a ready card runnable", () => {
+    expect(
+      capabilityNextAction("ready", RAW, undefined, "c-1", true, 0).kind
+    ).toBe("run");
+  });
+});

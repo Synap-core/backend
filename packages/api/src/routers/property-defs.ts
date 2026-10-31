@@ -25,6 +25,7 @@ import {
   reprojectLifecycleProfiles,
   assertNotLifecycleDef,
   changeLifecycleOptions,
+  setLifecycleInitialStatus,
   LifecycleDefChangeError,
 } from "@synap/database";
 import { entityPropertyIndex } from "@synap/database/schema";
@@ -309,6 +310,13 @@ export const propertyDefsRouter = router({
         valueType: PropertyValueTypeSchema.optional(),
         constraints: z.record(z.string(), z.unknown()).optional(),
         uiHints: z.record(z.string(), z.unknown()).optional(),
+        /**
+         * A declared lifecycle's INITIAL status: the option key a new thing
+         * or role starts in when its creator names none (`null` clears it).
+         * Stored on the lifecycle link, never on the def
+         * (`setLifecycleInitialStatus`); refused on a plain property.
+         */
+        initialStatus: z.string().min(1).nullable().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -383,6 +391,18 @@ export const propertyDefsRouter = router({
       // now): the columns re-derive from the projection.
       if (optionsChanged) {
         await reprojectLifecycleProfiles(db, lifecycleProfiles);
+      }
+
+      // After the def write, so an option appended in this same call may be
+      // the initial. A refusal is the caller's error, never a silent skip.
+      if (input.initialStatus !== undefined) {
+        const initial = await setLifecycleInitialStatus(db, {
+          propertyDefId: existing.id,
+          initialStatus: input.initialStatus,
+        });
+        if (initial.status === "refused") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: initial.reason });
+        }
       }
 
       logger.info(

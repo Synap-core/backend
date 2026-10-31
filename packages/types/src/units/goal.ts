@@ -31,7 +31,14 @@ import type {
   PullRequestChecks,
   PullRequestState,
 } from "../events/pr-state.js";
-import type { HoldOn } from "../lifecycle/hold.js";
+import type { HoldDevRef, HoldOn } from "../lifecycle/hold.js";
+import {
+  WAIT_BALLS,
+  WAIT_KIND_BALL,
+  WAIT_KIND_FROM,
+  isWaitKind,
+  type WaitKind,
+} from "./wait-kind.js";
 
 // ── kind of work and uncertainty (decision 4) ──────────────────────────────
 
@@ -798,6 +805,12 @@ export interface WaitingOnRef {
   id?: string;
   url?: string;
   label: string;
+  /**
+   * What kind of wait it is (`WAIT_KINDS`, `./wait-kind.ts`), from the
+   * source that named this ref ({@link waitKindOf}). Absent from an older
+   * pod; a reader must work without it.
+   */
+  waitKind?: WaitKind;
 }
 
 /** One thing a goal or a session waits on, as the pod found it. */
@@ -809,7 +822,12 @@ export type WaitingOnSource = (
     }
   | { kind: "pending_proposal" }
   | { kind: "blocked_by" }
-  | { kind: "hold"; on: HoldOn }
+  | {
+      kind: "hold";
+      on: HoldOn;
+      /** The dev fact its `until.moves` names (`parseHoldDevRef`), if any. */
+      devRef?: HoldDevRef["kind"] | null;
+    }
   | { kind: "work_unit"; state: PullRequestState; checks?: PullRequestChecks }
   | { kind: "child_session" }
 ) & { ref?: WaitingOnRef };
@@ -839,6 +857,42 @@ export function waitingOnReasonOf(
   }
 }
 
+/**
+ * THE mapping from one source to its wait kind (decision 2), read off the one
+ * map table {@link WAIT_KIND_FROM}. Every source gives a kind, unlike
+ * {@link waitingOnReasonOf}: a park on `nobody` or a red PR is still a kind
+ * of wait for the history, even where it makes no "Waiting on" mark.
+ */
+export function waitKindOf(source: WaitingOnSource): WaitKind {
+  switch (source.kind) {
+    case "pending_proposal":
+      return WAIT_KIND_FROM.source.pending_proposal;
+    case "blocked_by":
+      return WAIT_KIND_FROM.source.blocked_by;
+    case "child_session":
+      return WAIT_KIND_FROM.source.child_session;
+    case "work_unit":
+      return source.checks === "passed"
+        ? WAIT_KIND_FROM.source.work_unit_green
+        : WAIT_KIND_FROM.source.work_unit_checks;
+    case "hold":
+      if (source.devRef && Object.hasOwn(WAIT_KIND_FROM.dev, source.devRef)) {
+        return WAIT_KIND_FROM.dev[source.devRef];
+      }
+      return Object.hasOwn(WAIT_KIND_FROM.hold, source.on)
+        ? WAIT_KIND_FROM.hold[source.on]
+        : WAIT_KIND_FROM.hold.unspecified;
+    case "owed_slot": {
+      const r = source.blockedReason?.trim().toLowerCase();
+      return r && r !== "none" && Object.hasOwn(WAIT_KIND_FROM.blockedReason, r)
+        ? WAIT_KIND_FROM.blockedReason[
+            r as keyof typeof WAIT_KIND_FROM.blockedReason
+          ]
+        : WAIT_KIND_FROM.blockedReason.none;
+    }
+  }
+}
+
 export interface WaitingOnMark {
   reason: WaitingOnReason;
   count: number;
@@ -861,7 +915,7 @@ export function deriveWaitingOn(
     counts.set(reason, (counts.get(reason) ?? 0) + 1);
     const named = refs.get(reason) ?? [];
     if (s.ref && named.length < WAITING_ON_REFS_MAX) {
-      named.push(s.ref);
+      named.push({ ...s.ref, waitKind: waitKindOf(s) });
       refs.set(reason, named);
     }
   }
@@ -870,6 +924,33 @@ export function deriveWaitingOn(
     count: counts.get(reason)!,
     ...(refs.has(reason) ? { refs: refs.get(reason)! } : {}),
   }));
+}
+
+/**
+ * The ONE wait kind a row leads with, from its waiting-on marks: the named
+ * ref whose ball comes first in {@link WAIT_BALLS} (yours, then theirs, an
+ * agent's, a machine's, other work, a date, nobody), in source order within a
+ * ball. `null` when no ref names a kind (nothing waited on, or an older pod).
+ */
+export function leadWaitKind(
+  marks:
+    | ReadonlyArray<{
+        refs?: ReadonlyArray<{ waitKind?: string | null }> | null;
+      }>
+    | null
+    | undefined
+): WaitKind | null {
+  let best = null as WaitKind | null;
+  for (const m of marks ?? []) {
+    for (const r of m.refs ?? []) {
+      if (!isWaitKind(r.waitKind)) continue;
+      const rank = WAIT_BALLS.indexOf(WAIT_KIND_BALL[r.waitKind]);
+      if (best === null || rank < WAIT_BALLS.indexOf(WAIT_KIND_BALL[best])) {
+        best = r.waitKind;
+      }
+    }
+  }
+  return best;
 }
 
 // Every value has its words in the vocabulary, and the vocabulary names

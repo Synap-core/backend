@@ -8,6 +8,18 @@
  *   approaching      — that date is at most {@link DATE_APPROACHING_DAYS} ahead;
  *   hold_review_due  — its pause's `reviewBy` passed and it is still paused.
  *
+ * And three about DEV WORK (plan 5513a09a P4.1), raised on the session that
+ * owns it (`api/services/status/dev-signals.ts`, read from the newest
+ * `dev.repo_snapshot` of each repo):
+ *
+ *   pr_green_unmerged — a ready PR's checks are green and it was left
+ *                       unmerged;
+ *   pr_red_idle       — a ready PR's checks are red (its own red, not main's)
+ *                       and nothing was pushed since;
+ *   main_red_unowned  — a repo's main is red and nobody owns the fix (no
+ *                       open `main red: <repo> …` session, no fix PR named),
+ *                       told to the session of the PR that turned it red.
+ *
  * Calendar time only (plan Q3.1): no business days, no time zones beyond UTC.
  * Pure: no imports at run time.
  */
@@ -17,6 +29,9 @@ export const STATUS_SIGNALS = [
   "late",
   "approaching",
   "hold_review_due",
+  "pr_green_unmerged",
+  "pr_red_idle",
+  "main_red_unowned",
 ] as const;
 export type StatusSignal = (typeof STATUS_SIGNALS)[number];
 

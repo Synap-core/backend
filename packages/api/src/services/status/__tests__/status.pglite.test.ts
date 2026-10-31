@@ -10,7 +10,9 @@
  *     week, what it waits on;
  *   - `readScopeRollup`: a space's things per category, its stuck things
  *     (named), its work, its moves; another person's project is `null`;
- *   - `withGoalRollups`: a failed rollup read is `unavailable`, never zeros.
+ *   - `withGoalRollups`: a failed rollup read is `unavailable`, never zeros;
+ *   - goal rollups follow `serves`: a session filed in AND serving a goal
+ *     counts once there, a serving session counts, a sub-goal is a child.
  *
  * Only `getEffectiveLifecycle` is stubbed (its own suites prove it).
  */
@@ -407,5 +409,75 @@ describe("rollups", () => {
     } finally {
       await client.exec(`alter table fs_gone rename to focus_sessions`);
     }
+  });
+});
+
+describe("goal rollups follow `serves`", () => {
+  const G_PARENT = randomUUID();
+  const G_CHILD = randomUUID();
+  const S_BOTH = randomUUID(); // filed in G_PARENT AND serving it
+  const S_SERVING = randomUUID(); // filed in G_CHILD, serving G_PARENT
+
+  async function serves(fromType: string, fromId: string, toId: string) {
+    await q(
+      `insert into links (id, workspace_id, from_type, from_id, to_type, to_id, link_type, metadata, created_by, created_at)
+       values ($1, null, $2, $3, 'track', $4, 'serves', '{}'::jsonb, $5, now())`,
+      [randomUUID(), fromType, fromId, toId, ME]
+    );
+  }
+
+  beforeAll(async () => {
+    for (const [id, name] of [
+      [G_PARENT, "Launch"],
+      [G_CHILD, "Pricing page"],
+    ]) {
+      await q(
+        `insert into project_tracks (id, project_id, user_id, name, definition_snapshot, method_version, status, criteria, created_at, updated_at)
+         values ($1, $2, $3, $4, '{}'::jsonb, '1', 'active', '[]'::jsonb, now(), now())`,
+        [id, P, ME, name]
+      );
+    }
+    for (const [id, goal] of [
+      [S_BOTH, G_PARENT],
+      [S_SERVING, G_CHILD],
+    ]) {
+      await q(
+        `insert into focus_sessions (id, user_id, workspace_id, project_id, track_id, goal, status, origin, expected_outputs, metadata, started_at, created_at, updated_at)
+         values ($1, $2, $3, $4, $5, 'Do it', 'active', 'agent', '[]'::jsonb, '{}'::jsonb, now(), now(), now())`,
+        [id, ME, W, P, goal]
+      );
+    }
+    await serves("session", S_BOTH, G_PARENT);
+    await serves("session", S_SERVING, G_PARENT);
+    await serves("track", G_CHILD, G_PARENT);
+    // One move of S_BOTH: reached through BOTH its filing and its edge.
+    await transition(
+      "focus_session",
+      S_BOTH,
+      "focus_session.transition.completed",
+      1,
+      { trackId: G_PARENT, projectId: P }
+    );
+  });
+
+  it("a session filed in AND serving a goal counts once; a serving one counts; a sub-goal is a child", async () => {
+    const tracks = (await listOpenGoalTracks({ userId: ME, limit: 50 })).filter(
+      (t) => t.id === G_PARENT || t.id === G_CHILD
+    );
+    expect(tracks).toHaveLength(2);
+    const rollups = await readGoalRollups(ME, tracks);
+
+    expect(rollups.get(G_PARENT)).toMatchObject({
+      // S_BOTH once (not twice), plus S_SERVING, which is filed elsewhere.
+      work: { active: 2 },
+      // S_BOTH's one move, counted once.
+      moved: 1,
+      children: [G_CHILD],
+    });
+    // The sub-goal keeps its own filed session, and has no children.
+    const child = rollups.get(G_CHILD);
+    expect(child).toMatchObject({ work: { active: 1 } });
+    expect(child).not.toHaveProperty("children");
+    expect(child).not.toHaveProperty("moved");
   });
 });

@@ -2,18 +2,24 @@
 
 /**
  * Shown when the user is signed in but does not have the `pod_admin`
- * role (admin or owner of the pod-admin workspace). Single Card with a
- * sign-out button — sign-out clears the Kratos cookie via the pod's
- * logout endpoint, then bounces back to login on next visit.
+ * role (admin or owner of the pod-admin workspace). Single Card with the way
+ * back (Home, which every signed-in person may open) and a sign-out button —
+ * sign-out clears the Kratos cookie via the pod's logout endpoint, then
+ * bounces back to login on next visit. Until 2026-10-30 Sign out was the only
+ * button, and the card named a role slug.
  */
 
 import { Button, Card, CardBody } from "@heroui/react";
 import { ShieldOff, LogOut } from "lucide-react";
+import Link from "next/link";
+import { consolePath } from "@synap-core/types/console";
 import { publicPodUrl } from "../../lib/public-pod-url";
+import { forbiddenT } from "./copy";
 
 const POD_URL = publicPodUrl();
 
 export default function ForbiddenPage() {
+  const t = forbiddenT();
   const handleSignOut = async () => {
     // Initiate Kratos browser logout. Kratos returns a logout URL we
     // navigate to — that endpoint clears the session cookie and redirects.
@@ -64,27 +70,31 @@ export default function ForbiddenPage() {
 
           <div className="flex flex-col gap-1.5">
             <h1 className="font-heading text-[20px] font-medium tracking-tight text-foreground">
-              Pod admin access required
+              {t("title")}
             </h1>
             <p className="text-[13.5px] leading-relaxed text-foreground/65">
-              You are signed in, but this surface is restricted to operators of
-              the pod-admin workspace. Ask your pod operator to grant you the{" "}
-              <span className="font-mono text-[12px] text-foreground">
-                pod_admin
-              </span>{" "}
-              role.
+              {t("body")}
             </p>
           </div>
 
           <div className="flex items-center justify-end gap-2 pt-2">
             <Button
               size="sm"
-              variant="flat"
+              variant="light"
               radius="md"
               startContent={<LogOut className="h-3.5 w-3.5" />}
               onPress={handleSignOut}
             >
-              Sign out
+              {t("signOut")}
+            </Button>
+            <Button
+              as={Link}
+              href={consolePath({ page: "home" }) ?? "/"}
+              size="sm"
+              color="primary"
+              radius="md"
+            >
+              {t("home")}
             </Button>
           </div>
         </CardBody>

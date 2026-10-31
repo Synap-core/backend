@@ -37,6 +37,7 @@ import { createT, type TFunction } from "../i18n/translator.js";
 import type { Noun, NounParams } from "../i18n/noun.js";
 import {
   buildVocabularyEn,
+  vocabularySentencesEn,
   type VocabularyEn,
   type VocabularySentencesEn,
 } from "./catalog.en.js";
@@ -54,6 +55,7 @@ import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
 import type { StuckCause } from "../units/stuck.js";
+import type { WaitKind } from "../units/wait-kind.js";
 import type {
   CheckVerdict,
   RepoMainHealth,
@@ -797,6 +799,8 @@ export const LINEAGE_EDGE_LABELS: Readonly<
   blocked_by: { outgoing: "Blocked by", incoming: "Blocks" },
   // `A --replaces--> B`: "this step replaces that one".
   replaces: { outgoing: "Replaces", incoming: "Replaced by" },
+  // `X --serves--> G`: a session or a sub-goal does its work FOR goal G.
+  serves: { outgoing: "Serves", incoming: "Served by" },
   // ── Every other stored `links` type, read from its TO end ────────────────
   // Without these an incoming edge showed its FORWARD word ("Targets") plus a
   // reversed-arrow mark. Read as "<focus> <label> <row>": the row is the
@@ -1190,7 +1194,11 @@ export function buildObjectActionTitle(params: {
     objectKind && objectKind.toLowerCase() !== "entity" ? objectKind : null;
   const nounEn = kind ? resolveObjectNoun(kind, "en") : "";
   const preposition = kind ? titlePreposition(actionToken) : "";
-  const headEn = [verbEn || "Proposal", preposition, nounEn]
+  const headEn = [
+    verbEn || vocabularySentencesEn["vocabulary.title.fallbackVerb"],
+    preposition,
+    nounEn,
+  ]
     .filter(Boolean)
     .join(" ");
   const name = nameSlot(objectName, headEn, verbEn, nounEn);
@@ -1381,7 +1389,7 @@ export const PROPOSAL_KIND_LABELS: Readonly<Record<string, string>> = {
   link: "Link",
   facet: "Role",
   composite: "Bundle",
-  session: "Session",
+  session: "Job",
   merge: "Merge",
   install: "Install",
   // Governance recommender kinds — reviewer never approved these before; the
@@ -1418,14 +1426,16 @@ export const PROPOSAL_KIND_LABELS: Readonly<Record<string, string>> = {
  *
  * These are the three DB kinds behind the one word, named for what they are
  * to a user: a `skill` is instructions an agent follows, a `capability` is an
- * action the pod can run, a `tool` row is a connected integration (the
+ * installed package of actions, a `tool` row is a connected integration (the
  * `tools` table holds integrations — CLAUDE.md "tools (integrations)").
+ * "Action" is NOT a kind here: it means one of a capability's verbs, and only
+ * that, everywhere (founder, 2026-10-30, decision 79f5b7a2).
  * Anything else humanizes; it is never "Tool", which would say nothing on a
  * page already titled as one.
  */
 export const TOOL_KIND_LABELS: Readonly<Record<string, string>> = {
   skill: "Skill",
-  capability: "Action",
+  capability: "Capability",
   tool: "Integration",
 };
 
@@ -1573,6 +1583,11 @@ const STATUS_LABEL_ROWS = {
   ready: "Ready",
   waiting: "Waiting",
   blocked: "Blocked",
+  // unit states (`resolveUnitState`) for a wait someone else holds: a person
+  // outside (a client's reply, a signature) or a machine (CI, the merge
+  // queue, a devbox job, a deploy). Derived, never stored.
+  with_them: "With them",
+  on_machine: "On a machine",
   done: "Done",
   // an agent- or automation-originated session not yet accepted from triage
   drafted: "Drafted",
@@ -2119,6 +2134,40 @@ export const WAITING_ON_REASON_LABELS = {
   date: "A date",
 } as const satisfies Readonly<Record<string, string>>;
 
+/**
+ * Each wait kind's words (`WAIT_KINDS`, `@synap-core/types/units`, decision
+ * 2): what a "Waiting on" chip says. Keyed by EVERY kind: a kind added
+ * without its words stops the build.
+ */
+export const WAIT_KIND_LABELS = {
+  answer: "Your answer",
+  approval: "Your approval",
+  send: "To send",
+  try_it: "To try",
+  access: "Access",
+  decide: "Your decision",
+  their_reply: "Their reply",
+  their_document: "Their document",
+  signature: "Signature",
+  payment: "Payment",
+  vendor: "Outside party",
+  agent_work: "Agent at work",
+  agent_stopped: "Agent stopped",
+  ci: "CI",
+  devbox_job: "Devbox job",
+  merge_queue: "Merge queue",
+  red_main: "Red main",
+  deploy: "Deploy",
+  another_work: "Other work",
+  date: "A date",
+  nobody: "Nobody",
+} as const satisfies Readonly<Record<WaitKind, string>>;
+
+/** The words for a wait kind; unknown values humanize, never leak. */
+export function resolveWaitKindLabel(v: string | null | undefined) {
+  return resolveFrom(WAIT_KIND_LABELS, v);
+}
+
 function resolveFrom<T extends Readonly<Record<string, string>>>(
   table: T,
   value: string | null | undefined
@@ -2553,7 +2602,7 @@ export function resolveBlockedReasonLabel(
  */
 export const OUTPUT_RETIRED_REASON_LABELS: Readonly<Record<string, string>> = {
   /** The session was cancelled with the slot still owed. */
-  session_cancelled: "Session cancelled",
+  session_cancelled: "Job cancelled",
   /**
    * The decision this slot asked about was settled on the decision itself
    * (accepted / rejected / superseded), so the question is moot.
@@ -2562,7 +2611,7 @@ export const OUTPUT_RETIRED_REASON_LABELS: Readonly<Record<string, string>> = {
   /** The agent withdrew a deliverable it had declared (`retireOutput`). */
   withdrawn: "Withdrawn",
   /** The session ended with the agent's own question (confirm / choose) still open. */
-  session_ended: "Session ended",
+  session_ended: "Job ended",
   /** A proposed decision a person wrote asked them with no agent behind it. */
   not_asked: "Not asked by anyone",
 };

@@ -588,7 +588,7 @@ describe("rows group the ask by object", () => {
       ["Inspirations", "off/view"],
       ["Documents", "off/view"],
       ["Links", "off/view"],
-      ["Sessions", "off/view"],
+      ["Jobs", "off/view"],
       ["Changes waiting for your review", "off/view"],
     ]);
     // Every permission sits in exactly one top-level row; the folded row's

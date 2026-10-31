@@ -790,6 +790,7 @@ export function registerCaptureRoutes(app: HubHono): void {
           scope: graph.scope,
           sessionId: graph.scope.sessionId,
           ...(graph.deduped ? { deduped: true } : {}),
+          ...(graph.dedupedAs ? { dedupedAs: graph.dedupedAs } : {}),
           ...((result as { intake?: unknown }).intake
             ? { intake: (result as { intake?: unknown }).intake }
             : {}),

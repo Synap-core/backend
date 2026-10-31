@@ -1,7 +1,8 @@
 /**
  * Hub REST `GET /focus-sessions` — paging and pod-wide scope.
  *
- * `offset` was ignored (page 2 was unreachable) and a read naming neither
+ * `offset` was ignored (page 2 was unreachable), then clamped (a bad one
+ * read as page 1; now a 400), and a read naming neither
  * `workspaceId` nor `projectId` was a 400, though MCP `synap_list_sessions`
  * answers it pod-wide under the owner floor. DB-free: `db.select` is a chain
  * stub recording what the handler asked of it.
@@ -67,12 +68,24 @@ describe("Hub REST GET /focus-sessions — offset and pod-wide", () => {
     expect(h.orderByArity).toEqual([2]);
   });
 
-  it("defaults offset to 0 and treats junk as 0", async () => {
+  it("defaults offset to 0", async () => {
     await buildTestApp().request(`/focus-sessions`);
-    await buildTestApp().request(`/focus-sessions?offset=abc`);
-    await buildTestApp().request(`/focus-sessions?offset=-4`);
-    expect(h.offsets).toEqual([0, 0, 0]);
+    expect(h.offsets).toEqual([0]);
   });
+
+  // It used to clamp junk to 0 while its OpenAPI said min(0): a caller paging
+  // with a bad offset silently got page 1 again. Refused like `GET /events`.
+  it.each(["abc", "-4", "1.5"])(
+    "refuses offset=%s with 400, before any query",
+    async (bad) => {
+      const res = await buildTestApp().request(`/focus-sessions?offset=${bad}`);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "offset must be a non-negative integer",
+      });
+      expect(h.offsets).toEqual([]);
+    }
+  );
 
   it("with neither workspaceId nor projectId it lists pod-wide, not 400", async () => {
     const res = await buildTestApp().request(`/focus-sessions`);

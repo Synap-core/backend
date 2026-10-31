@@ -1,8 +1,9 @@
 /**
  * The pod courier (SMTP) self-report — one reader shared by the provision
- * status (`routers/provision.ts`) and account recovery's "Email me a code"
- * door (`routers/account-recovery.ts`), so the two can never disagree about
- * whether mail leaves this pod.
+ * status (apps/api `routers/provision.ts`), account recovery's "Email me a
+ * code" door (apps/api `routers/account-recovery.ts`) and the unlink confirm
+ * (@synap/api `unlinkImpacts`), so they can never disagree about whether mail
+ * leaves this pod.
  */
 
 /**

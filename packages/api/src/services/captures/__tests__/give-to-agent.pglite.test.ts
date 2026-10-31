@@ -70,6 +70,18 @@ vi.mock("@synap/database", async (importOriginal) => {
     resolveSessionProjectPlacement: async () => ({ projectId: null }),
   };
 });
+// Since #556 createFocusSession floors the subject through isOutputRefVisible,
+// which reads `entities` through the access layer. This suite's PGlite schema
+// holds no `entities`, and what it checks is WHICH subject give-to-agent passes,
+// not who may see it (create-session.subject-floor.pglite.test.ts owns that).
+vi.mock(
+  "../../focus-sessions/assert-output-ref-visible.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    isOutputRefVisible: async () => true,
+  })
+);
+
 vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {

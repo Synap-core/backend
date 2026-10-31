@@ -2,8 +2,8 @@
 
 /**
  * One agent, the one body — drawn by `/open/agent/:id` as an object page in
- * the receiver card (`AgentObject`) and by the console's agent drawer
- * (`AgentDrawer`, opened from Agents). Both draw the same sections: where it
+ * the receiver card (`AgentObject`), which a row on Agents opens (it was a
+ * drawer until 2026-10-30; the drawer drew these same sections). Where it
  * stands, its scorecard, how its writes land, and what the viewer may do to it.
  *
  *   • Facts — the roster row (`agentUsers.list`, floored to the viewer: an
@@ -37,6 +37,8 @@ import { formatRelative } from "../../../../lib/format";
 import { ExitLink } from "../../../../lib/exit-link";
 import { openIn } from "../../../../lib/open-in";
 import { ConfirmModal } from "../../../(admin)/components/confirm-modal";
+import { useConsoleRole } from "../../../(admin)/components/side-nav-role";
+import { agentTrustDoor } from "./agent-trust-door";
 import {
   agentReviewHref,
   agentsByCreator,
@@ -320,12 +322,25 @@ export function AgentGovernance({ agentUserId }: { agentUserId: string }) {
               ))}
             </ul>
           )}
-          <p className="text-[12px] text-foreground/65">
-            Change it from the desktop app, in Settings › Agents.
-          </p>
+          <AgentTrustDoorLine />
         </>
       )}
     </Section>
+  );
+}
+
+/** Where this agent's trust is changed, for this viewer (`agent-trust-door.ts`). */
+function AgentTrustDoorLine() {
+  const door = agentTrustDoor(useConsoleRole());
+  return door.kind === "link" ? (
+    <Link
+      href={door.href}
+      className="self-start text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
+    >
+      {door.label}
+    </Link>
+  ) : (
+    <p className="text-[12px] text-foreground/65">{door.text}</p>
   );
 }
 

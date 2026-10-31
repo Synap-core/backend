@@ -11,8 +11,10 @@
  * under. Any run opens its drawer (`run-drawer.tsx`). All reads are
  * user-floored (D1a).
  *
- * Receivers: `?filter=` (all · failing · running · chat) and
- * `?focus=<flowId>` on the board.
+ * Receivers: `?filter=` (all · failing · running · chat),
+ * `?focus=<flowId>` on the board, and `?capability=<id>` / `?skill=<id>` —
+ * one tool's runs (a tool page's "Show all"), through the `runs.list` tool
+ * lens.
  */
 
 import { Button } from "@heroui/react";
@@ -47,7 +49,12 @@ import {
   runFilterOf,
   runListInput,
   runRowSecondary,
+  toolRunsInput,
+  type ToolRunsInput,
 } from "./_lib/run-board";
+import { useT } from "../../../lib/i18n/locale-provider";
+import { openIn } from "../../../lib/open-in";
+import { TOOLS_CATALOGS } from "../tools/_lib/copy";
 import { RunDrawer, type RunTarget } from "./_lib/run-drawer";
 
 const TITLE = "Runs";
@@ -70,7 +77,17 @@ function RunsInner() {
   const searchParams = useSearchParams();
   const filter = runFilterOf(searchParams.get("filter"));
   const listInput = runListInput(filter);
+  const toolInput = toolRunsInput(searchParams);
   const [target, setTarget] = useState<RunTarget | null>(null);
+
+  if (toolInput)
+    return (
+      <PageShell>
+        <PageHeader title={TITLE} description={DESCRIPTION} />
+        <ToolRunFeed input={toolInput} onOpen={setTarget} />
+        <RunDrawer target={target} onClose={() => setTarget(null)} />
+      </PageShell>
+    );
 
   return (
     <PageShell>
@@ -307,16 +324,71 @@ function FlowRuns({
   );
 }
 
+// ─── One tool's runs (`?capability=` · `?skill=`) ─────────────────────
+
+function ToolRunFeed({
+  input,
+  onOpen,
+}: {
+  input: ToolRunsInput;
+  onOpen: (t: RunTarget) => void;
+}) {
+  const t = useT(TOOLS_CATALOGS);
+  const tool =
+    "capabilityId" in input.scope
+      ? openIn({
+          kind: "object",
+          objectKind: "capability",
+          id: input.scope.capabilityId,
+        })
+      : openIn({
+          kind: "object",
+          objectKind: "skill",
+          id: input.scope.skillId,
+        });
+  return (
+    <>
+      <div className="mb-4 flex flex-wrap items-center gap-3 text-[12.5px]">
+        <Link
+          href={tool.href}
+          className="rounded-sm text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        >
+          {t("runs.openTool")}
+        </Link>
+        <Link
+          href="/runs"
+          className="rounded-sm text-foreground/70 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        >
+          {t("runs.everyRun")}
+        </Link>
+      </div>
+      <RunFeed
+        input={input}
+        filter="all"
+        onOpen={onOpen}
+        heading={{
+          title: t("runs.toolTitle"),
+          hint: t("runs.toolHint"),
+          empty: t("history.empty"),
+        }}
+      />
+    </>
+  );
+}
+
 // ─── The per-run feed (Running · Failed AI turns) ─────────────────────
 
 function RunFeed({
   input,
   filter,
   onOpen,
+  heading,
 }: {
-  input: NonNullable<ReturnType<typeof runListInput>>;
+  input: NonNullable<ReturnType<typeof runListInput>> | ToolRunsInput;
   filter: ReturnType<typeof runFilterOf>;
   onOpen: (t: RunTarget) => void;
+  /** Words for a feed that is neither Running nor Failed AI turns. */
+  heading?: { title: string; hint: string; empty: string };
 }) {
   const feed = trpc.runs.list.useInfiniteQuery(
     { ...input, limit: PAGE_SIZE },
@@ -335,11 +407,12 @@ function RunFeed({
 
   return (
     <SectionCard
-      title={isChat ? "Failed AI turns" : "Running now"}
+      title={heading?.title ?? (isChat ? "Failed AI turns" : "Running now")}
       hint={
-        isChat
+        heading?.hint ??
+        (isChat
           ? "Chat turns that failed — Companion, Discord, external agents"
-          : "Every run still going, across rules, templates, sessions and tools"
+          : "Every run still going, across rules, templates, sessions and tools")
       }
     >
       {feed.isLoading || isAuthRedirecting ? (
@@ -351,7 +424,10 @@ function RunFeed({
         />
       ) : runs.length === 0 ? (
         <ResourceRowEmpty
-          message={isChat ? "No failed AI turns." : "Nothing is running."}
+          message={
+            heading?.empty ??
+            (isChat ? "No failed AI turns." : "Nothing is running.")
+          }
         />
       ) : (
         <div className="-mx-2 divide-y divide-foreground/[0.05]">

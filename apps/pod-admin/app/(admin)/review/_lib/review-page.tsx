@@ -97,6 +97,11 @@ import { SessionFilter } from "./review-session-filter";
 import { nextRowKey } from "./ask-detail";
 import { useT } from "../../../../lib/i18n/locale-provider";
 import { en, fr } from "./copy";
+import {
+  batchFailureReceipt,
+  batchRejectReceipt,
+} from "../../../_lib/receipt/decision-receipt";
+import { showReceipt } from "../../../_lib/receipt/decision-receipt-toast";
 
 const CATALOGS = { en, fr };
 
@@ -256,21 +261,13 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
   const batchApprove = trpc.proposals.batchApprove.useMutation({
     onError: (err) => {
       if (redirectToLoginIfUnauthorized(err)) return;
-      addToast({
-        title: "Approve failed",
-        description: err.message,
-        color: "danger",
-      });
+      showReceipt(batchFailureReceipt("approve", err));
     },
   });
   const batchReject = trpc.proposals.batchReject.useMutation({
     onError: (err) => {
       if (redirectToLoginIfUnauthorized(err)) return;
-      addToast({
-        title: "Reject failed",
-        description: err.message,
-        color: "danger",
-      });
+      showReceipt(batchFailureReceipt("reject", err));
     },
   });
 
@@ -293,18 +290,17 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
 
   async function rejectRows(picked: ReviewRow[], reason: string) {
     const proposalIds = picked.flatMap((r) => r.batchIds ?? []);
+    let answer: { rejected: number };
     try {
-      await batchReject.mutateAsync({
+      answer = await batchReject.mutateAsync({
         proposalIds,
         ...(reason ? { reason } : {}),
       });
     } catch {
       return; // `onError` said so; the modal stays up with the reason intact.
     }
-    addToast({
-      title: `Rejected ${picked.length} change${picked.length === 1 ? "" : "s"}`,
-      color: "default",
-    });
+    // Counted from the pod's answer: a request decided meanwhile is skipped.
+    showReceipt(batchRejectReceipt(proposalIds.length, answer));
     setSelected(new Set());
     setFailures([]);
     setRejectOpen(false);

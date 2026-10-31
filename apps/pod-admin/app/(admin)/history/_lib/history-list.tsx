@@ -29,7 +29,7 @@ import {
 import { kindIcon } from "../../../_lib/object/kind-icon";
 import { en, fr } from "./copy";
 import { historyRows, type HistoryRow } from "./history-rows";
-import { UndoDecision } from "./undo-decision";
+import { UndoDecisionButton } from "../../../_lib/receipt/decision-receipt-toast";
 
 const CATALOGS = { en, fr };
 /** Rows shown before "Show all". */
@@ -140,7 +140,8 @@ function HistoryRowView({
 
   const actions =
     row.undo === "available" ? (
-      <UndoDecision proposalId={row.id} />
+      // Offered on an applied change only (`undoOf`): Undo takes it back.
+      <UndoDecisionButton proposalId={row.id} verb="approve" />
     ) : row.undo === "permanent" ? (
       <span className="text-[12px] text-foreground/65">{t("row.noUndo")}</span>
     ) : null;

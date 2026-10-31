@@ -48,6 +48,15 @@ export const en = {
   "user.docs": "Documentation",
   "user.signOut": "Sign out",
   retry: "Retry",
+  "listSearch.rules": "Search rules…",
+  "listSearch.templates": "Search templates…",
+  "listSearch.members": "Search members…",
+  "listSearch.agents": "Search agents…",
+  "listSearch.none": "Nothing matches “{query}”.",
+  "listSearch.partial.templates":
+    "Searching the {n, plural, one {# template} other {# templates}} loaded so far. Load more to search further.",
+  "listSearch.partial.rules":
+    "Searching the {n, plural, one {# rule} other {# rules}} loaded (the 2,000 most recent at most).",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -85,4 +94,13 @@ export const fr: Catalog<typeof en> = {
   "user.docs": "Documentation",
   "user.signOut": "Se déconnecter",
   retry: "Réessayer",
+  "listSearch.rules": "Rechercher une règle…",
+  "listSearch.templates": "Rechercher un modèle…",
+  "listSearch.members": "Rechercher un membre…",
+  "listSearch.agents": "Rechercher un agent…",
+  "listSearch.none": "Aucun résultat pour « {query} ».",
+  "listSearch.partial.templates":
+    "Recherche parmi {n, plural, one {# modèle chargé} other {# modèles chargés}} pour l’instant. Chargez-en plus pour chercher plus loin.",
+  "listSearch.partial.rules":
+    "Recherche parmi {n, plural, one {# règle chargée} other {# règles chargées}} (2 000 au plus, les plus récentes).",
 };

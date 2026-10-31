@@ -1,41 +1,9 @@
 /**
  * The pure half of the capability object page (`views/capability-object.tsx`,
- * drawn by `/open/capability/:id`): the one pill its state reads as, and who
- * the page offers the verb switches to. The page only fetches and draws.
+ * drawn by `/open/capability/:id`): who the page offers the verb switches to.
+ * Its status mark is the Tools one (`tools/_lib/tool-status.ts`). The page
+ * only fetches and draws.
  */
-
-import type { AppRouter } from "@synap-core/api-types";
-import type { inferRouterOutputs } from "@trpc/server";
-import type { StatusKind } from "../../(admin)/components/status-pill";
-
-/** A catalog card's state, typed off the router so a new state fails here. */
-export type CapabilityStatus =
-  inferRouterOutputs<AppRouter>["capabilities"]["catalog"][number]["status"];
-
-/**
- * The pill a capability's state reads as. The sentence beside it is the pod's
- * own (`nextAction.hint`), so this only names the state in a word or two.
- */
-export function capabilityStatusPill(status: CapabilityStatus): {
-  kind: StatusKind;
-  label: string;
-} {
-  switch (status) {
-    case "ready":
-      return { kind: "healthy", label: "Ready" };
-    case "partial":
-      return { kind: "stale", label: "Some actions off" };
-    case "connected":
-    case "draft":
-      return { kind: "stale", label: "Actions off" };
-    case "needs_connection":
-      return { kind: "down", label: "Needs an account" };
-    case "unavailable":
-      return { kind: "unknown", label: "Not offered" };
-    case "available":
-      return { kind: "unknown", label: "Not installed" };
-  }
-}
 
 /**
  * Whether the page offers the verb switches. Mirrors the pod's ONE gate

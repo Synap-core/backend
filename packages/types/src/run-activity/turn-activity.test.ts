@@ -318,7 +318,7 @@ describe("deriveTurnActivity — working label and summary", () => {
         awaitingCount: 0,
         reasoningCount: 0,
       })
-    ).toBe("Thought 12s · ran 3 tools · 1 failed · 2 proposals");
+    ).toBe("Thought 12s · ran 3 tools · 1 failed · 2 requests");
     expect(
       formatTurnSummary({
         thinkingMs: null,
@@ -328,7 +328,7 @@ describe("deriveTurnActivity — working label and summary", () => {
         awaitingCount: 0,
         reasoningCount: 0,
       })
-    ).toBe("Ran 1 tool · 1 proposal");
+    ).toBe("Ran 1 tool · 1 request");
     expect(
       formatTurnSummary({
         thinkingMs: null,
