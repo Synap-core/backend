@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { needsYouBucketOf, needsYouRows } from "../needs-you/index.js";
-import { resolveUnitState, unitStateInputOfWaitKind } from "../units/state.js";
+import { resolveUnitState } from "../units/state.js";
 import type { ActivityRow } from "../activity/index.js";
 import {
   ATTENTION_CLASSES,
@@ -1032,40 +1032,5 @@ describe("lensStatusBanner — ONE, deduplicated", () => {
       notificationIds: [],
     });
     expect(lensStatusBanner([])).toBeNull();
-  });
-});
-
-describe("a your-move row's mark comes from its wait kind (THE map table)", () => {
-  const rowOf = (over: Partial<LensNeedsYouSignal> & { kind: string }) =>
-    lensRowOfNeedsYou(
-      needsYouRows([sig({ id: `x:${over.kind}`, ...over })]).recent[0]!,
-      "blocking"
-    );
-
-  it("a ball mark follows the wait kind; with none, the kind's own mark", () => {
-    expect(rowOf({ kind: "owed-slot", waitKind: "their_reply" }).state).toEqual(
-      { ...unitStateInputOfWaitKind("their_reply") }
-    );
-    expect(
-      resolveUnitState(rowOf({ kind: "owed-slot", waitKind: "answer" }).state)
-        .state
-    ).toBe("needs_you");
-    expect(rowOf({ kind: "owed-slot" }).state).toEqual({ owedFromYou: 1 });
-  });
-
-  it("a cluster keeps its count of decisions", () => {
-    const row = rowOf({
-      kind: "proposal-cluster",
-      count: 3,
-      waitKind: "approval",
-    });
-    expect(row.state).toMatchObject({ pendingDecisions: 3 });
-    expect(resolveUnitState(row.state).state).toBe("needs_review");
-  });
-
-  it("a row whose mark is the work's own state keeps it", () => {
-    expect(rowOf({ kind: "draft-asks", waitKind: "answer" }).state).toEqual({
-      everStarted: false,
-    });
   });
 });

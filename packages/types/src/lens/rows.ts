@@ -27,11 +27,9 @@ import {
 } from "../needs-you/index.js";
 import {
   resolveUnitState,
-  unitStateInputOfWaitKind,
   type UnitStateInput,
   type UnitTone,
 } from "../units/state.js";
-import { isWaitKind } from "../units/wait-kind.js";
 import {
   pathRowSessionFact,
   sessionRowInput,
@@ -264,11 +262,6 @@ function iso(at: string | Date | null | undefined): string | null {
 export interface LensNeedsYouSignal extends GroupableSignal {
   /** `owed-slot`: what the answer unblocks (`Signal.unblocks`). */
   unblocks?: string | null;
-  /**
-   * Whose ball, through THE map table (`waitKindOf`, the pod's
-   * `Signal.waitKind`): a "your move" row wears the mark its kind says.
-   */
-  waitKind?: string | null;
   title: string;
   category?: string | null;
   /** Notification registry type — `placeSignal` reads it for the banner rule. */
@@ -439,38 +432,6 @@ export function lensRowsChangeMessage(
 const CRITERION_SLOT = "criterion";
 
 function itemShape(
-  s: LensNeedsYouSignal
-): Pick<LensRow, "state" | "objectKind" | "reason" | "verb"> {
-  const shape = itemShapeOfKind(s);
-  return { ...shape, state: needsYouState(s.waitKind, shape.state) };
-}
-
-/**
- * A "your move" row's mark from its wait kind (`unitStateInputOfWaitKind`,
- * THE map table), so every surface reading these rows wears the same mark.
- * Only a ball mark (an answer or a decision owed) is replaced, and its count
- * is kept (a cluster of 3 is 3 decisions); a row whose mark is the WORK's
- * state (a draft not started, a failure) keeps it. No wait kind: the kind's
- * own mark.
- */
-function needsYouState(
-  waitKind: string | null | undefined,
-  literal: UnitStateInput
-): UnitStateInput {
-  const owed = literal.owedFromYou ?? 0;
-  const decisions = literal.pendingDecisions ?? 0;
-  if (!isWaitKind(waitKind) || (owed === 0 && decisions === 0)) return literal;
-  const input = unitStateInputOfWaitKind(waitKind);
-  return {
-    ...input,
-    ...(input.owedFromYou ? { owedFromYou: Math.max(1, owed) } : {}),
-    ...(input.pendingDecisions
-      ? { pendingDecisions: Math.max(1, decisions) }
-      : {}),
-  };
-}
-
-function itemShapeOfKind(
   s: LensNeedsYouSignal
 ): Pick<LensRow, "state" | "objectKind" | "reason" | "verb"> {
   switch (s.kind) {
