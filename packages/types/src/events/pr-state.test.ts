@@ -45,6 +45,17 @@ function ci(
   };
 }
 
+function started(
+  min: number,
+  over: Record<string, unknown> = {}
+): DevLoopEventRowLike {
+  return {
+    type: T.ciStarted,
+    timestamp: at(min),
+    data: { repo: "Synap-core/backend", sha: HEAD, ...over },
+  };
+}
+
 describe("foldPullRequestState — what the recorded facts say about one PR", () => {
   it("no PR fact recorded: null, never a guessed 'open' (CI or deploy rows alone say nothing)", () => {
     expect(foldPullRequestState(REF, [])).toBeNull();
@@ -224,6 +235,105 @@ describe("foldPullRequestState — what the recorded facts say about one PR", ()
     expect(
       foldPullRequestState(REF, [pr(T.prOpened, 1, { sha: HEAD }), build(9)])
     ).not.toHaveProperty("deployed");
+  });
+
+  it("ci.started: running until its workflow finishes on that sha; a settled failure stays failed", () => {
+    const opened = pr(T.prOpened, 1, { sha: HEAD });
+    const fold = (...runs: DevLoopEventRowLike[]) =>
+      foldPullRequestState(REF, [opened, ...runs]);
+    // Started, nothing finished: running, no verdict yet.
+    expect(fold(started(2, { workflow: "CI", pr: 285 }))).toEqual({
+      state: "open",
+      checksOn: HEAD,
+      checksRunning: true,
+      at: at(1).toISOString(),
+    });
+    // Its finish ends it.
+    const done = fold(
+      started(2, { workflow: "CI", pr: 285 }),
+      ci(4, "success", { workflow: "CI", pr: 285 })
+    );
+    expect(done).toMatchObject({ checks: "passed", checksOn: HEAD });
+    expect(done).not.toHaveProperty("checksRunning");
+    // One workflow passed, another still running: not passed yet.
+    const half = fold(
+      ci(3, "success", { workflow: "CI", pr: 285 }),
+      started(4, { workflow: "Reference docs", pr: 285 })
+    );
+    expect(half).toMatchObject({ checksRunning: true, checksOn: HEAD });
+    expect(half).not.toHaveProperty("checks");
+    // A failure already settled stays failed while another runs.
+    expect(
+      fold(
+        ci(3, "failure", { workflow: "CI", pr: 285 }),
+        started(4, { workflow: "Reference docs", pr: 285 })
+      )
+    ).toMatchObject({ checks: "failed", checksRunning: true });
+    // A re-run of a finished workflow runs again.
+    expect(
+      fold(
+        ci(3, "failure", { workflow: "CI", pr: 285 }),
+        started(5, { workflow: "CI", pr: 285 })
+      )
+    ).toMatchObject({ checksRunning: true });
+    // A start and a finish at the same instant: the finish.
+    expect(
+      fold(
+        started(3, { workflow: "CI", pr: 285 }),
+        ci(3, "success", { workflow: "CI", pr: 285 })
+      )
+    ).not.toHaveProperty("checksRunning");
+    // A push: the newer sha's start supersedes the old sha's verdict.
+    const pushed = fold(
+      ci(3, "success", { workflow: "CI", pr: 285 }),
+      started(6, { workflow: "CI", pr: 285, sha: HEAD2 })
+    );
+    expect(pushed).toMatchObject({ checksRunning: true, checksOn: HEAD2 });
+    expect(pushed).not.toHaveProperty("checks");
+    // Another PR's start, or another repo's, is not this PR's.
+    expect(
+      fold(
+        started(2, { pr: 284, sha: HEAD2 }),
+        started(3, { repo: "Synap-core/app-bases", pr: 285 })
+      )
+    ).not.toHaveProperty("checksRunning");
+  });
+
+  it("dev.merge_queued: queued while open and not reopened since; merged or closed ends it", () => {
+    const opened = pr(T.prOpened, 1, { sha: HEAD });
+    const queued = pr(T.mergeQueued, 3, { sha: HEAD });
+    expect(foldPullRequestState(REF, [opened, queued])).toEqual({
+      state: "open",
+      queued: true,
+      at: at(1).toISOString(),
+    });
+    // A queue entry never sets the state on its own: no PR fact, no state.
+    expect(foldPullRequestState(REF, [queued])).toBeNull();
+    // It does not move the state's time either.
+    expect(foldPullRequestState(REF, [opened, queued])?.at).toBe(
+      at(1).toISOString()
+    );
+    // Merged (out of the queue) or closed: no longer queued.
+    const merged = foldPullRequestState(REF, [
+      opened,
+      queued,
+      pr(T.prMerged, 6, { sha: MERGE }),
+    ]);
+    expect(merged).toMatchObject({ state: "merged" });
+    expect(merged).not.toHaveProperty("queued");
+    expect(
+      foldPullRequestState(REF, [opened, queued, pr(T.prClosed, 6)])
+    ).not.toHaveProperty("queued");
+    // Closed, then reopened after it was queued: not queued until re-queued.
+    const reopened = [opened, queued, pr(T.prClosed, 5), pr(T.prOpened, 7)];
+    expect(foldPullRequestState(REF, reopened)).not.toHaveProperty("queued");
+    expect(
+      foldPullRequestState(REF, [...reopened, pr(T.mergeQueued, 8)])
+    ).toMatchObject({ state: "open", queued: true });
+    // Another PR's queue entry is not this PR's.
+    expect(
+      foldPullRequestState(REF, [opened, pr(T.mergeQueued, 3, { number: 284 })])
+    ).not.toHaveProperty("queued");
   });
 
   it("sameCommit: a short sha names the long one, case-insensitive; different shas differ", () => {

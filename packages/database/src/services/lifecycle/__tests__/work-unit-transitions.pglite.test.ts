@@ -308,6 +308,50 @@ describe("setSessionStatus — the one session status write", () => {
     });
   });
 
+  it("a patch with expectedStatus moves only from that status", async () => {
+    const id = await session("paused");
+    await writeSessionPatch(db, {
+      sessionId: id,
+      set: { status: "active" },
+      actor: { kind: "agent", userId: OWNER, agentUserId: "a1" },
+      expectedStatus: "paused",
+    });
+    expect((await row(id)).status).toBe("active");
+    expect((await owedFor(id))[0]).toMatchObject({
+      from: "paused",
+      to: "active",
+    });
+  });
+
+  it("a stale expectedStatus is a conflict: nothing written, nothing owed", async () => {
+    const id = await session("active");
+    const err = await writeSessionPatch(db, {
+      sessionId: id,
+      set: { status: "paused", progress: 40 },
+      actor: { kind: "human", userId: OWNER },
+      expectedStatus: "paused",
+    }).catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      code: "LIFECYCLE_STALE",
+      expectedFrom: "paused",
+      actual: "active",
+    });
+    const now = await row(id);
+    expect(now.status).toBe("active");
+    expect(now.progress).not.toBe(40);
+    expect(await owedFor(id)).toEqual([]);
+  });
+
+  it("a gone session with expectedStatus writes nothing and throws nothing", async () => {
+    const rows = await writeSessionPatch(db, {
+      sessionId: randomUUID(),
+      set: { status: "active" },
+      actor: { kind: "human", userId: OWNER },
+      expectedStatus: "paused",
+    });
+    expect(rows).toEqual([]);
+  });
+
   it("inside a caller's transaction it rolls back with it", async () => {
     const id = await session("active");
     await expect(

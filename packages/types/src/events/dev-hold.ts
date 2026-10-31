@@ -19,12 +19,18 @@
  *            reused, so an earlier run of the same name says nothing.
  */
 
-import { holdDevMovesRef, type HoldDevRef } from "../lifecycle/hold.js";
+import {
+  holdDevMovesRef,
+  holdDevRefLabel,
+  parseHoldDevRef,
+  type HoldDevRef,
+} from "../lifecycle/hold.js";
 import {
   ciVerdictOf,
   DEV_LOOP_EVENT_TYPES,
   devboxJobOf,
   devboxJobWorkflow,
+  pullRequestUrl,
 } from "./dev-loop.js";
 import { foldPullRequestState, type DevLoopEventRowLike } from "./pr-state.js";
 
@@ -56,6 +62,25 @@ export function holdDevFactOf(type: string, data: unknown): string | null {
     type === DEV_LOOP_EVENT_TYPES.ciFinished ? devboxJobOf(d.workflow) : null;
   if (job) return holdDevMovesRef({ kind: "job", name: job });
   return null;
+}
+
+/**
+ * What a hold on a dev fact NAMES (`until.moves` = `pr:` / `main:` / `job:`):
+ * its words (`holdDevRefLabel`: `backend#539`, `backend main`, `job kit-h`)
+ * and, for a PR, its page on GitHub. A repo's main and a devbox job have no
+ * page the pod knows, so they are named only. `null` when `moves` names no
+ * dev fact.
+ */
+export function holdDevRefNamed(
+  moves: string
+): { ref: HoldDevRef; label: string; url: string | null } | null {
+  const ref = parseHoldDevRef(moves);
+  if (!ref) return null;
+  return {
+    ref,
+    label: holdDevRefLabel(ref),
+    url: ref.kind === "pr" ? pullRequestUrl(ref) : null,
+  };
 }
 
 function record(data: unknown): Record<string, unknown> {

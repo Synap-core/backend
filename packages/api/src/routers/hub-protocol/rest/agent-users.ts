@@ -25,10 +25,21 @@ import {
 import { liveAgentConnections } from "../../../services/agent-connect.js";
 import { isPodAdmin } from "../../../utils/workspace-role.js";
 import { loadAgentDispatchSummaries } from "../../../services/agent-dispatch/agent-binding.js";
+import {
+  readAgentAssignment,
+  setAgentAssignment,
+} from "../../../services/agent-dispatch/agent-assignment.js";
+import { checkLinkEndpointVisible } from "./link-endpoint-visibility.js";
+import { TRPCError } from "@trpc/server";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
+  AgentAssignmentQuerySchema,
+  AgentAssignmentReadSchema,
+  AgentAssignmentRefusalSchema,
   ListAgentUsersQuerySchema,
+  SetAgentAssignmentBodySchema,
+  SetAgentAssignmentResultSchema,
   WireAgentUserSchema,
 } from "./_codecs/misc.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -307,6 +318,220 @@ export function registerAgentUsersRoutes(app: HubHono): void {
       logger.error({ err }, "listAgentUsers failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/agent-users/assignments",
+    tags: ["Agents"],
+    summary: "Read which agent you assigned to a target",
+    description:
+      "The agent YOU assigned to a playbook, kind (profile), project or space: the one that takes that target's work when a run names nobody. One per person per target. `assignment: null` when you assigned none. A scoped key needs `agent.read`.",
+    request: { query: AgentAssignmentQuerySchema },
+    responses: {
+      200: {
+        description: "Your assignment",
+        schema: AgentAssignmentReadSchema,
+      },
+      400: { description: "Invalid query", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: AgentAssignmentRefusalSchema },
+      404: {
+        description: "Target not found",
+        schema: AgentAssignmentRefusalSchema,
+      },
+    },
+  });
+
+  /**
+   * GET /agent-users/assignments?targetType=&targetId=
+   *
+   * The read half of PUT /agent-users/:agentUserId/assignment: the caller's
+   * own row (`metadata.ownerId` = the caller, 0329) on a target the caller can
+   * see. A scoped key reaches it with `agent.read` (fence: a PERSON door, the
+   * person's own staffing, which no space holds). A failed read is an error,
+   * never `null`.
+   */
+  app.get("/agent-users/assignments", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const parsed = AgentAssignmentQuerySchema.safeParse({
+      targetType: c.req.query("targetType"),
+      targetId: c.req.query("targetId"),
+    });
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid query", details: parsed.error.issues },
+        400
+      );
+    }
+    const userId = c.get("userId") as string;
+    const target = {
+      type: parsed.data.targetType,
+      id: parsed.data.targetId,
+    };
+    try {
+      const refusal = await checkLinkEndpointVisible(
+        target.type,
+        target.id,
+        userId,
+        null
+      );
+      if (refusal) {
+        return c.json(
+          {
+            error: refusal.error,
+            code: "TARGET_NOT_FOUND",
+            reasonCode: "TARGET_NOT_FOUND",
+          },
+          refusal.status
+        );
+      }
+      const assignment = await readAgentAssignment({ ownerId: userId, target });
+      return c.json({ assignment });
+    } catch (err) {
+      logger.error({ err, target }, "GET /agent-users/assignments failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  registerOpenApi(app, {
+    method: "put",
+    path: "/agent-users/{agentUserId}/assignment",
+    tags: ["Agents"],
+    summary: "Assign an agent to a target, or remove it",
+    description:
+      "Says which of your agents takes a playbook's, kind's, project's or space's work when a run names nobody (`participant --assigned_to--> target`). One agent per person per target: assigning replaces yours. A PERSON's act only: an agent key (an app's own agent included) is refused `PERSON_ONLY`. The agent's owner or a pod admin. A scoped key (an app signed in as you) needs `agent.update` in the target's space and must read the target there (`playbook.read` for a playbook, `project.read` for a project; else TARGET_NOT_FOUND).",
+    request: {
+      params: z.object({ agentUserId: z.string().uuid() }),
+      body: SetAgentAssignmentBodySchema,
+    },
+    responses: {
+      200: {
+        description: "Assigned or removed",
+        schema: SetAgentAssignmentResultSchema,
+      },
+      400: { description: "Invalid body", schema: ErrorSchema },
+      403: {
+        description:
+          "PERSON_ONLY (agent key), NOT_OWNER, GRANT_DENIED (no agent.update there), or a space you cannot see (TARGET_NOT_FOUND)",
+        schema: AgentAssignmentRefusalSchema,
+      },
+      404: {
+        description: "NOT_FOUND (no such agent) or TARGET_NOT_FOUND",
+        schema: AgentAssignmentRefusalSchema,
+      },
+      409: { description: "Assigned at the same time", schema: ErrorSchema },
+    },
+  });
+
+  /**
+   * PUT /agent-users/:agentUserId/assignment
+   *
+   * The Hub door of `agentUsers.setAssignment` (tRPC): the same service
+   * (`setAgentAssignment`) and the same gate. A person's act only: an agent
+   * credential (an agent key, an app's own agent key, the IS internal key)
+   * could staff itself onto anyone's work, so it is refused before anything
+   * is read. A person's own key — directly, or an app signed in as them
+   * (`app_person`, a person principal) — is bounded by its grant:
+   * `agent.update` in the target's space (an app's write permissions are
+   * always pinned to spaces), checked once the agent and the target are known
+   * and before anything is written. The target must be one the key reads
+   * (the visibility floor ANDs its grant: `playbook.read` for a playbook).
+   */
+  app.put("/agent-users/:agentUserId/assignment", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    if (
+      isAgentCaller({
+        agentUserId: c.get("agentUserId") as string | undefined,
+        keyType: c.get("keyType") as string | undefined,
+      })
+    ) {
+      return c.json(
+        {
+          error:
+            "Only a person can assign an agent — an agent key cannot. Choose it in the Synap app or in an app you signed in to.",
+          code: "PERSON_ONLY",
+          reasonCode: "PERSON_ONLY",
+        },
+        403
+      );
+    }
+    const agentUserId = requireUuidParam(c, "agentUserId");
+    if (agentUserId instanceof Response) return agentUserId;
+    if (!agentUserId) return c.json({ error: "agentUserId is required" }, 400);
+    const parsed = SetAgentAssignmentBodySchema.safeParse(
+      await c.req.json().catch(() => null)
+    );
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid body", details: parsed.error.issues },
+        400
+      );
+    }
+    try {
+      const result = await setAgentAssignment({
+        callerId: c.get("userId") as string,
+        agentUserId,
+        target: parsed.data.target,
+        assigned: parsed.data.assigned,
+        authorize: async ({ workspaceId, projectId }) => {
+          const denial = await grantWriteDenial({
+            subjectType: "agent",
+            action: "update",
+            workspaceId,
+            projectId,
+          });
+          if (denial) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: denial,
+              cause: { reasonCode: "GRANT_DENIED" },
+            });
+          }
+        },
+      });
+      return c.json({
+        assigned: result.assigned,
+        agentUserId: result.agentUserId,
+        target: result.target,
+        // One agent per person per target, so at most one was replaced.
+        replaced: result.replaced[0] ?? null,
+      });
+    } catch (err) {
+      const reasonCode = (
+        (err as { cause?: { reasonCode?: unknown } })?.cause as
+          { reasonCode?: unknown } | undefined
+      )?.reasonCode;
+      if (typeof reasonCode !== "string") {
+        logger.error(
+          { err, agentUserId },
+          "PUT /agent-users/:agentUserId/assignment failed"
+        );
+      }
+      return c.json(
+        {
+          error: err instanceof Error ? err.message : "Unknown error",
+          // `code` is what the SDK maps into its typed failure; `reasonCode`
+          // is the pod's refusal field. Same value.
+          ...(typeof reasonCode === "string"
+            ? { code: reasonCode, reasonCode }
+            : {}),
+        },
         httpStatusForTrpcError(err)
       );
     }

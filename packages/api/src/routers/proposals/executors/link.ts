@@ -6,7 +6,7 @@ import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
 import { approveProjectFiling } from "./project-filing.js";
 import { isProjectUnfilePayload } from "../../../services/projects/project-filing-summary.js";
-import { isDependencyLinkType } from "@synap-core/types/connections";
+import { isWorkLinkType } from "@synap-core/types/connections";
 import { applyApprovedDependencyLink } from "../../../services/links/dependency-links.js";
 
 /**
@@ -59,7 +59,7 @@ export function registerLinkExecutors(): void {
       if (isProjectUnfilePayload("link", "delete", inner)) {
         return approveProjectFiling(args, true);
       }
-      if (isDependencyLinkType(inner.linkType as string)) {
+      if (isWorkLinkType(inner.linkType as string)) {
         const [settled] = await db
           .select({ status: proposals.status })
           .from(proposals)

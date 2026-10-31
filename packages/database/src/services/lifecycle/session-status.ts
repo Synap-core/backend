@@ -46,6 +46,7 @@ import {
 } from "../../schema/focus-sessions.js";
 import { insertTransitionOutbox } from "./transition-outbox.js";
 import { HoldRefusedError, listHolds } from "./holds.js";
+import { LifecycleConflictError } from "./apply-status-move.js";
 import {
   buildWorkUnitTransition,
   type WorkUnitActor,
@@ -225,6 +226,13 @@ export async function writeSessionPatch(
     hold?: Hold | null;
     occurredAt?: Date | null;
     appId?: string | null;
+    /**
+     * With a status: the status the mover SAW. The move is then a
+     * compare-and-set from that status only, and a session that moved
+     * meanwhile throws `LifecycleConflictError` (nothing is written), like an
+     * entity's `moveStatus`. Absent: from whatever it stands at.
+     */
+    expectedStatus?: SessionStatus | null;
   }
 ): Promise<FocusSession[]> {
   const { status, ...rest } = input.set;
@@ -242,9 +250,10 @@ export async function writeSessionPatch(
       .where(eq(focusSessions.id, input.sessionId))
       .returning();
   }
+  const expected = input.expectedStatus ?? null;
   const { rows } = await setSessionStatus(db, {
     sessionId: input.sessionId,
-    from: SESSION_STATUSES,
+    from: expected ? [expected] : SESSION_STATUSES,
     to: status,
     actor: input.actor,
     proposalId: input.proposalId,
@@ -253,5 +262,13 @@ export async function writeSessionPatch(
     occurredAt: input.occurredAt,
     appId: input.appId,
   });
+  if (expected && rows.length === 0) {
+    // Nothing moved: gone (empty, as before) or stale (a conflict).
+    const [now] = await db
+      .select({ status: focusSessions.status })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, input.sessionId));
+    if (now) throw new LifecycleConflictError(expected, now.status);
+  }
   return rows;
 }

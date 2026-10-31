@@ -3,7 +3,8 @@
  *
  *   lifecycle.get   — the declared lifecycle of ONE profile (the thing page's
  *                     status strip): property + options with label, category,
- *                     tone, humanOnly — words and marks resolved here, once.
+ *                     tone, humanOnly, and the initialStatus a new one starts
+ *                     in — words and marks resolved here, once.
  *   lifecycle.board — the PIPELINE: things of that kind/role grouped by status
  *                     column, options in declared order, done/lost windowed to
  *                     the period, values no option declares in an explicit
@@ -13,8 +14,12 @@
  *
  *   lifecycle.statusOf — WHERE DOES IT STAND for up to 10 ids (things, goals,
  *                     sessions, runs): status, category, since, what it waits
- *                     on (with refs), the current hold, and for a session
- *                     `live` + `nextMove`. The screens' door to the SAME read
+ *                     on (with refs), the current hold, its `nextMove`
+ *                     (a session's, a lifecycle thing's, a goal's), and for
+ *                     a session `live`; its tone; a thing's roles and
+ *                     account line; and on `include` its moves, history,
+ *                     `serves` links, goal rollup and open signals. The
+ *                     screens' door to the SAME read
  *                     orient's `statusOf` serves on MCP and Hub REST
  *                     (`services/status/status-read.ts`, `readStatusOf`).
  *
@@ -53,7 +58,11 @@ import { listEnabledWorkers } from "../services/playbooks/workers.js";
 import { loadWorkedBy } from "../services/lifecycle/worked-by.js";
 import { loadCardFaces } from "../services/lifecycle/card-face.js";
 import { rosterReadFor } from "../access/session-visibility.js";
-import { readStatusOf, statusOfInput } from "../services/status/status-read.js";
+import {
+  readStatusOf,
+  statusOfIncludeInput,
+  statusOfInput,
+} from "../services/status/status-read.js";
 import {
   countStuckThings,
   countTerminalEntriesByBucket,
@@ -100,6 +109,12 @@ const lifecycleWire = z.object({
   profileKind: z.enum(["kind", "role"]),
   property: z.string(),
   options: z.array(lifecycleOptionWire),
+  /**
+   * The option key a new thing or role starts in when its creator names none
+   * (`EffectiveLifecycle.initialStatus`, written by the def door's
+   * `initialStatus`); null = none set.
+   */
+  initialStatus: z.string().nullable(),
 });
 
 const workedByWire = z.object({
@@ -432,8 +447,19 @@ export type LifecycleThroughputWire = z.infer<typeof throughputWire>;
 
 export const lifecycleRouter = router({
   statusOf: podProcedure
-    .input(z.object({ ids: statusOfInput.unwrap().min(1) }))
-    .query(({ input, ctx }) => readStatusOf(ctx.userId, input.ids)),
+    .input(
+      z.object({
+        ids: statusOfInput.unwrap().min(1),
+        /**
+         * Parts beyond the status, on request (`STATUS_OF_INCLUDES`): `moves`,
+         * `history`, `links`, `rollup`, `signals`. An unknown part is refused.
+         */
+        include: statusOfIncludeInput,
+      })
+    )
+    .query(({ input, ctx }) =>
+      readStatusOf(ctx.userId, input.ids, { include: input.include })
+    ),
 
   get: podProcedure
     .input(

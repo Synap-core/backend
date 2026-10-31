@@ -25,6 +25,7 @@ import {
   workUnitActorOf,
   writeSessionPatch,
   transitionProposal,
+  appendSessionStageHistory,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
@@ -64,6 +65,7 @@ import {
   stampSessionUpdate,
 } from "../../../services/proposals/stamp-materialized.js";
 import {
+  SESSION_STATUSES,
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
   type SessionTitleSource,
@@ -814,7 +816,10 @@ export function registerFocusSessionExecutors(): void {
           throw new TRPCError({ code: "BAD_REQUEST", message: reopening });
         }
         // Non-close update: apply only defined scalar fields from gate data.
-        const set: Partial<typeof focusSessions.$inferInsert> = {
+        const set: Omit<
+          Partial<typeof focusSessions.$inferInsert>,
+          "stageHistory"
+        > & { stageHistory?: ReturnType<typeof appendSessionStageHistory> } = {
           updatedAt: new Date(),
         };
         if (typeof innerData.status === "string") {
@@ -844,6 +849,16 @@ export function registerFocusSessionExecutors(): void {
         }
         if (typeof innerData.currentStage === "string") {
           set.currentStage = innerData.currentStage;
+          // The stage ledger (0382), in this same UPDATE: the approver moved
+          // it (an agent proposed; a person decided). A no-op appends none.
+          if (innerData.currentStage !== (session.currentStage ?? null)) {
+            set.stageHistory = appendSessionStageHistory({
+              fromStage: session.currentStage ?? null,
+              toStage: innerData.currentStage,
+              userId,
+              via: "approval",
+            });
+          }
         }
         // SUBJECT anchor. Carried by both proposing doors; hand-listing the set
         // above is exactly how the deliverables half went unapplied for months,
@@ -1031,6 +1046,15 @@ export function registerFocusSessionExecutors(): void {
           occurredAt:
             set.status && typeof innerData.occurredAt === "string"
               ? new Date(innerData.occurredAt)
+              : null,
+          // The status the agent SAW when it filed the move: a session that
+          // moved since is a conflict, never an overwrite (compare-and-set).
+          expectedStatus:
+            set.status &&
+            (SESSION_STATUSES as readonly unknown[]).includes(
+              innerData.expectedStatus
+            )
+              ? (innerData.expectedStatus as (typeof SESSION_STATUSES)[number])
               : null,
         });
         await stampSessionUpdate({

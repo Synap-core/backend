@@ -44,8 +44,8 @@ import {
   governedDependencyLink,
 } from "../../../services/links/dependency-links.js";
 import {
-  isDependencyLinkType,
-  type DependencyLinkType,
+  isWorkLinkType,
+  type WorkLinkType,
 } from "@synap-core/types/connections";
 
 // Kept in sync with LinkEndpointType (packages/database/src/schema/links.ts).
@@ -145,6 +145,10 @@ const LINK_TYPES = [
   // REFUSED below like dispatched_via: only a person assigns an agent, through
   // `agentUsers.setAssignment` — an agent writing it could staff itself.
   "assigned_to",
+  // session|track --serves--> track: work done FOR a goal. Producer: THE
+  // dependency door (below, `governedDependencyLink`); reader: the goal
+  // rollup (`services/status/status-rollup.ts`).
+  "serves",
 ] as const;
 
 /** Link types this door names but never writes — each has its own human door. */
@@ -263,13 +267,14 @@ export function registerLinksRoutes(app: HubHono): void {
     // `blocked_by` between two SESSIONS keeps its dedicated, owner-floored
     // session door below (its response shape is a contract). Every OTHER
     // dependency edge — `blocked_by` across kinds (entity · session · track)
-    // and `replaces` — goes through THE generic dependency door
+    // and `replaces` — and the `serves` work edge (session | goal → goal,
+    // `metadata.criterionKey` checked there) go through THE generic door
     // (`governedDependencyLink`): endpoint floor, governance in the BLOCKED
     // end's workspace, the one store write, `link.create.completed`.
     const isSessionPair =
       parsed.data.fromType === "session" && parsed.data.toType === "session";
     const isGenericDependency =
-      isDependencyLinkType(parsed.data.linkType) &&
+      isWorkLinkType(parsed.data.linkType) &&
       !(parsed.data.linkType === "blocked_by" && isSessionPair);
     const isBlockedBy = parsed.data.linkType === "blocked_by" && isSessionPair;
     // The BLOCKED session's own workspace — what the edge will be stamped
@@ -350,7 +355,7 @@ export function registerLinksRoutes(app: HubHono): void {
             fromId: parsed.data.fromId,
             toType: parsed.data.toType,
             toId: parsed.data.toId,
-            linkType: parsed.data.linkType as DependencyLinkType,
+            linkType: parsed.data.linkType as WorkLinkType,
           },
           userId,
           agentUserId: actorId !== userId ? actorId : undefined,

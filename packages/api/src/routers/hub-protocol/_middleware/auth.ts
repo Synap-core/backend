@@ -38,6 +38,7 @@ import {
   CONVERSATION_HEADER,
   CONVERSATION_CWD_HEADER,
   PROCESS_HEADER,
+  RUNNER_STATE_HEADER,
   isProbeApiKey,
   isPodJwtShaped,
   grantOfScope,
@@ -60,6 +61,7 @@ import {
   isGuestPrincipal,
 } from "../../../access/guest-containment.js";
 import { reportNoPodAccess } from "../../../access/pod-access.js";
+import { reportRunnerState } from "../../../services/focus-sessions/session-runners.js";
 import type { HubVariables } from "../rest/_shared.js";
 import {
   isPublicDoorPath,
@@ -606,9 +608,14 @@ export const hubAuthMiddleware = async (
               keyRecord,
               requestConversationId(c.req.header(CONVERSATION_HEADER))
             ),
-            () => runWithGrant(keyIdentity.grant, () => next()),
+            () => {
+              // 0384: what the runner says it is doing, recorded off the request path.
+              void reportRunnerState();
+              return runWithGrant(keyIdentity.grant, () => next());
+            },
             c.req.header(CONVERSATION_CWD_HEADER),
-            c.req.header(PROCESS_HEADER)
+            c.req.header(PROCESS_HEADER),
+            c.req.header(RUNNER_STATE_HEADER)
           )
         )
       )

@@ -4,7 +4,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { catalogProblems } from "../i18n/index.js";
-import { homeCopy, homeT } from "./home-copy.js";
+import { REQUEST_LATER_CHOICES } from "../proposals/request-later.js";
+import { HOME_LATER_CHOICE_KEY, homeCopy, homeT } from "./home-copy.js";
 
 describe("home copy", () => {
   it("the French catalog has every key, the same arguments, no extra", () => {
@@ -19,6 +20,19 @@ describe("home copy", () => {
     expect(homeT("fr")("home.yours.later")).toBe("Plus tard");
     expect(homeT("en")("home.yours.frees", { n: 3 })).toBe("frees 3");
     expect(homeT("fr")("home.yours.frees", { n: 3 })).toBe("débloque 3");
+  });
+
+  it("each Later choice has its words, in both languages", () => {
+    expect(Object.keys(HOME_LATER_CHOICE_KEY)).toEqual([
+      ...REQUEST_LATER_CHOICES,
+    ]);
+    expect(homeT("en")(HOME_LATER_CHOICE_KEY.tomorrow)).toBe("Tomorrow, 8:00");
+    expect(homeT("fr")(HOME_LATER_CHOICE_KEY.next_week)).toBe(
+      "Lundi prochain, 8 h"
+    );
+    expect(homeT("fr")("home.later.receipt", { when: "18 h" })).toBe(
+      "Mise de côté jusqu’à 18 h"
+    );
   });
 
   it("the key list is pinned", () => {
@@ -49,6 +63,13 @@ describe("home copy", () => {
       "home.undo.a11y",
       "home.activity",
       "home.activity.a11y",
+      "home.later.title",
+      "home.later.choice.in_3_hours",
+      "home.later.choice.tomorrow",
+      "home.later.choice.next_week",
+      "home.later.receipt",
+      "home.later.undo",
+      "home.later.failed",
     ]);
   });
 });

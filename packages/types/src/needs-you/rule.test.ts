@@ -433,6 +433,44 @@ describe("proposals: needs you only when something waits on it", () => {
       classifyPendingProposal({ ...base, status: "approved" }, NOW)
     ).toBeNull();
   });
+
+  it("Later (decision G3): set aside until a future time ⇒ Review later, even a gate", () => {
+    const later = new Date(NOW + DAY);
+    expect(classifyPendingProposal({ ...base, snoozedUntil: later }, NOW)).toBe(
+      "review_later"
+    );
+    expect(
+      classifyPendingProposal(
+        {
+          ...base,
+          waits: { waits: true, reason: "gate" },
+          snoozedUntil: later.toISOString(),
+        },
+        NOW
+      )
+    ).toBe("review_later");
+    expect(
+      classifyPendingProposal(
+        { ...base, waits: { waits: false }, snoozedUntil: later },
+        NOW
+      )
+    ).toBe("review_later");
+  });
+
+  it("Later: the time passed (or none) ⇒ the request comes back as it was", () => {
+    expect(
+      classifyPendingProposal({ ...base, snoozedUntil: ago(1) }, NOW)
+    ).toBe("needs_you");
+    expect(classifyPendingProposal({ ...base, snoozedUntil: null }, NOW)).toBe(
+      "needs_you"
+    );
+    expect(
+      classifyPendingProposal(
+        { ...base, status: "approved", snoozedUntil: new Date(NOW + DAY) },
+        NOW
+      )
+    ).toBeNull();
+  });
 });
 
 describe("the census shape (needs-truth §6): 114 claims, 7 real", () => {

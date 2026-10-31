@@ -495,6 +495,13 @@ export {
   type StatusSignalEpisode,
 } from "./services/lifecycle/status-signals.js";
 export {
+  listOpenWaitEpisodeSubjects,
+  readWaitEpisodes,
+  syncWaitEpisodes,
+  type WaitEpisodeSeen,
+  type WaitEpisodeSubject,
+} from "./services/lifecycle/wait-episodes.js";
+export {
   LifecycleWriteOutsideDoorError,
   assertNoLifecycleMove,
   columnsForValue,
@@ -618,6 +625,12 @@ export {
   getTableColumns,
 } from "drizzle-orm";
 
+export {
+  appendSessionStageHistory,
+  readSessionStageHistory,
+  sessionStageHistoryEntry,
+  type SessionStageMove,
+} from "./utils/session-stage-history.js";
 // Also export sql from drizzle-orm as drizzleSql for clarity (for SQL template literals)
 export { sql as drizzleSql } from "drizzle-orm";
 

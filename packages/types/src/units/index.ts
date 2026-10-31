@@ -1,5 +1,6 @@
 export * from "./state.js";
 export * from "./wait-kind.js";
+export * from "./wait-episode.js";
 export * from "./share.js";
 export * from "./lead.js";
 export * from "./phases.js";
@@ -20,3 +21,4 @@ export * from "./stage-space.js";
 export * from "./deliverable.js";
 export * from "./outcome.js";
 export * from "./stuck.js";
+export * from "./status-of.js";

@@ -200,6 +200,8 @@ const NOT_READERS: Record<string, string> = {
   diffSection: "block diff (source slices)",
   bodyWithoutTitleHeading: "source slice (leadingHeading's rest)",
   isSameTitle: "predicate",
+  // merge: line 3-way merge over SOURCE SLICES (merge.ts) — never parses
+  mergeText3: "line merge (source slices)",
   PASSAGE_MAX_CHARS: "data",
   PASSAGE_MIN_CHARS: "data",
 };

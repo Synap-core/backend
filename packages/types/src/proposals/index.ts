@@ -18,6 +18,8 @@ export * from "./governance-grant-options.js";
 // The governance policy's own sentences — so a reader never shows them as a
 // proposer's reasoning (see the file header).
 export * from "./governance-policy-sentences.js";
+// "Later" on a request: the time choices and the door's bound (decision G3).
+export * from "./request-later.js";
 // A reviewer's note on a decided proposal (`proposals.comments`).
 export * from "./review-comment.js";
 // A run on a playbook starts a session — the one classification + subject reader.

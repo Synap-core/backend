@@ -130,8 +130,13 @@ export type ExitTarget =
     }
   /** A section of the desktop app's Settings. */
   | { kind: "settings"; section: BrowserSettingsSection }
-  /** A desktop app by manifest id (e.g. `marketplace`, `data`, `governance`). */
-  | { kind: "app"; appId: string }
+  /**
+   * A desktop app by manifest id (e.g. `marketplace`, `data`, `governance`).
+   * `query` becomes the app's props: the desktop's deep-link resolver turns
+   * each param into a prop (`tab`, `kindSlugs`), so a row can open the app
+   * already on the thing it names.
+   */
+  | { kind: "app"; appId: string; query?: Record<string, string> }
   /**
    * The same object, but explicitly IN THE DESKTOP APP even when pod-admin can
    * render it on the web. Needed by `/proposal/[id]`, which IS the web
@@ -392,11 +397,16 @@ export function openIn(target: ExitTarget): Exit {
         phoneExit("nowhere", desktopPlaceCover(`settings/${target.section}`))
       );
 
-    case "app":
+    case "app": {
+      const search = target.query
+        ? new URLSearchParams(target.query).toString()
+        : "";
+      const href = `synap://open/app/${encodeURIComponent(target.appId)}`;
       return desktop(
-        `synap://open/app/${encodeURIComponent(target.appId)}`,
+        search ? `${href}?${search}` : href,
         phoneExit("nowhere", desktopPlaceCover(target.appId))
       );
+    }
 
     case "account":
       return web(`${WEB_BASE}/account/${target.page}`);

@@ -48,6 +48,8 @@ import { useFocusRow } from "../components/use-focus-row";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { FactsGrid } from "../../_lib/object/facts-grid";
 import { formatRelative, formatTimestamp } from "../../../lib/format";
+import { SourceConfigDrawer } from "./_lib/source-config-drawer";
+import type { SourceConfigRow } from "./_lib/source-config-model";
 
 // ─── Page ─────────────────────────────────────────────────────────────
 
@@ -293,21 +295,15 @@ function ProviderCardSkeleton() {
  * pollers, …). They MAY be workspace-scoped (`workspaceId`) or pod-wide
  * (`workspaceId = null`).
  *
- * Mutations (re-auth, edit) are not the console's: they hand off to the
- * app — the console is the overview, the app is the detail.
+ * A row opens a drawer (facts, "Test connection"). Edits are not the
+ * console's: they hand off to the app — the console is the overview, the
+ * app is the detail.
  */
 
-interface SourceConfigRow {
-  id: string;
-  providerType: string;
-  name: string;
-  description?: string | null;
-  enabled: boolean;
-  workspaceId?: string | null;
-  config?: Record<string, unknown> | null;
-}
-
 function PodLevelConnectorsSection() {
+  // The id, not the row: a test re-reads the list, and the drawer must show
+  // the row as the pod now holds it (its last test).
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const query = trpc.sourceConfigs.list.useQuery(undefined, {
     staleTime: 60_000,
     retry: false,
@@ -321,51 +317,56 @@ function PodLevelConnectorsSection() {
   const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";
 
   const rows = (query.data ?? []) as SourceConfigRow[];
+  const selected = rows.find((r) => r.id === selectedId) ?? null;
 
   return (
-    <SectionCard
-      title="Pod-level connectors"
-      hint="Source configs the operator owns directly (RSS, ICS, HTTP pollers)"
-      actions={
-        rows.length > 0 ? (
-          <span className="text-[11px] tabular text-foreground/65">
-            {rows.length} configured
-          </span>
-        ) : null
-      }
-    >
-      {query.isLoading || isAuthRedirecting ? (
-        <ResourceRowSkeleton count={3} />
-      ) : query.isError ? (
-        <ErrorBanner message="Couldn't load pod-level connectors." />
-      ) : rows.length === 0 ? (
-        <ResourceRowEmpty message="No pod-level source configs yet." />
-      ) : (
-        <div className="-mx-2 divide-y divide-foreground/[0.05]">
-          {rows.map((row) => (
-            <ResourceRow
-              key={row.id}
-              Icon={iconForProvider(row.providerType)}
-              primary={row.name}
-              secondary={[
-                row.providerType,
-                row.workspaceId
-                  ? `space ${row.workspaceId.slice(0, 8)}`
-                  : "Pod-level",
-                row.description,
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-              status={
-                row.enabled
-                  ? { kind: "healthy", label: "Enabled" }
-                  : { kind: "unknown", label: "Disabled" }
-              }
-            />
-          ))}
-        </div>
-      )}
-    </SectionCard>
+    <>
+      <SectionCard
+        title="Pod-level connectors"
+        hint="Source configs the operator owns directly (RSS, ICS, HTTP pollers)"
+        actions={
+          rows.length > 0 ? (
+            <span className="text-[11px] tabular text-foreground/65">
+              {rows.length} configured
+            </span>
+          ) : null
+        }
+      >
+        {query.isLoading || isAuthRedirecting ? (
+          <ResourceRowSkeleton count={3} />
+        ) : query.isError ? (
+          <ErrorBanner message="Couldn't load pod-level connectors." />
+        ) : rows.length === 0 ? (
+          <ResourceRowEmpty message="No pod-level source configs yet." />
+        ) : (
+          <div className="-mx-2 divide-y divide-foreground/[0.05]">
+            {rows.map((row) => (
+              <ResourceRow
+                key={row.id}
+                Icon={iconForProvider(row.providerType)}
+                primary={row.name}
+                secondary={[
+                  row.providerType,
+                  row.workspaceId
+                    ? `space ${row.workspaceId.slice(0, 8)}`
+                    : "Pod-level",
+                  row.description,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+                status={
+                  row.enabled
+                    ? { kind: "healthy", label: "Enabled" }
+                    : { kind: "unknown", label: "Disabled" }
+                }
+                onSelect={() => setSelectedId(row.id)}
+              />
+            ))}
+          </div>
+        )}
+      </SectionCard>
+      <SourceConfigDrawer row={selected} onClose={() => setSelectedId(null)} />
+    </>
   );
 }
 

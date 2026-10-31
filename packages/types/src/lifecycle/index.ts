@@ -10,7 +10,11 @@
  * The pod reads these same declarations (`@synap/database`
  * `utils/lifecycle-model.ts` re-exports them); there is no second copy.
  */
-import type { LifecycleCategory, LifecycleOption } from "./option.js";
+import type {
+  LifecycleCategory,
+  LifecycleOption,
+  TransitionWait,
+} from "./option.js";
 import type { RecordedHold } from "./hold.js";
 
 export {
@@ -21,6 +25,8 @@ export {
   type LifecycleCategory,
   type LifecycleOption,
   type LifecycleOptionWaits,
+  transitionWaitOf,
+  type TransitionWait,
 } from "./option.js";
 
 export const TERMINAL_LIFECYCLE_CATEGORIES: readonly LifecycleCategory[] = [
@@ -122,6 +128,12 @@ export interface TransitionBase {
    * other move. The transition log is the hold's only store.
    */
   hold: RecordedHold | null;
+  /**
+   * The wait the target step declares (`LifecycleOption.waits`), stamped by
+   * the mover; absent when the step declares none (and on goal and session
+   * moves, whose statuses declare no waits).
+   */
+  wait?: TransitionWait;
 }
 
 /** Who made a move, for attribution (`TransitionBase.actorClass`). */
@@ -173,6 +185,7 @@ export {
   decideMoveHold,
   holdProblem,
   holdDevMovesRef,
+  holdDevRefLabel,
   holdWokenBy,
   parseHoldDevRef,
   parseHoldMovesRef,
@@ -192,6 +205,7 @@ export {
   DATE_APPROACHING_DAYS,
   dateDueAt,
   dateSignalOf,
+  isStatusSignal,
   type StatusSignal,
 } from "./signal.js";
 

@@ -36,6 +36,7 @@ import {
   MAX_QUEUE_FAILURES_PER_HEAD,
   MAX_TOGGLES_PER_SWEEP,
   RERUN_CHECK_NAME,
+  commitCarriers,
   dependabotOnly,
   dependsState,
   enqueueDecision,
@@ -54,6 +55,7 @@ import {
   queueFailuresSince,
   requiredChecksState,
   runBot,
+  sharedCommitOf,
   victimDecision,
   // @ts-expect-error — plain ESM script, no declarations
 } from "./merge-bot.mjs";
@@ -80,6 +82,8 @@ const pr = (over: Pr = {}): Pr => ({
   isInMergeQueue: false,
   author: { login: "Antoinesrvt" },
   labels: { nodes: [] },
+  // One commit of its own, as the GraphQL listing returns it.
+  commits: { nodes: [{ commit: { oid: `own-${over.number ?? 500}` } }] },
   ...over,
 });
 const labelled = (...names: string[]) => ({
@@ -111,6 +115,7 @@ const decide = (p: Pr, over: Pr = {}) =>
     checks: greenChecks(),
     depends: LANDED,
     files: SOURCE_FILES,
+    shared: null,
     ...over,
   });
 
@@ -877,13 +882,40 @@ const victim = (over: Pr = {}) =>
     window: WINDOW,
     latestRun: prRun(),
     markers: [],
-    merge: { mergeable: true, baseSha: MAIN_TIP, mainSha: MAIN_TIP },
+    merge: { mergeable: true, behindBy: 3 },
     ...over,
   });
 
 describe("merge-bot: main's victims, run again once", () => {
-  it("a PR whose latest run failed while main was red: run again", () => {
-    expect(victim()).toEqual({ rerun: true, reasons: [] });
+  it("a PR whose latest run failed while main was red, its branch behind main: main is brought in", () => {
+    expect(victim()).toEqual({
+      rerun: true,
+      reasons: [],
+      how: "update-branch",
+    });
+  });
+  it("a branch that already holds main's tip: toggled draft → ready (its test merge has the head's tree)", () => {
+    expect(victim({ merge: { mergeable: true, behindBy: 0 } })).toEqual({
+      rerun: true,
+      reasons: [],
+      how: "toggle",
+    });
+  });
+  // 30 Oct: GitHub does not rebuild an idle PR's test merge when main moves.
+  // The bot waited for it ("test merge not yet rebuilt on main's tip") on
+  // every sweep, and #561 was never run again. Only how far the HEAD is
+  // behind main matters now; where the stale test merge sits does not.
+  it("a test merge built on an OLD main does not hold it (#561, 30 Oct)", () => {
+    const d = victim({
+      merge: {
+        mergeable: true,
+        behindBy: 4,
+        baseSha: "d".repeat(40),
+        mainSha: MAIN_TIP,
+      },
+    });
+    expect(d.reasons).toEqual([]);
+    expect(d).toMatchObject({ rerun: true, how: "update-branch" });
   });
   it("a marker for ANOTHER main red does not hold it", () => {
     expect(
@@ -947,17 +979,21 @@ describe("merge-bot: main's victims, run again once", () => {
       "already run again",
     ],
     [
-      "the test merge is not built",
-      { merge: { mergeable: null, baseSha: null, mainSha: MAIN_TIP } },
+      "GitHub is still computing its mergeability",
+      { merge: { mergeable: null, behindBy: null } },
       "not ready",
     ],
     [
-      "the test merge is on an old main",
-      {
-        merge: { mergeable: true, baseSha: "d".repeat(40), mainSha: MAIN_TIP },
-      },
-      "main's tip",
+      "it conflicts with main (update-branch would fail)",
+      { merge: { mergeable: false, behindBy: 2 } },
+      "not ready",
     ],
+    [
+      "its head could not be compared with main",
+      { merge: { mergeable: true, behindBy: null } },
+      "could not compare",
+    ],
+    ["its merge state not read", { merge: undefined }, "merge: not read"],
     ["markers not read", { markers: undefined }, "not read"],
   ])("not run again: %s", (_n, over: Pr, reason: string) => {
     const d = victim(over);
@@ -1100,6 +1136,15 @@ if (args[1] === "graphql") {
 const method = args[2], path = args[3];
 if (method === "POST" && path.endsWith("/check-runs")) say({ id: 1 });
 let m;
+if (method === "PUT" && (m = /pulls\\/(\\d+)\\/update-branch$/.exec(path))) {
+  if ((data.refuseUpdate || []).includes(Number(m[1]))) die("gh: refusing to allow a GitHub App to create or update workflow \`.github/workflows/ci.yml\` without \`workflows\` permission (HTTP 403)");
+  say({ message: "Updating pull request branch." });
+}
+if ((m = /compare\\/([0-9a-f]+)\\.\\.\\.([0-9a-f]+)\\?per_page=1$/.exec(path))) {
+  if (m[1] !== data.mainSha) die("fake gh: compare against " + m[1] + ", not main's tip");
+  const b = (data.behind || {})[m[2]];
+  say({ behind_by: b === undefined ? 2 : b });
+}
 if ((m = /commits\\/([0-9a-f]+)\\/check-runs\\?check_name=/.exec(path))) say({ check_runs: (data.markers || {})[m[1]] || [] });
 if ((m = /commits\\/([0-9a-f]+)\\/check-runs/.exec(path))) say({ check_runs: (data.checks || {})[m[1]] || [] });
 if (path.includes("runs?branch=main&event=push")) { if (data.mainRuns === null) die("gh: HTTP 502"); say({ workflow_runs: data.mainRuns || [] }); }
@@ -1516,22 +1561,35 @@ describe(
         10: { mergeable: true, merge_commit_sha: sha("f") },
         13: { mergeable: true, merge_commit_sha: sha("f") },
       },
-      mergeBase: { [sha("f")]: MAIN_TIP },
+      // GitHub's test merge of an idle PR, still on an OLD main (as #561's and
+      // #564's were on 30 Oct): the bot must not wait for it to be rebuilt.
+      mergeBase: { [sha("f")]: sha("9") },
+      behind: { [sha("a")]: 3 },
       checks: {},
       ...over,
     });
+    const updates = (calls: Call[]) =>
+      calls.filter(
+        (c) => c.args[2] === "PUT" && c.args[3].endsWith("/update-branch")
+      );
+    const toggles = (calls: Call[]) => [
+      ...mutations(calls, "convertPullRequestToDraft"),
+      ...mutations(calls, "markPullRequestReadyForReview"),
+    ];
 
-    it("main back to green: the victim gets ONE fresh run (draft → ready, app token) and the marker; a queued PR is never toggled", async () => {
+    it("main back to green: a victim BEHIND main gets main merged in (update-branch at its judged head, app token) and the marker; no toggle; a queued PR is never touched", async () => {
       const { r, calls, out } = await bot(victimData());
-      expect(r).toMatchObject({ code: 0, rerun: [10] });
-      const toggles = [
-        ...mutations(calls, "convertPullRequestToDraft"),
-        ...mutations(calls, "markPullRequestReadyForReview"),
-      ];
-      expect(toggles.map((c) => [varOf(c, "id"), c.token])).toEqual([
-        ["PR_10", "bot-token"],
-        ["PR_10", "bot-token"],
+      expect(r).toMatchObject({ code: 0, rerun: [10], failures: 0 });
+      const u = updates(calls);
+      expect(u.map((c) => [c.args[3], c.token, JSON.parse(c.input)])).toEqual([
+        [
+          `repos/${BACKEND}/pulls/10/update-branch`,
+          "bot-token",
+          { expected_head_sha: sha("a") },
+        ],
       ]);
+      expect(toggles(calls)).toEqual([]);
+      expect(out).toMatch(/#10 CI started again \(main brought in/);
       const marker = calls.filter((c) => c.args[2] === "POST");
       expect(marker).toHaveLength(1);
       expect(JSON.parse(marker[0].input)).toMatchObject({
@@ -1546,6 +1604,41 @@ describe(
       expect(calls.some((c) => (c.args[3] ?? "").includes("rerun"))).toBe(
         false
       );
+    });
+
+    it("a victim whose branch already holds main's tip is toggled draft → ready (app token), never updated", async () => {
+      const { r, calls } = await bot(victimData({ behind: { [sha("a")]: 0 } }));
+      expect(r).toMatchObject({ code: 0, rerun: [10] });
+      expect(updates(calls)).toEqual([]);
+      expect(toggles(calls).map((c) => [varOf(c, "id"), c.token])).toEqual([
+        ["PR_10", "bot-token"],
+        ["PR_10", "bot-token"],
+      ]);
+    });
+
+    it("an update GitHub refuses: no toggle, said ONCE on the marker with the command to run, and the run goes red", async () => {
+      const { r, calls, out } = await bot(victimData({ refuseUpdate: [10] }));
+      expect(r).toMatchObject({ code: 1, rerun: [], failures: 1 });
+      expect(updates(calls)).toHaveLength(1);
+      expect(toggles(calls)).toEqual([]);
+      expect(out).toMatch(/#10 main could not be brought in .*workflows/);
+      const marker = calls.filter((c) => c.args[2] === "POST");
+      expect(marker).toHaveLength(1);
+      const body = JSON.parse(marker[0].input);
+      expect(body).toMatchObject({
+        head_sha: sha("a"),
+        external_id: "main-green-3",
+      });
+      expect(body.output.summary).toContain("gh pr update-branch 10");
+    });
+
+    it("a dry run brings nothing in and toggles nothing", async () => {
+      const { r, calls, out } = await bot(victimData(), {
+        vars: { MERGE_BOT_DRY_RUN: "true" },
+      });
+      expect(r.rerun).toEqual([]);
+      expect(calls.filter(isWrite)).toEqual([]);
+      expect(out).toMatch(/#10 WOULD run CI again, main brought in/);
     });
 
     it("the second sweep after it (marker posted) runs nothing again", async () => {
@@ -1588,6 +1681,121 @@ describe(
       );
       expect(r.rerun).toHaveLength(MAX_TOGGLES_PER_SWEEP);
       expect(out).toMatch(/wait for the next sweep/);
+    });
+  }
+);
+
+// 29 Oct 2026: all 5 `invalid_merge_commit` queue removals were PRs carrying
+// the commits of another PR still unmerged in the queue: #515 and #516 both
+// carried 2be3cd7fd, #503's commit (#335 carried #332's). PRs sharing commits
+// only with an already-merged PR were never removed.
+const C503 = "2be3cd7fd" + "0".repeat(31);
+const commitsOf = (...oids: string[]) => ({
+  commits: { nodes: oids.map((oid) => ({ commit: { oid } })) },
+});
+const sharedData = () => ({
+  prs: [
+    pr({ number: 499, id: "PR_499", state: "MERGED", ...commitsOf("m499") }),
+    pr({
+      number: 503,
+      id: "PR_503",
+      headRefOid: sha("3"),
+      ...commitsOf(C503, "o503"),
+    }),
+    pr({
+      number: 515,
+      id: "PR_515",
+      headRefOid: sha("5"),
+      ...commitsOf(C503, "o515"),
+    }),
+    pr({
+      number: 516,
+      id: "PR_516",
+      headRefOid: sha("6"),
+      ...commitsOf(C503, "o516"),
+    }),
+    pr({
+      number: 520,
+      id: "PR_520",
+      headRefOid: sha("7"),
+      ...commitsOf("m499", "o520"),
+    }),
+  ],
+  checks: {
+    [sha("3")]: greenOn(sha("3")),
+    [sha("5")]: greenOn(sha("5")),
+    [sha("6")]: greenOn(sha("6")),
+    [sha("7")]: greenOn(sha("7")),
+  },
+});
+
+describe(
+  "merge-bot: a PR carrying another open PR's commits waits for it to land",
+  { timeout: 30_000 },
+  () => {
+    it("pure: #515 and #516 carry #503's commit and wait for #503; #503 itself does not wait", () => {
+      const prs = sharedData().prs;
+      const carriers = commitCarriers(prs);
+      const by = (n: number) => prs.find((p) => p.number === n);
+      expect(sharedCommitOf(by(515), carriers)).toEqual({
+        owner: 503,
+        oid: C503,
+      });
+      expect(sharedCommitOf(by(516), carriers)).toEqual({
+        owner: 503,
+        oid: C503,
+      });
+      expect(sharedCommitOf(by(503), carriers)).toBeNull();
+    });
+    it("pure: a commit shared only with a MERGED PR holds nothing", () => {
+      const prs = sharedData().prs;
+      expect(
+        sharedCommitOf(
+          prs.find((p) => p.number === 520),
+          commitCarriers(prs)
+        )
+      ).toBeNull();
+    });
+    it("pure: a PR whose commits were not read is not enqueued, and the decision needs the read", () => {
+      expect(
+        sharedCommitOf(pr({ commits: undefined }), commitCarriers([]))
+      ).toBe("unread");
+      expect(decide(pr(), { shared: "unread" }).reasons).toContain(
+        "its commits could not be read"
+      );
+      expect(decide(pr(), { shared: undefined }).reasons).toContain(
+        "commits of the open PRs: not read"
+      );
+    });
+    it("a sweep enqueues #503 and #520 (shares only with merged #499), holds #515 and #516 naming #503", async () => {
+      const { r, calls, out } = await bot(sharedData());
+      expect(r).toMatchObject({ code: 0, enqueued: [503, 520] });
+      expect(out).toMatch(
+        /#515 not enqueued: carries #503's commit 2be3cd7f; waits for #503 to land/
+      );
+      expect(out).toMatch(
+        /#516 not enqueued: carries #503's commit 2be3cd7f; waits for #503 to land/
+      );
+      // The commits come with the open-PR listing: no extra call per PR.
+      const query = (c: Call) =>
+        c.args.find((a) => a.startsWith("query=")) ?? "";
+      const listing = calls.find((c) => query(c).includes("pullRequests("));
+      expect(listing && query(listing)).toMatch(
+        /commits\(first: 100\) \{ nodes \{ commit \{ oid \} \} \}/
+      );
+      expect(
+        calls.filter((c) => /pulls\/\d+\/commits/.test(c.args[3] ?? ""))
+      ).toEqual([]);
+    });
+    it("a PR's own CI run (judged alone) still sees the other open PRs' commits", async () => {
+      const { r, out } = await bot(sharedData(), {
+        vars: { GITHUB_EVENT_NAME: "workflow_run" },
+        payload: {
+          workflow_run: { id: 9, event: "pull_request", head_sha: sha("5") },
+        },
+      });
+      expect(r.enqueued).toEqual([]);
+      expect(out).toMatch(/#515 not enqueued: carries #503's commit 2be3cd7f/);
     });
   }
 );
@@ -1680,11 +1888,19 @@ describe("merge-bot: what it must never do", () => {
     ["bypass as an admin", /--admin|bypass/i],
     ["re-run the stale merge", /rerun-failed-jobs|\/rerun\b|run rerun/],
     [
-      "update a branch or push",
-      /update-branch|updatePullRequestBranch|git push/,
+      "push, rebase, or update a branch through another door",
+      /git push|rebase|updatePullRequestBranch/i,
     ],
   ])("its code never does: %s", (_n, re) => {
     expect(code).not.toMatch(re);
+  });
+  // The one branch write: main merged into a victim's branch (section D).
+  // Sees a second REST update-branch path; the e2e victim tests pin its body.
+  it("its one branch update is the REST update-branch, at the head it judged", () => {
+    expect(code.match(/\/update-branch`/g)).toHaveLength(1);
+    expect(code).toMatch(
+      /\/update-branch`, \{\s+token,\s+method: "PUT",\s+body: \{ expected_head_sha: pr\.headRefOid \},\s+\}\);/
+    );
   });
   it("the bot job reads its secrets from environment ci-bots (branch policy: main), never repo-wide", () => {
     const job = wf.slice(wf.indexOf("\n  bot:"));

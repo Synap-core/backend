@@ -27,6 +27,16 @@ declare const WAIT_KINDS: readonly [
 	"nobody"
 ];
 export type WaitKind = (typeof WAIT_KINDS)[number];
+declare const STATUS_SIGNALS: readonly [
+	"stuck",
+	"late",
+	"approaching",
+	"hold_review_due",
+	"pr_green_unmerged",
+	"pr_red_idle",
+	"main_red_unowned"
+];
+export type StatusSignal = (typeof STATUS_SIGNALS)[number];
 declare const TRACK_STATUSES: readonly [
 	"proposed",
 	"agreed",
@@ -217,6 +227,12 @@ export interface TransitionBase {
 	 * other move. The transition log is the hold's only store.
 	 */
 	hold: RecordedHold | null;
+	/**
+	 * The wait the target step declares (`LifecycleOption.waits`), stamped by
+	 * the mover; absent when the step declares none (and on goal and session
+	 * moves, whose statuses declare no waits).
+	 */
+	wait?: TransitionWait;
 }
 /** Who made a move, for attribution (`TransitionBase.actorClass`). */
 export type TransitionActorClass = "agent" | "app" | "human" | "system";
@@ -294,6 +310,19 @@ declare const LIFECYCLE_CATEGORIES: readonly [
 	"lost"
 ];
 export type LifecycleCategory = (typeof LIFECYCLE_CATEGORIES)[number];
+/**
+ * The wait a MOVE lands in (`TransitionBase.wait`, status-first PR-H): stamped
+ * by the mover when the target step declares one (`LifecycleOption.waits`),
+ * absent otherwise. A step wait is not a pause: the hold (`hold`) stays null
+ * for an active step; the wait's history (`status_wait_episode`) starts here.
+ */
+export interface TransitionWait {
+	waitKind: WaitKind;
+	/** The step's `waits.on`. */
+	on?: HoldOn;
+	/** What `waits.refFrom` held on the thing at the move (an id, a name). */
+	ref?: string;
+}
 declare const UNIT_STATES: readonly [
 	"not_started",
 	"working",
@@ -3704,6 +3733,75 @@ export interface AiProviderModelEntry {
 	costPer1MInput?: number;
 	costPer1MOutput?: number;
 }
+/**
+ * Focus Sessions Schema
+ *
+ * A focus session is a goal-bound user work session — a discrete "working
+ * mode" where the user (and optionally IS agents) collaborate toward a
+ * stated objective.
+ *
+ * This is WORKFLOW-SIDE infrastructure, not data-side. It has no relationship
+ * to the `sessions` table, which is IS memory/compaction machinery.
+ *
+ * ── LIFECYCLE ───────────────────────────────────────────────────────────────
+ * This block must account for EVERY member of `FocusSessionStatus`. It did not:
+ * it described `active → paused ↔ active → closed (or → stale)` while the enum
+ * also carried `forming` and `scheduled`, two pre-start states the prose had
+ * never heard of. A guard now derives both sets and fails when they diverge
+ * (`__tests__/focus-session-lifecycle-doc.test.ts`), so a new status cannot be
+ * added without this paragraph being updated in the same commit — prose alone
+ * decays exactly the way the first version of this note did.
+ *
+ * PRE-START (a row exists; the work has not begun):
+ *   - scheduled — waits for a CLOCK. The session was materialized ahead of time
+ *     for a moment it is FOR; a person opens it when that moment arrives.
+ *     Produced by `materializeScheduledSession`
+ *     (api services/focus-sessions/schedule-session.ts) from a playbook whose
+ *     `schedule.mode` is `"appointment"`. This is its ONLY producer.
+ *   - forming — waits for a PERSON. Reserved for a session that has been drafted
+ *     but not yet constituted. ⚠️ STILL UNPRODUCED: nothing in any repo assigns
+ *     it (verified 2026-09-08 across the monorepo; the only occurrences are one
+ *     browser test fixture and an unrelated content status). It is NOT redundant
+ *     with triage — `services/focus-sessions/triage.ts` states outright that
+ *     acceptance is a RECEIPT (`metadata.triage.acceptedAt`), not a status,
+ *     precisely so a session can be `forming`/`scheduled` AND triage-pending at
+ *     once. Status and acceptance are orthogonal axes. `forming` is unbuilt, not
+ *     superfluous; do not repurpose or delete it without deciding what it means.
+ *
+ * RUNNING:  active → paused ↔ active
+ *
+ * EXITS (terminal — every one MUST go through `completeFocusSession`):
+ *   closed · failed · cancelled
+ *
+ * NON-TERMINAL DECAY:
+ *   - stale — auto-set by the focus-session reaper (C8 lifecycle hygiene) when
+ *     an `active`/`paused` row has had no `updatedAt` activity for
+ *     REAPER_STALE_HOURS. Non-destructive: the row can still be
+ *     completed/reopened like any other session; it only stops counting as a
+ *     live "in progress" session. The reaper is scoped to `('active','paused')`
+ *     ONLY — a `scheduled` row is never aged out, which is why the appointment
+ *     producer owns its own non-accumulation policy (roll-forward) rather than
+ *     relying on the reaper.
+ */
+/**
+ * One stage a session ENTERED (0382), oldest first — the shape of a goal's
+ * `ProjectTrackStageHistoryEntry` (0274) plus where the move came from.
+ * Appended by `appendSessionStageHistory` in the write that sets
+ * `current_stage`. A re-entered stage is a NEW entry.
+ */
+export interface SessionStageHistoryEntry {
+	stageKey: string;
+	/** The stage it came from; `null` when the session had none. */
+	fromStage: string | null;
+	/** ISO-8601. */
+	enteredAt: string;
+	/** Who moved it: the agent's user id when an agent drove it, else the human. */
+	actor: string;
+	/** The human the move is attributed to (the reviewer, on an approval). */
+	userId: string;
+	/** Which writer recorded it: the stage door, or a re-applied approval. */
+	via: "advance" | "approval";
+}
 declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	columns: {
 		agentIds: import("drizzle-orm/pg-core").PgColumn<{
@@ -4010,6 +4108,25 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			notNull: false;
 			tableName: "focus_sessions";
 		}, {}, {}>;
+		stageHistory: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgJsonb";
+			data: SessionStageHistoryEntry[];
+			dataType: "json";
+			driverParam: unknown;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: true;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "stage_history";
+			notNull: true;
+			tableName: "focus_sessions";
+		}, {}, {
+			$type: SessionStageHistoryEntry[];
+		}>;
 		stages: import("drizzle-orm/pg-core").PgColumn<{
 			baseColumn: never;
 			columnType: "PgJsonb";
@@ -6131,7 +6248,18 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  * ONLY, through `agentUsers.setAssignment` — an agent that could write it
  * could staff itself onto anyone's work. The Hub REST door lists and refuses it.
  */
- | "assigned_to";
+ | "assigned_to"
+/**
+ * session|track --serves--> track. The work is done FOR that goal: a session
+ * serving a goal (optionally naming ONE of the goal's criteria in
+ * `metadata.criterionKey`), or a sub-goal serving its parent goal. Written
+ * by THE dependency door (`services/links/dependency-links.ts`: pair, self,
+ * criterion and track→track cycle floors). NOT a dependency — no blocker
+ * reader follows it. Goal rollups do (`services/status/status-rollup.ts`):
+ * a goal's work counts the sessions filed in it OR serving it, each once,
+ * and its sub-goals are listed as `children`.
+ */
+ | "serves";
 /**
  * Playbook Runs Schema — the run ledger (executor spine, Phase 3)
  *
@@ -6244,6 +6372,15 @@ export interface SessionVerdict {
 	 */
 	state: "failing" | "incomplete" | "none" | "passing";
 }
+declare const CI_FINISHED_STATUSES: readonly [
+	"success",
+	"failure",
+	"cancelled",
+	"skipped",
+	"neutral",
+	"timed_out"
+];
+export type CiFinishedStatus = (typeof CI_FINISHED_STATUSES)[number];
 declare const repoSnapshotEventSchema: z.ZodObject<{
 	live: z.ZodOptional<z.ZodNullable<z.ZodObject<{
 		behindBy: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
@@ -6345,6 +6482,17 @@ export interface PullRequestStateFacts {
 	checks?: PullRequestChecks;
 	/** The sha `checks` is about — compare it with a newer head before trusting it. */
 	checksOn?: string;
+	/**
+	 * A check on `checksOn` is running: a `ci.started` with no later
+	 * `ci.finished` of its workflow on that sha. `checks` then holds a failure
+	 * already settled, never `passed`. Never `false`.
+	 */
+	checksRunning?: true;
+	/**
+	 * The PR is in its repository's merge queue: open, with a
+	 * `dev.merge_queued` at or after the fact that (re)opened it. Never `false`.
+	 */
+	queued?: true;
 	/**
 	 * A merge into the repository's default branch (the producer said so). Only
 	 * on `merged`; absent when the fact did not say (a stacked PR merged into
@@ -6481,6 +6629,19 @@ export interface GoalCriterionView {
 	 * (`mark: null`).
 	 */
 	evidenceWithheld?: boolean;
+	/**
+	 * WHO WORKS IT: the open sessions that serve this criterion
+	 * (`session --serves--> goal` with `metadata.criterionKey`), only those the
+	 * reader may read, oldest first. Empty = nobody on it. Absent on a write's
+	 * fallback view, which read no goal facts.
+	 */
+	servedBy?: GoalCriterionServer[];
+}
+/** One session serving a criterion, as the goal page names it. */
+export interface GoalCriterionServer {
+	sessionId: string;
+	title: string;
+	status: string;
 }
 declare const OPERATION_PERIOD_MARKS: readonly [
 	"met",
@@ -6746,6 +6907,70 @@ export interface TrackHistoryWire {
 	/** A source hit its scan cap — older events exist and are not listed. */
 	truncated: boolean;
 }
+/** Doors the event names — each opens that object's own page. */
+export interface DevTimelineRefs {
+	sessionId?: string;
+	proposalId?: string;
+	/** A pull request or a CI run's page. */
+	url?: string;
+}
+export interface DevTimelineEventBase {
+	/** Stable across reads — a client may key rows by it. */
+	id: string;
+	/** When it happened (ISO-8601). */
+	at: string;
+	/** When the pod recorded it, only when later than `at` by 1 s or more. */
+	recordedAt?: string;
+	/** Who acted, named by the pod. A producer's fact is `system`. */
+	actor: ActivityActor;
+	refs: DevTimelineRefs;
+}
+export type DevTimelineEvent = DevTimelineEventBase & ({
+	kind: "session_started";
+	title: string;
+} | {
+	category: LifecycleCategory;
+	from: string | null;
+	/** What a pause waits on and how it resumes; null for any other move. */
+	hold: RecordedHold | null;
+	kind: "status_moved";
+	reason: string | null;
+	/** A thing's ROLE moved (its slug); absent for its own status. */
+	role?: string;
+	to: string;
+} | {
+	/** A merge into the default branch; null when the fact did not say. */
+	intoDefault: boolean | null;
+	kind: "pr_closed" | "pr_merged" | "pr_opened";
+	pr: {
+		number: number;
+		repo: string;
+		title: string | null;
+		url: string;
+	};
+} | {
+	checks: {
+		/** The devbox job (a `devbox <name>` run); null for a CI workflow. */
+		job: string | null;
+		pr: number | null;
+		repo: string;
+		/** null: the run settled nothing (cancelled, skipped, neutral). */
+		result: PullRequestChecks | null;
+		sha: string;
+		status: CiFinishedStatus;
+		workflow: string | null;
+	};
+	kind: "checks_finished";
+} | {
+	kind: "decision_asked";
+	title: string | null;
+} | {
+	/** `approved` | `rejected` | `reverted` | `approval_failed`. */
+	decision: string;
+	kind: "decision_answered";
+	note: string | null;
+	title: string | null;
+});
 declare const TRACK_PARTICIPANT_ROLES: readonly [
 	"owner",
 	"judge",
@@ -6902,6 +7127,131 @@ export interface SessionInput {
 	criterionKey?: string;
 	/** The stored slot's label — what the label-matching answer doors address. */
 	slotLabel: string;
+}
+/**
+ * A stage a SESSION entered, read from its stage ledger
+ * (`focus_sessions.stage_history`, 0382; the shape of a goal's `step_moved`).
+ * Only `include: ["history"]` carries it; the timeline does not.
+ */
+export interface StatusOfStageEntered {
+	/** Stable across reads — a client may key rows by it. */
+	id: string;
+	kind: "stage_entered";
+	/** When it entered the stage (ISO-8601). */
+	at: string;
+	/** Who moved it, named by the pod: the agent when one drove it. */
+	actor: ActivityActor;
+	refs: {
+		sessionId: string;
+	};
+	/** The stage entered. */
+	stageKey: string;
+	/** The stage left; `null` when the session stood on none. */
+	fromStage: string | null;
+	/** Which writer recorded it: the stage door, or a re-applied approval. */
+	via: "advance" | "approval";
+}
+/** One entry of `include: ["history"]`. */
+export type StatusOfHistoryEvent = DevTimelineEvent | TrackHistoryEvent | StatusOfStageEntered;
+/** One role a thing wears, with the role's own status (stored on the facet). */
+export interface StatusOfRole {
+	facetId: string;
+	/** The role's slug (`lead`, `client`). */
+	role: string;
+	/** The role's display name. */
+	roleName: string;
+	status: string | null;
+	label: string | null;
+	category: LifecycleCategory | null;
+	tone: UnitTone | null;
+	/** Its CURRENT hold, when the role stands in a paused status under one. */
+	hold?: RecordedHold;
+}
+/**
+ * The account a thing works at (`works_at`), when the reader may read it: its
+ * own status and the roles it wears. A person's stage is read off its account.
+ */
+export interface StatusOfAccount {
+	id: string;
+	name: string | null;
+	status: string | null;
+	label: string | null;
+	category: LifecycleCategory | null;
+	tone: UnitTone | null;
+	roles: StatusOfRole[];
+	link: string;
+}
+/**
+ * `include: ["history"]`: THE timeline, kept to its status events, with a
+ * session's stage ledger merged in by time.
+ */
+export interface StatusOfHistory {
+	/**
+	 * Newest first: a goal's are `TrackHistoryEvent`s, a session's
+	 * `status_moved` and `stage_entered`, a thing's `status_moved`.
+	 */
+	events: StatusOfHistoryEvent[];
+	/** Older events exist and are not listed. */
+	truncated: boolean;
+}
+/** One end of a `serves` edge, as the reader may see it. */
+export interface StatusOfLinkEnd {
+	type: "goal" | "session";
+	id: string;
+	name: string | null;
+	status: string | null;
+	category: LifecycleCategory | null;
+	tone: UnitTone | null;
+	/** The goal criterion a session serves, when the edge names one. */
+	criterionKey?: string;
+}
+/** `include: ["links"]` on a goal or a session: its `serves` edges. */
+export interface StatusOfLinks {
+	/** What it serves (a goal it is done for). */
+	serves: StatusOfLinkEnd[];
+	/** What serves it (its sessions and sub-goals). */
+	servedBy: StatusOfLinkEnd[];
+}
+/** Waits counted per wait kind; a kind with none is left out. */
+export type WaitKindCounts = Partial<Record<WaitKind, number>>;
+/** The numbers a goal's bars are drawn from, for one node of its tree. */
+export interface StatusOfRollupCounts {
+	/** Its work sessions per category, each session once. */
+	byCategory: Partial<Record<LifecycleCategory, number>>;
+	/** Sessions the reaper found quiet (`stale`): nobody is moving them. */
+	stuck: number;
+	/** What its goals and open sessions wait on, per wait kind (the chips). */
+	waits: WaitKindCounts;
+}
+/** A sub-goal (`track --serves--> goal`), rolled up over its own subtree. */
+export interface StatusOfRollupChild extends StatusOfRollupCounts {
+	id: string;
+	name: string | null;
+	status: string | null;
+	category: LifecycleCategory | null;
+	tone: UnitTone | null;
+}
+/**
+ * `include: ["rollup"]` on a goal: the goal and every goal that serves it,
+ * down the tree. A node reached twice counts once; a loop of `serves` edges
+ * (the door refuses them; an old row may hold one) is walked once and named.
+ */
+export interface StatusOfRollup extends StatusOfRollupCounts {
+	/** Goals in the tree the reader may see, this one included. */
+	goals: number;
+	/** Work sessions counted, filed in or serving a goal of the tree. */
+	sessions: number;
+	/** Its direct sub-goals, each over its own subtree. */
+	children: StatusOfRollupChild[];
+	/** The walk met a loop of `serves` edges and cut it. */
+	cycle?: true;
+}
+/** `include: ["signals"]`: a status signal whose episode is still open. */
+export interface StatusOfSignal {
+	signal: StatusSignal;
+	/** The role whose lifecycle raised it; null for the thing's own. */
+	role: string | null;
+	raisedAt: string;
 }
 /**
  * `@synap-core/types/renderer-ref` — what a profile or workspace stores as its
@@ -15983,9 +16333,17 @@ export interface PacketRunnerItem {
 		processId: string;
 		startedAt?: string;
 	}>;
+	/**
+	 * What the runner says it is doing (0384, `X-Synap-Runner-State`): `busy`,
+	 * `idle`, `needs_permission`, or `ended` (it said so, or left the live
+	 * window). `null` while live = its client names no state: unknown, not idle.
+	 */
+	state: "busy" | "ended" | "idle" | "needs_permission" | null;
+	/** When it entered that state; for a runner gone quiet, when it was last seen. */
+	stateSince?: string;
 	firstSeenAt: string;
 	lastSeenAt: string;
-	/** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read. */
+	/** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read, and not `ended`. */
 	live: boolean;
 	/** The shell command that reopens it (`resolveAgentConversation`); absent for a harness we cannot reopen. */
 	resume?: string;
@@ -16188,7 +16546,16 @@ export interface PacketDecision {
 	/** The reviewer's rejection reason, when one was given. */
 	reason?: string;
 }
-export type NextMoveKind = "agent_slot" | "blocker_dropped" | "message_waiting" | "none" | "owed_slot" | "pending_proposal" | "pull_request" | "ready_to_close" | "undeclared" | "unknown" | "waiting_on_hold" | "waiting_on_session";
+/**
+ * The kinds of THE next move. A session's come from `deriveNextMove`; a
+ * thing's and a goal's from `deriveThingNextMove` / `deriveGoalNextMove`
+ * (`services/status/next-move.ts`), which reuse these and add four:
+ * `waiting_on` (a wait on someone or something, its `waitKind` saying whose
+ * ball), `step` (a thing's next step on its path, `to`), `judge_review` (a
+ * goal's claims wait on its judge) and `start_work` (no open session works
+ * on a goal).
+ */
+export type NextMoveKind = "agent_slot" | "blocker_dropped" | "judge_review" | "message_waiting" | "none" | "owed_slot" | "pending_proposal" | "pull_request" | "ready_to_close" | "start_work" | "step" | "undeclared" | "unknown" | "waiting_on" | "waiting_on_hold" | "waiting_on_session";
 export interface ContinuationNextMove {
 	kind: NextMoveKind;
 	/** Who acts: the person, the AI, or nobody. */
@@ -16224,6 +16591,15 @@ export interface ContinuationNextMove {
 	 * PR has ended: the AI records it).
 	 */
 	reasonCode?: "checks_failed" | "checks_pending" | "closed" | "criteria_unmet" | "merged" | "ready_to_land";
+	/** The lifecycle option a `step` move targets (it moves through `moveStatus`). */
+	to?: string;
+	/**
+	 * What kind of wait it is (`WAIT_KINDS`), on a move read off a waiting-on
+	 * ref (a thing's or a goal's): its ball says whose move it is.
+	 */
+	waitKind?: WaitKind;
+	/** The person or thing a `waiting_on` move waits on, when the reader may read it. */
+	entityId?: string;
 }
 export interface ContinuationPacket {
 	version: 1;
@@ -16464,6 +16840,21 @@ export interface ContinuationPacket {
 	live: {
 		lastActivityAt: string | null;
 		measuredAt: string;
+		/**
+		 * What the LIVE runners SAY they are doing (0384), folded by
+		 * `foldRunnerState`: `needs_permission` over `busy` over `idle`;
+		 * `state: null` = no live runner named one. The harness's own word,
+		 * beside the pod-activity `state` above and never folded into it. A
+		 * failed runners read is `unavailable` (see `runners`), never null.
+		 */
+		runner: {
+			since: string | null;
+			state: "busy" | "idle" | "needs_permission" | null;
+			status: "ok";
+		} | {
+			reason: string;
+			status: "unavailable";
+		};
 		since: string | null;
 		state: "idle" | "working";
 		status: "ok";
@@ -16547,6 +16938,11 @@ export interface GoalRollup {
 	moved?: number;
 	/** Absent when it waits on nothing. */
 	waitingOn?: WaitingOnMark[];
+	/**
+	 * The goals that SERVE this one (`track --serves--> track`), direct only,
+	 * that the reader may see. Absent when none.
+	 */
+	children?: string[];
 }
 export interface ScopeRollup {
 	lens: "project" | "workspace";
@@ -16569,6 +16965,20 @@ export interface ScopeRollup {
 	};
 	waitingOn: WaitingOnMark[];
 }
+/**
+ * A move a thing's step offers: every declared option but the one it stands
+ * on, the main path first (declared order), then the off-path ones. It moves
+ * only through `moveStatus`; this is what a surface may offer.
+ */
+export interface StatusOfMove {
+	/** The option key a move targets. */
+	to: string;
+	label: string;
+	/** Only a person may move a thing INTO it. */
+	humanOnly: boolean;
+	/** It is a pause: the move must say what it waits on (a hold). */
+	needsHold: boolean;
+}
 type Unavailable$1 = {
 	status: "unavailable";
 };
@@ -16579,6 +16989,11 @@ export interface StatusOf {
 	status: string | null;
 	label: string | null;
 	category: LifecycleCategory | null;
+	/**
+	 * THE tone of its status: the declared option's (`lifecycleOptionTone`),
+	 * else the status word's (`resolveStatusTone`); null with no status.
+	 */
+	tone: UnitTone | null;
 	/** When it entered this status (ISO), or a stored fallback (below). */
 	since: string | null;
 	/** False: no move was recorded, so `since` is when it was created or started. */
@@ -16600,8 +17015,28 @@ export interface StatusOf {
 		state: "idle" | "working";
 		status: "ok";
 	} | Unavailable$1;
-	/** Sessions only: THE next move (`deriveNextMove`). */
+	/**
+	 * THE next move: a session's (`deriveNextMove`), a thing's with a declared
+	 * lifecycle (`deriveThingNextMove`) and a goal's (`deriveGoalNextMove`).
+	 */
 	nextMove?: ContinuationNextMove;
+	/**
+	 * Things with a declared lifecycle, on `include: ["moves"]` only: the
+	 * moves its step offers ({@link StatusOfMove}).
+	 */
+	moves?: StatusOfMove[];
+	/** Things only: the roles it wears that the reader may see. */
+	roles?: StatusOfRole[] | Unavailable$1;
+	/** Things only: the account it works at, when the reader may read it. */
+	account?: StatusOfAccount;
+	/** On `include: ["history"]` (things, goals, sessions). */
+	history?: StatusOfHistory | Unavailable$1;
+	/** On `include: ["links"]` (goals, sessions): its `serves` edges. */
+	links?: StatusOfLinks | Unavailable$1;
+	/** On `include: ["rollup"]` (goals): its tree, down `serves`. */
+	rollup?: StatusOfRollup | Unavailable$1;
+	/** On `include: ["signals"]` (things, goals, sessions): those still open. */
+	signals?: StatusOfSignal[] | Unavailable$1;
 	link: string;
 }
 export type StatusOfAnswer = StatusOf | {
@@ -18130,9 +18565,11 @@ export type ExecuteCapabilityResult = {
 	 * just had no way to make it actionable — 0 of 11 containers on the live
 	 * pod are approved, so this is the wall every run hits today.
 	 *
-	 * A deny from this gate is ALWAYS an approval problem (a dead connection
+	 * A deny from this gate is an approval problem (a dead connection
 	 * surfaces as `kind:"error"` with `errorClass:"no_connection"`, which
-	 * carries its own `connect` block) — the two fixes stay distinct.
+	 * carries its own `connect` block) — the two fixes stay distinct —
+	 * except a person's "Never" (`reasonCode`), which nothing but that
+	 * person can lift.
 	 */
 	enable?: CapabilityNextAction;
 	/**
@@ -18144,6 +18581,12 @@ export type ExecuteCapabilityResult = {
 	enableProposal?: CapabilityEnableOffer;
 	kind: "deny";
 	reason: string;
+	/**
+	 * A typed refusal the caller can branch on: `DENIED_BY_RULE` = a
+	 * person's stored "Never" on this capability for this agent (0381).
+	 * Such a refusal carries no `enable`: enabling would not fix it.
+	 */
+	reasonCode?: string;
 } | {
 	/**
 	 * CONNECTION moment: a `no_connection` / `auth` failure means the
@@ -20476,6 +20919,7 @@ declare function projectSessionRows(sessions: FocusSession[], userId: string | n
 	playbookId: string | null;
 	progress: number | null;
 	projectId: string | null;
+	stageHistory: SessionStageHistoryEntry[];
 	stages: unknown;
 	startedAt: Date;
 	status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -23387,6 +23831,178 @@ export interface MarketplacePreflight extends MarketInstallSummary {
 		connectors: boolean;
 		network: boolean;
 	};
+}
+declare const PACKAGE_FIELD_STATES: readonly [
+	"updates",
+	"yours",
+	"both",
+	"same"
+];
+export type PackageFieldState = (typeof PACKAGE_FIELD_STATES)[number];
+declare const PACKAGE_UPDATE_NEEDS: readonly [
+	"consent",
+	"choice",
+	"review",
+	"nothing"
+];
+export type PackageUpdateNeeds = (typeof PACKAGE_UPDATE_NEEDS)[number];
+/** How many fields of a package are in each state. */
+export type PackageFieldCounts = Record<PackageFieldState, number>;
+/** The kinds of installed row a plan compares today. */
+export type PackageUpdateRowKind = "automation" | "skill" | "view";
+/** One row of `GET /package-updates` / `packageUpdates.list`. */
+export interface PackageUpdateSummary {
+	slug: string;
+	/** The catalog kind of the package (`skill`, `view`, `automation`). */
+	kind: string;
+	name: string;
+	/** The version the pod's rows last converged to; null when never recorded. */
+	installedVersion: string | null;
+	latestVersion: string | null;
+	counts: PackageFieldCounts;
+	/** Records the update would change (space updates only; 0 otherwise). */
+	dataChanges: number;
+	needs: PackageUpdateNeeds;
+	/** The pod path that opens the review page (`/open/update/<slug>`). */
+	reviewUrl: string;
+}
+/**
+ * `GET /package-updates` / `packageUpdates.list`: every installed package
+ * whose catalog version moved, and every one whose catalog could not be read
+ * (named with the reason, never folded into "nothing waiting").
+ */
+export interface PackageUpdateList {
+	updates: PackageUpdateSummary[];
+	unreadable: Array<{
+		kind: string;
+		name: string;
+		reason: string;
+		slug: string;
+	}>;
+}
+/** One pending change to existing records a space update would run. */
+export interface PackageDataChange {
+	/** The op key `acceptDataChanges` names. */
+	id: string;
+	/** One plain sentence. */
+	sentence: string;
+	/** How many records it changes; null when the count failed (never 0). */
+	affected: number | null;
+	/** Never run by an update: an operator step. */
+	destructive: boolean;
+}
+/** One compared field of one installed row. */
+export interface PackageUpdateField {
+	/** The row field name (`body`, `description`, `flowDefinition`, …). */
+	key: string;
+	/** Its words for a person (`resolvePackageFieldLabel`). */
+	label: string;
+	state: PackageFieldState;
+	/** The catalog's value when installed (or last decided). */
+	base: unknown;
+	/** The catalog's value now. */
+	desired: unknown;
+	/** The pod's value now. */
+	live: unknown;
+	/**
+	 * `both` text fields only: the line-level 3-way merge of the two edits, or
+	 * null when they overlap (D2: "Combine both" is offered only without an
+	 * overlap). Absent for every other field.
+	 */
+	merged?: string | null;
+	/** `both` text fields only: the two edits touch the same lines. */
+	overlap?: boolean;
+}
+/** `GET /package-updates/:slug` / `packageUpdates.get`. */
+export interface PackageUpdatePlan {
+	slug: string;
+	kind: string;
+	name: string;
+	installedVersion: string | null;
+	latestVersion: string | null;
+	/** The catalog's change notes since the installed version, when it has any. */
+	notes?: string[];
+	rows: Array<{
+		fields: PackageUpdateField[];
+		name: string;
+		rowId: string;
+		rowKind: PackageUpdateRowKind;
+	}>;
+	/**
+	 * A space update's changes to existing records (the conversion engine's
+	 * pending ops, as `/packages/preflight` reports them). The person agrees by
+	 * sending each consentable item's `id` in `acceptDataChanges`. A
+	 * `destructive` item is never run by an update: it is an operator step on
+	 * pod admin (`needsPodAdmin`).
+	 */
+	dataChanges?: {
+		count: number;
+		items: PackageDataChange[];
+		needsPodAdmin: boolean;
+	};
+	/**
+	 * The choice the pod recommends per `both` field, keyed `<rowId>:<field>`:
+	 * `catalog` when the pod's edit is already inside the catalog's text,
+	 * `combine` when the two edits merge without overlapping. Absent = no
+	 * recommendation; a person decides.
+	 */
+	recommended?: Record<string, PackageUpdateChoiceName>;
+	counts: PackageFieldCounts;
+	needs: PackageUpdateNeeds;
+}
+declare const PACKAGE_UPDATE_CHOICE_NAMES: readonly [
+	"catalog",
+	"mine",
+	"combine"
+];
+export type PackageUpdateChoiceName = (typeof PACKAGE_UPDATE_CHOICE_NAMES)[number];
+/** One field an apply (or an undo) changed. */
+export interface PackageUpdateChange {
+	rowKind: PackageUpdateRowKind;
+	rowId: string;
+	field: string;
+	before: unknown;
+	after: unknown;
+}
+/**
+ * The receipt of one package update — kept in the pod's event log as a
+ * `package.updated` event. `source: 'automatic'` is the start-up pass applying
+ * fields nobody edited (D3); `person` is an apply from a door.
+ */
+export interface PackageUpdateReceipt {
+	id: string;
+	slug: string;
+	kind: string;
+	name: string;
+	fromVersion: string | null;
+	toVersion: string | null;
+	appliedAt: string;
+	source: "automatic" | "person";
+	changes: PackageUpdateChange[];
+	/** Undo refuses after this instant (D5: 30 days). */
+	undoUntil: string;
+	/** When it was undone, or null. */
+	undoneAt: string | null;
+}
+/**
+ * The answer of an apply or an undo. A person's write lands and returns its
+ * receipt; an agent's write is filed as proposals through each row's own
+ * governed `.update` door, and lands only when a person approves them.
+ */
+export type PackageUpdateApplyResult = {
+	receipt: PackageUpdateReceipt | null;
+	status: "applied";
+} | {
+	proposalIds: string[];
+	status: "proposed";
+};
+export type StandaloneKind = "automation" | "skill" | "view";
+export interface DetachResult {
+	detached: boolean;
+	kind: StandaloneKind;
+	id: string;
+	outcome?: "proposed" | "updated";
+	reason?: string;
 }
 /**
  * Core API Router
@@ -33343,6 +33959,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -33722,6 +34339,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -33787,6 +34405,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -33826,6 +34445,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34249,6 +34869,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34282,6 +34903,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbooks?: SessionPlaybookCandidates | undefined;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34344,6 +34966,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34455,6 +35078,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projectId: string | null;
 				recall: SessionRecallView;
 				rerun: RerunAvailability;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34495,6 +35119,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34613,6 +35238,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34736,6 +35362,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -35303,6 +35930,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					unblocks?: string | undefined;
 					why?: string | undefined;
 				}[] | undefined;
+				expectedStatus?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | undefined;
 				followPlaybookId?: string | null | undefined;
 				followStageKey?: string | null | undefined;
 				goal?: string | undefined;
@@ -35498,6 +36126,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -35835,7 +36464,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetKind: "action" | "capability" | "connection" | "profile";
 				targetPattern: string;
 				targetProfile?: string | undefined;
-				verdict: "auto" | "propose";
+				verdict: "auto" | "deny" | "propose";
 				workspaceId?: string | undefined;
 			};
 			meta: object;
@@ -35855,7 +36484,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				};
 			};
@@ -35889,7 +36518,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				} | null;
 			};
@@ -35914,7 +36543,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				}[];
 			};
@@ -35937,7 +36566,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				}[];
 			};
@@ -36078,7 +36707,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				};
 			};
@@ -36292,9 +36921,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		addDependency: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				criterionKey?: string | undefined;
 				fromId: string;
 				fromType: "entity" | "session" | "track";
-				linkType: "blocked_by" | "replaces";
+				linkType: "blocked_by" | "replaces" | "serves";
 				toId: string;
 				toType: "entity" | "session" | "track";
 			};
@@ -36508,7 +37138,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				fromId: string;
 				fromType: "entity" | "session" | "track";
-				linkType: "blocked_by" | "replaces";
+				linkType: "blocked_by" | "replaces" | "serves";
 				toId: string;
 				toType: "entity" | "session" | "track";
 			};
@@ -38784,6 +39414,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				doneWindowed: number;
 				hasWorker: boolean;
 				lifecycle: {
+					initialStatus: string | null;
 					options: {
 						category: "active" | "done" | "lost" | "open" | "paused";
 						dateBinding?: string | undefined;
@@ -38821,6 +39452,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				initialStatus: string | null;
 				options: {
 					category: "active" | "done" | "lost" | "open" | "paused";
 					dateBinding?: string | undefined;
@@ -38948,6 +39580,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		statusOf: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				ids: string[];
+				include?: ("history" | "links" | "moves" | "rollup" | "signals")[] | undefined;
 			};
 			meta: object;
 			output: StatusOfAnswer[];
@@ -40897,6 +41530,82 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: LandedObjectsPage;
 		}>;
 	}>>;
+	packageUpdates: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
+				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		applyUpdate: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				acceptDataChanges?: string[] | undefined;
+				choices?: Record<string, "catalog" | "combine" | "mine" | {
+					value: unknown;
+				}> | undefined;
+				expectedVersion: string;
+				slug: string;
+			};
+			meta: object;
+			output: PackageUpdateApplyResult;
+		}>;
+		detach: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				kind: "automation" | "skill" | "view";
+			};
+			meta: object;
+			output: DetachResult;
+		}>;
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				slug: string;
+			};
+			meta: object;
+			output: PackageUpdatePlan;
+		}>;
+		history: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				limit?: number | undefined;
+				slug?: string | undefined;
+			} | undefined;
+			meta: object;
+			output: PackageUpdateReceipt[];
+		}>;
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: PackageUpdateList;
+		}>;
+		undo: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				receiptId: string;
+			};
+			meta: object;
+			output: PackageUpdateApplyResult;
+		}>;
+	}>>;
 	places: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		errorShape: {
@@ -41976,6 +42685,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -42037,6 +42747,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -44534,6 +45245,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				success: boolean;
 			};
 		}>;
+		clearLater: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				proposalId: string;
+			};
+			meta: object;
+			output: {
+				cleared: boolean;
+			};
+		}>;
 		createDocumentEdit: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				documentId: string;
@@ -44662,6 +45382,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reviewLater: number;
 				scanTruncated: boolean;
 				scanned: number;
+			};
+		}>;
+		later: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				proposalId: string;
+				until: unknown;
+			};
+			meta: object;
+			output: {
+				proposalId: string;
+				snoozedUntil: Date;
 			};
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
