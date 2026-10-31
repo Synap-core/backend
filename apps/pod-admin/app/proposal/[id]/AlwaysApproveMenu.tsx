@@ -18,7 +18,12 @@
  * "Everything, always" here: `deriveGovernanceGrantOptions` writes no wildcard
  * rule in pod admin (finding c173cc51).
  *
- * "Reject & never…" (`RejectNeverMenu`) is the third answer of decision G3:
+ * Both speak through the decision's receipt door (`decision-receipt.ts`):
+ * "Approved" only when the pod's answer says it applied, a failure stays until
+ * it is closed and never shows a raw exception. No Undo: taking the decision
+ * back would leave its rule standing.
+ *
+ * "Reject & never…" (`RejectNeverMenu`) is the third answer of audit 110dd4ab G3:
  * it rejects AND writes one `deny` row for this agent and this act
  * (`deriveGovernanceNeverOption`, never a wildcard), so the pod refuses the
  * same write from then on with `DENIED_BY_RULE`, above the floors (decision
@@ -32,7 +37,6 @@ import {
   DropdownItem,
   DropdownMenu,
   DropdownTrigger,
-  addToast,
 } from "@heroui/react";
 import { Ban, ChevronDown, Repeat } from "lucide-react";
 import {
@@ -43,10 +47,22 @@ import {
   type GovernanceGrantOption,
 } from "@synap-core/types";
 import {
-  resolveActionLabel,
+  buildObjectActionTitle,
   resolveObjectNoun,
 } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../lib/trpc";
+import { showApprovalProgressToast } from "../../_lib/approval-progress/approval-progress-toast";
+import {
+  decisionFailure,
+  decisionReceipt,
+  readApproveAnswer,
+  readRejectAnswer,
+  typedDetail,
+  type DecisionError,
+  type DecisionOutcome,
+  type Receipt,
+} from "../../_lib/receipt/decision-receipt";
+import { showReceipt } from "../../_lib/receipt/decision-receipt-toast";
 import { alwaysApproveT } from "./copy";
 import { approveInput, renderedRevision } from "./use-proposal-decision";
 
@@ -72,6 +88,8 @@ export interface ProposalForRule {
   workspaceId?: string | null;
   request?: { data?: unknown } | null;
   revisionHistory?: unknown;
+  /** The engine's reason code: a floor no rule widens offers no rule. */
+  governanceReason?: string | null;
 }
 
 function stringField(data: unknown, key: string): string | undefined {
@@ -85,7 +103,9 @@ type T = ReturnType<typeof alwaysApproveT>;
 /** Operator-facing words for each granularity — the option DERIVATION is
  * shared (`deriveGovernanceGrantOptions(..., "operator-any")`); only the
  * wording is pod-admin's own (`GovernanceMenu` words the same ids for the
- * end-user surface). "global" is never derived in operator mode. */
+ * end-user surface). "global" is never derived in operator mode. A session's
+ * tool grant says what it really opens: the tools it hands out then run,
+ * sends included, with no ask. */
 function grantWords(
   t: T,
   id: GovernanceGrantOption["id"],
@@ -101,11 +121,14 @@ function grantWords(
     case "action":
       return {
         label: t("always.action.label", {
-          change: `${resolveActionLabel(p.proposalType)} ${resolveObjectNoun(
-            p.targetType
-          ).toLowerCase()}`,
+          change: buildObjectActionTitle({
+            action: p.proposalType,
+            objectKind: p.targetType,
+          }),
         }),
-        covers: t("always.action.covers"),
+        covers: isToolGrant(p)
+          ? t("always.grant.covers")
+          : t("always.action.covers"),
       };
     case "profile":
       return {
@@ -115,11 +138,32 @@ function grantWords(
     case "agent":
       return {
         label: t("always.agent.label"),
-        covers: t("always.agent.covers"),
+        covers: isToolGrant(p)
+          ? t("always.grantAgent.covers")
+          : t("always.agent.covers"),
       };
     case "global":
       return null;
   }
+}
+
+/** A session's tool grant (`focus_session.grant_capability`). */
+function isToolGrant(p: ProposalForRule): boolean {
+  return (
+    p.targetType === "focus_session" && p.proposalType === "grant_capability"
+  );
+}
+
+/** The rule's line after a decision: the decision's receipt, plus what the
+ * rule now covers. Its Undo hint goes: this receipt offers no Undo. */
+function withRule(outcome: DecisionOutcome, body: string): Receipt {
+  const receipt = decisionReceipt(outcome);
+  const said = receipt.undo ? undefined : receipt.description;
+  return {
+    ...receipt,
+    description: [said, body].filter(Boolean).join(" "),
+    undo: false,
+  };
 }
 
 /** Pod-admin's raw proposal-row fields, mapped into the shared context
@@ -141,6 +185,7 @@ function grantContext(p: ProposalForRule): GovernanceGrantContext {
     capabilityTarget: resolveCapabilityTarget(p.request?.data),
     actionKey,
     profileSlug,
+    governanceReason: p.governanceReason,
   };
 }
 
@@ -182,38 +227,48 @@ export function AlwaysApproveMenu({
   async function approveAndAlways(g: Granularity) {
     setRunning(true);
     try {
-      await approve.mutateAsync(
-        approveInput(proposal.id, {}, renderedRevision(proposal))
-      );
+      // `null`: a large graph applies in the background, and its own toast
+      // says when; this receipt then speaks only of the rule.
+      let outcome: DecisionOutcome | null;
+      try {
+        const answer = await approve.mutateAsync(
+          approveInput(proposal.id, {}, renderedRevision(proposal))
+        );
+        if ((answer as { queued?: boolean }).queued) {
+          showApprovalProgressToast(proposal.id);
+          outcome = null;
+        } else outcome = readApproveAnswer(answer);
+      } catch (err) {
+        outcome = decisionFailure("approve", err as DecisionError);
+      }
+      if (outcome?.state === "failed") {
+        showReceipt(decisionReceipt(outcome));
+        return;
+      }
       try {
         await createRule.mutateAsync(g.input);
-        addToast({
-          title: t("always.done.title"),
-          description: t("always.done.body", { label: g.label }),
-          color: "success",
-        });
+        const body = t("always.done.body", { label: g.label });
+        showReceipt(
+          outcome
+            ? withRule(outcome, body)
+            : {
+                title: t("always.ruleSaved"),
+                description: body,
+                tone: "success",
+                undo: false,
+              }
+        );
       } catch (ruleError) {
-        addToast({
-          title: t("always.done.title"),
-          description: t("always.ruleFailed", {
-            reason:
-              ruleError instanceof Error
-                ? ruleError.message
-                : t("always.noReason"),
-          }),
-          color: "warning",
+        showReceipt({
+          title: t("always.ruleFailed"),
+          description:
+            typedDetail(ruleError as DecisionError) ??
+            t("always.ruleFailedHint"),
+          tone: "danger",
+          undo: false,
         });
       }
       onDone();
-    } catch (approveError) {
-      addToast({
-        title: t("always.approveFailed"),
-        description:
-          approveError instanceof Error
-            ? approveError.message
-            : t("always.noReason"),
-        color: "danger",
-      });
     } finally {
       setRunning(false);
     }
@@ -252,7 +307,7 @@ export function AlwaysApproveMenu({
 }
 
 /**
- * "Reject & never…": the request's "Never" (decision G3). Rejects, then
+ * "Reject & never…": the request's "Never" (audit 110dd4ab G3). Rejects, then
  * writes the deny `deriveGovernanceNeverOption` derives. Absent when the
  * request names no agent or no single act (the derivation returns null).
  */
@@ -286,39 +341,35 @@ export function RejectNeverMenu({
   async function rejectAndNever(rule: CreateRuleInput, label: string) {
     setRunning(true);
     try {
-      await reject.mutateAsync({
-        proposalId: proposal.id,
-        reason: t("never.reason"),
-      });
+      let outcome: DecisionOutcome;
+      try {
+        outcome = readRejectAnswer(
+          await reject.mutateAsync({
+            proposalId: proposal.id,
+            reason: t("never.reason"),
+          })
+        );
+      } catch (err) {
+        outcome = decisionFailure("reject", err as DecisionError);
+      }
+      if (outcome.state === "failed") {
+        showReceipt(decisionReceipt(outcome));
+        return;
+      }
       try {
         await createRule.mutateAsync(rule);
-        addToast({
-          title: t("never.done.title"),
-          description: t("never.done.body", { label }),
-          color: "success",
-        });
+        showReceipt(withRule(outcome, t("never.done.body", { label })));
       } catch (ruleError) {
-        addToast({
-          title: t("never.done.title"),
-          description: t("never.ruleFailed", {
-            reason:
-              ruleError instanceof Error
-                ? ruleError.message
-                : t("always.noReason"),
-          }),
-          color: "warning",
+        showReceipt({
+          title: t("never.ruleFailed"),
+          description:
+            typedDetail(ruleError as DecisionError) ??
+            t("never.ruleFailedHint"),
+          tone: "danger",
+          undo: false,
         });
       }
       onDone();
-    } catch (rejectError) {
-      addToast({
-        title: t("never.rejectFailed"),
-        description:
-          rejectError instanceof Error
-            ? rejectError.message
-            : t("always.noReason"),
-        color: "danger",
-      });
     } finally {
       setRunning(false);
     }

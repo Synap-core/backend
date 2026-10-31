@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Réglages (the client scope's Settings, PA-G-06) — the person's language,
+ * Réglages (the client scope's Settings, audit a48761f2 PA-G-06) — the person's language,
  * then (founder B-3, B-4, 27 Oct 2026) the same choices the Review page and
  * its layout offer make, in one place:
  *

@@ -3489,6 +3489,12 @@ export const automationsRouter = router({
         },
       });
 
+      // The run's focus session is opened by the WORKER (`automation-execute`,
+      // pg-boss), after this reply: there is no session id to return without
+      // racing it, and a pre-opened one would skip the executor's channel and
+      // precondition rules. The honest handle is `runId`: the caller reads
+      // `runs.get({ flowType: "automation", id: runId }).sessionId`, null until
+      // the worker has opened the session (and for a run that never does).
       return {
         status: "triggered" as const,
         runId: run.id as string | null,

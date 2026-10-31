@@ -450,7 +450,7 @@ function importance(key: string): number {
  * every one but the review backlog. Its number is the requests', which Home
  * shows from Review's own read beside the band and the Requests badge
  * carries (`signals.count`): a third number for the same queue is how Home
- * once said "Nothing waiting" next to "See all 3" (PA-D-13, ui-composition
+ * once said "Nothing waiting" next to "See all 3" (audit abbc7a19 PA-D-13, ui-composition
  * §11: one number, one source).
  */
 export function homeSections(

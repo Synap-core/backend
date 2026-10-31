@@ -38,6 +38,7 @@ import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { DetailDrawer } from "../../components/detail-drawer";
 import { proposalRequester } from "../../../proposal/[id]/proposal-requester";
+import { proposalPageT } from "../../../proposal/[id]/copy";
 import { requestReadFailure } from "../../../proposal/[id]/request-read-failure";
 import { RequestUnreadable } from "../../../proposal/[id]/RequestUnreadable";
 import {
@@ -449,7 +450,8 @@ function ProposalBody({
     if (query.error) redirectToLoginIfUnauthorized(query.error);
   }, [query.error]);
 
-  if (query.isLoading) return <Loading label="Reading the proposal…" />;
+  if (query.isLoading)
+    return <Loading label={proposalPageT()("read.loading")} />;
   const p = query.data;
   const failure = requestReadFailure(query.error, !!p);
   if (failure || !p)

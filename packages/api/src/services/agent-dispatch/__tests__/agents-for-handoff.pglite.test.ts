@@ -13,6 +13,9 @@
  *   - paused is said, and a paused agent cannot take your work;
  *   - live: a pull agent inside `PULL_LIVE_WINDOW_MS`, not outside it; a
  *     dispatch agent only when its binding resolves;
+ *   - servedAt / nobodyRuns: the newest runner stamp over the agent's keys; a
+ *     pull agent on a computer served outside the window is run by nobody,
+ *     one never stamped is NOT MEASURED (null), and `live` ignores both;
  *   - handOff: what a hand-off FROM THE CALLING AGENT would do — the route's
  *     refusal ⇒ blocked; else the governance dry run for
  *     `focus_session.assign_agent` (no rule ⇒ proposes ⇒ asks_you); the
@@ -170,22 +173,38 @@ beforeAll(async () => {
     agentId: string,
     linkedTo: string,
     lastUsedAt: string | null,
-    label: string | null
+    label: string | null,
+    workerServedAt: string | null = null
   ) =>
     q(
-      `insert into api_keys (id, user_id, key_type, linked_user_id, is_active, last_used_at, instance_label, created_at)
-       values ($1, $2, 'hub_inbound', $3, true, $4, $5, now())`,
-      [randomUUID(), agentId, linkedTo, lastUsedAt, label]
+      `insert into api_keys (id, user_id, key_type, linked_user_id, is_active, last_used_at, instance_label, worker_served_at, created_at)
+       values ($1, $2, 'hub_inbound', $3, true, $4, $5, $6, now())`,
+      [randomUUID(), agentId, linkedTo, lastUsedAt, label, workerServedAt]
     );
-  await key(ON_DEVBOX, OWNER, ago(60_000), "MacBook");
-  await key(ON_LABEL, OWNER, ago(2 * 3_600_000), "MacBook-Pro");
+  await key(ON_DEVBOX, OWNER, ago(60_000), "MacBook", ago(30_000));
+  // An older runner stamp on a second key: the newest one counts.
+  await key(ON_DEVBOX, OWNER, null, null, ago(3 * 3_600_000));
+  await key(
+    ON_LABEL,
+    OWNER,
+    ago(2 * 3_600_000),
+    "MacBook-Pro",
+    ago(2 * 3_600_000)
+  );
   await key(
     ON_LABEL_DEVBOX,
     OWNER,
     ago(PULL_LIVE_WINDOW_MS - 60_000),
     "Devbox"
   );
-  await key(PAUSED, OWNER, ago(30_000), "MacBook-Pro");
+  // Used 30 s ago, but its runner last served it outside the window.
+  await key(
+    PAUSED,
+    OWNER,
+    ago(30_000),
+    "MacBook-Pro",
+    ago(PULL_LIVE_WINDOW_MS + 60_000)
+  );
   await key(THEIRS, TEAMMATE, ago(30_000), "their-laptop");
   await key(THEIRS_ON_DEVBOX, TEAMMATE, ago(30_000), null);
   await q(
@@ -224,6 +243,39 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await h.client?.close();
+});
+
+describe("readAgentsForHandoff — is anything running it (servedAt)", () => {
+  it("servedAt is the newest runner stamp over the agent's keys", () => {
+    expect(row(ON_DEVBOX).servedAt).toBe(ago(30_000));
+    expect(row(ON_LABEL).servedAt).toBe(ago(2 * 3_600_000));
+  });
+
+  it("a pull agent on a computer served inside the window: somebody runs it", () => {
+    expect(row(ON_DEVBOX).nobodyRuns).toBe(false);
+  });
+
+  it("served outside the window: nobody runs it, and `live` keeps reading key use", () => {
+    expect(row(ON_LABEL).nobodyRuns).toBe(true);
+    expect(row(ON_LABEL).live).toBe(false);
+    // Called 30 s ago (live), but no runner within the window.
+    expect(row(PAUSED).nobodyRuns).toBe(true);
+    expect(row(PAUSED).live).toBe(true);
+  });
+
+  it("never stamped: not measured (null), never 'nobody runs it'", () => {
+    expect(row(ON_LABEL_DEVBOX).servedAt).toBeNull();
+    expect(row(ON_LABEL_DEVBOX).nobodyRuns).toBeNull();
+    expect(row(ON_LABEL_DEVBOX).live).toBe(true);
+  });
+
+  it("not a pull agent on a computer: the question does not arise (false)", () => {
+    expect(row(HOUSE).nobodyRuns).toBe(false);
+    expect(row(BOUND).nobodyRuns).toBe(false);
+    // Pull, but no computer at all.
+    expect(row(NEVER).computer).toBeNull();
+    expect(row(NEVER).nobodyRuns).toBe(false);
+  });
 });
 
 describe("readAgentsForHandoff — which computer", () => {

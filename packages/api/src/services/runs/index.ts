@@ -2037,6 +2037,20 @@ export async function getRun(
       meta?.definitionSnapshot
     );
     const pathTaken = parseRunPathTaken(meta?.pathTaken);
+    // The session the worker opened for this run, when the viewer may read it
+    // (D1). Newest first: a run whose first delivery was retried may have been
+    // re-opened.
+    const [runSession] = await db
+      .select({ id: focusSessions.id })
+      .from(focusSessions)
+      .where(
+        and(
+          drizzleSql`${focusSessions.metadata}->>'automationRunId' = ${run.id}::text`,
+          sessionReadableWhere({ userId, roster })
+        )
+      )
+      .orderBy(desc(focusSessions.createdAt))
+      .limit(1);
     const nodeLabelById = buildNodeLabelMap(definitionSnapshot);
     const nodeTypeById = buildNodeTypeMap(definitionSnapshot);
     const activity: AutomationStepActivityItem[] = steps
@@ -2086,6 +2100,7 @@ export async function getRun(
       },
       outputSummary: meta?.outputSummary ?? null,
       playbookDetail: null,
+      sessionId: runSession?.id ?? null,
       // The flow definition this run executed — lets the UI render the graph.
       definitionSnapshot,
       // Which edges of that graph the run actually walked. NULL = unknown

@@ -7,7 +7,8 @@
  *   - WHO is visible   `queryAgentUsers` (the `agentUsers.list` floor; app
  *                      agents are already excluded there);
  *   - last seen        `loadAgentPresence` (the newest key use, and the
- *                      computer label on that same key);
+ *                      computer label on that same key; `servedAt`, the
+ *                      newest call a process running the agent made);
  *   - reach + binding  `loadAgentDispatchSummaries` (THE reach rule, a broken
  *                      binding as `error`, never as "not bound");
  *   - may it take it   `namedVerdicts` — `route()`'s selector rung, batched,
@@ -89,6 +90,18 @@ export interface HandoffAgent {
   live: boolean;
   paused: boolean;
   lastSeenAt: string | null;
+  /**
+   * The newest call a process RUNNING this agent made (`X-Synap-Runner`,
+   * 0385); `null` = no runner ever said so. `live` does not read it yet.
+   */
+  servedAt: string | null;
+  /**
+   * A pull agent on a computer that nothing runs now: `true` = a runner served
+   * it, but not within `PULL_LIVE_WINDOW_MS`; `false` = served within it, or
+   * not a pull agent on a computer; `null` = not measured (no runner ever
+   * stamped any of its keys). A presence fact, never a route refusal.
+   */
+  nobodyRuns: boolean | null;
   /** direct = lands on the roster now; asks_you = the person approves first. */
   handOff: HandOffPreview;
   /** Why it asks or is blocked (the resolver's or the route's words). */
@@ -211,6 +224,13 @@ export async function readAgentsForHandoff(
           ? !!lastSeenAt &&
             now.getTime() - Date.parse(lastSeenAt) <= PULL_LIVE_WINDOW_MS
           : true;
+    const servedAt = seen?.servedAt ?? null;
+    const nobodyRuns =
+      reach !== "pull" || !computer
+        ? false
+        : servedAt
+          ? now.getTime() - Date.parse(servedAt) > PULL_LIVE_WINDOW_MS
+          : null;
     const whyNot = verdicts.get(r.id)?.refusal ?? null;
     // An agent adding ITSELF is joining, not a hand-off: never gated.
     const preview: { handOff: HandOffPreview; handOffReason: string | null } =
@@ -235,6 +255,8 @@ export async function readAgentsForHandoff(
       live,
       paused: r.pausedAt != null,
       lastSeenAt,
+      servedAt,
+      nobodyRuns,
       ...preview,
     };
   });

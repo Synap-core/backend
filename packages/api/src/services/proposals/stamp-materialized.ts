@@ -879,6 +879,7 @@ export async function readSessionUndoSnapshot(
       goal: focusSessions.goal,
       progress: focusSessions.progress,
       projectId: focusSessions.projectId,
+      criteria: focusSessions.criteria,
       trackId: focusSessions.trackId,
       trackStage: focusSessions.trackStage,
     })

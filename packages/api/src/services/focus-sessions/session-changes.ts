@@ -127,15 +127,13 @@ import {
   readSessionStageHistory,
 } from "@synap/database";
 import type { SQLWrapper } from "drizzle-orm";
+import { checksOf } from "./checks-finished.js";
+import type { ChecksFinished } from "./checks-finished.js";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import {
   DEV_LOOP_EVENT_TYPES,
-  ciVerdictOf,
-  devboxJobOf,
   parsePullRequestRef,
-  pullRequestUrl,
   type CiFinishedStatus,
-  type PullRequestChecks,
   type PullRequestRef,
 } from "@synap-core/types";
 import { DEPENDENCY_LINK_TYPE } from "@synap-core/types/connections";
@@ -312,20 +310,7 @@ export type SessionChangeEvent =
     })
   | (EventBase & {
       kind: "checks_finished";
-      checks: {
-        repo: string;
-        sha: string;
-        /** What the run says: `passed` (success) or `failed` (failure, timed out). */
-        result: PullRequestChecks;
-        status: CiFinishedStatus;
-        /** The PR the run was for; null for a devbox job tied to none. */
-        pr: { number: number; url: string } | null;
-        /** The devbox job (a `devbox <name>` run); null for a CI workflow. */
-        job: string | null;
-        workflow: string | null;
-        /** The run's page, when the producer gave one. */
-        url: string | null;
-      };
+      checks: ChecksFinished;
     })
   | (EventBase & {
       kind: "status_moved" | "hold_set";
@@ -474,32 +459,6 @@ function firstSettledRunWhere(ci: string) {
          and ${key(drizzleSql.raw("prior.data"))} = ${key(e.data)}
          and (${heard("prior")}, prior.id) < (${heard("events")}, ${e.id})
     )))`;
-}
-
-/** A `ci.finished` payload as the feed carries it; null when it settles nothing. */
-function checksOf(
-  d: Record<string, unknown>
-): Extract<SessionChangeEvent, { kind: "checks_finished" }>["checks"] | null {
-  const status = d.status as CiFinishedStatus;
-  const result = ciVerdictOf(status);
-  const repo = typeof d.repo === "string" ? d.repo : null;
-  const sha = typeof d.sha === "string" ? d.sha : null;
-  if (!result || !repo || !sha) return null;
-  const workflow = typeof d.workflow === "string" ? d.workflow : null;
-  const number = typeof d.pr === "number" ? d.pr : null;
-  return {
-    repo,
-    sha,
-    result,
-    status,
-    pr:
-      number === null
-        ? null
-        : { number, url: pullRequestUrl({ repo, number }) },
-    job: devboxJobOf(workflow),
-    workflow,
-    url: typeof d.url === "string" ? d.url : null,
-  };
 }
 
 /** A transition row as recorded (`StatusTransition`); null when it is not one. */

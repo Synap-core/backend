@@ -918,6 +918,12 @@ export interface ProjectContinuationPacketCtx {
   userId: string;
   /** Honour the human-roster read branch (`sessionReadableWhere`). Default false. */
   roster?: boolean;
+  /**
+   * Whose deploy approvals `gates.ownerDeploys` lists: `all` (default) = every
+   * session of the owner; `own` = this session's only (the lean read, C8). The
+   * rest are read by commit through `readDeployGate`.
+   */
+  ownerDeploys?: "all" | "own";
 }
 
 function toIso(value: Date | string | null | undefined): string | null {
@@ -2935,7 +2941,8 @@ export async function projectContinuationPacket(
         playbookId: row.playbookId ?? null,
         userId: row.userId,
       },
-      ctx.userId
+      ctx.userId,
+      ctx.ownerDeploys
     )
       .then(({ items, deploy, ownerDeploys }): ContinuationPacket["gates"] => ({
         status: "ok",

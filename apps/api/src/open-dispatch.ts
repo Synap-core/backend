@@ -138,6 +138,32 @@ export function isWebHostedOpenKind(
 
 export type OpenWebKind = "proposal" | WebHostedOpenKind;
 
+/** A catalog package's slug in a template-update link (`[a-z0-9-]` in practice). */
+const PACKAGE_SLUG_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * Template updates' links, printed by `synap market update` and
+ * `synap_template_health`: `/open/update/<slug>` (one update's Review page)
+ * and `/open/updates` (every update). A package is named by its slug, not an
+ * object by its id, so neither is a `TYPED_OPEN_KINDS` kind. They go to the
+ * same path on pod-admin, which owns where each lands (`packageUpdateOpenPath`,
+ * apps/pod-admin/app/open/open-model.ts). Null for any other address, or a
+ * slug that is not a safe token.
+ */
+export function packageUpdateOpenTarget(
+  type: string | undefined,
+  id: string,
+  adminBase: string
+): string | null {
+  if (type === undefined && id === "updates") {
+    return new URL("/open/updates", adminBase).toString();
+  }
+  if (type === "update" && PACKAGE_SLUG_RE.test(id)) {
+    return new URL(`/open/update/${id}`, adminBase).toString();
+  }
+  return null;
+}
+
 export function podAdminTarget(
   kind: OpenWebKind,
   id: string,

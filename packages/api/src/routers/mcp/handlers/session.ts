@@ -29,6 +29,7 @@ import {
 } from "../../../services/messaging/room-post-kind.js";
 import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
+import { newSessionClientKey } from "../../../services/focus-sessions/session-client-binding.js";
 import { refuseUndeclaredArgs } from "../undeclared-args.js";
 import {
   waitForConversationChanges,
@@ -38,6 +39,12 @@ import {
 import { namedConversationOf } from "../../../services/focus-sessions/conversation-changes.js";
 import { getRequestClientKey } from "@synap/database";
 import { parseSessionChangeKinds } from "../../../services/focus-sessions/session-changes.js";
+import {
+  parseSessionReadDetail,
+  readLeanSession,
+  readSessionDeploys,
+  SESSION_READ_DETAIL_ERROR,
+} from "../../../services/focus-sessions/session-lean.js";
 import {
   describeRelayRefusal,
   relaySessionAnswer,
@@ -632,8 +639,18 @@ export const sessionHandlers: McpHandlerMap = {
         // service, with the same pure function the run funnel uses.
         params: readParamsArg(args.params),
         // Binds the session to THIS client and adopts the session the gate
-        // auto-opened for it, if any (never a duplicate).
-        clientKey: requestClientKey(agentUserId) ?? null,
+        // auto-opened for it, if any (never a duplicate) — unless it is
+        // started for another agent or a teammate (C7, `session-client-binding.ts`).
+        clientKey: await newSessionClientKey({
+          clientKey: requestClientKey(agentUserId),
+          agentUserId,
+          userId,
+          agentIds: Array.isArray(args.agentIds)
+            ? (args.agentIds as string[])
+            : null,
+          parentSessionId: args.parentSessionId as string | undefined,
+          suspendedIntent: args.suspendedIntent as string | undefined,
+        }),
         // An agent's NEW session declares what done means (F11, NO_CRITERIA).
         requireCriteria: !!agentUserId,
         // Validated by the service with the shared criteria schema.
@@ -1000,6 +1017,32 @@ export const sessionHandlers: McpHandlerMap = {
       .limit(1);
     if (!session) {
       return ok({ error: `Focus session ${wantedId} not found` });
+    }
+    // `detail` (C8): `full` (default, as ever) · `lean` (what a wake needs, no
+    // other session's deploys) · `deploys` (the owner's deploys, by commit).
+    // MCP schemas are ADVISORY, so an off-enum value is answered in words.
+    const detail = parseSessionReadDetail(args.detail);
+    if (detail === null) {
+      return ok({ error: SESSION_READ_DETAIL_ERROR(args.detail) });
+    }
+    if (detail === "deploys") {
+      return ok(
+        await readSessionDeploys(session, {
+          userId,
+          commitSha:
+            typeof args.commitSha === "string" && args.commitSha.trim() !== ""
+              ? args.commitSha.trim()
+              : undefined,
+        })
+      );
+    }
+    if (detail === "lean") {
+      const lean = await readLeanSession(session, { userId });
+      return ok({
+        session: await withParentSessionId(session),
+        ...lean,
+        ...(ambient?.sessionId ? { inferred: true, via: ambient.source } : {}),
+      });
     }
     // Detour lineage, DERIVED from the `spawned_from` edge — never a column, so
     // there is exactly one store for "what was this forked from". ONE

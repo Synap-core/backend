@@ -1,5 +1,5 @@
 /**
- * Agents' header words (a client place, PA-G-06), as catalogs
+ * Agents' header words (a client place, audit a48761f2 PA-G-06), as catalogs
  * (`@synap-core/types/i18n`): English is the source and the type. The title
  * is the vocabulary's plural; the roster below keeps its English words for
  * now. DRAFT French ("vous"), awaiting the founder's review.

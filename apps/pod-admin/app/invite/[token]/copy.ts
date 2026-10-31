@@ -18,6 +18,9 @@ export const en = {
   "done.appsRetry": "Try again",
   "done.phoneGet": "Get the Synap mobile app",
   "done.phoneHint": "On your phone too: decide requests wherever you are.",
+  "done.signInAs":
+    "{app, select, yes {In the Synap app, sign in} other {Sign in}} to {where} as {email}{way, select, passkey { with your passkey.} password { with your company’s Synap password.} synap_cloud { with Synap Cloud.} other {.}}",
+  "done.yourSynap": "your company’s Synap",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -31,6 +34,9 @@ export const fr: Catalog<typeof en> = {
   "done.phoneGet": "Installer l’application mobile Synap",
   "done.phoneHint":
     "Aussi sur votre téléphone : décidez des demandes où que vous soyez.",
+  "done.signInAs":
+    "{app, select, yes {Dans l’application Synap, connectez-vous} other {Connectez-vous}} sur {where} avec l’adresse {email}{way, select, passkey { et votre clé d’accès.} password { et le mot de passe du Synap de votre entreprise.} synap_cloud { via Synap Cloud.} other {.}}",
+  "done.yourSynap": "le Synap de votre entreprise",
 };
 
 /** The invite page's translator, in the ambient catalog locale. */
