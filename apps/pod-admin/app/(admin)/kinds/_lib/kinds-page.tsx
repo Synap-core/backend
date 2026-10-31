@@ -45,6 +45,7 @@ import {
   KINDS_TITLE,
   kindRows,
   recordsLine,
+  kindAppTarget,
   retireOutcome,
   schemaFindings,
   tidyItems,
@@ -197,6 +198,12 @@ function KindRowView({ row }: { row: KindRow }) {
     uiHints: row.profile.uiHints as { icon?: string | null } | null,
     profileKind: row.profile.profileKind,
   });
+  // The row opens THIS kind in the desktop Data app. `null` on a phone: the
+  // mobile app cannot open it, so the row offers no dead link. A click that
+  // opened nothing offers the download beneath the row.
+  const placed = usePlacedExit(openIn(kindAppTarget(row.slug)));
+  const appOpen = useAppOpenAttempt(placed);
+  const href = placed.href;
   return (
     <div data-row-id={row.id} className="rounded-md">
       <ResourceRow
@@ -205,7 +212,33 @@ function KindRowView({ row }: { row: KindRow }) {
         secondary={[row.scope, recordsLine(row), row.slug].join(" · ")}
         status={row.pill ?? undefined}
         wrap
+        actions={
+          href === null ? undefined : (
+            <Button
+              as="a"
+              href={href}
+              onPress={appOpen.onOpen}
+              size="sm"
+              variant="light"
+              radius="md"
+              className="text-foreground/65"
+              aria-label={`Open ${row.name} in the app`}
+              endContent={
+                <ArrowUpRight
+                  className="h-3 w-3"
+                  strokeWidth={1.75}
+                  aria-hidden
+                />
+              }
+            >
+              Open in app
+            </Button>
+          )
+        }
       />
+      <div className="px-3 pb-2 text-[12px] empty:hidden">
+        {appOpen.offer}
+      </div>
     </div>
   );
 }
