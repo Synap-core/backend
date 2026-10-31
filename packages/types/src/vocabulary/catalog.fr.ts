@@ -152,6 +152,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "kind.ui-design.other": "Designs d’interface",
   "kind.okr.one": "OKR",
   "kind.okr.other": "OKR",
+  "kind.verb.one": "Action",
+  "kind.verb.other": "Actions",
   // ── Verbs: `action.<token>.imperative` (infinitive) / `.past` (masculine
   // participle, D4) / `.progressive` / `.present` ──
   "action.create.imperative": "Créer",
@@ -678,4 +680,5 @@ export const vocabularyFrNouns: Readonly<Record<NounSlug, FrenchNounGrammar>> =
     property: { gender: "m", elides: false },
     "ui-design": { gender: "m", elides: false },
     okr: { gender: "m", elides: true },
+    verb: { gender: "f", elides: true },
   };

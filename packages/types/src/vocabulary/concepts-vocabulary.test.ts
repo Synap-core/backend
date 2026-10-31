@@ -116,6 +116,17 @@ describe("concept vocabulary — Template, Rule, Tools (W5)", () => {
     expect(resolveToolKindLabel("mcp_server")).toBe("Mcp server");
   });
 
+  it("one verb of a capability is an Action, through the noun door", () => {
+    expect(resolveObjectNoun("verb")).toBe("Action");
+    expect(resolveObjectNounPlural("verb")).toBe("Actions");
+    expect(resolveObjectNoun("verb", "fr")).toBe("Action");
+    expect(resolveObjectNounPlural("verb", "fr")).toBe("Actions");
+    // The capability keeps its own word: a verb is never its kind chip.
+    expect(resolveToolKindLabel("capability")).not.toBe(
+      resolveObjectNoun("verb")
+    );
+  });
+
   it("run chips say the user word", () => {
     expect(resolveProposalKindLabel("capability_run")).toBe("Run tool");
     expect(resolveProposalKindLabel("automation_run")).toBe("Run rule");

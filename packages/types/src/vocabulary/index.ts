@@ -896,6 +896,13 @@ const OBJECT_NOUN_ROWS = {
   // The Project Management `okr` kind ("Make it a goal" names it in the
   // proposal it files): an acronym again — it humanized to "Okr".
   okr: "OKR",
+  // One VERB of a capability (`capabilities.verbs[]`, the thing an agent runs
+  // by `verbId`): "Action" names this and only this, everywhere (founder,
+  // 2026-10-30, decision 79f5b7a2). Not a registry kind (a capability's verbs
+  // are not objects of their own), so it is a backend-only noun: the one door
+  // `resolveObjectNoun("verb")` answers, never `TOOL_KIND_LABELS`, which names
+  // the capability ("Capability") a verb belongs to.
+  verb: "Action",
 } satisfies Readonly<Record<string, string>>;
 
 export const OBJECT_NOUNS: Readonly<Record<string, string>> = OBJECT_NOUN_ROWS;
@@ -926,6 +933,7 @@ export const OBJECT_NOUN_PLURALS: Readonly<
   property: "Fields",
   "ui-design": "UI designs",
   okr: "OKRs",
+  verb: "Actions",
 };
 
 // A backend-only noun never shares a slug with a registry kind: both live in
