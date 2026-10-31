@@ -32,10 +32,6 @@ import type {
   ToolVerbCatalogEntry,
 } from "@synap/database/schema";
 import { readInputMap } from "./intent-input.js";
-import {
-  parseBoxDeclaration,
-  type BoxDeclaration,
-} from "../box-runs/box-spec.js";
 import { paramPlaceholderTokens } from "../_shared/interpolate.js";
 import {
   isBroadUrlPattern,
@@ -76,12 +72,6 @@ export function canonicalJson(value: unknown): string {
  * teaching the comparator a new field invalidates every stamp it ever wrote and
  * every pod re-diffs exactly once. Absent (legacy) = pre-versioned = re-diff.
  *
- * v14 = v13 + `metadata.box` (a box skill's DECLARED language, packages, hosts
- *      and limits, normalised — see `declaredBox`). Before it the applier
- *      dropped the key, so a catalog box skill could be installed with no
- *      declaration to run from. A v13 stamp certified a container under a
- *      comparator that never read it; retiring v13 stamps makes each
- *      container re-diff once.
  * v13 = v12 + the skill-row `input_map` COLUMN (migration 0368): how a pod
  *      app's intent input becomes the verb's parameters (`projectInputMap`).
  *      A v12 stamp certified a container under a comparator that never read
@@ -146,7 +136,7 @@ export function canonicalJson(value: unknown): string {
  * v2 = the ten `PROJECTED_SKILL_FIELDS` + the projected verb catalog (intent).
  * v1 (never written) = the original providerSpec/parameters/code/description.
  */
-export const DRIFT_COMPARATOR_VERSION = 14;
+export const DRIFT_COMPARATOR_VERSION = 13;
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return (
@@ -501,37 +491,13 @@ export function declaredReadOnly(
 }
 
 /**
- * A box skill's DECLARATION (`skills.execution_mode = 'box'`): language, exact
- * package pins, hosts and limits, parsed by the ONE parser every skill door
- * uses (`parseBoxDeclaration`) and returned NORMALISED (entrypoint and limits
- * defaulted), because the live row stores the normalised shape and comparing a
- * raw template against it would read as drift on every boot. `undefined` when
- * the definition declares none or the declaration does not parse: the applier
- * refuses an invalid one before it projects (`boxSkillMetadata`), the same
- * "malformed reads as undeclared" contract as `declaredWriteBack`.
- *
- * Re-approval: a changed declaration demotes an approved skill, through
- * `boxDeclarationChanged` (`skill-exec-fields.ts`).
- */
-export const SKILL_METADATA_BOX = "box";
-
-export function declaredBox(
-  metadata: Record<string, unknown> | null | undefined
-): BoxDeclaration | undefined {
-  const raw = (metadata ?? {})[SKILL_METADATA_BOX];
-  if (raw === undefined) return undefined;
-  const parsed = parseBoxDeclaration(raw);
-  return parsed.ok ? parsed.box : undefined;
-}
-
-/**
  * THE applier's `skills.metadata` projection — the single expression the
  * template applier's `.set({ metadata: ... })` uses, and the one the drift
  * comparator is derived from.
  *
  * Contract, pinned by `capability-drift.projection-parity.tripwire.test.ts`:
  * every key of the live bag is preserved byte-identically and ONLY the
- * definition-owned keys (`allowedHosts`, `readOnly`, `writeBack`, `metering`, `box`)
+ * definition-owned keys (`allowedHosts`, `readOnly`, `writeBack`, `metering`)
  * are ever written. That is what lets `PROJECTED_SKILL_FIELDS` carry a `metadata` entry
  * that reads just those keys without the stamp overclaiming: the marker asserts
  * exactly what the comparator checked.
@@ -563,13 +529,11 @@ function declaredMetadataKeys(
   const readOnly = declaredReadOnly(metadata);
   const writeBack = declaredWriteBack(metadata);
   const metering = declaredMetering(metadata);
-  const box = declaredBox(metadata);
   if (
     hosts === undefined &&
     readOnly === undefined &&
     writeBack === undefined &&
-    metering === undefined &&
-    box === undefined
+    metering === undefined
   ) {
     return undefined;
   }
@@ -580,7 +544,6 @@ function declaredMetadataKeys(
       ? { [SKILL_METADATA_WRITE_BACK]: writeBack }
       : {}),
     ...(metering !== undefined ? { [SKILL_METADATA_METERING]: metering } : {}),
-    ...(box !== undefined ? { [SKILL_METADATA_BOX]: box } : {}),
   };
 }
 

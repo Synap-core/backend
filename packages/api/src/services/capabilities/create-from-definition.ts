@@ -86,8 +86,6 @@ import {
   skillsRouter,
   SKILL_DEFINITION_APPLIER,
   assertSkillCodeAllowed,
-  assertBoxNotReadOnly,
-  boxSkillMetadata,
   skillRequiresEdges,
 } from "../../routers/skills.js";
 import {
@@ -95,12 +93,10 @@ import {
   execFieldsChanged,
   MCP_SERVER_RE_APPROVAL_FIELDS,
   allowedHostsChanged,
-  boxDeclarationChanged,
   readOnlyWidened,
 } from "./skill-exec-fields.js";
 import {
   canonicalJson,
-  declaredBox,
   projectSkillMetadata,
   projectUrlPatterns,
   projectInputMap,
@@ -504,16 +500,6 @@ export function definitionSkillChangesExecution(
     // `skill-exec-fields.ts` and both doors call it.
     allowedHostsChanged(
       s.metadata as Record<string, unknown> | undefined,
-      existing.metadata as Record<string, unknown> | null
-    ) ||
-    // A box skill's declaration (packages, hosts, limits) is what the person
-    // approved besides the code: a changed one re-earns approval, by the same
-    // `boxDeclarationChanged` the skill edit door applies. Compared on the
-    // NORMALISED declaration, as stored.
-    boxDeclarationChanged(
-      declaredBox(s.metadata) !== undefined
-        ? { box: declaredBox(s.metadata) }
-        : undefined,
       existing.metadata as Record<string, unknown> | null
     ) ||
     // Same blind spot, same bag, same both-doors rule: turning
@@ -1041,19 +1027,6 @@ export async function createCapabilityFromDefinition(
   } as never);
   const createdSkills: CreateCapabilityResult["created"]["skills"] = [];
   for (const s of def.skills) {
-    // A box skill is judged by the SAME rule the skill create and edit doors
-    // apply (`boxSkillMetadata`: a script, no readOnly, a declaration that
-    // parses), before either branch below writes. The re-apply branch is a
-    // direct update, so without this a template could store a box skill the
-    // doors would refuse.
-    if (s.executionMode === "box") {
-      assertBoxNotReadOnly(s.metadata);
-      boxSkillMetadata({
-        executionMode: "box",
-        kind: s.kind ?? "code",
-        metadata: s.metadata,
-      });
-    }
     // Idempotent: reuse an existing skill with the same name in scope, refreshing
     // its code + required-tool links instead of creating a duplicate.
     const [existingSkill] = await db
@@ -1162,7 +1135,7 @@ export async function createCapabilityFromDefinition(
       // hard-fail on every future metadata-only reconcile (description/
       // parameters/scope/category), even though its code never changed.
       if (codeContentChanged) {
-        assertSkillCodeAllowed(s.kind ?? "code", s.code, s.executionMode);
+        assertSkillCodeAllowed(s.kind ?? "code", s.code);
       }
 
       await db
