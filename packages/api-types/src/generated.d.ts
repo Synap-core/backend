@@ -20376,6 +20376,10 @@ export interface NotificationDef {
 	 *   once when the session has an open room question, and counts ZERO when
 	 *   neither is true, because whatever it announced has been resolved. A
 	 *   pointer row's `sourceId` must be the session id.
+	 * - `"from_system"` — no real asker raised it: news the pod wrote on nobody's
+	 *   behalf (a blocker closed). Never a headline row: it sits in the needs-you
+	 *   rule's `from_system` fold (`needsYouClass: "from_system"`), counted in
+	 *   `count.folds.fromSystem`, never dropped.
 	 * - `"suggestion"` — something an AI offered on its own initiative (a nudge,
 	 *   an insight, a briefing). It NEVER counts toward needs-you. It goes to
 	 *   its own sibling bucket instead: `signals.list({ lens: "suggestions" })`
@@ -20410,7 +20414,7 @@ export interface NotificationDef {
 	 */
 	connectionNotice?: ConnectionNoticeClass;
 }
-export type NotificationNeedsYouRole = "informational" | "item" | "session-pointer" | "status" | "suggestion";
+export type NotificationNeedsYouRole = "from_system" | "informational" | "item" | "session-pointer" | "status" | "suggestion";
 /**
  * The five values `routingRules` has always declared, as read by
  * `NotificationService` (`"mute"` short-circuits before the row is written;

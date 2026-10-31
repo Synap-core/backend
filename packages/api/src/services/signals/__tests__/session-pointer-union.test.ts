@@ -142,3 +142,44 @@ describe("registry needsYou roles in the union", () => {
     expect(count(notifications, open)).toBe(listed.length);
   });
 });
+
+/**
+ * Noise measured in the founder's headline on 31 Oct (92 rows): 7
+ * `session.unblocked` notices no one asked (category `system`). The REAL
+ * registry row is driven through the union AND the count, so the role
+ * reverted in the registry (or the bucket dropped in `partitionNotifications`)
+ * turns it red. The other noise of that day, `session.criterion_escalated`
+ * repeating an owed slot, is backend#605's (registry role `session-pointer`).
+ */
+describe("needs-you headline noise: a system notice is From the system", () => {
+  it("a system 'is unblocked' notification lands in from_system, never the headline", () => {
+    expect(needsYouRole("session.unblocked")).toBe("from_system");
+    const unblocked = { ...row("session.unblocked"), category: "system" };
+    const rows = unionNeedsYou({
+      clusters: [],
+      notifications: [unblocked],
+      owedSlots: [],
+    });
+    const c = countNeedsYou({
+      distinctClusters: 0,
+      clustersTruncated: false,
+      clusters: [],
+      notifications: [unblocked],
+      notificationsTruncated: false,
+      owedSlots: [],
+      owedTruncated: false,
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      kind: "notification",
+      needsYouClass: "from_system",
+      reviewLater: true,
+    });
+    expect(c.needsYou).toBe(0);
+    expect(c.notifications).toBe(0);
+    // Countable, never lost: the fold counts the row the list draws.
+    expect(c.folds.fromSystem).toBe(1);
+    expect(c.reviewLater).toBe(1);
+  });
+});
