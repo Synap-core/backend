@@ -22,6 +22,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { seenLine } from "@synap-core/types/computers";
+import { resolveServiceName } from "@synap-core/types/service-marks";
 import { humanizeToken } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
 import {
@@ -59,10 +60,11 @@ import {
   platformLabel,
   revokeImpact,
   revokeLine,
+  scriptsOwnerWords,
   type ComputerLike,
 } from "./computer-model";
 
-/** Agents the Overview previews before "Open Agents tab". */
+/** Agents the Overview previews before "Show all N agents". */
 const AGENTS_PREVIEW = 3;
 
 /**
@@ -106,15 +108,17 @@ export function ComputerObject({
   const utils = trpc.useUtils();
   const [dialog, setDialog] = useState<null | "rename" | "lifetime">(null);
   const [proposalId, setProposalId] = useState<string | null>(null);
+  const scripts = computer ? scriptsOwnerWords(computer, viewerId) : null;
   const runsScripts = trpc.machines.setRunsScripts.useMutation({
     onSuccess: async (out) => {
+      const whose = scripts?.whose ?? "its owner's";
       addToast({
         title:
           out.status === "proposed"
             ? "Waiting for review — nothing changed yet"
             : out.runsScripts
-              ? "This computer now runs your scripts"
-              : "This computer no longer runs your scripts",
+              ? `This computer now runs ${whose} scripts`
+              : `This computer no longer runs ${whose} scripts`,
         color: "default",
       });
       await utils.machines.invalidate();
@@ -154,6 +158,7 @@ export function ComputerObject({
 
   const c = computer;
   const owner = ownerWords(c, viewerId);
+  const words = scriptsOwnerWords(c, viewerId);
   const impact = revokeImpact(c);
   const revoking = revoke.isPending;
   const revoked = c.key?.state === "revoked";
@@ -223,7 +228,7 @@ export function ComputerObject({
           kind: "machine",
           title: c.name,
           summary: computerSummary(c, viewerId, (d) => formatRelative(d)),
-          status: keyStatus(c.key),
+          status: keyStatus(c.key, Date.now(), { withDetail: true }),
           breadcrumb: frame.breadcrumb?.(c.name),
           primaryAction: (
             <Button
@@ -309,7 +314,7 @@ export function ComputerObject({
                         scroll={false}
                         className="rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 text-[12px] text-foreground/65 hover:text-foreground hover:underline"
                       >
-                        Open Agents tab
+                        Show all {c.agents.length} agents
                       </Link>
                     ) : undefined
                   }
@@ -325,8 +330,8 @@ export function ComputerObject({
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <p className="min-w-0 flex-1 text-[12.5px] text-foreground/75">
                         {c.runsScripts
-                          ? `${c.name} picks up the scripts you approve and runs each one in a fresh box, with no access to your pod. Their logs and files come back on the run.`
-                          : `Let ${c.name} run the scripts you approve (Python or Node with packages), each in a fresh box with no access to your pod. Its runner must be installed on it.`}
+                          ? `${c.name} picks up the scripts ${words.approves} and runs each one in a fresh box, with no access to the pod. Their logs and files come back on the run.`
+                          : `Let ${c.name} run the scripts ${words.approves} (Python or Node with packages), each in a fresh box with no access to the pod. Its runner must be installed on it.`}
                       </p>
                       <Button
                         size="sm"
@@ -342,7 +347,9 @@ export function ComputerObject({
                       >
                         {c.runsScripts
                           ? "Stop running scripts"
-                          : "Run my scripts here"}
+                          : words.whose === "your"
+                            ? "Run my scripts here"
+                            : `Run ${words.whose} scripts here`}
                       </Button>
                     </div>
                   </SectionCard>
@@ -416,7 +423,7 @@ export function ComputerObject({
             content: (
               <SubjectActivity
                 subjectIds={[c.id]}
-                line={(e) => activityLine(e, humanizeToken)}
+                line={(e) => activityLine(e, humanizeToken, words.whose)}
               />
             ),
           },
@@ -468,7 +475,7 @@ function AgentRows({
           Icon={Bot}
           primary={a.name}
           secondary={[
-            a.agentType ? humanizeToken(a.agentType) : null,
+            serviceOf(a),
             seenLine(a.lastSeenAt, (d) => formatRelative(d)),
           ]
             .filter(Boolean)
@@ -479,6 +486,18 @@ function AgentRows({
       ))}
     </div>
   );
+}
+
+/**
+ * What runs the agent, by the service-name door ("Claude Code"); left out
+ * when it only repeats the agent's name.
+ */
+function serviceOf(a: ComputerLike["agents"][number]): string | null {
+  if (!a.agentType) return null;
+  const service = resolveServiceName(a.agentType);
+  return service.trim().toLowerCase() === a.name.trim().toLowerCase()
+    ? null
+    : service;
 }
 
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
