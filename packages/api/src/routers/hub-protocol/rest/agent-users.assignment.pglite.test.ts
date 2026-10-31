@@ -18,6 +18,9 @@
  *    the same permission in the playbook's space passes (a check against no
  *    space refuses every app, whose writes are always pinned; a check against
  *    "any scope" lets one space's permission act in another);
+ *  - a key that cannot READ the playbook (`playbook.read` there): the target
+ *    is not found for it (the visibility floor ANDs the key's grant), so an
+ *    app assigns only to what it may already read;
  *  - a teammate's assignment on the same playbook is never read as yours
  *    (a read that drops the per-owner filter).
  */
@@ -293,17 +296,37 @@ describe("who may assign", () => {
     expect(await rows()).toEqual([]);
   });
 
-  it("an app signed in as the person, holding agent.update in the playbook's space, assigns", async () => {
+  it("an app signed in as the person, holding agent.update and playbook.read in the playbook's space, assigns", async () => {
     const res = await assign(AGENT_A, true, {
-      grant: appGrant(["entity.post.read", "agent.update"]),
+      grant: appGrant(["playbook.read", "agent.read", "agent.update"]),
     });
     expect(res.status).toBe(200);
     expect(await rows()).toEqual([[AGENT_A, OWNER]]);
+    // …and reads it back through the same key.
+    const got = await read(undefined, {
+      grant: appGrant(["playbook.read", "agent.read", "agent.update"]),
+    });
+    expect(got.status).toBe(200);
+    expect(
+      ((await got.json()) as { assignment: { agentUserId: string } }).assignment
+        .agentUserId
+    ).toBe(AGENT_A);
+  });
+
+  it("an app that cannot read the playbook cannot assign to it: 404 TARGET_NOT_FOUND", async () => {
+    const res = await assign(AGENT_A, true, {
+      grant: appGrant(["agent.update"]),
+    });
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { reasonCode: string }).reasonCode).toBe(
+      "TARGET_NOT_FOUND"
+    );
+    expect(await rows()).toEqual([]);
   });
 
   it("an app without agent.update is refused GRANT_DENIED and writes nothing", async () => {
     const res = await assign(AGENT_A, true, {
-      grant: appGrant(["entity.post.update", "agent.read"]),
+      grant: appGrant(["playbook.read", "entity.post.update", "agent.read"]),
     });
     expect(res.status).toBe(403);
     const body = (await res.json()) as { reasonCode: string; error: string };
@@ -313,8 +336,15 @@ describe("who may assign", () => {
   });
 
   it("agent.update in ANOTHER space does not reach this playbook", async () => {
+    // It reads the playbook in its space, but may update agents only in another.
     const res = await assign(AGENT_A, true, {
-      grant: appGrant(["agent.update"], [OTHER_WS]),
+      grant: {
+        scopes: [
+          { permissions: ["playbook.read"], workspaceIds: [WS] },
+          { permissions: ["agent.update"], workspaceIds: [OTHER_WS] },
+        ],
+        clientId: "content-studio",
+      },
     });
     expect(res.status).toBe(403);
     expect(((await res.json()) as { reasonCode: string }).reasonCode).toBe(

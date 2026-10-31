@@ -406,7 +406,7 @@ export function registerAgentUsersRoutes(app: HubHono): void {
     tags: ["Agents"],
     summary: "Assign an agent to a target, or remove it",
     description:
-      "Says which of your agents takes a playbook's, kind's, project's or space's work when a run names nobody (`participant --assigned_to--> target`). One agent per person per target: assigning replaces yours. A PERSON's act only: an agent key (an app's own agent included) is refused `PERSON_ONLY`. The agent's owner or a pod admin. A scoped key (an app signed in as you) needs `agent.update` in the target's space.",
+      "Says which of your agents takes a playbook's, kind's, project's or space's work when a run names nobody (`participant --assigned_to--> target`). One agent per person per target: assigning replaces yours. A PERSON's act only: an agent key (an app's own agent included) is refused `PERSON_ONLY`. The agent's owner or a pod admin. A scoped key (an app signed in as you) needs `agent.update` in the target's space and must read the target there (`playbook.read` for a playbook, `project.read` for a project; else TARGET_NOT_FOUND).",
     request: {
       params: z.object({ agentUserId: z.string().uuid() }),
       body: SetAgentAssignmentBodySchema,
@@ -441,7 +441,8 @@ export function registerAgentUsersRoutes(app: HubHono): void {
    * (`app_person`, a person principal) — is bounded by its grant:
    * `agent.update` in the target's space (an app's write permissions are
    * always pinned to spaces), checked once the agent and the target are known
-   * and before anything is written.
+   * and before anything is written. The target must be one the key reads
+   * (the visibility floor ANDs its grant: `playbook.read` for a playbook).
    */
   app.put("/agent-users/:agentUserId/assignment", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
