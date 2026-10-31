@@ -17200,9 +17200,11 @@ export interface StartHere {
 	statusOf?: StatusOfAnswer[] | StartHereUnavailable;
 	/**
 	 * Open sessions the person HANDED TO THIS AGENT (the agent is on the
-	 * session's roster — e.g. relay Capture "Give to agent"), newest first.
-	 * Present only when an agent calls; a pull-only agent learns about work it
-	 * was given HERE, since nothing can wake it.
+	 * session's roster — e.g. relay Capture "Give to agent"), newest first, then
+	 * the ones that went `stale` in the last `HANDED_STALE_RESUME_DAYS` days.
+	 * Never a session the agent started itself. Present only when an agent
+	 * calls; a pull-only agent learns about work it was given HERE, since
+	 * nothing can wake it.
 	 */
 	handedToYou?: {
 		count: number;
@@ -17210,6 +17212,13 @@ export interface StartHere {
 		items: Array<{
 			goal: string | null;
 			id: string;
+			/** With `resume`: its last activity (ISO); null when unmeasured. */
+			quietSince?: string | null;
+			/**
+			 * A stale session: continue its existing conversation, never
+			 * launch it fresh (with no record of one, launch nothing).
+			 */
+			resume?: true;
 			startedAt: string | null;
 		}>;
 	}
@@ -21671,6 +21680,12 @@ export interface PlaybookScorecard {
 	escalations: number;
 	overrides: number;
 	criteria: CriterionScore[];
+}
+/** Who a run was handed to, as the run reply names it. */
+export interface RunHandedTo {
+	agentUserId: string;
+	name: string | null;
+	via: "assigned" | "named";
 }
 /**
  * Enrollment shapes exposed to the frontend (contract with the parallel
@@ -42792,6 +42807,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				unenabledSkills?: undefined;
 			} | {
 				enableProposals?: undefined;
+				handedTo?: RunHandedTo | undefined;
 				message: string;
 				parentLink?: {
 					parentSessionId: string;
@@ -42837,6 +42853,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				unenabledSkills?: undefined;
 			} | {
 				enableProposals?: undefined;
+				handedTo?: RunHandedTo | undefined;
 				message: string;
 				parentLink?: {
 					parentSessionId: string;
