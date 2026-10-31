@@ -125,6 +125,84 @@ export const ListAgentUsersQuerySchema = z
   })
   .openapi("ListAgentUsersQuery");
 
+/** What an agent can be assigned to (`ASSIGNMENT_TARGETS`, route.ts). */
+export const AgentAssignmentTargetTypeSchema = z
+  .enum(["playbook", "profile", "project", "workspace"])
+  .openapi("AgentAssignmentTargetType");
+
+/** GET /agent-users/assignments query. */
+export const AgentAssignmentQuerySchema = z
+  .object({
+    targetType: AgentAssignmentTargetTypeSchema,
+    targetId: z.string().uuid(),
+  })
+  .openapi("AgentAssignmentQuery");
+
+/** GET /agent-users/assignments — the caller's own assignment on a target. */
+export const AgentAssignmentReadSchema = z
+  .object({
+    assignment: z
+      .object({
+        agentUserId: z.string(),
+        agentName: z.string().nullable(),
+        assignedAt: z.string(),
+      })
+      .nullable()
+      .describe(
+        "The agent YOU assigned to this target (one per person per target), or null when you assigned none."
+      ),
+  })
+  .openapi("AgentAssignmentRead");
+
+/** PUT /agent-users/{agentUserId}/assignment body. */
+export const SetAgentAssignmentBodySchema = z
+  .object({
+    target: z.object({
+      type: AgentAssignmentTargetTypeSchema,
+      id: z.string().uuid(),
+    }),
+    assigned: z
+      .boolean()
+      .describe(
+        "true = this agent takes the target's work (replaces the agent you had on it); false = remove this agent from it."
+      ),
+  })
+  .openapi("SetAgentAssignmentBody");
+
+/** PUT /agent-users/{agentUserId}/assignment response. */
+export const SetAgentAssignmentResultSchema = z
+  .object({
+    assigned: z.boolean(),
+    agentUserId: z.string(),
+    target: z.object({
+      type: AgentAssignmentTargetTypeSchema,
+      id: z.string(),
+    }),
+    replaced: z
+      .string()
+      .nullable()
+      .describe(
+        "The agent this assignment replaced on the target (yours), or null."
+      ),
+  })
+  .openapi("SetAgentAssignmentResult");
+
+/** A refused assignment read or write: the sentence and its machine code. */
+export const AgentAssignmentRefusalSchema = z
+  .object({
+    error: z.string(),
+    reasonCode: z
+      .enum([
+        "PERSON_ONLY",
+        "NOT_OWNER",
+        "NOT_FOUND",
+        "TARGET_NOT_FOUND",
+        "GRANT_DENIED",
+      ])
+      .optional(),
+  })
+  .openapi("AgentAssignmentRefusal");
+
 // ── Terminal logs ───────────────────────────────────────────────────────────
 
 export const TerminalServiceSchema = z
