@@ -30,6 +30,7 @@ const h = vi.hoisted(() => ({
   tables: [] as unknown[],
   fannedOut: [] as Array<Record<string, unknown>>,
   pushes: [] as Array<Record<string, unknown>>,
+  statusPushes: [] as Array<Record<string, unknown>>,
   db: null as unknown as Record<string, unknown>,
 }));
 
@@ -118,6 +119,14 @@ vi.mock("../../../notifications/expo-push.js", () => ({
 }));
 vi.mock("../../../utils/chat-realtime-broadcast.js", () => ({
   emitChatEvent: () => undefined,
+}));
+// The realtime push of a raised signal (its audience and wire have their own
+// suite, status-realtime.pglite.test.ts): recorded here, so a raise that
+// stops pushing goes red.
+vi.mock("../status-realtime.js", () => ({
+  pushStatusSignal: async (s: Record<string, unknown>) => {
+    h.statusPushes.push(s);
+  },
 }));
 vi.mock("../../projects/project-needs-you.js", () => ({
   listSessionsAwaitingReview: async () => ({ sessions: [], truncated: false }),
@@ -526,6 +535,19 @@ describe("the status watcher", () => {
       [...Array(7).fill("entity"), "focus_session", "track"].sort()
     );
     expect(signals.every((p) => p.eventId)).toBe(true);
+    // Pushed in realtime once per episode, to its readers (status-realtime).
+    expect(
+      h.statusPushes
+        .map((p) => `${p.subjectType}:${p.subjectId}:${p.signal}`)
+        .sort()
+    ).toEqual(
+      raised
+        .map(
+          (e) => `${e.data.subjectType}:${e.data.subjectId}:${e.data.signal}`
+        )
+        .sort()
+    );
+    expect(h.statusPushes).toHaveLength(9);
   });
 
   it("pushes only fresh news: a signal that began over a day ago lands in-app only", async () => {
