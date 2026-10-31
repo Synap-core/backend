@@ -21,7 +21,8 @@
  *   history  THE timeline (`readTimeline`), kept to its status events;
  *   links    a goal's or a session's `serves` edges, each end the reader sees;
  *   rollup   a goal's tree down `serves` (`readGoalTreeRollups`);
- *   signals  the status signals (`status_signal_raised`) still open.
+ *   signals  the status signals (`status_signal_raised`) still open;
+ *   episodes its wait episodes (`readWaitEpisodes`), newest first.
  * A part that could not be read is `unavailable`, never empty.
  *
  * Served by orient's `statusOf` (MCP, Hub REST) and tRPC `lifecycle.statusOf`
@@ -44,6 +45,7 @@ import {
   listHolds,
   or,
   playbookRuns,
+  readWaitEpisodes,
   projectTracks,
   ProfileResolutionService,
   relations,
@@ -77,6 +79,7 @@ import {
   type StatusOfRollup,
   type StatusOfSignal,
   type UnitTone,
+  type WaitEpisode,
   type WaitingOnMark,
 } from "@synap-core/types/units";
 import { isStatusSignal } from "@synap-core/types/lifecycle";
@@ -207,6 +210,12 @@ export interface StatusOf {
   rollup?: StatusOfRollup | Unavailable;
   /** On `include: ["signals"]` (things, goals, sessions): those still open. */
   signals?: StatusOfSignal[] | Unavailable;
+  /**
+   * On `include: ["episodes"]` (things, goals, sessions): its wait episodes,
+   * newest first, an open one with `closedAt: null`. A thing's include its
+   * roles' episodes only for the roles the reader may see.
+   */
+  episodes?: WaitEpisode[] | Unavailable;
   link: string;
 }
 
@@ -697,6 +706,49 @@ export async function readStatusOf(
     return { signals: await orUnavailable(read()) };
   };
 
+  // Its wait episodes: everything asked about in ONE read through THE reader
+  // (`readWaitEpisodes`), each subject already floored on the reader above.
+  const waited = wants("episodes")
+    ? readWaitEpisodes(db, [
+        ...things.map((t) => ({
+          subjectType: "entity" as const,
+          subjectId: t.id,
+        })),
+        ...goals.map((g) => ({
+          subjectType: "track" as const,
+          subjectId: g.id,
+        })),
+        ...sessions.map((x) => ({
+          subjectType: "focus_session" as const,
+          subjectId: x.id,
+        })),
+      ])
+    : null;
+  waited?.catch(() => undefined);
+  /**
+   * One subject's episodes, newest first (the reader gives them oldest
+   * first). A role's episode is kept only when the reader may see that role
+   * (THE facet visibility rule, `roles`); unread roles make it unavailable.
+   */
+  const episodesOf = async (
+    subjectType: "entity" | "track" | "focus_session",
+    subjectId: string
+  ): Promise<{ episodes?: WaitEpisode[] | Unavailable }> => {
+    if (!waited) return {};
+    const read = async (): Promise<WaitEpisode[]> => {
+      const own = (await waited).filter(
+        (e) => e.subjectType === subjectType && e.subjectId === subjectId
+      );
+      const seen = own.some((e) => e.facetId != null)
+        ? new Set(((await roles).get(subjectId) ?? []).map((r) => r.facetId))
+        : null;
+      return own
+        .filter((e) => e.facetId == null || seen?.has(e.facetId))
+        .reverse();
+    };
+    return { episodes: await orUnavailable(read()) };
+  };
+
   for (const t of things) {
     answers.set(
       t.id,
@@ -767,6 +819,7 @@ export async function readStatusOf(
                   since: null,
                 }))),
           ])),
+          ...(await episodesOf("entity", t.id)),
           link: openLink(t.id),
         };
       })()
@@ -831,6 +884,7 @@ export async function readStatusOf(
               since: since.since,
             },
           ])),
+          ...(await episodesOf("track", g.id)),
           link: openLink(g.id),
         };
       })()
@@ -875,6 +929,7 @@ export async function readStatusOf(
               since: since.since,
             },
           ])),
+          ...(await episodesOf("focus_session", s.id)),
           link: openLink(s.id),
         };
       })()

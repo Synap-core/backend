@@ -19,6 +19,9 @@
  *            stuck sessions and its waits per `waitKind`, each node once;
  *   signals  the status signals (`status_signal_raised`) whose episode is still
  *            open: raised in the step it stands in, or on the hold it is under.
+ *   episodes its wait episodes (`WaitEpisode`, `status_wait_episode`, 0386):
+ *            each stretch of time it waited on one thing, newest first, an
+ *            open one with `closedAt: null` ("where the time went").
  *
  * Pure: types and constants only.
  */
@@ -38,6 +41,7 @@ export const STATUS_OF_INCLUDES = [
   "links",
   "rollup",
   "signals",
+  "episodes",
 ] as const;
 export type StatusOfInclude = (typeof STATUS_OF_INCLUDES)[number];
 
