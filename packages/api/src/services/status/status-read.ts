@@ -20,9 +20,7 @@
  *   moves    a thing's step's moves (`stepsFromLifecycle`, `offPathChoices`);
  *   history  THE timeline (`readTimeline`), kept to its status events; a
  *            session's stages entered merged in by time, from the stage
- *            ledger its own row carries (`stage_history`, 0382); its wait
- *            episodes (`readWaitEpisodes`, 0386) merged in by when each
- *            opened, every subject asked about in ONE read;
+ *            ledger its own row carries (`stage_history`, 0382);
  *   links    a goal's or a session's `serves` edges, each end the reader sees;
  *   rollup   a goal's tree down `serves` (`readGoalTreeRollups`);
  *   signals  the status signals (`status_signal_raised`) still open.
@@ -51,7 +49,6 @@ import {
   projectTracks,
   ProfileResolutionService,
   readSessionStageHistory,
-  readWaitEpisodes,
   relations,
   statusSignalRaised,
   type CurrentHold,
@@ -79,7 +76,6 @@ import {
   type StatusOfHistory,
   type StatusOfHistoryEvent,
   type StatusOfStageEntered,
-  type StatusOfWaitEpisode,
   type StatusOfInclude,
   type StatusOfLinkEnd,
   type StatusOfLinks,
@@ -625,72 +621,6 @@ export async function readStatusOf(
   };
 
   // ── On request ──────────────────────────────────────────────────────────
-  // The history's wait episodes: everything asked about in ONE read through
-  // THE reader (`readWaitEpisodes`), each subject already floored on the
-  // reader above. Each subject's newest STATUS_OF_HISTORY_MAX + 1: one more
-  // than the history can list says older ones exist. Runs carry none.
-  const waited = wants("history")
-    ? readWaitEpisodes(
-        db,
-        [
-          ...thingIds.map((id) => ({
-            subjectType: "entity" as const,
-            subjectId: id,
-          })),
-          ...goals.map((g) => ({
-            subjectType: "track" as const,
-            subjectId: g.id,
-          })),
-          ...sessions.map((x) => ({
-            subjectType: "focus_session" as const,
-            subjectId: x.id,
-          })),
-        ],
-        { perSubject: STATUS_OF_HISTORY_MAX + 1 }
-      )
-    : null;
-  waited?.catch(() => undefined);
-  /**
-   * One subject's wait episodes as `wait_episode` history entries. A role's
-   * episode is kept only when the reader may see that role (THE facet
-   * visibility rule, `roles`). A failed read throws: the history is then
-   * unavailable, never a list silently missing its episodes.
-   */
-  const episodesOf = async (subject: {
-    kind: "entity" | "goal" | "session";
-    id: string;
-  }): Promise<{ events: StatusOfWaitEpisode[]; more: boolean }> => {
-    if (!waited) return { events: [], more: false };
-    const subjectType =
-      subject.kind === "goal"
-        ? "track"
-        : subject.kind === "session"
-          ? "focus_session"
-          : "entity";
-    const own = (await waited).filter(
-      (e) => e.subjectType === subjectType && e.subjectId === subject.id
-    );
-    const seen = own.some((e) => e.facetId != null)
-      ? new Set(((await roles).get(subject.id) ?? []).map((r) => r.facetId))
-      : null;
-    return {
-      events: own
-        .filter((e) => e.facetId == null || seen?.has(e.facetId))
-        .map((e) => ({
-          id: e.id,
-          kind: "wait_episode" as const,
-          at: e.openedAt,
-          waitKind: e.waitKind,
-          on: e.on,
-          reason: e.reason,
-          ref: e.ref,
-          openedAt: e.openedAt,
-          closedAt: e.closedAt,
-          facetId: e.facetId,
-        })),
-      more: own.length > STATUS_OF_HISTORY_MAX,
-    };
-  };
   const history = (
     subject: { kind: "entity" | "goal" | "session"; id: string },
     ledger: readonly SessionStageHistoryEntry[]
@@ -698,23 +628,21 @@ export async function readStatusOf(
     orUnavailable(
       (async (): Promise<StatusOfHistory | Unavailable> => {
         const { readTimeline } = await import("../timeline/read-timeline.js");
-        const [t, stages, episodes] = await Promise.all([
+        const [t, stages] = await Promise.all([
           readTimeline(subject, { userId }),
           stageEnteredEvents(subject.id, ledger, userId),
-          episodesOf(subject),
         ]);
         if (!t) return UNAVAILABLE;
         const kept = (t.events as StatusOfHistoryEvent[]).filter(
           isStatusHistoryEvent
         );
-        if (stages.length || episodes.events.length) {
-          kept.push(...stages, ...episodes.events);
+        if (stages.length) {
+          kept.push(...stages);
           kept.sort(newestFirst);
         }
         return {
           events: kept.slice(0, STATUS_OF_HISTORY_MAX),
-          truncated:
-            t.truncated || episodes.more || kept.length > STATUS_OF_HISTORY_MAX,
+          truncated: t.truncated || kept.length > STATUS_OF_HISTORY_MAX,
         };
       })()
     );
