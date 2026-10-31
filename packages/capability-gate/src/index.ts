@@ -51,6 +51,8 @@ import { tools, skills, capabilityIntents } from "@synap/database/schema";
 import {
   capabilityVerbAllowsRuleWiden,
   decideAgentPolicy,
+  DENIED_BY_RULE,
+  DENIED_BY_RULE_REASON,
 } from "@synap/governance-policy";
 
 /** The grantable kinds a capability run can target. */
@@ -193,7 +195,12 @@ export type GateCapabilityDecision =
        */
       reasonCode?: string;
     }
-  | { decision: "deny"; reason: string }
+  /**
+   * `reasonCode` = a typed refusal the caller branches on: `DENIED_BY_RULE`
+   * (a person's "Never" on this capability for this agent). Absent for the
+   * approval and policy denials, which carry only their sentence.
+   */
+  | { decision: "deny"; reason: string; reasonCode?: string }
   | { decision: "dry-run" };
 
 /**
@@ -339,6 +346,20 @@ export async function gateCapabilityExecution(
       // The reason text below is what a human caller still reads.
       reason:
         "This capability is installed but not yet enabled. Ask the user to enable it (Tools), or run with dryRun to preview.",
+    };
+  }
+
+  // ── 0.2 A PERSON'S "NEVER" (founder decision G3, 0381) — an agent run of a
+  //       capability a `deny` rule names (this agent, or any agent, by verb
+  //       name or row id) is refused, typed, before every other rung: refusing
+  //       is stricter than any floor below, and a read is refused too (the
+  //       person said never for this capability, not "never write"). Ranked by
+  //       the resolver's specificity score, deny winning ties.
+  if (input.agentUserId && (await capabilityRuleDenies(input, verbName))) {
+    return {
+      decision: "deny",
+      reason: DENIED_BY_RULE_REASON,
+      reasonCode: DENIED_BY_RULE,
     };
   }
 
@@ -645,6 +666,31 @@ async function capabilityRuleAuthorizesRun(
     capabilityVerbName: verbName,
   });
   return match?.verdict === "auto";
+}
+
+/**
+ * Does a stored `governance_rules` row refuse this agent's run of this
+ * capability — a person's "Never" (`verdict: "deny"`, 0381)? The SAME lookup
+ * {@link capabilityRuleAuthorizesRun} makes, so the two read one ranking: a
+ * more specific `auto` outranks a broad deny, and a deny wins a tie.
+ */
+async function capabilityRuleDenies(
+  input: GateCapabilityExecutionInput,
+  verbName: string | null
+): Promise<boolean> {
+  if (!input.agentUserId) return false;
+  // As the widening lookup: a rule is never consulted for a secret.
+  if ((input.capabilityKind as string) === "secret") return false;
+  const match = await resolveGovernanceRule({
+    db: await getDb(),
+    agentUserId: input.agentUserId,
+    workspaceId: input.workspaceId ?? null,
+    subjectType: CAPABILITY_RUN_PROPOSAL.targetType,
+    action: CAPABILITY_RUN_PROPOSAL.proposalType,
+    capabilityId: input.capabilityId,
+    capabilityVerbName: verbName,
+  });
+  return match?.verdict === "deny";
 }
 
 /**

@@ -13,6 +13,10 @@
  * the rule reads as open: a proposal is never demoted on a session nobody let
  * us see.
  *
+ * "Later" (`proposal_snoozes`, founder decision G3): the READER's own
+ * set-asides are read in the same batch, so a request they put off is Review
+ * later for them until its time and unchanged for everyone else.
+ *
  * A failed read THROWS, like `resolveProposalWaits`: "nothing waits" and
  * "could not tell" are different facts.
  */
@@ -20,8 +24,11 @@
 import {
   db,
   and,
+  eq,
+  gt,
   inArray,
   focusSessions,
+  proposalSnoozes,
   needsYouSessionClassSql,
   drizzleSql,
 } from "@synap/database";
@@ -62,7 +69,8 @@ export async function classifyPendingProposals(
         .filter((id): id is string => !!id && isUuid(id))
     ),
   ];
-  const [waits, sessions] = await Promise.all([
+  const proposalIds = pending.map((r) => r.id).filter(isUuid);
+  const [waits, sessions, snoozes] = await Promise.all([
     resolveProposalWaits(pending, reader),
     sessionIds.length > 0
       ? db
@@ -85,8 +93,28 @@ export async function classifyPendingProposals(
             sessionClass: NeedsYouSessionClass;
           }>
         ),
+    proposalIds.length > 0
+      ? db
+          .select({
+            proposalId: proposalSnoozes.proposalId,
+            snoozedUntil: proposalSnoozes.snoozedUntil,
+          })
+          .from(proposalSnoozes)
+          .where(
+            and(
+              eq(proposalSnoozes.userId, reader.userId),
+              inArray(proposalSnoozes.proposalId, proposalIds),
+              gt(proposalSnoozes.snoozedUntil, now)
+            )
+          )
+      : Promise.resolve(
+          [] as Array<{ proposalId: string; snoozedUntil: Date }>
+        ),
   ]);
   const sessionOf = new Map(sessions.map((s) => [s.id, s]));
+  const snoozedUntilOf = new Map(
+    snoozes.map((s) => [s.proposalId, s.snoozedUntil])
+  );
   for (const row of pending) {
     const sessionId = row.sessionId ?? null;
     const session = sessionId ? sessionOf.get(sessionId) : undefined;
@@ -98,6 +126,7 @@ export async function classifyPendingProposals(
         sessionId,
         sessionStatus: session?.status ?? null,
         sessionClass: session?.sessionClass ?? null,
+        snoozedUntil: snoozedUntilOf.get(row.id) ?? null,
       },
       now
     );

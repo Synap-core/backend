@@ -96,6 +96,7 @@ export const GOVERNANCE_RUNGS = [
   "default",
   "not-agent",
   "cbac-capability-allowlist",
+  "denied-by-rule",
   "admin-actions",
   "force-propose",
   "project-filing",

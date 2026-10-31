@@ -36,6 +36,11 @@ vi.mock("@synap/database", async (importOriginal) => {
   let selectingRuns = true;
   return {
     ...actual,
+    // The stage ledger's one append (0382): a marker carrying the move, so a
+    // test reads WHAT was recorded instead of a SQL fragment.
+    appendSessionStageHistory: (move: Record<string, unknown>) => ({
+      __ledger: move,
+    }),
     // The one session status write: records the status it writes beside the
     // caller's other columns.
     setSessionStatus: async (
@@ -107,6 +112,17 @@ const PLAYBOOK_ID = "22222222-3333-4444-8555-666666666666";
 const RUN_ID = "33333333-4444-4555-8666-777777777777";
 const USER_ID = "44444444-5555-4666-8777-888888888888";
 
+/** The ledger marker the mocked append returns for a human move. */
+const ledger = (fromStage: string | null, toStage: string) => ({
+  __ledger: {
+    fromStage,
+    toStage,
+    userId: USER_ID,
+    agentUserId: null,
+    via: "advance",
+  },
+});
+
 const session = (currentStage: string | null) => ({
   id: SESSION_ID,
   currentStage,
@@ -161,10 +177,12 @@ describe("advanceSessionStage — the gated path", () => {
     });
     expect(proposalCalls[0].summary).toContain("Review");
 
-    // The pause is the ONLY write on the "caller" path.
-    expect(updates).toHaveLength(1);
-    expect(updates[0]).toMatchObject({ status: "paused" });
-    expect(updates[0]).not.toHaveProperty("currentStage");
+    // On the "caller" path the door writes the ledger entry, then the pause;
+    // never the column (the caller's own UPDATE carried it).
+    expect(updates).toHaveLength(2);
+    expect(updates[0]).toEqual({ stageHistory: ledger("draft", "review") });
+    expect(updates[1]).toMatchObject({ status: "paused" });
+    expect(updates[1]).not.toHaveProperty("currentStage");
   });
 
   it("still emits stage_changed — the stage STANDS, the run is merely paused", async () => {
@@ -214,7 +232,7 @@ describe("advanceSessionStage — the ungated path is unchanged", () => {
       paused: false,
     });
     expect(proposalCalls).toEqual([]);
-    expect(updates).toEqual([]);
+    expect(updates).toEqual([{ stageHistory: ledger("review", "ship") }]);
     expect(emits).toHaveLength(1);
   });
 
@@ -233,7 +251,7 @@ describe("advanceSessionStage — the ungated path is unchanged", () => {
 });
 
 describe("advanceSessionStage — stageWrite decides who writes the column", () => {
-  it('"door" issues the single-column UPDATE itself', async () => {
+  it('"door" issues ONE UPDATE: the column and its ledger entry together', async () => {
     await advanceSessionStage({
       session: session("review"),
       toStage: "ship",
@@ -241,17 +259,40 @@ describe("advanceSessionStage — stageWrite decides who writes the column", () 
       stageWrite: "door",
     });
     expect(updates).toHaveLength(1);
-    expect(updates[0]).toMatchObject({ currentStage: "ship" });
+    expect(updates[0]).toMatchObject({
+      currentStage: "ship",
+      stageHistory: ledger("review", "ship"),
+    });
   });
 
-  it('"caller" writes nothing — the caller\'s own UPDATE already carried it', async () => {
+  it('"caller" appends the ledger entry only — the caller\'s own UPDATE carried the column', async () => {
     await advanceSessionStage({
       session: session("review"),
       toStage: "ship",
       userId: USER_ID,
       stageWrite: "caller",
     });
-    expect(updates).toEqual([]);
+    expect(updates).toEqual([{ stageHistory: ledger("review", "ship") }]);
+  });
+
+  it("an agent's advance names the agent and the human on its entry", async () => {
+    await advanceSessionStage({
+      session: session(null),
+      toStage: "draft",
+      userId: USER_ID,
+      agentUserId: "agent-9",
+      stageWrite: "door",
+    });
+    expect(updates[0]).toMatchObject({
+      stageHistory: {
+        __ledger: {
+          fromStage: null,
+          toStage: "draft",
+          userId: USER_ID,
+          agentUserId: "agent-9",
+        },
+      },
+    });
   });
 
   it('"door" + a gated stage writes the stage AND the pause, in that order', async () => {

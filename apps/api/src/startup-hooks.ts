@@ -939,8 +939,12 @@ async function runStartupHooksInner(): Promise<void> {
   // workspace reconciles above). Field-level 3-way merge — never overwrites a
   // user-edited field; a cache miss (private package) is skipped, not an error.
   // Idempotent + non-fatal, same stance as every reconcile here.
+  // Each package it updates gets a receipt marked "on its own", so History
+  // shows what changed and offers Undo (D3).
   try {
-    await reconcileStandaloneConfigsToTemplates();
+    await reconcileStandaloneConfigsToTemplates({
+      receipt: { source: "automatic" },
+    });
   } catch (err) {
     logger.warn(
       { err },

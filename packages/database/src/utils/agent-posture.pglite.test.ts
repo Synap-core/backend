@@ -47,7 +47,7 @@ beforeAll(async () => {
     CREATE TYPE governance_principal AS ENUM ('agent','any','class');
     CREATE TYPE governance_scope AS ENUM ('workspace','pod');
     CREATE TYPE governance_target AS ENUM ('action','profile','capability','connection');
-    CREATE TYPE governance_verdict AS ENUM ('auto','propose');
+    CREATE TYPE governance_verdict AS ENUM ('auto','propose','deny');
     CREATE TABLE governance_rules (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       principal_kind governance_principal NOT NULL,

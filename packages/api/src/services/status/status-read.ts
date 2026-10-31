@@ -7,7 +7,10 @@
  * declares `stuckAfterDays`) and what it waits on (`status-facts.ts`). A
  * paused thing also carries its current `hold`; a session carries `live` (the
  * 5-minute working rule, `isSessionWorkingNow`) and its `nextMove` (THE packet
- * rule, read through the list rows' batched sections).
+ * rule, read through the list rows' batched sections). Every answer carries
+ * its `tone` (THE tone table: the declared option's, else the status word's),
+ * and with `include: ["moves"]` a thing with a declared lifecycle carries the
+ * moves its step offers (`stepsFromLifecycle`, `offPathChoices`).
  *
  * Served by orient's `statusOf` (MCP, Hub REST) and tRPC `lifecycle.statusOf`
  * (the screens' door): one function, three doors. An id the caller cannot see
@@ -32,12 +35,18 @@ import type { ProjectTrack } from "@synap/database/schema";
 import {
   findLifecycleOption,
   lifecycleOptionLabel,
+  lifecycleOptionTone,
+  offPathChoices,
+  stepsFromLifecycle,
   type LifecycleCategory,
+  type LifecycleOption,
   type RecordedHold,
 } from "@synap-core/types/lifecycle";
 import { isSessionWorkingNow } from "@synap-core/types/run-activity";
 import {
+  resolveStatusTone,
   trackStatusCategory,
+  type UnitTone,
   type WaitingOnMark,
 } from "@synap-core/types/units";
 import {
@@ -84,6 +93,31 @@ export const statusOfInput = z
   .max(STATUS_OF_MAX)
   .optional();
 
+/** What an answer may carry beyond its status, on request. */
+export const STATUS_OF_INCLUDES = ["moves"] as const;
+export type StatusOfInclude = (typeof STATUS_OF_INCLUDES)[number];
+
+/** `include` as the doors accept it: an unknown part is refused. */
+export const statusOfIncludeInput = z
+  .array(z.enum(STATUS_OF_INCLUDES))
+  .max(STATUS_OF_INCLUDES.length)
+  .optional();
+
+/**
+ * A move a thing's step offers: every declared option but the one it stands
+ * on, the main path first (declared order), then the off-path ones. It moves
+ * only through `moveStatus`; this is what a surface may offer.
+ */
+export interface StatusOfMove {
+  /** The option key a move targets. */
+  to: string;
+  label: string;
+  /** Only a person may move a thing INTO it. */
+  humanOnly: boolean;
+  /** It is a pause: the move must say what it waits on (a hold). */
+  needsHold: boolean;
+}
+
 type Unavailable = { status: "unavailable" };
 const UNAVAILABLE: Unavailable = { status: "unavailable" };
 
@@ -94,6 +128,11 @@ export interface StatusOf {
   status: string | null;
   label: string | null;
   category: LifecycleCategory | null;
+  /**
+   * THE tone of its status: the declared option's (`lifecycleOptionTone`),
+   * else the status word's (`resolveStatusTone`); null with no status.
+   */
+  tone: UnitTone | null;
   /** When it entered this status (ISO), or a stored fallback (below). */
   since: string | null;
   /** False: no move was recorded, so `since` is when it was created or started. */
@@ -112,6 +151,11 @@ export interface StatusOf {
     | Unavailable;
   /** Sessions only: THE next move (`deriveNextMove`). */
   nextMove?: ContinuationNextMove;
+  /**
+   * Things with a declared lifecycle, on `include: ["moves"]` only: the
+   * moves its step offers ({@link StatusOfMove}).
+   */
+  moves?: StatusOfMove[];
   link: string;
 }
 
@@ -119,6 +163,29 @@ export type StatusOfAnswer = StatusOf | { id: string; type: "unknown" };
 
 const iso = (d: Date | string | null | undefined) =>
   d ? new Date(d).toISOString() : null;
+
+/** The tone of a status with no declared option: the status word's. */
+const toneOf = (status: string | null | undefined): UnitTone | null =>
+  status ? resolveStatusTone(status) : null;
+
+/** The moves a thing standing on `current` is offered, from the step helpers. */
+function movesFrom(
+  decl: { readonly options: readonly LifecycleOption[] },
+  current: string | null
+): StatusOfMove[] {
+  const steps = [
+    ...stepsFromLifecycle(decl, current).filter(
+      (s) => s.position !== "current" && s.position !== "off"
+    ),
+    ...offPathChoices(decl, current),
+  ];
+  return steps.map((s) => ({
+    to: s.key,
+    label: s.label,
+    humanOnly: s.humanOnly === true,
+    needsHold: s.category === "paused",
+  }));
+}
 
 /** A part of the answer that could not be read is `unavailable`, never empty. */
 async function orUnavailable<T>(p: Promise<T>): Promise<T | Unavailable> {
@@ -132,8 +199,10 @@ async function orUnavailable<T>(p: Promise<T>): Promise<T | Unavailable> {
 
 export async function readStatusOf(
   userId: string,
-  rawIds: readonly string[]
+  rawIds: readonly string[],
+  opts: { include?: readonly StatusOfInclude[] } = {}
 ): Promise<StatusOfAnswer[]> {
+  const withMoves = opts.include?.includes("moves") ?? false;
   // The doors cap the list (`statusOfInput`); nothing is dropped here.
   const asked = [...new Set(rawIds)];
   // Every id column is a uuid: anything else is simply not a thing here.
@@ -230,6 +299,7 @@ export async function readStatusOf(
       proposals: { targetIds: [t.id] },
       blockedNodes: [{ kind: "entity", id: t.id }],
       holds: [{ subjectType: "entity", subjectId: t.id }],
+      steps: [{ subjectType: "entity", subjectId: t.id }],
     });
   }
   for (const sid of new Set([
@@ -310,12 +380,16 @@ export async function readStatusOf(
               ? resolveStatusLabel(t.status)
               : null,
           category,
+          tone: option ? lifecycleOptionTone(option) : toneOf(t.status),
           ...since,
           ...(forDays !== null && afterDays !== undefined
             ? { stuck: { afterDays, forDays } }
             : {}),
           waitingOn: await waitingOf(t.id),
           ...(await holdOf(`entity:${t.id}`, category)),
+          ...(withMoves && lifecycle
+            ? { moves: movesFrom(lifecycle, t.status ?? null) }
+            : {}),
           link: openLink(t.id),
         };
       })()
@@ -333,6 +407,7 @@ export async function readStatusOf(
           status: g.status,
           label: resolveTrackStatusLabel(g.status),
           category,
+          tone: toneOf(g.status),
           ...sinceOf(`track:${g.id}`, g.createdAt),
           waitingOn: await orUnavailable(
             goalFacts!.then((f) => f.get(g.id)?.waitingOn ?? [])
@@ -358,6 +433,7 @@ export async function readStatusOf(
           status: s.status,
           label: resolveStatusLabel(s.status),
           category,
+          tone: toneOf(s.status),
           ...sinceOf(`focus_session:${s.id}`, done ? s.closedAt : s.startedAt),
           waitingOn: await waitingOf(`session:${s.id}`),
           ...(await holdOf(`focus_session:${s.id}`, category)),
@@ -383,6 +459,7 @@ export async function readStatusOf(
         status: r.status,
         label: resolveStatusLabel(r.status),
         category: runStatusCategory(r.status),
+        tone: toneOf(r.status),
         since: iso(r.completedAt ?? r.startedAt),
         sinceMeasured: settled,
         waitingOn: r.sessionId ? await waitingOf(`session:${r.sessionId}`) : [],

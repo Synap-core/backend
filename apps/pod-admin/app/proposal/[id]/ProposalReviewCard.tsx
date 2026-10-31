@@ -95,7 +95,7 @@ import {
 import { deriveDeferredWritesReview } from "@synap-core/types/proposals/deferred-writes";
 import { DocumentChanges } from "../../_lib/object/content/document-changes";
 import { documentChanges } from "../../_lib/object/content/document-changes-model";
-import { AlwaysApproveMenu } from "./AlwaysApproveMenu";
+import { AlwaysApproveMenu, RejectNeverMenu } from "./AlwaysApproveMenu";
 import { DeferredWritesList } from "./DeferredWritesList";
 import { FailedApproval } from "./FailedApproval";
 import {
@@ -711,6 +711,10 @@ function DecisionButtons({
         !pageOnlyReasonActs(proposalPageOnlyReason(p)) && (
           <AlwaysApproveMenu proposal={p} disabled={busy} onDone={onDecided} />
         )}
+      {/* "Never" narrows, so it stays beside a change that acts on its own. */}
+      {mode.kind === "plain" && (
+        <RejectNeverMenu proposal={p} disabled={busy} onDone={onDecided} />
+      )}
       {undoChip}
       {waiting && (
         <span className="text-[12px] text-foreground/60">

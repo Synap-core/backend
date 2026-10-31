@@ -36,6 +36,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Button, Spinner, addToast } from "@heroui/react";
 import { KeyRound, ShieldAlert, Trash2 } from "lucide-react";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
@@ -105,6 +106,7 @@ const STAT_MEANINGS: ReadonlyArray<{
 ];
 
 export default function MyVaultPage() {
+  const router = useRouter();
   const secrets = trpc.secretsVault.list.useQuery();
   const hasVault = trpc.secretsVault.hasVault.useQuery();
   const stats = trpc.secretsVault.getSecurityStats.useQuery();
@@ -199,6 +201,8 @@ export default function MyVaultPage() {
                   Icon={KeyRound}
                   primary={secret.name}
                   secondary={describe(secret)}
+                  /* Each secret is a door to its own page. */
+                  onSelect={() => router.push(`/my-vault/${secret.id}`)}
                   status={
                     secret.isCompromised
                       ? { kind: "down", label: "Compromised" }

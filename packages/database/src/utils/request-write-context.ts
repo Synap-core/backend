@@ -48,6 +48,8 @@ export interface RequestWriteContext {
   readonly conversationCwd?: string;
   /** C1 — which OS process of that conversation is calling (0373). */
   readonly process?: ProcessIdentity;
+  /** 0384 — what that conversation says it is doing, and when the pod heard it. */
+  readonly runnerState?: RunnerStateReport;
   /** W1 — what the calling key may touch (absent = a key with no grant). */
   readonly grant?: KeyGrant;
   /** B4 — the sessions this request's writes were FILED under (see below). */
@@ -540,26 +542,61 @@ export function parseProcessIdentity(
 }
 
 /**
+ * What a runner (a conversation's process) says it is doing (0384), sent by
+ * any harness adapter on any key-auth call: header `X-Synap-Runner-State`, or
+ * `_meta["live.synap/runnerState"]` for an MCP client that cannot set headers.
+ * `ended` is for a harness that knows its conversation stopped; one that just
+ * stops calling leaves the runner live window instead. Telemetry: recorded on
+ * that runner's `session_runners` rows, never on the client key.
+ */
+export const RUNNER_STATE_HEADER = "x-synap-runner-state";
+export const RUNNER_STATE_META_KEY = "live.synap/runnerState";
+export const RUNNER_STATES = [
+  "busy",
+  "idle",
+  "needs_permission",
+  "ended",
+] as const;
+export type RunnerState = (typeof RUNNER_STATES)[number];
+
+export interface RunnerStateReport {
+  state: RunnerState;
+  /** When the pod read the report — the order between two reports. */
+  reportedAt: Date;
+}
+
+/** A client-supplied runner state, or undefined when it names none we know. */
+export function parseRunnerState(
+  raw: string | null | undefined
+): RunnerState | undefined {
+  const v = raw?.trim().toLowerCase();
+  return RUNNER_STATES.find((s) => s === v);
+}
+
+/**
  * Run `fn` with the calling client recorded; `undefined` enters no scope. The
- * cwd and the process ride only with a client key: they describe that
- * client's conversation.
+ * cwd, the process and the runner state ride only with a client key: they
+ * describe that client's conversation.
  */
 export function runWithClientKey<T>(
   clientKey: string | undefined,
   fn: () => T,
   conversationCwd?: string | null,
-  processIdentity?: string | null
+  processIdentity?: string | null,
+  runnerState?: string | null
 ): T {
   if (!clientKey) return fn();
   const slot = storage.getStore()?.usage;
   if (slot) slot.clientKey = clientKey;
   const cwd = normalizeConversationCwd(conversationCwd);
   const process = parseProcessIdentity(processIdentity);
+  const state = parseRunnerState(runnerState);
   return runWithPatch(
     {
       clientKey,
       ...(cwd ? { conversationCwd: cwd } : {}),
       ...(process ? { process } : {}),
+      ...(state ? { runnerState: { state, reportedAt: new Date() } } : {}),
     },
     fn
   );
@@ -578,6 +615,11 @@ export function getRequestConversationCwd(): string | undefined {
 /** The calling OS process, when its client named one (0373). */
 export function getRequestProcess(): ProcessIdentity | undefined {
   return storage.getStore()?.process;
+}
+
+/** What the calling runner says it is doing, when its client named it (0384). */
+export function getRequestRunnerState(): RunnerStateReport | undefined {
+  return storage.getStore()?.runnerState;
 }
 
 /**

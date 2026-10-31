@@ -13,20 +13,25 @@ import {
   asc,
   db,
   drizzleSql,
+  entities,
   eq,
   events,
   focusSessions,
   inArray,
+  isNull,
   links,
   listHolds,
   or,
+  ProfileResolutionService,
   proposals,
   ProposalStatus,
   type HoldSubjectRef,
 } from "@synap/database";
+import { profiles } from "@synap/database/schema";
 import type { PlaybookRunStatus } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
 import {
+  findLifecycleOption,
   parseHoldDevRef,
   parseHoldMovesRef,
   type LifecycleCategory,
@@ -38,10 +43,12 @@ import {
   HOLD_ON_WAITING_ON,
   waitingOnReasonOf,
   type WaitingOnMark,
+  type WaitingOnReason,
   type WaitingOnRef,
   type WaitingOnSource,
 } from "@synap-core/types/units";
 import {
+  holdDevRefNamed,
   parsePullRequestRef,
   type PullRequestRef,
   type PullRequestStateFacts,
@@ -58,6 +65,7 @@ import {
   type SessionReader,
 } from "../../access/session-visibility.js";
 import { grantReadPredicate } from "../../access/grant-read.js";
+import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
 import { OPEN_SESSION_STATUSES } from "../focus-sessions/session-statuses.js";
 import type { SessionSubject } from "../focus-sessions/session-subject-where.js";
 import { extractProposalName } from "../proposals/fingerprint.js";
@@ -194,6 +202,12 @@ export interface WaitingOnQuestion {
   blockedNodes?: Array<{ kind: "session" | "entity" | "track"; id: string }>;
   /** Things whose CURRENT hold counts (a pause, read off the transition log). */
   holds?: HoldSubjectRef[];
+  /**
+   * Things whose CURRENT step declares a wait (`waits` on its lifecycle
+   * option: "sent" waits on the client's reply). A thing whose current hold
+   * this question counts waits on that hold instead: the pause names it.
+   */
+  steps?: Array<{ subjectType: "entity"; subjectId: string }>;
   /** Sessions whose open pull request outcomes count, by their recorded state. */
   workUnitsOf?: string[];
   /** Sessions whose OPEN sub-sessions (`spawned_from`) count. */
@@ -256,6 +270,9 @@ export async function readWaitingOn(
  *   · pending proposals, under THE proposal user floor;
  *   · open `blocked_by` blockers (THE dependency read);
  *   · the current hold of a paused thing (`listHolds`, `HOLD_ON_WAITING_ON`);
+ *   · the wait a thing's current step declares (`waits`, read through
+ *     `getEffectiveLifecycle`), naming who or what its `refFrom` property
+ *     holds only when the reader may read that thing;
  *   · open pull request outcomes, by what the pod recorded about them
  *     (`readPullRequestStates`, one read for every PR asked about): checks
  *     not settled wait on CI, green ones on the merge queue;
@@ -306,6 +323,7 @@ export async function readWaitingOnFor<K>(
   const unitSessionIds = union((q) => q.workUnitsOf, false);
   const unitContainerIds = union((q) => q.workUnitsOf, true);
   const parentIds = union((q) => q.childrenOf);
+  const stepIds = union((q) => q.steps?.map((st) => st.subjectId));
 
   // Loaded late: these reach the router layer, the event floor or the packet.
   const [{ readDependencyFacts }, { proposalUserFloor }, { listNeedsYouOwed }] =
@@ -339,6 +357,7 @@ export async function readWaitingOnFor<K>(
     holds,
     units,
     children,
+    stepWaits,
   ] = await Promise.all([
     owedOf(owedSessionIds, false),
     owedOf(owedContainerIds, true),
@@ -387,6 +406,7 @@ export async function readWaitingOnFor<K>(
       : Promise.resolve([]),
     readOpenWorkUnits(reader, unitSessionIds, unitContainerIds),
     readOpenChildren(reader, parentIds),
+    readStepWaits(userId, stepIds),
   ]);
 
   // Which of the sessions behind a source the reader may READ: only those
@@ -460,9 +480,11 @@ export async function readWaitingOnFor<K>(
         sources.push({ kind: "blocked_by", ref: blockerRef(b) });
       }
     }
+    const heldHere = new Set<string>();
     for (const h of q.holds ?? []) {
       const held = holdOf.get(holdKey(h));
       if (!held) continue;
+      if (h.facetId == null) heldHere.add(`${h.subjectType}:${h.subjectId}`);
       const moves =
         held.hold.until && "moves" in held.hold.until
           ? held.hold.until.moves
@@ -478,6 +500,11 @@ export async function readWaitingOnFor<K>(
           ? unnamed(source)
           : { ...source, ref: holdWaitingOnRef(held.hold, readable) }
       );
+    }
+    for (const st of q.steps ?? []) {
+      if (heldHere.has(`${st.subjectType}:${st.subjectId}`)) continue;
+      const wait = stepWaits.get(st.subjectId);
+      if (wait) sources.push(wait);
     }
     for (const sid of q.workUnitsOf ?? []) {
       // Another question's container may have read a session this one may not.
@@ -542,13 +569,21 @@ function unnamed(source: WaitingOnSource): WaitingOnSource {
  * What a hold names, as a ref: its reason in the mover's words, else its
  * date, else its reason's words. A `<kind>:<uuid>` ref is an id, never shown.
  * With `readable`, a session it resumes on is named only when the reader may
- * read it.
+ * read it. A hold on a DEV FACT names that fact, in the hold line's words
+ * (`holdDevRefNamed`): `backend#539` with its GitHub page, `backend main`,
+ * `job kit-h`.
  */
 export function holdWaitingOnRef(
   hold: RecordedHold,
   readable?: ReadonlySet<string>
 ): WaitingOnRef {
   const until = hold.until;
+  const dev = until && "moves" in until ? holdDevRefNamed(until.moves) : null;
+  if (dev) {
+    return dev.url
+      ? { kind: "pull_request", url: dev.url, label: dev.label }
+      : { kind: "thing", label: dev.label };
+  }
   const parsed =
     until && "moves" in until ? parseHoldMovesRef(until.moves) : null;
   const moves =
@@ -691,6 +726,122 @@ async function readOpenWorkUnits(
     const list = out.get(o.sessionId) ?? [];
     list.push({ url: o.url, label: o.label, facts });
     out.set(o.sessionId, list);
+  }
+  return out;
+}
+
+/**
+ * The wait each thing's CURRENT step declares (`LifecycleOption.waits`), as a
+ * `step` source: only for a thing the reader may read, standing in a declared
+ * option that waits. Its ref names the thing its `refFrom` property holds (an
+ * entity id on the row) when the reader may read that thing: its title, as a
+ * `person` door for a person, else a `thing`. Otherwise the wait is counted
+ * under its reason's words, never an id ({@link unnamed}). One read of the
+ * things, one lifecycle read per kind, one read of the named things. THROWS.
+ */
+async function readStepWaits(
+  userId: string,
+  entityIds: readonly string[]
+): Promise<Map<string, WaitingOnSource>> {
+  const out = new Map<string, WaitingOnSource>();
+  const ids = [...new Set(entityIds)].filter((id) => UUID.test(id));
+  if (ids.length === 0) return out;
+  const rows = await db
+    .select({
+      id: entities.id,
+      status: entities.status,
+      profileId: entities.profileId,
+      workspaceId: entities.workspaceId,
+      properties: entities.properties,
+    })
+    .from(entities)
+    .where(
+      and(
+        inArray(entities.id, ids),
+        isNull(entities.deletedAt),
+        entityReadVisibleWhere(userId)
+      )
+    );
+  const resolver = new ProfileResolutionService(db);
+  const lifecycles = new Map<
+    string,
+    ReturnType<typeof resolver.getEffectiveLifecycle>
+  >();
+  const waiting: Array<{
+    id: string;
+    source: WaitingOnSource;
+    reason: WaitingOnReason;
+    refId: string | null;
+  }> = [];
+  for (const r of rows) {
+    if (!r.profileId || !r.status) continue;
+    let read = lifecycles.get(r.profileId);
+    if (!read) {
+      read = resolver.getEffectiveLifecycle(r.profileId, r.workspaceId);
+      lifecycles.set(r.profileId, read);
+    }
+    const waits = findLifecycleOption(await read, r.status)?.waits;
+    if (!waits) continue;
+    const source: WaitingOnSource = {
+      kind: "step",
+      on: waits.on,
+      ...(waits.waitKind ? { waitKind: waits.waitKind } : {}),
+    };
+    // A step parked on nobody makes no mark: nothing to read or name.
+    const reason = waitingOnReasonOf(source);
+    if (!reason) continue;
+    const props = (r.properties ?? {}) as Record<string, unknown>;
+    const value = waits.refFrom ? props[waits.refFrom] : undefined;
+    waiting.push({
+      id: r.id,
+      source,
+      reason,
+      refId:
+        typeof value === "string" && UUID.test(value) && value !== r.id
+          ? value
+          : null,
+    });
+  }
+  const refIds = [
+    ...new Set(waiting.flatMap((w) => (w.refId ? [w.refId] : []))),
+  ];
+  // Only a thing the reader may read is named.
+  const named = new Map<
+    string,
+    { title: string | null; profileSlug: string | null }
+  >();
+  if (refIds.length) {
+    const refs = await db
+      .select({
+        id: entities.id,
+        title: entities.title,
+        profileSlug: profiles.slug,
+      })
+      .from(entities)
+      .leftJoin(profiles, eq(profiles.id, entities.profileId))
+      .where(
+        and(
+          inArray(entities.id, refIds),
+          isNull(entities.deletedAt),
+          entityReadVisibleWhere(userId)
+        )
+      );
+    for (const r of refs) named.set(r.id, r);
+  }
+  for (const w of waiting) {
+    const ref = w.refId ? named.get(w.refId) : undefined;
+    if (!ref) {
+      out.set(w.id, unnamed(w.source));
+      continue;
+    }
+    out.set(w.id, {
+      ...w.source,
+      ref: {
+        kind: ref.profileSlug === "person" ? "person" : "thing",
+        id: w.refId!,
+        label: ref.title?.trim() || resolveWaitingOnReasonLabel(w.reason),
+      },
+    });
   }
   return out;
 }

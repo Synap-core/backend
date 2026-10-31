@@ -190,6 +190,26 @@ export function holdDevMovesRef(ref: HoldDevRef): string {
   }
 }
 
+/**
+ * THE name of a dev fact, as a person reads it: `backend#539`, `backend main`,
+ * `job kit-h` (the repo's name without its owner). Every reader that names
+ * what a dev hold waits on says these words: the hold line (`holdLine`,
+ * `goal/marks.ts`), the waiting-on ref (`holdWaitingOnRef`, api) and the
+ * watcher's dev signals.
+ */
+export function holdDevRefLabel(ref: HoldDevRef): string {
+  switch (ref.kind) {
+    case "pr":
+      return `${repoName(ref.repo)}#${ref.number}`;
+    case "main":
+      return `${repoName(ref.repo)} main`;
+    case "job":
+      return `job ${ref.name}`;
+  }
+}
+
+const repoName = (repo: string) => repo.split("/").pop() ?? repo;
+
 /** `entity:<id>` → its parts, or null when it names no transition subject. */
 export function parseHoldMovesRef(
   ref: string

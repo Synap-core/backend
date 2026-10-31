@@ -185,7 +185,8 @@ export interface AgentGovernanceOverride {
   targetKind: "action" | "profile" | "capability" | "connection";
   targetPattern: string;
   targetProfile: string | null;
-  verdict: "auto" | "propose";
+  /** `deny` = a person's "Never" for this agent (0381). */
+  verdict: "auto" | "propose" | "deny";
   scopeKind: "pod" | "workspace";
   workspaceId: string | null;
   /** Provenance — who/what minted this rule. */

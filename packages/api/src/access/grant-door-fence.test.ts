@@ -456,6 +456,18 @@ describe("agent roster door: the person's agents, by a named read", () => {
       ok
     );
   });
+  it.each([
+    [["agent.read"], true],
+    [["entity.lead.update"], false],
+    [["messaging.read"], false],
+  ] as const)(
+    "the person's assignment read: a pinned key holding %j → %s",
+    (permissions, ok) => {
+      expect(
+        restDoorAllowed("GET", "/agent-users/assignments", app(...permissions))
+      ).toBe(ok);
+    }
+  );
   it("opens the roster only, never an agent's own doors", () => {
     const READER = app("agent.read");
     expect(restDoorAllowed("GET", "/agent-users/", READER)).toBe(true);

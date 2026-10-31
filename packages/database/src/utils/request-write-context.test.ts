@@ -24,6 +24,9 @@ import {
   conversationCwdPatch,
   parseProcessIdentity,
   getRequestProcess,
+  parseRunnerState,
+  getRequestRunnerState,
+  RUNNER_STATES,
 } from "./request-write-context.js";
 
 const S = "11111111-1111-4111-8111-111111111111";
@@ -256,6 +259,63 @@ describe("the calling process (0373)", () => {
         () => getRequestProcess(),
         "/w",
         "d:7:1761650000000"
+      )
+    ).toBeUndefined();
+  });
+});
+
+describe("the runner state (0384)", () => {
+  it("knows exactly busy, idle, needs_permission and ended, case and spaces folded; anything else is none", () => {
+    expect([...RUNNER_STATES]).toEqual([
+      "busy",
+      "idle",
+      "needs_permission",
+      "ended",
+    ]);
+    for (const s of RUNNER_STATES) expect(parseRunnerState(s)).toBe(s);
+    expect(parseRunnerState(" Needs_Permission ")).toBe("needs_permission");
+    for (const bad of [
+      undefined,
+      null,
+      "",
+      "working",
+      "needs-permission",
+      "busy,idle",
+    ])
+      expect(parseRunnerState(bad)).toBeUndefined();
+  });
+
+  it("rides with a client key, stamped with when the pod heard it; no key or no known state enters nothing", async () => {
+    const before = Date.now();
+    const seen = await runWithClientKey(
+      "key:k|conv:claude-code:c",
+      async () => {
+        await tick();
+        return { rs: getRequestRunnerState(), p: getRequestProcess()?.host };
+      },
+      "/work",
+      "devbox:7:1761650000000",
+      "needs_permission"
+    );
+    expect(seen.p).toBe("devbox");
+    expect(seen.rs?.state).toBe("needs_permission");
+    expect(seen.rs!.reportedAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(
+      runWithClientKey(
+        undefined,
+        () => getRequestRunnerState(),
+        null,
+        null,
+        "busy"
+      )
+    ).toBeUndefined();
+    expect(
+      runWithClientKey(
+        "key:k|conv:claude-code:c",
+        () => getRequestRunnerState(),
+        null,
+        null,
+        "asleep"
       )
     ).toBeUndefined();
   });

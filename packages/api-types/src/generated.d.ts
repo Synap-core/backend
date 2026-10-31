@@ -3704,6 +3704,75 @@ export interface AiProviderModelEntry {
 	costPer1MInput?: number;
 	costPer1MOutput?: number;
 }
+/**
+ * Focus Sessions Schema
+ *
+ * A focus session is a goal-bound user work session — a discrete "working
+ * mode" where the user (and optionally IS agents) collaborate toward a
+ * stated objective.
+ *
+ * This is WORKFLOW-SIDE infrastructure, not data-side. It has no relationship
+ * to the `sessions` table, which is IS memory/compaction machinery.
+ *
+ * ── LIFECYCLE ───────────────────────────────────────────────────────────────
+ * This block must account for EVERY member of `FocusSessionStatus`. It did not:
+ * it described `active → paused ↔ active → closed (or → stale)` while the enum
+ * also carried `forming` and `scheduled`, two pre-start states the prose had
+ * never heard of. A guard now derives both sets and fails when they diverge
+ * (`__tests__/focus-session-lifecycle-doc.test.ts`), so a new status cannot be
+ * added without this paragraph being updated in the same commit — prose alone
+ * decays exactly the way the first version of this note did.
+ *
+ * PRE-START (a row exists; the work has not begun):
+ *   - scheduled — waits for a CLOCK. The session was materialized ahead of time
+ *     for a moment it is FOR; a person opens it when that moment arrives.
+ *     Produced by `materializeScheduledSession`
+ *     (api services/focus-sessions/schedule-session.ts) from a playbook whose
+ *     `schedule.mode` is `"appointment"`. This is its ONLY producer.
+ *   - forming — waits for a PERSON. Reserved for a session that has been drafted
+ *     but not yet constituted. ⚠️ STILL UNPRODUCED: nothing in any repo assigns
+ *     it (verified 2026-09-08 across the monorepo; the only occurrences are one
+ *     browser test fixture and an unrelated content status). It is NOT redundant
+ *     with triage — `services/focus-sessions/triage.ts` states outright that
+ *     acceptance is a RECEIPT (`metadata.triage.acceptedAt`), not a status,
+ *     precisely so a session can be `forming`/`scheduled` AND triage-pending at
+ *     once. Status and acceptance are orthogonal axes. `forming` is unbuilt, not
+ *     superfluous; do not repurpose or delete it without deciding what it means.
+ *
+ * RUNNING:  active → paused ↔ active
+ *
+ * EXITS (terminal — every one MUST go through `completeFocusSession`):
+ *   closed · failed · cancelled
+ *
+ * NON-TERMINAL DECAY:
+ *   - stale — auto-set by the focus-session reaper (C8 lifecycle hygiene) when
+ *     an `active`/`paused` row has had no `updatedAt` activity for
+ *     REAPER_STALE_HOURS. Non-destructive: the row can still be
+ *     completed/reopened like any other session; it only stops counting as a
+ *     live "in progress" session. The reaper is scoped to `('active','paused')`
+ *     ONLY — a `scheduled` row is never aged out, which is why the appointment
+ *     producer owns its own non-accumulation policy (roll-forward) rather than
+ *     relying on the reaper.
+ */
+/**
+ * One stage a session ENTERED (0382), oldest first — the shape of a goal's
+ * `ProjectTrackStageHistoryEntry` (0274) plus where the move came from.
+ * Appended by `appendSessionStageHistory` in the write that sets
+ * `current_stage`. A re-entered stage is a NEW entry.
+ */
+export interface SessionStageHistoryEntry {
+	stageKey: string;
+	/** The stage it came from; `null` when the session had none. */
+	fromStage: string | null;
+	/** ISO-8601. */
+	enteredAt: string;
+	/** Who moved it: the agent's user id when an agent drove it, else the human. */
+	actor: string;
+	/** The human the move is attributed to (the reviewer, on an approval). */
+	userId: string;
+	/** Which writer recorded it: the stage door, or a re-applied approval. */
+	via: "advance" | "approval";
+}
 declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	columns: {
 		agentIds: import("drizzle-orm/pg-core").PgColumn<{
@@ -4010,6 +4079,25 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			notNull: false;
 			tableName: "focus_sessions";
 		}, {}, {}>;
+		stageHistory: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgJsonb";
+			data: SessionStageHistoryEntry[];
+			dataType: "json";
+			driverParam: unknown;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: true;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "stage_history";
+			notNull: true;
+			tableName: "focus_sessions";
+		}, {}, {
+			$type: SessionStageHistoryEntry[];
+		}>;
 		stages: import("drizzle-orm/pg-core").PgColumn<{
 			baseColumn: never;
 			columnType: "PgJsonb";
@@ -15994,9 +16082,17 @@ export interface PacketRunnerItem {
 		processId: string;
 		startedAt?: string;
 	}>;
+	/**
+	 * What the runner says it is doing (0384, `X-Synap-Runner-State`): `busy`,
+	 * `idle`, `needs_permission`, or `ended` (it said so, or left the live
+	 * window). `null` while live = its client names no state: unknown, not idle.
+	 */
+	state: "busy" | "ended" | "idle" | "needs_permission" | null;
+	/** When it entered that state; for a runner gone quiet, when it was last seen. */
+	stateSince?: string;
 	firstSeenAt: string;
 	lastSeenAt: string;
-	/** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read. */
+	/** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read, and not `ended`. */
 	live: boolean;
 	/** The shell command that reopens it (`resolveAgentConversation`); absent for a harness we cannot reopen. */
 	resume?: string;
@@ -16475,6 +16571,21 @@ export interface ContinuationPacket {
 	live: {
 		lastActivityAt: string | null;
 		measuredAt: string;
+		/**
+		 * What the LIVE runners SAY they are doing (0384), folded by
+		 * `foldRunnerState`: `needs_permission` over `busy` over `idle`;
+		 * `state: null` = no live runner named one. The harness's own word,
+		 * beside the pod-activity `state` above and never folded into it. A
+		 * failed runners read is `unavailable` (see `runners`), never null.
+		 */
+		runner: {
+			since: string | null;
+			state: "busy" | "idle" | "needs_permission" | null;
+			status: "ok";
+		} | {
+			reason: string;
+			status: "unavailable";
+		};
 		since: string | null;
 		state: "idle" | "working";
 		status: "ok";
@@ -16585,6 +16696,20 @@ export interface ScopeRollup {
 	};
 	waitingOn: WaitingOnMark[];
 }
+/**
+ * A move a thing's step offers: every declared option but the one it stands
+ * on, the main path first (declared order), then the off-path ones. It moves
+ * only through `moveStatus`; this is what a surface may offer.
+ */
+export interface StatusOfMove {
+	/** The option key a move targets. */
+	to: string;
+	label: string;
+	/** Only a person may move a thing INTO it. */
+	humanOnly: boolean;
+	/** It is a pause: the move must say what it waits on (a hold). */
+	needsHold: boolean;
+}
 type Unavailable$1 = {
 	status: "unavailable";
 };
@@ -16595,6 +16720,11 @@ export interface StatusOf {
 	status: string | null;
 	label: string | null;
 	category: LifecycleCategory | null;
+	/**
+	 * THE tone of its status: the declared option's (`lifecycleOptionTone`),
+	 * else the status word's (`resolveStatusTone`); null with no status.
+	 */
+	tone: UnitTone | null;
 	/** When it entered this status (ISO), or a stored fallback (below). */
 	since: string | null;
 	/** False: no move was recorded, so `since` is when it was created or started. */
@@ -16618,6 +16748,11 @@ export interface StatusOf {
 	} | Unavailable$1;
 	/** Sessions only: THE next move (`deriveNextMove`). */
 	nextMove?: ContinuationNextMove;
+	/**
+	 * Things with a declared lifecycle, on `include: ["moves"]` only: the
+	 * moves its step offers ({@link StatusOfMove}).
+	 */
+	moves?: StatusOfMove[];
 	link: string;
 }
 export type StatusOfAnswer = StatusOf | {
@@ -18146,9 +18281,11 @@ export type ExecuteCapabilityResult = {
 	 * just had no way to make it actionable — 0 of 11 containers on the live
 	 * pod are approved, so this is the wall every run hits today.
 	 *
-	 * A deny from this gate is ALWAYS an approval problem (a dead connection
+	 * A deny from this gate is an approval problem (a dead connection
 	 * surfaces as `kind:"error"` with `errorClass:"no_connection"`, which
-	 * carries its own `connect` block) — the two fixes stay distinct.
+	 * carries its own `connect` block) — the two fixes stay distinct —
+	 * except a person's "Never" (`reasonCode`), which nothing but that
+	 * person can lift.
 	 */
 	enable?: CapabilityNextAction;
 	/**
@@ -18160,6 +18297,12 @@ export type ExecuteCapabilityResult = {
 	enableProposal?: CapabilityEnableOffer;
 	kind: "deny";
 	reason: string;
+	/**
+	 * A typed refusal the caller can branch on: `DENIED_BY_RULE` = a
+	 * person's stored "Never" on this capability for this agent (0381).
+	 * Such a refusal carries no `enable`: enabling would not fix it.
+	 */
+	reasonCode?: string;
 } | {
 	/**
 	 * CONNECTION moment: a `no_connection` / `auth` failure means the
@@ -20492,6 +20635,7 @@ declare function projectSessionRows(sessions: FocusSession[], userId: string | n
 	playbookId: string | null;
 	progress: number | null;
 	projectId: string | null;
+	stageHistory: SessionStageHistoryEntry[];
 	stages: unknown;
 	startedAt: Date;
 	status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -23403,6 +23547,178 @@ export interface MarketplacePreflight extends MarketInstallSummary {
 		connectors: boolean;
 		network: boolean;
 	};
+}
+declare const PACKAGE_FIELD_STATES: readonly [
+	"updates",
+	"yours",
+	"both",
+	"same"
+];
+export type PackageFieldState = (typeof PACKAGE_FIELD_STATES)[number];
+declare const PACKAGE_UPDATE_NEEDS: readonly [
+	"consent",
+	"choice",
+	"review",
+	"nothing"
+];
+export type PackageUpdateNeeds = (typeof PACKAGE_UPDATE_NEEDS)[number];
+/** How many fields of a package are in each state. */
+export type PackageFieldCounts = Record<PackageFieldState, number>;
+/** The kinds of installed row a plan compares today. */
+export type PackageUpdateRowKind = "automation" | "skill" | "view";
+/** One row of `GET /package-updates` / `packageUpdates.list`. */
+export interface PackageUpdateSummary {
+	slug: string;
+	/** The catalog kind of the package (`skill`, `view`, `automation`). */
+	kind: string;
+	name: string;
+	/** The version the pod's rows last converged to; null when never recorded. */
+	installedVersion: string | null;
+	latestVersion: string | null;
+	counts: PackageFieldCounts;
+	/** Records the update would change (space updates only; 0 otherwise). */
+	dataChanges: number;
+	needs: PackageUpdateNeeds;
+	/** The pod path that opens the review page (`/open/update/<slug>`). */
+	reviewUrl: string;
+}
+/**
+ * `GET /package-updates` / `packageUpdates.list`: every installed package
+ * whose catalog version moved, and every one whose catalog could not be read
+ * (named with the reason, never folded into "nothing waiting").
+ */
+export interface PackageUpdateList {
+	updates: PackageUpdateSummary[];
+	unreadable: Array<{
+		kind: string;
+		name: string;
+		reason: string;
+		slug: string;
+	}>;
+}
+/** One pending change to existing records a space update would run. */
+export interface PackageDataChange {
+	/** The op key `acceptDataChanges` names. */
+	id: string;
+	/** One plain sentence. */
+	sentence: string;
+	/** How many records it changes; null when the count failed (never 0). */
+	affected: number | null;
+	/** Never run by an update: an operator step. */
+	destructive: boolean;
+}
+/** One compared field of one installed row. */
+export interface PackageUpdateField {
+	/** The row field name (`body`, `description`, `flowDefinition`, …). */
+	key: string;
+	/** Its words for a person (`resolvePackageFieldLabel`). */
+	label: string;
+	state: PackageFieldState;
+	/** The catalog's value when installed (or last decided). */
+	base: unknown;
+	/** The catalog's value now. */
+	desired: unknown;
+	/** The pod's value now. */
+	live: unknown;
+	/**
+	 * `both` text fields only: the line-level 3-way merge of the two edits, or
+	 * null when they overlap (D2: "Combine both" is offered only without an
+	 * overlap). Absent for every other field.
+	 */
+	merged?: string | null;
+	/** `both` text fields only: the two edits touch the same lines. */
+	overlap?: boolean;
+}
+/** `GET /package-updates/:slug` / `packageUpdates.get`. */
+export interface PackageUpdatePlan {
+	slug: string;
+	kind: string;
+	name: string;
+	installedVersion: string | null;
+	latestVersion: string | null;
+	/** The catalog's change notes since the installed version, when it has any. */
+	notes?: string[];
+	rows: Array<{
+		fields: PackageUpdateField[];
+		name: string;
+		rowId: string;
+		rowKind: PackageUpdateRowKind;
+	}>;
+	/**
+	 * A space update's changes to existing records (the conversion engine's
+	 * pending ops, as `/packages/preflight` reports them). The person agrees by
+	 * sending each consentable item's `id` in `acceptDataChanges`. A
+	 * `destructive` item is never run by an update: it is an operator step on
+	 * pod admin (`needsPodAdmin`).
+	 */
+	dataChanges?: {
+		count: number;
+		items: PackageDataChange[];
+		needsPodAdmin: boolean;
+	};
+	/**
+	 * The choice the pod recommends per `both` field, keyed `<rowId>:<field>`:
+	 * `catalog` when the pod's edit is already inside the catalog's text,
+	 * `combine` when the two edits merge without overlapping. Absent = no
+	 * recommendation; a person decides.
+	 */
+	recommended?: Record<string, PackageUpdateChoiceName>;
+	counts: PackageFieldCounts;
+	needs: PackageUpdateNeeds;
+}
+declare const PACKAGE_UPDATE_CHOICE_NAMES: readonly [
+	"catalog",
+	"mine",
+	"combine"
+];
+export type PackageUpdateChoiceName = (typeof PACKAGE_UPDATE_CHOICE_NAMES)[number];
+/** One field an apply (or an undo) changed. */
+export interface PackageUpdateChange {
+	rowKind: PackageUpdateRowKind;
+	rowId: string;
+	field: string;
+	before: unknown;
+	after: unknown;
+}
+/**
+ * The receipt of one package update — kept in the pod's event log as a
+ * `package.updated` event. `source: 'automatic'` is the start-up pass applying
+ * fields nobody edited (D3); `person` is an apply from a door.
+ */
+export interface PackageUpdateReceipt {
+	id: string;
+	slug: string;
+	kind: string;
+	name: string;
+	fromVersion: string | null;
+	toVersion: string | null;
+	appliedAt: string;
+	source: "automatic" | "person";
+	changes: PackageUpdateChange[];
+	/** Undo refuses after this instant (D5: 30 days). */
+	undoUntil: string;
+	/** When it was undone, or null. */
+	undoneAt: string | null;
+}
+/**
+ * The answer of an apply or an undo. A person's write lands and returns its
+ * receipt; an agent's write is filed as proposals through each row's own
+ * governed `.update` door, and lands only when a person approves them.
+ */
+export type PackageUpdateApplyResult = {
+	receipt: PackageUpdateReceipt | null;
+	status: "applied";
+} | {
+	proposalIds: string[];
+	status: "proposed";
+};
+export type StandaloneKind = "automation" | "skill" | "view";
+export interface DetachResult {
+	detached: boolean;
+	kind: StandaloneKind;
+	id: string;
+	outcome?: "proposed" | "updated";
+	reason?: string;
 }
 /**
  * Core API Router
@@ -33359,6 +33675,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -33738,6 +34055,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -33803,6 +34121,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -33842,6 +34161,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34265,6 +34585,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34298,6 +34619,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbooks?: SessionPlaybookCandidates | undefined;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34360,6 +34682,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34471,6 +34794,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projectId: string | null;
 				recall: SessionRecallView;
 				rerun: RerunAvailability;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34511,6 +34835,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34629,6 +34954,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34752,6 +35078,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -35319,6 +35646,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					unblocks?: string | undefined;
 					why?: string | undefined;
 				}[] | undefined;
+				expectedStatus?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | undefined;
 				followPlaybookId?: string | null | undefined;
 				followStageKey?: string | null | undefined;
 				goal?: string | undefined;
@@ -35514,6 +35842,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -35851,7 +36180,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetKind: "action" | "capability" | "connection" | "profile";
 				targetPattern: string;
 				targetProfile?: string | undefined;
-				verdict: "auto" | "propose";
+				verdict: "auto" | "deny" | "propose";
 				workspaceId?: string | undefined;
 			};
 			meta: object;
@@ -35871,7 +36200,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				};
 			};
@@ -35905,7 +36234,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				} | null;
 			};
@@ -35930,7 +36259,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				}[];
 			};
@@ -35953,7 +36282,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				}[];
 			};
@@ -36094,7 +36423,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				};
 			};
@@ -38965,6 +39294,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		statusOf: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				ids: string[];
+				include?: "moves"[] | undefined;
 			};
 			meta: object;
 			output: StatusOfAnswer[];
@@ -40914,6 +41244,82 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: LandedObjectsPage;
 		}>;
 	}>>;
+	packageUpdates: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
+				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		applyUpdate: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				acceptDataChanges?: string[] | undefined;
+				choices?: Record<string, "catalog" | "combine" | "mine" | {
+					value: unknown;
+				}> | undefined;
+				expectedVersion: string;
+				slug: string;
+			};
+			meta: object;
+			output: PackageUpdateApplyResult;
+		}>;
+		detach: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				kind: "automation" | "skill" | "view";
+			};
+			meta: object;
+			output: DetachResult;
+		}>;
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				slug: string;
+			};
+			meta: object;
+			output: PackageUpdatePlan;
+		}>;
+		history: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				limit?: number | undefined;
+				slug?: string | undefined;
+			} | undefined;
+			meta: object;
+			output: PackageUpdateReceipt[];
+		}>;
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: PackageUpdateList;
+		}>;
+		undo: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				receiptId: string;
+			};
+			meta: object;
+			output: PackageUpdateApplyResult;
+		}>;
+	}>>;
 	places: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		errorShape: {
@@ -41993,6 +42399,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -42054,6 +42461,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -44551,6 +44959,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				success: boolean;
 			};
 		}>;
+		clearLater: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				proposalId: string;
+			};
+			meta: object;
+			output: {
+				cleared: boolean;
+			};
+		}>;
 		createDocumentEdit: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				documentId: string;
@@ -44679,6 +45096,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reviewLater: number;
 				scanTruncated: boolean;
 				scanned: number;
+			};
+		}>;
+		later: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				proposalId: string;
+				until: unknown;
+			};
+			meta: object;
+			output: {
+				proposalId: string;
+				snoozedUntil: Date;
 			};
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{

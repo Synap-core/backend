@@ -30,6 +30,7 @@ import { sql } from "../client-pg.js";
 import {
   governancePrincipalEnum,
   governanceTargetEnum,
+  governanceVerdictEnum,
 } from "../schema/governance-rules.js";
 import { governanceCeilingAxisEnum } from "../schema/governance-ceilings.js";
 import { entityExternalLinks } from "../schema/entity-external-links.js";
@@ -1883,6 +1884,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "process_key",
     addedBy: "0373_session_runners_process.sql",
   },
+  // A runner's state (0384). Absence means every runner stamp fails (its
+  // insert names `state`, logged, never fatal) and the runner loader 42703s.
+  {
+    table: "session_runners",
+    column: "state_reported_at",
+    addedBy: "0384_session_runners_state.sql",
+  },
 
   // proposal_apply_runs — a large approval applied by the background job
   // (0352). Absence means every approve at or above the background threshold
@@ -2261,6 +2269,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "stage_history",
     addedBy: "0274_track_stage_and_params.sql",
   },
+  // 0382 — a session's stage ledger (status-first PR-E). Every session read
+  // selects the whole row, so a missing column 500s every session door.
+  {
+    table: "focus_sessions",
+    column: "stage_history",
+    addedBy: "0382_focus_session_stage_history.sql",
+  },
   // 0302 — a track's direction + optional KPI. Every track read selects the
   // whole row, so a missing column 500s every track door (`project_tracks` is
   // not in the baseline: these are its only startup guards).
@@ -2564,6 +2579,12 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "skills",
     column: "input_map",
     addedBy: "0368_intent_input_schema.sql",
+  }, // "Later" on a request (0381): the needs-you read joins it on every
+  // Review page and count, so a missing table fails every needs-you read.
+  {
+    table: "proposal_snoozes",
+    column: "snoozed_until",
+    addedBy: "0381_governance_deny_and_request_later.sql",
   },
 ];
 
@@ -2580,6 +2601,9 @@ const REQUIRED_ENUMS = [
   // 0320: `class` ("for all computers") — the resolver compares it on every
   // governed agent write, so a pod missing it fails every agent write.
   governancePrincipalEnum,
+  // 0381: `deny` ("Never") — a pod missing it fails the first "Never" a
+  // person taps, and the resolver reads it on every governed agent write.
+  governanceVerdictEnum,
 ] as const;
 
 /** A tagged-template query function shaped like postgres.js's `sql`. */

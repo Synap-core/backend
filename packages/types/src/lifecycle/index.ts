@@ -173,6 +173,7 @@ export {
   decideMoveHold,
   holdProblem,
   holdDevMovesRef,
+  holdDevRefLabel,
   holdWokenBy,
   parseHoldDevRef,
   parseHoldMovesRef,
