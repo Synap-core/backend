@@ -282,7 +282,7 @@ describe("batchApproveReceipt: per row, like the page lists them", () => {
 describe("batch counts in French agree with their number", () => {
   it("one request is singular", () => {
     setAmbientCatalogLocale("fr");
-    expect(batchRejectReceipt(3, 1).title).toBe("1 demande refusée sur 3");
+    expect(batchRejectReceipt(3, 1).title).toBe("1 demande rejetée sur 3");
     expect(batchApproveReceipt({ approved: 1, failed: 2 }).title).toBe(
       "1 demande approuvée sur 3"
     );
