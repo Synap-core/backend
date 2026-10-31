@@ -8020,834 +8020,6 @@ export type RecordSessionSpawnResult = {
 	linked: false;
 	reason: "parent_not_found" | "self_parent";
 };
-export interface ReversibleDefaultState {
-	enabled: boolean;
-	/** The active row, so a surface can open it; null when off. */
-	ruleId: string | null;
-}
-declare const SPACE_BRIEF_SEEDED_FIELDS: readonly [
-	"purpose",
-	"goal",
-	"framing",
-	"expertise",
-	"collect",
-	"openingQuestions",
-	"doneWhen",
-	"anchors",
-	"fetch"
-];
-export type SpaceBriefSeededField = (typeof SPACE_BRIEF_SEEDED_FIELDS)[number];
-export type BriefFieldOutcome = "adopted" | "kept" | "removed" | "updated" | "written";
-export interface BriefFieldConflict {
-	field: SpaceBriefSeededField;
-	/** `edited` = the user changed a value the template since changed too;
-	 *  `unstamped` = a value written before the stamp existed differs from the
-	 *  template, so this pass cannot tell template from user. */
-	reason: "edited" | "unstamped";
-}
-export interface SpaceBriefConvergence {
-	/** The brief to store; `null` when nothing changes (no write needed). */
-	next: WorkspaceSpaceBrief | null;
-	/** The marker to store alongside `next` (or alone, when only stamps move). */
-	nextSeed: SpaceBriefSeed | null;
-	outcomes: Partial<Record<SpaceBriefSeededField, BriefFieldOutcome>>;
-	conflicts: BriefFieldConflict[];
-}
-/** Why a declared `targetProfileSlug` did not become a `target_profile_id`. */
-export type PropertyTargetUnresolvedReason = 
-/** The owning profile never entered `profileMap` (kind conflict → skipped). */
-"owner-profile-unresolved"
-/** The target slug resolves to no profile visible in this workspace's lens. */
- | "target-profile-unresolved"
-/** No property-def with this slug exists on the owning profile. */
- | "property-def-not-found"
-/** The live def is not an `entity_id` — a target would be meaningless. */
- | "property-not-entity-id"
-/** Reading the live def failed (transient) — retried on the next reconcile. */
- | "read-failed"
-/** The def resolved but the UPDATE failed — retried on the next reconcile. */
- | "write-failed";
-export interface PropertyTargetEntry {
-	profile: string;
-	slug: string;
-	targetProfileSlug: string;
-}
-export interface PropertyTargetResolutionReport {
-	/** Defs whose NULL `target_profile_id` was filled in by this pass. */
-	set: PropertyTargetEntry[];
-	/** Declared targets left NULL — non-fatal, surfaced rather than swallowed. */
-	unresolved: Array<PropertyTargetEntry & {
-		reason: PropertyTargetUnresolvedReason;
-	}>;
-}
-/**
- * INSTALL LAYER — one axis of "did this install fully land?".
- *
- * Prior art is K8s `status.conditions[]`: a LIST of typed axes, not a boolean,
- * so an object can honestly report "the workspace exists and is usable, but
- * this layer is degraded". dpkg's `iF` half-configured state and Terraform's
- * partially-updated state are the same idea — record the partial, name it, and
- * give the caller a read door, rather than rolling back or claiming success.
- *
- * WHY THIS EXISTS. A workspace install has two layers:
- *   1. `template-reconcile` — profiles / property-defs / views / entity links
- *      (`reconcileWorkspaceFromDefinition`).
- *   2. `post-workspace` — capabilities / playbooks / automations / loops / cells
- *      / action placements (`applyPackagePostWorkspace`).
- * Layer 2 failing does NOT make the workspace unusable, so `createFromDefinition`
- * deliberately does not throw — but it also had nowhere to SAY so, and therefore
- * returned a clean report for an install whose living layers all failed. The
- * applier already stamps the durable half of this truth into
- * `workspace.settings` (`provisioningStatus:"failed"`, `failedStep`,
- * `failedStepError`, projected by Hub `GET /workspaces`); this is the
- * response-shaped half, for the caller that is holding the install result right
- * now.
- *
- * OPTIONAL BY CONTRACT. Both UI consumers derive their type via
- * `RouterOutputs[...]`, so an optional field keeps them compiling and lets each
- * surface opt in to rendering it. ABSENT means "no layer reported a failure",
- * never "unknown".
- */
-export interface InstallLayerReport {
-	/** Which install layer this axis describes. */
-	layer: "post-workspace" | "template-reconcile";
-	/** `applied` = the layer ran to completion. `failed` = it threw; the workspace
-	 *  itself still exists and the install is resumable (re-run to resume). */
-	status: "applied" | "failed";
-	/** Operator-facing failure detail. Present only for `failed`. */
-	message?: string;
-}
-export interface ReconcileReport {
-	workspaceId: string;
-	dryRun: boolean;
-	settings: {
-		merged: string[];
-	};
-	/**
-	 * The space brief's three-way convergence (`settings.onboarding`). Absent
-	 * when this reconcile does not own the brief (no identity: a compose
-	 * overlay or the base-defaults pass). `conflicts` are fields the user edited
-	 * while the template moved too — left alone, reported here.
-	 */
-	brief?: {
-		conflicts: SpaceBriefConvergence["conflicts"];
-		outcomes: SpaceBriefConvergence["outcomes"];
-		/** A concurrent brief write won the compare-and-set; retried next pass. */
-		raced?: true;
-	};
-	profiles: {
-		added: string[];
-		/**
-		 * Declared slug matched an existing profile of a DIFFERENT profileKind
-		 * (kind vs role). The merge was SKIPPED and the existing row left untouched
-		 * — the caller decides (never a silent kind flip).
-		 */
-		conflicts: Array<{
-			declaredKind: string;
-			existingKind: string;
-			slug: string;
-		}>;
-		/**
-		 * Slugs where an existing same-slug profile was found but could NOT be
-		 * safely promoted (another user's private row, or the pod-wide slug seat is
-		 * held by a soft-deleted shared row), so a DUPLICATE workspace-scoped
-		 * profile was created instead. This is the one branch where the dedup
-		 * keystone knowingly fails to dedup — surfaced, never silent.
-		 */
-		deferred: string[];
-		/**
-		 * Profiles whose `uiHints.presentation` this run wrote (new or changed),
-		 * through `setProfilePresentation`. Absent when none moved.
-		 */
-		presentations?: string[];
-		/** Existing workspace-scoped profiles promoted to shared to resolve-and-share. */
-		promoted: string[];
-		reused: string[];
-		/**
-		 * Declared `scope`/`entityScope` on a REUSED slug diverged from the live
-		 * row. ADVISORY (unlike `conflicts`, which skips): the profile was still
-		 * reused and the live row left untouched — the declared scope was NOT
-		 * applied. Surfaced so `market install`/reconcile callers can decide whether
-		 * to escalate; the first creator owns placement/visibility.
-		 */
-		scopeConflicts: Array<{
-			declaredEntityScope: "pod" | "workspace" | null;
-			declaredScope: string;
-			existingEntityScope: string;
-			existingScope: string;
-			slug: string;
-		}>;
-	};
-	properties: {
-		/** New overlay/base property-defs added. */
-		added: Array<{
-			profile: string;
-			slug: string;
-		}>;
-		/** Template type differs from the live type — NOT changed; needs a decision. */
-		conflicts: Array<{
-			liveType: string;
-			profile: string;
-			slug: string;
-			templateType: string;
-		}>;
-		/** Existing property whose enum options were synced to the template (values added). */
-		enumsUpdated: Array<{
-			profile: string;
-			slug: string;
-		}>;
-		/**
-		 * The profile already links a POD-WIDE GLOBAL def (profile_id + workspace_id
-		 * NULL) with this slug, so the template's declaration was NOT applied: a
-		 * global def is shared by every kind that links it, and one template's
-		 * enum/constraints must never narrow it for all of them (the 2026-10-12
-		 * `source` incident). Rename the template's property to claim it. Optional
-		 * so older report fixtures stay valid.
-		 */
-		globalsKept?: Array<{
-			profile: string;
-			slug: string;
-		}>;
-		/**
-		 * Lifecycle declarations (0319, work model L1): `declared` = the profile's
-		 * lifecycle link was set (or already was — `unchanged` is not listed);
-		 * `refused` = the template's declaration could not be applied, with why.
-		 * Optional so pre-0319 report fixtures stay valid.
-		 */
-		lifecycles?: {
-			declared: Array<{
-				profile: string;
-				property: string;
-			}>;
-			refused: Array<{
-				profile: string;
-				reason: string;
-			}>;
-		};
-		/** Already present (same slug, same type) — left as-is. */
-		skipped: Array<{
-			profile: string;
-			slug: string;
-		}>;
-		/**
-		 * `entity_id` properties whose declared `targetProfileSlug` was resolved to
-		 * a live profile and written to `property_defs.target_profile_id` — the key
-		 * the entity picker constrains on. `set` covers defs this run created AND
-		 * pre-existing defs that were still NULL (the backfill); `unresolved` is
-		 * non-fatal, mirroring `entityLinks.unresolved`. See
-		 * `resolve-property-target-profiles.ts`.
-		 */
-		targets: PropertyTargetResolutionReport;
-	};
-	views: {
-		added: string[];
-		deferred: string[];
-		skipped: string[];
-	};
-	/**
-	 * Schema-level links between entity types (relation_defs + profile_relations).
-	 * `added` = a (source, target, type) edge that did not exist and was created.
-	 * `updated` = already present, and its `required` mark was rewritten to
-	 * what the template declares now (`withRequiredLinkMark`).
-	 * `skipped` = already present (idempotent no-op).
-	 * `unresolved` = a source/target profile slug could not be resolved to a live
-	 * profile in this workspace — left untouched, non-fatal.
-	 */
-	entityLinks: {
-		added: string[];
-		skipped: string[];
-		unresolved: string[];
-		updated: string[];
-	};
-	/**
-	 * Home bento dashboard merge (an overlay's `bentoLayout` widgets +
-	 * `bentoViewBlocks` views). ADDITIVE: an overlay never overwrites the base's
-	 * dashboard.
-	 *   `created`   = the workspace had no home view yet, so one was created from
-	 *                 the overlay's bento (mirrors the create path).
-	 *   `blocksAdded` = block ids appended below the base blocks (see the merge
-	 *                 semantics in the step-5 comment).
-	 *   `skipped`   = overlay declared no bento, or an existing home view already
-	 *                 rendered every declared view block (nothing to append).
-	 */
-	home: {
-		blocksAdded: string[];
-		created: boolean;
-		skipped: boolean;
-	};
-	/**
-	 * Sidebar layout merge (an overlay's `layoutConfig.sidebarItems`). Base items
-	 * kept, overlay items appended, deduped by a stable per-kind key. `added` =
-	 * the dedup keys of overlay items appended to the workspace's sidebar.
-	 *
-	 * `primarySurfaceChanged` follows the replacement contract: absent preserves
-	 * the live value, null clears to workspace home, and a descriptor replaces it.
-	 */
-	layout: {
-		primarySurfaceChanged: boolean;
-		sidebarItemsAdded: string[];
-	};
-	/**
-	 * Flow automations reconciled version-aware (keyed on `(workspaceId, name)`).
-	 *   `created` = no row for that name → inserted.
-	 *   `updated` = a row existed but its stored `metadata.seedVersion` (content
-	 *               hash, or a legacy int) differed from the definition's hash →
-	 *               `flowDefinition`+`description` overwritten, hash re-stamped,
-	 *               `automations.version` bumped.
-	 *   `skipped` = stored hash equals the definition hash → no-op.
-	 * Values are automation names.
-	 */
-	automations: {
-		created: string[];
-		/** Flows refused by `opts.validateFlow` — not stored; `error` says why. */
-		rejected?: Array<{
-			error: string;
-			name: string;
-		}>;
-		skipped: string[];
-		updated: string[];
-	};
-	/**
-	 * Default intelligence commands seeded create-if-missing (keyed on `title`).
-	 * `created` = title absent → inserted; `skipped` = title already present
-	 * (left untouched — a seeded command is owned by the user after first seed).
-	 */
-	commands: {
-		created: string[];
-		skipped: string[];
-	};
-	/**
-	 * Relation defs seeded create-if-missing (keyed on `slug`), carrying full
-	 * metadata (description/isDirectional/uiHints). DISTINCT from `entityLinks`,
-	 * which reuses the def that resolves for a slug and creates one only when
-	 * nothing does.
-	 * `created` = slug absent → inserted; `skipped` = slug already present
-	 * (workspace-scoped or pod-wide) → left untouched.
-	 */
-	relationDefs: {
-		created: string[];
-		skipped: string[];
-	};
-	/**
-	 * PER-LAYER install health — see `InstallLayerReport`. OPTIONAL and additive:
-	 * absent means no layer reported a failure. Populated by the callers that own
-	 * the multi-layer install (`createFromDefinition`), not by this reconciler
-	 * itself — layer 2 is not the reconciler's business, but the report is the
-	 * only channel the caller has back to the installer.
-	 */
-	layers?: InstallLayerReport[];
-}
-/**
- * SESSION RECALL — the ONE reader of what recall left on a session.
- *
- * When a session starts, the pod looks for raw captures and notes that could
- * help it (api `services/focus-sessions/session-recall.ts`, the runner) and
- * writes its result onto `focus_sessions.metadata`:
- *   `recalled: RecalledItem[]`, `recalledAt`, `recallError?`, `recallSkipped?`.
- * Every surface (pod MCP + Hub + tRPC `focusSessions.get` `recall`, web, relay,
- * the intelligence service) reads it through {@link projectSessionRecall}, so
- * the five states can never fold into one another — above all, a FAILED recall
- * never reads as "nothing found".
- *
- *   pending   recall has not run yet (no `recalledAt`)
- *   ok        it found items (`recalled` non-empty)
- *   empty     it ran and found nothing
- *   skipped   it deliberately did not run (`recallSkipped`): a session an
- *             automation started (cost), or a shared session with no
- *             workspace to recall from (privacy)
- *   failed    it errored (`recallError`); what an EARLIER run found is kept
- *
- * Pure and dependency-free (web, relay, Electron, Node, IS).
- */
-export interface RecalledItem {
-	entityId: string;
-	title: string;
-	kind: string;
-	/** 0..1, two decimals — the candidate's own evidence. */
-	score: number;
-	/** One human line: why this was recalled. */
-	reason: string;
-	recalledAt: string;
-}
-/** Why recall deliberately did not run on a session. */
-export type RecallSkipReason = 
-/** Started by an automation with no person (cost); a manual recall still runs. */
-"automation"
-/** Others can read the session and it has no workspace to recall from. */
- | "shared_without_workspace";
-export type SessionRecallView = {
-	status: "pending";
-} | {
-	recalled: RecalledItem[];
-	recalledAt: string;
-	status: "ok";
-} | {
-	recalledAt: string;
-	status: "empty";
-} | {
-	reason: RecallSkipReason;
-	recalledAt: string;
-	status: "skipped";
-} | {
-	error: string;
-	/** What an EARLIER run found, kept across the failure. */
-	recalled: RecalledItem[];
-	recalledAt: string;
-	status: "failed";
-};
-/** A thing that can be held: an entity (kind lifecycle, or a role's facet), a goal, a session. */
-export interface HoldSubjectRef {
-	subjectType: TransitionSubjectType;
-	subjectId: string;
-	/** A role's lifecycle lives on its facet; null for the kind's own. */
-	facetId?: string | null;
-}
-export interface CurrentHold extends Required<HoldSubjectRef> {
-	role: string | null;
-	/** The paused status it stands in. */
-	status: string;
-	hold: RecordedHold;
-	transitionId: string;
-	/** The person the paused thing's move was attributed to. */
-	userId: string;
-	workspaceId: string | null;
-	/** `until.date` has come: the hourly sweep resumes it. */
-	resumeDue: boolean;
-	/** `reviewBy` has passed: a signal for the watcher, never a move. */
-	reviewDue: boolean;
-}
-/**
- * What a merge wrote onto a PRE-EXISTING entity, with the values it replaced.
- *
- * A strong-identity dedup does not create a row — it enriches one that was
- * already there. Revert must never delete that entity (it is somebody's), but
- * it must be able to put back what the run overwrote. So the merge records,
- * per key, the prior value and the value it wrote; revert restores a key only
- * while it still holds the written value (a key edited since is left alone).
- *
- * JSON cannot hold `undefined`, so "the key did not exist before" is a list
- * (`absentBefore`), never a missing entry in `before`.
- */
-export interface EntityPropertyDiff {
-	entityId: string;
-	/** Prior value of every changed key that EXISTED before the merge. */
-	before: Record<string, unknown>;
-	/** Value the merge wrote, for every changed key. */
-	after: Record<string, unknown>;
-	/** Changed keys that did not exist before the merge. */
-	absentBefore: string[];
-	/**
-	 * Body document the write linked onto the entity. Revert takes it off only
-	 * while the entity still points at it.
-	 */
-	bodyDocumentId?: string;
-	/**
-	 * The body the write REPLACED or unlinked (decision B9g), `null` when the
-	 * entity had none. Present only when an update changed the body link; revert
-	 * puts it back while the entity still points at what the write left
-	 * (`bodyDocumentId`, or no body). Absent on a merge record, which only ever
-	 * links onto an entity with no body.
-	 */
-	bodyDocumentIdBefore?: string | null;
-	/**
-	 * Keys the write REMOVED (an update's `deleteProperties`). Their prior value
-	 * is in `before`; revert restores one only while it is still absent.
-	 */
-	absentAfter?: string[];
-	/**
-	 * Entity COLUMNS an update changed (title; `preview` is the description).
-	 * Revert restores one only while it still holds the written value.
-	 */
-	fields?: {
-		after: Partial<Record<EntityDiffField, string | null>>;
-		before: Partial<Record<EntityDiffField, string | null>>;
-	};
-}
-/** The entity columns an update can change and revert can restore. */
-export type EntityDiffField = "preview" | "title";
-export type RevertTarget = {
-	id: string;
-	kind: "entity";
-} | {
-	id: string;
-	kind: "relation";
-} | {
-	id: string;
-	kind: "facet";
-} | {
-	id: string;
-	kind: "automation";
-} | {
-	id: string;
-	kind: "skill";
-}
-/** A rule is a `skills` row; kept distinct so outcomes name it as a rule. */
- | {
-	id: string;
-	kind: "rule";
-} | {
-	id: string;
-	kind: "playbook";
-}
-/** A saved List (`views` row). No soft delete exists: retired by delete. */
- | {
-	id: string;
-	kind: "view";
-} | {
-	id: string;
-	kind: "project";
-	/**
-	 * The subject the SAME work bound to it — its `project --targets-->
-	 * entity` edge is the project's own, not a use by something else.
-	 */
-	subjectEntityId?: string;
-}
-/** A `links` row (a plan's `blocked_by` / `spawned_from` edge). Deleted, like a relation. */
- | {
-	id: string;
-	kind: "link";
-}
-/** One property a merge overwrote on a pre-existing entity. */
- | {
-	/** The run REMOVED the key — restore only while it is still absent. */
-	absentAfter?: boolean;
-	absentBefore: boolean;
-	/** The value the run wrote — restore only while the key still holds it. */
-	after: unknown;
-	/** Prior value (ignored when `absentBefore`). */
-	before: unknown;
-	entityId: string;
-	key: string;
-	kind: "property";
-}
-/**
- * A body-link change: `documentId` is what the write left (null = it
- * unlinked the body), `previousDocumentId` what it replaced (absent/null =
- * the entity had none — the merge case). Revert puts `previousDocumentId`
- * back only while the entity still points at `documentId` (B9g).
- */
- | {
-	documentId: string | null;
-	entityId: string;
-	kind: "entity_body";
-	previousDocumentId?: string | null;
-}
-/**
- * Config columns an `update_*` op (a Library rebuild) rewrote on a row it
- * did NOT create. Restored to `before` only while EVERY column still holds
- * `after` — a column somebody edited since is theirs, and the row is kept.
- */
- | {
-	after: Record<string, unknown>;
-	before: Record<string, unknown>;
-	id: string;
-	kind: "row_patch";
-	table: RowPatchTable;
-}
-/** One entity column (title / preview) an update changed. */
- | {
-	/** The value the run wrote — restore only while the column still holds it. */
-	after: string | null;
-	before: string | null;
-	entityId: string;
-	field: EntityDiffField;
-	kind: "entity_field";
-};
-/**
- * The config tables a `row_patch` may restore, and the ONLY columns it may
- * write on each — the fields the `update_*` ops patch. A stored record naming
- * any other column is refused (`not_owned`), never written: the record is
- * data, and data does not get to pick which columns an undo touches.
- */
-export type RowPatchTable = "automation" | "focus_session" | "playbook" | "rule" | "skill" | "view";
-export type RevertSkipReason = 
-/** Changed after the work that created it. */
-"edited_since"
-/** Something else uses it now (a run, a link, another session). */
- | "in_use"
-/** Already retired — nothing left to undo. */
- | "already_reverted" | "not_found"
-/** Its lineage names different work — it was never this work's row. */
- | "not_owned";
-export interface RevertSkip {
-	target: RevertTarget;
-	reason: RevertSkipReason;
-	detail: string;
-}
-/**
- * One multi-proposal revert pass (a session revert). Undoing an earlier item
- * can itself bump `updated_at` on an entity a later item still has to judge —
- * the relation → property reverse sync rewrites the link's source entity after
- * the commit. Such a bump is the pass's OWN write, not somebody's edit: an
- * entity named here whose `updated_at` moved no earlier than `startedAt` is not
- * read as `edited_since`. A human edit to the same entity during the pass is
- * indistinguishable and is tolerated too — the window is the pass itself.
- */
-export interface RevertPass {
-	startedAt: Date;
-	entityIds: Set<string>;
-}
-/**
- * Context Types
- *
- * Proper type definitions for tRPC context to avoid `any` types.
- */
-/**
- * Database client type
- *
- * Note: Using `any` here to preserve Drizzle's schema inference.
- * Attempting to use PostgresJsDatabase<any> loses the schema generic
- * and breaks db.query.tableName access patterns.
- */
-export type DatabaseClient = any;
-/**
- * Ory Kratos identity
- */
-export interface KratosIdentity {
-	id: string;
-	traits: {
-		email: string;
-		name?: string;
-		[key: string]: unknown;
-	};
-}
-/**
- * Ory Kratos session
- */
-export interface KratosSession {
-	identity: KratosIdentity;
-	active: boolean;
-	expires_at?: string;
-	authenticated_at?: string;
-	/** How it was authenticated (Kratos); the step-up clock reads it. */
-	authentication_methods?: Array<{
-		completed_at?: string;
-		method?: string;
-		provider?: string;
-	}>;
-	/**
-	 * Set ONLY when the person came in on a Synap app's device token
-	 * (`appSessionMiddleware`): the device it was minted
-	 * for, and when the person last really authenticated for it (`authTime`,
-	 * the step-up clock). Absent on a Kratos session. Such a session has no
-	 * `authenticated_at`, so account recovery never counts it as a recent
-	 * sign-in.
-	 */
-	device?: {
-		authTime: Date | null;
-		clientId: string;
-		id: string;
-	};
-}
-/**
- * User object (simplified from Kratos identity)
- */
-export interface User {
-	id: string;
-	email: string;
-	name?: string;
-}
-/**
- * Full tRPC context
- */
-export interface Context {
-	db: DatabaseClient;
-	authenticated: boolean;
-	userId?: string | null;
-	user?: User | null;
-	session?: KratosSession | null;
-	/**
-	 * What kind of PERSON session `session` is: a Kratos session (browser
-	 * cookie, X-Session-Token) or a Synap app's device token. Set ONLY by
-	 * `createContext`, from what the app session gate resolved from the row
-	 * (`middleware/app-session.ts`); null when there is no session. A credential
-	 * door takes a `person_device` session only shortly after a real sign-in
-	 * (`requireFreshAuthentication`, trpc.ts).
-	 */
-	sessionKind?: "kratos" | "person_device" | null;
-	req?: Request;
-	socketIO?: any;
-	workspaceId?: string | null;
-	/**
-	 * Project ID from the X-Project-Id header — the cross-cutting PROJECT lens,
-	 * orthogonal to the workspace lens. Optional narrowing only: it is intersected
-	 * with the user-access floor, so a stale/forged id can never widen access.
-	 * `undefined`/`null` = no project narrowing. See `AccessContext.projectLens`.
-	 */
-	projectId?: string | null;
-	workspaceRole?: string | null;
-	/**
-	 * Request source — "intelligence" when the request comes from the Intelligence Hub
-	 * via API key auth. Set automatically by api-key-auth middleware; never set by humans.
-	 */
-	source?: string | null;
-	/**
-	 * Hard flag — true only when authenticated via a hub-protocol scoped API key.
-	 * Cannot be spoofed by a human JWT session.
-	 */
-	isHubProtocol?: boolean;
-	/**
-	 * The authenticating API key's type (`user_pat` | `service` | `agent` | …) and
-	 * its workspace binding, threaded from api-key-auth middleware. They let the
-	 * hub-protocol tRPC surface apply the SAME service-key workspace confinement
-	 * (resolveConfinedWorkspace) the Hono REST door already applies. NOTE: identity
-	 * is NEVER relaxed on keyType — a `service` key is self-mintable on this pod
-	 * (setup.ts `/setup/service` Path 4), so it grants no impersonation right; see
-	 * `hub-protocol/guard.ts`.
-	 */
-	keyType?: string | null;
-	keyWorkspaceId?: string | null;
-	/**
-	 * The agent user ID acting on behalf of this request, when the caller is an
-	 * AI agent (set from the hub-protocol key's `linkedUserId`). Drives the
-	 * governance membrane: when present, mutations route through
-	 * checkPermissionOrPropose (propose instead of auto-apply). Undefined for
-	 * operator/human-driven requests, which stay synchronous.
-	 */
-	agentUserId?: string | null;
-	/**
-	 * INTERNAL CHANNEL — never from a request. No context factory populates it
-	 * and there is no wire passthrough. **Keep it that way** — a ctx factory that
-	 * ever read this from a header or input would hand any caller an "assume my
-	 * write is already approved" primitive.
-	 *
-	 * ⚠️ CORRECTED 2026-09-07. This docblock previously said "set ONLY by
-	 * `applyProposalApproval`'s composite caller … it arrives solely from that
-	 * internal object literal." That was FALSE on the day it was written. There
-	 * are TWO producers, and the omission mattered because the field is read as a
-	 * security carve-out (below), so the comment understated where that carve-out
-	 * applies:
-	 *   · `routers/proposals/apply-approval.ts` — the approval composite caller.
-	 *   · `services/capture-agent/submit-capture-graph.ts` — the capture
-	 *     auto-apply composite caller (its existence is asserted by
-	 *     `__tripwires__/capture-graph-governance-linkage.test.ts`).
-	 *
-	 * THE INVARIANT, stated so a third producer knows what it is signing up to:
-	 * set this ONLY from an internal caller that has ALREADY obtained a
-	 * governance decision for the write it is about to make. It means "a decision
-	 * exists for this", not merely "an internal caller made this".
-	 *
-	 * Two load-bearing meanings:
-	 *  · PROVENANCE — stamped as `source_proposal_id`, the JOIN that recovers the
-	 *    APPROVER via `proposals.reviewedBy`.
-	 *  · "this write is ALREADY APPROVED" — `relations.create` reads it to skip
-	 *    re-entering the governance membrane. Without that skip the ladder falls
-	 *    to `propose` (relation.create is not in DEFAULT_AUTO_APPROVE) and the
-	 *    edge is silently never created while the receipt reports it linked.
-	 *    `playbooks.run` reads it the same way (set by the `playbook/run`
-	 *    executor): it gates on the APPROVER, while its `agentUserId` input
-	 *    still owns the session.
-	 *
-	 * Declared here rather than cast at each reader: it was read through
-	 * `(ctx as { governanceProposalId?: string })` in seven places across three
-	 * files, one of which now guards the security fix above — so renaming the
-	 * field would have broken all seven with ZERO typecheck signal.
-	 */
-	governanceProposalId?: string;
-	/**
-	 * The message ID that triggered this hub-protocol request.
-	 * When set, proposals created during this request are linked to this message.
-	 */
-	sourceMessageId?: string | null;
-	/**
-	 * Session ID that triggered this hub-protocol request.
-	 * When set, proposals created during this request are linked to this session.
-	 */
-	sessionId?: string | null;
-	/**
-	 * `"sync"` when this request materializes a bulk mirror of an external source
-	 * (a connection sync, or the approval of its grouped import). Forwarded by the
-	 * entity/relation doors to `recordDomainMutation`, so event automations skip
-	 * the fan-out unless they opted in (`triggerConfig.includeSyncOrigin`).
-	 * INTERNAL composite-caller channel — createContext never sets it from HTTP.
-	 */
-	origin?: "sync";
-	/**
-	 * The enclosing session revert pass (`revertSession`), so each per-proposal
-	 * `proposals.revert` in that pass tolerates the pass's OWN `updated_at` bumps.
-	 * INTERNAL composite-caller channel — createContext never sets it from HTTP,
-	 * and it is never read from procedure input: a client must not be able to
-	 * exempt entities from the edit check.
-	 */
-	revertPass?: RevertPass;
-}
-declare const PROMOTE_TO_BODY_REFUSALS: readonly [
-	"not_body_property",
-	"empty_value",
-	"body_exists",
-	"agent_caller"
-];
-export type PromoteToBodyRefusal = (typeof PROMOTE_TO_BODY_REFUSALS)[number];
-declare const UNDO_PROMOTE_TO_BODY_REFUSALS: readonly [
-	"edited_since",
-	"not_promoted"
-];
-export type UndoPromoteToBodyRefusal = (typeof UNDO_PROMOTE_TO_BODY_REFUSALS)[number];
-/**
- * Field errors of a refused input: dotted input path (`items.0.title`) →
- * the messages for that field; `""` is the input as a whole.
- *
- * The pod sends it as tRPC `error.data.fieldErrors` and as `fieldErrors` on a
- * Hub REST 400, built from the Zod refusal (messages only, never the values
- * the caller sent). Absent when the refusal is not a validation one.
- */
-export type FieldErrors = Record<string, string[]>;
-declare enum AgentType {
-	DEFAULT = "default",
-	META = "meta",
-	PROMPTING = "prompting",
-	KNOWLEDGE_SEARCH = "knowledge-search",
-	CODE = "code",
-	WRITING = "writing",
-	ACTION = "action",
-	ONBOARDING = "onboarding",
-	WORKSPACE_CREATION = "workspace-creation"
-}
-/**
- * Agent type as string literal union (for flexibility)
- */
-export type AgentTypeString = `${AgentType}` | (string & {});
-declare enum AIStepType {
-	THINKING = "thinking",
-	TOOL_CALL = "tool_call",
-	TOOL_RESULT = "tool_result",
-	DECISION = "decision",
-	ERROR = "error"
-}
-/**
- * AI step - shows what the AI is doing
- *
- * Represents any step in the AI's reasoning/execution process:
- * - thinking: General analysis and reasoning
- * - tool_call: When AI calls a tool
- * - tool_result: Result from tool execution
- * - decision: AI making a decision
- * - error: Error during processing
- */
-export interface AIStep {
-	id: string;
-	type: AIStepType | string;
-	content: string;
-	toolName?: string;
-	toolInput?: unknown;
-	toolOutput?: unknown;
-	timestamp: string;
-	duration?: number;
-	error?: string;
-	title?: string;
-	description?: string;
-	status?: "complete" | "error" | "pending" | "running";
-}
-/**
- * Branch decision from meta-agent
- */
-export interface BranchDecision {
-	shouldBranch: boolean;
-	reason: string;
-	suggestedAgentType?: AgentTypeString;
-	suggestedTitle?: string;
-	suggestedPurpose?: string;
-}
 /**
  * REACH — what something that acts on its own can touch outside the pod, and
  * the ONE set of words every surface says it with.
@@ -10053,6 +9225,834 @@ export interface ProposalMaterializedRecord {
 		winnerFacetIds?: string[];
 		winnerId: string;
 	};
+}
+export interface ReversibleDefaultState {
+	enabled: boolean;
+	/** The active row, so a surface can open it; null when off. */
+	ruleId: string | null;
+}
+declare const SPACE_BRIEF_SEEDED_FIELDS: readonly [
+	"purpose",
+	"goal",
+	"framing",
+	"expertise",
+	"collect",
+	"openingQuestions",
+	"doneWhen",
+	"anchors",
+	"fetch"
+];
+export type SpaceBriefSeededField = (typeof SPACE_BRIEF_SEEDED_FIELDS)[number];
+export type BriefFieldOutcome = "adopted" | "kept" | "removed" | "updated" | "written";
+export interface BriefFieldConflict {
+	field: SpaceBriefSeededField;
+	/** `edited` = the user changed a value the template since changed too;
+	 *  `unstamped` = a value written before the stamp existed differs from the
+	 *  template, so this pass cannot tell template from user. */
+	reason: "edited" | "unstamped";
+}
+export interface SpaceBriefConvergence {
+	/** The brief to store; `null` when nothing changes (no write needed). */
+	next: WorkspaceSpaceBrief | null;
+	/** The marker to store alongside `next` (or alone, when only stamps move). */
+	nextSeed: SpaceBriefSeed | null;
+	outcomes: Partial<Record<SpaceBriefSeededField, BriefFieldOutcome>>;
+	conflicts: BriefFieldConflict[];
+}
+/** Why a declared `targetProfileSlug` did not become a `target_profile_id`. */
+export type PropertyTargetUnresolvedReason = 
+/** The owning profile never entered `profileMap` (kind conflict → skipped). */
+"owner-profile-unresolved"
+/** The target slug resolves to no profile visible in this workspace's lens. */
+ | "target-profile-unresolved"
+/** No property-def with this slug exists on the owning profile. */
+ | "property-def-not-found"
+/** The live def is not an `entity_id` — a target would be meaningless. */
+ | "property-not-entity-id"
+/** Reading the live def failed (transient) — retried on the next reconcile. */
+ | "read-failed"
+/** The def resolved but the UPDATE failed — retried on the next reconcile. */
+ | "write-failed";
+export interface PropertyTargetEntry {
+	profile: string;
+	slug: string;
+	targetProfileSlug: string;
+}
+export interface PropertyTargetResolutionReport {
+	/** Defs whose NULL `target_profile_id` was filled in by this pass. */
+	set: PropertyTargetEntry[];
+	/** Declared targets left NULL — non-fatal, surfaced rather than swallowed. */
+	unresolved: Array<PropertyTargetEntry & {
+		reason: PropertyTargetUnresolvedReason;
+	}>;
+}
+/**
+ * INSTALL LAYER — one axis of "did this install fully land?".
+ *
+ * Prior art is K8s `status.conditions[]`: a LIST of typed axes, not a boolean,
+ * so an object can honestly report "the workspace exists and is usable, but
+ * this layer is degraded". dpkg's `iF` half-configured state and Terraform's
+ * partially-updated state are the same idea — record the partial, name it, and
+ * give the caller a read door, rather than rolling back or claiming success.
+ *
+ * WHY THIS EXISTS. A workspace install has two layers:
+ *   1. `template-reconcile` — profiles / property-defs / views / entity links
+ *      (`reconcileWorkspaceFromDefinition`).
+ *   2. `post-workspace` — capabilities / playbooks / automations / loops / cells
+ *      / action placements (`applyPackagePostWorkspace`).
+ * Layer 2 failing does NOT make the workspace unusable, so `createFromDefinition`
+ * deliberately does not throw — but it also had nowhere to SAY so, and therefore
+ * returned a clean report for an install whose living layers all failed. The
+ * applier already stamps the durable half of this truth into
+ * `workspace.settings` (`provisioningStatus:"failed"`, `failedStep`,
+ * `failedStepError`, projected by Hub `GET /workspaces`); this is the
+ * response-shaped half, for the caller that is holding the install result right
+ * now.
+ *
+ * OPTIONAL BY CONTRACT. Both UI consumers derive their type via
+ * `RouterOutputs[...]`, so an optional field keeps them compiling and lets each
+ * surface opt in to rendering it. ABSENT means "no layer reported a failure",
+ * never "unknown".
+ */
+export interface InstallLayerReport {
+	/** Which install layer this axis describes. */
+	layer: "post-workspace" | "template-reconcile";
+	/** `applied` = the layer ran to completion. `failed` = it threw; the workspace
+	 *  itself still exists and the install is resumable (re-run to resume). */
+	status: "applied" | "failed";
+	/** Operator-facing failure detail. Present only for `failed`. */
+	message?: string;
+}
+export interface ReconcileReport {
+	workspaceId: string;
+	dryRun: boolean;
+	settings: {
+		merged: string[];
+	};
+	/**
+	 * The space brief's three-way convergence (`settings.onboarding`). Absent
+	 * when this reconcile does not own the brief (no identity: a compose
+	 * overlay or the base-defaults pass). `conflicts` are fields the user edited
+	 * while the template moved too — left alone, reported here.
+	 */
+	brief?: {
+		conflicts: SpaceBriefConvergence["conflicts"];
+		outcomes: SpaceBriefConvergence["outcomes"];
+		/** A concurrent brief write won the compare-and-set; retried next pass. */
+		raced?: true;
+	};
+	profiles: {
+		added: string[];
+		/**
+		 * Declared slug matched an existing profile of a DIFFERENT profileKind
+		 * (kind vs role). The merge was SKIPPED and the existing row left untouched
+		 * — the caller decides (never a silent kind flip).
+		 */
+		conflicts: Array<{
+			declaredKind: string;
+			existingKind: string;
+			slug: string;
+		}>;
+		/**
+		 * Slugs where an existing same-slug profile was found but could NOT be
+		 * safely promoted (another user's private row, or the pod-wide slug seat is
+		 * held by a soft-deleted shared row), so a DUPLICATE workspace-scoped
+		 * profile was created instead. This is the one branch where the dedup
+		 * keystone knowingly fails to dedup — surfaced, never silent.
+		 */
+		deferred: string[];
+		/**
+		 * Profiles whose `uiHints.presentation` this run wrote (new or changed),
+		 * through `setProfilePresentation`. Absent when none moved.
+		 */
+		presentations?: string[];
+		/** Existing workspace-scoped profiles promoted to shared to resolve-and-share. */
+		promoted: string[];
+		reused: string[];
+		/**
+		 * Declared `scope`/`entityScope` on a REUSED slug diverged from the live
+		 * row. ADVISORY (unlike `conflicts`, which skips): the profile was still
+		 * reused and the live row left untouched — the declared scope was NOT
+		 * applied. Surfaced so `market install`/reconcile callers can decide whether
+		 * to escalate; the first creator owns placement/visibility.
+		 */
+		scopeConflicts: Array<{
+			declaredEntityScope: "pod" | "workspace" | null;
+			declaredScope: string;
+			existingEntityScope: string;
+			existingScope: string;
+			slug: string;
+		}>;
+	};
+	properties: {
+		/** New overlay/base property-defs added. */
+		added: Array<{
+			profile: string;
+			slug: string;
+		}>;
+		/** Template type differs from the live type — NOT changed; needs a decision. */
+		conflicts: Array<{
+			liveType: string;
+			profile: string;
+			slug: string;
+			templateType: string;
+		}>;
+		/** Existing property whose enum options were synced to the template (values added). */
+		enumsUpdated: Array<{
+			profile: string;
+			slug: string;
+		}>;
+		/**
+		 * The profile already links a POD-WIDE GLOBAL def (profile_id + workspace_id
+		 * NULL) with this slug, so the template's declaration was NOT applied: a
+		 * global def is shared by every kind that links it, and one template's
+		 * enum/constraints must never narrow it for all of them (the 2026-10-12
+		 * `source` incident). Rename the template's property to claim it. Optional
+		 * so older report fixtures stay valid.
+		 */
+		globalsKept?: Array<{
+			profile: string;
+			slug: string;
+		}>;
+		/**
+		 * Lifecycle declarations (0319, work model L1): `declared` = the profile's
+		 * lifecycle link was set (or already was — `unchanged` is not listed);
+		 * `refused` = the template's declaration could not be applied, with why.
+		 * Optional so pre-0319 report fixtures stay valid.
+		 */
+		lifecycles?: {
+			declared: Array<{
+				profile: string;
+				property: string;
+			}>;
+			refused: Array<{
+				profile: string;
+				reason: string;
+			}>;
+		};
+		/** Already present (same slug, same type) — left as-is. */
+		skipped: Array<{
+			profile: string;
+			slug: string;
+		}>;
+		/**
+		 * `entity_id` properties whose declared `targetProfileSlug` was resolved to
+		 * a live profile and written to `property_defs.target_profile_id` — the key
+		 * the entity picker constrains on. `set` covers defs this run created AND
+		 * pre-existing defs that were still NULL (the backfill); `unresolved` is
+		 * non-fatal, mirroring `entityLinks.unresolved`. See
+		 * `resolve-property-target-profiles.ts`.
+		 */
+		targets: PropertyTargetResolutionReport;
+	};
+	views: {
+		added: string[];
+		deferred: string[];
+		skipped: string[];
+	};
+	/**
+	 * Schema-level links between entity types (relation_defs + profile_relations).
+	 * `added` = a (source, target, type) edge that did not exist and was created.
+	 * `updated` = already present, and its `required` mark was rewritten to
+	 * what the template declares now (`withRequiredLinkMark`).
+	 * `skipped` = already present (idempotent no-op).
+	 * `unresolved` = a source/target profile slug could not be resolved to a live
+	 * profile in this workspace — left untouched, non-fatal.
+	 */
+	entityLinks: {
+		added: string[];
+		skipped: string[];
+		unresolved: string[];
+		updated: string[];
+	};
+	/**
+	 * Home bento dashboard merge (an overlay's `bentoLayout` widgets +
+	 * `bentoViewBlocks` views). ADDITIVE: an overlay never overwrites the base's
+	 * dashboard.
+	 *   `created`   = the workspace had no home view yet, so one was created from
+	 *                 the overlay's bento (mirrors the create path).
+	 *   `blocksAdded` = block ids appended below the base blocks (see the merge
+	 *                 semantics in the step-5 comment).
+	 *   `skipped`   = overlay declared no bento, or an existing home view already
+	 *                 rendered every declared view block (nothing to append).
+	 */
+	home: {
+		blocksAdded: string[];
+		created: boolean;
+		skipped: boolean;
+	};
+	/**
+	 * Sidebar layout merge (an overlay's `layoutConfig.sidebarItems`). Base items
+	 * kept, overlay items appended, deduped by a stable per-kind key. `added` =
+	 * the dedup keys of overlay items appended to the workspace's sidebar.
+	 *
+	 * `primarySurfaceChanged` follows the replacement contract: absent preserves
+	 * the live value, null clears to workspace home, and a descriptor replaces it.
+	 */
+	layout: {
+		primarySurfaceChanged: boolean;
+		sidebarItemsAdded: string[];
+	};
+	/**
+	 * Flow automations reconciled version-aware (keyed on `(workspaceId, name)`).
+	 *   `created` = no row for that name → inserted.
+	 *   `updated` = a row existed but its stored `metadata.seedVersion` (content
+	 *               hash, or a legacy int) differed from the definition's hash →
+	 *               `flowDefinition`+`description` overwritten, hash re-stamped,
+	 *               `automations.version` bumped.
+	 *   `skipped` = stored hash equals the definition hash → no-op.
+	 * Values are automation names.
+	 */
+	automations: {
+		created: string[];
+		/** Flows refused by `opts.validateFlow` — not stored; `error` says why. */
+		rejected?: Array<{
+			error: string;
+			name: string;
+		}>;
+		skipped: string[];
+		updated: string[];
+	};
+	/**
+	 * Default intelligence commands seeded create-if-missing (keyed on `title`).
+	 * `created` = title absent → inserted; `skipped` = title already present
+	 * (left untouched — a seeded command is owned by the user after first seed).
+	 */
+	commands: {
+		created: string[];
+		skipped: string[];
+	};
+	/**
+	 * Relation defs seeded create-if-missing (keyed on `slug`), carrying full
+	 * metadata (description/isDirectional/uiHints). DISTINCT from `entityLinks`,
+	 * which reuses the def that resolves for a slug and creates one only when
+	 * nothing does.
+	 * `created` = slug absent → inserted; `skipped` = slug already present
+	 * (workspace-scoped or pod-wide) → left untouched.
+	 */
+	relationDefs: {
+		created: string[];
+		skipped: string[];
+	};
+	/**
+	 * PER-LAYER install health — see `InstallLayerReport`. OPTIONAL and additive:
+	 * absent means no layer reported a failure. Populated by the callers that own
+	 * the multi-layer install (`createFromDefinition`), not by this reconciler
+	 * itself — layer 2 is not the reconciler's business, but the report is the
+	 * only channel the caller has back to the installer.
+	 */
+	layers?: InstallLayerReport[];
+}
+/**
+ * SESSION RECALL — the ONE reader of what recall left on a session.
+ *
+ * When a session starts, the pod looks for raw captures and notes that could
+ * help it (api `services/focus-sessions/session-recall.ts`, the runner) and
+ * writes its result onto `focus_sessions.metadata`:
+ *   `recalled: RecalledItem[]`, `recalledAt`, `recallError?`, `recallSkipped?`.
+ * Every surface (pod MCP + Hub + tRPC `focusSessions.get` `recall`, web, relay,
+ * the intelligence service) reads it through {@link projectSessionRecall}, so
+ * the five states can never fold into one another — above all, a FAILED recall
+ * never reads as "nothing found".
+ *
+ *   pending   recall has not run yet (no `recalledAt`)
+ *   ok        it found items (`recalled` non-empty)
+ *   empty     it ran and found nothing
+ *   skipped   it deliberately did not run (`recallSkipped`): a session an
+ *             automation started (cost), or a shared session with no
+ *             workspace to recall from (privacy)
+ *   failed    it errored (`recallError`); what an EARLIER run found is kept
+ *
+ * Pure and dependency-free (web, relay, Electron, Node, IS).
+ */
+export interface RecalledItem {
+	entityId: string;
+	title: string;
+	kind: string;
+	/** 0..1, two decimals — the candidate's own evidence. */
+	score: number;
+	/** One human line: why this was recalled. */
+	reason: string;
+	recalledAt: string;
+}
+/** Why recall deliberately did not run on a session. */
+export type RecallSkipReason = 
+/** Started by an automation with no person (cost); a manual recall still runs. */
+"automation"
+/** Others can read the session and it has no workspace to recall from. */
+ | "shared_without_workspace";
+export type SessionRecallView = {
+	status: "pending";
+} | {
+	recalled: RecalledItem[];
+	recalledAt: string;
+	status: "ok";
+} | {
+	recalledAt: string;
+	status: "empty";
+} | {
+	reason: RecallSkipReason;
+	recalledAt: string;
+	status: "skipped";
+} | {
+	error: string;
+	/** What an EARLIER run found, kept across the failure. */
+	recalled: RecalledItem[];
+	recalledAt: string;
+	status: "failed";
+};
+/** A thing that can be held: an entity (kind lifecycle, or a role's facet), a goal, a session. */
+export interface HoldSubjectRef {
+	subjectType: TransitionSubjectType;
+	subjectId: string;
+	/** A role's lifecycle lives on its facet; null for the kind's own. */
+	facetId?: string | null;
+}
+export interface CurrentHold extends Required<HoldSubjectRef> {
+	role: string | null;
+	/** The paused status it stands in. */
+	status: string;
+	hold: RecordedHold;
+	transitionId: string;
+	/** The person the paused thing's move was attributed to. */
+	userId: string;
+	workspaceId: string | null;
+	/** `until.date` has come: the hourly sweep resumes it. */
+	resumeDue: boolean;
+	/** `reviewBy` has passed: a signal for the watcher, never a move. */
+	reviewDue: boolean;
+}
+/**
+ * What a merge wrote onto a PRE-EXISTING entity, with the values it replaced.
+ *
+ * A strong-identity dedup does not create a row — it enriches one that was
+ * already there. Revert must never delete that entity (it is somebody's), but
+ * it must be able to put back what the run overwrote. So the merge records,
+ * per key, the prior value and the value it wrote; revert restores a key only
+ * while it still holds the written value (a key edited since is left alone).
+ *
+ * JSON cannot hold `undefined`, so "the key did not exist before" is a list
+ * (`absentBefore`), never a missing entry in `before`.
+ */
+export interface EntityPropertyDiff {
+	entityId: string;
+	/** Prior value of every changed key that EXISTED before the merge. */
+	before: Record<string, unknown>;
+	/** Value the merge wrote, for every changed key. */
+	after: Record<string, unknown>;
+	/** Changed keys that did not exist before the merge. */
+	absentBefore: string[];
+	/**
+	 * Body document the write linked onto the entity. Revert takes it off only
+	 * while the entity still points at it.
+	 */
+	bodyDocumentId?: string;
+	/**
+	 * The body the write REPLACED or unlinked (decision B9g), `null` when the
+	 * entity had none. Present only when an update changed the body link; revert
+	 * puts it back while the entity still points at what the write left
+	 * (`bodyDocumentId`, or no body). Absent on a merge record, which only ever
+	 * links onto an entity with no body.
+	 */
+	bodyDocumentIdBefore?: string | null;
+	/**
+	 * Keys the write REMOVED (an update's `deleteProperties`). Their prior value
+	 * is in `before`; revert restores one only while it is still absent.
+	 */
+	absentAfter?: string[];
+	/**
+	 * Entity COLUMNS an update changed (title; `preview` is the description).
+	 * Revert restores one only while it still holds the written value.
+	 */
+	fields?: {
+		after: Partial<Record<EntityDiffField, string | null>>;
+		before: Partial<Record<EntityDiffField, string | null>>;
+	};
+}
+/** The entity columns an update can change and revert can restore. */
+export type EntityDiffField = "preview" | "title";
+export type RevertTarget = {
+	id: string;
+	kind: "entity";
+} | {
+	id: string;
+	kind: "relation";
+} | {
+	id: string;
+	kind: "facet";
+} | {
+	id: string;
+	kind: "automation";
+} | {
+	id: string;
+	kind: "skill";
+}
+/** A rule is a `skills` row; kept distinct so outcomes name it as a rule. */
+ | {
+	id: string;
+	kind: "rule";
+} | {
+	id: string;
+	kind: "playbook";
+}
+/** A saved List (`views` row). No soft delete exists: retired by delete. */
+ | {
+	id: string;
+	kind: "view";
+} | {
+	id: string;
+	kind: "project";
+	/**
+	 * The subject the SAME work bound to it — its `project --targets-->
+	 * entity` edge is the project's own, not a use by something else.
+	 */
+	subjectEntityId?: string;
+}
+/** A `links` row (a plan's `blocked_by` / `spawned_from` edge). Deleted, like a relation. */
+ | {
+	id: string;
+	kind: "link";
+}
+/** One property a merge overwrote on a pre-existing entity. */
+ | {
+	/** The run REMOVED the key — restore only while it is still absent. */
+	absentAfter?: boolean;
+	absentBefore: boolean;
+	/** The value the run wrote — restore only while the key still holds it. */
+	after: unknown;
+	/** Prior value (ignored when `absentBefore`). */
+	before: unknown;
+	entityId: string;
+	key: string;
+	kind: "property";
+}
+/**
+ * A body-link change: `documentId` is what the write left (null = it
+ * unlinked the body), `previousDocumentId` what it replaced (absent/null =
+ * the entity had none — the merge case). Revert puts `previousDocumentId`
+ * back only while the entity still points at `documentId` (B9g).
+ */
+ | {
+	documentId: string | null;
+	entityId: string;
+	kind: "entity_body";
+	previousDocumentId?: string | null;
+}
+/**
+ * Config columns an `update_*` op (a Library rebuild) rewrote on a row it
+ * did NOT create. Restored to `before` only while EVERY column still holds
+ * `after` — a column somebody edited since is theirs, and the row is kept.
+ */
+ | {
+	after: Record<string, unknown>;
+	before: Record<string, unknown>;
+	id: string;
+	kind: "row_patch";
+	table: RowPatchTable;
+}
+/** One entity column (title / preview) an update changed. */
+ | {
+	/** The value the run wrote — restore only while the column still holds it. */
+	after: string | null;
+	before: string | null;
+	entityId: string;
+	field: EntityDiffField;
+	kind: "entity_field";
+};
+/**
+ * The config tables a `row_patch` may restore, and the ONLY columns it may
+ * write on each — the fields the `update_*` ops patch. A stored record naming
+ * any other column is refused (`not_owned`), never written: the record is
+ * data, and data does not get to pick which columns an undo touches.
+ */
+export type RowPatchTable = "automation" | "focus_session" | "playbook" | "rule" | "skill" | "view";
+export type RevertSkipReason = 
+/** Changed after the work that created it. */
+"edited_since"
+/** Something else uses it now (a run, a link, another session). */
+ | "in_use"
+/** Already retired — nothing left to undo. */
+ | "already_reverted" | "not_found"
+/** Its lineage names different work — it was never this work's row. */
+ | "not_owned";
+export interface RevertSkip {
+	target: RevertTarget;
+	reason: RevertSkipReason;
+	detail: string;
+}
+/**
+ * One multi-proposal revert pass (a session revert). Undoing an earlier item
+ * can itself bump `updated_at` on an entity a later item still has to judge —
+ * the relation → property reverse sync rewrites the link's source entity after
+ * the commit. Such a bump is the pass's OWN write, not somebody's edit: an
+ * entity named here whose `updated_at` moved no earlier than `startedAt` is not
+ * read as `edited_since`. A human edit to the same entity during the pass is
+ * indistinguishable and is tolerated too — the window is the pass itself.
+ */
+export interface RevertPass {
+	startedAt: Date;
+	entityIds: Set<string>;
+}
+/**
+ * Context Types
+ *
+ * Proper type definitions for tRPC context to avoid `any` types.
+ */
+/**
+ * Database client type
+ *
+ * Note: Using `any` here to preserve Drizzle's schema inference.
+ * Attempting to use PostgresJsDatabase<any> loses the schema generic
+ * and breaks db.query.tableName access patterns.
+ */
+export type DatabaseClient = any;
+/**
+ * Ory Kratos identity
+ */
+export interface KratosIdentity {
+	id: string;
+	traits: {
+		email: string;
+		name?: string;
+		[key: string]: unknown;
+	};
+}
+/**
+ * Ory Kratos session
+ */
+export interface KratosSession {
+	identity: KratosIdentity;
+	active: boolean;
+	expires_at?: string;
+	authenticated_at?: string;
+	/** How it was authenticated (Kratos); the step-up clock reads it. */
+	authentication_methods?: Array<{
+		completed_at?: string;
+		method?: string;
+		provider?: string;
+	}>;
+	/**
+	 * Set ONLY when the person came in on a Synap app's device token
+	 * (`appSessionMiddleware`): the device it was minted
+	 * for, and when the person last really authenticated for it (`authTime`,
+	 * the step-up clock). Absent on a Kratos session. Such a session has no
+	 * `authenticated_at`, so account recovery never counts it as a recent
+	 * sign-in.
+	 */
+	device?: {
+		authTime: Date | null;
+		clientId: string;
+		id: string;
+	};
+}
+/**
+ * User object (simplified from Kratos identity)
+ */
+export interface User {
+	id: string;
+	email: string;
+	name?: string;
+}
+/**
+ * Full tRPC context
+ */
+export interface Context {
+	db: DatabaseClient;
+	authenticated: boolean;
+	userId?: string | null;
+	user?: User | null;
+	session?: KratosSession | null;
+	/**
+	 * What kind of PERSON session `session` is: a Kratos session (browser
+	 * cookie, X-Session-Token) or a Synap app's device token. Set ONLY by
+	 * `createContext`, from what the app session gate resolved from the row
+	 * (`middleware/app-session.ts`); null when there is no session. A credential
+	 * door takes a `person_device` session only shortly after a real sign-in
+	 * (`requireFreshAuthentication`, trpc.ts).
+	 */
+	sessionKind?: "kratos" | "person_device" | null;
+	req?: Request;
+	socketIO?: any;
+	workspaceId?: string | null;
+	/**
+	 * Project ID from the X-Project-Id header — the cross-cutting PROJECT lens,
+	 * orthogonal to the workspace lens. Optional narrowing only: it is intersected
+	 * with the user-access floor, so a stale/forged id can never widen access.
+	 * `undefined`/`null` = no project narrowing. See `AccessContext.projectLens`.
+	 */
+	projectId?: string | null;
+	workspaceRole?: string | null;
+	/**
+	 * Request source — "intelligence" when the request comes from the Intelligence Hub
+	 * via API key auth. Set automatically by api-key-auth middleware; never set by humans.
+	 */
+	source?: string | null;
+	/**
+	 * Hard flag — true only when authenticated via a hub-protocol scoped API key.
+	 * Cannot be spoofed by a human JWT session.
+	 */
+	isHubProtocol?: boolean;
+	/**
+	 * The authenticating API key's type (`user_pat` | `service` | `agent` | …) and
+	 * its workspace binding, threaded from api-key-auth middleware. They let the
+	 * hub-protocol tRPC surface apply the SAME service-key workspace confinement
+	 * (resolveConfinedWorkspace) the Hono REST door already applies. NOTE: identity
+	 * is NEVER relaxed on keyType — a `service` key is self-mintable on this pod
+	 * (setup.ts `/setup/service` Path 4), so it grants no impersonation right; see
+	 * `hub-protocol/guard.ts`.
+	 */
+	keyType?: string | null;
+	keyWorkspaceId?: string | null;
+	/**
+	 * The agent user ID acting on behalf of this request, when the caller is an
+	 * AI agent (set from the hub-protocol key's `linkedUserId`). Drives the
+	 * governance membrane: when present, mutations route through
+	 * checkPermissionOrPropose (propose instead of auto-apply). Undefined for
+	 * operator/human-driven requests, which stay synchronous.
+	 */
+	agentUserId?: string | null;
+	/**
+	 * INTERNAL CHANNEL — never from a request. No context factory populates it
+	 * and there is no wire passthrough. **Keep it that way** — a ctx factory that
+	 * ever read this from a header or input would hand any caller an "assume my
+	 * write is already approved" primitive.
+	 *
+	 * ⚠️ CORRECTED 2026-09-07. This docblock previously said "set ONLY by
+	 * `applyProposalApproval`'s composite caller … it arrives solely from that
+	 * internal object literal." That was FALSE on the day it was written. There
+	 * are TWO producers, and the omission mattered because the field is read as a
+	 * security carve-out (below), so the comment understated where that carve-out
+	 * applies:
+	 *   · `routers/proposals/apply-approval.ts` — the approval composite caller.
+	 *   · `services/capture-agent/submit-capture-graph.ts` — the capture
+	 *     auto-apply composite caller (its existence is asserted by
+	 *     `__tripwires__/capture-graph-governance-linkage.test.ts`).
+	 *
+	 * THE INVARIANT, stated so a third producer knows what it is signing up to:
+	 * set this ONLY from an internal caller that has ALREADY obtained a
+	 * governance decision for the write it is about to make. It means "a decision
+	 * exists for this", not merely "an internal caller made this".
+	 *
+	 * Two load-bearing meanings:
+	 *  · PROVENANCE — stamped as `source_proposal_id`, the JOIN that recovers the
+	 *    APPROVER via `proposals.reviewedBy`.
+	 *  · "this write is ALREADY APPROVED" — `relations.create` reads it to skip
+	 *    re-entering the governance membrane. Without that skip the ladder falls
+	 *    to `propose` (relation.create is not in DEFAULT_AUTO_APPROVE) and the
+	 *    edge is silently never created while the receipt reports it linked.
+	 *    `playbooks.run` reads it the same way (set by the `playbook/run`
+	 *    executor): it gates on the APPROVER, while its `agentUserId` input
+	 *    still owns the session.
+	 *
+	 * Declared here rather than cast at each reader: it was read through
+	 * `(ctx as { governanceProposalId?: string })` in seven places across three
+	 * files, one of which now guards the security fix above — so renaming the
+	 * field would have broken all seven with ZERO typecheck signal.
+	 */
+	governanceProposalId?: string;
+	/**
+	 * The message ID that triggered this hub-protocol request.
+	 * When set, proposals created during this request are linked to this message.
+	 */
+	sourceMessageId?: string | null;
+	/**
+	 * Session ID that triggered this hub-protocol request.
+	 * When set, proposals created during this request are linked to this session.
+	 */
+	sessionId?: string | null;
+	/**
+	 * `"sync"` when this request materializes a bulk mirror of an external source
+	 * (a connection sync, or the approval of its grouped import). Forwarded by the
+	 * entity/relation doors to `recordDomainMutation`, so event automations skip
+	 * the fan-out unless they opted in (`triggerConfig.includeSyncOrigin`).
+	 * INTERNAL composite-caller channel — createContext never sets it from HTTP.
+	 */
+	origin?: "sync";
+	/**
+	 * The enclosing session revert pass (`revertSession`), so each per-proposal
+	 * `proposals.revert` in that pass tolerates the pass's OWN `updated_at` bumps.
+	 * INTERNAL composite-caller channel — createContext never sets it from HTTP,
+	 * and it is never read from procedure input: a client must not be able to
+	 * exempt entities from the edit check.
+	 */
+	revertPass?: RevertPass;
+}
+declare const PROMOTE_TO_BODY_REFUSALS: readonly [
+	"not_body_property",
+	"empty_value",
+	"body_exists",
+	"agent_caller"
+];
+export type PromoteToBodyRefusal = (typeof PROMOTE_TO_BODY_REFUSALS)[number];
+declare const UNDO_PROMOTE_TO_BODY_REFUSALS: readonly [
+	"edited_since",
+	"not_promoted"
+];
+export type UndoPromoteToBodyRefusal = (typeof UNDO_PROMOTE_TO_BODY_REFUSALS)[number];
+/**
+ * Field errors of a refused input: dotted input path (`items.0.title`) →
+ * the messages for that field; `""` is the input as a whole.
+ *
+ * The pod sends it as tRPC `error.data.fieldErrors` and as `fieldErrors` on a
+ * Hub REST 400, built from the Zod refusal (messages only, never the values
+ * the caller sent). Absent when the refusal is not a validation one.
+ */
+export type FieldErrors = Record<string, string[]>;
+declare enum AgentType {
+	DEFAULT = "default",
+	META = "meta",
+	PROMPTING = "prompting",
+	KNOWLEDGE_SEARCH = "knowledge-search",
+	CODE = "code",
+	WRITING = "writing",
+	ACTION = "action",
+	ONBOARDING = "onboarding",
+	WORKSPACE_CREATION = "workspace-creation"
+}
+/**
+ * Agent type as string literal union (for flexibility)
+ */
+export type AgentTypeString = `${AgentType}` | (string & {});
+declare enum AIStepType {
+	THINKING = "thinking",
+	TOOL_CALL = "tool_call",
+	TOOL_RESULT = "tool_result",
+	DECISION = "decision",
+	ERROR = "error"
+}
+/**
+ * AI step - shows what the AI is doing
+ *
+ * Represents any step in the AI's reasoning/execution process:
+ * - thinking: General analysis and reasoning
+ * - tool_call: When AI calls a tool
+ * - tool_result: Result from tool execution
+ * - decision: AI making a decision
+ * - error: Error during processing
+ */
+export interface AIStep {
+	id: string;
+	type: AIStepType | string;
+	content: string;
+	toolName?: string;
+	toolInput?: unknown;
+	toolOutput?: unknown;
+	timestamp: string;
+	duration?: number;
+	error?: string;
+	title?: string;
+	description?: string;
+	status?: "complete" | "error" | "pending" | "running";
+}
+/**
+ * Branch decision from meta-agent
+ */
+export interface BranchDecision {
+	shouldBranch: boolean;
+	reason: string;
+	suggestedAgentType?: AgentTypeString;
+	suggestedTitle?: string;
+	suggestedPurpose?: string;
 }
 declare enum MessageLinkTargetType {
 	ENTITY = "entity",
