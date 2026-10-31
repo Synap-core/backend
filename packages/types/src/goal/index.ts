@@ -4,6 +4,8 @@
  * and pod-admin share ONE composition; headless re-exports it. */
 export * from "./marks.js";
 export * from "./model.js";
+/** The goal model's own words, en + fr (`./copy.ts`). */
+export { goalCopy, goalT } from "./copy.js";
 export * from "./view.js";
 export * from "./criteria-input.js";
 export * from "./new-goal.js";

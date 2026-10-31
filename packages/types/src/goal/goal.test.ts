@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
-import type { GoalCriterionView, TrackParticipant } from "../units/index.js";
+import { catalogProblems } from "../i18n/index.js";
+import type {
+  GoalCriterionServer,
+  GoalCriterionView,
+  TrackParticipant,
+} from "../units/index.js";
 import {
   criterionMark,
   goalCounterAnswerChange,
   goalCriteriaCount,
+  goalCopy,
   goalCriterionRows,
   goalHeader,
   goalParticipantRows,
@@ -430,6 +436,69 @@ describe("Done when", () => {
       by: "Claimed by someone",
       session: { id: "s2", title: "Job" },
       evidence: null,
+    });
+  });
+
+  describe("who works it (servedBy)", () => {
+    const server = (n: number): GoalCriterionServer => ({
+      sessionId: `s${n}`,
+      title: `Run ${n}`,
+      status: "active",
+    });
+    const rowsOf = (
+      servedBy: GoalCriterionServer[] | undefined,
+      locale?: "en" | "fr"
+    ) =>
+      goalCriterionRows(
+        goal({ criteria: [crit("a", "under_way", { servedBy })] }),
+        person(OWNER),
+        locale
+      );
+
+    it('read and empty says "Nobody on it": an empty list is a fact, not a blank', () => {
+      expect(rowsOf([])[0]).toMatchObject({
+        servedBy: [],
+        servedByLabel: "Nobody on it",
+      });
+    });
+
+    it('one session reads its title; three read the first title and "+2", the list kept in the pod\'s order', () => {
+      expect(rowsOf([server(1)])[0]!.servedByLabel).toBe("Run 1");
+      const [row] = rowsOf([server(1), server(2), server(3)]);
+      expect(row!.servedByLabel).toBe("Run 1 +2");
+      expect(row!.servedBy!.map((s) => s.sessionId)).toEqual([
+        "s1",
+        "s2",
+        "s3",
+      ]);
+    });
+
+    it("an untitled first session reads the session noun, never a blank or an id", () => {
+      const [row] = rowsOf([{ ...server(1), title: "  " }, server(2)]);
+      expect(row!.servedByLabel).toBe("Job +1");
+    });
+
+    it("not read (a write's fallback view) says nothing: both fields null, never a guessed nobody", () => {
+      expect(rowsOf(undefined)[0]).toMatchObject({
+        servedBy: null,
+        servedByLabel: null,
+      });
+    });
+
+    it("speaks French when asked; a session's title stays as written", () => {
+      expect(rowsOf([], "fr")[0]!.servedByLabel).toBe("Personne dessus");
+      expect(
+        rowsOf([server(1), server(2), server(3)], "fr")[0]!.servedByLabel
+      ).toBe("Run 1 +2");
+      expect(rowsOf(undefined, "fr")[0]!.servedByLabel).toBeNull();
+    });
+
+    it("the French catalog has every key, the same arguments, no extra; the key list is pinned", () => {
+      expect(catalogProblems(goalCopy)).toEqual([]);
+      expect(Object.keys(goalCopy.en)).toEqual([
+        "goal.criterion.servedBy.nobody",
+        "goal.criterion.servedBy.more",
+      ]);
     });
   });
 
