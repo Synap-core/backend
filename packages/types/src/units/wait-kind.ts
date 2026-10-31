@@ -124,7 +124,9 @@ export function waitKindBall(
  *    no reason (a question, a param, an ask).
  *  - `source`: what the pod found the wait in (`WaitingOnSource`); a work
  *    unit splits by its checks (`ci` while they run, `merge_queue` once
- *    green), and `owed_slot` / `hold` defer to their own axis.
+ *    green), and `owed_slot` / `hold` defer to their own axis. A `step` (a
+ *    lifecycle option's declared `waits`) gives its own `waitKind`, else
+ *    defers to the `hold` axis by its `on`.
  */
 export const WAIT_KIND_FROM = {
   hold: {

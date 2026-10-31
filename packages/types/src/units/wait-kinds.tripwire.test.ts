@@ -28,6 +28,7 @@ import {
   WAIT_KIND_FROM,
   isWaitKind,
   waitKindBall,
+  type WaitKind,
 } from "./wait-kind.js";
 import { deriveWaitingOn, waitKindOf, type WaitingOnSource } from "./goal.js";
 import { resolveUnitState, UNIT_STATES } from "./state.js";
@@ -135,6 +136,42 @@ describe("the one map table → waitKind", () => {
     for (const [source, waitKind] of cases) {
       expect(waitKindOf(source)).toBe(waitKind);
     }
+  });
+
+  it("a step's declared waitKind wins; absent or unknown, its on decides", () => {
+    for (const on of HOLD_ON) {
+      expect(waitKindOf({ kind: "step", on })).toBe(WAIT_KIND_FROM.hold[on]);
+      expect(waitKindOf({ kind: "step", on, waitKind: "signature" })).toBe(
+        "signature"
+      );
+    }
+    expect(waitKindOf({ kind: "step", on: "person" })).toBe("answer");
+    expect(
+      waitKindOf({ kind: "step", on: "person", waitKind: "their_reply" })
+    ).toBe("their_reply");
+    // A kind this build does not know (an older pod's typo) falls to `on`.
+    expect(
+      waitKindOf({
+        kind: "step",
+        on: "external",
+        waitKind: "nope" as WaitKind,
+      })
+    ).toBe("vendor");
+    const [mark] = deriveWaitingOn([
+      {
+        kind: "step",
+        on: "person",
+        waitKind: "their_reply",
+        ref: { kind: "person", id: "p1", label: "Ada" },
+      },
+    ]);
+    expect(mark).toEqual({
+      reason: "input",
+      count: 1,
+      refs: [
+        { kind: "person", id: "p1", label: "Ada", waitKind: "their_reply" },
+      ],
+    });
   });
 
   it("deriveWaitingOn stamps each named ref with its waitKind, never `kind`", () => {

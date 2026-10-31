@@ -63,6 +63,26 @@ import {
 } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
+/**
+ * One stage a session ENTERED (0382), oldest first — the shape of a goal's
+ * `ProjectTrackStageHistoryEntry` (0274) plus where the move came from.
+ * Appended by `appendSessionStageHistory` in the write that sets
+ * `current_stage`. A re-entered stage is a NEW entry.
+ */
+export interface SessionStageHistoryEntry {
+  stageKey: string;
+  /** The stage it came from; `null` when the session had none. */
+  fromStage: string | null;
+  /** ISO-8601. */
+  enteredAt: string;
+  /** Who moved it: the agent's user id when an agent drove it, else the human. */
+  actor: string;
+  /** The human the move is attributed to (the reviewer, on an approval). */
+  userId: string;
+  /** Which writer recorded it: the stage door, or a re-applied approval. */
+  via: "advance" | "approval";
+}
+
 export enum FocusSessionStatus {
   ACTIVE = "active",
   PAUSED = "paused",
@@ -231,6 +251,16 @@ export const focusSessions = pgTable(
      * for stageless playbooks (progress-only) — NEVER becomes NOT NULL.
      */
     currentStage: text("current_stage"),
+    /**
+     * Every stage this session ENTERED, oldest first (0382): appended in the
+     * write that moves `current_stage` (`appendSessionStageHistory`), never
+     * into the transition outbox (a stage row there would hide a hold).
+     * Empty for moves before 0382.
+     */
+    stageHistory: jsonb("stage_history")
+      .$type<SessionStageHistoryEntry[]>()
+      .notNull()
+      .default([]),
     /**
      * Agent IDs invited to this session — an INVITE LIST, not a participant set.
      * NOTHING appends to it after create/update: an agent that joins and works

@@ -108,6 +108,7 @@ import { usersRouter } from "./routers/users.js";
 import { placesRouter } from "./routers/places.js";
 import { brandRouter } from "./routers/brand.js";
 import { marketplaceRouter } from "./routers/marketplace.js";
+import { packageUpdatesRouter } from "./routers/package-updates.js";
 
 /**
  * Core API Router
@@ -232,6 +233,9 @@ export const coreRouter = router({
   brand: brandRouter,
   // Marketplace — the pod-owned catalog (browse, preflight, install).
   marketplace: marketplaceRouter,
+  // Package updates — what a catalog update does field by field, applied
+  // with a choice per field, with History and Undo (pod admin).
+  packageUpdates: packageUpdatesRouter,
 });
 
 export type AppRouter = typeof coreRouter;

@@ -28,4 +28,4 @@ export * from "./home-brief-reads.js";
 export { formatFloorCount } from "../value-format/numbers.js";
 
 /** Home's words, en + fr (`./home-copy.ts`). */
-export { homeCopy, homeT } from "./home-copy.js";
+export { HOME_LATER_CHOICE_KEY, homeCopy, homeT } from "./home-copy.js";

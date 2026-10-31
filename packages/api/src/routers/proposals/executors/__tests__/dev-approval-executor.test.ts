@@ -279,6 +279,36 @@ describe("apply stamps the session", () => {
     expect(result.success).toBe(true);
   });
 
+  it("records the stage it entered in the stage ledger (0382), in the same UPDATE", async () => {
+    sessionRow = { ...sessionRow!, currentStage: "plan" };
+    await executor("focus_session/dev.plan_approval").execute(
+      args(DEV_PLAN_APPROVAL_TYPE, PLAN_PAYLOAD)
+    );
+    const values = sessionUpdate();
+    const chunks =
+      (values.stageHistory as { queryChunks?: unknown[] } | undefined)
+        ?.queryChunks ?? [];
+    expect(chunks.length).toBeGreaterThan(0);
+    const text = chunks
+      .map((c) =>
+        Array.isArray((c as { value?: unknown }).value)
+          ? (c as { value: string[] }).value.join("")
+          : String(c)
+      )
+      .join("");
+    expect(text).toContain('"stageKey":"plan_approved"');
+    expect(text).toContain('"fromStage":"plan"');
+    expect(text).toContain('"via":"approval"');
+  });
+
+  it("appends no ledger entry when the approval leaves the stage where it was", async () => {
+    sessionRow = { ...sessionRow!, currentStage: "plan_approved" };
+    await executor("focus_session/dev.plan_approval").execute(
+      args(DEV_PLAN_APPROVAL_TYPE, PLAN_PAYLOAD)
+    );
+    expect(sessionUpdate()).not.toHaveProperty("stageHistory");
+  });
+
   it("deploy approval records the commit, host and gate outcome", async () => {
     updateReturns = [{ id: SESSION_ID, currentStage: "deploy_approved" }];
     await executor("focus_session/dev.deploy_approval").execute(

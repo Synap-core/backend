@@ -625,6 +625,11 @@ export {
   getTableColumns,
 } from "drizzle-orm";
 
+export {
+  appendSessionStageHistory,
+  sessionStageHistoryEntry,
+  type SessionStageMove,
+} from "./utils/session-stage-history.js";
 // Also export sql from drizzle-orm as drizzleSql for clarity (for SQL template literals)
 export { sql as drizzleSql } from "drizzle-orm";
 

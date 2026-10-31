@@ -1,6 +1,7 @@
 /**
  * readPullRequestStates — THE read of what the pod knows about pull requests:
- * the dev-loop facts it recorded (`dev.pr_*`, `ci.finished`, `dev.deployed`),
+ * the dev-loop facts it recorded (`dev.pr_*`, `dev.merge_queued`,
+ * `ci.started` / `ci.finished`, `dev.deployed`),
  * under the reader's event floor (`eventVisibleWhere`), folded by the ONE rule
  * (`foldPullRequestState`, `@synap-core/types`).
  *
@@ -8,7 +9,8 @@
  * no producer): the caller draws nothing, never a guessed "Open". A failed
  * read THROWS, so the caller can say `unavailable` instead of absent.
  *
- * Two queries, both bounded by the PRs asked about: the PR facts first, then
+ * Two queries, both bounded by the PRs asked about: the PR facts (a merge
+ * queue entry is one: it names repo and number) first, then
  * the CI runs and deploys that can only be matched once the PR's head and
  * merge shas are known. A deploy is read when it names a merge sha, or, once
  * some PR merged, when it is a build of one of the PRs' repos that says when
@@ -37,6 +39,13 @@ const PR_TYPES = [
   DEV_LOOP_EVENT_TYPES.prOpened,
   DEV_LOOP_EVENT_TYPES.prMerged,
   DEV_LOOP_EVENT_TYPES.prClosed,
+  DEV_LOOP_EVENT_TYPES.mergeQueued,
+];
+
+/** A run's start and its end: the fold pairs them per workflow. */
+const CI_TYPES = [
+  DEV_LOOP_EVENT_TYPES.ciStarted,
+  DEV_LOOP_EVENT_TYPES.ciFinished,
 ];
 
 /** Shas are matched on their first 7 characters in SQL, exactly in the fold. */
@@ -104,7 +113,7 @@ export async function readPullRequestStates(
   if (headShas.size > 0) ciMatch.push(inArray(shaOf, [...headShas]));
   const followUps: SQL[] = [
     and(
-      sql`${events.type} = ${DEV_LOOP_EVENT_TYPES.ciFinished}`,
+      inArray(events.type, CI_TYPES),
       inArray(repoOf, repos),
       or(...ciMatch)
     )!,
