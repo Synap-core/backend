@@ -589,11 +589,14 @@ export interface NeedsYouAccessRequest {
    * What would be granted: issuer trust, an application's browser origin, or
    * an API key one of the person's computers asked them for (`api_key`, read
    * for its person, not only for admins; decision 68d37853, answer 25).
+   * `capability`: one of the person's OWN tool connections broke (every
+   * connection of that tool needs a sign-in again, `secrets.connection_state
+   * = 'needs_reauth'`); the ask is to reconnect it, read for its person.
    */
-  subject: "issuer" | "application" | "api_key";
-  /** The asker's display name (the issuer's host, the app's name; a key's requested name). */
+  subject: "issuer" | "application" | "api_key" | "capability";
+  /** The asker's display name (the issuer's host, the app's name; a key's requested name; the broken tool's name). */
   name: string;
-  /** Where it asks from: the issuer URL, the app's requested origin, or the computer asking for a key. */
+  /** Where it asks from: the issuer URL, the app's requested origin, the computer asking for a key; "" for a broken connection. */
   from: string;
 }
 
