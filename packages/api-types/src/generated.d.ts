@@ -15994,9 +15994,17 @@ export interface PacketRunnerItem {
 		processId: string;
 		startedAt?: string;
 	}>;
+	/**
+	 * What the runner says it is doing (0384, `X-Synap-Runner-State`): `busy`,
+	 * `idle`, `needs_permission`, or `ended` (it said so, or left the live
+	 * window). `null` while live = its client names no state: unknown, not idle.
+	 */
+	state: "busy" | "ended" | "idle" | "needs_permission" | null;
+	/** When it entered that state; for a runner gone quiet, when it was last seen. */
+	stateSince?: string;
 	firstSeenAt: string;
 	lastSeenAt: string;
-	/** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read. */
+	/** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read, and not `ended`. */
 	live: boolean;
 	/** The shell command that reopens it (`resolveAgentConversation`); absent for a harness we cannot reopen. */
 	resume?: string;
@@ -16475,6 +16483,21 @@ export interface ContinuationPacket {
 	live: {
 		lastActivityAt: string | null;
 		measuredAt: string;
+		/**
+		 * What the LIVE runners SAY they are doing (0384), folded by
+		 * `foldRunnerState`: `needs_permission` over `busy` over `idle`;
+		 * `state: null` = no live runner named one. The harness's own word,
+		 * beside the pod-activity `state` above and never folded into it. A
+		 * failed runners read is `unavailable` (see `runners`), never null.
+		 */
+		runner: {
+			since: string | null;
+			state: "busy" | "idle" | "needs_permission" | null;
+			status: "ok";
+		} | {
+			reason: string;
+			status: "unavailable";
+		};
 		since: string | null;
 		state: "idle" | "working";
 		status: "ok";
