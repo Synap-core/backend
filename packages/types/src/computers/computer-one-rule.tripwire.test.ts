@@ -66,8 +66,8 @@ const FORKS: Array<{ name: string; re: RegExp; sample: string }> = [
   },
   {
     name: "own never-seen wording",
-    re: /["']Not seen yet["']|empty:\s*["']never["']|seen never/,
-    sample: 'formatRelative(d, { empty: "never" })',
+    re: /["']Not seen yet["']|seen never|`seen \$\{/,
+    sample: "`seen ${formatRelative(d)}`",
   },
   {
     name: "own key-expiry words",
