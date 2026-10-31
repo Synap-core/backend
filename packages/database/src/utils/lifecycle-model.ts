@@ -50,13 +50,6 @@ export interface EffectiveLifecycle extends LifecycleDeclaration {
   /** The profile whose link declares it (the leaf, or an ancestor). */
   declaredOnProfileId: string;
   unclassified: string[];
-  /**
-   * The status a new thing or role starts in when its creator names none:
-   * the declaring link's `profile_properties.default_value`, the column the
-   * lifecycle door `setLifecycleInitialStatus` writes. `null` = none set (a
-   * stored default that is not a string is reported as none, never guessed).
-   */
-  initialStatus: string | null;
 }
 
 /** The longest stuck threshold an option may declare (ten years). */
