@@ -62,6 +62,53 @@ export function podSessionFromBody(body) {
 
 const SOURCE = "github-actions";
 
+/**
+ * The checks a PR must pass to land: a copy of REQUIRED_CHECK_NAMES
+ * (packages/types/src/events/dev-loop.ts); the tripwire pins the two equal.
+ */
+export const REQUIRED_CHECK_NAMES = [
+  "Release gate",
+  "Full suite",
+  "API e2e",
+  "Reference docs are current",
+];
+
+/** The one workflow whose runs are "the PR's checks" (a copy of ciRunCountsAsChecks). */
+export const CI_WORKFLOW = "CI";
+
+/**
+ * The required-checks verdict of a PR head (finding 1bff8284). `checkRuns` =
+ * the head's check runs (`name`, `status`, `conclusion`, `id`); `mergeableState`
+ * = the PR's `mergeable_state`. Pure.
+ *   no_ci    the PR conflicts with main (GitHub runs no CI), or none of the
+ *            required checks ever started
+ *   red      a required check ended failed: names in `failing`
+ *   pending  a required check is queued, running or not yet reported: `pending`
+ *   green    all of them success (skipped / neutral count, as GitHub's merge rule does)
+ * A rerun lists a check twice: the newest (highest id) is the one.
+ */
+export function requiredChecksVerdict({ checkRuns, mergeableState }) {
+  if (mergeableState === "dirty") return { verdict: "no_ci" };
+  const newest = new Map();
+  for (const c of checkRuns ?? []) {
+    if (!REQUIRED_CHECK_NAMES.includes(c.name)) continue;
+    const prior = newest.get(c.name);
+    if (!prior || (c.id ?? 0) > (prior.id ?? 0)) newest.set(c.name, c);
+  }
+  if (newest.size === 0) return { verdict: "no_ci" };
+  const failing = [];
+  const pending = [];
+  for (const name of REQUIRED_CHECK_NAMES) {
+    const c = newest.get(name);
+    if (!c || c.status !== "completed") pending.push(name);
+    else if (!["success", "skipped", "neutral"].includes(c.conclusion))
+      failing.push(name);
+  }
+  if (failing.length) return { verdict: "red", failing };
+  if (pending.length) return { verdict: "pending", pending };
+  return { verdict: "green" };
+}
+
 /** The contract's limits (dev-loop.ts): an over-long field would refuse the whole item. */
 const MAX_BODY = 65_536;
 const MAX_TITLE = 512;
@@ -159,7 +206,7 @@ function runStartObservation(run, repo, sessionId) {
   };
 }
 
-function runObservation(run, repo, sessionId) {
+function runObservation(run, repo, sessionId, requiredChecks) {
   const status = CI_STATUS[run.conclusion];
   if (!status || !run.head_sha) return null;
   return {
@@ -176,6 +223,7 @@ function runObservation(run, repo, sessionId) {
       workflow: run.name,
       branch: run.head_branch,
       sessionId,
+      requiredChecks,
       source: SOURCE,
     }),
   };
@@ -185,13 +233,14 @@ function runObservation(run, repo, sessionId) {
  * The observation for one GitHub event, or null when the event is not one we
  * report (another pull_request action, a run from a fork).
  *
- * `sessionId` is only used for workflow_run, whose payload carries no PR body:
- * the caller reads it from the run's first PR.
+ * `sessionId` and `requiredChecks` are only used for workflow_run, whose
+ * payload carries neither: the caller reads them from the run's first PR and
+ * the head's check runs.
  */
 export function observationFromEvent(
   eventName,
   payload,
-  { sessionId = null } = {}
+  { sessionId = null, requiredChecks = null } = {}
 ) {
   const repo = payload?.repository?.full_name;
   if (!repo) return null;
@@ -215,37 +264,56 @@ export function observationFromEvent(
       run.head_repository.full_name !== repo
     )
       return null;
+    // Only CI is "the PR's checks": Depends-On, the merge bot and the like
+    // finish green with no CI behind them (#584) and are never a fact.
+    if (run.name !== CI_WORKFLOW) return null;
     return payload.action === "requested"
       ? runStartObservation(run, repo, sessionId)
-      : runObservation(run, repo, sessionId);
+      : runObservation(run, repo, sessionId, requiredChecks ?? undefined);
   }
   return null;
 }
 
-/** The PR body of a workflow run's first PR, for its `Pod session:` line. */
-async function runPodSession(payload, token) {
-  const pr = payload.workflow_run?.pull_requests?.[0];
-  if (!pr || !token) return null;
-  const repo = payload.repository.full_name;
-  const res = await fetch(
-    `https://api.github.com/repos/${repo}/pulls/${pr.number}`,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json",
-      },
-      signal: AbortSignal.timeout(15_000),
-    }
-  );
+/** GET a GitHub API path; null (said, not swallowed) when it fails. */
+async function github(path, token) {
+  const res = await fetch(`https://api.github.com/${path}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+    },
+    signal: AbortSignal.timeout(15_000),
+  });
   if (!res.ok) {
-    // The run is still reported; only the session join is missing, and the
-    // resolver can still join on data.pr. Said, not swallowed.
-    console.warn(
-      `::warning::could not read PR #${pr.number} (${res.status}); sessionId not set`
-    );
+    console.warn(`::warning::could not read ${path} (${res.status})`);
     return null;
   }
-  return podSessionFromBody((await res.json()).body);
+  return res.json();
+}
+
+/**
+ * What a workflow run's first PR adds: the `Pod session:` line of its body and
+ * the head's required-checks verdict. A failed read leaves that part out (the
+ * run is still reported; a reader never says "passed" without the verdict).
+ */
+async function runPrFacts(payload, token) {
+  const pr = payload.workflow_run?.pull_requests?.[0];
+  if (!pr || !token) return { sessionId: null, requiredChecks: null };
+  const repo = payload.repository.full_name;
+  const sha = payload.workflow_run.head_sha;
+  const [pull, checks] = await Promise.all([
+    github(`repos/${repo}/pulls/${pr.number}`, token),
+    github(`repos/${repo}/commits/${sha}/check-runs?per_page=100`, token),
+  ]);
+  return {
+    sessionId: pull ? podSessionFromBody(pull.body) : null,
+    requiredChecks:
+      pull && checks
+        ? requiredChecksVerdict({
+            checkRuns: checks.check_runs,
+            mergeableState: pull.mergeable_state,
+          })
+        : null,
+  };
 }
 
 /** POST one observation; returns the error text, or null when it was recorded. */
@@ -298,11 +366,14 @@ async function main() {
   const payload = JSON.parse(
     readFileSync(process.env.GITHUB_EVENT_PATH, "utf8")
   );
-  const sessionId =
+  const { sessionId, requiredChecks } =
     eventName === "workflow_run"
-      ? await runPodSession(payload, process.env.GITHUB_TOKEN)
-      : null;
-  const obs = observationFromEvent(eventName, payload, { sessionId });
+      ? await runPrFacts(payload, process.env.GITHUB_TOKEN)
+      : { sessionId: null, requiredChecks: null };
+  const obs = observationFromEvent(eventName, payload, {
+    sessionId,
+    requiredChecks,
+  });
   if (!obs) {
     console.log(`Nothing to report for ${eventName}/${payload.action}.`);
     return;
