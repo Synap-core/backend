@@ -159,7 +159,9 @@ export type SignalKind =
    * `access-requests.ts`): a pending trusted issuer (`target.kind: "issuer"`)
    * or an app's pending connection request (`target.kind:
    * "connection-request"`); or the person's own pending KEY request
-   * (`target.kind: "key-request"`, read for its person). Who asks and from
+   * (`target.kind: "key-request"`, read for its person); or one of the
+   * person's own tools whose connections all need a sign-in again
+   * (`target.kind: "capability"`, `broken-connections.ts`). Who asks and from
    * where ride in `access`.
    */
   | "access-request"
@@ -1496,12 +1498,27 @@ export interface PendingKeyRequestSignalInput {
   expiresAt: Date;
 }
 
+/**
+ * One of the person's tools whose connections ALL need a sign-in again, as
+ * `listBrokenConnections` reads it (`broken-connections.ts`).
+ */
+export interface BrokenConnectionSignalInput {
+  /** The capability (tool) id — the row's door. */
+  capabilityId: string;
+  /** The tool's name ("Gmail"); the connection's own label when unnamed. */
+  name: string;
+  /** When it broke: the newest auth failure, else the connection's last change. */
+  brokenAt: Date;
+}
+
 /** The access-request half of the union. Absent ⇒ none (not an admin, or a lens). */
 export interface AccessRequestsInput {
   issuers: readonly PendingIssuerSignalInput[];
   applications: readonly PendingAppRequestSignalInput[];
   /** The viewer's own key requests (absent = none read). */
   keys?: readonly PendingKeyRequestSignalInput[];
+  /** The viewer's own broken tool connections (absent = none read). */
+  connections?: readonly BrokenConnectionSignalInput[];
 }
 
 /**
@@ -1613,7 +1630,34 @@ export function signalFromKeyRequest(
   });
 }
 
-/** Every access-request row, issuers, apps, then keys (the union orders them). */
+/**
+ * A broken tool connection → one row: "Reconnect Tool "Gmail"". Nothing to
+ * decide, one act owed (wait kind `access`, the person's ball), so it stays
+ * until the person signs in again — the pod clears `needs_reauth` on the next
+ * call that succeeds (`external-dispatch.ts`) — never when a bell row is read.
+ * Its door is the tool's page, where Reconnect lives; it has no lifetime.
+ */
+export function signalFromBrokenConnection(
+  row: BrokenConnectionSignalInput,
+  now: Date = new Date()
+): Signal {
+  return {
+    ...accessRequestSignal({
+      id: `access:connection:${row.capabilityId}`,
+      target: { kind: "capability", id: row.capabilityId },
+      access: { subject: "capability", name: row.name, from: "" },
+      occurredAt: row.brokenAt,
+      lifetimeHours: null,
+      now,
+      action: "reconnect",
+    }),
+    // A connection the person owns, not a permission decision.
+    category: "data",
+    waitKind: "access",
+  };
+}
+
+/** Every access-request row, issuers, apps, keys, then broken connections (the union orders them). */
 export function signalsFromAccessRequests(
   input: AccessRequestsInput | undefined,
   now: Date = new Date()
@@ -1623,6 +1667,7 @@ export function signalsFromAccessRequests(
     ...input.issuers.map((r) => signalFromPendingIssuer(r, now)),
     ...input.applications.map((r) => signalFromAppRequest(r, now)),
     ...(input.keys ?? []).map((r) => signalFromKeyRequest(r, now)),
+    ...(input.connections ?? []).map((r) => signalFromBrokenConnection(r, now)),
   ];
 }
 

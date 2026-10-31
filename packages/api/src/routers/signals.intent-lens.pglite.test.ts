@@ -53,6 +53,11 @@ vi.mock("../services/signals/access-requests.js", async (orig) => ({
   listPendingAppRequests: async () => ({ rows: [], truncated: false }),
   listPendingKeyRequests: async () => ({ rows: [], truncated: false }),
 }));
+// The broken-connection half: pinned by its own PGlite suite
+// (`broken-connections.pglite.test.ts`); none here.
+vi.mock("../services/signals/broken-connections.js", () => ({
+  listBrokenConnections: async () => ({ rows: [], truncated: false }),
+}));
 // The viewer's open space invites: pinned by their own PGlite suite
 // (`space-invites.pglite.test.ts`); none here.
 vi.mock("../services/signals/space-invites.js", () => ({
