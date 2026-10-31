@@ -2131,9 +2131,18 @@ export interface CapabilitySkillDef {
    * an approved skill's egress can never be widened without re-earning approval.
    * Omitting the key on a re-apply leaves an existing list untouched; it does not
    * revoke one.
+   *
+   * A second key is persisted for a box skill: `box`, its declaration
+   * (`{ language, entrypoint?, packages, hosts, limits }`), stored normalised.
+   * Changing it on an approved skill demotes it, like `allowedHosts`.
    */
   metadata?: Record<string, unknown>;
-  executionMode?: "sync" | "async";
+  /**
+   * `box` = a script run on the person's computer in a box. It needs
+   * `kind: "code"` and `metadata.box` (language, exact package pins, hosts,
+   * limits), which the applier parses with the same rule as the skill doors.
+   */
+  executionMode?: "sync" | "async" | "box";
   timeoutSeconds?: number;
   /**
    * Names of `tools[]` in THIS definition the skill requires. The applier maps

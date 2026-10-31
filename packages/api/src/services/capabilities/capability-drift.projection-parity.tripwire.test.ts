@@ -138,7 +138,7 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
       "DRIFT_COMPARATOR_VERSION must be bumped (and this pin updated) whenever " +
         "the comparator's coverage changes — otherwise every container already " +
         "stamped by the OLD comparator keeps its stamp and is never re-diffed."
-    ).toBe(13);
+    ).toBe(14);
   });
 
   /** A value pair per field: what the template declares vs what the live row has. */
@@ -406,6 +406,46 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
         projectSkillMetadata(null, {
           metering: { provider: "exa", unit: "search", costUsd: -1 },
         })
+      ).toBeUndefined();
+    });
+
+    it("a box-declaration-only difference is drift, installed NORMALISED, and converges", () => {
+      // The fifth definition-owned key (v14). The live row stores the
+      // normalised declaration (entrypoint and limits defaulted), so a raw
+      // template must project to it, or it would read as drift on every boot.
+      const def = {
+        name: "crunch",
+        executionMode: "box",
+        metadata: { box: { language: "python", hosts: ["API.example.com"] } },
+      };
+      const live = {
+        name: "crunch",
+        executionMode: "box",
+        metadata: { readOnly: false },
+      };
+      expect(
+        capabilityDefinitionDrift([live], { skills: [def] }).drifted,
+        "a box-declaration-only difference must be drift"
+      ).toEqual(["crunch"]);
+      const projected = projectSkillMetadata(null, def.metadata);
+      expect(projected?.box).toMatchObject({
+        language: "python",
+        entrypoint: "main.py",
+        hosts: ["api.example.com"],
+      });
+      const converged = projectSkillMetadata(
+        { ...live.metadata, runCount: 3 },
+        def.metadata
+      );
+      expect(
+        capabilityDefinitionDrift([{ ...live, metadata: converged }], {
+          skills: [def],
+        }).drifted,
+        "one apply converges it — the raw template equals the stored normalised one"
+      ).toEqual([]);
+      // A declaration that does not parse is never persisted.
+      expect(
+        projectSkillMetadata(null, { box: { language: "ruby" } })
       ).toBeUndefined();
     });
 

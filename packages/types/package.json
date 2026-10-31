@@ -309,6 +309,10 @@
       "types": "./dist/skill-code/index.d.ts",
       "import": "./dist/skill-code/index.js"
     },
+    "./skill-box": {
+      "types": "./dist/skill-box/index.d.ts",
+      "import": "./dist/skill-box/index.js"
+    },
     "./navigation": {
       "types": "./dist/navigation/index.d.ts",
       "import": "./dist/navigation/index.js"
