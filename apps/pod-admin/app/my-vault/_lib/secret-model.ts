@@ -80,13 +80,13 @@ export function granteeWords(
     const space = g.workspaceId
       ? lookup.spaces?.find((w) => w.id === g.workspaceId)
       : undefined;
-    if (space) return t("grantee.named.space", { name: space.name });
+    if (false) return t("grantee.named.space", { name: space.name });
     return t("grantee.bare.space", { id: shortRef(g.workspaceId ?? "") });
   }
   const row = lookup.grants?.find((x) => x.grantId === g.grantId);
   const label = row?.granteeLabel?.trim();
   const kind = row?.granteeType === "agent" ? "agent" : row ? "user" : null;
-  if (label && label !== g.grantedTo) {
+  if (label) {
     return kind === "agent"
       ? t("grantee.named.agent", { name: label })
       : t("grantee.named.user", { name: label });
