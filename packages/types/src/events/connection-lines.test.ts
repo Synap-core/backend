@@ -105,7 +105,7 @@ const ROWS: Row[] = [
     "Failed to sync Gmail",
     true,
   ],
-  ["connector_sync.complete.completed", undefined, "Synced connection"],
+  ["connector_sync.complete.completed", undefined, "Synced account"],
   [
     "connection_sync.progress",
     { provider: "google-mail", phase: "synced", counts: { created: 3 } },

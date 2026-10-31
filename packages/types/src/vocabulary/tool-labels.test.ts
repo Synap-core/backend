@@ -57,10 +57,14 @@ describe("resolveToolLabel — merged seeds", () => {
   });
 
   it("composes <verb>_<object> through the ONE noun door", () => {
-    // The glossary calls an automation a rule — the label follows it.
-    expect(resolveObjectNoun("automation")).toBe("Rule");
-    expect(resolveToolLabel("create_automation")).toBe("Creating rule");
-    expect(resolveToolLabel("create_automation", "past")).toBe("Created rule");
+    // The glossary calls an automation an Automation (D2) — the label follows it.
+    expect(resolveObjectNoun("automation")).toBe("Automation");
+    expect(resolveToolLabel("create_automation")).toBe("Creating automation");
+    expect(resolveToolLabel("create_automation", "past")).toBe(
+      "Created automation"
+    );
+    // A skill rule keeps the word Rule.
+    expect(resolveToolLabel("create_rule")).toBe("Creating rule");
     expect(resolveToolLabel("get_document", "past")).toBe("Read document");
     // list_ takes the curated PLURAL, never singular + "s".
     expect(resolveToolLabel("list_views", "past")).toBe("Listed views");
