@@ -385,7 +385,11 @@ export function registerAgentUsersRoutes(app: HubHono): void {
       );
       if (refusal) {
         return c.json(
-          { error: refusal.error, reasonCode: "TARGET_NOT_FOUND" },
+          {
+            error: refusal.error,
+            code: "TARGET_NOT_FOUND",
+            reasonCode: "TARGET_NOT_FOUND",
+          },
           refusal.status
         );
       }
@@ -461,6 +465,7 @@ export function registerAgentUsersRoutes(app: HubHono): void {
         {
           error:
             "Only a person can assign an agent — an agent key cannot. Choose it in the Synap app or in an app you signed in to.",
+          code: "PERSON_ONLY",
           reasonCode: "PERSON_ONLY",
         },
         403
@@ -521,7 +526,11 @@ export function registerAgentUsersRoutes(app: HubHono): void {
       return c.json(
         {
           error: err instanceof Error ? err.message : "Unknown error",
-          ...(typeof reasonCode === "string" ? { reasonCode } : {}),
+          // `code` is what the SDK maps into its typed failure; `reasonCode`
+          // is the pod's refusal field. Same value.
+          ...(typeof reasonCode === "string"
+            ? { code: reasonCode, reasonCode }
+            : {}),
         },
         httpStatusForTrpcError(err)
       );

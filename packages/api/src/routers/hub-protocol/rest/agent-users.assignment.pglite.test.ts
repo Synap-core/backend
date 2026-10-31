@@ -159,6 +159,18 @@ const read = (
     )
   );
 
+/**
+ * A refusal's machine code. The body carries it twice, as `code` (what the
+ * SDK maps into its typed failure) and `reasonCode`: both must be there and
+ * agree, so a door that sends only one fails here.
+ */
+async function refusalCode(res: Response): Promise<string> {
+  const body = (await res.json()) as { code?: string; reasonCode?: string };
+  expect(body.code).toBeTypeOf("string");
+  expect(body.code).toBe(body.reasonCode);
+  return body.code!;
+}
+
 /** Every assigned_to row on the playbook: [agent, ownerId]. */
 const rows = async () =>
   (
@@ -281,18 +293,14 @@ describe("who may assign", () => {
   it("an agent key is refused PERSON_ONLY and writes nothing", async () => {
     const res = await assign(AGENT_A, true, { agentUserId: AGENT_A });
     expect(res.status).toBe(403);
-    expect(((await res.json()) as { reasonCode: string }).reasonCode).toBe(
-      "PERSON_ONLY"
-    );
+    expect(await refusalCode(res)).toBe("PERSON_ONLY");
     expect(await rows()).toEqual([]);
   });
 
   it("the AI service's internal key is refused PERSON_ONLY too", async () => {
     const res = await assign(AGENT_A, true, { keyType: "is_internal" });
     expect(res.status).toBe(403);
-    expect(((await res.json()) as { reasonCode: string }).reasonCode).toBe(
-      "PERSON_ONLY"
-    );
+    expect(await refusalCode(res)).toBe("PERSON_ONLY");
     expect(await rows()).toEqual([]);
   });
 
@@ -318,9 +326,7 @@ describe("who may assign", () => {
       grant: appGrant(["agent.update"]),
     });
     expect(res.status).toBe(404);
-    expect(((await res.json()) as { reasonCode: string }).reasonCode).toBe(
-      "TARGET_NOT_FOUND"
-    );
+    expect(await refusalCode(res)).toBe("TARGET_NOT_FOUND");
     expect(await rows()).toEqual([]);
   });
 
@@ -329,7 +335,12 @@ describe("who may assign", () => {
       grant: appGrant(["playbook.read", "entity.post.update", "agent.read"]),
     });
     expect(res.status).toBe(403);
-    const body = (await res.json()) as { reasonCode: string; error: string };
+    const body = (await res.json()) as {
+      code: string;
+      reasonCode: string;
+      error: string;
+    };
+    expect(body.code).toBe("GRANT_DENIED");
     expect(body.reasonCode).toBe("GRANT_DENIED");
     expect(body.error).toMatch(/agent\.update/);
     expect(await rows()).toEqual([]);
@@ -347,26 +358,20 @@ describe("who may assign", () => {
       },
     });
     expect(res.status).toBe(403);
-    expect(((await res.json()) as { reasonCode: string }).reasonCode).toBe(
-      "GRANT_DENIED"
-    );
+    expect(await refusalCode(res)).toBe("GRANT_DENIED");
     expect(await rows()).toEqual([]);
   });
 
   it("an unknown agent → 404 NOT_FOUND", async () => {
     const res = await assign(randomUUID());
     expect(res.status).toBe(404);
-    expect(((await res.json()) as { reasonCode: string }).reasonCode).toBe(
-      "NOT_FOUND"
-    );
+    expect(await refusalCode(res)).toBe("NOT_FOUND");
   });
 
   it("someone else's agent → 403 NOT_OWNER", async () => {
     const res = await assign(THEIRS);
     expect(res.status).toBe(403);
-    expect(((await res.json()) as { reasonCode: string }).reasonCode).toBe(
-      "NOT_OWNER"
-    );
+    expect(await refusalCode(res)).toBe("NOT_OWNER");
     expect(await rows()).toEqual([]);
   });
 
@@ -374,14 +379,10 @@ describe("who may assign", () => {
     const target = { type: "playbook", id: randomUUID() };
     const res = await put(AGENT_A, { target, assigned: true });
     expect(res.status).toBe(404);
-    expect(((await res.json()) as { reasonCode: string }).reasonCode).toBe(
-      "TARGET_NOT_FOUND"
-    );
+    expect(await refusalCode(res)).toBe("TARGET_NOT_FOUND");
     const got = await read(target);
     expect(got.status).toBe(404);
-    expect(((await got.json()) as { reasonCode: string }).reasonCode).toBe(
-      "TARGET_NOT_FOUND"
-    );
+    expect(await refusalCode(got)).toBe("TARGET_NOT_FOUND");
   });
 
   it("a malformed body or query → 400", async () => {

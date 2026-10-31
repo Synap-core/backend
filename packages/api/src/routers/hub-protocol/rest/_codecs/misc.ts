@@ -187,19 +187,24 @@ export const SetAgentAssignmentResultSchema = z
   })
   .openapi("SetAgentAssignmentResult");
 
-/** A refused assignment read or write: the sentence and its machine code. */
+const AgentAssignmentRefusalCodeSchema = z.enum([
+  "PERSON_ONLY",
+  "NOT_OWNER",
+  "NOT_FOUND",
+  "TARGET_NOT_FOUND",
+  "GRANT_DENIED",
+]);
+
+/**
+ * A refused assignment read or write: the sentence and its machine code, as
+ * `code` (what the SDK maps into its typed failure) and `reasonCode` (the
+ * pod's refusal field), always the same value.
+ */
 export const AgentAssignmentRefusalSchema = z
   .object({
     error: z.string(),
-    reasonCode: z
-      .enum([
-        "PERSON_ONLY",
-        "NOT_OWNER",
-        "NOT_FOUND",
-        "TARGET_NOT_FOUND",
-        "GRANT_DENIED",
-      ])
-      .optional(),
+    code: AgentAssignmentRefusalCodeSchema.optional(),
+    reasonCode: AgentAssignmentRefusalCodeSchema.optional(),
   })
   .openapi("AgentAssignmentRefusal");
 
