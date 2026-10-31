@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { stripComments } from "../../../scripts/strip-comments.mjs";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE: a computer's key and presence have ONE rule, and it is shared.
@@ -14,6 +14,8 @@ import { stripComments } from "../../../scripts/strip-comments.mjs";
  * `@synap-core/types/device`. This holds pod admin to it: no file of the app
  * re-derives one of them. The desktop and Relay halves are held in their own
  * repos' tripwires, because a sibling checkout is not there in this repo's CI.
+ * It lives beside the rule (not in pod admin's `__tripwires__`) so the types
+ * suite, which every change to the rule runs, runs it.
  *
  * HOW: the scanned set is DERIVED (every .ts/.tsx of the app but tests and
  * build output), so a new page is scanned the day it appears. Each forbidden
@@ -23,7 +25,10 @@ import { stripComments } from "../../../scripts/strip-comments.mjs";
  * WHAT IT DOES NOT SEE: a fork under other words with none of these patterns
  * (e.g. a hand-written "3 days left" template); granularity is the file.
  */
-const APP_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
+const APP_ROOT = join(
+  fileURLToPath(new URL(".", import.meta.url)),
+  "../../../../apps/pod-admin"
+);
 const SKIP_DIRS = new Set([
   "node_modules",
   ".next",
