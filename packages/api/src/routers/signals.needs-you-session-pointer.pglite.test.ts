@@ -360,19 +360,41 @@ describe("signals: session.needs_you in needs-you (session.room_update retired)"
     expect((await count()).needsYou).toBe(0);
   });
 
-  it("the fold is keyed on the registry role, never on the session id: session.unblocked stays", async () => {
+  it("the fold is keyed on the registry role, never on the session id: session.unblocked is From the system, not folded away", async () => {
     const s = await seedSession({ owed: true });
     await notify("session.unblocked", s, "system");
     await notify("session.needs_you", s);
 
     const c = await count();
     expect(c.blocked).toBe(1);
+    expect(c.notifications).toBe(0);
+    expect(c.needsYou).toBe(1);
+    // No real asker: in the from_system fold, drawn and counted there.
+    expect(c.folds.fromSystem).toBe(1);
+    const rows = await list();
+    expect(rows.map((r) => [r.kind, r.needsYouClass ?? null]).sort()).toEqual([
+      ["notification", "from_system"],
+      ["owed-slot", "needs_you"],
+    ]);
+  });
+
+  it("session.criterion_escalated folds into its session's owed slot, and stays when the session owes nothing", async () => {
+    const owedS = await seedSession({ owed: true });
+    const bareS = await seedSession();
+    await notify("session.criterion_escalated", owedS);
+    await notify("session.criterion_escalated", bareS);
+
+    const c = await count();
+    expect(c.blocked).toBe(1);
     expect(c.notifications).toBe(1);
     expect(c.needsYou).toBe(2);
-    expect((await list()).map((r) => r.kind).sort()).toEqual([
-      "notification",
-      "owed-slot",
-    ]);
+    const rows = await list();
+    expect(rows.map((r) => [r.kind, r.target?.id ?? null]).sort()).toEqual(
+      [
+        ["notification", bareS],
+        ["owed-slot", owedS],
+      ].sort()
+    );
   });
 
   it("the badge equals the list length across a mixed population", async () => {

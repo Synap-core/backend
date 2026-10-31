@@ -1364,9 +1364,10 @@ function outOfHeadline(
 export interface SessionLiveNeeds {
   /**
    * Sessions known to hold at least one owed slot: the scanned owed page's
-   * sessions, PLUS the pointer sessions measured directly
-   * (`sessionsWithOwedSlot`, uncapped) — so a pointer whose session's slots
-   * fell past the owed page's cap still folds (needs-you duplicate cause 3).
+   * sessions, PLUS the pointer and session-ask sessions measured directly
+   * (`sessionsWithOwedSlot`, uncapped) — so a pointer or a session ask whose
+   * session's slots fell past the owed page's cap still folds (needs-you
+   * duplicate cause 3).
    */
   owedSessionIds: ReadonlySet<string>;
   /**
@@ -1761,7 +1762,14 @@ export function owedSessionIdsOf(
  *     it: one entry per session, counted once;
  *   - its type is a `"session-pointer"` and the session has neither an owed
  *     slot nor an open question. Whatever it announced was met, so a row the
- *     person never opened must not keep the session in needs-you.
+ *     person never opened must not keep the session in needs-you;
+ *   - its type is a `"session-ask"` (`session.criterion_escalated`) and the
+ *     session has an owed slot. The escalation filed that slot, so the row
+ *     repeats the ask the slot row shows: it folds into it, counted once there.
+ *     With no owed slot on its session it stays, an item like any other;
+ *   - its type is `"from_system"` (`session.unblocked`): no real asker raised
+ *     it. It is not dropped: {@link partitionNotifications} puts it in the
+ *     `fromSystem` bucket, drawn and counted in the rule's `from_system` fold.
  *
  * A pointer row whose session has no owed slot but an open question stays, and
  * counts once. The question has no row of its own in the union.
@@ -1804,6 +1812,11 @@ export function partitionNotifications(
   suggestions: NotificationSignalInput[];
   /** SYSTEM HEALTH rows (registry role `"status"`) — the status banner. */
   status: NotificationSignalInput[];
+  /**
+   * Rows no real asker raised (registry role `"from_system"`): out of the
+   * headline, in the needs-you rule's `from_system` fold.
+   */
+  fromSystem: NotificationSignalInput[];
 } {
   const clusteredProposalIds = new Set<string>();
   for (const c of clusters) {
@@ -1812,18 +1825,31 @@ export function partitionNotifications(
   const needsYou: NotificationSignalInput[] = [];
   const suggestions: NotificationSignalInput[] = [];
   const status: NotificationSignalInput[] = [];
+  const fromSystem: NotificationSignalInput[] = [];
   for (const r of rows) {
     if (r.sourceType === "proposal") continue;
     if (r.sourceId && clusteredProposalIds.has(r.sourceId)) continue;
     const role = needsYouRole(r.type);
     if (role === "suggestion") suggestions.push(r);
     else if (role === "status") status.push(r);
+    else if (role === "from_system") fromSystem.push(r);
     else if (role === "item") needsYou.push(r);
     else if (role === "session-pointer" && pointerStillNeedsYou(r, live))
       needsYou.push(r);
-    // "informational": in no bucket. It stays in the bell.
+    else if (role === "session-ask" && !foldsIntoOwedSlot(r, live))
+      needsYou.push(r);
+    // "informational": in no bucket. It stays in the bell. A pointer or a
+    // session ask that folded is drawn and counted as its session's owed slot.
   }
-  return { needsYou, suggestions, status };
+  return { needsYou, suggestions, status, fromSystem };
+}
+
+/** A `"session-ask"` row whose session already shows an owed-slot row. */
+function foldsIntoOwedSlot(
+  r: NotificationSignalInput,
+  live: SessionLiveNeeds
+): boolean {
+  return !!r.sourceId && live.owedSessionIds.has(r.sourceId);
 }
 
 /** A `"session-pointer"` row, decided from its session's live state. */
@@ -1896,14 +1922,16 @@ export function unionProposed(args: {
  * session has an owed slot), so the pointer never resurfaces as a loose
  * needs-you row.
  *
- * ── OWED SLOTS FOLD ONLY A SESSION POINTER, NEVER "ANY ROW ABOUT THE SESSION" ─
+ * ── OWED SLOTS FOLD A SESSION POINTER OR ASK, NEVER "ANY ROW ABOUT THE SESSION" ─
  * Every door that hands a slot to the person writes `session.needs_you`
  * (`notify-needs-you.ts`), and that row announced the SAME need the owed-slot
- * row already shows. So the fold is keyed on the registry's
- * `needsYou: "session-pointer"` role, never on `sourceId` alone:
- * `session.unblocked` (`sourceType: "system"`, `sourceId` = the session id) is
- * separate news, and it stays — in the session's block, through its
- * container. See {@link dedupeNotifications}.
+ * row already shows; a criterion escalation (`session.criterion_escalated`)
+ * files the slot it asks about. So the fold is keyed on the registry's
+ * `needsYou: "session-pointer"` / `"session-ask"` roles, never on `sourceId`
+ * alone. `session.unblocked` (`sourceType: "system"`, `sourceId` = the session
+ * id) is separate news no one asked: registry role `"from_system"`, so it sits
+ * in the rule's `from_system` fold, stamped `needsYouClass`, never in the
+ * headline. See {@link dedupeNotifications}.
  *
  * ── ORDERING: NEWEST FIRST ACROSS EVERY KIND (W2 "calm", 2026-09-28) ─────────
  * One newest-first order across kinds, a session's rows kept together, and
@@ -1950,9 +1978,13 @@ export function unionNeedsYou(args: {
   now?: Date;
 }): Signal[] {
   const now = args.now ?? new Date();
-  const notifications = foldNotifications(
-    dedupeNotifications(args.notifications, args.clusters, liveNeedsOf(args))
+  const buckets = partitionNotifications(
+    args.notifications,
+    args.clusters,
+    liveNeedsOf(args)
   );
+  const notifications = foldNotifications(buckets.needsYou);
+  const fromSystem = foldNotifications(buckets.fromSystem);
   return orderNeedsYou(
     holdAsksWithTheirSession([
       ...args.owedSlots.map((r) => signalFromOwedSlot(r, now)),
@@ -1978,6 +2010,16 @@ export function unionNeedsYou(args: {
           args.notificationContainers?.get(f.row.id)
         )
       ),
+      // No real asker: drawn in the rule's From the system fold.
+      ...fromSystem.map((f) => ({
+        ...signalFromNotification(
+          f.row,
+          now,
+          f.repeatCount,
+          args.notificationContainers?.get(f.row.id)
+        ),
+        ...outOfHeadline("from_system", true),
+      })),
     ]).map(withReviewPackage)
   );
 }
@@ -2365,6 +2407,8 @@ export function countNeedsYou(args: {
   // Folded, like the list: the same news raised N times is ONE row there, so
   // it is one here — the badge must equal the number of rows it stands for.
   const notifications = foldNotifications(buckets.needsYou).length;
+  // No real asker: the From the system fold, the rows the list stamps.
+  const notificationsFromSystem = foldNotifications(buckets.fromSystem).length;
   // THE rows the list draws, classified and counted: the session grouping is
   // the list's own (`unionNeedsYou`, which holds an unclassed week-old ask in
   // its session's card), never re-derived here. A row the rule classed counts
@@ -2398,7 +2442,7 @@ export function countNeedsYou(args: {
   );
   const blocked = owedFolds.needsYou;
   const owedOut = owedRows.length - blocked;
-  const reviewLater = reviewLaterClusters + owedOut;
+  const reviewLater = reviewLaterClusters + owedOut + notificationsFromSystem;
   const clusterFolds: ClusterFoldCounts = args.clusterFolds ?? {
     working: 0,
     reviewLater: reviewLaterClusters,
@@ -2433,6 +2477,7 @@ export function countNeedsYou(args: {
     needsYou,
     working: owedFolds.working + clusterFolds.working,
     reviewLater: owedFolds.reviewLater + clusterFolds.reviewLater,
+    fromSystem: owedFolds.fromSystem + notificationsFromSystem,
     changesToReview: clusterFolds.changesToReview,
   };
   return {
