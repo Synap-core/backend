@@ -41,6 +41,7 @@ import { projectTracks } from "../schema/project-tracks.js";
 import { trackParticipants } from "../schema/track-participants.js";
 import { libraryGroups } from "../schema/library-groups.js";
 import { documentPassages } from "../schema/document-passages.js";
+import { statusWaitEpisode } from "../schema/status-wait-episode.js";
 
 /**
  * A single column the runtime requires to exist.
@@ -158,6 +159,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "status_signal_raised",
     column: "episode_key",
     addedBy: "0376_status_signal_raised.sql",
+  },
+  // Wait episodes (0386, status-first PR-H). Absent, every watcher tick's
+  // episode write fails (logged; the signals still raise) and the wait
+  // history reads nothing.
+  {
+    table: "status_wait_episode",
+    column: "ref_key",
+    addedBy: "0386_status_wait_episode.sql",
   },
   // notification_preferences — per-person push categories (0289). The
   // producer reads it on every os-channel notification; missing, the push
@@ -2669,6 +2678,10 @@ const REQUIRED_INDEX_TABLES = [
   // Document passages (0358b): the passage worker's upsert conflicts on
   // `uq_document_passages_document_ordinal`.
   documentPassages,
+  // Wait episodes (0386): the open-episode partial unique index IS "one open
+  // episode per subject, facet, wait kind and ref"; the watcher's insert
+  // relies on it (ON CONFLICT DO NOTHING) to keep an episode single.
+  statusWaitEpisode,
 ] as const;
 
 /** Every index declared in the drizzle schema but absent from the live DB. */

@@ -227,6 +227,12 @@ export interface TransitionBase {
 	 * other move. The transition log is the hold's only store.
 	 */
 	hold: RecordedHold | null;
+	/**
+	 * The wait the target step declares (`LifecycleOption.waits`), stamped by
+	 * the mover; absent when the step declares none (and on goal and session
+	 * moves, whose statuses declare no waits).
+	 */
+	wait?: TransitionWait;
 }
 /** Who made a move, for attribution (`TransitionBase.actorClass`). */
 export type TransitionActorClass = "agent" | "app" | "human" | "system";
@@ -304,6 +310,19 @@ declare const LIFECYCLE_CATEGORIES: readonly [
 	"lost"
 ];
 export type LifecycleCategory = (typeof LIFECYCLE_CATEGORIES)[number];
+/**
+ * The wait a MOVE lands in (`TransitionBase.wait`, status-first PR-H): stamped
+ * by the mover when the target step declares one (`LifecycleOption.waits`),
+ * absent otherwise. A step wait is not a pause: the hold (`hold`) stays null
+ * for an active step; the wait's history (`status_wait_episode`) starts here.
+ */
+export interface TransitionWait {
+	waitKind: WaitKind;
+	/** The step's `waits.on`. */
+	on?: HoldOn;
+	/** What `waits.refFrom` held on the thing at the move (an id, a name). */
+	ref?: string;
+}
 declare const UNIT_STATES: readonly [
 	"not_started",
 	"working",
@@ -16496,7 +16515,16 @@ export interface PacketDecision {
 	/** The reviewer's rejection reason, when one was given. */
 	reason?: string;
 }
-export type NextMoveKind = "agent_slot" | "blocker_dropped" | "message_waiting" | "none" | "owed_slot" | "pending_proposal" | "pull_request" | "ready_to_close" | "undeclared" | "unknown" | "waiting_on_hold" | "waiting_on_session";
+/**
+ * The kinds of THE next move. A session's come from `deriveNextMove`; a
+ * thing's and a goal's from `deriveThingNextMove` / `deriveGoalNextMove`
+ * (`services/status/next-move.ts`), which reuse these and add four:
+ * `waiting_on` (a wait on someone or something, its `waitKind` saying whose
+ * ball), `step` (a thing's next step on its path, `to`), `judge_review` (a
+ * goal's claims wait on its judge) and `start_work` (no open session works
+ * on a goal).
+ */
+export type NextMoveKind = "agent_slot" | "blocker_dropped" | "judge_review" | "message_waiting" | "none" | "owed_slot" | "pending_proposal" | "pull_request" | "ready_to_close" | "start_work" | "step" | "undeclared" | "unknown" | "waiting_on" | "waiting_on_hold" | "waiting_on_session";
 export interface ContinuationNextMove {
 	kind: NextMoveKind;
 	/** Who acts: the person, the AI, or nobody. */
@@ -16532,6 +16560,15 @@ export interface ContinuationNextMove {
 	 * PR has ended: the AI records it).
 	 */
 	reasonCode?: "checks_failed" | "checks_pending" | "closed" | "criteria_unmet" | "merged" | "ready_to_land";
+	/** The lifecycle option a `step` move targets (it moves through `moveStatus`). */
+	to?: string;
+	/**
+	 * What kind of wait it is (`WAIT_KINDS`), on a move read off a waiting-on
+	 * ref (a thing's or a goal's): its ball says whose move it is.
+	 */
+	waitKind?: WaitKind;
+	/** The person or thing a `waiting_on` move waits on, when the reader may read it. */
+	entityId?: string;
 }
 export interface ContinuationPacket {
 	version: 1;
@@ -16947,7 +16984,10 @@ export interface StatusOf {
 		state: "idle" | "working";
 		status: "ok";
 	} | Unavailable$1;
-	/** Sessions only: THE next move (`deriveNextMove`). */
+	/**
+	 * THE next move: a session's (`deriveNextMove`), a thing's with a declared
+	 * lifecycle (`deriveThingNextMove`) and a goal's (`deriveGoalNextMove`).
+	 */
 	nextMove?: ContinuationNextMove;
 	/**
 	 * Things with a declared lifecycle, on `include: ["moves"]` only: the
@@ -39343,6 +39383,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				doneWindowed: number;
 				hasWorker: boolean;
 				lifecycle: {
+					initialStatus: string | null;
 					options: {
 						category: "active" | "done" | "lost" | "open" | "paused";
 						dateBinding?: string | undefined;
@@ -39380,6 +39421,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				initialStatus: string | null;
 				options: {
 					category: "active" | "done" | "lost" | "open" | "paused";
 					dateBinding?: string | undefined;

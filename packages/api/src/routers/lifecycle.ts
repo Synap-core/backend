@@ -3,7 +3,8 @@
  *
  *   lifecycle.get   — the declared lifecycle of ONE profile (the thing page's
  *                     status strip): property + options with label, category,
- *                     tone, humanOnly — words and marks resolved here, once.
+ *                     tone, humanOnly, and the initialStatus a new one starts
+ *                     in — words and marks resolved here, once.
  *   lifecycle.board — the PIPELINE: things of that kind/role grouped by status
  *                     column, options in declared order, done/lost windowed to
  *                     the period, values no option declares in an explicit
@@ -13,8 +14,9 @@
  *
  *   lifecycle.statusOf — WHERE DOES IT STAND for up to 10 ids (things, goals,
  *                     sessions, runs): status, category, since, what it waits
- *                     on (with refs), the current hold, and for a session
- *                     `live` + `nextMove`; its tone; a thing's roles and
+ *                     on (with refs), the current hold, its `nextMove`
+ *                     (a session's, a lifecycle thing's, a goal's), and for
+ *                     a session `live`; its tone; a thing's roles and
  *                     account line; and on `include` its moves, history,
  *                     `serves` links, goal rollup and open signals. The
  *                     screens' door to the SAME read
@@ -107,6 +109,12 @@ const lifecycleWire = z.object({
   profileKind: z.enum(["kind", "role"]),
   property: z.string(),
   options: z.array(lifecycleOptionWire),
+  /**
+   * The option key a new thing or role starts in when its creator names none
+   * (`EffectiveLifecycle.initialStatus`, written by the def door's
+   * `initialStatus`); null = none set.
+   */
+  initialStatus: z.string().nullable(),
 });
 
 const workedByWire = z.object({

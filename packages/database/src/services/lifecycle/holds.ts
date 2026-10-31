@@ -83,7 +83,9 @@ export type HoldFilter =
   | { reviewDueBy: Date }
   | { awaiting: { subjectType: string; subjectId: string } }
   /** Every hold whose `until.moves` names a dev fact (`HoldDevRef`). */
-  | { awaitingDevFacts: true };
+  | { awaitingDevFacts: true }
+  /** Every current hold (the status watcher's wait episodes ask about each). */
+  | { current: true };
 
 /** A row owed before W1 has no subject fields: it is an entity's. */
 const SUBJECT_TYPE = (a: string) =>
@@ -115,6 +117,7 @@ function filterSql(filter: HoldFilter): SQL {
     // fail the watcher's whole read).
     return sql`(o.transition->'hold'->>'reviewBy') ~ ${ISO_STAMP_PATTERN} AND (o.transition->'hold'->>'reviewBy') <= ${filter.reviewDueBy.toISOString()}`;
   }
+  if ("current" in filter) return sql`TRUE`;
   if ("awaitingDevFacts" in filter) {
     return sql`(o.transition->'hold'->'until'->>'moves') ~ '^(pr|main|job):'`;
   }

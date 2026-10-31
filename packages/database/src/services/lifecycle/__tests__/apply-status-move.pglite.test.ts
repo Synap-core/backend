@@ -32,7 +32,9 @@ async function kind(
   slug: string,
   propSlug: string,
   options: unknown[],
-  role = false
+  role = false,
+  /** Other properties the profile carries (a step wait's `refFrom`). */
+  extra: string[] = []
 ) {
   const [p] = await db
     .insert(schema.profiles)
@@ -50,6 +52,15 @@ async function kind(
   await db
     .insert(schema.profileProperties)
     .values({ profileId: p.id, propertyDefId: d.id });
+  for (const slug of extra) {
+    const [x] = await db
+      .insert(schema.propertyDefs)
+      .values({ slug, valueType: "string", profileId: p.id })
+      .returning();
+    await db
+      .insert(schema.profileProperties)
+      .values({ profileId: p.id, propertyDefId: x.id });
+  }
   await declareLifecycle(db, { profileId: p.id, propertySlug: propSlug });
   return p.id as string;
 }
@@ -244,5 +255,142 @@ describe("applyStatusMove", () => {
     expect(f.statusCategory).toBe("done");
     expect(f.properties).toEqual({ leadStage: "qualified" });
     expect((await row(leadEntity)).status).toBeNull();
+  });
+});
+
+/**
+ * A STEP WAIT is stamped on the move (status-first PR-H): moving INTO a step
+ * that declares `waits` carries `transition.wait` — the step's kind (else the
+ * one map table's, from `on`), its `on`, and who its `refFrom` names (a
+ * role's facet value first) — in the outbox too. A step with no wait stamps
+ * none.
+ */
+describe("applyStatusMove — the step wait", () => {
+  it("stamps the target step's declared wait, and none for a step without one", async () => {
+    const quote = await kind(
+      "quote",
+      "quoteStage",
+      [
+        { key: "draft", category: "open" },
+        {
+          key: "sent",
+          category: "active",
+          waits: {
+            on: "person",
+            waitKind: "their_reply",
+            refFrom: "contactId",
+          },
+        },
+        { key: "chasing", category: "active", waits: { on: "external" } },
+        { key: "accepted", category: "done" },
+      ],
+      false,
+      ["contactId"]
+    );
+    const [e] = await db
+      .insert(schema.entities)
+      .values({
+        userId: "u1",
+        profileId: quote,
+        type: "quote",
+        status: "draft",
+        properties: { quoteStage: "draft", contactId: "person-42" },
+      })
+      .returning();
+    const sent = await applyStatusMove(db, {
+      target: await target(e.id),
+      expectedFrom: "draft",
+      to: "sent",
+      actor: AGENT,
+    });
+    expect(sent.status).toBe("moved");
+    if (sent.status !== "moved") return;
+    expect(sent.transition.wait).toEqual({
+      waitKind: "their_reply",
+      on: "person",
+      ref: "person-42",
+    });
+    // The outbox row (what the event and the hold reads carry) has it too.
+    const [owed] = await db
+      .select()
+      .from(schema.lifecycleTransitionOutbox)
+      .where(
+        eq(
+          schema.lifecycleTransitionOutbox.transitionId,
+          sent.transition.transitionId
+        )
+      );
+    expect(owed.transition.wait).toEqual(sent.transition.wait);
+
+    // No waitKind declared: the one map table's, from `on`; no refFrom, no ref.
+    const chasing = await applyStatusMove(db, {
+      target: await target(e.id),
+      expectedFrom: "sent",
+      to: "chasing",
+      actor: AGENT,
+    });
+    if (chasing.status !== "moved") throw new Error(chasing.status);
+    expect(chasing.transition.wait).toEqual({
+      waitKind: "vendor",
+      on: "external",
+    });
+
+    const done = await applyStatusMove(db, {
+      target: await target(e.id),
+      expectedFrom: "chasing",
+      to: "accepted",
+      actor: HUMAN,
+    });
+    if (done.status !== "moved") throw new Error(done.status);
+    expect("wait" in done.transition).toBe(false);
+  });
+
+  it("a role's step reads its refFrom off the facet first", async () => {
+    const person = await kind("contact", "contactState", [
+      { key: "known", category: "open" },
+    ]);
+    const buyer = await kind(
+      "buyer",
+      "buyerStage",
+      [
+        { key: "new", category: "open" },
+        {
+          key: "offered",
+          category: "active",
+          waits: { on: "person", refFrom: "ownerId" },
+        },
+      ],
+      true,
+      ["ownerId"]
+    );
+    const [e] = await db
+      .insert(schema.entities)
+      .values({
+        userId: "u1",
+        profileId: person,
+        type: "contact",
+        status: null,
+        properties: { ownerId: "on-the-entity" },
+      })
+      .returning();
+    await db.insert(schema.entityFacets).values({
+      entityId: e.id,
+      profileId: buyer,
+      userId: "u1",
+      status: "new",
+      properties: { buyerStage: "new", ownerId: "on-the-facet" },
+    });
+    const r = await applyStatusMove(db, {
+      target: await target(e.id, "buyer"),
+      expectedFrom: "new",
+      to: "offered",
+      actor: HUMAN,
+    });
+    if (r.status !== "moved") throw new Error(r.status);
+    expect(r.transition.wait).toEqual({
+      waitKind: "answer",
+      on: "person",
+      ref: "on-the-facet",
+    });
   });
 });

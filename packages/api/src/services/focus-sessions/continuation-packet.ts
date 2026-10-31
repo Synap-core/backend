@@ -89,6 +89,7 @@ import {
 import type { OpenBlocker } from "@synap-core/types/connections";
 import type { RecordedHold } from "@synap-core/types/lifecycle";
 import { readDependencyState } from "../links/dependency-links.js";
+import { holdNextMove } from "../status/next-move.js";
 import {
   holdWaitingOnRef,
   readWaitingOn,
@@ -124,6 +125,7 @@ import {
   filedStageKey,
   type GoalCriterionMark,
   type TrackKpi,
+  type WaitKind,
   type WaitingOnMark,
 } from "@synap-core/types/units";
 import { getTrack, toTrackView } from "../tracks/tracks-service.js";
@@ -498,6 +500,15 @@ export interface PacketDecision {
   reason?: string;
 }
 
+/**
+ * The kinds of THE next move. A session's come from `deriveNextMove`; a
+ * thing's and a goal's from `deriveThingNextMove` / `deriveGoalNextMove`
+ * (`services/status/next-move.ts`), which reuse these and add four:
+ * `waiting_on` (a wait on someone or something, its `waitKind` saying whose
+ * ball), `step` (a thing's next step on its path, `to`), `judge_review` (a
+ * goal's claims wait on its judge) and `start_work` (no open session works
+ * on a goal).
+ */
 export type NextMoveKind =
   | "owed_slot"
   | "pending_proposal"
@@ -509,6 +520,10 @@ export type NextMoveKind =
   | "agent_slot"
   | "undeclared"
   | "ready_to_close"
+  | "waiting_on"
+  | "step"
+  | "judge_review"
+  | "start_work"
   | "none"
   | "unknown";
 
@@ -553,6 +568,15 @@ export interface ContinuationNextMove {
     | "ready_to_land"
     | "merged"
     | "closed";
+  /** The lifecycle option a `step` move targets (it moves through `moveStatus`). */
+  to?: string;
+  /**
+   * What kind of wait it is (`WAIT_KINDS`), on a move read off a waiting-on
+   * ref (a thing's or a goal's): its ball says whose move it is.
+   */
+  waitKind?: WaitKind;
+  /** The person or thing a `waiting_on` move waits on, when the reader may read it. */
+  entityId?: string;
 }
 
 /**
@@ -2176,31 +2200,12 @@ function blockerName(b: OpenBlocker): string {
 const isOpenStatus = (status: string): boolean =>
   (OPEN_SESSION_STATUSES as readonly string[]).includes(status);
 
-/** Rung 2c: a paused session's move is what its hold waits on. */
+/**
+ * Rung 2c: a paused session's move is what its hold waits on — the ONE hold
+ * rung a paused thing and goal read too (`holdNextMove`).
+ */
 function holdMove(hold: RecordedHold): ContinuationNextMove {
-  const ref = holdWaitingOnRef(hold);
-  const until = hold.until;
-  const parked = hold.on === "nobody" || hold.on === "unspecified";
-  const why = hold.reason?.trim() ? `: ${hold.reason.trim()}` : "";
-  const resumes =
-    until && "date" in until
-      ? `It resumes on its own on ${until.date.slice(0, 10)}.`
-      : until && "moves" in until
-        ? "It resumes on its own when what it waits on moves."
-        : hold.reviewBy
-          ? `It resumes when someone resumes it, and is due for a look by ${hold.reviewBy.slice(0, 10)}.`
-          : "It resumes when someone resumes it.";
-  return {
-    kind: "waiting_on_hold",
-    actor: "none",
-    label: parked
-      ? "Paused"
-      : until && "date" in until && hold.on === "date"
-        ? `Paused until ${until.date.slice(0, 10)}`
-        : `Waiting on ${ref.label}`,
-    reason: `This session is paused${why}. ${resumes}`,
-    ...(ref.kind === "session" && ref.id ? { sessionId: ref.id } : {}),
-  };
+  return holdNextMove(hold, holdWaitingOnRef(hold), "session");
 }
 
 /** Rung 3: the move a pull request the pod recorded asks for. */

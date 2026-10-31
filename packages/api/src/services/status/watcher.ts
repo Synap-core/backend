@@ -17,6 +17,10 @@
  * with no push, a red main nobody owns — each a signal for the session that
  * owns it, read off the newest `dev.repo_snapshot` of each repo (the rules:
  * `dev-signals.ts`). Its first raise is in-app only; it escalates once.
+ *
+ * WAIT EPISODES (status-first PR-H, `./wait-episodes.ts`): the same tick opens
+ * an episode for each wait THE waiting-on collector finds and closes the ones
+ * it no longer finds. History only: an episode notifies nobody.
  */
 import {
   and,
@@ -93,6 +97,7 @@ import {
   mainRedOwnedRepos,
   type DevSignalCandidate,
 } from "./dev-signals.js";
+import { syncWaitEpisodesTick } from "./wait-episodes.js";
 import {
   dateBindingsOf,
   pageThingsInColumn,
@@ -869,6 +874,8 @@ export interface StatusWatcherResult {
   unowned: number;
   /** Dev signals that name no session to raise on (a red main's culprit unknown). */
   unrouted: number;
+  /** Wait episodes opened and closed this tick (null: their write failed). */
+  waitEpisodes: { opened: number; closed: number; unread: number } | null;
 }
 
 /** One tick. A read that fails is logged and skipped, never the whole tick. */
@@ -889,6 +896,21 @@ export async function runStatusWatcher(
     ...(await read("holds", holdCandidates(now))),
     ...(await read("dev work", devCandidates(now, dev))),
   ];
+  // Wait episodes first: a failure there is logged, never the signals'.
+  const waitEpisodes = await syncWaitEpisodesTick(
+    now,
+    noticed.map((c) => ({
+      subjectType: c.subjectType,
+      subjectId: c.subjectId,
+      facetId: c.facetId,
+    }))
+  ).catch((err) => {
+    logger.error(
+      { err },
+      "status watcher: wait episodes could not be written — they catch up on the next tick"
+    );
+    return null;
+  });
   const claims = await claimStatusSignals(
     db,
     noticed.map((c) => ({
@@ -904,6 +926,7 @@ export async function runStatusWatcher(
     raised: 0,
     unowned: 0,
     unrouted: dev.unrouted,
+    waitEpisodes,
   };
   if (claims.length === 0) return result;
 
