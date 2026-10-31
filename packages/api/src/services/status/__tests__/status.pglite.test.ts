@@ -19,7 +19,7 @@
  *   - a thing's `roles` (only those the reader may see) and its `account`
  *     line (the account it works at, when the reader may read it);
  *   - `include`: `history` (THE timeline, kept to status events; a hidden
- *     role's move left out), `links` (`serves` both ways, a hidden end left
+ *     role's move left out; a session's stage ledger merged in by time), `links` (`serves` both ways, a hidden end left
  *     out), `rollup` (a goal's tree: each session and goal once, a loop cut
  *     and named, stuck and waits per kind), `signals` (only open episodes).
  *
@@ -907,6 +907,113 @@ describe("a thing's roles and its account line", () => {
     expect((session as StatusOf).history).toMatchObject({
       events: [{ kind: "status_moved", from: "forming", to: "active" }],
     });
+  });
+});
+
+describe('include: ["history"] — a session\'s stage ledger (0382)', () => {
+  const S_STAGED = randomUUID();
+  const AGENT = "user-agent";
+  const daysAgo = (d: number) => new Date(Date.now() - d * 86_400_000);
+  const DRAFT_AT = daysAgo(3).toISOString();
+  const MOVED_AT = daysAgo(2).toISOString();
+  const REVIEW_AT = daysAgo(1).toISOString();
+
+  beforeAll(async () => {
+    const ledger = [
+      {
+        stageKey: "draft",
+        fromStage: null,
+        enteredAt: DRAFT_AT,
+        actor: ME,
+        userId: ME,
+        via: "advance",
+      },
+      {
+        stageKey: "review",
+        fromStage: "draft",
+        enteredAt: REVIEW_AT,
+        actor: AGENT,
+        userId: ME,
+        via: "approval",
+      },
+    ];
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, project_id, goal, status, origin, expected_outputs, metadata, current_stage, stage_history, started_at, created_at, updated_at)
+       values ($1, $2, $3, $4, 'Ship it', 'active', 'agent', '[]'::jsonb, '{}'::jsonb, 'review', $5::jsonb, ${ago(4)}, now(), now())`,
+      [S_STAGED, ME, W, P, JSON.stringify(ledger)]
+    );
+    // A status move between its two stages: the merge is by time.
+    await outbox({
+      subjectType: "focus_session",
+      subjectId: S_STAGED,
+      from: "forming",
+      to: "active",
+      category: "active",
+      occurredAt: MOVED_AT,
+      recordedAt: MOVED_AT,
+    });
+    // Another person's session with a ledger: the read floor hides it all.
+    await q(
+      `update focus_sessions set stage_history = $1::jsonb where id = $2`,
+      [
+        JSON.stringify([
+          {
+            stageKey: "their-secret-stage",
+            fromStage: null,
+            enteredAt: REVIEW_AT,
+            actor: OTHER,
+            userId: OTHER,
+            via: "advance",
+          },
+        ]),
+        S_THEIRS,
+      ]
+    );
+  });
+
+  it("carries each stage entered, in time order with its status moves", async () => {
+    const a = await statusOf(S_STAGED, { include: ["history"] });
+    expect(a.history).toMatchObject({
+      truncated: false,
+      events: [
+        {
+          kind: "stage_entered",
+          at: REVIEW_AT,
+          stageKey: "review",
+          fromStage: "draft",
+          via: "approval",
+          actor: { kind: "agent", id: AGENT },
+          refs: { sessionId: S_STAGED },
+        },
+        { kind: "status_moved", from: "forming", to: "active" },
+        {
+          kind: "stage_entered",
+          at: DRAFT_AT,
+          stageKey: "draft",
+          fromStage: null,
+          via: "advance",
+          actor: { kind: "human", id: ME, isViewer: true },
+          refs: { sessionId: S_STAGED },
+        },
+      ],
+    });
+    for (const e of (a.history as { events: Array<{ kind: string }> }).events) {
+      expect(STATUS_HISTORY_EVENT_KINDS as readonly string[]).toContain(e.kind);
+    }
+    // Asked without history, the ledger is not carried.
+    expect(await statusOf(S_STAGED)).not.toHaveProperty("history");
+  });
+
+  it("a thing without a ledger is unchanged; a hidden session's stays hidden", async () => {
+    const held = await statusOf(E_HELD, { include: ["history"] });
+    const events = (held.history as { events: Array<{ kind: string }> }).events;
+    expect(events.map((e) => e.kind)).toEqual(["status_moved"]);
+
+    const [theirs] = await readStatusOf(ME, [S_THEIRS], {
+      include: ["history"],
+    });
+    expect(theirs).toMatchObject({ type: "unknown" });
+    expect(JSON.stringify(theirs)).not.toContain("their-secret-stage");
   });
 });
 

@@ -1,5 +1,5 @@
 /**
- * THE ONE APPEND of `focus_sessions.stage_history` (0382).
+ * THE ONE APPEND of `focus_sessions.stage_history` (0382), and its reader.
  *
  * The stage ledger of a session: every stage it entered, oldest first, in the
  * shape of a goal's `project_tracks.stage_history` (0274). It is written ONLY
@@ -50,4 +50,22 @@ export function appendSessionStageHistory(move: SessionStageMove) {
   return drizzleSql`(COALESCE(${focusSessions.stageHistory}, '[]'::jsonb) || ${JSON.stringify(
     [sessionStageHistoryEntry(move)]
   )}::jsonb)`;
+}
+
+/**
+ * The ledger as read back: the entries a stored `stage_history` holds, oldest
+ * first, each with its stage and its time; anything else is left out. Pure.
+ * Its readers: the session change feed (`stage_moved`) and `statusOf`'s
+ * `include: ["history"]` (`stage_entered`).
+ */
+export function readSessionStageHistory(
+  raw: unknown
+): SessionStageHistoryEntry[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (e): e is SessionStageHistoryEntry =>
+      Boolean(e) &&
+      typeof (e as SessionStageHistoryEntry).stageKey === "string" &&
+      typeof (e as SessionStageHistoryEntry).enteredAt === "string"
+  );
 }
