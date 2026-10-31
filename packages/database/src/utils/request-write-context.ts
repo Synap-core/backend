@@ -86,6 +86,16 @@ function runWithPatch<T>(patch: RequestWriteContext, fn: () => T): T {
   return storage.run({ ...storage.getStore(), ...patch }, fn);
 }
 
+/**
+ * Run `fn` OUTSIDE any request's context: no grant, no calling key, no acting
+ * agent. For work a request starts but that answers for OTHER people — the
+ * realtime audience of a status move reads each reader's own floor, which the
+ * mover's key grant must not narrow (`api/services/status/status-floor.ts`).
+ */
+export function runOutsideRequestContext<T>(fn: () => T): T {
+  return storage.exit(fn);
+}
+
 // ═══ Concern: PROBE WRITES (D8) ═══════════════════════════════════════════════
 //
 // A write made with a probe key is MARKED at the write floor, EXCLUDED from

@@ -9,6 +9,8 @@
  */
 
 import type { Entity } from "../index.js";
+import type { LifecycleCategory } from "../lifecycle/option.js";
+import type { StatusSignal } from "../lifecycle/signal.js";
 
 // =============================================================================
 // Entity Events
@@ -140,6 +142,65 @@ export interface LibraryItemUpdatedEvent {
 }
 
 // =============================================================================
+// Status events — where a thing, a goal or a session stands (status-first W2)
+// =============================================================================
+
+/**
+ * What a status event is about, in `statusOf`'s words (its answer's `type`):
+ * a thing (`entity`), a goal (`track`) or a work session (`focus_session`).
+ * Read the subject again with `lifecycle.statusOf({ ids: [subjectId] })`.
+ */
+export const STATUS_EVENT_SUBJECT_TYPES = [
+  "entity",
+  "goal",
+  "session",
+] as const;
+export type StatusEventSubjectType =
+  (typeof STATUS_EVENT_SUBJECT_TYPES)[number];
+
+/**
+ * `status:transition:completed` — a thing, a goal or a session moved to
+ * another status. Sent ONLY to the `user:<id>` room of each person who could
+ * read that status through `statusOf` (its read floor; a role's move only to
+ * those who may see the role), never to a workspace room. It names the move
+ * and nothing more: no hold, no reason, no mover. A client refetches
+ * `statusOf` for the rest.
+ */
+export interface StatusTransitionEvent {
+  subjectType: StatusEventSubjectType;
+  /** The thing, goal or session (the `statusOf` id). */
+  subjectId: string;
+  /** The move's id (the transition log row's id): one event per move. */
+  transitionId: string;
+  /** A role's move: the role's slug (its status lives on the facet); else null. */
+  role: string | null;
+  from: string | null;
+  to: string;
+  category: LifecycleCategory;
+  /** When it moved (ISO): the move's `occurredAt`. */
+  at: string;
+}
+
+/**
+ * `status:signal:raised` — the status watcher noticed something about a thing,
+ * a goal or a session that stands still (stuck, late, approaching, a pause
+ * past its review date, a dev signal), once per episode. Same audience as
+ * {@link StatusTransitionEvent}. Read the words with `statusOf` and
+ * `include: ["signals"]`.
+ */
+export interface StatusSignalRaisedEvent {
+  subjectType: StatusEventSubjectType;
+  subjectId: string;
+  signal: StatusSignal;
+  /** A role's signal: the role's slug; else null. */
+  role: string | null;
+  /** When the state it reports began (ISO). */
+  beganAt: string;
+  /** When the watcher raised it (ISO). */
+  raisedAt: string;
+}
+
+// =============================================================================
 // AI Events
 // =============================================================================
 
@@ -249,6 +310,8 @@ export interface DomainServerToClientEvents {
   "synap:reply:routed": (data: SynapReplyRoutedEvent) => void;
   "import:file:progress": (data: ImportFileProgressEvent) => void;
   "library:item:updated": (data: LibraryItemUpdatedEvent) => void;
+  "status:transition:completed": (data: StatusTransitionEvent) => void;
+  "status:signal:raised": (data: StatusSignalRaisedEvent) => void;
 
   // UI gateway
   "ui:focus": (data: UiFocusEvent) => void;
@@ -346,6 +409,10 @@ export const EventNames = {
   IMPORT_FILE_PROGRESS: "import:file:progress",
   /** A Library item's read or media copy finished (owner's room only). */
   LIBRARY_ITEM_UPDATED: "library:item:updated",
+  /** A status moved (each reader's room only, under `statusOf`'s floor). */
+  STATUS_TRANSITION_COMPLETED: "status:transition:completed",
+  /** The status watcher raised a signal (same audience). */
+  STATUS_SIGNAL_RAISED: "status:signal:raised",
 
   // UI gateway
   UI_FOCUS: "ui:focus",
