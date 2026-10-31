@@ -1,8 +1,8 @@
 /**
  * Refusals in front of the main `/trpc` mount, answered as tRPC errors.
  *
- * The session gate (`trpc-session-gate.ts` → `appSessionMiddleware` →
- * `authMiddleware`) and the AI rate limit (`trpc-ai-rate-limit.ts`) refuse
+ * The session gate (apps/api `trpc-session-gate.ts` → `appSessionMiddleware`
+ * → `authMiddleware`) and the AI rate limit (`trpc-ai-rate-limit.ts`) refuse
  * with plain JSON (`{ error: "Unauthorized" }`, 401/429/503). `@trpc/client`
  * 11 cannot parse that body: it throws "Unable to transform response from
  * server" with the status only on `meta.response`, so clients retried a 401
@@ -20,6 +20,9 @@
  * Left as they were: a HEAD/OPTIONS refusal (tRPC answers HEAD 204 and serves
  * neither), a status with no tRPC code, and every route outside `/trpc`.
  *
+ * Imports only hono and @trpc/server: apps/api reads it (and `trpcPath`, for
+ * the session gate and the AI limit) via `@synap/api/trpc-refusal`.
+ *
  * Tests: `trpc-refusal.test.ts` (real @trpc/client + superjson).
  */
 
@@ -31,7 +34,18 @@ import {
 } from "@trpc/server";
 import { getHTTPStatusCodeFromError, resolveResponse } from "@trpc/server/http";
 import { TRPC_ERROR_CODES_BY_KEY } from "@trpc/server/rpc";
-import { trpcPath } from "./trpc-session-gate.js";
+
+const trimSlashes = (p: string): string =>
+  p.replace(/^\//, "").replace(/\/$/, "");
+
+/**
+ * The path `fetchRequestHandler` hands tRPC for this URL: the raw, still
+ * encoded pathname, endpoint and slashes trimmed (@trpc/server 11).
+ */
+export function trpcPath(url: string, endpoint = "/trpc"): string {
+  const pathname = trimSlashes(new URL(url, "http://pod.invalid").pathname);
+  return trimSlashes(pathname.slice(trimSlashes(endpoint).length));
+}
 
 /** HTTP status → tRPC code, inverted from tRPC's own code → status map. */
 const TRPC_CODE_BY_STATUS = new Map<number, TRPC_ERROR_CODE_KEY>(

@@ -109,7 +109,7 @@ import { configureLocalMode, safeTokenEqual } from "@synap/auth";
 import { buildKratosProxyTargetUrl } from "./kratos-proxy-url.js";
 import { trpcSessionGate } from "./trpc-session-gate.js";
 import { trpcAiRateLimit } from "./trpc-ai-rate-limit.js";
-import { trpcRefusals } from "./trpc-refusal.js";
+import { trpcRefusals } from "@synap/api/trpc-refusal";
 import { createRequire } from "node:module";
 import {
   DEFAULT_POD_STATE_DIR,
@@ -1056,7 +1056,8 @@ mountAdminEventStream(app);
 // (health.*, setup.*, invite preview/accept). See trpc-session-gate.ts. The
 // session is a Kratos one or a Synap app's device token, and no other bearer
 // (packages/api middleware/app-session.ts). Its refusals, and the AI rate
-// limit's below, reach the client as tRPC errors (trpc-refusal.ts).
+// limit's below, reach the client as tRPC errors (packages/api
+// middleware/trpc-refusal.ts).
 const trpcRefusal = trpcRefusals(appRouter);
 app.use("/trpc/*", trpcRefusal(trpcSessionGate(appSessionMiddleware())));
 
