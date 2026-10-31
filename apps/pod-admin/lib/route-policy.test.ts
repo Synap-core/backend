@@ -68,6 +68,7 @@ describe("isSelfService (moved verbatim from proxy.ts)", () => {
     "/my-connections",
     "/apps/app_123",
     "/my-vault",
+    "/my-vault/6f1c2a3b-0000-4000-8000-000000000001",
     "/my-computers",
     "/my-computers/c1",
     "/my-notifications",

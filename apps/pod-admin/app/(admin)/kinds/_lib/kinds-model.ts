@@ -16,6 +16,7 @@
  */
 
 import type { StatusKind } from "../../components/status-pill";
+import type { ExitTarget } from "../../../../lib/open-in";
 
 export const KINDS_TITLE = "Kinds";
 export const KINDS_DESCRIPTION =
@@ -124,6 +125,19 @@ export function scopeLabel(
         ? (workspaceNames.get(p.workspaceId) ?? "A space")
         : "Space";
   }
+}
+
+/**
+ * Where a kind's row opens: the desktop Data app on its Kinds tab, filtered
+ * to this slug (`DataApp` reads `tab` and `kindSlugs` as props). A slug is
+ * the kind's identity in the app, so twins on one slug open the same view.
+ */
+export function kindAppTarget(slug: string): ExitTarget {
+  return {
+    kind: "app",
+    appId: "data",
+    query: { tab: "profiles", kindSlugs: slug },
+  };
 }
 
 export interface KindRow {
