@@ -22,7 +22,6 @@ import {
   focusSessions,
   isNull,
   projectTracks,
-  runOutsideRequestContext,
   users,
 } from "@synap/database";
 import type { SQL } from "drizzle-orm";
@@ -111,6 +110,8 @@ const AUDIENCE_CONCURRENCY = 8;
 export async function statusAudience(
   subject: StatusSubjectRef
 ): Promise<string[]> {
+  // NEGATIVE CONTROL: read inside the mover's request context.
+  const runOutsideRequestContext = <T>(fn: () => T): T => fn();
   return runOutsideRequestContext(async () => {
     const everyone = await db.select({ id: users.id }).from(users);
     const readers: string[] = [];
