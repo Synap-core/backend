@@ -30456,6 +30456,19 @@
                       "cancelled"
                     ]
                   },
+                  "expectedStatus": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "paused",
+                      "forming",
+                      "scheduled",
+                      "closed",
+                      "failed",
+                      "cancelled",
+                      "stale"
+                    ]
+                  },
                   "hold": {
                     "type": "object",
                     "properties": {

@@ -3993,6 +3993,22 @@
           "enum": ["active", "paused"]
         },
         {
+          "name": "expectedStatus",
+          "type": "enum",
+          "required": false,
+          "description": "With `status`: the status you read the session in (synap_get_session) — send it. Compare-and-set: if it moved meanwhile the call answers status='conflict' with the current status and writes nothing.",
+          "enum": [
+            "active",
+            "paused",
+            "forming",
+            "scheduled",
+            "closed",
+            "failed",
+            "cancelled",
+            "stale"
+          ]
+        },
+        {
           "name": "hold",
           "type": "object",
           "required": false,
@@ -4139,6 +4155,20 @@
             "type": "string",
             "enum": ["active", "paused"],
             "description": "New lifecycle status (optional). To CLOSE a session use synap_complete_session — update_session cannot close, since a raw close would orphan a running playbook_run."
+          },
+          "expectedStatus": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused",
+              "forming",
+              "scheduled",
+              "closed",
+              "failed",
+              "cancelled",
+              "stale"
+            ],
+            "description": "With `status`: the status you read the session in (synap_get_session) — send it. Compare-and-set: if it moved meanwhile the call answers status='conflict' with the current status and writes nothing."
           },
           "hold": {
             "type": "object",

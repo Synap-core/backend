@@ -193,6 +193,10 @@ import {
   WORK_GRAPH_MAX_WINDOW_HOURS,
 } from "../services/focus-sessions/work-graph.js";
 import { moveHoldInputShape } from "../services/lifecycle/hold-input.js";
+import {
+  lifecycleConflictError,
+  lifecycleConflictOf,
+} from "../services/lifecycle/conflict.js";
 import { sessionMoveRefusal } from "../services/focus-sessions/update-session.js";
 
 // ── Shared input fragment ──────────────────────────────────────────────────
@@ -1972,6 +1976,11 @@ export const focusSessionsRouter = router({
       z.object({
         id: z.string().uuid(),
         status: updatableStatusSchema.optional(),
+        /**
+         * With `status`: the status the caller SAW. A session that moved
+         * meanwhile is a CONFLICT and nothing is written (compare-and-set).
+         */
+        expectedStatus: z.enum(SESSION_STATUSES).optional(),
         /** With a pause: what it waits on, and when the move happened (W4). */
         ...moveHoldInputShape,
         progress: z.number().int().min(0).max(100).optional(),
@@ -2106,7 +2115,12 @@ export const focusSessionsRouter = router({
         });
       }
 
-      const { id: _id, ...patch } = input;
+      const { id: _id, expectedStatus, ...patch } = input;
+
+      // A stale move: the caller decided on a status the session left.
+      if (expectedStatus && expectedStatus !== existing.status) {
+        throw lifecycleConflictError(expectedStatus, existing.status);
+      }
 
       // R8 — a closed run stays closed: never moved back to an open status.
       const reopening = closedRunRefusal(existing.status, patch.status);
@@ -2248,6 +2262,17 @@ export const focusSessionsRouter = router({
         actor: workUnitActorOf(ctx.userId, ctx.agentUserId),
         hold: patch.hold,
         occurredAt: patch.occurredAt ? new Date(patch.occurredAt) : null,
+        expectedStatus: expectedStatus ?? null,
+      }).catch((err: unknown) => {
+        // Moved between the read above and the write: the same CONFLICT.
+        const stale = lifecycleConflictOf(err);
+        if (stale) {
+          throw lifecycleConflictError(
+            stale.conflict.expectedStatus,
+            stale.conflict.currentStatus
+          );
+        }
+        throw err;
       });
 
       // The spine record of this edit — the signal "touched by a person
