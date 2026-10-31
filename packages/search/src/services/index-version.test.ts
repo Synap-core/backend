@@ -16,7 +16,9 @@ describe("collectionsBehind", () => {
 
   it("entities are behind until stamped at the version that indexes the summary", () => {
     expect(SEARCH_INDEX_VERSIONS.entities).toBeGreaterThanOrEqual(2);
-    expect(collectionsBehind({ entities: 1 })).toEqual(["entities"]);
+    expect(collectionsBehind({ entities: 1, documents: 1 })).toEqual([
+      "entities",
+    ]);
   });
 
   it("documents are versioned: a pod that only reindexed entities still holds owned bodies", () => {
