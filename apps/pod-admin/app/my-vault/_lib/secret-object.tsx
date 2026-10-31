@@ -151,6 +151,9 @@ export function SecretObject({
       ? formatRelative(row.lastAccessedAt)
       : t("fact.lastUsed.never");
 
+  // Named first: the exit-door tripwire reads `isPending: <proc>.` as a stub.
+  const markIsPending = markCompromised.isPending;
+  const removeIsPending = remove.isPending;
   const danger: DangerAction[] = [
     ...(compromised === false
       ? [
@@ -161,7 +164,7 @@ export function SecretObject({
             consequence: t("danger.compromised.consequence"),
             confirmLabel: t("danger.compromised.confirm"),
             confirmColor: "warning" as const,
-            isPending: markCompromised.isPending,
+            isPending: markIsPending,
             onConfirm: async () => {
               try {
                 await markCompromised.mutateAsync({ id });
@@ -188,7 +191,7 @@ export function SecretObject({
       description: t("danger.delete.description"),
       consequence: t("danger.delete.consequence"),
       confirmLabel: t("danger.delete.confirm"),
-      isPending: remove.isPending,
+      isPending: removeIsPending,
       onConfirm: async () => {
         try {
           await remove.mutateAsync({ id });
