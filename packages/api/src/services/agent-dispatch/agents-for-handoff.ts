@@ -48,6 +48,7 @@ import { MACHINE_AGENT_TYPE, type AgentReach } from "@synap-core/types/agents";
 import { queryAgentUsers } from "../../routers/agent-users.js";
 import { loadAgentPresence } from "../agent-presence.js";
 import { machineName } from "../machine-roster.js";
+import { actorComputer } from "../actor-computer.js";
 import { loadAgentDispatchSummaries } from "./agent-binding.js";
 import {
   HAND_OFF_ACCEPT,
@@ -208,12 +209,17 @@ export async function readAgentsForHandoff(
   const agents: HandoffAgent[] = agentRows.map((r) => {
     const seen = presence.get(r.id);
     const hostId = kindOf.get(r.id)?.hostUserId ?? null;
-    const computer: HandoffComputer | null =
-      hostId && machineNameOf.has(hostId)
-        ? { agentUserId: hostId, name: machineNameOf.get(hostId)! }
-        : seen?.hostLabel
-          ? { agentUserId: null, name: seen.hostLabel }
-          : null;
+    // THE attribution order: its host computer, else where its key was last seen.
+    const named = actorComputer({
+      hostName: hostId ? machineNameOf.get(hostId) : null,
+      keyLabel: seen?.hostLabel,
+    });
+    const computer: HandoffComputer | null = named
+      ? {
+          agentUserId: named.source === "host" ? hostId : null,
+          name: named.name,
+        }
+      : null;
     const summary = dispatch.get(r.id);
     const reach = summary?.reach ?? "pull";
     const lastSeenAt = seen?.lastSeenAt ?? null;

@@ -8,8 +8,11 @@
 // (`routers/proposals.ts`, `services/focus-sessions/participants.ts`) is
 // unaffected.
 import { isLikelyUUID } from "@synap-core/types/proposals";
-import { agentDisplayName } from "@synap-core/types/agents";
 import { resolveServiceName } from "@synap-core/types/service-marks";
+import {
+  actorComputer,
+  nameWithComputer,
+} from "../../services/actor-computer.js";
 
 export function stringProp(
   record: Record<string, unknown> | undefined,
@@ -33,10 +36,11 @@ export function displayNameForUser(row: {
 }
 
 /**
- * WHO ACTED, as a person reads it: `displayNameForUser`, and for an agent that
- * runs on a computer (`users.host_user_id`) the ONE phrasing of
- * `agentDisplayName` — "Claude Code on devbox" — so it never reads the same as
- * its twin on another computer. `hostNames` is `loadMachineNames`
+ * WHO ACTED, as a person reads it: `displayNameForUser`, and for an agent the
+ * computer of THE attribution order (`services/actor-computer.ts`): the one it
+ * runs on (`users.host_user_id`) — "Claude Code on devbox" — so it never reads
+ * the same as its twin on another computer; else the filing key's label,
+ * "Claude Code, last seen on MacBook". `hostNames` is `loadMachineNames`
  * (`services/machine-roster.ts`) over the rows' `hostUserId`s; a computer it
  * could not name leaves the agent's own name. An agent with no name of its own
  * is named from its type the way the rosters name it (`resolveServiceName`:
@@ -48,10 +52,9 @@ export function actorDisplayName(
   },
   hostNames: ReadonlyMap<string, { name: string }>,
   /**
-   * The computer named by the KEY that filed this write
-   * (`api_keys.instance_label` through `proposals.api_key_id`, B7). It wins
-   * over the agent's host: one agent user serves every computer it is
-   * connected from, the key says which one this was. Absent/blank → the host.
+   * The label of the KEY that filed this write (`api_keys.instance_label`
+   * through `proposals.api_key_id`, B7): where the agent was last seen, used
+   * only when it runs on no computer of its own. Absent/blank → no computer.
    */
   keyComputer?: string | null
 ): string | undefined {
@@ -63,10 +66,11 @@ export function actorDisplayName(
     ? resolveServiceName(unnamedType)
     : displayNameForUser(row);
   if (row.userType !== "agent") return name;
-  const host =
-    keyComputer?.trim() ||
-    (row.hostUserId ? hostNames.get(row.hostUserId)?.name : undefined);
-  return host ? agentDisplayName({ name, hostName: host }) : name;
+  const computer = actorComputer({
+    hostName: row.hostUserId ? hostNames.get(row.hostUserId)?.name : undefined,
+    keyLabel: keyComputer,
+  });
+  return computer ? nameWithComputer(name, computer) : name;
 }
 
 // ProposalRow type - minimal shape needed by resolvers.

@@ -388,3 +388,57 @@ describe("an agent hands a run only to itself, and the hold keeps it", () => {
     expect(h.dispatched.map((d) => d.ref)).toEqual(["is-agent"]);
   });
 });
+
+describe("a run that names nobody goes to the agent assigned to its playbook", () => {
+  const assign = (agentUserId: string, playbookId = PLAYBOOK) =>
+    q(
+      `insert into links (from_type, from_id, to_type, to_id, link_type) values ('participant', $1, 'playbook', $2, 'assigned_to')`,
+      [agentUserId, playbookId]
+    );
+
+  it("the assigned agent takes it, and the reply names it", async () => {
+    await assign(AGENT);
+    const res = await asPerson().run({ playbookId: PLAYBOOK });
+    expect(res.status).toBe("running");
+    expect(res).toMatchObject({
+      handedTo: { agentUserId: AGENT, name: "claude-code", via: "assigned" },
+    });
+    expect(res.message).toMatch(
+      /handed to claude-code, the agent assigned to this playbook/
+    );
+    expect(h.dispatched).toEqual([]);
+    expect(await runs()).toEqual([
+      { executor: "external-agent", status: "running" },
+    ]);
+    const rows = await sessions();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ user_id: USER, agent_ids: [AGENT] });
+    expect(await handedTo(AGENT)).toMatchObject({
+      count: 1,
+      items: [{ id: rows[0]!.id }],
+    });
+  });
+
+  it("a named agent wins over the assignment", async () => {
+    await assign(AGENT);
+    const res = await asPerson().run({
+      playbookId: PLAYBOOK,
+      handToAgentId: AGENT_B,
+    });
+    expect(res).toMatchObject({ handedTo: { agentUserId: AGENT_B } });
+    expect((await sessions())[0]).toMatchObject({ agent_ids: [AGENT_B] });
+  });
+
+  it.each([
+    ["an assignee the route refuses (paused)", () => assign(PAUSED)],
+    ["an assignment on another playbook", () => assign(AGENT, randomUUID())],
+  ])("%s changes nothing: the built-in executor runs it", async (_l, seed) => {
+    await seed();
+    const res = await asPerson().run({ playbookId: PLAYBOOK });
+    expect(res.status).toBe("running");
+    expect("handedTo" in res).toBe(false);
+    expect(res.message).toBe("Playbook run started");
+    expect(h.dispatched.map((d) => d.ref)).toEqual(["is-agent"]);
+    expect((await sessions())[0]!.agent_ids).toEqual([]);
+  });
+});

@@ -23,6 +23,7 @@ import {
   resolveSessionProjectPlacement,
   isProbeWriteContext,
   stampProbeMarker,
+  startedByAgentPatch,
 } from "@synap/database";
 import {
   checkPermissionOrPropose,
@@ -1227,6 +1228,7 @@ export async function createFocusSession(
           // never renames. D8: conditional, so an untitled human session keeps
           // the column default.
           ...(clientKey ||
+          agentUserId ||
           title ||
           derivedTitle ||
           paramResolution ||
@@ -1237,6 +1239,8 @@ export async function createFocusSession(
                   ...(clientKey
                     ? { clientKey, ...conversationCwdPatch(clientKey) }
                     : {}),
+                  // The agent that starts it (orient's `handedToYou` leaves it out).
+                  ...startedByAgentPatch(agentUserId),
                   ...(params.governance
                     ? { governance: params.governance }
                     : {}),
