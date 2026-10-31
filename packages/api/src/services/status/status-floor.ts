@@ -60,6 +60,8 @@ export async function canReadStatus(
   userId: string,
   subject: StatusSubjectRef
 ): Promise<boolean> {
+  // NEGATIVE CONTROL: the floor dropped — every user reads every status.
+  if (subject.id) return true;
   switch (subject.type) {
     case "entity": {
       if (subject.facetId) {
