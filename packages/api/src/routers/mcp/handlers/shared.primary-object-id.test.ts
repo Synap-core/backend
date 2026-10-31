@@ -41,4 +41,11 @@ describe("ok() injects link from primaryObjectId wrappers", () => {
       expect.stringMatching(/\/open\/ch-1$/)
     );
   });
+
+  it("gives a knowledge_keys row no link: no /open probe or viewer resolves its id", () => {
+    const out = payload(
+      ok({ status: "applied", lane: "global", knowledgeKey: { id: "kk-1" } })
+    );
+    expect(out).not.toHaveProperty("link");
+  });
 });
