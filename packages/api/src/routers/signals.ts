@@ -112,6 +112,7 @@ import {
   type NotificationContainer,
   type NotificationSignalInput,
   type OwedSlotSignalInput,
+  type BrokenConnectionSignalInput,
   type PendingAppRequestSignalInput,
   type PendingKeyRequestSignalInput,
   type PendingIssuerSignalInput,
@@ -126,6 +127,7 @@ import {
   listPendingIssuers,
   podAdminCheck,
 } from "../services/signals/access-requests.js";
+import { listBrokenConnections } from "../services/signals/broken-connections.js";
 import { listOpenSpaceInvites } from "../services/signals/space-invites.js";
 import { listConvertibleGoals } from "../services/signals/convertible-goals.js";
 import { listSessionsAwaitingReview } from "../services/projects/project-needs-you.js";
@@ -301,6 +303,7 @@ export type SignalSubRead =
   | "issuers"
   | "app-requests"
   | "key-requests"
+  | "broken-connections"
   | "invites"
   | "convertible-goals"
   | "liveness"
@@ -449,6 +452,7 @@ async function readAttention(
     issuers,
     appRequests,
     keyRequestRows,
+    brokenConnections,
     spaceInvites,
     convertibleGoals,
   ] = await Promise.all([
@@ -576,6 +580,17 @@ async function readAttention(
           ? await listPendingKeyRequests({ personUserId: userId })
           : { rows: [], truncated: false }
     ),
+    // The person's own tools that need a sign-in again: the pod's connection
+    // health (`secrets.connection_state`), read for its owner on the same
+    // floor-only rule as the other access asks.
+    settle(
+      "broken-connections",
+      { rows: [] as BrokenConnectionSignalInput[], truncated: false },
+      async () =>
+        readsAccess
+          ? await listBrokenConnections({ userId })
+          : { rows: [], truncated: false }
+    ),
     settle(
       "invites",
       { rows: [] as SpaceInviteSignalInput[], truncated: false },
@@ -647,11 +662,13 @@ async function readAttention(
       issuers: issuers.value.rows,
       applications: appRequests.value.rows,
       keys: keyRequestRows.value.rows,
+      connections: brokenConnections.value.rows,
     },
     accessRequestsTruncated:
       issuers.value.truncated ||
       appRequests.value.truncated ||
-      keyRequestRows.value.truncated,
+      keyRequestRows.value.truncated ||
+      brokenConnections.value.truncated,
     spaceInvites: spaceInvites.value.rows,
     spaceInvitesTruncated: spaceInvites.value.truncated,
     convertibleGoals: convertibleGoals.value,
@@ -671,6 +688,7 @@ async function readAttention(
         issuers,
         appRequests,
         keyRequestRows,
+        brokenConnections,
         spaceInvites,
         convertibleGoals,
         containers,
@@ -1506,7 +1524,12 @@ function narrowAttention(
     ...(scope.workspaceId === null && !scope.kindClusters
       ? {}
       : {
-          accessRequests: { issuers: [], applications: [], keys: [] },
+          accessRequests: {
+            issuers: [],
+            applications: [],
+            keys: [],
+            connections: [],
+          },
           accessRequestsTruncated: false,
           spaceInvites: [],
           spaceInvitesTruncated: false,

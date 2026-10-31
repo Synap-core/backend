@@ -11070,11 +11070,14 @@ export interface NeedsYouAccessRequest {
 	 * What would be granted: issuer trust, an application's browser origin, or
 	 * an API key one of the person's computers asked them for (`api_key`, read
 	 * for its person, not only for admins; decision 68d37853, answer 25).
+	 * `capability`: one of the person's OWN tool connections broke (every
+	 * connection of that tool needs a sign-in again, `secrets.connection_state
+	 * = 'needs_reauth'`); the ask is to reconnect it, read for its person.
 	 */
-	subject: "api_key" | "application" | "issuer";
-	/** The asker's display name (the issuer's host, the app's name; a key's requested name). */
+	subject: "api_key" | "application" | "capability" | "issuer";
+	/** The asker's display name (the issuer's host, the app's name; a key's requested name; the broken tool's name). */
 	name: string;
-	/** Where it asks from: the issuer URL, the app's requested origin, or the computer asking for a key. */
+	/** Where it asks from: the issuer URL, the app's requested origin, the computer asking for a key; "" for a broken connection. */
 	from: string;
 }
 /**
@@ -22932,7 +22935,9 @@ export type SignalKind =
  * `access-requests.ts`): a pending trusted issuer (`target.kind: "issuer"`)
  * or an app's pending connection request (`target.kind:
  * "connection-request"`); or the person's own pending KEY request
- * (`target.kind: "key-request"`, read for its person). Who asks and from
+ * (`target.kind: "key-request"`, read for its person); or one of the
+ * person's own tools whose connections all need a sign-in again
+ * (`target.kind: "capability"`, `broken-connections.ts`). Who asks and from
  * where ride in `access`.
  */
  | "access-request"
@@ -23396,6 +23401,18 @@ export interface PendingKeyRequestSignalInput {
 	/** Past it the request is expired, never decidable (24 h after filing). */
 	expiresAt: Date;
 }
+/**
+ * One of the person's tools whose connections ALL need a sign-in again, as
+ * `listBrokenConnections` reads it (`broken-connections.ts`).
+ */
+export interface BrokenConnectionSignalInput {
+	/** The capability (tool) id — the row's door. */
+	capabilityId: string;
+	/** The tool's name ("Gmail"); the connection's own label when unnamed. */
+	name: string;
+	/** When it broke: the newest auth failure, else the connection's last change. */
+	brokenAt: Date;
+}
 /** An open invite to another space, as `listOpenSpaceInvites` reads it. */
 export interface SpaceInviteSignalInput {
 	id: string;
@@ -23499,7 +23516,7 @@ export interface ReviewSessionRow {
 	trackId: string | null;
 }
 /** A sub-read's name — what `unreadable` reports. */
-export type SignalSubRead = "activity" | "app-requests" | "captures" | "convertible-goals" | "drafts" | "events" | "invites" | "issuers" | "key-requests" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
+export type SignalSubRead = "activity" | "app-requests" | "broken-connections" | "captures" | "convertible-goals" | "drafts" | "events" | "invites" | "issuers" | "key-requests" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
 /** One class of the lens page. */
 export interface LensClassWire {
 	/** The first `cap` rows, in the class's own order. */
@@ -47642,6 +47659,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				count: ReturnType<(a: {
 					accessRequests: {
 						applications: PendingAppRequestSignalInput[];
+						connections: BrokenConnectionSignalInput[];
 						issuers: PendingIssuerSignalInput[];
 						keys: PendingKeyRequestSignalInput[];
 					};
