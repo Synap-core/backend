@@ -286,10 +286,15 @@ async function readGateProposals(
   return rows as GateProposalRow[];
 }
 
-/** The deploys a PERSON approved on any session `ownerId` owns, newest first. */
+/**
+ * The deploys a PERSON approved on any session `ownerId` owns, newest first.
+ * `sessionId` narrows it to one session's own; `commitSha` to the deploys whose
+ * commit starts with it (a prefix, like the gate's own match).
+ */
 async function readOwnerDeploys(
   database: typeof db,
-  ownerId: string
+  ownerId: string,
+  only: { sessionId?: string; commitSha?: string } = {}
 ): Promise<PacketDeployApproval[]> {
   const rows = await database
     .select({
@@ -319,6 +324,12 @@ async function readOwnerDeploys(
         eq(proposals.status, ProposalStatus.APPROVED),
         eq(users.userType, "human"),
         eq(focusSessions.userId, ownerId),
+        only.sessionId
+          ? eq(focusSessions.id, only.sessionId)
+          : drizzleSql`true`,
+        only.commitSha
+          ? drizzleSql`starts_with(${proposals.data} ->> 'commitSha', ${only.commitSha})`
+          : drizzleSql`true`,
         drizzleSql`${proposals.data} ->> 'commitSha' IS NOT NULL`,
         drizzleSql`${proposals.reviewedAt} >= now() - (${OWNER_DEPLOYS_DAYS}::int * interval '1 day')`
       )
@@ -346,7 +357,13 @@ async function readOwnerDeploys(
 export async function readSessionGates(
   database: typeof db,
   row: { id: string; playbookId: string | null; userId: string },
-  viewerId: string
+  viewerId: string,
+  /**
+   * `all` (default, today's read): every deploy a person approved on any of the
+   * owner's sessions. `own`: only this session's (the lean read; the others
+   * are one call away through {@link readDeployGate}).
+   */
+  ownerDeploysScope: "all" | "own" = "all"
 ): Promise<{
   items: PacketGateItem[];
   deploy: PacketDeployApproval | null;
@@ -356,11 +373,31 @@ export async function readSessionGates(
     loadSessionProcess({ sessionId: row.id, playbookId: row.playbookId }),
     readGateProposals(database, row.id),
     viewerId === row.userId
-      ? readOwnerDeploys(database, row.userId)
+      ? readOwnerDeploys(
+          database,
+          row.userId,
+          ownerDeploysScope === "own" ? { sessionId: row.id } : {}
+        )
       : Promise.resolve([]),
   ]);
   return {
     ...deriveSessionGates(sessionProcess?.stages ?? [], rows),
     ownerDeploys,
   };
+}
+
+/**
+ * THE gate read for deploys, keyed by commit: "is commit X approved to ship by
+ * a person?" across ALL of the owner's sessions, without the whole session
+ * packet. Owner only, like `ownerDeploys` (a room member never reads the
+ * owner's other sessions). Throws on a failed read.
+ */
+export async function readDeployGate(
+  database: typeof db,
+  row: { id: string; userId: string },
+  viewerId: string,
+  only: { commitSha?: string } = {}
+): Promise<PacketDeployApproval[]> {
+  if (viewerId !== row.userId) return [];
+  return readOwnerDeploys(database, row.userId, only);
 }
