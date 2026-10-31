@@ -11,9 +11,8 @@
  *
  *   moves    a thing's step's moves (`StatusOfMove`, in the api);
  *   history  THE timeline (`readTimeline`), kept to status moves, holds and
- *            step entries ({@link isStatusHistoryEvent}), with a session's
- *            stages entered from its stage ledger ({@link StatusOfStageEntered}),
- *            newest first, at most {@link STATUS_OF_HISTORY_MAX};
+ *            step entries ({@link isStatusHistoryEvent}), newest first, at
+ *            most {@link STATUS_OF_HISTORY_MAX};
  *   links    a goal's or a session's `serves` edges: what it serves, what
  *            serves it, each end the reader may see;
  *   rollup   a goal's tree, down its `serves` edges: its work per category, its
@@ -24,7 +23,6 @@
  * Pure: types and constants only.
  */
 
-import type { ActivityActor } from "../activity/index.js";
 import type { RecordedHold } from "../lifecycle/hold.js";
 import type { LifecycleCategory } from "../lifecycle/option.js";
 import type { StatusSignal } from "../lifecycle/signal.js";
@@ -49,9 +47,9 @@ export const STATUS_OF_HISTORY_MAX = 50;
 /**
  * The timeline events that are a STATUS history: a status move (with its hold,
  * a wait episode the move opened), a goal's step entered, its check verdict, a
- * pause and its resume, a session's stage entered (its stage ledger, 0382).
- * Sessions, decisions and dev facts stay on the timeline. The wait episodes
- * of computed waits have no store yet; they join this list when they do.
+ * pause and its resume. Sessions, decisions and dev facts stay on the
+ * timeline. A session's step entries and the wait episodes of computed waits
+ * have no store yet; they join this list when they do.
  */
 export const STATUS_HISTORY_EVENT_KINDS = [
   "status_moved",
@@ -62,37 +60,12 @@ export const STATUS_HISTORY_EVENT_KINDS = [
   "paused",
   "resumed",
   "status_changed",
-  "stage_entered",
 ] as const;
 
-/**
- * A stage a SESSION entered, read from its stage ledger
- * (`focus_sessions.stage_history`, 0382; the shape of a goal's `step_moved`).
- * Only `include: ["history"]` carries it; the timeline does not.
- */
-export interface StatusOfStageEntered {
-  /** Stable across reads — a client may key rows by it. */
-  id: string;
-  kind: "stage_entered";
-  /** When it entered the stage (ISO-8601). */
-  at: string;
-  /** Who moved it, named by the pod: the agent when one drove it. */
-  actor: ActivityActor;
-  refs: { sessionId: string };
-  /** The stage entered. */
-  stageKey: string;
-  /** The stage left; `null` when the session stood on none. */
-  fromStage: string | null;
-  /** Which writer recorded it: the stage door, or a re-applied approval. */
-  via: "advance" | "approval";
-}
-
-/** One entry of `include: ["history"]`. */
-export type StatusOfHistoryEvent =
-  DevTimelineEvent | TrackHistoryEvent | StatusOfStageEntered;
-
 /** A timeline event kept by `include: ["history"]`. */
-export function isStatusHistoryEvent(event: StatusOfHistoryEvent): boolean {
+export function isStatusHistoryEvent(
+  event: DevTimelineEvent | TrackHistoryEvent
+): boolean {
   return (STATUS_HISTORY_EVENT_KINDS as readonly string[]).includes(event.kind);
 }
 
@@ -126,16 +99,10 @@ export interface StatusOfAccount {
   link: string;
 }
 
-/**
- * `include: ["history"]`: THE timeline, kept to its status events, with a
- * session's stage ledger merged in by time.
- */
+/** `include: ["history"]`: THE timeline, kept to its status events. */
 export interface StatusOfHistory {
-  /**
-   * Newest first: a goal's are `TrackHistoryEvent`s, a session's
-   * `status_moved` and `stage_entered`, a thing's `status_moved`.
-   */
-  events: StatusOfHistoryEvent[];
+  /** Newest first: a goal's are `TrackHistoryEvent`s, the rest `status_moved`. */
+  events: Array<DevTimelineEvent | TrackHistoryEvent>;
   /** Older events exist and are not listed. */
   truncated: boolean;
 }

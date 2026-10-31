@@ -18,9 +18,7 @@
  *
  * On `include` (`STATUS_OF_INCLUDES`, `@synap-core/types/units`):
  *   moves    a thing's step's moves (`stepsFromLifecycle`, `offPathChoices`);
- *   history  THE timeline (`readTimeline`), kept to its status events; a
- *            session's stages entered merged in by time, from the stage
- *            ledger its own row carries (`stage_history`, 0382);
+ *   history  THE timeline (`readTimeline`), kept to its status events;
  *   links    a goal's or a session's `serves` edges, each end the reader sees;
  *   rollup   a goal's tree down `serves` (`readGoalTreeRollups`);
  *   signals  the status signals (`status_signal_raised`) still open.
@@ -48,11 +46,9 @@ import {
   playbookRuns,
   projectTracks,
   ProfileResolutionService,
-  readSessionStageHistory,
   relations,
   statusSignalRaised,
   type CurrentHold,
-  type SessionStageHistoryEntry,
 } from "@synap/database";
 import type { ProjectTrack } from "@synap/database/schema";
 import {
@@ -74,8 +70,6 @@ import {
   trackStatusCategory,
   type StatusOfAccount,
   type StatusOfHistory,
-  type StatusOfHistoryEvent,
-  type StatusOfStageEntered,
   type StatusOfInclude,
   type StatusOfLinkEnd,
   type StatusOfLinks,
@@ -98,7 +92,6 @@ import { AccessContext, scopedDb } from "../../access/index.js";
 import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { openLink } from "../../utils/deep-links.js";
-import { activityActorOf, loadActorRows } from "../activity/activity-actors.js";
 import { stuckAfterDaysOf, stuckForDays } from "../lifecycle/status-groups.js";
 import type { ContinuationNextMove } from "../focus-sessions/continuation-packet.js";
 // Static, not loaded late: this pulls the continuation packet in with this
@@ -260,47 +253,6 @@ function openSessionsOf(rollup: StatusOfRollup): number {
   return (c.open ?? 0) + (c.active ?? 0) + (c.paused ?? 0);
 }
 
-/** Newest first; a tie by id, as the timeline orders its own. */
-function newestFirst(a: StatusOfHistoryEvent, b: StatusOfHistoryEvent): number {
-  const t = Date.parse(b.at) - Date.parse(a.at);
-  if (t !== 0) return t;
-  return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
-}
-
-/**
- * A session's stage ledger as `stage_entered` history entries, each actor
- * named by the pod. The ledger comes with the session's own row, read under
- * the session floor: no second read of its stages. An entry whose time does
- * not parse is left out. The id is the change feed's `stage_moved` id.
- */
-async function stageEnteredEvents(
-  sessionId: string,
-  ledger: readonly SessionStageHistoryEntry[],
-  viewer: string
-): Promise<StatusOfStageEntered[]> {
-  const entries = ledger.filter((e) => !Number.isNaN(Date.parse(e.enteredAt)));
-  if (entries.length === 0) return [];
-  const rows = await loadActorRows(entries.map((e) => e.actor));
-  return entries.map((e) => {
-    const actorId = typeof e.actor === "string" && e.actor ? e.actor : null;
-    return {
-      id: `stage:${sessionId}:${e.enteredAt}:${e.stageKey}`,
-      kind: "stage_entered" as const,
-      at: new Date(e.enteredAt).toISOString(),
-      actor: activityActorOf(
-        actorId,
-        actorId ? rows.get(actorId) : undefined,
-        viewer,
-        actorId !== null && actorId !== e.userId
-      ),
-      refs: { sessionId },
-      stageKey: e.stageKey,
-      fromStage: typeof e.fromStage === "string" ? e.fromStage : null,
-      via: e.via === "approval" ? ("approval" as const) : ("advance" as const),
-    };
-  });
-}
-
 /** A part of the answer that could not be read is `unavailable`, never empty. */
 async function orUnavailable<T>(p: Promise<T>): Promise<T | Unavailable> {
   try {
@@ -364,8 +316,6 @@ export async function readStatusOf(
         userId: focusSessions.userId,
         criteria: focusSessions.criteria,
         channelId: focusSessions.channelId,
-        // Its stage ledger (0382): `include: ["history"]`'s stage entries.
-        stageHistory: focusSessions.stageHistory,
       })
       .from(focusSessions)
       .where(
@@ -621,36 +571,29 @@ export async function readStatusOf(
   };
 
   // ── On request ──────────────────────────────────────────────────────────
-  const history = (
-    subject: { kind: "entity" | "goal" | "session"; id: string },
-    ledger: readonly SessionStageHistoryEntry[]
-  ) =>
+  const history = (subject: {
+    kind: "entity" | "goal" | "session";
+    id: string;
+  }) =>
     orUnavailable(
       (async (): Promise<StatusOfHistory | Unavailable> => {
         const { readTimeline } = await import("../timeline/read-timeline.js");
-        const [t, stages] = await Promise.all([
-          readTimeline(subject, { userId }),
-          stageEnteredEvents(subject.id, ledger, userId),
-        ]);
+        const t = await readTimeline(subject, { userId });
         if (!t) return UNAVAILABLE;
-        const kept = (t.events as StatusOfHistoryEvent[]).filter(
-          isStatusHistoryEvent
-        );
-        if (stages.length) {
-          kept.push(...stages);
-          kept.sort(newestFirst);
-        }
+        const kept = (
+          t.events as Array<StatusOfHistory["events"][number]>
+        ).filter(isStatusHistoryEvent);
         return {
           events: kept.slice(0, STATUS_OF_HISTORY_MAX),
           truncated: t.truncated || kept.length > STATUS_OF_HISTORY_MAX,
         };
       })()
     );
-  const historyOf = async (
-    subject: { kind: "entity" | "goal" | "session"; id: string },
-    ledger: readonly SessionStageHistoryEntry[] = []
-  ): Promise<{ history?: StatusOfHistory | Unavailable }> =>
-    wants("history") ? { history: await history(subject, ledger) } : {};
+  const historyOf = async (subject: {
+    kind: "entity" | "goal" | "session";
+    id: string;
+  }): Promise<{ history?: StatusOfHistory | Unavailable }> =>
+    wants("history") ? { history: await history(subject) } : {};
 
   const linkIds = [...goals.map((g) => g.id), ...sessions.map((s) => s.id)];
   const served =
@@ -920,10 +863,7 @@ export async function readStatusOf(
           ...(facts.nextMove.has(s.id)
             ? { nextMove: facts.nextMove.get(s.id)! }
             : {}),
-          ...(await historyOf(
-            { kind: "session", id: s.id },
-            readSessionStageHistory(s.stageHistory)
-          )),
+          ...(await historyOf({ kind: "session", id: s.id })),
           ...(await linksOf(s.id)),
           ...(await signalsOf([
             {
