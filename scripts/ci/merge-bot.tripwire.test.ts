@@ -877,13 +877,40 @@ const victim = (over: Pr = {}) =>
     window: WINDOW,
     latestRun: prRun(),
     markers: [],
-    merge: { mergeable: true, baseSha: MAIN_TIP, mainSha: MAIN_TIP },
+    merge: { mergeable: true, behindBy: 3 },
     ...over,
   });
 
 describe("merge-bot: main's victims, run again once", () => {
-  it("a PR whose latest run failed while main was red: run again", () => {
-    expect(victim()).toEqual({ rerun: true, reasons: [] });
+  it("a PR whose latest run failed while main was red, its branch behind main: main is brought in", () => {
+    expect(victim()).toEqual({
+      rerun: true,
+      reasons: [],
+      how: "update-branch",
+    });
+  });
+  it("a branch that already holds main's tip: toggled draft → ready (its test merge has the head's tree)", () => {
+    expect(victim({ merge: { mergeable: true, behindBy: 0 } })).toEqual({
+      rerun: true,
+      reasons: [],
+      how: "toggle",
+    });
+  });
+  // 30 Oct: GitHub does not rebuild an idle PR's test merge when main moves.
+  // The bot waited for it ("test merge not yet rebuilt on main's tip") on
+  // every sweep, and #561 was never run again. Only how far the HEAD is
+  // behind main matters now; where the stale test merge sits does not.
+  it("a test merge built on an OLD main does not hold it (#561, 30 Oct)", () => {
+    const d = victim({
+      merge: {
+        mergeable: true,
+        behindBy: 4,
+        baseSha: "d".repeat(40),
+        mainSha: MAIN_TIP,
+      },
+    });
+    expect(d.reasons).toEqual([]);
+    expect(d).toMatchObject({ rerun: true, how: "update-branch" });
   });
   it("a marker for ANOTHER main red does not hold it", () => {
     expect(
@@ -947,17 +974,21 @@ describe("merge-bot: main's victims, run again once", () => {
       "already run again",
     ],
     [
-      "the test merge is not built",
-      { merge: { mergeable: null, baseSha: null, mainSha: MAIN_TIP } },
+      "GitHub is still computing its mergeability",
+      { merge: { mergeable: null, behindBy: null } },
       "not ready",
     ],
     [
-      "the test merge is on an old main",
-      {
-        merge: { mergeable: true, baseSha: "d".repeat(40), mainSha: MAIN_TIP },
-      },
-      "main's tip",
+      "it conflicts with main (update-branch would fail)",
+      { merge: { mergeable: false, behindBy: 2 } },
+      "not ready",
     ],
+    [
+      "its head could not be compared with main",
+      { merge: { mergeable: true, behindBy: null } },
+      "could not compare",
+    ],
+    ["its merge state not read", { merge: undefined }, "merge: not read"],
     ["markers not read", { markers: undefined }, "not read"],
   ])("not run again: %s", (_n, over: Pr, reason: string) => {
     const d = victim(over);
@@ -1100,6 +1131,15 @@ if (args[1] === "graphql") {
 const method = args[2], path = args[3];
 if (method === "POST" && path.endsWith("/check-runs")) say({ id: 1 });
 let m;
+if (method === "PUT" && (m = /pulls\\/(\\d+)\\/update-branch$/.exec(path))) {
+  if ((data.refuseUpdate || []).includes(Number(m[1]))) die("gh: refusing to allow a GitHub App to create or update workflow \`.github/workflows/ci.yml\` without \`workflows\` permission (HTTP 403)");
+  say({ message: "Updating pull request branch." });
+}
+if ((m = /compare\\/([0-9a-f]+)\\.\\.\\.([0-9a-f]+)\\?per_page=1$/.exec(path))) {
+  if (m[1] !== data.mainSha) die("fake gh: compare against " + m[1] + ", not main's tip");
+  const b = (data.behind || {})[m[2]];
+  say({ behind_by: b === undefined ? 2 : b });
+}
 if ((m = /commits\\/([0-9a-f]+)\\/check-runs\\?check_name=/.exec(path))) say({ check_runs: (data.markers || {})[m[1]] || [] });
 if ((m = /commits\\/([0-9a-f]+)\\/check-runs/.exec(path))) say({ check_runs: (data.checks || {})[m[1]] || [] });
 if (path.includes("runs?branch=main&event=push")) { if (data.mainRuns === null) die("gh: HTTP 502"); say({ workflow_runs: data.mainRuns || [] }); }
@@ -1516,22 +1556,35 @@ describe(
         10: { mergeable: true, merge_commit_sha: sha("f") },
         13: { mergeable: true, merge_commit_sha: sha("f") },
       },
-      mergeBase: { [sha("f")]: MAIN_TIP },
+      // GitHub's test merge of an idle PR, still on an OLD main (as #561's and
+      // #564's were on 30 Oct): the bot must not wait for it to be rebuilt.
+      mergeBase: { [sha("f")]: sha("9") },
+      behind: { [sha("a")]: 3 },
       checks: {},
       ...over,
     });
+    const updates = (calls: Call[]) =>
+      calls.filter(
+        (c) => c.args[2] === "PUT" && c.args[3].endsWith("/update-branch")
+      );
+    const toggles = (calls: Call[]) => [
+      ...mutations(calls, "convertPullRequestToDraft"),
+      ...mutations(calls, "markPullRequestReadyForReview"),
+    ];
 
-    it("main back to green: the victim gets ONE fresh run (draft → ready, app token) and the marker; a queued PR is never toggled", async () => {
+    it("main back to green: a victim BEHIND main gets main merged in (update-branch at its judged head, app token) and the marker; no toggle; a queued PR is never touched", async () => {
       const { r, calls, out } = await bot(victimData());
-      expect(r).toMatchObject({ code: 0, rerun: [10] });
-      const toggles = [
-        ...mutations(calls, "convertPullRequestToDraft"),
-        ...mutations(calls, "markPullRequestReadyForReview"),
-      ];
-      expect(toggles.map((c) => [varOf(c, "id"), c.token])).toEqual([
-        ["PR_10", "bot-token"],
-        ["PR_10", "bot-token"],
+      expect(r).toMatchObject({ code: 0, rerun: [10], failures: 0 });
+      const u = updates(calls);
+      expect(u.map((c) => [c.args[3], c.token, JSON.parse(c.input)])).toEqual([
+        [
+          `repos/${BACKEND}/pulls/10/update-branch`,
+          "bot-token",
+          { expected_head_sha: sha("a") },
+        ],
       ]);
+      expect(toggles(calls)).toEqual([]);
+      expect(out).toMatch(/#10 CI started again \(main brought in/);
       const marker = calls.filter((c) => c.args[2] === "POST");
       expect(marker).toHaveLength(1);
       expect(JSON.parse(marker[0].input)).toMatchObject({
@@ -1546,6 +1599,41 @@ describe(
       expect(calls.some((c) => (c.args[3] ?? "").includes("rerun"))).toBe(
         false
       );
+    });
+
+    it("a victim whose branch already holds main's tip is toggled draft → ready (app token), never updated", async () => {
+      const { r, calls } = await bot(victimData({ behind: { [sha("a")]: 0 } }));
+      expect(r).toMatchObject({ code: 0, rerun: [10] });
+      expect(updates(calls)).toEqual([]);
+      expect(toggles(calls).map((c) => [varOf(c, "id"), c.token])).toEqual([
+        ["PR_10", "bot-token"],
+        ["PR_10", "bot-token"],
+      ]);
+    });
+
+    it("an update GitHub refuses: no toggle, said ONCE on the marker with the command to run, and the run goes red", async () => {
+      const { r, calls, out } = await bot(victimData({ refuseUpdate: [10] }));
+      expect(r).toMatchObject({ code: 1, rerun: [], failures: 1 });
+      expect(updates(calls)).toHaveLength(1);
+      expect(toggles(calls)).toEqual([]);
+      expect(out).toMatch(/#10 main could not be brought in .*workflows/);
+      const marker = calls.filter((c) => c.args[2] === "POST");
+      expect(marker).toHaveLength(1);
+      const body = JSON.parse(marker[0].input);
+      expect(body).toMatchObject({
+        head_sha: sha("a"),
+        external_id: "main-green-3",
+      });
+      expect(body.output.summary).toContain("gh pr update-branch 10");
+    });
+
+    it("a dry run brings nothing in and toggles nothing", async () => {
+      const { r, calls, out } = await bot(victimData(), {
+        vars: { MERGE_BOT_DRY_RUN: "true" },
+      });
+      expect(r.rerun).toEqual([]);
+      expect(calls.filter(isWrite)).toEqual([]);
+      expect(out).toMatch(/#10 WOULD run CI again, main brought in/);
     });
 
     it("the second sweep after it (marker posted) runs nothing again", async () => {
@@ -1680,11 +1768,19 @@ describe("merge-bot: what it must never do", () => {
     ["bypass as an admin", /--admin|bypass/i],
     ["re-run the stale merge", /rerun-failed-jobs|\/rerun\b|run rerun/],
     [
-      "update a branch or push",
-      /update-branch|updatePullRequestBranch|git push/,
+      "push, rebase, or update a branch through another door",
+      /git push|rebase|updatePullRequestBranch/i,
     ],
   ])("its code never does: %s", (_n, re) => {
     expect(code).not.toMatch(re);
+  });
+  // The one branch write: main merged into a victim's branch (section D).
+  // Sees a second REST update-branch path; the e2e victim tests pin its body.
+  it("its one branch update is the REST update-branch, at the head it judged", () => {
+    expect(code.match(/\/update-branch`/g)).toHaveLength(1);
+    expect(code).toMatch(
+      /\/update-branch`, \{\s+token,\s+method: "PUT",\s+body: \{ expected_head_sha: pr\.headRefOid \},\s+\}\);/
+    );
   });
   it("the bot job reads its secrets from environment ci-bots (branch policy: main), never repo-wide", () => {
     const job = wf.slice(wf.indexOf("\n  bot:"));
