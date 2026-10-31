@@ -718,8 +718,10 @@ describe("the status watcher, on dev work standing still", () => {
   const session = (id: string, title: string, owner = ME, status = "active") =>
     q(
       `insert into focus_sessions (id, user_id, workspace_id, goal, title, status, origin, expected_outputs, metadata, started_at, created_at, updated_at)
-       values ($1, $2, $3, $4, $4, $5, 'agent', '[]'::jsonb, '{}'::jsonb, now(), now(), now())`,
-      [id, owner, W, title, status]
+       values ($1, $2, $3, $4, $5, $6, 'agent', '[]'::jsonb, '{}'::jsonb, now(), now(), now())`,
+      // goal (text) and title (varchar) each get their own parameter: one
+      // parameter in both makes Postgres deduce two types for it.
+      [id, owner, W, title, title, status]
     );
   const pr = (number: number, podSessionId: string, over = {}) => ({
     number,
