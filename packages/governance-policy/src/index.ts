@@ -232,31 +232,13 @@ export const DEFAULT_AUTO_APPROVE: readonly string[] = [
  * branch merges can never auto-execute. Format used by the floor is the bare
  * action verb; event keys are `${subjectType}.${action}` (e.g. `entity.merge`).
  */
-/**
- * Capability verb ids a stored `auto` rule must not widen to a direct run.
- * The policy engine itself never sees a verb id — `capability-gate` consults
- * this before `capabilityRuleAuthorizesRun`. Gmail and every other send stay
- * off the list.
- */
-export const PROPOSE_ONLY_CAPABILITY_VERBS = [
-  "postiz_draft",
-  "postiz_schedule",
-  "postiz_publish",
-  // The code verb that uploads media then creates the post (draft | schedule |
-  // now) — the same public send as the three above. `postiz_upload_from_url`
-  // is deliberately NOT here: it stores a file in the Postiz media library and
-  // publishes nothing, so a person may widen it like any other write.
-  "postiz_schedule_post",
-] as const;
-
-export function capabilityVerbAllowsRuleWiden(
-  verbName: string | null | undefined
-): boolean {
-  if (!verbName) return true;
-  return !(PROPOSE_ONLY_CAPABILITY_VERBS as readonly string[]).includes(
-    verbName
-  );
-}
+// The verbs a stored `auto` rule never widens (a public post): defined beside
+// the "always" menus' derivation in @synap-core/types, which cannot import
+// this engine, so both read ONE list.
+export {
+  PROPOSE_ONLY_CAPABILITY_VERBS,
+  capabilityVerbAllowsRuleWiden,
+} from "@synap-core/types/proposals";
 
 /**
  * THE OUTWARD FLOOR (finding c173cc51, founder 2026-10-30: an act that leaves
