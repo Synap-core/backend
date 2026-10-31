@@ -453,6 +453,14 @@ export interface TrackGoalFacts {
   criteria: GoalCriterionView[];
   inReview: boolean;
   waitingOn: WaitingOnMark[];
+  /** Its open runs (sessions filed into it, every member's): a count only. */
+  openRuns: number;
+  /**
+   * Who judges it (`goalJudge`: the judge seat, else the owner), from the
+   * seats this read already loads; a goal's next move names them
+   * (`deriveGoalNextMove`, through statusOf's own name read).
+   */
+  judgeId: string | null;
 }
 
 /**
@@ -962,6 +970,8 @@ export async function loadTrackGoalFacts(
           ? operationPeriodReading(criteria, runsOf.get(track.id) ?? [], week)
           : null,
       waitingOn: waitingOf.get(track.id) ?? [],
+      openRuns: openSessions.filter((s) => s.trackId === track.id).length,
+      judgeId: seats.get(track.id)?.judge ?? null,
     });
   }
   return out;

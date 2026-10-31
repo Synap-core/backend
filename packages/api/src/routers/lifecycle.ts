@@ -14,8 +14,9 @@
  *
  *   lifecycle.statusOf — WHERE DOES IT STAND for up to 10 ids (things, goals,
  *                     sessions, runs): status, category, since, what it waits
- *                     on (with refs), the current hold, and for a session
- *                     `live` + `nextMove`; its tone; a thing's roles and
+ *                     on (with refs), the current hold, its `nextMove`
+ *                     (a session's, a lifecycle thing's, a goal's), and for
+ *                     a session `live`; its tone; a thing's roles and
  *                     account line; and on `include` its moves, history,
  *                     `serves` links, goal rollup and open signals. The
  *                     screens' door to the SAME read
