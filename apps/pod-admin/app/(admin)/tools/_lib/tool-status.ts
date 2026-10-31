@@ -17,8 +17,9 @@
  * off (every call to one is refused), then stuck runs, then On. A read that
  * failed leaves its half unknown, never "fine".
  *
- * A skill's mark is its `approved`: on or off. Nothing else is known about it
- * (an instruction is read by agents, and the pod records no read of it).
+ * A skill's (and a standalone integration's) mark is its `approved`: on or
+ * off. Nothing else is known about it (an instruction is read by agents, and
+ * the pod records no read of it).
  */
 
 import type { AppRouter } from "@synap-core/api-types";
@@ -113,10 +114,13 @@ export function capabilityStatus(input: {
   return { kind: "unknown", label: t("status.unknown") };
 }
 
-/** A skill's one mark: turned on or not. */
-export function skillStatus(skill: { approved: boolean }): StatusMark {
+/**
+ * A skill's or an integration's one mark: turned on (`approved`, the flag
+ * the run gate reads for both rows) or not.
+ */
+export function approvedStatus(row: { approved: boolean }): StatusMark {
   const t = toolsT();
-  return skill.approved
+  return row.approved
     ? { kind: "healthy", label: t("status.on") }
     : { kind: "stale", label: t("status.off") };
 }

@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import { DEV_LOOP_EVENT_TYPES as T } from "./dev-loop.js";
-import { holdDevFactOf, holdDevRefMet } from "./dev-hold.js";
+import { holdDevFactOf, holdDevRefMet, holdDevRefNamed } from "./dev-hold.js";
 import type { DevLoopEventRowLike } from "./pr-state.js";
 
 const SINCE = "2026-10-30T12:00:00.000Z";
@@ -117,5 +117,28 @@ describe("holdDevFactOf", () => {
         workflow: "CI",
       })
     ).toBeNull();
+  });
+});
+
+describe("holdDevRefNamed", () => {
+  it("names a dev fact in the hold line's words; a PR carries its GitHub page", () => {
+    expect(holdDevRefNamed("pr:synap-core/backend#539")).toEqual({
+      ref: { kind: "pr", repo: "synap-core/backend", number: 539 },
+      label: "backend#539",
+      url: "https://github.com/synap-core/backend/pull/539",
+    });
+    expect(holdDevRefNamed("main:synap-core/app-bases")).toMatchObject({
+      label: "app-bases main",
+      url: null,
+    });
+    expect(holdDevRefNamed("job:kit-h")).toMatchObject({
+      label: "job kit-h",
+      url: null,
+    });
+  });
+
+  it("names nothing that is not a dev fact", () => {
+    expect(holdDevRefNamed("focus_session:abc")).toBeNull();
+    expect(holdDevRefNamed("pr:not a repo#1")).toBeNull();
   });
 });

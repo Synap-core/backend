@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   capabilityStatus,
-  skillStatus,
+  approvedStatus,
   statusRank,
   type CapabilityCardStatus,
   type RunHealth,
@@ -94,13 +94,13 @@ describe("capabilityStatus — the ONE mark, list and page", () => {
   });
 });
 
-describe("skillStatus", () => {
+describe("approvedStatus", () => {
   it("on or off", () => {
-    expect(skillStatus({ approved: true })).toEqual({
+    expect(approvedStatus({ approved: true })).toEqual({
       kind: "healthy",
       label: "On",
     });
-    expect(skillStatus({ approved: false })).toEqual({
+    expect(approvedStatus({ approved: false })).toEqual({
       kind: "stale",
       label: "Off",
     });

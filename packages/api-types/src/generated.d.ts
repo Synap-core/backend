@@ -6131,7 +6131,18 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  * ONLY, through `agentUsers.setAssignment` — an agent that could write it
  * could staff itself onto anyone's work. The Hub REST door lists and refuses it.
  */
- | "assigned_to";
+ | "assigned_to"
+/**
+ * session|track --serves--> track. The work is done FOR that goal: a session
+ * serving a goal (optionally naming ONE of the goal's criteria in
+ * `metadata.criterionKey`), or a sub-goal serving its parent goal. Written
+ * by THE dependency door (`services/links/dependency-links.ts`: pair, self,
+ * criterion and track→track cycle floors). NOT a dependency — no blocker
+ * reader follows it. Goal rollups do (`services/status/status-rollup.ts`):
+ * a goal's work counts the sessions filed in it OR serving it, each once,
+ * and its sub-goals are listed as `children`.
+ */
+ | "serves";
 /**
  * Playbook Runs Schema — the run ledger (executor spine, Phase 3)
  *
@@ -16547,6 +16558,11 @@ export interface GoalRollup {
 	moved?: number;
 	/** Absent when it waits on nothing. */
 	waitingOn?: WaitingOnMark[];
+	/**
+	 * The goals that SERVE this one (`track --serves--> track`), direct only,
+	 * that the reader may see. Absent when none.
+	 */
+	children?: string[];
 }
 export interface ScopeRollup {
 	lens: "project" | "workspace";
@@ -22530,6 +22546,15 @@ export interface Signal {
 	 * mapping, which is the fork the lens helper exists to prevent.
 	 */
 	blockedReason?: ExpectedOutput["blockedReason"];
+	/**
+	 * What kind of wait this row is (`WAIT_KINDS`, `@synap-core/types/units`):
+	 * the ball a needs-you row wears (`resolveWaitKindState`). Set on the rows
+	 * that wait on the person (`owed-slot` by its blocked reason, a
+	 * `proposal-cluster`'s approval, a `draft-asks`' answer, a
+	 * `session-review`'s try-it), through THE map table (`waitKindOf`);
+	 * absent on every other kind.
+	 */
+	waitKind?: WaitKind;
 	/** One line naming WHICH thing is missing — the resumption cue. `owed-slot` only. */
 	why?: string;
 	/** The agent's own (unverified) claim it produced this after all. `owed-slot` only. */
@@ -36284,9 +36309,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		addDependency: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				criterionKey?: string | undefined;
 				fromId: string;
 				fromType: "entity" | "session" | "track";
-				linkType: "blocked_by" | "replaces";
+				linkType: "blocked_by" | "replaces" | "serves";
 				toId: string;
 				toType: "entity" | "session" | "track";
 			};
@@ -36500,7 +36526,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				fromId: string;
 				fromType: "entity" | "session" | "track";
-				linkType: "blocked_by" | "replaces";
+				linkType: "blocked_by" | "replaces" | "serves";
 				toId: string;
 				toType: "entity" | "session" | "track";
 			};
@@ -38921,6 +38947,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						live: boolean;
 						sessionId: string;
 						since: string;
+						waitKind?: "access" | "agent_stopped" | "agent_work" | "another_work" | "answer" | "approval" | "ci" | "date" | "decide" | "deploy" | "devbox_job" | "merge_queue" | "nobody" | "payment" | "red_main" | "send" | "signature" | "their_document" | "their_reply" | "try_it" | "vendor" | undefined;
 					}[];
 					workspaceId: string | null;
 				}[];
@@ -38931,6 +38958,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					live: boolean;
 					sessionId: string;
 					since: string;
+					waitKind?: "access" | "agent_stopped" | "agent_work" | "another_work" | "answer" | "approval" | "ci" | "date" | "decide" | "deploy" | "devbox_job" | "merge_queue" | "nobody" | "payment" | "red_main" | "send" | "signature" | "their_document" | "their_reply" | "try_it" | "vendor" | undefined;
 					workspaceId: string | null;
 				}[];
 			};
@@ -44519,6 +44547,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				rejected: number;
+				rejectedIds: string[];
 				success: boolean;
 			};
 		}>;
@@ -49200,6 +49230,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				capabilityId: string | null;
 				skills: {
 					agentTypes: string[] | null;
 					alwaysOn: boolean;

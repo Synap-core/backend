@@ -583,6 +583,19 @@ describe("batch", () => {
       failures: [{ title: "c2", error: "Target was deleted" }],
     });
   });
+
+  it("a member the answer does not mention is not approved", () => {
+    const b = batchOf(rows, new Set(["c1", "c2"]));
+    expect(
+      summarizeBatch(b.rows, [
+        { proposalId: "c1-p1", success: true },
+        { proposalId: "x", success: true },
+      ])
+    ).toEqual({
+      approved: 1,
+      failures: [{ title: "c2", error: "It could not be approved." }],
+    });
+  });
 });
 
 describe("isRemoval", () => {

@@ -1094,3 +1094,21 @@ describe("convertible goals — the pod's ONE Make them goals card (D-3)", () =>
     expect(counted.truncated).toBe(false);
   });
 });
+
+describe("needs-you rows carry their wait kind (status foundation)", () => {
+  it("an owed slot's kind comes from its blocked reason, through the one map table", () => {
+    expect(
+      signalFromOwedSlot(owed({ blockedReason: "credential" })).waitKind
+    ).toBe("access");
+    expect(
+      signalFromOwedSlot(owed({ blockedReason: "decision" })).waitKind
+    ).toBe("decide");
+    expect(
+      signalFromOwedSlot(owed({ blockedReason: undefined })).waitKind
+    ).toBe("answer");
+  });
+
+  it("a proposal cluster waits on your approval", () => {
+    expect(signalFromCluster(cluster()).waitKind).toBe("approval");
+  });
+});

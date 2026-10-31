@@ -4064,7 +4064,13 @@ export const proposalsRouter = router({
       // Parity with the single `reject` door: rejected public-form answers go.
       await scrubRejectedGuestPayloads(actionedIds);
 
-      return { success: true };
+      // What this call actually rejected: a proposal decided meanwhile (or
+      // gone) is skipped, so a receipt counts these, never the ids sent.
+      return {
+        success: true,
+        rejected: actionedIds.length,
+        rejectedIds: actionedIds,
+      };
     }),
 
   /**

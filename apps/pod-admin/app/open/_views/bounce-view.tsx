@@ -16,21 +16,20 @@
  * cell TYPE KEY, not a row. `settings` addresses a section name. Both fail the
  * uuid gate.
  *
- * A kind the console also has an admin page for (a space) offers a pod admin
- * that page beside the app link ("See this space here"). A member is not
- * offered it: the page is pod-admin only and would answer /forbidden
- * (`objectWebAlternative` asks the console's audience rule).
+ * A kind the console also has an admin page for (a space, a Settings section
+ * the console covers) leads with that page ("See this space here"); the app
+ * link is then the second door. A member is not offered the page: it is
+ * pod-admin only and would answer /forbidden (`objectWebAlternative` asks the
+ * console's audience rule). What the card says and offers is `bounceCard`:
+ * never a list of our object kinds, and always the app, where the work is
+ * done (decision 94cd8636).
  */
 
 import { Button } from "@heroui/react";
 import Link from "next/link";
 
 import { trpc } from "../../../lib/trpc";
-import {
-  bounceAddressParams,
-  bounceReceipt,
-  bounceSummary,
-} from "../open-model";
+import { bounceAddressParams, bounceCard, bounceReceipt } from "../open-model";
 import { labelForOpenType, type KnownOpenType } from "../open-params";
 import { formatRelative, isUuid } from "../../../lib/format";
 import { objectWebAlternative } from "../../../lib/open-in";
@@ -84,32 +83,35 @@ export function BounceView({
     id,
     viewerIsPodAdmin ? "admin" : "member"
   );
+  const card = bounceCard({ consolePage: !!consolePage });
+  const appLink = (
+    <OpenInAppLink
+      type={type}
+      id={id}
+      params={bounceAddressParams(type, resolved.data)}
+    />
+  );
   return (
     <OpenObject
       header={{
         kind: type,
-        title:
-          receipt?.title ?? `This ${noun.toLowerCase()} opens in the Synap app`,
-        summary: bounceSummary(type),
-        status: { kind: "unknown", label: "Opens in app" },
-        primaryAction: (
-          <OpenInAppLink
-            type={type}
-            id={id}
-            params={bounceAddressParams(type, resolved.data)}
-          />
-        ),
-        secondaryActions: consolePage ? (
+        title: receipt?.title ?? noun,
+        summary: card.summary ?? undefined,
+        status: card.status ? { kind: "unknown", label: card.status } : null,
+        primaryAction: consolePage ? (
           <Button
             as={Link}
             href={consolePage.href}
             size="sm"
             radius="md"
-            variant="light"
+            color="primary"
           >
             {consolePage.label}
           </Button>
-        ) : undefined,
+        ) : (
+          appLink
+        ),
+        secondaryActions: card.app === "secondary" ? appLink : undefined,
       }}
       facts={facts.length > 0 ? facts : undefined}
       advanced={
