@@ -444,10 +444,15 @@ describe("global lane", () => {
   it("reports no session and no project for a knowledge_keys row", async () => {
     const { knowledgeKeysRepository } = await import("@synap/database");
     vi.spyOn(knowledgeKeysRepository, "upsert").mockResolvedValue({
+      id: "kk-1",
       key: "k",
     } as never);
 
     const out = await call({ text: "Runbook: rotate the key", global: true });
+
+    // A runbook row has no page: no dead `/open/<id>` link, a read-back hint.
+    expect(out).not.toHaveProperty("link");
+    expect(out.readBack).toEqual(expect.stringContaining("synap_ask"));
 
     expect(out.scope).toEqual({
       workspaceId: null,
