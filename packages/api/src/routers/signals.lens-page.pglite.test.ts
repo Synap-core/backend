@@ -91,6 +91,7 @@ import {
   podMembers,
   projectMembers,
   proposals,
+  proposalSnoozes,
   projects,
   events,
   chatTurns,
@@ -256,6 +257,8 @@ beforeAll(async () => {
     podMembers,
     projectMembers,
     proposals,
+    // "Later" (0381): the needs-you rule reads the reader's own snoozes.
+    proposalSnoozes,
     projects,
     events,
     chatTurns,

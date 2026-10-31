@@ -59,6 +59,8 @@ const NOT_A_DECISION: Record<string, string> = {
   muteRejectionCluster: "the viewer's own inbox preference",
   unmuteRejectionCluster: "the viewer's own inbox preference",
   askAi: "asks a question about a proposal; changes nothing",
+  later: "the caller sets a request aside for themselves; nothing is decided",
+  clearLater: "the caller takes back their own Later",
 };
 
 function procedureSegments(source: string): Map<string, string> {
