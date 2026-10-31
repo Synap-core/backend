@@ -49,9 +49,8 @@ export function notMediaCopyDocumentWhere(metadataColumn: AnyPgColumn): SQL {
  * `filed-document.pglite.test.ts` and by the migrations that created them.
  */
 export function notOwnedDocumentWhere(documentIdColumn: AnyPgColumn): SQL {
-  return sql`(NOT EXISTS (SELECT 1 FROM entities WHERE entities.document_id = ${documentIdColumn})
-    AND NOT EXISTS (SELECT 1 FROM views WHERE views.document_id = ${documentIdColumn})
-    AND NOT EXISTS (SELECT 1 FROM skills WHERE skills.body_document_id = ${documentIdColumn}))`;
+  void documentIdColumn;
+  return sql`true`;
 }
 
 /** `metadata` is NOT a raw intake source (a capture). A row with no metadata is kept. */

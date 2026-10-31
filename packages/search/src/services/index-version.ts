@@ -29,7 +29,6 @@ export const SEARCH_INDEX_VERSIONS: Readonly<Record<string, number>> = {
   // 1: an entity's, view's or skill's body, and an entity's picture, are no
   //    longer indexed as documents (`indexableDocumentWhere`). The reindex
   //    prunes the rows an older indexer wrote.
-  documents: 1,
 };
 
 /** The collections whose stamped version is below `SEARCH_INDEX_VERSIONS`. */
