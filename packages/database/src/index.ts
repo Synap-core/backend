@@ -627,6 +627,7 @@ export {
 
 export {
   appendSessionStageHistory,
+  readSessionStageHistory,
   sessionStageHistoryEntry,
   type SessionStageMove,
 } from "./utils/session-stage-history.js";

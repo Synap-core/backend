@@ -124,6 +124,7 @@ import {
   isNull,
   or,
   drizzleSql,
+  readSessionStageHistory,
 } from "@synap/database";
 import type { SQLWrapper } from "drizzle-orm";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
@@ -564,12 +565,7 @@ export async function listSessionChanges(p: {
   // the state-derived fallback below still covers them.
   let ledgerStageMoves = 0;
   if (p.kinds.has("stage_moved")) {
-    const entries = Array.isArray(session.stageHistory)
-      ? session.stageHistory
-      : [];
-    for (const e of entries) {
-      if (!e || typeof e.stageKey !== "string") continue;
-      if (typeof e.enteredAt !== "string") continue;
+    for (const e of readSessionStageHistory(session.stageHistory)) {
       if (floor && !(e.enteredAt > floor)) continue;
       ledgerStageMoves++;
       cursored.push({
