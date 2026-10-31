@@ -88,6 +88,8 @@ export function statusTransitionPush(
   // Only an entity's move can be a role's (its status lives on the facet).
   const role = subjectType === "entity" ? str(d.role) : null;
   const facetId = subjectType === "entity" ? str(d.facetId) : null;
+  // A role's move without its facet cannot be floored as the role: not sent.
+  if (role && !facetId) return null;
   const type = SUBJECT_OF[subjectType];
   return {
     event: EventNames.STATUS_TRANSITION_COMPLETED,
@@ -124,6 +126,8 @@ export function statusSignalPush(
   const type = SUBJECT_OF[s.subjectType];
   if (!type) return null;
   const role = s.subjectType === "entity" ? (s.role ?? null) : null;
+  // A role's signal without its facet cannot be floored as the role: not sent.
+  if (role && !s.facetId) return null;
   return {
     event: EventNames.STATUS_SIGNAL_RAISED,
     subject: { type, id: s.subjectId, facetId: role ? s.facetId : null },

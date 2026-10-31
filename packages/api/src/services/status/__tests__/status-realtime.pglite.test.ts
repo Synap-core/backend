@@ -443,4 +443,22 @@ describe("on the wire", () => {
     expect(bodies()).toHaveLength(1);
     expect(bodies()[0]!.event).toBe("status:transition:completed");
   });
+
+  it("a role's move or signal that names no facet is sent to nobody", async () => {
+    // Without its facet the role cannot be floored as the role; the thing's
+    // floor (which admits OTHER here) must not stand in for it.
+    await pushStatusTransition(
+      transitionRow("entity", E_SHARED, { role: "client", facetId: null })
+    );
+    await pushStatusSignal({
+      signal: "stuck",
+      subjectType: "entity",
+      subjectId: E_SHARED,
+      facetId: null,
+      role: "client",
+      beganAt: "2026-10-28T00:00:00.000Z",
+      raisedAt: new Date("2026-10-31T09:00:00Z"),
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
