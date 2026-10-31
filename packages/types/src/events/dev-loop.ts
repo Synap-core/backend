@@ -243,6 +243,55 @@ export function devboxJobOf(workflow: unknown): string | null {
     : null;
 }
 
+/**
+ * The checks a PR must pass to land (ruleset 25542891). ONE list; the GitHub
+ * workflow script (scripts/pod-observation.mjs) keeps a copy it cannot import
+ * and its tripwire pins the two equal.
+ */
+export const REQUIRED_CHECK_NAMES = [
+  "Release gate",
+  "Full suite",
+  "API e2e",
+  "Reference docs are current",
+] as const;
+
+/**
+ * The verdict of the PR head's REQUIRED checks, computed by the producer from
+ * the head's check runs (finding 1bff8284: "passed" was read off one workflow's
+ * conclusion, so a Depends-On success and a half-run CI both read as green).
+ * `green` only when every required check is success; `pending` while any is
+ * queued, running or not yet reported; `red` with the failing names; `no_ci`
+ * when the PR conflicts with main or its required checks never started.
+ */
+export const REQUIRED_CHECKS_VERDICTS = [
+  "green",
+  "pending",
+  "red",
+  "no_ci",
+] as const;
+export type RequiredChecksVerdict = (typeof REQUIRED_CHECKS_VERDICTS)[number];
+
+export const requiredChecksSchema = z.object({
+  verdict: z.enum(REQUIRED_CHECKS_VERDICTS),
+  /** The required checks that failed (verdict `red`). */
+  failing: z.array(z.string().min(1).max(256)).max(20).optional(),
+  /** The required checks still queued, running or unreported (verdict `pending`). */
+  pending: z.array(z.string().min(1).max(256)).max(20).optional(),
+});
+export type RequiredChecks = z.infer<typeof requiredChecksSchema>;
+
+/**
+ * Does a `ci.finished` of this workflow count as "the PR's checks finished"?
+ * Only the CI workflow and a devbox gate job do. Any other workflow
+ * (Depends-On, merge bot, pod observations) is not CI: its success must never
+ * wake an agent with "checks passed" (#584: Depends-On green, CI never ran).
+ * A fact with no workflow name is kept: nothing says it is not CI.
+ */
+export function ciRunCountsAsChecks(workflow: unknown): boolean {
+  if (typeof workflow !== "string") return true;
+  return workflow === "CI" || devboxJobOf(workflow) !== null;
+}
+
 /** `ci.finished` — a CI run ended; `status` says how. */
 export const ciFinishedEventSchema = z.object({
   status: z.enum(CI_FINISHED_STATUSES),
@@ -252,6 +301,11 @@ export const ciFinishedEventSchema = z.object({
   pr: z.number().int().positive().optional(),
   url: z.string().url().optional(),
   workflow: z.string().min(1).max(256).optional(),
+  /**
+   * The PR head's required-checks verdict, for a run tied to a PR. Absent =
+   * the producer did not compute it: a reader must not say "passed" for it.
+   */
+  requiredChecks: requiredChecksSchema.optional(),
 });
 export type CiFinishedEvent = z.infer<typeof ciFinishedEventSchema>;
 
@@ -262,6 +316,7 @@ export type CiFinishedEvent = z.infer<typeof ciFinishedEventSchema>;
  */
 export const ciStartedEventSchema = ciFinishedEventSchema.omit({
   status: true,
+  requiredChecks: true,
 });
 export type CiStartedEvent = z.infer<typeof ciStartedEventSchema>;
 
