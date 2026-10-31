@@ -30,12 +30,26 @@ describe("grantState", () => {
     expect(grantState(grant(), NOW)).toBe("active");
   });
   it("names why a grant ended", () => {
-    expect(grantState(grant({ revokedAt: "2026-10-01T00:00:00Z", active: false }), NOW)).toBe("revoked");
-    expect(grantState(grant({ usesRemaining: 0, active: false }), NOW)).toBe("exhausted");
-    expect(grantState(grant({ expiresAt: "2026-10-30T00:00:00Z", active: false }), NOW)).toBe("expired");
+    expect(
+      grantState(
+        grant({ revokedAt: "2026-10-01T00:00:00Z", active: false }),
+        NOW
+      )
+    ).toBe("revoked");
+    expect(grantState(grant({ usesRemaining: 0, active: false }), NOW)).toBe(
+      "exhausted"
+    );
+    expect(
+      grantState(
+        grant({ expiresAt: "2026-10-30T00:00:00Z", active: false }),
+        NOW
+      )
+    ).toBe("expired");
   });
   it("an expiry in the past ends a grant the flag still calls active", () => {
-    expect(grantState(grant({ expiresAt: "2026-10-30T00:00:00Z" }), NOW)).toBe("expired");
+    expect(grantState(grant({ expiresAt: "2026-10-30T00:00:00Z" }), NOW)).toBe(
+      "expired"
+    );
   });
 });
 
@@ -69,11 +83,22 @@ describe("secretStatus", () => {
   });
   it("counts live grants only", () => {
     const s = secretStatus(
-      { grants: [grant(), grant({ grantId: "x", revokedAt: "2026-10-01T00:00:00Z", active: false })] },
+      {
+        grants: [
+          grant(),
+          grant({
+            grantId: "x",
+            revokedAt: "2026-10-01T00:00:00Z",
+            active: false,
+          }),
+        ],
+      },
       false,
       t
     );
-    expect(s.sentence).toBe("1 grant lets an agent or a space use this secret.");
+    expect(s.sentence).toBe(
+      "1 grant lets an agent or a space use this secret."
+    );
     expect(secretStatus(none, false, t).label).toBe("Only you");
   });
 });
@@ -96,7 +121,11 @@ describe("usageTarget", () => {
     consumerLabel: "X",
   });
   it("links the kinds the console hosts and only those", () => {
-    expect(usageTarget(usage("automation"))).toEqual({ kind: "object", objectKind: "automation", id: "c1" });
+    expect(usageTarget(usage("automation"))).toEqual({
+      kind: "object",
+      objectKind: "automation",
+      id: "c1",
+    });
     expect(usageTarget(usage("capability"))?.kind).toBe("object");
     expect(usageTarget(usage("connection"))).toBeNull();
     expect(usageTarget(usage("url"))).toBeNull();
@@ -106,10 +135,28 @@ describe("usageTarget", () => {
 describe("activityLine", () => {
   it("says what happened and who did it, marking an agent", () => {
     expect(
-      activityLine({ id: "e", action: "revealed", actorType: "agent", actorLabel: "Scout", createdAt: "2026-10-31T00:00:00Z" }, t)
+      activityLine(
+        {
+          id: "e",
+          action: "revealed",
+          actorType: "agent",
+          actorLabel: "Scout",
+          createdAt: "2026-10-31T00:00:00Z",
+        },
+        t
+      )
     ).toBe("Revealed by Scout (agent)");
     expect(
-      activityLine({ id: "e", action: "created", actorType: "user", actorLabel: "Lea", createdAt: "2026-10-31T00:00:00Z" }, t)
+      activityLine(
+        {
+          id: "e",
+          action: "created",
+          actorType: "user",
+          actorLabel: "Lea",
+          createdAt: "2026-10-31T00:00:00Z",
+        },
+        t
+      )
     ).toBe("Created by Lea");
   });
 });

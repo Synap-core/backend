@@ -113,7 +113,12 @@ export function SecretObject({
       fail &&
       (code === "NOT_FOUND" || code === "FORBIDDEN" || code === "UNAUTHORIZED")
     ) {
-      return frame.failure({ kind: "secret", id, failure: fail, openIn: false });
+      return frame.failure({
+        kind: "secret",
+        id,
+        failure: fail,
+        openIn: false,
+      });
     }
     // A read that FAILED, not an empty secret: say so, keep the retry.
     const failed = couldNotLoad("Secret", { inApp: false });
@@ -145,11 +150,12 @@ export function SecretObject({
     ? data.recentActivity
     : data.recentActivity.slice(0, ACTIVITY_CAP);
 
-  const lastUsed = !list.isSuccess || !row
-    ? t("fact.lastUsed.unknown")
-    : row.lastAccessedAt
-      ? formatRelative(row.lastAccessedAt)
-      : t("fact.lastUsed.never");
+  const lastUsed =
+    !list.isSuccess || !row
+      ? t("fact.lastUsed.unknown")
+      : row.lastAccessedAt
+        ? formatRelative(row.lastAccessedAt)
+        : t("fact.lastUsed.never");
 
   // Named first: the exit-door tripwire reads `isPending: <proc>.` as a stub.
   const markIsPending = markCompromised.isPending;
@@ -283,7 +289,11 @@ export function SecretObject({
               ) : (
                 <div className="-mx-2 divide-y divide-foreground/[0.05]">
                   {active.map((g) => (
-                    <GrantRow key={g.grantId} grant={g} onRevoke={setRevoking} />
+                    <GrantRow
+                      key={g.grantId}
+                      grant={g}
+                      onRevoke={setRevoking}
+                    />
                   ))}
                 </div>
               )}

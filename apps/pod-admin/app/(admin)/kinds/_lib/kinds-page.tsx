@@ -236,9 +236,7 @@ function KindRowView({ row }: { row: KindRow }) {
           )
         }
       />
-      <div className="px-3 pb-2 text-[12px] empty:hidden">
-        {appOpen.offer}
-      </div>
+      <div className="px-3 pb-2 text-[12px] empty:hidden">{appOpen.offer}</div>
     </div>
   );
 }

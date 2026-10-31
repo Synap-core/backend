@@ -26,8 +26,7 @@ export const en = {
     "You marked this secret as compromised. Rotate it at the service it belongs to; grants below still work until you revoke them.",
   "summary.shared":
     "{n, plural, one {# grant lets} other {# grants let}} an agent or a space use this secret.",
-  "summary.private":
-    "Nobody but you can use it: it has no active grant.",
+  "summary.private": "Nobody but you can use it: it has no active grant.",
   "summary.unknown":
     "Whether this secret is marked compromised couldn’t be read.",
   "noun.fallback": "Secret",
@@ -39,8 +38,7 @@ export const en = {
   "grants.detail.expires": "expires {when}",
   "grants.detail.expired": "expired {when}",
   "grants.detail.revoked": "revoked {when}",
-  "grants.detail.usesLeft":
-    "{n, plural, one {# use left} other {# uses left}}",
+  "grants.detail.usesLeft": "{n, plural, one {# use left} other {# uses left}}",
   "grants.status.active": "Active",
   "grants.status.expired": "Expired",
   "grants.status.revoked": "Revoked",
@@ -61,8 +59,7 @@ export const en = {
   "activity.empty": "No activity recorded yet.",
   "activity.row": "{action} by {who}",
   "activity.agent": "{who} (agent)",
-  "activity.more":
-    "Show all {n}",
+  "activity.more": "Show all {n}",
   "activity.less": "Show fewer",
   "fact.lastUsed": "Last used",
   "fact.lastUsed.never": "Never used",
@@ -74,8 +71,7 @@ export const en = {
   "fact.id": "Secret ID",
   "settings.link": "Open Settings → Vault",
   "danger.compromised.label": "Mark as compromised",
-  "danger.compromised.description":
-    "When you think this secret has leaked.",
+  "danger.compromised.description": "When you think this secret has leaked.",
   "danger.compromised.consequence":
     "The secret is flagged as compromised everywhere you see it. It does not change the password or key at the service, and it does not revoke grants: rotate it there, and revoke grants above.",
   "danger.compromised.confirm": "Mark as compromised",

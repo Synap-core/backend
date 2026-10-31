@@ -64,9 +64,9 @@ describe("lastTestLine", () => {
   });
   it("passed and failed, with the stored reason", () => {
     const base = { ...ROW, lastTestedAt: "2026-10-31T00:00:00Z" };
-    expect(
-      lastTestLine({ ...base, lastTestStatus: "ok" }, "2 h ago", t)
-    ).toBe("Passed 2 h ago");
+    expect(lastTestLine({ ...base, lastTestStatus: "ok" }, "2 h ago", t)).toBe(
+      "Passed 2 h ago"
+    );
     expect(
       lastTestLine(
         { ...base, lastTestStatus: "error", lastTestError: "timeout" },
@@ -81,7 +81,10 @@ describe("scopeLabel", () => {
   it("pod-wide, or one space by short id", () => {
     expect(scopeLabel(ROW, t)).toBe("Pod-level");
     expect(
-      scopeLabel({ ...ROW, workspaceId: "808939d1-86b3-4c52-a153-ae06ece2c54e" }, t)
+      scopeLabel(
+        { ...ROW, workspaceId: "808939d1-86b3-4c52-a153-ae06ece2c54e" },
+        t
+      )
     ).toBe("Space 808939d1");
   });
 });

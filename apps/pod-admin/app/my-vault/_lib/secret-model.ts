@@ -119,9 +119,7 @@ const USAGE_OBJECT_KIND: Partial<Record<SecretUsage["consumerType"], string>> =
 
 export function usageTarget(u: SecretUsage): ExitTarget | null {
   const objectKind = USAGE_OBJECT_KIND[u.consumerType];
-  return objectKind
-    ? { kind: "object", objectKind, id: u.consumerId }
-    : null;
+  return objectKind ? { kind: "object", objectKind, id: u.consumerId } : null;
 }
 
 /** An audit row as one line: the act, and who did it (an agent says so). */
