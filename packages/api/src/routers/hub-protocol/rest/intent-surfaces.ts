@@ -209,7 +209,7 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
     tags: ["Lifecycle"],
     summary: "The declared lifecycle of a kind or role",
     description:
-      "The stages a kind or role declares (`lifecycle.get`): the status `property` and its `options` in declared order, each with `key`, `label`, `category`, `tone` and `humanOnly`. Declared data, no rows. A key bounded by a grant must name `workspaceId` and hold `entity.<profileSlug>.read` (`facet.read` for a role) there (403 otherwise).",
+      "The stages a kind or role declares (`lifecycle.get`): the status `property` and its `options` in declared order, each with `key`, `label`, `category`, `tone` and `humanOnly`, and the `initialStatus` a new one starts in (null = none set). Declared data, no rows. A key bounded by a grant must name `workspaceId` and hold `entity.<profileSlug>.read` (`facet.read` for a role) there (403 otherwise).",
     request: { query: declaredQuery },
     responses: {
       200: { description: "Lifecycle", schema: z.object({}).passthrough() },

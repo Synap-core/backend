@@ -39343,6 +39343,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				doneWindowed: number;
 				hasWorker: boolean;
 				lifecycle: {
+					initialStatus: string | null;
 					options: {
 						category: "active" | "done" | "lost" | "open" | "paused";
 						dateBinding?: string | undefined;
@@ -39380,6 +39381,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				initialStatus: string | null;
 				options: {
 					category: "active" | "done" | "lost" | "open" | "paused";
 					dateBinding?: string | undefined;

@@ -68,10 +68,13 @@ export function nearestLifecycleLink<
   return undefined;
 }
 
-/** A lifecycle def's options, read through the one mapper. PURE. */
+/**
+ * A lifecycle def's options, read through the one mapper, and the declaring
+ * link's initial status (`default_value`). PURE.
+ */
 function effectiveLifecycleOf(
   def: PropertyDef,
-  declaredOnProfileId: string
+  link: { profileId: string; defaultValue: unknown }
 ): EffectiveLifecycle {
   const stored =
     readStoredEnumOptions({
@@ -83,11 +86,13 @@ function effectiveLifecycleOf(
   return {
     propertySlug: def.slug,
     propertyDefId: def.id,
-    declaredOnProfileId,
+    declaredOnProfileId: link.profileId,
     options: categorized.length ? options : [],
     unclassified: stored
       .filter((o) => !isLifecycleCategory(o.category))
       .map((o) => o.key),
+    initialStatus:
+      typeof link.defaultValue === "string" ? link.defaultValue : null,
   };
 }
 
@@ -904,6 +909,7 @@ export class ProfileResolutionService {
         profileId: profileProperties.profileId,
         propertyDefId: profileProperties.propertyDefId,
         isLifecycle: profileProperties.isLifecycle,
+        defaultValue: profileProperties.defaultValue,
       })
       .from(profileProperties)
       .where(
@@ -924,7 +930,7 @@ export class ProfileResolutionService {
       .where(eq(propertyDefs.id, link.propertyDefId))
       .limit(1);
     if (!def) return null;
-    return effectiveLifecycleOf(def, link.profileId);
+    return effectiveLifecycleOf(def, link);
   }
 
   /**
@@ -959,6 +965,7 @@ export class ProfileResolutionService {
         profileId: profileProperties.profileId,
         propertyDefId: profileProperties.propertyDefId,
         isLifecycle: profileProperties.isLifecycle,
+        defaultValue: profileProperties.defaultValue,
       })
       .from(profileProperties)
       .where(
@@ -980,8 +987,7 @@ export class ProfileResolutionService {
     for (const [profileId, hierarchy] of hierarchies) {
       const link = nearestLifecycleLink(hierarchy, links);
       const def = link ? defById.get(link.propertyDefId) : undefined;
-      if (link && def)
-        out.set(profileId, effectiveLifecycleOf(def, link.profileId));
+      if (link && def) out.set(profileId, effectiveLifecycleOf(def, link));
     }
     return out;
   }
