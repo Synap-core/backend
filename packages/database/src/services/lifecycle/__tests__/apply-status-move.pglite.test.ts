@@ -32,7 +32,9 @@ async function kind(
   slug: string,
   propSlug: string,
   options: unknown[],
-  role = false
+  role = false,
+  /** Other properties the profile carries (a step wait's `refFrom`). */
+  extra: string[] = []
 ) {
   const [p] = await db
     .insert(schema.profiles)
@@ -50,6 +52,15 @@ async function kind(
   await db
     .insert(schema.profileProperties)
     .values({ profileId: p.id, propertyDefId: d.id });
+  for (const slug of extra) {
+    const [x] = await db
+      .insert(schema.propertyDefs)
+      .values({ slug, valueType: "string", profileId: p.id })
+      .returning();
+    await db
+      .insert(schema.profileProperties)
+      .values({ profileId: p.id, propertyDefId: x.id });
+  }
   await declareLifecycle(db, { profileId: p.id, propertySlug: propSlug });
   return p.id as string;
 }
@@ -256,16 +267,26 @@ describe("applyStatusMove", () => {
  */
 describe("applyStatusMove — the step wait", () => {
   it("stamps the target step's declared wait, and none for a step without one", async () => {
-    const quote = await kind("quote", "quoteStage", [
-      { key: "draft", category: "open" },
-      {
-        key: "sent",
-        category: "active",
-        waits: { on: "person", waitKind: "their_reply", refFrom: "contactId" },
-      },
-      { key: "chasing", category: "active", waits: { on: "external" } },
-      { key: "accepted", category: "done" },
-    ]);
+    const quote = await kind(
+      "quote",
+      "quoteStage",
+      [
+        { key: "draft", category: "open" },
+        {
+          key: "sent",
+          category: "active",
+          waits: {
+            on: "person",
+            waitKind: "their_reply",
+            refFrom: "contactId",
+          },
+        },
+        { key: "chasing", category: "active", waits: { on: "external" } },
+        { key: "accepted", category: "done" },
+      ],
+      false,
+      ["contactId"]
+    );
     const [e] = await db
       .insert(schema.entities)
       .values({
@@ -339,7 +360,8 @@ describe("applyStatusMove — the step wait", () => {
           waits: { on: "person", refFrom: "ownerId" },
         },
       ],
-      true
+      true,
+      ["ownerId"]
     );
     const [e] = await db
       .insert(schema.entities)
