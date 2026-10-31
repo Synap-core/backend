@@ -108,6 +108,31 @@ describe("registry needsYou roles in the union", () => {
     expect(r.notifications).toBe(0);
   });
 
+  it("a session's pointer alerts count once and list as its own row", () => {
+    // Open question, no owed slot: both pointers stand for that one need.
+    // Folded per type, the session counted twice and kept a "Needs your
+    // call" row about a criterion already graded beside its own row.
+    const needsYou = row("session.needs_you");
+    const escalated = {
+      ...row("session.criterion_escalated"),
+      createdAt: new Date("2026-09-25T11:00:00Z"),
+    };
+    const open = new Set([S]);
+    expect(count([needsYou, escalated], open)).toBe(1);
+    const listed = unionNeedsYou({
+      clusters: [],
+      notifications: [escalated, needsYou],
+      owedSlots: [],
+      openQuestionSessionIds: open,
+    });
+    expect(listed.map((s) => s.notificationType)).toEqual([
+      "session.needs_you",
+    ]);
+    // Another session's pointer stays its own row.
+    const other = { ...row("session.needs_you", "b"), id: "n-b" };
+    expect(count([needsYou, escalated, other], new Set([S, "b"]))).toBe(2);
+  });
+
   it("an UNMEASURED question read keeps a pointer row counting, never hides it", () => {
     expect(count([row("session.needs_you")])).toBe(1);
     expect(count([row("session.needs_you")], new Set())).toBe(0);

@@ -911,6 +911,12 @@ export function signalFromNotification(
  * one type with the SAME rendered title say the same thing (needs-you
  * duplicate cause 2 — "Weekly digest ready" raised five times was five
  * rows). Two targetless rows whose titles differ stay apart: different news.
+ *
+ * Every `"session-pointer"` row of ONE session folds into one row, whatever
+ * its type: each points at the same live need (the session's open question,
+ * once no owed slot absorbs it), so the session counts once, as the registry
+ * role promises. Folded per type, a session with an open question also showed
+ * a "Needs your call" row about a criterion already graded.
  */
 export function foldNotifications(
   rows: readonly NotificationSignalInput[]
@@ -920,22 +926,45 @@ export function foldNotifications(
     { row: NotificationSignalInput; repeatCount: number }
   >();
   for (const r of rows) {
-    // A type whose registry `foldBy` is "groupKey" folds on the producer's
+    // A session's pointer rows fold on the session, whatever their type. A
+    // type whose registry `foldBy` is "groupKey" folds on the producer's
     // collapse key: one agent failing on nine runs is ONE row ×9.
     const key =
-      r.groupKey && needsYouFoldBy(r.type) === "groupKey"
-        ? `group\u0000${r.type}\u0000${r.groupKey}`
-        : r.sourceId
-          ? `${r.type ?? ""}\u0000${r.sourceType}\u0000${r.sourceId}`
-          : `untargeted\u0000${r.type ?? ""}\u0000${r.sourceType}\u0000${r.title}`;
+      r.sourceId && needsYouRole(r.type) === "session-pointer"
+        ? `pointer\u0000${r.sourceType}\u0000${r.sourceId}`
+        : r.groupKey && needsYouFoldBy(r.type) === "groupKey"
+          ? `group\u0000${r.type}\u0000${r.groupKey}`
+          : r.sourceId
+            ? `${r.type ?? ""}\u0000${r.sourceType}\u0000${r.sourceId}`
+            : `untargeted\u0000${r.type ?? ""}\u0000${r.sourceType}\u0000${r.title}`;
     const seen = folds.get(key);
     if (!seen) folds.set(key, { row: r, repeatCount: 1 });
     else {
       seen.repeatCount += 1;
-      if (r.createdAt.getTime() > seen.row.createdAt.getTime()) seen.row = r;
+      if (standsForFold(r, seen.row)) seen.row = r;
     }
   }
   return [...folds.values()];
+}
+
+/** The pointer type that names the session's need itself ("Needs you: …"). */
+const SESSION_NEEDS_YOU_TYPE = "session.needs_you";
+
+/**
+ * Whether `r` replaces `current` as the row a fold shows: the newest, except
+ * that a session's own `session.needs_you` row stands for its pointer fold.
+ * A pointer row still counting means the session has an open question and no
+ * owed slot, so a narrower pointer ("Needs your call: … mark it pass or fail")
+ * names a slot that is already met; the session's row names the live need.
+ */
+function standsForFold(
+  r: NotificationSignalInput,
+  current: NotificationSignalInput
+): boolean {
+  const lead = (x: NotificationSignalInput) =>
+    x.type === SESSION_NEEDS_YOU_TYPE ? 1 : 0;
+  if (lead(r) !== lead(current)) return lead(r) > lead(current);
+  return r.createdAt.getTime() > current.createdAt.getTime();
 }
 
 /**
@@ -1801,9 +1830,10 @@ export function owedSessionIdsOf(
  *     `system.issuer_pending_approval` announces the pending issuer the
  *     access-request half reads from its table, so the notification stays in
  *     the bell and the TABLE row is the ask (one item, one row);
- *   - its type is a `"session-pointer"` (`session.needs_you`) and the session
- *     has an owed slot. The slot row IS that need, so the pointer folds into
- *     it: one entry per session, counted once;
+ *   - its type is a `"session-pointer"` (`session.needs_you`,
+ *     `session.criterion_escalated`) and the session has an owed slot. The
+ *     slot row IS that need, so the pointer folds into it: one entry per
+ *     session, counted once;
  *   - its type is a `"session-pointer"` and the session has neither an owed
  *     slot nor an open question. Whatever it announced was met, so a row the
  *     person never opened must not keep the session in needs-you;
@@ -1812,7 +1842,8 @@ export function owedSessionIdsOf(
  *     `fromSystem` bucket, drawn and counted in the rule's `from_system` fold.
  *
  * A pointer row whose session has no owed slot but an open question stays, and
- * counts once. The question has no row of its own in the union.
+ * counts once: {@link foldNotifications} folds every pointer row of one session
+ * into one. The question has no row of its own in the union.
  *
  * WHY STATE, NOT MARK-READ. The row does not persist WHY it was written (a slot
  * or a question; the registry's six-hour window merges both into one row), and
