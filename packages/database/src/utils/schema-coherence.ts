@@ -511,6 +511,18 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "tool_groups",
     addedBy: "0280_api_keys_tool_profile.sql",
   },
+  // Served-by-a-runner stamp (0385): the presence read selects it for every
+  // agent roster, so without it agent lists 500.
+  {
+    table: "api_keys",
+    column: "worker_served_at",
+    addedBy: "0385_api_keys_worker_served.sql",
+  },
+  {
+    table: "api_keys",
+    column: "worker_served_version",
+    addedBy: "0385_api_keys_worker_served.sql",
+  },
 
   // api_key_external_users — sub-token mappings (0018)
   {

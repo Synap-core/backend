@@ -23787,6 +23787,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reach: "dispatch" | "pod" | "pull";
 				revokedKeys: number;
 				role: string | null;
+				servedAt: string | null;
 				viewerCanDisconnect: boolean;
 			}[];
 		}>;

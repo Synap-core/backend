@@ -9,6 +9,11 @@
  * surfaces list: an agent's `lastSeenAt` is its most recent key use, and
  * `host` is the instance label of the key it was last seen on.
  *
+ * `servedAt` is the narrower fact: the newest call on any of the agent's keys
+ * that a process RUNNING it made (`api_keys.worker_served_at`, stamped from
+ * the `X-Synap-Runner` header, `services/worker-served.ts`). A key use is not
+ * that: an interactive conversation on the same identity takes no handed work.
+ *
  * Callers pass ids they already floored (the list doors); this adds no rows.
  * A failed read throws — "never seen" and "could not tell" are different facts.
  */
@@ -25,6 +30,11 @@ export interface AgentPresence {
    * 0325 — "devbox"); `null` when it was never seen or an older CLI sent none.
    */
   hostLabel: string | null;
+  /**
+   * ISO — the newest call a process RUNNING the agent made on any of its keys
+   * (0385); `null` = no runner ever said so: not measured, never "not running".
+   */
+  servedAt: string | null;
   /** Live keys (active, not revoked, not expired) — 0 means the agent cannot connect. */
   activeKeys: number;
   /** Keys minted and still awaiting the person's approval (inactive, not revoked, not expired). */
@@ -46,6 +56,7 @@ export const NEVER_SEEN: Readonly<AgentPresence> = {
   lastSeenAt: null,
   host: null,
   hostLabel: null,
+  servedAt: null,
   activeKeys: 0,
   pendingKeys: 0,
   revokedKeys: 0,
@@ -66,6 +77,7 @@ export async function loadAgentPresence(
       id: apiKeys.id,
       userId: apiKeys.userId,
       lastUsedAt: apiKeys.lastUsedAt,
+      workerServedAt: apiKeys.workerServedAt,
       instanceId: apiKeys.instanceId,
       instanceLabel: apiKeys.instanceLabel,
       isActive: apiKeys.isActive,
@@ -85,6 +97,10 @@ export async function loadAgentPresence(
         cur.host = r.instanceId ?? null;
         cur.hostLabel = r.instanceLabel?.trim() || null;
       }
+    }
+    if (r.workerServedAt) {
+      const at = r.workerServedAt.toISOString();
+      if (!cur.servedAt || at > cur.servedAt) cur.servedAt = at;
     }
     // An expired key cannot authenticate: it is neither live nor approvable.
     const expired = r.expiresAt !== null && r.expiresAt <= now;
