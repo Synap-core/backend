@@ -480,6 +480,9 @@ describe("the conversation change feed", () => {
       job: null,
       workflow: "CI",
       url: null,
+      // A fact posted without a verdict (the producer computed none): null,
+      // never a guessed "green" (finding 1bff8284).
+      requiredChecks: null,
     });
     expect(res.events![1]!.checks).toMatchObject({
       job: "dev-feed-h",
