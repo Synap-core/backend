@@ -1190,7 +1190,6 @@ export async function createFocusSession(
           metadata: drizzleSql`(coalesce(${focusSessions.metadata}, '{}'::jsonb) - 'kind' - 'autoOpened') || ${JSON.stringify(
             {
               clientKey,
-              ...startedByAgentPatch(agentUserId),
               adoptedAt: new Date().toISOString(),
               ...(params.governance ? { governance: params.governance } : {}),
               // What this run was actually given — same key, same meaning as
