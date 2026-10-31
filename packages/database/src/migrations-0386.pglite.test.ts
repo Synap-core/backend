@@ -200,6 +200,7 @@ describe("wait episodes — the writer and the reader", () => {
   });
 
   it("the cap is per subject and keeps each one's NEWEST episodes", async () => {
+    const db = drizzle(pg) as never;
     await pg.exec(`DELETE FROM status_wait_episode`);
     const ep = (subject: string, h: number, closed: boolean, key: string) =>
       pg.query(
