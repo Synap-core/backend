@@ -102,3 +102,65 @@ export function sessionOwesHumanWhere(sessionId: AnyPgColumn | SQL): SQL {
       AND ${openOwingSessionSql("owing")}
   )`;
 }
+
+// ─── A session whose only open work is a pull request (plan d679e92c C6) ────
+
+/**
+ * An OUTSTANDING slot (`isDeliverableOutstanding`, `@synap-core/types/units`):
+ * not done, not retired, not optional — whoever owns it. THE owed clauses
+ * minus the owner, so the two can never spell "outstanding" differently.
+ */
+const OUTSTANDING_SLOT_SQL = drizzleSql.raw(
+  OWED_SLOT_CLAUSES.filter((c) => !c.includes("'owner'")).join("\n      AND ")
+);
+
+/**
+ * A pull request outcome as `rules/work-units` records it: `kind:
+ * 'pull_request'` and a `ref.url` that names a GitHub pull request. The url
+ * is what the hold resumes on (`pr:<owner/name>#<n>`), so a slot without one
+ * is ordinary work.
+ */
+export const PULL_REQUEST_URL_PATTERN =
+  "^https://github\\.com/[^/]+/[^/]+/pull/[0-9]+";
+
+/** SQL: the given `expected_outputs` value holds at least one outstanding slot. */
+export function outstandingSlotExistsIn(
+  expectedOutputs: AnyPgColumn | SQL
+): SQL {
+  return drizzleSql`EXISTS (
+    SELECT 1 FROM jsonb_array_elements(
+      CASE WHEN jsonb_typeof(${expectedOutputs}) = 'array'
+           THEN ${expectedOutputs}
+           ELSE '[]'::jsonb END
+    ) AS slot
+    WHERE ${OUTSTANDING_SLOT_SQL}
+  )`;
+}
+
+const PULL_REQUEST_SLOT_SQL = drizzleSql.raw(
+  `slot->>'kind' = 'pull_request' AND (slot->'ref'->>'url') ~ '${PULL_REQUEST_URL_PATTERN}'`
+);
+
+/**
+ * SQL: this session's ONLY outstanding outcomes are pull requests — at least
+ * one is outstanding, and every outstanding one is a pull request. Such a
+ * session is not abandoned: it waits on a merge. The focus-session reaper
+ * holds it ("waiting on merge") instead of marking it stale.
+ */
+export function onlyOpenPullRequestsWhere(
+  expectedOutputs: AnyPgColumn | SQL = focusSessions.expectedOutputs
+): SQL {
+  const slots = drizzleSql`jsonb_array_elements(
+      CASE WHEN jsonb_typeof(${expectedOutputs}) = 'array'
+           THEN ${expectedOutputs}
+           ELSE '[]'::jsonb END
+    ) AS slot`;
+  return drizzleSql`(EXISTS (
+    SELECT 1 FROM ${slots}
+    WHERE ${OUTSTANDING_SLOT_SQL}
+  ) AND NOT EXISTS (
+    SELECT 1 FROM ${slots}
+    WHERE ${OUTSTANDING_SLOT_SQL}
+      AND NOT (${PULL_REQUEST_SLOT_SQL})
+  ))`;
+}
