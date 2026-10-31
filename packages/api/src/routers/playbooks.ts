@@ -129,6 +129,7 @@ import {
 import {
   runPlaybook,
   resolveRunHandOff,
+  handedToLine,
 } from "../services/playbooks/run-playbook.js";
 import { resolvePlaybookRunWriteWorkspace } from "../services/playbooks/resolve-playbook-name.js";
 import { computePlaybookScorecard } from "@synap/jobs/utils/playbook-scorecard.js";
@@ -2948,36 +2949,39 @@ export const playbooksRouter = router({
       // `try`/`let` pair so this stays the ONE assigned runPlaybook call in
       // this file, which `severed-approval-doors.test.ts` (6b) anchors on (and
       // counts) when it proves this door passes no `idempotentBySubject`.
-      const { run, session, parentLink, skipped, held } = await runPlaybook({
-        playbookId: input.playbookId,
-        workspaceId: runWorkspaceId,
-        userId: ctx.userId,
-        params: input.params,
-        agentIds: input.agentIds,
-        agentUserId: input.agentUserId,
-        subjectId,
-        ...(input.parentSessionId
-          ? { parentSessionId: input.parentSessionId }
-          : {}),
-        ...(filedProjectId ? { projectId: filedProjectId } : {}),
-        ...(input.trackId ? { trackId: input.trackId } : {}),
-        ...(input.trackId && input.trackStage
-          ? { trackStage: input.trackStage }
-          : {}),
-        ...(input.onMissingRequired
-          ? { onMissingRequired: input.onMissingRequired }
-          : {}),
-        ...(input.goalOverride
-          ? { goalTemplateOverride: input.goalOverride }
-          : {}),
-        ...(input.agentType ? { agentType: input.agentType } : {}),
-        ...(input.handToAgentId ? { handToAgentId: input.handToAgentId } : {}),
-      }).catch((err: unknown) => {
-        if (err instanceof PlaybookParamsError) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
-        }
-        throw err;
-      });
+      const { run, session, parentLink, skipped, held, handedTo } =
+        await runPlaybook({
+          playbookId: input.playbookId,
+          workspaceId: runWorkspaceId,
+          userId: ctx.userId,
+          params: input.params,
+          agentIds: input.agentIds,
+          agentUserId: input.agentUserId,
+          subjectId,
+          ...(input.parentSessionId
+            ? { parentSessionId: input.parentSessionId }
+            : {}),
+          ...(filedProjectId ? { projectId: filedProjectId } : {}),
+          ...(input.trackId ? { trackId: input.trackId } : {}),
+          ...(input.trackId && input.trackStage
+            ? { trackStage: input.trackStage }
+            : {}),
+          ...(input.onMissingRequired
+            ? { onMissingRequired: input.onMissingRequired }
+            : {}),
+          ...(input.goalOverride
+            ? { goalTemplateOverride: input.goalOverride }
+            : {}),
+          ...(input.agentType ? { agentType: input.agentType } : {}),
+          ...(input.handToAgentId
+            ? { handToAgentId: input.handToAgentId }
+            : {}),
+        }).catch((err: unknown) => {
+          if (err instanceof PlaybookParamsError) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+          }
+          throw err;
+        });
 
       if (skipped !== undefined || session === null) {
         return {
@@ -3001,9 +3005,11 @@ export const playbooksRouter = router({
           session,
           status: "draft" as const,
           message:
-            "Playbook run created as a draft. It belongs to the person and does not start until they accept it in their sessions.",
+            "Playbook run created as a draft. It belongs to the person and does not start until they accept it in their sessions." +
+            handedToLine(handedTo),
           proposalId: null as string | null,
           ...(parentLink ? { parentLink } : {}),
+          ...(handedTo ? { handedTo } : {}),
         };
       }
 
@@ -3011,9 +3017,10 @@ export const playbooksRouter = router({
         run,
         session,
         status: "running" as const,
-        message: "Playbook run started",
+        message: "Playbook run started" + handedToLine(handedTo),
         proposalId: null as string | null,
         ...(parentLink ? { parentLink } : {}),
+        ...(handedTo ? { handedTo } : {}),
       };
     }),
 
