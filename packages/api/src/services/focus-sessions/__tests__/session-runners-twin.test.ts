@@ -14,6 +14,8 @@ const run = (over: Partial<SessionRunner>): SessionRunner => ({
   firstSeenAt: "2026-10-28T10:00:00.000Z",
   lastSeenAt: "2026-10-28T10:00:00.000Z",
   live: true,
+  state: null,
+  stateSince: null,
   conversation: null,
   ...over,
 });

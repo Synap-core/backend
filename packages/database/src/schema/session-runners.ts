@@ -16,6 +16,10 @@
  * the session channel on every write there, which would wake the very wait
  * that stamped it — a loop.
  *
+ * Since 0384 a row also carries what the runner SAYS it is doing (`state`:
+ * busy / idle / needs_permission / ended), reported by any harness adapter on
+ * any key-auth call (`X-Synap-Runner-State`).
+ *
  * Read floor = the session's (`sessionRunnerReadableWhere`,
  * `access/registry.ts`). `user_id` is the session owner, copied as the
  * visibility floor like `session_evaluations.user_id`.
@@ -75,6 +79,22 @@ export const sessionRunners = pgTable(
       mode: "date",
       withTimezone: true,
     }),
+    /**
+     * What the runner last said it is doing (0384): `busy`, `idle`,
+     * `needs_permission` or `ended` (`RUNNER_STATES`, `X-Synap-Runner-State`).
+     * NULL for a client that names none.
+     */
+    state: text("state"),
+    /** When the runner entered {@link state}. */
+    stateSince: timestamp("state_since", { mode: "date", withTimezone: true }),
+    /**
+     * When the pod heard the newest state report — the order key: an older
+     * report (a long wait's re-stamp) never overwrites a newer one.
+     */
+    stateReportedAt: timestamp("state_reported_at", {
+      mode: "date",
+      withTimezone: true,
+    }),
     firstSeenAt: timestamp("first_seen_at", {
       mode: "date",
       withTimezone: true,
@@ -92,6 +112,11 @@ export const sessionRunners = pgTable(
     sessionSeenIdx: index("idx_session_runners_session_seen").on(
       table.sessionId,
       table.lastSeenAt
+    ),
+    /** A conversation's process rows, for a state report on a call that is not the wait (0384). */
+    clientIdx: index("idx_session_runners_client").on(
+      table.clientKey,
+      table.processKey
     ),
   })
 );
