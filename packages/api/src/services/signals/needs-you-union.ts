@@ -721,9 +721,6 @@ export const NOTIFICATION_TARGET_KIND: Readonly<Record<string, string>> = {
   // A handoff (`notifCenter.handoff`) names its object by its own kind, so
   // every `HANDOFF_KINDS` member maps to itself; these three have no other
   // producer (pinned by `notif-center.handoff.pglite.test.ts`).
-  document: "document",
-  project: "project",
-  playbook: "playbook",
 };
 
 /**

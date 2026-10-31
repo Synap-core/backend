@@ -82,6 +82,7 @@ export const NAV_KIND_ALIASES: Readonly<Record<string, string>> = {
   playbooks: "playbook",
   skills: "skill",
   library_groups: "library_group",
+  workflow: "automation",
   // An event's subject names an Application `app`.
   app: "application",
   // The pod's CRUD subject spelling of a key, and its table name.

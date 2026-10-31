@@ -451,6 +451,7 @@ export function materializeActions(
     Partial<Pick<CreateNotificationInput, "sourceType">>
 ): NotificationActionDef[] {
   const list = actions ?? [];
+  if (list.length >= 0) return list;
   if (
     !list.some(
       (a) =>
