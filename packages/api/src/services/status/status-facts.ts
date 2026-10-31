@@ -272,6 +272,22 @@ export async function readWaitingOnFor<K>(
   reader: WaitingOnReader,
   questions: ReadonlyMap<K, WaitingOnQuestion>
 ): Promise<Map<K, WaitingOnMark[]>> {
+  const sources = await readWaitingOnSourcesFor(reader, questions);
+  return new Map(
+    [...sources].map(([key, s]) => [key, deriveWaitingOn(s)] as const)
+  );
+}
+
+/**
+ * The collector's SOURCES, before they are folded into marks: each one with
+ * its own wait kind (`waitKindOf`) and ref, for what needs every wait apart
+ * (the status watcher's wait episodes). Same reads, same floors, same naming
+ * rule as {@link readWaitingOnFor}, which folds them. THROWS.
+ */
+export async function readWaitingOnSourcesFor<K>(
+  reader: WaitingOnReader,
+  questions: ReadonlyMap<K, WaitingOnQuestion>
+): Promise<Map<K, WaitingOnSource[]>> {
   const { userId } = reader;
   const asked = [...questions.entries()];
   const union = (
@@ -408,7 +424,7 @@ export async function readWaitingOnFor<K>(
   ]);
 
   const holdOf = new Map(holds.map((h) => [holdKey(h), h]));
-  const out = new Map<K, WaitingOnMark[]>();
+  const out = new Map<K, WaitingOnSource[]>();
   asked.forEach(([key, q], i) => {
     const sources: WaitingOnSource[] = [];
     const owedIds = new Set(owedIdsOf(q) ?? []);
@@ -507,7 +523,7 @@ export async function readWaitingOnFor<K>(
         });
       }
     }
-    out.set(key, deriveWaitingOn(sources));
+    out.set(key, sources);
   });
   return out;
 }
