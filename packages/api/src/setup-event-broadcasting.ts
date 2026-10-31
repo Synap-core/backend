@@ -5,9 +5,6 @@
  * 1. SSE broadcast hook — streams events to connected clients (admin)
  * 2. Domain event bridge — forwards .completed events to Realtime (Socket.IO) for entity, view, relation, document, workspace, workspace member
  * 3. Materialization hook — enqueues .validated events for DB writes via pg-boss
- * 4. Real-time sync push — forwards .completed events to sync peers
- * 5. Status events — a transition's row becomes `status:transition:completed`
- *    in the room of each user who may read that status (`statusOf`'s floor)
  *
  * Call setupEventBroadcasting() at application startup.
  */
@@ -18,7 +15,6 @@ import { getBoss } from "@synap/jobs";
 import { createLogger } from "@synap-core/core";
 import { emitDomainEventToRealtime } from "./utils/domain-event-bridge.js";
 import { syncRealtimeHook } from "./utils/sync-realtime-hook.js";
-import { statusRealtimeHook } from "./services/status/status-realtime.js";
 import { registerFacetAttachEmitter } from "./routers/entities/helpers.js";
 
 const logger = createLogger({ module: "event-broadcasting" });
@@ -101,9 +97,6 @@ export function setupEventBroadcasting(): void {
   eventRepository.addEventHook(domainBridgeHook);
   eventRepository.addEventHook(materializationHook);
   eventRepository.addEventHook(syncRealtimeHook);
-  // Hook 5: status events — each reader of a moved status, under statusOf's
-  // floor (services/status/status-realtime.ts). Fire-and-forget.
-  eventRepository.addEventHook(statusRealtimeHook);
 
   logger.info(
     "Event broadcasting + domain bridge + materialization + sync real-time hooks registered"

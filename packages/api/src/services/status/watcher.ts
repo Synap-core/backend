@@ -2,10 +2,8 @@
  * THE STATUS WATCHER — every hour it notices what is late, nearly due, stuck
  * in its step, or paused past its review date, and raises each ONCE per
  * episode: the derived event `<subjectType>.signal.completed` (automations
- * trigger on it; nothing here moves a thing), a notification to the
- * thing's owner, else its goal's owner, and the realtime event
- * `status:signal:raised` to each user who may read that status
- * (`status-realtime.ts`, under statusOf's floor).
+ * trigger on it; nothing here moves a thing) and a notification to the
+ * thing's owner, else its goal's owner.
  *
  * EPISODE = (subject, signal, anchor); the anchor is what changes when an
  * episode ends: the step and when it was entered, the bound date, the pause
@@ -53,7 +51,6 @@ import {
 import type { ProjectTrack } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
 import { emitSideEffects } from "@synap/events";
-import { pushStatusSignal } from "./status-realtime.js";
 import { createLogger } from "@synap-core/core";
 import {
   DATE_APPROACHING_DAYS,
@@ -1007,17 +1004,6 @@ async function raise(
     workspaceId,
     eventId,
     data: { ...data, profileSlug: place.profileSlug },
-  });
-  // Realtime: `status:signal:raised` to each user who may read this status
-  // (statusOf's floor, `status-realtime.ts`). Fire-and-forget; never throws.
-  void pushStatusSignal({
-    signal: c.signal,
-    subjectType: c.subjectType,
-    subjectId: c.subjectId,
-    facetId: c.facetId,
-    role: c.role,
-    beganAt: c.beganAt,
-    raisedAt: now,
   });
   if (!ownerId) return;
   const { type, sourceType } = SIGNAL_NOTIFICATION[c.subjectType];

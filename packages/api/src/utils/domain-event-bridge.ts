@@ -21,9 +21,6 @@
  * - widget_definition.*.completed → widget_definition:changed
  * - (focus sessions are NOT bridged here: `focus_session:updated` has ONE
  *   producer, the DB-trigger listener in `session-changed-listener.ts`)
- * - (every transition, goals' and sessions' too, ALSO becomes
- *   `status:transition:completed` per reader — not here: its audience is
- *   statusOf's floor, not a room (`services/status/status-realtime.ts`))
  * - artifact.changed.completed → artifact:changed
  * - entity_facet.*.completed → entity_facet:attached | entity_facet:updated | entity_facet:detached
  *
