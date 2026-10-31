@@ -21,6 +21,7 @@ import { ArrowRight, Bot, KeyRound } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { seenLine } from "@synap-core/types/computers";
 import { humanizeToken } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
 import {
@@ -468,7 +469,7 @@ function AgentRows({
           primary={a.name}
           secondary={[
             a.agentType ? humanizeToken(a.agentType) : null,
-            `seen ${formatRelative(a.lastSeenAt, { empty: "never" })}`,
+            seenLine(a.lastSeenAt, (d) => formatRelative(d)),
           ]
             .filter(Boolean)
             .join(" · ")}

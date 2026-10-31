@@ -24,6 +24,7 @@ import { randomUUID } from "crypto";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { PENDING_APPROVAL_BATCH_MAX } from "@synap-core/types/external-connect";
+import { SURFACE_HARNESS_SLUGS } from "@synap-core/types/agents";
 
 import {
   db,
@@ -132,21 +133,12 @@ import {
  *     desktop companion runs, not an agent type at all).
  * Do not merge those lists into this one.
  *
- * See synap-cli `SURFACE_NAMES`; drift is known (widening this allowlist is a
+ * The list is the harness registry's `surface` rows (`@synap-core/types/agents`);
+ * synap-cli `SURFACE_NAMES` is a copy that drifts (widening this allowlist is a
  * governance decision) — a CLI-only name is refused with
  * SURFACE_AGENT_TYPE_REQUIRED.
  */
-export const SURFACE_AGENT_TYPES = [
-  "claude-code",
-  "claude-desktop",
-  "cursor",
-  "raycast",
-  "codex",
-  "openwebui",
-  "discord",
-  "proton",
-  "generic",
-] as const;
+export const SURFACE_AGENT_TYPES = SURFACE_HARNESS_SLUGS;
 
 /** Check Kratos admin API for any identities. */
 async function checkKratosIdentity(): Promise<boolean> {

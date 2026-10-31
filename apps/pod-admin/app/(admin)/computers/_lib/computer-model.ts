@@ -13,18 +13,33 @@
  * person's own): the rows are the same shape, `owner` is only on the admin's.
  */
 
-import { AGENT_CONNECT_COMMAND } from "@synap-core/types/agents";
-import { DAY_MS } from "../../../../lib/format";
+import {
+  computerKeyRead,
+  computerKeyState,
+  days,
+  isLiveKey,
+  type ComputerKeyLike as SharedComputerKeyLike,
+  type ComputerKeyState,
+} from "@synap-core/types/computers";
 import type { SubjectEventLike } from "../../../_lib/object/subject-activity";
 import type { StatusKind } from "../../components/status-pill";
 
-export type ComputerKeyState =
-  "active" | "expiring" | "expired" | "revoked" | "none";
+// The key rule, the "never seen" words, the OS names and the commands are the
+// ONE computer rule (`@synap-core/types/computers`), shared with the desktop
+// and Relay. This file keeps only what is the console's: pills, filters, impact.
+export {
+  computerKeyState,
+  days,
+  daysLeft,
+  CONNECT_COMMAND,
+  isLiveKey,
+  platformLabel,
+  RECONNECT_COMMAND,
+  type ComputerKeyState,
+} from "@synap-core/types/computers";
 
-export interface ComputerKeyLike {
+export interface ComputerKeyLike extends SharedComputerKeyLike {
   id: string;
-  state: ComputerKeyState;
-  expiresAt: Date | string | null;
 }
 
 export interface ComputerAgentLike {
@@ -56,26 +71,15 @@ export interface ComputerLike {
   owner?: { id: string; name: string } | null;
 }
 
-/**
- * The one line a person runs ON the computer to give it new keys: the device
- * flow again, which offers the same computer and replaces its key. Spelled
- * from the ONE connect command, exactly as the desktop spells it.
- */
-export const RECONNECT_COMMAND = AGENT_CONNECT_COMMAND.replace(
-  / init$/,
-  " pods reconnect"
-);
-/** The one line that connects a machine as a computer. */
-export const CONNECT_COMMAND = AGENT_CONNECT_COMMAND;
-
 // ─── Key state → words ───────────────────────────────────────────────
 
-/** Whole days until `expiresAt` (at least 1 while it has not passed). */
-export function daysLeft(expiresAt: Date | string, now: number): number {
-  return Math.max(1, Math.ceil((new Date(expiresAt).getTime() - now) / DAY_MS));
-}
-
-export const days = (n: number): string => `${n} day${n === 1 ? "" : "s"}`;
+const KEY_PILL: Record<ComputerKeyState, StatusKind> = {
+  active: "healthy",
+  expiring: "stale",
+  expired: "down",
+  revoked: "unknown",
+  none: "unknown",
+};
 
 /**
  * A key's state as the console's pill. A live key is healthy; one about to
@@ -86,35 +90,8 @@ export function keyStatus(
   key: ComputerKeyLike | null,
   now: number = Date.now()
 ): { kind: StatusKind; label: string } {
-  switch (key?.state) {
-    case "active":
-      return { kind: "healthy", label: "Active" };
-    case "expiring":
-      return {
-        kind: "stale",
-        label: key.expiresAt
-          ? `Expires in ${days(daysLeft(key.expiresAt, now))}`
-          : "Expiring",
-      };
-    case "expired":
-      return { kind: "down", label: "Expired" };
-    case "revoked":
-      return { kind: "unknown", label: "Revoked" };
-    default:
-      return { kind: "unknown", label: "No key" };
-  }
-}
-
-/** The computer's own key state ("none" when it holds no key). */
-export function computerKeyState(
-  c: Pick<ComputerLike, "key">
-): ComputerKeyState {
-  return c.key?.state ?? "none";
-}
-
-/** A key that still lets its holder in. */
-export function isLiveKey(key: ComputerKeyLike | null): boolean {
-  return key?.state === "active" || key?.state === "expiring";
+  const { state, label } = computerKeyRead(key, now);
+  return { kind: KEY_PILL[state], label };
 }
 
 // ─── The list ────────────────────────────────────────────────────────
@@ -179,26 +156,6 @@ export function rosterLine(computers: readonly ComputerLike[]): string {
   const plural = (n: number, word: string) =>
     `${n} ${word}${n === 1 ? "" : "s"}`;
   return `${plural(agents, "agent")} on ${plural(computers.length, "computer")}`;
-}
-
-/** The operating system in a person's words (`process.platform` → "macOS"). */
-export function platformLabel(
-  platform: string | null | undefined
-): string | null {
-  const raw = platform?.trim();
-  if (!raw) return null;
-  switch (raw.toLowerCase()) {
-    case "darwin":
-    case "macos":
-      return "macOS";
-    case "linux":
-      return "Linux";
-    case "win32":
-    case "windows":
-      return "Windows";
-    default:
-      return raw.charAt(0).toUpperCase() + raw.slice(1);
-  }
 }
 
 /**
