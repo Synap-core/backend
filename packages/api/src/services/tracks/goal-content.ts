@@ -1002,7 +1002,7 @@ async function readCriterionServers(
         eq(links.toType, "track"),
         inArray(links.toId, [...trackIds]),
         inArray(focusSessions.status, [...OPEN_SESSION_STATUSES]),
-        sessionReadableWhere({ userId, roster: reader.roster })
+        undefined
       )
     )
     .orderBy(focusSessions.createdAt);
