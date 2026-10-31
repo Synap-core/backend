@@ -21302,6 +21302,80 @@ export type StructureAgainResult = {
 	sourceDocumentId: string;
 	status: "structured";
 } & Omit<RerunItemResult, "door" | "sourceDocumentIds">);
+export interface LeanRoomMessage {
+	id: string;
+	at: string;
+	author: string;
+	isPerson: boolean;
+	/** The message, fenced as untrusted data (the plain `text` is not repeated). */
+	fenced: string;
+	truncated: boolean;
+}
+export type LeanRoomSection = {
+	channelId: string | null;
+	cursor: string | null;
+	hasMore: boolean;
+	/** The newest {@link LEAN_ROOM_LAST}, newest first. */
+	last: LeanRoomMessage[];
+	status: "ok";
+	/** Open posts other sessions addressed to this one: exact count. */
+	unread: number;
+	/** Those posts, oldest first, fenced. `null` when the inbox failed. */
+	unreadItems: Array<{
+		at: string;
+		fenced: string;
+		fromSessionId: string | null;
+		id: string;
+		intent: string;
+		truncated: boolean;
+	}> | null;
+} | {
+	reason: string;
+	status: "unavailable";
+};
+export interface LeanContinuation {
+	version: 1;
+	detail: "lean";
+	session: ContinuationPacket["session"];
+	nextMove: ContinuationPacket["nextMove"];
+	userMustDecide: ContinuationPacket["userMustDecide"];
+	openRoomQuestions: ContinuationPacket["openRoomQuestions"];
+	blockedBy: ContinuationPacket["blockedBy"];
+	waitingOn: ContinuationPacket["waitingOn"];
+	workUnits: ContinuationPacket["workUnits"];
+	room: LeanRoomSection;
+	/** `ownerDeploys` holds THIS session's deploys only (`detail: 'deploys'` reads the rest). */
+	gates: ContinuationPacket["gates"];
+	live: ContinuationPacket["live"];
+}
+export type LeanOutcomesSection = {
+	counts: {
+		met: number;
+		total: number;
+	};
+	inputs: Array<{
+		answered: boolean;
+		blocksOutcomeKey: string | null;
+		key: string;
+		label: string;
+		need: string;
+		open: boolean;
+		owedSince?: string;
+		slotLabel: string;
+		why?: string;
+	}>;
+	outcomes: Array<{
+		key: string;
+		kind: string;
+		label: string;
+		met: boolean;
+		state: string;
+	}>;
+	status: "ok";
+} | {
+	reason: string;
+	status: "unavailable";
+};
 export interface CriterionRunOutcome {
 	key: string;
 	/** `recorded` wrote a row; `skipped` wrote nothing and says why. */
@@ -34968,6 +35042,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				triggered: boolean;
 			};
 		}>;
+		deploys: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				commitSha?: string | undefined;
+				id: string;
+			};
+			meta: object;
+			output: {
+				commitSha: string | null;
+				deploys: PacketDeployApproval[];
+				detail: "deploys";
+				sessionId: string;
+				status: "ok";
+			} | {
+				detail: "deploys";
+				reason: string;
+				status: "unavailable";
+			};
+		}>;
 		discardFromTriage: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				sessionId: string;
@@ -35164,6 +35256,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				userId: string;
 				verificationReport: unknown;
 				workspaceId: string | null;
+			};
+		}>;
+		getLean: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			meta: object;
+			output: {
+				continuation: LeanContinuation;
+				outcomes: LeanOutcomesSection;
 			};
 		}>;
 		grade: import("@trpc/server").TRPCMutationProcedure<{

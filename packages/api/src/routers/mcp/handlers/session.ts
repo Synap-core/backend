@@ -40,6 +40,12 @@ import { namedConversationOf } from "../../../services/focus-sessions/conversati
 import { getRequestClientKey } from "@synap/database";
 import { parseSessionChangeKinds } from "../../../services/focus-sessions/session-changes.js";
 import {
+  parseSessionReadDetail,
+  readLeanSession,
+  readSessionDeploys,
+  SESSION_READ_DETAIL_ERROR,
+} from "../../../services/focus-sessions/session-lean.js";
+import {
   describeRelayRefusal,
   relaySessionAnswer,
   RelaySessionAnswerInputSchema,
@@ -1011,6 +1017,32 @@ export const sessionHandlers: McpHandlerMap = {
       .limit(1);
     if (!session) {
       return ok({ error: `Focus session ${wantedId} not found` });
+    }
+    // `detail` (C8): `full` (default, as ever) · `lean` (what a wake needs, no
+    // other session's deploys) · `deploys` (the owner's deploys, by commit).
+    // MCP schemas are ADVISORY, so an off-enum value is answered in words.
+    const detail = parseSessionReadDetail(args.detail);
+    if (detail === null) {
+      return ok({ error: SESSION_READ_DETAIL_ERROR(args.detail) });
+    }
+    if (detail === "deploys") {
+      return ok(
+        await readSessionDeploys(session, {
+          userId,
+          commitSha:
+            typeof args.commitSha === "string" && args.commitSha.trim() !== ""
+              ? args.commitSha.trim()
+              : undefined,
+        })
+      );
+    }
+    if (detail === "lean") {
+      const lean = await readLeanSession(session, { userId });
+      return ok({
+        session: await withParentSessionId(session),
+        ...lean,
+        ...(ambient?.sessionId ? { inferred: true, via: ambient.source } : {}),
+      });
     }
     // Detour lineage, DERIVED from the `spawned_from` edge — never a column, so
     // there is exactly one store for "what was this forked from". ONE
