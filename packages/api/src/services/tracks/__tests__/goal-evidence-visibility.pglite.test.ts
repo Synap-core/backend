@@ -450,3 +450,33 @@ describe("D-6 — what backs a goal's criteria is the owner's, the judge's and t
     });
   });
 });
+
+describe("who works each criterion: the sessions that serve it, under the session read rule", () => {
+  async function serve(sessionId: string, trackId: string, key: string) {
+    await q(
+      `insert into links (id, workspace_id, from_type, from_id, to_type, to_id, link_type, created_by, metadata)
+       values (gen_random_uuid(), $1, 'session', $2, 'track', $3, 'serves', $4, $5::jsonb)`,
+      [WS, sessionId, trackId, OWNER, JSON.stringify({ criterionKey: key })]
+    );
+  }
+
+  it("names the serving sessions the reader may read, per criterion; nobody on it reads []", async () => {
+    const g = await goal("Served goal");
+    const theirs = await fileRun(g, RUNNER, ["copy"]);
+    const mine = await fileRun(g, OWNER, ["copy"]);
+    await serve(theirs, g, "copy");
+    await serve(mine, g, "copy");
+
+    const owner = await read(g, person(OWNER));
+    // The owner reads its own run; the runner's run is not the owner's to read.
+    expect(owner.copy!.servedBy).toEqual([
+      { sessionId: mine, title: TITLE, status: "active" },
+    ]);
+    expect(owner.pages!.servedBy).toEqual([]);
+
+    const runner = await read(g, person(RUNNER));
+    expect(runner.copy!.servedBy).toEqual([
+      { sessionId: theirs, title: TITLE, status: "active" },
+    ]);
+  });
+});

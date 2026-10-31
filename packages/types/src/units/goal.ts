@@ -480,6 +480,20 @@ export interface GoalCriterionView {
    * (`mark: null`).
    */
   evidenceWithheld?: boolean;
+  /**
+   * WHO WORKS IT: the open sessions that serve this criterion
+   * (`session --serves--> goal` with `metadata.criterionKey`), only those the
+   * reader may read, oldest first. Empty = nobody on it. Absent on a write's
+   * fallback view, which read no goal facts.
+   */
+  servedBy?: GoalCriterionServer[];
+}
+
+/** One session serving a criterion, as the goal page names it. */
+export interface GoalCriterionServer {
+  sessionId: string;
+  title: string;
+  status: string;
 }
 
 function ms(at: Date | string): number {
