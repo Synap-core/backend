@@ -25,6 +25,7 @@ import {
   ResponsiveTable,
   type TableColumn,
 } from "../../components/responsive-table";
+import { NEVER_SEEN_LABEL, seenLine } from "@synap-core/types/computers";
 import { SectionCard } from "../../components/section-card";
 import { StatusPill } from "../../components/status-pill";
 import { useFocusRow } from "../../components/use-focus-row";
@@ -155,7 +156,7 @@ export function ComputerList({
                 c.hostname,
                 platformLabel(c.platform),
                 showOwner ? ownerWords(c, viewerId) : null,
-                `seen ${formatRelative(c.lastSeenAt, { empty: "never" })}`,
+                seenLine(c.lastSeenAt, (d) => formatRelative(d)),
                 agentsPhrase(c.agents.length),
               ]
                 .filter(Boolean)
@@ -218,7 +219,7 @@ function columns(
     {
       header: "Last seen",
       width: "minmax(0,0.9fr)",
-      cell: (c) => formatRelative(c.lastSeenAt, { empty: "never" }),
+      cell: (c) => formatRelative(c.lastSeenAt, { empty: NEVER_SEEN_LABEL }),
     },
     {
       header: "Key",
