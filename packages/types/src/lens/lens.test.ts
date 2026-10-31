@@ -590,13 +590,13 @@ describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () =>
       expect(answer.verb).toEqual({ action: "approve", label: "Approve" });
     });
 
-    it("a draft stamped `answer` is your turn, never working", () => {
+    it("a draft stamped `answer` keeps its own mark: not started, never working", () => {
       const row = lensRowOfNeedsYou(
         needsYouRows([sig({ id: "d", kind: "draft-asks", waitKind: "answer" })])
           .recent[0]!,
         "proposed"
       );
-      expect(resolveUnitState(row.state).state).toBe("needs_you");
+      expect(resolveUnitState(row.state).state).toBe("not_started");
       expect(row.reason).toBeNull();
     });
 
