@@ -62,6 +62,8 @@ import type { SQL } from "@synap/database";
 import { parsePullRequestRef, type PullRequestRef } from "@synap-core/types";
 import { holdDevMovesRef, type Hold } from "@synap-core/types/lifecycle";
 import { workClockIn } from "@synap-core/types/work-clock";
+import { isDeliverableOutstanding } from "@synap-core/types/units";
+import type { ExpectedOutput } from "@synap/playbooks";
 import { sessionKindWhere } from "./session-kind.js";
 import { attachNextMove } from "./session-path-sections.js";
 import { completeFocusSession } from "./complete-session.js";
@@ -171,24 +173,19 @@ export function waitingOnMergeCandidateWhere(): SQL {
   ) as SQL;
 }
 
-interface SlotLike {
-  kind?: unknown;
-  status?: unknown;
-  retiredAt?: unknown;
-  optional?: unknown;
-  ref?: { url?: unknown } | null;
-}
-
-/** The first outstanding pull request a session's outcomes name, if any. */
+/**
+ * The first outstanding pull request a session's outcomes name, if any —
+ * outstanding by THE deliverable rule (`isDeliverableOutstanding`), the rule
+ * `onlyOpenPullRequestsWhere` mirrors in SQL.
+ */
 export function firstOpenPullRequest(
   expectedOutputs: unknown
 ): PullRequestRef | null {
   if (!Array.isArray(expectedOutputs)) return null;
-  for (const slot of expectedOutputs as SlotLike[]) {
+  for (const slot of expectedOutputs as ExpectedOutput[]) {
     if (!slot || slot.kind !== "pull_request") continue;
-    if (slot.status === "done" || slot.retiredAt != null) continue;
-    if (slot.optional === true) continue;
-    const url = slot.ref?.url;
+    if (!isDeliverableOutstanding(slot)) continue;
+    const url = (slot.ref as { url?: unknown } | undefined)?.url;
     if (typeof url !== "string") continue;
     const pr = parsePullRequestRef(url);
     if (pr) return pr;
