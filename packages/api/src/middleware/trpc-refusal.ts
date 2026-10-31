@@ -80,11 +80,11 @@ async function asTrpcError(
   endpoint: string
 ): Promise<Response> {
   const headers = new Headers();
-  for (const [key, value] of refusal.headers) {
+  refusal.headers.forEach((value, key) => {
     if (key !== "content-type" && key !== "content-length") {
       headers.append(key, value);
     }
-  }
+  });
   return resolveResponse({
     router,
     req: c.req.raw,
