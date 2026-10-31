@@ -123,41 +123,31 @@ describe("registry needsYou roles in the union", () => {
 });
 
 /**
- * The two noises measured in the founder's headline on 31 Oct (92 rows):
- * 7 `session.unblocked` notices no one asked (category `system`) and 15
- * `session.criterion_escalated` "Needs your call" rows repeating a session
- * whose owed slot was already in the headline. Each case drives the REAL
- * registry row through the union AND the count, so a role reverted in the
- * registry (or a bucket dropped in `partitionNotifications`) turns it red.
+ * Noise measured in the founder's headline on 31 Oct (92 rows): 7
+ * `session.unblocked` notices no one asked (category `system`). The REAL
+ * registry row is driven through the union AND the count, so the role
+ * reverted in the registry (or the bucket dropped in `partitionNotifications`)
+ * turns it red. The other noise of that day, `session.criterion_escalated`
+ * repeating an owed slot, is backend#605's (registry role `session-pointer`).
  */
-describe("needs-you headline noise: system notices and repeats of an owed slot", () => {
-  const owedSlot = (sessionId: string) => ({
-    sessionId,
-    label: `Check: ${sessionId} criterion`,
-    owedSince: new Date("2026-09-25T09:00:00.000Z").toISOString(),
-    blockedReason: "decision" as const,
-    needsYouClass: "needs_you" as const,
-  });
-  const read = (
-    notifications: NotificationSignalInput[],
-    owedSlots: ReturnType<typeof owedSlot>[] = []
-  ) => ({
-    rows: unionNeedsYou({ clusters: [], notifications, owedSlots }),
-    count: countNeedsYou({
-      distinctClusters: 0,
-      clustersTruncated: false,
-      clusters: [],
-      notifications,
-      notificationsTruncated: false,
-      owedSlots,
-      owedTruncated: false,
-    }),
-  });
-
+describe("needs-you headline noise: a system notice is From the system", () => {
   it("a system 'is unblocked' notification lands in from_system, never the headline", () => {
     expect(needsYouRole("session.unblocked")).toBe("from_system");
     const unblocked = { ...row("session.unblocked"), category: "system" };
-    const { rows, count: c } = read([unblocked]);
+    const rows = unionNeedsYou({
+      clusters: [],
+      notifications: [unblocked],
+      owedSlots: [],
+    });
+    const c = countNeedsYou({
+      distinctClusters: 0,
+      clustersTruncated: false,
+      clusters: [],
+      notifications: [unblocked],
+      notificationsTruncated: false,
+      owedSlots: [],
+      owedTruncated: false,
+    });
 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
@@ -170,36 +160,5 @@ describe("needs-you headline noise: system notices and repeats of an owed slot",
     // Countable, never lost: the fold counts the row the list draws.
     expect(c.folds.fromSystem).toBe(1);
     expect(c.reviewLater).toBe(1);
-  });
-
-  it("a 'Needs your call' notification whose session has an owed-slot row folds into it, still counted once", () => {
-    expect(needsYouRole("session.criterion_escalated")).toBe("session-ask");
-    const escalated = row("session.criterion_escalated", S);
-    const { rows, count: c } = read([escalated], [owedSlot(S)]);
-
-    // One row for the session: its owed slot. The notification is not a
-    // second headline row.
-    expect(rows.map((r) => [r.kind, r.target?.id])).toEqual([["owed-slot", S]]);
-    expect(c.notifications).toBe(0);
-    // The session's need is still in the headline, counted once.
-    expect(c.blocked).toBe(1);
-    expect(c.needsYou).toBe(1);
-  });
-
-  it("a 'Needs your call' notification with no owed slot on its session stays in the headline", () => {
-    const escalated = row("session.criterion_escalated", "sess-bare");
-    // Another session's slot does not fold it.
-    const { rows, count: c } = read([escalated], [owedSlot(S)]);
-
-    expect(
-      rows.map((r) => [r.kind, r.target?.id, r.needsYouClass ?? null]).sort()
-    ).toEqual(
-      [
-        ["notification", "sess-bare", null],
-        ["owed-slot", S, "needs_you"],
-      ].sort()
-    );
-    expect(c.notifications).toBe(1);
-    expect(c.needsYou).toBe(2);
   });
 });

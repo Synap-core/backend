@@ -136,10 +136,7 @@ import {
   sessionsWithOwedSlot,
   type ContainerLens,
 } from "../services/signals/lens-containers.js";
-import {
-  needsYouRole,
-  type NotificationNeedsYouRole,
-} from "../notifications/registry.js";
+import { needsYouRole } from "../notifications/registry.js";
 import { listDraftAskSlots } from "../services/focus-sessions/draft-asks.js";
 import { listNeedsYouOwed } from "../services/signals/needs-you-owed.js";
 import { resolveScope } from "../utils/scope-filter.js";
@@ -615,20 +612,16 @@ async function readAttention(
     inContainerLens(containers.value.get(r.id), container ?? {})
   );
 
-  // The live state of the `session.needs_you` pointer rows, and of the
-  // `session-ask` rows (which fold on an owed slot only).
-  const sessionIdsOf = (role: NotificationNeedsYouRole) =>
-    notifications.flatMap((r) =>
-      needsYouRole(r.type) === role && r.sourceId ? [r.sourceId] : []
-    );
-  const pointerIds = sessionIdsOf("session-pointer");
-  const owedProbeIds = [...pointerIds, ...sessionIdsOf("session-ask")];
+  // The live state of the `session.needs_you` pointer rows.
+  const pointerIds = notifications.flatMap((r) =>
+    needsYouRole(r.type) === "session-pointer" && r.sourceId ? [r.sourceId] : []
+  );
   const [openQuestions, owedPointers] = await Promise.all([
     settle("notifications", new Set<string>(), () =>
       sessionsWithOpenQuestion(pointerIds)
     ),
     settle("notifications", new Set<string>(), () =>
-      sessionsWithOwedSlot(userId, owedProbeIds)
+      sessionsWithOwedSlot(userId, pointerIds)
     ),
   ]);
 

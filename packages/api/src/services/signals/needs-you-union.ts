@@ -1364,10 +1364,9 @@ function outOfHeadline(
 export interface SessionLiveNeeds {
   /**
    * Sessions known to hold at least one owed slot: the scanned owed page's
-   * sessions, PLUS the pointer and session-ask sessions measured directly
-   * (`sessionsWithOwedSlot`, uncapped) — so a pointer or a session ask whose
-   * session's slots fell past the owed page's cap still folds (needs-you
-   * duplicate cause 3).
+   * sessions, PLUS the pointer sessions measured directly
+   * (`sessionsWithOwedSlot`, uncapped) — so a pointer whose session's slots
+   * fell past the owed page's cap still folds (needs-you duplicate cause 3).
    */
   owedSessionIds: ReadonlySet<string>;
   /**
@@ -1763,10 +1762,6 @@ export function owedSessionIdsOf(
  *   - its type is a `"session-pointer"` and the session has neither an owed
  *     slot nor an open question. Whatever it announced was met, so a row the
  *     person never opened must not keep the session in needs-you;
- *   - its type is a `"session-ask"` (`session.criterion_escalated`) and the
- *     session has an owed slot. The escalation filed that slot, so the row
- *     repeats the ask the slot row shows: it folds into it, counted once there.
- *     With no owed slot on its session it stays, an item like any other;
  *   - its type is `"from_system"` (`session.unblocked`): no real asker raised
  *     it. It is not dropped: {@link partitionNotifications} puts it in the
  *     `fromSystem` bucket, drawn and counted in the rule's `from_system` fold.
@@ -1836,20 +1831,9 @@ export function partitionNotifications(
     else if (role === "item") needsYou.push(r);
     else if (role === "session-pointer" && pointerStillNeedsYou(r, live))
       needsYou.push(r);
-    else if (role === "session-ask" && !foldsIntoOwedSlot(r, live))
-      needsYou.push(r);
-    // "informational": in no bucket. It stays in the bell. A pointer or a
-    // session ask that folded is drawn and counted as its session's owed slot.
+    // "informational": in no bucket. It stays in the bell.
   }
   return { needsYou, suggestions, status, fromSystem };
-}
-
-/** A `"session-ask"` row whose session already shows an owed-slot row. */
-function foldsIntoOwedSlot(
-  r: NotificationSignalInput,
-  live: SessionLiveNeeds
-): boolean {
-  return !!r.sourceId && live.owedSessionIds.has(r.sourceId);
 }
 
 /** A `"session-pointer"` row, decided from its session's live state. */
@@ -1922,13 +1906,12 @@ export function unionProposed(args: {
  * session has an owed slot), so the pointer never resurfaces as a loose
  * needs-you row.
  *
- * ── OWED SLOTS FOLD A SESSION POINTER OR ASK, NEVER "ANY ROW ABOUT THE SESSION" ─
+ * ── OWED SLOTS FOLD ONLY A SESSION POINTER, NEVER "ANY ROW ABOUT THE SESSION" ─
  * Every door that hands a slot to the person writes `session.needs_you`
  * (`notify-needs-you.ts`), and that row announced the SAME need the owed-slot
- * row already shows; a criterion escalation (`session.criterion_escalated`)
- * files the slot it asks about. So the fold is keyed on the registry's
- * `needsYou: "session-pointer"` / `"session-ask"` roles, never on `sourceId`
- * alone. `session.unblocked` (`sourceType: "system"`, `sourceId` = the session
+ * row already shows. So the fold is keyed on the registry's
+ * `needsYou: "session-pointer"` role, never on `sourceId` alone.
+ * `session.unblocked` (`sourceType: "system"`, `sourceId` = the session
  * id) is separate news no one asked: registry role `"from_system"`, so it sits
  * in the rule's `from_system` fold, stamped `needsYouClass`, never in the
  * headline. See {@link dedupeNotifications}.

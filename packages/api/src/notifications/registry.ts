@@ -149,12 +149,6 @@ export interface NotificationDef {
    *   once when the session has an open room question, and counts ZERO when
    *   neither is true, because whatever it announced has been resolved. A
    *   pointer row's `sourceId` must be the session id.
-   * - `"session-ask"` — the row asks the person something about ONE session
-   *   (`sourceId` = the session id). It is its own needs-you entry until it
-   *   is read, UNLESS that session already has an owed-slot row: the row then
-   *   repeats the ask that row shows, so it folds into it and the need counts
-   *   once, through the owed-slot row. Unlike a pointer it stays when the
-   *   session has no owed slot: then nothing else shows its ask.
    * - `"from_system"` — no real asker raised it: news the pod wrote on nobody's
    *   behalf (a blocker closed). Never a headline row: it sits in the needs-you
    *   rule's `from_system` fold (`needsYouClass: "from_system"`), counted in
@@ -198,7 +192,6 @@ export type NotificationNeedsYouRole =
   | "item"
   | "informational"
   | "session-pointer"
-  | "session-ask"
   | "from_system"
   | "suggestion"
   | "status";
@@ -1624,10 +1617,6 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     ttl: 0,
     groupBy: "sessionId",
     dedupeWindowMs: SESSION_ATTENTION_DEDUPE_WINDOW_MS,
-    // The escalation also files the criterion's owed slot ("Check: …"), which
-    // is the ask; the row folds into it (31 Oct: 15 of the founder's 92 rows
-    // repeated an owed slot already in the headline).
-    needsYou: "session-ask",
     actions: [
       {
         id: "view",

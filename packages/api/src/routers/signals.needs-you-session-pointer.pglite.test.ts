@@ -378,25 +378,6 @@ describe("signals: session.needs_you in needs-you (session.room_update retired)"
     ]);
   });
 
-  it("session.criterion_escalated folds into its session's owed slot, and stays when the session owes nothing", async () => {
-    const owedS = await seedSession({ owed: true });
-    const bareS = await seedSession();
-    await notify("session.criterion_escalated", owedS);
-    await notify("session.criterion_escalated", bareS);
-
-    const c = await count();
-    expect(c.blocked).toBe(1);
-    expect(c.notifications).toBe(1);
-    expect(c.needsYou).toBe(2);
-    const rows = await list();
-    expect(rows.map((r) => [r.kind, r.target?.id ?? null]).sort()).toEqual(
-      [
-        ["notification", bareS],
-        ["owed-slot", owedS],
-      ].sort()
-    );
-  });
-
   it("the badge equals the list length across a mixed population", async () => {
     const owedS = await seedSession({ owed: true });
     const channelId = randomUUID();
