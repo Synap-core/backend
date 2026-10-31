@@ -1916,7 +1916,7 @@ try {
             } = await import("@synap/jobs/workers/fireflies-worker.js");
             const { registerSessionRecallRunner } =
               await import("@synap/jobs/workers/session-recall-worker.js");
-            const { registerGoalLoopSweeper } =
+            const { registerGoalLoopSweeper, registerSessionLifecycleSweeper } =
               await import("@synap/jobs/workers/focus-session-reaper.js");
             const { registerInboundAttachmentIngestRunner } =
               await import("@synap/jobs/workers/inbound-attachment-worker.js");
@@ -2044,6 +2044,14 @@ try {
             // The goal loop's hourly re-check (W4) rides the focus-session
             // reaper's tick: no scheduler of its own.
             registerGoalLoopSweeper(() => api.sweepGoalLoops());
+            // The session lifecycle (C6) rides the same tick: met work closes,
+            // work waiting on a merge is held, a week-stale unowed agent
+            // session is cancelled, an ended run closes — and the stale sweeps
+            // leave runs to their run (the kind's RUN predicate).
+            registerSessionLifecycleSweeper({
+              sweep: () => api.sweepSessionLifecycle(),
+              runSessionWhere: () => api.runSessionWhere(),
+            });
             // Inbound attachments: fetch bytes off the sensor path → GOVERNED
             // file door → link to channel + message (IoC across the api↔jobs dep).
             registerInboundAttachmentIngestRunner((input) =>
