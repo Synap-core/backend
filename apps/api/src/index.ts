@@ -109,6 +109,7 @@ import { configureLocalMode, safeTokenEqual } from "@synap/auth";
 import { buildKratosProxyTargetUrl } from "./kratos-proxy-url.js";
 import { trpcSessionGate } from "./trpc-session-gate.js";
 import { trpcAiRateLimit } from "./trpc-ai-rate-limit.js";
+import { trpcRefusals } from "./trpc-refusal.js";
 import { createRequire } from "node:module";
 import {
   DEFAULT_POD_STATE_DIR,
@@ -1054,8 +1055,10 @@ mountAdminEventStream(app);
 // tRPC routes — session auth on every call except the public procedures
 // (health.*, setup.*, invite preview/accept). See trpc-session-gate.ts. The
 // session is a Kratos one or a Synap app's device token, and no other bearer
-// (packages/api middleware/app-session.ts).
-app.use("/trpc/*", trpcSessionGate(appSessionMiddleware()));
+// (packages/api middleware/app-session.ts). Its refusals, and the AI rate
+// limit's below, reach the client as tRPC errors (trpc-refusal.ts).
+const trpcRefusal = trpcRefusals(appRouter);
+app.use("/trpc/*", trpcRefusal(trpcSessionGate(appSessionMiddleware())));
 
 // WebSocket ticket minting (see ws-auth.ts for the CSWSH rationale). The browser
 // exchanges its authenticated session for a short-lived, single-use ticket, then
@@ -1284,7 +1287,7 @@ app.route("/api/media", mediaTranscribeApp);
 
 // AI rate limiting — charged once per AI procedure in the request, batched or
 // not (chat.sendMessage, channels.sendMessage). See trpc-ai-rate-limit.ts.
-app.use("/trpc/*", trpcAiRateLimit(aiRateLimitMiddleware));
+app.use("/trpc/*", trpcRefusal(trpcAiRateLimit(aiRateLimitMiddleware)));
 
 // tRPC endpoint
 // NOTE: Using fetchRequestHandler directly from @trpc/server instead of
