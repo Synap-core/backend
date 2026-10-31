@@ -29,7 +29,8 @@ export interface GovernanceRuleRow {
   targetKind: "action" | "profile" | "capability" | "connection";
   targetPattern: string;
   targetProfile: string | null;
-  verdict: "auto" | "propose";
+  /** `deny` = a person's "Never" for this agent and this act (0381). */
+  verdict: "auto" | "propose" | "deny";
   createdAt: string | Date;
   createdBy: string | null;
   sourceProposalId: string | null;
@@ -124,5 +125,6 @@ export function provenanceLabel(rule: GovernanceRuleRow): string {
 }
 
 export function verdictLabel(rule: GovernanceRuleRow): string {
+  if (rule.verdict === "deny") return "Never";
   return rule.verdict === "auto" ? "Auto-approve" : "Require proposal";
 }

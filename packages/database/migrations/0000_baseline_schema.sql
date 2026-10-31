@@ -2201,6 +2201,21 @@ DO $$ BEGIN
   END IF;
 END; $$;
 
+-- "Later" on a request, per person (migration 0381, founder decision G3) —
+-- mirrors 0381_governance_deny_and_request_later.sql. It sits here, beside the
+-- table it references, so every slice of this file that reaches it has
+-- "proposals" already. (Its `deny` verdict value sits beside the
+-- governance_verdict type below.)
+CREATE TABLE IF NOT EXISTS "proposal_snoozes" (
+  "proposal_id"    uuid NOT NULL REFERENCES "proposals"("id") ON DELETE CASCADE,
+  "user_id"        text NOT NULL,
+  "snoozed_until"  timestamptz NOT NULL,
+  "created_at"     timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY ("proposal_id", "user_id")
+);
+CREATE INDEX IF NOT EXISTS "proposal_snoozes_user_idx"
+  ON "proposal_snoozes" ("user_id", "snoozed_until");
+
 -- ─── 29. knowledge_facts ─────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS "knowledge_facts" (
@@ -4632,6 +4647,8 @@ DO $$ BEGIN
   CREATE TYPE governance_verdict AS ENUM ('auto', 'propose');
 EXCEPTION WHEN duplicate_object THEN null;
 END $$;
+-- 0381: `deny`, a person's stored "Never" (founder decision G3).
+ALTER TYPE governance_verdict ADD VALUE IF NOT EXISTS 'deny';
 
 CREATE TABLE IF NOT EXISTS "governance_rules" (
   "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),

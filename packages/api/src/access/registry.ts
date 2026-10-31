@@ -38,6 +38,7 @@ import {
   notifications,
   feeds,
   inboxItems,
+  proposalSnoozes,
   messagingAccounts,
   sourceConfigs,
   sourceSubscriptions,
@@ -491,6 +492,13 @@ registerVisibility({
   query: () => db.query.notifications,
   // `userId` is the RECIPIENT — a notification belongs to exactly one user.
   rule: { kind: "user", userColumn: notifications.userId },
+});
+registerVisibility({
+  table: proposalSnoozes,
+  query: () => db.query.proposalSnoozes,
+  // "Later" on a request (0381): one person's own setting aside. Never read
+  // for anyone else — another reader still counts the request.
+  rule: { kind: "user", userColumn: proposalSnoozes.userId },
 });
 registerVisibility({
   table: inboxItems,

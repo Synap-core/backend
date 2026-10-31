@@ -121,9 +121,10 @@ describe("gateCapabilityExecution — capability rule consultation (Option B)", 
 
     expect(decision).toEqual({ decision: "dry-run" });
     // dry-run short-circuits before the policy-propose rule consultation —
-    // the rule lookup only ever happens on the no-grant route, which never
-    // fires here because a grant exists.
-    expect(resolveGovernanceRuleMock).not.toHaveBeenCalled();
+    // the widening lookup only ever happens on the no-grant route, which never
+    // fires here because a grant exists. The ONE lookup is the "Never" check
+    // (0.2), which can only refuse.
+    expect(resolveGovernanceRuleMock).toHaveBeenCalledTimes(1);
   });
 
   it("no grant + no matching rule → propose (unchanged fallback)", async () => {
@@ -233,8 +234,9 @@ describe("gateCapabilityExecution — untrusted origin (#4 provenance)", () => {
 
     expect(decision.decision).toBe("propose");
     // The rule shortcut is skipped entirely for an untrusted origin (rung 2.55
-    // sits above the capability rule rung 2.8) — it is never even consulted.
-    expect(resolveGovernanceRuleMock).not.toHaveBeenCalled();
+    // sits above the capability rule rung 2.8) — it is consulted only by the
+    // "Never" check (0.2), which can only refuse.
+    expect(resolveGovernanceRuleMock).toHaveBeenCalledTimes(1);
   });
 
   it("untrusted origin + auto-mode grant → propose (grant exec-mode can't auto-run an untrusted origin)", async () => {
@@ -343,5 +345,99 @@ describe("propose decisions carry a structured cause", () => {
       code,
       "a propose decision must never reach review with no cause"
     ).toBeTruthy();
+  });
+});
+
+/**
+ * A person's "Never" (founder decision G3, 0381): a `deny` rule naming this
+ * capability refuses the agent's run, typed, before every other rung — an
+ * auto grant, a declared read and an auto rule included.
+ */
+describe("gateCapabilityExecution — a deny rule refuses the run", () => {
+  beforeEach(() => {
+    findCapabilityGrantMock.mockReset();
+    resolveGovernanceRuleMock.mockReset();
+    resolveOriginTrustMock.mockReset();
+    resolveOriginTrustMock.mockResolvedValue(undefined);
+  });
+
+  const DENIED = {
+    decision: "deny",
+    reasonCode: "DENIED_BY_RULE",
+  };
+
+  it("control: an auto grant runs when no rule says never", async () => {
+    findCapabilityGrantMock.mockResolvedValue({ ok: true, execMode: "auto" });
+    resolveGovernanceRuleMock.mockResolvedValue(undefined);
+    expect(await gateCapabilityExecution(BASE_INPUT)).toEqual({
+      decision: "run",
+    });
+  });
+
+  it("an auto grant + a deny rule → refused, typed", async () => {
+    findCapabilityGrantMock.mockResolvedValue({ ok: true, execMode: "auto" });
+    resolveGovernanceRuleMock.mockResolvedValue({
+      verdict: "deny",
+      matchedPattern: "tool-123",
+    });
+    const decision = await gateCapabilityExecution(BASE_INPUT);
+    expect(decision).toMatchObject(DENIED);
+    expect(decision.decision === "deny" && decision.reason).toMatch(
+      /^DENIED_BY_RULE:/
+    );
+    // Refused before the grant is even looked up.
+    expect(findCapabilityGrantMock).not.toHaveBeenCalled();
+  });
+
+  it("a declared read is refused too", async () => {
+    resolveGovernanceRuleMock.mockResolvedValue({
+      verdict: "deny",
+      matchedPattern: "tool-123",
+    });
+    expect(
+      await gateCapabilityExecution({ ...BASE_INPUT, readOnly: true })
+    ).toMatchObject(DENIED);
+  });
+
+  it("the lookup names the capability (verb name and row id)", async () => {
+    resolveGovernanceRuleMock.mockResolvedValue({ verdict: "deny" });
+    await gateCapabilityExecution({
+      ...BASE_INPUT,
+      tool: {
+        id: "tool-123",
+        approved: true,
+        createdBy: "owner-1",
+        name: "send_email",
+      },
+    });
+    expect(resolveGovernanceRuleMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentUserId: "agent-1",
+        capabilityId: "tool-123",
+        capabilityVerbName: "send_email",
+      })
+    );
+  });
+
+  it("the person's own run never consults the rules", async () => {
+    resolveGovernanceRuleMock.mockResolvedValue({ verdict: "deny" });
+    expect(
+      await gateCapabilityExecution({
+        ...BASE_INPUT,
+        actorUserId: "owner-1",
+        agentUserId: null,
+      })
+    ).toEqual({ decision: "run" });
+    expect(resolveGovernanceRuleMock).not.toHaveBeenCalled();
+  });
+
+  it("an unapproved capability still meets the approval floor first", async () => {
+    resolveGovernanceRuleMock.mockResolvedValue({ verdict: "deny" });
+    const decision = await gateCapabilityExecution({
+      ...BASE_INPUT,
+      tool: { id: "tool-123", approved: false, createdBy: "owner-1" },
+    });
+    expect(decision.decision).toBe("deny");
+    expect(decision).not.toHaveProperty("reasonCode");
   });
 });

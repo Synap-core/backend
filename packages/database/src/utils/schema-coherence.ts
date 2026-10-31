@@ -30,6 +30,7 @@ import { sql } from "../client-pg.js";
 import {
   governancePrincipalEnum,
   governanceTargetEnum,
+  governanceVerdictEnum,
 } from "../schema/governance-rules.js";
 import { governanceCeilingAxisEnum } from "../schema/governance-ceilings.js";
 import { entityExternalLinks } from "../schema/entity-external-links.js";
@@ -2564,6 +2565,12 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "skills",
     column: "input_map",
     addedBy: "0368_intent_input_schema.sql",
+  }, // "Later" on a request (0381): the needs-you read joins it on every
+  // Review page and count, so a missing table fails every needs-you read.
+  {
+    table: "proposal_snoozes",
+    column: "snoozed_until",
+    addedBy: "0381_governance_deny_and_request_later.sql",
   },
 ];
 
@@ -2580,6 +2587,9 @@ const REQUIRED_ENUMS = [
   // 0320: `class` ("for all computers") — the resolver compares it on every
   // governed agent write, so a pod missing it fails every agent write.
   governancePrincipalEnum,
+  // 0381: `deny` ("Never") — a pod missing it fails the first "Never" a
+  // person taps, and the resolver reads it on every governed agent write.
+  governanceVerdictEnum,
 ] as const;
 
 /** A tagged-template query function shaped like postgres.js's `sql`. */
