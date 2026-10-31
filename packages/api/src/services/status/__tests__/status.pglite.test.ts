@@ -736,6 +736,7 @@ describe("a thing's roles and its account line", () => {
   const E_PERSON_2 = randomUUID();
   const E_ACME = randomUUID();
   const E_THEIR_CO = randomUUID();
+  const E_PERSON_3 = randomUUID();
   const F_ACME_LEAD = randomUUID();
 
   beforeAll(async () => {
@@ -756,6 +757,7 @@ describe("a thing's roles and its account line", () => {
       [E_ROLE, ME, W, PERSON, "Grace Hopper"],
       [E_PERSON, ME, W, PERSON, "Ada"],
       [E_PERSON_2, ME, W, PERSON, "Linus"],
+      [E_PERSON_3, ME, W, PERSON, "Margaret"],
       [E_ACME, ME, W, COMPANY, "Acme"],
       [E_THEIR_CO, OTHER, null, COMPANY, "Their company"],
     ] as const) {
@@ -777,14 +779,17 @@ describe("a thing's roles and its account line", () => {
         [id, entity, profile, owner, ws, status, cat]
       );
     }
-    for (const [from, to] of [
-      [E_PERSON, E_ACME],
-      [E_PERSON_2, E_THEIR_CO],
-    ]) {
+    for (const [from, to, ago] of [
+      [E_PERSON, E_ACME, "0"],
+      [E_PERSON_2, E_THEIR_CO, "0"],
+      // Margaret: an older account I may read, a newer one I may not.
+      [E_PERSON_3, E_ACME, "2 days"],
+      [E_PERSON_3, E_THEIR_CO, "1 day"],
+    ] as const) {
       await q(
         `insert into relations (id, user_id, workspace_id, source_entity_id, target_entity_id, type, created_at)
-         values ($1, $2, $3, $4, $5, 'works_at', now())`,
-        [randomUUID(), ME, W, from, to]
+         values ($1, $2, $3, $4, $5, 'works_at', now() - $6::interval)`,
+        [randomUUID(), ME, W, from, to, ago]
       );
     }
     // The visible role's move and the hidden one's, on the thing's log.
@@ -842,6 +847,12 @@ describe("a thing's roles and its account line", () => {
   it("an account the reader may not read is no line at all", async () => {
     const a = await statusOf(E_PERSON_2);
     expect(a).not.toHaveProperty("account");
+    expect(JSON.stringify(a)).not.toContain(E_THEIR_CO);
+  });
+
+  it("the newest account the reader may read stands; a newer hidden one is skipped", async () => {
+    const a = await statusOf(E_PERSON_3);
+    expect(a.account).toMatchObject({ id: E_ACME, name: "Acme" });
     expect(JSON.stringify(a)).not.toContain(E_THEIR_CO);
   });
 
