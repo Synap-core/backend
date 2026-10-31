@@ -7,7 +7,10 @@
  * declares `stuckAfterDays`) and what it waits on (`status-facts.ts`). A
  * paused thing also carries its current `hold`; a session carries `live` (the
  * 5-minute working rule, `isSessionWorkingNow`) and its `nextMove` (THE packet
- * rule, read through the list rows' batched sections). Every answer carries
+ * rule, read through the list rows' batched sections). A thing with a declared
+ * lifecycle and a goal carry theirs too, the same shape from the facts this
+ * read already holds (`deriveThingNextMove`, `deriveGoalNextMove`,
+ * `next-move.ts`): no further read. Every answer carries
  * its `tone` (THE tone table: the declared option's, else the status word's).
  * A thing carries its `roles` (the role facets it wears, each with its own
  * status, under THE facet visibility rule, `readThingRoles`) and, when it
@@ -100,8 +103,14 @@ import {
   type PathSourceRow,
 } from "../focus-sessions/session-path-sections.js";
 import { loadSessionLiveness } from "../runs/session-liveness.js";
+import {
+  deriveGoalNextMove,
+  deriveThingNextMove,
+  type NextMoveHoldFact,
+} from "./next-move.js";
 import { readThingRoles, type ThingRoleRow } from "./status-roles.js";
 import {
+  holdWaitingOnRef,
   lastTransitionAt,
   readWaitingOnFor,
   runStatusCategory,
@@ -176,7 +185,10 @@ export interface StatusOf {
   live?:
     | { status: "ok"; state: "working" | "idle"; lastActivityAt: string | null }
     | Unavailable;
-  /** Sessions only: THE next move (`deriveNextMove`). */
+  /**
+   * THE next move: a session's (`deriveNextMove`), a thing's with a declared
+   * lifecycle (`deriveThingNextMove`) and a goal's (`deriveGoalNextMove`).
+   */
   nextMove?: ContinuationNextMove;
   /**
    * Things with a declared lifecycle, on `include: ["moves"]` only: the
@@ -224,6 +236,21 @@ function movesFrom(
     humanOnly: s.humanOnly === true,
     needsHold: s.category === "paused",
   }));
+}
+
+/** A paused subject's hold as the next move reads it (with its waiting-on ref). */
+function holdFact(
+  hold: RecordedHold | Unavailable | undefined
+): NextMoveHoldFact {
+  if (!hold) return null;
+  if (!("on" in hold)) return "unavailable";
+  return { hold, ref: holdWaitingOnRef(hold) };
+}
+
+/** The open sessions of a goal's tree (not done, not lost). */
+function openSessionsOf(rollup: StatusOfRollup): number {
+  const c = rollup.byCategory;
+  return (c.open ?? 0) + (c.active ?? 0) + (c.paused ?? 0);
 }
 
 /** A part of the answer that could not be read is `unavailable`, never empty. */
@@ -667,17 +694,34 @@ export async function readStatusOf(
             ? stuckForDays(since.since, afterDays)
             : null;
         const thingRoles = await rolesOf(t.id);
+        const stuck =
+          forDays !== null && afterDays !== undefined
+            ? { afterDays, forDays }
+            : undefined;
+        const waitingOn = await waitingOf(t.id);
+        const held = await holdOf(`entity:${t.id}`, category);
         return {
           id: t.id,
           type: "entity",
           name: t.title ?? null,
           ...line,
           ...since,
-          ...(forDays !== null && afterDays !== undefined
-            ? { stuck: { afterDays, forDays } }
+          ...(stuck ? { stuck } : {}),
+          waitingOn,
+          ...held,
+          ...(lifecycle
+            ? {
+                nextMove: deriveThingNextMove({
+                  lifecycle,
+                  status: t.status ?? null,
+                  category,
+                  label: line.label,
+                  stuck,
+                  waitingOn: "status" in waitingOn ? "unavailable" : waitingOn,
+                  hold: holdFact(held.hold),
+                }),
+              }
             : {}),
-          waitingOn: await waitingOf(t.id),
-          ...(await holdOf(`entity:${t.id}`, category)),
           ...(withMoves && lifecycle
             ? { moves: movesFrom(lifecycle, t.status ?? null) }
             : {}),
@@ -715,22 +759,38 @@ export async function readStatusOf(
       (async (): Promise<StatusOf> => {
         const category = trackStatusCategory(g.status);
         const since = sinceOf(`track:${g.id}`, g.createdAt);
+        const facts = await orUnavailable(
+          goalFacts!.then((f) => f.get(g.id) ?? UNAVAILABLE)
+        );
+        const held = await holdOf(`track:${g.id}`, category);
+        const tree = await rollupOf(g.id);
+        const label = resolveTrackStatusLabel(g.status);
         return {
           id: g.id,
           type: "goal",
           name: g.name,
           status: g.status,
-          label: resolveTrackStatusLabel(g.status),
+          label,
           category,
           tone: toneOf(g.status),
           ...since,
-          waitingOn: await orUnavailable(
-            goalFacts!.then((f) => f.get(g.id)?.waitingOn ?? [])
-          ),
-          ...(await holdOf(`track:${g.id}`, category)),
+          waitingOn: "status" in facts ? UNAVAILABLE : facts.waitingOn,
+          ...held,
+          nextMove: deriveGoalNextMove({
+            category,
+            label,
+            hold: holdFact(held.hold),
+            facts: "status" in facts ? "unavailable" : facts,
+            // The tree's open sessions, when the rollup was asked for (it
+            // counts those serving it and its sub-goals too).
+            ...(tree.rollup && !("status" in tree.rollup)
+              ? { treeOpenSessions: openSessionsOf(tree.rollup) }
+              : {}),
+            readerId: userId,
+          }),
           ...(await historyOf({ kind: "goal", id: g.id })),
           ...(await linksOf(g.id)),
-          ...(await rollupOf(g.id)),
+          ...tree,
           ...(await signalsOf([
             {
               key: `track:${g.id}`,

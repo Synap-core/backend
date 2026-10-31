@@ -1190,3 +1190,49 @@ describe('include: ["signals"] — only the episodes still open', () => {
     expect(await statusOf(E_STUCK)).not.toHaveProperty("signals");
   });
 });
+
+describe("readStatusOf: THE next move of a thing and a goal", () => {
+  it("a thing with a lifecycle carries its next move; one without carries none", async () => {
+    const out = await readStatusOf(ME, [E_SENT, E_STUCK, E_HELD, E_PLAIN]);
+    const by = new Map(out.map((a) => [a.id, a as StatusOf]));
+    // Waiting on its contact: named, nobody here acts.
+    expect(by.get(E_SENT)?.nextMove).toMatchObject({
+      kind: "waiting_on",
+      actor: "none",
+      label: "Waiting on Ada Lovelace",
+      waitKind: "their_reply",
+      entityId: C_MINE,
+    });
+    // Nothing waited on: its next main-path step, said stuck.
+    expect(by.get(E_STUCK)?.nextMove).toMatchObject({
+      kind: "step",
+      actor: "user",
+      label: "Next: Proposal sent",
+      to: "sent",
+      reason: expect.stringMatching(/stuck after 3/),
+    });
+    // Paused: what its hold waits on, the session's own rung.
+    expect(by.get(E_HELD)?.nextMove).toMatchObject({
+      kind: "waiting_on_hold",
+      actor: "none",
+      reason: expect.stringMatching(/^This thing is paused/),
+    });
+    expect(by.get(E_PLAIN)).not.toHaveProperty("nextMove");
+  });
+
+  it("a goal carries its next move: the slot its run owes you, else start work", async () => {
+    const out = await readStatusOf(ME, [G, G_QUIET]);
+    const by = new Map(out.map((a) => [a.id, a as StatusOf]));
+    expect(by.get(G)?.nextMove).toMatchObject({
+      kind: "owed_slot",
+      actor: "user",
+      label: 'Provide "Which plan"',
+      sessionId: S_ACTIVE,
+    });
+    expect(by.get(G_QUIET)?.nextMove).toMatchObject({
+      kind: "start_work",
+      actor: "user",
+      label: "Start work on it",
+    });
+  });
+});
