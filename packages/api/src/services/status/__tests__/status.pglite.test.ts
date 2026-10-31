@@ -15,7 +15,13 @@
  *     (named), its work, its moves; another person's project is `null`;
  *   - `withGoalRollups`: a failed rollup read is `unavailable`, never zeros;
  *   - goal rollups follow `serves`: a session filed in AND serving a goal
- *     counts once there, a serving session counts, a sub-goal is a child.
+ *     counts once there, a serving session counts, a sub-goal is a child;
+ *   - a thing's `roles` (only those the reader may see) and its `account`
+ *     line (the account it works at, when the reader may read it);
+ *   - `include`: `history` (THE timeline, kept to status events; a hidden
+ *     role's move left out), `links` (`serves` both ways, a hidden end left
+ *     out), `rollup` (a goal's tree: each session and goal once, a loop cut
+ *     and named, stuck and waits per kind), `signals` (only open episodes).
  *
  * Only `getEffectiveLifecycle` is stubbed (its own suites prove it).
  */
@@ -26,6 +32,7 @@ vi.setConfig({ testTimeout: 120_000 });
 
 const holder = vi.hoisted(() => ({ db: undefined as unknown }));
 const DEAL = "11111111-1111-4111-8111-111111111111";
+const LEAD = "44444444-4444-4444-8444-444444444444";
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -36,6 +43,17 @@ vi.mock("@synap/database", async (importOriginal) => {
       db: unknown
     ) => object) {
       async getEffectiveLifecycle(profileId: string) {
+        if (profileId === LEAD) {
+          return {
+            propertySlug: "leadStage",
+            options: [
+              { key: "new", category: "open" },
+              { key: "talking", category: "active", label: "In talks" },
+              { key: "parked", category: "paused" },
+            ],
+            unclassified: [],
+          };
+        }
         if (profileId !== DEAL) return null;
         return {
           propertySlug: "stage",
@@ -79,9 +97,13 @@ import { drizzle } from "drizzle-orm/pglite";
 import { SQL, is } from "drizzle-orm";
 import { PgTable, getTableConfig } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
-import { readStatusOf } from "../status-read.js";
+import { readStatusOf, type StatusOf } from "../status-read.js";
 import { LIFECYCLE_CATEGORY_TONE } from "@synap-core/types/lifecycle";
-import { resolveStatusTone } from "@synap-core/types/units";
+import {
+  STATUS_HISTORY_EVENT_KINDS,
+  resolveStatusTone,
+} from "@synap-core/types/units";
+import { closesDependencyCycle } from "../../links/dependency-links.js";
 import { resolveWaitingOnReasonLabel } from "@synap-core/types/vocabulary";
 import { listOpenGoalTracks } from "../../discover/open-goals.js";
 import {
@@ -672,5 +694,510 @@ describe("goal rollups follow `serves`", () => {
     expect(child).toMatchObject({ work: { active: 1 } });
     expect(child).not.toHaveProperty("children");
     expect(child).not.toHaveProperty("moved");
+  });
+});
+
+/** The one answer for `id`, as a status (fails on `unknown`). */
+async function statusOf(
+  id: string,
+  include?: Parameters<typeof readStatusOf>[2]
+): Promise<StatusOf> {
+  const [a] = await readStatusOf(ME, [id], include);
+  if (!a || a.type === "unknown") throw new Error(`${id} read as unknown`);
+  return a as StatusOf;
+}
+
+async function outbox(t: Record<string, unknown>) {
+  const at = new Date().toISOString();
+  await q(
+    `insert into lifecycle_transition_outbox (transition_id, transition, created_at) values ($1, $2::jsonb, now())`,
+    [
+      (t.transitionId as string | undefined) ?? randomUUID(),
+      JSON.stringify({
+        transitionId: randomUUID(),
+        userId: ME,
+        workspaceId: null,
+        actorKind: "human",
+        recordedAt: at,
+        occurredAt: at,
+        ...t,
+      }),
+    ]
+  );
+}
+
+describe("a thing's roles and its account line", () => {
+  const E_ROLE = randomUUID();
+  const F_LEAD = randomUUID();
+  const F_HIDDEN = randomUUID();
+  const SECRET = randomUUID();
+  const COMPANY = randomUUID();
+  const E_PERSON = randomUUID();
+  const E_PERSON_2 = randomUUID();
+  const E_ACME = randomUUID();
+  const E_THEIR_CO = randomUUID();
+  const E_PERSON_3 = randomUUID();
+  const F_ACME_LEAD = randomUUID();
+
+  beforeAll(async () => {
+    for (const [id, slug, name] of [
+      [LEAD, "lead", "Lead"],
+      [SECRET, "secret-role", "Secret role"],
+    ]) {
+      await q(
+        `insert into profiles (id, slug, display_name, profile_kind, entity_scope) values ($1, $2, $3, 'role', 'workspace')`,
+        [id, slug, name]
+      );
+    }
+    await q(
+      `insert into profiles (id, slug, display_name, profile_kind, entity_scope) values ($1, 'company', 'Company', 'kind', 'workspace')`,
+      [COMPANY]
+    );
+    for (const [id, owner, ws, profile, title] of [
+      [E_ROLE, ME, W, PERSON, "Grace Hopper"],
+      [E_PERSON, ME, W, PERSON, "Ada"],
+      [E_PERSON_2, ME, W, PERSON, "Linus"],
+      [E_PERSON_3, ME, W, PERSON, "Margaret"],
+      [E_ACME, ME, W, COMPANY, "Acme"],
+      [E_THEIR_CO, OTHER, null, COMPANY, "Their company"],
+    ] as const) {
+      await q(
+        `insert into entities (id, user_id, workspace_id, profile_id, title, properties, created_at, updated_at)
+         values ($1, $2, $3, $4, $5, '{}'::jsonb, now(), now())`,
+        [id, owner, ws, profile, title]
+      );
+    }
+    // A role in my space, and another person's pod-wide one I may not see.
+    for (const [id, entity, profile, owner, ws, status, cat] of [
+      [F_LEAD, E_ROLE, LEAD, ME, W, "talking", "active"],
+      [F_HIDDEN, E_ROLE, SECRET, OTHER, null, "x", "active"],
+      [F_ACME_LEAD, E_ACME, LEAD, ME, W, "new", "open"],
+    ] as const) {
+      await q(
+        `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, status, status_category, created_at, updated_at)
+         values ($1, $2, $3, $4, $5, $6, $7, now(), now())`,
+        [id, entity, profile, owner, ws, status, cat]
+      );
+    }
+    for (const [from, to, ago] of [
+      [E_PERSON, E_ACME, "0"],
+      [E_PERSON_2, E_THEIR_CO, "0"],
+      // Margaret: an older account I may read, a newer one I may not.
+      [E_PERSON_3, E_ACME, "2 days"],
+      [E_PERSON_3, E_THEIR_CO, "1 day"],
+    ] as const) {
+      await q(
+        `insert into relations (id, user_id, workspace_id, source_entity_id, target_entity_id, type, created_at)
+         values ($1, $2, $3, $4, $5, 'works_at', now() - $6::interval)`,
+        [randomUUID(), ME, W, from, to, ago]
+      );
+    }
+    // The visible role's move and the hidden one's, on the thing's log.
+    await outbox({
+      subjectType: "entity",
+      subjectId: E_ROLE,
+      facetId: F_LEAD,
+      role: "lead",
+      from: "new",
+      to: "talking",
+      category: "active",
+    });
+    await outbox({
+      subjectType: "entity",
+      subjectId: E_ROLE,
+      facetId: F_HIDDEN,
+      role: "secret-role",
+      to: "x",
+      category: "active",
+    });
+  });
+
+  it("lists the roles the reader may see, each with its own status", async () => {
+    const a = await statusOf(E_ROLE);
+    expect(a.roles).toEqual([
+      {
+        facetId: F_LEAD,
+        role: "lead",
+        roleName: "Lead",
+        status: "talking",
+        label: "In talks",
+        category: "active",
+        tone: LIFECYCLE_CATEGORY_TONE.active,
+      },
+    ]);
+    expect(JSON.stringify(a)).not.toContain(F_HIDDEN);
+    expect(a).not.toHaveProperty("account");
+  });
+
+  it("carries the account it works at, with the account's roles", async () => {
+    const a = await statusOf(E_PERSON);
+    expect(a.roles).toEqual([]);
+    expect(a.account).toMatchObject({
+      id: E_ACME,
+      name: "Acme",
+      status: null,
+      category: null,
+      roles: [
+        { facetId: F_ACME_LEAD, role: "lead", status: "new", category: "open" },
+      ],
+      link: expect.any(String),
+    });
+  });
+
+  it("an account the reader may not read is no line at all", async () => {
+    const a = await statusOf(E_PERSON_2);
+    expect(a).not.toHaveProperty("account");
+    expect(JSON.stringify(a)).not.toContain(E_THEIR_CO);
+  });
+
+  it("the newest account the reader may read stands; a newer hidden one is skipped", async () => {
+    const a = await statusOf(E_PERSON_3);
+    expect(a.account).toMatchObject({ id: E_ACME, name: "Acme" });
+    expect(JSON.stringify(a)).not.toContain(E_THEIR_CO);
+  });
+
+  it('include: ["history"] is the timeline kept to status moves, a hidden role left out', async () => {
+    const plain = await statusOf(E_ROLE);
+    expect(plain).not.toHaveProperty("history");
+    const a = await statusOf(E_ROLE, { include: ["history"] });
+    expect(a.history).toMatchObject({
+      truncated: false,
+      events: [
+        {
+          kind: "status_moved",
+          from: "new",
+          to: "talking",
+          role: "lead",
+        },
+      ],
+    });
+    expect(JSON.stringify(a.history)).not.toContain("secret-role");
+
+    // A thing's own pause, with its hold.
+    const held = await statusOf(E_HELD, { include: ["history"] });
+    expect(held.history).toMatchObject({
+      events: [
+        { kind: "status_moved", to: "on_hold", hold: { on: "external" } },
+      ],
+    });
+  });
+
+  it("a goal's and a session's history keep only their status events", async () => {
+    await outbox({
+      subjectType: "focus_session",
+      subjectId: S_ACTIVE,
+      from: "forming",
+      to: "active",
+      category: "active",
+    });
+    const [goal, session] = await readStatusOf(ME, [G, S_ACTIVE], {
+      include: ["history"],
+    });
+    for (const a of [goal, session]) {
+      const events = (a as StatusOf).history as {
+        events: Array<{ kind: string }>;
+      };
+      expect(events.events.length).toBeGreaterThan(0);
+      for (const e of events.events) {
+        expect(STATUS_HISTORY_EVENT_KINDS as readonly string[]).toContain(
+          e.kind
+        );
+      }
+    }
+    expect((session as StatusOf).history).toMatchObject({
+      events: [{ kind: "status_moved", from: "forming", to: "active" }],
+    });
+  });
+});
+
+describe('include: ["links"] — the serves edges, both ways', () => {
+  const G_TOP = randomUUID();
+  const G_SUB = randomUUID();
+  const S_WORK = randomUUID();
+
+  beforeAll(async () => {
+    for (const [id, name] of [
+      [G_TOP, "Grow"],
+      [G_SUB, "Pricing"],
+    ]) {
+      await q(
+        `insert into project_tracks (id, project_id, user_id, name, definition_snapshot, method_version, status, criteria, created_at, updated_at)
+         values ($1, $2, $3, $4, '{}'::jsonb, '1', 'active', '[]'::jsonb, now(), now())`,
+        [id, P, ME, name]
+      );
+    }
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, project_id, title, goal, status, origin, expected_outputs, metadata, started_at, created_at, updated_at)
+       values ($1, $2, $3, $4, 'Write the page', 'Do it', 'active', 'agent', '[]'::jsonb, '{}'::jsonb, now(), now(), now())`,
+      [S_WORK, ME, W, P]
+    );
+    for (const [fromType, fromId, metadata] of [
+      ["track", G_SUB, {}],
+      ["session", S_WORK, { criterionKey: "page-live" }],
+      // Another person's session serving my goal: never named.
+      ["session", S_THEIRS, {}],
+    ] as const) {
+      await q(
+        `insert into links (id, workspace_id, from_type, from_id, to_type, to_id, link_type, metadata, created_by, created_at)
+         values ($1, null, $2, $3, 'track', $4, 'serves', $5::jsonb, $6, now())`,
+        [randomUUID(), fromType, fromId, G_TOP, JSON.stringify(metadata), ME]
+      );
+    }
+  });
+
+  it("a goal lists what serves it, a hidden end left out; a session what it serves", async () => {
+    const [top, work] = await readStatusOf(ME, [G_TOP, S_WORK], {
+      include: ["links"],
+    });
+    const links = (top as StatusOf).links as {
+      serves: unknown[];
+      servedBy: Array<{ id: string }>;
+    };
+    expect(links.serves).toEqual([]);
+    expect(links.servedBy).toHaveLength(2);
+    expect(links.servedBy).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "goal",
+          id: G_SUB,
+          name: "Pricing",
+          category: "active",
+        }),
+        expect.objectContaining({
+          type: "session",
+          id: S_WORK,
+          name: "Write the page",
+          criterionKey: "page-live",
+        }),
+      ])
+    );
+    expect(JSON.stringify(links)).not.toContain(S_THEIRS);
+    expect((work as StatusOf).links).toEqual({
+      serves: [
+        expect.objectContaining({
+          type: "goal",
+          id: G_TOP,
+          criterionKey: "page-live",
+        }),
+      ],
+      servedBy: [],
+    });
+    // Without the include: no links.
+    expect(await statusOf(G_TOP)).not.toHaveProperty("links");
+  });
+});
+
+describe('include: ["rollup"] — a goal\'s tree down serves', () => {
+  const ROOT = randomUUID();
+  const A = randomUUID();
+  const B = randomUUID();
+  const S_R = randomUUID();
+  const S_A = randomUUID(); // filed in A AND serving ROOT: once
+  const S_B_STALE = randomUUID();
+  const S_B_DONE = randomUUID();
+  const LOOP_1 = randomUUID();
+  const LOOP_2 = randomUUID();
+  const S_L1 = randomUUID();
+  const S_L2 = randomUUID();
+
+  async function goal(id: string, name: string) {
+    await q(
+      `insert into project_tracks (id, project_id, user_id, name, definition_snapshot, method_version, status, criteria, created_at, updated_at)
+       values ($1, $2, $3, $4, '{}'::jsonb, '1', 'active', '[]'::jsonb, now(), now())`,
+      [id, P, ME, name]
+    );
+  }
+  async function session(
+    id: string,
+    trackId: string,
+    status: string,
+    outputs: unknown[] = []
+  ) {
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, project_id, track_id, goal, status, origin, expected_outputs, metadata, started_at, closed_at, created_at, updated_at)
+       values ($1, $2, $3, $4, $5, 'Do it', $6, 'agent', $7::jsonb, '{}'::jsonb, now(), $8, now(), now())`,
+      [
+        id,
+        ME,
+        W,
+        P,
+        trackId,
+        status,
+        JSON.stringify(outputs),
+        status === "closed" ? new Date() : null,
+      ]
+    );
+  }
+  async function serves(fromType: string, fromId: string, toId: string) {
+    await q(
+      `insert into links (id, workspace_id, from_type, from_id, to_type, to_id, link_type, metadata, created_by, created_at)
+       values ($1, null, $2, $3, 'track', $4, 'serves', '{}'::jsonb, $5, now())`,
+      [randomUUID(), fromType, fromId, toId, ME]
+    );
+  }
+
+  beforeAll(async () => {
+    for (const [id, name] of [
+      [ROOT, "Root"],
+      [A, "A"],
+      [B, "B"],
+      [LOOP_1, "Loop one"],
+      [LOOP_2, "Loop two"],
+    ]) {
+      await goal(id, name);
+    }
+    await session(S_R, ROOT, "active");
+    await session(S_A, A, "active", [
+      {
+        key: "pick",
+        label: "Which plan",
+        kind: "decision",
+        owner: "human",
+        status: "pending",
+        blockedReason: "decision",
+        owedSince: new Date().toISOString(),
+      },
+    ]);
+    await session(S_B_STALE, B, "stale");
+    await session(S_B_DONE, B, "closed");
+    // ROOT <- A <- B, and B serves ROOT too: B is reached twice.
+    await serves("track", A, ROOT);
+    await serves("track", B, A);
+    await serves("track", B, ROOT);
+    await serves("session", S_A, ROOT);
+    await session(S_L1, LOOP_1, "active");
+    await session(S_L2, LOOP_2, "active");
+    await serves("track", LOOP_2, LOOP_1);
+  });
+
+  it("counts each goal and each session once, its stuck and its waits per kind", async () => {
+    const a = await statusOf(ROOT, { include: ["rollup"] });
+    expect(a.rollup).toMatchObject({
+      goals: 3,
+      sessions: 4,
+      byCategory: { active: 2, paused: 1, done: 1 },
+      stuck: 1,
+      waits: { decide: 1 },
+    });
+    expect(a.rollup).not.toHaveProperty("cycle");
+    const children = (a.rollup as { children: Array<{ id: string }> }).children;
+    expect(children.map((c) => c.id).sort()).toEqual([A, B].sort());
+    expect(children.find((c) => c.id === A)).toMatchObject({
+      name: "A",
+      category: "active",
+      // A's own subtree: A and B.
+      byCategory: { active: 1, paused: 1, done: 1 },
+      stuck: 1,
+      waits: { decide: 1 },
+    });
+    expect(children.find((c) => c.id === B)).toMatchObject({
+      byCategory: { paused: 1, done: 1 },
+      stuck: 1,
+      waits: {},
+    });
+    // Only goals carry a rollup; without the include, none.
+    expect(await statusOf(ROOT)).not.toHaveProperty("rollup");
+    expect(await statusOf(S_R, { include: ["rollup"] })).not.toHaveProperty(
+      "rollup"
+    );
+  });
+
+  it("the door refuses a loop; one already stored is cut once and named", async () => {
+    expect(
+      await closesDependencyCycle(
+        { fromType: "track", fromId: LOOP_1, toType: "track", toId: LOOP_2 },
+        "serves"
+      )
+    ).toBe(true);
+    // An older row may hold the loop the door now refuses.
+    await serves("track", LOOP_1, LOOP_2);
+    const a = await statusOf(LOOP_1, { include: ["rollup"] });
+    expect(a.rollup).toMatchObject({
+      goals: 2,
+      sessions: 2,
+      byCategory: { active: 2 },
+      cycle: true,
+      children: [{ id: LOOP_2, byCategory: { active: 2 } }],
+    });
+  });
+});
+
+describe('include: ["signals"] — only the episodes still open', () => {
+  const E_HELD_2 = randomUUID();
+  const HOLD_T = randomUUID();
+  const E_LEADY = randomUUID();
+  const F_LEADY = randomUUID();
+
+  async function raised(
+    subjectId: string,
+    signal: string,
+    episodeKey: string,
+    daysAgo = 0
+  ) {
+    await q(
+      `insert into status_signal_raised (subject_type, subject_id, signal, episode_key, raised_at)
+       values ('entity', $1, $2, $3, ${ago(daysAgo)})`,
+      [subjectId, signal, episodeKey]
+    );
+  }
+
+  beforeAll(async () => {
+    await q(
+      `insert into entities (id, user_id, workspace_id, profile_id, title, status, status_category, properties, created_at, updated_at)
+       values ($1, $2, null, $3, 'Held, review due', 'on_hold', 'paused', '{}'::jsonb, now(), now())`,
+      [E_HELD_2, ME, DEAL]
+    );
+    const since = new Date().toISOString();
+    await outbox({
+      transitionId: HOLD_T,
+      subjectType: "entity",
+      subjectId: E_HELD_2,
+      to: "on_hold",
+      category: "paused",
+      hold: {
+        on: "person",
+        resumeTo: "sent",
+        since,
+        reviewBy: "2026-01-01",
+      },
+    });
+    await q(
+      `insert into entities (id, user_id, workspace_id, profile_id, title, properties, created_at, updated_at)
+       values ($1, $2, $3, $4, 'Leady', '{}'::jsonb, now(), now())`,
+      [E_LEADY, ME, W, PERSON]
+    );
+    await q(
+      `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, status, status_category, created_at, updated_at)
+       values ($1, $2, $3, $4, $5, 'talking', 'active', now(), now())`,
+      [F_LEADY, E_LEADY, LEAD, ME, W]
+    );
+    // E_STUCK stands in `negotiating` since it was created (10 days ago).
+    await raised(E_STUCK, "stuck", "negotiating:now");
+    await raised(E_STUCK, "late", "draft:then:2026-01-01"); // another step
+    await raised(E_STUCK, "stuck", "negotiating:before", 20); // before it entered
+    await raised(E_STUCK, "gossip", "negotiating:x"); // not a signal
+    await raised(E_HELD_2, "hold_review_due", `${HOLD_T}:2026-01-01`);
+    await raised(E_HELD_2, "hold_review_due", `${randomUUID()}:2025-01-01`);
+    await raised(F_LEADY, "stuck", "talking:now");
+  });
+
+  it("a thing's own, its hold's while it stands, and its role's", async () => {
+    const stuck = await statusOf(E_STUCK, { include: ["signals"] });
+    expect(stuck.signals).toEqual([
+      { signal: "stuck", role: null, raisedAt: expect.any(String) },
+    ]);
+    const held = await statusOf(E_HELD_2, { include: ["signals"] });
+    expect(held.signals).toEqual([
+      { signal: "hold_review_due", role: null, raisedAt: expect.any(String) },
+    ]);
+    const leady = await statusOf(E_LEADY, { include: ["signals"] });
+    expect(leady.signals).toEqual([
+      { signal: "stuck", role: "lead", raisedAt: expect.any(String) },
+    ]);
+    // A goal with none says so; without the include, no signals at all.
+    expect(await statusOf(G, { include: ["signals"] })).toMatchObject({
+      signals: [],
+    });
+    expect(await statusOf(E_STUCK)).not.toHaveProperty("signals");
   });
 });

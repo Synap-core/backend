@@ -11,7 +11,10 @@
  *                 facts of its PRs and devbox jobs (`dev.pr_*`, `ci.finished`)
  *                 and the decisions filed in it;
  *   pull_request  the dev facts about it (`dev.pr_*`, the CI runs on its
- *                 heads).
+ *                 heads);
+ *   entity        a thing's status moves and its visible roles' (the
+ *                 transition log). Read through `statusOf`'s
+ *                 `include: ["history"]`; no door names it on its own.
  *
  * TIME: `at` is when the thing HAPPENED (a move's `occurredAt`, a fact's
  * occurred time). `recordedAt` is present only where the pod recorded it
@@ -81,6 +84,8 @@ export type DevTimelineEvent = DevTimelineEventBase &
         reason: string | null;
         /** What a pause waits on and how it resumes; null for any other move. */
         hold: RecordedHold | null;
+        /** A thing's ROLE moved (its slug); absent for its own status. */
+        role?: string;
       }
     | {
         kind: "pr_opened" | "pr_merged" | "pr_closed";
@@ -122,6 +127,11 @@ export type TimelineWire =
     }
   | {
       subject: { kind: "session"; id: string; title: string };
+      events: DevTimelineEvent[];
+      truncated: boolean;
+    }
+  | {
+      subject: { kind: "entity"; id: string; title: string | null };
       events: DevTimelineEvent[];
       truncated: boolean;
     }

@@ -925,6 +925,22 @@ export function waitKindOf(source: WaitingOnSource): WaitKind {
   }
 }
 
+/**
+ * The waits of a set of sources counted per wait kind ({@link waitKindOf}):
+ * the chips a rollup draws. Every source counts, as `waitKindOf` gives every
+ * source a kind; a kind with none is left out.
+ */
+export function countWaitKinds(
+  sources: readonly WaitingOnSource[]
+): Partial<Record<WaitKind, number>> {
+  const out: Partial<Record<WaitKind, number>> = {};
+  for (const s of sources) {
+    const k = waitKindOf(s);
+    out[k] = (out[k] ?? 0) + 1;
+  }
+  return out;
+}
+
 export interface WaitingOnMark {
   reason: WaitingOnReason;
   count: number;
