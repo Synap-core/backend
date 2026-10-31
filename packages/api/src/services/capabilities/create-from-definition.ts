@@ -86,6 +86,7 @@ import {
   skillsRouter,
   SKILL_DEFINITION_APPLIER,
   assertSkillCodeAllowed,
+  assertBoxNotReadOnly,
   boxSkillMetadata,
   skillRequiresEdges,
 } from "../../routers/skills.js";
@@ -1091,6 +1092,19 @@ export async function createCapabilityFromDefinition(
         )
       )
       .limit(1);
+    // ...and on the bag the row will STORE, not only the template's: the
+    // re-apply MERGES the declared keys onto the live bag
+    // (`projectSkillMetadata`), so a live `readOnly: true` set through the
+    // edit door survives a template that moves the skill to box and says
+    // nothing about readOnly. Once re-approved, the gate would auto-run the
+    // script (`verbDeclaresReadOnly`). A template that moves a read-only
+    // skill to box declares `readOnly: false`.
+    if (s.executionMode === "box" && existingSkill) {
+      assertBoxNotReadOnly(
+        projectSkillMetadata(existingSkill.metadata, s.metadata) ??
+          existingSkill.metadata
+      );
+    }
     if (existingSkill) {
       // Reconcile ALL code-owned (definition) fields — not just kind/code/
       // providerSpec — so a verb that gains a parameter or changes its
