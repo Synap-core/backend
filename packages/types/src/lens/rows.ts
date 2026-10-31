@@ -464,10 +464,7 @@ function itemState(
   s: LensNeedsYouSignal,
   ownState: UnitStateInput
 ): UnitStateInput {
-  // A draft keeps its own mark whatever its stamp: nobody accepted it, so
-  // nothing is happening in it, and a pile of drafts must not outshout the
-  // real asks (its asks are their own rows; this one carries the verb).
-  if (s.kind === "draft-asks" || !isWaitKind(s.waitKind)) return ownState;
+  if (!isWaitKind(s.waitKind)) return ownState;
   const input = unitStateInputOfWaitKind(s.waitKind);
   const n = itemCount(s);
   const scaled = (v: number | null | undefined) => (v ? v * n : v);
@@ -572,8 +569,8 @@ function itemShape(
     case "draft-asks":
       return {
         // Not accepted yet ⇒ nothing has happened in it: `not_started`, never
-        // `working` (an agent drafted it; nobody is at it), even when the pod
-        // stamps its `answer` wait kind (`itemState`).
+        // `working` (an agent drafted it; nobody is at it). A pod that stamps
+        // its `answer` wait kind makes it your turn instead (`itemState`).
         state: { everStarted: false },
         objectKind: "session",
         // No ask count: since the founder decision of 2026-10-22 a draft's
