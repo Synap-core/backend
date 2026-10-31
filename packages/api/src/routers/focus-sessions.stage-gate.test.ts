@@ -175,8 +175,12 @@ describe("focusSessions.update — the ungated path is unchanged", () => {
     })) as { status: string };
 
     expect(proposalCalls).toEqual([]);
-    expect(sets).toHaveLength(1);
+    // The door's patch, then the stage ledger's entry for that move (0382).
+    expect(sets).toHaveLength(2);
     expect(sets[0]).toMatchObject({ currentStage: "review" });
+    expect(
+      sets.filter((s) => Object.keys(s as object).join() === "stageHistory")
+    ).toHaveLength(1);
     expect(out.status).not.toBe("paused");
   });
 
