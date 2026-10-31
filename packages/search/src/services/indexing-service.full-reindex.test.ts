@@ -144,15 +144,24 @@ describe("what the `documents` index reads", () => {
   // The rendered SQL of the `where` a documents read passed. The rule itself
   // is proven on a real Postgres (`filed-document.pglite.test.ts`); this proves
   // BOTH index paths reach it, so a body can never be indexed as a document.
+  const text = (x: unknown): string => {
+    if (Array.isArray(x)) return x.map(text).join("");
+    const o = x as { queryChunks?: unknown; value?: unknown } | null;
+    if (o?.queryChunks) return text(o.queryChunks);
+    if (Array.isArray(o?.value)) return (o.value as string[]).join("");
+    return "";
+  };
   const render = async (where: unknown): Promise<string> => {
-    const { PgDialect } = await import("drizzle-orm/pg-core");
-    const orm = await import("drizzle-orm");
+    const { and, isNull } = await import("@synap/database");
     const { documents } = await import("@synap/database/schema");
-    const sql =
+    return text(
       typeof where === "function"
-        ? (where as (d: unknown, ops: unknown) => unknown)(documents, orm)
-        : where;
-    return new PgDialect().sqlToQuery(sql as never).sql;
+        ? (where as (d: unknown, ops: unknown) => unknown)(documents, {
+            and,
+            isNull,
+          })
+        : where
+    );
   };
 
   it("a full reindex leaves out another row's body (entity, view, skill)", async () => {
