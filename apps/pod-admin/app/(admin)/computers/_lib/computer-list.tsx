@@ -12,7 +12,6 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Laptop } from "lucide-react";
-import type { ReactNode } from "react";
 import { formatRelative } from "../../../../lib/format";
 import { CommandLine } from "../../../_lib/command-line";
 import { FilterChips } from "../../components/filter-chips";
@@ -37,7 +36,9 @@ import {
   computerCounts,
   computerFilterOf,
   computerMatches,
+  expiredCount,
   expiredLine,
+  expiredReconnectLine,
   keyStatus,
   ownerWords,
   platformLabel,
@@ -113,8 +114,7 @@ export function ComputerList({
             )}
           </div>
           <p className="text-[12.5px] leading-relaxed text-foreground/65">
-            Its agents can&apos;t reach the pod until it has a fresh key. Run
-            this on that computer:
+            {expiredReconnectLine(expiredCount(all))}
           </p>
           <CommandLine command={RECONNECT_COMMAND} />
         </div>
@@ -131,8 +131,16 @@ export function ComputerList({
             message="Couldn't load computers."
             onRetry={onRetry}
           />
+        ) : all.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 px-3 py-8 text-center">
+            <p className="text-[12.5px] text-foreground/65">
+              A computer appears here the first time an agent connects from it.
+              To add one, run this on that machine:
+            </p>
+            <CommandLine command={CONNECT_COMMAND} />
+          </div>
         ) : visible.length === 0 ? (
-          <ResourceRowEmpty message={emptyMessage(filter, all.length)} />
+          <ResourceRowEmpty message={emptyMessage(filter)} />
         ) : (
           <ResponsiveTable
             ariaLabel="Computers"
@@ -170,15 +178,8 @@ export function ComputerList({
   );
 }
 
-function emptyMessage(filter: ComputerFilter, total: number): ReactNode {
-  if (total === 0)
-    return (
-      <>
-        A computer appears here the first time an agent connects from it. To add
-        one, run <code className="font-mono">{CONNECT_COMMAND}</code> on that
-        machine.
-      </>
-    );
+/** A filter that matches nothing (the list itself is not empty). */
+function emptyMessage(filter: ComputerFilter): string {
   switch (filter) {
     case "active":
       return "No computer has a key that is good for more than a week.";
@@ -219,7 +220,11 @@ function columns(
     {
       header: "Last seen",
       width: "minmax(0,0.9fr)",
-      cell: (c) => formatRelative(c.lastSeenAt, { empty: NEVER_SEEN_LABEL }),
+      cell: (c) => (
+        <span className="tabular-nums">
+          {formatRelative(c.lastSeenAt, { empty: NEVER_SEEN_LABEL })}
+        </span>
+      ),
     },
     {
       header: "Key",
@@ -239,13 +244,21 @@ function columns(
           {c.agents.slice(0, AGENT_CHIPS).map((a) => (
             <span
               key={a.id}
+              title={a.name}
               className="max-w-[9rem] truncate rounded bg-foreground/[0.06] px-1.5 py-0.5 text-[11.5px] text-foreground/80"
             >
               {a.name}
             </span>
           ))}
           {c.agents.length > AGENT_CHIPS && (
-            <span className="text-[11.5px] text-foreground/65">
+            <span
+              title={c.agents
+                .slice(AGENT_CHIPS)
+                .map((a) => a.name)
+                .join(", ")}
+              aria-label={`${c.agents.length - AGENT_CHIPS} more agent${c.agents.length - AGENT_CHIPS === 1 ? "" : "s"}`}
+              className="text-[11.5px] text-foreground/65"
+            >
               +{c.agents.length - AGENT_CHIPS}
             </span>
           )}

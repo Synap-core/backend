@@ -492,6 +492,7 @@ export function definitionSkillChangesExecution(
     },
     existing
   );
+  const box = declaredBox(s.metadata);
   return (
     execContentChanged ||
     // Widening (or narrowing) the sandbox's egress allowlist is an
@@ -511,9 +512,7 @@ export function definitionSkillChangesExecution(
     // `boxDeclarationChanged` the skill edit door applies. Compared on the
     // NORMALISED declaration, as stored.
     boxDeclarationChanged(
-      declaredBox(s.metadata) !== undefined
-        ? { box: declaredBox(s.metadata) }
-        : undefined,
+      box !== undefined ? { box } : undefined,
       existing.metadata as Record<string, unknown> | null
     ) ||
     // Same blind spot, same bag, same both-doors rule: turning
@@ -1047,7 +1046,6 @@ export async function createCapabilityFromDefinition(
     // direct update, so without this a template could store a box skill the
     // doors would refuse.
     if (s.executionMode === "box") {
-      assertBoxNotReadOnly(s.metadata);
       boxSkillMetadata({
         executionMode: "box",
         kind: s.kind ?? "code",
@@ -1094,6 +1092,19 @@ export async function createCapabilityFromDefinition(
         )
       )
       .limit(1);
+    // ...and on the bag the row will STORE, not only the template's: the
+    // re-apply MERGES the declared keys onto the live bag
+    // (`projectSkillMetadata`), so a live `readOnly: true` set through the
+    // edit door survives a template that moves the skill to box and says
+    // nothing about readOnly. Once re-approved, the gate would auto-run the
+    // script (`verbDeclaresReadOnly`). A template that moves a read-only
+    // skill to box declares `readOnly: false`.
+    if (s.executionMode === "box" && existingSkill) {
+      assertBoxNotReadOnly(
+        projectSkillMetadata(existingSkill.metadata, s.metadata) ??
+          existingSkill.metadata
+      );
+    }
     if (existingSkill) {
       // Reconcile ALL code-owned (definition) fields — not just kind/code/
       // providerSpec — so a verb that gains a parameter or changes its

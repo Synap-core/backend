@@ -222,6 +222,34 @@ describe("a box skill in a capability definition", () => {
     expect(insertedRows).toEqual([]);
   });
 
+  it("UPDATE: a LIVE readOnly: true does not survive a move to box — the bag the row stores is judged, not only the template's", async () => {
+    // readOnly set on the live row (edit door, or an older template); the new
+    // template moves the skill to box and says nothing about readOnly. The
+    // re-apply merges onto the live bag, so storing it would keep readOnly and
+    // the gate would auto-run the script once re-approved.
+    existingSkillRow.current = installed({
+      metadata: { marketSource: { slug: "vendor-pack" }, readOnly: true },
+    });
+    await expect(applySkill(SKILL)).rejects.toThrow(
+      "A box skill cannot be read-only"
+    );
+    expect(updatedSets).toEqual([]);
+  });
+
+  it("UPDATE: a template that moves a read-only skill to box with readOnly: false clears it", async () => {
+    existingSkillRow.current = installed({
+      metadata: { marketSource: { slug: "vendor-pack" }, readOnly: true },
+    });
+    await applySkill({ ...SKILL, metadata: { box: BOX, readOnly: false } });
+    const set = updatedSets.find((s) => s.metadata);
+    expect(set, "the applier's skills UPDATE never ran").toBeTruthy();
+    expect(set!.metadata).toEqual({
+      marketSource: { slug: "vendor-pack" },
+      readOnly: false,
+      box: BOX_STORED,
+    });
+  });
+
   it("UPDATE: sync -> box stores the declaration, python code passes, and an approved skill is demoted", async () => {
     existingSkillRow.current = installed();
     await applySkill(SKILL);

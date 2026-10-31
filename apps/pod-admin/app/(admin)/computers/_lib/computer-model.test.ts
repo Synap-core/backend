@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AGENT_CONNECT_COMMAND } from "@synap-core/types/agents";
+import { NEVER_SEEN_LABEL } from "@synap-core/types/computers";
 import {
   RECONNECT_COMMAND,
   activityLine,
@@ -9,6 +10,7 @@ import {
   computerMatches,
   computerSummary,
   expiredLine,
+  expiredReconnectLine,
   keyLifetimeLine,
   keyStatus,
   keysOnComputer,
@@ -17,6 +19,7 @@ import {
   revokeImpact,
   revokeLine,
   rosterLine,
+  scriptsOwnerWords,
   validKeyTtl,
   type ComputerKeyLike,
   type ComputerKeyState,
@@ -83,6 +86,17 @@ describe("keyStatus", () => {
     });
     expect(keyStatus(null, NOW).label).toBe("No key");
   });
+
+  it("withDetail: an active key adds the shared rule's detail; other states do not", () => {
+    const wide = { withDetail: true };
+    expect(
+      keyStatus(key("active", new Date(NOW + 11.5 * DAY)), NOW, wide)
+    ).toEqual({ kind: "healthy", label: "Active · 12 days left" });
+    expect(keyStatus(key("active"), NOW, wide).label).toBe(
+      "Active · No expiry"
+    );
+    expect(keyStatus(key("expired"), NOW, wide).label).toBe("Expired");
+  });
 });
 
 describe("the list's filters", () => {
@@ -118,6 +132,15 @@ describe("the list's filters", () => {
     expect(expiredLine(list)).toBe("2 computers' keys have expired");
     expect(expiredLine([computer({ key: key("expired") })])).toBe(
       "One computer's key has expired"
+    );
+  });
+
+  it("the callout's body speaks of one computer or of several", () => {
+    expect(expiredReconnectLine(1)).toMatch(
+      /^Its agents .* on that computer:$/
+    );
+    expect(expiredReconnectLine(2)).toMatch(
+      /^Their agents .* on each of those computers:$/
     );
   });
 
@@ -172,10 +195,24 @@ describe("words", () => {
         "me",
         rel
       )
-    ).toBe("Runs 2 agents for Marie. Last seen 4m ago.");
+    ).toBe("Runs 2 agents for Marie. Seen 4m ago.");
     expect(computerSummary(computer({ lastSeenAt: null }), "me", rel)).toBe(
-      "No agents run on it; it belongs to you. It has not called the pod yet."
+      `No agents run on it; it belongs to you. ${NEVER_SEEN_LABEL}.`
     );
+  });
+
+  it("scriptsOwnerWords: the scripts are the computer owner's, never the viewer's", () => {
+    expect(scriptsOwnerWords(computer(), "me")).toEqual({
+      whose: "your",
+      approves: "you approve",
+    });
+    expect(
+      scriptsOwnerWords(computer({ owner: { id: "m2", name: "Marie" } }), "me")
+    ).toEqual({ whose: "Marie's", approves: "Marie approves" });
+    expect(scriptsOwnerWords(computer({ owner: null }), "me")).toEqual({
+      whose: "its owner's",
+      approves: "its owner approves",
+    });
   });
 
   it("keyLifetimeLine says whose lifetime it is", () => {
@@ -215,23 +252,56 @@ describe("activityLine", () => {
 
   it("says what was done to the computer", () => {
     expect(
-      activityLine(ev({ kind: "machine_rename", to: "Build box" }), humanize)
+      activityLine(
+        ev({ kind: "machine_rename", to: "Build box" }),
+        humanize,
+        "your"
+      )
     ).toBe("Renamed to “Build box”");
     expect(
-      activityLine(ev({ kind: "machine_key_ttl", keyTtlDays: 30 }), humanize)
+      activityLine(
+        ev({ kind: "machine_key_ttl", keyTtlDays: 30 }),
+        humanize,
+        "your"
+      )
     ).toBe("Key lifetime set to 30 days");
     expect(
-      activityLine(ev({ kind: "machine_key_ttl", keyTtlDays: null }), humanize)
+      activityLine(
+        ev({ kind: "machine_key_ttl", keyTtlDays: null }),
+        humanize,
+        "your"
+      )
     ).toBe("Key lifetime back to the pod default");
     expect(
-      activityLine(ev({ kind: "machine_revoke", revokedKeys: 1 }), humanize)
+      activityLine(
+        ev({ kind: "machine_revoke", revokedKeys: 1 }),
+        humanize,
+        "your"
+      )
     ).toBe("Revoked — 1 key stopped working");
   });
 
   it("falls back to the event type, humanized", () => {
-    expect(activityLine(ev(null, "api_keys.revoke.completed"), humanize)).toBe(
-      "H(api_keys revoke)"
-    );
+    expect(
+      activityLine(ev(null, "api_keys.revoke.completed"), humanize, "your")
+    ).toBe("H(api_keys revoke)");
+  });
+
+  it("says whose scripts it runs: its owner's, in the reader's words", () => {
+    expect(
+      activityLine(
+        ev({ kind: "machine_runs_scripts", enabled: true }),
+        humanize,
+        "Marie's"
+      )
+    ).toBe("Set to run Marie's scripts");
+    expect(
+      activityLine(
+        ev({ kind: "machine_runs_scripts", enabled: false }),
+        humanize,
+        "your"
+      )
+    ).toBe("Stopped running your scripts");
   });
 });
 

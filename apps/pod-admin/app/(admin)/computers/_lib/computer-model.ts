@@ -18,6 +18,7 @@ import {
   computerKeyState,
   days,
   isLiveKey,
+  seenLine,
   type ComputerKeyLike as SharedComputerKeyLike,
   type ComputerKeyState,
 } from "@synap-core/types/computers";
@@ -85,13 +86,20 @@ const KEY_PILL: Record<ComputerKeyState, StatusKind> = {
  * A key's state as the console's pill. A live key is healthy; one about to
  * lapse is amber and says how long it has (the computer renews it on its own
  * at `synap login`); a lapsed key failed; a revoked one is simply off.
+ *
+ * `withDetail` is for a pill with room (the computer's own header): an active
+ * key then adds the shared rule's detail, "Active · 12 days left".
  */
 export function keyStatus(
   key: ComputerKeyLike | null,
-  now: number = Date.now()
+  now: number = Date.now(),
+  { withDetail = false }: { withDetail?: boolean } = {}
 ): { kind: StatusKind; label: string } {
-  const { state, label } = computerKeyRead(key, now);
-  return { kind: KEY_PILL[state], label };
+  const { state, label, detail } = computerKeyRead(key, now);
+  return {
+    kind: KEY_PILL[state],
+    label: withDetail && detail ? `${label} · ${detail}` : label,
+  };
 }
 
 // ─── The list ────────────────────────────────────────────────────────
@@ -158,6 +166,13 @@ export function rosterLine(computers: readonly ComputerLike[]): string {
   return `${plural(agents, "agent")} on ${plural(computers.length, "computer")}`;
 }
 
+/** How many computers lost their key to expiry. */
+export function expiredCount(
+  computers: readonly Pick<ComputerLike, "key">[]
+): number {
+  return computers.filter((c) => computerKeyState(c) === "expired").length;
+}
+
 /**
  * The callout over the list: how many computers lost their key to expiry. A
  * computer whose key is only expiring renews it on its own, so it is not
@@ -166,11 +181,18 @@ export function rosterLine(computers: readonly ComputerLike[]): string {
 export function expiredLine(
   computers: readonly Pick<ComputerLike, "key">[]
 ): string | null {
-  const n = computers.filter((c) => computerKeyState(c) === "expired").length;
+  const n = expiredCount(computers);
   if (n === 0) return null;
   return n === 1
     ? "One computer's key has expired"
     : `${n} computers' keys have expired`;
+}
+
+/** The callout's body over the reconnect command, for `n` expired computers. */
+export function expiredReconnectLine(n: number): string {
+  return n === 1
+    ? "Its agents can't reach the pod until it has a fresh key. Run this on that computer:"
+    : "Their agents can't reach the pod until each has a fresh key. Run this on each of those computers:";
 }
 
 // ─── One computer ────────────────────────────────────────────────────
@@ -189,7 +211,24 @@ export function ownerWords(
 }
 
 /**
- * The header's one sentence: "Runs 3 agents for Antoine. Last seen 4m ago."
+ * Whose scripts "Runs scripts" runs, in the reader's words. The computer
+ * leases its OWNER's box runs, never the viewer's: an admin on Marie's
+ * computer reads "Marie's scripts", Marie reads "your scripts", and an owner
+ * the console does not know reads "its owner's".
+ */
+export function scriptsOwnerWords(
+  c: Pick<ComputerLike, "owner">,
+  viewerId: string | null
+): { whose: string; approves: string } {
+  const owner = ownerWords(c, viewerId);
+  if (owner === "you") return { whose: "your", approves: "you approve" };
+  if (owner) return { whose: `${owner}'s`, approves: `${owner} approves` };
+  return { whose: "its owner's", approves: "its owner approves" };
+}
+
+/**
+ * The header's one sentence: "Runs 3 agents for Antoine. Seen 4m ago." The
+ * seen part is the shared rule's (`seenLine`: "Seen …" or "Not seen yet").
  * `relative` is the console's `formatRelative`, injected so this stays pure.
  */
 export function computerSummary(
@@ -205,10 +244,7 @@ export function computerSummary(
         ? `No agents run on it; it belongs to ${owner}.`
         : "No agents run on it."
       : `${agentsPhrase(n)}${owner ? ` for ${owner}` : ""}.`;
-  const seen = c.lastSeenAt
-    ? ` Last seen ${relative(c.lastSeenAt)}.`
-    : " It has not called the pod yet.";
-  return `${runs}${seen}`;
+  return `${runs} ${seenLine(c.lastSeenAt, relative)}.`;
 }
 
 /** "90 days (pod default)" · "30 days (this computer)". */
@@ -273,10 +309,12 @@ export function revokeImpact(c: ComputerLike): {
 /**
  * One activity row in words. The computer's own acts (`machines.*`) carry a
  * `data.kind`; anything else falls back to its event type, humanized.
+ * `whose` is `scriptsOwnerWords(…).whose`: the scripts are its owner's.
  */
 export function activityLine(
   e: SubjectEventLike,
-  humanize: (token: string) => string
+  humanize: (token: string) => string,
+  whose: string
 ): string {
   const data = (e.data ?? {}) as Record<string, unknown>;
   switch (data.kind) {
@@ -290,8 +328,8 @@ export function activityLine(
         : "Key lifetime back to the pod default";
     case "machine_runs_scripts":
       return data.enabled === true
-        ? "Set to run your scripts"
-        : "Stopped running your scripts";
+        ? `Set to run ${whose} scripts`
+        : `Stopped running ${whose} scripts`;
     case "machine_revoke":
       return typeof data.revokedKeys === "number"
         ? `Revoked — ${data.revokedKeys} key${data.revokedKeys === 1 ? "" : "s"} stopped working`

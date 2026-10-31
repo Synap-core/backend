@@ -120,7 +120,7 @@ export function assertSkillCodeAllowed(
  * each agent run of it is reviewed.
  */
 export function assertBoxNotReadOnly(
-  metadata: Record<string, unknown> | undefined
+  metadata: Record<string, unknown> | null | undefined
 ): void {
   if (declaredReadOnly(metadata) === true) {
     throw new TRPCError({
@@ -1634,8 +1634,15 @@ export const skillsRouter = router({
       const writtenMode = input.executionMode ?? existingSkill.executionMode;
       assertSkillCodeAllowed(writtenKind, input.code, writtenMode);
       // A box declaration edit is parsed by the same rule as create, and a
-      // box skill is never made read-only.
-      if (writtenMode === "box") assertBoxNotReadOnly(metadataPatch);
+      // box skill is never read-only: judged on the bag the UPDATE stores
+      // (the patch shallow-merged onto the live bag, below), so a live
+      // `readOnly: true` is refused too, not only one in the patch.
+      if (writtenMode === "box") {
+        assertBoxNotReadOnly({
+          ...((existingSkill.metadata as Record<string, unknown> | null) ?? {}),
+          ...(metadataPatch ?? {}),
+        });
+      }
       if (metadataPatch && "box" in metadataPatch && writtenMode === "box") {
         metadataPatch.box = boxSkillMetadata({
           executionMode: "box",
