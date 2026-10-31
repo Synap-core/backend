@@ -34,7 +34,7 @@ const DECIDED_WAIT_KIND = {
   capability: "access",
   policy: "access",
   decision: "decide",
-  physical: "vendor",
+  physical: "answer",
   none: "answer",
 } as const;
 
