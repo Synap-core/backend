@@ -302,7 +302,7 @@ describe("proposals — session content copied at write time is withheld at read
     const wire = JSON.stringify(row);
     expect(wire).not.toContain(T_GOAL);
     expect(wire).not.toContain(SUMMARY);
-    expect(row.targetName).toBe("Private session");
+    expect(row.targetName).toBe("Private job");
   });
   it("a roster human sees the goal; the same member's agent door does not", async () => {
     expect(JSON.stringify(await display(MEMBER, true))).toContain(SUMMARY);

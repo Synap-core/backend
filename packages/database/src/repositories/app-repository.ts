@@ -19,6 +19,7 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { db } from "../client-pg.js";
 import {
   apps,
+  isPodWideReadPermission,
   type AppApprovedRequest,
   type AppRecord,
 } from "../schema/apps.js";
@@ -101,6 +102,12 @@ export function readAppConnectRequests(raw: unknown): AppApprovedRequest[] {
     const permission = (item as Record<string, unknown>).permission;
     const workspaceId = (item as Record<string, unknown>).workspaceId;
     if (typeof permission !== "string" || !permission.trim()) continue;
+    // A pod-wide pair (null) only for a pod-wide READ: any other is dropped.
+    if (workspaceId === null) {
+      if (isPodWideReadPermission(permission))
+        out.push({ permission, workspaceId: null });
+      continue;
+    }
     if (typeof workspaceId !== "string" || !workspaceId.trim()) continue;
     out.push({ permission, workspaceId });
   }

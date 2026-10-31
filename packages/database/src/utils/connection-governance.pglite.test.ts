@@ -56,7 +56,8 @@ beforeAll(async () => {
       created_by text NOT NULL,
       created_at timestamptz NOT NULL DEFAULT now(),
       revoked_at timestamptz,
-      expires_at timestamptz
+      expires_at timestamptz,
+      revoked_reason text
     );
   `);
   // `proposals` — only the columns the helpers select or filter on.

@@ -228,6 +228,7 @@ vi.mock("../../services/app-connect.js", () => ({
   oauthAppOffer: async (_user: string, permissions: string[]) =>
     permissions.map((permission) => ({ permission, workspaces: [] })),
   oauthAppPodWideKinds: async () => [],
+  oauthAppPodWideOffer: () => [],
   currentOAuthApproval: async () => [],
 }));
 

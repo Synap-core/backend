@@ -55,6 +55,7 @@ import {
   podSharedEntityIdsForSpaces,
   homeSpaceSharedWhere,
   homeSpaceInLensWhere,
+  homeSpaceInSpacesWhere,
   type SpaceIds,
 } from "@synap/database";
 import { sessionDocumentReadableWhere } from "../access/session-visibility.js";
@@ -533,6 +534,47 @@ export function homeSpaceDocumentWhere(
     isNull(documentWorkspaceIdColumn),
     inArray(documentIdColumn, homedEntityDocumentIds)
   )!;
+}
+
+/**
+ * The HOME-SPACE reach of a set of spaces over entities, for a key grant
+ * limited to them (access/grant-read.ts `spaceReach`, founder decision
+ * e1b59d38 "A", 2026-10-30): a pod-wide entity filed for one of `spaces`
+ * (`home_workspace_id`), which a member of that space reads through
+ * `homeSpaceMemberWhere`. THE predicate is `homeSpaceInSpacesWhere`
+ * (@synap/database utils/home-space-visibility.ts). Read only.
+ */
+export function homeSpaceInSpacesMemberWhere(
+  workspaceIdColumn: AnyPgColumn,
+  spaces: readonly string[]
+): SQL {
+  return homeSpaceInSpacesWhere(
+    workspaceIdColumn,
+    entities.homeWorkspaceId,
+    spaces
+  );
+}
+
+/**
+ * SPACE-KEYED twin of `homeSpaceDocumentWhere`: the pod-wide body of a live
+ * entity homed in one of `spaces` (a document follows its entity, as for a
+ * member). Pod-wide documents only; a standalone document, or the body of an
+ * un-homed or trashed entity, matches nothing.
+ */
+export function homeSpaceDocumentInSpacesWhere(
+  documentWorkspaceIdColumn: AnyPgColumn,
+  documentIdColumn: AnyPgColumn,
+  spaces: readonly string[]
+): SQL {
+  return podWideBodyOfWhere(
+    documentWorkspaceIdColumn,
+    documentIdColumn,
+    homeSpaceInSpacesWhere(
+      entities.workspaceId,
+      entities.homeWorkspaceId,
+      spaces
+    )
+  );
 }
 
 /**

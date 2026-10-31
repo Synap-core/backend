@@ -28,6 +28,7 @@ import {
   Search,
   Trash2,
 } from "lucide-react";
+import Link from "next/link";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
@@ -41,6 +42,7 @@ import { ConfirmModal } from "../components/confirm-modal";
 import { SectionCard } from "../components/section-card";
 import { useFocusRow } from "../components/use-focus-row";
 import { formatRelative, isUuid, readableError } from "../../../lib/format";
+import { openIn } from "../../../lib/open-in";
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -531,11 +533,19 @@ function EntityTableRow({
         <div className="grid flex-1 grid-cols-[1fr_auto] items-center gap-3 sm:grid-cols-[2fr_1fr_1fr_1fr_1fr_auto]">
           <div className="flex min-w-0 items-center gap-2">
             <Database className="h-3.5 w-3.5 shrink-0 text-foreground/35" />
-            <span className="truncate text-[12.5px] text-foreground">
+            {/* The name is the door to the entity's page; the checkbox and
+                the delete act stay their own controls. */}
+            <Link
+              href={
+                openIn({ kind: "object", objectKind: "entity", id: item.id })
+                  .href
+              }
+              className="truncate text-[12.5px] text-foreground hover:underline focus-visible:underline focus-visible:outline-none"
+            >
               {item.title ?? (
                 <span className="text-foreground/65 italic">Untitled</span>
               )}
-            </span>
+            </Link>
           </div>
           <span className="hidden truncate font-mono text-[11px] text-foreground/65 sm:block">
             {item.profileSlug}

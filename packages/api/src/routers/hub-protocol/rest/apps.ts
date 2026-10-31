@@ -79,13 +79,16 @@ const ConnectBody = z.object({
   requests: z.array(RequestSchema).min(1).max(64),
 });
 
-/** POST /apps/:id/narrow — the (permission, space) pairs the app KEEPS. */
+/**
+ * POST /apps/:id/narrow — the (permission, space) pairs the app KEEPS; a null
+ * space is a pod-wide read it was approved (decision e1b59d38 "B").
+ */
 const NarrowBody = z.object({
   approved: z
     .array(
       z.object({
         permission: z.string().min(1).max(120),
-        workspaceId: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable(),
       })
     )
     .min(1)

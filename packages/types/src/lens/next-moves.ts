@@ -37,6 +37,7 @@
 import { resolveActionLabel } from "../vocabulary/index.js";
 import type { UnitStateInput } from "../units/state.js";
 import type { LensDoor, LensRow } from "./rows.js";
+import { workClockIn } from "../work-clock/index.js";
 
 export const NEXT_MOVE_TIERS = ["answer", "start", "watch"] as const;
 export type NextMoveTier = (typeof NEXT_MOVE_TIERS)[number];
@@ -76,7 +77,7 @@ export interface NextMoveCandidate {
 export type NextMoveReasonTone = "neutral" | "ai" | "error";
 
 /** Waiting this many days or more reads as stuck (the error tone). */
-export const NEXT_MOVE_STUCK_DAYS = 7;
+export const NEXT_MOVE_STUCK_DAYS = workClockIn("stuck", "days");
 
 /** One reason chip — why the machine ranked it here. */
 export type NextMoveReason = { tone: NextMoveReasonTone } & (

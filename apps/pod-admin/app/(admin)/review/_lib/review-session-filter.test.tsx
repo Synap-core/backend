@@ -60,7 +60,7 @@ describe("SessionFilter — the narrowed session, named by its own read", () => 
     for (const session of [{}, { error: { data: { code: "NOT_FOUND" } } }]) {
       state.session = session;
       const seen = text(render());
-      expect(seen).toMatch(/From Session Show everything/);
+      expect(seen).toMatch(/From Job Show everything/);
       expect(seen).not.toContain(SESSION_ID);
     }
   });

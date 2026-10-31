@@ -76,6 +76,7 @@ import {
 import { updatePropertyDef } from "../services/profiles/update-property-def.js";
 import { addEnumOptionRefusal, withAddedEnumOption } from "@synap/database";
 import { scanApprovalPatterns } from "../services/proposals/approval-patterns.js";
+import { pauseRuleOfUndoneReceipt } from "../services/proposals/recommend-tighten.js";
 import {
   assertNotForeignLibraryProposal,
   assertProposalVisibleTo,
@@ -197,10 +198,7 @@ import {
   identityResolutionInput,
 } from "./proposals/executors/identity-resolution.js";
 import { weakDedupFailureFields } from "../utils/weak-dedup-wire.js";
-export {
-  type GovernanceWidenLaneProposalData,
-  type GovernanceTightenLaneProposalData,
-} from "./proposals/apply-approval.js";
+export { type GovernanceTightenLaneProposalData } from "./proposals/apply-approval.js";
 import type { ProposalExecutorResult } from "./proposals/execution-registry.js";
 import { askAiAboutProposal } from "./proposals/ask-ai.js";
 import {
@@ -3074,6 +3072,9 @@ export const proposalsRouter = router({
           },
           source: "api",
         });
+        // The last item undone reverts the whole receipt: its earned grant
+        // may pause (founder Q3). Non-fatal.
+        if (liveLeft === 0) await pauseRuleOfUndoneReceipt(proposal.data);
         return {
           success: stillLive.length === 0,
           opKey: input.opKey,
@@ -3508,6 +3509,10 @@ export const proposalsRouter = router({
           ...(restoredEntityId ? { restoredEntityId } : {}),
         };
       }
+
+      // An undone RECEIPT may pause the earned grant that decided it: two
+      // undos within 30 days (founder Q3). Non-fatal: the undo has happened.
+      await pauseRuleOfUndoneReceipt(proposal.data);
 
       // Audit the undo: a record that this proposal was reverted, plus a
       // best-effort delete.completed / restore.completed for the target
@@ -4059,7 +4064,13 @@ export const proposalsRouter = router({
       // Parity with the single `reject` door: rejected public-form answers go.
       await scrubRejectedGuestPayloads(actionedIds);
 
-      return { success: true };
+      // What this call actually rejected: a proposal decided meanwhile (or
+      // gone) is skipped, so a receipt counts these, never the ids sent.
+      return {
+        success: true,
+        rejected: actionedIds.length,
+        rejectedIds: actionedIds,
+      };
     }),
 
   /**

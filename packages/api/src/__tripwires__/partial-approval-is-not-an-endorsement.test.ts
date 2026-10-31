@@ -7,6 +7,7 @@ import {
   resolveStatusLabel,
   humanizeToken,
 } from "@synap-core/types/vocabulary";
+import { earnedStreak } from "@synap-core/types/trust-ladder";
 import { computeAgentScorecard } from "../services/diagnose/agent-scorecard.js";
 import type { ScorecardProposalRow } from "../services/diagnose/agent-scorecard.js";
 
@@ -23,22 +24,21 @@ import type { ScorecardProposalRow } from "../services/diagnose/agent-scorecard.
  * cannot distinguish "kept 1 of 30" from "kept 30 of 30", and every reader that
  * scores an agent MUST also ask the dispositions question.
  *
- * This matters most where the answer GRANTS AUTONOMY. The widening lane scanner
- * fires at `total >= 100 && approveRate > 0.95`: an agent whose packages are
- * routinely gutted would read 100% and earn a wider auto-approve lane — trust
- * granted on a signal that means the opposite of what it was counted as. The
- * daily-cap trust check (`agentProposalCap`, 3x ceiling) has the same
- * shape.
+ * This matters most where the answer GRANTS AUTONOMY. The earned streak
+ * (`earnedStreak`, the offer to widen an agent's lane) counts ten approvals in
+ * a row: an agent whose packages are routinely gutted would read ten and earn
+ * a wider auto-approve lane — trust granted on a signal that means the
+ * opposite of what it was counted as. The daily-cap trust check
+ * (`agentProposalCap`, 3x ceiling) has the same shape.
  *
- * Behavioural half: `computeAgentScorecard` is pure, so it is exercised
- * directly. Source half: the jobs-package scanner and the permission-check cap
+ * Behavioural half: `computeAgentScorecard` and `earnedStreak` are pure, so
+ * they are exercised directly. Source half: the permission-check cap
  * cannot be imported here (module-level `@synap/database`), so their routing is
  * frozen at source level, the way the other __tripwires__ do it.
  */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const API_SRC = join(HERE, ".."); // packages/api/src
-const JOBS_SRC = join(HERE, "..", "..", "..", "jobs", "src");
 const read = (abs: string) => readFileSync(abs, "utf8");
 
 function row(over: Partial<ScorecardProposalRow>): ScorecardProposalRow {
@@ -104,29 +104,40 @@ describe("partial approval is not an endorsement — scorecard", () => {
   });
 });
 
-describe("partial approval is not an endorsement — widening gate (source)", () => {
-  const scanner = read(join(JOBS_SRC, "workers", "governance-lane-scanner.ts"));
+describe("partial approval is not an endorsement — the earned streak", () => {
+  // The offer to widen an agent's lane (S3): ten unedited human approvals in a
+  // row over two days. A gutted package is not one of them, and it breaks the
+  // run rather than being skipped.
+  const at = (day: number, i: number) =>
+    new Date(Date.UTC(2026, 9, day, 10, i));
+  const approval = (day: number, i: number, data: unknown = {}) => ({
+    status: "approved",
+    data,
+    revisionHistory: [],
+    createdAt: new Date(at(day, i).getTime() - 60_000),
+    reviewedAt: at(day, i),
+    reviewedBy: "user-owner",
+  });
+  const ten = () => [
+    ...[0, 1, 2, 3, 4].map((i) => approval(21, i)),
+    ...[0, 1, 2, 3, 4].map((i) => approval(20, i)),
+  ];
 
-  it("the scanner's approve-rate goes through the partial-aware predicate", () => {
-    // ONE definition of "approved" for both the rate and the dominant motif.
-    expect(scanner).toMatch(/function isFullApproval\(/);
-    expect(scanner).toMatch(/isPartiallyApprovedData\(r\.data\)/);
-    expect(scanner).toMatch(/rows\.filter\(isFullApproval\)/);
-    // Exactly two consumers of the predicate: computeQualification's numerator
-    // and computeDominantMotif's evidence set.
-    expect(scanner.match(/rows\.filter\(isFullApproval\)/g)).toHaveLength(2);
-    // ...and the per-motif gate's numerator (F5), over the motif's decisions.
-    expect(scanner.match(/decided\.filter\(isFullApproval\)/g)).toHaveLength(1);
+  it("ten full approvals over two days earn it", () => {
+    expect(earnedStreak(ten()).met).toBe(true);
   });
 
-  it("no status-only approval test survives in the scanner", () => {
-    // The old shape: a bare `r.status === APPROVED || r.status === AUTO_APPROVED`
-    // filter with no disposition check. It may now appear ONLY inside
-    // isFullApproval.
-    const occurrences = scanner.match(
-      /r\.status === ProposalStatus\.APPROVED/g
-    );
-    expect(occurrences).toHaveLength(1);
+  it("a partially applied approval breaks the run", () => {
+    const gutted = { dispositions: { $op0: { status: "reject" } } };
+    // The NEWEST decision (day 21, minute 4) is a gutted package: nothing counts.
+    const newest = ten();
+    newest[4] = approval(21, 4, gutted);
+    expect(earnedStreak(newest)).toMatchObject({ met: false, count: 0 });
+    // The 5th newest (day 21, minute 0): the four after it count, and the run
+    // ENDS there. Skipped instead of breaking, it would count nine.
+    const fifth = ten();
+    fifth[0] = approval(21, 0, gutted);
+    expect(earnedStreak(fifth)).toMatchObject({ met: false, count: 4 });
   });
 });
 

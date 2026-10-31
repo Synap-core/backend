@@ -3403,6 +3403,10 @@
           "valueType": { "type": "string" },
           "constraints": { "type": "object", "additionalProperties": {} },
           "uiHints": { "type": "object", "additionalProperties": {} },
+          "initialStatus": {
+            "type": ["string", "null"],
+            "description": "A declared lifecycle's initial status: the option key a new thing or role starts in when its creator names none; null clears it. Refused on a property that is not a lifecycle, or a key that is not one of its options."
+          },
           "agentUserId": { "type": "string" },
           "sourceMessageId": { "type": "string" },
           "reasoning": { "type": "string" }
@@ -15483,6 +15487,17 @@
                               "required": ["name"]
                             }
                           },
+                          "toolsOff": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": { "type": "string" },
+                                "name": { "type": "string" }
+                              },
+                              "required": ["id", "name"]
+                            }
+                          },
                           "builtIn": { "type": "boolean" },
                           "nextAction": {
                             "type": "object",
@@ -21144,7 +21159,8 @@
                       "replaces",
                       "uses",
                       "dispatched_via",
-                      "assigned_to"
+                      "assigned_to",
+                      "serves"
                     ]
                   },
                   "metadata": { "type": "object", "additionalProperties": {} },

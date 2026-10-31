@@ -288,7 +288,7 @@ describe("cleanup pack v2 items", () => {
         v2item("close_session", "b"),
         v2item("retire_profile", "k"),
       ])
-    ).toBe("Tidy your pod: Close 2 idle sessions, retire 1 unused kind");
+    ).toBe("Tidy your pod: Close 2 idle jobs, retire 1 unused kind");
   });
 });
 

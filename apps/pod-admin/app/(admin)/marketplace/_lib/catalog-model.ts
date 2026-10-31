@@ -6,7 +6,7 @@
  * the registry kind the server pairs it with (`objectKind` — a `template` is
  * a `workspace`, so it reads "Space"). The three tool-family kinds share ONE
  * user word ("Tool"), so a filter that lists them side by side uses the
- * registry's own kind labels for that family (`TOOL_KIND_LABELS`: Action,
+ * registry's own kind labels for that family (`TOOL_KIND_LABELS`: Capability,
  * Skill) — the same door a detail page uses to name which kind of tool.
  */
 

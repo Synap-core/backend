@@ -338,7 +338,7 @@ export async function gateCapabilityExecution(
       // (`proposeCapabilityEnable`, services/capabilities/propose-capability-enable.ts).
       // The reason text below is what a human caller still reads.
       reason:
-        "This capability is installed but not yet enabled. Ask the user to enable it (Settings → Capabilities), or run with dryRun to preview.",
+        "This capability is installed but not yet enabled. Ask the user to enable it (Tools), or run with dryRun to preview.",
     };
   }
 
@@ -616,6 +616,11 @@ async function isOutward(
  * authored against the VERB NAME (reinstall-stable) matches equally to one
  * authored against the row id (reinstall-unstable, the KNOWN LIMITATION
  * above) — see `scoreRuleTarget`'s `targetKind: "capability"` branch.
+ *
+ * Only a rule that NAMES this capability can authorize the run: the resolver
+ * skips every broad `auto` row (`*`, a glob, the generic `capability.run`
+ * action) for a capability run (`NAMED_RULE_ONLY_EVENT_KEYS`, the outward
+ * floor), so "Everything, always" never sends a message on its own.
  */
 async function capabilityRuleAuthorizesRun(
   input: GateCapabilityExecutionInput,

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   bounceAddressParams,
   bounceReceipt,
-  bounceSummary,
+  bounceCard,
   entityPageMedia,
   entitySummary,
   openPathForResolved,
@@ -61,18 +61,28 @@ describe("bounceReceipt — diagnose.resolveOpen names the bounced object", () =
   });
 });
 
-describe("bounceSummary", () => {
-  it("names every hosted kind, from HOST_TYPES", () => {
-    expect(bounceSummary("project")).toBe(
-      "The web shows entities, views, rules, sessions, templates, runs, tools, agents, documents, channels and goals. Open this one in the Synap app for the full surface."
-    );
+describe("bounceCard: what a card for an object with no web page says", () => {
+  it("an object with a console page leads with it; the Synap app is the second door", () => {
+    expect(bounceCard({ consolePage: true })).toEqual({
+      summary: null,
+      status: null,
+      app: "secondary",
+    });
   });
 
-  it("never says the web shows the word the bounced kind reads as", () => {
-    // A skill and a tool read as "Tool", like a (hosted) capability.
-    for (const type of ["tool", "skill"]) {
-      expect(bounceSummary(type)).toBe(
-        "The web shows entities, views, rules, sessions, templates, runs, agents, documents, channels and goals. Open this one in the Synap app for the full surface."
+  it("an object with none says so, and the Synap app is the door", () => {
+    expect(bounceCard({ consolePage: false })).toEqual({
+      summary: "It has no page on the web yet. Open it in the Synap app.",
+      status: "No web page",
+      app: "primary",
+    });
+  });
+
+  it("never lists our object kinds", () => {
+    for (const consolePage of [true, false]) {
+      const { summary } = bounceCard({ consolePage });
+      expect(summary ?? "").not.toMatch(
+        /entities|sessions|runs|capabilities|channels|The web shows/
       );
     }
   });

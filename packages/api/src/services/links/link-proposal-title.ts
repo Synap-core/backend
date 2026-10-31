@@ -1,6 +1,6 @@
 /**
- * The NAME a link write's proposal carries (`data.title`): "Session blocked
- * by session", "Project uses space" — words from the vocabulary door, never
+ * The NAME a link write's proposal carries (`data.title`): "Job blocked by
+ * job", "Project uses space" — words from the vocabulary door, never
  * the edge's machine form (`session --blocked_by--> session`). The proposal
  * title (`Create Link "<name>"`) and the receipt session named after it read
  * it; the machine form came out of the receipt's title builder as "session

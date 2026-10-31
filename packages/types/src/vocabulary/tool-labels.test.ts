@@ -67,7 +67,7 @@ describe("resolveToolLabel — merged seeds", () => {
     expect(resolveToolLabel("list_entities")).toBe("Listing entities");
     // A phrase routes each kind word through the door.
     expect(resolveToolLabel("promote_session_to_playbook", "past")).toBe(
-      "Promoted session to template"
+      "Promoted job to template"
     );
     // Acronyms stay upper-case mid-sentence.
     expect(resolveToolLabel("request_mcp")).toBe("Requesting MCP server");

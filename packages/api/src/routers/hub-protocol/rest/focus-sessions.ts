@@ -1421,9 +1421,13 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     const limit = Number.isFinite(limitRaw)
       ? Math.min(Math.max(limitRaw, 1), 50)
       : 20;
-    const offsetRaw = Number(c.req.query("offset") ?? "0");
-    const offset =
-      Number.isFinite(offsetRaw) && offsetRaw > 0 ? Math.trunc(offsetRaw) : 0;
+    // Refused, never clamped (as `GET /events`): a page the caller did not
+    // ask for, answered as if it were the first, reads as "no more rows".
+    const offsetRaw = c.req.query("offset");
+    const offset = offsetRaw === undefined ? 0 : Number(offsetRaw);
+    if (!Number.isInteger(offset) || offset < 0) {
+      return c.json({ error: "offset must be a non-negative integer" }, 400);
+    }
     // ONE status vocabulary (session-statuses.ts) — this door used to carry a
     // hand-mirrored copy that would silently reject any status the schema
     // later learned.
@@ -1863,27 +1867,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       throw err;
     }
 
-    // VISIBILITY FLOOR on the subject anchor — the same predicate and the same
-    // refusal the PATCH door applies, so the two cannot disagree about what a
-    // caller may point a session at.
-    if (body.subjectEntityId) {
-      const { isOutputRefVisible } =
-        await import("../../../services/focus-sessions/assert-output-ref-visible.js");
-      const visible = await isOutputRefVisible({
-        userId,
-        kind: "entity",
-        refId: body.subjectEntityId,
-      });
-      if (!visible) {
-        return c.json(
-          { error: `No entity ${body.subjectEntityId} you can access` },
-          404
-        );
-      }
-    }
-    // The session ROOM floor (a room the caller cannot read → 404) is
-    // enforced by `createFocusSession` itself, for every start door; its
-    // NOT_FOUND maps to 404 through `httpStatusForTrpcError` below.
+    // The SUBJECT floor (an entity the caller cannot see) and the session ROOM
+    // floor (a room the caller cannot read) are enforced by
+    // `createFocusSession` itself, for every start door; their NOT_FOUND maps
+    // to 404 through `httpStatusForTrpcError` below.
 
     try {
       // Delegate to the shared service (used by both Hub REST and MCP adapter).

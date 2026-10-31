@@ -4,7 +4,7 @@
  * Every kind and every role declares at most ONE lifecycle: one select
  * property (the link row `profile_properties.is_lifecycle`) whose options are
  * objects `{ key, label?, category, tone?, humanOnly?, stuckAfterDays?,
- * dateBinding? }` stored at
+ * dateBinding?, waits? }` stored at
  * `property_defs.constraints.enumOptions` (the bare `constraints.enum` key list
  * is DERIVED from them by the one mapper, `utils/property-enum.ts`).
  *
@@ -19,12 +19,16 @@
  */
 
 import {
+  HOLD_ON,
   LIFECYCLE_CATEGORIES,
   TERMINAL_LIFECYCLE_CATEGORIES,
+  type HoldOn,
   type LifecycleCategory,
   type LifecycleDeclaration,
   type LifecycleOption,
+  type LifecycleOptionWaits,
 } from "@synap-core/types/lifecycle";
+import { isWaitKind } from "@synap-core/types/units";
 import { foldPropertyKey } from "../services/did-you-mean.js";
 
 export {
@@ -144,9 +148,66 @@ export function parseLifecycleOptions(raw: unknown): {
         opt.dateBinding = o.dateBinding;
       }
     }
+    if (o.waits !== undefined) {
+      // Validated like `dateBinding`: reported, never dropping the option.
+      const parsed = parseOptionWaits(key, o.category, o.waits);
+      if (typeof parsed === "string") errors.push(parsed);
+      else opt.waits = parsed;
+    }
     options.push(opt);
   });
   return { options, errors };
+}
+
+/**
+ * What a step may say it waits on: a hold's own `on` (`HOLD_ON`, no new list;
+ * never `unspecified`, which says nothing), the finer `waitKind`
+ * (`WAIT_KINDS`), the property naming who (`refFrom`) and the date that ends
+ * it (`dateBinding`). The one parser, so the def door and the lifecycle door
+ * cannot disagree. Returns the clean shape, or the error words.
+ */
+export function parseOptionWaits(
+  key: string,
+  category: LifecycleCategory,
+  raw: unknown
+): LifecycleOptionWaits | string {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return `option "${key}" waits must be an object { on, waitKind?, refFrom?, dateBinding? }`;
+  }
+  if (TERMINAL_LIFECYCLE_CATEGORIES.includes(category)) {
+    return `option "${key}" is ${category}: a finished thing waits on nothing (waits is for open, active or paused options)`;
+  }
+  const w = raw as Record<string, unknown>;
+  const on = w.on;
+  if (
+    typeof on !== "string" ||
+    on === "unspecified" ||
+    !(HOLD_ON as readonly string[]).includes(on)
+  ) {
+    return `option "${key}" waits.on must be one of ${HOLD_ON.filter((h) => h !== "unspecified").join(" | ")}`;
+  }
+  const out: LifecycleOptionWaits = { on: on as HoldOn };
+  if (w.waitKind !== undefined) {
+    if (!isWaitKind(w.waitKind)) {
+      return `option "${key}" waits.waitKind is not a wait kind (WAIT_KINDS)`;
+    }
+    out.waitKind = w.waitKind;
+  }
+  for (const field of ["refFrom", "dateBinding"] as const) {
+    const v = w[field];
+    if (v === undefined) continue;
+    if (typeof v !== "string" || !DATE_BINDING.test(v)) {
+      return `option "${key}" waits.${field} must name a property (its slug, e.g. "${field === "refFrom" ? "contactId" : "nextActionAt"}")`;
+    }
+    out[field] = v;
+  }
+  const unknown = Object.keys(w).filter(
+    (k) => !["on", "waitKind", "refFrom", "dateBinding"].includes(k)
+  );
+  if (unknown.length > 0) {
+    return `option "${key}" waits has unknown field(s): ${unknown.join(", ")}`;
+  }
+  return out;
 }
 
 export function findLifecycleOption(

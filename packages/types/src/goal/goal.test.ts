@@ -10,6 +10,7 @@ import {
   goalStatusMark,
   goalStatusMoves,
   goalVerdicts,
+  holdLine,
   silenceMark,
   viewerMayDrop,
   waitingOnMarks,
@@ -152,6 +153,84 @@ describe("goal marks", () => {
     ]);
     expect(marks.map((m) => m.count)).toEqual([12, 3]);
     for (const m of marks) expect(m.label).not.toMatch(/\d/);
+  });
+
+  it("waiting-on: what it waits on by name, each a door to its own page or an outside link", () => {
+    const [mark] = waitingOnMarks([
+      {
+        reason: "another_work",
+        count: 3,
+        refs: [
+          { kind: "session", id: "s1", label: "Build the import" },
+          { kind: "slot", id: "s2", label: "Stripe key" },
+          {
+            kind: "pull_request",
+            url: "https://github.com/Synap-core/backend/pull/47",
+            label: "backend#47",
+          },
+          {
+            kind: "pull_request",
+            url: "javascript:alert(1)",
+            label: "a bad link",
+          },
+          { kind: "something_new", id: "x", label: "Whatever it is" },
+        ],
+      },
+    ]);
+    expect(mark!.refs.map((r) => [r.label, r.door, r.url])).toEqual([
+      ["Build the import", { kind: "session", id: "s1" }, null],
+      // A slot has no page: it opens the session that declares it.
+      ["Stripe key", { kind: "session", id: "s2" }, null],
+      ["backend#47", null, "https://github.com/Synap-core/backend/pull/47"],
+      // Only an http(s) link is a door; a kind this build does not know is said, not linked.
+      ["a bad link", null, null],
+      ["Whatever it is", null, null],
+    ]);
+  });
+
+  it("waiting-on: an older pod names nothing — the mark keeps its reason and count, no refs", () => {
+    const [mark] = waitingOnMarks([{ reason: "approval", count: 2 }]);
+    expect(mark).toMatchObject({ reason: "approval", count: 2, refs: [] });
+  });
+
+  it("the hold line: why, for how long, what resumes it — or nothing when the hold says none", () => {
+    const now = NOW.getTime();
+    const since = new Date(now - 3 * 3_600_000).toISOString();
+    expect(
+      holdLine(
+        {
+          since,
+          reason: "Review slot frees up",
+          until: { date: new Date(now + 26 * 3_600_000).toISOString() },
+        },
+        now
+      )
+    ).toBe("Review slot frees up · for 3h · resumes tomorrow");
+    expect(
+      holdLine({ since, until: { moves: "focus_session:s1", to: "done" } }, now)
+    ).toBe("for 3h · resumes when the job moves to done");
+    expect(holdLine(null, now)).toBeNull();
+    expect(holdLine({ since: "not a date", reason: "  " }, now)).toBeNull();
+  });
+
+  it("the hold line names the dev fact that resumes it, never 'the entity moves'", () => {
+    const now = NOW.getTime();
+    const since = new Date(now - 2 * 3_600_000).toISOString();
+    const line = (moves: string, to?: string) =>
+      holdLine({ since, until: { moves, ...(to ? { to } : {}) } }, now);
+    expect(line("pr:synap-core/backend#539")).toBe(
+      "for 2h · resumes when backend#539 merges"
+    );
+    expect(line("pr:synap-core/backend#539", "closed")).toBe(
+      "for 2h · resumes when backend#539 is closed"
+    );
+    expect(line("main:synap-core/app-bases")).toBe(
+      "for 2h · resumes when app-bases main is green"
+    );
+    expect(line("job:kit-h")).toBe("for 2h · resumes when job kit-h finishes");
+    expect(line("job:kit-h", "failed")).toBe(
+      "for 2h · resumes when job kit-h fails"
+    );
   });
 
   it('silence starts at one hour and says "Silent", never "stale"', () => {
@@ -349,7 +428,7 @@ describe("Done when", () => {
       goalCriterionRows(goal({ criteria: [bare] }), person(JUDGE))[0]!.claim
     ).toMatchObject({
       by: "Claimed by someone",
-      session: { id: "s2", title: "Session" },
+      session: { id: "s2", title: "Job" },
       evidence: null,
     });
   });

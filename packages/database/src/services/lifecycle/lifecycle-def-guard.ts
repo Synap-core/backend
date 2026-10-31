@@ -129,6 +129,16 @@ export function checkLifecycleDefUpdate(
         `"${o.key}" dateBinding is set through the lifecycle door (it must name a date property)`
       );
     }
+    // A step wait names properties too (`waits.refFrom`, `waits.dateBinding`):
+    // the same door, for the same reason.
+    if (
+      o.waits !== undefined &&
+      JSON.stringify(o.waits) !== JSON.stringify(prev?.waits)
+    ) {
+      reasons.push(
+        `"${o.key}" waits is set through the lifecycle door (it names the profile's properties)`
+      );
+    }
     if (!prev) {
       if (!isLifecycleCategory(o.category)) {
         reasons.push(`the new option "${o.key}" needs a category`);
@@ -243,7 +253,8 @@ export async function changeLifecycleOptions(
         b.tone === o.tone &&
         Boolean(b.humanOnly) === Boolean(o.humanOnly) &&
         b.stuckAfterDays === o.stuckAfterDays &&
-        b.dateBinding === o.dateBinding
+        b.dateBinding === o.dateBinding &&
+        JSON.stringify(b.waits) === JSON.stringify(o.waits)
       );
     });
   if (same) return { status: "unchanged" };
@@ -292,6 +303,81 @@ export async function changeLifecycleOptions(
     await reprojectLifecycleProfiles(t, profileIds);
   });
   return { status: "changed", remapped };
+}
+
+export type SetLifecycleInitialStatusResult =
+  | { status: "changed"; links: number }
+  | { status: "unchanged" }
+  | { status: "refused"; reason: string };
+
+/**
+ * THE LIFECYCLE DOOR for a lifecycle's INITIAL STATUS: the status a new thing
+ * or role starts in when its creator names none. It is the declaring link's
+ * `profile_properties.default_value` (`EffectiveLifecycle.initialStatus`,
+ * read by every birth door), so this writes that column on every lifecycle
+ * link of the def — never the def's `constraints.defaultValue`, which no
+ * birth door reads. `null` clears it (things are born with no status).
+ *
+ * The key must be one of the lifecycle's CATEGORISED options: an initial the
+ * birth path cannot classify would be dropped there silently. A terminal or
+ * person-only initial is allowed (`decision` → `accepted`): the create door's
+ * lifecycle floor turns an agent's birth there into a proposal.
+ */
+export async function setLifecycleInitialStatus(
+  db: Db,
+  input: { propertyDefId: string; initialStatus: string | null }
+): Promise<SetLifecycleInitialStatusResult> {
+  const links = await db
+    .select({
+      profileId: profileProperties.profileId,
+      defaultValue: profileProperties.defaultValue,
+    })
+    .from(profileProperties)
+    .where(
+      and(
+        eq(profileProperties.propertyDefId, input.propertyDefId),
+        eq(profileProperties.isLifecycle, true)
+      )
+    );
+  if (links.length === 0) {
+    return {
+      status: "refused",
+      reason:
+        "this property is not a declared lifecycle: an initial status belongs to a lifecycle",
+    };
+  }
+  if (input.initialStatus !== null) {
+    const [def] = await db
+      .select()
+      .from(propertyDefs)
+      .where(eq(propertyDefs.id, input.propertyDefId))
+      .limit(1);
+    if (!def) return { status: "refused", reason: "property not found" };
+    const categorised = storedOptions(def).filter((o) =>
+      isLifecycleCategory(o.category)
+    );
+    if (!categorised.some((o) => o.key === input.initialStatus)) {
+      return {
+        status: "refused",
+        reason: `"${input.initialStatus}" is not one of this lifecycle's options (${categorised
+          .map((o) => o.key)
+          .join(", ")})`,
+      };
+    }
+  }
+  if (links.every((l) => (l.defaultValue ?? null) === input.initialStatus)) {
+    return { status: "unchanged" };
+  }
+  await db
+    .update(profileProperties)
+    .set({ defaultValue: input.initialStatus })
+    .where(
+      and(
+        eq(profileProperties.propertyDefId, input.propertyDefId),
+        eq(profileProperties.isLifecycle, true)
+      )
+    );
+  return { status: "changed", links: links.length };
 }
 
 /** Refuse deleting a def that IS a lifecycle. */

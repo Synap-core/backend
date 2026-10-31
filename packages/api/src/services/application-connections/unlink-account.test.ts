@@ -9,25 +9,28 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@synap/auth", () => ({ kratosAdmin: {} }));
+vi.mock("@synap/auth", async (importOriginal) => ({
+  // The one pod-held-factor rule stays real; Kratos admin writes are stubbed.
+  ...(await importOriginal<typeof import("@synap/auth")>()),
+  kratosAdmin: {},
+}));
 vi.mock("../../utils/workspace-role.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getPodAdminRole: vi.fn(),
 }));
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   db: {},
   eq: vi.fn(),
-  federatedApplicationConnections: {},
-  podSettings: {},
-  trustedIssuers: {},
   unlinkFederatedIdentity: vi.fn(),
-  users: {},
 }));
 
 import {
   unlinkConnectionAccount,
+  unlinkImpacts,
   unlinkReach,
   type UnlinkAccountDeps,
+  type UnlinkImpactDeps,
 } from "./unlink-account.js";
 
 const CLOUD = "https://api.synap.live";
@@ -251,5 +254,66 @@ describe("unlinkReach — what the confirm says goes with it", () => {
         }
       )
     ).resolves.toEqual({ otherApps: [], cloudSignIn: false });
+  });
+});
+
+describe("unlinkImpacts — what each person is left to sign in with", () => {
+  // ada: a password; bo: a recovery code only; cy: neither; dee: Kratos down.
+  // Kratos is keyed by identity id (`kid-<user>`), the codes by user id.
+  function impactDeps(over: Partial<UnlinkImpactDeps> = {}) {
+    return {
+      podHeldCredential: vi.fn(async (id: string) => {
+        if (id === "kid-dee")
+          throw new Error("Kratos identity read failed: 503");
+        return id === "kid-ada";
+      }),
+      unusedRecoveryCodes: vi.fn(async (id: string) => (id === "bo" ? 3 : 0)),
+      emailRecovery: vi.fn(() => false),
+      ...over,
+    };
+  }
+  const person = (userId: string) => ({ userId, identityId: `kid-${userId}` });
+  const everyone = ["ada", "bo", "cy", "dee"].map(person);
+
+  it("no_way_in only for the person with no pod-held factor and no mail", async () => {
+    const impacts = await unlinkImpacts(
+      everyone,
+      { cloudSignIn: true },
+      impactDeps()
+    );
+    expect(Object.fromEntries(impacts)).toEqual({
+      ada: "keeps_a_way_in",
+      bo: "keeps_a_way_in",
+      cy: "no_way_in",
+      dee: "unknown",
+    });
+  });
+
+  it("with mail going out, email recovery is their way back", async () => {
+    const impacts = await unlinkImpacts(
+      [person("cy")],
+      { cloudSignIn: true },
+      impactDeps({ emailRecovery: vi.fn(() => true) })
+    );
+    expect(impacts.get("cy")).toBe("email_recovery_only");
+  });
+
+  it("a failed recovery-code read is unknown, never 'no codes'", async () => {
+    const impacts = await unlinkImpacts(
+      [person("cy")],
+      { cloudSignIn: true },
+      impactDeps({
+        unusedRecoveryCodes: vi.fn().mockRejectedValue(new Error("db down")),
+      })
+    );
+    expect(impacts.get("cy")).toBe("unknown");
+  });
+
+  it("another issuer takes no sign-in method: nothing is read", async () => {
+    const d = impactDeps();
+    const impacts = await unlinkImpacts(everyone, { cloudSignIn: false }, d);
+    expect([...impacts.values()]).toEqual(everyone.map(() => "keeps_a_way_in"));
+    expect(d.podHeldCredential).not.toHaveBeenCalled();
+    expect(d.unusedRecoveryCodes).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { proposalHeading } from "./proposal-heading";
 
 /** The row `requestAccess` files (`services/app-connect.ts`). */
@@ -28,6 +29,33 @@ const payload = {
 };
 
 describe("the review page heading", () => {
+  it("a tool run reads as its action and its tool, never 'Run Tool'", () => {
+    const row = {
+      targetType: "capability",
+      targetName: null,
+      proposalType: "capability.run",
+      review: {
+        toolRun: {
+          action: "Create server",
+          tool: "Hetzner cloud",
+          parameters: [],
+        },
+      },
+    };
+    expect(proposalHeading(row, {}).heading).toBe(
+      "Create server · Hetzner cloud"
+    );
+    expect(
+      proposalHeading(
+        {
+          ...row,
+          review: { toolRun: { action: "Create server", parameters: [] } },
+        },
+        {}
+      ).heading
+    ).toBe("Create server");
+  });
+
   it("an app/connect request reads '<app> asks for access', one line per space", () => {
     const h = proposalHeading(appConnectRow, payload);
     expect(h.heading).toBe("synap.live asks for access");
@@ -72,6 +100,37 @@ describe("the review page heading", () => {
     ).toBe("Writes held for review: 2026-10-27, 0 items");
     expect(proposalHeading({ ...row, agentActorName: null }, {}).heading).toBe(
       "Writes held for review"
+    );
+  });
+
+  it("a deploy approval names the step, commit and repo, never 'Approve deploy Session'", () => {
+    const row = {
+      targetType: "focus_session",
+      targetName: "Ship the publish gate",
+      proposalType: "dev.deploy_approval",
+    };
+    const data = {
+      sessionId: "63bc4338-0000-4000-8000-000000000000",
+      repo: "Synap-core/control-plane-api",
+      branch: "main",
+      commitSha: "a524c103d1e2f3a4b5c6",
+      gateReport: { passed: true },
+      targetHost: "control-plane-api main",
+      deployCommand: "git push origin a524c103:main",
+      step: "push",
+    };
+    const h = proposalHeading(row, data);
+    expect(h.heading).toBe(
+      "Push a524c103 to main in Synap-core/control-plane-api"
+    );
+    expect(h.heading).not.toMatch(/Session|Deploy/);
+    // A payload that cannot say what ships keeps the generic title.
+    expect(proposalHeading(row, {}).heading).toBe(
+      buildObjectActionTitle({
+        action: "dev.deploy_approval",
+        objectKind: "focus_session",
+        objectName: "Ship the publish gate",
+      })
     );
   });
 

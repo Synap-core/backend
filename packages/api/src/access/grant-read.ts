@@ -19,7 +19,9 @@
  *
  * SPACE REACH (founder "option 1", 2026-10-23). A grant restricted to spaces
  * X reads what a MEMBER of X reads there, not only the rows stamped with X: a
- * pod-wide person or company with a live role in X is X's data too. The
+ * pod-wide person or company with a live role in X is X's data too, and so is
+ * a pod-wide record filed FOR X (`home_workspace_id`, decision e1b59d38 "A",
+ * 2026-10-30). The
  * tables whose member rule reaches past `workspace_id` say so in `spaceReach`
  * (entities, their facets, their bodies), built from the SAME space-keyed
  * builders the member floor uses (utils/project-scope.ts,
@@ -98,6 +100,8 @@ import {
 } from "@synap/governance-policy/grants";
 import { grantRequestKey } from "@synap/governance-policy";
 import {
+  homeSpaceDocumentInSpacesWhere,
+  homeSpaceInSpacesMemberWhere,
   podSharedDocumentInSpacesWhere,
   projectLensWhere,
   roleInSpacesWhere,
@@ -139,23 +143,35 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
     spec("entity", entities, {
       kind: { typeColumn: entities.type, profileIdColumn: entities.profileId },
       projectEntityColumn: entities.id,
-      // (a) a live facet stamped in a granted space, or (b) a pod-wide entity
-      // wearing a live pod-wide facet whose role is granted to one.
+      // (a) a live facet stamped in a granted space, (b) a pod-wide entity
+      // wearing a live pod-wide facet whose role is granted to one, or (c) a
+      // pod-wide entity whose HOME is one (decision e1b59d38 "A").
       spaceReach: (spaces) =>
-        roleInSpacesWhere(entities.workspaceId, entities.id, spaces),
+        or(
+          roleInSpacesWhere(entities.workspaceId, entities.id, spaces),
+          homeSpaceInSpacesMemberWhere(entities.workspaceId, spaces)
+        )!,
     }),
   ],
   [
     documents,
     spec("document", documents, {
       // A document follows its entity, as for a member: the pod-wide body of
-      // a pod-shared entity of the spaces (decision B only, rv-security B-4).
+      // a pod-shared entity of the spaces (decision B only, rv-security B-4),
+      // or of an entity homed in one (decision e1b59d38 "A").
       spaceReach: (spaces) =>
-        podSharedDocumentInSpacesWhere(
-          documents.workspaceId,
-          documents.id,
-          spaces
-        ),
+        or(
+          podSharedDocumentInSpacesWhere(
+            documents.workspaceId,
+            documents.id,
+            spaces
+          ),
+          homeSpaceDocumentInSpacesWhere(
+            documents.workspaceId,
+            documents.id,
+            spaces
+          )
+        )!,
     }),
   ],
   // Not widened: an edge between a space entity and a pod-wide one is stamped

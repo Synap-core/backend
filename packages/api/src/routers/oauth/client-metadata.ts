@@ -41,6 +41,7 @@ import {
   assertPermissions,
   InvalidPermissionError,
 } from "@synap/governance-policy/grants";
+import { isPodWideReadPermission } from "@synap/database/schema";
 
 import {
   resolvePublicIssuerEndpoint,
@@ -111,6 +112,12 @@ export interface ValidatedClientMetadataDocument {
   /** `synap_requests[].permission`, grant grammar. */
   requestedPermissions: string[];
   /**
+   * The ones declared POD-WIDE (`synap_requests[].scope = "pod"`, decision
+   * e1b59d38 "B"): a subset of `requestedPermissions`, each a read of one
+   * named kind (`isPodWideReadPermission`).
+   */
+  requestedPodWide: string[];
+  /**
    * `synap_requests[].reason` by permission, as display text
    * (`displayReason`); a permission sent with no reason has no entry.
    */
@@ -170,6 +177,29 @@ function assertAppPermission(permission: string): void {
     }
     throw err;
   }
+}
+
+/**
+ * One `synap_requests[].scope`: absent or `"space"` (given per space, the
+ * default) or `"pod"` (given everywhere in the pod, one tick). `"pod"` is
+ * accepted ONLY on a read of one named kind (`isPodWideReadPermission`,
+ * decision e1b59d38 "B"): writes, gate verbs, a whole kind, every kind and
+ * every other subject stay per space, and a document asking otherwise is
+ * refused, as an invalid permission is.
+ */
+function requestScope(permission: string, scope: unknown): "space" | "pod" {
+  if (scope === undefined || scope === "space") return "space";
+  if (scope !== "pod") {
+    throw new ClientMetadataError(
+      `synap_requests scope must be "space" or "pod" (for ${permission})`
+    );
+  }
+  if (!isPodWideReadPermission(permission)) {
+    throw new ClientMetadataError(
+      `synap_requests: "${permission}" cannot be asked pod-wide: only a read of one kind can (entity.<kind>.read); every other permission is given in a space`
+    );
+  }
+  return "pod";
 }
 
 /** Removed from a reason: they could make it read as something else. */
@@ -306,6 +336,8 @@ export function validateClientMetadataDocument(
   const requestedPermissions: string[] = [];
   // A permission listed twice keeps its first entry's reason.
   const requestedReasons = new Map<string, string>();
+  // Each permission's scope as first declared: "space" (default) or "pod".
+  const scopeOf = new Map<string, "space" | "pod">();
   if (d.synap_requests !== undefined) {
     if (!Array.isArray(d.synap_requests)) {
       throw new ClientMetadataError("synap_requests must be an array");
@@ -321,7 +353,7 @@ export function validateClientMetadataDocument(
           "each synap_requests entry must be an object"
         );
       }
-      const { permission, reason } = r as Record<string, unknown>;
+      const { permission, reason, scope } = r as Record<string, unknown>;
       if (typeof permission !== "string") {
         throw new ClientMetadataError(
           "each synap_requests entry needs a permission string"
@@ -336,6 +368,14 @@ export function validateClientMetadataDocument(
         );
       }
       assertAppPermission(permission);
+      const asked = requestScope(permission, scope);
+      const before = scopeOf.get(permission);
+      if (before && before !== asked) {
+        throw new ClientMetadataError(
+          `synap_requests: "${permission}" is declared both pod-wide and per space; declare it once`
+        );
+      }
+      scopeOf.set(permission, asked);
       if (!requestedPermissions.includes(permission)) {
         requestedPermissions.push(permission);
         const shown = typeof reason === "string" ? displayReason(reason) : "";
@@ -370,6 +410,9 @@ export function validateClientMetadataDocument(
     redirectUris,
     scopes,
     requestedPermissions,
+    requestedPodWide: requestedPermissions.filter(
+      (p) => scopeOf.get(p) === "pod"
+    ),
     requestedReasons: Object.fromEntries(requestedReasons),
     requestedTemplates,
     clientUri,

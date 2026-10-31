@@ -35,6 +35,7 @@ import {
   REVERSIBLE_CLASS_PATTERN,
   OWN_ORGANISE_CLASS_PATTERN,
   isOwnOrganiseWrite,
+  isNamedRuleOnlyWrite,
   type ChannelCapabilityGrant,
 } from "@synap/governance-policy";
 import {
@@ -444,6 +445,23 @@ export function draftRuleMatchesWrite(
   return score !== undefined;
 }
 
+/**
+ * Does this matched row NAME the write (target score 3) rather than cover it
+ * through a class, glob, `*` or profile-wide target? For a capability run the
+ * exact action `capability.run` still covers every capability, so only a
+ * capability-target row (that capability's id or verb name) names one.
+ */
+function ruleNamesWrite(
+  rule: Pick<GovernanceRuleCandidate, "targetKind">,
+  targetScore: number,
+  eventKey: string
+): boolean {
+  if (targetScore !== 3) return false;
+  return eventKey === "capability.run"
+    ? rule.targetKind === "capability"
+    : true;
+}
+
 export interface ResolveGovernanceRuleInput {
   /** Injected Drizzle handle. */
   db: DbHandle;
@@ -546,6 +564,7 @@ export async function resolveGovernanceRule(
   // B3: the class may cover only an attributed write its door proved.
   const organise =
     ownWorkOrganise && !!agentUserId && isOwnOrganiseWrite(eventKey);
+  const namedRuleOnly = isNamedRuleOnlyWrite(eventKey);
 
   // A CLASS row ("for all computers") is per-agent-identity like an agent
   // row, so it follows the same `includeAgentPrincipal` gate.
@@ -628,6 +647,11 @@ export async function resolveGovernanceRule(
           capabilityVerbName
         );
     if (targetScore === undefined) continue;
+    const namesWrite = ruleNamesWrite(rule, targetScore, eventKey);
+    // The outward floor: a broad `auto` never widens a capability run or a
+    // capability grant. Skipped, not ranked, so a lower-ranked rule naming the
+    // write still decides; a `propose` row still matches and tightens.
+    if (namedRuleOnly && rule.verdict === "auto" && !namesWrite) continue;
     const principalScore = principalSpecificity(rule.principalKind);
     const scopeScore = rule.scopeKind === "workspace" ? 2 : 0;
     const score = principalScore + scopeScore + targetScore;
@@ -645,7 +669,7 @@ export async function resolveGovernanceRule(
           rule.targetKind === "profile"
             ? `profile:${rule.targetProfile}`
             : rule.targetPattern,
-        namesWrite: targetScore === 3,
+        namesWrite,
       };
     }
   }
@@ -694,9 +718,9 @@ export interface SyncAutoApproveRulesInput {
  *
  * REPLACE semantics: revokes every currently-active row this same write
  * surface could have created for this (principal, scope) tuple — scoped to
- * `source_proposal_id IS NULL` so a human-approved `governance.widen_lane`
- * rule (a DIFFERENT authority, Phase D) is never touched by a plain settings
- * PATCH — then inserts one fresh row per entry in `actions`. An empty list
+ * `source_proposal_id IS NULL` so an EARNED rule (granted from a card the
+ * person approved, or a legacy `governance.widen_lane` approval — a DIFFERENT
+ * authority) is never touched by a plain settings PATCH — then inserts one fresh row per entry in `actions`. An empty list
  * legitimately clears the mirrored rules (revoke-only, no insert), matching
  * "workspace clears its autoApproveFor override."
  *

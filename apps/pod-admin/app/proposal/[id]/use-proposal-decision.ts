@@ -9,10 +9,16 @@
  * keyed by the item's ref for a graph — `routers/proposals.ts` approve input).
  */
 
-import { addToast } from "@heroui/react";
 import type { DuplicateResolution } from "@synap-core/types/proposals";
 import { trpc } from "../../../lib/trpc";
 import { showApprovalProgressToast } from "../../_lib/approval-progress/approval-progress-toast";
+import {
+  decisionFailure,
+  decisionReceipt,
+  readApproveAnswer,
+  readRejectAnswer,
+} from "../../_lib/receipt/decision-receipt";
+import { showDecisionReceipt } from "../../_lib/receipt/decision-receipt-toast";
 
 /** What one approve carries beyond the proposal: the reviewer's twin choice. */
 export interface ApproveChoice {
@@ -64,13 +70,19 @@ export function useProposalDecision(
   {
     onRejected,
     expectedRevision,
+    revertable,
   }: {
     onRejected?: () => void;
     /** `renderedRevision` of the proposal this page drew. */
     expectedRevision?: number;
+    /** The request's own `revertable`: whether Undo can take an approve back. */
+    revertable?: boolean | null;
   } = {}
 ) {
   const utils = trpc.useUtils();
+  // The receipt says what the pod ANSWERED (`decision-receipt.ts`), with Undo
+  // for 8 s when the pod can take the decision back. An Undo refreshes the
+  // proposal reads, so the page and the list draw the request pending again.
   const approveMutation = trpc.proposals.approve.useMutation({
     onSuccess: (result) => {
       void utils.proposals.approvalProgress.invalidate({ proposalId });
@@ -80,30 +92,28 @@ export function useProposalDecision(
       if ((result as { queued?: boolean }).queued) {
         showApprovalProgressToast(proposalId);
       } else {
-        addToast({ title: "Proposal approved", color: "success" });
+        showDecisionReceipt(
+          decisionReceipt(readApproveAnswer(result), { revertable }),
+          { proposalId, verb: "approve" }
+        );
       }
       onDecided();
     },
     onError: (e) =>
-      addToast({
-        title: "Could not approve",
-        description: e.message,
-        color: "danger",
-      }),
+      showDecisionReceipt(decisionReceipt(decisionFailure("approve", e))),
   });
 
   const rejectMutation = trpc.proposals.reject.useMutation({
-    onSuccess: () => {
-      addToast({ title: "Proposal rejected", color: "success" });
+    onSuccess: (result) => {
+      showDecisionReceipt(decisionReceipt(readRejectAnswer(result)), {
+        proposalId,
+        verb: "reject",
+      });
       onRejected?.();
       onDecided();
     },
     onError: (e) =>
-      addToast({
-        title: "Could not reject",
-        description: e.message,
-        color: "danger",
-      }),
+      showDecisionReceipt(decisionReceipt(decisionFailure("reject", e))),
   });
 
   return {

@@ -211,7 +211,7 @@ const SECTION_ROWS: Record<string, (s: DiagnoseSection) => RowBody | null> = {
       action: {
         kind: "link",
         label: "Turn on in Tools",
-        exit: consoleRoute(navHref("tools", { tab: "actions" })),
+        exit: consoleRoute(navHref("tools", { type: "capabilities" })),
       },
       items: [],
     };

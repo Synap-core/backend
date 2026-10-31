@@ -1119,6 +1119,12 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "requested_reasons",
     addedBy: "0339b_oauth_client_request_reasons.sql",
   },
+  // Pod-wide read requests (0379): every client read selects it, as above.
+  {
+    table: "oauth_clients",
+    column: "requested_pod_wide",
+    addedBy: "0379_oauth_client_requested_pod_wide.sql",
+  },
   // Pod app refresh tokens (0339). /token's refresh grant and /revoke read
   // and write them, and revoking an app revokes them: without the table the
   // pod app refresh grant, a pod app's /token and every app revoke 500.
@@ -1198,6 +1204,11 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "governance_rules",
     column: "principal_class",
     addedBy: "0320_machine_identity.sql",
+  },
+  {
+    table: "governance_rules",
+    column: "revoked_reason",
+    addedBy: "0380_governance_rules_revoked_reason.sql",
   },
   {
     table: "governance_ceilings",

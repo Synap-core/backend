@@ -290,6 +290,19 @@ export interface CapabilityCard {
     credential?: string;
   };
   /**
+   * Its member TOOL rows the run gate refuses (`approvalRefusesRun` on
+   * `tools.approved`, the same predicate `gateCapabilityExecution` denies on),
+   * so every action that calls through one is refused "installed but not
+   * enabled" however many of its verbs are on. Present only when one is off.
+   *
+   * Founder dogfood 2026-10-30: Hetzner Cloud read "6 of 6 on" while its
+   * `hetzner_cloud` row had never been approved (the CLI's one-shot approve
+   * timed out), and the run failed with nothing on any screen to turn on.
+   * Turned on by `tools.setApproved` / `POST /tools/:id/approve`, a person's
+   * step (an agent is refused).
+   */
+  toolsOff?: Array<{ id: string; name: string }>;
+  /**
    * The template's INSTALL params — what the caller must supply to apply it (e.g.
    * a vault credential, a baseUrl). Surfaced so the CLI can prompt for them and
    * apply WITH params (which wires the credential into the tool), instead of a
@@ -838,6 +851,7 @@ export async function buildCapabilityCatalog(
             id: tools.id,
             name: tools.name,
             credentialRef: tools.credentialRef,
+            approved: tools.approved,
             // The verb catalog is where `intent` is persisted (`skills` has no
             // such column) — without it the card verbs drop the routing axis.
             capabilities: tools.capabilities,
@@ -923,6 +937,11 @@ export async function buildCapabilityCatalog(
       .map((l) => toolById.get(l.fromId))
       .filter((t): t is NonNullable<typeof t> => !!t);
     const myToolRefs = myTools.map((t) => t.credentialRef ?? null);
+    // The gate's own predicate on each tool row: one that is off refuses
+    // every run that calls through it (see `toolsOff`).
+    const toolsOff = myTools
+      .filter((t) => approvalRefusesRun(t))
+      .map((t) => ({ id: t.id, name: t.name }));
 
     const connection = deriveConnection(myToolRefs, false, conn);
 
@@ -975,7 +994,7 @@ export async function buildCapabilityCatalog(
           s,
           postureByContainer?.get(container.id)?.get(s.name)
         ),
-        runnable: enabled && connectionOk && projected,
+        runnable: enabled && connectionOk && projected && toolsOff.length === 0,
         params: extractParamNames(s.parameters),
         paramsSchema: extractParamsSchema(s.parameters),
         ...(category ? { category } : {}),
@@ -1009,6 +1028,7 @@ export async function buildCapabilityCatalog(
       ...(connection.required || connection.kind ? { connection } : {}),
       verbs,
       anatomy,
+      ...(toolsOff.length > 0 ? { toolsOff } : {}),
       installParams: matchedTemplate
         ? extractInstallParams(matchedTemplate.def)
         : [],
@@ -1023,7 +1043,8 @@ export async function buildCapabilityCatalog(
         container.name,
         connection,
         container.id,
-        runnableByContainer ? verbs.some((v) => v.runnable) : undefined
+        runnableByContainer ? verbs.some((v) => v.runnable) : undefined,
+        toolsOff.length
       ),
     });
   }

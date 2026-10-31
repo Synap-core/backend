@@ -65,8 +65,15 @@ import {
 // `block-output.ts` has always imported this module statically.
 import {
   findUnreachableOutputRefs,
+  isOutputRefVisible,
   unreachableOutputRefError,
 } from "./assert-output-ref-visible.js";
+import {
+  resolveSubjectRef,
+  subjectRefKeys,
+  type SubjectRef,
+  type SubjectRefResolution,
+} from "./subject-ref.js";
 import {
   addCreateTimeBlockers,
   type CreateTimeBlockerReport,
@@ -213,6 +220,14 @@ export interface CreateFocusSessionParams {
    * the ad-hoc start path so a session can be tied to a person/company/deal.
    */
   subjectEntityId?: string | null;
+  /**
+   * The subject named by an identity the caller holds (a URL, an external id
+   * such as `github:<owner>/<repo>#<n>`), resolved through the one identity
+   * door (`subject-ref.ts`). A strong hit the caller can see becomes
+   * `subjectEntityId`; anything else starts with no subject, said back as
+   * `subjectRef: { status: "unresolved" }`. Never with `subjectEntityId`.
+   */
+  subjectRef?: SubjectRef | null;
   /**
    * Short optional one-line NAME, separate from `goal` (the outcome). Blank ⇒
    * null (untitled; surfaces show the goal's first line via
@@ -452,6 +467,8 @@ export type CreateFocusSessionResult =
        * failed: unknown, never "no offers".
        */
       offers?: StartOffersRead;
+      /** Present iff a `subjectRef` was given: what it resolved to. */
+      subjectRef?: SubjectRefResolution;
     }
   | {
       /**
@@ -495,7 +512,8 @@ export async function createFocusSession(
     workspaceId = null,
     projectId: explicitProjectId = null,
     trackId: requestedTrackId = null,
-    subjectEntityId = null,
+    subjectEntityId: explicitSubjectEntityId = null,
+    subjectRef = null,
     title: rawTitle = null,
     goal,
     agentUserId,
@@ -573,6 +591,49 @@ export async function createFocusSession(
     throw new TRPCError({
       code: "NOT_FOUND",
       message: `No channel ${channelId} you can access`,
+    });
+  }
+
+  // A subject named by an identity (`subject-ref.ts`): one way to name it per
+  // call, refused in words otherwise.
+  if (
+    explicitSubjectEntityId &&
+    subjectRef &&
+    subjectRefKeys(subjectRef).length
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "Pass subjectEntityId OR subjectRef, not both: subjectRef names the subject by an identity (url, externalId), subjectEntityId by its id.",
+    });
+  }
+  const subjectRefResolution =
+    subjectRef && subjectRefKeys(subjectRef).length
+      ? await resolveSubjectRef(userId, subjectRef)
+      : null;
+  const subjectEntityId =
+    subjectRefResolution?.status === "resolved"
+      ? subjectRefResolution.entityId
+      : explicitSubjectEntityId;
+
+  // The SUBJECT is the same kind of pointer: the room resolves its live title
+  // by bare id, and the project ladder below reads its filing. A subject the
+  // caller cannot already see is refused here, NOT_FOUND, through the SAME
+  // predicate an output's ref goes through (`isOutputRefVisible`), for every
+  // start door. The tRPC and Hub doors used to floor it themselves and MCP
+  // `start_session` did not, so an agent could anchor a session on any entity
+  // id in the pod and read its title back: a read oracle.
+  if (
+    subjectEntityId &&
+    !(await isOutputRefVisible({
+      userId,
+      kind: "entity",
+      refId: subjectEntityId,
+    }))
+  ) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `No entity ${subjectEntityId} you can access`,
     });
   }
 
@@ -1441,5 +1502,6 @@ export async function createFocusSession(
       : {}),
     ...(playbookCandidates ? { playbooks: playbookCandidates } : {}),
     ...(outcome.adopted ? { adopted: true as const } : {}),
+    ...(subjectRefResolution ? { subjectRef: subjectRefResolution } : {}),
   };
 }

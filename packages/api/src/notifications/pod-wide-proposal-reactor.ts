@@ -2,13 +2,12 @@
  * The event-driven pod-wide proposal attention fan-out.
  *
  * WHY THIS EXISTS: `notifyPodWideProposal` is the fan-out, but it only fires for
- * callers that REMEMBER to call it. The trusted-lane WIDEN scanner
- * (`packages/jobs/src/workers/governance-lane-scanner.ts`) files
- * `governance.widen_lane` proposals through the `insertPendingProposal` one-door
- * and cannot call it at all: it lives in `@synap/jobs`, and the dependency
- * direction is api → jobs, never jobs → api. So the proposal that GRANTS an
- * agent more autonomy — the riskier direction — was invisible to the human it
- * asks to decide.
+ * callers that REMEMBER to call it. A jobs-side filer (the recurrence and
+ * structure-guideline scanners; once the since-retired widen-lane scanner)
+ * files through the `insertPendingProposal` one-door and cannot call it at
+ * all: it lives in `@synap/jobs`, and the dependency direction is api → jobs,
+ * never jobs → api. So a proposal that GRANTS an agent more autonomy — the
+ * riskier direction — was invisible to the human it asks to decide.
  *
  * THE SEAM: every one of those writers already emits a `proposal.created` side
  * effect through `emitSideEffects` (@synap/events). That emitter iterates a

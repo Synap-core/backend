@@ -1557,7 +1557,8 @@ export const apiKeysRouter = router({
           .array(
             z.object({
               permission: z.string().min(1).max(200),
-              workspaceId: z.string().uuid(),
+              // null: a pod-wide read the app declared (`app.podWide`).
+              workspaceId: z.string().uuid().nullable(),
             })
           )
           .max(512)

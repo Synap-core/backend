@@ -575,3 +575,249 @@ describe("proposeNextRung — who grants", () => {
     expect(await ruleCount()).toBe(0);
   });
 });
+
+// ─── The earned streak (S3, founder Q3) ─────────────────────────────────────
+
+const DAY1 = Date.parse("2026-10-20T10:00:00.000Z");
+const DAY2 = Date.parse("2026-10-21T10:00:00.000Z");
+
+/**
+ * A DECIDED agent write, as the approve door leaves it: the request envelope
+ * (`pending`'s shape), a reviewer, the decided instant, and the revision log.
+ */
+async function decided(o: {
+  subjectType?: string;
+  action?: string;
+  profileSlug?: string;
+  status?: string;
+  /** The decided instant (`reviewed_at`). */
+  at: number;
+  /** Filed this long before it was decided. Default one minute. */
+  afterMs?: number;
+  revisionHistory?: unknown[];
+}): Promise<string> {
+  const id = randomUUID();
+  const envelope = {
+    requestId: randomUUID(),
+    source: "ai",
+    sourceId: OWNER,
+    workspaceId: WS,
+    targetType: "entity",
+    targetId: randomUUID(),
+    changeType: (o.action ??
+      "create") as RequestShapedProposalData["changeType"],
+    data: {
+      title: "x",
+      ...(o.profileSlug ? { profileSlug: o.profileSlug } : {}),
+    },
+  } satisfies Partial<RequestShapedProposalData>;
+  await client.query(
+    `insert into proposals (id, workspace_id, status, proposal_type, target_type, target_id, data, created_by, subject_user_id, agent_user_id, reviewed_by, reviewed_at, created_at, revision_history)
+     values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $8, $9, $8, $10, $11, $12::jsonb)`,
+    [
+      id,
+      WS,
+      o.status ?? "approved",
+      o.action ?? "create",
+      o.subjectType ?? "entity",
+      envelope.targetId,
+      JSON.stringify(envelope),
+      OWNER,
+      AGENT,
+      new Date(o.at).toISOString(),
+      new Date(o.at - (o.afterMs ?? 60_000)).toISOString(),
+      JSON.stringify(o.revisionHistory ?? []),
+    ]
+  );
+  return id;
+}
+
+/** Ten human approvals of one kind: five on each of two days. Newest last. */
+async function tenOverTwoDays(
+  o: { subjectType?: string; action?: string; profileSlug?: string } = {}
+): Promise<string[]> {
+  const ids: string[] = [];
+  for (const day of [DAY1, DAY2]) {
+    for (let i = 0; i < 5; i++) {
+      ids.push(await decided({ ...o, at: day + i * 60_000 }));
+    }
+  }
+  return ids;
+}
+
+describe("nextRungs — the earned streak rides the offer", () => {
+  it("a card whose kind was approved 10 times in a row over 2 days carries a met streak", async () => {
+    await tenOverTwoDays({ profileSlug: "note" });
+    const card = await pending({
+      subjectType: "entity",
+      action: "create",
+      profileSlug: "note",
+    });
+    // Same agent and action, another kind: its own key, no history.
+    const otherKind = await pending({
+      subjectType: "entity",
+      action: "create",
+      profileSlug: "task",
+    });
+    const { rungs } = await caller(OWNER).nextRungs({
+      proposalIds: [card, otherKind],
+    });
+    const byId = new Map(rungs.map((r) => [r.proposalId, r]));
+    expect(byId.get(card)!.offer).not.toBeNull();
+    expect(byId.get(card)!.streak).toEqual({
+      met: true,
+      count: 10,
+      needed: 10,
+      since: new Date(DAY1).toISOString(),
+    });
+    expect(byId.get(otherKind)!.streak).toEqual({
+      met: false,
+      count: 0,
+      needed: 10,
+      since: null,
+    });
+    expect(byId.get(card)!.paused).toBeNull();
+  });
+
+  it("a rejection on the key breaks it; the next approvals start over", async () => {
+    await tenOverTwoDays({ profileSlug: "note" });
+    await decided({
+      profileSlug: "note",
+      status: "rejected",
+      at: DAY2 + 3_600_000,
+    });
+    await decided({ profileSlug: "note", at: DAY2 + 7_200_000 });
+    const card = await pending({
+      subjectType: "entity",
+      action: "create",
+      profileSlug: "note",
+    });
+    const { rungs } = await caller(OWNER).nextRungs({ proposalIds: [card] });
+    expect(rungs[0]!.streak).toMatchObject({ met: false, count: 1 });
+  });
+
+  it("no streak where the ladder refuses: irreversible, floored, an entity with no kind", async () => {
+    // Irreversible (a new commitment): `isReversibleWrite` is false.
+    await tenOverTwoDays({ subjectType: "project", action: "create" });
+    // Floored: a delete.
+    await tenOverTwoDays({ action: "delete" });
+    // An entity write with no kind would grant every kind.
+    await tenOverTwoDays({ action: "create" });
+    const cards = [
+      await pending({ subjectType: "project", action: "create" }),
+      await pending({
+        subjectType: "entity",
+        action: "delete",
+        governanceReason: "DESTRUCTIVE_HARD_FLOOR",
+      }),
+      await pending({ subjectType: "entity", action: "create" }),
+    ];
+    const { rungs } = await caller(OWNER).nextRungs({ proposalIds: cards });
+    expect(rungs).toHaveLength(3);
+    for (const r of rungs) {
+      expect(r.offer, r.proposalId).toBeNull();
+      expect(r.streak, r.proposalId).toBeNull();
+    }
+  });
+
+  it("a covered card carries no streak (the rule already says it)", async () => {
+    await tenOverTwoDays({ profileSlug: "note" });
+    const card = await pending({
+      subjectType: "entity",
+      action: "create",
+      profileSlug: "note",
+    });
+    await caller(OWNER).proposeNextRung({
+      itemRef: { kind: "proposal", id: card },
+    });
+    const { rungs } = await caller(OWNER).nextRungs({ proposalIds: [card] });
+    expect(rungs[0]!.covered).not.toBeNull();
+    expect(rungs[0]!.streak).toBeNull();
+  });
+
+  it("an unreadable history is no streak, and the offer stays as it was (decision e8939070)", async () => {
+    await tenOverTwoDays({ profileSlug: "note" });
+    const card = await pending({
+      subjectType: "entity",
+      action: "create",
+      profileSlug: "note",
+    });
+    // The evidence read needs the revision log; the card read does not.
+    await client.exec(`alter table proposals drop column revision_history`);
+    const { rungs } = await caller(OWNER).nextRungs({ proposalIds: [card] });
+    expect(rungs[0]!.offer).not.toBeNull();
+    expect(rungs[0]!.streak).toBeNull();
+  });
+
+  it("a rule paused after reverts names itself on the next card, and only approvals after the pause count", async () => {
+    await tenOverTwoDays({ profileSlug: "note" });
+    const pausedAt = new Date(DAY2 + 86_400_000);
+    const ruleId = randomUUID();
+    await client.query(
+      `insert into governance_rules (id, principal_kind, agent_user_id, scope_kind, workspace_id, target_kind, target_pattern, target_profile, verdict, source_proposal_id, created_by, revoked_at, revoked_reason)
+       values ($1, 'agent', $2, 'workspace', $3, 'action', 'entity.create', 'note', 'auto', $4, $5, $6, 'paused_after_reverts')`,
+      [ruleId, AGENT, WS, randomUUID(), `user:${OWNER}`, pausedAt.toISOString()]
+    );
+    await decided({ profileSlug: "note", at: pausedAt.getTime() + 60_000 });
+    const card = await pending({
+      subjectType: "entity",
+      action: "create",
+      profileSlug: "note",
+    });
+    const { rungs } = await caller(OWNER).nextRungs({ proposalIds: [card] });
+    expect(rungs[0]!.offer).not.toBeNull();
+    expect(rungs[0]!.paused).toEqual({
+      ruleId,
+      revokedAt: pausedAt.toISOString(),
+    });
+    expect(rungs[0]!.streak).toMatchObject({ met: false, count: 1 });
+  });
+});
+
+describe("alwaysApproved — the Calibration kind, granted through the one back half", () => {
+  it("lists a kind with a met streak and no covering rule; accepting it writes the rule through fileRuleGrant", async () => {
+    const ids = await tenOverTwoDays({ profileSlug: "note" });
+    // Not met: nine approvals of another kind.
+    for (let i = 0; i < 9; i++) {
+      await decided({ profileSlug: "task", at: DAY1 + i * 3_600_000 * 3 });
+    }
+    const { readable, kinds } = await caller(OWNER).alwaysApproved();
+    expect(readable).toBe(true);
+    expect(kinds).toHaveLength(1);
+    const kind = kinds[0]!;
+    // The exemplar is the kind's newest approval: the card the grant is made from.
+    expect(kind.proposalId).toBe(ids.at(-1));
+    expect(kind.streak).toMatchObject({ met: true, count: 10 });
+    expect(kind.rule).toMatchObject({
+      agentUserId: AGENT,
+      scopeKind: "workspace",
+      workspaceId: WS,
+      targetPattern: "entity.create",
+      targetProfile: "note",
+      verdict: "auto",
+    });
+
+    const result = await caller(OWNER).proposeNextRung({
+      itemRef: { kind: "proposal", id: kind.proposalId },
+    });
+    expect(result.outcome).toBe("created");
+    const stored = (
+      await client.query<{ source_proposal_id: string; created_by: string }>(
+        `select source_proposal_id, created_by from governance_rules where id = $1`,
+        [(result as { ruleId: string }).ruleId]
+      )
+    ).rows[0]!;
+    expect(stored).toEqual({
+      source_proposal_id: kind.proposalId,
+      created_by: `user:${OWNER}`,
+    });
+
+    // Granted ⇒ covered ⇒ no longer "always approved, no rule".
+    expect((await caller(OWNER).alwaysApproved()).kinds).toEqual([]);
+  });
+
+  it("an outsider sees no kind", async () => {
+    await tenOverTwoDays({ profileSlug: "note" });
+    expect((await caller(OUTSIDER).alwaysApproved()).kinds).toEqual([]);
+  });
+});

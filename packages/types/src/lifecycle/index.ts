@@ -20,6 +20,7 @@ export {
   lifecycleOptionTone,
   type LifecycleCategory,
   type LifecycleOption,
+  type LifecycleOptionWaits,
 } from "./option.js";
 
 export const TERMINAL_LIFECYCLE_CATEGORIES: readonly LifecycleCategory[] = [
@@ -172,6 +173,7 @@ export {
   decideMoveHold,
   holdProblem,
   holdDevMovesRef,
+  holdDevRefLabel,
   holdWokenBy,
   parseHoldDevRef,
   parseHoldMovesRef,

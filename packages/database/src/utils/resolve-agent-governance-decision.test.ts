@@ -507,6 +507,163 @@ describe("resolveAgentGovernanceDecision — one-store (governance_rules)", () =
 });
 
 /**
+ * The outward floor (finding c173cc51): "Everything, always" wrote
+ * `any · pod · "*" · auto`, and the capability gate asked this resolver about
+ * every capability run, so any agent sent `messaging.external.send` unreviewed.
+ * A broad `auto` row is now skipped for a capability run and a capability
+ * grant; only a row naming the write may widen it. `messaging://unipile` is the
+ * capability id `gateMessagingSend` (external-dispatch.ts) resolves with when no
+ * messaging tool row is seeded.
+ */
+describe("resolveGovernanceRule — the outward floor", () => {
+  const SEND = {
+    agentUserId: "agent-1",
+    workspaceId: "ws-1",
+    subjectType: "capability",
+    action: "run",
+    capabilityId: "messaging://unipile",
+    capabilityVerbName: null,
+  } as const;
+  const EVERYTHING_ALWAYS = ruleRow({
+    principalKind: "any",
+    scopeKind: "pod",
+    targetPattern: "*",
+    verdict: "auto",
+  });
+
+  it("an 'Everything, always' rule does not authorize an external send", async () => {
+    const db = makeDb([[EVERYTHING_ALWAYS]]);
+    expect(await resolveGovernanceRule({ db, ...SEND })).toBeUndefined();
+  });
+
+  it("neither does a glob or the generic capability.run action: they cover every capability", async () => {
+    for (const targetPattern of ["capability.*", "capability.run"]) {
+      const db = makeDb([
+        [
+          ruleRow({
+            principalKind: "agent",
+            scopeKind: "workspace",
+            targetPattern,
+            verdict: "auto",
+          }),
+        ],
+      ]);
+      expect(await resolveGovernanceRule({ db, ...SEND })).toBeUndefined();
+    }
+  });
+
+  it("a rule naming that capability still authorizes it", async () => {
+    const db = makeDb([
+      [
+        EVERYTHING_ALWAYS,
+        ruleRow({
+          principalKind: "any",
+          scopeKind: "pod",
+          targetKind: "capability",
+          targetPattern: "messaging://unipile",
+          verdict: "auto",
+        }),
+      ],
+    ]);
+    expect(await resolveGovernanceRule({ db, ...SEND })).toEqual({
+      verdict: "auto",
+      matchedPattern: "messaging://unipile",
+      namesWrite: true,
+    });
+  });
+
+  it("a broad auto that outranks the naming rule is skipped, not ranked", async () => {
+    // agent × workspace × "*" scores 4, any × pod × capability scores 3.
+    const db = makeDb([
+      [
+        ruleRow({
+          principalKind: "agent",
+          scopeKind: "workspace",
+          targetPattern: "*",
+          verdict: "auto",
+        }),
+        ruleRow({
+          principalKind: "any",
+          scopeKind: "pod",
+          targetKind: "capability",
+          targetPattern: "messaging://unipile",
+          verdict: "auto",
+        }),
+      ],
+    ]);
+    expect(await resolveGovernanceRule({ db, ...SEND })).toMatchObject({
+      verdict: "auto",
+      matchedPattern: "messaging://unipile",
+    });
+  });
+
+  it("a broad propose rule still tightens a naming auto rule it outranks", async () => {
+    const db = makeDb([
+      [
+        ruleRow({
+          principalKind: "agent",
+          scopeKind: "workspace",
+          targetPattern: "*",
+          verdict: "propose",
+        }),
+        ruleRow({
+          principalKind: "any",
+          scopeKind: "pod",
+          targetKind: "capability",
+          targetPattern: "messaging://unipile",
+          verdict: "auto",
+        }),
+      ],
+    ]);
+    expect(await resolveGovernanceRule({ db, ...SEND })).toMatchObject({
+      verdict: "propose",
+      matchedPattern: "*",
+    });
+  });
+
+  it("a broad auto never grants a session a capability; the exact action does", async () => {
+    const GRANT = {
+      agentUserId: "agent-1",
+      workspaceId: "ws-1",
+      subjectType: "focus_session",
+      action: "grant_capability",
+    } as const;
+    expect(
+      await resolveGovernanceRule({
+        db: makeDb([[EVERYTHING_ALWAYS]]),
+        ...GRANT,
+      })
+    ).toBeUndefined();
+    const exact = ruleRow({
+      principalKind: "any",
+      scopeKind: "pod",
+      targetPattern: "focus_session.grant_capability",
+      verdict: "auto",
+    });
+    expect(
+      await resolveGovernanceRule({ db: makeDb([[exact]]), ...GRANT })
+    ).toMatchObject({ verdict: "auto", namesWrite: true });
+  });
+
+  it("control: the same broad rule still widens a write inside the pod", async () => {
+    const db = makeDb([[EVERYTHING_ALWAYS]]);
+    expect(
+      await resolveGovernanceRule({
+        db,
+        agentUserId: "agent-1",
+        workspaceId: "ws-1",
+        subjectType: "entity",
+        action: "update",
+      })
+    ).toMatchObject({
+      verdict: "auto",
+      matchedPattern: "*",
+      namesWrite: false,
+    });
+  });
+});
+
+/**
  * #4 instruction-provenance — rung 2.55's I/O half (`resolveOriginTrust`).
  * These prove the CLASSIFICATION half in isolation (the pure engine's
  * tighten-only mapping is covered in governance-policy/policy.test.ts). No

@@ -24,6 +24,8 @@ export interface FailureWording {
   inApp?: boolean;
   notFound?: string;
   forbidden?: string;
+  /** The sentence for a read that failed (not a not-found or a refusal). */
+  failed?: string;
 }
 
 /**
@@ -89,9 +91,10 @@ export function couldNotLoad(
   return {
     title: `This ${n} couldn’t be loaded`,
     message:
-      wording.inApp === false
+      wording.failed ??
+      (wording.inApp === false
         ? `Something went wrong while loading this ${n}. Try again.`
-        : `Something went wrong while loading this ${n}. Try again, or open it in the Synap app.`,
+        : `Something went wrong while loading this ${n}. Try again, or open it in the Synap app.`),
     chip: "Couldn’t load",
   };
 }

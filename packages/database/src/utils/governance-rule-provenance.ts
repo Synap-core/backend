@@ -96,8 +96,11 @@ export function createdByUserId(createdBy: string): string | null {
 
 /**
  * How a rule came to exist.
- *   - `earned`   — a human approved a `governance.widen_lane` proposal
- *                  (`source_proposal_id` set): reviewed lineage.
+ *   - `earned`   — `source_proposal_id` set: a person granted it from a card
+ *                  they approved (the trust ladder's next rung, offered on the
+ *                  earned streak), or approved a legacy `governance.widen_lane`
+ *                  proposal. Reviewed lineage. An earned rule PAUSES after
+ *                  repeated undos (`revoked_reason`).
  *   - `machine`  — a machine minted it under a `system:*` author (boot
  *                  backfill, capture-agent seeder, or the settings MIRROR).
  *                  NO ONE typed this rule into the editor.

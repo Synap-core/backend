@@ -30,7 +30,10 @@ import {
   notAnAppAgent,
 } from "@synap/database";
 import type { ProposalRevision } from "@synap/database";
-import { isPartiallyApprovedData } from "@synap-core/types/proposals";
+import {
+  isHumanRevision,
+  isPartiallyApprovedData,
+} from "@synap-core/types/proposals";
 import { proposalReasonBucket } from "../proposals/reason-bucket.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { authoredByUser } from "../agent-identity-service.js";
@@ -66,23 +69,11 @@ export interface ScorecardProposalRow {
 }
 
 /**
- * A revision is a HUMAN CORRECTION only when no agent made it: the entry
- * names an acting agent when an agent key revised it on a human's behalf
- * (`computeRevisedEnvelope`), and some doors record the agent itself as `by`
- * (`subjectAgentId`, when scoring one agent). An unattributed entry
- * (`by: null`) claims no actor and is not counted. LIMIT: entries written
- * before the acting agent was recorded carry only the human owner in `by` and
- * still count — history cannot be re-split.
- *
- * THE one rule — the prompt-version quality report imports it.
+ * A revision is a HUMAN CORRECTION only when no agent made it — THE one rule,
+ * in `@synap-core/types/proposals` (the trust ladder's earned streak reads it
+ * too). Re-exported for this module's importers.
  */
-export function isHumanRevision(
-  rev: unknown,
-  subjectAgentId?: string
-): boolean {
-  const r = rev as { by?: string | null; actingAgentUserId?: string | null };
-  return !r.actingAgentUserId && !!r.by && r.by !== subjectAgentId;
-}
+export { isHumanRevision };
 
 /** The window the per-agent card counts over (`AgentScorecard.window`). */
 export interface ScorecardWindow {

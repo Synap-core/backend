@@ -7,7 +7,9 @@
  * `automation` (pause), `session` (cancel / run again), `playbook` (archive),
  * `run` (cancel / run again), `capability` (turn its verbs on), `agent`
  * (disconnect) and `track` (a goal: its judge accepts, sends back, declares
- * done). Authoring stays in the app. Bounce kinds match the Hono
+ * done) and `skill` (one skill: its instructions, on or off, turned on
+ * there when it is an instruction) and `tool` (an integration: the page of
+ * the capability it belongs to, or its own). Authoring stays in the app. Bounce kinds match the Hono
  * `/open/:type/:id` ALLOWED set minus host types: we never render them here,
  * we point at `synap://open/{type}/{id}`.
  *
@@ -31,6 +33,8 @@ export const HOST_TYPES = [
   "document",
   "channel",
   "track",
+  "skill",
+  "tool",
 ] as const;
 export type HostType = (typeof HOST_TYPES)[number];
 
@@ -41,8 +45,6 @@ export const BOUNCE_TYPES = [
   "project",
   "workspace",
   "settings",
-  "skill",
-  "tool",
 ] as const;
 export type BounceType = (typeof BOUNCE_TYPES)[number];
 
@@ -109,6 +111,23 @@ export function parseOpenParams(type: string, id: string): ParsedOpen {
   }
 
   return { status: "not-found", type: kind || type, id: rawId };
+}
+
+/**
+ * Where `/open/:type/:id` goes instead of drawing a card, or `null` to draw
+ * it. A proposal has its review page; a space has its console page, which only
+ * a pod admin may open (a member keeps the bounce card).
+ */
+export function openRedirect(
+  parsed: ParsedOpen,
+  viewerIsPodAdmin: boolean
+): string | null {
+  if (parsed.status !== "bounce") return null;
+  if (parsed.type === "proposal") return `/proposal/${parsed.id}`;
+  if (parsed.type === "workspace" && viewerIsPodAdmin) {
+    return `/workspaces/${encodeURIComponent(parsed.id)}`;
+  }
+  return null;
 }
 
 export function openDocumentTitle(parsed: ParsedOpen): string {

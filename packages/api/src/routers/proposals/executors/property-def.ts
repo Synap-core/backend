@@ -167,6 +167,10 @@ export function registerPropertyDefExecutors(): void {
         ...(innerData.uiHints !== undefined
           ? { uiHints: innerData.uiHints as Record<string, unknown> }
           : {}),
+        ...(typeof innerData.initialStatus === "string" ||
+        innerData.initialStatus === null
+          ? { initialStatus: innerData.initialStatus }
+          : {}),
       });
 
       // Same as create: `ProposalMaterializedRecord` has no field for a

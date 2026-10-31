@@ -6,7 +6,8 @@
  * project adds `statusRollup`. Detail stays behind the ids (`statusOf`).
  *
  * Every number comes from an existing reader: the session population of a
- * goal (`workAndTrackedRunsWhere`), the goal's waiting-on (`loadTrackGoalFacts`),
+ * goal (`workAndTrackedRunsWhere`, filed in it OR serving it — the `serves`
+ * link, each session once per goal), the goal's waiting-on (`loadTrackGoalFacts`),
  * the board's status grouping and stuck count (`status-groups.ts`), the
  * transition log and the owed-slot / dependency reads (`status-facts.ts`).
  */
@@ -19,6 +20,7 @@ import {
   eq,
   focusSessions,
   inArray,
+  links,
   listableEntityWhere,
   profiles,
   projects,
@@ -26,6 +28,7 @@ import {
   ProfileResolutionService,
 } from "@synap/database";
 import type { ProjectTrack } from "@synap/database/schema";
+import type { SQL } from "drizzle-orm";
 import {
   findLifecycleOption,
   type LifecycleCategory,
@@ -83,6 +86,11 @@ export interface GoalRollup {
   moved?: number;
   /** Absent when it waits on nothing. */
   waitingOn?: WaitingOnMark[];
+  /**
+   * The goals that SERVE this one (`track --serves--> track`), direct only,
+   * that the reader may see. Absent when none.
+   */
+  children?: string[];
 }
 
 export interface ScopeRollup {
@@ -110,26 +118,102 @@ export interface ScopeRollup {
 const windowStart = () =>
   new Date(Date.now() - ROLLUP_WINDOW_DAYS * 86_400_000);
 
-/** Sessions per (key, category) — the key is the goal, or one bucket. */
+/** A scope's work sessions per category. */
 async function countWork(
-  where: ReturnType<typeof and>,
-  byTrack: boolean
-): Promise<Map<string, CategoryCounts>> {
+  where: ReturnType<typeof and>
+): Promise<CategoryCounts> {
   const rows = await db
     .select({
-      trackId: focusSessions.trackId,
       status: focusSessions.status,
       n: drizzleSql<number>`cast(count(*) as integer)`,
     })
     .from(focusSessions)
     .where(and(where, workAndTrackedRunsWhere()))
-    .groupBy(focusSessions.trackId, focusSessions.status);
-  const out = new Map<string, CategoryCounts>();
+    .groupBy(focusSessions.status);
+  const counts: CategoryCounts = {};
   for (const r of rows) {
-    const key = byTrack ? (r.trackId ?? "") : "all";
-    const counts = out.get(key) ?? {};
     addCount(counts, sessionStatusCategory(r.status), Number(r.n));
-    out.set(key, counts);
+  }
+  return counts;
+}
+
+/**
+ * `(id, key, status)` = (session, goal, its status) for every work session
+ * FILED in one of `goalIds` (`track_id`) or SERVING it
+ * (`session --serves--> track`). `UNION`, not `UNION ALL`: a session filed in
+ * AND serving the same goal is one row, so it counts once there. A session
+ * filed in one goal and serving another counts in each — two goals, one row
+ * each.
+ */
+function goalSessions(goalIds: string[]): SQL {
+  const filed = and(
+    inArray(focusSessions.trackId, goalIds),
+    workAndTrackedRunsWhere()
+  );
+  // The literal (not the `SERVES_LINK_TYPE` constant) keeps this reader
+  // visible to the `links-type-ssot` tripwire's typed-reader scan.
+  const serving = and(
+    eq(links.linkType, "serves"),
+    eq(links.fromType, "session"),
+    eq(links.toType, "track"),
+    inArray(links.toId, goalIds),
+    workAndTrackedRunsWhere()
+  );
+  return drizzleSql`SELECT ${focusSessions.id}::text AS id, ${focusSessions.trackId}::text AS key, ${focusSessions.status} AS status
+      FROM ${focusSessions} WHERE ${filed}
+    UNION
+    SELECT ${focusSessions.id}::text AS id, ${links.toId} AS key, ${focusSessions.status} AS status
+      FROM ${links} JOIN ${focusSessions} ON ${focusSessions.id}::text = ${links.fromId}
+     WHERE ${serving}`;
+}
+
+/** Each goal's work sessions per category (filed or serving, each once). */
+async function countGoalWork(
+  sessions: SQL
+): Promise<Map<string, CategoryCounts>> {
+  const res = (await db.execute(drizzleSql`
+    SELECT g.key AS k, g.status AS status, cast(count(*) as integer) AS n
+      FROM (${sessions}) g
+     GROUP BY g.key, g.status`)) as
+    | Array<{ k: string; status: string | null; n: number }>
+    | { rows: Array<{ k: string; status: string | null; n: number }> };
+  const out = new Map<string, CategoryCounts>();
+  for (const r of Array.isArray(res) ? res : res.rows) {
+    const counts = out.get(r.k) ?? {};
+    addCount(counts, sessionStatusCategory(r.status), Number(r.n));
+    out.set(r.k, counts);
+  }
+  return out;
+}
+
+/**
+ * Each goal's sub-goals: the tracks that SERVE it (`track --serves--> track`),
+ * direct only, through the goal read rule — a sub-goal the reader may not see
+ * is left out, never named.
+ */
+async function readChildGoals(
+  userId: string,
+  goalIds: string[]
+): Promise<Map<string, string[]>> {
+  const rows = await db
+    .select({ parent: links.toId, child: projectTracks.id })
+    .from(links)
+    .innerJoin(
+      projectTracks,
+      drizzleSql`${projectTracks.id}::text = ${links.fromId}`
+    )
+    .where(
+      and(
+        eq(links.linkType, "serves"),
+        eq(links.fromType, "track"),
+        eq(links.toType, "track"),
+        inArray(links.toId, goalIds),
+        scopedDb(AccessContext.operator({ userId })).predicate(projectTracks)
+      )
+    );
+  const out = new Map<string, string[]>();
+  for (const r of rows) {
+    out.set(r.parent, [...(out.get(r.parent) ?? []), r.child]);
   }
   return out;
 }
@@ -147,13 +231,12 @@ export async function readGoalRollups(
   const out = new Map<string, GoalRollup>();
   if (tracks.length === 0) return out;
   const ids = tracks.map((t) => t.id);
-  const inGoals = and(
-    inArray(focusSessions.trackId, ids),
-    workAndTrackedRunsWhere()
-  );
+  // Filed in a goal OR serving it, each session once per goal — the work
+  // counts and the session moves read the SAME rows, so they cannot disagree.
+  const sessions = goalSessions(ids);
   const { loadTrackGoalFacts } = await import("../tracks/goal-content.js");
-  const [work, moved, entered, facts] = await Promise.all([
-    countWork(inArray(focusSessions.trackId, ids), true),
+  const [work, moved, entered, facts, children] = await Promise.all([
+    countGoalWork(sessions),
     countMovesSince(windowStart(), [
       movesOf(
         "track",
@@ -161,23 +244,26 @@ export async function readGoalRollups(
       ),
       movesOf(
         "focus_session",
-        drizzleSql`SELECT ${focusSessions.id} AS id, ${focusSessions.trackId} AS key FROM ${focusSessions} WHERE ${inGoals}`
+        drizzleSql`SELECT g.id AS id, g.key AS key FROM (${sessions}) g`
       ),
     ]),
     lastTransitionAt(ids.map((id) => ({ type: "track" as const, id }))),
     loadTrackGoalFacts(tracks, userId),
+    readChildGoals(userId, ids),
   ]);
   for (const t of tracks) {
     const at = entered.get(`track:${t.id}`);
     const w = work.get(t.id);
     const m = moved.get(t.id);
     const waits = facts.get(t.id)?.waitingOn;
+    const kids = children.get(t.id);
     out.set(t.id, {
       since: new Date(at ?? t.createdAt).toISOString(),
       sinceMeasured: at !== undefined,
       ...(w && Object.keys(w).length ? { work: w } : {}),
       ...(m ? { moved: m } : {}),
       ...(waits?.length ? { waitingOn: waits } : {}),
+      ...(kids?.length ? { children: kids } : {}),
     });
   }
   return out;
@@ -362,7 +448,7 @@ export async function readScopeRollup(input: {
       userId,
       ...(projectId ? { projectId } : { workspaceId }),
     }),
-    countWork(sessionsInScope, false),
+    countWork(sessionsInScope),
     // Moves of what the caller can see in the scope: its things (the entity
     // read floor), its sessions (THE session read rule) and, for a project,
     // the project's goals (the project was checked visible above).
@@ -411,7 +497,7 @@ export async function readScopeRollup(input: {
     id,
     windowDays: ROLLUP_WINDOW_DAYS,
     things,
-    work: work.get("all") ?? {},
+    work,
     moved: moved.get("all") ?? 0,
     stuck,
     waitingOn,

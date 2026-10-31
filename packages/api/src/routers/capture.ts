@@ -190,6 +190,7 @@ import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
 import { writeRelationAsDependency } from "../services/links/dependency-links.js";
+import { nameCapturedSubject } from "../services/captures/captured-subject.js";
 import { computeCaptureGraphIdempotencyKey } from "../utils/pending-capture-dedup.js";
 import { markServiceCredentialError } from "../utils/credential-auto-repair.js";
 import { emitSideEffects } from "@synap/events";
@@ -4587,6 +4588,34 @@ const captureBaseRouter = router({
               "capture: session-produced link failed (non-fatal)"
             );
           }
+        }
+      }
+
+      // The WORK session this capture was filed into (a provided handle — relay
+      // mints one at Continue, before anything is filed) learns what it is
+      // ABOUT: the person's anchor, else the one lifecycle-kind entity filed
+      // (`captured-subject.ts`). Never a minted intake run, never an existing
+      // subject. Best-effort: the capture is already committed.
+      if (runSession.status === "provided" && created.length > 0) {
+        try {
+          const named = await nameCapturedSubject({
+            sessionId: runSession.sessionId,
+            userId,
+            agentUserId: ctx.agentUserId ?? null,
+            anchorEntityId: input.anchorEntityId ?? null,
+            entityIds: created.map((c) => c.entityId),
+          });
+          if (named.status === "refused") {
+            logger.warn(
+              { sessionId: runSession.sessionId, reason: named.reason },
+              "capture: session subject not set (refused)"
+            );
+          }
+        } catch (err) {
+          logger.warn(
+            { err, sessionId: runSession.sessionId },
+            "capture: session subject read failed (non-fatal)"
+          );
         }
       }
 

@@ -341,6 +341,8 @@ ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "metadata_sha256" text;
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_templates" text[] NOT NULL DEFAULT '{}';
 -- 0339b: why the document asks for each permission (`synap_requests[].reason`).
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_reasons" jsonb NOT NULL DEFAULT '{}'::jsonb;
+-- 0379: the permissions it asks for pod-wide (`synap_requests[].scope = "pod"`).
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_pod_wide" text[] NOT NULL DEFAULT '{}';
 
 CREATE TABLE IF NOT EXISTS "oauth_authorization_codes" (
   "code_hash"      text PRIMARY KEY,
@@ -4645,7 +4647,8 @@ CREATE TABLE IF NOT EXISTS "governance_rules" (
   "created_by"          text NOT NULL,
   "created_at"          timestamptz NOT NULL DEFAULT now(),
   "revoked_at"          timestamptz,
-  "expires_at"          timestamptz
+  "expires_at"          timestamptz,
+  "revoked_reason"      text
 );
 ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "principal_kind" governance_principal;
 ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "agent_user_id" text;
@@ -4660,6 +4663,7 @@ ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "source_proposal_id" uui
 ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "created_by" text;
 ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "revoked_at" timestamptz;
 ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "expires_at" timestamptz;
+ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "revoked_reason" text; -- 0380
 
 CREATE INDEX IF NOT EXISTS "governance_rules_scope_principal_idx"
   ON "governance_rules" ("scope_kind", "workspace_id", "principal_kind", "agent_user_id")

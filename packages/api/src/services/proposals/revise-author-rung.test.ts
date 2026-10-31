@@ -304,7 +304,7 @@ describe("THE KEY HALF — revising needs the approve right, unless the key's ag
   const asKey = (
     agent: string | undefined,
     grant: typeof AI_KEY,
-    fn: () => Promise<void>
+    fn: () => Promise<unknown>
   ) => runWithActingAgent(agent, () => runWithGrant(grant, fn));
 
   it("the authoring agent's key revises its own proposal without proposal.approve", async () => {
@@ -389,7 +389,7 @@ describe("A KEY LIMITED TO SPACES rewords its own proposal, never what it runs",
   const FULL_KEY = { scopes: [{ permissions: ["*"] }], clientId: null };
   const asKey = (
     grant: typeof CRM_KEY | typeof FULL_KEY,
-    fn: () => Promise<void>
+    fn: () => Promise<unknown>
   ) => runWithActingAgent(AGENT, () => runWithGrant(grant as never, fn));
 
   it("a payload patch, a re-target of space or project: FORBIDDEN, nothing written", async () => {

@@ -5,12 +5,7 @@ import {
 } from "@synap-core/types/i18n";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { en, fr } from "./copy";
-import {
-  historyRow,
-  historyRows,
-  undoOutcome,
-  type HistoryProposal,
-} from "./history-rows";
+import { historyRow, historyRows, type HistoryProposal } from "./history-rows";
 
 function proposal(over: Partial<HistoryProposal> = {}): HistoryProposal {
   return {
@@ -50,6 +45,28 @@ describe("historyRow", () => {
         objectName: "Léa",
       })
     );
+  });
+
+  it("a push to main says what was approved, never 'Approved deploy Session'", () => {
+    const row = historyRow(
+      proposal({
+        proposalType: "dev.deploy_approval",
+        targetType: "focus_session",
+        targetName: "Ship the publish gate",
+        data: {
+          repo: "Synap-core/control-plane-api",
+          branch: "main",
+          commitSha: "a524c103d1e2f3a4b5c6",
+          targetHost: "control-plane-api main",
+          deployCommand: "git push origin a524c103:main",
+          step: "push",
+        },
+      })
+    );
+    expect(row.title).toBe(
+      "Approved push of a524c103 to main in Synap-core/control-plane-api"
+    );
+    expect(row.title).not.toMatch(/Session|deploy/);
   });
 
   it("names who asked, who decided, when, and where", () => {
@@ -109,25 +126,6 @@ describe("historyRows", () => {
       proposal({ id: "c", status: "rejected" }),
     ]);
     expect(rows.map((r) => r.id)).toEqual(["a", "c"]);
-  });
-});
-
-describe("undoOutcome", () => {
-  it("reads the receipt from what the pod answered", () => {
-    expect(undoOutcome({ success: true })).toBe("done");
-    expect(undoOutcome({ success: true, alreadyReverted: true } as never)).toBe(
-      "done"
-    );
-    expect(
-      undoOutcome({ success: true, skipped: [{ reason: "edited" }] })
-    ).toBe("partly");
-    expect(undoOutcome({ success: true, partialFailures: ["Task"] })).toBe(
-      "partly"
-    );
-    expect(undoOutcome({ success: false })).toBe("partly");
-    expect(undoOutcome({ success: false, nothingReverted: true })).toBe(
-      "nothing"
-    );
   });
 });
 

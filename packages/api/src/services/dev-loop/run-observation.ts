@@ -19,6 +19,12 @@
  * A `failed` outcome (a transient error) THROWS once every session was tried,
  * so pg-boss retries the job: the sweep is idempotent (a settled slot is
  * skipped), and no producer replays a fact it already delivered.
+ *
+ * VISIBLE: every verdict that says something (delivered, withdrawn, waiting
+ * on review, DENIED by the grant) is posted to the session's room as the pod,
+ * outside the grant, before a failure throws (`sweep-notice.ts`). A key that
+ * holds only `event.create` is denied by design (F1); the room line names the
+ * grant it lacks (`session.update`) and the by-hand fallback.
  */
 
 import {
@@ -32,6 +38,7 @@ import {
   sweepMergedPullRequest,
   type MergeSweepOutcome,
 } from "./merge-sweeper.js";
+import { postSweepNotices } from "./sweep-notice.js";
 
 export type DevLoopRunResult =
   | { status: "swept"; outcomes: MergeSweepOutcome[] }
@@ -40,15 +47,21 @@ export type DevLoopRunResult =
   | { status: "invalid"; error: string };
 
 const SWEEPS = {
-  [DEV_LOOP_EVENT_TYPES.prMerged]: sweepMergedPullRequest,
-  [DEV_LOOP_EVENT_TYPES.prClosed]: sweepClosedPullRequest,
+  [DEV_LOOP_EVENT_TYPES.prMerged]: {
+    sweep: sweepMergedPullRequest,
+    kind: "merged",
+  },
+  [DEV_LOOP_EVENT_TYPES.prClosed]: {
+    sweep: sweepClosedPullRequest,
+    kind: "closed",
+  },
 } as const;
 
 export async function runDevLoopObservation(
   job: DevLoopObservationJobData
 ): Promise<DevLoopRunResult> {
-  const sweep = SWEEPS[job.eventType as keyof typeof SWEEPS];
-  if (!sweep) return { status: "ignored", eventType: job.eventType };
+  const entry = SWEEPS[job.eventType as keyof typeof SWEEPS];
+  if (!entry) return { status: "ignored", eventType: job.eventType };
   const parsed = pullRequestEventSchema.safeParse(job.data);
   if (!parsed.success) {
     return {
@@ -59,12 +72,19 @@ export async function runDevLoopObservation(
   const outcomes = await runWithGrant(
     job.grant as unknown as KeyGrant | null | undefined,
     () =>
-      sweep({
+      entry.sweep({
         userId: job.userId,
         producerAgentUserId: job.producerAgentUserId,
         event: parsed.data,
       })
   );
+  // Outside the grant: the pod reports what it did; the key writes nothing.
+  await postSweepNotices({
+    kind: entry.kind,
+    event: parsed.data,
+    eventId: job.eventId,
+    outcomes,
+  });
   const failed = outcomes.filter((o) => o.result === "failed");
   if (failed.length > 0) {
     throw new Error(

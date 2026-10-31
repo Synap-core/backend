@@ -30,6 +30,7 @@ import type { Tool } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { toolNotRetiredWhere } from "../services/tools/visibility.js";
+import { toolCapabilityForReader } from "../services/tools/tool-capability.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { auditLog } from "../utils/audit-log.js";
@@ -130,7 +131,12 @@ export const toolsRouter = router({
       return rows as Tool[];
     }),
 
-  /** A tool + the skills that `require` it (for the tool detail page). */
+  /**
+   * A tool + the skills that `require` it (for the tool detail page), and the
+   * capability it belongs to when the reader can see that capability (null
+   * otherwise): its own page is where the tool is turned on and seen running
+   * (pod admin's `/open/tool/:id` opens it).
+   */
   get: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
@@ -156,7 +162,11 @@ export const toolsRouter = router({
       const requiredBy = skillIds.length
         ? await db.select().from(skills).where(inArray(skills.id, skillIds))
         : [];
-      return { tool: tool as Tool, skills: requiredBy };
+      return {
+        tool: tool as Tool,
+        skills: requiredBy,
+        capabilityId: await toolCapabilityForReader(userId, input.id),
+      };
     }),
 
   create: protectedProcedure

@@ -10,6 +10,7 @@ import { isDocumentEditProposal } from "./intent.js";
 import type { UnitTone } from "../units/state.js";
 import type { AskFate } from "../ask/card.js";
 import { formatFloorCount } from "../value-format/numbers.js";
+import { workClockIn } from "../work-clock/index.js";
 
 /**
  * Untouched `objectWork` proposals leave the headline count after this many
@@ -17,7 +18,7 @@ import { formatFloorCount } from "../value-format/numbers.js";
  * The needs-you "Older" fold reads the same clock (`OLDER_AFTER_MS`, api
  * `needs-you-union.ts`).
  */
-export const REVIEW_LATER_AFTER_DAYS = 7;
+export const REVIEW_LATER_AFTER_DAYS = workClockIn("stuck", "days");
 export const REVIEW_LATER_AFTER_MS = REVIEW_LATER_AFTER_DAYS * 24 * 3_600_000;
 
 /**

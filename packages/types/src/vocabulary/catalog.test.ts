@@ -147,7 +147,7 @@ describe("French: words", () => {
   it("nouns, plurals and their grammar", () => {
     expect(resolveObjectNoun("task", "fr")).toBe("Tâche");
     expect(resolveObjectNounPlural("person", "fr")).toBe("Personnes");
-    expect(resolveObjectNoun("focus_session", "fr")).toBe("Session");
+    expect(resolveObjectNoun("focus_session", "fr")).toBe("Travail");
     expect(resolveObjectNounPlural("channel", "fr")).toBe("Canaux");
     expect(resolveNoun("idea", "fr")).toEqual({
       one: "Idée",
@@ -249,7 +249,7 @@ describe("French: sentences agree with the noun", () => {
       "Mettre à jour le récit du projet"
     );
     expect(title("session_narrative_update", "session")).toBe(
-      "Mettre à jour le récit de la session"
+      "Mettre à jour le récit du travail"
     );
     expect(title("widen_scopes", "issuer")).toBe(
       "Élargir l’accès pour l’émetteur de confiance"
@@ -262,7 +262,7 @@ describe("French: sentences agree with the noun", () => {
     );
     expect(title("run", null, "Sync")).toBe(`Exécuter ${quoted("Sync")}`);
     expect(buildObjectActionTitle({ objectKind: "task", locale: "fr" })).toBe(
-      `Proposition${NBSP}: tâche`
+      `Demande${NBSP}: tâche`
     );
   });
 
@@ -288,7 +288,7 @@ describe("French: sentences agree with the noun", () => {
 
   it("private and members-decide marks agree", () => {
     expect(resolvePrivateObjectLabel("focus_session", "fr")).toBe(
-      "Session privée"
+      "Travail privé"
     );
     expect(resolvePrivateObjectLabel("project", "fr")).toBe("Projet privé");
     expect(resolvePrivateObjectLabel("recipe", "fr")).toBe(
@@ -296,7 +296,7 @@ describe("French: sentences agree with the noun", () => {
     );
     expect(resolvePrivateObjectLabel(undefined, "fr")).toBe("Élément privé");
     expect(resolveMembersDecideLabel("focus_session", "fr")).toBe(
-      "Les membres de la session décident"
+      "Les membres du travail décident"
     );
     expect(resolveMembersDecideLabel("project", "fr")).toBe(
       "Les membres du projet décident"

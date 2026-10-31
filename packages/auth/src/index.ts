@@ -18,6 +18,14 @@ export {
   attachOidcCredentialToIdentity,
 } from "./ory-kratos.js";
 
+// Pod-held sign-in facts (password / passkey, the courier)
+export {
+  accountHasPodHeldFactor,
+  identityHasPodHeldCredential,
+  kratosIdentityHasPodHeldCredential,
+} from "./pod-held-credential.js";
+export { courierStatus } from "./courier-status.js";
+
 // Re-export Ory middleware
 export { orySessionMiddleware } from "./ory-middleware.js";
 

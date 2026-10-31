@@ -5,18 +5,18 @@
  * button. Approving normally decides once; picking a granularity here does
  * that AND writes one revocable `governance_rules` row (Governance
  * Convergence Plan, Phase A/D) so the same kind of write auto-approves next
- * time — until someone revokes it in Governance rules.
+ * time — until someone takes it back in a space's Governance tab.
  *
- * The five granularities are described in the header of
+ * The granularities are described in the header of
  * `packages/api/src/routers/governance-rules.ts`; only the ones this
- * proposal's own data supports are offered — never guessed.
+ * proposal's own data supports are offered — never guessed. Each one says
+ * what it covers and what still asks (`copy.ts`, `always.*`).
  *
- * NOTE (Phase A limitation, see resolve-agent-governance-decision.ts's
- * `scoreRuleTarget`): a `targetKind: "capability"` rule is stored and
- * revocable today, but the resolver doesn't consult capability-target rows
- * yet — "always approve this capability" won't actually auto-approve future
- * runs until that wiring lands. Still offered (it's the documented door),
- * degrades to a no-op rather than lying about what's possible.
+ * "This tool" writes a `targetKind: "capability"` row, the ONLY rule that can
+ * authorize a tool run: the capability gate consults the resolver, which
+ * skips every broad rule for a run (the outward floor). There is no
+ * "Everything, always" here: `deriveGovernanceGrantOptions` writes no wildcard
+ * rule in pod admin (finding c173cc51).
  */
 
 import { useState } from "react";
@@ -34,7 +34,12 @@ import {
   resolveCapabilityTarget,
   type GovernanceGrantOption,
 } from "@synap-core/types";
+import {
+  resolveActionLabel,
+  resolveObjectNoun,
+} from "@synap-core/types/vocabulary";
 import { trpc } from "../../../lib/trpc";
+import { alwaysApproveT } from "./copy";
 import { approveInput, renderedRevision } from "./use-proposal-decision";
 
 type CreateRuleInput = Parameters<
@@ -44,6 +49,8 @@ type CreateRuleInput = Parameters<
 interface Granularity {
   key: GovernanceGrantOption["id"];
   label: string;
+  /** What the rule covers and what still asks. */
+  covers: string;
   input: CreateRuleInput;
 }
 
@@ -65,21 +72,47 @@ function stringField(data: unknown, key: string): string | undefined {
   return typeof v === "string" && v.trim() ? v : undefined;
 }
 
-/** Operator-facing label copy for each granularity — the option DERIVATION is
+type T = ReturnType<typeof alwaysApproveT>;
+
+/** Operator-facing words for each granularity — the option DERIVATION is
  * shared (`deriveGovernanceGrantOptions(..., "operator-any")`); only the
  * wording is pod-admin's own (`GovernanceMenu` words the same ids for the
- * end-user surface). The "action" label reads the raw `targetType`/`proposalType`
- * (space-separated) rather than the `<type>.<action>` event key. */
-const GRANT_LABELS: Record<
-  GovernanceGrantOption["id"],
-  (p: ProposalForRule, value?: string) => string
-> = {
-  capability: (_p, value) => `Always approve "${value}"`,
-  action: (p) => `All "${p.targetType} ${p.proposalType}" actions`,
-  profile: (_p, value) => `Everything of type "${value}"`,
-  agent: () => "This same action from this agent",
-  global: () => "Everything, always",
-};
+ * end-user surface). "global" is never derived in operator mode. */
+function grantWords(
+  t: T,
+  id: GovernanceGrantOption["id"],
+  p: ProposalForRule,
+  value?: string
+): { label: string; covers: string } | null {
+  switch (id) {
+    case "capability":
+      return {
+        label: t("always.capability.label", { name: value ?? "" }),
+        covers: t("always.capability.covers"),
+      };
+    case "action":
+      return {
+        label: t("always.action.label", {
+          change: `${resolveActionLabel(p.proposalType)} ${resolveObjectNoun(
+            p.targetType
+          ).toLowerCase()}`,
+        }),
+        covers: t("always.action.covers"),
+      };
+    case "profile":
+      return {
+        label: t("always.profile.label", { kind: resolveObjectNoun(value) }),
+        covers: t("always.profile.covers"),
+      };
+    case "agent":
+      return {
+        label: t("always.agent.label"),
+        covers: t("always.agent.covers"),
+      };
+    case "global":
+      return null;
+  }
+}
 
 /** Derive the applicable granularities from data already on the page — a
  * granularity is offered only when the proposal actually carries the field
@@ -89,7 +122,7 @@ const GRANT_LABELS: Record<
  * synap-app's `GovernanceMenu` calls, here with the operator (`"operator-any"`)
  * mode; this file only maps pod-admin's raw proposal-row fields into the shared
  * context and supplies operator label copy. */
-function deriveGrantOptions(p: ProposalForRule): Granularity[] {
+function deriveGrantOptions(p: ProposalForRule, t: T): Granularity[] {
   const actionKey =
     p.targetType && p.proposalType
       ? `${p.targetType}.${p.proposalType}`
@@ -112,11 +145,12 @@ function deriveGrantOptions(p: ProposalForRule): Granularity[] {
     "operator-any"
   );
 
-  return options.map((o) => ({
-    key: o.id,
-    label: GRANT_LABELS[o.id](p, o.value),
-    input: o.rule as CreateRuleInput,
-  }));
+  return options.flatMap((o) => {
+    const words = grantWords(t, o.id, p, o.value);
+    return words
+      ? [{ key: o.id, ...words, input: o.rule as CreateRuleInput }]
+      : [];
+  });
 }
 
 export function AlwaysApproveMenu({
@@ -132,7 +166,8 @@ export function AlwaysApproveMenu({
   const approve = trpc.proposals.approve.useMutation();
   const createRule = trpc.governanceRules.create.useMutation();
 
-  const granularities = deriveGrantOptions(proposal);
+  const t = alwaysApproveT();
+  const granularities = deriveGrantOptions(proposal, t);
 
   async function approveAndAlways(g: Granularity) {
     setRunning(true);
@@ -143,27 +178,30 @@ export function AlwaysApproveMenu({
       try {
         await createRule.mutateAsync(g.input);
         addToast({
-          title: "Approved",
-          description: `Rule created — "${g.label}" will auto-approve from now on. Revocable in Governance rules.`,
+          title: t("always.done.title"),
+          description: t("always.done.body", { label: g.label }),
           color: "success",
         });
       } catch (ruleError) {
         addToast({
-          title: "Approved",
-          description: `The change went through, but the always-approve rule wasn't created: ${
-            ruleError instanceof Error ? ruleError.message : "unknown error"
-          }`,
+          title: t("always.done.title"),
+          description: t("always.ruleFailed", {
+            reason:
+              ruleError instanceof Error
+                ? ruleError.message
+                : t("always.noReason"),
+          }),
           color: "warning",
         });
       }
       onDone();
     } catch (approveError) {
       addToast({
-        title: "Could not approve",
+        title: t("always.approveFailed"),
         description:
           approveError instanceof Error
             ? approveError.message
-            : "unknown error",
+            : t("always.noReason"),
         color: "danger",
       });
     } finally {
@@ -182,11 +220,11 @@ export function AlwaysApproveMenu({
           isLoading={running}
           isDisabled={disabled || running}
         >
-          Approve &amp; always…
+          {t("always.trigger")}
         </Button>
       </DropdownTrigger>
       <DropdownMenu
-        aria-label="Approve and create an always-approve rule"
+        aria-label={t("always.menu")}
         disabledKeys={running ? granularities.map((g) => g.key) : []}
         onAction={(key) => {
           const g = granularities.find((item) => item.key === key);
@@ -194,10 +232,7 @@ export function AlwaysApproveMenu({
         }}
       >
         {granularities.map((g) => (
-          <DropdownItem
-            key={g.key}
-            description="Auto-approved next time — revocable"
-          >
+          <DropdownItem key={g.key} description={g.covers}>
             {g.label}
           </DropdownItem>
         ))}

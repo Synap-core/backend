@@ -47,6 +47,28 @@ export function runListInput(
   }
 }
 
+/** One tool's runs: the `runs.list` tool lens. */
+export type ToolRunsInput = {
+  flowType: "capability";
+  scope: { capabilityId: string } | { skillId: string };
+};
+
+/**
+ * `?capability=<id>` / `?skill=<id>` (a tool page's "Show all") → the tool
+ * lens, or null. A malformed id is no lens, never a request the pod refuses.
+ */
+export function toolRunsInput(params: {
+  get(key: string): string | null;
+}): ToolRunsInput | null {
+  const capabilityId = params.get("capability");
+  if (capabilityId && isUuid(capabilityId))
+    return { flowType: "capability", scope: { capabilityId } };
+  const skillId = params.get("skill");
+  if (skillId && isUuid(skillId))
+    return { flowType: "capability", scope: { skillId } };
+  return null;
+}
+
 /**
  * A ledger's noun. Registry kinds read through the vocabulary ("Rule",
  * "Template", "Tool"); a chat turn and an agent write have no object of their

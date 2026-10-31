@@ -747,6 +747,12 @@ export const hubProfilesRouter = router({
         valueType: z.string().min(1).optional(),
         constraints: z.record(z.string(), z.unknown()).optional(),
         uiHints: z.record(z.string(), z.unknown()).optional(),
+        /**
+         * A declared lifecycle's INITIAL status: the option a new thing or
+         * role starts in when its creator names none (`null` clears it).
+         * Applied through the lifecycle door (`setLifecycleInitialStatus`).
+         */
+        initialStatus: z.string().min(1).nullable().optional(),
         agentUserId: z.string().uuid().optional(),
         reasoning: z.string().optional(),
       })
@@ -768,12 +774,13 @@ export const hubProfilesRouter = router({
         slug === undefined &&
         input.valueType === undefined &&
         input.constraints === undefined &&
-        input.uiHints === undefined
+        input.uiHints === undefined &&
+        input.initialStatus === undefined
       ) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message:
-            "Nothing to update: pass at least one of slug, valueType, constraints, uiHints.",
+            "Nothing to update: pass at least one of slug, valueType, constraints, uiHints, initialStatus.",
         });
       }
 
@@ -824,6 +831,9 @@ export const hubProfilesRouter = router({
             ? { constraints: input.constraints }
             : {}),
           ...(input.uiHints !== undefined ? { uiHints: input.uiHints } : {}),
+          ...(input.initialStatus !== undefined
+            ? { initialStatus: input.initialStatus }
+            : {}),
         },
       });
 
@@ -847,6 +857,9 @@ export const hubProfilesRouter = router({
           ? { constraints: input.constraints }
           : {}),
         ...(input.uiHints !== undefined ? { uiHints: input.uiHints } : {}),
+        ...(input.initialStatus !== undefined
+          ? { initialStatus: input.initialStatus }
+          : {}),
       });
 
       return {

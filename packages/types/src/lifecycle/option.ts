@@ -1,5 +1,6 @@
 /**
  * The lifecycle OPTION model: categories, an option, and its words and tone.
+ * The tone itself comes from THE tone table (`../units/state.ts`).
  *
  * A leaf module so `./steps.ts` can read it without importing `./index.ts`,
  * which re-exports `./steps.ts` — that cycle left `STEP_POSITIONS` in its
@@ -7,8 +8,14 @@
  * `./index.ts` mid-load, and relay web would not boot. Re-exported unchanged
  * from `./index.ts`; import it from `@synap-core/types/lifecycle`.
  */
-import type { UnitTone } from "../units/state.js";
+import {
+  isUnitTone,
+  LIFECYCLE_CATEGORY_TONE,
+  type UnitTone,
+} from "../units/state.js";
 import { resolveStatusLabel } from "../vocabulary/index.js";
+import type { WaitKind } from "../units/wait-kind.js";
+import type { HoldOn } from "./hold.js";
 
 export const LIFECYCLE_CATEGORIES = [
   "open",
@@ -41,29 +48,38 @@ export interface LifecycleOption {
    * date rule. Never on a done/lost option.
    */
   dateBinding?: string;
+  /**
+   * The wait this step DECLARES (decision 1, c3a662b2 §12): an ACTIVE step
+   * such as "sent" or "proposal sent" waits on someone without being a pause.
+   * Whose move it is and lateness then come from the step itself. Absent ⇒
+   * the step waits on nothing of its own. Never on a done/lost option.
+   */
+  waits?: LifecycleOptionWaits;
 }
 
-/** The default mark of each category — a tone TOKEN, never a colour. */
-export const LIFECYCLE_CATEGORY_TONE: Readonly<
-  Record<LifecycleCategory, UnitTone>
-> = {
-  open: "textSecondary",
-  active: "primary",
-  paused: "warning",
-  done: "success",
-  lost: "error",
-};
+/**
+ * A step's declared wait. `on` is a hold's own value set (`HOLD_ON`): no new
+ * list. `waitKind` is the finer axis (`WAIT_KINDS`); absent, it is read off
+ * `on` through the one map table (`WAIT_KIND_FROM.hold`).
+ */
+export interface LifecycleOptionWaits {
+  on: HoldOn;
+  /** The finer kind ("signature", "payment"…); absent ⇒ derived from `on`. */
+  waitKind?: WaitKind;
+  /**
+   * The property or relation of the thing that names WHO or WHAT is waited
+   * on (a deal's `contactId`), so the wait's ref is read from the row.
+   */
+  refFrom?: string;
+  /**
+   * The date property that ends the wait (a lead's `nextActionAt`): past it,
+   * the wait is late. The same reading as the option's own `dateBinding`.
+   */
+  dateBinding?: string;
+}
 
-const UNIT_TONES: readonly string[] = [
-  "primary",
-  "ai",
-  "info",
-  "error",
-  "success",
-  "warning",
-  "textSecondary",
-  "textMuted",
-] satisfies readonly UnitTone[];
+/** The default mark of each category: THE tone table's (`../units/state.ts`). */
+export { LIFECYCLE_CATEGORY_TONE };
 
 /** The words for an option: its authored label, else the shared vocabulary. */
 export function lifecycleOptionLabel(
@@ -76,7 +92,7 @@ export function lifecycleOptionLabel(
 export function lifecycleOptionTone(
   option: Pick<LifecycleOption, "category" | "tone">
 ): UnitTone {
-  return option.tone && UNIT_TONES.includes(option.tone)
-    ? (option.tone as UnitTone)
+  return isUnitTone(option.tone)
+    ? option.tone
     : LIFECYCLE_CATEGORY_TONE[option.category];
 }

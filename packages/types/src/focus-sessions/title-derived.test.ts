@@ -298,7 +298,7 @@ describe("buildRunSessionStartTitle — the name a run will carry, said before i
         playbookName: "Qualify a lead",
         subjectCount: 4,
       })
-    ).toBe("Qualify a lead · 4 sessions");
+    ).toBe("Qualify a lead · 4 jobs");
   });
 
   it("drops an unresolved subject rather than printing an id", () => {

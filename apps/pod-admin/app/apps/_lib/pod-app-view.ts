@@ -6,12 +6,21 @@
  * rule (only ever take a pair away, never the last one) is tested here.
  */
 
-import { permissionLabel } from "../../oauth/consent/consent-model";
+import {
+  EVERYWHERE_IN_POD,
+  permissionLabel,
+  POD_WIDE_HEADING,
+} from "../../oauth/consent/consent-model";
 
-/** One approved (permission, space) pair, with the space's name. */
+export { EVERYWHERE_IN_POD, POD_WIDE_HEADING };
+
+/**
+ * One approved (permission, space) pair, with the space's name. A null space
+ * is a read the app was given EVERYWHERE in the pod (decision e1b59d38 "B").
+ */
 export interface PodAppPair {
   permission: string;
-  workspaceId: string;
+  workspaceId: string | null;
   workspaceName: string | null;
 }
 
@@ -40,21 +49,35 @@ export function tierLabel(verified: boolean): string {
   return verified ? "Synap app" : "Unverified app";
 }
 
+/** Where a pair applies, after its verb: "in Brand" / "everywhere in your pod". */
+export function placePhrase(space: {
+  workspaceId: string | null;
+  workspaceName: string;
+}): string {
+  return space.workspaceId === null
+    ? EVERYWHERE_IN_POD
+    : `in ${space.workspaceName}`;
+}
+
 /** A space's name, or a stand-in when the pod no longer has it. */
 function spaceName(pair: PodAppPair): string {
+  if (pair.workspaceId === null) return EVERYWHERE_IN_POD;
   return pair.workspaceName ?? "a space you no longer see";
 }
 
-/** The approval, one entry per space, each with the permissions given there. */
+/**
+ * The approval, one entry per space, each with the permissions given there.
+ * The pod-wide reads (`workspaceId` null) are one entry of their own, first.
+ */
 export function approvalBySpace(approved: readonly PodAppPair[]): Array<{
-  workspaceId: string;
+  workspaceId: string | null;
   workspaceName: string;
   permissions: Array<{ permission: string; label: string }>;
 }> {
   const out = new Map<
-    string,
+    string | null,
     {
-      workspaceId: string;
+      workspaceId: string | null;
       workspaceName: string;
       permissions: Array<{ permission: string; label: string }>;
     }
@@ -71,8 +94,10 @@ export function approvalBySpace(approved: readonly PodAppPair[]): Array<{
     });
     out.set(pair.workspaceId, space);
   }
-  return [...out.values()].sort((a, b) =>
-    a.workspaceName.localeCompare(b.workspaceName)
+  return [...out.values()].sort(
+    (a, b) =>
+      Number(a.workspaceId !== null) - Number(b.workspaceId !== null) ||
+      a.workspaceName.localeCompare(b.workspaceName)
   );
 }
 
@@ -81,8 +106,7 @@ export function approvalSentence(approved: readonly PodAppPair[]): string {
   if (approved.length === 0) return "No access.";
   return approvalBySpace(approved)
     .map(
-      (s) =>
-        `${s.permissions.map((p) => p.label).join(", ")} in ${s.workspaceName}`
+      (s) => `${s.permissions.map((p) => p.label).join(", ")} ${placePhrase(s)}`
     )
     .join(" · ");
 }
@@ -94,8 +118,8 @@ export function approvalSentence(approved: readonly PodAppPair[]): string {
  */
 export function keepWithout(
   approved: readonly PodAppPair[],
-  drop: { permission?: string; workspaceId: string }
-): Array<{ permission: string; workspaceId: string }> | null {
+  drop: { permission?: string; workspaceId: string | null }
+): Array<{ permission: string; workspaceId: string | null }> | null {
   const keep = approved
     .filter(
       (p) =>

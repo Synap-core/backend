@@ -54,3 +54,36 @@ describe("deriveGovernanceGrantOptions — non-widenable floors", () => {
     expect(isNonWidenableGovernanceReason(null)).toBe(false);
   });
 });
+
+describe("deriveGovernanceGrantOptions — the outward floor (finding c173cc51)", () => {
+  const RUN: GovernanceGrantContext = {
+    ...BASE,
+    actionKey: "capability.run",
+    capabilityTarget: "messaging://unipile",
+  };
+
+  it("pod admin offers no wildcard rule: no 'Everything, always'", () => {
+    const opts = deriveGovernanceGrantOptions(BASE, "operator-any");
+    expect(opts.map((o) => o.id)).not.toContain("global");
+    expect(
+      opts.some(
+        (o) => o.rule.targetPattern === "*" && o.rule.targetKind === "action"
+      )
+    ).toBe(false);
+  });
+
+  it("control: the desktop menu still offers it", () => {
+    expect(ids(BASE)).toContain("global");
+  });
+
+  it("a capability run offers the capability, never the generic capability.run action", () => {
+    for (const mode of ["agent-scoped", "operator-any"] as const) {
+      const opts = deriveGovernanceGrantOptions(RUN, mode);
+      expect(opts.map((o) => o.id)).toContain("capability");
+      expect(opts.map((o) => o.id)).not.toContain("action");
+      expect(opts.some((o) => o.rule.targetPattern === "capability.run")).toBe(
+        false
+      );
+    }
+  });
+});

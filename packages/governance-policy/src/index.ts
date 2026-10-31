@@ -251,6 +251,26 @@ export function capabilityVerbAllowsRuleWiden(
   );
 }
 
+/**
+ * THE OUTWARD FLOOR (finding c173cc51, founder 2026-10-30: an act that leaves
+ * the company stays a person's yes). A capability run can send, publish or
+ * spend outside the pod, and a session grant hands an agent the right to run
+ * one (an `auto` exec-mode grant the gate then honours with no rule at all).
+ * For these writes a broad `auto` rule (`*`, a glob, a class, or the generic
+ * `capability.run` action) never widens: only a rule that NAMES the write
+ * does — a capability-target row naming that capability for a run, the exact
+ * action for a grant. Applied where every caller resolves a rule
+ * (`resolveGovernanceRule`, @synap/database); a `propose` rule still tightens.
+ */
+export const NAMED_RULE_ONLY_EVENT_KEYS = [
+  "capability.run",
+  "focus_session.grant_capability",
+] as const;
+
+export function isNamedRuleOnlyWrite(eventKey: string): boolean {
+  return (NAMED_RULE_ONLY_EVENT_KEYS as readonly string[]).includes(eventKey);
+}
+
 export const DESTRUCTIVE_ACTIONS: readonly string[] = [
   "delete",
   "archive",

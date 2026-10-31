@@ -77,3 +77,23 @@ export function homeSpaceInLensWhere(
     homeInCallerSpaces(homeWorkspaceIdColumn, userId)
   )!;
 }
+
+/**
+ * KEY TWIN — a pod-wide row homed in one of `spaces`, for a KEY GRANT limited
+ * to those spaces (api access/grant-read.ts `spaceReach`, founder decision
+ * e1b59d38 "A", 2026-10-30): a key granted space S reads what a member of S
+ * reads, and a member of S reads what was filed for S. Not self-gating: the
+ * spaces are the grant's own, and the grant only ever NARROWS the person's
+ * floor. Pod-wide rows only; an un-homed row matches nothing. READ ONLY, like
+ * every builder here: no write door composes it.
+ */
+export function homeSpaceInSpacesWhere(
+  workspaceIdColumn: AnyPgColumn,
+  homeWorkspaceIdColumn: AnyPgColumn,
+  spaces: readonly string[]
+): SQL {
+  return and(
+    isNull(workspaceIdColumn),
+    inArray(homeWorkspaceIdColumn, [...spaces])
+  )!;
+}

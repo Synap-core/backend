@@ -7,21 +7,33 @@
  * answers the one question those refusals raise: what is blocking it, and can
  * I fix it here?
  *
- * Reads (both user-floored): `capabilities.containers.get` — the container, its
- * space, and NOT_FOUND for one the reader cannot see — and the catalog card
- * (`capabilities.catalog`, the same cached read Tools › Actions uses) for
- * its state, its verbs and the pod's own next-step sentence.
+ * It is also every capability's own page from Tools (one row, one click), so
+ * it answers the rest too: is it on, is something running now, what did it
+ * run (`ToolRuns`).
  *
- * The one act on the web is turning verbs on or off
+ * Reads (all user-floored): `capabilities.containers.get` — the container, its
+ * space, and NOT_FOUND for one the reader cannot see — the catalog card
+ * (`capabilities.catalog`, the same cached read Tools uses) for its state, its
+ * verbs and the pod's own next-step sentence, and its composition
+ * (`capabilities.compositions`) for its run health and its rules and
+ * templates. The status mark is THE one (`tool-status.ts`), the same the Tools
+ * row shows.
+ *
+ * The acts on the web are turning verbs on or off
  * (`capabilities.setToolEnabled`, the same gate as everywhere: a space's
- * owner, or a pod admin for a pod-wide capability). The switches are offered
- * only to those (`mayTurnVerbsOn`); everyone else reads the state and who can
- * change it. Connecting an account stays in the app — the web has no Connect
+ * owner, or a pod admin for a pod-wide capability), and turning ON its access
+ * to the service when a member tool row is off (`card.toolsOff`,
+ * `tools.setApproved`, the same gate). The run gate refuses on that row too,
+ * so a capability with every action on and its access off ran nothing, and
+ * until 2026-10-30 no screen offered to turn it on (Hetzner Cloud). The
+ * switches are offered only to those (`mayTurnVerbsOn`); everyone else reads
+ * the state and who can change it. Connecting an account stays in the app — the web has no Connect
  * flow — so that step is a "Connect in app" exit.
  */
 
 import { addToast, Chip, Switch } from "@heroui/react";
 import { useState } from "react";
+import { resolveServiceName } from "@synap-core/types/service-marks";
 import { trpc } from "../../../../lib/trpc";
 import { readableError } from "../../../../lib/format";
 import { ExitLink } from "../../../../lib/exit-link";
@@ -35,16 +47,19 @@ import {
 import {
   CAPABILITY_READ_OPTIONS,
   CATALOG_INPUT,
-} from "../../../(admin)/tools/_lib/installed-tab";
+} from "../../../(admin)/tools/_lib/tools-model";
 import {
   toolGroups,
   type CardVerbLike,
 } from "../../../(admin)/tools/_lib/installed-model";
+import { capabilityStatus } from "../../../(admin)/tools/_lib/tool-status";
+import { toolsT } from "../../../(admin)/tools/_lib/copy";
 import {
-  capabilityStatusPill,
-  mayTurnVerbsOn,
-  whoTurnsVerbsOn,
-} from "../capability-model";
+  actionLabelFor,
+  capabilityFlows,
+} from "../../../(admin)/tools/_lib/tool-runs-model";
+import { mayTurnVerbsOn, whoTurnsVerbsOn } from "../capability-model";
+import { ToolRuns } from "./tool-runs";
 import { couldNotLoad, loadFailure } from "../load-failure";
 import { useReauthOnUnauthorized } from "../use-reauth";
 import type { ObjectFrame } from "./object-frame";
@@ -65,6 +80,10 @@ export function CapabilityObject({
     { retry: false }
   );
   const catalog = trpc.capabilities.catalog.useQuery(CATALOG_INPUT, {
+    ...CAPABILITY_READ_OPTIONS,
+    enabled: container.isSuccess,
+  });
+  const compositions = trpc.capabilities.compositions.useQuery(undefined, {
     ...CAPABILITY_READ_OPTIONS,
     enabled: container.isSuccess,
   });
@@ -96,6 +115,24 @@ export function CapabilityObject({
       });
     },
   });
+  // Its access to the service (a member tool row the run gate refuses).
+  const [accessRefusals, setAccessRefusals] = useState<Record<string, string>>(
+    {}
+  );
+  const setAccess = trpc.tools.setApproved.useMutation({
+    onSuccess: (_res, input) => {
+      setAccessRefusals(({ [input.id]: _dropped, ...rest }) => rest);
+      void utils.capabilities.catalog.invalidate();
+      void utils.diagnose.global.invalidate();
+    },
+    onError: (err, input) => {
+      if (redirectToLoginIfUnauthorized(err)) return;
+      setAccessRefusals((r) => ({
+        ...r,
+        [input.id]: readableError(err.message) ?? toolsT()("access.notChanged"),
+      }));
+    },
+  });
   useReauthOnUnauthorized(container.error, catalog.error);
 
   if (container.isLoading) return frame.loading("Loading tool…");
@@ -110,6 +147,7 @@ export function CapabilityObject({
   }
 
   const card = (catalog.data ?? []).find((c) => c.id === id);
+  const composition = (compositions.data ?? []).find((c) => c.id === id);
   const space = workspaceId
     ? (spaces.data ?? []).find((s) => s.id === workspaceId)
     : undefined;
@@ -126,6 +164,10 @@ export function CapabilityObject({
     objectKind: "capability",
     id,
   });
+  const accessOff = card?.toolsOff ?? [];
+  const pendingAccess = setAccess.isPending
+    ? setAccess.variables?.id
+    : undefined;
   const pendingSkill = setEnabled.isPending
     ? setEnabled.variables?.skillId
     : undefined;
@@ -163,7 +205,15 @@ export function CapabilityObject({
       summary:
         next?.hint ??
         (catalog.isLoading ? undefined : "Its state couldn’t be read."),
-      status: card ? capabilityStatusPill(card.status) : null,
+      // Nothing until both halves answered or failed: a mark that flips from
+      // "On" to "2 failed runs" a second later would be read as the answer.
+      status:
+        catalog.isLoading || compositions.isLoading
+          ? null
+          : capabilityStatus({
+              card: card ?? null,
+              health: composition?.health ?? null,
+            }),
       breadcrumb: frame.breadcrumb?.(card?.name ?? cap.name),
       primaryAction:
         next?.kind === "connect" ? (
@@ -189,15 +239,38 @@ export function CapabilityObject({
         : []),
     ],
     children: (
-      <section className="flex flex-col gap-2">
-        <h2 className="text-[13px] font-medium text-foreground">Actions</h2>
-        {!canToggle && verbs.length > 0 && (
-          <p className="text-[12.5px] text-foreground/65">
-            {whoTurnsVerbsOn(workspaceId ? spaceName : null)}
-          </p>
+      <>
+        {accessOff.length > 0 && (
+          <AccessSection
+            tools={accessOff}
+            canToggle={canToggle}
+            who={
+              workspaceId
+                ? toolsT()("access.whoSpace", { space: spaceName ?? "" })
+                : toolsT()("access.who")
+            }
+            pendingId={pendingAccess}
+            refusals={accessRefusals}
+            onTurnOn={(toolId) =>
+              setAccess.mutate({ id: toolId, approved: true })
+            }
+          />
         )}
-        {verbsBody}
-      </section>
+        <section className="flex flex-col gap-2">
+          <h2 className="text-[13px] font-medium text-foreground">Actions</h2>
+          {!canToggle && verbs.length > 0 && (
+            <p className="text-[12.5px] text-foreground/65">
+              {whoTurnsVerbsOn(workspaceId ? spaceName : null)}
+            </p>
+          )}
+          {verbsBody}
+        </section>
+        <ToolRuns
+          tool={{ capabilityId: id }}
+          flows={capabilityFlows(composition?.members ?? [])}
+          actionLabel={actionLabelFor(card?.verbs ?? [])}
+        />
+      </>
     ),
     advanced: {
       ids: [
@@ -207,6 +280,82 @@ export function CapabilityObject({
       ...(card ? { raw: card } : {}),
     },
   });
+}
+
+/**
+ * Its access to the service, off: one row per member tool row the run gate
+ * refuses, with its switch. Only drawn while one is off; once on, the card no
+ * longer lists it and the section goes.
+ */
+function AccessSection({
+  tools,
+  canToggle,
+  who,
+  pendingId,
+  refusals,
+  onTurnOn,
+}: {
+  tools: ReadonlyArray<{ id: string; name: string }>;
+  canToggle: boolean;
+  who: string;
+  pendingId: string | undefined;
+  refusals: Record<string, string>;
+  onTurnOn: (toolId: string) => void;
+}) {
+  const t = toolsT();
+  return (
+    <section
+      data-capability-access=""
+      className="flex flex-col gap-2"
+      aria-label={t("access.title")}
+    >
+      <h2 className="text-[13px] font-medium text-foreground">
+        {t("access.title")}
+      </h2>
+      {!canToggle && <p className="text-[12.5px] text-foreground/65">{who}</p>}
+      <ul className="-mx-2 flex flex-col">
+        {tools.map((tool) => {
+          const service = resolveServiceName(tool.name);
+          return (
+            <li
+              key={tool.id}
+              data-access-tool={tool.id}
+              className="flex flex-col gap-1 border-b border-foreground/[0.05] px-2 py-2 last:border-b-0"
+            >
+              <div className="flex min-h-10 items-center gap-3">
+                <div className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate text-[13px] text-foreground">
+                    {t("access.row", { service })}
+                  </span>
+                  <span className="text-[11.5px] text-foreground/65">
+                    {t("access.why", { service })}
+                  </span>
+                </div>
+                {canToggle ? (
+                  <Switch
+                    size="sm"
+                    isSelected={false}
+                    isDisabled={pendingId === tool.id}
+                    onValueChange={(on) => on && onTurnOn(tool.id)}
+                    aria-label={t("access.turnOn", { service })}
+                  />
+                ) : (
+                  <span className="shrink-0 text-[12px] text-status-down">
+                    {t("access.off")}
+                  </span>
+                )}
+              </div>
+              {refusals[tool.id] && (
+                <p className="text-[12px] text-status-down" role="alert">
+                  {refusals[tool.id]}
+                </p>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
 }
 
 function VerbRow({

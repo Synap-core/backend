@@ -20,7 +20,15 @@
  * ON TOP of these predicates, never forks of them.
  */
 
-import { and, or, eq, drizzleSql, proposals, events } from "@synap/database";
+import {
+  and,
+  or,
+  eq,
+  inArray,
+  drizzleSql,
+  proposals,
+  events,
+} from "@synap/database";
 import type { SQL } from "@synap/database";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { AI_DECISION } from "../../lib/ai-events.js";
@@ -43,6 +51,19 @@ export interface CapabilityRunLens {
   /** Proposals only — `events` carries no project column. */
   projectId?: string;
   sessionId?: string;
+  /**
+   * TOOL lens: runs of these skills (one skill, or a capability's actions,
+   * `tool-lens.ts`). A proposal names its skill in `data.skillId` (the
+   * capability door) or in `data.capabilityId` with `capabilityKind: "skill"`
+   * (`skills.execute`); a direct run's event in `data.skillId`. An EMPTY list
+   * matches nothing (a capability with no actions has no action runs).
+   */
+  skillIds?: readonly string[];
+}
+
+/** `expr IN (ids)`, or a literal false for no ids: never an empty `IN ()`. */
+function inSkillIds(expr: SQL, ids: readonly string[]): SQL {
+  return ids.length > 0 ? inArray(expr, [...ids]) : drizzleSql`false`;
 }
 
 /**
@@ -70,7 +91,19 @@ export function capabilityRunProposalWhere(
     // SESSION lens (proposed path). `proposals.session_id` is stamped by
     // every capability door that forwards a session; `proposals_session_id_idx`
     // is the index it was created for.
-    lens.sessionId ? eq(proposals.sessionId, lens.sessionId) : undefined
+    lens.sessionId ? eq(proposals.sessionId, lens.sessionId) : undefined,
+    lens.skillIds
+      ? or(
+          inSkillIds(drizzleSql`${proposals.data}->>'skillId'`, lens.skillIds),
+          and(
+            drizzleSql`${proposals.data}->>'capabilityKind' = 'skill'`,
+            inSkillIds(
+              drizzleSql`${proposals.data}->>'capabilityId'`,
+              lens.skillIds
+            )
+          )
+        )
+      : undefined
   )!;
 }
 
@@ -102,6 +135,9 @@ export function capabilityRunEventWhere(
     // which is exactly what `idx_events_session_id` keys on. This is
     // the only way a direct run is attributable to a session at all:
     // it has no proposal row to carry one.
-    lens.sessionId ? eq(events.sessionId, lens.sessionId) : undefined
+    lens.sessionId ? eq(events.sessionId, lens.sessionId) : undefined,
+    lens.skillIds
+      ? inSkillIds(drizzleSql`${events.data}->>'skillId'`, lens.skillIds)
+      : undefined
   )!;
 }

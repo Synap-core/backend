@@ -241,6 +241,10 @@
       "types": "./dist/proposals/capability-run.d.ts",
       "import": "./dist/proposals/capability-run.js"
     },
+    "./proposals/dev-deploy": {
+      "types": "./dist/proposals/dev-deploy.d.ts",
+      "import": "./dist/proposals/dev-deploy.js"
+    },
     "./proposals/review-package": {
       "types": "./dist/proposals/review-package.d.ts",
       "import": "./dist/proposals/review-package.js"
@@ -348,6 +352,10 @@
     "./work-release": {
       "types": "./dist/work-release/index.d.ts",
       "import": "./dist/work-release/index.js"
+    },
+    "./work-clock": {
+      "types": "./dist/work-clock/index.d.ts",
+      "import": "./dist/work-clock/index.js"
     },
     "./lens": {
       "types": "./dist/lens/index.d.ts",

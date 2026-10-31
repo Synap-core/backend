@@ -3,12 +3,305 @@
 import { Column, SQL } from 'drizzle-orm';
 import { z } from 'zod';
 
+declare const WAIT_KINDS: readonly [
+	"answer",
+	"approval",
+	"send",
+	"try_it",
+	"access",
+	"decide",
+	"their_reply",
+	"their_document",
+	"signature",
+	"payment",
+	"vendor",
+	"agent_work",
+	"agent_stopped",
+	"ci",
+	"devbox_job",
+	"merge_queue",
+	"red_main",
+	"deploy",
+	"another_work",
+	"date",
+	"nobody"
+];
+export type WaitKind = (typeof WAIT_KINDS)[number];
+declare const TRACK_STATUSES: readonly [
+	"proposed",
+	"agreed",
+	"ready",
+	"active",
+	"paused",
+	"completed",
+	"archived"
+];
+export type TrackStatus = (typeof TRACK_STATUSES)[number];
+declare const TRACK_STAGE_POSITIONS: readonly [
+	"done",
+	"active",
+	"not_started"
+];
+export type TrackStagePosition = (typeof TRACK_STAGE_POSITIONS)[number];
+export interface TrackStage {
+	key: string;
+	name: string;
+	/** The stage's closed rollup category, when the pinned stage declares one. */
+	category: string | null;
+	position: TrackStagePosition;
+	/** Sessions filed in this track at this stage — only when counts were given. */
+	sessionCount?: number;
+	/** The stage's own goal — the brief of a session started at this stage. */
+	goal?: string;
+	description?: string;
+	suggestedTasks?: string[];
+	/** Deliverables expected from this stage, as pinned (untyped jsonb objects). */
+	expectedOutputs?: Array<Record<string, unknown>>;
+	/** Acceptance criteria of this stage, as pinned (objects with a `key`). */
+	criteria?: Array<Record<string, unknown> & {
+		key: string;
+	}>;
+	/** The entry gate's kind — a person approves (`human`) or a check measures. */
+	gate?: "check" | "human";
+	/** May the track sit in this stage indefinitely? */
+	indefinite?: boolean;
+	/**
+	 * The DOMAIN this stage is worked in: a workspace TEMPLATE slug
+	 * (`workspaces.package_slug`), never a workspace id, so a method stays
+	 * portable across pods. `startStageSession` resolves it to a live workspace.
+	 */
+	domain?: string;
+	/**
+	 * ISO-8601 — present only on an EMERGENT stage: one added to the running
+	 * track (`addTrackStage`) rather than pinned from its method at start.
+	 */
+	addedAt?: string;
+}
+/**
+ * One stage a track ENTERED (`project_tracks.stage_history`, 0274), oldest
+ * first. A re-entered stage appears again — this is a timeline, not a map.
+ */
+export interface TrackStageHistoryEntry {
+	stageKey: string;
+	/** Where it came from — `null` for the entry recorded at birth/backfill. */
+	fromStage: string | null;
+	/** ISO-8601. */
+	enteredAt: string;
+	/** The user (or agent) id that moved it. */
+	actor: string;
+	/**
+	 * The verdict of the entered step's `check` ENTRY gate, which measured the
+	 * step LEFT (`fromStage`). Present only when such a gate ran on this move;
+	 * absent = no check gate ran (or the move predates the stamp, U5).
+	 */
+	check?: TrackStageCheckVerdict;
+}
+/** A check gate's verdict on one move (`stage_history[].check`). */
+export interface TrackStageCheckVerdict {
+	passed: boolean;
+	/** Required criteria / outcomes not met; `CHECK_GATE_UNEVALUATED` = not measured. */
+	failing: string[];
+	reason?: string;
+}
+declare const TRACK_VERDICTS: readonly [
+	"met",
+	"partly_met",
+	"not_met",
+	"retired",
+	"no_longer_needed",
+	"impossible",
+	"replaced",
+	"mistake"
+];
+export type TrackVerdict = (typeof TRACK_VERDICTS)[number];
+/**
+ * WHY a paused track is paused — projected by the pod on every track read.
+ *   - `check` — a check stage gate held it (the gate's `metadata.checkGate`
+ *     marker, cleared on every status change);
+ *   - `human` — a person paused it, or a human stage gate awaits review;
+ *   - `null`  — the track is not paused (a stale marker never leaks).
+ */
+export type TrackPausedBy = "check" | "human" | null;
+/**
+ * What a check gate that HELD the track recorded (`metadata.checkGate`): the
+ * step entered (`stageKey`, whose entry gate it is), the step it measured
+ * (`fromStage`), what failed and why. Projected on every track read while the
+ * track is paused by it — `null` otherwise (the marker is cleared on every
+ * status change, so a stale one never leaks).
+ */
+export interface TrackCheckGate {
+	stageKey: string;
+	fromStage: string;
+	failing: string[];
+	reason: string | null;
+}
+/**
+ * The number a track steers by (`project_tracks.kpi`, 0302).
+ *
+ * `current` is STATED, never measured: nothing in the pod derives "qualified
+ * leads per month", so the value always travels with WHEN it was stated
+ * (`updatedAt`) and by whom (`updatedBy`). A surface must never present it as
+ * a live measurement.
+ *
+ * The target is REACHED when `current >= target` — a KPI is a number to grow
+ * toward. (A lower-is-better KPI is not modelled yet; state it as the number
+ * to reach, e.g. "days saved", not "days taken".)
+ *
+ * The pod types `project_tracks.kpi` with this declaration (re-exported as
+ * `ProjectTrackKpi`, `@synap/database`).
+ */
+export interface TrackKpi {
+	label: string;
+	unit?: string;
+	target: number;
+	current?: number;
+	/** ISO-8601 — when `current` was last stated. */
+	updatedAt?: string;
+	/** The user (or agent) id that stated `current`. */
+	updatedBy?: string;
+}
+/**
+ * What a transition is ABOUT. An entity (a kind's lifecycle, or a role's on
+ * its facet) moves through the `moveStatus` door; a goal (`project_tracks`)
+ * through its own compare-and-set; a focus session through `setSessionStatus`.
+ * All three write the SAME shape below, through the same outbox.
+ */
+export type TransitionSubjectType = "entity" | "focus_session" | "track";
+/**
+ * ONE TRANSITION SHAPE (status-flow plan W1): what every status move carries,
+ * whatever moved. Emitted as `<subjectType>.transition.completed`
+ * (`entity.transition.completed`, `track.…`, `focus_session.…`).
+ */
+export interface TransitionBase {
+	transitionId: string;
+	subjectType: TransitionSubjectType;
+	subjectId: string;
+	/** The status property (`status` for a goal or a session). */
+	property: string;
+	from: string | null;
+	to: string;
+	fromCategory: LifecycleCategory | null;
+	category: LifecycleCategory;
+	/** How the move was governed and compare-and-set (who wins a race). */
+	actorKind: "agent" | "human" | "system";
+	/**
+	 * Who made it, for attribution: `actorKind`, except a move made with an
+	 * APP's key (`grants.client_id`, the same attribution `events.app_id`
+	 * carries, 0310) is the app's: the CRM app moving a deal is neither the
+	 * person who connected it nor an agent.
+	 */
+	actorClass: TransitionActorClass;
+	/** The app's `public_id` when `actorClass` is `app`, else null. */
+	appId: string | null;
+	/** The person the move is attributed to (the owner of an agent's move). */
+	userId: string;
+	agentUserId: string | null;
+	sessionId: string | null;
+	reason: string | null;
+	/** A person moved it from a value they had not seen ("moved meanwhile"). */
+	staleExpected: boolean;
+	proposalId: string | null;
+	/** The lens the move happened in. */
+	workspaceId: string | null;
+	/**
+	 * When it happened (ISO): now, or up to 30 days back when the mover says so
+	 * (`resolveOccurredAt`). Time in a status is measured from here.
+	 */
+	occurredAt: string;
+	/** When it was recorded (ISO), stamped at the move, never at delivery. */
+	recordedAt: string;
+	/** `occurredAt` was given and lies before `recordedAt`. */
+	backdated: boolean;
+	/**
+	 * What a move into a paused status waits on (`./hold.ts`); null for any
+	 * other move. The transition log is the hold's only store.
+	 */
+	hold: RecordedHold | null;
+}
+/** Who made a move, for attribution (`TransitionBase.actorClass`). */
+export type TransitionActorClass = "agent" | "app" | "human" | "system";
+/**
+ * The payload of `entity.transition.completed` — the ONE event every entity
+ * status move emits (the `moveStatus` door). `role` is the role-profile slug
+ * when the status is a role's (stored on the facet), null for the kind's own
+ * lifecycle. `subjectId` is the entity.
+ */
+export interface LifecycleTransitionPayload extends TransitionBase {
+	subjectType: "entity";
+	entityId: string;
+	profileSlug: string | null;
+	role: string | null;
+	facetId: string | null;
+}
+declare const HOLD_ON: readonly [
+	"person",
+	"agent",
+	"external",
+	"thing",
+	"decision",
+	"date",
+	"nobody",
+	"unspecified"
+];
+export type HoldOn = (typeof HOLD_ON)[number];
+/**
+ * How a hold resumes: on a calendar date (ISO), or when the awaited thing moves
+ * (`moves` = `<subjectType>:<id>`, e.g. `entity:…`, `track:…`,
+ * `focus_session:…`), optionally only when it reaches `to` (a status key, or a
+ * category such as `done`). `moves` may also name a DEV FACT
+ * ({@link HoldDevRef}: `pr:<owner/name>#<n>`, `main:<owner/name>`,
+ * `job:<name>`): the hold then resumes when a producer posts that fact.
+ */
+export type HoldUntil = {
+	date: string;
+} | {
+	moves: string;
+	to?: string;
+};
+/** A hold as a mover gives it. */
+export interface Hold {
+	on: HoldOn;
+	/** Who or what: `person:<id>`, `company:<id>`, `check:<stage>`, a free label. */
+	ref?: string | null;
+	reason?: string | null;
+	until?: HoldUntil | null;
+	/** ISO date by which someone looks at it again (never a move). */
+	reviewBy?: string | null;
+}
+/**
+ * A hold as the transition records it: the mover's hold plus what the server
+ * knows. `resumeTo` is the status the thing left when the pause BEGAN (a
+ * carried hold keeps it), so a resume by date or by move goes back there;
+ * `since` is when the pause began (its occurred time).
+ */
+export interface RecordedHold extends Hold {
+	resumeTo: string | null;
+	since: string;
+}
+export type MoveHoldDecision = {
+	hold: RecordedHold | null;
+	ok: true;
+} | {
+	code: "HOLD_INVALID" | "HOLD_NOT_A_PAUSE" | "HOLD_REQUIRED";
+	message: string;
+	ok: false;
+};
+declare const LIFECYCLE_CATEGORIES: readonly [
+	"open",
+	"active",
+	"paused",
+	"done",
+	"lost"
+];
+export type LifecycleCategory = (typeof LIFECYCLE_CATEGORIES)[number];
 declare const UNIT_STATES: readonly [
 	"not_started",
 	"working",
 	"needs_you",
 	"needs_review",
 	"blocked",
+	"with_them",
+	"on_machine",
 	"scheduled",
 	"paused",
 	"done",
@@ -16,19 +309,19 @@ declare const UNIT_STATES: readonly [
 	"failed"
 ];
 export type UnitState = (typeof UNIT_STATES)[number];
-/**
- * A palette token NAME. Every one of these already exists in Relay's theme
- * (`relay-theme.ts`) and in the browser's `--synap-*` set; this list may not
- * grow without a token existing on BOTH surfaces first.
- *
- * `warning` is a heads-up — "you need to act, nothing broke yet" (a sign-in
- * that expired, a connection asking for access). It joined once both palettes
- * carried it (`--synap-tone-warning-fill|ink`, relay `warning` / `warningInk`);
- * no unit-of-work state wears it, `resolveUnitState` never returns it.
- */
-export type UnitTone = "ai" | "error" | "info" | "primary" | "success" | "textMuted" | "textSecondary" | "warning";
+declare const UNIT_TONES: readonly [
+	"primary",
+	"ai",
+	"info",
+	"error",
+	"success",
+	"warning",
+	"textSecondary",
+	"textMuted"
+];
+export type UnitTone = (typeof UNIT_TONES)[number];
 /** Which mark the state wears. Surfaces map these to their own icon set. */
-export type UnitGlyph = "alert" | "check" | "clock" | "dashed-circle" | "globe" | "link" | "lock" | "pause" | "person" | "question" | "scales" | "spark" | "users";
+export type UnitGlyph = "alert" | "check" | "clock" | "cpu" | "dashed-circle" | "globe" | "link" | "lock" | "pause" | "person" | "question" | "scales" | "spark" | "users";
 /**
  * The progress rail. `none` is not "0%" — a rail implies motion, so a unit
  * that has never started shows none at all. `dashed` means the progress is
@@ -3339,10 +3632,16 @@ export interface CatalogSyncStamp {
  *
  * ONE write door: `AppRepository` (repositories/app-repository.ts).
  */
-/** One entry of `apps.approved_requests` — a permission bounded to a workspace. */
+/**
+ * One entry of `apps.approved_requests` — a permission bounded to a workspace,
+ * or, with `workspaceId: null`, a POD-WIDE read ("everywhere in your pod",
+ * founder decision e1b59d38 "B", 2026-10-30). Null is allowed ONLY for a
+ * permission `isPodWideReadPermission` accepts: every reader refuses (drops)
+ * any other null pair, so a write is always bounded to a workspace.
+ */
 export interface AppApprovedRequest {
 	permission: string;
-	workspaceId: string;
+	workspaceId: string | null;
 }
 /**
  * Cell Instances Schema — The Universal Rendering Unit (persisted)
@@ -5832,7 +6131,18 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  * ONLY, through `agentUsers.setAssignment` — an agent that could write it
  * could staff itself onto anyone's work. The Hub REST door lists and refuses it.
  */
- | "assigned_to";
+ | "assigned_to"
+/**
+ * session|track --serves--> track. The work is done FOR that goal: a session
+ * serving a goal (optionally naming ONE of the goal's criteria in
+ * `metadata.criterionKey`), or a sub-goal serving its parent goal. Written
+ * by THE dependency door (`services/links/dependency-links.ts`: pair, self,
+ * criterion and track→track cycle floors). NOT a dependency — no blocker
+ * reader follows it. Goal rollups do (`services/status/status-rollup.ts`):
+ * a goal's work counts the sessions filed in it OR serving it, each once,
+ * and its sub-goals are listed as `children`.
+ */
+ | "serves";
 /**
  * Playbook Runs Schema — the run ledger (executor spine, Phase 3)
  *
@@ -5916,273 +6226,6 @@ export interface PlaybookRunExternalAgent {
 		previewUrl?: string;
 	};
 	startedAt: string;
-}
-declare const LIFECYCLE_CATEGORIES: readonly [
-	"open",
-	"active",
-	"paused",
-	"done",
-	"lost"
-];
-export type LifecycleCategory = (typeof LIFECYCLE_CATEGORIES)[number];
-declare const HOLD_ON: readonly [
-	"person",
-	"agent",
-	"external",
-	"thing",
-	"decision",
-	"date",
-	"nobody",
-	"unspecified"
-];
-export type HoldOn = (typeof HOLD_ON)[number];
-/**
- * How a hold resumes: on a calendar date (ISO), or when the awaited thing moves
- * (`moves` = `<subjectType>:<id>`, e.g. `entity:…`, `track:…`,
- * `focus_session:…`), optionally only when it reaches `to` (a status key, or a
- * category such as `done`). `moves` may also name a DEV FACT
- * ({@link HoldDevRef}: `pr:<owner/name>#<n>`, `main:<owner/name>`,
- * `job:<name>`): the hold then resumes when a producer posts that fact.
- */
-export type HoldUntil = {
-	date: string;
-} | {
-	moves: string;
-	to?: string;
-};
-/** A hold as a mover gives it. */
-export interface Hold {
-	on: HoldOn;
-	/** Who or what: `person:<id>`, `company:<id>`, `check:<stage>`, a free label. */
-	ref?: string | null;
-	reason?: string | null;
-	until?: HoldUntil | null;
-	/** ISO date by which someone looks at it again (never a move). */
-	reviewBy?: string | null;
-}
-/**
- * A hold as the transition records it: the mover's hold plus what the server
- * knows. `resumeTo` is the status the thing left when the pause BEGAN (a
- * carried hold keeps it), so a resume by date or by move goes back there;
- * `since` is when the pause began (its occurred time).
- */
-export interface RecordedHold extends Hold {
-	resumeTo: string | null;
-	since: string;
-}
-export type MoveHoldDecision = {
-	hold: RecordedHold | null;
-	ok: true;
-} | {
-	code: "HOLD_INVALID" | "HOLD_NOT_A_PAUSE" | "HOLD_REQUIRED";
-	message: string;
-	ok: false;
-};
-/**
- * What a transition is ABOUT. An entity (a kind's lifecycle, or a role's on
- * its facet) moves through the `moveStatus` door; a goal (`project_tracks`)
- * through its own compare-and-set; a focus session through `setSessionStatus`.
- * All three write the SAME shape below, through the same outbox.
- */
-export type TransitionSubjectType = "entity" | "focus_session" | "track";
-/**
- * ONE TRANSITION SHAPE (status-flow plan W1): what every status move carries,
- * whatever moved. Emitted as `<subjectType>.transition.completed`
- * (`entity.transition.completed`, `track.…`, `focus_session.…`).
- */
-export interface TransitionBase {
-	transitionId: string;
-	subjectType: TransitionSubjectType;
-	subjectId: string;
-	/** The status property (`status` for a goal or a session). */
-	property: string;
-	from: string | null;
-	to: string;
-	fromCategory: LifecycleCategory | null;
-	category: LifecycleCategory;
-	/** How the move was governed and compare-and-set (who wins a race). */
-	actorKind: "agent" | "human" | "system";
-	/**
-	 * Who made it, for attribution: `actorKind`, except a move made with an
-	 * APP's key (`grants.client_id`, the same attribution `events.app_id`
-	 * carries, 0310) is the app's: the CRM app moving a deal is neither the
-	 * person who connected it nor an agent.
-	 */
-	actorClass: TransitionActorClass;
-	/** The app's `public_id` when `actorClass` is `app`, else null. */
-	appId: string | null;
-	/** The person the move is attributed to (the owner of an agent's move). */
-	userId: string;
-	agentUserId: string | null;
-	sessionId: string | null;
-	reason: string | null;
-	/** A person moved it from a value they had not seen ("moved meanwhile"). */
-	staleExpected: boolean;
-	proposalId: string | null;
-	/** The lens the move happened in. */
-	workspaceId: string | null;
-	/**
-	 * When it happened (ISO): now, or up to 30 days back when the mover says so
-	 * (`resolveOccurredAt`). Time in a status is measured from here.
-	 */
-	occurredAt: string;
-	/** When it was recorded (ISO), stamped at the move, never at delivery. */
-	recordedAt: string;
-	/** `occurredAt` was given and lies before `recordedAt`. */
-	backdated: boolean;
-	/**
-	 * What a move into a paused status waits on (`./hold.ts`); null for any
-	 * other move. The transition log is the hold's only store.
-	 */
-	hold: RecordedHold | null;
-}
-/** Who made a move, for attribution (`TransitionBase.actorClass`). */
-export type TransitionActorClass = "agent" | "app" | "human" | "system";
-/**
- * The payload of `entity.transition.completed` — the ONE event every entity
- * status move emits (the `moveStatus` door). `role` is the role-profile slug
- * when the status is a role's (stored on the facet), null for the kind's own
- * lifecycle. `subjectId` is the entity.
- */
-export interface LifecycleTransitionPayload extends TransitionBase {
-	subjectType: "entity";
-	entityId: string;
-	profileSlug: string | null;
-	role: string | null;
-	facetId: string | null;
-}
-declare const TRACK_STATUSES: readonly [
-	"proposed",
-	"agreed",
-	"ready",
-	"active",
-	"paused",
-	"completed",
-	"archived"
-];
-export type TrackStatus = (typeof TRACK_STATUSES)[number];
-declare const TRACK_STAGE_POSITIONS: readonly [
-	"done",
-	"active",
-	"not_started"
-];
-export type TrackStagePosition = (typeof TRACK_STAGE_POSITIONS)[number];
-export interface TrackStage {
-	key: string;
-	name: string;
-	/** The stage's closed rollup category, when the pinned stage declares one. */
-	category: string | null;
-	position: TrackStagePosition;
-	/** Sessions filed in this track at this stage — only when counts were given. */
-	sessionCount?: number;
-	/** The stage's own goal — the brief of a session started at this stage. */
-	goal?: string;
-	description?: string;
-	suggestedTasks?: string[];
-	/** Deliverables expected from this stage, as pinned (untyped jsonb objects). */
-	expectedOutputs?: Array<Record<string, unknown>>;
-	/** Acceptance criteria of this stage, as pinned (objects with a `key`). */
-	criteria?: Array<Record<string, unknown> & {
-		key: string;
-	}>;
-	/** The entry gate's kind — a person approves (`human`) or a check measures. */
-	gate?: "check" | "human";
-	/** May the track sit in this stage indefinitely? */
-	indefinite?: boolean;
-	/**
-	 * The DOMAIN this stage is worked in: a workspace TEMPLATE slug
-	 * (`workspaces.package_slug`), never a workspace id, so a method stays
-	 * portable across pods. `startStageSession` resolves it to a live workspace.
-	 */
-	domain?: string;
-	/**
-	 * ISO-8601 — present only on an EMERGENT stage: one added to the running
-	 * track (`addTrackStage`) rather than pinned from its method at start.
-	 */
-	addedAt?: string;
-}
-/**
- * One stage a track ENTERED (`project_tracks.stage_history`, 0274), oldest
- * first. A re-entered stage appears again — this is a timeline, not a map.
- */
-export interface TrackStageHistoryEntry {
-	stageKey: string;
-	/** Where it came from — `null` for the entry recorded at birth/backfill. */
-	fromStage: string | null;
-	/** ISO-8601. */
-	enteredAt: string;
-	/** The user (or agent) id that moved it. */
-	actor: string;
-	/**
-	 * The verdict of the entered step's `check` ENTRY gate, which measured the
-	 * step LEFT (`fromStage`). Present only when such a gate ran on this move;
-	 * absent = no check gate ran (or the move predates the stamp, U5).
-	 */
-	check?: TrackStageCheckVerdict;
-}
-/** A check gate's verdict on one move (`stage_history[].check`). */
-export interface TrackStageCheckVerdict {
-	passed: boolean;
-	/** Required criteria / outcomes not met; `CHECK_GATE_UNEVALUATED` = not measured. */
-	failing: string[];
-	reason?: string;
-}
-declare const TRACK_VERDICTS: readonly [
-	"met",
-	"partly_met",
-	"not_met",
-	"retired",
-	"no_longer_needed",
-	"impossible",
-	"replaced",
-	"mistake"
-];
-export type TrackVerdict = (typeof TRACK_VERDICTS)[number];
-/**
- * WHY a paused track is paused — projected by the pod on every track read.
- *   - `check` — a check stage gate held it (the gate's `metadata.checkGate`
- *     marker, cleared on every status change);
- *   - `human` — a person paused it, or a human stage gate awaits review;
- *   - `null`  — the track is not paused (a stale marker never leaks).
- */
-export type TrackPausedBy = "check" | "human" | null;
-/**
- * What a check gate that HELD the track recorded (`metadata.checkGate`): the
- * step entered (`stageKey`, whose entry gate it is), the step it measured
- * (`fromStage`), what failed and why. Projected on every track read while the
- * track is paused by it — `null` otherwise (the marker is cleared on every
- * status change, so a stale one never leaks).
- */
-export interface TrackCheckGate {
-	stageKey: string;
-	fromStage: string;
-	failing: string[];
-	reason: string | null;
-}
-/**
- * The number a track steers by (`project_tracks.kpi`, 0302).
- *
- * `current` is STATED, never measured: nothing in the pod derives "qualified
- * leads per month", so the value always travels with WHEN it was stated
- * (`updatedAt`) and by whom (`updatedBy`). A surface must never present it as
- * a live measurement.
- *
- * The target is REACHED when `current >= target` — a KPI is a number to grow
- * toward. (A lower-is-better KPI is not modelled yet; state it as the number
- * to reach, e.g. "days saved", not "days taken".)
- *
- * The pod types `project_tracks.kpi` with this declaration (re-exported as
- * `ProjectTrackKpi`, `@synap/database`).
- */
-export interface TrackKpi {
-	label: string;
-	unit?: string;
-	target: number;
-	current?: number;
-	/** ISO-8601 — when `current` was last stated. */
-	updatedAt?: string;
-	/** The user (or agent) id that stated `current`. */
-	updatedBy?: string;
 }
 declare const EVALUATION_VERDICTS: readonly [
 	"pass",
@@ -6484,6 +6527,12 @@ export interface WaitingOnRef {
 	id?: string;
 	url?: string;
 	label: string;
+	/**
+	 * What kind of wait it is (`WAIT_KINDS`, `./wait-kind.ts`), from the
+	 * source that named this ref ({@link waitKindOf}). Absent from an older
+	 * pod; a reader must work without it.
+	 */
+	waitKind?: WaitKind;
 }
 export interface WaitingOnMark {
 	reason: WaitingOnReason;
@@ -8497,6 +8546,37 @@ export interface ProposalPartReach {
 	/** Steps whose reach could not be read. Non-zero: the lists may be short. */
 	unreadSteps: number;
 }
+/** One argument of a tool run, as the reviewer reads it. */
+export interface ProposalToolRunParameter {
+	/** The key the agent passed (`serverType`). */
+	key: string;
+	/** The schema's `title`, else the key in words ("Server type"). */
+	label: string;
+	/** What the verb's schema says the argument is, when it says. */
+	description?: string;
+	/** The value the agent passed, whole. Absent when `secret`. */
+	value?: unknown;
+	/** The argument names a credential: its value never leaves the pod. */
+	secret?: true;
+}
+/**
+ * A `capability.run` as the call it makes (`ProposalReviewModel.toolRun`):
+ * WHAT it does, THROUGH which tool, WITH which arguments.
+ */
+export interface ProposalToolRun {
+	/** The action in words, imperative: "Create server". */
+	action: string;
+	/** The tool(s) it runs through, in words ("Hetzner cloud"); absent = none readable. */
+	tool?: string;
+	/** The verb's own description, when it has one. */
+	description?: string;
+	/**
+	 * Every argument: the ones the verb declares first, then the rest. Within
+	 * each group, the stored order (jsonb sorts object keys, so neither the
+	 * schema's nor the agent's own order survives a stored row).
+	 */
+	parameters: ProposalToolRunParameter[];
+}
 /**
  * Governance grant-option derivation — "always approve for…" menu.
  *
@@ -9127,6 +9207,12 @@ export interface ProposalReviewModel {
 	 * on — see {@link ProposalTurnsOn}.
 	 */
 	turnsOn?: ProposalTurnsOn;
+	/**
+	 * Present ONLY for a `capability.run`: the call it makes — its action, the
+	 * tool it runs through, and every argument with its value (secrets never
+	 * leave the pod) — see {@link ProposalToolRun}.
+	 */
+	toolRun?: ProposalToolRun;
 	events: ProposalReviewEvent[];
 }
 /**
@@ -11413,6 +11499,12 @@ export interface SubmitCaptureGraphResult {
 	/** True when this call returned a PRIOR proposal instead of filing one. */
 	deduped?: true;
 	/**
+	 * Set when that prior proposal is the caller's own pending TWIN (D3): a
+	 * different payload whose entities already wait there, not an identical
+	 * re-send. The MCP door's hint says which (`ok()` in mcp/handlers/shared.ts).
+	 */
+	dedupedAs?: "own_pending_twin";
+	/**
 	 * How the graph was placed when the caller gave no workspace (D14): each
 	 * entity resolves on its OWN kind and roles; unanimous → placed, split →
 	 * abstain (`workspaceId` null) with every workspace the entities named in
@@ -13275,6 +13367,22 @@ export interface CapabilityCard {
 		tools: string[];
 	};
 	/**
+	 * Its member TOOL rows the run gate refuses (`approvalRefusesRun` on
+	 * `tools.approved`, the same predicate `gateCapabilityExecution` denies on),
+	 * so every action that calls through one is refused "installed but not
+	 * enabled" however many of its verbs are on. Present only when one is off.
+	 *
+	 * Founder dogfood 2026-10-30: Hetzner Cloud read "6 of 6 on" while its
+	 * `hetzner_cloud` row had never been approved (the CLI's one-shot approve
+	 * timed out), and the run failed with nothing on any screen to turn on.
+	 * Turned on by `tools.setApproved` / `POST /tools/:id/approve`, a person's
+	 * step (an agent is refused).
+	 */
+	toolsOff?: Array<{
+		id: string;
+		name: string;
+	}>;
+	/**
 	 * The template's INSTALL params — what the caller must supply to apply it (e.g.
 	 * a vault credential, a baseUrl). Surfaced so the CLI can prompt for them and
 	 * apply WITH params (which wires the credential into the tool), instead of a
@@ -13598,8 +13706,8 @@ export interface ClusterFoldCounts {
  *
  * 1. KEYED ON MOTIF, NEVER ON FINGERPRINT. The key is
  *    `${eventType}` × `${targetType}.${proposalType}` — the SAME motif
- *    vocabulary `recommend-tighten` and the widen scanner speak, so all three
- *    lanes glob-match against one language. The structural fingerprint
+ *    vocabulary `recommend-tighten` and the trust ladder's event key speak, so
+ *    every lane glob-matches against one language. The structural fingerprint
  *    (`computeProposalFingerprint`) embeds OBJECT identity (`id:<targetId>` for
  *    every non-create class), which is right for duplicate detection and fatal
  *    here: "same shape, different objects" would shatter into clusters of one.
@@ -14738,6 +14846,16 @@ export interface OAuthAppConsent {
 	permissions: Array<OAuthAppOfferItem & {
 		reason: string | null;
 	}>;
+	/**
+	 * The permissions it asks for EVERYWHERE IN THE POD (`synap_requests[].scope
+	 * = "pod"`, decision e1b59d38 "B"): each a read of one named kind, one tick
+	 * each, shown in their own section. Ticked, each is sent as
+	 * `{ permission, workspaceId: null }`. Never also in `permissions`.
+	 */
+	podWide: Array<{
+		permission: string;
+		reason: string | null;
+	}>;
 	/** What this person approved for this app before (re-consent pre-ticks it). */
 	approved: AppApprovedRequest[];
 	/**
@@ -15222,27 +15340,6 @@ export interface RankComparison {
 	};
 }
 export type SubstrateKind = "episodic" | "library" | "procedural" | "semantic" | "structured";
-export interface AskSpaceHint {
-	workspaceId: string;
-	name: string;
-	/** One-line purpose (`spacePurposeLine`). Absent when the space has none. */
-	purpose?: string;
-	/** The asked-about kinds this space HOLDS, with its own entity counts. */
-	kinds: Array<{
-		count: number;
-		slug: string;
-	}>;
-}
-/**
- * The space(s) holding the kinds a question is about — `ask`'s routing hint.
- * `matches: []` = read, and no member space holds any of those kinds.
- * `{ status: "unavailable" }` = the read failed — never folded into "none".
- */
-export type AskSpacesHint = {
-	matches: AskSpaceHint[];
-} | {
-	status: "unavailable";
-};
 /** One owed deliverable, with just enough of its session to be actionable. */
 export interface OwedSlot {
 	sessionId: string;
@@ -16461,6 +16558,11 @@ export interface GoalRollup {
 	moved?: number;
 	/** Absent when it waits on nothing. */
 	waitingOn?: WaitingOnMark[];
+	/**
+	 * The goals that SERVE this one (`track --serves--> track`), direct only,
+	 * that the reader may see. Absent when none.
+	 */
+	children?: string[];
 }
 export interface ScopeRollup {
 	lens: "project" | "workspace";
@@ -16744,6 +16846,66 @@ export interface StartHere {
 	beforeYouFinish: string;
 }
 export type AskQueueBlock = Pick<StartHere, "openSessions" | "owedByPerson" | "pendingReview">;
+export interface SynthesisSource {
+	substrate: string;
+	id: string;
+	title: string;
+}
+/**
+ * A retrieved record that was REPLACED (`properties.supersededBy` set, read by
+ * the one predicate `supersededByOf`). It is not fed to the answer and not
+ * listed in `sources`: a replaced fact presented as current is how an agent
+ * reported a stale cause as today's diagnosis. It does not vanish either: it
+ * is listed here with the id of its replacement, the door to the current
+ * record (`synap_get_entity` on `supersededBy`), and the context tells the
+ * model it was left out and by what it was replaced.
+ */
+export interface SupersededSource extends SynthesisSource {
+	/** The id of the record that replaced this one. */
+	supersededBy: string;
+}
+/**
+ * What the context budget left OUT — and, crucially, WHICH items.
+ *
+ * `omitted`/`total` alone told a caller only that its answer was partial, with
+ * no door to complete it: the agent read "16 of 20 items are not shown" and had
+ * no cursor, no id and no follow-up call. `omittedSources` closes that — every
+ * dropped item's `{substrate, id, title}`, the SAME shape `sources` already
+ * carries, so the agent completes the answer with a tool it already has
+ * (`synap_get_entity` / `synap_get_entities` on those ids). No cursor and no
+ * server-side paging state: the ids were already computed before the budget
+ * check ran, so naming them costs nothing new.
+ *
+ * `omittedSources.length` can be SHORTER than `omitted`: an item with no `id`
+ * is counted as dropped but cannot be offered as a fetchable source — the same
+ * rule `sources` already follows (it admits only id-bearing rows).
+ */
+export interface SynthesisTruncation {
+	omitted: number;
+	total: number;
+	omittedSources: SynthesisSource[];
+}
+export interface AskSpaceHint {
+	workspaceId: string;
+	name: string;
+	/** One-line purpose (`spacePurposeLine`). Absent when the space has none. */
+	purpose?: string;
+	/** The asked-about kinds this space HOLDS, with its own entity counts. */
+	kinds: Array<{
+		count: number;
+		slug: string;
+	}>;
+}
+/**
+ * The space(s) holding the kinds a question is about — `ask`'s routing hint.
+ * `matches: []` = read, and no member space holds any of those kinds.
+ * `{ status: "unavailable" }` = the read failed — never folded into "none".
+ */
+export type AskSpacesHint = {
+	matches: AskSpaceHint[];
+} | {
+	status: "unavailable";
+};
 /**
  * The lens an answer reports — `lens: { filter, boost, source }` on `ask`'s
  * envelope, on every door that returns it (MCP `synap_ask`, Hub
@@ -16857,45 +17019,6 @@ export interface AskResult {
 	 * sections as orient's `startHere`. Retrieval cannot answer such a question.
 	 */
 	queue?: AskQueueBlock;
-}
-export interface SynthesisSource {
-	substrate: string;
-	id: string;
-	title: string;
-}
-/**
- * A retrieved record that was REPLACED (`properties.supersededBy` set, read by
- * the one predicate `supersededByOf`). It is not fed to the answer and not
- * listed in `sources`: a replaced fact presented as current is how an agent
- * reported a stale cause as today's diagnosis. It does not vanish either: it
- * is listed here with the id of its replacement, the door to the current
- * record (`synap_get_entity` on `supersededBy`), and the context tells the
- * model it was left out and by what it was replaced.
- */
-export interface SupersededSource extends SynthesisSource {
-	/** The id of the record that replaced this one. */
-	supersededBy: string;
-}
-/**
- * What the context budget left OUT — and, crucially, WHICH items.
- *
- * `omitted`/`total` alone told a caller only that its answer was partial, with
- * no door to complete it: the agent read "16 of 20 items are not shown" and had
- * no cursor, no id and no follow-up call. `omittedSources` closes that — every
- * dropped item's `{substrate, id, title}`, the SAME shape `sources` already
- * carries, so the agent completes the answer with a tool it already has
- * (`synap_get_entity` / `synap_get_entities` on those ids). No cursor and no
- * server-side paging state: the ids were already computed before the budget
- * check ran, so naming them costs nothing new.
- *
- * `omittedSources.length` can be SHORTER than `omitted`: an item with no `id`
- * is counted as dropped but cannot be offered as a fetchable source — the same
- * rule `sources` already follows (it admits only id-bearing rows).
- */
-export interface SynthesisTruncation {
-	omitted: number;
-	total: number;
-	omittedSources: SynthesisSource[];
 }
 export type RunPosture = "auto" | "propose";
 /**
@@ -19331,6 +19454,26 @@ export interface NextRungRuleInput {
 	profileSlug?: string | null;
 }
 declare function nextRungRuleDraft(input: NextRungRuleInput): GovernanceRuleDraft;
+/**
+ * How far an agent has earned one kind of work: `count` human approvals in a
+ * row (newest backwards), `met` once {@link STREAK_NEEDED} of them span
+ * {@link STREAK_MIN_DAYS} days. `since` is the oldest counted decision.
+ */
+export interface EarnedStreak {
+	met: boolean;
+	count: number;
+	needed: number;
+	since: string | null;
+}
+/**
+ * A grant on this card's kind that paused itself after undos
+ * ({@link RULE_PAUSED_AFTER_REVERTS}): the card offers "Ask me again" and the
+ * rule is a door. `governanceRules.nextRungs` rows carry `paused`.
+ */
+export interface NextRungPaused {
+	ruleId: string;
+	revokedAt: string;
+}
 type GovernanceRuleDraft$1 = ReturnType<typeof nextRungRuleDraft>;
 export interface NextRungProjection {
 	proposalId: string;
@@ -19344,6 +19487,18 @@ export interface NextRungProjection {
 	 * "Already a rule" as a DOOR to it. `null` when nothing covers the card.
 	 */
 	covered: NextRungCovered | null;
+	/**
+	 * How far the agent has EARNED this offer (`earnedStreak`), set only where
+	 * there is an offer. `null` WITH an offer = the history could not be read —
+	 * never an empty streak (decision e8939070). A streak never creates an offer
+	 * the ladder refuses.
+	 */
+	streak: EarnedStreak | null;
+	/**
+	 * The grant on this kind PAUSED itself after undos: the card offers "Ask me
+	 * again" and names the rule (a door). Only approvals after the pause count.
+	 */
+	paused: NextRungPaused | null;
 }
 export type FileNextRungResult = {
 	offer: NextRungOffer;
@@ -19965,6 +20120,18 @@ export interface UnlinkReach {
 	/** Whether "Continue with Synap Cloud" goes too (the Cloud issuer). */
 	cloudSignIn: boolean;
 }
+/**
+ * What one person is left to sign in with once unlinked, for the confirm —
+ * read before anything happens, never guessed:
+ *  - `keeps_a_way_in`: the unlink takes no sign-in method (another issuer), or
+ *    they hold a pod-held factor — a password or passkey on this Pod, or an
+ *    unused recovery code (`accountHasPodHeldFactor`, the one rule);
+ *  - `email_recovery_only`: none of those, but this Pod's mail goes out, so
+ *    recovering the account by email still gets them back in;
+ *  - `no_way_in`: none of those, and no mail: they cannot sign in at all;
+ *  - `unknown`: a read failed. The confirm says it could not check.
+ */
+export type UnlinkImpact = "email_recovery_only" | "keeps_a_way_in" | "no_way_in" | "unknown";
 /**
  * The clients the pod's OWN OAuth authorization server registered (Path B:
  * claude.ai pointed straight at `https://<pod>/mcp`; `routers/oauth/*`), read
@@ -22379,6 +22546,15 @@ export interface Signal {
 	 * mapping, which is the fork the lens helper exists to prevent.
 	 */
 	blockedReason?: ExpectedOutput["blockedReason"];
+	/**
+	 * What kind of wait this row is (`WAIT_KINDS`, `@synap-core/types/units`):
+	 * the ball a needs-you row wears (`resolveWaitKindState`). Set on the rows
+	 * that wait on the person (`owed-slot` by its blocked reason, a
+	 * `proposal-cluster`'s approval, a `draft-asks`' answer, a
+	 * `session-review`'s try-it), through THE map table (`waitKindOf`);
+	 * absent on every other kind.
+	 */
+	waitKind?: WaitKind;
 	/** One line naming WHICH thing is missing — the resumption cue. `owed-slot` only. */
 	why?: string;
 	/** The agent's own (unverified) claim it produced this after all. `owed-slot` only. */
@@ -24599,7 +24775,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				approve: boolean;
 				approved?: {
 					permission: string;
-					workspaceId: string;
+					workspaceId: string | null;
 				}[] | undefined;
 				authRequest?: string | undefined;
 				clientId: string;
@@ -24946,14 +25122,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				issuerId: string;
 				issuerUrl: string;
 				lastUsedAt: Date | null;
-				people: ({
+				people: {
 					email: string;
 					linkedAt: Date;
-					name: string | null;
-					userId: string;
-				} & {
 					linkedByInvite: boolean;
-				})[];
+					name: string | null;
+					unlinkImpact: UnlinkImpact;
+					userId: string;
+				}[];
 				peopleCount: number;
 				publisherUrl: string | null;
 				rejectionReason: string | null;
@@ -25419,7 +25595,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				approved: {
 					permission: string;
-					workspaceId: string;
+					workspaceId: string | null;
 				}[];
 				publicId: string;
 			};
@@ -35828,6 +36004,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		meta: object;
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		alwaysApproved: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				kinds: NextRungProjection[];
+				readable: boolean;
+			};
+		}>;
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				agentUserId?: string | undefined;
@@ -35853,6 +36037,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					principalClass: string | null;
 					principalKind: "agent" | "any" | "class";
 					revokedAt: Date | null;
+					revokedReason: string | null;
 					scopeKind: "pod" | "workspace";
 					sourceProposalId: string | null;
 					targetKind: "action" | "capability" | "connection" | "profile";
@@ -36075,6 +36260,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					principalClass: string | null;
 					principalKind: "agent" | "any" | "class";
 					revokedAt: Date | null;
+					revokedReason: string | null;
 					scopeKind: "pod" | "workspace";
 					sourceProposalId: string | null;
 					targetKind: "action" | "capability" | "connection" | "profile";
@@ -36294,9 +36480,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		addDependency: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				criterionKey?: string | undefined;
 				fromId: string;
 				fromType: "entity" | "session" | "track";
-				linkType: "blocked_by" | "replaces";
+				linkType: "blocked_by" | "replaces" | "serves";
 				toId: string;
 				toType: "entity" | "session" | "track";
 			};
@@ -36510,7 +36697,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				fromId: string;
 				fromType: "entity" | "session" | "track";
-				linkType: "blocked_by" | "replaces";
+				linkType: "blocked_by" | "replaces" | "serves";
 				toId: string;
 				toType: "entity" | "session" | "track";
 			};
@@ -38794,6 +38981,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						label: string;
 						stuckAfterDays?: number | undefined;
 						tone: string;
+						waits?: {
+							dateBinding?: string | undefined;
+							on: "agent" | "date" | "decision" | "external" | "nobody" | "person" | "thing" | "unspecified";
+							refFrom?: string | undefined;
+							waitKind?: "access" | "agent_stopped" | "agent_work" | "another_work" | "answer" | "approval" | "ci" | "date" | "decide" | "deploy" | "devbox_job" | "merge_queue" | "nobody" | "payment" | "red_main" | "send" | "signature" | "their_document" | "their_reply" | "try_it" | "vendor" | undefined;
+						} | undefined;
 					}[];
 					profileKind: "kind" | "role";
 					profileSlug: string;
@@ -38825,6 +39018,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					label: string;
 					stuckAfterDays?: number | undefined;
 					tone: string;
+					waits?: {
+						dateBinding?: string | undefined;
+						on: "agent" | "date" | "decision" | "external" | "nobody" | "person" | "thing" | "unspecified";
+						refFrom?: string | undefined;
+						waitKind?: "access" | "agent_stopped" | "agent_work" | "another_work" | "answer" | "approval" | "ci" | "date" | "decide" | "deploy" | "devbox_job" | "merge_queue" | "nobody" | "payment" | "red_main" | "send" | "signature" | "their_document" | "their_reply" | "try_it" | "vendor" | undefined;
+					} | undefined;
 				}[];
 				profileKind: "kind" | "role";
 				profileSlug: string;
@@ -38919,6 +39118,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						live: boolean;
 						sessionId: string;
 						since: string;
+						waitKind?: "access" | "agent_stopped" | "agent_work" | "another_work" | "answer" | "approval" | "ci" | "date" | "decide" | "deploy" | "devbox_job" | "merge_queue" | "nobody" | "payment" | "red_main" | "send" | "signature" | "their_document" | "their_reply" | "try_it" | "vendor" | undefined;
 					}[];
 					workspaceId: string | null;
 				}[];
@@ -38929,6 +39129,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					live: boolean;
 					sessionId: string;
 					since: string;
+					waitKind?: "access" | "agent_stopped" | "agent_work" | "another_work" | "answer" | "approval" | "ci" | "date" | "decide" | "deploy" | "devbox_job" | "merge_queue" | "nobody" | "payment" | "red_main" | "send" | "signature" | "their_document" | "their_reply" | "try_it" | "vendor" | undefined;
 					workspaceId: string | null;
 				}[];
 			};
@@ -44413,6 +44614,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				constraints?: Record<string, unknown> | undefined;
 				id: string;
+				initialStatus?: string | null | undefined;
 				slug?: string | undefined;
 				uiHints?: Record<string, unknown> | undefined;
 				valueType?: "array" | "boolean" | "date" | "entity_id" | "number" | "object" | "secret" | "string" | undefined;
@@ -44592,6 +44794,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				rejected: number;
+				rejectedIds: string[];
 				success: boolean;
 			};
 		}>;
@@ -45948,8 +46152,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				flowType?: "agent_write" | "automation" | "capability" | "capture" | "chat" | "playbook" | "session" | undefined;
 				limit?: number | undefined;
 				scope?: {
+					capabilityId?: string | undefined;
 					projectId?: string | undefined;
 					sessionId?: string | undefined;
+					skillId?: string | undefined;
 					subjectEntityId?: string | undefined;
 					workspaceId?: string | undefined;
 				} | undefined;
@@ -47208,6 +47414,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				allSpaces?: boolean | undefined;
 				id: string;
 				workspaceId?: string | undefined;
 			};
@@ -47340,6 +47547,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				allSpaces?: boolean | undefined;
 				approved?: boolean | undefined;
 				kind?: "builtin" | "code" | "declarative" | "instruction" | undefined;
 				limit?: number | undefined;
@@ -49269,6 +49477,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				capabilityId: string | null;
 				skills: {
 					agentTypes: string[] | null;
 					alwaysOn: boolean;

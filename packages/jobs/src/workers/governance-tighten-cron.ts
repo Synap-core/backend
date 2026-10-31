@@ -6,9 +6,11 @@
  * `packages/api/src/services/proposals/recommend-tighten.ts`) was reachable
  * ONLY through a pod-admin-invoked verb, so on a pod nobody invoked it on, a
  * motif the humans reject 20 times in a row was never pinned back to review.
- * Its twin, the WIDEN scanner (`governance-lane-scanner.ts`), has run daily
- * since the queue fix. This file gives tighten the same wiring: a queue in
- * `ALL_QUEUES`, a worker, a daily schedule offset from its siblings.
+ * This file gives tighten its wiring: a queue in `ALL_QUEUES`, a worker, a
+ * daily schedule offset from its siblings. (Its old twin, the daily WIDEN
+ * scanner, is retired: the offer is the earned streak on the card, S3.) The
+ * same pass also pauses an earned grant whose receipts were undone twice in
+ * 30 days — the backstop to the undo door's own call.
  *
  * @synap/jobs cannot import @synap/api (circular dep), so apps/api fills the
  * slot at boot with `registerTightenRecommender` — the same IoC inversion as
@@ -27,7 +29,7 @@
  * decided yet.
  *
  * Queue: governance.tighten-scan
- * Cron:  daily 35 3 * * * (after the widen lane scan at 3:30)
+ * Cron:  daily 35 3 * * *
  */
 
 import { createLogger } from "@synap-core/core";
@@ -36,7 +38,7 @@ const logger = createLogger({ module: "governance-tighten-cron" });
 
 export const GOVERNANCE_TIGHTEN_SCAN_QUEUE = "governance.tighten-scan";
 
-/** Daily 03:35 UTC — five minutes after the widen lane scan. */
+/** Daily 03:35 UTC. */
 export const GOVERNANCE_TIGHTEN_SCAN_CRON = "35 3 * * *";
 
 /** Structurally mirrors api's `recommendTightenForAllAgents` result. */

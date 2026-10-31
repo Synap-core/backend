@@ -7,13 +7,13 @@ import {
 describe("resolveRetiredReasonLabel", () => {
   it("labels every retire reason", () => {
     expect(resolveRetiredReasonLabel("session_cancelled")).toBe(
-      "Session cancelled"
+      "Job cancelled"
     );
     expect(resolveRetiredReasonLabel("decision_resolved")).toBe(
       "Decided elsewhere"
     );
     expect(resolveRetiredReasonLabel("withdrawn")).toBe("Withdrawn");
-    expect(resolveRetiredReasonLabel("session_ended")).toBe("Session ended");
+    expect(resolveRetiredReasonLabel("session_ended")).toBe("Job ended");
     expect(resolveRetiredReasonLabel("not_asked")).toBe("Not asked by anyone");
   });
 

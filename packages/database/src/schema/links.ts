@@ -235,7 +235,18 @@ export type LinkType =
    * ONLY, through `agentUsers.setAssignment` — an agent that could write it
    * could staff itself onto anyone's work. The Hub REST door lists and refuses it.
    */
-  | "assigned_to";
+  | "assigned_to"
+  /**
+   * session|track --serves--> track. The work is done FOR that goal: a session
+   * serving a goal (optionally naming ONE of the goal's criteria in
+   * `metadata.criterionKey`), or a sub-goal serving its parent goal. Written
+   * by THE dependency door (`services/links/dependency-links.ts`: pair, self,
+   * criterion and track→track cycle floors). NOT a dependency — no blocker
+   * reader follows it. Goal rollups do (`services/status/status-rollup.ts`):
+   * a goal's work counts the sessions filed in it OR serving it, each once,
+   * and its sub-goals are listed as `children`.
+   */
+  | "serves";
 
 export const links = pgTable(
   "links",

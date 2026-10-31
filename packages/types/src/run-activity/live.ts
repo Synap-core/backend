@@ -19,8 +19,13 @@
  * session merely goes quiet.
  */
 
-/** How recent the newest activity must be for a session to read as working. */
-export const SESSION_WORKING_WINDOW_MS = 5 * 60_000;
+import { WORK_CLOCK } from "../work-clock/index.js";
+
+/**
+ * How recent the newest activity must be for a session to read as working:
+ * the ladder's `live` rung.
+ */
+export const SESSION_WORKING_WINDOW_MS = WORK_CLOCK.live;
 
 /** The two liveness facts the rule reads. Structural — `SessionActivityLive` fits. */
 export interface SessionLiveFacts {

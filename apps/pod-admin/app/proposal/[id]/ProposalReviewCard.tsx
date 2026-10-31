@@ -153,6 +153,8 @@ import {
   type ApproveChoice,
 } from "./use-proposal-decision";
 import { useRecordDefinitions } from "./use-record-definitions";
+import { ToolRunArguments } from "./ToolRunArguments";
+import { reviewToolRun } from "./tool-run-model";
 
 /**
  * `pending` and `approval_failed` are the two states a reviewer can still decide;
@@ -582,6 +584,7 @@ function DecisionButtons({
   const decision = useProposalDecision(p.id, onDecided, {
     onRejected: () => setRejecting(false),
     expectedRevision: renderedRevision(p),
+    revertable: (p as { revertable?: boolean | null }).revertable,
   });
   const { busy } = decision;
 
@@ -881,11 +884,18 @@ export function ProposalReviewBody({
     !graph && !appConnect && !docChanges && !deferredWrites
       ? (p.review as { turnsOn?: ProposalTurnsOn }).turnsOn
       : undefined;
+  /* A tool run: the call it makes, every argument with its value — never the
+     generic diff, which read it as "Untitled · Tool" and its arguments'
+     names only (proposal 4b5e040e). */
+  const toolRun =
+    !graph && !appConnect && !docChanges && !deferredWrites && !turnsOn
+      ? reviewToolRun(p.review)
+      : null;
   const edges = graphItems.flatMap((item) =>
     item.shape === "edge" ? [item.edge] : []
   );
   const records: ProposedRecord[] =
-    appConnect || docChanges || deferredWrites
+    appConnect || docChanges || deferredWrites || toolRun
       ? []
       : graph
         ? reviewGraph
@@ -1030,6 +1040,8 @@ export function ProposalReviewBody({
         <Section label="What changes">
           <DocumentChanges changes={docChanges} />
         </Section>
+      ) : toolRun ? (
+        <ToolRunArguments run={toolRun} />
       ) : records.length > 0 ? (
         <div className="flex flex-col gap-3">
           {groups.map((group) => (

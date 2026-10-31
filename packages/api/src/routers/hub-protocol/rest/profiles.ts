@@ -563,6 +563,8 @@ export function registerProfilesRoutes(app: HubHono): void {
       valueType?: string;
       constraints?: Record<string, unknown>;
       uiHints?: Record<string, unknown>;
+      /** A declared lifecycle's initial status (`null` clears it). */
+      initialStatus?: string | null;
       agentUserId?: string;
       sourceMessageId?: string;
       reasoning?: string;
@@ -599,6 +601,9 @@ export function registerProfilesRoutes(app: HubHono): void {
         valueType: body.valueType,
         constraints: body.constraints,
         uiHints: body.uiHints,
+        ...(body.initialStatus !== undefined
+          ? { initialStatus: body.initialStatus }
+          : {}),
         reasoning: body.reasoning,
         ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
       });

@@ -63,6 +63,7 @@ import {
   fileRuleGrant,
   loadVisibleNextRungRow,
   projectNextRung,
+  readAlwaysApproved,
   readNextRungs,
 } from "../services/proposals/next-rung.js";
 import { authoredByUser } from "../services/agent-identity-service.js";
@@ -713,6 +714,17 @@ export const governanceRulesRouter = router({
         proposalIds: input.proposalIds,
       }),
     })),
+  /**
+   * Settings › Trust rules › Calibration, "Always approved": the kinds of work
+   * the caller can see that an agent has EARNED (`streak.met`) and no rule
+   * covers yet, each as the projection of its newest approval. Accepting one
+   * is `proposeNextRung` on that card — the same guards, the same back half.
+   * Humans only, like the rest of the ladder. `readable: false` = the history
+   * could not be read, so nothing is offered (decision e8939070).
+   */
+  alwaysApproved: protectedProcedure.query(async ({ ctx }) =>
+    readAlwaysApproved({ userId: ctx.userId })
+  ),
   /**
    * THE TRUST LADDER, write: accept a card's next rung ("Next time, do it and
    * tell me"). Writes the NARROWEST rule (agent × workspace × exact action ×
