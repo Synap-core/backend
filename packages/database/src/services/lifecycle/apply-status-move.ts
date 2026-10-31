@@ -47,12 +47,9 @@ import {
 } from "../../utils/lifecycle-model.js";
 import {
   decideMoveHold,
-  transitionWaitOf,
   type Hold,
-  type LifecycleOptionWaits,
   type LifecycleTransitionPayload,
   type MoveHoldDecision,
-  type TransitionWait,
 } from "@synap-core/types/lifecycle";
 import { insertTransitionOutbox } from "./transition-outbox.js";
 import { transitionStamp } from "./transition-stamp.js";
@@ -450,13 +447,10 @@ export async function applyStatusMove(
 
     const fromOption = findLifecycleOption(target.lifecycle, current);
     const [profileRow] = await tx
-      .select({ type: entities.type, properties: entities.properties })
+      .select({ type: entities.type })
       .from(entities)
       .where(eq(entities.id, target.entityId))
       .limit(1);
-    // The wait the target step declares (PR-H): stamped on the move, with
-    // who or what its `refFrom` property names (the facet's own value first).
-    const wait = await stepWaitOf(tx, target, option.waits, profileRow);
     const transition: StatusTransition = {
       transitionId: randomUUID(),
       subjectType: "entity",
@@ -480,37 +474,8 @@ export async function applyStatusMove(
       workspaceId: target.workspaceId ?? input.lensWorkspaceId ?? null,
       ...stamp,
       hold: held.hold,
-      ...(wait ? { wait } : {}),
     };
     await insertTransitionOutbox(tx, transition, input.emitContext);
     return { status: "moved", transition };
   });
-}
-
-/** The target step's declared wait, as the move stamps it (`TransitionBase.wait`). */
-async function stepWaitOf(
-  tx: Tx,
-  target: StatusMoveTarget,
-  waits: LifecycleOptionWaits | undefined,
-  entity: { properties: unknown } | undefined
-): Promise<TransitionWait | null> {
-  if (!waits) return null;
-  const prop = waits.refFrom;
-  let value: unknown;
-  if (prop) {
-    const own = (p: unknown) =>
-      p && typeof p === "object"
-        ? (p as Record<string, unknown>)[prop]
-        : undefined;
-    if (target.facetId) {
-      const [facet] = await tx
-        .select({ properties: entityFacets.properties })
-        .from(entityFacets)
-        .where(eq(entityFacets.id, target.facetId))
-        .limit(1);
-      value = own(facet?.properties);
-    }
-    if (value === undefined || value === null) value = own(entity?.properties);
-  }
-  return transitionWaitOf(waits, value);
 }
