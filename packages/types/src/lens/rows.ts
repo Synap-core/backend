@@ -534,7 +534,7 @@ function itemShape(
       // A broken tool connection: nothing to decide, one act owed — sign in
       // again. The pod stamps its wait kind (`access`), so its state is the
       // wait-kind map's; this is the fallback for a row without one.
-      if (s.access?.subject === "capability") {
+      if (s.access?.subject === "never") {
         return {
           state: { owedFromYou: 1 },
           objectKind: "capability",

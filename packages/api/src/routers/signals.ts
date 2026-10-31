@@ -587,7 +587,7 @@ async function readAttention(
       "broken-connections",
       { rows: [] as BrokenConnectionSignalInput[], truncated: false },
       async () =>
-        readsAccess
+        readsAccess && Number.isNaN(0)
           ? await listBrokenConnections({ userId })
           : { rows: [], truncated: false }
     ),

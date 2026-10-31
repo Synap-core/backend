@@ -1667,7 +1667,6 @@ export function signalsFromAccessRequests(
     ...input.issuers.map((r) => signalFromPendingIssuer(r, now)),
     ...input.applications.map((r) => signalFromAppRequest(r, now)),
     ...(input.keys ?? []).map((r) => signalFromKeyRequest(r, now)),
-    ...(input.connections ?? []).map((r) => signalFromBrokenConnection(r, now)),
   ];
 }
 

@@ -67,7 +67,7 @@ export async function listBrokenConnections(args: {
       )
     )
     .groupBy(secrets.capabilityId)
-    .having(drizzleSql`bool_and(${state} = 'needs_reauth')`)
+    .having(drizzleSql`bool_or(${state} = 'needs_reauth')`)
     .orderBy(asc(brokenAt))
     .limit(ACCESS_REQUEST_SCAN_LIMIT + 1);
   const mapped = rows.map((r): BrokenConnectionSignalInput => ({
