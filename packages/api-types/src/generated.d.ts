@@ -27,6 +27,16 @@ declare const WAIT_KINDS: readonly [
 	"nobody"
 ];
 export type WaitKind = (typeof WAIT_KINDS)[number];
+declare const STATUS_SIGNALS: readonly [
+	"stuck",
+	"late",
+	"approaching",
+	"hold_review_due",
+	"pr_green_unmerged",
+	"pr_red_idle",
+	"main_red_unowned"
+];
+export type StatusSignal = (typeof STATUS_SIGNALS)[number];
 declare const TRACK_STATUSES: readonly [
 	"proposed",
 	"agreed",
@@ -6343,6 +6353,15 @@ export interface SessionVerdict {
 	 */
 	state: "failing" | "incomplete" | "none" | "passing";
 }
+declare const CI_FINISHED_STATUSES: readonly [
+	"success",
+	"failure",
+	"cancelled",
+	"skipped",
+	"neutral",
+	"timed_out"
+];
+export type CiFinishedStatus = (typeof CI_FINISHED_STATUSES)[number];
 declare const repoSnapshotEventSchema: z.ZodObject<{
 	live: z.ZodOptional<z.ZodNullable<z.ZodObject<{
 		behindBy: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
@@ -6845,6 +6864,70 @@ export interface TrackHistoryWire {
 	/** A source hit its scan cap — older events exist and are not listed. */
 	truncated: boolean;
 }
+/** Doors the event names — each opens that object's own page. */
+export interface DevTimelineRefs {
+	sessionId?: string;
+	proposalId?: string;
+	/** A pull request or a CI run's page. */
+	url?: string;
+}
+export interface DevTimelineEventBase {
+	/** Stable across reads — a client may key rows by it. */
+	id: string;
+	/** When it happened (ISO-8601). */
+	at: string;
+	/** When the pod recorded it, only when later than `at` by 1 s or more. */
+	recordedAt?: string;
+	/** Who acted, named by the pod. A producer's fact is `system`. */
+	actor: ActivityActor;
+	refs: DevTimelineRefs;
+}
+export type DevTimelineEvent = DevTimelineEventBase & ({
+	kind: "session_started";
+	title: string;
+} | {
+	category: LifecycleCategory;
+	from: string | null;
+	/** What a pause waits on and how it resumes; null for any other move. */
+	hold: RecordedHold | null;
+	kind: "status_moved";
+	reason: string | null;
+	/** A thing's ROLE moved (its slug); absent for its own status. */
+	role?: string;
+	to: string;
+} | {
+	/** A merge into the default branch; null when the fact did not say. */
+	intoDefault: boolean | null;
+	kind: "pr_closed" | "pr_merged" | "pr_opened";
+	pr: {
+		number: number;
+		repo: string;
+		title: string | null;
+		url: string;
+	};
+} | {
+	checks: {
+		/** The devbox job (a `devbox <name>` run); null for a CI workflow. */
+		job: string | null;
+		pr: number | null;
+		repo: string;
+		/** null: the run settled nothing (cancelled, skipped, neutral). */
+		result: PullRequestChecks | null;
+		sha: string;
+		status: CiFinishedStatus;
+		workflow: string | null;
+	};
+	kind: "checks_finished";
+} | {
+	kind: "decision_asked";
+	title: string | null;
+} | {
+	/** `approved` | `rejected` | `reverted` | `approval_failed`. */
+	decision: string;
+	kind: "decision_answered";
+	note: string | null;
+	title: string | null;
+});
 declare const TRACK_PARTICIPANT_ROLES: readonly [
 	"owner",
 	"judge",
@@ -7001,6 +7084,100 @@ export interface SessionInput {
 	criterionKey?: string;
 	/** The stored slot's label — what the label-matching answer doors address. */
 	slotLabel: string;
+}
+/** One role a thing wears, with the role's own status (stored on the facet). */
+export interface StatusOfRole {
+	facetId: string;
+	/** The role's slug (`lead`, `client`). */
+	role: string;
+	/** The role's display name. */
+	roleName: string;
+	status: string | null;
+	label: string | null;
+	category: LifecycleCategory | null;
+	tone: UnitTone | null;
+	/** Its CURRENT hold, when the role stands in a paused status under one. */
+	hold?: RecordedHold;
+}
+/**
+ * The account a thing works at (`works_at`), when the reader may read it: its
+ * own status and the roles it wears. A person's stage is read off its account.
+ */
+export interface StatusOfAccount {
+	id: string;
+	name: string | null;
+	status: string | null;
+	label: string | null;
+	category: LifecycleCategory | null;
+	tone: UnitTone | null;
+	roles: StatusOfRole[];
+	link: string;
+}
+/** `include: ["history"]`: THE timeline, kept to its status events. */
+export interface StatusOfHistory {
+	/** Newest first: a goal's are `TrackHistoryEvent`s, the rest `status_moved`. */
+	events: Array<DevTimelineEvent | TrackHistoryEvent>;
+	/** Older events exist and are not listed. */
+	truncated: boolean;
+}
+/** One end of a `serves` edge, as the reader may see it. */
+export interface StatusOfLinkEnd {
+	type: "goal" | "session";
+	id: string;
+	name: string | null;
+	status: string | null;
+	category: LifecycleCategory | null;
+	tone: UnitTone | null;
+	/** The goal criterion a session serves, when the edge names one. */
+	criterionKey?: string;
+}
+/** `include: ["links"]` on a goal or a session: its `serves` edges. */
+export interface StatusOfLinks {
+	/** What it serves (a goal it is done for). */
+	serves: StatusOfLinkEnd[];
+	/** What serves it (its sessions and sub-goals). */
+	servedBy: StatusOfLinkEnd[];
+}
+/** Waits counted per wait kind; a kind with none is left out. */
+export type WaitKindCounts = Partial<Record<WaitKind, number>>;
+/** The numbers a goal's bars are drawn from, for one node of its tree. */
+export interface StatusOfRollupCounts {
+	/** Its work sessions per category, each session once. */
+	byCategory: Partial<Record<LifecycleCategory, number>>;
+	/** Sessions the reaper found quiet (`stale`): nobody is moving them. */
+	stuck: number;
+	/** What its goals and open sessions wait on, per wait kind (the chips). */
+	waits: WaitKindCounts;
+}
+/** A sub-goal (`track --serves--> goal`), rolled up over its own subtree. */
+export interface StatusOfRollupChild extends StatusOfRollupCounts {
+	id: string;
+	name: string | null;
+	status: string | null;
+	category: LifecycleCategory | null;
+	tone: UnitTone | null;
+}
+/**
+ * `include: ["rollup"]` on a goal: the goal and every goal that serves it,
+ * down the tree. A node reached twice counts once; a loop of `serves` edges
+ * (the door refuses them; an old row may hold one) is walked once and named.
+ */
+export interface StatusOfRollup extends StatusOfRollupCounts {
+	/** Goals in the tree the reader may see, this one included. */
+	goals: number;
+	/** Work sessions counted, filed in or serving a goal of the tree. */
+	sessions: number;
+	/** Its direct sub-goals, each over its own subtree. */
+	children: StatusOfRollupChild[];
+	/** The walk met a loop of `serves` edges and cut it. */
+	cycle?: true;
+}
+/** `include: ["signals"]`: a status signal whose episode is still open. */
+export interface StatusOfSignal {
+	signal: StatusSignal;
+	/** The role whose lifecycle raised it; null for the thing's own. */
+	role: string | null;
+	raisedAt: string;
 }
 /**
  * `@synap-core/types/renderer-ref` — what a profile or workspace stores as its
@@ -16753,6 +16930,18 @@ export interface StatusOf {
 	 * moves its step offers ({@link StatusOfMove}).
 	 */
 	moves?: StatusOfMove[];
+	/** Things only: the roles it wears that the reader may see. */
+	roles?: StatusOfRole[] | Unavailable$1;
+	/** Things only: the account it works at, when the reader may read it. */
+	account?: StatusOfAccount;
+	/** On `include: ["history"]` (things, goals, sessions). */
+	history?: StatusOfHistory | Unavailable$1;
+	/** On `include: ["links"]` (goals, sessions): its `serves` edges. */
+	links?: StatusOfLinks | Unavailable$1;
+	/** On `include: ["rollup"]` (goals): its tree, down `serves`. */
+	rollup?: StatusOfRollup | Unavailable$1;
+	/** On `include: ["signals"]` (things, goals, sessions): those still open. */
+	signals?: StatusOfSignal[] | Unavailable$1;
 	link: string;
 }
 export type StatusOfAnswer = StatusOf | {
@@ -39294,7 +39483,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		statusOf: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				ids: string[];
-				include?: "moves"[] | undefined;
+				include?: ("history" | "links" | "moves" | "rollup" | "signals")[] | undefined;
 			};
 			meta: object;
 			output: StatusOfAnswer[];
