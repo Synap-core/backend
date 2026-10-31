@@ -226,6 +226,9 @@ describe("concept vocabulary — nouns of making and connecting (D3)", () => {
     expect(resolveObjectNoun("review")).toBe("Review");
     expect(resolveObjectNounPlural("review")).toBe("Reviews");
     expect(resolveObjectNoun("room")).not.toBe(resolveObjectNoun("review"));
+    // The English words humanize to themselves; French proves the rows exist.
+    expect(resolveObjectNoun("room", "fr")).toBe("Salon");
+    expect(resolveObjectNoun("review", "fr")).toBe("Revue");
   });
 
   it("Tool still names capabilities and skills only (N7)", () => {
