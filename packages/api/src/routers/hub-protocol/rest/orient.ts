@@ -12,9 +12,6 @@
  *   ?workspaceId=  — pin to one workspace
  *   ?projectId=    — pin to one project
  *   ?statusOf=a,b  — where each id stands (`startHere.statusOf`)
- *   ?include=x,y   — what each of those answers carries beyond its status
- *                    (`STATUS_OF_INCLUDES`: moves, history, links, rollup,
- *                    signals); an unknown part is refused
  */
 
 import { z } from "@hono/zod-openapi";
@@ -34,9 +31,7 @@ import {
   type DiscoverScope,
 } from "../../../services/discover/discover.js";
 import {
-  STATUS_OF_INCLUDES,
   STATUS_OF_MAX,
-  statusOfIncludeInput,
   statusOfInput,
 } from "../../../services/status/status-read.js";
 
@@ -90,27 +85,6 @@ export function registerOrientRoutes(app: HubHono): void {
         400
       );
     }
-    const includeParam = c.req.query("include");
-    const include = statusOfIncludeInput.safeParse(
-      includeParam
-        ? [
-            ...new Set(
-              includeParam
-                .split(",")
-                .map((s) => s.trim())
-                .filter(Boolean)
-            ),
-          ]
-        : undefined
-    );
-    if (!include.success) {
-      return c.json(
-        {
-          error: `include takes some of: ${STATUS_OF_INCLUDES.join(", ")}.`,
-        },
-        400
-      );
-    }
     const scopeParam = c.req.query("scope");
     const scope = scopeParam
       ? (scopeParam
@@ -131,7 +105,6 @@ export function registerOrientRoutes(app: HubHono): void {
         workspaceId,
         projectId,
         ...(statusOf.data?.length ? { statusOf: statusOf.data } : {}),
-        ...(include.data?.length ? { statusOfInclude: include.data } : {}),
         explain,
       });
       return c.json(result);

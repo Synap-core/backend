@@ -287,21 +287,6 @@ export async function readWaitingOnFor<K>(
   reader: WaitingOnReader,
   questions: ReadonlyMap<K, WaitingOnQuestion>
 ): Promise<Map<K, WaitingOnMark[]>> {
-  const sources = await readWaitingOnSourcesFor(reader, questions);
-  return new Map(
-    [...sources].map(([key, s]) => [key, deriveWaitingOn(s)] as const)
-  );
-}
-
-/**
- * The collector's SOURCES, before they are folded into marks: what a rollup
- * counts per wait kind (`countWaitKinds`). Same reads, same floors, same
- * naming rule as {@link readWaitingOnFor}, which folds them.
- */
-export async function readWaitingOnSourcesFor<K>(
-  reader: WaitingOnReader,
-  questions: ReadonlyMap<K, WaitingOnQuestion>
-): Promise<Map<K, WaitingOnSource[]>> {
   const { userId } = reader;
   const asked = [...questions.entries()];
   const union = (
@@ -441,7 +426,7 @@ export async function readWaitingOnSourcesFor<K>(
   ]);
 
   const holdOf = new Map(holds.map((h) => [holdKey(h), h]));
-  const out = new Map<K, WaitingOnSource[]>();
+  const out = new Map<K, WaitingOnMark[]>();
   asked.forEach(([key, q], i) => {
     const sources: WaitingOnSource[] = [];
     const owedIds = new Set(owedIdsOf(q) ?? []);
@@ -547,7 +532,7 @@ export async function readWaitingOnSourcesFor<K>(
         });
       }
     }
-    out.set(key, sources);
+    out.set(key, deriveWaitingOn(sources));
   });
   return out;
 }

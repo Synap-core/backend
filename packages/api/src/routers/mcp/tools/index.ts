@@ -52,7 +52,6 @@ import {
   GOAL_CRITERIA_MIN,
   GOAL_LOOP_DEFAULT_PER_WEEK,
   GOAL_LOOP_MAX_PER_WEEK,
-  STATUS_OF_INCLUDES,
 } from "@synap-core/types/units";
 // The renderer `slot`/`scope` wire vocabularies — DERIVED, never hand-listed
 // (see renderer-slot-enum-parity.tripwire.test.ts).
@@ -2212,16 +2211,6 @@ export const tools = {
               maxItems: 10,
               description:
                 "Optional: up to 10 ids (thing, goal, session or run). `startHere.statusOf` says where each stands: status, how long it has been there, whether it is stuck, and what it waits on.",
-            },
-            include: {
-              type: "array",
-              items: {
-                type: "string",
-                enum: [...STATUS_OF_INCLUDES],
-              },
-              maxItems: STATUS_OF_INCLUDES.length,
-              description:
-                "Optional, with statusOf: what each answer carries beyond its status. moves = a thing's next moves; history = its status moves, holds and steps; links = a goal's or session's `serves` edges; rollup = a goal's tree down `serves` (work by category, stuck, waits by kind); signals = its open status signals. An unknown part is refused.",
             },
           },
           required: [],

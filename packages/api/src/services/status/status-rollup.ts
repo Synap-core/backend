@@ -10,10 +10,6 @@
  * link, each session once per goal), the goal's waiting-on (`loadTrackGoalFacts`),
  * the board's status grouping and stuck count (`status-groups.ts`), the
  * transition log and the owed-slot / dependency reads (`status-facts.ts`).
- *
- * A goal's TREE (`statusOf`'s `include: ["rollup"]`, `readGoalTreeRollups`)
- * follows the same `serves` edges down: the goal, its sub-goals and theirs,
- * each node once however often it is reached, a loop walked once and named.
  */
 import {
   and,
@@ -41,16 +37,7 @@ import {
   OPEN_SESSION_STATUSES,
   sessionStatusCategory,
 } from "@synap-core/types/focus-sessions";
-import {
-  countWaitKinds,
-  resolveStatusTone,
-  trackStatusCategory,
-  type StatusOfRollup,
-  type StatusOfRollupChild,
-  type StatusOfRollupCounts,
-  type WaitingOnMark,
-  type WaitingOnSource,
-} from "@synap-core/types/units";
+import type { WaitingOnMark } from "@synap-core/types/units";
 import { createLogger } from "@synap-core/core";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
@@ -75,9 +62,7 @@ import {
   lastTransitionAt,
   movesOf,
   readWaitingOn,
-  readWaitingOnSourcesFor,
   type CategoryCounts,
-  type WaitingOnQuestion,
 } from "./status-facts.js";
 
 const logger = createLogger({ module: "status-rollup" });
@@ -279,172 +264,6 @@ export async function readGoalRollups(
       ...(m ? { moved: m } : {}),
       ...(waits?.length ? { waitingOn: waits } : {}),
       ...(kids?.length ? { children: kids } : {}),
-    });
-  }
-  return out;
-}
-
-/** How deep a goal tree is followed down its `serves` edges. */
-export const GOAL_TREE_MAX_DEPTH = 32;
-
-/**
- * Each asked goal's TREE rollup (`include: ["rollup"]`): the goal and every
- * goal that serves it, down `serves` edges the reader may see
- * (`readChildGoals`), at most {@link GOAL_TREE_MAX_DEPTH} deep. Its work is
- * every session filed in or serving a goal of the tree (`goalSessions`),
- * each counted ONCE however many goals it reaches; a goal reached twice is
- * one node; a loop of `serves` edges (the door refuses one, an older row may
- * hold it) is cut where it closes and named (`cycle`). `stuck` = its sessions
- * the reaper found quiet (`stale`); `waits` = what its goals and open sessions
- * wait on, per wait kind — THE collector's sources (`readWaitingOnSourcesFor`,
- * the goal's container question), counted by `countWaitKinds`. Each direct
- * sub-goal gets the same numbers over its own subtree. `rootIds` are goals the
- * caller already read through the goal visibility rule. THROWS.
- */
-export async function readGoalTreeRollups(
-  userId: string,
-  rootIds: readonly string[]
-): Promise<Map<string, StatusOfRollup>> {
-  const out = new Map<string, StatusOfRollup>();
-  if (rootIds.length === 0) return out;
-  // The graph, breadth-first: each goal expanded once.
-  const childrenOf = new Map<string, string[]>();
-  let frontier = [...new Set(rootIds)];
-  const nodes = new Set(frontier);
-  for (let depth = 0; depth < GOAL_TREE_MAX_DEPTH && frontier.length; depth++) {
-    const kids = await readChildGoals(userId, frontier);
-    const next: string[] = [];
-    for (const parent of frontier) {
-      const mine = [...new Set(kids.get(parent) ?? [])];
-      childrenOf.set(parent, mine);
-      for (const k of mine) {
-        if (nodes.has(k)) continue;
-        nodes.add(k);
-        next.push(k);
-      }
-    }
-    frontier = next;
-  }
-
-  // Each node's subtree, cycle-safe: a goal already on the path closes a loop.
-  const subtree = (root: string) => {
-    const seen = new Set<string>();
-    let cycle = false;
-    const walk = (id: string, path: Set<string>) => {
-      if (path.has(id)) {
-        cycle = true;
-        return;
-      }
-      if (seen.has(id)) return;
-      seen.add(id);
-      path.add(id);
-      for (const k of childrenOf.get(id) ?? []) walk(k, path);
-      path.delete(id);
-    };
-    walk(root, new Set());
-    return { goals: seen, cycle };
-  };
-  const counted = new Set<string>(rootIds);
-  for (const r of rootIds) {
-    for (const k of childrenOf.get(r) ?? []) counted.add(k);
-  }
-  const trees = new Map([...counted].map((id) => [id, subtree(id)]));
-
-  const allIds = [...nodes];
-  const [goalRows, sessionRows] = await Promise.all([
-    db
-      .select({
-        id: projectTracks.id,
-        name: projectTracks.name,
-        status: projectTracks.status,
-      })
-      .from(projectTracks)
-      .where(inArray(projectTracks.id, allIds)),
-    db.execute(drizzleSql`SELECT g.id AS id, g.key AS key, g.status AS status
-      FROM (${goalSessions(allIds)}) g`) as Promise<
-      | Array<{ id: string; key: string; status: string | null }>
-      | { rows: Array<{ id: string; key: string; status: string | null }> }
-    >,
-  ]);
-  const goalOf = new Map(goalRows.map((g) => [g.id, g]));
-  const sessionsOf = new Map<string, Set<string>>();
-  const statusOf = new Map<string, string | null>();
-  for (const r of Array.isArray(sessionRows) ? sessionRows : sessionRows.rows) {
-    statusOf.set(r.id, r.status);
-    sessionsOf.set(
-      r.key,
-      (sessionsOf.get(r.key) ?? new Set<string>()).add(r.id)
-    );
-  }
-  const sessionsIn = (goals: ReadonlySet<string>) => {
-    const ids = new Set<string>();
-    for (const g of goals) for (const s of sessionsOf.get(g) ?? []) ids.add(s);
-    return ids;
-  };
-
-  // ONE collector read: one container question per counted node.
-  const open = new Set<string>(OPEN_SESSION_STATUSES);
-  const questions = new Map<string, WaitingOnQuestion>();
-  for (const [id, tree] of trees) {
-    const goals = [...tree.goals];
-    const runs = [...sessionsIn(tree.goals)].filter((s) =>
-      open.has(statusOf.get(s) ?? "")
-    );
-    questions.set(id, {
-      container: true,
-      owed: { sessionIds: runs },
-      proposals: { sessionIds: runs, targetIds: goals },
-      blockedNodes: [
-        ...goals.map((g) => ({ kind: "track" as const, id: g })),
-        ...runs.map((s) => ({ kind: "session" as const, id: s })),
-      ],
-      holds: [
-        ...goals.map((g) => ({ subjectType: "track" as const, subjectId: g })),
-        ...runs.map((s) => ({
-          subjectType: "focus_session" as const,
-          subjectId: s,
-        })),
-      ],
-      workUnitsOf: runs,
-    });
-  }
-  const sources = await readWaitingOnSourcesFor({ userId }, questions);
-
-  const countsOf = (id: string): StatusOfRollupCounts => {
-    const byCategory: CategoryCounts = {};
-    let stuck = 0;
-    for (const s of sessionsIn(trees.get(id)!.goals)) {
-      const status = statusOf.get(s) ?? null;
-      addCount(byCategory, sessionStatusCategory(status), 1);
-      if (status === "stale") stuck++;
-    }
-    return {
-      byCategory,
-      stuck,
-      waits: countWaitKinds(sources.get(id) ?? ([] as WaitingOnSource[])),
-    };
-  };
-  for (const r of new Set(rootIds)) {
-    const tree = trees.get(r)!;
-    const children: StatusOfRollupChild[] = (childrenOf.get(r) ?? [])
-      .filter((k) => k !== r)
-      .map((k) => {
-        const g = goalOf.get(k);
-        return {
-          id: k,
-          name: g?.name ?? null,
-          status: g?.status ?? null,
-          category: g ? trackStatusCategory(g.status) : null,
-          tone: g?.status ? resolveStatusTone(g.status) : null,
-          ...countsOf(k),
-        };
-      });
-    out.set(r, {
-      ...countsOf(r),
-      goals: tree.goals.size,
-      sessions: sessionsIn(tree.goals).size,
-      children,
-      ...(tree.cycle ? { cycle: true as const } : {}),
     });
   }
   return out;

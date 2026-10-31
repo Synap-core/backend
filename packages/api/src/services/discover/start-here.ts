@@ -16,7 +16,6 @@ import {
   type RankableProfile,
   type RankedProfile,
 } from "./profile-ranking.js";
-import type { StatusOfInclude } from "@synap-core/types/units";
 import type { StartHere } from "./discover.js";
 import { readLooseEnds } from "./loose-ends.js";
 import { readOpenGoals } from "./open-goals.js";
@@ -348,12 +347,11 @@ async function readStatusRollup(p: {
 
 async function readStatusOfSection(
   userId: string,
-  ids: string[],
-  include?: readonly StatusOfInclude[]
+  ids: string[]
 ): Promise<StartHere["statusOf"]> {
   try {
     const { readStatusOf } = await import("../status/status-read.js");
-    return await readStatusOf(userId, ids, include ? { include } : {});
+    return await readStatusOf(userId, ids);
   } catch (err) {
     logger.warn({ err }, "orient: statusOf NOT read — unavailable");
     return UNAVAILABLE;
@@ -415,8 +413,6 @@ export async function buildStartHere(p: {
   projectId?: string;
   /** Ids to say where each stands (`statusOf`). */
   statusOf?: string[];
-  /** What each `statusOf` answer carries beyond its status. */
-  statusOfInclude?: readonly StatusOfInclude[];
   pending: PendingReviewState;
   learnMoreSkill: string;
   /** The lens listing, when the caller already started reading it. */
@@ -463,7 +459,7 @@ export async function buildStartHere(p: {
         })
       : Promise.resolve(undefined),
     p.statusOf?.length
-      ? readStatusOfSection(p.userId, p.statusOf, p.statusOfInclude)
+      ? readStatusOfSection(p.userId, p.statusOf)
       : Promise.resolve(undefined),
   ]);
   const pendingReview = foldPendingReview(p.pending);
