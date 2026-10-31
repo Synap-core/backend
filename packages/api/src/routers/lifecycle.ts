@@ -14,8 +14,9 @@
  *   lifecycle.statusOf — WHERE DOES IT STAND for up to 10 ids (things, goals,
  *                     sessions, runs): status, category, since, what it waits
  *                     on (with refs), the current hold, and for a session
- *                     `live` + `nextMove`; its tone, and with
- *                     `include: ["moves"]` a thing's offered moves. The
+ *                     `live` + `nextMove`; its tone; a thing's roles and
+ *                     account line; and on `include` its moves, history,
+ *                     `serves` links, goal rollup and open signals. The
  *                     screens' door to the SAME read
  *                     orient's `statusOf` serves on MCP and Hub REST
  *                     (`services/status/status-read.ts`, `readStatusOf`).
@@ -441,7 +442,10 @@ export const lifecycleRouter = router({
     .input(
       z.object({
         ids: statusOfInput.unwrap().min(1),
-        /** Parts beyond the status, on request: `moves` (a thing's step's moves). */
+        /**
+         * Parts beyond the status, on request (`STATUS_OF_INCLUDES`): `moves`,
+         * `history`, `links`, `rollup`, `signals`. An unknown part is refused.
+         */
         include: statusOfIncludeInput,
       })
     )

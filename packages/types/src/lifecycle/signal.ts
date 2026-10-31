@@ -20,6 +20,14 @@ export const STATUS_SIGNALS = [
 ] as const;
 export type StatusSignal = (typeof STATUS_SIGNALS)[number];
 
+/** True when `value` is a status signal this build knows. */
+export function isStatusSignal(value: unknown): value is StatusSignal {
+  return (
+    typeof value === "string" &&
+    (STATUS_SIGNALS as readonly string[]).includes(value)
+  );
+}
+
 /** "Approaching": the bound date is due within this many days. One default. */
 export const DATE_APPROACHING_DAYS = 3;
 

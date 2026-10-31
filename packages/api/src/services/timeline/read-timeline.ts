@@ -20,6 +20,11 @@
  *                     in it (pending; decided by a PERSON), as the goal history.
  *   pull_request  its `dev.pr_*` facts, and the CI runs that name it or ran on
  *                 a head sha one of them named (the PR fold's own rule).
+ *   entity        a thing's status moves — its own and those of the roles it
+ *                 wears that the reader may see (`readThingRoles`, THE facet
+ *                 visibility rule) — from the transition log, with their
+ *                 holds. Under the entity read floor. No door names this
+ *                 subject; `statusOf`'s `include: ["history"]` reads it.
  *
  * Owner-floored like every agent door (`sessionReadableWhere` owner-only, the
  * events floor; a workspace-bound key's `lens` narrows both): missing and
@@ -34,11 +39,13 @@ import {
   db,
   desc,
   drizzleSql,
+  entities,
   eq,
   events,
   focusSessions,
   inArray,
   isNotNull,
+  isNull,
   lifecycleTransitionOutbox,
   or,
   proposals,
@@ -60,11 +67,13 @@ import type { TransitionBase } from "@synap-core/types/lifecycle";
 import {
   timelineRecordedAt,
   type DevTimelineEvent,
+  type DevTimelineRefs,
   type TimelineWire,
 } from "@synap-core/types/units";
 
 import { decisionEvents } from "../activity/decision-events.js";
 import { eventVisibleWhere } from "../../access/event-visibility.js";
+import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { activityActorOf, loadActorRows } from "../activity/activity-actors.js";
 import {
@@ -73,6 +82,7 @@ import {
 } from "../focus-sessions/session-changes.js";
 import { UUID_RE } from "../focus-sessions/session-metadata.js";
 import { readTrackHistory } from "../tracks/track-history.js";
+import { readThingRoles } from "../status/status-roles.js";
 import type { TrackActor } from "../tracks/tracks-service.js";
 
 /** Rows read per source. Hitting it sets `truncated` — older rows exist. */
@@ -81,6 +91,7 @@ export const TIMELINE_SOURCE_CAP = 500;
 export type TimelineSubject =
   | { kind: "goal"; id: string }
   | { kind: "session"; id: string }
+  | { kind: "entity"; id: string }
   | { kind: "pull_request"; ref: PullRequestRef };
 
 /**
@@ -271,7 +282,97 @@ export async function readTimeline(
     };
   }
   if (subject.kind === "session") return readSessionTimeline(subject.id, actor);
+  if (subject.kind === "entity") return readEntityTimeline(subject.id, actor);
   return readPullRequestTimeline(subject.ref, actor);
+}
+
+/** A status move off the transition log, as a timeline event. */
+function statusMovedEvent(
+  r: { id: string; transition: unknown; createdAt: Date | string },
+  refs: DevTimelineRefs
+): Pending | null {
+  const t = (
+    typeof r.transition === "string" ? JSON.parse(r.transition) : r.transition
+  ) as TransitionBase & { role?: string | null };
+  if (typeof t?.to !== "string") return null;
+  // A row owed before moves stamped their times (W4) has only its own.
+  const recordedAt = t.recordedAt ?? iso(r.createdAt);
+  const at = iso(t.occurredAt ?? recordedAt);
+  return {
+    event: {
+      id: `transition:${r.id}`,
+      kind: "status_moved",
+      at,
+      ...timelineRecordedAt(at, recordedAt),
+      refs,
+      from: t.from ?? null,
+      to: t.to,
+      category: t.category,
+      reason: t.reason ?? null,
+      hold: t.hold ?? null,
+      ...(t.role ? { role: t.role } : {}),
+      ...(t.actorKind === "system" ? { actor: SYSTEM } : {}),
+    },
+    actorId: t.actorKind === "agent" ? t.agentUserId : t.userId,
+    isAgent: t.actorKind === "agent",
+  };
+}
+
+async function readEntityTimeline(
+  entityId: string,
+  actor: TimelineReader
+): Promise<TimelineWire | null> {
+  const [thing] = await db
+    .select({ id: entities.id, title: entities.title })
+    .from(entities)
+    .where(
+      and(
+        eq(entities.id, entityId),
+        isNull(entities.deletedAt),
+        entityReadVisibleWhere(actor.userId)
+      )
+    )
+    .limit(1);
+  if (!thing) return null;
+  const cap = TIMELINE_SOURCE_CAP;
+  const outbox = lifecycleTransitionOutbox;
+  const [rows, roles] = await Promise.all([
+    db
+      .select({
+        id: outbox.transitionId,
+        transition: outbox.transition,
+        createdAt: outbox.createdAt,
+      })
+      .from(outbox)
+      .where(
+        and(
+          // The subject index (0374): coalesce(subjectId, entityId), created_at.
+          drizzleSql`coalesce(${outbox.transition}->>'subjectId', ${outbox.transition}->>'entityId') = ${thing.id}`,
+          drizzleSql`${outbox.transition}->>'subjectType' = 'entity'`
+        )
+      )
+      .orderBy(desc(outbox.createdAt))
+      .limit(cap + 1),
+    readThingRoles(actor.userId, [thing.id]),
+  ]);
+  // A role's move is shown only when the reader may see that role.
+  const visibleFacets = new Set(
+    (roles.get(thing.id) ?? []).map((r) => r.facetId)
+  );
+  const out: Pending[] = [];
+  for (const r of rows.slice(0, cap)) {
+    const t = (
+      typeof r.transition === "string" ? JSON.parse(r.transition) : r.transition
+    ) as { facetId?: string | null } | null;
+    if (t?.facetId && !visibleFacets.has(t.facetId)) continue;
+    const e = statusMovedEvent(r, {});
+    if (e) out.push(e);
+  }
+  return {
+    subject: { kind: "entity", id: thing.id, title: thing.title ?? null },
+    events: await finish(out, actor.userId),
+    truncated: rows.length > cap,
+  };
 }
 
 async function readSessionTimeline(
@@ -399,30 +500,8 @@ async function readSessionTimeline(
   ];
 
   for (const r of moves.slice(0, cap)) {
-    const t = (
-      typeof r.transition === "string" ? JSON.parse(r.transition) : r.transition
-    ) as TransitionBase;
-    if (typeof t?.to !== "string") continue;
-    // A row owed before moves stamped their times (W4) has only its own.
-    const recordedAt = t.recordedAt ?? iso(r.createdAt);
-    const at = iso(t.occurredAt ?? recordedAt);
-    out.push({
-      event: {
-        id: `transition:${r.id}`,
-        kind: "status_moved",
-        at,
-        ...timelineRecordedAt(at, recordedAt),
-        refs: { sessionId: session.id },
-        from: t.from ?? null,
-        to: t.to,
-        category: t.category,
-        reason: t.reason ?? null,
-        hold: t.hold ?? null,
-        ...(t.actorKind === "system" ? { actor: SYSTEM } : {}),
-      },
-      actorId: t.actorKind === "agent" ? t.agentUserId : t.userId,
-      isAgent: t.actorKind === "agent",
-    });
+    const e = statusMovedEvent(r, { sessionId: session.id });
+    if (e) out.push(e);
   }
 
   for (const r of facts.slice(0, cap)) {

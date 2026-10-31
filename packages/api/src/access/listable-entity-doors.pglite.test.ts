@@ -755,9 +755,12 @@ const WITHHELD_FILES: Record<string, string> = {
   "services/runs/index.ts": "one run's produced records, by id",
   "services/status/status-facts.ts":
     "a step's wait: the asked things and the one each step names, by id",
-  "services/status/status-read.ts": "statusOf: the named ids, by id",
+  "services/status/status-read.ts":
+    "statusOf: the named ids and the account each works at, by id",
   "services/surfaces/renderer-usage.ts":
     "renderer-removal impact count: a demo row's override is affected too",
+  "services/timeline/read-timeline.ts":
+    "one thing's status history (statusOf include=history), by id",
   "utils/identity-resolve-response.ts": "strong-match recheck, by id (dedup)",
   "utils/project-subject.ts": "a project's subject name + bind gate",
 };
