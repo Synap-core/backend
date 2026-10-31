@@ -1,6 +1,6 @@
 /**
  * Home's words, as catalogs (`@synap-core/types/i18n`): English is the
- * source and the type. Client words (decision G1): requests, never
+ * source and the type. Client words (audit 110dd4ab G1): requests, never
  * proposals. The rows of the "Needs you" band are the health checks' own
  * sentences (`needs-you.ts`) and stay English for now; "Pod at a glance" is
  * the operator's (behind "All tools"). DRAFT French ("vous"), awaiting the

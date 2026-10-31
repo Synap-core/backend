@@ -4,7 +4,7 @@
  * Home — where the console opens. It answers "what did our AIs do, and what
  * waits for me?" first.
  *
- *   0. Morning brief — the person's latest brief (PA-D-03), with a door to
+ *   0. Morning brief — the person's latest brief (audit abbc7a19 PA-D-03), with a door to
  *                      Historique (`_lib/morning-brief.tsx`).
  *   1. Status line   — one sentence from `diagnose.global` + failing sync
  *                      peers, when the pod was last checked, and "Check
@@ -17,7 +17,7 @@
  *   3. Requests      — a short peek into Review, never a second queue: the
  *                      SAME read as Review (`signals.list` needs-you) and its
  *                      count (`signals.count`), so Home shows one number
- *                      (PA-D-13). Every row and the count lead into `/review`.
+ *                      (audit abbc7a19 PA-D-13). Every row and the count lead into `/review`.
  *   4. Pod at a glance — sync, backups and contents as three compact rows;
  *                      the operator's, shown with "All tools" on.
  *
@@ -534,7 +534,7 @@ function RequestsCard() {
   const t = useT(CATALOGS);
   const locale = useConsoleLocale();
   // THE needs-you read Review draws (`signals.list`), so the peek and the
-  // count below range over the same population (PA-D-13): it can never say
+  // count below range over the same population (audit abbc7a19 PA-D-13): it can never say
   // "nothing waiting" beside "See all 3".
   const { data, isLoading, isError, refetch } = trpc.signals.list.useQuery(
     { lens: "needs-you", limit: QUEUE_PEEK },

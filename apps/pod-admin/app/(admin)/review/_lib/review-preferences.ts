@@ -10,7 +10,7 @@
  * (`@synap-core/types`), the one reader browser and relay share (B-6).
  */
 
-import { addToast } from "@heroui/react";
+import { ambientCatalogLocale, createT } from "@synap-core/types/i18n";
 import {
   readReviewPreferences,
   reviewGroupByFor,
@@ -22,6 +22,9 @@ import {
 } from "@synap-core/types/proposals/review-package";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
+import { failureReceipt } from "../../../_lib/receipt/decision-receipt";
+import { showReceipt } from "../../../_lib/receipt/decision-receipt-toast";
+import { en, fr } from "./copy";
 
 export interface ReviewPreferencesState {
   /** The read is in flight: nothing is known yet (never "never chose"). */
@@ -57,13 +60,12 @@ export function useReviewPreferences(): ReviewPreferencesState {
       );
     },
     onSettled: () => void utils.preferences.get.invalidate(),
+    // The one place a failed save is said: every caller below may drop the
+    // rejected promise.
     onError: (err) => {
       if (redirectToLoginIfUnauthorized(err)) return;
-      addToast({
-        title: "Your review settings were not saved",
-        description: err.message,
-        color: "danger",
-      });
+      const t = createT(ambientCatalogLocale(), { en, fr });
+      showReceipt(failureReceipt(t("prefs.notSaved"), err));
     },
   });
 

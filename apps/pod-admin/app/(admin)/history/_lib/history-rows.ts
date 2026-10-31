@@ -1,5 +1,5 @@
 /**
- * Historique's rows: one decided request, in the client's words (PA-D-17).
+ * Historique's rows: one decided request, in the client's words (audit abbc7a19 PA-D-17).
  * Pure; `history-list.tsx` only draws it.
  *
  * - The title says what HAPPENED (the vocabulary's past mood: "Created

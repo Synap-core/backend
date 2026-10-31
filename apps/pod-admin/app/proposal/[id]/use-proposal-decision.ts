@@ -81,7 +81,7 @@ export function useProposalDecision(
 ) {
   const utils = trpc.useUtils();
   // The receipt says what the pod ANSWERED (`decision-receipt.ts`), with Undo
-  // for 8 s when the pod can take the decision back. An Undo refreshes the
+  // for `UNDO_WINDOW_MS` when the pod can take the decision back. An Undo refreshes the
   // proposal reads, so the page and the list draw the request pending again.
   const approveMutation = trpc.proposals.approve.useMutation({
     onSuccess: (result) => {

@@ -584,7 +584,7 @@ function DecisionButtons({
   const decision = useProposalDecision(p.id, onDecided, {
     onRejected: () => setRejecting(false),
     expectedRevision: renderedRevision(p),
-    revertable: (p as { revertable?: boolean | null }).revertable,
+    revertable: p.revertable,
   });
   const { busy } = decision;
 
@@ -979,7 +979,7 @@ export function ProposalReviewBody({
     reasoning: p.review.reasoning,
   });
   const reason = reasonMark(p.governanceReason);
-  const undo = undoMark((p as { revertable?: boolean | null }).revertable);
+  const undo = undoMark(p.revertable);
   const { actor } = proposalRequesterParts(p);
   // Present only when `proposals.source` named it: a session the reader may
   // read (the session floor, decision D1).

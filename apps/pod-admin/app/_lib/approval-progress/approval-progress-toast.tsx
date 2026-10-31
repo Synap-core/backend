@@ -25,7 +25,12 @@ import { Button, Progress, addToast, closeToast } from "@heroui/react";
 import { trpc } from "../../../lib/trpc";
 import { openIn } from "../../../lib/open-in";
 import { ExitLink } from "../../../lib/exit-link";
-import { readableError } from "../../../lib/format";
+import {
+  decisionFailure,
+  decisionReceipt,
+  readApproveAnswer,
+} from "../receipt/decision-receipt";
+import { showReceipt } from "../receipt/decision-receipt-toast";
 import {
   approvalProgressCopy,
   isApplying,
@@ -212,15 +217,10 @@ function ResumeButton({
       if ((result as { queued?: boolean }).queued) {
         showApprovalProgressToast(proposalId);
       } else {
-        addToast({ title: "Proposal approved", color: "success" });
+        showReceipt(decisionReceipt(readApproveAnswer(result)));
       }
     },
-    onError: (e) =>
-      addToast({
-        title: "Could not resume",
-        description: readableError(e.message) ?? "Try again from the proposal.",
-        color: "danger",
-      }),
+    onError: (e) => showReceipt(decisionReceipt(decisionFailure("approve", e))),
   });
   return (
     <Button

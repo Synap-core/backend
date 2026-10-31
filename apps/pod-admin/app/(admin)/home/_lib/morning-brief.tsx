@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * "What did our AIs do yesterday?" (PA-D-03): the person's latest morning
+ * "What did our AIs do yesterday?" (audit abbc7a19 PA-D-03): the person's latest morning
  * brief, at the top of Home, with a door to Historique for what was decided.
  *
  * The brief is a notification the pod raises once a day

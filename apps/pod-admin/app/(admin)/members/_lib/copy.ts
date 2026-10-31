@@ -1,5 +1,5 @@
 /**
- * Équipe's header words (a client place, PA-G-06), as catalogs
+ * Équipe's header words (a client place, audit a48761f2 PA-G-06), as catalogs
  * (`@synap-core/types/i18n`): English is the source and the type. The lists,
  * drawer and invite form below keep their English words for now. DRAFT
  * French ("vous"), awaiting the founder's review.
