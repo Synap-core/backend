@@ -88,6 +88,7 @@ import {
   registerWorkspacesEnsureTemplateRoutes,
   registerWorkspaceOpsRoutes,
   registerInstalledRoutes,
+  registerPackageUpdatesRoutes,
   registerMessagingRoutes,
   registerDiscordRoutes,
   registerDiscordIdentityRoutes,
@@ -282,6 +283,7 @@ registerWorkspacesEnsureTemplateRoutes(app); // /workspaces/ensure-template (Con
 registerWorkspacesRoutes(app); // /workspaces, /workspaces/:id/*, /users/:id/context
 registerWorkspaceOpsRoutes(app); // governed archive/restore/rename, /entities/move, /profiles/grant-access (R8a)
 registerInstalledRoutes(app); // /installed — the ONE read door over the install ledgers
+registerPackageUpdatesRoutes(app); // /package-updates — one update's plan and its apply (S2/S3)
 registerThreadsRoutes(app); // /threads* — combines GET-list, context, link, branches, messages, etc.
 registerEventsRoutes(app); // /events
 registerEntitiesRoutes(app); // /users/:id/entities + /entities*

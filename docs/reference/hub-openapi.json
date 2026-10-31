@@ -6828,6 +6828,400 @@
         }
       }
     },
+    "/package-updates": {
+      "get": {
+        "tags": ["Packages"],
+        "summary": "List the package updates waiting on this pod",
+        "description": "Every installed view/skill/automation package whose catalog version moved, with how many fields each update changes per state (updates / yours / both / same) and what it needs from a person. A package whose catalog cannot be read is listed under `unreadable` with the reason. Pod admins only. Requires hub-protocol.read scope.",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Waiting updates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "updates": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "slug": { "type": "string" },
+                          "kind": { "type": "string" },
+                          "name": { "type": "string" },
+                          "installedVersion": { "type": ["string", "null"] },
+                          "latestVersion": { "type": ["string", "null"] },
+                          "counts": {
+                            "type": "object",
+                            "properties": {
+                              "updates": { "type": "number" },
+                              "yours": { "type": "number" },
+                              "both": { "type": "number" },
+                              "same": { "type": "number" }
+                            },
+                            "required": ["updates", "yours", "both", "same"]
+                          },
+                          "dataChanges": { "type": "number" },
+                          "needs": {
+                            "type": "string",
+                            "enum": ["consent", "choice", "review", "nothing"]
+                          },
+                          "reviewUrl": { "type": "string" }
+                        },
+                        "required": [
+                          "slug",
+                          "kind",
+                          "name",
+                          "installedVersion",
+                          "latestVersion",
+                          "counts",
+                          "dataChanges",
+                          "needs",
+                          "reviewUrl"
+                        ]
+                      }
+                    },
+                    "unreadable": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "slug": { "type": "string" },
+                          "kind": { "type": "string" },
+                          "name": { "type": "string" },
+                          "reason": { "type": "string" }
+                        },
+                        "required": ["slug", "kind", "name", "reason"]
+                      }
+                    }
+                  },
+                  "required": ["updates", "unreadable"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/package-updates/{slug}": {
+      "get": {
+        "tags": ["Packages"],
+        "summary": "One package update, field by field",
+        "description": "For each installed row of the package, each field the catalog provides with its state and its three values: the catalog's when installed (`base`), the catalog's now (`desired`) and the pod's (`live`). A text field both sides changed carries the line-level merge (`merged`, null when the edits overlap). `recommended` names the suggested choice per `<rowId>:<field>`. Pod admins only. Requires hub-protocol.read scope.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "minLength": 1 },
+            "required": true,
+            "name": "slug",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The update plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "slug": { "type": "string" },
+                    "kind": { "type": "string" },
+                    "name": { "type": "string" },
+                    "installedVersion": { "type": ["string", "null"] },
+                    "latestVersion": { "type": ["string", "null"] },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "rowKind": {
+                            "type": "string",
+                            "enum": ["view", "skill", "automation"]
+                          },
+                          "rowId": { "type": "string" },
+                          "name": { "type": "string" },
+                          "fields": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "key": { "type": "string" },
+                                "label": { "type": "string" },
+                                "state": {
+                                  "type": "string",
+                                  "enum": ["updates", "yours", "both", "same"]
+                                },
+                                "base": {},
+                                "desired": {},
+                                "live": {},
+                                "merged": { "type": ["string", "null"] },
+                                "overlap": { "type": "boolean" }
+                              },
+                              "required": ["key", "label", "state"]
+                            }
+                          }
+                        },
+                        "required": ["rowKind", "rowId", "name", "fields"]
+                      }
+                    },
+                    "recommended": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string",
+                        "enum": ["catalog", "combine"]
+                      }
+                    },
+                    "counts": {
+                      "type": "object",
+                      "properties": {
+                        "updates": { "type": "number" },
+                        "yours": { "type": "number" },
+                        "both": { "type": "number" },
+                        "same": { "type": "number" }
+                      },
+                      "required": ["updates", "yours", "both", "same"]
+                    },
+                    "needs": {
+                      "type": "string",
+                      "enum": ["consent", "choice", "review", "nothing"]
+                    }
+                  },
+                  "required": [
+                    "slug",
+                    "kind",
+                    "name",
+                    "installedVersion",
+                    "latestVersion",
+                    "rows",
+                    "counts",
+                    "needs"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Nothing installed from it",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "The catalog cannot be read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/package-updates/{slug}/apply": {
+      "post": {
+        "tags": ["Packages"],
+        "summary": "Apply a package update with a choice per field",
+        "description": "`choices` is keyed `<rowId>:<field>`: `catalog`, `mine`, `combine` or `{value}`. Every field both sides changed needs one; a field only the catalog changed defaults to `catalog`. `expectedVersion` is the catalog version the plan showed: a newer one answers 409. Each row is written through its own governed `.update` door as the caller: a person's write lands and returns its receipt (Undo for 30 days, on pod admin); an agent's is filed as proposals. Pod admins only. Requires hub-protocol.write scope.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "minLength": 1 },
+            "required": true,
+            "name": "slug",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedVersion": { "type": "string", "minLength": 1 },
+                  "choices": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": ["catalog", "mine", "combine"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": { "value": {} },
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "default": {}
+                  },
+                  "acceptDataChanges": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  }
+                },
+                "required": ["expectedVersion"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Applied or proposed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": { "type": "string", "enum": ["applied"] },
+                        "receipt": {
+                          "type": ["object", "null"],
+                          "properties": {
+                            "id": { "type": "string" },
+                            "slug": { "type": "string" },
+                            "kind": { "type": "string" },
+                            "name": { "type": "string" },
+                            "fromVersion": { "type": ["string", "null"] },
+                            "toVersion": { "type": ["string", "null"] },
+                            "appliedAt": { "type": "string" },
+                            "source": {
+                              "type": "string",
+                              "enum": ["person", "automatic"]
+                            },
+                            "changes": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "rowKind": {
+                                    "type": "string",
+                                    "enum": ["view", "skill", "automation"]
+                                  },
+                                  "rowId": { "type": "string" },
+                                  "field": { "type": "string" },
+                                  "before": {},
+                                  "after": {}
+                                },
+                                "required": ["rowKind", "rowId", "field"]
+                              }
+                            },
+                            "undoUntil": { "type": "string" },
+                            "undoneAt": { "type": ["string", "null"] }
+                          },
+                          "required": [
+                            "id",
+                            "slug",
+                            "kind",
+                            "name",
+                            "fromVersion",
+                            "toVersion",
+                            "appliedAt",
+                            "source",
+                            "changes",
+                            "undoUntil",
+                            "undoneAt"
+                          ]
+                        }
+                      },
+                      "required": ["status", "receipt"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": { "type": "string", "enum": ["proposed"] },
+                        "proposalIds": {
+                          "type": "array",
+                          "items": { "type": "string" }
+                        }
+                      },
+                      "required": ["status", "proposalIds"]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Nothing installed from it",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "The catalog moved",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/threads": {
       "get": {
         "tags": ["Threads"],
