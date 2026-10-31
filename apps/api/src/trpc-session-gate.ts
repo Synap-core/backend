@@ -37,10 +37,15 @@ export const PUBLIC_TRPC_PROCEDURES: ReadonlySet<string> = new Set([
 const trimSlashes = (p: string): string =>
   p.replace(/^\//, "").replace(/\/$/, "");
 
+/** The path `fetchRequestHandler` hands tRPC for this URL (still encoded). */
+export function trpcPath(url: string, endpoint = "/trpc"): string {
+  const pathname = trimSlashes(new URL(url, "http://pod.invalid").pathname);
+  return trimSlashes(pathname.slice(trimSlashes(endpoint).length));
+}
+
 /** The procedure paths tRPC will run for this URL (batch paths split on ","). */
 export function trpcProcedurePaths(url: string, endpoint = "/trpc"): string[] {
-  const pathname = trimSlashes(new URL(url, "http://pod.invalid").pathname);
-  return trimSlashes(pathname.slice(trimSlashes(endpoint).length)).split(",");
+  return trpcPath(url, endpoint).split(",");
 }
 
 function isPublicProcedure(procedurePath: string): boolean {
