@@ -11,17 +11,7 @@
  *
  * Nothing here notifies anyone: an episode is history, not a signal.
  */
-import {
-  and,
-  asc,
-  getTableColumns,
-  gte,
-  inArray,
-  isNull,
-  lte,
-  or,
-  sql,
-} from "drizzle-orm";
+import { and, asc, gte, inArray, isNull, or } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { TransitionSubjectType } from "@synap-core/types/lifecycle";
 import type { WaitEpisode } from "@synap-core/types/units";
@@ -154,10 +144,6 @@ export async function listOpenWaitEpisodeSubjects(
  * these subjects, oldest first, every facet of an entity included. With
  * `since`, only those still open or closed at or after it. The caller has
  * floored the subjects on its reader; a ref is as the thing's HOLDER read it.
- *
- * The cap is PER SUBJECT and keeps each one's NEWEST `perSubject` episodes:
- * one read serves many subjects at once (Home's goals), and a shared
- * oldest-first cap dropped the newest rows, the open wait among them.
  */
 export async function readWaitEpisodes(
   db: Db,
@@ -165,19 +151,14 @@ export async function readWaitEpisodes(
     subjectType: TransitionSubjectType;
     subjectId: string;
   }>,
-  opts: { since?: Date; perSubject?: number } = {}
+  opts: { since?: Date; limit?: number } = {}
 ): Promise<WaitEpisode[]> {
   if (subjects.length === 0) return [];
   const wanted = new Set(
     subjects.map((s) => `${s.subjectType}:${s.subjectId}`)
   );
-  const ranked = db
-    .select({
-      ...getTableColumns(statusWaitEpisode),
-      rank: sql<number>`row_number() over (partition by ${statusWaitEpisode.subjectType}, ${statusWaitEpisode.subjectId} order by ${statusWaitEpisode.openedAt} desc, ${statusWaitEpisode.id} desc)`.as(
-        "rank"
-      ),
-    })
+  const rows = await db
+    .select()
     .from(statusWaitEpisode)
     .where(
       and(
@@ -192,12 +173,8 @@ export async function readWaitEpisodes(
           : undefined
       )
     )
-    .as("ranked");
-  const rows = await db
-    .select()
-    .from(ranked)
-    .where(lte(ranked.rank, opts.perSubject ?? 500))
-    .orderBy(asc(ranked.openedAt), asc(ranked.id));
+    .orderBy(asc(statusWaitEpisode.openedAt), asc(statusWaitEpisode.id))
+    .limit(opts.limit ?? 1_000);
   return rows
     .filter((r) => wanted.has(`${r.subjectType}:${r.subjectId}`))
     .map((r) => ({
