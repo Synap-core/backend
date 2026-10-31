@@ -3120,6 +3120,95 @@
           "lastUsedAt"
         ]
       },
+      "AgentAssignmentRead": {
+        "type": "object",
+        "properties": {
+          "assignment": {
+            "type": ["object", "null"],
+            "properties": {
+              "agentUserId": { "type": "string" },
+              "agentName": { "type": ["string", "null"] },
+              "assignedAt": { "type": "string" }
+            },
+            "required": ["agentUserId", "agentName", "assignedAt"],
+            "description": "The agent YOU assigned to this target (one per person per target), or null when you assigned none."
+          }
+        },
+        "required": ["assignment"]
+      },
+      "AgentAssignmentRefusal": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string" },
+          "code": {
+            "type": "string",
+            "enum": [
+              "PERSON_ONLY",
+              "NOT_OWNER",
+              "NOT_FOUND",
+              "TARGET_NOT_FOUND",
+              "GRANT_DENIED"
+            ]
+          },
+          "reasonCode": {
+            "type": "string",
+            "enum": [
+              "PERSON_ONLY",
+              "NOT_OWNER",
+              "NOT_FOUND",
+              "TARGET_NOT_FOUND",
+              "GRANT_DENIED"
+            ]
+          }
+        },
+        "required": ["error"]
+      },
+      "AgentAssignmentTargetType": {
+        "type": "string",
+        "enum": ["playbook", "profile", "project", "workspace"]
+      },
+      "SetAgentAssignmentResult": {
+        "type": "object",
+        "properties": {
+          "assigned": { "type": "boolean" },
+          "agentUserId": { "type": "string" },
+          "target": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "$ref": "#/components/schemas/AgentAssignmentTargetType"
+              },
+              "id": { "type": "string" }
+            },
+            "required": ["type", "id"]
+          },
+          "replaced": {
+            "type": ["string", "null"],
+            "description": "The agent this assignment replaced on the target (yours), or null."
+          }
+        },
+        "required": ["assigned", "agentUserId", "target", "replaced"]
+      },
+      "SetAgentAssignmentBody": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "$ref": "#/components/schemas/AgentAssignmentTargetType"
+              },
+              "id": { "type": "string", "format": "uuid" }
+            },
+            "required": ["type", "id"]
+          },
+          "assigned": {
+            "type": "boolean",
+            "description": "true = this agent takes the target's work (replaces the agent you had on it); false = remove this agent from it."
+          }
+        },
+        "required": ["target", "assigned"]
+      },
       "AgentConfig": {
         "type": "object",
         "properties": {
@@ -20125,6 +20214,141 @@
           },
           "500": {
             "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agent-users/assignments": {
+      "get": {
+        "tags": ["Agents"],
+        "summary": "Read which agent you assigned to a target",
+        "description": "The agent YOU assigned to a playbook, kind (profile), project or space: the one that takes that target's work when a run names nobody. One per person per target. `assignment: null` when you assigned none. A scoped key needs `agent.read`.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "$ref": "#/components/schemas/AgentAssignmentTargetType"
+            },
+            "required": true,
+            "name": "targetType",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "targetId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Your assignment",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AgentAssignmentRead" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentAssignmentRefusal"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Target not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentAssignmentRefusal"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agent-users/{agentUserId}/assignment": {
+      "put": {
+        "tags": ["Agents"],
+        "summary": "Assign an agent to a target, or remove it",
+        "description": "Says which of your agents takes a playbook's, kind's, project's or space's work when a run names nobody (`participant --assigned_to--> target`). One agent per person per target: assigning replaces yours. A PERSON's act only: an agent key (an app's own agent included) is refused `PERSON_ONLY`. The agent's owner or a pod admin. A scoped key (an app signed in as you) needs `agent.update` in the target's space and must read the target there (`playbook.read` for a playbook, `project.read` for a project; else TARGET_NOT_FOUND).",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "agentUserId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetAgentAssignmentBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Assigned or removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetAgentAssignmentResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "PERSON_ONLY (agent key), NOT_OWNER, GRANT_DENIED (no agent.update there), or a space you cannot see (TARGET_NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentAssignmentRefusal"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND (no such agent) or TARGET_NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentAssignmentRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Assigned at the same time",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
