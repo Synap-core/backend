@@ -514,6 +514,7 @@ export function registerFocusSessionExecutors(): void {
             userId,
             innerData,
             ownCriteria,
+            startedByAgentId: proposal.agentUserId ?? null,
           })
         : claimed.rows;
 
@@ -1388,6 +1389,8 @@ async function instantiateApprovedPlaybook(args: {
   innerData: Record<string, unknown>;
   /** The proposer's own criteria (already parsed); the playbook's join after. */
   ownCriteria: SessionCriterion[];
+  /** The proposing agent: it started the session (`startedByAgentPatch`). */
+  startedByAgentId: string | null;
 }) {
   const { innerData } = args;
   if (!args.workspaceId) {
@@ -1442,6 +1445,7 @@ async function instantiateApprovedPlaybook(args: {
     ...(typeof innerData.prompt === "string" && innerData.prompt.trim()
       ? { goalOverride: innerData.prompt }
       : {}),
+    metadata: startedByAgentPatch(args.startedByAgentId),
   });
   return row ? [row] : [];
 }
