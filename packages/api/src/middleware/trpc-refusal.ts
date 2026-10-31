@@ -104,7 +104,8 @@ export function trpcRefusals(router: AnyTRPCRouter, endpoint = "/trpc") {
         passed = true;
         await next();
       });
-      if (passed) return out;
+      // NEGATIVE CONTROL (do not merge): every refusal is left as it was.
+      if (passed || router) return out;
       // A refusal is returned (`return c.json(…)`) or assigned (`c.res = …`,
       // the AI rate limit). `c.res` is read only when assigned: its getter
       // creates an empty 200.
