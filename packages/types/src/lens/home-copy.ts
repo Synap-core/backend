@@ -9,6 +9,7 @@
  */
 import { ambientCatalogLocale } from "../i18n/ambient.js";
 import { createT, type Catalog, type Locale } from "../i18n/index.js";
+import type { RequestLaterChoice } from "../proposals/request-later.js";
 
 export const en = {
   /** The section of what waits on the person: their move. */
@@ -51,6 +52,16 @@ export const en = {
   "home.undo.a11y": "Recent changes, each with its Undo",
   "home.activity": "Activity & suggestions",
   "home.activity.a11y": "Activity and suggestions across your pod",
+
+  /** "Later" on a request (#543): the sheet, its choices, the receipt. */
+  "home.later.title": "When should this come back?",
+  "home.later.choice.in_3_hours": "In 3 hours",
+  "home.later.choice.tomorrow": "Tomorrow, 8:00",
+  "home.later.choice.next_week": "Next Monday, 8:00",
+  /** `{when}` is the return time as the surface formats it. */
+  "home.later.receipt": "Set aside until {when}",
+  "home.later.undo": "Undo",
+  "home.later.failed": "Couldn’t set this aside",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -85,7 +96,25 @@ export const fr: Catalog<typeof en> = {
   "home.undo.a11y": "Modifications récentes, chacune avec son Annuler",
   "home.activity": "Activité et suggestions",
   "home.activity.a11y": "Activité et suggestions dans votre pod",
+
+  "home.later.title": "Quand revient-elle ?",
+  "home.later.choice.in_3_hours": "Dans 3 heures",
+  "home.later.choice.tomorrow": "Demain, 8 h",
+  "home.later.choice.next_week": "Lundi prochain, 8 h",
+  "home.later.receipt": "Mise de côté jusqu’à {when}",
+  "home.later.undo": "Annuler",
+  "home.later.failed": "Impossible de la mettre de côté",
 };
+
+/**
+ * The word of each "Later" choice, keyed by `REQUEST_LATER_CHOICES`: a new
+ * choice without its words fails the build.
+ */
+export const HOME_LATER_CHOICE_KEY = {
+  in_3_hours: "home.later.choice.in_3_hours",
+  tomorrow: "home.later.choice.tomorrow",
+  next_week: "home.later.choice.next_week",
+} as const satisfies Record<RequestLaterChoice, keyof typeof en>;
 
 /** Home's catalogs, for a surface that composes its own translator. */
 export const homeCopy = { en, fr } as const;
