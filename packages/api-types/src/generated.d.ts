@@ -7128,6 +7128,31 @@ export interface SessionInput {
 	/** The stored slot's label — what the label-matching answer doors address. */
 	slotLabel: string;
 }
+/**
+ * A stage a SESSION entered, read from its stage ledger
+ * (`focus_sessions.stage_history`, 0382; the shape of a goal's `step_moved`).
+ * Only `include: ["history"]` carries it; the timeline does not.
+ */
+export interface StatusOfStageEntered {
+	/** Stable across reads — a client may key rows by it. */
+	id: string;
+	kind: "stage_entered";
+	/** When it entered the stage (ISO-8601). */
+	at: string;
+	/** Who moved it, named by the pod: the agent when one drove it. */
+	actor: ActivityActor;
+	refs: {
+		sessionId: string;
+	};
+	/** The stage entered. */
+	stageKey: string;
+	/** The stage left; `null` when the session stood on none. */
+	fromStage: string | null;
+	/** Which writer recorded it: the stage door, or a re-applied approval. */
+	via: "advance" | "approval";
+}
+/** One entry of `include: ["history"]`. */
+export type StatusOfHistoryEvent = DevTimelineEvent | TrackHistoryEvent | StatusOfStageEntered;
 /** One role a thing wears, with the role's own status (stored on the facet). */
 export interface StatusOfRole {
 	facetId: string;
@@ -7156,10 +7181,16 @@ export interface StatusOfAccount {
 	roles: StatusOfRole[];
 	link: string;
 }
-/** `include: ["history"]`: THE timeline, kept to its status events. */
+/**
+ * `include: ["history"]`: THE timeline, kept to its status events, with a
+ * session's stage ledger merged in by time.
+ */
 export interface StatusOfHistory {
-	/** Newest first: a goal's are `TrackHistoryEvent`s, the rest `status_moved`. */
-	events: Array<DevTimelineEvent | TrackHistoryEvent>;
+	/**
+	 * Newest first: a goal's are `TrackHistoryEvent`s, a session's
+	 * `status_moved` and `stage_entered`, a thing's `status_moved`.
+	 */
+	events: StatusOfHistoryEvent[];
 	/** Older events exist and are not listed. */
 	truncated: boolean;
 }
