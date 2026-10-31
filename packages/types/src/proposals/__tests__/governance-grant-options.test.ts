@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  PROPOSE_ONLY_CAPABILITY_VERBS,
   deriveGovernanceGrantOptions,
   deriveGovernanceNeverOption,
   isNonWidenableGovernanceReason,
@@ -86,6 +87,23 @@ describe("deriveGovernanceGrantOptions — the outward floor (finding c173cc51)"
         false
       );
     }
+  });
+
+  it("a public post offers no 'this tool': the gate never lets a rule widen it", () => {
+    for (const verb of PROPOSE_ONLY_CAPABILITY_VERBS) {
+      for (const mode of ["agent-scoped", "operator-any"] as const) {
+        expect(
+          ids({ ...RUN, capabilityTarget: verb }, mode),
+          `${verb} ${mode}`
+        ).not.toContain("capability");
+      }
+    }
+  });
+
+  it("a run under a floor no rule widens offers no 'this tool'", () => {
+    expect(
+      ids({ ...RUN, governanceReason: "ADMIN" }, "operator-any")
+    ).not.toContain("capability");
   });
 });
 

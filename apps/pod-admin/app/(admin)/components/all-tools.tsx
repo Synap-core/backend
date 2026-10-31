@@ -2,7 +2,7 @@
 
 /**
  * The "All tools" switch: whether an admin's nav shows every operator group
- * after the client places (`navFor`, PA-G-06). Off by default, for everyone:
+ * after the client places (`navFor`, audit a48761f2 PA-G-06). Off by default, for everyone:
  * a client's founder IS `pod_admin`, so the client view is the default and
  * the operator turns this on once.
  *

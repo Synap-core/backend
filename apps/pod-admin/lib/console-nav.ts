@@ -98,8 +98,9 @@ export const CONSOLE_NAV = [
       {
         id: "review",
         href: "/review",
-        // The client's word (decision G1): a request, "Demande".
+        // The client's word (audit 110dd4ab G1): a request, "Demande".
         label: "Requests",
+        kind: "proposal",
         icon: "Inbox",
         legacy: [
           { source: "/audit", query: { key: "section", value: "queue" } },
@@ -108,7 +109,7 @@ export const CONSOLE_NAV = [
         audience: "member",
       },
       {
-        // What was decided, with its receipt and Undo (decision G2: "what
+        // What was decided, with its receipt and Undo (audit 110dd4ab G2: "what
         // happened" grows from Review › History; `/audit` stays the
         // operator's database log).
         id: "history",
@@ -408,7 +409,7 @@ export function navVisibleTo(item: NavItem, role: NavAudience): boolean {
 }
 
 /**
- * The CLIENT SCOPE of the same table (PA-G-06): the six places a company's
+ * The CLIENT SCOPE of the same table (audit a48761f2 PA-G-06): the six places a company's
  * founder and team use, in their order. A scope, not a fork: these are
  * {@link CONSOLE_NAV}'s own items, and every other page keeps its route (a
  * link to `/runs` still opens); only the navigation is scoped.
@@ -512,6 +513,11 @@ export interface SearchDestination {
   nav: NavId;
   /** The palette's group heading. */
   label: string;
+  /**
+   * The vocabulary registry kind whose PLURAL noun the heading is, pinned by
+   * the tripwire like `NavItem.kind`.
+   */
+  kind?: string;
   /** The href for one result id. */
   href: (id: string) => string;
 }
@@ -564,7 +570,8 @@ export const SEARCH_DESTINATION: Readonly<
   },
   proposal: {
     nav: "review",
-    label: "Proposals",
+    label: "Requests",
+    kind: "proposal",
     href: (id) => navHref("review", { focus: id }),
   },
   audit: {

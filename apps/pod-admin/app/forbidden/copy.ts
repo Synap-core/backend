@@ -17,7 +17,7 @@ export const en = {
 
 export const fr: Catalog<typeof en> = {
   title: "Cette page est réservée aux administrateurs",
-  body: "Votre session est ouverte, mais seul un administrateur du Synap de votre entreprise peut ouvrir cette page. Demandez-lui si vous en avez besoin.",
+  body: "Seul un administrateur du Synap de votre entreprise peut ouvrir cette page. Demandez-lui si vous en avez besoin.",
   home: "Retour à l’accueil",
   signOut: "Se déconnecter",
 };

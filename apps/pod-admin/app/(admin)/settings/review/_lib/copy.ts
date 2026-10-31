@@ -37,8 +37,8 @@ export const en = {
   "handOffs.on": "Always allowed",
   "handOffs.off": "Asks you",
   "handOffs.aria": "{name}: always allow hand-offs",
-  "handOffs.allowed": "{name} may take hand-offs without asking",
-  "handOffs.asksAgain": "{name} asks again before taking hand-offs",
+  "handOffs.allowed": "{name} may hand work to another AI without asking",
+  "handOffs.asksAgain": "{name} asks again before handing work on",
   "handOffs.notChanged": "Couldn’t change this rule",
   "handOffs.notChangedHint": "Nothing changed. Try again.",
 } as const;

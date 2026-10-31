@@ -77,6 +77,10 @@
  *                                    rule on a move INTO done/lost applies
  *                                    only if it names the write; else 2.85
  *   2.85 lifecycle move into done/lost → propose (2.86 other moves → execute)
+ *   2.88 NAMED_RULE_ONLY_EVENT_KEYS → propose (a capability run or a session's
+ *                                    tool grant that no rule NAMING it widened
+ *                                    at 2.8; ownership and the auto-approve
+ *                                    lists below never execute one)
  *   3. isAgentOwnedWorkspace      → execute (non-destructive) / propose (destructive)
  *   4. explicit autoApproveFor    → execute (overrides writesRequireProposal)
  *   5. writesRequireProposal      → propose on non-pure-read writes
@@ -228,31 +232,13 @@ export const DEFAULT_AUTO_APPROVE: readonly string[] = [
  * branch merges can never auto-execute. Format used by the floor is the bare
  * action verb; event keys are `${subjectType}.${action}` (e.g. `entity.merge`).
  */
-/**
- * Capability verb ids a stored `auto` rule must not widen to a direct run.
- * The policy engine itself never sees a verb id — `capability-gate` consults
- * this before `capabilityRuleAuthorizesRun`. Gmail and every other send stay
- * off the list.
- */
-export const PROPOSE_ONLY_CAPABILITY_VERBS = [
-  "postiz_draft",
-  "postiz_schedule",
-  "postiz_publish",
-  // The code verb that uploads media then creates the post (draft | schedule |
-  // now) — the same public send as the three above. `postiz_upload_from_url`
-  // is deliberately NOT here: it stores a file in the Postiz media library and
-  // publishes nothing, so a person may widen it like any other write.
-  "postiz_schedule_post",
-] as const;
-
-export function capabilityVerbAllowsRuleWiden(
-  verbName: string | null | undefined
-): boolean {
-  if (!verbName) return true;
-  return !(PROPOSE_ONLY_CAPABILITY_VERBS as readonly string[]).includes(
-    verbName
-  );
-}
+// The verbs a stored `auto` rule never widens (a public post): defined beside
+// the "always" menus' derivation in @synap-core/types, which cannot import
+// this engine, so both read ONE list.
+export {
+  PROPOSE_ONLY_CAPABILITY_VERBS,
+  capabilityVerbAllowsRuleWiden,
+} from "@synap-core/types/proposals";
 
 /**
  * THE OUTWARD FLOOR (finding c173cc51, founder 2026-10-30: an act that leaves
@@ -263,7 +249,10 @@ export function capabilityVerbAllowsRuleWiden(
  * `capability.run` action) never widens: only a rule that NAMES the write
  * does — a capability-target row naming that capability for a run, the exact
  * action for a grant. Applied where every caller resolves a rule
- * (`resolveGovernanceRule`, @synap/database); a `propose` rule still tightens.
+ * (`resolveGovernanceRule`, @synap/database), and again in the engine: 2.8
+ * skips a broad `auto` handed in for these keys, and 2.88 proposes them above
+ * ownership (3) and the auto-approve lists (4, 8). A `propose` rule still
+ * tightens.
  */
 export const NAMED_RULE_ONLY_EVENT_KEYS = [
   "capability.run",
@@ -2021,6 +2010,14 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     organise &&
     input.governanceRuleVerdict === "auto" &&
     input.governanceRuleIsOwnOrganise !== true;
+  // The outward floor (NAMED_RULE_ONLY_EVENT_KEYS): a broad `auto` handed in
+  // for a capability run or a tool grant is skipped like one on a terminal
+  // move; 2.88 then proposes. The resolver already skips it; this holds even
+  // for a caller that resolved the rule some other way.
+  const broadAutoOnNamedRuleOnly =
+    input.governanceRuleVerdict === "auto" &&
+    isNamedRuleOnlyWrite(eventKey) &&
+    input.governanceRuleNamesWrite !== true;
   const broadAutoOnTerminalMove =
     input.governanceRuleVerdict === "auto" &&
     input.lifecycleMove?.intoTerminal === true &&
@@ -2029,6 +2026,7 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   if (
     input.governanceRuleVerdict &&
     !broadAutoOnTerminalMove &&
+    !broadAutoOnNamedRuleOnly &&
     !autoFromOtherRowOnOrganise
   ) {
     return input.governanceRuleVerdict === "auto"
@@ -2076,6 +2074,17 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
           reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE,
           reasonCode: "SCOPE_IDENTITY_CHANGE",
         };
+  }
+
+  // 2.88 THE OUTWARD FLOOR (NAMED_RULE_ONLY_EVENT_KEYS). A capability run or a
+  // session's tool grant that no rule naming it widened at 2.8 proposes here,
+  // above ownership (3) and the auto-approve lists (4, 8): an agent granting
+  // itself a tool in its own space would write an `auto` grant the capability
+  // gate then honours for every send. No reason code, as at rung 9: the same
+  // proposal the write gets in any space the agent does not own, so the next
+  // rung (an exact-action rule) is still offered on it.
+  if (isNamedRuleOnlyWrite(eventKey)) {
+    return { verdict: "propose" };
   }
 
   // 3. Agent owns this workspace (linkedAgentId === agentUserId, workspaceType="agent").
@@ -2187,6 +2196,8 @@ export function nonWidenableFloorFor(eventKey: string): string | null {
     subjectType: eventKey.slice(0, dot),
     action: eventKey.slice(dot + 1),
     governanceRuleVerdict: "auto",
+    // A rule on this exact key names the write (2.8, the outward floor).
+    governanceRuleNamesWrite: true,
   });
   return decided.verdict === "propose" ? (decided.reasonCode ?? null) : null;
 }

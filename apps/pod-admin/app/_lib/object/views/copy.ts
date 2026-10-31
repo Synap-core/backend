@@ -17,7 +17,7 @@ export const en = {
 export const fr: Catalog<typeof en> = {
   "agent.trust.change": "Changer ce qu’il peut faire sans demander",
   "agent.trust.askAdmin":
-    "Un administrateur du Synap de votre entreprise peut changer ce qu’il fait sans demander.",
+    "Un administrateur du Synap de votre entreprise peut changer ce qu’il peut faire sans demander.",
 };
 
 /** The object views' translator, in the ambient catalog locale. */
