@@ -2949,39 +2949,37 @@ export const playbooksRouter = router({
       // `try`/`let` pair so this stays the ONE assigned runPlaybook call in
       // this file, which `severed-approval-doors.test.ts` (6b) anchors on (and
       // counts) when it proves this door passes no `idempotentBySubject`.
-      const { run, session, parentLink, skipped, held, handedTo } =
-        await runPlaybook({
-          playbookId: input.playbookId,
-          workspaceId: runWorkspaceId,
-          userId: ctx.userId,
-          params: input.params,
-          agentIds: input.agentIds,
-          agentUserId: input.agentUserId,
-          subjectId,
-          ...(input.parentSessionId
-            ? { parentSessionId: input.parentSessionId }
-            : {}),
-          ...(filedProjectId ? { projectId: filedProjectId } : {}),
-          ...(input.trackId ? { trackId: input.trackId } : {}),
-          ...(input.trackId && input.trackStage
-            ? { trackStage: input.trackStage }
-            : {}),
-          ...(input.onMissingRequired
-            ? { onMissingRequired: input.onMissingRequired }
-            : {}),
-          ...(input.goalOverride
-            ? { goalTemplateOverride: input.goalOverride }
-            : {}),
-          ...(input.agentType ? { agentType: input.agentType } : {}),
-          ...(input.handToAgentId
-            ? { handToAgentId: input.handToAgentId }
-            : {}),
-        }).catch((err: unknown) => {
-          if (err instanceof PlaybookParamsError) {
-            throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
-          }
-          throw err;
-        });
+      const started = await runPlaybook({
+        playbookId: input.playbookId,
+        workspaceId: runWorkspaceId,
+        userId: ctx.userId,
+        params: input.params,
+        agentIds: input.agentIds,
+        agentUserId: input.agentUserId,
+        subjectId,
+        ...(input.parentSessionId
+          ? { parentSessionId: input.parentSessionId }
+          : {}),
+        ...(filedProjectId ? { projectId: filedProjectId } : {}),
+        ...(input.trackId ? { trackId: input.trackId } : {}),
+        ...(input.trackId && input.trackStage
+          ? { trackStage: input.trackStage }
+          : {}),
+        ...(input.onMissingRequired
+          ? { onMissingRequired: input.onMissingRequired }
+          : {}),
+        ...(input.goalOverride
+          ? { goalTemplateOverride: input.goalOverride }
+          : {}),
+        ...(input.agentType ? { agentType: input.agentType } : {}),
+        ...(input.handToAgentId ? { handToAgentId: input.handToAgentId } : {}),
+      }).catch((err: unknown) => {
+        if (err instanceof PlaybookParamsError) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
+        throw err;
+      });
+      const { run, session, parentLink, skipped, held, handedTo } = started;
 
       if (skipped !== undefined || session === null) {
         return {

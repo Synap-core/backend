@@ -7,6 +7,7 @@
  */
 
 import { createLogger } from "@synap-core/core";
+import { workClockIn } from "@synap-core/types/work-clock";
 import type { HubProtocolCaller } from "../../routers/hub-protocol/rest/_shared.js";
 import { openLink } from "../../utils/deep-links.js";
 import {
@@ -78,11 +79,12 @@ export async function readOpenSessions(
 
 /**
  * How long after a session handed to the agent went `stale` it still comes
- * back in `handedToYou`, marked `resume`. Bounded so a worker with an empty
- * local state (or one just moved to a new identity) never relaunches every
- * stale session ever handed to it (plan v2 S7).
+ * back in `handedToYou`, marked `resume`: until it would read as stuck (the
+ * work clock's `stuck` rung). Bounded so a worker with an empty local state
+ * (or one just moved to a new identity) never relaunches every stale session
+ * ever handed to it (plan v2 S7).
  */
-export const HANDED_STALE_RESUME_DAYS = 7;
+export const HANDED_STALE_RESUME_DAYS = workClockIn("stuck", "days");
 
 /**
  * Sessions owned by the person with THIS agent on the roster: the open ones,
