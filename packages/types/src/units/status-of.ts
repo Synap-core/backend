@@ -12,8 +12,9 @@
  *   moves    a thing's step's moves (`StatusOfMove`, in the api);
  *   history  THE timeline (`readTimeline`), kept to status moves, holds and
  *            step entries ({@link isStatusHistoryEvent}), with a session's
- *            stages entered from its stage ledger ({@link StatusOfStageEntered}),
- *            newest first, at most {@link STATUS_OF_HISTORY_MAX};
+ *            stages entered from its stage ledger ({@link StatusOfStageEntered})
+ *            and its wait episodes ({@link StatusOfWaitEpisode}, 0386), newest
+ *            first, at most {@link STATUS_OF_HISTORY_MAX};
  *   links    a goal's or a session's `serves` edges: what it serves, what
  *            serves it, each end the reader may see;
  *   rollup   a goal's tree, down its `serves` edges: its work per category, its
@@ -31,6 +32,7 @@ import type { StatusSignal } from "../lifecycle/signal.js";
 import type { UnitTone } from "./state.js";
 import type { DevTimelineEvent } from "./timeline.js";
 import type { TrackHistoryEvent } from "./track-history.js";
+import type { WaitEpisode } from "./wait-episode.js";
 import type { WaitKind } from "./wait-kind.js";
 
 /** What an answer may carry beyond its status, on request. */
@@ -49,9 +51,9 @@ export const STATUS_OF_HISTORY_MAX = 50;
 /**
  * The timeline events that are a STATUS history: a status move (with its hold,
  * a wait episode the move opened), a goal's step entered, its check verdict, a
- * pause and its resume, a session's stage entered (its stage ledger, 0382).
- * Sessions, decisions and dev facts stay on the timeline. The wait episodes
- * of computed waits have no store yet; they join this list when they do.
+ * pause and its resume, a session's stage entered (its stage ledger, 0382),
+ * a wait episode (`status_wait_episode`, 0386). Sessions, decisions and dev
+ * facts stay on the timeline.
  */
 export const STATUS_HISTORY_EVENT_KINDS = [
   "status_moved",
@@ -63,6 +65,7 @@ export const STATUS_HISTORY_EVENT_KINDS = [
   "resumed",
   "status_changed",
   "stage_entered",
+  "wait_episode",
 ] as const;
 
 /**
@@ -87,9 +90,41 @@ export interface StatusOfStageEntered {
   via: "advance" | "approval";
 }
 
+/**
+ * A stretch of time a thing, goal or session waited on one thing, read from
+ * its wait episodes (`status_wait_episode`, 0386, {@link WaitEpisode}):
+ * "where the time went". Placed in the history when it OPENED; `closedAt` is
+ * null while the wait stands. A role's episode is listed only when the reader
+ * may see that role. Only `include: ["history"]` carries it; the timeline
+ * does not.
+ */
+export interface StatusOfWaitEpisode {
+  /** The episode's id: stable across reads. */
+  id: string;
+  kind: "wait_episode";
+  /** When the wait opened (= `openedAt`): the history's sort key. */
+  at: string;
+  waitKind: WaitEpisode["waitKind"];
+  /** A hold's `on` when the wait is a pause, else null. */
+  on: WaitEpisode["on"];
+  /** The coarse waiting-on reason; null for a wait that makes no mark. */
+  reason: WaitEpisode["reason"];
+  /** What is waited on; null when the pod cannot name it. */
+  ref: WaitEpisode["ref"];
+  /** ISO. The tick that first found the wait. */
+  openedAt: string;
+  /** ISO; null while the wait stands. */
+  closedAt: string | null;
+  /** The role's facet when the wait is on a role's lifecycle, else null. */
+  facetId: string | null;
+}
+
 /** One entry of `include: ["history"]`. */
 export type StatusOfHistoryEvent =
-  DevTimelineEvent | TrackHistoryEvent | StatusOfStageEntered;
+  | DevTimelineEvent
+  | TrackHistoryEvent
+  | StatusOfStageEntered
+  | StatusOfWaitEpisode;
 
 /** A timeline event kept by `include: ["history"]`. */
 export function isStatusHistoryEvent(event: StatusOfHistoryEvent): boolean {
@@ -128,12 +163,13 @@ export interface StatusOfAccount {
 
 /**
  * `include: ["history"]`: THE timeline, kept to its status events, with a
- * session's stage ledger merged in by time.
+ * session's stage ledger and the subject's wait episodes merged in by time.
  */
 export interface StatusOfHistory {
   /**
    * Newest first: a goal's are `TrackHistoryEvent`s, a session's
-   * `status_moved` and `stage_entered`, a thing's `status_moved`.
+   * `status_moved` and `stage_entered`, a thing's `status_moved`; each also
+   * carries its `wait_episode`s.
    */
   events: StatusOfHistoryEvent[];
   /** Older events exist and are not listed. */
