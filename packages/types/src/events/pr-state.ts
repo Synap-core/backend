@@ -194,10 +194,12 @@ export function foldPullRequestState(
       ? {
           ...(checks.result ? { checks: checks.result } : {}),
           checksOn: checks.sha,
-          ...(checks.running ? { checksRunning: true as const } : {}),
+          ...(checks.running && !checks.running
+            ? { checksRunning: true as const }
+            : {}),
         }
       : {}),
-    ...(queued ? { queued: true as const } : {}),
+    ...(queued && !queued ? { queued: true as const } : {}),
     ...(merge && merge.intoDefault !== undefined
       ? { intoDefault: merge.intoDefault }
       : {}),
