@@ -237,19 +237,6 @@ export interface TransitionBase {
 /** Who made a move, for attribution (`TransitionBase.actorClass`). */
 export type TransitionActorClass = "agent" | "app" | "human" | "system";
 /**
- * The wait a MOVE lands in (`TransitionBase.wait`, status-first PR-H): stamped
- * by the mover when the target step declares one (`LifecycleOption.waits`),
- * absent otherwise. A step wait is not a pause: the hold (`hold`) stays null
- * for an active step; the wait's history (`status_wait_episode`) starts here.
- */
-export interface TransitionWait {
-	waitKind: WaitKind;
-	/** The step's `waits.on`. */
-	on?: HoldOn;
-	/** What `waits.refFrom` held on the thing at the move (an id, a name). */
-	ref?: string;
-}
-/**
  * The payload of `entity.transition.completed` — the ONE event every entity
  * status move emits (the `moveStatus` door). `role` is the role-profile slug
  * when the status is a role's (stored on the facet), null for the kind's own
@@ -323,6 +310,19 @@ declare const LIFECYCLE_CATEGORIES: readonly [
 	"lost"
 ];
 export type LifecycleCategory = (typeof LIFECYCLE_CATEGORIES)[number];
+/**
+ * The wait a MOVE lands in (`TransitionBase.wait`, status-first PR-H): stamped
+ * by the mover when the target step declares one (`LifecycleOption.waits`),
+ * absent otherwise. A step wait is not a pause: the hold (`hold`) stays null
+ * for an active step; the wait's history (`status_wait_episode`) starts here.
+ */
+export interface TransitionWait {
+	waitKind: WaitKind;
+	/** The step's `waits.on`. */
+	on?: HoldOn;
+	/** What `waits.refFrom` held on the thing at the move (an id, a name). */
+	ref?: string;
+}
 declare const UNIT_STATES: readonly [
 	"not_started",
 	"working",
