@@ -1,7 +1,13 @@
 /** Types for pod-observation.mjs — see that file for the event → type map. */
 
 export interface PodObservation {
-  type: "dev.pr_opened" | "dev.pr_merged" | "dev.pr_closed" | "ci.finished";
+  type:
+    | "dev.pr_opened"
+    | "dev.pr_merged"
+    | "dev.pr_closed"
+    | "dev.merge_queued"
+    | "ci.started"
+    | "ci.finished";
   /** `owner/name#n` for a PR, `owner/name@sha` for a CI run. */
   subjectId: string;
   subjectType: "pull_request" | "ci_run";

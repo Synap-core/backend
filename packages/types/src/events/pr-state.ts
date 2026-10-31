@@ -1,7 +1,8 @@
 /**
  * THE STATE OF A PULL REQUEST, as the pod knows it: folded from the dev-loop
  * facts it recorded (`dev.pr_opened` / `dev.pr_merged` / `dev.pr_closed`,
- * `ci.finished`, `dev.deployed`; the contract is `./dev-loop.ts`). The pod
+ * `dev.merge_queued`, `ci.started` / `ci.finished`, `dev.deployed`; the
+ * contract is `./dev-loop.ts`). The pod
  * reads no GitHub of its own: what it knows is what a producer posted.
  *
  * PURE: the api reads the event rows (`services/dev-loop/pr-state.ts`), this
@@ -11,7 +12,11 @@
  * What it never does:
  *  - guess a state with no fact: no PR event recorded → `null` (the reader
  *    draws nothing), never "Open";
- *  - say checks are running: no event says CI started (only `ci.finished`);
+ *  - say checks are running without a `ci.started` whose workflow has not
+ *    finished on that sha since;
+ *  - say "queued" for a PR that is not open, or that was (re)opened after it
+ *    was queued. A DEQUEUE (removed from the queue, still open) is not a fact
+ *    yet: such a PR reads as queued until it merges, closes or reopens;
  *  - say "not deployed": a build that does not show it contains the merge
  *    may still contain it. Deployed is stated when a deploy of the PR's repo
  *    was built from a commit made at or after the merge (`builtAt`), or
@@ -47,6 +52,17 @@ export interface PullRequestStateFacts {
   checks?: PullRequestChecks;
   /** The sha `checks` is about — compare it with a newer head before trusting it. */
   checksOn?: string;
+  /**
+   * A check on `checksOn` is running: a `ci.started` with no later
+   * `ci.finished` of its workflow on that sha. `checks` then holds a failure
+   * already settled, never `passed`. Never `false`.
+   */
+  checksRunning?: true;
+  /**
+   * The PR is in its repository's merge queue: open, with a
+   * `dev.merge_queued` at or after the fact that (re)opened it. Never `false`.
+   */
+  queued?: true;
   /**
    * A merge into the repository's default branch (the producer said so). Only
    * on `merged`; absent when the fact did not say (a stacked PR merged into
@@ -132,7 +148,14 @@ export function foldPullRequestState(
     intoDefault?: boolean;
   } | null = null;
   const prShas: string[] = [];
+  let queuedAt: number | undefined;
   for (const row of rows) {
+    if (row.type === DEV_LOOP_EVENT_TYPES.mergeQueued) {
+      if (isAbout(ref, record(row.data))) {
+        queuedAt = Math.max(queuedAt ?? -Infinity, time(row));
+      }
+      continue;
+    }
     const state = PR_EVENT_STATE[row.type];
     if (!state) continue;
     const data = record(row.data);
@@ -162,10 +185,19 @@ export function foldPullRequestState(
   const merge = newest.state === "merged" ? newest : null;
   const deployed =
     merge !== null && rows.some((row) => containsMerge(ref, merge, row));
+  const queued =
+    newest.state === "open" && queuedAt !== undefined && queuedAt >= newest.at;
 
   return {
     state: newest.state,
-    ...(checks ? { checks: checks.result, checksOn: checks.sha } : {}),
+    ...(checks
+      ? {
+          ...(checks.result ? { checks: checks.result } : {}),
+          checksOn: checks.sha,
+          ...(checks.running ? { checksRunning: true as const } : {}),
+        }
+      : {}),
+    ...(queued ? { queued: true as const } : {}),
     ...(merge && merge.intoDefault !== undefined
       ? { intoDefault: merge.intoDefault }
       : {}),
@@ -202,19 +234,22 @@ function containsMerge(
 }
 
 /**
- * The checks on the PR's NEWEST run sha: the latest result of each workflow
- * on that sha, `failed` when any failed, `passed` when every one passed,
- * absent otherwise (a cancelled or skipped run settles nothing). A run is the
- * PR's when it names the PR number, or ran on a head sha a `dev.pr_opened`
- * named.
+ * The checks on the PR's NEWEST run sha: the latest fact of each workflow on
+ * that sha, `failed` when any finished failed, `passed` when every one
+ * finished passed and none is running, absent otherwise (a cancelled or
+ * skipped run settles nothing). `running` when a workflow's latest fact is
+ * its `ci.started` (a start and a finish at one instant: the finish). A run
+ * is the PR's when it names the PR number, or ran on a head sha a
+ * `dev.pr_opened` named. A start and its finish are paired by `workflow`.
  */
 function foldChecks(
   ref: PullRequestRef,
   rows: readonly DevLoopEventRowLike[],
   prShas: readonly string[]
-): { result: PullRequestChecks; sha: string } | undefined {
+): { result?: PullRequestChecks; running: boolean; sha: string } | undefined {
   const runs = rows.flatMap((row) => {
-    if (row.type !== DEV_LOOP_EVENT_TYPES.ciFinished) return [];
+    const started = row.type === DEV_LOOP_EVENT_TYPES.ciStarted;
+    if (!started && row.type !== DEV_LOOP_EVENT_TYPES.ciFinished) return [];
     const data = record(row.data);
     const repo = str(data.repo);
     const sha = str(data.sha);
@@ -228,7 +263,10 @@ function foldChecks(
         at: time(row),
         sha,
         workflow: str(data.workflow) ?? "",
-        status: str(data.status) as CiFinishedStatus | undefined,
+        started,
+        status: started
+          ? undefined
+          : (str(data.status) as CiFinishedStatus | undefined),
       },
     ];
   });
@@ -238,11 +276,24 @@ function foldChecks(
   for (const run of runs) {
     if (!sameCommit(run.sha, latest.sha)) continue;
     const seen = perWorkflow.get(run.workflow);
-    if (!seen || run.at > seen.at) perWorkflow.set(run.workflow, run);
+    if (
+      !seen ||
+      run.at > seen.at ||
+      (run.at === seen.at && seen.started && !run.started)
+    ) {
+      perWorkflow.set(run.workflow, run);
+    }
   }
-  const results = [...perWorkflow.values()].map((r) => ciVerdictOf(r.status));
-  if (results.includes("failed")) return { result: "failed", sha: latest.sha };
-  if (results.length > 0 && results.every((r) => r === "passed"))
-    return { result: "passed", sha: latest.sha };
-  return undefined;
+  const newestPerWorkflow = [...perWorkflow.values()];
+  const running = newestPerWorkflow.some((r) => r.started);
+  const results = newestPerWorkflow
+    .filter((r) => !r.started)
+    .map((r) => ciVerdictOf(r.status));
+  const result: PullRequestChecks | undefined = results.includes("failed")
+    ? "failed"
+    : !running && results.length > 0 && results.every((r) => r === "passed")
+      ? "passed"
+      : undefined;
+  if (!result && !running) return undefined;
+  return { ...(result ? { result } : {}), running, sha: latest.sha };
 }

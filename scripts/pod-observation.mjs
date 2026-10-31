@@ -11,7 +11,13 @@
  *   pull_request closed, merged     → dev.pr_merged (`intoDefault`: into the
  *                                     repo's default branch, not a stacked base)
  *   pull_request closed, not merged → dev.pr_closed
+ *   pull_request enqueued           → dev.merge_queued (entered the merge queue)
+ *   workflow_run requested          → ci.started (each attempt of a run)
  *   workflow_run completed          → ci.finished
+ *
+ * `enqueued` and `requested` are mapped here but only reach the script once
+ * pod-observations.yml subscribes to them (its `on:` lists opened / reopened /
+ * closed and completed today).
  *
  * The payloads are the dev-loop contract (packages/types/src/events/dev-loop.ts,
  * which the door checks per item); the tripwire parses every one with it. No
@@ -90,6 +96,10 @@ function prObservation(action, pr, repo, defaultBranch) {
   } else if (action === "closed") {
     type = pr.merged ? "dev.pr_merged" : "dev.pr_closed";
     occurredAt = pr.merged ? pr.merged_at : pr.closed_at;
+  } else if (action === "enqueued") {
+    // GitHub's payload has no enqueued_at: the PR's update is the entry.
+    type = "dev.merge_queued";
+    occurredAt = pr.updated_at;
   } else {
     return null;
   }
@@ -120,6 +130,30 @@ function prObservation(action, pr, repo, defaultBranch) {
       merged: Boolean(pr.merged),
       headSha: pr.head?.sha,
       author: pr.user?.login,
+      source: SOURCE,
+    }),
+  };
+}
+
+/** `ci.started`: one per attempt of a run (a re-run starts again). */
+function runStartObservation(run, repo, sessionId) {
+  if (!run.head_sha) return null;
+  const occurredAt = run.run_started_at ?? run.created_at;
+  return {
+    type: "ci.started",
+    subjectId: `${repo}@${run.head_sha}`,
+    subjectType: "ci_run",
+    ...(occurredAt ? { occurredAt } : {}),
+    data: compact({
+      sha: run.head_sha,
+      repo,
+      pr: run.pull_requests?.[0]?.number,
+      url: run.html_url,
+      // The same name its ci.finished carries: the pod pairs them by it.
+      workflow: run.name,
+      branch: run.head_branch,
+      attempt: run.run_attempt,
+      sessionId,
       source: SOURCE,
     }),
   };
@@ -172,7 +206,7 @@ export function observationFromEvent(
   if (
     eventName === "workflow_run" &&
     payload.workflow_run &&
-    payload.action === "completed"
+    (payload.action === "completed" || payload.action === "requested")
   ) {
     const run = payload.workflow_run;
     // A run of a fork's code: its PR is not ours to report.
@@ -181,7 +215,9 @@ export function observationFromEvent(
       run.head_repository.full_name !== repo
     )
       return null;
-    return runObservation(run, repo, sessionId);
+    return payload.action === "requested"
+      ? runStartObservation(run, repo, sessionId)
+      : runObservation(run, repo, sessionId);
   }
   return null;
 }

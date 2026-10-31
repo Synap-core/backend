@@ -78,6 +78,9 @@ const run = (over: Record<string, unknown> = {}) => ({
   head_branch: "feat/x",
   event: "pull_request",
   conclusion: "success",
+  created_at: "2026-10-26T12:10:00Z",
+  run_started_at: "2026-10-26T12:11:00Z",
+  run_attempt: 1,
   updated_at: "2026-10-26T12:30:00Z",
   head_repository: { full_name: "Synap-core/backend" },
   pull_requests: [{ number: 42 }],
@@ -111,6 +114,16 @@ const EVERY_REPORTED = [
     workflow_run: run(),
     repository,
   }),
+  observationFromEvent("pull_request", {
+    action: "enqueued",
+    pull_request: pr(),
+    repository,
+  }),
+  observationFromEvent("workflow_run", {
+    action: "requested",
+    workflow_run: run({ conclusion: null }),
+    repository,
+  }),
 ];
 
 afterEach(() => {
@@ -132,6 +145,8 @@ describe("pod-observation: what the door accepts", () => {
       DEV_LOOP_EVENT_TYPES.prMerged,
       DEV_LOOP_EVENT_TYPES.prClosed,
       DEV_LOOP_EVENT_TYPES.ciFinished,
+      DEV_LOOP_EVENT_TYPES.mergeQueued,
+      DEV_LOOP_EVENT_TYPES.ciStarted,
     ]);
     for (const t of types as string[]) {
       expect(
@@ -229,6 +244,45 @@ describe("pod-observation: the facts it carries", () => {
       workflow: "CI",
       sessionId: SID,
     });
+  });
+
+  it("a PR entering the merge queue is dev.merge_queued, at its update", () => {
+    const o = EVERY_REPORTED[5]!;
+    expect(o.subjectId).toBe("Synap-core/backend#42");
+    expect(o.occurredAt).toBe("2026-10-26T11:00:00Z");
+    expect(o.data).toMatchObject({
+      repo: "Synap-core/backend",
+      number: 42,
+      url: "https://github.com/Synap-core/backend/pull/42",
+      action: "enqueued",
+      sessionId: SID,
+    });
+  });
+
+  it("a requested run is ci.started, named like its ci.finished (the pod pairs them by workflow)", () => {
+    const o = observationFromEvent(
+      "workflow_run",
+      { action: "requested", workflow_run: run(), repository },
+      { sessionId: SID }
+    );
+    expect(o?.subjectId).toBe("Synap-core/backend@bead001");
+    expect(o?.occurredAt).toBe("2026-10-26T12:11:00Z");
+    expect(o?.data).toMatchObject({
+      sha: "bead001",
+      pr: 42,
+      workflow: EVERY_REPORTED[4]!.data.workflow,
+      attempt: 1,
+      sessionId: SID,
+    });
+    expect(o?.data).not.toHaveProperty("status");
+    // An in_progress run is not a second start.
+    expect(
+      observationFromEvent("workflow_run", {
+        action: "in_progress",
+        workflow_run: run(),
+        repository,
+      })
+    ).toBeNull();
   });
 
   it("folds GitHub's other conclusions into the contract's, and skips an unknown one", () => {

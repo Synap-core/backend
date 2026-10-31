@@ -797,3 +797,120 @@ describe("observations.append — dev.repo_snapshot (the Work › Ship fact)", (
     );
   });
 });
+
+describe("observations.append — the facts that end a dev wait (ci.started, dev.merge_queued, dev.deployed)", () => {
+  const SHA = "91de41c34abc0f1e2d3c4b5a69788796a5b4c3d2";
+
+  it("every dev-loop type passes the door's floors (registered namespace, NO reserved phase)", async () => {
+    const { DEV_LOOP_EVENT_TYPES } = await import("@synap-core/types");
+    const { RESERVED_PHASES } = await import("./observations.js");
+    for (const type of Object.values(DEV_LOOP_EVENT_TYPES)) {
+      expect(parseType(type).success, type).toBe(true);
+      expect(
+        RESERVED_PHASES.some((p) => type.endsWith(p)),
+        type
+      ).toBe(false);
+    }
+    expect(Object.values(DEV_LOOP_EVENT_TYPES)).toEqual(
+      expect.arrayContaining(["ci.started", "dev.merge_queued"])
+    );
+    // The floor still holds next to them.
+    expect(parseType("ci.started.completed").success).toBe(false);
+    expect(parseType("dev.merge_queued.failed").success).toBe(false);
+  });
+
+  it("ACCEPTS a deploy receipt with a target and the whole sha; REFUSES a bad sha or target, per item", async () => {
+    appended.length = 0;
+    const res = await callAppend([
+      {
+        type: "dev.deployed",
+        subjectId: "deploy:site:crm.synap.live",
+        subjectType: "deploy",
+        data: {
+          target: "site:crm.synap.live",
+          sha: SHA,
+          repo: "Synap-core/crm",
+        },
+      },
+      {
+        type: "dev.deployed",
+        subjectId: "deploy:site:crm.synap.live",
+        subjectType: "deploy",
+        data: { target: "site:crm.synap.live", sha: "91de41c" },
+      },
+      {
+        type: "dev.deployed",
+        subjectId: "deploy:cli",
+        subjectType: "deploy",
+        data: {
+          target: "cli",
+          sha: "not-a-sha-not-a-sha-not-a-sha-not-a-sha!",
+        },
+      },
+      {
+        type: "dev.deployed",
+        subjectId: "deploy:x",
+        subjectType: "deploy",
+        data: { target: "https://crm.synap.live", sha: SHA },
+      },
+    ]);
+    expect(res.results[0]).toMatchObject({ ok: true, index: 0 });
+    expect(res.results[1]).toMatchObject({ ok: false, index: 1 });
+    expect(res.results[1].error).toMatch(/dev\.deployed: sha/);
+    expect(res.results[2]).toMatchObject({ ok: false, index: 2 });
+    expect(res.results[2].error).toMatch(/dev\.deployed: sha/);
+    expect(res.results[3]).toMatchObject({ ok: false, index: 3 });
+    expect(res.results[3].error).toMatch(/dev\.deployed: target/);
+    expect(appended).toHaveLength(1);
+    expect(appended[0].data).toMatchObject({
+      target: "site:crm.synap.live",
+      sha: SHA,
+    });
+  });
+
+  it("RECORDS ci.started and dev.merge_queued; REFUSES them malformed", async () => {
+    appended.length = 0;
+    const res = await callAppend([
+      {
+        type: "ci.started",
+        subjectId: `Synap-core/backend@${SHA}`,
+        subjectType: "ci_run",
+        data: { repo: "Synap-core/backend", sha: SHA, pr: 255, workflow: "CI" },
+      },
+      {
+        type: "ci.started",
+        subjectId: "x",
+        subjectType: "ci_run",
+        data: { repo: "Synap-core/backend", sha: "main" },
+      },
+      {
+        type: "dev.merge_queued",
+        subjectId: "Synap-core/backend#255",
+        subjectType: "pull_request",
+        data: {
+          repo: "Synap-core/backend",
+          number: 255,
+          url: "https://github.com/Synap-core/backend/pull/255",
+        },
+      },
+      {
+        type: "dev.merge_queued",
+        subjectId: "Synap-core/backend#255",
+        subjectType: "pull_request",
+        data: { repo: "Synap-core/backend", number: 255 },
+      },
+    ]);
+    expect(res.results.map((r: { ok: boolean }) => r.ok)).toEqual([
+      true,
+      false,
+      true,
+      false,
+    ]);
+    expect(res.results[1].error).toMatch(/ci\.started: sha/);
+    expect(res.results[3].error).toMatch(/dev\.merge_queued: url/);
+    expect(appended.map((e) => e.type)).toEqual([
+      "ci.started",
+      "dev.merge_queued",
+    ]);
+  });
+});
