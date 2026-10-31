@@ -14,11 +14,8 @@
  *   dev.pr_opened  repo#n @ occurredAt          opened (created_at) and each
  *   dev.pr_closed  repo#n @ occurredAt            reopen / close (updated_at,
  *                                                 closed_at) is its own fact
- *   dev.merge_queued repo#n @ occurredAt        each entry into the queue
  *   ci.finished    repo@sha · run · status      run = the run url, else the
  *                                                 workflow name
- *   ci.started     repo@sha · run @ occurredAt  a re-run attempt of one run
- *                                                 (same url) starts again
  *
  * `null` = no key: the fact is recorded as it comes (a snapshot, where the
  * newest wins; `dev.deployed`, where the same sha deployed again after a
@@ -40,30 +37,23 @@ export function observationFactKey(
   switch (type) {
     case DEV_LOOP_EVENT_TYPES.prMerged:
     case DEV_LOOP_EVENT_TYPES.prOpened:
-    case DEV_LOOP_EVENT_TYPES.prClosed:
-    case DEV_LOOP_EVENT_TYPES.mergeQueued: {
+    case DEV_LOOP_EVENT_TYPES.prClosed: {
       const number = Number(data.number);
       if (!Number.isSafeInteger(number) || number <= 0) return null;
       const pr = `${type}:${repo}#${number}`;
       if (type === DEV_LOOP_EVENT_TYPES.prMerged) return pr;
       return occurredAt ? `${pr}@${occurredAt.toISOString()}` : pr;
     }
-    case DEV_LOOP_EVENT_TYPES.ciFinished:
-    case DEV_LOOP_EVENT_TYPES.ciStarted: {
+    case DEV_LOOP_EVENT_TYPES.ciFinished: {
       const sha = typeof data.sha === "string" ? data.sha.toLowerCase() : null;
-      if (!sha) return null;
+      const status = typeof data.status === "string" ? data.status : null;
+      if (!sha || !status) return null;
       const run =
         typeof data.url === "string" && data.url
           ? data.url
           : typeof data.workflow === "string"
             ? data.workflow
             : "";
-      if (type === DEV_LOOP_EVENT_TYPES.ciStarted) {
-        const start = `${type}:${repo}@${sha}:${run}`;
-        return occurredAt ? `${start}@${occurredAt.toISOString()}` : start;
-      }
-      const status = typeof data.status === "string" ? data.status : null;
-      if (!status) return null;
       return `${type}:${repo}@${sha}:${run}:${status}`;
     }
     default:

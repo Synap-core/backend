@@ -18,15 +18,8 @@
  * so no new namespace widens what an agent key may post).
  *
  * Producers: the backend GitHub Actions workflow and the devbox CI watcher
- * (PRs, CI, `dev.repo_snapshot`), the pod itself on a successful update
- * (`dev.deployed`, target `pod` or its host), and any agent or script that
- * shipped something else (`dev.deployed` with `site:…`, `npm:…`, `cli`).
- *
- * The facts that END a dev wait: `ci.started` → `ci.finished` (checks
- * running, then settled), `dev.merge_queued` → `dev.pr_merged` (in the merge
- * queue, then merged), `dev.deployed` (a build is live). A wait on CI, the
- * merge queue or a deploy moves when its fact arrives, not when someone looks.
- *
+ * (PRs, CI, `dev.repo_snapshot`), and the pod itself on a successful update
+ * (`dev.deployed`).
  * Consumers: the PR sweeper (`dev.pr_merged` into the default branch completes
  * the session outcome that points at the PR, `dev.pr_closed` retires it), the
  * Work › Ship read (`dev.repo_snapshot`, `services/dev-loop/work-release.ts`)
@@ -43,19 +36,7 @@ export const DEV_LOOP_EVENT_TYPES = {
   prOpened: "dev.pr_opened",
   prMerged: "dev.pr_merged",
   prClosed: "dev.pr_closed",
-  /**
-   * A CI run BEGAN (GitHub `workflow_run` requested; each re-run attempt
-   * begins again): the PR's checks are running until the same workflow's
-   * `ci.finished` on that sha.
-   */
-  ciStarted: "ci.started",
   ciFinished: "ci.finished",
-  /**
-   * A PR entered its repository's merge queue (GitHub `pull_request`
-   * `enqueued`). It leaves the queue by merging (`dev.pr_merged`) or closing;
-   * a dequeue is not a fact yet (see `events/pr-state.ts`).
-   */
-  mergeQueued: "dev.merge_queued",
   deployed: "dev.deployed",
   /**
    * A repository's whole release state at one instant (its main, what is
@@ -80,15 +61,6 @@ export function isDevLoopEventType(type: string): type is DevLoopEventType {
 /** `owner/name`, as GitHub spells a repository. */
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const SHA_RE = /^[0-9a-f]{7,40}$/i;
-/** A whole commit id: what a deploy receipt must name (never a prefix). */
-const FULL_SHA_RE = /^[0-9a-f]{40}$/i;
-/**
- * Where a build is live: `pod` (or the pod's host, what the pod's own
- * producer posts), `cli`, or `<kind>:<name>` (`site:crm.synap.live`,
- * `npm:@synap-core/sdk`, `image:ghcr.io/synap-core/backend`). One token: no
- * whitespace, no scheme (`https://` is refused: name the host).
- */
-const DEPLOY_TARGET_RE = /^[a-z0-9@][a-z0-9@._:/+~-]*$/i;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -162,7 +134,7 @@ export function podSessionIdFromBody(
 const repoSchema = z.string().regex(REPO_RE, "repo must be `owner/name`");
 const shaSchema = z.string().regex(SHA_RE, "sha must be 7-40 hex characters");
 
-/** `dev.pr_opened` / `dev.pr_merged` / `dev.pr_closed` / `dev.merge_queued`. */
+/** `dev.pr_opened` / `dev.pr_merged` / `dev.pr_closed`. */
 export const pullRequestEventSchema = z
   .object({
     repo: repoSchema,
@@ -255,39 +227,10 @@ export const ciFinishedEventSchema = z.object({
 });
 export type CiFinishedEvent = z.infer<typeof ciFinishedEventSchema>;
 
-/**
- * `ci.started` — a CI run began on `sha`. The same fields as `ci.finished`
- * without its `status`: the run's `ci.finished` (same `workflow`, same sha)
- * ends it, so a producer names the workflow the same way in both.
- */
-export const ciStartedEventSchema = ciFinishedEventSchema.omit({
-  status: true,
-});
-export type CiStartedEvent = z.infer<typeof ciStartedEventSchema>;
-
-/**
- * `dev.deployed` — a build is live on `target`: the RECEIPT that ends a wait
- * on a deploy. The pod posts its own (target = its host, `pod` when it has no
- * public url); an agent or script that shipped a site, a package or the CLI
- * posts one through the observation door. `sha` is the whole commit the build
- * was made from: a receipt names exactly what is live, never a prefix.
- */
+/** `dev.deployed` — a build is live on `target` (a pod host, an app url). */
 export const deployedEventSchema = z.object({
-  target: z
-    .string()
-    .min(1)
-    .max(256)
-    .regex(
-      DEPLOY_TARGET_RE,
-      "target must be `pod`, a host, `cli` or `<kind>:<name>` (site:crm.synap.live, npm:@synap-core/sdk): one token, no scheme"
-    )
-    .refine((t) => !t.includes("://"), "target must name a host, not a url"),
-  sha: z
-    .string()
-    .regex(
-      FULL_SHA_RE,
-      "sha must be the full 40-hex commit the build was made from"
-    ),
+  target: z.string().min(1).max(256),
+  sha: shaSchema,
   /** The repository the build was made from (`owner/name`). */
   repo: repoSchema.optional(),
   /**
@@ -455,8 +398,6 @@ const SCHEMA_BY_TYPE: Record<DevLoopEventType, z.ZodTypeAny> = {
   [DEV_LOOP_EVENT_TYPES.prOpened]: pullRequestEventSchema,
   [DEV_LOOP_EVENT_TYPES.prMerged]: pullRequestEventSchema,
   [DEV_LOOP_EVENT_TYPES.prClosed]: pullRequestEventSchema,
-  [DEV_LOOP_EVENT_TYPES.mergeQueued]: pullRequestEventSchema,
-  [DEV_LOOP_EVENT_TYPES.ciStarted]: ciStartedEventSchema,
   [DEV_LOOP_EVENT_TYPES.ciFinished]: ciFinishedEventSchema,
   [DEV_LOOP_EVENT_TYPES.deployed]: deployedEventSchema,
   [DEV_LOOP_EVENT_TYPES.repoSnapshot]: repoSnapshotEventSchema,
