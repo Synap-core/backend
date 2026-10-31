@@ -28,7 +28,7 @@
  * is no third accent token in the palette, and inventing one would fork it.
  */
 import type { LifecycleCategory } from "../lifecycle/option.js";
-import { waitKindBall, type WaitKind } from "./wait-kind.js";
+import { isWaitKind, waitKindBall, type WaitKind } from "./wait-kind.js";
 
 export const UNIT_STATES = [
   "not_started",
@@ -255,8 +255,10 @@ export interface UnitStateInput {
    * WHAT it waits on, on the finer axis ({@link WaitKind}, `./wait-kind.ts`).
    * A wait whose ball is `them` (a person outside) reads `with_them`; one
    * whose ball is `machine` (CI, the merge queue, a devbox job, a deploy)
-   * reads `on_machine`. Any other ball changes nothing here: your turn already has its arms
-   * above, and other work is `blockedBy`.
+   * reads `on_machine`; `date` reads `scheduled` and `nobody` `paused`. A
+   * `me`, `agent` or `thing` ball changes nothing here: those have their own
+   * inputs (`owedFromYou`, `agentAtWork`, `blockedBy`); a surface holding
+   * only a kind asks {@link unitStateInputOfWaitKind}.
    */
   waitKind?: WaitKind | null;
   /** An agent is actively working right now. */
@@ -397,6 +399,23 @@ export function resolveUnitState(input: UnitStateInput): UnitStateView {
       rail: determinate(0),
     };
   }
+  // A wait on the calendar is a date to come; a park on nobody is quiet.
+  if (ball === "date") {
+    return {
+      state: "scheduled",
+      tone: "info",
+      glyph: "clock",
+      rail: { kind: "dashed", pct: null },
+    };
+  }
+  if (ball === "nobody") {
+    return {
+      state: "paused",
+      tone: "textMuted",
+      glyph: "pause",
+      rail: { kind: "dashed", pct: null },
+    };
+  }
   if (input.blockedBy) {
     return {
       state: "blocked",
@@ -493,6 +512,58 @@ export function unitStateInputOfRunStatus(
     default:
       return { unreadable: true };
   }
+}
+
+/**
+ * A WAIT KIND as a unit-state input — so a waiting-on ref, a needs-you row or
+ * a moving work line wears the mark its ball says, and no surface maps ball →
+ * state by hand. Keyed by EVERY kind (a kind added without its row stops the
+ * build): your answer is `needs_you`, a judgement (approval, try it) is
+ * `needs_review`, an agent at work is `working` and a stopped one quiet, other
+ * work is `blocked`; them / machine / date / nobody go through `waitKind`.
+ */
+const WAIT_KIND_STATE_INPUT = {
+  answer: { owedFromYou: 1 },
+  send: { owedFromYou: 1 },
+  access: { owedFromYou: 1 },
+  decide: { owedFromYou: 1 },
+  approval: { pendingDecisions: 1 },
+  try_it: { pendingDecisions: 1 },
+  their_reply: { waitKind: "their_reply" },
+  their_document: { waitKind: "their_document" },
+  signature: { waitKind: "signature" },
+  payment: { waitKind: "payment" },
+  vendor: { waitKind: "vendor" },
+  agent_work: { agentAtWork: true },
+  agent_stopped: { idle: true },
+  ci: { waitKind: "ci" },
+  devbox_job: { waitKind: "devbox_job" },
+  merge_queue: { waitKind: "merge_queue" },
+  red_main: { waitKind: "red_main" },
+  deploy: { waitKind: "deploy" },
+  another_work: { blockedBy: "another_work" },
+  date: { waitKind: "date" },
+  nobody: { waitKind: "nobody" },
+} as const satisfies Record<WaitKind, UnitStateInput>;
+
+/** The input a wait kind gives; an unknown kind is `unmeasured`, never a guess. */
+export function unitStateInputOfWaitKind(
+  waitKind: string | null | undefined
+): UnitStateInput {
+  return isWaitKind(waitKind)
+    ? {
+        owedFromYou: 0,
+        pendingDecisions: 0,
+        ...WAIT_KIND_STATE_INPUT[waitKind],
+      }
+    : { unreadable: true };
+}
+
+/** {@link resolveUnitState} for a wait kind: the mark a ref or a row wears. */
+export function resolveWaitKindState(
+  waitKind: string | null | undefined
+): UnitStateView {
+  return resolveUnitState(unitStateInputOfWaitKind(waitKind));
 }
 
 /** {@link resolveUnitState} for a run status. */

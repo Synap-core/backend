@@ -799,6 +799,8 @@ export const LINEAGE_EDGE_LABELS: Readonly<
   blocked_by: { outgoing: "Blocked by", incoming: "Blocks" },
   // `A --replaces--> B`: "this step replaces that one".
   replaces: { outgoing: "Replaces", incoming: "Replaced by" },
+  // `X --serves--> G`: a session or a sub-goal does its work FOR goal G.
+  serves: { outgoing: "Serves", incoming: "Served by" },
   // ── Every other stored `links` type, read from its TO end ────────────────
   // Without these an incoming edge showed its FORWARD word ("Targets") plus a
   // reversed-arrow mark. Read as "<focus> <label> <row>": the row is the
@@ -3188,6 +3190,7 @@ export const GOVERNANCE_RUNG_LABELS: Readonly<Record<GovernanceRung, string>> =
     default: "The ask-first default",
     "not-agent": "Not an agent",
     "cbac-capability-allowlist": "Not in its tool list",
+    "denied-by-rule": "Set to never",
     "admin-actions": "Admin actions always ask",
     "force-propose": "A change of scope or identity",
     "project-filing": "Filing into a project",

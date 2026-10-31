@@ -20765,7 +20765,8 @@
                       "replaces",
                       "uses",
                       "dispatched_via",
-                      "assigned_to"
+                      "assigned_to",
+                      "serves"
                     ]
                   },
                   "metadata": { "type": "object", "additionalProperties": {} },
@@ -30453,6 +30454,19 @@
                       "closed",
                       "failed",
                       "cancelled"
+                    ]
+                  },
+                  "expectedStatus": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "paused",
+                      "forming",
+                      "scheduled",
+                      "closed",
+                      "failed",
+                      "cancelled",
+                      "stale"
                     ]
                   },
                   "hold": {

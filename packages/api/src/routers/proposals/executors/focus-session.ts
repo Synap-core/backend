@@ -64,6 +64,7 @@ import {
   stampSessionUpdate,
 } from "../../../services/proposals/stamp-materialized.js";
 import {
+  SESSION_STATUSES,
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
   type SessionTitleSource,
@@ -1031,6 +1032,15 @@ export function registerFocusSessionExecutors(): void {
           occurredAt:
             set.status && typeof innerData.occurredAt === "string"
               ? new Date(innerData.occurredAt)
+              : null,
+          // The status the agent SAW when it filed the move: a session that
+          // moved since is a conflict, never an overwrite (compare-and-set).
+          expectedStatus:
+            set.status &&
+            (SESSION_STATUSES as readonly unknown[]).includes(
+              innerData.expectedStatus
+            )
+              ? (innerData.expectedStatus as (typeof SESSION_STATUSES)[number])
               : null,
         });
         await stampSessionUpdate({

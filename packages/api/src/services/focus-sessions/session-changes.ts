@@ -73,6 +73,15 @@
  *                          `delivered` = it closed, false = it was cancelled
  *                          or failed (re-plan: the edge does not clear by
  *                          itself). `at` = when its end was recorded.
+ *   - `signal_raised`    — the status watcher raised a "Needs a look" on the
+ *                          session (`focus_session.signal.completed`,
+ *                          `services/status/watcher.ts`): its pause is past
+ *                          its review date, or its dev work stands still (a
+ *                          PR green and unmerged, a PR red with no push, a red
+ *                          main nobody owns, `dev-signals.ts`). `signal` =
+ *                          the rule, `headline` / `detail` = the words its
+ *                          person reads, `escalated` = its second raise. `at`
+ *                          = when it was raised.
  *
  * CURSOR: `since` is EXCLUSIVE over each event's `at` (millisecond ISO — the
  * database's microseconds are truncated BEFORE the comparison, or a row would
@@ -168,6 +177,7 @@ export const SESSION_CHANGE_KINDS = [
   "status_moved",
   "hold_set",
   "blocker_ended",
+  "signal_raised",
 ] as const;
 export type SessionChangeKind = (typeof SESSION_CHANGE_KINDS)[number];
 
@@ -344,6 +354,19 @@ export type SessionChangeEvent =
         status: string;
         /** It closed (done). False: cancelled or failed — re-plan the wait. */
         delivered: boolean;
+      };
+    })
+  | (EventBase & {
+      kind: "signal_raised";
+      signal: {
+        /** The watcher's rule (`STATUS_SIGNALS`). */
+        signal: string;
+        headline: string;
+        detail: string;
+        /** The second raise of its episode (dev work escalates once). */
+        escalated: boolean;
+        /** The PR or main it is about (dev work); null otherwise. */
+        url: string | null;
       };
     });
 
@@ -964,6 +987,47 @@ export async function listSessionChanges(p: {
           },
         });
       }
+    }
+  }
+
+  if (p.kinds.has("signal_raised")) {
+    const raisedAt = msIso(drizzleSql`${eventsTable.timestamp}`);
+    const rows = await db
+      .select({ id: eventsTable.id, data: eventsTable.data, at: raisedAt })
+      .from(eventsTable)
+      .where(
+        and(
+          eq(eventsTable.type, "focus_session.signal.completed"),
+          eq(eventsTable.subjectId, session.id),
+          eventVisibleWhere({ userId: p.userId, roster: false }),
+          ...(floor
+            ? [
+                // The raw column first (the timestamp index), then the
+                // millisecond cursor.
+                drizzleSql`${eventsTable.timestamp} > ${floor}::timestamptz - interval '1 minute'`,
+                drizzleSql`${raisedAt} > ${floor}`,
+              ]
+            : [])
+        )
+      )
+      .orderBy(asc(eventsTable.timestamp), asc(eventsTable.id))
+      .limit(limit + 1);
+    sourceHasMore ||= rows.length > limit;
+    for (const r of rows.slice(0, limit)) {
+      const d = (r.data ?? {}) as Record<string, unknown>;
+      if (typeof d.signal !== "string") continue;
+      cursored.push({
+        kind: "signal_raised",
+        id: `event:${r.id}`,
+        at: r.at,
+        signal: {
+          signal: d.signal,
+          headline: typeof d.headline === "string" ? d.headline : "",
+          detail: typeof d.detail === "string" ? d.detail : "",
+          escalated: d.escalated === true,
+          url: typeof d.url === "string" ? d.url : null,
+        },
+      });
     }
   }
 

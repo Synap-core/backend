@@ -48,6 +48,7 @@ import {
   type WaitingOnSource,
 } from "@synap-core/types/units";
 import {
+  holdDevRefNamed,
   parsePullRequestRef,
   type PullRequestRef,
   type PullRequestStateFacts,
@@ -568,13 +569,21 @@ function unnamed(source: WaitingOnSource): WaitingOnSource {
  * What a hold names, as a ref: its reason in the mover's words, else its
  * date, else its reason's words. A `<kind>:<uuid>` ref is an id, never shown.
  * With `readable`, a session it resumes on is named only when the reader may
- * read it.
+ * read it. A hold on a DEV FACT names that fact, in the hold line's words
+ * (`holdDevRefNamed`): `backend#539` with its GitHub page, `backend main`,
+ * `job kit-h`.
  */
 export function holdWaitingOnRef(
   hold: RecordedHold,
   readable?: ReadonlySet<string>
 ): WaitingOnRef {
   const until = hold.until;
+  const dev = until && "moves" in until ? holdDevRefNamed(until.moves) : null;
+  if (dev) {
+    return dev.url
+      ? { kind: "pull_request", url: dev.url, label: dev.label }
+      : { kind: "thing", label: dev.label };
+  }
   const parsed =
     until && "moves" in until ? parseHoldMovesRef(until.moves) : null;
   const moves =

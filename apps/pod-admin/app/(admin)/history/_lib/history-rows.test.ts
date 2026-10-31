@@ -47,6 +47,28 @@ describe("historyRow", () => {
     );
   });
 
+  it("a push to main says what was approved, never 'Approved deploy Session'", () => {
+    const row = historyRow(
+      proposal({
+        proposalType: "dev.deploy_approval",
+        targetType: "focus_session",
+        targetName: "Ship the publish gate",
+        data: {
+          repo: "Synap-core/control-plane-api",
+          branch: "main",
+          commitSha: "a524c103d1e2f3a4b5c6",
+          targetHost: "control-plane-api main",
+          deployCommand: "git push origin a524c103:main",
+          step: "push",
+        },
+      })
+    );
+    expect(row.title).toBe(
+      "Approved push of a524c103 to main in Synap-core/control-plane-api"
+    );
+    expect(row.title).not.toMatch(/Session|deploy/);
+  });
+
   it("names who asked, who decided, when, and where", () => {
     const row = historyRow(proposal());
     expect(row.askedBy).toBe("Scout");

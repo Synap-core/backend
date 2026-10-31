@@ -352,6 +352,126 @@ describe("governedDependencyLink — governance + event", () => {
   });
 });
 
+describe("serves — the work edge through the same door", () => {
+  const S = "aaaaaaaa-0000-4000-8000-000000000005";
+  const serves = {
+    fromType: "session",
+    fromId: S,
+    toType: "track",
+    toId: T2,
+    linkType: "serves" as const,
+  };
+  const criteria = [
+    { key: "ship", statement: "It ships", check: { kind: "human" } },
+    { key: "docs", statement: "It is documented", check: { kind: "human" } },
+  ];
+
+  it("session → goal naming a real criterion: written, the key in metadata and in the proposal", async () => {
+    queue.push([{ w: "ws-1", o: U }]); // from-end home
+    queue.push([{ criteria }]); // the goal's criteria
+    queue.push([{ id: "link-s" }]); // insert … returning
+    const r = await governedDependencyLink({
+      edge: serves,
+      metadata: { criterionKey: "ship" },
+      userId: U,
+      door: "test",
+    });
+    expect(r).toEqual({ status: "created", linkId: "link-s", inserted: 1 });
+    expect(inserts[0]).toMatchObject({
+      fromType: "session",
+      toType: "track",
+      linkType: "serves",
+      workspaceId: "ws-1",
+      metadata: { criterionKey: "ship" },
+    });
+    expect(gate.mock.calls[0]![0]).toMatchObject({
+      data: { linkType: "serves", metadata: { criterionKey: "ship" } },
+    });
+  });
+
+  it("a criterion key the goal does not have is refused before governance", async () => {
+    queue.push([{ w: "ws-1", o: U }]);
+    queue.push([{ criteria }]);
+    const r = await governedDependencyLink({
+      edge: serves,
+      metadata: { criterionKey: "nope" },
+      userId: U,
+      door: "test",
+    });
+    expect(r).toMatchObject({
+      status: "refused",
+      reason: "invalid_pair",
+      httpStatus: 400,
+      error: 'The goal has no criterion with the key "nope".',
+    });
+    expect(gate).not.toHaveBeenCalled();
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("an entity cannot serve a goal (nothing read)", async () => {
+    const r = await validateDependencyEdge(
+      { ...serves, fromType: "entity", fromId: T1 },
+      U
+    );
+    expect(r).toMatchObject({
+      ok: false,
+      reason: "invalid_pair",
+      httpStatus: 400,
+    });
+    expect(visibility).not.toHaveBeenCalled();
+  });
+
+  it("a goal cannot serve a session", async () => {
+    const r = await validateDependencyEdge(
+      { ...serves, fromType: "track", fromId: T1, toType: "session", toId: S },
+      U
+    );
+    expect(r).toMatchObject({ ok: false, reason: "invalid_pair" });
+  });
+
+  it("a goal → goal edge that would loop the goal tree is refused", async () => {
+    queue.push([{ w: "ws-1", o: U }]); // from-end home
+    queue.push([{ toType: "track", toId: T1 }]); // T2 --serves--> T1 already
+    const r = await governedDependencyLink({
+      edge: { ...serves, fromType: "track", fromId: T1 },
+      userId: U,
+      door: "test",
+    });
+    expect(r).toMatchObject({
+      status: "refused",
+      reason: "cycle",
+      httpStatus: 400,
+    });
+    expect(gate).not.toHaveBeenCalled();
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("a goal → goal edge cannot name a criterion (only a session does)", async () => {
+    queue.push([{ w: "ws-1", o: U }]);
+    const r = await validateDependencyEdge(
+      { ...serves, fromType: "track", fromId: T1 },
+      U,
+      null,
+      "create",
+      { criterionKey: "ship" }
+    );
+    expect(r).toMatchObject({ ok: false, reason: "invalid_pair" });
+  });
+
+  it("a goal cannot serve itself", async () => {
+    const r = await validateDependencyEdge(
+      { ...serves, fromType: "track", fromId: T2 },
+      U
+    );
+    expect(r).toMatchObject({
+      ok: false,
+      reason: "self_edge",
+      httpStatus: 400,
+      error: "A goal cannot serve itself.",
+    });
+  });
+});
+
 describe("writeRelationAsDependency — the relation doors' mapping", () => {
   it("A blocks B lands as B --blocked_by--> A, tagged with the requested slug", async () => {
     queue.push([{ w: "ws-1" }]);

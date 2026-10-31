@@ -164,6 +164,10 @@ import {
   clusterFoldCounts,
 } from "../services/proposals/proposal-needs-you.js";
 import { isNeedsYou } from "@synap-core/types/needs-you/rule";
+import {
+  setRequestLater,
+  clearRequestLater,
+} from "../services/proposals/request-later.js";
 export { buildProposalChanges } from "./proposals/changes.js";
 import {
   planProposalRevert,
@@ -1242,6 +1246,34 @@ export const proposalsRouter = router({
       .orderBy(desc(proposalClusterMutes.createdAt));
     return { mutes: rows };
   }),
+
+  /**
+   * "Later" on a request (founder decision G3): set one pending request aside
+   * for the CALLER until `until` (at most 30 days ahead). Governance is
+   * untouched and nobody else's count changes; for the caller the request is
+   * Review later until then (`classifyPendingProposals`). A second call moves
+   * the time. The choices a surface offers: `requestLaterUntil`
+   * (`@synap-core/types/proposals`).
+   */
+  later: protectedProcedure
+    .input(z.object({ proposalId: z.string().uuid(), until: z.coerce.date() }))
+    .mutation(async ({ ctx, input }) =>
+      setRequestLater({
+        proposalId: input.proposalId,
+        userId: requireUserId(ctx.userId),
+        until: input.until,
+      })
+    ),
+
+  /** Take back the caller's "Later" on a request (the receipt's Undo). */
+  clearLater: protectedProcedure
+    .input(z.object({ proposalId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) =>
+      clearRequestLater({
+        proposalId: input.proposalId,
+        userId: requireUserId(ctx.userId),
+      })
+    ),
 
   /**
    * "Ask AI to resolve this" — the ONE server door behind the affordance both

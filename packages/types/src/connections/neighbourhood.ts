@@ -242,6 +242,9 @@ export const LINK_EDGE_ROLES = {
   // who takes that work by default (the route's assignment rung) —
   // configuration, not work or lineage.
   assigned_to: RELATED,
+  // session|track --serves--> track: the work is done FOR that goal (a
+  // sub-goal serves its parent). Read like `member_of`: not a wait.
+  serves: { outgoing: "servesAndBlocks", incoming: "work" },
 } as const satisfies Readonly<Record<string, EdgeRole>>;
 
 /**

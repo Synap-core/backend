@@ -545,6 +545,29 @@ export const sessionHandlers: McpHandlerMap = {
         error: `suspendedIntent must be a string of at most ${SUSPENDED_INTENT_MAX} characters — ONE line naming what you were about to do.`,
       });
     }
+    // `subjectRef` (W2): an identity naming the subject — the same
+    // advisory-schema reason, refused in words.
+    const subjectRefArg = args.subjectRef;
+    if (
+      subjectRefArg !== undefined &&
+      subjectRefArg !== null &&
+      (typeof subjectRefArg !== "object" ||
+        Array.isArray(subjectRefArg) ||
+        Object.entries(subjectRefArg as Record<string, unknown>).some(
+          ([k, v]) =>
+            !["url", "externalId"].includes(k) ||
+            (v !== undefined && v !== null && typeof v !== "string")
+        ))
+    ) {
+      return ok({
+        error:
+          "subjectRef must be an object with `url` and/or `externalId` (strings) — an identity naming the entity this work is about.",
+      });
+    }
+    const subjectRef = (subjectRefArg ?? null) as {
+      url?: string | null;
+      externalId?: string | null;
+    } | null;
     const { createFocusSession } =
       await import("../../../services/focus-sessions/create-session.js");
     const { expectedOutputWireSchema, addOutputWireSchema } =
@@ -591,6 +614,7 @@ export const sessionHandlers: McpHandlerMap = {
             ? args.trackStage.trim()
             : undefined,
         subjectEntityId: args.subjectEntityId as string | undefined,
+        subjectRef,
         title: typeof args.title === "string" ? args.title : null,
         goal: args.goal as string,
         agentUserId,
@@ -664,10 +688,30 @@ export const sessionHandlers: McpHandlerMap = {
         await import("../../../services/focus-sessions/session-nudges.js");
       await claimPlaybookOffer(result.session.id, userId).catch(() => false);
     }
+    // No subject named: same-name entities of kinds with a lifecycle are
+    // OFFERED (weak identity — never attached), for the agent to confirm.
+    const subjectCandidates =
+      result.status === "created" &&
+      !result.session.subjectEntityId &&
+      !args.subjectEntityId &&
+      !subjectRef &&
+      typeof args.title === "string" &&
+      args.title.trim()
+        ? await (
+            await import("../../../services/focus-sessions/subject-ref.js")
+          ).subjectCandidatesFor(userId, args.title)
+        : [];
     // Recall runs in the background right after a start; this says so, and
     // where to read it, instead of the agent concluding nothing exists.
     return ok({
       ...result,
+      ...(subjectCandidates.length > 0
+        ? {
+            subjectCandidates,
+            subjectHint:
+              "Same-name entities this work may be about: pass one's id as subjectEntityId (synap_update_session) to anchor it. Nothing was attached.",
+          }
+        : {}),
       ...(result.status === "created"
         ? {
             recall: {
@@ -1507,6 +1551,16 @@ export const sessionHandlers: McpHandlerMap = {
       }
       outcomeLists = resolved;
     }
+    // The status the agent SAW (compare-and-set); a value that is no session
+    // status is refused with the list, never read as "no expectation".
+    const expectedStatus = SESSION_STATUSES.find(
+      (st) => st === args.expectedStatus
+    );
+    if (args.expectedStatus != null && !expectedStatus) {
+      return reply({
+        error: `expectedStatus must be one of ${SESSION_STATUSES.join(" | ")}.`,
+      });
+    }
     const result = await updateFocusSession({
       sessionId: args.sessionId as string,
       userId,
@@ -1527,6 +1581,7 @@ export const sessionHandlers: McpHandlerMap = {
           ? { criteria: args.criteria as SessionCriterion[] }
           : {}),
       status: args.status as "active" | "paused" | undefined,
+      ...(expectedStatus ? { expectedStatus } : {}),
       // A pause's hold and the move's time (W4), checked by the service.
       ...moveHoldToolArgs(args),
       progress: args.progress as number | undefined,
@@ -1620,6 +1675,9 @@ export const sessionHandlers: McpHandlerMap = {
           error: `Focus session ${args.sessionId as string} not found`,
           ...blockersNotApplied,
         });
+      case "conflict":
+        // A result to re-plan on (read the status, decide again), not an error.
+        return reply({ ...result, ...blockersNotApplied });
       case "denied":
         // A filing the pod applied on its own receipt still landed.
         return reply({

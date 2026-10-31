@@ -116,6 +116,7 @@ import { emitAiDecision } from "../../utils/ai-feedback-events.js";
 import { gateCapabilityExecution } from "./gate-capability-execution.js";
 // Straight from the package, not the shim: the shim is what unit tests mock.
 import { approvalRefusesRun } from "@synap/capability-gate";
+import { DENIED_BY_RULE } from "@synap/governance-policy";
 import { runSkill } from "../skills/run-skill.js";
 import { executeProviderVerb } from "./execute-provider-verb.js";
 import { isProposedEnvelope } from "./proposed-envelope.js";
@@ -197,14 +198,22 @@ export type ExecuteCapabilityResult =
       kind: "deny";
       reason: string;
       /**
+       * A typed refusal the caller can branch on: `DENIED_BY_RULE` = a
+       * person's stored "Never" on this capability for this agent (0381).
+       * Such a refusal carries no `enable`: enabling would not fix it.
+       */
+      reasonCode?: string;
+      /**
        * ATTEMPT moment: WHAT to enable and WHERE, as a clickable link the agent
        * can hand straight to the human. The refusal already knew the cause; it
        * just had no way to make it actionable — 0 of 11 containers on the live
        * pod are approved, so this is the wall every run hits today.
        *
-       * A deny from this gate is ALWAYS an approval problem (a dead connection
+       * A deny from this gate is an approval problem (a dead connection
        * surfaces as `kind:"error"` with `errorClass:"no_connection"`, which
-       * carries its own `connect` block) — the two fixes stay distinct.
+       * carries its own `connect` block) — the two fixes stay distinct —
+       * except a person's "Never" (`reasonCode`), which nothing but that
+       * person can lift.
        */
       enable?: CapabilityNextAction;
       /**
@@ -350,7 +359,10 @@ export type CapabilityRefusalReason =
   /** The container is enabled; the ACCOUNT is missing or dead → connect it. */
   | "not_connected"
   /** The acting agent exhausted its daily proposal budget → review the queue. */
-  | "capped";
+  | "capped"
+  /** A person said "Never" for this agent and this capability (0381) → only
+   * they can take it back (revoke the rule). */
+  | "denied_by_rule";
 
 /**
  * Make a capability REFUSAL observable to the HUMAN — the missing half of the
@@ -672,6 +684,24 @@ export async function executeCapability(input: {
     carriesPodFiles: podFiles.files.length > 0,
   });
 
+  // A person's "Never" (0381) is not an approval problem: enabling would not
+  // lift it, so it carries no enable-link and files no enable request. It is
+  // recorded for the person all the same, under its own reason.
+  if (decision.decision === "deny" && decision.reasonCode === DENIED_BY_RULE) {
+    await recordRefusedCapabilityRun({
+      userId,
+      workspaceId,
+      skillId: skillRow.id,
+      verbId: verbId ?? null,
+      refusalReason: "denied_by_rule",
+      reason: decision.reason,
+    });
+    return {
+      kind: "deny",
+      reason: decision.reason,
+      reasonCode: DENIED_BY_RULE,
+    };
+  }
   if (decision.decision === "deny") {
     const enable = await resolveRefusalBlock({
       skillId: skillRow.id,

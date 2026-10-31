@@ -34,6 +34,7 @@ const h = vi.hoisted(() => ({
   verdict: { granted: true } as Record<string, unknown>,
   throwOnce: false,
   evaluations: [] as Array<Record<string, unknown>>,
+  notices: [] as Array<{ sessionId: string; content: string; key: string }>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -89,6 +90,18 @@ vi.mock(
     };
   }
 );
+// The room door (`postSessionNotice`) has its own tests; here it records what
+// the sweep ASKED it to say, to which session, under which idempotency key.
+vi.mock("../../agent-dispatch/binding-call.js", () => ({
+  postSessionNotice: async (
+    sessionId: string,
+    content: string,
+    key: string
+  ) => {
+    h.notices.push({ sessionId, content, key });
+    return true;
+  },
+}));
 vi.mock("@synap/events", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, emitSideEffects: async () => undefined };
@@ -616,5 +629,92 @@ describe("a transient failure fails the job, and the retry finishes it (S2)", ()
     expect(retry).toMatchObject({
       outcomes: [{ sessionId: id, result: "completed" }],
     });
+  });
+});
+
+describe("the sweep's verdict is said in the session room (a denial is never silent)", () => {
+  beforeEach(() => {
+    h.perm.length = 0;
+    h.notices.length = 0;
+    h.verdict = { granted: true };
+  });
+
+  const PR_KEY = {
+    scopes: [{ permissions: ["event.create", "session.update"] }],
+    clientId: null,
+  };
+  const EVENT_ONLY_KEY = {
+    scopes: [{ permissions: ["event.create"] }],
+    clientId: null,
+  };
+
+  it("a merged fact meets the PR outcome, and the room says it was recorded as delivered", async () => {
+    const id = await seed([prSlot(1000)]);
+    const r = await runDevLoopObservation({
+      ...job(
+        "dev.pr_merged",
+        merged({ number: 1000, url: prUrl(1000) }),
+        PR_KEY
+      ),
+      eventId: "ev-1000",
+    });
+    expect(r).toMatchObject({
+      outcomes: [{ sessionId: id, result: "completed" }],
+    });
+    expect((await stored(id))[0]).toMatchObject({
+      status: "done",
+      satisfiedByEvidence: { kind: "ref", id: prUrl(1000) },
+    });
+    expect(h.notices).toEqual([
+      {
+        sessionId: id,
+        content:
+          'Synap-core/backend#1000 merged into main: the pod recorded "pr-backend-1000" as delivered.',
+        key: `dev-loop:ev-1000:${id}:pr-backend-1000`,
+      },
+    ]);
+  });
+
+  it("a key holding only event.create: the outcome stays open, and the room names the grant it lacks and the by-hand fallback", async () => {
+    const id = await seed([prSlot(1001)]);
+    const r = await runDevLoopObservation({
+      ...job(
+        "dev.pr_merged",
+        merged({ number: 1001, url: prUrl(1001) }),
+        EVENT_ONLY_KEY
+      ),
+      eventId: "ev-1001",
+    });
+    expect(r).toMatchObject({
+      outcomes: [{ sessionId: id, result: "denied" }],
+    });
+    expect((await stored(id))[0]!.status ?? "pending").toBe("pending");
+    expect(h.notices).toHaveLength(1);
+    expect(h.notices[0]!.sessionId).toBe(id);
+    expect(h.notices[0]!.content).toBe(
+      'Synap-core/backend#1001 merged into main, but the pod could not record "pr-backend-1001": ' +
+        'This key\'s grant does not allow "session.update". ' +
+        'Record it with completeOutput "pr-backend-1001", or give the key that posts PR facts the session.update grant.'
+    );
+  });
+
+  it("a closed-unmerged PR says it withdrew the outcome; a replay of the same fact says nothing twice", async () => {
+    const id = await seed([prSlot(1002)]);
+    const closed = {
+      ...job(
+        "dev.pr_closed",
+        merged({ number: 1002, url: prUrl(1002) }),
+        PR_KEY
+      ),
+      eventId: "ev-1002",
+    };
+    await runDevLoopObservation(closed);
+    expect(h.notices.map((n) => n.content)).toEqual([
+      'Synap-core/backend#1002 closed without merging: the pod withdrew "pr-backend-1002".',
+    ]);
+    // Replayed: the slot is settled, nothing new to say.
+    await runDevLoopObservation(closed);
+    expect(h.notices).toHaveLength(1);
+    expect((await stored(id))[0]!.retiredAt).toBeTruthy();
   });
 });

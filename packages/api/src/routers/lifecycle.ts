@@ -314,6 +314,8 @@ const movingLineWire = z.object({
   /** The session holds a deliverable owed by you (THE needs-you predicate). */
   asksYou: z.boolean(),
   since: z.string(),
+  /** What it waits on, as one kind (`leadWaitKind`); absent = nothing named. */
+  waitKind: z.enum(WAIT_KINDS).optional(),
 });
 
 const movingWire = z.object({

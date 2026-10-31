@@ -8,7 +8,8 @@
  * `run` (cancel / run again), `capability` (turn its verbs on), `agent`
  * (disconnect) and `track` (a goal: its judge accepts, sends back, declares
  * done) and `skill` (one skill: its instructions, on or off, turned on
- * there when it is an instruction). Authoring stays in the app. Bounce kinds match the Hono
+ * there when it is an instruction) and `tool` (an integration: the page of
+ * the capability it belongs to, or its own). Authoring stays in the app. Bounce kinds match the Hono
  * `/open/:type/:id` ALLOWED set minus host types: we never render them here,
  * we point at `synap://open/{type}/{id}`.
  *
@@ -33,6 +34,7 @@ export const HOST_TYPES = [
   "channel",
   "track",
   "skill",
+  "tool",
 ] as const;
 export type HostType = (typeof HOST_TYPES)[number];
 
@@ -43,7 +45,6 @@ export const BOUNCE_TYPES = [
   "project",
   "workspace",
   "settings",
-  "tool",
 ] as const;
 export type BounceType = (typeof BOUNCE_TYPES)[number];
 

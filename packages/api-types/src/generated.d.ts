@@ -6131,7 +6131,18 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  * ONLY, through `agentUsers.setAssignment` — an agent that could write it
  * could staff itself onto anyone's work. The Hub REST door lists and refuses it.
  */
- | "assigned_to";
+ | "assigned_to"
+/**
+ * session|track --serves--> track. The work is done FOR that goal: a session
+ * serving a goal (optionally naming ONE of the goal's criteria in
+ * `metadata.criterionKey`), or a sub-goal serving its parent goal. Written
+ * by THE dependency door (`services/links/dependency-links.ts`: pair, self,
+ * criterion and track→track cycle floors). NOT a dependency — no blocker
+ * reader follows it. Goal rollups do (`services/status/status-rollup.ts`):
+ * a goal's work counts the sessions filed in it OR serving it, each once,
+ * and its sub-goals are listed as `children`.
+ */
+ | "serves";
 /**
  * Playbook Runs Schema — the run ledger (executor spine, Phase 3)
  *
@@ -15983,9 +15994,17 @@ export interface PacketRunnerItem {
 		processId: string;
 		startedAt?: string;
 	}>;
+	/**
+	 * What the runner says it is doing (0384, `X-Synap-Runner-State`): `busy`,
+	 * `idle`, `needs_permission`, or `ended` (it said so, or left the live
+	 * window). `null` while live = its client names no state: unknown, not idle.
+	 */
+	state: "busy" | "ended" | "idle" | "needs_permission" | null;
+	/** When it entered that state; for a runner gone quiet, when it was last seen. */
+	stateSince?: string;
 	firstSeenAt: string;
 	lastSeenAt: string;
-	/** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read. */
+	/** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read, and not `ended`. */
 	live: boolean;
 	/** The shell command that reopens it (`resolveAgentConversation`); absent for a harness we cannot reopen. */
 	resume?: string;
@@ -16464,6 +16483,21 @@ export interface ContinuationPacket {
 	live: {
 		lastActivityAt: string | null;
 		measuredAt: string;
+		/**
+		 * What the LIVE runners SAY they are doing (0384), folded by
+		 * `foldRunnerState`: `needs_permission` over `busy` over `idle`;
+		 * `state: null` = no live runner named one. The harness's own word,
+		 * beside the pod-activity `state` above and never folded into it. A
+		 * failed runners read is `unavailable` (see `runners`), never null.
+		 */
+		runner: {
+			since: string | null;
+			state: "busy" | "idle" | "needs_permission" | null;
+			status: "ok";
+		} | {
+			reason: string;
+			status: "unavailable";
+		};
 		since: string | null;
 		state: "idle" | "working";
 		status: "ok";
@@ -16547,6 +16581,11 @@ export interface GoalRollup {
 	moved?: number;
 	/** Absent when it waits on nothing. */
 	waitingOn?: WaitingOnMark[];
+	/**
+	 * The goals that SERVE this one (`track --serves--> track`), direct only,
+	 * that the reader may see. Absent when none.
+	 */
+	children?: string[];
 }
 export interface ScopeRollup {
 	lens: "project" | "workspace";
@@ -18154,9 +18193,11 @@ export type ExecuteCapabilityResult = {
 	 * just had no way to make it actionable — 0 of 11 containers on the live
 	 * pod are approved, so this is the wall every run hits today.
 	 *
-	 * A deny from this gate is ALWAYS an approval problem (a dead connection
+	 * A deny from this gate is an approval problem (a dead connection
 	 * surfaces as `kind:"error"` with `errorClass:"no_connection"`, which
-	 * carries its own `connect` block) — the two fixes stay distinct.
+	 * carries its own `connect` block) — the two fixes stay distinct —
+	 * except a person's "Never" (`reasonCode`), which nothing but that
+	 * person can lift.
 	 */
 	enable?: CapabilityNextAction;
 	/**
@@ -18168,6 +18209,12 @@ export type ExecuteCapabilityResult = {
 	enableProposal?: CapabilityEnableOffer;
 	kind: "deny";
 	reason: string;
+	/**
+	 * A typed refusal the caller can branch on: `DENIED_BY_RULE` = a
+	 * person's stored "Never" on this capability for this agent (0381).
+	 * Such a refusal carries no `enable`: enabling would not fix it.
+	 */
+	reasonCode?: string;
 } | {
 	/**
 	 * CONNECTION moment: a `no_connection` / `auth` failure means the
@@ -22554,6 +22601,15 @@ export interface Signal {
 	 * mapping, which is the fork the lens helper exists to prevent.
 	 */
 	blockedReason?: ExpectedOutput["blockedReason"];
+	/**
+	 * What kind of wait this row is (`WAIT_KINDS`, `@synap-core/types/units`):
+	 * the ball a needs-you row wears (`resolveWaitKindState`). Set on the rows
+	 * that wait on the person (`owed-slot` by its blocked reason, a
+	 * `proposal-cluster`'s approval, a `draft-asks`' answer, a
+	 * `session-review`'s try-it), through THE map table (`waitKindOf`);
+	 * absent on every other kind.
+	 */
+	waitKind?: WaitKind;
 	/** One line naming WHICH thing is missing — the resumption cue. `owed-slot` only. */
 	why?: string;
 	/** The agent's own (unverified) claim it produced this after all. `owed-slot` only. */
@@ -35318,6 +35374,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					unblocks?: string | undefined;
 					why?: string | undefined;
 				}[] | undefined;
+				expectedStatus?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | undefined;
 				followPlaybookId?: string | null | undefined;
 				followStageKey?: string | null | undefined;
 				goal?: string | undefined;
@@ -35850,7 +35907,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetKind: "action" | "capability" | "connection" | "profile";
 				targetPattern: string;
 				targetProfile?: string | undefined;
-				verdict: "auto" | "propose";
+				verdict: "auto" | "deny" | "propose";
 				workspaceId?: string | undefined;
 			};
 			meta: object;
@@ -35870,7 +35927,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				};
 			};
@@ -35904,7 +35961,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				} | null;
 			};
@@ -35929,7 +35986,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				}[];
 			};
@@ -35952,7 +36009,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				}[];
 			};
@@ -36093,7 +36150,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
+					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				};
 			};
@@ -36307,9 +36364,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		addDependency: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				criterionKey?: string | undefined;
 				fromId: string;
 				fromType: "entity" | "session" | "track";
-				linkType: "blocked_by" | "replaces";
+				linkType: "blocked_by" | "replaces" | "serves";
 				toId: string;
 				toType: "entity" | "session" | "track";
 			};
@@ -36523,7 +36581,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				fromId: string;
 				fromType: "entity" | "session" | "track";
-				linkType: "blocked_by" | "replaces";
+				linkType: "blocked_by" | "replaces" | "serves";
 				toId: string;
 				toType: "entity" | "session" | "track";
 			};
@@ -38944,6 +39002,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						live: boolean;
 						sessionId: string;
 						since: string;
+						waitKind?: "access" | "agent_stopped" | "agent_work" | "another_work" | "answer" | "approval" | "ci" | "date" | "decide" | "deploy" | "devbox_job" | "merge_queue" | "nobody" | "payment" | "red_main" | "send" | "signature" | "their_document" | "their_reply" | "try_it" | "vendor" | undefined;
 					}[];
 					workspaceId: string | null;
 				}[];
@@ -38954,6 +39013,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					live: boolean;
 					sessionId: string;
 					since: string;
+					waitKind?: "access" | "agent_stopped" | "agent_work" | "another_work" | "answer" | "approval" | "ci" | "date" | "decide" | "deploy" | "devbox_job" | "merge_queue" | "nobody" | "payment" | "red_main" | "send" | "signature" | "their_document" | "their_reply" | "try_it" | "vendor" | undefined;
 					workspaceId: string | null;
 				}[];
 			};
@@ -44548,6 +44608,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				success: boolean;
 			};
 		}>;
+		clearLater: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				proposalId: string;
+			};
+			meta: object;
+			output: {
+				cleared: boolean;
+			};
+		}>;
 		createDocumentEdit: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				documentId: string;
@@ -44676,6 +44745,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reviewLater: number;
 				scanTruncated: boolean;
 				scanned: number;
+			};
+		}>;
+		later: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				proposalId: string;
+				until: unknown;
+			};
+			meta: object;
+			output: {
+				proposalId: string;
+				snoozedUntil: Date;
 			};
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
@@ -49226,6 +49306,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				capabilityId: string | null;
 				skills: {
 					agentTypes: string[] | null;
 					alwaysOn: boolean;
