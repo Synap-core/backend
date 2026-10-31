@@ -406,9 +406,20 @@ describe("test-ratchet shards: planning a PR selection", () => {
       { budgetSeconds: 60 }
     );
     expect(many.shards).toBe(SELECTION_MAX_SHARDS);
-    // The budget decides: half the budget, about twice the shards.
-    const a = planOf([...tripwires, ...EXTRA], { budgetSeconds: 120 });
-    const b = planOf([...tripwires, ...EXTRA], { budgetSeconds: 60 });
+    // The budget decides: half the budget, about twice the shards. A FIXED
+    // set (the first 300 planned api files, no tripwires): planning the real
+    // tripwire set made this depend on repo size, and each new tripwire pushed
+    // the 120 s plan toward the cap until `b` could no longer exceed `a`.
+    const fixed = Object.keys(plan.api)
+      .sort()
+      .slice(0, 300)
+      .map((f) => `packages/api/${f}`);
+    const a = planOf(fixed, { budgetSeconds: 120 });
+    const b = planOf(fixed, { budgetSeconds: 60 });
+    expect(
+      a.shards,
+      "the fixed set no longer fits under the cap: pick a smaller one"
+    ).toBeLessThan(SELECTION_MAX_SHARDS);
     expect(b.shards).toBeGreaterThan(a.shards);
   });
 
