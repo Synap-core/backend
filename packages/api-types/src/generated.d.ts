@@ -22935,7 +22935,9 @@ export type SignalKind =
  * `access-requests.ts`): a pending trusted issuer (`target.kind: "issuer"`)
  * or an app's pending connection request (`target.kind:
  * "connection-request"`); or the person's own pending KEY request
- * (`target.kind: "key-request"`, read for its person). Who asks and from
+ * (`target.kind: "key-request"`, read for its person); or one of the
+ * person's own tools whose connections all need a sign-in again
+ * (`target.kind: "capability"`, `broken-connections.ts`). Who asks and from
  * where ride in `access`.
  */
  | "access-request"
