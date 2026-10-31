@@ -3704,6 +3704,75 @@ export interface AiProviderModelEntry {
 	costPer1MInput?: number;
 	costPer1MOutput?: number;
 }
+/**
+ * Focus Sessions Schema
+ *
+ * A focus session is a goal-bound user work session — a discrete "working
+ * mode" where the user (and optionally IS agents) collaborate toward a
+ * stated objective.
+ *
+ * This is WORKFLOW-SIDE infrastructure, not data-side. It has no relationship
+ * to the `sessions` table, which is IS memory/compaction machinery.
+ *
+ * ── LIFECYCLE ───────────────────────────────────────────────────────────────
+ * This block must account for EVERY member of `FocusSessionStatus`. It did not:
+ * it described `active → paused ↔ active → closed (or → stale)` while the enum
+ * also carried `forming` and `scheduled`, two pre-start states the prose had
+ * never heard of. A guard now derives both sets and fails when they diverge
+ * (`__tests__/focus-session-lifecycle-doc.test.ts`), so a new status cannot be
+ * added without this paragraph being updated in the same commit — prose alone
+ * decays exactly the way the first version of this note did.
+ *
+ * PRE-START (a row exists; the work has not begun):
+ *   - scheduled — waits for a CLOCK. The session was materialized ahead of time
+ *     for a moment it is FOR; a person opens it when that moment arrives.
+ *     Produced by `materializeScheduledSession`
+ *     (api services/focus-sessions/schedule-session.ts) from a playbook whose
+ *     `schedule.mode` is `"appointment"`. This is its ONLY producer.
+ *   - forming — waits for a PERSON. Reserved for a session that has been drafted
+ *     but not yet constituted. ⚠️ STILL UNPRODUCED: nothing in any repo assigns
+ *     it (verified 2026-09-08 across the monorepo; the only occurrences are one
+ *     browser test fixture and an unrelated content status). It is NOT redundant
+ *     with triage — `services/focus-sessions/triage.ts` states outright that
+ *     acceptance is a RECEIPT (`metadata.triage.acceptedAt`), not a status,
+ *     precisely so a session can be `forming`/`scheduled` AND triage-pending at
+ *     once. Status and acceptance are orthogonal axes. `forming` is unbuilt, not
+ *     superfluous; do not repurpose or delete it without deciding what it means.
+ *
+ * RUNNING:  active → paused ↔ active
+ *
+ * EXITS (terminal — every one MUST go through `completeFocusSession`):
+ *   closed · failed · cancelled
+ *
+ * NON-TERMINAL DECAY:
+ *   - stale — auto-set by the focus-session reaper (C8 lifecycle hygiene) when
+ *     an `active`/`paused` row has had no `updatedAt` activity for
+ *     REAPER_STALE_HOURS. Non-destructive: the row can still be
+ *     completed/reopened like any other session; it only stops counting as a
+ *     live "in progress" session. The reaper is scoped to `('active','paused')`
+ *     ONLY — a `scheduled` row is never aged out, which is why the appointment
+ *     producer owns its own non-accumulation policy (roll-forward) rather than
+ *     relying on the reaper.
+ */
+/**
+ * One stage a session ENTERED (0382), oldest first — the shape of a goal's
+ * `ProjectTrackStageHistoryEntry` (0274) plus where the move came from.
+ * Appended by `appendSessionStageHistory` in the write that sets
+ * `current_stage`. A re-entered stage is a NEW entry.
+ */
+export interface SessionStageHistoryEntry {
+	stageKey: string;
+	/** The stage it came from; `null` when the session had none. */
+	fromStage: string | null;
+	/** ISO-8601. */
+	enteredAt: string;
+	/** Who moved it: the agent's user id when an agent drove it, else the human. */
+	actor: string;
+	/** The human the move is attributed to (the reviewer, on an approval). */
+	userId: string;
+	/** Which writer recorded it: the stage door, or a re-applied approval. */
+	via: "advance" | "approval";
+}
 declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	columns: {
 		agentIds: import("drizzle-orm/pg-core").PgColumn<{
@@ -4010,6 +4079,25 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			notNull: false;
 			tableName: "focus_sessions";
 		}, {}, {}>;
+		stageHistory: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgJsonb";
+			data: SessionStageHistoryEntry[];
+			dataType: "json";
+			driverParam: unknown;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: true;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "stage_history";
+			notNull: true;
+			tableName: "focus_sessions";
+		}, {}, {
+			$type: SessionStageHistoryEntry[];
+		}>;
 		stages: import("drizzle-orm/pg-core").PgColumn<{
 			baseColumn: never;
 			columnType: "PgJsonb";
@@ -20547,6 +20635,7 @@ declare function projectSessionRows(sessions: FocusSession[], userId: string | n
 	playbookId: string | null;
 	progress: number | null;
 	projectId: string | null;
+	stageHistory: SessionStageHistoryEntry[];
 	stages: unknown;
 	startedAt: Date;
 	status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -33586,6 +33675,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -33965,6 +34055,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34030,6 +34121,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34069,6 +34161,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34492,6 +34585,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34525,6 +34619,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbooks?: SessionPlaybookCandidates | undefined;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34587,6 +34682,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34698,6 +34794,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projectId: string | null;
 				recall: SessionRecallView;
 				rerun: RerunAvailability;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34738,6 +34835,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34856,6 +34954,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -34979,6 +35078,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -35742,6 +35842,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				progress: number | null;
 				projectId: string | null;
+				stageHistory: SessionStageHistoryEntry[];
 				stages: unknown;
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -42298,6 +42399,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
@@ -42359,6 +42461,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					progress: number | null;
 					projectId: string | null;
+					stageHistory: SessionStageHistoryEntry[];
 					stages: unknown;
 					startedAt: Date;
 					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";

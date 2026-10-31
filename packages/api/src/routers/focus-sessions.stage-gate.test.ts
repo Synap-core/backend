@@ -145,10 +145,15 @@ describe("focusSessions.update — advancing into a GATED stage", () => {
       action: "stage_gate",
     });
 
-    // Two writes: the door's own patch (which carried the stage), then the pause.
-    expect(sets).toHaveLength(2);
+    // The door's own patch (which carried the stage), the stage ledger's
+    // entry for that move (0382, appended while the stage still stands), then
+    // the pause.
+    expect(sets).toHaveLength(3);
     expect(sets[0]).toMatchObject({ currentStage: "review" });
-    expect(sets[1]).toMatchObject({ status: "paused" });
+    expect(
+      sets.filter((s) => Object.keys(s as object).join() === "stageHistory")
+    ).toHaveLength(1);
+    expect(sets).toContainEqual(expect.objectContaining({ status: "paused" }));
   });
 
   it("returns the session as PAUSED — not the `active` the caller asked for", async () => {
@@ -170,8 +175,12 @@ describe("focusSessions.update — the ungated path is unchanged", () => {
     })) as { status: string };
 
     expect(proposalCalls).toEqual([]);
-    expect(sets).toHaveLength(1);
+    // The door's patch, then the stage ledger's entry for that move (0382).
+    expect(sets).toHaveLength(2);
     expect(sets[0]).toMatchObject({ currentStage: "review" });
+    expect(
+      sets.filter((s) => Object.keys(s as object).join() === "stageHistory")
+    ).toHaveLength(1);
     expect(out.status).not.toBe("paused");
   });
 

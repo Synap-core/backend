@@ -141,6 +141,32 @@ const ACKNOWLEDGED: Record<string, string> = {
   // by THE_DOOR above, not here.
 };
 
+/**
+ * THE STAGE LEDGER (0382, status-first PR-E): a writer of
+ * `focus_sessions.current_stage` must record the move in
+ * `focus_sessions.stage_history` through the ONE append
+ * (`appendSessionStageHistory`, `@synap/database`). A ROUTED door gets it from
+ * the door. Exempt, SHRINK-ONLY (a stale entry fails below): files that write
+ * no move — a birth seed, a declaration, an argument, another table's column.
+ * Not seen (measured): granularity is the FILE — a second, unrecorded write
+ * beside a recorded one stays green; the behavioural tests of each door cover
+ * the call site.
+ */
+const LEDGER_EXEMPT: Record<string, string> = {
+  "api:services/focus-sessions/create-session.ts":
+    "birth seed of stages[0]: nobody moved it (no backfill, effects change 4)",
+  "api:services/playbooks/playbook-lifecycle.ts":
+    "birth seed of stages[0] at run start",
+  "api:services/focus-sessions/follow-playbook.ts":
+    "declaration of the stage the work is ALREADY in, not a move",
+  "api:services/event-end/run-event-end.ts":
+    "argument to updateFocusSession (the door appends)",
+  "api:routers/mcp/tools/index.ts": "JSON-schema property declaration",
+  "api:services/tracks/tracks-service.ts":
+    "project_tracks.current_stage: the track keeps its own ledger (0274)",
+  "api:services/tracks/track-history.ts": "read projection, not a write",
+};
+
 // ── the scan ─────────────────────────────────────────────────────────────────
 
 function tsFiles(dir: string, acc: string[] = []): string[] {
@@ -314,6 +340,52 @@ describe("tripwire: currentStage advances go through ONE door", () => {
         );
     }
     expect(wrong).toEqual([]);
+  });
+
+  it("every writer records the move in the stage ledger, or is a named exemption", () => {
+    const LEDGER = "appendSessionStageHistory(";
+    const missing = keys.filter((k) => {
+      if (k in ROUTED_THROUGH_DOOR || k in LEDGER_EXEMPT) return false;
+      return !stripComments(
+        readFileSync(join(...rootFor(k)), "utf8"),
+        "ts"
+      ).includes(LEDGER);
+    });
+    expect(missing).toEqual([]);
+    // The door itself must append (routed callers rely on it).
+    expect(
+      stripComments(readFileSync(join(...rootFor(THE_DOOR)), "utf8"), "ts")
+    ).toContain(LEDGER);
+    // Shrink-only: an exemption that no longer writes the column is removed.
+    expect(Object.keys(LEDGER_EXEMPT).filter((k) => !keys.includes(k))).toEqual(
+      []
+    );
+    // Non-vacuity: at least the two approval re-applies are held to it.
+    expect(
+      keys.filter(
+        (k) =>
+          !(k in ROUTED_THROUGH_DOOR) && !(k in LEDGER_EXEMPT) && k !== THE_DOOR
+      ).length
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  it("no stage move is written to the lifecycle transition outbox", () => {
+    // A stage row there hides a paused session's hold (listHolds reads the
+    // latest transition of any property): the ledger is a column (0382).
+    const offenders: string[] = [];
+    for (const root of [API_SRC, JOBS_SRC]) {
+      for (const file of tsFiles(root)) {
+        const src = stripComments(readFileSync(file, "utf8"), "ts");
+        if (
+          /lifecycleTransitionOutbox|lifecycle_transition_outbox/.test(src) &&
+          /property:\s*["']currentStage["']|property:\s*["']current_stage["']/.test(
+            src
+          )
+        )
+          offenders.push(relative(root, file));
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 
   it("no file writes current_stage through raw SQL, dodging the scan entirely", () => {
