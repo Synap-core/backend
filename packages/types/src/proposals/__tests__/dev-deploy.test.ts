@@ -4,7 +4,11 @@
  * read as approving the session).
  */
 import { describe, expect, it } from "vitest";
-import { describeDevDeployProposal, devDeployStepOf } from "../dev-deploy.js";
+import {
+  DEV_DEPLOY_STEPS,
+  describeDevDeployProposal,
+  devDeployStepOf,
+} from "../dev-deploy.js";
 
 const row = (data: Record<string, unknown>) => ({
   proposalType: "dev.deploy_approval",
@@ -26,8 +30,8 @@ describe("describeDevDeployProposal", () => {
     expect(d.title).toBe(
       "Push a524c103 to main in Synap-core/control-plane-api"
     );
-    expect(d.pastTitle).toBe(
-      "Approved push of a524c103 to main in Synap-core/control-plane-api"
+    expect(d.recordTitle).toBe(
+      "Push of a524c103 to main in Synap-core/control-plane-api"
     );
     expect(d.title).not.toMatch(/Session|Deploy/);
   });
@@ -56,6 +60,41 @@ describe("describeDevDeployProposal", () => {
     expect(d.title).toBe(
       "Deploy a524c103 from Synap-core/app-bases to devplane.synap.live"
     );
+  });
+
+  it("a target given as a URL names its host, never the scheme", () => {
+    const d = describeDevDeployProposal(
+      row({
+        step: "deploy",
+        repo: "Synap-core/site-crm",
+        targetHost: "https://crm.synap.live",
+        deployCommand: "vercel deploy --prod",
+      })
+    )!;
+    expect(d.title).toBe(
+      "Deploy a524c103 from Synap-core/site-crm to crm.synap.live"
+    );
+    const ship = describeDevDeployProposal(
+      row({
+        deployCommand: "./release.sh",
+        targetHost: "http://pod.example.org:8080/x",
+      })
+    )!;
+    expect(ship.title).toBe(
+      "Ship a524c103 from Synap-core/control-plane-api main to pod.example.org"
+    );
+  });
+
+  it("the steps the pod accepts are the steps the heading words", () => {
+    for (const step of DEV_DEPLOY_STEPS) {
+      const d = describeDevDeployProposal(
+        row({ step, deployCommand: "./release.sh" })
+      )!;
+      expect(d.step).toBe(step);
+      expect(
+        d.title.startsWith(step.charAt(0).toUpperCase() + step.slice(1))
+      ).toBe(true);
+    }
   });
 
   it("an approval with no step is read from its command, and a push to main is a push", () => {

@@ -26,6 +26,7 @@
 import type { NeedsYouProposalClass } from "@synap-core/types/needs-you/rule";
 import { decodeHtmlEntities } from "@synap-core/types/text";
 import { heldWritesPackName } from "@synap-core/types/proposals/deferred-writes";
+import { describeDevDeployProposal } from "@synap-core/types/proposals/dev-deploy";
 import type { PROPOSE_REASON } from "@synap/governance-policy";
 import {
   capabilityRunVerbId,
@@ -187,6 +188,16 @@ export function computeProposalFingerprint(
   p: ProposalFingerprintInput
 ): string {
   const cls = classifyChange(p.proposalType);
+
+  // A deploy approval's target is its SESSION, so two asks of one session (a
+  // push, then the deploy of the same commit; or two commits) would share the
+  // session's id and fold into one row titled after whichever came first.
+  // Each is its own decision: its heading (step, commit, branch, repo) is
+  // part of the signature.
+  const deploy = describeDevDeployProposal(p);
+  if (deploy) {
+    return `${p.proposalType}${SEP}${p.targetType}${SEP}id:${p.targetId?.trim() ?? ""} ${normalizeSignatureToken(deploy.title)}`;
+  }
 
   let signature: string;
   if (cls === "create") {
@@ -398,6 +409,10 @@ const DEFAULT_SAMPLE_CAP = 20;
  * sentence that already contains it.
  */
 function resolveTargetLabel(row: ProposalFingerprintInput): string {
+  // A deploy approval's label IS its heading ("Push a524c103 to main in …"),
+  // the one `signalFromCluster` shows as the row's whole title.
+  const deploy = describeDevDeployProposal(row);
+  if (deploy) return deploy.title;
   // Decoded here, not in `extractProposalName`/`extractProposalSummary`:
   // those two also feed `computeProposalFingerprint`'s signature, and
   // decoding there would change fingerprint grouping for already-clustered

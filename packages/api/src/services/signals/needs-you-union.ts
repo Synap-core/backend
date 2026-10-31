@@ -45,6 +45,7 @@ import {
 } from "@synap-core/types/ask";
 import { needsYouTotal } from "@synap-core/types/units";
 import { REVIEW_LATER_AFTER_MS } from "@synap-core/types/proposals/fate";
+import { DEV_DEPLOY_APPROVAL_TYPE } from "@synap-core/types/proposals/dev-deploy";
 import type { ClusterFoldCounts } from "../proposals/proposal-needs-you.js";
 import {
   foldNeedsYouCounts,
@@ -777,6 +778,24 @@ function reviewLaterSuffix(
   return cluster.reviewLater ? "@review-later" : "";
 }
 
+/**
+ * A cluster row's title, imperative (what approving it WILL do). A deploy
+ * approval's label is already its whole heading, "Push a524c103 to main in
+ * Synap-core/control-plane-api" (`describeDevDeployProposal`, the one door
+ * every surface titles it through); the generic sentence would wrap it as
+ * `Approve deploy Session "Push …"`, naming the session as the thing approved.
+ */
+function clusterTitle(cluster: ProposalCluster): string {
+  if (cluster.proposalType === DEV_DEPLOY_APPROVAL_TYPE && cluster.targetLabel)
+    return cluster.targetLabel;
+  return buildObjectActionTitle({
+    action: cluster.proposalType,
+    objectKind: cluster.targetType,
+    objectName: cluster.targetLabel,
+    mood: "imperative",
+  });
+}
+
 /** One cluster → one signal. Title via the vocabulary SSOT, imperative mood
  *  (the card describes what approving it WILL do, not what happened).
  *
@@ -810,12 +829,7 @@ export function signalFromCluster(
         : `cluster:${cluster.fingerprint}${reviewLaterSuffix(cluster)}`,
     kind: "proposal-cluster",
     waitKind: waitKindOf({ kind: "pending_proposal" }),
-    title: buildObjectActionTitle({
-      action: cluster.proposalType,
-      objectKind: cluster.targetType,
-      objectName: cluster.targetLabel,
-      mood: "imperative",
-    }),
+    title: clusterTitle(cluster),
     count: cluster.count,
     occurredAt: cluster.latestAt,
     target: sampleId ? { kind: "proposal", id: sampleId } : null,

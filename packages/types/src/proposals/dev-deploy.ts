@@ -1,7 +1,7 @@
 /**
  * What a `dev.deploy_approval` lets ship, in words — the ONE heading every
- * surface shows for it (the review page, the history row, the proposal's own
- * summary and therefore its push notification).
+ * surface shows for it (the review page, the history row, the needs-you row,
+ * the proposal's own summary and therefore its push notification body).
  *
  * The proposal is filed against the SESSION (`targetType: "focus_session"`),
  * because the session is what the approval stamps. The generic title therefore
@@ -20,8 +20,17 @@
  * never guesses "deploy".
  */
 
-/** The steps a deploy approval covers (`DEV_DEPLOY_STEPS` on the pod). */
-export type DevDeployStep = "push" | "publish" | "deploy";
+/** Proposal type filed before the agent ships a verified commit. */
+export const DEV_DEPLOY_APPROVAL_TYPE = "dev.deploy_approval";
+
+/**
+ * What a deploy approval lets ship: a push to a protected branch, a package
+ * publish, or a deploy. An approval covers its commit for its step only
+ * (founder, 2026-10-28): approving "push to main" does not approve a publish.
+ * The pod's payload schema validates `step` against this list.
+ */
+export const DEV_DEPLOY_STEPS = ["push", "publish", "deploy"] as const;
+export type DevDeployStep = (typeof DEV_DEPLOY_STEPS)[number];
 
 export interface DevDeployProposalLike {
   proposalType?: string | null;
@@ -38,11 +47,13 @@ export interface DevDeploySummary {
   target: string | null;
   /** What approving lets happen: "Push a524c103 to main in control-plane-api". */
   title: string;
-  /** What was decided: "Approved push of a524c103 to main in control-plane-api". */
-  pastTitle: string;
+  /**
+   * The same act as a record, for a list of decisions: "Push of a524c103 to
+   * main in control-plane-api". It names no outcome, because the row's status
+   * mark already says approved, rejected or withdrawn.
+   */
+  recordTitle: string;
 }
-
-export const DEV_DEPLOY_APPROVAL_TYPE = "dev.deploy_approval";
 
 function rec(v: unknown): Record<string, unknown> | null {
   return v && typeof v === "object" && !Array.isArray(v)
@@ -52,6 +63,10 @@ function rec(v: unknown): Record<string, unknown> | null {
 
 function text(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
+}
+
+function isDevDeployStep(v: string): v is DevDeployStep {
+  return (DEV_DEPLOY_STEPS as readonly string[]).includes(v);
 }
 
 /**
@@ -74,9 +89,14 @@ function repoLabel(repo: string): string {
     : bare;
 }
 
-/** `devplane.synap.live (Vercel project …)` → `devplane.synap.live`: the first clause, at most 60 characters. */
+/**
+ * `devplane.synap.live (Vercel project …)` → `devplane.synap.live`: the first
+ * clause, at most 60 characters. A URL keeps its host: `https://x.live/a` →
+ * `x.live/a`, never `https`.
+ */
 function targetLabel(host: string): string {
-  const first = host.split(/[,:(]/)[0]!.trim();
+  const bare = host.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
+  const first = bare.split(/[,:(]/)[0]!.trim();
   return first.length > 60 ? `${first.slice(0, 59)}…` : first;
 }
 
@@ -96,10 +116,9 @@ export function describeDevDeployProposal(
   if (!sha || !repoRaw || !branch) return null;
 
   const declared = text(data?.step);
-  const step: DevDeployStep | null =
-    declared === "push" || declared === "publish" || declared === "deploy"
-      ? declared
-      : devDeployStepOf(text(data?.deployCommand));
+  const step: DevDeployStep | null = isDevDeployStep(declared)
+    ? declared
+    : devDeployStepOf(text(data?.deployCommand));
   const commit = sha.slice(0, 8);
   const repo = repoLabel(repoRaw);
   const host = text(data?.targetHost);
@@ -142,6 +161,6 @@ export function describeDevDeployProposal(
     branch,
     target,
     title: `${verb} ${what}`,
-    pastTitle: `Approved ${noun} of ${what}`,
+    recordTitle: `${verb} of ${what}`,
   };
 }
