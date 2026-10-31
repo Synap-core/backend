@@ -19,6 +19,11 @@ describe("collectionsBehind", () => {
     expect(collectionsBehind({ entities: 1 })).toEqual(["entities"]);
   });
 
+  it("documents are versioned: a pod that only reindexed entities still holds owned bodies", () => {
+    expect(SEARCH_INDEX_VERSIONS.documents).toBeGreaterThanOrEqual(1);
+    expect(collectionsBehind({ entities: 2 })).toEqual(["documents"]);
+  });
+
   it("a pod stamped at the current versions has nothing to reindex", () => {
     expect(collectionsBehind({ ...SEARCH_INDEX_VERSIONS })).toEqual([]);
   });
