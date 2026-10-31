@@ -42,7 +42,6 @@ import {
 } from "@synap/playbooks";
 import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { openLink } from "../../utils/deep-links.js";
-import { postSessionNotice } from "../agent-dispatch/binding-call.js";
 import { isHttpUrl } from "@synap/shared-utils";
 import {
   ASK_LIMITS,
@@ -2601,6 +2600,12 @@ export async function updateFocusSession(
     const before = Array.isArray(existing.criteria)
       ? (existing.criteria as SessionCriterion[])
       : [];
+    // Dynamic on purpose: binding-call imports `executeCapability`, whose graph
+    // reaches `propose-capability-enable` → `permission-check`. A static edge
+    // here put that cycle inside permission-check's own graph, so a test's
+    // permission-check mock no longer reached its importers (backend#611 CI).
+    const { postSessionNotice } =
+      await import("../agent-dispatch/binding-call.js");
     await postSessionNotice(
       sessionId,
       ownCriteriaChangeLine({
