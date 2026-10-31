@@ -994,7 +994,11 @@ async function readCriterionServers(
       status: focusSessions.status,
     })
     .from(links)
-    .innerJoin(focusSessions, eq(focusSessions.id, links.fromId))
+    // `links.from_id` is text, a session id a uuid: compare as text.
+    .innerJoin(
+      focusSessions,
+      drizzleSql`${focusSessions.id}::text = ${links.fromId}`
+    )
     .where(
       and(
         eq(links.linkType, "serves"),
