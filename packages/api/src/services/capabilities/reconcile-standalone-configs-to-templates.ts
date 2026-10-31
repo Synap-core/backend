@@ -60,11 +60,16 @@ import {
   detachMarketSource,
   deepEqual,
   MARKET_SOURCE_COMPARATOR_VERSION,
+  type MarketSource,
 } from "./market-source.js";
 import { lookupCatalogEntry } from "./marketplace-install.js";
 import { admitOfficialDefinition } from "./official-catalog-trust.js";
 import { skillElementOf } from "./package-element.js";
 import type { Context } from "../../types/context.js";
+import {
+  recordPackageUpdateReceipt,
+  type PendingReceipt,
+} from "../package-updates/receipts.js";
 
 const logger = createLogger({
   module: "reconcile-standalone-configs-to-templates",
@@ -153,7 +158,7 @@ function pickField(el: Record<string, unknown>, key: string): unknown {
   return el[key];
 }
 
-interface KindAdapter {
+export interface KindAdapter {
   kind: StandaloneKind;
   /** The `cp_catalog_cache` / CP package kind — identical string here. */
   catalogKind: CatalogKind;
@@ -173,8 +178,23 @@ interface KindAdapter {
     ctx: Context;
     id: string;
     merged: Record<string, unknown>;
-    metadata: Record<string, unknown>;
-  }): Promise<"updated" | "proposed">;
+    /** Omitted = the row's metadata is left as it is. */
+    metadata?: Record<string, unknown>;
+  }): Promise<WriteOutcome>;
+}
+
+/** What a governed `.update` door did with a write. */
+export interface WriteOutcome {
+  status: "updated" | "proposed";
+  proposalId?: string;
+}
+
+/** Read the governed door's answer: proposed (with its id) or landed. */
+function writeOutcomeOf(res: unknown): WriteOutcome {
+  const r = res as { status?: string; proposalId?: string } | null;
+  return r?.status === "proposed"
+    ? { status: "proposed", proposalId: r.proposalId }
+    : { status: "updated" };
 }
 
 /** The owner-owned report line: every kept field, then which of them the
@@ -230,10 +250,8 @@ const ADAPTERS: KindAdapter[] = [
         // extra keys are stripped by the door's zod input.
         .update({ id, ...merged, metadata } as Parameters<
           ReturnType<typeof viewsRouter.createCaller>["update"]
-        >[0])) as { status?: string } | unknown;
-      return (res as { status?: string })?.status === "proposed"
-        ? "proposed"
-        : "updated";
+        >[0])) as unknown;
+      return writeOutcomeOf(res);
     },
   },
   {
@@ -264,8 +282,8 @@ const ADAPTERS: KindAdapter[] = [
         metadata,
       } as Parameters<
         ReturnType<typeof skillsRouter.createCaller>["update"]
-      >[0])) as { status?: string };
-      return res?.status === "proposed" ? "proposed" : "updated";
+      >[0])) as unknown;
+      return writeOutcomeOf(res);
     },
   },
   {
@@ -293,8 +311,8 @@ const ADAPTERS: KindAdapter[] = [
         metadata,
       } as Parameters<
         ReturnType<typeof automationsRouter.createCaller>["update"]
-      >[0])) as { status?: string };
-      return res?.status === "proposed" ? "proposed" : "updated";
+      >[0])) as unknown;
+      return writeOutcomeOf(res);
     },
   },
 ];
@@ -315,6 +333,169 @@ function buildRowCtx(
   } as unknown as Context;
 }
 
+/** An installed row that carries a source-link, before its catalog is read. */
+export interface InstalledStandaloneRow {
+  adapter: KindAdapter;
+  row: Record<string, unknown>;
+  source: MarketSource;
+}
+
+/**
+ * One installed row resolved against its package's CURRENT catalog entry:
+ * `live` and `desired` cover exactly the baseline's managed keys, ready for
+ * `threeWayMergeFields(live, source.baseline, desired)`. The reconcile, the
+ * update plan and the update apply all read rows through here, so the three
+ * can never resolve one row two ways.
+ */
+export interface ResolvedStandaloneRow extends InstalledStandaloneRow {
+  catalogVersion: string | null;
+  catalogName: string;
+  live: Record<string, unknown>;
+  desired: Record<string, unknown>;
+}
+
+export async function resolveInstalledRow(
+  installed: InstalledStandaloneRow
+): Promise<
+  { ok: true; resolved: ResolvedStandaloneRow } | { ok: false; reason: string }
+> {
+  const { adapter, row, source } = installed;
+  const name = (row.name as string) ?? "";
+  // Resolve the source package's CURRENT definition. Cache row first (for
+  // its `source`/`version`); a MISS (private package not in the public
+  // cache) SKIPS — reported, never an error.
+  const cacheRow = await lookupCatalogEntry(
+    adapter.catalogKind,
+    source.packageSlug
+  );
+  if (!cacheRow) {
+    return {
+      ok: false,
+      reason: `source package "${source.packageSlug}" not in the catalog cache (private/unsynced — reconciles via the user surface, not boot)`,
+    };
+  }
+
+  const def =
+    cacheRow.definition ??
+    (await fetchPackageDefinition(
+      cacheRow.source,
+      source.packageSlug,
+      cacheRow.version
+    ));
+  if (!def) {
+    return {
+      ok: false,
+      reason: `could not resolve the definition for "${source.packageSlug}" (source unreachable or no payload)`,
+    };
+  }
+  // An automatic update converges only what Synap's signed index vouches
+  // for (enforced; reported only until then).
+  const admission = await admitOfficialDefinition({
+    kind: adapter.catalogKind,
+    slug: source.packageSlug,
+    version: cacheRow.version,
+    definition: def,
+  });
+  if (!admission.admitted) return { ok: false, reason: admission.reason };
+
+  const element = adapter.findElement(def, name);
+  if (!element) {
+    return {
+      ok: false,
+      reason: `no matching "${name}" element in package "${source.packageSlug}" (renamed or removed upstream)`,
+    };
+  }
+
+  // desired = the template's current values for EXACTLY the baseline's
+  // managed keys (the fields the install-side applier stamped). A key the
+  // template no longer provides is omitted (prune OFF → left on the row,
+  // never blanked).
+  //
+  // KNOWN LIMITATION (v1, by design): the reconciled field SET is fixed at
+  // install time. A brand-new TOP-LEVEL field a template adds AFTER install
+  // won't reach an already-installed row — it isn't in `baseline`, so it
+  // never enters `desired`. This is deliberately conservative and low-impact:
+  // a change WITHIN an existing managed field DOES propagate (a flow's
+  // `flowDefinition` is one managed key, so e.g. a retry policy nested inside
+  // it reconciles as a whole-field replace). A config that must adopt a new
+  // top-level field re-installs. `threeWayMergeFields`' newly-managed-field
+  // branch stays correct (and unit-tested) for the day this scope widens to
+  // `union(baselineKeys, template-managed keys)`.
+  const desired: Record<string, unknown> = {};
+  const live: Record<string, unknown> = {};
+  for (const k of Object.keys(source.baseline)) {
+    const v = pickField(element, k);
+    if (v !== undefined) desired[k] = v;
+    live[k] = row[k];
+  }
+  return {
+    ok: true,
+    resolved: {
+      ...installed,
+      catalogVersion: cacheRow.version ?? null,
+      catalogName: cacheRow.name ?? source.packageSlug,
+      live,
+      desired,
+    },
+  };
+}
+
+/**
+ * Every installed view/skill/automation row carrying a source-link, narrowed
+ * like the reconcile (`ids`, `packageSlugs`; an empty list = none). Unlike the
+ * reconcile's per-kind load, a failed read THROWS: a reader must never show
+ * "no updates" for a list it could not load.
+ */
+export async function loadInstalledStandaloneRows(
+  opts: { ids?: string[]; packageSlugs?: string[] } = {}
+): Promise<InstalledStandaloneRow[]> {
+  if (
+    (opts.ids && opts.ids.length === 0) ||
+    (opts.packageSlugs && opts.packageSlugs.length === 0)
+  ) {
+    return [];
+  }
+  const slugFilter = opts.packageSlugs ? new Set(opts.packageSlugs) : null;
+  const out: InstalledStandaloneRow[] = [];
+  for (const adapter of ADAPTERS) {
+    for (const row of await adapter.loadRows(opts.ids)) {
+      const source = readMarketSource(
+        row.metadata as Record<string, unknown> | null | undefined
+      );
+      if (!source) continue;
+      if (slugFilter && !slugFilter.has(source.packageSlug)) continue;
+      out.push({ adapter, row, source });
+    }
+  }
+  return out;
+}
+
+function adapterFor(kind: StandaloneKind): KindAdapter {
+  const adapter = ADAPTERS.find((a) => a.kind === kind);
+  if (!adapter) throw new Error(`unknown standalone kind "${kind}"`);
+  return adapter;
+}
+
+/** Rows of one kind by id, linked or not (an undo after a detach). */
+export function loadStandaloneRows(
+  kind: StandaloneKind,
+  ids: string[]
+): Promise<Record<string, unknown>[]> {
+  if (ids.length === 0) return Promise.resolve([]);
+  return adapterFor(kind).loadRows(ids);
+}
+
+/** The governed write of one standalone row, as the given caller. */
+export function writeStandaloneRow(args: {
+  kind: StandaloneKind;
+  ctx: Context;
+  id: string;
+  merged: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}): Promise<WriteOutcome> {
+  return adapterFor(args.kind).applyUpdate(args);
+}
+
 export async function reconcileStandaloneConfigsToTemplates(
   opts: {
     dryRun?: boolean;
@@ -322,6 +503,13 @@ export async function reconcileStandaloneConfigsToTemplates(
     ids?: string[];
     /** NARROW to rows installed from these packages (`marketSource.packageSlug`). */
     packageSlugs?: string[];
+    /**
+     * Who the pass acts for, on the receipt each updated package gets
+     * (`package.updated`, History with Undo): `automatic` (the default) is
+     * the start-up pass (D3); `person` is an operator's on-demand pass, filed
+     * under `userId`.
+     */
+    receipt?: { source: "automatic" | "person"; userId?: string };
   } = {}
 ): Promise<StandaloneReconcileReport> {
   const dryRun = !!opts.dryRun;
@@ -345,6 +533,7 @@ export async function reconcileStandaloneConfigsToTemplates(
     return report;
   }
   const slugFilter = opts.packageSlugs ? new Set(opts.packageSlugs) : null;
+  const receipts = new Map<string, PendingReceipt>();
 
   for (const adapter of ADAPTERS) {
     let rows: Record<string, unknown>[];
@@ -378,80 +567,17 @@ export async function reconcileStandaloneConfigsToTemplates(
       };
 
       try {
-        // Resolve the source package's CURRENT definition. Cache row first (for
-        // its `source`/`version`); a MISS (private package not in the public
-        // cache) SKIPS — reported, never an error.
-        const cacheRow = await lookupCatalogEntry(
-          adapter.catalogKind,
-          source.packageSlug
-        );
-        if (!cacheRow) {
-          report.skipped.push({
-            ...base,
-            reason: `source package "${source.packageSlug}" not in the catalog cache (private/unsynced — reconciles via the user surface, not boot)`,
-          });
-          continue;
-        }
-
-        const def =
-          cacheRow.definition ??
-          (await fetchPackageDefinition(
-            cacheRow.source,
-            source.packageSlug,
-            cacheRow.version
-          ));
-        if (!def) {
-          report.skipped.push({
-            ...base,
-            reason: `could not resolve the definition for "${source.packageSlug}" (source unreachable or no payload)`,
-          });
-          continue;
-        }
-        // An automatic update converges only what Synap's signed index vouches
-        // for (enforced; reported only until then).
-        const admission = await admitOfficialDefinition({
-          kind: adapter.catalogKind,
-          slug: source.packageSlug,
-          version: cacheRow.version,
-          definition: def,
+        const resolution = await resolveInstalledRow({
+          adapter,
+          row,
+          source,
         });
-        if (!admission.admitted) {
-          report.skipped.push({ ...base, reason: admission.reason });
+        if (!resolution.ok) {
+          report.skipped.push({ ...base, reason: resolution.reason });
           continue;
         }
-
-        const element = adapter.findElement(def, name);
-        if (!element) {
-          report.skipped.push({
-            ...base,
-            reason: `no matching "${name}" element in package "${source.packageSlug}" (renamed or removed upstream)`,
-          });
-          continue;
-        }
-
-        // desired = the template's current values for EXACTLY the baseline's
-        // managed keys (the fields the install-side applier stamped). A key the
-        // template no longer provides is omitted (prune OFF → left on the row,
-        // never blanked).
-        //
-        // KNOWN LIMITATION (v1, by design): the reconciled field SET is fixed at
-        // install time. A brand-new TOP-LEVEL field a template adds AFTER install
-        // won't reach an already-installed row — it isn't in `baseline`, so it
-        // never enters `desired`. This is deliberately conservative and low-impact:
-        // a change WITHIN an existing managed field DOES propagate (a flow's
-        // `flowDefinition` is one managed key, so e.g. a retry policy nested inside
-        // it reconciles as a whole-field replace). A config that must adopt a new
-        // top-level field re-installs. `threeWayMergeFields`' newly-managed-field
-        // branch stays correct (and unit-tested) for the day this scope widens to
-        // `union(baselineKeys, template-managed keys)`.
-        const baselineKeys = Object.keys(source.baseline);
-        const desired: Record<string, unknown> = {};
-        const live: Record<string, unknown> = {};
-        for (const k of baselineKeys) {
-          const v = pickField(element, k);
-          if (v !== undefined) desired[k] = v;
-          live[k] = (row as Record<string, unknown>)[k];
-        }
+        const { live, desired, catalogVersion, catalogName } =
+          resolution.resolved;
 
         const r = threeWayMergeFields(live, source.baseline, desired);
 
@@ -473,7 +599,7 @@ export async function reconcileStandaloneConfigsToTemplates(
         // the old version, so the list and this pass both still flag the row.
         const version =
           r.conflicted.length === 0
-            ? (cacheRow.version ?? source.packageVersion)
+            ? (catalogVersion ?? source.packageVersion)
             : source.packageVersion;
         const baselineMoved = !deepEqual(r.nextBaseline, source.baseline);
         const stampStale = version !== source.packageVersion;
@@ -535,7 +661,29 @@ export async function reconcileStandaloneConfigsToTemplates(
           metadata: nextMetadata,
         });
 
-        if (outcome === "proposed") {
+        if (outcome.status === "updated" && r.changed) {
+          const pending = receipts.get(source.packageSlug) ?? {
+            slug: source.packageSlug,
+            kind: adapter.catalogKind,
+            name: catalogName,
+            fromVersion: source.packageVersion,
+            toVersion: catalogVersion,
+            userId: opts.receipt?.userId ?? adapter.creatorOf(row),
+            changes: [],
+          };
+          for (const k of r.applied) {
+            pending.changes.push({
+              rowKind: adapter.kind,
+              rowId: id,
+              field: k,
+              before: live[k],
+              after: r.merged[k],
+            });
+          }
+          receipts.set(source.packageSlug, pending);
+        }
+
+        if (outcome.status === "proposed") {
           report.skipped.push({
             ...base,
             reason: r.changed
@@ -563,6 +711,23 @@ export async function reconcileStandaloneConfigsToTemplates(
           "Standalone reconcile failed for this row (non-fatal)"
         );
       }
+    }
+  }
+
+  // One receipt per updated package, so History shows what changed on its
+  // own and offers Undo (D3). A receipt that cannot be written never undoes
+  // the pass: the update landed, and the log says so.
+  for (const pending of receipts.values()) {
+    try {
+      await recordPackageUpdateReceipt({
+        ...pending,
+        source: opts.receipt?.source ?? "automatic",
+      });
+    } catch (err) {
+      logger.warn(
+        { err, slug: pending.slug },
+        "Standalone reconcile: could not record the update receipt (non-fatal)"
+      );
     }
   }
 
@@ -657,9 +822,9 @@ export async function detachStandaloneConfigSource(args: {
   });
 
   return {
-    detached: outcome === "updated",
+    detached: outcome.status === "updated",
     kind: args.kind,
     id: args.id,
-    outcome,
+    outcome: outcome.status,
   };
 }

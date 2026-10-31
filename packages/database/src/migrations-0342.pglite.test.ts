@@ -4,7 +4,8 @@
  * `session_runners` with EVERY column and index the drizzle schema declares,
  * schema-coherence names it, re-running is a no-op, the (session, client key)
  * primary key is what the throttled upsert conflicts on, and a deleted session
- * takes its runners with it.
+ * takes its runners with it. 0384 adds the runner's state (three columns) and
+ * the client-key index its non-wait write reads.
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -25,6 +26,10 @@ const M0373 = readFileSync(
   resolve(HERE, "../migrations/0373_session_runners_process.sql"),
   "utf8"
 );
+const M0384 = readFileSync(
+  resolve(HERE, "../migrations/0384_session_runners_state.sql"),
+  "utf8"
+);
 const BASELINE = readFileSync(
   resolve(HERE, "../migrations/0000_baseline_schema.sql"),
   "utf8"
@@ -43,18 +48,25 @@ describe("migration 0342 — session_runners", () => {
     await pg.exec(M0342);
     await pg.exec(M0373);
     await pg.exec(M0373);
+    await pg.exec(M0384);
+    await pg.exec(M0384);
     const cols = await pg.query<{ column_name: string }>(
       `SELECT column_name FROM information_schema.columns WHERE table_name = 'session_runners'`
     );
-    expect(declaredColumns.length).toBe(14);
+    expect(declaredColumns.length).toBe(17);
     expect(cols.rows.map((r) => r.column_name).sort()).toEqual(
       [...declaredColumns].sort()
     );
-    expect(declaredIndexes).toEqual(["idx_session_runners_session_seen"]);
+    expect(declaredIndexes).toEqual([
+      "idx_session_runners_session_seen",
+      "idx_session_runners_client",
+    ]);
     const idx = await pg.query<{ indexname: string }>(
       `SELECT indexname FROM pg_indexes WHERE tablename = 'session_runners'`
     );
-    expect(idx.rows.map((r) => r.indexname)).toContain(declaredIndexes[0]);
+    expect(idx.rows.map((r) => r.indexname)).toEqual(
+      expect.arrayContaining(declaredIndexes)
+    );
     await pg.close();
   }, 60_000);
 
@@ -88,6 +100,7 @@ describe("migration 0342 — session_runners", () => {
     );
     expect(baselineCreate.length).toBeGreaterThan(300);
     expect(BASELINE).toContain('"idx_session_runners_session_seen"');
+    expect(BASELINE).toContain('"idx_session_runners_client"');
     const shape = async (setup: string) => {
       const pg = new PGlite();
       await pg.exec(SESSIONS_STUB);
@@ -103,7 +116,7 @@ describe("migration 0342 — session_runners", () => {
       return { cols: cols.rows, pk: pk.rows.map((r) => r.attname) };
     };
     const fromBaseline = await shape(baselineCreate);
-    expect(fromBaseline).toEqual(await shape(M0342 + M0373));
+    expect(fromBaseline).toEqual(await shape(M0342 + M0373 + M0384));
     expect(fromBaseline.pk).toEqual([
       "client_key",
       "process_key",
@@ -114,7 +127,12 @@ describe("migration 0342 — session_runners", () => {
         (c) => c.column
       )
     ).toEqual(
-      expect.arrayContaining(["last_seen_at", "machine_user_id", "process_key"])
+      expect.arrayContaining([
+        "last_seen_at",
+        "machine_user_id",
+        "process_key",
+        "state_reported_at",
+      ])
     );
   }, 60_000);
 

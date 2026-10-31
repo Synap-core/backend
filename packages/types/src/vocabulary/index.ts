@@ -57,6 +57,10 @@ import type { NeedsYouFold } from "../needs-you/rule.js";
 import type { StuckCause } from "../units/stuck.js";
 import type { WaitKind } from "../units/wait-kind.js";
 import type {
+  PackageFieldState,
+  PackageUpdateNeeds,
+} from "../package-updates/index.js";
+import type {
   CheckVerdict,
   RepoMainHealth,
   ShipFold,
@@ -799,6 +803,8 @@ export const LINEAGE_EDGE_LABELS: Readonly<
   blocked_by: { outgoing: "Blocked by", incoming: "Blocks" },
   // `A --replaces--> B`: "this step replaces that one".
   replaces: { outgoing: "Replaces", incoming: "Replaced by" },
+  // `X --serves--> G`: a session or a sub-goal does its work FOR goal G.
+  serves: { outgoing: "Serves", incoming: "Served by" },
   // ── Every other stored `links` type, read from its TO end ────────────────
   // Without these an incoming edge showed its FORWARD word ("Targets") plus a
   // reversed-arrow mark. Read as "<focus> <label> <row>": the row is the
@@ -894,6 +900,13 @@ const OBJECT_NOUN_ROWS = {
   // The Project Management `okr` kind ("Make it a goal" names it in the
   // proposal it files): an acronym again — it humanized to "Okr".
   okr: "OKR",
+  // One VERB of a capability (`capabilities.verbs[]`, the thing an agent runs
+  // by `verbId`): "Action" names this and only this, everywhere (founder,
+  // 2026-10-30, decision 79f5b7a2). Not a registry kind (a capability's verbs
+  // are not objects of their own), so it is a backend-only noun: the one door
+  // `resolveObjectNoun("verb")` answers, never `TOOL_KIND_LABELS`, which names
+  // the capability ("Capability") a verb belongs to.
+  verb: "Action",
 } satisfies Readonly<Record<string, string>>;
 
 export const OBJECT_NOUNS: Readonly<Record<string, string>> = OBJECT_NOUN_ROWS;
@@ -924,6 +937,7 @@ export const OBJECT_NOUN_PLURALS: Readonly<
   property: "Fields",
   "ui-design": "UI designs",
   okr: "OKRs",
+  verb: "Actions",
 };
 
 // A backend-only noun never shares a slug with a registry kind: both live in
@@ -2440,6 +2454,72 @@ export function resolveTemplateStepLabel(
 }
 
 /**
+ * What a package update does to ONE field, as the words of its mark — the
+ * state the pod's plan computes (`@synap-core/types/package-updates`). One
+ * table for pod admin, the CLI, Relay and MCP, so a field never reads two ways.
+ * Keyed by `PackageFieldState`: a new state is a BUILD error until it is named.
+ */
+export const PACKAGE_FIELD_STATE_LABELS: Readonly<
+  Record<PackageFieldState, string>
+> = {
+  updates: "Updates",
+  yours: "Stays yours",
+  both: "Both changed",
+  same: "Same",
+};
+
+/** A field state's words; an unknown state humanizes rather than leaks. */
+export function resolvePackageFieldStateLabel(
+  state: PackageFieldState | (string & {})
+): string {
+  return (
+    (PACKAGE_FIELD_STATE_LABELS as Readonly<Record<string, string>>)[state] ??
+    humanizeToken(state)
+  );
+}
+
+/** What a package update needs from a person, as the words of its group. */
+export const PACKAGE_UPDATE_NEEDS_LABELS: Readonly<
+  Record<PackageUpdateNeeds, string>
+> = {
+  consent: "Needs your OK",
+  choice: "Needs your choice",
+  review: "Updates on its own",
+  nothing: "Yours, nothing to update",
+};
+
+/** An update's group words; an unknown value humanizes rather than leaks. */
+export function resolvePackageUpdateNeedsLabel(
+  needs: PackageUpdateNeeds | (string & {})
+): string {
+  return (
+    (PACKAGE_UPDATE_NEEDS_LABELS as Readonly<Record<string, string>>)[needs] ??
+    humanizeToken(needs)
+  );
+}
+
+/**
+ * A package field's name for a person. The row field names the install wrote
+ * are code (`body`, `flowDefinition`); these are the ones whose humanized form
+ * would mislead. Every other key humanizes.
+ */
+const PACKAGE_FIELD_LABELS: Readonly<Record<string, string>> = {
+  body: "Instructions",
+  code: "Code",
+  flowDefinition: "Steps",
+  triggerConfig: "Trigger",
+  providerSpec: "Provider",
+  config: "Settings",
+  query: "Query",
+  executionMode: "Run mode",
+  timeoutSeconds: "Time limit",
+};
+
+export function resolvePackageFieldLabel(key: string): string {
+  return PACKAGE_FIELD_LABELS[key] ?? humanizeToken(key);
+}
+
+/**
  * PROVENANCE labels — "who or what produced this", as a human word.
  *
  * ── Why this table exists BEFORE anything renders provenance ───────────────
@@ -3188,6 +3268,7 @@ export const GOVERNANCE_RUNG_LABELS: Readonly<Record<GovernanceRung, string>> =
     default: "The ask-first default",
     "not-agent": "Not an agent",
     "cbac-capability-allowlist": "Not in its tool list",
+    "denied-by-rule": "Set to never",
     "admin-actions": "Admin actions always ask",
     "force-propose": "A change of scope or identity",
     "project-filing": "Filing into a project",

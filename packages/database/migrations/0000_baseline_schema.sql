@@ -2201,6 +2201,21 @@ DO $$ BEGIN
   END IF;
 END; $$;
 
+-- "Later" on a request, per person (migration 0381, founder decision G3) —
+-- mirrors 0381_governance_deny_and_request_later.sql. It sits here, beside the
+-- table it references, so every slice of this file that reaches it has
+-- "proposals" already. (Its `deny` verdict value sits beside the
+-- governance_verdict type below.)
+CREATE TABLE IF NOT EXISTS "proposal_snoozes" (
+  "proposal_id"    uuid NOT NULL REFERENCES "proposals"("id") ON DELETE CASCADE,
+  "user_id"        text NOT NULL,
+  "snoozed_until"  timestamptz NOT NULL,
+  "created_at"     timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY ("proposal_id", "user_id")
+);
+CREATE INDEX IF NOT EXISTS "proposal_snoozes_user_idx"
+  ON "proposal_snoozes" ("user_id", "snoozed_until");
+
 -- ─── 29. knowledge_facts ─────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS "knowledge_facts" (
@@ -4134,6 +4149,7 @@ ALTER TABLE focus_sessions ADD COLUMN IF NOT EXISTS subject_entity_id uuid;
 CREATE INDEX IF NOT EXISTS idx_focus_sessions_subject_entity_id ON focus_sessions (subject_entity_id);
 -- First-class playbook stages (0159): active stage pointer (nullable).
 ALTER TABLE focus_sessions ADD COLUMN IF NOT EXISTS current_stage text;
+ALTER TABLE focus_sessions ADD COLUMN IF NOT EXISTS stage_history jsonb NOT NULL DEFAULT '[]'::jsonb;
 -- Free-form session metadata bag (0160): shallow-merged by PATCH + session_update.
 ALTER TABLE focus_sessions ADD COLUMN IF NOT EXISTS metadata jsonb NOT NULL DEFAULT '{}'::jsonb;
 -- One active session per channel + covering index for per-message lookup (0121)
@@ -4632,6 +4648,8 @@ DO $$ BEGIN
   CREATE TYPE governance_verdict AS ENUM ('auto', 'propose');
 EXCEPTION WHEN duplicate_object THEN null;
 END $$;
+-- 0381: `deny`, a person's stored "Never" (founder decision G3).
+ALTER TYPE governance_verdict ADD VALUE IF NOT EXISTS 'deny';
 
 CREATE TABLE IF NOT EXISTS "governance_rules" (
   "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -5303,7 +5321,8 @@ END $$;
 -- 0342: session runners — who is attached to a session right now (one row per
 -- session × client conversation holding its change-feed wait). Telemetry,
 -- stamped by the wait at most once a minute; never on focus_sessions (0277's
--- trigger would wake the waiter). Mirrors 0342_session_runners.sql + 0373 (process).
+-- trigger would wake the waiter). Mirrors 0342_session_runners.sql + 0373 (process)
+-- + 0384 (state).
 CREATE TABLE IF NOT EXISTS "session_runners" (
   "session_id"      uuid        NOT NULL REFERENCES "focus_sessions"("id") ON DELETE CASCADE,
   "client_key"      text        NOT NULL,
@@ -5317,6 +5336,9 @@ CREATE TABLE IF NOT EXISTS "session_runners" (
   "process_key"        text        NOT NULL DEFAULT '',
   "process_host"       text,
   "process_started_at" timestamptz,
+  "state"              text,
+  "state_since"        timestamptz,
+  "state_reported_at"  timestamptz,
   "first_seen_at"   timestamptz NOT NULL DEFAULT now(),
   "last_seen_at"    timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY ("session_id", "client_key", "process_key")
@@ -5324,6 +5346,8 @@ CREATE TABLE IF NOT EXISTS "session_runners" (
 
 CREATE INDEX IF NOT EXISTS "idx_session_runners_session_seen"
   ON "session_runners" ("session_id", "last_seen_at");
+CREATE INDEX IF NOT EXISTS "idx_session_runners_client"
+  ON "session_runners" ("client_key", "process_key");
 
 -- 0352: proposal apply runs — one row per background attempt at applying a
 -- LARGE approved proposal (progress, counts, outcome). Read through its

@@ -25,7 +25,7 @@ import { toolsT } from "./copy";
 import type { CardLike, CompositionLike } from "./installed-model";
 import {
   capabilityStatus,
-  skillStatus,
+  approvedStatus,
   statusRank,
   type StatusMark,
 } from "./tool-status";
@@ -224,7 +224,7 @@ function skillItem(
     slug: s.slug?.trim() || null,
     kind: s.kind,
     actionLabels: [],
-    status: skillStatus(s),
+    status: approvedStatus(s),
     workspaceId: s.workspaceId ?? null,
     scope:
       s.scope === "user" || s.scope === "workspace"

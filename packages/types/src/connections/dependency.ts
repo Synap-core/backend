@@ -96,6 +96,45 @@ export function isDependencyLinkType(
   );
 }
 
+/**
+ * `X --serves--> G`: the work X is done FOR goal G. X is a session (optionally
+ * naming ONE of G's criteria in `links.metadata.criterionKey`) or a sub-goal
+ * (a track serving its parent goal). G is always a track.
+ *
+ * NOT a dependency: nothing waits on anything, so every blocker reader (they
+ * read {@link DEPENDENCY_LINK_TYPES}) ignores it. Goal rollups follow it: a
+ * goal's work counts the sessions filed in it OR serving it, each once.
+ */
+export const SERVES_LINK_TYPE = "serves" as const;
+
+/**
+ * The work edges THE dependency door writes: the dependency edges plus
+ * `serves`. Readers of "what waits on what" keep reading
+ * {@link DEPENDENCY_LINK_TYPES}; only the door widens to this list.
+ */
+export const WORK_LINK_TYPES = [
+  ...DEPENDENCY_LINK_TYPES,
+  SERVES_LINK_TYPE,
+] as const;
+export type WorkLinkType = (typeof WORK_LINK_TYPES)[number];
+
+export function isWorkLinkType(
+  type: string | null | undefined
+): type is WorkLinkType {
+  return type != null && (WORK_LINK_TYPES as readonly string[]).includes(type);
+}
+
+/** The kinds that may SERVE a goal; the served end is always a track. */
+export const SERVES_FROM_KINDS = ["session", "track"] as const;
+
+/** Is `from --serves--> to` a pair the edge allows (session|track → track)? */
+export function isServesPair(fromType: string, toType: string): boolean {
+  return (
+    (SERVES_FROM_KINDS as readonly string[]).includes(fromType) &&
+    toType === "track"
+  );
+}
+
 /** What became of a blocker — see the table at the top of this module. */
 export type DependencyOutcome = "open" | "delivered" | "dropped";
 

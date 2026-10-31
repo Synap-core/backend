@@ -39,6 +39,7 @@ import {
   db,
   focusSessions,
   proposals,
+  proposalSnoozes,
   users,
   chatTurns,
   workspaces,
@@ -161,6 +162,8 @@ beforeAll(async () => {
   for (const t of [
     focusSessions,
     proposals,
+    // "Later" (0381): the needs-you rule reads the reader's own snoozes.
+    proposalSnoozes,
     users,
     chatTurns,
     workspaces,

@@ -31,6 +31,7 @@ describe("openIn — web-hosted objects", () => {
     "document",
     "channel",
     "skill",
+    "tool",
   ])("hosts %s on /open", (objectKind) => {
     const exit = openIn({ kind: "object", objectKind, id: ID });
     expect(exit.href).toBe(`/open/${objectKind}/${ID}`);
@@ -62,7 +63,7 @@ describe("openIn — web-hosted objects", () => {
 });
 
 describe("openIn — desktop links always carry a fallback", () => {
-  it.each(["workspace", "project", "cell", "tool"])(
+  it.each(["workspace", "project", "cell"])(
     "%s bounces to the desktop app with a download fallback",
     (objectKind) => {
       const exit = openIn({ kind: "object", objectKind, id: ID });
@@ -356,6 +357,26 @@ describe("placeExit — the device decides what a hand-off shows", () => {
       expect(placed.unavailable).toEqual({ note: PHONE_UNAVAILABLE_NOTE });
     }
   );
+
+  it("an app exit carries its query as the app's props, and none without one", () => {
+    expect(openIn({ kind: "app", appId: "data" }).href).toBe(
+      "synap://open/app/data"
+    );
+    const exit = openIn({
+      kind: "app",
+      appId: "data",
+      query: { tab: "profiles", kindSlugs: "contact" },
+    });
+    expect(exit.href).toBe(
+      "synap://open/app/data?tab=profiles&kindSlugs=contact"
+    );
+    expect(exit.isDesktopLink).toBe(true);
+    expect(exit.fallback?.href).toMatch(/\/download\/browser$/);
+    // A phone is still told to open it on the computer, query or not.
+    const placed = placeExit(exit, true, "admin");
+    expect(placed.href).toBeNull();
+    expect(placed.unavailable).toEqual({ note: PHONE_UNAVAILABLE_NOTE });
+  });
 
   it("never hands a phone a desktop-app link or the desktop install hatch", () => {
     const targets = [

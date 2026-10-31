@@ -32,6 +32,7 @@ import {
   CEILING_DEFAULTS,
   TIGHTEN_ONLY_CEILING_AXES,
   PROPOSE_REASON,
+  DENIED_BY_RULE,
   REVERSIBLE_CLASS_PATTERN,
   OWN_ORGANISE_CLASS_PATTERN,
   isOwnOrganiseWrite,
@@ -229,7 +230,8 @@ export async function resolveGovernanceLane(input: {
  */
 export type AgentGovernanceResolution =
   | { decision: "not-agent" }
-  | { decision: "deny"; reason: string }
+  /** `reasonCode` = the engine's typed refusal (`DENIED_BY_RULE`), when set. */
+  | { decision: "deny"; reason: string; reasonCode?: string }
   | { decision: "propose"; reason?: string; reasonCode?: string }
   | {
       decision: "execute";
@@ -246,7 +248,7 @@ interface GovernanceRuleCandidate {
   targetKind: "action" | "profile" | "capability" | "connection";
   targetPattern: string;
   targetProfile: string | null;
-  verdict: "auto" | "propose";
+  verdict: GovernanceRuleVerdict;
   createdAt: Date;
 }
 
@@ -511,6 +513,9 @@ export interface ResolveGovernanceRuleInput {
   ownWorkOrganise?: boolean;
 }
 
+/** A stored rule's verdict: `deny` is a person's "Never" (0381). */
+type GovernanceRuleVerdict = "auto" | "propose" | "deny";
+
 /** A resolved rule match: the winning verdict + the pattern that matched (for audit stamping). */
 export interface GovernanceRuleMatch {
   /**
@@ -520,7 +525,7 @@ export interface GovernanceRuleMatch {
    * / `matchedPattern`, so surfacing the id changes no decision.
    */
   ruleId: string;
-  verdict: "auto" | "propose";
+  verdict: GovernanceRuleVerdict;
   /** The matched target — an action pattern, or `profile:<slug>` for a profile-kind rule. */
   matchedPattern: string;
   /**
@@ -544,6 +549,13 @@ export interface GovernanceRuleMatch {
  * "*"=0) — and returns the top-ranked row's verdict, breaking ties by the
  * newest `created_at`. Returns `undefined` when no rule matches, so the
  * engine's rung 2.8 simply no-ops.
+ *
+ * A `deny` row (a person's "Never", 0381) ranks on the SAME score: a more
+ * specific `auto` or `propose` outranks a broader deny (the person widened
+ * one act inside a wider "never"), and a more specific deny outranks a
+ * broader auto. On an EQUAL score the deny wins whatever its age — refusing
+ * is the safe side of a tie, and a later "Always" of the same reach does not
+ * silently undo a "Never" (revoke the deny to take it back).
  */
 export async function resolveGovernanceRule(
   input: ResolveGovernanceRuleInput
@@ -610,7 +622,7 @@ export async function resolveGovernanceRule(
         id: string;
         score: number;
         createdAt: Date;
-        verdict: "auto" | "propose";
+        verdict: GovernanceRuleVerdict;
         matchedPattern: string;
         namesWrite: boolean;
       }
@@ -655,10 +667,16 @@ export async function resolveGovernanceRule(
     const principalScore = principalSpecificity(rule.principalKind);
     const scopeScore = rule.scopeKind === "workspace" ? 2 : 0;
     const score = principalScore + scopeScore + targetScore;
+    const denyTie =
+      !!best &&
+      score === best.score &&
+      (rule.verdict === "deny") !== (best.verdict === "deny");
     if (
       !best ||
       score > best.score ||
-      (score === best.score && rule.createdAt > best.createdAt)
+      (denyTie
+        ? rule.verdict === "deny"
+        : score === best.score && rule.createdAt > best.createdAt)
     ) {
       best = {
         id: rule.id,
@@ -903,7 +921,10 @@ export async function applyAgentPosture(input: {
           eq(governanceRules.targetKind, "action"),
           eq(governanceRules.principalKind, "agent"),
           eq(governanceRules.agentUserId, agentUserId),
-          eq(governanceRules.scopeKind, "pod")
+          eq(governanceRules.scopeKind, "pod"),
+          // A posture never writes a "Never" (0381), so it never takes one
+          // back: a person's deny outlives every posture change.
+          ne(governanceRules.verdict, "deny")
         )
       );
     const rows = [
@@ -1009,7 +1030,7 @@ async function applyAgentSpacePosture(input: {
  * a name the rows actually encode. Rows matching no preset ⇒ `null` (custom).
  */
 function matchPostureName(
-  rows: ReadonlyArray<{ pattern: string; verdict: "auto" | "propose" }>
+  rows: ReadonlyArray<{ pattern: string; verdict: GovernanceRuleVerdict }>
 ): AgentPostureName | null {
   const key = (v: string, p: string) => `${v} ${p}`;
   const have = new Set(rows.map((r) => key(r.verdict, r.pattern)));
@@ -1030,8 +1051,9 @@ export interface AgentGovernanceState {
   /** The named posture last applied, or null (custom / never set). */
   posture: AgentPostureName | null;
   writesRequireProposal: boolean;
-  /** Active agent-scoped, pod-scope action rules (this agent's own). */
-  rules: Array<{ pattern: string; verdict: "auto" | "propose" }>;
+  /** Active agent-scoped, pod-scope action rules (this agent's own), its
+   * "Never"s (`deny`, 0381) included. */
+  rules: Array<{ pattern: string; verdict: GovernanceRuleVerdict }>;
   /**
    * Per-space overrides written by a SPACE posture ({@link applyAgentPosture}
    * with `scope.kind = "workspace"`), one entry per space that has any.
@@ -1119,7 +1141,7 @@ export async function readAgentGovernance(input: {
     .where(spacePostureRowsWhere(agentUserId));
   const bySpace = new Map<
     string,
-    Array<{ pattern: string; verdict: "auto" | "propose" }>
+    Array<{ pattern: string; verdict: GovernanceRuleVerdict }>
   >();
   for (const r of spaceRows) {
     if (!r.workspaceId) continue;
@@ -1841,7 +1863,11 @@ async function resolveForPrincipal(input: PrincipalInput): Promise<{
   // (e) Verdict → plain resolution. All side effects stay with the caller.
   if (decision.verdict === "deny") {
     return {
-      resolution: { decision: "deny", reason: decision.reason },
+      resolution: {
+        decision: "deny",
+        reason: decision.reason,
+        ...(decision.reasonCode ? { reasonCode: decision.reasonCode } : {}),
+      },
       hostUserId,
     };
   }
@@ -1956,7 +1982,7 @@ export async function dryRunAgentGovernanceDecision(
    */
   winningRule: {
     ruleId: string;
-    verdict: "auto" | "propose";
+    verdict: GovernanceRuleVerdict;
     matchedPattern: string;
   } | null;
 }> {
@@ -2022,7 +2048,11 @@ export async function dryRunAgentGovernanceDecision(
     case "deny":
       return {
         outcome: "deny",
-        rung: "cbac-capability-allowlist",
+        // A person's "Never" (rung 1.5) or the CBAC allowlist (rung 1).
+        rung:
+          resolution.reasonCode === DENIED_BY_RULE
+            ? "denied-by-rule"
+            : "cbac-capability-allowlist",
         reason: resolution.reason,
         winningRule,
       };

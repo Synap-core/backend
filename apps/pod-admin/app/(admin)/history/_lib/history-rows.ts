@@ -15,6 +15,7 @@
  */
 
 import { describeHeldWritesProposal } from "@synap-core/types/proposals/deferred-writes";
+import { describeDevDeployProposal } from "@synap-core/types/proposals/dev-deploy";
 import {
   buildObjectActionTitle,
   resolveObjectNoun,
@@ -101,6 +102,11 @@ function pastTitle(p: HistoryProposal): string {
   ) {
     return heading;
   }
+  const deploy = describeDevDeployProposal({
+    proposalType: p.proposalType,
+    data: payload,
+  });
+  if (deploy) return deploy.pastTitle;
   return buildObjectActionTitle({
     action: String(p.proposalType ?? "change"),
     objectKind: String(p.targetType ?? ""),

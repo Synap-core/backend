@@ -4,9 +4,11 @@
  *
  * A rule says: for this principal (a specific agent, or "any"), in this
  * scope (a workspace, or pod-wide), targeting this action/profile/capability
- * pattern — auto-execute or route to a proposal. `verdict` is NEVER 'deny':
- * denial stays a CBAC/floor concern (ADMIN, forcePropose, DESTRUCTIVE,
- * by-kind rungs), never a user-authored rule.
+ * pattern — auto-execute, route to a proposal, or refuse it. `deny` (0381,
+ * founder decision G3, 30 Oct 2026) is a person's "Never": from then on the
+ * pod refuses that write with the typed reason `DENIED_BY_RULE`. It can only
+ * tighten, so it is the one verdict that ranks ABOVE the floors (a floor
+ * proposes; "Never" refuses).
  *
  * Resolution (rung 2.8, `resolveAgentGovernanceDecision`) ranks matching rows
  * by specificity — agent > any, workspace > pod, exact action > profile >
@@ -62,13 +64,14 @@ export const GOVERNANCE_TARGETS = governanceTargetEnum.enumValues;
 export type GovernanceTarget = (typeof GOVERNANCE_TARGETS)[number];
 
 /**
- * 'auto' | 'propose' only — never 'deny'. A rule can widen the door
- * (auto-execute) or keep it reviewable (propose); it can never close a door
- * that a floor rung already opened for review or blocked outright.
+ * 'auto' widens the door (auto-execute), 'propose' keeps it reviewable,
+ * 'deny' (0381) closes it: a person's stored "Never". A rule can never widen a
+ * floor; a `deny` only ever refuses more.
  */
 export const governanceVerdictEnum = pgEnum("governance_verdict", [
   "auto",
   "propose",
+  "deny",
 ]);
 export const GOVERNANCE_VERDICTS = governanceVerdictEnum.enumValues;
 export type GovernanceVerdict = (typeof GOVERNANCE_VERDICTS)[number];

@@ -69,6 +69,9 @@ const APPROVAL_CLASS = /\b(approv|enabl|grant)/i;
  * "Enable X" hint.
  */
 function isRefusalInScope(literal: string): boolean {
+  // A person's "Never" (`reasonCode: DENIED_BY_RULE`, 0381) is a governance
+  // refusal no enabling lifts: an "Enable X" hint would name the wrong fix.
+  if (/reasonCode:\s*DENIED_BY_RULE\b/.test(literal)) return false;
   if (APPROVAL_CLASS.test(literal)) return true;
   const reason = /reason:\s*([\s\S]*?)(?:,\n|\n\s*\})/.exec(literal)?.[1] ?? "";
   const isLiteralText = /^\s*[`"']/.test(reason);

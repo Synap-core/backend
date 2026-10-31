@@ -34,6 +34,7 @@
 
 import { z } from "zod";
 import { resolveStageGate } from "@synap/playbooks";
+import { describeDevDeployProposal } from "@synap-core/types/proposals/dev-deploy";
 import { TRPCError } from "@trpc/server";
 import { db, eq, focusSessions, getRequestGrant } from "@synap/database";
 import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
@@ -213,10 +214,15 @@ function summarize(
   if (type === DEV_PLAN_APPROVAL_TYPE) {
     return `Approve plan for ${payload.repo} on ${payload.branch}`;
   }
-  const deploy = payload as DevDeployApprovalPayload;
-  return `Deploy ${deploy.commitSha.slice(0, 8)} (${deploy.branch}) to ${
-    deploy.targetHost
-  }`;
+  // The one heading every surface shows ("Push a524c103 to main in …"): it
+  // names the step, never "Deploy" for a push to main.
+  const deploy = describeDevDeployProposal({
+    proposalType: type,
+    data: payload,
+  });
+  if (deploy) return deploy.title;
+  const raw = payload as DevDeployApprovalPayload;
+  return `Ship ${raw.commitSha.slice(0, 8)} (${raw.branch}) to ${raw.targetHost}`;
 }
 
 export interface CreateDevApprovalProposalInput {

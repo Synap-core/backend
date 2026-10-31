@@ -71,7 +71,7 @@ import {
 import { checkLinkEndpointsVisible } from "./hub-protocol/rest/link-endpoint-visibility.js";
 import {
   DEPENDENCY_ENDPOINT_KINDS,
-  DEPENDENCY_LINK_TYPES,
+  WORK_LINK_TYPES,
 } from "@synap-core/types/connections";
 
 const dependencyEdgeInput = z.object({
@@ -79,7 +79,16 @@ const dependencyEdgeInput = z.object({
   fromId: z.string().uuid(),
   toType: z.enum(DEPENDENCY_ENDPOINT_KINDS),
   toId: z.string().uuid(),
-  linkType: z.enum(DEPENDENCY_LINK_TYPES),
+  linkType: z.enum(WORK_LINK_TYPES),
+});
+
+/**
+ * The create input: a `serves` edge from a session may name ONE of the goal's
+ * criteria (stored in `links.metadata.criterionKey`; the door refuses a key
+ * the goal does not have, or one on any other edge).
+ */
+const addDependencyInput = dependencyEdgeInput.extend({
+  criterionKey: z.string().min(1).max(200).optional(),
 });
 
 /** A governed dependency result as the tRPC contract: refusals THROW. */
@@ -961,13 +970,17 @@ export const graphRouter = router({
   // node neighbourhood already DRAWS these edges (Blocked by / Blocks /
   // Replaces / Replaced by); this is how a person adds or drops one.
 
-  /** Declare a dependency (or a replacement) between two units of work. */
+  /**
+   * Declare a dependency (or a replacement) between two units of work, or
+   * that a session or a sub-goal SERVES a goal (`serves`, not a dependency).
+   */
   addDependency: protectedProcedure
-    .input(dependencyEdgeInput)
-    .mutation(async ({ ctx, input }) =>
+    .input(addDependencyInput)
+    .mutation(async ({ ctx, input: { criterionKey, ...edge } }) =>
       governedResultOrThrow(
         await governedDependencyLink({
-          edge: input,
+          edge,
+          ...(criterionKey !== undefined ? { metadata: { criterionKey } } : {}),
           userId: ctx.userId,
           agentUserId: ctx.agentUserId ?? undefined,
           requestWorkspaceId: ctx.workspaceId ?? null,

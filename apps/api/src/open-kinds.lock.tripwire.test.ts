@@ -14,7 +14,8 @@ import { stripComments } from "../../../scripts/strip-comments.mjs";
 // The operational kinds (automation, session, playbook, run, capability,
 // agent) are HOST kinds: the console hosts them on the web and `dispatchOpen`
 // 302s humans there. So are `document` and `channel` (read-only bodies),
-// `track` (a goal: its judge's verbs), and `skill` (pod admin's tool page).
+// `track` (a goal: its judge's verbs), and `skill` and `tool` (pod admin's
+// tool pages).
 // Do not import that file from apps/api — tsc rootDir cannot leave src/.
 // If you change either list, update both this snapshot and open-params.ts.
 const POD_ADMIN_HOST_TYPES = [
@@ -30,6 +31,7 @@ const POD_ADMIN_HOST_TYPES = [
   "channel",
   "track",
   "skill",
+  "tool",
 ] as const;
 const POD_ADMIN_BOUNCE_TYPES = [
   "proposal",
@@ -37,7 +39,6 @@ const POD_ADMIN_BOUNCE_TYPES = [
   "project",
   "workspace",
   "settings",
-  "tool",
 ] as const;
 
 // Frozen copy of TYPED_DEEP_LINK_KINDS (packages/api/src/utils/deep-links.ts).

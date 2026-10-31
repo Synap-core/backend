@@ -49,6 +49,22 @@ describe("holds ↔ waiting-on reasons", () => {
     }
   });
 
+  it("a step's declared wait reads exactly as a hold on the same on", () => {
+    for (const on of HOLD_ON) {
+      expect(waitingOnReasonOf({ kind: "step", on })).toBe(DECIDED[on]);
+      // Its finer kind never changes the reason.
+      expect(
+        waitingOnReasonOf({ kind: "step", on, waitKind: "their_reply" })
+      ).toBe(DECIDED[on]);
+    }
+    expect(
+      deriveWaitingOn([
+        { kind: "step", on: "nobody" },
+        { kind: "step", on: "unspecified" },
+      ])
+    ).toEqual([]);
+  });
+
   it("a mapped reason is a real reason with words; nobody and unspecified make no mark", () => {
     for (const reason of Object.values(HOLD_ON_WAITING_ON)) {
       if (reason === null) continue;
@@ -86,6 +102,15 @@ describe("holds ↔ wait kinds", () => {
   it("each hold maps to the decided kind, through the mapping function", () => {
     for (const on of HOLD_ON) {
       expect(waitKindOf({ kind: "hold", on })).toBe(DECIDED_WAIT_KIND[on]);
+    }
+  });
+
+  it("a step gives its declared kind, else the hold's kind for its on", () => {
+    for (const on of HOLD_ON) {
+      expect(waitKindOf({ kind: "step", on })).toBe(DECIDED_WAIT_KIND[on]);
+      expect(waitKindOf({ kind: "step", on, waitKind: "their_reply" })).toBe(
+        "their_reply"
+      );
     }
   });
 

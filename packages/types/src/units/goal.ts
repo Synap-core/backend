@@ -32,7 +32,13 @@ import type {
   PullRequestState,
 } from "../events/pr-state.js";
 import type { HoldDevRef, HoldOn } from "../lifecycle/hold.js";
-import { WAIT_KIND_FROM, type WaitKind } from "./wait-kind.js";
+import {
+  WAIT_BALLS,
+  WAIT_KIND_BALL,
+  WAIT_KIND_FROM,
+  isWaitKind,
+  type WaitKind,
+} from "./wait-kind.js";
 
 // ── kind of work and uncertainty (decision 4) ──────────────────────────────
 
@@ -712,7 +718,8 @@ export function operationPeriodReading(
  * What a goal or a session is WAITING ON (R4) — a derived mark with a reason,
  * never a status, distinct from `paused` (chosen). Read from what exists: the
  * owed slots of its open runs, pending proposals, `blocked_by` edges, the
- * current hold of a pause, open pull requests and open sub-sessions. `external`
+ * current hold of a pause, the wait a thing's current step declares
+ * (`waits`), open pull requests and open sub-sessions. `external`
  * (an outside party: a vendor, a client, CI) and `date` (a calendar date) were
  * added for holds and PRs (decision D4, 2026-10-30).
  */
@@ -824,6 +831,16 @@ export type WaitingOnSource = (
     }
   | { kind: "work_unit"; state: PullRequestState; checks?: PullRequestChecks }
   | { kind: "child_session" }
+  | {
+      /**
+       * The thing stands in a step that DECLARES a wait (`waits` on its
+       * lifecycle option): "sent" waits on the client's reply without being a
+       * pause. Read like a hold's `on`; `waitKind` is the step's own.
+       */
+      kind: "step";
+      on: HoldOn;
+      waitKind?: WaitKind;
+    }
 ) & { ref?: WaitingOnRef };
 
 /** THE mapping from one source to its reason; `null` = it makes no mark. */
@@ -837,6 +854,7 @@ export function waitingOnReasonOf(
     case "child_session":
       return "another_work";
     case "hold":
+    case "step":
       return Object.hasOwn(HOLD_ON_WAITING_ON, source.on)
         ? HOLD_ON_WAITING_ON[source.on]
         : null;
@@ -873,6 +891,12 @@ export function waitKindOf(source: WaitingOnSource): WaitKind {
       if (source.devRef && Object.hasOwn(WAIT_KIND_FROM.dev, source.devRef)) {
         return WAIT_KIND_FROM.dev[source.devRef];
       }
+      return Object.hasOwn(WAIT_KIND_FROM.hold, source.on)
+        ? WAIT_KIND_FROM.hold[source.on]
+        : WAIT_KIND_FROM.hold.unspecified;
+    case "step":
+      // The step's declared kind first ("their_reply"), else its `on`.
+      if (isWaitKind(source.waitKind)) return source.waitKind;
       return Object.hasOwn(WAIT_KIND_FROM.hold, source.on)
         ? WAIT_KIND_FROM.hold[source.on]
         : WAIT_KIND_FROM.hold.unspecified;
@@ -918,6 +942,33 @@ export function deriveWaitingOn(
     count: counts.get(reason)!,
     ...(refs.has(reason) ? { refs: refs.get(reason)! } : {}),
   }));
+}
+
+/**
+ * The ONE wait kind a row leads with, from its waiting-on marks: the named
+ * ref whose ball comes first in {@link WAIT_BALLS} (yours, then theirs, an
+ * agent's, a machine's, other work, a date, nobody), in source order within a
+ * ball. `null` when no ref names a kind (nothing waited on, or an older pod).
+ */
+export function leadWaitKind(
+  marks:
+    | ReadonlyArray<{
+        refs?: ReadonlyArray<{ waitKind?: string | null }> | null;
+      }>
+    | null
+    | undefined
+): WaitKind | null {
+  let best = null as WaitKind | null;
+  for (const m of marks ?? []) {
+    for (const r of m.refs ?? []) {
+      if (!isWaitKind(r.waitKind)) continue;
+      const rank = WAIT_BALLS.indexOf(WAIT_KIND_BALL[r.waitKind]);
+      if (best === null || rank < WAIT_BALLS.indexOf(WAIT_KIND_BALL[best])) {
+        best = r.waitKind;
+      }
+    }
+  }
+  return best;
 }
 
 // Every value has its words in the vocabulary, and the vocabulary names

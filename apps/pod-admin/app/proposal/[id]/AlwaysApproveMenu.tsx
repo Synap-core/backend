@@ -17,6 +17,12 @@
  * skips every broad rule for a run (the outward floor). There is no
  * "Everything, always" here: `deriveGovernanceGrantOptions` writes no wildcard
  * rule in pod admin (finding c173cc51).
+ *
+ * "Reject & never…" (`RejectNeverMenu`) is the third answer of decision G3:
+ * it rejects AND writes one `deny` row for this agent and this act
+ * (`deriveGovernanceNeverOption`, never a wildcard), so the pod refuses the
+ * same write from then on with `DENIED_BY_RULE`, above the floors (decision
+ * 956930ad). Pod admin runs the pod: a rule about what an agent may do.
  */
 
 import { useState } from "react";
@@ -28,10 +34,12 @@ import {
   DropdownTrigger,
   addToast,
 } from "@heroui/react";
-import { ChevronDown, Repeat } from "lucide-react";
+import { Ban, ChevronDown, Repeat } from "lucide-react";
 import {
   deriveGovernanceGrantOptions,
+  deriveGovernanceNeverOption,
   resolveCapabilityTarget,
+  type GovernanceGrantContext,
   type GovernanceGrantOption,
 } from "@synap-core/types";
 import {
@@ -114,15 +122,9 @@ function grantWords(
   }
 }
 
-/** Derive the applicable granularities from data already on the page — a
- * granularity is offered only when the proposal actually carries the field
- * it needs (e.g. no `agentUserId` → no "this agent" option). The which-and-what
- * decision (and the exact `governanceRules.create` payloads) is the shared pure
- * `deriveGovernanceGrantOptions` in `@synap-core/types` — the SAME function
- * synap-app's `GovernanceMenu` calls, here with the operator (`"operator-any"`)
- * mode; this file only maps pod-admin's raw proposal-row fields into the shared
- * context and supplies operator label copy. */
-function deriveGrantOptions(p: ProposalForRule, t: T): Granularity[] {
+/** Pod-admin's raw proposal-row fields, mapped into the shared context
+ * both derivations ("always" and "never") read. */
+function grantContext(p: ProposalForRule): GovernanceGrantContext {
   const actionKey =
     p.targetType && p.proposalType
       ? `${p.targetType}.${p.proposalType}`
@@ -132,18 +134,26 @@ function deriveGrantOptions(p: ProposalForRule, t: T): Granularity[] {
   const profileSlug =
     stringField(p.request?.data, "profileSlug") ??
     stringField(p.request?.data, "type");
+  return {
+    proposalId: p.id,
+    workspaceId: p.workspaceId,
+    agentUserId: p.agentUserId,
+    capabilityTarget: resolveCapabilityTarget(p.request?.data),
+    actionKey,
+    profileSlug,
+  };
+}
 
-  const options = deriveGovernanceGrantOptions(
-    {
-      proposalId: p.id,
-      workspaceId: p.workspaceId,
-      agentUserId: p.agentUserId,
-      capabilityTarget: resolveCapabilityTarget(p.request?.data),
-      actionKey,
-      profileSlug,
-    },
-    "operator-any"
-  );
+/** Derive the applicable granularities from data already on the page — a
+ * granularity is offered only when the proposal actually carries the field
+ * it needs (e.g. no `agentUserId` → no "this agent" option). The which-and-what
+ * decision (and the exact `governanceRules.create` payloads) is the shared pure
+ * `deriveGovernanceGrantOptions` in `@synap-core/types` — the SAME function
+ * synap-app's `GovernanceMenu` calls, here with the operator (`"operator-any"`)
+ * mode; this file only maps pod-admin's raw proposal-row fields into the shared
+ * context and supplies operator label copy. */
+function deriveGrantOptions(p: ProposalForRule, t: T): Granularity[] {
+  const options = deriveGovernanceGrantOptions(grantContext(p), "operator-any");
 
   return options.flatMap((o) => {
     const words = grantWords(t, o.id, p, o.value);
@@ -236,6 +246,109 @@ export function AlwaysApproveMenu({
             {g.label}
           </DropdownItem>
         ))}
+      </DropdownMenu>
+    </Dropdown>
+  );
+}
+
+/**
+ * "Reject & never…": the request's "Never" (decision G3). Rejects, then
+ * writes the deny `deriveGovernanceNeverOption` derives. Absent when the
+ * request names no agent or no single act (the derivation returns null).
+ */
+export function RejectNeverMenu({
+  proposal,
+  disabled,
+  onDone,
+}: {
+  proposal: ProposalForRule;
+  disabled?: boolean;
+  onDone: () => void;
+}) {
+  const [running, setRunning] = useState(false);
+  const reject = trpc.proposals.reject.useMutation();
+  const createRule = trpc.governanceRules.create.useMutation();
+
+  const t = alwaysApproveT();
+  const never = deriveGovernanceNeverOption(grantContext(proposal));
+  if (!never) return null;
+  const words =
+    never.rule.targetKind === "capability"
+      ? {
+          label: t("never.capability.label", { name: never.value }),
+          covers: t("never.capability.covers"),
+        }
+      : {
+          label: t("never.action.label"),
+          covers: t("never.action.covers"),
+        };
+
+  async function rejectAndNever(rule: CreateRuleInput, label: string) {
+    setRunning(true);
+    try {
+      await reject.mutateAsync({
+        proposalId: proposal.id,
+        reason: t("never.reason"),
+      });
+      try {
+        await createRule.mutateAsync(rule);
+        addToast({
+          title: t("never.done.title"),
+          description: t("never.done.body", { label }),
+          color: "success",
+        });
+      } catch (ruleError) {
+        addToast({
+          title: t("never.done.title"),
+          description: t("never.ruleFailed", {
+            reason:
+              ruleError instanceof Error
+                ? ruleError.message
+                : t("always.noReason"),
+          }),
+          color: "warning",
+        });
+      }
+      onDone();
+    } catch (rejectError) {
+      addToast({
+        title: t("never.rejectFailed"),
+        description:
+          rejectError instanceof Error
+            ? rejectError.message
+            : t("always.noReason"),
+        color: "danger",
+      });
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <Dropdown placement="bottom-start">
+      <DropdownTrigger>
+        <Button
+          color="danger"
+          variant="light"
+          className="min-h-10"
+          startContent={<Ban size={14} />}
+          endContent={<ChevronDown size={14} />}
+          isLoading={running}
+          isDisabled={disabled || running}
+        >
+          {t("never.trigger")}
+        </Button>
+      </DropdownTrigger>
+      <DropdownMenu
+        aria-label={t("never.menu")}
+        disabledKeys={running ? ["never"] : []}
+        onAction={() =>
+          void rejectAndNever(never.rule as CreateRuleInput, words.label)
+        }
+      >
+        <DropdownItem key="never" description={words.covers}>
+          {words.label}
+        </DropdownItem>
       </DropdownMenu>
     </Dropdown>
   );

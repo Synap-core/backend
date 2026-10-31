@@ -18,15 +18,11 @@
  * moved behind `open-findings-door.js` (to stop this file needing a TOTAL
  * `@synap/database` mock), this file stubs that door outright. So it covers the
  * PROJECTION and the honesty rules only — it does NOT exercise the SQL at all.
- * Nothing here would notice if the `finding-status = 'open'` or
- * `severity = 'blocker'` predicates were dropped, the soft-delete filter removed,
- * or the `CAP + 1` probe changed to `CAP` (which would silently turn
- * `countIsLowerBound` into a permanent `false`).
- *
- * That is a REAL hole, not a shrug. It is currently covered only by the live
- * verification against the pod on 2026-09-20 (20 findings, correct
- * status/severity filtering). Closing it properly needs a pglite test driving
- * `readOpenBlockerFindings` against real rows — worth doing, not done.
+ * The SQL (the open predicate, `severity = 'blocker'`, the soft-delete filter,
+ * the `CAP + 1` probe) is pinned against real rows in
+ * `open-findings-door.pglite.test.ts`. While it was only stubbed here, the door
+ * read a property key no finding carries and reported `openTotal: 0` on a pod
+ * of 296 unresolved findings.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 

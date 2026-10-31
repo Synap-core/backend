@@ -26,3 +26,6 @@ export * from "./home-brief-reads.js";
  * importers move; then this line goes.
  */
 export { formatFloorCount } from "../value-format/numbers.js";
+
+/** Home's words, en + fr (`./home-copy.ts`). */
+export { homeCopy, homeT } from "./home-copy.js";

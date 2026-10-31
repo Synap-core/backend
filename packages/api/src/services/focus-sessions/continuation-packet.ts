@@ -161,7 +161,12 @@ import {
 import { loadSessionLiveness } from "../runs/session-liveness.js";
 import { readSessionRoom, type PacketRoomSection } from "./room-messages.js";
 import { readSessionGates, type PacketGatesSection } from "./session-gates.js";
-import { loadSessionRunners, type SessionRunner } from "./session-runners.js";
+import {
+  foldRunnerState,
+  loadSessionRunners,
+  type RunnerStateFold,
+  type SessionRunner,
+} from "./session-runners.js";
 import {
   readSessionInbox,
   type PacketInboxItem,
@@ -265,9 +270,17 @@ export interface PacketRunnerItem {
     startedAt?: string;
     lastSeenAt: string;
   }>;
+  /**
+   * What the runner says it is doing (0384, `X-Synap-Runner-State`): `busy`,
+   * `idle`, `needs_permission`, or `ended` (it said so, or left the live
+   * window). `null` while live = its client names no state: unknown, not idle.
+   */
+  state: "busy" | "idle" | "needs_permission" | "ended" | null;
+  /** When it entered that state; for a runner gone quiet, when it was last seen. */
+  stateSince?: string;
   firstSeenAt: string;
   lastSeenAt: string;
-  /** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read. */
+  /** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read, and not `ended`. */
   live: boolean;
   /** The shell command that reopens it (`resolveAgentConversation`); absent for a harness we cannot reopen. */
   resume?: string;
@@ -799,6 +812,20 @@ export interface ContinuationPacket {
         lastActivityAt: string | null;
         measuredAt: string;
         windowMs: number;
+        /**
+         * What the LIVE runners SAY they are doing (0384), folded by
+         * `foldRunnerState`: `needs_permission` over `busy` over `idle`;
+         * `state: null` = no live runner named one. The harness's own word,
+         * beside the pod-activity `state` above and never folded into it. A
+         * failed runners read is `unavailable` (see `runners`), never null.
+         */
+        runner:
+          | {
+              status: "ok";
+              state: "busy" | "idle" | "needs_permission" | null;
+              since: string | null;
+            }
+          | { status: "unavailable"; reason: string };
       }
     | { status: "unavailable"; reason: string };
   /**
@@ -938,6 +965,8 @@ function runnerItem(r: SessionRunner): PacketRunnerItem {
           })),
         }
       : {}),
+    state: r.state,
+    ...(r.stateSince ? { stateSince: r.stateSince } : {}),
     firstSeenAt: r.firstSeenAt,
     lastSeenAt: r.lastSeenAt,
     live: r.live,
@@ -2712,7 +2741,7 @@ export async function projectContinuationPacket(
     room,
     liveFacts,
     gates,
-    runners,
+    runnersRead,
     inbox,
     goal,
     siblings,
@@ -2913,15 +2942,27 @@ export async function projectContinuationPacket(
         unavailable(row.id, "gates", "This session's gates could not be read.")
       ),
     // The loader's max, so `total` counts every runner (a session has a handful).
+    // The fold reads every runner, not the top N the section shows.
     loadSessionRunners(row.id, { database, limit: 100 })
-      .then((all) => section(all.map(runnerItem)))
-      .catch(
-        unavailable(
+      .then(
+        (
+          all
+        ): {
+          section: ContinuationPacket["runners"];
+          fold: RunnerStateFold | null;
+        } => ({
+          section: section(all.map(runnerItem)),
+          fold: foldRunnerState(all),
+        })
+      )
+      .catch((err: unknown) => ({
+        section: unavailable(
           row.id,
           "runners",
           "Who is attached to this session could not be read."
-        )
-      ),
+        )(err),
+        fold: null,
+      })),
     readSessionInbox(database, {
       sessionId: row.id,
       viewerId: ctx.userId,
@@ -2979,6 +3020,7 @@ export async function projectContinuationPacket(
       ? { ...allWorkUnits, items: allWorkUnits.items.slice(0, PACKET_TOP_N) }
       : allWorkUnits;
 
+  const runners = runnersRead.section;
   const measuredAt = Date.now();
   const live: ContinuationPacket["live"] = liveFacts
     ? {
@@ -2993,6 +3035,12 @@ export async function projectContinuationPacket(
         lastActivityAt: toIso(liveFacts.lastAt),
         measuredAt: new Date(measuredAt).toISOString(),
         windowMs: SESSION_WORKING_WINDOW_MS,
+        runner: runnersRead.fold
+          ? { status: "ok", ...runnersRead.fold }
+          : {
+              status: "unavailable",
+              reason: "Who is attached to this session could not be read.",
+            },
       }
     : {
         status: "unavailable",

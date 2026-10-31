@@ -373,6 +373,9 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
                 (outcome.enableProposal?.status === "proposed"
                   ? ` ${outcome.enableProposal.message} Review: ${outcome.enableProposal.reviewUrl}`
                   : ""),
+              // A person's "Never" (0381): typed, so the caller stops
+              // instead of parsing the sentence.
+              ...(outcome.reasonCode ? { reasonCode: outcome.reasonCode } : {}),
               ...(outcome.enable ? { enable: outcome.enable } : {}),
               ...(outcome.enableProposal
                 ? { enableProposal: outcome.enableProposal }

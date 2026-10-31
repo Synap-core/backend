@@ -66,6 +66,7 @@ import {
   messages,
   playbookRuns,
   proposals,
+  proposalSnoozes,
 } from "@synap/database";
 import { listNeedsYouOwed } from "../needs-you-owed.js";
 import { countNeedsYou } from "../needs-you-union.js";
@@ -156,6 +157,8 @@ describe("listNeedsYouOwed + countNeedsYou: THE rule through the reader", () => 
       messages,
       chatTurns,
       proposals,
+      // "Later" (0381): the needs-you rule reads the reader's own snoozes.
+      proposalSnoozes,
       events,
       playbookRuns,
     ]) {
