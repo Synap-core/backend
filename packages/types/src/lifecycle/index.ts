@@ -193,6 +193,7 @@ export {
   DATE_APPROACHING_DAYS,
   dateDueAt,
   dateSignalOf,
+  isStatusSignal,
   type StatusSignal,
 } from "./signal.js";
 

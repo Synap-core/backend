@@ -32,6 +32,7 @@ import type { LibraryHealth } from "@synap-core/types/imports";
 import type { SessionsOwingGrade } from "../focus-sessions/session-nudges.js";
 import type { GoalRollup, ScopeRollup } from "../status/status-rollup.js";
 import type { StatusOfAnswer } from "../status/status-read.js";
+import type { StatusOfInclude } from "@synap-core/types/units";
 import {
   db,
   entities,
@@ -375,6 +376,8 @@ interface DiscoverOptions {
   projectId?: string;
   /** Ids to answer "where does it stand" for (`startHere.statusOf`). */
   statusOf?: string[];
+  /** What each `statusOf` answer carries beyond its status (`include`). */
+  statusOfInclude?: readonly StatusOfInclude[];
   /**
    * Include the lens-model concept prose in `note`. Implied by detail:'full'.
    * Off by default: the concept is taught once per conversation (instructions
@@ -1069,6 +1072,7 @@ export async function discover(
       workspaceId,
       projectId,
       statusOf: params.statusOf,
+      statusOfInclude: params.statusOfInclude,
       pending: pendingState,
       learnMoreSkill: ORIENT_LEARN_MORE_SKILL,
       ranked,

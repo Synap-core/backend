@@ -20,3 +20,4 @@ export * from "./stage-space.js";
 export * from "./deliverable.js";
 export * from "./outcome.js";
 export * from "./stuck.js";
+export * from "./status-of.js";
