@@ -14,7 +14,7 @@ import {
   type UnitTone,
 } from "../units/state.js";
 import { resolveStatusLabel } from "../vocabulary/index.js";
-import type { WaitKind } from "../units/wait-kind.js";
+import { WAIT_KIND_FROM, type WaitKind } from "../units/wait-kind.js";
 import type { HoldOn } from "./hold.js";
 
 export const LIFECYCLE_CATEGORIES = [
@@ -76,6 +76,44 @@ export interface LifecycleOptionWaits {
    * the wait is late. The same reading as the option's own `dateBinding`.
    */
   dateBinding?: string;
+}
+
+/**
+ * The wait a MOVE lands in (`TransitionBase.wait`, status-first PR-H): stamped
+ * by the mover when the target step declares one (`LifecycleOption.waits`),
+ * absent otherwise. A step wait is not a pause: the hold (`hold`) stays null
+ * for an active step; the wait's history (`status_wait_episode`) starts here.
+ */
+export interface TransitionWait {
+  waitKind: WaitKind;
+  /** The step's `waits.on`. */
+  on?: HoldOn;
+  /** What `waits.refFrom` held on the thing at the move (an id, a name). */
+  ref?: string;
+}
+
+/**
+ * THE stamp a move carries for its target step's declared wait: the step's
+ * kind, else the one map table's (`WAIT_KIND_FROM.hold`); `ref` is the value
+ * of the step's `refFrom` property, when it holds a string or a number.
+ */
+export function transitionWaitOf(
+  waits: LifecycleOptionWaits | null | undefined,
+  refValue?: unknown
+): TransitionWait | null {
+  if (!waits) return null;
+  const waitKind =
+    waits.waitKind ??
+    (Object.hasOwn(WAIT_KIND_FROM.hold, waits.on)
+      ? WAIT_KIND_FROM.hold[waits.on]
+      : WAIT_KIND_FROM.hold.unspecified);
+  const ref =
+    typeof refValue === "string"
+      ? refValue.trim()
+      : typeof refValue === "number" && Number.isFinite(refValue)
+        ? String(refValue)
+        : "";
+  return { waitKind, on: waits.on, ...(ref ? { ref } : {}) };
 }
 
 /** The default mark of each category: THE tone table's (`../units/state.ts`). */

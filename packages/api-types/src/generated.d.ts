@@ -227,6 +227,12 @@ export interface TransitionBase {
 	 * other move. The transition log is the hold's only store.
 	 */
 	hold: RecordedHold | null;
+	/**
+	 * The wait the target step declares (`LifecycleOption.waits`), stamped by
+	 * the mover; absent when the step declares none (and on goal and session
+	 * moves, whose statuses declare no waits).
+	 */
+	wait?: TransitionWait;
 }
 /** Who made a move, for attribution (`TransitionBase.actorClass`). */
 export type TransitionActorClass = "agent" | "app" | "human" | "system";
@@ -304,6 +310,19 @@ declare const LIFECYCLE_CATEGORIES: readonly [
 	"lost"
 ];
 export type LifecycleCategory = (typeof LIFECYCLE_CATEGORIES)[number];
+/**
+ * The wait a MOVE lands in (`TransitionBase.wait`, status-first PR-H): stamped
+ * by the mover when the target step declares one (`LifecycleOption.waits`),
+ * absent otherwise. A step wait is not a pause: the hold (`hold`) stays null
+ * for an active step; the wait's history (`status_wait_episode`) starts here.
+ */
+export interface TransitionWait {
+	waitKind: WaitKind;
+	/** The step's `waits.on`. */
+	on?: HoldOn;
+	/** What `waits.refFrom` held on the thing at the move (an id, a name). */
+	ref?: string;
+}
 declare const UNIT_STATES: readonly [
 	"not_started",
 	"working",

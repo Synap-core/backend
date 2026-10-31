@@ -495,6 +495,13 @@ export {
   type StatusSignalEpisode,
 } from "./services/lifecycle/status-signals.js";
 export {
+  listOpenWaitEpisodeSubjects,
+  readWaitEpisodes,
+  syncWaitEpisodes,
+  type WaitEpisodeSeen,
+  type WaitEpisodeSubject,
+} from "./services/lifecycle/wait-episodes.js";
+export {
   LifecycleWriteOutsideDoorError,
   assertNoLifecycleMove,
   columnsForValue,

@@ -5573,3 +5573,27 @@ CREATE TABLE IF NOT EXISTS "status_signal_raised" (
   "raised_at"    timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY ("subject_type", "subject_id", "signal", "episode_key")
 );
+
+-- 0386: wait episodes (status-first PR-H) — mirrors
+-- 0386_status_wait_episode.sql.
+CREATE TABLE IF NOT EXISTS "status_wait_episode" (
+  "id"           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "subject_type" text        NOT NULL,
+  "subject_id"   text        NOT NULL,
+  "facet_id"     text,
+  "wait_kind"    text        NOT NULL,
+  "on"           text,
+  "reason"       text,
+  "ref"          jsonb,
+  "ref_key"      text        NOT NULL DEFAULT '',
+  "opened_at"    timestamptz NOT NULL DEFAULT now(),
+  "closed_at"    timestamptz
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_status_wait_episode_open"
+  ON "status_wait_episode" ("subject_type", "subject_id", "facet_id", "wait_kind", "ref_key")
+  NULLS NOT DISTINCT
+  WHERE "closed_at" IS NULL;
+
+CREATE INDEX IF NOT EXISTS "idx_status_wait_episode_subject"
+  ON "status_wait_episode" ("subject_type", "subject_id", "opened_at");

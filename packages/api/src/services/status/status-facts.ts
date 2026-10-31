@@ -295,9 +295,11 @@ export async function readWaitingOnFor<K>(
 }
 
 /**
- * The collector's SOURCES, before they are folded into marks: what a rollup
- * counts per wait kind (`countWaitKinds`). Same reads, same floors, same
- * naming rule as {@link readWaitingOnFor}, which folds them.
+ * The collector's SOURCES, before they are folded into marks: each one with
+ * its own wait kind (`waitKindOf`) and ref, for what needs every wait apart
+ * (the status watcher's wait episodes) and what a rollup counts per wait kind
+ * (`countWaitKinds`). Same reads, same floors, same naming rule as
+ * {@link readWaitingOnFor}, which folds them. THROWS.
  */
 export async function readWaitingOnSourcesFor<K>(
   reader: WaitingOnReader,
