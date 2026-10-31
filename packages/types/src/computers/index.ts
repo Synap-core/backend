@@ -3,8 +3,10 @@
  * surfaces draw the same computer and must never disagree: pod admin's
  * Computers (web), the desktop's Connected › Computers, and Relay. Each used
  * to carry its own copy of these helpers, with diverging words ("seen never"
- * here, "Not seen yet" there). They all import this file; none re-derives a
- * key state, a number of days, an OS name, a "never seen" or a command.
+ * here, "Not seen yet" there). Pod admin and the desktop import this file
+ * (browser `apps/connected`, held there by `computers-one-rule.tripwire`);
+ * Relay does not yet. A surface that imports it re-derives no key state,
+ * number of days, OS name, "never seen" or command.
  *
  * What lives here: key state → words, whole days left, the one "never seen"
  * wording, the OS in a person's words and the two commands a person runs ON

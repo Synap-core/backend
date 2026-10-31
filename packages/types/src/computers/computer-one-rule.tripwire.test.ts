@@ -12,8 +12,10 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
  * (key state in words, days left, the one "never seen", the OS names, the
  * connect and reconnect commands); the device flow's twin is
  * `@synap-core/types/device`. This holds pod admin to it: no file of the app
- * re-derives one of them. The desktop and Relay halves are held in their own
- * repos' tripwires, because a sibling checkout is not there in this repo's CI.
+ * re-derives one of them. The desktop is held by its own repo's tripwire
+ * (browser `computers-one-rule.tripwire.test.ts`), because a sibling checkout
+ * is not there in this repo's CI. Relay does not import the rule yet, and
+ * nothing holds it.
  * It lives beside the rule (not in pod admin's `__tripwires__`) so the types
  * suite, which every change to the rule runs, runs it.
  *
