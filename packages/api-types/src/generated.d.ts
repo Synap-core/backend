@@ -18377,40 +18377,6 @@ export interface RetireShadowsResult {
 		reason: string;
 	}>;
 }
-/**
- * reconcileCapabilitiesToTemplates
- * =================================
- *
- * Boot-time (+ on-demand) convergence: for every installed capability CONTAINER
- * (the `capabilities` table — pod-wide and workspace-scoped), additively
- * re-project its member skills from the current Control-Plane template when
- * the template has drifted since it was installed.
- *
- * WHY THIS EXISTS: a capability template fix (e.g. the `calendar_list`
- * `baseUrlOverride` correction) used to only reach a pod that re-ran the
- * install flow by hand. This is the CAPABILITY-layer counterpart to
- * `reconcileWorkspacesToTemplates` (apps/api/src/startup — converges workspaces
- * to their canonical `@synap-core/workspace-templates` package) — same shape,
- * same guarantees, applied to `@synap/playbooks` `CapabilityDefinition`s
- * instead. Lives in `@synap/api` (not apps/api/src/startup, unlike its
- * workspace counterpart) because it has TWO callers that both need the engine:
- * the apps/api boot hook AND the Hub REST `POST /capabilities/reconcile`
- * trigger below in `rest/capabilities.ts` — and apps/api cannot be imported
- * back by packages/api.
- *
- * Idempotent + additive + non-fatal:
- *  - Convergence is applied ONLY through the GOVERNED
- *    `createCapabilityFromDefinition` door — the same applier a manual
- *    `cap apply`/`cap install` uses. It never deletes a member and never
- *    touches a skill whose name isn't declared by the definition (a user's own
- *    custom-named skill is left alone); a skill it DOES own (matched by name)
- *    is re-projected to the template's canonical fields — exactly the
- *    self-healing behavior `ensureSynapCoreCapability` already relies on.
- *  - A failure re-applying ONE container (a missing required param, a
- *    permission/governance rejection, a network blip) is caught, reported as a
- *    CONFLICT, and never blocks another container or boot.
- *  - `dryRun: true` computes the full report without writing anything.
- */
 export interface CapabilityReconcileEntry {
 	containerId: string;
 	name: string;
