@@ -13464,6 +13464,16 @@ export interface AutomationRunDetail extends UnifiedRunDetailBase {
 	};
 	outputSummary: Record<string, unknown> | null;
 	playbookDetail: null;
+	/**
+	 * The focus session this run opened (`focus_sessions.metadata.automationRunId`),
+	 * or null. The worker opens it ASYNCHRONOUSLY, after `automations.trigger` has
+	 * returned the run id, so null is also "not opened yet": a caller that just
+	 * triggered a run reads this until it is set or the run settles. It stays null
+	 * for a run that never opens one (a `skipped` precondition, a playbook
+	 * delegate, whose playbook run opens its own) and for a session the viewer may
+	 * not read (decision D1: a session is content, `sessionReadableWhere`).
+	 */
+	sessionId: string | null;
 	/** The flow definition this run executed; null only for legacy runs. */
 	definitionSnapshot: RunDefinitionSnapshot | null;
 	/**
