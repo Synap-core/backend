@@ -6346,6 +6346,17 @@ export interface PullRequestStateFacts {
 	/** The sha `checks` is about — compare it with a newer head before trusting it. */
 	checksOn?: string;
 	/**
+	 * A check on `checksOn` is running: a `ci.started` with no later
+	 * `ci.finished` of its workflow on that sha. `checks` then holds a failure
+	 * already settled, never `passed`. Never `false`.
+	 */
+	checksRunning?: true;
+	/**
+	 * The PR is in its repository's merge queue: open, with a
+	 * `dev.merge_queued` at or after the fact that (re)opened it. Never `false`.
+	 */
+	queued?: true;
+	/**
 	 * A merge into the repository's default branch (the producer said so). Only
 	 * on `merged`; absent when the fact did not say (a stacked PR merged into
 	 * its parent branch is not on main).
