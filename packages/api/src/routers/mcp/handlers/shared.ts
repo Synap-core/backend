@@ -120,7 +120,7 @@ export async function createHubProtocolCaller(
 /**
  * Extract the primary object id from a tool result, in field-priority order:
  *   proposalId → id → entityId → wrapped view.id → documentId → viewId →
- *   channelId → sessionId → knowledgeKey.id → nested data.id → wrapped
+ *   channelId → sessionId → nested data.id → wrapped
  *   channel.id / document.id
  * First string hit wins; returns undefined when none is present.
  * `view` is unwrapped before `documentId` so views.create { view, documentId }
@@ -156,8 +156,10 @@ function primaryObjectId(data: unknown): string | undefined {
   }
   const documentId = d.documentId;
   if (typeof documentId === "string" && documentId) return documentId;
-  const kk = d.knowledgeKey as Record<string, unknown> | undefined;
-  if (kk && typeof kk.id === "string" && kk.id) return kk.id;
+  // `knowledgeKey.id` (the capture global lane's runbook row) is deliberately
+  // NOT a link target: no `/open/<id>` probe or viewer resolves a
+  // `knowledge_keys` id (it opened "Nothing here"). That lane reads back via
+  // `synap_ask` instead — see its `readBack` hint.
   const nested = d.data as Record<string, unknown> | undefined;
   if (
     nested &&
