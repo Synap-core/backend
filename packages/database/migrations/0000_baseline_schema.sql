@@ -2562,6 +2562,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS "automations_workspace_name_active_uq"
   )
   WHERE status <> 'archived';
 
+-- 0387: a document's bound refresher unbinds itself when its automation is
+-- deleted — mirrors 0387_document_scope_refresher.sql (the columns sit in the
+-- documents section; the FK sits here, the first point where "automations"
+-- exists). Not at the file's tail: the migration tests of the tail blocks
+-- (0376, 0386) run "from their marker to the end" on an empty database.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'documents_refresh_automation_id_fkey'
+  ) THEN
+    ALTER TABLE "documents"
+      ADD CONSTRAINT "documents_refresh_automation_id_fkey"
+      FOREIGN KEY ("refresh_automation_id") REFERENCES "automations"("id")
+      ON DELETE SET NULL;
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS "automation_runs" (
   "id"              uuid  PRIMARY KEY DEFAULT gen_random_uuid(),
   "automation_id"   uuid  NOT NULL REFERENCES "automations"("id") ON DELETE CASCADE,
@@ -5604,18 +5621,3 @@ CREATE UNIQUE INDEX IF NOT EXISTS "uq_status_wait_episode_open"
 
 CREATE INDEX IF NOT EXISTS "idx_status_wait_episode_subject"
   ON "status_wait_episode" ("subject_type", "subject_id", "opened_at");
-
--- 0387: a document's bound refresher unbinds itself when its automation is
--- deleted — mirrors 0387_document_scope_refresher.sql (the columns sit in the
--- documents section; the FK waits here, after "automations" exists).
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'documents_refresh_automation_id_fkey'
-  ) THEN
-    ALTER TABLE "documents"
-      ADD CONSTRAINT "documents_refresh_automation_id_fkey"
-      FOREIGN KEY ("refresh_automation_id") REFERENCES "automations"("id")
-      ON DELETE SET NULL;
-  END IF;
-END $$;
