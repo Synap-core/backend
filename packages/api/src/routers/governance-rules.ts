@@ -58,6 +58,10 @@ import {
   proposals,
   secrets,
 } from "@synap/database/schema";
+import {
+  revokeHostSeeds,
+  seedHostRules,
+} from "@synap/database/agent-governance";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import {
   NEXT_RUNG_BATCH_MAX,
@@ -699,6 +703,9 @@ export const governanceRulesRouter = router({
           expiresAt: input.expiresAt ?? null,
         })
         .returning();
+      // The same rule for the agent's box, when the box is the agent's
+      // (host-seed.ts). A seed that fails leaves the box asking: stricter.
+      if (rule) await seedHostRules(db, [rule]);
 
       return { rule };
     }),
@@ -859,6 +866,8 @@ export const governanceRulesRouter = router({
         .set({ revokedAt: new Date() })
         .where(eq(governanceRules.id, input.id))
         .returning();
+      // An agent's approval seeded on its box goes with it (host-seed.ts).
+      await revokeHostSeeds(db, [input.id]);
 
       return { rule };
     }),

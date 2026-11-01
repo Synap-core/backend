@@ -11,6 +11,7 @@
  * that could hold a code, token, secret or key in clear.
  */
 import { pgTable, uuid, text, integer, timestamp } from "drizzle-orm/pg-core";
+import type { ComputerBelongsTo } from "@synap-core/types/computers";
 import { users } from "./users.js";
 
 export const DEVICE_AUTH_STATUSES = [
@@ -43,6 +44,8 @@ export const deviceAuthRequests = pgTable("device_auth_requests", {
     onDelete: "set null",
   }),
   machineName: text("machine_name"),
+  /** The approver's "whose computer is it" (0388), applied when the key is collected. */
+  computerBelongsTo: text("computer_belongs_to").$type<ComputerBelongsTo>(),
   mintedKeyId: uuid("minted_key_id"),
   failedCodeAttempts: integer("failed_code_attempts").notNull().default(0),
   pollIntervalSeconds: integer("poll_interval_seconds").notNull().default(5),
