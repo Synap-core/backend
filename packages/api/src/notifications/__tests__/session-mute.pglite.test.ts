@@ -73,7 +73,10 @@ import {
   proposals,
   users,
 } from "@synap/database";
-import { PUSH_DAILY_CAP } from "@synap-core/types/push";
+import {
+  PUSH_DAILY_CAP,
+  PUSH_MUTED_SESSIONS_MAX,
+} from "@synap-core/types/push";
 import { NotificationService } from "../NotificationService.js";
 import {
   readPushPrefs,
@@ -177,6 +180,31 @@ describe("the per-session mute", () => {
     expect(await readPushPrefs(USER)).toEqual({
       categories: { mention: false, "late-or-stuck": true },
     });
+  });
+
+  it("the stored list is trimmed to its max in the same write, the oldest mute first", async () => {
+    const full = Array.from({ length: PUSH_MUTED_SESSIONS_MAX }, () =>
+      randomUUID()
+    );
+    await q(
+      `insert into notification_preferences (id, user_id, workspace_id, push_prefs) values ($1, $2, null, $3::jsonb)`,
+      [randomUUID(), USER, JSON.stringify({ mutedSessions: full })]
+    );
+    expect(await writeSessionMute(USER, MUTED, true)).toBe(true);
+    expect(await writeSessionMute(USER, OTHER, true)).toBe(true);
+    const stored = async () =>
+      (
+        await q<{ muted: string[] }>(
+          `select push_prefs->'mutedSessions' as muted from notification_preferences where user_id = $1`,
+          [USER]
+        )
+      ).rows[0]!.muted;
+    // The column itself, not the read's cap: what is stored is what is read.
+    expect(await stored()).toEqual([...full.slice(2), MUTED, OTHER]);
+    // An unmute does not bring the oldest mute back inside the window.
+    expect(await writeSessionMute(USER, OTHER, false)).toBe(false);
+    expect(await stored()).toEqual([...full.slice(2), MUTED]);
+    expect((await readPushPrefs(USER)).mutedSessions).not.toContain(full[0]);
   });
 
   it("a muted session's push is held back; its row lands unread; another session still pushes", async () => {

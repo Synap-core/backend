@@ -171,6 +171,14 @@ beforeAll(async () => {
     status: "success",
     minutesAgo: 5,
   });
+  // Older than the session by more than a day: outside the read's bound
+  // (the read is pruned by time, so it never scans a session's whole past).
+  await ciFinished({
+    sessionId: S.lane,
+    workflow: "devbox before-start",
+    status: "success",
+    minutesAgo: 3 * 24 * 60,
+  });
   await ciFinished({
     sessionId: S.quiet,
     workflow: "devbox other-lane",
@@ -191,7 +199,7 @@ beforeAll(async () => {
 }, 120_000);
 
 describe("continuation packet — devbox jobs", () => {
-  it("one item per job of THIS session, its newest run first, under the events floor", async () => {
+  it("one item per job of THIS session, its newest run first, under the events floor, from a day before it began", async () => {
     const packet = await packetFor(S.lane);
     expect(packet.devboxJobs).toEqual({
       status: "ok",

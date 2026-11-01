@@ -18,13 +18,17 @@ import {
 import {
   isSessionPushMuted,
   normalizePushPrefs,
+  PUSH_MUTED_SESSIONS_MAX,
   type PushCategory,
   type PushPrefs,
 } from "@synap-core/types/push";
 
 /** No row ⇒ defaults (`{}`). A FAILED read throws — never read as defaults. */
-export async function readPushPrefs(userId: string): Promise<PushPrefs> {
-  return (await readPodPushSettings(userId)).prefs;
+export async function readPushPrefs(
+  userId: string,
+  database: typeof db = db
+): Promise<PushPrefs> {
+  return (await readPodPushSettings(userId, database)).prefs;
 }
 
 /**
@@ -34,11 +38,14 @@ export async function readPushPrefs(userId: string): Promise<PushPrefs> {
  * row can make it — a workspace override row must never ring a phone the
  * person silenced. A FAILED read throws.
  */
-export async function readPodPushSettings(userId: string): Promise<{
+export async function readPodPushSettings(
+  userId: string,
+  database: typeof db = db
+): Promise<{
   prefs: PushPrefs;
   routingRules: Record<string, string>;
 }> {
-  const row = await db.query.notificationPreferences.findFirst({
+  const row = await database.query.notificationPreferences.findFirst({
     where: and(
       eq(notificationPreferences.userId, userId),
       isNull(notificationPreferences.workspaceId)
@@ -116,10 +123,17 @@ export async function writeSessionMute(
   const current = drizzleSql`(CASE WHEN jsonb_typeof(${pp}->'mutedSessions') = 'array'
     THEN ${pp}->'mutedSessions' ELSE '[]'::jsonb END)`;
   // `jsonb - text` drops the id wherever it is; a mute appends it last, so the
-  // oldest mute is the one the read cap drops first.
-  const next = muted
+  // oldest mute is the one dropped first.
+  const appended = muted
     ? drizzleSql`((${current} - ${id}::text) || to_jsonb(${id}::text))`
     : drizzleSql`(${current} - ${id}::text)`;
+  // Trimmed to PUSH_MUTED_SESSIONS_MAX in the same write: the stored list is
+  // the one the read keeps (`normalizePushPrefs` keeps the newest that many).
+  // Left to grow, an unmute would bring an older mute back inside the read's
+  // window, muting a session the person stopped seeing as muted long ago.
+  const next = drizzleSql`(SELECT coalesce(jsonb_agg(m.e ORDER BY m.o), '[]'::jsonb)
+    FROM jsonb_array_elements(${appended}) WITH ORDINALITY AS m(e, o)
+    WHERE m.o > jsonb_array_length(${appended}) - ${PUSH_MUTED_SESSIONS_MAX}::int)`;
   await db
     .insert(notificationPreferences)
     .values({
