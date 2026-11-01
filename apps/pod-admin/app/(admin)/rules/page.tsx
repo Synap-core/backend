@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Rules — what runs on its own, and whether it worked.
+ * Automations — what runs on its own, and whether it worked.
  *
  * Rows are `automations.listPage` (user-floored, D1a) followed to its end so
  * the filter counts are true over every rule, joined on `flowId` with the
@@ -271,7 +271,7 @@ function RulesInner() {
             variant="flat"
             radius="md"
           >
-            Review never-ran rules
+            Review never-ran automations
           </Button>
         </div>
       )}
@@ -285,7 +285,7 @@ function RulesInner() {
               ? "Counting…"
               : `${counts.active} active · ${counts.failing} failing${
                   ruleDrain.capped
-                    ? " · counts cover the first 2,000 rules"
+                    ? " · counts cover the first 2,000 automations"
                     : ""
                 }`
         }
@@ -294,7 +294,7 @@ function RulesInner() {
           <ResourceRowSkeleton count={4} />
         ) : rules.isError ? (
           <ResourceRowError
-            message="Couldn't load rules."
+            message="Couldn't load automations."
             onRetry={() => void rules.refetch()}
           />
         ) : visible.length === 0 ? (
@@ -402,12 +402,13 @@ function RulesInner() {
         )}
         {groups.isError && !loading && (
           <p className="px-1 pt-3 text-[12px] text-foreground/65">
-            Run health couldn’t be loaded, so “Failing” may be missing rules.
+            Run health couldn’t be loaded, so “Failing” may be missing
+            automations.
           </p>
         )}
         {groupDrain.capped && (
           <p className="px-1 pt-3 text-[12px] text-foreground/65">
-            Run health covers the 2,000 most recently run rules.
+            Run health covers the 2,000 most recently run automations.
           </p>
         )}
       </SectionCard>
@@ -522,17 +523,17 @@ function emptyMessage(
   total: number
 ): string {
   if (total === 0) {
-    return "No rules yet. Rules are made in the Synap app — “when this happens, do that”.";
+    return "No automations yet. Automations are made in the Synap app — “when this happens, do that”.";
   }
   switch (filter) {
     case "active":
-      return "No rule is switched on.";
+      return "No automation is switched on.";
     case "failing":
-      return "Nothing is failing. Every live rule’s runs this week went through.";
+      return "Nothing is failing. Every live automation’s runs this week went through.";
     case "never-ran":
-      return "Every rule has run at least once.";
+      return "Every automation has run at least once.";
     case "paused":
-      return "No paused rules.";
+      return "No paused automations.";
     case "drafts":
       return "No drafts.";
   }
