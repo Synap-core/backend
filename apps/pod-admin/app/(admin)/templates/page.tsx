@@ -12,7 +12,6 @@
 
 import { Button } from "@heroui/react";
 import { BookOpen } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { Suspense, useEffect, useMemo } from "react";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
@@ -21,11 +20,12 @@ import { openIn } from "../../../lib/open-in";
 import { ExitLink } from "../../../lib/exit-link";
 import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import {
-  ResourceRow,
   ResourceRowEmpty,
   ResourceRowError,
   ResourceRowSkeleton,
 } from "../components/resource-row";
+import { ResponsiveTable } from "../components/responsive-table";
+import { StatusPill } from "../components/status-pill";
 import { SectionCard } from "../components/section-card";
 import { useFocusRow } from "../components/use-focus-row";
 import { filterBySearch } from "../components/list-search";
@@ -34,6 +34,16 @@ import { useT } from "../../../lib/i18n/locale-provider";
 import { en, fr } from "../components/copy";
 import { useDrainPages } from "../../../lib/use-drain-pages";
 import { flowHealthPill, flowHealthSentence } from "../runs/_lib/run-board";
+import {
+  RunHealthLegend,
+  RunHealthStrip,
+  ServesGoal,
+} from "../components/run-health-cells";
+import {
+  runHealthCell,
+  servesGoalCell,
+  servesGoalText,
+} from "../runs/_lib/run-health-view";
 
 const CATALOGS = { en, fr };
 
@@ -52,7 +62,6 @@ export default function TemplatesPage() {
 }
 
 function TemplatesInner() {
-  const router = useRouter();
   const t = useT(CATALOGS);
   const search = useDebouncedQuery();
   const list = trpc.playbooks.listAllPage.useInfiniteQuery(
@@ -156,35 +165,77 @@ function TemplatesInner() {
                 message={t("listSearch.none", { query: search.query })}
               />
             ) : (
-              <div className="-mx-2 divide-y divide-foreground/[0.05]">
-                {shownRows.map((p) => {
-                  const g = groupById.get(p.id);
-                  const secondary = [
-                    spaceName(p.workspaceId),
-                    g
-                      ? `${flowHealthSentence({ ...g, flowType: "playbook" })} · last ran ${formatRelative(g.latestStartedAt)}`
-                      : "Never ran",
-                  ].join(" · ");
-                  return (
-                    <div
-                      key={p.id}
-                      data-row-id={p.id}
-                      className="rounded-md transition-shadow"
-                    >
-                      <ResourceRow
-                        Icon={BookOpen}
-                        primary={p.name}
-                        secondary={secondary}
-                        status={flowHealthPill(p.status, g)}
-                        onSelect={() =>
-                          router.push(`/templates/${encodeURIComponent(p.id)}`)
-                        }
-                        wrap
-                      />
-                    </div>
-                  );
-                })}
-              </div>
+              <>
+                <ResponsiveTable
+                  ariaLabel="Templates"
+                  rows={shownRows}
+                  rowKey={(p) => p.id}
+                  rowId={(p) => p.id}
+                  href={(p) => `/templates/${encodeURIComponent(p.id)}`}
+                  name={{
+                    header: "Name",
+                    width: "minmax(0,2fr)",
+                    label: (p) => p.name,
+                  }}
+                  columns={[
+                    {
+                      header: "Space",
+                      width: "minmax(0,1fr)",
+                      cell: (p) => spaceName(p.workspaceId),
+                    },
+                    {
+                      header: "Serves goal",
+                      width: "minmax(0,1.2fr)",
+                      className: "min-w-0",
+                      cell: (p) => <ServesGoal goals={p.servesGoals} />,
+                    },
+                    {
+                      header: "Health",
+                      width: "minmax(0,1.1fr)",
+                      className: "min-w-0",
+                      cell: (p) => <RunHealthStrip health={p.runHealth} />,
+                    },
+                    {
+                      header: "Last run",
+                      width: "minmax(0,0.9fr)",
+                      cell: (p) => {
+                        const g = groupById.get(p.id);
+                        return g ? formatRelative(g.latestStartedAt) : "never";
+                      },
+                    },
+                    {
+                      header: "Status",
+                      width: "minmax(0,1fr)",
+                      className: "min-w-0",
+                      cell: (p) => {
+                        const pill = flowHealthPill(
+                          p.status,
+                          groupById.get(p.id)
+                        );
+                        return (
+                          <StatusPill kind={pill.kind} label={pill.label} />
+                        );
+                      },
+                    },
+                  ]}
+                  phone={(p) => {
+                    const g = groupById.get(p.id);
+                    return {
+                      Icon: BookOpen,
+                      secondary: [
+                        spaceName(p.workspaceId),
+                        g
+                          ? `${flowHealthSentence({ ...g, flowType: "playbook" })} · last ran ${formatRelative(g.latestStartedAt)}`
+                          : "Never ran",
+                        servesGoalText(servesGoalCell(p.servesGoals)),
+                        runHealthCell(p.runHealth).sentence,
+                      ].join(" · "),
+                      status: flowHealthPill(p.status, g),
+                    };
+                  }}
+                />
+                <RunHealthLegend />
+              </>
             )}
           </>
         )}

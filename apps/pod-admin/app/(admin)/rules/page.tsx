@@ -61,6 +61,17 @@ import {
   type RuleRowAction,
 } from "./_lib/rule-rows";
 import { useDrainPages } from "../../../lib/use-drain-pages";
+import {
+  RunHealthLegend,
+  RunHealthStrip,
+  ServesGoal,
+} from "../components/run-health-cells";
+import {
+  runHealthCell,
+  servesGoalCell,
+  servesGoalText,
+} from "../runs/_lib/run-health-view";
+import type { RunHealth } from "@synap-core/types/workers/health";
 
 const CATALOGS = { en, fr };
 
@@ -362,6 +373,18 @@ function RulesInner() {
                   ),
                 },
                 {
+                  header: "Serves goal",
+                  width: "minmax(0,1.2fr)",
+                  className: "min-w-0",
+                  cell: (rule) => <ServesGoal goals={rule.servesGoal} />,
+                },
+                {
+                  header: "Health",
+                  width: "minmax(0,1.1fr)",
+                  className: "min-w-0",
+                  cell: (rule) => <RunHealthStrip health={rule.runHealth} />,
+                },
+                {
                   header: "Status",
                   width: "minmax(0,1.2fr)",
                   className: "min-w-0",
@@ -381,6 +404,8 @@ function RulesInner() {
                     row.space,
                     `Last run ${row.lastRun}`,
                     runsPhrase(rule),
+                    servesGoalText(servesGoalCell(rule.servesGoal)),
+                    runHealthCell(rule.runHealth).sentence,
                   ].join(" · "),
                   status: row.pill,
                 };
@@ -399,6 +424,9 @@ function RulesInner() {
               </div>
             )}
           </>
+        )}
+        {!loading && !rules.isError && visible.length > 0 && (
+          <RunHealthLegend />
         )}
         {groups.isError && !loading && (
           <p className="px-1 pt-3 text-[12px] text-foreground/65">
@@ -468,6 +496,10 @@ function RulesInner() {
 type RuleRow = RuleFacts & {
   workspaceId: string | null;
   triggerConfig: unknown;
+  /** The goal its worker serves (`automations.listPage`), null when none. */
+  servesGoal: { id: string; name: string } | null;
+  /** The pod's own run health for it (state + last runs). */
+  runHealth: RunHealth | null;
 };
 
 interface RuleRowView {
