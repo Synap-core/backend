@@ -88,6 +88,9 @@ export function ProposalReview({
       identity={identity}
       footer={footer}
       pinsBar={pinsBar}
+      /* Widens to a document's width when the review shows text
+         (`reviewReadsWide`, drawn by the body as `READS_WIDE_ATTR`). */
+      width="auto"
     >
       {children}
     </ReceiverShell>

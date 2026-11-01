@@ -88,6 +88,7 @@ import { mediaAlt } from "../../_lib/media/stored-media-model";
 import { useConsoleRole } from "../../(admin)/components/side-nav-role";
 import { AdvancedPanel } from "../../_lib/object/advanced-panel";
 import { kindIcon } from "../../_lib/object/kind-icon";
+import { READS_WIDE_ATTR } from "../../_lib/receiver-shell";
 import {
   AgentMark,
   PersonAvatar,
@@ -131,6 +132,7 @@ import {
 } from "./proposal-record-model";
 import {
   reasonMark,
+  reviewReadsWide,
   undoMark,
   type ProposalChangeInput,
   type ReviewMark,
@@ -156,7 +158,7 @@ import {
 } from "./use-proposal-decision";
 import { useRecordDefinitions } from "./use-record-definitions";
 import { ToolRunArguments } from "./ToolRunArguments";
-import { reviewToolRun } from "./tool-run-model";
+import { reviewToolRun, toolRunArguments } from "./tool-run-model";
 
 /**
  * `pending` and `approval_failed` are the two states a reviewer can still decide;
@@ -1006,8 +1008,19 @@ export function ProposalReviewBody({
     (item) => !records.some((r) => r.ref === item.forRef)
   );
 
+  /* A review that shows text (a document, code, prose) reads at a
+     document's width; the receiver card widens on this mark. */
+  const readsWide = reviewReadsWide({
+    documentChanges: !!docChanges,
+    toolArguments: toolRun ? toolRunArguments(toolRun) : [],
+    records,
+  });
+
   return (
-    <div className="flex flex-col gap-5">
+    <div
+      className="flex flex-col gap-5"
+      {...(readsWide ? { [READS_WIDE_ATTR]: "" } : {})}
+    >
       <ProvenanceLine
         proposal={p}
         sourceExits={sourceExits}
