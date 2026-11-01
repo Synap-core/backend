@@ -23314,6 +23314,13 @@ export type SignalKind =
  */
  | "session-review"
 /**
+ * One session whose agent waits on the person's PERMISSION — a live
+ * runner says `needs_permission` (0384; decision D-R1, the rule's
+ * `classifyRunnerWait`). ONE row per session, whatever its runners; the
+ * door is the session. Its runner word rides in `why`.
+ */
+ | "session-permission"
+/**
  * One capture that still owes the person something (founder, 2026-10-12):
  * an OPEN question, or suggestions nobody filed or refused. The door opens
  * the capture thread (the session's `room` view); `captureStatus` says which.
@@ -23763,6 +23770,17 @@ export interface OwedSlotSignalInput {
 	/** What the answer unblocks, straight from `listOwedSlots`. */
 	unblocks?: string;
 }
+/** One session waiting for the person's permission (`listSessionsWaitingForPermission`). */
+export interface PermissionSessionSignalInput {
+	id: string;
+	title: string | null;
+	goal: string | null;
+	/** When its longest-waiting live runner began to wait. */
+	since: Date;
+	projectId?: string | null;
+	/** The session's space (the per-space split reads it). */
+	workspaceId?: string | null;
+}
 /** A pending trusted issuer, as `listPendingIssuers` reads it. */
 export interface PendingIssuerSignalInput {
 	id: string;
@@ -23905,7 +23923,7 @@ export interface ReviewSessionRow {
 	trackId: string | null;
 }
 /** A sub-read's name — what `unreadable` reports. */
-export type SignalSubRead = "activity" | "app-requests" | "broken-connections" | "captures" | "convertible-goals" | "drafts" | "events" | "invites" | "issuers" | "key-requests" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
+export type SignalSubRead = "activity" | "app-requests" | "broken-connections" | "captures" | "convertible-goals" | "drafts" | "events" | "invites" | "issuers" | "key-requests" | "liveness" | "notifications" | "outputs" | "owed" | "permission" | "proposals" | "review";
 /** One class of the lens page. */
 export interface LensClassWire {
 	/** The first `cap` rows, in the class's own order. */
@@ -47696,6 +47714,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				invites: number;
 				needsYou: number;
 				notifications: number;
+				permission?: number;
 				requests: number;
 				review: number;
 				reviewLater: number;
@@ -47724,6 +47743,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					invites: number;
 					needsYou: number;
 					notifications: number;
+					permission?: number;
 					requests: number;
 					review: number;
 					reviewLater: number;
@@ -47756,6 +47776,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					invites: number;
 					needsYou: number;
 					notifications: number;
+					permission?: number;
 					requests: number;
 					review: number;
 					reviewLater: number;
@@ -47781,7 +47802,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					proposed?: number | undefined;
 				} | undefined;
 				cursor?: string | undefined;
-				kinds?: ("access-request" | "activity" | "capture" | "convertible-goals" | "draft-asks" | "event" | "live-session" | "notification" | "output" | "owed-slot" | "proposal-cluster" | "rule-run" | "session-review" | "space-invite")[] | undefined;
+				kinds?: ("access-request" | "activity" | "capture" | "convertible-goals" | "draft-asks" | "event" | "live-session" | "notification" | "output" | "owed-slot" | "proposal-cluster" | "rule-run" | "session-permission" | "session-review" | "space-invite")[] | undefined;
 				lens?: "happening" | "history" | "needs-you" | "page" | "produced" | "proposed" | "suggestions" | undefined;
 				limit?: number | undefined;
 				picks?: boolean | undefined;
@@ -47865,6 +47886,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						workspaceId: string | null;
 					})[];
 					owedTruncated: boolean;
+					permission: {
+						sessions: PermissionSessionSignalInput[];
+						truncated: boolean;
+					};
 					review: {
 						sessions: ReviewSessionRow[];
 						truncated: boolean;
@@ -47886,6 +47911,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					invites: number;
 					needsYou: number;
 					notifications: number;
+					permission?: number;
 					requests: number;
 					review: number;
 					reviewLater: number;

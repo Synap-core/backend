@@ -2504,8 +2504,12 @@ export function countNeedsYou(args: {
   notifications: number;
   /** Sessions awaiting your review / close (every scope). */
   review: number;
-  /** Sessions whose agent waits on your permission (`session-permission` rows, D-R1). */
-  permission: number;
+  /**
+   * Sessions whose agent waits on your permission (`session-permission` rows,
+   * D-R1). Always set by this pod; OPTIONAL on the wire first, so a hand-built
+   * count (a client's sample world, a mock) still type-checks.
+   */
+  permission?: number;
   /** Captures that owe an answer or a filing decision (`capture` rows). */
   captures: number;
   /**
