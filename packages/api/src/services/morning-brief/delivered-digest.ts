@@ -57,6 +57,11 @@ import {
   pullRequestKey,
 } from "@synap-core/types";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  nounInSentence,
+  resolveObjectNoun,
+  resolveObjectNounPlural,
+} from "@synap-core/types/vocabulary";
 import { sessionKindWhere } from "../focus-sessions/session-kind.js";
 
 type Database = typeof defaultDb;
@@ -119,7 +124,11 @@ export function composeDeliveredDigest(
     );
   if (f.sessionsClosed > 0)
     parts.push(
-      `${plural(f.sessionsClosed, "session", "sessions")}${plus} closed`
+      `${plural(
+        f.sessionsClosed,
+        nounInSentence(resolveObjectNoun("session")),
+        nounInSentence(resolveObjectNounPlural("session"))
+      )}${plus} closed`
     );
   if (parts.length === 0) return null;
   const lines = [`${parts.join(", ")}.`];

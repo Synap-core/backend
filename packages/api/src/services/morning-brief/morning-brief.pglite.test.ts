@@ -8,6 +8,10 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import {
+  nounInSentence,
+  resolveObjectNoun,
+} from "@synap-core/types/vocabulary";
 import { randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
@@ -546,7 +550,7 @@ describe("composeDeliveredDigest — what got delivered, nothing when nothing", 
         sessionsClosed: 1,
         floor: true,
       })?.body
-    ).toBe("1 session+ closed.");
+    ).toBe(`1 ${nounInSentence(resolveObjectNoun("session"))}+ closed.`);
   });
 });
 
