@@ -884,24 +884,6 @@ export const NotificationService = {
             facts,
             prefs: pod.prefs,
           });
-          // The person muted this notification's session (rule 5): held
-          // back before the budget, so it is never counted. A failed lookup
-          // keeps the push (logged): an unread mute must not silence a
-          // blocking ask, and the person can mute again.
-          try {
-            decision = withSessionMute(
-              decision,
-              await pushAboutMutedSession(
-                { ...input, target },
-                pod.prefs.mutedSessions
-              )
-            );
-          } catch (err) {
-            logger.warn(
-              { err, type: input.type, notificationId: row.id },
-              "Session mute unreadable — push decided without it"
-            );
-          }
           // The interruption budget, counted in the person's own day — read
           // only when it applies, so an exempt or forced push never waits on
           // it. A failed count skips the push, except a blocking ask (as for
