@@ -16,6 +16,8 @@
  * "Live" is the runner read's own window (`RUNNER_LIVE_WINDOW_SECONDS`): a
  * runner gone quiet says nothing about now. A failed read THROWS (an empty
  * list would read as "nobody waits on you").
+ *
+ * SESSION-KIND-LENS-EXEMPT: returns `session-permission` SIGNAL inputs (id, title, goal, since, project, space), never a session row; the population is sessionListConditions, with lens `all` + kind `all` on purpose (above).
  */
 import {
   and,
