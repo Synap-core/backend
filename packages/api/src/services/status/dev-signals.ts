@@ -10,12 +10,21 @@
  *   pr_red_idle        a ready PR's checks are red — its own red, not one it
  *                      inherits from main (`redInheritedFromMain`) — and
  *                      nothing changed it for the first rung;
- *   main_red_unowned   main is red, nobody owns the fix (no open session
- *                      titled `main red: <repo> …`, no fix PR named in
+ *   main_red_unowned   main is red, nobody owns the fix (no ACTIVE session
+ *                      titled `main red: <repo> …` started at or after main
+ *                      turned red — CI's own owner rule, `culprit-finder.mjs`
+ *                      `revertDecision` — and no fix PR named in
  *                      `main.fixedBy`), for the first rung. Told to the
  *                      session of the PR that turned it red
- *                      (`main.redSince.prNumber`); with no such session there
- *                      is nobody to tell, and it is counted, never guessed.
+ *                      (`main.redSince.prNumber`), read off the snapshot's
+ *                      `mergedToday`, else the `dev.pr_merged` fact the
+ *                      watcher found for it (`culprits`); with no such session
+ *                      there is nobody to tell, and it is counted, never
+ *                      guessed.
+ *
+ * QUIET WHILE MAIN IS RED: a green PR waits for main then (the merge queue
+ * takes only a main-red fix while main is red), so "green and not merged" is
+ * the queue's job, not the session's. A PR's own red still raises.
  *
  * ── The clock ──────────────────────────────────────────────────────────────
  * Every N is a rung of THE work clock (`WORK_CLOCK`), never a literal. A PR's
@@ -34,6 +43,14 @@
  *
  * EPISODE: the PR and its head sha (a push is a new episode); main and the sha
  * that turned it red.
+ *
+ * WHO IS TOLD (decision D-R3, founder 2026-11-01): a dev signal is for the
+ * session's AGENT first, through its change feed (`signal_raised`); the
+ * first raise tells no person. Only the escalation reaches the person
+ * (`watcher.ts`, `agentOnly`). D-R2: once one repo has
+ * {@link REPO_STUCK_AT} or more PRs escalated at once, the person reads ONE
+ * signal for the repo ("backend: 5 PRs are stuck"), not one per PR
+ * ({@link foldRepoStuck}).
  *
  * PURE: the watcher reads the snapshots and the owning sessions
  * (`watcher.ts`, `devCandidates`), this file decides what they say.
@@ -77,27 +94,78 @@ export interface DevSignalCandidate {
     url?: string;
     number?: number;
     headSha?: string;
+    /** A PR: its title (the work), capped ({@link TITLE_MAX}). */
+    title?: string | null;
     /** main: the sha that turned it red, the PR that did, and what is red. */
     redSha?: string;
     culpritLabel?: string | null;
+    /** main: the title of the PR that turned it red, capped. */
+    culpritTitle?: string | null;
+    /** main: what is red, capped ({@link REASON_MAX}). */
     reason?: string | null;
   };
 }
 
-/** The repo names (lowercased, no owner) that an open `main red: <repo> …` session owns. */
-export function mainRedOwnedRepos(
-  titles: ReadonlyArray<string | null | undefined>
-): Set<string> {
-  const out = new Set<string>();
-  for (const t of titles) {
-    const m = /^\s*main red:\s*([A-Za-z0-9_.-]+)/i.exec(t ?? "");
-    if (m) out.add(m[1]!.toLowerCase());
-  }
-  return out;
+/** A PR title in a signal's words, at most this long. */
+export const TITLE_MAX = 80;
+/** What is red on main, in a signal's words, at most this long. */
+export const REASON_MAX = 160;
+
+/** `text` cut to `max` characters, an ellipsis marking the cut; null when blank. */
+export function capWords(
+  text: string | null | undefined,
+  max: number
+): string | null {
+  const t = text?.replace(/\s+/g, " ").trim();
+  if (!t) return null;
+  return t.length <= max ? t : `${t.slice(0, max - 1).trimEnd()}…`;
 }
 
-const repoName = (repo: string) =>
-  (repo.split("/").pop() ?? repo).toLowerCase();
+/** An open session that may own a red main: its title, and when it started. */
+export interface MainRedOwner {
+  title: string | null | undefined;
+  startedAt: Date | string | null | undefined;
+}
+
+/** The repo (lowercased, no owner) a `main red: <repo> …` title names, or null. */
+export function mainRedRepoOf(title: string | null | undefined): string | null {
+  const m = /^\s*main red:\s*([A-Za-z0-9_.-]+)/i.exec(title ?? "");
+  return m ? m[1]!.toLowerCase() : null;
+}
+
+/**
+ * Does an owner session own THIS red of `repo`? CI's rule (`culprit-finder.mjs`
+ * `revertDecision`): an active session titled `main red: <repo> …` that
+ * started at or after the red began. An older one is about an earlier red:
+ * it must not silence every red after it. (The caller reads active sessions
+ * only.)
+ */
+export function ownsMainRed(
+  owners: readonly MainRedOwner[],
+  repo: string,
+  redAt: string
+): boolean {
+  const name = repoName(repo);
+  const red = Date.parse(redAt);
+  if (!Number.isFinite(red)) return false;
+  return owners.some((o) => {
+    if (mainRedRepoOf(o.title) !== name) return false;
+    const started =
+      o.startedAt instanceof Date
+        ? o.startedAt.getTime()
+        : Date.parse(String(o.startedAt ?? ""));
+    return Number.isFinite(started) && !(started < red);
+  });
+}
+
+/** `owner/name` → `name`; the snapshot's repo is already lowercased. */
+const repoName = (repo: string) => repo.split("/").pop() ?? repo;
+
+/** The PR that turned a repo's main red, as a `dev.pr_merged` fact named it. */
+export interface CulpritFact {
+  sessionId: string | null;
+  title: string | null;
+}
 
 /**
  * The rung an age has reached, if any: the escalation when it is past
@@ -130,18 +198,30 @@ function rungOf(
 /** The dev signals one repo's newest snapshot says, at `now`. */
 export function devSignalsOf(
   snapshot: RepoSnapshotFact,
-  opts: { now: Date; ownedMains: ReadonlySet<string> }
+  opts: {
+    now: Date;
+    /** The ACTIVE `main red: …` sessions ({@link ownsMainRed}). */
+    owners: readonly MainRedOwner[];
+    /**
+     * The culprit PR's `dev.pr_merged` fact, by PR number, for a culprit the
+     * snapshot's `mergedToday` does not name (merged before today).
+     */
+    culprits?: ReadonlyMap<number, CulpritFact>;
+  }
 ): DevSignalCandidate[] {
   const now = opts.now.getTime();
   const repo = snapshot.repo.toLowerCase();
   const out: DevSignalCandidate[] = [];
   const episode = (base: string, escalated: boolean) =>
     escalated ? `${base}:escalated` : base;
+  const main = snapshot.main;
+  const mainRed = main.health === "red";
 
   for (const pr of snapshot.prs) {
     if (pr.draft || !pr.podSessionId) continue;
     const signal: DevSignal | null =
-      pr.checks === "green"
+      // While main is red the queue holds every green PR for main.
+      pr.checks === "green" && !mainRed
         ? "pr_green_unmerged"
         : pr.checks === "red" && pr.redInheritedFromMain !== true
           ? "pr_red_idle"
@@ -166,27 +246,30 @@ export function devSignalsOf(
         url: pr.url,
         number: pr.number,
         headSha: pr.headSha,
+        title: capWords(pr.title, TITLE_MAX),
       },
     });
   }
 
-  const main = snapshot.main;
   const redAt = main.redSince?.at;
   if (
-    main.health === "red" &&
+    mainRed &&
     main.redSince &&
     redAt &&
     !main.fixedBy &&
-    !opts.ownedMains.has(repoName(repo))
+    !ownsMainRed(opts.owners, repo, redAt)
   ) {
     const rung = rungOf("main_red_unowned", redAt, now);
     if (rung) {
       const culprit = main.redSince.prNumber;
-      const culpritSession =
+      const today =
         culprit === undefined
-          ? null
-          : (snapshot.mergedToday.find((m) => m.number === culprit)
-              ?.podSessionId ?? null);
+          ? undefined
+          : snapshot.mergedToday.find((m) => m.number === culprit);
+      const fact =
+        culprit === undefined ? undefined : opts.culprits?.get(culprit);
+      const culpritSession = today?.podSessionId ?? fact?.sessionId ?? null;
+      const culpritTitle = today?.title ?? fact?.title ?? null;
       out.push({
         signal: "main_red_unowned",
         sessionId: culpritSession?.toLowerCase() ?? null,
@@ -205,10 +288,66 @@ export function devSignalsOf(
             culprit === undefined
               ? null
               : holdDevRefLabel({ kind: "pr", repo, number: culprit }),
-          reason: main.reason?.trim() || null,
+          culpritTitle: capWords(culpritTitle, TITLE_MAX),
+          reason: capWords(main.reason, REASON_MAX),
         },
       });
     }
+  }
+  return out;
+}
+
+/** The red-main culprits a snapshot names but whose session it does not say. */
+export function culpritsToLookUp(snapshot: RepoSnapshotFact): number | null {
+  const main = snapshot.main;
+  const culprit = main.redSince?.prNumber;
+  if (main.health !== "red" || culprit === undefined) return null;
+  const today = snapshot.mergedToday.find((m) => m.number === culprit);
+  return today?.podSessionId ? null : culprit;
+}
+
+/** D-R2: this many PRs of one repo escalated at once read as ONE signal. */
+export const REPO_STUCK_AT = 3;
+
+/** What a PR signal says when its repo is folded (D-R2). */
+export interface RepoStuckFold {
+  /** How many PRs of the repo are escalated at once. */
+  count: number;
+  /** Their names (`holdDevRefLabel`), lowest number first, at most 5. */
+  labels: string[];
+}
+
+const PR_SIGNALS: ReadonlySet<DevSignal> = new Set([
+  "pr_green_unmerged",
+  "pr_red_idle",
+]);
+
+/**
+ * D-R2: the repos with {@link REPO_STUCK_AT} or more ESCALATED PR signals
+ * standing at once, each with its fold. The first raise is the agent's
+ * (D-R3), so only escalations are counted: they are what a person reads.
+ * Pure; keyed by the snapshot's lowercased repo.
+ */
+export function repoStuckFolds(
+  candidates: ReadonlyArray<
+    Pick<DevSignalCandidate, "signal" | "escalated" | "facts">
+  >
+): Map<string, RepoStuckFold> {
+  const byRepo = new Map<string, Array<{ number: number; label: string }>>();
+  for (const c of candidates) {
+    if (!c.escalated || !PR_SIGNALS.has(c.signal)) continue;
+    const list = byRepo.get(c.facts.repo) ?? [];
+    list.push({ number: c.facts.number ?? 0, label: c.facts.label });
+    byRepo.set(c.facts.repo, list);
+  }
+  const out = new Map<string, RepoStuckFold>();
+  for (const [repo, list] of byRepo) {
+    if (list.length < REPO_STUCK_AT) continue;
+    const sorted = [...list].sort((a, b) => a.number - b.number);
+    out.set(repo, {
+      count: sorted.length,
+      labels: sorted.slice(0, 5).map((p) => p.label),
+    });
   }
   return out;
 }

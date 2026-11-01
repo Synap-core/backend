@@ -17,8 +17,9 @@
  *   pr_red_idle       — a ready PR's checks are red (its own red, not main's)
  *                       and nothing was pushed since;
  *   main_red_unowned  — a repo's main is red and nobody owns the fix (no
- *                       open `main red: <repo> …` session, no fix PR named),
- *                       told to the session of the PR that turned it red.
+ *                       active `main red: <repo> …` session started since
+ *                       it turned red, no fix PR named), told to the session
+ *                       of the PR that turned it red.
  *
  * Calendar time only (plan Q3.1): no business days, no time zones beyond UTC.
  * Pure: no imports at run time.

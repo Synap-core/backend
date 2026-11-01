@@ -16,7 +16,11 @@
  * DEV WORK (plan 5513a09a P4.1): a PR left green and unmerged, a PR left red
  * with no push, a red main nobody owns — each a signal for the session that
  * owns it, read off the newest `dev.repo_snapshot` of each repo (the rules:
- * `dev-signals.ts`). Its first raise is in-app only; it escalates once.
+ * `dev-signals.ts`). Its first raise is for the session's AGENT only (the
+ * change feed, decision D-R3); it escalates once, and only the escalation is
+ * told to the person — one signal per repo once three or more of its PRs
+ * stand escalated at once (D-R2). A paused (held or parked) session is
+ * told nothing.
  *
  * WAIT EPISODES (status-first PR-H, `./wait-episodes.ts`): the same tick opens
  * an episode for each wait THE waiting-on collector finds and closes the ones
@@ -40,7 +44,6 @@ import {
   inArray,
   isNotNull,
   isNull,
-  notInArray,
   listableEntityWhere,
   listHolds,
   profiles,
@@ -76,15 +79,15 @@ import {
   resolveStatusLabel,
   resolveTrackStatusLabel,
 } from "@synap-core/types/vocabulary";
-import {
-  resolveSessionTitle,
-  TERMINAL_SESSION_STATUSES,
-} from "@synap-core/types/focus-sessions";
+import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import {
   DEV_LOOP_EVENT_TYPES,
+  podSessionIdFromBody,
   repoSnapshotEventSchema,
+  type RepoSnapshotFact,
 } from "@synap-core/types";
 import { formatElapsed } from "@synap-core/types/value-format";
+import { WORK_CLOCK } from "@synap-core/types/work-clock";
 import { randomUUID } from "node:crypto";
 import { NotificationService } from "../../notifications/NotificationService.js";
 import { AccessContext, scopedDb } from "../../access/index.js";
@@ -93,8 +96,10 @@ import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { BELONGS_TO_PROJECT } from "../../utils/project-scope.js";
 import { SNAPSHOT_LOOKBACK_MS } from "../dev-loop/work-release.js";
 import {
+  culpritsToLookUp,
   devSignalsOf,
-  mainRedOwnedRepos,
+  repoStuckFolds,
+  type CulpritFact,
   type DevSignalCandidate,
 } from "./dev-signals.js";
 import { syncWaitEpisodesTick } from "./wait-episodes.js";
@@ -140,8 +145,15 @@ export interface SignalCandidate {
   beganAt: string;
   /** A hold's move lens: a goal has no lens of its own. */
   workspaceId?: string | null;
-  /** Never pushed, whatever its age: a dev signal's first raise. */
+  /**
+   * Told to NO person: a dev signal's first raise is for the session's agent,
+   * through its change feed (decision D-R3). The event is still raised.
+   */
+  agentOnly?: boolean;
+  /** Never pushed, whatever its age: a repo fold's PRs but one (D-R2). */
   inAppOnly?: boolean;
+  /** The needs-you collapse key, when not the signal's own (D-R2: per repo). */
+  groupKey?: string;
   facts: Record<string, unknown>;
 }
 
@@ -425,10 +437,12 @@ async function holdCandidates(now: Date): Promise<SignalCandidate[]> {
 
 /**
  * Dev work standing still (`dev-signals.ts`): the newest snapshot of each
- * repo, the open `main red: …` sessions that own a red main, then each signal
- * on its session — only a session the snapshot's poster may read (a fact
- * names only work its producer can see). `unrouted` counts a red main whose
- * culprit names no session: nobody to tell, never a guess.
+ * repo, the active `main red: …` sessions that own a red main (started at or
+ * after it turned red, CI's rule), the `dev.pr_merged` fact of a culprit the
+ * snapshot does not name, then each signal on its session — only a session
+ * the snapshot's poster may read (a fact names only work its producer can
+ * see), and never a paused one. `unrouted` counts a red main whose culprit
+ * names no session: nobody to tell, never a guess.
  */
 async function devCandidates(
   now: Date,
@@ -451,17 +465,16 @@ async function devCandidates(
     .orderBy(repoOf, desc(events.timestamp));
   if (rows.length === 0) return [];
   const owners = await db
-    .select({ title: focusSessions.title })
+    .select({ title: focusSessions.title, startedAt: focusSessions.startedAt })
     .from(focusSessions)
     .where(
       and(
         ilike(focusSessions.title, "main red:%"),
-        notInArray(focusSessions.status, [...TERMINAL_SESSION_STATUSES])
+        eq(focusSessions.status, "active")
       )
     );
-  const ownedMains = mainRedOwnedRepos(owners.map((o) => o.title));
 
-  const byPoster = new Map<string, DevSignalCandidate[]>();
+  const snapshots: Array<{ poster: string; fact: RepoSnapshotFact }> = [];
   for (const row of rows) {
     const parsed = repoSnapshotEventSchema.safeParse(row.data);
     if (!parsed.success) {
@@ -471,15 +484,27 @@ async function devCandidates(
       );
       continue;
     }
-    for (const d of devSignalsOf(parsed.data, { now, ownedMains })) {
+    snapshots.push({ poster: row.userId, fact: parsed.data });
+  }
+  const culprits = await culpritFacts(snapshots);
+
+  const byPoster = new Map<string, DevSignalCandidate[]>();
+  for (const { poster, fact } of snapshots) {
+    const repo = fact.repo.toLowerCase();
+    for (const d of devSignalsOf(fact, {
+      now,
+      owners,
+      culprits: culprits.get(`${poster}\u0000${repo}`),
+    })) {
       if (!d.sessionId) {
         result.unrouted++;
         continue;
       }
-      byPoster.set(row.userId, [...(byPoster.get(row.userId) ?? []), d]);
+      byPoster.set(poster, [...(byPoster.get(poster) ?? []), d]);
     }
   }
 
+  const raised: DevSignalCandidate[] = [];
   const out: SignalCandidate[] = [];
   for (const [poster, ds] of byPoster) {
     const ids = [...new Set(ds.map((d) => d.sessionId!))];
@@ -498,7 +523,9 @@ async function devCandidates(
     }
     for (const d of ds) {
       const status = sessions.get(d.sessionId!);
-      if (status === undefined) continue;
+      // Unreadable to the poster, or held / parked on purpose: told nothing.
+      if (status === undefined || status === "paused") continue;
+      raised.push(d);
       out.push({
         signal: d.signal,
         subjectType: "focus_session",
@@ -510,10 +537,88 @@ async function devCandidates(
         category: null,
         episodeKey: d.episodeKey,
         beganAt: d.beganAt,
-        inAppOnly: !d.escalated,
+        agentOnly: !d.escalated,
         facts: { ...d.facts, escalated: d.escalated },
       });
     }
+  }
+
+  // D-R2: a repo with several PRs escalated at once is ONE signal to the
+  // person — the same words on each, one collapse key, one push.
+  const folds = repoStuckFolds(raised);
+  const pushed = new Set<string>();
+  for (const c of out) {
+    const repo = String(c.facts.repo);
+    const fold = c.agentOnly ? undefined : folds.get(repo);
+    if (
+      !fold ||
+      (c.signal !== "pr_green_unmerged" && c.signal !== "pr_red_idle")
+    )
+      continue;
+    c.facts = {
+      ...c.facts,
+      repoStuck: fold.count,
+      repoStuckLabels: fold.labels,
+    };
+    c.groupKey = `status-signal:dev-prs:${repo}`;
+    if (pushed.has(repo)) c.inAppOnly = true;
+    else pushed.add(repo);
+  }
+  return out;
+}
+
+/**
+ * The `dev.pr_merged` fact of each red main's culprit that its snapshot does
+ * not name (merged before today, so not in `mergedToday`): the session its
+ * producer resolved (`sessionId`), else its body's `Pod session:` line. One
+ * query for every snapshot. The OWNER floor (the snapshot's poster's own
+ * facts), as a hold reads its dev facts: another key's forged merge cannot
+ * aim a signal at a session. Keyed `<poster>\0<repo>` → PR number → fact.
+ */
+async function culpritFacts(
+  snapshots: ReadonlyArray<{ poster: string; fact: RepoSnapshotFact }>
+): Promise<Map<string, Map<number, CulpritFact>>> {
+  const wanted = snapshots.flatMap(({ poster, fact }) => {
+    const number = culpritsToLookUp(fact);
+    return number === null
+      ? []
+      : [{ poster, repo: fact.repo.toLowerCase(), number }];
+  });
+  const out = new Map<string, Map<number, CulpritFact>>();
+  if (wanted.length === 0) return out;
+  const facts = await db
+    .select({ userId: events.userId, data: events.data })
+    .from(events)
+    .where(
+      and(
+        eq(events.type, DEV_LOOP_EVENT_TYPES.prMerged),
+        drizzleSql`(${events.userId}, lower(${events.data}->>'repo'), ${events.data}->>'number') in (${drizzleSql.join(
+          wanted.map(
+            (w) =>
+              drizzleSql`(${w.poster}::text, ${w.repo}::text, ${String(w.number)}::text)`
+          ),
+          drizzleSql`, `
+        )})`
+      )
+    )
+    .orderBy(desc(events.timestamp));
+  for (const f of facts) {
+    const d = (f.data ?? {}) as Record<string, unknown>;
+    const repo = typeof d.repo === "string" ? d.repo.toLowerCase() : null;
+    const number = typeof d.number === "number" ? d.number : null;
+    if (!repo || number === null) continue;
+    const key = `${f.userId}\u0000${repo}`;
+    const byNumber = out.get(key) ?? new Map<number, CulpritFact>();
+    if (byNumber.has(number)) continue; // newest first: the first one wins
+    const named =
+      typeof d.sessionId === "string"
+        ? d.sessionId.toLowerCase()
+        : podSessionIdFromBody(typeof d.body === "string" ? d.body : null);
+    byNumber.set(number, {
+      sessionId: named,
+      title: typeof d.title === "string" ? d.title : null,
+    });
+    out.set(key, byNumber);
   }
   return out;
 }
@@ -833,25 +938,54 @@ export function signalWords(
         headline: `${name} has been paused longer than planned`,
         detail: `Paused since ${dateWords(f.pausedSince)}${f.holdReason ? `: ${String(f.holdReason)}` : ""}. Resume it, or note what it is still waiting on.`,
       };
-    // Dev work (`dev-signals.ts`): `label` names the PR or main, `name` the
-    // session that owns it.
+    // Dev work (`dev-signals.ts`): the words lead with the WORK — the PR's
+    // title, else the session's name — and say its `label` (`backend#539`,
+    // `backend main`) after it; `name` is the session that owns it.
     case "pr_green_unmerged":
-      return {
-        headline: `${String(f.label)} is green and not merged`,
-        detail: `${name}: its checks passed and nothing has changed it for ${formatElapsed(String(f.since), now.getTime())}. Find what holds the merge, or pause the session with a reason.`,
-      };
-    case "pr_red_idle":
-      return {
-        headline: `${String(f.label)} has been red for ${formatElapsed(String(f.since), now.getTime())} with no push`,
-        detail: `${name}: fix it and push once, or hand it over.`,
-      };
-    case "main_red_unowned":
+    case "pr_red_idle": {
+      const stuck = Number(f.repoStuck);
+      if (Number.isFinite(stuck) && stuck > 0) {
+        // D-R2: the repo's PRs read as one signal.
+        const labels = Array.isArray(f.repoStuckLabels)
+          ? f.repoStuckLabels.map(String)
+          : [];
+        const more = stuck > labels.length ? ", …" : "";
+        return {
+          headline: `${repoWord(f.repo)}: ${stuck} PRs are stuck`,
+          detail: `${labels.join(", ")}${more} have been green and not merged, or red with no push, for over ${days(Math.floor(WORK_CLOCK.stuck / DAY_MS))}. Open each one, or pause the ones that wait on purpose.`,
+        };
+      }
+      const work = String(f.title ?? "").trim() || name;
+      const elapsed = formatElapsed(String(f.since), now.getTime());
+      return c.signal === "pr_green_unmerged"
+        ? {
+            headline: `${work} is green and not merged`,
+            detail: `${String(f.label)} passed its checks and nothing has changed it for ${elapsed}. Find what holds the merge, or pause the session with a reason.`,
+          }
+        : {
+            headline: `${work} has been red for ${elapsed} with no push`,
+            detail: `${String(f.label)} is failing its own checks. Fix it and push once, or hand it over.`,
+          };
+    }
+    case "main_red_unowned": {
+      const culprit = f.culpritLabel
+        ? String(f.culpritTitle ?? "").trim()
+          ? `"${String(f.culpritTitle).trim()}" (${String(f.culpritLabel)})`
+          : String(f.culpritLabel)
+        : null;
       return {
         headline: `${String(f.label)} has been red for ${formatElapsed(String(f.since), now.getTime())} and nobody owns the fix`,
-        detail: `${f.culpritLabel ? `It turned red with ${String(f.culpritLabel)}` : "It turned red"}${f.reason ? `: ${String(f.reason)}` : ""}. Own it with a session titled "main red: ${String(f.repo).split("/").pop()} …", or name the PR that fixes it.`,
+        detail: `${culprit ? `It turned red with ${culprit}` : "It turned red"}${f.reason ? `: ${String(f.reason)}` : ""}. Ask an agent to fix it, or revert the change that broke it.`,
       };
+    }
   }
 }
+
+/** `synap-core/backend` → `backend`: a repo in a person's words. */
+const repoWord = (repo: unknown) => {
+  const r = String(repo ?? "");
+  return r.split("/").pop() || r;
+};
 
 // ── Raising ─────────────────────────────────────────────────────────────────
 
@@ -1042,7 +1176,8 @@ async function raise(
     beganAt: c.beganAt,
     raisedAt: now,
   });
-  if (!ownerId) return;
+  // A dev signal's first raise is the agent's (the feed above): no person.
+  if (!ownerId || c.agentOnly) return;
   const { type, sourceType } = SIGNAL_NOTIFICATION[c.subjectType];
   // `create` logs its own failures and does not throw: a lost notification is
   // logged there, and not retried (the episode is raised).
@@ -1053,7 +1188,9 @@ async function raise(
     sourceType,
     sourceId: c.subjectId,
     // One needs-you row per signal and kind of thing ("and 4 more like it").
-    groupKey: `status-signal:${c.signal}:${c.role ?? place.profileSlug ?? c.subjectType}`,
+    groupKey:
+      c.groupKey ??
+      `status-signal:${c.signal}:${c.role ?? place.profileSlug ?? c.subjectType}`,
     inAppOnly:
       c.inAppOnly === true ||
       now.getTime() - Date.parse(c.beganAt) > SIGNAL_BACKLOG_AFTER_MS,

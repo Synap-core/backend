@@ -316,6 +316,27 @@ describe("a dev fact (until.moves = pr: / main: / job:)", () => {
     });
   });
 
+  it("the hourly sweep decides every dev hold from one read per kind: each hold reads only its own owner's fact of its own ref", async () => {
+    const a = await pausedOn(`pr:${BE}#61`);
+    const b = await pausedOn(`pr:${BE}#62`);
+    const c = await pausedOn(`pr:${BE}#63`);
+    const merged = (user: string, number: number) =>
+      devFact(user, "dev.pr_merged", {
+        repo: BE,
+        number,
+        url: `https://github.com/${BE}/pull/${number}`,
+        intoDefault: true,
+      });
+    await merged("u1", 61);
+    await merged("u1", 62);
+    // #63 merged, but the fact is another person's: it never moves u1's hold.
+    await merged("u2", 63);
+    expect((await handleHoldResume({}, new Date())).resumed).toBe(2);
+    expect(await statusOf("focus_sessions", a)).toBe("active");
+    expect(await statusOf("focus_sessions", b)).toBe("active");
+    expect(await statusOf("focus_sessions", c)).toBe("paused");
+  });
+
   it("the hourly sweep resumes a job hold whose run ended after the pause, and a main hold once main is green", async () => {
     const onJob = await pausedOn("job:dev-feed-h", "failed");
     const onMain = await pausedOn(`main:${BE}`);
