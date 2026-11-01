@@ -115,6 +115,17 @@ vi.mock("../playbook-activators.js", async (importOriginal) => ({
     outcomes: [],
   })),
 }));
+// The goals' names go through the project_tracks floor (`scopedDb`), proven
+// in the access suites; here the floor lets the caller see both goals.
+vi.mock("../../../access/index.js", () => ({
+  AccessContext: { from: (a: unknown) => a },
+  scopedDb: () => ({
+    findMany: async () => [
+      { id: "99999999-9999-4999-8999-999999999991", name: "Ship weekly" },
+      { id: "99999999-9999-4999-8999-999999999992", name: "Keep docs fresh" },
+    ],
+  }),
+}));
 vi.mock("../../projects/load-visible-project.js", () => ({
   loadVisibleProject: vi.fn(async (_db: unknown, id: string) => ({ id })),
 }));
@@ -152,8 +163,10 @@ import {
   assertNoWorkerOverlap,
   enableWorker,
   listEnabledWorkers,
+  automationGoalsAndHealth,
   goalRunsOf,
   listWorkerViews,
+  playbookGoalsAndHealth,
   setWorkerPaused,
 } from "../workers.js";
 import { updateRuleGoverned } from "../../rules/update.js";
@@ -876,5 +889,46 @@ describe("goalRunsOf — a page of goals, its runs in fixed reads", () => {
     // One approvals read for the whole page, not one per goal.
     expect(h.bulkCalls).toHaveLength(1);
     h.pending.clear();
+  });
+});
+
+describe("pod admin rows — the goal an automation or a playbook serves", () => {
+  it("an automation activated by a goal's worker names that goal; another names none; both get a health", async () => {
+    const rule = await workerRule({ activatorKey: KEY, trackId: T1 });
+    const served = await automationFor(rule);
+    await runAt(served, "failed", 6);
+    const loose = randomUUID();
+    const page = await automationGoalsAndHealth({
+      userId: USER,
+      automations: [
+        { id: served, status: "active", errorMessage: null },
+        { id: loose, status: "paused", errorMessage: null },
+      ],
+    });
+    expect(page.get(served)).toMatchObject({
+      goal: { id: T1, name: "Ship weekly" },
+      health: { state: "failing", consecutiveFailures: 1 },
+    });
+    expect(page.get(loose)).toMatchObject({
+      goal: null,
+      health: { state: "paused" },
+    });
+  });
+
+  it("a playbook names the goals its workers serve and its worst worker's health", async () => {
+    const rule = await workerRule({ activatorKey: KEY, trackId: T1 });
+    await automationFor(rule, { status: "error", error: "Turned off." });
+    const page = await playbookGoalsAndHealth({
+      userId: USER,
+      playbookIds: [PB, "66666666-6666-4666-8666-666666666668"],
+    });
+    expect(page.get(PB)).toMatchObject({
+      goals: [{ id: T1, name: "Ship weekly" }],
+      health: { state: "off", offReason: "Turned off." },
+    });
+    expect(page.get("66666666-6666-4666-8666-666666666668")).toEqual({
+      goals: [],
+      health: null,
+    });
   });
 });
