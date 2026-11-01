@@ -234,3 +234,106 @@ export function lensActivityScope(scope: LensScope): ActivityScope {
       return { kind: "pod" };
   }
 }
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,99}$/;
+
+/** What {@link readLensScope} answers: the scope, or the one reason it is not one. */
+export type LensScopeRead =
+  { ok: true; scope: LensScope } | { ok: false; reason: string };
+
+/**
+ * Read a STORED or SENT scope object (`documents.scope`, a write's input) back
+ * as a {@link LensScope} — the object twin of {@link parseLensScope}, which
+ * reads the address token. Strict: an unknown kind, a missing id, an id that is
+ * not a UUID or an unknown field is refused with the reason, never repaired, so
+ * a stored scope always reads back exactly as it was written. Containers left
+ * out stay out; a `null` container is dropped (same meaning: unknown).
+ */
+export function readLensScope(value: unknown): LensScopeRead {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, reason: "a scope is an object with a `kind`" };
+  }
+  const v = value as Record<string, unknown>;
+  const kind = v.kind;
+  if (
+    typeof kind !== "string" ||
+    !(LENS_SCOPE_KINDS as readonly string[]).includes(kind)
+  ) {
+    return {
+      ok: false,
+      reason: `\`kind\` is one of ${LENS_SCOPE_KINDS.join(", ")}`,
+    };
+  }
+  const FIELDS: Record<
+    LensScopeKind,
+    { required: string[]; optional: string[] }
+  > = {
+    pod: { required: [], optional: [] },
+    workspace: { required: ["workspaceId"], optional: ["projectId"] },
+    project: { required: ["projectId"], optional: [] },
+    track: { required: ["trackId"], optional: ["projectId"] },
+    session: {
+      required: ["sessionId"],
+      optional: ["trackId", "projectId"],
+    },
+    pipeline: {
+      required: ["profileSlug"],
+      optional: ["workspaceId", "projectId", "trackId"],
+    },
+  };
+  const { required, optional } = FIELDS[kind as LensScopeKind];
+  const out: Record<string, string> = { kind };
+  for (const key of Object.keys(v)) {
+    if (key === "kind") continue;
+    if (!required.includes(key) && !optional.includes(key)) {
+      return { ok: false, reason: `a ${kind} scope has no \`${key}\`` };
+    }
+  }
+  for (const key of [...required, ...optional]) {
+    const raw = v[key];
+    if (raw === undefined || raw === null) {
+      if (required.includes(key)) {
+        return { ok: false, reason: `a ${kind} scope needs \`${key}\`` };
+      }
+      continue;
+    }
+    const valid =
+      typeof raw === "string" &&
+      (key === "profileSlug" ? SLUG_RE.test(raw) : UUID_RE.test(raw));
+    if (!valid) {
+      return {
+        ok: false,
+        reason:
+          key === "profileSlug"
+            ? "`profileSlug` is a kind's slug"
+            : `\`${key}\` is a UUID`,
+      };
+    }
+    out[key] = raw as string;
+  }
+  return { ok: true, scope: out as unknown as LensScope };
+}
+
+/**
+ * The ids a scope NAMES (itself and every container it carries), by kind —
+ * what a door checks the writer can read before it stores the scope.
+ */
+export function lensScopeIds(scope: LensScope): {
+  workspaceIds: string[];
+  projectIds: string[];
+  trackIds: string[];
+  sessionIds: string[];
+} {
+  const s = scope as Partial<
+    Record<"workspaceId" | "projectId" | "trackId" | "sessionId", string | null>
+  >;
+  const one = (id: string | null | undefined) => (id ? [id] : []);
+  return {
+    workspaceIds: one(s.workspaceId),
+    projectIds: one(s.projectId),
+    trackIds: one(s.trackId),
+    sessionIds: one(s.sessionId),
+  };
+}

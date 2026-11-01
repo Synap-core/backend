@@ -38,6 +38,8 @@ const h = vi.hoisted(() => ({
   replaced: [] as Array<{ documentId: string; revision: number }>,
   catalogFails: false,
   filed: [] as Array<Record<string, unknown>>,
+  /** Ids the scope floor lets the writer read (spaces, projects, automations…). */
+  readable: new Set<string>(),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -148,6 +150,21 @@ vi.mock("../cells/renderables.js", () => ({
   },
 }));
 
+// The scope floor: which ids the writer can read (its own predicate is the
+// access layer's suite, and `document-scope.test.ts` drives the reading).
+vi.mock("../document-scope/document-scope.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const can = async (ids: readonly string[]) =>
+    new Set(ids.filter((id) => h.readable.has(id)));
+  return {
+    ...actual,
+    podDocumentScopeFloor: () => ({
+      workspaces: can,
+      visible: (_kind: string, ids: readonly string[]) => can(ids),
+    }),
+  };
+});
+
 vi.mock("../../access/index.js", () => ({
   AccessContext: {
     operator: () => ({ withLens: () => ({}) }),
@@ -156,7 +173,12 @@ vi.mock("../../access/index.js", () => ({
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { documents, documentVersions } from "@synap/database/schema";
+import {
+  automationRuns,
+  documents,
+  documentVersions,
+  focusSessions,
+} from "@synap/database/schema";
 import {
   applyDocumentPatch,
   applyApprovedDocumentPatch,
@@ -247,7 +269,7 @@ async function row(id: string) {
 }
 
 beforeAll(async () => {
-  for (const t of [documents, documentVersions])
+  for (const t of [documents, documentVersions, focusSessions, automationRuns])
     await h.client!.exec(ddlFor(t as PgTable));
 });
 
@@ -257,6 +279,7 @@ beforeEach(() => {
   h.replaced = [];
   h.catalogFails = false;
   h.filed = [];
+  h.readable = new Set();
 });
 
 describe("applyDocumentPatch — a person's patch applies", () => {
@@ -735,5 +758,282 @@ describe("applyDocumentPatch — set_title renames the document", () => {
       })
     ).rejects.toThrow(/already named "Plan"/);
     expect(h.gate).toEqual([]);
+  });
+});
+
+// ─── Living documents: insert_embed, scope, refresher (0387) ────────────────
+
+async function fields(id: string) {
+  const { rows } = await q<{
+    scope: unknown;
+    refresh_automation_id: string | null;
+    content_revision: number;
+  }>(
+    `select scope, refresh_automation_id, content_revision from documents where id = $1`,
+    [id]
+  );
+  return rows[0]!;
+}
+
+describe("applyDocumentPatch — insert_embed writes the directive for the writer", () => {
+  it("serializes a cell embed through serializeEmbed and files it under document.update", async () => {
+    const id = await newDocument();
+    const res = await applyDocumentPatch({
+      userId: USER,
+      documentId: id,
+      baseRevision: 1,
+      ops: [
+        {
+          op: "insert_embed",
+          directive: "synap-cell",
+          ref: { cellKey: "lens-section" },
+          props: { section: "blocking", limit: 5 },
+          fallback: "What needs you in this project.",
+          after: "We ship on Friday.",
+        },
+      ],
+    });
+    expect(res.status).toBe("applied");
+    const { content } = await row(id);
+    expect(content).toContain(
+      [
+        "We ship on Friday.",
+        "",
+        ':::synap-cell{cellKey="lens-section"}',
+        "```json",
+        '{"section":"blocking","limit":5}',
+        "```",
+        "",
+        "What needs you in this project.",
+        ":::",
+      ].join("\n")
+    );
+    // The person's section is still byte-for-byte there.
+    expect(content).toContain(human("notes", "My own notes."));
+    expect(h.gate.map((g) => g.action)).toEqual(["update"]);
+  });
+
+  it("an embed an agent drops into a person's section is refused by the floor", async () => {
+    const id = await newDocument();
+    await expect(
+      applyDocumentPatch({
+        userId: USER,
+        agentUserId: AGENT,
+        documentId: id,
+        ops: [
+          {
+            op: "insert_embed",
+            directive: "synap-entity",
+            ref: { id: randomUUID() },
+            sectionId: "notes",
+          },
+        ],
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(h.gate).toEqual([]);
+  });
+});
+
+describe("applyDocumentPatch — set_scope / set_refresher", () => {
+  const P = "22222222-2222-4222-8222-222222222222";
+  const A = "55555555-5555-4555-8555-555555555555";
+
+  it("a person's scope + refresher apply as fields only: no content revision is cut", async () => {
+    const id = await newDocument();
+    h.readable = new Set([P, A]);
+    const res = await applyDocumentPatch({
+      userId: USER,
+      documentId: id,
+      ops: [
+        { op: "set_scope", scope: { kind: "project", projectId: P } },
+        { op: "set_refresher", automationId: A },
+      ],
+    });
+    expect(res.status).toBe("applied");
+    expect(await fields(id)).toEqual({
+      scope: { kind: "project", projectId: P },
+      refresh_automation_id: A,
+      content_revision: 1,
+    });
+    expect((await row(id)).content).toBe(BODY);
+    // Never a section key: binding a refresher is a document.update.
+    expect(h.gate.map((g) => g.action)).toEqual(["update"]);
+  });
+
+  it("a scope naming a project the writer cannot read is refused BEFORE the gate", async () => {
+    const id = await newDocument();
+    await expect(
+      applyDocumentPatch({
+        userId: USER,
+        documentId: id,
+        ops: [{ op: "set_scope", scope: { kind: "project", projectId: P } }],
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(h.gate).toEqual([]);
+    expect((await fields(id)).scope).toBeNull();
+  });
+
+  it("an agent binding a refresher is PROPOSED; the approval binds it", async () => {
+    const id = await newDocument();
+    h.readable = new Set([A]);
+    const res = await applyDocumentPatch({
+      userId: USER,
+      agentUserId: AGENT,
+      documentId: id,
+      ops: [{ op: "set_refresher", automationId: A }],
+    });
+    expect(res.status).toBe("proposed");
+    expect((await fields(id)).refresh_automation_id).toBeNull();
+    const filed = h.gate[0]!;
+    await applyApprovedDocumentPatch(
+      { targetId: id, agentUserId: AGENT, data: filed.data },
+      USER
+    );
+    expect((await fields(id)).refresh_automation_id).toBe(A);
+  });
+});
+
+describe("applyDocumentPatch — the bound refresher (decision D4)", () => {
+  const AUTOMATION = "66666666-6666-4666-8666-666666666666";
+  const aiSection = (id: string, body: string) =>
+    [
+      `::::synap-section{id="${id}" owner="ai"}`,
+      `## ${id}`,
+      "",
+      body,
+      "::::",
+    ].join("\n");
+  const LIVING = [BODY, aiSection("status", "Two PRs in review."), ""].join(
+    "\n"
+  );
+
+  async function livingDocument(bound: string | null = AUTOMATION) {
+    const id = await newDocument(LIVING);
+    await q(`update documents set refresh_automation_id = $1 where id = $2`, [
+      bound,
+      id,
+    ]);
+    return id;
+  }
+  async function runSession(
+    opts: { automationId?: string; closed?: boolean; userId?: string } = {}
+  ) {
+    const id = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, status, metadata, closed_at) values ($1, $2, 'active', $3, $4)`,
+      [
+        id,
+        opts.userId ?? USER,
+        JSON.stringify({ automationId: opts.automationId ?? AUTOMATION }),
+        opts.closed ? new Date().toISOString() : null,
+      ]
+    );
+    return id;
+  }
+  const refresh = (
+    documentId: string,
+    sessionId: string | null,
+    ops: unknown[] = [
+      {
+        op: "upsert_section",
+        id: "status",
+        title: "status",
+        body: "One PR left.",
+      },
+    ]
+  ) =>
+    applyDocumentPatch({
+      userId: USER,
+      agentUserId: AGENT,
+      documentId,
+      provenanceSessionId: sessionId,
+      ops: ops as never,
+    });
+
+  it("its run rewriting an existing AI section files under refresher_section_update", async () => {
+    const id = await livingDocument();
+    await refresh(id, await runSession());
+    expect(h.gate.map((g) => g.action)).toEqual(["refresher_section_update"]);
+  });
+
+  it("…and where the stored rule applies it, the section is rewritten and the person's is untouched", async () => {
+    const id = await livingDocument();
+    h.agentAutoApply = true;
+    const res = await refresh(id, await runSession());
+    expect(res.status).toBe("applied");
+    const { content } = await row(id);
+    expect(content).toContain("One PR left.");
+    expect(content).toContain(human("notes", "My own notes."));
+  });
+
+  it("a NEW section from the same run is a section_update (D4 rewrites, never adds)", async () => {
+    const id = await livingDocument();
+    await refresh(id, await runSession(), [
+      { op: "upsert_section", id: "fresh", title: "fresh", body: "New." },
+    ]);
+    expect(h.gate.map((g) => g.action)).toEqual(["section_update"]);
+  });
+
+  it("a run of ANOTHER automation, a closed run, someone else's run or no session: section_update", async () => {
+    const id = await livingDocument();
+    await refresh(
+      id,
+      await runSession({ automationId: "77777777-7777-4777-8777-777777777777" })
+    );
+    await refresh(id, await runSession({ closed: true }));
+    await refresh(id, await runSession({ userId: "someone-else" }));
+    await refresh(id, null);
+    expect(h.gate.map((g) => g.action)).toEqual([
+      "section_update",
+      "section_update",
+      "section_update",
+      "section_update",
+    ]);
+  });
+
+  it("a document with no bound refresher: section_update", async () => {
+    const id = await livingDocument(null);
+    await refresh(id, await runSession());
+    expect(h.gate.map((g) => g.action)).toEqual(["section_update"]);
+  });
+
+  it("any op beside the section rewrite makes it a document.update", async () => {
+    const id = await livingDocument();
+    await refresh(id, await runSession(), [
+      { op: "upsert_section", id: "status", title: "status", body: "x" },
+      { op: "append", body: "More." },
+    ]);
+    expect(h.gate.map((g) => g.action)).toEqual(["update"]);
+  });
+
+  it("the person's section is refused to the refresher like to any agent (the floor runs first)", async () => {
+    const id = await livingDocument();
+    await expect(
+      refresh(id, await runSession(), [
+        {
+          op: "upsert_section",
+          id: "notes",
+          title: "notes",
+          body: "Mine now.",
+        },
+      ])
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(h.gate).toEqual([]);
+  });
+
+  it("a session matched only through the run ledger counts (sessionAutomationWhere)", async () => {
+    const id = await livingDocument();
+    const runId = randomUUID();
+    await q(`insert into automation_runs (id, automation_id) values ($1, $2)`, [
+      runId,
+      AUTOMATION,
+    ]);
+    const sessionId = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, status, metadata) values ($1, $2, 'active', $3)`,
+      [sessionId, USER, JSON.stringify({ automationRunId: runId })]
+    );
+    await refresh(id, sessionId);
+    expect(h.gate.map((g) => g.action)).toEqual(["refresher_section_update"]);
   });
 });

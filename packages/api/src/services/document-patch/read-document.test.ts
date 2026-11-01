@@ -85,6 +85,11 @@ describe("projectAgentDocument — every field a guarded edit needs arrives", ()
     workspaceId: "ws-1",
     contentRevision: 7,
     currentVersion: 3,
+    scope: {
+      kind: "project",
+      projectId: "22222222-2222-4222-8222-222222222222",
+    } as const,
+    refreshAutomationId: "55555555-5555-4555-8555-555555555555",
     updatedAt: "2026-09-25T00:00:00.000Z",
     createdAt: "2026-09-24T00:00:00.000Z",
   };
@@ -102,6 +107,25 @@ describe("projectAgentDocument — every field a guarded edit needs arrives", ()
       diagnostics: [],
     });
     expect(out).not.toHaveProperty("diagnosticsError");
+  });
+
+  it("carries the living document's scope and refresher (0387)", () => {
+    const out = projectAgentDocument(row, raw, "raw", { items: [] });
+    expect(out.scope).toEqual({
+      kind: "project",
+      projectId: "22222222-2222-4222-8222-222222222222",
+    });
+    expect(out.refreshAutomationId).toBe(
+      "55555555-5555-4555-8555-555555555555"
+    );
+    const bare = projectAgentDocument(
+      { ...row, scope: null, refreshAutomationId: null },
+      raw,
+      "raw",
+      { items: [] }
+    );
+    expect(bare.scope).toBeNull();
+    expect(bare.refreshAutomationId).toBeNull();
   });
 
   it("a check that could not run is null + a reason, never an empty list", () => {

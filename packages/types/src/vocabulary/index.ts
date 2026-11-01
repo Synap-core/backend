@@ -518,6 +518,11 @@ const ACTION_VERB_ROWS = {
     imperative: "Update narrative",
     past: "Updated narrative",
   },
+  // D4: a living document's bound refresher rewriting its own AI sections.
+  refresher_section_update: {
+    imperative: "Refresh section",
+    past: "Refreshed section",
+  },
   ai_edit: { imperative: "Edit", past: "Edited" },
   // `user_edit` is a PERSON's suggested change to a document, reviewed like
   // any other proposal — so it reads as a suggestion, not as an edit made.
@@ -673,6 +678,7 @@ export const PIN_LIST_CAP = 50;
 export const ACTION_OBJECT_PREPOSITIONS: Readonly<Record<string, string>> = {
   section_update: "in",
   session_narrative_update: "of",
+  refresher_section_update: "in",
   widen_scopes: "for",
 } satisfies Readonly<Record<string, TitlePreposition>>;
 

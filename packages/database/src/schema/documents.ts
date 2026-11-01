@@ -16,6 +16,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { ProvenanceKind } from "./provenance.js";
+import type { LensScope } from "@synap-core/types/lens";
 
 /**
  * Documents table
@@ -69,6 +70,23 @@ export const documents = pgTable(
 
     // Metadata
     metadata: jsonb("metadata"), // Custom metadata
+
+    /**
+     * The `LensScope` a living document reads through (0387; plan 678c56c4
+     * contract 3): pod, workspace (+ projectId), project, track or session.
+     * Hosts stamp it on every embedded cell's lens; a cell never takes scope
+     * as a prop. Written only through `readLensScope` + the read floor
+     * (`api/services/documents/document-scope.ts`). NULL = the document's
+     * workspace, else the pod (the behaviour before 0387).
+     */
+    scope: jsonb("scope").$type<LensScope>(),
+    /**
+     * The automation bound to refresh this document (0387; decision D4). Its
+     * run sessions may rewrite the document's EXISTING owner="ai" sections
+     * under the stored `document.refresher_section_update` rule; every other
+     * write is governed as before. FK → automations, ON DELETE SET NULL.
+     */
+    refreshAutomationId: uuid("refresh_automation_id"),
 
     // Provenance (Wave B3) — who/what authored this row. FKs + indexes in
     // migration 0107.

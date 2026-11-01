@@ -8,6 +8,8 @@
  * on one side only fails the database build.
  */
 
+import type { LensScope } from "../lens/scope.js";
+
 /** Who created a row (`created_by_kind`, the shared provenance vocabulary). */
 export type ProvenanceKind = "human" | "ai_agent" | "system";
 
@@ -29,6 +31,10 @@ export interface Document {
   contentRevision: number;
   workingStateRevision: number | null;
   metadata: unknown;
+  /** The living document's scope (0387, Generative UI contract 3); null = its space, else the pod. */
+  scope: LensScope | null;
+  /** The automation bound to refresh it (0387, decision D4), or null. */
+  refreshAutomationId: string | null;
   createdByKind: ProvenanceKind | null;
   createdByUserId: string | null;
   agentUserId: string | null;

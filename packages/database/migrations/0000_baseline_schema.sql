@@ -780,6 +780,8 @@ CREATE TABLE IF NOT EXISTS "documents" (
   "content_revision"         integer NOT NULL DEFAULT 1,
   "working_state_revision"   integer,
   "metadata"                 jsonb,
+  "scope"                    jsonb,
+  "refresh_automation_id"    uuid,
   "created_at"               timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"               timestamp with time zone NOT NULL DEFAULT now(),
   "deleted_at"               timestamp with time zone
@@ -801,6 +803,9 @@ ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "working_state_updated_at" time
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "content_revision" integer NOT NULL DEFAULT 1;
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "working_state_revision" integer;
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "metadata" jsonb;
+-- 0387: the living document's LensScope and its bound refresher (D4).
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "scope" jsonb;
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "refresh_automation_id" uuid;
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;
@@ -5599,3 +5604,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS "uq_status_wait_episode_open"
 
 CREATE INDEX IF NOT EXISTS "idx_status_wait_episode_subject"
   ON "status_wait_episode" ("subject_type", "subject_id", "opened_at");
+
+-- 0387: a document's bound refresher unbinds itself when its automation is
+-- deleted — mirrors 0387_document_scope_refresher.sql (the columns sit in the
+-- documents section; the FK waits here, after "automations" exists).
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'documents_refresh_automation_id_fkey'
+  ) THEN
+    ALTER TABLE "documents"
+      ADD CONSTRAINT "documents_refresh_automation_id_fkey"
+      FOREIGN KEY ("refresh_automation_id") REFERENCES "automations"("id")
+      ON DELETE SET NULL;
+  END IF;
+END $$;
