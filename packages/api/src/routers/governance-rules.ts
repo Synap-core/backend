@@ -24,7 +24,7 @@
  *   - scopeKind "workspace" -> editor/admin/owner membership in that workspace
  *   - principalKind "agent" -> caller must own the agent (users.createdByUserId)
  *                              or be pod-admin; otherwise FORBIDDEN
- * `verdict: "deny"` (0381, a founder decision) is a person's stored "Never":
+ * `verdict: "deny"` (0381, founder decision G3) is a person's stored "Never":
  * the resolver refuses the matching write with `DENIED_BY_RULE`. Refusing more
  * is always safe, so a deny may be as broad as the caller may manage; the
  * request's "Never" option writes the narrow one (this agent × this act).
@@ -416,15 +416,6 @@ export const governanceRulesRouter = router({
    * always pin an auto-approve to review), but a `verdict:"auto"` draft's count
    * is an UPPER BOUND — a floored review row is counted as a flip though a floor
    * would still hold it. The `scope` string states this.
-   *
-   * A `verdict:"deny"` draft (a "Never") refuses every matched act at the door,
-   * above every floor, so nothing is filed for review and nothing runs. A
-   * matched proposal flips unless it already ended refused, i.e. a person
-   * rejected it (`rejected`): every other status ran, waits, or was put in
-   * front of a person, which a deny would have stopped. Exact over the window,
-   * with one caveat: a `withdrawn`, `expired` or `approval_failed` row never
-   * ran either, but it is counted, since a deny would still have changed it
-   * from "filed for review" to "refused".
    */
   retroImpact: protectedProcedure
     .input(
@@ -436,7 +427,7 @@ export const governanceRulesRouter = router({
         targetKind: z.enum(["action", "profile", "capability", "connection"]),
         targetPattern: z.string().min(1),
         targetProfile: z.string().min(1).optional(),
-        verdict: z.enum(["auto", "propose", "deny"]),
+        verdict: z.enum(["auto", "propose"]),
         /** Cap the scan window (defaults to, and is clamped to, 500). */
         window: z.number().int().min(1).max(500).optional(),
       })
@@ -488,9 +479,7 @@ export const governanceRulesRouter = router({
         targetKind: input.targetKind,
         targetPattern: input.targetPattern,
         targetProfile: input.targetProfile,
-        // The matcher reads only the principal, scope and target, never the
-        // verdict; its draft type does not name "deny" yet.
-        verdict: input.verdict === "deny" ? "propose" : input.verdict,
+        verdict: input.verdict,
       };
 
       let matched = 0;
@@ -511,10 +500,6 @@ export const governanceRulesRouter = router({
           continue;
         }
         matched++;
-        if (input.verdict === "deny") {
-          if (row.status !== ProposalStatus.REJECTED) wouldFlip++;
-          continue;
-        }
         const currentOutcome =
           row.status === ProposalStatus.AUTO_APPROVED ? "auto" : "propose";
         if (currentOutcome !== input.verdict) wouldFlip++;
@@ -529,9 +514,7 @@ export const governanceRulesRouter = router({
           `(newest first, capped at ${SCAN_LIMIT}) — not lifetime. ` +
           (input.verdict === "auto"
             ? "wouldFlip is an UPPER BOUND: floors (destructive/admin/scope) are not re-evaluated, so a floored review row is still counted."
-            : input.verdict === "deny"
-              ? "wouldFlip counts every matched proposal a person did not reject: a deny refuses the act at the door, above every floor."
-              : "wouldFlip is exact: a rule can always pin an auto-approve to review."),
+            : "wouldFlip is exact: a rule can always pin an auto-approve to review."),
       };
     }),
 

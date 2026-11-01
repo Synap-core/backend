@@ -46,7 +46,6 @@ import {
 import {
   resolveGovernanceRule,
   resolveOriginTrust,
-  type GovernanceRuleMatch,
 } from "@synap/database/agent-governance";
 import { tools, skills, capabilityIntents } from "@synap/database/schema";
 import {
@@ -250,8 +249,7 @@ function readGrantExecMode(raw: unknown): GrantExecMode | null {
  *      before falling through to a reviewable proposal.
  *
  * Reads the one tool/skill row (when not pre-loaded) + a non-consuming grant
- * existence check + (for an agent run) ONE `governance_rules` lookup, from
- * which both the "Never" refusal and the rule widening derive.
+ * existence check + (only on the propose path) one `governance_rules` lookup.
  * NO writes (use-count is consumed at the dispatch point only when the verdict
  * is `run`).
  *
@@ -351,17 +349,13 @@ export async function gateCapabilityExecution(
     };
   }
 
-  // The capability rule for this agent run, read ONCE: the "Never" check
-  // below and both widening checks further down derive their answer from it.
-  const rule = await resolveCapabilityRule(input, verbName);
-
-  // ── 0.2 A PERSON'S "NEVER" (a founder decision, 0381) — an agent run of a
+  // ── 0.2 A PERSON'S "NEVER" (founder decision G3, 0381) — an agent run of a
   //       capability a `deny` rule names (this agent, or any agent, by verb
   //       name or row id) is refused, typed, before every other rung: refusing
   //       is stricter than any floor below, and a read is refused too (the
   //       person said never for this capability, not "never write"). Ranked by
   //       the resolver's specificity score, deny winning ties.
-  if (rule?.verdict === "deny") {
+  if (input.agentUserId && (await capabilityRuleDenies(input, verbName))) {
     return {
       decision: "deny",
       reason: DENIED_BY_RULE_REASON,
@@ -493,7 +487,10 @@ export async function gateCapabilityExecution(
       // proposal (a human can approve the run); do NOT hard-deny.
       // #4: an untrusted origin can NEVER be widened to run by a rule (rung
       // 2.55 sits above rung 2.8) — skip the rule shortcut and propose.
-      if (!originUntrusted && capabilityRuleAuthorizesRun(rule, verbName)) {
+      if (
+        !originUntrusted &&
+        (await capabilityRuleAuthorizesRun(input, verbName))
+      ) {
         return { decision: "run" };
       }
       // The policy has NOT run on this path — it short-circuits above the
@@ -550,7 +547,10 @@ export async function gateCapabilityExecution(
   // propose — consult a stored capability rule (Option B) before falling
   // through to a reviewable `capability/run` proposal. #4: an untrusted origin
   // can NEVER be widened to run by a rule (rung 2.55 sits above rung 2.8).
-  if (!originUntrusted && capabilityRuleAuthorizesRun(rule, verbName)) {
+  if (
+    !originUntrusted &&
+    (await capabilityRuleAuthorizesRun(input, verbName))
+  ) {
     return { decision: "run" };
   }
   // The verdict already carries the structured cause (the policy emits
@@ -619,35 +619,69 @@ async function isOutward(
 }
 
 /**
- * The stored `governance_rules` `target_kind: "capability"` row that governs
- * this agent's run of this capability, read ONCE per run: a `deny` refuses it
- * (step 0.2), an `auto` may widen it (`capabilityRuleAuthorizesRun`). One read
- * means one ranking: a more specific `auto` outranks a broad deny, and a deny
- * wins a tie (`resolveGovernanceRule`). `undefined` for a non-agent run, a
- * secret, or no matching active rule.
+ * Consult a stored `governance_rules` `target_kind: "capability"` row for
+ * this `(agentUserId, workspaceId, capabilityId)` — Option B / D1 (ratified
+ * 2026-07-27, docs/decisions/agent-governance.md, phase 2 D1). An ACTIVE `verdict: "auto"` row
+ * widens an otherwise-`propose` capability run to `run`.
  *
  * Scoped to grantable kinds ONLY: `input.capabilityKind` is typed
  * `CapabilityRunKind` ("tool" | "skill" | "command"), which never includes
  * `"secret"` — so this can never be reached for, and can never authorize, a
- * secret decrypt.
+ * secret decrypt. Callers must NEVER call this for the `approved === false`
+ * deny floor or the `dry-run` short-circuit — both are checked strictly
+ * BEFORE either call site that invokes this helper (see the resolution-order
+ * doc above), so a rule can never cross those floors.
  *
  * `verbName` (the capability's stable `tools.name`/`skills.name`) is passed
  * through to `resolveGovernanceRule` alongside `capabilityId` so a rule
  * authored against the VERB NAME (reinstall-stable) matches equally to one
  * authored against the row id (reinstall-unstable, the KNOWN LIMITATION
  * above) — see `scoreRuleTarget`'s `targetKind: "capability"` branch.
+ *
+ * Only a rule that NAMES this capability can authorize the run: the resolver
+ * skips every broad `auto` row (`*`, a glob, the generic `capability.run`
+ * action) for a capability run (`NAMED_RULE_ONLY_EVENT_KEYS`, the outward
+ * floor), so "Everything, always" never sends a message on its own.
  */
-async function resolveCapabilityRule(
+async function capabilityRuleAuthorizesRun(
   input: GateCapabilityExecutionInput,
   verbName: string | null
-): Promise<GovernanceRuleMatch | undefined> {
-  if (!input.agentUserId) return undefined;
+): Promise<boolean> {
+  if (!input.agentUserId) return false;
+  // A public post stays a proposal even when a lane rule says auto.
+  if (!capabilityVerbAllowsRuleWiden(verbName)) return false;
   // Defence-in-depth: `input.capabilityKind` is typed `CapabilityRunKind`
   // ("tool" | "skill" | "command"), which structurally excludes "secret" —
   // this runtime guard holds even against a future type widening or an
   // `as` cast, so a rule can never be consulted for a secret grantable.
-  if ((input.capabilityKind as string) === "secret") return undefined;
-  return resolveGovernanceRule({
+  if ((input.capabilityKind as string) === "secret") return false;
+  const db = await getDb();
+  const match = await resolveGovernanceRule({
+    db,
+    agentUserId: input.agentUserId,
+    workspaceId: input.workspaceId ?? null,
+    subjectType: CAPABILITY_RUN_PROPOSAL.targetType,
+    action: CAPABILITY_RUN_PROPOSAL.proposalType,
+    capabilityId: input.capabilityId,
+    capabilityVerbName: verbName,
+  });
+  return match?.verdict === "auto";
+}
+
+/**
+ * Does a stored `governance_rules` row refuse this agent's run of this
+ * capability — a person's "Never" (`verdict: "deny"`, 0381)? The SAME lookup
+ * {@link capabilityRuleAuthorizesRun} makes, so the two read one ranking: a
+ * more specific `auto` outranks a broad deny, and a deny wins a tie.
+ */
+async function capabilityRuleDenies(
+  input: GateCapabilityExecutionInput,
+  verbName: string | null
+): Promise<boolean> {
+  if (!input.agentUserId) return false;
+  // As the widening lookup: a rule is never consulted for a secret.
+  if ((input.capabilityKind as string) === "secret") return false;
+  const match = await resolveGovernanceRule({
     db: await getDb(),
     agentUserId: input.agentUserId,
     workspaceId: input.workspaceId ?? null,
@@ -656,29 +690,7 @@ async function resolveCapabilityRule(
     capabilityId: input.capabilityId,
     capabilityVerbName: verbName,
   });
-}
-
-/**
- * Does the run's capability rule widen an otherwise-`propose` run to `run`?
- * Option B / D1 (ratified 2026-07-27, docs/decisions/agent-governance.md,
- * phase 2 D1): an ACTIVE `verdict: "auto"` row authorizes it, even with no
- * grant. Callers must NEVER ask this for the `approved === false` deny floor
- * or the `dry-run` short-circuit — both are checked strictly BEFORE either
- * call site (see the resolution-order doc above), so a rule can never cross
- * those floors.
- *
- * Only a rule that NAMES this capability can authorize the run: the resolver
- * skips every broad `auto` row (`*`, a glob, the generic `capability.run`
- * action) for a capability run (`NAMED_RULE_ONLY_EVENT_KEYS`, the outward
- * floor), so "Everything, always" never sends a message on its own.
- */
-function capabilityRuleAuthorizesRun(
-  rule: GovernanceRuleMatch | undefined,
-  verbName: string | null
-): boolean {
-  // A public post stays a proposal even when a lane rule says auto.
-  if (!capabilityVerbAllowsRuleWiden(verbName)) return false;
-  return rule?.verdict === "auto";
+  return match?.verdict === "deny";
 }
 
 /**
