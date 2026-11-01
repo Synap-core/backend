@@ -80,7 +80,7 @@ describe("describeCapabilityRun", () => {
 });
 
 describe("describeCapabilityRun: a ship verb (decision 4d6d7922)", () => {
-  it("a merge is titled from its arguments, never 'Run github merge pr'", () => {
+  it("a merge is titled from its arguments, never 'Run GitHub merge pr'", () => {
     expect(
       describeCapabilityRun("github_merge_pr", {
         repo: "Synap-core/app-bases",
@@ -91,7 +91,7 @@ describe("describeCapabilityRun: a ship verb (decision 4d6d7922)", () => {
     ).toBe("Merge app-bases#12 into main at a524c103");
     // Arguments that do not name the act keep the generic title.
     expect(describeCapabilityRun("github_merge_pr", { pr: 12 })).toBe(
-      "Run github merge pr"
+      "Run GitHub merge pr"
     );
   });
 });
