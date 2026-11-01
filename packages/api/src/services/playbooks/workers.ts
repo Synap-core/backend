@@ -28,7 +28,9 @@
  * door, which commits on its own connections.
  *
  * `listEnabledWorkers` is the ONE reader: the track page's Workers section,
- * `lifecycle.board`'s `hasWorker`, the relay track page.
+ * `lifecycle.board`'s `hasWorker`, the relay track page. `listWorkerViews`
+ * is the same read plus each worker's trigger words, last and next run and
+ * run health (`GoalWorkerView`, goals that run), in a fixed number of reads.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -37,9 +39,11 @@ import {
   and,
   eq,
   inArray,
+  lte,
   drizzleSql,
   playbooks,
   automations,
+  automationRuns,
   skills,
   countWorkerPendingApprovalsBulk,
   userVisibleWhere,
@@ -51,6 +55,15 @@ import {
   type WorkerScopeKind,
   type WorkerSize,
 } from "@synap-core/types/workers";
+import {
+  RUN_HEALTH_MARK_LIMIT,
+  deriveRunHealth,
+  runMarkOfRunStatus,
+  workerTriggerKind,
+  type GoalWorkerView,
+  type RunMarkEntry,
+} from "@synap-core/types/workers/health";
+import { workerWhen } from "@synap-core/types/workers/words";
 import {
   activatorKey,
   readPlaybookProcess,
@@ -193,34 +206,102 @@ function enablementOf(
   return null;
 }
 
+/** The automation a rule's worker runs through, as the reads need it. */
+interface RuleAutomation {
+  id: string;
+  status: string;
+  errorMessage: string | null;
+  nextRunAt: Date | null;
+  lastRunAt: Date | null;
+}
+
 /**
- * The ACTIVE automation of each rule (null when none), in two reads: the
- * rules' activates-edges (`readRuleHealthBulk`, the lineage store) and the
- * automations among them that are active.
+ * Each rule's automations, in two reads: the rules' activates-edges
+ * (`readRuleHealthBulk`, the lineage store) and those automations' rows.
+ * `current` is the ACTIVE one, else the one the breaker turned off
+ * (`status = 'error'`), newest edge first; null when neither. `all` is every
+ * automation the rule ever activated (its runs' history spans recompiles).
  */
-async function activeAutomationsOf(
+async function automationsOfRules(
   ruleIds: readonly string[]
-): Promise<Map<string, string | null>> {
-  const out = new Map<string, string | null>(ruleIds.map((id) => [id, null]));
+): Promise<Map<string, { current: RuleAutomation | null; all: string[] }>> {
+  const out = new Map<
+    string,
+    { current: RuleAutomation | null; all: string[] }
+  >(ruleIds.map((id) => [id, { current: null, all: [] }]));
   if (ruleIds.length === 0) return out;
   const health = await readRuleHealthBulk([...out.keys()]);
   const all = [
     ...new Set([...health.values()].flatMap((h) => h.automationIds)),
   ];
   if (all.length === 0) return out;
-  const active = new Set(
-    (
-      await db
-        .select({ id: automations.id })
-        .from(automations)
-        .where(
-          and(inArray(automations.id, all), eq(automations.status, "active"))
-        )
-    ).map((r) => r.id)
-  );
+  const rows = await db
+    .select({
+      id: automations.id,
+      status: automations.status,
+      errorMessage: automations.errorMessage,
+      nextRunAt: automations.nextRunAt,
+      lastRunAt: automations.lastRunAt,
+    })
+    .from(automations)
+    .where(
+      and(
+        inArray(automations.id, all),
+        inArray(automations.status, ["active", "error"])
+      )
+    );
+  const byId = new Map(rows.map((r) => [r.id, r as RuleAutomation]));
   for (const [ruleId, h] of health) {
-    out.set(ruleId, h.automationIds.find((id) => active.has(id)) ?? null);
+    const newestFirst = [...h.automationIds].reverse();
+    const pick = (status: string) =>
+      newestFirst.map((id) => byId.get(id)).find((a) => a?.status === status);
+    out.set(ruleId, {
+      current: pick("active") ?? pick("error") ?? null,
+      all: h.automationIds,
+    });
   }
+  return out;
+}
+
+/**
+ * The newest {@link RUN_HEALTH_MARK_LIMIT} runs of each automation, in ONE
+ * read (a window over `automation_runs`), as marks, NEWEST first.
+ */
+async function recentRunMarksOf(
+  automationIds: readonly string[]
+): Promise<Map<string, RunMarkEntry[]>> {
+  const out = new Map<string, RunMarkEntry[]>();
+  if (automationIds.length === 0) return out;
+  const ranked = db
+    .select({
+      id: automationRuns.id,
+      automationId: automationRuns.automationId,
+      status: automationRuns.status,
+      stopReason: automationRuns.stopReason,
+      startedAt: automationRuns.startedAt,
+      rn: drizzleSql<number>`row_number() over (partition by ${automationRuns.automationId} order by ${automationRuns.startedAt} desc, ${automationRuns.id} desc)`.as(
+        "rn"
+      ),
+    })
+    .from(automationRuns)
+    .where(inArray(automationRuns.automationId, [...automationIds]))
+    .as("ranked_runs");
+  const rows = await db
+    .select()
+    .from(ranked)
+    .where(lte(ranked.rn, RUN_HEALTH_MARK_LIMIT));
+  for (const r of rows) {
+    const mark = runMarkOfRunStatus(r.status, r.stopReason);
+    if (!mark) continue;
+    const list = out.get(r.automationId) ?? [];
+    list.push({
+      runId: r.id,
+      mark,
+      at: new Date(r.startedAt).toISOString(),
+    });
+    out.set(r.automationId, list);
+  }
+  for (const list of out.values()) list.sort((a, b) => (a.at < b.at ? 1 : -1));
   return out;
 }
 
@@ -229,17 +310,92 @@ async function activeAutomationsOf(
  *   profileSlug — workers whose playbook's subject is this kind or role;
  *   projectId   — workers that run over that project's things: space-wide
  *                 ones (they cover it) and ones enabled for that project;
- *   trackId     — its project's workers (a track's filter is its project).
+ *   trackId     — the workers enabled ON that goal, and only those (goals
+ *                 that run R1: two goals of one project never see each
+ *                 other's workers; a space-wide or project-wide worker is
+ *                 not the goal's).
  * `liveOnly` drops paused ones (what `hasWorker` asks).
  */
-export async function listEnabledWorkers(input: {
+export async function listEnabledWorkers(
+  input: ListEnabledWorkersInput
+): Promise<EnabledWorker[]> {
+  return (await readEnabledWorkers(input)).map((r) => r.worker);
+}
+
+/**
+ * The enabled workers as the pages read them (`workers.list`): the reader
+ * above, plus each worker's trigger words, last run, next run (the pod's
+ * `automations.next_run_at`, never computed on a page) and run health
+ * (`deriveRunHealth` over its newest runs). Two more reads for the whole
+ * list, whatever its size.
+ */
+export async function listWorkerViews(
+  input: ListEnabledWorkersInput
+): Promise<GoalWorkerView[]> {
+  const found = await readEnabledWorkers(input);
+  const ruleOfAutomation = new Map<string, string>();
+  for (const f of found) {
+    for (const id of f.automations.all)
+      ruleOfAutomation.set(id, f.worker.ruleId);
+  }
+  const runs = await recentRunMarksOf([...ruleOfAutomation.keys()]);
+  return found.map(({ worker, automations: auto }) => {
+    const marksNewestFirst = auto.all
+      .flatMap((id) => runs.get(id) ?? [])
+      .sort((a, b) => (a.at < b.at ? 1 : -1))
+      .slice(0, RUN_HEALTH_MARK_LIMIT);
+    const marks = [...marksNewestFirst].reverse();
+    const current = worker.state === "paused" ? null : auto.current;
+    const trigger = {
+      kind: workerTriggerKind(worker.activator?.on),
+      words: workerWhen(worker),
+    };
+    const lastRun =
+      marksNewestFirst[0]?.at ?? auto.current?.lastRunAt?.toISOString() ?? null;
+    return {
+      ...worker,
+      activator: worker.activator
+        ? { ...worker.activator, mode: worker.mode }
+        : null,
+      trigger,
+      lastRunAt: lastRun,
+      nextRunAt:
+        current?.status === "active" && trigger.kind === "schedule"
+          ? (current.nextRunAt?.toISOString() ?? null)
+          : null,
+      health: deriveRunHealth({
+        paused: worker.state === "paused",
+        automationStatus: current?.status ?? null,
+        automationError: current?.errorMessage ?? null,
+        marks,
+        pendingApprovals: worker.pendingApprovals,
+      }),
+    };
+  });
+}
+
+export interface ListEnabledWorkersInput {
   userId: string;
   profileSlug?: string;
   projectId?: string | null;
   trackId?: string | null;
   playbookId?: string;
   liveOnly?: boolean;
-}): Promise<EnabledWorker[]> {
+}
+
+async function readEnabledWorkers(input: {
+  userId: string;
+  profileSlug?: string;
+  projectId?: string | null;
+  trackId?: string | null;
+  playbookId?: string;
+  liveOnly?: boolean;
+}): Promise<
+  Array<{
+    worker: EnabledWorker;
+    automations: { current: RuleAutomation | null; all: string[] };
+  }>
+> {
   let projectId = input.projectId ?? null;
   if (input.trackId) {
     const { getTrack } = await import("../tracks/tracks-service.js");
@@ -287,41 +443,56 @@ export async function listEnabledWorkers(input: {
       if (!en) continue;
       if (projectId && en.scope === "project" && en.projectId !== projectId)
         continue;
+      // A goal's workers are the ones enabled ON it — never its project's
+      // or the space's (R1).
+      if (input.trackId && en.trackId !== input.trackId) continue;
       const paused = row.meta.draft === true;
       if (input.liveOnly && paused) continue;
       found.push({ pb, process, row, en, paused });
     }
   }
-  const automationOf = await activeAutomationsOf(
-    found.filter((f) => !f.paused).map((f) => f.row.id)
-  );
+  const automationsOf = await automationsOfRules(found.map((f) => f.row.id));
+  const activeOf = (ruleId: string): string | null => {
+    const c = automationsOf.get(ruleId)?.current;
+    return c?.status === "active" ? c.id : null;
+  };
   const pending = await countWorkerPendingApprovalsBulk(
-    [...automationOf.values()].filter((id): id is string => !!id)
+    found
+      .filter((f) => !f.paused)
+      .map((f) => activeOf(f.row.id))
+      .filter((id): id is string => !!id)
   );
-  const out: EnabledWorker[] = [];
+  const out: Array<{
+    worker: EnabledWorker;
+    automations: { current: RuleAutomation | null; all: string[] };
+  }> = [];
   for (const { pb, process, row, en, paused } of found) {
-    const automationId = paused ? null : (automationOf.get(row.id) ?? null);
+    const automationId = paused ? null : activeOf(row.id);
     if (input.liveOnly && !automationId) continue;
     const activator =
       process.activators.find((a) => activatorKey(a) === en.activatorKey) ??
       null;
     out.push({
-      ruleId: row.id,
-      playbookId: pb.id,
-      playbookName: pb.name,
-      activatorKey: en.activatorKey,
-      activator,
-      profileSlug: process.profileSlug,
-      size: activator ? effectiveWorkerSize(activator) : "per_thing",
-      mode: activator?.mode ?? "propose",
-      scope: en.scope,
-      projectId: en.projectId,
-      trackId: en.trackId,
-      state: paused ? "paused" : "running",
-      automationId,
-      pendingApprovals: automationId ? (pending.get(automationId) ?? 0) : 0,
-      maxPendingApprovals:
-        activator?.maxPendingApprovals ?? DEFAULT_WORKER_MAX_PENDING_APPROVALS,
+      automations: automationsOf.get(row.id) ?? { current: null, all: [] },
+      worker: {
+        ruleId: row.id,
+        playbookId: pb.id,
+        playbookName: pb.name,
+        activatorKey: en.activatorKey,
+        activator,
+        profileSlug: process.profileSlug,
+        size: activator ? effectiveWorkerSize(activator) : "per_thing",
+        mode: activator?.mode ?? "propose",
+        scope: en.scope,
+        projectId: en.projectId,
+        trackId: en.trackId,
+        state: paused ? "paused" : "running",
+        automationId,
+        pendingApprovals: automationId ? (pending.get(automationId) ?? 0) : 0,
+        maxPendingApprovals:
+          activator?.maxPendingApprovals ??
+          DEFAULT_WORKER_MAX_PENDING_APPROVALS,
+      },
     });
   }
   return out;

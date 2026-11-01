@@ -9,7 +9,10 @@
  *  - re-enabling an enablement a person disabled turns the SAME rule back on;
  *  - FB2 item 4: the race settles on the SMALLEST live id, a step-back that
  *    did not apply is never reported as a refusal, and RESUME and the
- *    approval of an agent's enable/resume run the same overlap check.
+ *    approval of an agent's enable/resume run the same overlap check;
+ *  - goals that run R1: `listEnabledWorkers({ trackId })` returns only the
+ *    workers enabled ON that goal (two goals of one project), and
+ *    `listWorkerViews` reads each one's runs into its health and next run.
  *
  * Mocked, each proven elsewhere: the rule door (a stateful fake that writes
  * the rule row exactly as `createRuleGoverned` stamps it — so the overlap
@@ -116,6 +119,9 @@ vi.mock("../../projects/load-visible-project.js", () => ({
   loadVisibleProject: vi.fn(async (_db: unknown, id: string) => ({ id })),
 }));
 vi.mock("../../tracks/tracks-service.js", () => ({
+  getTrack: vi.fn(async (id: string) =>
+    TRACK_PROJECT[id] ? { id, projectId: TRACK_PROJECT[id] } : null
+  ),
   resolveTrackFiling: vi.fn(async (p: { trackId: string }) => ({
     projectId: TRACK_PROJECT[p.trackId],
     trackId: p.trackId,
@@ -136,6 +142,7 @@ import {
   users,
   links,
   automations,
+  automationRuns,
   proposals,
   focusSessions,
   playbookAutomations,
@@ -145,6 +152,7 @@ import {
   assertNoWorkerOverlap,
   enableWorker,
   listEnabledWorkers,
+  listWorkerViews,
   setWorkerPaused,
 } from "../workers.js";
 import { updateRuleGoverned } from "../../rules/update.js";
@@ -201,6 +209,7 @@ beforeAll(async () => {
     users,
     links,
     automations,
+    automationRuns,
     proposals,
     focusSessions,
     playbookAutomations,
@@ -236,7 +245,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await h.client!.exec(
-    "delete from skills; delete from links; delete from automations; delete from proposals; delete from focus_sessions;"
+    "delete from skills; delete from links; delete from automations; delete from automation_runs; delete from proposals; delete from focus_sessions;"
   );
   vi.mocked(updateRuleGoverned).mockClear();
 });
@@ -683,5 +692,160 @@ describe("convergeActivatorsAtBoot — D4: once per compile version", () => {
     await q(`delete from playbooks where id = any($1::uuid[])`, [
       [behind, current, paused],
     ]);
+  });
+});
+
+// ── goals that run: a goal's workers, and how they are doing ───────────────
+
+/** A project enablement row, written as the rule door stamps it. */
+const workerRule = (o: { activatorKey: string; trackId?: string }) =>
+  insertRule({
+    intent: "worker",
+    scope: { kind: "workspace", workspaceId: WS, projectId: P1 },
+    seed: {
+      template: `playbook-worker:${PB}`,
+      key: `${o.activatorKey}@project:${P1}${o.trackId ? `@track:${o.trackId}` : ""}`,
+      hash: "h",
+    },
+  });
+
+async function automationFor(
+  ruleId: string,
+  o: { status?: string; error?: string; nextRunAt?: string } = {}
+): Promise<string> {
+  const id = randomUUID();
+  await q(
+    `insert into automations (id, created_by, name, trigger_type, status, error_message, next_run_at)
+     values ($1, $2, 'worker', 'event', $3, $4, $5)`,
+    [id, USER, o.status ?? "active", o.error ?? null, o.nextRunAt ?? null]
+  );
+  await q(
+    `insert into links (id, created_by, from_type, from_id, to_type, to_id, link_type, created_at)
+     values (gen_random_uuid(), $1, 'skill', $2, 'automation', $3, 'activates', now())`,
+    [USER, ruleId, id]
+  );
+  return id;
+}
+
+const runAt = (automationId: string, status: string, minute: number) =>
+  q(
+    `insert into automation_runs (id, automation_id, status, started_at)
+     values (gen_random_uuid(), $1, $2, $3)`,
+    [
+      automationId,
+      status,
+      `2026-11-01T09:${String(minute).padStart(2, "0")}:00Z`,
+    ]
+  );
+
+describe("listEnabledWorkers — a goal reads only ITS workers (R1)", () => {
+  it("two goals of one project never see each other's workers, nor the project's", async () => {
+    const mine = await workerRule({ activatorKey: KEY, trackId: T1 });
+    const theirs = await workerRule({
+      activatorKey: "schedule:0 9 * * *",
+      trackId: T2,
+    });
+    const projectWide = await workerRule({ activatorKey: "count:review:3" });
+    const forT1 = await listEnabledWorkers({ userId: USER, trackId: T1 });
+    expect(forT1.map((w) => w.ruleId)).toEqual([mine]);
+    const forT2 = await listEnabledWorkers({ userId: USER, trackId: T2 });
+    expect(forT2.map((w) => w.ruleId)).toEqual([theirs]);
+    // The project still reads all three: the strict filter is the goal's only.
+    const forP1 = await listEnabledWorkers({ userId: USER, projectId: P1 });
+    expect(forP1.map((w) => w.ruleId).sort()).toEqual(
+      [mine, theirs, projectWide].sort()
+    );
+  });
+});
+
+describe("listWorkerViews — trigger words, runs and health from the pod", () => {
+  it("failures since the last success read failing, oldest → newest marks", async () => {
+    const rule = await workerRule({ activatorKey: KEY, trackId: T1 });
+    const auto = await automationFor(rule);
+    await runAt(auto, "completed", 1);
+    await runAt(auto, "failed", 2);
+    await runAt(auto, "skipped", 3);
+    await runAt(auto, "failed", 4);
+    const [w] = await listWorkerViews({ userId: USER, trackId: T1 });
+    expect(w).toMatchObject({
+      ruleId: rule,
+      automationId: auto,
+      trigger: { kind: "event" },
+      lastRunAt: "2026-11-01T09:04:00.000Z",
+      nextRunAt: null,
+      health: { state: "failing", consecutiveFailures: 2, offReason: null },
+    });
+    expect(w!.trigger.words).toBeTruthy();
+    expect(w!.health.marks.map((m) => m.mark)).toEqual([
+      "done",
+      "failed",
+      "skipped",
+      "failed",
+    ]);
+  });
+
+  it("an automation the breaker turned off reads off, with its sentence; a paused one reads paused", async () => {
+    const rule = await workerRule({ activatorKey: KEY, trackId: T1 });
+    await automationFor(rule, {
+      status: "error",
+      error: "Turned off automatically after 3 failed runs in a row.",
+    });
+    const [off] = await listWorkerViews({ userId: USER, trackId: T1 });
+    expect(off).toMatchObject({
+      automationId: null,
+      health: {
+        state: "off",
+        offReason: "Turned off automatically after 3 failed runs in a row.",
+      },
+    });
+    await q(
+      `update skills set metadata = jsonb_set(metadata, '{rule,draft}', 'true') where id = $1`,
+      [rule]
+    );
+    const [paused] = await listWorkerViews({ userId: USER, trackId: T1 });
+    expect(paused).toMatchObject({
+      state: "paused",
+      health: { state: "paused" },
+    });
+  });
+
+  it("a schedule worker carries the pod's next run, said in words, never a raw cron", async () => {
+    const PB2 = "66666666-6666-4666-8666-666666666667";
+    await q(
+      `insert into playbooks (id, name, status, workspace_id, created_by, goal_template, subject_profile)
+       values ($1, 'Daily check', 'active', $2, $3, 'g', $4::jsonb)`,
+      [
+        PB2,
+        WS,
+        USER,
+        JSON.stringify({
+          profileSlug: "deal",
+          activators: [{ on: "schedule", cron: "0 9 * * *", mode: "propose" }],
+        }),
+      ]
+    );
+    try {
+      const rule = await insertRule({
+        intent: "worker",
+        scope: { kind: "workspace", workspaceId: WS, projectId: P1 },
+        seed: {
+          template: `playbook-worker:${PB2}`,
+          key: `schedule:0 9 * * *@project:${P1}@track:${T1}`,
+          hash: "h",
+        },
+      });
+      await automationFor(rule, { nextRunAt: "2026-11-02T09:00:00Z" });
+      const [w] = await listWorkerViews({ userId: USER, trackId: T1 });
+      expect(w).toMatchObject({
+        playbookId: PB2,
+        trigger: { kind: "schedule" },
+        nextRunAt: "2026-11-02T09:00:00.000Z",
+        lastRunAt: null,
+        health: { state: "healthy", marks: [] },
+      });
+      expect(w!.trigger.words).not.toContain("*");
+    } finally {
+      await q(`delete from playbooks where id = $1`, [PB2]);
+    }
   });
 });
