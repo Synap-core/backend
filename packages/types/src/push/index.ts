@@ -312,7 +312,6 @@ export const PUSH_DAILY_CAP = 3;
 export const PUSH_CAP_EXEMPT_CATEGORIES: readonly PushCategory[] = [
   "work-broke",
   "sent-by-you",
-  "delivered-digest",
 ];
 
 /** The notification types whose push the cap never counts (derived, never listed). */
