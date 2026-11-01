@@ -37,6 +37,8 @@ vi.mock("@synap/database", async (importOriginal) => {
         onConflictDoUpdate: () => ({
           returning: async () => [{ id: "row-1" }],
         }),
+        // The pod-global (no workspace) branch inserts plainly and reads the id.
+        returning: async () => [{ id: "row-1" }],
       };
     },
   };

@@ -12,8 +12,165 @@ import {
   CONTENT_KINDS,
   type ContentKind,
 } from "@synap/database/schema";
-import { registerProposalExecutor } from "../execution-registry.js";
+import {
+  registerProposalExecutor,
+  type ProposalExecutorArgs,
+} from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+function isSize(v: unknown): v is { w: number; h: number } {
+  return isPlainObject(v) && typeof v.w === "number" && typeof v.h === "number";
+}
+
+/** Mechanisms a gated cell definition may carry. `native` is absent by construction. */
+const GATED_RENDERER_TYPES = ["builtin", "iframe", "frame"] as const;
+
+/**
+ * Materialise a gated cell definition through `defineCell` and mark the proposal
+ * APPROVED. ONE implementation for both approve keys: `cell/define` (current)
+ * and `widget/register` (legacy, back-compat for proposals filed before the
+ * Hub widget-definitions door was routed through `defineCell`), which hands its
+ * own stored payload here as `innerData`.
+ */
+export async function applyCellDefineProposal(
+  { proposal, userId, input, deps }: ProposalExecutorArgs,
+  innerData: Record<string, unknown>
+) {
+  const name = innerData.name as string | undefined;
+  const rendererSource = innerData.rendererSource as string | undefined;
+  if (!name || !rendererSource) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Cell proposal is missing name/rendererSource",
+    });
+  }
+
+  // Idempotency: defineCell upserts, but skip the whole apply once the row
+  // has already been flipped APPROVED (double-click / retried re-approve).
+  const [alreadyDone] = await db
+    .select({ status: proposals.status })
+    .from(proposals)
+    .where(eq(proposals.id, input.proposalId));
+  if (alreadyDone?.status === ProposalStatus.APPROVED) {
+    return { success: true, alreadyApproved: true };
+  }
+
+  // typeKey the door carried into the gate `data`. Without it an approved
+  // cell materialises under `generated:<slug(name)>` — the reviewer
+  // approves one key and the pod writes another.
+  //
+  // Caller-supplied, so it is RE-VALIDATED here rather than trusted: the
+  // provenance floor runs again against `proposal.workspaceId`, the scope
+  // this proposal was actually REVIEWED at. That matters because `revise`
+  // can re-target `proposals.workspaceId` after the payload was written, so
+  // a key that was editable at the original scope may be a MINT at the new
+  // one.
+  const proposedTypeKey =
+    typeof innerData.typeKey === "string" && innerData.typeKey.length > 0
+      ? innerData.typeKey
+      : undefined;
+  if (proposedTypeKey) {
+    const { assertMayWriteNamespacedTypeKey } =
+      await import("../../../services/cells/namespaced-type-key.js");
+    await assertMayWriteNamespacedTypeKey(
+      proposedTypeKey,
+      proposal.workspaceId ?? null
+    );
+  }
+
+  const { defineCell } = await import("../../../services/cells/define-cell.js");
+  await defineCell({
+    name,
+    rendererSource,
+    typeKey: proposedTypeKey,
+    // SCOPE = THE REVIEWED SCOPE, never the payload. This used to read
+    // `innerData.workspaceId ?? proposal.workspaceId ?? null`, so the
+    // caller-supplied gate `data` chose the cell's scope.
+    //
+    // PRECISION on the reachable vector (measured, not assumed — the first
+    // reading of this bug overstated it): `??` falls through on a payload
+    // `null`, so a payload could NOT force POD-GLOBAL. What it COULD do is
+    // REDIRECT: a payload naming workspace B out-votes a proposal reviewed
+    // under workspace A, and a payload workspace NARROWS a pod-wide
+    // proposal into one workspace. Both write the cell at a scope no
+    // reviewer approved, which is the defect regardless of direction.
+    //
+    // The two doors that mint these proposals (MCP `synap_create_cell`,
+    // Hub `POST /cells/define`) always write the SAME value into both
+    // places, so this is a no-op for every legitimate caller today; the
+    // divergence appears the moment the two can differ — e.g. `revise`
+    // re-targets `proposals.workspaceId` (that path re-authorizes the
+    // DESTINATION, and pod-wide requires pod-admin) while leaving the
+    // stored `data.workspaceId` untouched, at which point the stale payload
+    // would win over the scope a reviewer actually approved.
+    // Matches `view/create` (executors/view.ts), which already reads only
+    // `proposal.workspaceId ?? null`.
+    workspaceId: proposal.workspaceId ?? null,
+    description: (innerData.description as string | null | undefined) ?? null,
+    // View-renderer affinity, carried in the gate `data` by the doors that
+    // accept it (Hub `POST /cells/define`, MCP `synap_create_cell`).
+    // Absent ⇒ undefined ⇒ defineCell leaves any stored affinity untouched.
+    viewTypes: Array.isArray(innerData.viewTypes)
+      ? (innerData.viewTypes as string[])
+      : undefined,
+    // Renderer SLOT, carried in the gate `data` by the same two doors.
+    // Absent ⇒ undefined ⇒ defineCell leaves an existing row's slot
+    // untouched and lets a new row take the column default. Re-validated
+    // against the SSOT rather than trusted: the payload is caller-supplied,
+    // and an unrecognised value must not reach the column.
+    contentKind: (CONTENT_KINDS as readonly string[]).includes(
+      innerData.contentKind as string
+    )
+      ? (innerData.contentKind as ContentKind)
+      : undefined,
+    // Presentation fields, carried by the Hub widget-definitions door (and
+    // the legacy `widget/register` payload). Each is re-validated, never
+    // trusted; absent ⇒ undefined ⇒ defineCell derives (mechanism) or leaves
+    // the stored value alone.
+    rendererType: (GATED_RENDERER_TYPES as readonly string[]).includes(
+      innerData.rendererType as string
+    )
+      ? (innerData.rendererType as (typeof GATED_RENDERER_TYPES)[number])
+      : undefined,
+    category:
+      typeof innerData.category === "string" ? innerData.category : undefined,
+    icon: typeof innerData.icon === "string" ? innerData.icon : undefined,
+    configSchema: isPlainObject(innerData.configSchema)
+      ? innerData.configSchema
+      : undefined,
+    defaultConfig: isPlainObject(innerData.defaultConfig)
+      ? innerData.defaultConfig
+      : undefined,
+    defaultSize: isSize(innerData.defaultSize)
+      ? innerData.defaultSize
+      : undefined,
+    userId,
+  });
+
+  await transitionProposal(db, {
+    to: ProposalStatus.APPROVED,
+    set: {
+      reviewedBy: userId,
+      reviewedAt: new Date(),
+      updatedAt: new Date(),
+    },
+    where: eq(proposals.id, input.proposalId),
+  });
+
+  // Report to IS telemetry (fire-and-forget — never blocks)
+  reportApproved(deps, proposal, input.proposalId);
+
+  deps.emitProposalReviewed(
+    input.proposalId,
+    proposal.workspaceId,
+    "approved",
+    userId
+  );
+  return { success: true };
+}
 
 /** Register the cell/define approve executor. */
 export function registerCellExecutors(): void {
@@ -28,121 +185,10 @@ export function registerCellExecutors(): void {
   // be written. The distinct action (`cell.define`) keeps it off that path.
   registerProposalExecutor({
     key: "cell/define",
-    async execute({ proposal, userId, input, deps }) {
-      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+    async execute(ctx) {
+      const innerData = ((ctx.proposal.data as Record<string, unknown>)?.data ??
         {}) as Record<string, unknown>;
-      const name = innerData.name as string | undefined;
-      const rendererSource = innerData.rendererSource as string | undefined;
-      if (!name || !rendererSource) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Cell proposal is missing name/rendererSource",
-        });
-      }
-
-      // Idempotency: defineCell upserts, but skip the whole apply once the row
-      // has already been flipped APPROVED (double-click / retried re-approve).
-      const [alreadyDone] = await db
-        .select({ status: proposals.status })
-        .from(proposals)
-        .where(eq(proposals.id, input.proposalId));
-      if (alreadyDone?.status === ProposalStatus.APPROVED) {
-        return { success: true, alreadyApproved: true };
-      }
-
-      // typeKey the door carried into the gate `data`. Without it an approved
-      // cell materialises under `generated:<slug(name)>` — the reviewer
-      // approves one key and the pod writes another.
-      //
-      // Caller-supplied, so it is RE-VALIDATED here rather than trusted: the
-      // provenance floor runs again against `proposal.workspaceId`, the scope
-      // this proposal was actually REVIEWED at. That matters because `revise`
-      // can re-target `proposals.workspaceId` after the payload was written, so
-      // a key that was editable at the original scope may be a MINT at the new
-      // one.
-      const proposedTypeKey =
-        typeof innerData.typeKey === "string" && innerData.typeKey.length > 0
-          ? innerData.typeKey
-          : undefined;
-      if (proposedTypeKey) {
-        const { assertMayWriteNamespacedTypeKey } =
-          await import("../../../services/cells/namespaced-type-key.js");
-        await assertMayWriteNamespacedTypeKey(
-          proposedTypeKey,
-          proposal.workspaceId ?? null
-        );
-      }
-
-      const { defineCell } =
-        await import("../../../services/cells/define-cell.js");
-      await defineCell({
-        name,
-        rendererSource,
-        typeKey: proposedTypeKey,
-        // SCOPE = THE REVIEWED SCOPE, never the payload. This used to read
-        // `innerData.workspaceId ?? proposal.workspaceId ?? null`, so the
-        // caller-supplied gate `data` chose the cell's scope.
-        //
-        // PRECISION on the reachable vector (measured, not assumed — the first
-        // reading of this bug overstated it): `??` falls through on a payload
-        // `null`, so a payload could NOT force POD-GLOBAL. What it COULD do is
-        // REDIRECT: a payload naming workspace B out-votes a proposal reviewed
-        // under workspace A, and a payload workspace NARROWS a pod-wide
-        // proposal into one workspace. Both write the cell at a scope no
-        // reviewer approved, which is the defect regardless of direction.
-        //
-        // The two doors that mint these proposals (MCP `synap_create_cell`,
-        // Hub `POST /cells/define`) always write the SAME value into both
-        // places, so this is a no-op for every legitimate caller today; the
-        // divergence appears the moment the two can differ — e.g. `revise`
-        // re-targets `proposals.workspaceId` (that path re-authorizes the
-        // DESTINATION, and pod-wide requires pod-admin) while leaving the
-        // stored `data.workspaceId` untouched, at which point the stale payload
-        // would win over the scope a reviewer actually approved.
-        // Matches `view/create` (executors/view.ts), which already reads only
-        // `proposal.workspaceId ?? null`.
-        workspaceId: proposal.workspaceId ?? null,
-        description:
-          (innerData.description as string | null | undefined) ?? null,
-        // View-renderer affinity, carried in the gate `data` by the doors that
-        // accept it (Hub `POST /cells/define`, MCP `synap_create_cell`).
-        // Absent ⇒ undefined ⇒ defineCell leaves any stored affinity untouched.
-        viewTypes: Array.isArray(innerData.viewTypes)
-          ? (innerData.viewTypes as string[])
-          : undefined,
-        // Renderer SLOT, carried in the gate `data` by the same two doors.
-        // Absent ⇒ undefined ⇒ defineCell leaves an existing row's slot
-        // untouched and lets a new row take the column default. Re-validated
-        // against the SSOT rather than trusted: the payload is caller-supplied,
-        // and an unrecognised value must not reach the column.
-        contentKind: (CONTENT_KINDS as readonly string[]).includes(
-          innerData.contentKind as string
-        )
-          ? (innerData.contentKind as ContentKind)
-          : undefined,
-        userId,
-      });
-
-      await transitionProposal(db, {
-        to: ProposalStatus.APPROVED,
-        set: {
-          reviewedBy: userId,
-          reviewedAt: new Date(),
-          updatedAt: new Date(),
-        },
-        where: eq(proposals.id, input.proposalId),
-      });
-
-      // Report to IS telemetry (fire-and-forget — never blocks)
-      reportApproved(deps, proposal, input.proposalId);
-
-      deps.emitProposalReviewed(
-        input.proposalId,
-        proposal.workspaceId,
-        "approved",
-        userId
-      );
-      return { success: true };
+      return applyCellDefineProposal(ctx, innerData);
     },
   });
 
