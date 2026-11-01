@@ -58,7 +58,11 @@
  * Pure, no I/O: the clock is a parameter.
  */
 
-import { askEndsWithSession, type AskCardSlot } from "../ask/card.js";
+// The zod-free leaf, never `../ask/card.js` (which reads zod through
+// `../ask/index.js`): this rule is in the graph of the `connections` leaf
+// that relay loads (guard: `relay-leaves.bare-free.test.ts`).
+import { askEndsWithSession } from "../ask/ends-with-session.js";
+import type { AskCardSlot } from "../ask/card.js";
 import { TERMINAL_SESSION_STATUSES } from "../focus-sessions/statuses.js";
 import { deliverableOwedBy } from "../units/deliverable.js";
 import { REVIEW_LATER_AFTER_MS } from "../proposals/fate.js";

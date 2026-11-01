@@ -388,7 +388,7 @@
   --synap-theme-mix-base: #ffffff;        /* chrome lifts toward white in both modes */
   --synap-theme-shadow-base: rgba(0, 0, 0, 1); /* shadow ink — black in dark */
   --synap-theme-edge-alpha: 8%;            /* inset top-highlight strength */
-  --synap-theme-tonal-hover-tint: 32%;
+  --synap-theme-tonal-hover-tint: 30%;
   --synap-theme-mode: dark;
 
   /* ── Z-index scale (harvested 2026-09-22) ──────────────────────────────────
@@ -765,7 +765,7 @@ html.dark,
   --synap-theme-mix-base: #ffffff;
   --synap-theme-shadow-base: rgba(0, 0, 0, 1);
   --synap-theme-edge-alpha: 8%;
-  --synap-theme-tonal-hover-tint: 32%;
+  --synap-theme-tonal-hover-tint: 30%;
   --synap-theme-mode: dark;
 }
 
