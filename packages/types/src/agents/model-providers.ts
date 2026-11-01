@@ -40,7 +40,7 @@ export type ModelProviderSlug = (typeof MODEL_PROVIDERS)[number]["slug"];
 /** The provider for a slug, or null when it names none. */
 export function resolveModelProvider(
   slug: string | null | undefined
-): ModelProvider | null {
+): (typeof MODEL_PROVIDERS)[number] | null {
   return MODEL_PROVIDERS.find((p) => p.slug === slug) ?? null;
 }
 

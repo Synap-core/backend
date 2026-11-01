@@ -880,8 +880,9 @@ describe("continuation packet — runners", () => {
     const keyId = randomUUID();
     const ran = (proc: string, model: string | null, provider: string | null) =>
       q(
-        `insert into session_runners (session_id, client_key, process_key, user_id, api_key_id, harness, conversation_id, model, provider)
-         values ($1, $2, $3, $4, $5, 'claude-code', $6, $7, $8)`,
+        // The test schema is columns only (no defaults): seen times are given.
+        `insert into session_runners (session_id, client_key, process_key, user_id, api_key_id, harness, conversation_id, model, provider, first_seen_at, last_seen_at)
+         values ($1, $2, $3, $4, $5, 'claude-code', $6, $7, $8, now(), now())`,
         [
           sid,
           `key:${keyId}|conv:claude-code:${CC_CONV}`,
