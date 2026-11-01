@@ -81,6 +81,7 @@ import { RUN_NOT_DELAY_SUSPENDED } from "./automation-run-reaper.js";
 import {
   tripNeverWorkedBreaker,
   tripBrokeAfterWorkingBreaker,
+  tripGoalWorkerBreaker,
 } from "./automation-breaker.js";
 import {
   beginAiUsageCapture,
@@ -2148,6 +2149,12 @@ async function executeAutomationFlow(params: {
           automationId,
           status: statsAfter.status,
           successCount: statsAfter.successCount,
+          reason: firstFailureMessage,
+        });
+        // A goal's worker stops sooner: 3 failures in a row (decision 7).
+        await tripGoalWorkerBreaker({
+          automationId,
+          status: statsAfter.status,
           reason: firstFailureMessage,
         });
       }
