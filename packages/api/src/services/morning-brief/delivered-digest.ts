@@ -14,7 +14,8 @@
  *
  * ITS OWN CLASS: passive, outside the 3-a-day interruption budget (it is in
  * `PUSH_CAP_EXEMPT_CATEGORIES`, so it is neither held back nor counted), and
- * `informational` in needs-you (it never waits on the person).
+ * a `suggestion` in needs-you like every `ai.proactive.*` type (founder D2): it
+ * never counts there, it never waits on the person.
  *
  * WHAT COUNTS AS DELIVERED, only from facts the pod recorded, each with its
  * time (an outcome whose delivery time was never recorded is not guessed):
@@ -262,6 +263,7 @@ export async function readDeliveredSince(
   const [sessions, prFacts] = await Promise.all([
     // A session that delivered something since `since` was written since
     // then: its `updated_at` moved.
+    // SESSION-KIND-LENS-EXEMPT: folded into counts and a few titles, never a page of session rows; kind is `work` in the WHERE, and triage is deliberately not applied: an agent-opened session nobody accepted still delivered what it delivered.
     database
       .select({
         id: focusSessions.id,
