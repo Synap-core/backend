@@ -70,6 +70,7 @@ import {
   type ProposalTurnsOn,
 } from "@synap-core/types/proposals";
 import {
+  resolveActionLabel,
   resolveObjectNoun,
   resolveProvenanceLabel,
   resolveStatusLabel,
@@ -96,6 +97,7 @@ import { deriveDeferredWritesReview } from "@synap-core/types/proposals/deferred
 import { DocumentChanges } from "../../_lib/object/content/document-changes";
 import { documentChanges } from "../../_lib/object/content/document-changes-model";
 import { AlwaysApproveMenu, RejectNeverMenu } from "./AlwaysApproveMenu";
+import { proposalPageT } from "./copy";
 import { DeferredWritesList } from "./DeferredWritesList";
 import { FailedApproval } from "./FailedApproval";
 import {
@@ -587,6 +589,10 @@ function DecisionButtons({
     revertable: p.revertable,
   });
   const { busy } = decision;
+  const t = proposalPageT();
+  // A rule is a pod admin's to set (`assertCanManageRule`): anyone else would
+  // decide, then be refused the rule they chose, so the menus are not offered.
+  const mayRule = useConsoleRole() === "admin";
 
   if (rejecting) {
     return (
@@ -594,8 +600,8 @@ function DecisionButtons({
         <Textarea
           value={reason}
           onValueChange={setReason}
-          label="Reason (optional)"
-          placeholder="Why are you rejecting this? The agent sees this."
+          label={t("decide.reason.label")}
+          placeholder={t("decide.reason.placeholder")}
           minRows={2}
         />
         <div className="flex items-center gap-2">
@@ -605,7 +611,7 @@ function DecisionButtons({
             isLoading={decision.rejecting}
             onPress={() => decision.reject(reason)}
           >
-            Confirm reject
+            {resolveActionLabel("reject")}
           </Button>
           <Button
             variant="light"
@@ -613,7 +619,7 @@ function DecisionButtons({
             isDisabled={decision.rejecting}
             onPress={() => setRejecting(false)}
           >
-            Cancel
+            {t("decide.cancel")}
           </Button>
         </div>
       </div>
@@ -629,7 +635,7 @@ function DecisionButtons({
       isDisabled={busy}
       onPress={() => setRejecting(true)}
     >
-      Reject…
+      {`${resolveActionLabel("reject")}…`}
     </Button>
   );
   const undoChip = undo && <DisclosedMark mark={undo} icon={TriangleAlert} />;
@@ -702,23 +708,24 @@ function DecisionButtons({
         isDisabled={busy || waiting}
         onPress={() => decision.approve(choice)}
       >
-        {resume ? "Resume" : "Approve"}
+        {resolveActionLabel(resume ? "resume" : "approve")}
       </Button>
       {rejectButton}
       {/* Never widen autonomy beside the approval of something that acts on
           its own: that moment is for reading it, not for "always". */}
-      {mode.kind === "plain" &&
+      {mayRule &&
+        mode.kind === "plain" &&
         !pageOnlyReasonActs(proposalPageOnlyReason(p)) && (
           <AlwaysApproveMenu proposal={p} disabled={busy} onDone={onDecided} />
         )}
       {/* "Never" narrows, so it stays beside a change that acts on its own. */}
-      {mode.kind === "plain" && (
+      {mayRule && mode.kind === "plain" && (
         <RejectNeverMenu proposal={p} disabled={busy} onDone={onDecided} />
       )}
       {undoChip}
       {waiting && (
         <span className="text-[12px] text-foreground/60">
-          Pick the record for each item first.
+          {t("decide.pickFirst")}
         </span>
       )}
     </div>
@@ -757,17 +764,10 @@ function WhoDecides({ identity }: { identity?: string }) {
     ) : (
       audit.label
     );
+  const t = proposalPageT();
   return (
     <p className="text-[11.5px] text-foreground/55">
-      {identity ? (
-        <>
-          You decide as <span className="text-foreground/75">{identity}</span>
-          {" · recorded in the "}
-        </>
-      ) : (
-        "Recorded in the "
-      )}
-      {log}
+      {identity ? t("decide.as", { identity }) : t("decide.recorded")} {log}
     </p>
   );
 }

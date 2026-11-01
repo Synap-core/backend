@@ -808,6 +808,9 @@ export async function syncAutoApproveRules(
           // The reversible-by-default row is a Settings toggle, not a mirrored
           // autoApproveFor entry — a list PATCH never switches it off.
           ne(governanceRules.targetPattern, REVERSIBLE_CLASS_PATTERN),
+          // A person's "never" is not a mirrored allow: an allow-list PATCH
+          // never takes it back (as `applyAgentPosture`).
+          ne(governanceRules.verdict, "deny"),
           principalCondition,
           scopeCondition
         )

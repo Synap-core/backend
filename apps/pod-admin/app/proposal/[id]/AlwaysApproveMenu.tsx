@@ -5,7 +5,7 @@
  * button. Approving normally decides once; picking a granularity here does
  * that AND writes one revocable `governance_rules` row (Governance
  * Convergence Plan, Phase A/D) so the same kind of write auto-approves next
- * time — until someone takes it back in a space's Governance tab.
+ * time — until someone takes it back in Settings (`request-rules.tsx`).
  *
  * The granularities are described in the header of
  * `packages/api/src/routers/governance-rules.ts`; only the ones this
@@ -23,11 +23,12 @@
  * it is closed and never shows a raw exception. No Undo: taking the decision
  * back would leave its rule standing.
  *
- * "Reject & never…" (`RejectNeverMenu`) is the third answer of audit 110dd4ab G3:
- * it rejects AND writes one `deny` row for this agent and this act
- * (`deriveGovernanceNeverOption`, never a wildcard), so the pod refuses the
- * same write from then on with `DENIED_BY_RULE`, above the floors (decision
- * 956930ad). Pod admin runs the pod: a rule about what an agent may do.
+ * "Reject and never allow…" (`RejectNeverMenu`) writes one pod-wide `deny` row
+ * for this agent and this act (`deriveGovernanceNeverOption`, never a
+ * wildcard), then rejects, so the pod refuses the same write from then on
+ * with `DENIED_BY_RULE`, above the floors (decision 956930ad). Pod admin runs
+ * the pod: a rule about what an agent may do. Both menus are offered to a pod
+ * admin only (`ProposalReviewCard`): the rule door refuses anyone else.
  */
 
 import { useState } from "react";
@@ -307,8 +308,8 @@ export function AlwaysApproveMenu({
 }
 
 /**
- * "Reject & never…": the request's "Never" (audit 110dd4ab G3). Rejects, then
- * writes the deny `deriveGovernanceNeverOption` derives. Absent when the
+ * "Reject and never allow…": the request's "Never". Writes the pod-wide deny
+ * `deriveGovernanceNeverOption` derives, then rejects. Absent when the
  * request names no agent or no single act (the derivation returns null).
  */
 export function RejectNeverMenu({
@@ -338,9 +339,26 @@ export function RejectNeverMenu({
           covers: t("never.action.covers"),
         };
 
+  // The rule first: the rejection tells the agent "refused for good", which
+  // is true only once the rule is saved. A refused rule leaves the request as
+  // it was; a refused rejection leaves the rule, which is safe (a deny beside
+  // a pending request) and said.
   async function rejectAndNever(rule: CreateRuleInput, label: string) {
     setRunning(true);
     try {
+      try {
+        await createRule.mutateAsync(rule);
+      } catch (ruleError) {
+        showReceipt({
+          title: t("never.ruleFailed"),
+          description:
+            typedDetail(ruleError as DecisionError) ??
+            t("never.ruleFailedHint"),
+          tone: "danger",
+          undo: false,
+        });
+        return;
+      }
       let outcome: DecisionOutcome;
       try {
         outcome = readRejectAnswer(
@@ -353,22 +371,13 @@ export function RejectNeverMenu({
         outcome = decisionFailure("reject", err as DecisionError);
       }
       if (outcome.state === "failed") {
-        showReceipt(decisionReceipt(outcome));
+        showReceipt({
+          ...decisionReceipt(outcome),
+          title: t("never.rejectFailed"),
+        });
         return;
       }
-      try {
-        await createRule.mutateAsync(rule);
-        showReceipt(withRule(outcome, t("never.done.body", { label })));
-      } catch (ruleError) {
-        showReceipt({
-          title: t("never.ruleFailed"),
-          description:
-            typedDetail(ruleError as DecisionError) ??
-            t("never.ruleFailedHint"),
-          tone: "danger",
-          undo: false,
-        });
-      }
+      showReceipt(withRule(outcome, t("never.done.body", { label })));
       onDone();
     } finally {
       setRunning(false);

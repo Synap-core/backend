@@ -96,7 +96,7 @@ export function ProposalReview({
   if (query.isLoading) {
     return shell(
       <CardBody className="items-center gap-3 px-7 py-16">
-        <Spinner label="Loading proposal…" />
+        <Spinner label={t("read.loading")} />
       </CardBody>
     );
   }

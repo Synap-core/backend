@@ -293,8 +293,7 @@ export function deriveGovernanceGrantOptions(
 export interface GovernanceDenyDraft {
   principalKind: "agent";
   agentUserId: string;
-  scopeKind: "workspace" | "pod";
-  workspaceId?: string;
+  scopeKind: "pod";
   targetKind: "action" | "capability";
   targetPattern: string;
   verdict: "deny";
@@ -318,18 +317,21 @@ export interface GovernanceNeverOption {
  * glob action, or a capability run with no capability, whose action key
  * `capability.run` would refuse every tool. A broad deny stays possible
  * through `governanceRules.create`; this option never writes one.
+ *
+ * Pod-wide, whatever space the request was filed in: the words promise "this
+ * AI can no longer use this tool", and a space-scoped deny would let the same
+ * agent run the same act from another space (the resolver reads a space rule
+ * only for a run in that space). Refusing more is always safe.
  */
 export function deriveGovernanceNeverOption(
   ctx: GovernanceGrantContext
 ): GovernanceNeverOption | null {
   const agentUserId = ctx.agentUserId ?? undefined;
   if (!agentUserId) return null;
-  const workspaceId = ctx.workspaceId ?? undefined;
   const base = {
     principalKind: "agent" as const,
     agentUserId,
-    scopeKind: workspaceId ? ("workspace" as const) : ("pod" as const),
-    workspaceId,
+    scopeKind: "pod" as const,
     verdict: "deny" as const,
     sourceProposalId: ctx.proposalId,
   };

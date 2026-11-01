@@ -115,8 +115,7 @@ describe("deriveGovernanceNeverOption — a request's 'Never' (decision G3)", ()
       rule: {
         principalKind: "agent",
         agentUserId: "agent-1",
-        scopeKind: "workspace",
-        workspaceId: BASE.workspaceId,
+        scopeKind: "pod",
         targetKind: "action",
         targetPattern: "profile.create",
         verdict: "deny",
@@ -165,13 +164,15 @@ describe("deriveGovernanceNeverOption — a request's 'Never' (decision G3)", ()
     ).toBeNull();
   });
 
-  it("a request with no space writes a pod-wide deny, still for one agent", () => {
-    const never = deriveGovernanceNeverOption({ ...BASE, workspaceId: null });
-    expect(never?.rule).toMatchObject({
-      scopeKind: "pod",
-      principalKind: "agent",
-      agentUserId: "agent-1",
-    });
-    expect(never?.rule.workspaceId).toBeUndefined();
+  it("is pod-wide whatever space the request was filed in, still for one agent", () => {
+    for (const workspaceId of [BASE.workspaceId, null]) {
+      const never = deriveGovernanceNeverOption({ ...BASE, workspaceId });
+      expect(never?.rule).toMatchObject({
+        scopeKind: "pod",
+        principalKind: "agent",
+        agentUserId: "agent-1",
+      });
+      expect(never?.rule).not.toHaveProperty("workspaceId");
+    }
   });
 });
