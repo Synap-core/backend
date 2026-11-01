@@ -42767,6 +42767,36 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 			};
 		}>;
+		match: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				intentText: string;
+				limit?: number | undefined;
+				projectId?: string | undefined;
+				workspaceId?: string | undefined;
+			};
+			meta: object;
+			output: {
+				autoPicked: boolean;
+				playbooks: {
+					executor: PlaybookExecutorRef;
+					forceProposeWrites: boolean;
+					goalTemplate: string;
+					id: string;
+					inputStrategyKind: string | null;
+					name: string;
+					params: unknown;
+					reason: string;
+					scope: PlaybookScope;
+					score: number;
+					signals: RouteSignal[];
+					subjectFilter: {} | null;
+					subjectProfileSlug: string | null;
+					templateKind: string;
+					workspaceId: string | null;
+				}[];
+				workspaceId: string;
+			};
+		}>;
 		matchForEntity: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				entityId?: string | undefined;
