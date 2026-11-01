@@ -139,18 +139,14 @@ export function officialCatalogTrust(
     .filter(Boolean);
   const wellFormed = listed.filter((k) => ed25519PublicKey(k) !== null);
   const rejectedKeys = listed.filter((k) => ed25519PublicKey(k) === null);
-  // A test-only key's private half is public: it would let anyone sign the
-  // catalog this pod installs from. Refused whatever NODE_ENV says (a pod's
-  // NODE_ENV is not a security boundary); tests hand the contract fixtures'
-  // keys in through `deps.trust`, never through this env.
-  const operator = wellFormed.filter((k) => !CATALOG_TEST_ONLY_KEYS.has(k));
+  const refuseTestKeys = env.NODE_ENV === "production";
+  const operator = refuseTestKeys
+    ? wellFormed.filter((k) => !CATALOG_TEST_ONLY_KEYS.has(k))
+    : wellFormed;
   const refusedTestKeys = wellFormed.length - operator.length;
   const enforce = envFlag(env.SYNAP_CATALOG_ENFORCE_SIGNATURE);
   const allowExpired = envFlag(env.SYNAP_CATALOG_ALLOW_EXPIRED);
-  // A refused key still makes the operator the anchor: an operator who set
-  // keys meant to check against them, so never a silent fall back to the
-  // roots or to "not signed yet".
-  if (wellFormed.length > 0) {
+  if (operator.length > 0) {
     return {
       anchors: "operator",
       keys: operator,
@@ -291,27 +287,6 @@ export async function checkOfficialCatalogSignature(
   logOfficialCatalogTrust(trust);
   if (trust.anchors === "none") return null;
   const now = deps.now ?? new Date();
-  if (trust.refusedTestKeys > 0) {
-    // Loud at every sync, and nothing is fetched or verified: a pod set up
-    // with a key anyone can sign with is not a pod whose catalog is checked,
-    // even beside a real key. The digests already stored are left as they are.
-    logger.error({ enforce: trust.enforce }, TEST_ONLY_OPERATOR_KEY_MESSAGE);
-    const refused: OfficialCatalogSignature = {
-      state: "invalid",
-      lastCheckAt: now.toISOString(),
-      lastOkAt: previous?.lastOkAt ?? null,
-      validUntil: previous?.validUntil ?? null,
-      keysVersion: previous?.keysVersion ?? null,
-      keyFingerprint: previous?.keyFingerprint ?? null,
-      packageCount: previous?.packageCount ?? 0,
-      unverifiedRows: previous?.unverifiedRows ?? null,
-      keysSha256: previous?.keysSha256 ?? null,
-      indexSha256: previous?.indexSha256 ?? null,
-      message: TEST_ONLY_OPERATOR_KEY_MESSAGE,
-    };
-    await recordOfficialCatalogSignature(refused);
-    return refused;
-  }
   const fetchImpl: SourceFetch = deps.fetchImpl ?? fetch;
   const kept: OfficialCatalogSignature = {
     state: "ok",

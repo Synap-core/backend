@@ -606,7 +606,7 @@ const BlockOutputBodySchema = z.object({
    * express it, so the whole `/openapi.json` answered 500
    * (`focus-sessions.ask-wire.test.ts`).
    */
-  ask: AskSchema.nullable().optional(),
+  ask: z.custom<Ask>().nullable().optional(),
 });
 
 const UnblockOutputBodySchema = z.object({

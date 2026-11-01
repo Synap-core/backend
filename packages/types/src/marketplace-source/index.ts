@@ -227,7 +227,7 @@ export const CATALOG_KEY_MAX_LIFETIME_DAYS = 90;
 export const CATALOG_KEYS_MAX_LIFETIME_DAYS = 366;
 export const CATALOG_KEYS_MAX_BYTES = 64 * 1024;
 /** A keys statement names 1 to this many online keys. */
-export const CATALOG_KEYS_MAX_KEYS = 8;
+export const CATALOG_KEYS_MAX_KEYS = 9;
 
 /**
  * One listing of Synap's signed index. Same fields as any source, plus the
