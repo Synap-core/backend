@@ -1912,6 +1912,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "state_reported_at",
     addedBy: "0384_session_runners_state.sql",
   },
+  // What a runner says it runs on (0389). Absence means every runner stamp
+  // fails (its insert names `model`, logged, never fatal) and the runner
+  // loader 42703s.
+  {
+    table: "session_runners",
+    column: "provider",
+    addedBy: "0389_session_runners_model.sql",
+  },
 
   // proposal_apply_runs — a large approval applied by the background job
   // (0352). Absence means every approve at or above the background threshold

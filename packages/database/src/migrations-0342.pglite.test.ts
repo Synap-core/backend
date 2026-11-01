@@ -5,7 +5,8 @@
  * schema-coherence names it, re-running is a no-op, the (session, client key)
  * primary key is what the throttled upsert conflicts on, and a deleted session
  * takes its runners with it. 0384 adds the runner's state (three columns) and
- * the client-key index its non-wait write reads.
+ * the client-key index its non-wait write reads; 0389 the model and provider
+ * the runner says it runs on.
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -30,6 +31,10 @@ const M0384 = readFileSync(
   resolve(HERE, "../migrations/0384_session_runners_state.sql"),
   "utf8"
 );
+const M0389 = readFileSync(
+  resolve(HERE, "../migrations/0389_session_runners_model.sql"),
+  "utf8"
+);
 const BASELINE = readFileSync(
   resolve(HERE, "../migrations/0000_baseline_schema.sql"),
   "utf8"
@@ -50,10 +55,12 @@ describe("migration 0342 — session_runners", () => {
     await pg.exec(M0373);
     await pg.exec(M0384);
     await pg.exec(M0384);
+    await pg.exec(M0389);
+    await pg.exec(M0389);
     const cols = await pg.query<{ column_name: string }>(
       `SELECT column_name FROM information_schema.columns WHERE table_name = 'session_runners'`
     );
-    expect(declaredColumns.length).toBe(17);
+    expect(declaredColumns.length).toBe(19);
     expect(cols.rows.map((r) => r.column_name).sort()).toEqual(
       [...declaredColumns].sort()
     );
@@ -116,7 +123,7 @@ describe("migration 0342 — session_runners", () => {
       return { cols: cols.rows, pk: pk.rows.map((r) => r.attname) };
     };
     const fromBaseline = await shape(baselineCreate);
-    expect(fromBaseline).toEqual(await shape(M0342 + M0373 + M0384));
+    expect(fromBaseline).toEqual(await shape(M0342 + M0373 + M0384 + M0389));
     expect(fromBaseline.pk).toEqual([
       "client_key",
       "process_key",
@@ -132,6 +139,7 @@ describe("migration 0342 — session_runners", () => {
         "machine_user_id",
         "process_key",
         "state_reported_at",
+        "provider",
       ])
     );
   }, 60_000);

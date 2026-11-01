@@ -958,6 +958,8 @@ export function agentDisplayName(input: {
 // The reopenable agent conversation behind a piece of work.
 export * from "./conversation.js";
 export * from "./harnesses.js";
+// The model a run used and its provider: facts a client reports, not identity.
+export * from "./model-providers.js";
 export * from "./route-choice.js";
 // One agent's typed message to another session (the coordination post).
 export * from "./session-post.js";

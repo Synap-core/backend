@@ -16,6 +16,8 @@ const run = (over: Partial<SessionRunner>): SessionRunner => ({
   live: true,
   state: null,
   stateSince: null,
+  model: null,
+  provider: null,
   conversation: null,
   ...over,
 });

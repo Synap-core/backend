@@ -280,6 +280,17 @@ export interface PacketRunnerItem {
   state: "busy" | "idle" | "needs_permission" | "ended" | null;
   /** When it entered that state; for a runner gone quiet, when it was last seen. */
   stateSince?: string;
+  /**
+   * The model it says it runs on (0389, `X-Synap-Model`), as its client names
+   * it. Absent = its client names none (unknown). Claimed, not attested.
+   */
+  model?: string;
+  /**
+   * The provider serving that model (0389, `X-Synap-Model-Provider`): a
+   * `MODEL_PROVIDERS` slug (`@synap-core/types/agents`). Absent = unknown,
+   * never "anthropic".
+   */
+  provider?: string;
   firstSeenAt: string;
   lastSeenAt: string;
   /** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read, and not `ended`. */
@@ -997,6 +1008,8 @@ function runnerItem(r: SessionRunner): PacketRunnerItem {
       : {}),
     state: r.state,
     ...(r.stateSince ? { stateSince: r.stateSince } : {}),
+    ...(r.model ? { model: r.model } : {}),
+    ...(r.provider ? { provider: r.provider } : {}),
     firstSeenAt: r.firstSeenAt,
     lastSeenAt: r.lastSeenAt,
     live: r.live,

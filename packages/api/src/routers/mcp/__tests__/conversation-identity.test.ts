@@ -66,6 +66,7 @@ vi.mock("../index.js", async () => {
     getRequestClientKey,
     getRequestConversationCwd,
     getRequestRunnerState,
+    getRequestReportedModel,
   } = await import("@synap/database");
   return {
     groundingBudgetBytes: () => 0,
@@ -85,6 +86,8 @@ vi.mock("../index.js", async () => {
               key: String(getRequestClientKey()),
               cwd: getRequestConversationCwd() ?? null,
               state: getRequestRunnerState()?.state ?? null,
+              // Absent (undefined) when nothing usable was reported.
+              ran: getRequestReportedModel(),
             }),
           },
         ],
@@ -114,7 +117,12 @@ async function post(body: unknown, extra: Record<string, string> = {}) {
 async function contextOfCall(
   extra: Record<string, string> = {},
   meta?: Record<string, unknown>
-): Promise<{ key: string; cwd: string | null; state: string | null }> {
+): Promise<{
+  key: string;
+  cwd: string | null;
+  state: string | null;
+  ran?: { model?: string; provider?: string };
+}> {
   const res = await post(
     {
       jsonrpc: "2.0",
@@ -263,5 +271,49 @@ describe("MCP conversation identity (Mcp-Session-Id)", () => {
         })
       ).state
     ).toBeNull();
+  });
+
+  // 0389: the model and provider a client says it runs on, on any call.
+  it("X-Synap-Model / X-Synap-Model-Provider reach the request, parsed; none sent reads unknown", async () => {
+    const CC = "claude-code:8c34a72b-b1c1-4c37-9c1f-02920b69ccb2";
+    expect(
+      (
+        await contextOfCall({
+          "x-synap-conversation": CC,
+          "x-synap-model": "claude-opus-5-5",
+          "x-synap-model-provider": "Anthropic",
+        })
+      ).ran
+    ).toEqual({ model: "claude-opus-5-5", provider: "anthropic" });
+    expect(
+      (await contextOfCall({ "x-synap-conversation": CC })).ran
+    ).toBeUndefined();
+    expect(
+      (
+        await contextOfCall({
+          "x-synap-model": "https://api.z.ai/v1",
+          "x-synap-model-provider": "https://api.z.ai",
+        })
+      ).ran
+    ).toEqual({ provider: "other" });
+  });
+
+  it("_meta names them for a client that cannot set headers; the header outranks it", async () => {
+    expect(
+      (
+        await contextOfCall(
+          {},
+          { "live.synap/model": "glm-4.6", "live.synap/modelProvider": "zai" }
+        )
+      ).ran
+    ).toEqual({ model: "glm-4.6", provider: "zai" });
+    expect(
+      (
+        await contextOfCall(
+          { "x-synap-model": "claude-opus-5-5" },
+          { "live.synap/model": "glm-4.6" }
+        )
+      ).ran
+    ).toEqual({ model: "claude-opus-5-5" });
   });
 });

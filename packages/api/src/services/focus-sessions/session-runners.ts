@@ -47,6 +47,13 @@
  * `ended` and not live; a live one whose client names no state reads `null`
  * (unknown, never "idle"). {@link foldRunnerState} is the session-level word.
  *
+ * A runner SAYS WHAT IT RUNS ON (0389): the model and the provider serving it
+ * (`X-Synap-Model` / `X-Synap-Model-Provider`, parsed by `runWithReportedModel`,
+ * `request-write-context.ts`). Facts the client claims, never identity
+ * (decision 5e7c77dc). The wait's stamp records them; a call that names none
+ * keeps what the row has, and a change is written at once, past the throttle.
+ * READ: `null` = its client names none (unknown, never "anthropic").
+ *
  * A runner row carries the session's `clientKey` + `cwd` shape, so the ONE
  * resume derivation (`resolveAgentConversation`, @synap-core/types/agents)
  * reads it as it reads a session's metadata — never a second resume rule.
@@ -63,6 +70,7 @@ import {
   getRequestConversationCwd,
   getRequestProcess,
   getRequestRunnerState,
+  getRequestReportedModel,
   and,
   isNull,
   lt,
@@ -72,8 +80,10 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
+  parseModelProvider,
   resolveAgentConversation,
   type AgentConversationRef,
+  type ModelProviderSlug,
 } from "@synap-core/types/agents";
 
 const logger = createLogger({ module: "session-runners" });
@@ -137,9 +147,12 @@ export async function stampSessionRunner(p: {
   const cwd = getRequestConversationCwd() ?? null;
   const proc = getRequestProcess();
   const report = getRequestRunnerState();
+  const ran = getRequestReportedModel();
   const agentUserId = p.agentUserId ?? null;
   // The report is newer than the row's: it may move the state (0384).
   const fresher = drizzleSql`(excluded.state IS NOT NULL AND (${sessionRunners.stateReportedAt} IS NULL OR excluded.state_reported_at > ${sessionRunners.stateReportedAt}))`;
+  // It names another model or provider than the row's (0389): written at once.
+  const switched = drizzleSql`((excluded.model IS NOT NULL AND excluded.model IS DISTINCT FROM ${sessionRunners.model}) OR (excluded.provider IS NOT NULL AND excluded.provider IS DISTINCT FROM ${sessionRunners.provider}))`;
   try {
     // The computer: the agent's host (`users.host_user_id`), or the agent
     // itself when the key belongs to a `machine` agent user.
@@ -164,6 +177,8 @@ export async function stampSessionRunner(p: {
         state: report?.state ?? null,
         stateSince: report?.reportedAt ?? null,
         stateReportedAt: report?.reportedAt ?? null,
+        model: ran?.model ?? null,
+        provider: ran?.provider ?? null,
       })
       .onConflictDoUpdate({
         target: [
@@ -176,13 +191,15 @@ export async function stampSessionRunner(p: {
           cwd: drizzleSql`coalesce(excluded.cwd, ${sessionRunners.cwd})`,
           agentUserId: drizzleSql`excluded.agent_user_id`,
           machineUserId: drizzleSql`coalesce(excluded.machine_user_id, ${sessionRunners.machineUserId})`,
+          model: drizzleSql`coalesce(excluded.model, ${sessionRunners.model})`,
+          provider: drizzleSql`coalesce(excluded.provider, ${sessionRunners.provider})`,
           state: drizzleSql`CASE WHEN ${fresher} THEN excluded.state ELSE ${sessionRunners.state} END`,
           stateSince: drizzleSql`CASE WHEN ${fresher} AND excluded.state IS DISTINCT FROM ${sessionRunners.state} THEN excluded.state_since ELSE ${sessionRunners.stateSince} END`,
           stateReportedAt: drizzleSql`CASE WHEN ${fresher} THEN excluded.state_reported_at ELSE ${sessionRunners.stateReportedAt} END`,
         },
         // THE throttle: at most one write a minute per row — unless the
         // runner says something new, which is written at once.
-        setWhere: drizzleSql`${sessionRunners.lastSeenAt} < now() - make_interval(secs => ${RUNNER_STAMP_INTERVAL_SECONDS}) OR (${fresher} AND excluded.state IS DISTINCT FROM ${sessionRunners.state})`,
+        setWhere: drizzleSql`${sessionRunners.lastSeenAt} < now() - make_interval(secs => ${RUNNER_STAMP_INTERVAL_SECONDS}) OR (${fresher} AND excluded.state IS DISTINCT FROM ${sessionRunners.state}) OR ${switched}`,
       })
       .returning({ sessionId: sessionRunners.sessionId });
     return written.length > 0;
@@ -271,6 +288,10 @@ export interface SessionRunner {
   state: RunnerState | null;
   /** When it entered that state (for a runner gone quiet: when it was last seen). */
   stateSince: string | null;
+  /** The model it says it runs on (0389); null = its client names none (unknown). */
+  model: string | null;
+  /** The provider serving that model (0389); null = unknown, never "anthropic". */
+  provider: ModelProviderSlug | null;
   firstSeenAt: string;
   lastSeenAt: string;
   /** Stamped within {@link RUNNER_LIVE_WINDOW_SECONDS} of `now`, and not `ended`. */
@@ -302,6 +323,8 @@ export async function loadSessionRunners(
       processStartedAt: sessionRunners.processStartedAt,
       state: sessionRunners.state,
       stateSince: sessionRunners.stateSince,
+      model: sessionRunners.model,
+      provider: sessionRunners.provider,
       firstSeenAt: sessionRunners.firstSeenAt,
       lastSeenAt: sessionRunners.lastSeenAt,
     })
@@ -330,6 +353,9 @@ export async function loadSessionRunners(
           live || said === "ended"
             ? (r.stateSince?.toISOString() ?? null)
             : r.lastSeenAt.toISOString(),
+        model: r.model,
+        // Read through the one rule: a slug dropped since reads `other`.
+        provider: parseModelProvider(r.provider) ?? null,
         firstSeenAt: r.firstSeenAt.toISOString(),
         lastSeenAt: r.lastSeenAt.toISOString(),
         live,

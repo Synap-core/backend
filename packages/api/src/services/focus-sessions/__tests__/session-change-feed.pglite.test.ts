@@ -94,6 +94,7 @@ import {
   messages,
   proposals,
   runWithClientKey,
+  runWithReportedModel,
 } from "@synap/database";
 import { registerFocusSessionsRoutes } from "../../../routers/hub-protocol/rest/focus-sessions.js";
 import { sessionHandlers } from "../../../routers/mcp/handlers/session.js";
@@ -280,6 +281,7 @@ beforeAll(async () => {
   await h.client!.exec(migration("0342_session_runners.sql"));
   await h.client!.exec(migration("0373_session_runners_process.sql"));
   await h.client!.exec(migration("0384_session_runners_state.sql"));
+  await h.client!.exec(migration("0389_session_runners_model.sql"));
   await q(
     `insert into users (id, email, name, timezone, user_type, agent_type, host_user_id) values
       ($1, 'o@example.test', 'Owner', 'UTC', 'human', null, null),
@@ -972,5 +974,68 @@ describe("runner state (0384)", () => {
     } finally {
       await unlisten();
     }
+  });
+});
+
+describe("runner model and provider (0389)", () => {
+  const MAC = "mac-a:4242:1761600000000";
+  beforeEach(async () => {
+    await q(`delete from session_runners where client_key = $1`, [CLIENT_KEY]);
+  });
+  /** The wait's stamp, from a client that reports `model` / `provider` (or nothing). */
+  const stamp = (sessionId: string, model?: string, provider?: string) =>
+    runWithClientKey(
+      CLIENT_KEY,
+      () =>
+        runWithReportedModel(model, provider, () =>
+          stampSessionRunner({ sessionId, ownerId: OWNER, agentUserId: AGENT })
+        ),
+      CWD,
+      MAC
+    );
+  const row = async (sessionId: string) =>
+    (
+      await q<{ model: string | null; provider: string | null }>(
+        `select model, provider from session_runners where session_id = $1 and process_key = $2`,
+        [sessionId, MAC]
+      )
+    ).rows[0];
+
+  it("absent headers stamp unknown (null), never anthropic", async () => {
+    const { sessionId } = await seed();
+    expect(await stamp(sessionId)).toBe(true);
+    expect(await row(sessionId)).toEqual({ model: null, provider: null });
+    const [r] = await loadSessionRunners(sessionId);
+    expect(r).toMatchObject({ model: null, provider: null });
+  });
+
+  it("the wait's stamp records what the runner says; a switch is written at once, past the throttle; a call that names none keeps it", async () => {
+    const { sessionId } = await seed();
+    expect(await stamp(sessionId, "claude-opus-5-5", "anthropic")).toBe(true);
+    expect(await row(sessionId)).toEqual({
+      model: "claude-opus-5-5",
+      provider: "anthropic",
+    });
+    // Same facts inside the minute: throttled.
+    expect(await stamp(sessionId, "claude-opus-5-5", "anthropic")).toBe(false);
+    // `/model` to GLM on Z.ai inside the minute: written now.
+    expect(await stamp(sessionId, "glm-4.6", "zai")).toBe(true);
+    const [r] = await loadSessionRunners(sessionId);
+    expect(r).toMatchObject({ model: "glm-4.6", provider: "zai" });
+    // A later call that names nothing does not erase what the runner said.
+    await q(
+      `update session_runners set last_seen_at = now() - interval '2 minutes' where session_id = $1`,
+      [sessionId]
+    );
+    expect(await stamp(sessionId)).toBe(true);
+    expect(await row(sessionId)).toEqual({ model: "glm-4.6", provider: "zai" });
+  });
+
+  it("junk is bounded: an oversized model is dropped, an unlisted provider reads other", async () => {
+    const { sessionId } = await seed();
+    expect(
+      await stamp(sessionId, "x".repeat(500), "https://api.z.ai/api/anthropic")
+    ).toBe(true);
+    expect(await row(sessionId)).toEqual({ model: null, provider: "other" });
   });
 });
