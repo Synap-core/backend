@@ -381,6 +381,10 @@
       "types": "./dist/workers/words.d.ts",
       "import": "./dist/workers/words.js"
     },
+    "./workers/health": {
+      "types": "./dist/workers/health.d.ts",
+      "import": "./dist/workers/health.js"
+    },
     "./targets": {
       "types": "./dist/targets/index.d.ts",
       "import": "./dist/targets/index.js"

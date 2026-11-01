@@ -5,7 +5,9 @@
 import { describe, expect, it } from "vitest";
 import { resolveUnitState } from "../units/state.js";
 import {
+  goalRhythmWords,
   playbookTriggerFact,
+  workerWhen,
   workerSentence,
   workerUnitInput,
   type SentenceWorker,
@@ -40,7 +42,7 @@ describe("playbookTriggerFact — the header says what starts it", () => {
         workersFailed: false,
         schedule: { cron: "0 9 * * 1", enabled: true },
       })
-    ).toEqual({ state: "known", text: "0 9 * * 1" });
+    ).toEqual({ state: "known", text: "Every Monday at 09:00 UTC" });
     expect(
       playbookTriggerFact({
         workers: paused,
@@ -112,5 +114,49 @@ describe("workerSentence + workerUnitInput — the worker row", () => {
     expect(
       resolveUnitState(workerUnitInput(w({ state: "paused" }))).state
     ).toBe("paused");
+  });
+});
+
+describe("workerWhen — a schedule is said in words (D3)", () => {
+  it("reads a cron through cronWords, and an unphrasable one as a custom schedule", () => {
+    expect(
+      workerWhen(worker({ activator: { on: "schedule", cron: "0 9 * * 1" } }))
+    ).toBe("Every Monday at 09:00 UTC");
+    expect(
+      workerWhen(
+        worker({ activator: { on: "schedule", cron: "*/15 * * * *" } })
+      )
+    ).toBe("On a custom schedule");
+    expect(workerWhen(worker({ activator: { on: "schedule" } }))).toBeNull();
+  });
+});
+
+describe("goalRhythmWords — a goal's rhythm comes from its workers", () => {
+  it("joins the running workers' triggers, schedule first as written", () => {
+    expect(
+      goalRhythmWords([
+        worker({ activator: { on: "schedule", cron: "0 9 * * 1" } }),
+        worker({ profileSlug: "issue", activator: { on: "created" } }),
+      ])
+    ).toBe("Every Monday at 09:00 UTC · when an issue is created");
+  });
+
+  it("leaves out paused and unsayable workers, says a repeat once, null when nothing wakes it", () => {
+    const monday = worker({ activator: { on: "schedule", cron: "0 9 * * 1" } });
+    expect(
+      goalRhythmWords([
+        monday,
+        monday,
+        worker({ state: "paused", activator: { on: "created" } }),
+        worker({ activator: { on: "manual" } }),
+      ])
+    ).toBe("Every Monday at 09:00 UTC");
+    expect(goalRhythmWords([])).toBeNull();
+    expect(
+      goalRhythmWords([
+        worker({ state: "paused" }),
+        worker({ activator: null }),
+      ])
+    ).toBeNull();
   });
 });
