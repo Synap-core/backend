@@ -20,10 +20,10 @@ import {
 } from "./chart-data.js";
 import type { LensEmptyAnswer } from "../lens/sections.js";
 import {
+  ATTENTION_CLASSES,
   LENS_CAPS,
   LENS_EMPTY_ANSWERS,
   LENS_SECTION_LABELS,
-  LENS_SECTION_ORDER,
 } from "../lens/sections.js";
 
 // Data bindings (decision D2). Declare only what the cell's component renders
@@ -88,6 +88,8 @@ const NO_BINDING: RenderableDataBinding = {
 const greeting: WidgetCapabilityDef = {
   key: "greeting",
   package: "synap.bento-widgets",
+  // An app-surface widget: never placed in a document (generation contract rule 12).
+  placements: ["bento"],
   requiredConfig: [],
   aiHint:
     "Home hero row: time-of-day greeting and today's date. No config needed.",
@@ -160,6 +162,8 @@ const sectionHeader: WidgetCapabilityDef = {
 const workspaceInfo: WidgetCapabilityDef = {
   key: "workspace-info",
   package: "synap.bento-widgets",
+  // An app-surface widget: never placed in a document (generation contract rule 12).
+  placements: ["bento"],
   name: "Workspace Info",
   description: "Current workspace name, connection status, and member count",
   icon: "Database",
@@ -178,6 +182,8 @@ const workspaceInfo: WidgetCapabilityDef = {
 const homeTabs: WidgetCapabilityDef = {
   key: "home-tabs",
   package: "synap.bento-widgets",
+  // An app-surface widget: never placed in a document (generation contract rule 12).
+  placements: ["bento"],
   name: "Home Tabs",
   description: "Navigation tabs to switch between workspace and personal home",
   icon: "LayoutGrid",
@@ -1947,6 +1953,8 @@ const entityProgress: WidgetCapabilityDef = {
 const quickAccess: WidgetCapabilityDef = {
   key: "quick-access",
   package: "synap.core-widgets",
+  // An app-surface widget: never placed in a document (generation contract rule 12).
+  placements: ["bento"],
   requiredConfig: [],
   aiHint:
     "Pinned shortcuts. config.items[] of { kind: view|entity|url, \u2026 }.",
@@ -2186,6 +2194,8 @@ const channelFeed: WidgetCapabilityDef = {
 const aiChat: WidgetCapabilityDef = {
   key: "ai-chat",
   package: "synap.ai-chat",
+  // An app-surface widget: never placed in a document (generation contract rule 12).
+  placements: ["bento"],
   name: "AI Chat",
   description: "Embedded AI assistant chat panel",
   icon: "Bot",
@@ -3222,7 +3232,7 @@ const lensSection: WidgetCapabilityDef = {
     'One section of the scope\'s work page: config.section. "blocking" is Needs you (there is no separate needs-you widget), "happening" what agents do now, "produced" what work made, "proposed" what the AI suggests, "happened" what changed. The scope is the document\'s, never a prop. Optional limit (1-10) and empty (omit | invite | explain | reassure).',
   name: "Work section",
   description:
-    "One section of a work page (Needs you, Happening, Produced, Proposed, Happened…) for the page's own scope, drawn as the work page draws it.",
+    "One section of a work page (Needs you, Happening, Produced, Proposed, Happened) for the page's own scope, drawn as the work page draws it.",
   icon: "LayoutList",
   category: "productivity",
   semanticSection: "track-monitor",
@@ -3236,7 +3246,12 @@ const lensSection: WidgetCapabilityDef = {
       type: "select",
       required: true,
       description: 'Which section of the work page. "blocking" = Needs you.',
-      options: LENS_SECTION_ORDER.map((value) => ({
+      // The five attention classes only: the lens page read the cell draws
+      // (signals.list lens "page") carries these, and each has its own cap
+      // (LENS_CAPS). doneWhen, participants, structure and data come from
+      // other reads (a track's criteria and roster, the plan, the scope's
+      // data) and show only on their own page.
+      options: ATTENTION_CLASSES.map((value) => ({
         value,
         label: LENS_SECTION_LABELS[value],
       })),

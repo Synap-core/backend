@@ -9,7 +9,7 @@
 
 import type { Placement } from "./content-kinds.js";
 import type { ChartDataShape } from "./chart-data.js";
-import type { LensEmptyAnswer, LensSection } from "../lens/sections.js";
+import type { AttentionClass, LensEmptyAnswer } from "../lens/sections.js";
 
 // ─── Display modes ────────────────────────────────────────────────────────────
 
@@ -837,8 +837,8 @@ export interface AgentSpendConfig {
  * No scope: the host stamps it from the document's stored scope.
  */
 export interface LensSectionConfig {
-  /** Which section ("blocking" = Needs you). */
-  section: LensSection;
+  /** Which section, one of the five attention classes ("blocking" = Needs you). */
+  section: AttentionClass;
   /** Rows at rest, 1–10; absent = the section's own cap (`LENS_CAPS`). */
   limit?: number;
   /** What it shows when it has no rows; absent = the section's own answer. */
