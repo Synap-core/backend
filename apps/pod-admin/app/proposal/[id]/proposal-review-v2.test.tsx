@@ -23,13 +23,21 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { GOVERNANCE_POLICY_SENTENCES } from "@synap-core/types/proposals";
 
+vi.mock("../../(admin)/components/side-nav-role", () => ({
+  useConsoleRole: () => state.role,
+}));
+
 vi.mock("next/navigation", () => ({
   usePathname: () => "/proposal",
   useRouter: () => ({ replace() {}, push() {} }),
 }));
 
 const { state, presses, approveCalls, ids } = vi.hoisted(() => ({
-  state: { proposal: null as unknown, defs: [] as unknown[] },
+  state: {
+    proposal: null as unknown,
+    defs: [] as unknown[],
+    role: "admin" as "admin" | "member",
+  },
   presses: new Map<string, () => void>(),
   approveCalls: [] as unknown[],
   ids: {
@@ -262,6 +270,7 @@ beforeEach(() => {
   presses.clear();
   approveCalls.length = 0;
   state.defs = [];
+  state.role = "admin";
 });
 
 describe("a create the pod matched to an existing record", () => {
@@ -359,6 +368,15 @@ describe("Reject and never allow (decision G3)", () => {
     const seen = text(render());
     expect(seen).not.toContain("Approve and always allow");
     expect(seen).toContain("Reject and never allow");
+  });
+
+  it("a member is offered neither rule: the rule door is a pod admin's", () => {
+    state.role = "member";
+    state.proposal = personCreate(null);
+    const seen = text(render());
+    expect(seen).toContain("Reject…");
+    expect(seen).not.toContain("Reject and never allow");
+    expect(seen).not.toContain("Approve and always allow");
   });
 });
 

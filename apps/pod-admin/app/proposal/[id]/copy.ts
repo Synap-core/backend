@@ -34,6 +34,12 @@ export const en = {
   "read.signIn": "You’re signed out. Taking you to sign in…",
   "read.retry": "Try again",
   openInDesktop: "Open in the Synap desktop app",
+  "decide.cancel": "Cancel",
+  "decide.reason.label": "Reason (optional)",
+  "decide.reason.placeholder": "Why are you rejecting this? The AI sees it.",
+  "decide.pickFirst": "Pick the record for each item first.",
+  "decide.as": "You decide as {identity} · recorded in the",
+  "decide.recorded": "Recorded in the",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -64,6 +70,13 @@ export const fr: Catalog<typeof en> = {
   "read.signIn": "Votre compte n’est plus connecté. Ouverture de la connexion…",
   "read.retry": "Réessayer",
   openInDesktop: "Ouvrir dans l’application Synap pour ordinateur",
+  "decide.cancel": "Annuler",
+  "decide.reason.label": "Raison (facultatif)",
+  "decide.reason.placeholder":
+    "Pourquoi rejetez-vous cette demande\u00a0? L’IA la lira.",
+  "decide.pickFirst": "Choisissez d’abord la fiche de chaque élément.",
+  "decide.as": "Vous décidez en tant que {identity} · enregistré dans",
+  "decide.recorded": "Enregistré dans",
 };
 
 /** The page's translator, in the ambient catalog locale. */
@@ -83,9 +96,10 @@ export function proposalPageT() {
  * and the pod-wide ones. The decision's title is the receipt's
  * (`_lib/receipt`).
  *
- * "Reject & never…" (`RejectNeverMenu`, same file): rejects the request and
- * stores a deny rule for THIS agent and THIS act (`deriveGovernanceNeverOption`),
- * which the pod refuses from then on without asking (decision 956930ad).
+ * "Reject and never allow…" (`RejectNeverMenu`, same file): stores a deny rule
+ * for THIS agent and THIS act, pod-wide (`deriveGovernanceNeverOption`), then
+ * rejects the request; the pod refuses that act from then on without asking
+ * (decision 956930ad). Both rules are taken back in Settings.
  * `never.reason` is the rejection reason the agent reads.
  */
 export const alwaysEn = {
@@ -107,8 +121,7 @@ export const alwaysEn = {
     "Your AIs get tools for their work without asking you, and what those tools send then goes without asking too.",
   "always.grantAgent.covers":
     "Only this AI gets tools without asking you, and what those tools send then goes without asking too.",
-  "always.done.body":
-    "From now on: {label}. Take it back in that space’s Governance tab.",
+  "always.done.body": "From now on: {label}. Take it back in Settings.",
   "always.ruleSaved": "Rule saved",
   "always.ruleFailed": "Approved, but the rule wasn’t saved",
   "always.ruleFailedHint": "The next request like this one will ask you again.",
@@ -122,10 +135,10 @@ export const alwaysEn = {
     "This AI can no longer use this tool, even to read. Your other AIs still ask you.",
   "never.reason":
     "Refused for good: you will not be allowed to make this change again.",
-  "never.done.body":
-    "From now on: {label}. Take it back in that space’s Governance tab.",
-  "never.ruleFailed": "Rejected, but the rule wasn’t saved",
-  "never.ruleFailedHint": "The next request like this one will ask you again.",
+  "never.done.body": "From now on: {label}. Take it back in Settings.",
+  "never.ruleFailed": "Nothing changed: the rule wasn’t saved",
+  "never.ruleFailedHint": "This request is still waiting for you.",
+  "never.rejectFailed": "Refused from now on, but this request is still open",
 } as const;
 
 export const alwaysFr: Catalog<typeof alwaysEn> = {
@@ -148,7 +161,7 @@ export const alwaysFr: Catalog<typeof alwaysEn> = {
   "always.grantAgent.covers":
     "Seule cette IA obtient des outils sans vous demander, et ce que ces outils envoient part alors sans vous demander.",
   "always.done.body":
-    "Désormais : {label}. Vous pouvez le retirer dans l’onglet Gouvernance de cet espace.",
+    "Désormais\u00a0: {label}. Vous pouvez le retirer dans Réglages.",
   "always.ruleSaved": "Règle enregistrée",
   "always.ruleFailed": "Approuvée, mais la règle n’a pas été enregistrée",
   "always.ruleFailedHint":
@@ -164,10 +177,10 @@ export const alwaysFr: Catalog<typeof alwaysEn> = {
   "never.reason":
     "Refusé définitivement\u00a0: vous ne pourrez plus faire ce changement.",
   "never.done.body":
-    "Désormais : {label}. Vous pouvez le retirer dans l’onglet Gouvernance de cet espace.",
-  "never.ruleFailed": "Rejetée, mais la règle n’a pas été enregistrée",
-  "never.ruleFailedHint":
-    "La prochaine demande comme celle-ci vous sera de nouveau soumise.",
+    "Désormais\u00a0: {label}. Vous pouvez le retirer dans Réglages.",
+  "never.ruleFailed": "Rien n’a changé\u00a0: la règle n’a pas été enregistrée",
+  "never.ruleFailedHint": "Cette demande vous attend toujours.",
+  "never.rejectFailed": "Refusé désormais, mais cette demande reste ouverte",
 };
 
 /** The "Approve & always…" and "Reject & never…" menus' translator, in the ambient catalog locale. */

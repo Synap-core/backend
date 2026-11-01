@@ -53,6 +53,7 @@ import {
   useT,
 } from "../../../../../lib/i18n/locale-provider";
 import { en, fr } from "./copy";
+import { RequestRules } from "./request-rules";
 
 const CATALOGS = { en, fr };
 
@@ -127,6 +128,7 @@ export function ReviewSettings() {
         </SectionCard>
 
         <HandOffRules />
+        <RequestRules />
       </div>
     </PageShell>
   );
