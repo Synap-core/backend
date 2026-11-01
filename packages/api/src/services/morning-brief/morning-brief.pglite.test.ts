@@ -850,7 +850,8 @@ describe("runMorningBriefs — the digest in the same pass", () => {
       []
     );
 
-    // The next morning reports since the last digest: nothing new, nothing sent.
+    // The next morning reports since the last digest: nothing new, nothing
+    // sent. D's snooze ends then, so D is due too (and had nothing delivered).
     const tomorrow = fakeDoor(NOW);
     const next = await runMorningBriefs({
       database,
@@ -858,7 +859,7 @@ describe("runMorningBriefs — the digest in the same pass", () => {
       notify: tomorrow.notify,
       readNeedsYou,
     });
-    expect(next.digest).toEqual({ due: 3, sent: 0, failed: 0 });
+    expect(next.digest).toEqual({ due: 4, sent: 0, failed: 0 });
   });
 
   it("a failed read skips the person and is counted, never sent as an empty digest", async () => {
