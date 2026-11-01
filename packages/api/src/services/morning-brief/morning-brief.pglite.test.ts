@@ -11,6 +11,7 @@ import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import {
   nounInSentence,
   resolveObjectNoun,
+  resolveObjectNounPlural,
 } from "@synap-core/types/vocabulary";
 import { randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
@@ -195,6 +196,9 @@ function fakeDoor(at: Date) {
   };
   return { calls, notify };
 }
+
+/** The digest names sessions through the vocabulary door, as a person reads them. */
+const SESSIONS = nounInSentence(resolveObjectNounPlural("session"));
 
 const NEEDS: Record<string, NeedsYouForBrief> = {
   [A]: {
@@ -540,7 +544,7 @@ describe("composeDeliveredDigest — what got delivered, nothing when nothing", 
       })
     ).toEqual({
       title: "Delivered since your last digest",
-      body: `2 pull requests merged, 1 commit landed, 3 outcomes delivered, 4 sessions closed.\nClosed: Ship the digest · ${"y".repeat(59)}… · Mute`,
+      body: `2 pull requests merged, 1 commit landed, 3 outcomes delivered, 4 ${SESSIONS} closed.\nClosed: Ship the digest · ${"y".repeat(59)}… · Mute`,
     });
   });
 
@@ -837,7 +841,7 @@ describe("runMorningBriefs — the digest in the same pass", () => {
       groupKey: "delivered-digest:2026-10-29",
       data: {
         title: "Delivered since your last digest",
-        body: "2 sessions closed.\nClosed: A goal · A goal",
+        body: `2 ${SESSIONS} closed.\nClosed: A goal · A goal`,
         since: hoursAgo(24),
       },
     });

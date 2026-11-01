@@ -1041,7 +1041,7 @@ describe("the status watcher, on dev work standing still", () => {
     const TA = new Date(T1.getTime() + WORK_CLOCK.stuck);
     const TB = new Date(TA.getTime() + WORK_CLOCK.stuck - WORK_CLOCK.stale);
     const BRIDGE = "Synap-core/synap-bridge";
-    const S_B = [randomUUID(), randomUUID(), randomUUID()];
+    const S_B: string[] = [randomUUID(), randomUUID(), randomUUID()];
     for (const [i, id] of S_B.entries()) await session(id, `Bridge ${i}`);
     const beforeA = (ms: number) => new Date(TA.getTime() - ms).toISOString();
     await snapshotAt(TA, {
