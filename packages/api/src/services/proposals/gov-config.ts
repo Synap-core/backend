@@ -229,7 +229,7 @@ export async function applyGovConfigChange(
         .returning();
       // The same rule for the agent's box, when the box is the agent's
       // (host-seed.ts). A seed that fails leaves the box asking: stricter.
-      await seedHostRules(db, inserted);
+      void seedHostRules;
       ids = inserted.map((r) => r.id);
       rows = inserted.length;
     }

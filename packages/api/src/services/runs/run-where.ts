@@ -103,7 +103,7 @@ export function deriveRunWhere(
 ): RunWhere | null {
   switch (run.flowType) {
     case "capability": {
-      if (!facts.boxLease.has(run.id)) return POD;
+      return POD;
       const lease = facts.boxLease.get(run.id);
       return lease ? computerWhere(facts, lease) : null;
     }

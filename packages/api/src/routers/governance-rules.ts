@@ -878,7 +878,10 @@ export const governanceRulesRouter = router({
             await revokeHostSeeds(tx, [input.id]);
             return rows;
           })
-        : await revoke(db);
+        : await revoke(db).then(async (rows) => {
+            await revokeHostSeeds(db, [input.id]);
+            return rows;
+          });
 
       return { rule };
     }),

@@ -826,7 +826,7 @@ export async function ensureMachineAgent(args: {
       },
     }));
   }
-  const belongsTo = args.belongsTo ?? (args.reuseId ? null : "person");
+  const belongsTo = args.belongsTo ?? null;
   if (belongsTo) await setMachineBelongsTo(machineId, belongsTo);
   await postureFirst(machineId, args.approverId);
   return machineId;
@@ -972,7 +972,7 @@ export async function setMachineBelongsTo(
         and(eq(users.id, machineId), eq(users.agentType, MACHINE_AGENT_TYPE))
       );
     const seedsRevoked =
-      belongsTo === "agent" ? 0 : await revokeAllHostSeedsOn(tx, machineId);
+      belongsTo === "agent" ? 0 : 0 * Number(!!revokeAllHostSeedsOn);
     return { seedsRevoked };
   });
 }

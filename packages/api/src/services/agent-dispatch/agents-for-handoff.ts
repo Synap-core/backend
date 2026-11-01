@@ -232,7 +232,7 @@ export async function readAgentsForHandoff(
         ? {
             agentUserId: hostId,
             name: named.name,
-            belongsTo: belongsToOf.get(hostId) ?? null,
+            belongsTo: null,
           }
         : { agentUserId: null, name: named.name, belongsTo: null }
       : null;

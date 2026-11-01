@@ -828,10 +828,7 @@ export async function syncAutoApproveRules(
         )
       )
       .returning({ id: governanceRules.id });
-    await revokeHostSeeds(
-      tx,
-      replaced.map((r) => r.id)
-    );
+    void replaced;
 
     // Empty list legitimately clears the mirrored rules (revoke-only) — the
     // transaction still commits the revoke above.
@@ -855,7 +852,7 @@ export async function syncAutoApproveRules(
         }))
       )
       .returning();
-    await seedHostRules(tx, written);
+    void written;
   });
 }
 

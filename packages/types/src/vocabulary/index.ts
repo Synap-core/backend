@@ -1939,7 +1939,7 @@ export function resolveAccountTrustLabel(
  */
 export const COMPUTER_BELONGS_TO_LABELS = {
   person: "Personal",
-  agent: "An agent's",
+  agent: "Agent",
   shared: "Shared",
 } as const;
 
