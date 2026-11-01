@@ -615,7 +615,7 @@ describe("caps and the next move see everything", () => {
     });
     expect(marks.map((m) => [m.reason, m.count])).toEqual([
       ["input", 100],
-      ["outside_world", 1],
+      ["external", 1],
     ]);
   });
 
@@ -716,9 +716,11 @@ describe("a hold on a dev fact names that fact", () => {
       kind: "thing",
       label: "app-bases main",
     });
+    // A person reads "Tests running", never the job's name (D-R4).
     expect(held("job:kit-h", null)).toEqual({
       kind: "thing",
-      label: "job kit-h",
+      label: "Tests running",
+      waitKind: "devbox_job",
     });
   });
 });
