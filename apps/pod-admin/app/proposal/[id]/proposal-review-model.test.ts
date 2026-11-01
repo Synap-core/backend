@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GOVERNANCE_POLICY_SENTENCES } from "@synap-core/types/proposals";
-import { reasonMark, undoMark } from "./proposal-review-model";
+import { reasonMark, reviewReadsWide, undoMark } from "./proposal-review-model";
 import { initials } from "../../_lib/object/provenance-chips";
 
 describe("reasonMark — WHY it waits, as one mark, only when it is particular", () => {
@@ -46,5 +46,43 @@ describe("initials", () => {
     expect(initials("Ada King Lovelace")).toBe("AL");
     expect(initials("claude")).toBe("CL");
     expect(initials("  ")).toBe("?");
+  });
+});
+
+describe("reviewReadsWide — a review that shows text reads at a document's width", () => {
+  const none = { documentChanges: false, toolArguments: [], records: [] };
+  const short = { fields: [{ wide: false }, { wide: false }] };
+
+  it("short values only: the default width", () => {
+    expect(reviewReadsWide(none)).toBe(false);
+    expect(
+      reviewReadsWide({
+        ...none,
+        toolArguments: [{ wide: false }],
+        records: [short, short],
+      })
+    ).toBe(false);
+  });
+
+  it("a document's change reads wide", () => {
+    expect(reviewReadsWide({ ...none, documentChanges: true })).toBe(true);
+  });
+
+  it("one wide tool argument reads wide", () => {
+    expect(
+      reviewReadsWide({
+        ...none,
+        toolArguments: [{ wide: false }, { wide: true }],
+      })
+    ).toBe(true);
+  });
+
+  it("one wide field in any record reads wide (a graph's skill, a note)", () => {
+    expect(
+      reviewReadsWide({
+        ...none,
+        records: [short, { fields: [{ wide: false }, { wide: true }] }],
+      })
+    ).toBe(true);
   });
 });

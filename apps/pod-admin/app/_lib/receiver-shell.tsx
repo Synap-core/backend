@@ -78,7 +78,9 @@ interface ReceiverShellProps {
   /**
    * `sm` for a single decision (approve this agent, accept this invite, grant
    * this scope); `md` when the card renders an object with fields to read;
-   * `lg` for a long read with tables and charts (a document, a report).
+   * `lg` for a long read with tables and charts (a document, a report);
+   * `auto` reads at `md` and widens to `lg` when the card holds content marked
+   * `READS_WIDE_ATTR` (a proposal that shows a document, code or prose).
    */
   width?: ReceiverWidth;
   /**
@@ -89,7 +91,15 @@ interface ReceiverShellProps {
   pinsBar?: boolean;
 }
 
-export type ReceiverWidth = "sm" | "md" | "lg";
+export type ReceiverWidth = "sm" | "md" | "lg" | "auto";
+
+/**
+ * The mark a card's content carries when it reads wide (prose, code, a text
+ * diff). An `auto` card widens to `lg` on it through CSS `:has()`, so the
+ * width follows what the content draws, decided once, in the content's own
+ * model, with no state passed up and no jump after the first paint.
+ */
+export const READS_WIDE_ATTR = "data-reads-wide";
 
 /**
  * Width → container class. A pure function, and exported, ON PURPOSE.
@@ -105,6 +115,10 @@ export function receiverWidthClass(width: ReceiverWidth): string {
   // A document reads wide: the whole width on a small screen, 80% of the
   // window from 1024px (founder, 2026-10-22), never past 72rem.
   if (width === "lg") return "max-w-6xl lg:w-4/5";
+  // `md` until the card holds `READS_WIDE_ATTR`, then `lg`'s two classes.
+  // Tailwind reads class names as literals, so the attribute is spelled here.
+  if (width === "auto")
+    return "max-w-2xl has-[[data-reads-wide]]:max-w-6xl lg:has-[[data-reads-wide]]:w-4/5";
   return "max-w-2xl";
 }
 

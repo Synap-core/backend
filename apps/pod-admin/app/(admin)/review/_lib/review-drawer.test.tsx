@@ -141,6 +141,8 @@ const {
     status: "pending",
     /** Review's query string (`?session=` narrows it). */
     search: "",
+    /** Fields laid over the fixture proposal (a different review). */
+    proposal: {} as Record<string, unknown>,
     /** `proposals.approvalProgress` — a background apply, when one runs. */
     progress: null as unknown,
     session: ok(SESSION) as Q,
@@ -192,7 +194,7 @@ vi.mock("../../../../lib/trpc", () => ({
     proposals: {
       get: {
         useQuery: () => ({
-          data: { ...PROPOSAL, status: state.status },
+          data: { ...PROPOSAL, status: state.status, ...state.proposal },
           isLoading: false,
           error: null,
           refetch() {},
@@ -562,6 +564,50 @@ describe("the review body — where 'what is next' may stand", () => {
       const html = body(status);
       expect(text(html)).toMatch(/Reject…/);
       expect(html).not.toContain("data-after-decision");
+    }
+  });
+});
+
+/**
+ * The page's width follows what the review draws (founder, 2026-11-01: a
+ * proposal that shows text reads at a document's width). The card is `auto`;
+ * the body marks itself `data-reads-wide` when a field is prose, code or a
+ * text diff, and the card widens on that mark (`receiverWidthClass`).
+ */
+describe("the /proposal page — reads wide when the review shows text", () => {
+  const AUTO = "has-[[data-reads-wide]]:max-w-6xl";
+
+  it("a change of short values stays at the default width", () => {
+    const html = page();
+    expect(html).toContain(AUTO);
+    expect(html).not.toContain("data-reads-wide=");
+  });
+
+  it("a field rewritten as prose marks the review wide", () => {
+    const prose = (lead: string) =>
+      `${lead}\n${"Every search tool goes through the capability gate. ".repeat(4)}`;
+    state.proposal = {
+      review: {
+        ...PROPOSAL.review,
+        changes: [
+          {
+            path: "description",
+            label: "Description",
+            operation: "update",
+            before: prose("Before."),
+            after: prose("After."),
+            valueType: "string",
+            drift: "unchanged",
+          },
+        ],
+      },
+    };
+    try {
+      const html = page();
+      expect(html).toContain(AUTO);
+      expect(count(html, /data-reads-wide=""/)).toBe(1);
+    } finally {
+      state.proposal = {};
     }
   });
 });
