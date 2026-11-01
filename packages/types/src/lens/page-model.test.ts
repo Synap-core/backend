@@ -19,6 +19,7 @@ import {
   lensLastActivityAt,
   lensPageCounts,
   lensPageModel,
+  lensClassCap,
   lensHappenedSpan,
   lensNextMoveRow,
   type LensNeedsYouSignal,
@@ -231,6 +232,46 @@ describe("Show all counts the class's UNITS", () => {
     expect(m.blocking.count).toBe(7);
     expect(m.blocking.rest).toHaveLength(0);
     expect(m.blocking.showAll).toBeNull();
+  });
+});
+
+describe("per-class caps — a host lowers (or raises) one class's cap; the cap RULE stays the model's", () => {
+  const singles = (n: number) =>
+    Array.from({ length: n }, (_, i) => sig(`x${i}`));
+
+  it("a cap of 2 shows 2 of 6 Needs you rows, the rest behind Show all", () => {
+    const m = lensPageModel(page({ blocking: cls(singles(6)) }), {
+      timeZone: TZ,
+      now: NOW,
+      caps: { blocking: 2 },
+    });
+    expect(m.blocking.items).toHaveLength(2);
+    expect(m.blocking.rest).toHaveLength(4);
+    expect(m.blocking.showAll).toBe(6);
+  });
+
+  it("the ONE rule holds under a host cap: one hidden row is never hidden", () => {
+    const m = lensPageModel(page({ blocking: cls(singles(3)) }), {
+      timeZone: TZ,
+      now: NOW,
+      caps: { blocking: 2 },
+    });
+    expect(m.blocking.items).toHaveLength(3);
+    expect(m.blocking.showAll).toBeNull();
+  });
+
+  it("other classes keep their own caps; a cap that is not a positive number is the class's own", () => {
+    const m = lensPageModel(
+      page({ blocking: cls(singles(9)), proposed: cls(singles(9)) }),
+      { timeZone: TZ, now: NOW, caps: { proposed: 0 } }
+    );
+    expect(m.blocking.items).toHaveLength(LENS_CAPS.blocking);
+    expect(m.proposed.items).toHaveLength(LENS_CAPS.proposed);
+    expect(lensClassCap("produced", { produced: Number.NaN })).toBe(
+      LENS_CAPS.produced
+    );
+    expect(lensClassCap("produced", { produced: 9.7 })).toBe(9);
+    expect(lensClassCap("happened")).toBe(LENS_CAPS.happened);
   });
 });
 
