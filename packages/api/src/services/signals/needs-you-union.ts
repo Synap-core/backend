@@ -45,7 +45,6 @@ import {
 } from "@synap-core/types/ask";
 import { needsYouTotal } from "@synap-core/types/units";
 import { REVIEW_LATER_AFTER_MS } from "@synap-core/types/proposals/fate";
-import { DEV_DEPLOY_APPROVAL_TYPE } from "@synap-core/types/proposals/dev-deploy";
 import type { ClusterFoldCounts } from "../proposals/proposal-needs-you.js";
 import {
   foldNeedsYouCounts,
@@ -787,14 +786,14 @@ function reviewLaterSuffix(
 
 /**
  * A cluster row's title, imperative (what approving it WILL do). A deploy
- * approval's label is already its whole heading, "Push a524c103 to main in
- * Synap-core/control-plane-api" (`describeDevDeployProposal`, the one door
- * every surface titles it through); the generic sentence would wrap it as
- * `Approve deploy Session "Push …"`, naming the session as the thing approved.
+ * approval's or a ship verb's label is already its whole heading, "Push
+ * a524c103 to main in Synap-core/control-plane-api" or "Merge app-bases#12
+ * into main at a524c103" (`describeDevDeployProposal`, `describeVerbRun`, the
+ * doors every surface titles them through; `labelIsHeading`). The generic
+ * sentence would wrap it as `Approve deploy Session "Push …"` or `Run Tool`.
  */
 function clusterTitle(cluster: ProposalCluster): string {
-  if (cluster.proposalType === DEV_DEPLOY_APPROVAL_TYPE && cluster.targetLabel)
-    return cluster.targetLabel;
+  if (cluster.labelIsHeading && cluster.targetLabel) return cluster.targetLabel;
   return buildObjectActionTitle({
     action: cluster.proposalType,
     objectKind: cluster.targetType,

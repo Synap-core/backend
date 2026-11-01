@@ -16,6 +16,7 @@
 
 import { describeHeldWritesProposal } from "@synap-core/types/proposals/deferred-writes";
 import { describeDevDeployProposal } from "@synap-core/types/proposals/dev-deploy";
+import { describeVerbRunProposal } from "@synap-core/types/proposals/capability-run";
 import {
   buildObjectActionTitle,
   resolveObjectNoun,
@@ -110,6 +111,12 @@ function pastTitle(p: HistoryProposal): string {
   // mark says whether it was approved, rejected or withdrawn, so the title
   // never claims "Approved" for a row that was not.
   if (deploy) return deploy.recordTitle;
+  // A ship verb's run, as a record ("Merge of app-bases#12 into main at …").
+  const verbRun = describeVerbRunProposal({
+    proposalType: p.proposalType,
+    data: payload,
+  });
+  if (verbRun) return verbRun.recordTitle;
   return buildObjectActionTitle({
     action: String(p.proposalType ?? "change"),
     objectKind: String(p.targetType ?? ""),

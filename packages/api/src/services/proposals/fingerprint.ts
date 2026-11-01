@@ -27,6 +27,7 @@ import type { NeedsYouProposalClass } from "@synap-core/types/needs-you/rule";
 import { decodeHtmlEntities } from "@synap-core/types/text";
 import { heldWritesPackName } from "@synap-core/types/proposals/deferred-writes";
 import { describeDevDeployProposal } from "@synap-core/types/proposals/dev-deploy";
+import { describeVerbRunProposal } from "@synap-core/types/proposals/capability-run";
 import type { PROPOSE_REASON } from "@synap/governance-policy";
 import {
   capabilityRunVerbId,
@@ -198,6 +199,13 @@ export function computeProposalFingerprint(
   if (deploy) {
     return `${p.proposalType}${SEP}${p.targetType}${SEP}id:${p.targetId?.trim() ?? ""} ${normalizeSignatureToken(deploy.title)}`;
   }
+  // A ship verb's runs share the verb's skill as their target, so two merges
+  // (two PRs, or one PR at two heads) would fold into one row titled after
+  // the first. Its heading names the act, so it is part of the signature.
+  const verbRun = describeVerbRunProposal(p);
+  if (verbRun) {
+    return `${p.proposalType}${SEP}${p.targetType}${SEP}id:${p.targetId?.trim() ?? ""} ${normalizeSignatureToken(verbRun.title)}`;
+  }
 
   let signature: string;
   if (cls === "create") {
@@ -327,6 +335,11 @@ export interface ProposalCluster {
   /** Human label for the shared target (name, else `<type> · <shortId>`). */
   targetLabel: string;
   /**
+   * `targetLabel` IS the whole heading (a deploy approval's, a ship verb's):
+   * the row shows it as its title, with no action or kind around it.
+   */
+  labelIsHeading?: true;
+  /**
    * Decision CLASS of the cluster — derived from the fingerprint's own
    * (proposalType, targetType), which every member shares BY CONSTRUCTION:
    * both columns are fingerprint inputs, so a cluster can never mix classes.
@@ -409,10 +422,8 @@ const DEFAULT_SAMPLE_CAP = 20;
  * sentence that already contains it.
  */
 function resolveTargetLabel(row: ProposalFingerprintInput): string {
-  // A deploy approval's label IS its heading ("Push a524c103 to main in …"),
-  // the one `signalFromCluster` shows as the row's whole title.
-  const deploy = describeDevDeployProposal(row);
-  if (deploy) return deploy.title;
+  const heading = headingOf(row);
+  if (heading) return heading;
   // Decoded here, not in `extractProposalName`/`extractProposalSummary`:
   // those two also feed `computeProposalFingerprint`'s signature, and
   // decoding there would change fingerprint grouping for already-clustered
@@ -429,6 +440,19 @@ function resolveTargetLabel(row: ProposalFingerprintInput): string {
   return "";
 }
 
+/**
+ * A proposal whose heading is its whole title: a deploy approval's ("Push
+ * a524c103 to main in …") or a ship verb's ("Merge app-bases#12 into main at
+ * a524c103"). `signalFromCluster` shows it as the row's title, as is.
+ */
+function headingOf(row: ProposalFingerprintInput): string | null {
+  return (
+    describeDevDeployProposal(row)?.title ??
+    describeVerbRunProposal(row)?.title ??
+    null
+  );
+}
+
 interface ClusterAccumulator {
   fingerprint: string;
   proposalType: string;
@@ -438,6 +462,7 @@ interface ClusterAccumulator {
   reviewLater: boolean;
   needsYouClass: NeedsYouProposalClass | null;
   targetLabel: string;
+  labelIsHeading: boolean;
   count: number;
   sampleProposalIds: string[];
   sourceKeys: Set<string>;
@@ -517,6 +542,7 @@ export function collapseProposalsToClusters(
         reviewLater,
         needsYouClass,
         targetLabel: resolveTargetLabel(row),
+        labelIsHeading: headingOf(row) !== null,
         count: 0,
         sampleProposalIds: [],
         sourceKeys: new Set<string>(),
@@ -583,6 +609,7 @@ export function collapseProposalsToClusters(
     proposalType: acc.proposalType,
     targetType: acc.targetType,
     targetLabel: acc.targetLabel,
+    ...(acc.labelIsHeading ? { labelIsHeading: true as const } : {}),
     ...proposalClassFields(acc.proposalType, acc.targetType, acc.runVerbId),
     reviewLater: acc.reviewLater,
     ...(acc.needsYouClass ? { needsYouClass: acc.needsYouClass } : {}),

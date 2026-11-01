@@ -267,3 +267,104 @@ export function describeToolRun(input: ToolRunInput): ProposalToolRun | null {
     parameters,
   };
 }
+
+// ── A ship verb's heading ───────────────────────────────────────────────────
+//
+// Decision 4d6d7922 (founder, 2026-11-01, D2 A): an approval to ship is a
+// typed tool action, and its heading names the act from the verb's own
+// arguments: "Merge app-bases#12 into main at a524c103", never "Run github
+// merge pr" or the session. ONE door, read by every place a proposal's title
+// is drawn: the stored summary (`describeCapabilityRun`), the needs-you row
+// and its fingerprint (two merges of one verb stay two rows), pod admin's
+// heading and history, and synap-app's review card.
+
+/** The proposal type every capability run is filed under. */
+export const CAPABILITY_RUN_PROPOSAL_TYPE = "capability.run";
+
+export interface VerbRunSummary {
+  /** The verb (`data.verbId`, the backing skill's name). */
+  verbId: string;
+  /** What approving lets happen: "Merge app-bases#12 into main at a524c103". */
+  title: string;
+  /**
+   * The same act as a record, for a list of decisions: "Merge of app-bases#12
+   * into main at a524c103". It names no outcome: the row's status mark does.
+   */
+  recordTitle: string;
+}
+
+/** `{verb, what}` for a verb whose arguments name the act, else null. */
+type VerbHeading = (
+  parameters: Record<string, unknown>
+) => { verb: string; what: string } | null;
+
+const REPO = /^(?:[\w.-]+\/)?([\w.-]+)$/;
+const SHA = /^[0-9a-f]{7,40}$/i;
+
+function positiveInt(v: unknown): number | null {
+  const n = typeof v === "string" && /^\d+$/.test(v.trim()) ? Number(v) : v;
+  return typeof n === "number" && Number.isInteger(n) && n > 0 ? n : null;
+}
+
+const VERB_HEADINGS: Record<string, VerbHeading> = {
+  github_merge_pr: (p) => {
+    const repo = REPO.exec(text(p.repo) ?? "")?.[1];
+    const pr = positiveInt(p.pr);
+    const sha = text(p.expectedHeadSha);
+    if (!repo || !pr || !sha || !SHA.test(sha)) return null;
+    const base = text(p.base);
+    return {
+      verb: "Merge",
+      what: `${repo}#${pr}${base ? ` into ${base}` : ""} at ${sha.slice(0, 8).toLowerCase()}`,
+    };
+  },
+};
+
+/** True when this verb's runs are titled from their arguments. */
+export function hasVerbRunHeading(verbId: string | null | undefined): boolean {
+  return (
+    typeof verbId === "string" &&
+    Object.prototype.hasOwnProperty.call(VERB_HEADINGS, verbId)
+  );
+}
+
+/**
+ * A run's heading from its verb and arguments, or `null` when the verb has no
+ * heading of its own or its arguments do not name the act (then the generic
+ * run title stands, never a half-filled one).
+ */
+export function describeVerbRun(
+  verbId: string | null | undefined,
+  parameters: Record<string, unknown> | null | undefined
+): VerbRunSummary | null {
+  if (!hasVerbRunHeading(verbId)) return null;
+  const heading = VERB_HEADINGS[verbId!]!(parameters ?? {});
+  if (!heading) return null;
+  return {
+    verbId: verbId!,
+    title: `${heading.verb} ${heading.what}`,
+    recordTitle: `${heading.verb} of ${heading.what}`,
+  };
+}
+
+/** The same, read from a stored proposal (`{proposalType, data}`). */
+export function describeVerbRunProposal(p: {
+  proposalType?: string | null;
+  data?: unknown;
+}): VerbRunSummary | null {
+  if (p.proposalType !== CAPABILITY_RUN_PROPOSAL_TYPE) return null;
+  const data =
+    p.data && typeof p.data === "object" && !Array.isArray(p.data)
+      ? (p.data as Record<string, unknown>)
+      : null;
+  const parameters =
+    data?.parameters &&
+    typeof data.parameters === "object" &&
+    !Array.isArray(data.parameters)
+      ? (data.parameters as Record<string, unknown>)
+      : null;
+  return describeVerbRun(
+    typeof data?.verbId === "string" ? data.verbId : null,
+    parameters
+  );
+}
