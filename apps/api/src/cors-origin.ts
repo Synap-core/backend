@@ -21,7 +21,7 @@ import { getCorsOrigins } from "./middleware/security.js";
 import { isPublicDoorPath } from "@synap/api/public-doors";
 import {
   firstPartyBaseForPodHost,
-  isRefusedSiteBase,
+  isRefusedFirstPartyBase,
   normalizeHost,
 } from "@synap-core/types/tenancy";
 import {
@@ -66,13 +66,15 @@ function podPublicHost(): string | null {
  * Base domain whose subdomains count as first-party.
  *
  * Derived from the pod's public host by the one naming rule
- * (`firstPartyBaseForPodHost`, `@synap-core/types/tenancy`): a Synap Cloud pod
- * `<name>.pod.synap.live` → itself, so its console `admin.<name>.pod.synap.live`
- * is first-party; a nested legacy `pod.<name>.synap.live` → `<name>.synap.live`;
- * a flat legacy pod none (it shares only a tenant zone with its console); a
- * self-hosted `pod.<root>` / `pod-admin.<root>` → `<root>`. Never a TLD or a
- * tenant zone, explicit or derived: every other tenant's pod lives under one
- * and would become a credentialed caller of this pod.
+ * (`firstPartyBaseForPodHost`, `@synap-core/types/tenancy`): a current-scheme
+ * Synap Cloud pod `<name>.pod.synap.live` has none: its console is first-party
+ * by POD_ADMIN_URL (explicitOrigins), and the sites its tenant runs under its
+ * name (`<label>.<name>.pod.synap.live`) are not the pod. A nested legacy
+ * `pod.<name>.synap.live` → `<name>.synap.live` until the moves end; a flat
+ * legacy pod none; a self-hosted `pod.<root>` / `pod-admin.<root>` → `<root>`.
+ * Never a TLD, a tenant zone or a host under a current one, explicit or derived
+ * (`isRefusedFirstPartyBase`): other tenants' pods and sites live there and
+ * would become credentialed callers of this pod.
  *
  * SELF-HEALING: derived from the pod's live PUBLIC_URL, not a separately-stored
  * value that goes stale on a domain move. An explicit SYNAP_BASE_DOMAIN is
@@ -85,7 +87,7 @@ function podPublicHost(): string | null {
 function getBaseDomain(): string | null {
   const configured = normalizeHost(process.env.SYNAP_BASE_DOMAIN ?? "");
   const explicit =
-    configured && !isRefusedSiteBase(configured) ? configured : null;
+    configured && !isRefusedFirstPartyBase(configured) ? configured : null;
   const host = podPublicHost();
   const derived = host ? firstPartyBaseForPodHost(host) : null;
 
