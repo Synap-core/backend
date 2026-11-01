@@ -47,7 +47,11 @@ vi.mock("../../services/cells/define-cell.js", async (importOriginal) => ({
   defineCell: async (input: Record<string, unknown>) => {
     if (h.defineError) throw h.defineError;
     h.defineCalls.push(input);
-    return { typeKey: String(input.typeKey), changeType: "created" as const };
+    return {
+      id: "44444444-4444-4444-8444-444444444444",
+      typeKey: String(input.typeKey),
+      changeType: "created" as const,
+    };
   },
 }));
 

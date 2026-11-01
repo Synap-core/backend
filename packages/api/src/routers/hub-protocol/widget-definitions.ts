@@ -15,7 +15,7 @@
 import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
-import { getDb, and, eq, isNull } from "@synap/database";
+import { getDb, eq } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
 import {
   checkPermissionOrPropose,
@@ -217,8 +217,9 @@ export const hubWidgetDefinitionsRouter = router({
       // mechanism when none was named, validates deps, enforces the agent floor
       // and emits `widget_definition.*.completed`. (The native compile step is
       // gone; see NATIVE_RENDERER_REJECTED.)
+      let written: Awaited<ReturnType<typeof defineCell>>;
       try {
-        await defineCell({
+        written = await defineCell({
           typeKey: input.typeKey,
           workspaceId: input.workspaceId ?? null,
           name: input.name,
@@ -239,18 +240,12 @@ export const hubWidgetDefinitionsRouter = router({
         throw err;
       }
 
+      // Read back the row the writer just wrote, by its id alone.
       const db = await getDb();
       const [row] = await db
         .select()
         .from(widgetDefinitions)
-        .where(
-          and(
-            eq(widgetDefinitions.typeKey, input.typeKey),
-            input.workspaceId
-              ? eq(widgetDefinitions.workspaceId, input.workspaceId)
-              : isNull(widgetDefinitions.workspaceId)
-          )
-        )
+        .where(eq(widgetDefinitions.id, written.id))
         .limit(1);
 
       return { status: "ok" as const, widgetDef: row };
