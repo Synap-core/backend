@@ -18,6 +18,7 @@
  */
 
 import type { MiddlewareHandler } from "hono";
+import { trpcPath } from "@synap/api/trpc-refusal";
 
 /** Router namespaces whose every procedure is public. */
 export const PUBLIC_TRPC_NAMESPACES = ["setup"] as const;
@@ -34,13 +35,9 @@ export const PUBLIC_TRPC_PROCEDURES: ReadonlySet<string> = new Set([
   "workspaces.previewInvite",
 ]);
 
-const trimSlashes = (p: string): string =>
-  p.replace(/^\//, "").replace(/\/$/, "");
-
 /** The procedure paths tRPC will run for this URL (batch paths split on ","). */
 export function trpcProcedurePaths(url: string, endpoint = "/trpc"): string[] {
-  const pathname = trimSlashes(new URL(url, "http://pod.invalid").pathname);
-  return trimSlashes(pathname.slice(trimSlashes(endpoint).length)).split(",");
+  return trpcPath(url, endpoint).split(",");
 }
 
 function isPublicProcedure(procedurePath: string): boolean {

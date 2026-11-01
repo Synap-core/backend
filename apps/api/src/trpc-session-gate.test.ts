@@ -237,7 +237,7 @@ describe("index.ts mounts the ONE gate", () => {
     // The Kratos session gate, widened ONLY to a Synap app's device token
     // (packages/api middleware/app-session.ts, its own bearer tripwire).
     expect(src).toContain(
-      'app.use("/trpc/*", trpcSessionGate(appSessionMiddleware()))'
+      'app.use("/trpc/*", trpcRefusal(trpcSessionGate(appSessionMiddleware())))'
     );
   });
 
