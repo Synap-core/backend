@@ -974,6 +974,30 @@ describe("applyDocumentPatch — the bound refresher (decision D4)", () => {
     expect(h.gate.map((g) => g.action)).toEqual(["section_update"]);
   });
 
+  it("a NEW section written twice in one patch is still a section_update (judged against the document as read)", async () => {
+    // Ops apply in order: the first upsert appends "fresh", so the second
+    // REPLACES it in the in-progress text. D4 must judge each op against the
+    // sections that existed before the patch, or this pair creates an AI
+    // section without review.
+    const id = await livingDocument();
+    const fresh = {
+      op: "upsert_section",
+      id: "fresh",
+      title: "fresh",
+      body: "New.",
+    };
+    await refresh(id, await runSession(), [fresh, { ...fresh, body: "New!" }]);
+    await refresh(id, await runSession(), [
+      { op: "upsert_section", id: "status", title: "status", body: "x" },
+      fresh,
+      { ...fresh, body: "New!" },
+    ]);
+    expect(h.gate.map((g) => g.action)).toEqual([
+      "section_update",
+      "section_update",
+    ]);
+  });
+
   it("a run of ANOTHER automation, a closed run, someone else's run or no session: section_update", async () => {
     const id = await livingDocument();
     await refresh(
