@@ -91,6 +91,7 @@ import {
   playbookRequiredIntentsSchema,
 } from "../schemas/playbook-definition.js";
 import { AccessContext, scopedDb } from "../access/index.js";
+import { playbookGoalsAndHealth } from "../services/playbooks/workers.js";
 import { rankRouteCandidates } from "../services/routing/suggest-routes.js";
 import {
   preferTrackTemplates,
@@ -1487,8 +1488,18 @@ export const playbooksRouter = router({
       const hasNextPage = rows.length > limit;
       const page = hasNextPage ? rows.slice(0, limit) : rows;
       const last = page.at(-1);
+      // Each row: the goals its workers serve and how they are doing — for
+      // the whole page in a fixed number of reads.
+      const served = await playbookGoalsAndHealth({
+        userId: ctx.userId,
+        playbookIds: page.map((p) => p.id),
+      });
       return {
-        playbooks: page,
+        playbooks: page.map((p) => ({
+          ...p,
+          servesGoals: served.get(p.id)?.goals ?? [],
+          runHealth: served.get(p.id)?.health ?? null,
+        })),
         nextCursor:
           hasNextPage && last
             ? encodeDefinitionCursor({ at: last.createdAt, id: last.id })

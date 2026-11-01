@@ -45,9 +45,12 @@ import {
   automations,
   automationRuns,
   skills,
+  links,
+  projectTracks,
   countWorkerPendingApprovalsBulk,
   userVisibleWhere,
 } from "@synap/database";
+import { AccessContext, scopedDb } from "../../access/index.js";
 import type { PlaybookActivator } from "@synap/playbooks";
 import {
   DEFAULT_WORKER_MAX_PENDING_APPROVALS,
@@ -58,12 +61,18 @@ import {
 import {
   RUN_HEALTH_MARK_LIMIT,
   deriveRunHealth,
+  goalRunHealth,
+  type RunHealth,
   runMarkOfRunStatus,
   workerTriggerKind,
   type GoalWorkerView,
   type RunMarkEntry,
 } from "@synap-core/types/workers/health";
 import { workerWhen } from "@synap-core/types/workers/words";
+import {
+  goalRunsRollup,
+  type GoalRunsRollup,
+} from "@synap-core/types/workers/goal";
 import {
   activatorKey,
   readPlaybookProcess,
@@ -147,8 +156,10 @@ interface PlaybookRow {
 async function visiblePlaybooks(input: {
   userId: string;
   playbookId?: string;
+  playbookIds?: readonly string[];
   profileSlug?: string;
 }): Promise<PlaybookRow[]> {
+  if (input.playbookIds && input.playbookIds.length === 0) return [];
   return db
     .select({
       id: playbooks.id,
@@ -162,6 +173,9 @@ async function visiblePlaybooks(input: {
       and(
         userVisibleWhere(playbooks.workspaceId, input.userId),
         ...(input.playbookId ? [eq(playbooks.id, input.playbookId)] : []),
+        ...(input.playbookIds
+          ? [inArray(playbooks.id, [...input.playbookIds])]
+          : []),
         ...(input.profileSlug
           ? [
               drizzleSql`${playbooks.subjectProfile}->>'profileSlug' = ${input.profileSlug}`,
@@ -379,18 +393,45 @@ export interface ListEnabledWorkersInput {
   profileSlug?: string;
   projectId?: string | null;
   trackId?: string | null;
+  /**
+   * Bulk: the workers enabled on ANY of these goals (strict, like `trackId`).
+   * The caller has already read the goals through their visibility floor
+   * (`tracks.list`); nothing is looked up per goal.
+   */
+  trackIds?: readonly string[];
   playbookId?: string;
+  /** Bulk: the workers of any of these playbooks. */
+  playbookIds?: readonly string[];
   liveOnly?: boolean;
 }
 
-async function readEnabledWorkers(input: {
+/**
+ * Each goal's runs, rolled up from ITS workers (`goalRunsRollup`, the ONE
+ * derivation) — for a whole page of goals in the fixed reads of
+ * {@link listWorkerViews}, never one read per goal. A goal with no worker
+ * gets the empty rollup (`workerCount: 0`), never a missing entry.
+ */
+export async function goalRunsOf(input: {
   userId: string;
-  profileSlug?: string;
-  projectId?: string | null;
-  trackId?: string | null;
-  playbookId?: string;
-  liveOnly?: boolean;
-}): Promise<
+  trackIds: readonly string[];
+}): Promise<Map<string, GoalRunsRollup>> {
+  const byTrack = new Map<string, GoalWorkerView[]>(
+    input.trackIds.map((id) => [id, []])
+  );
+  if (input.trackIds.length > 0) {
+    for (const w of await listWorkerViews({
+      userId: input.userId,
+      trackIds: input.trackIds,
+    })) {
+      if (w.trackId) byTrack.get(w.trackId)?.push(w);
+    }
+  }
+  return new Map(
+    [...byTrack].map(([id, workers]) => [id, goalRunsRollup(workers)])
+  );
+}
+
+async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
   Array<{
     worker: EnabledWorker;
     automations: { current: RuleAutomation | null; all: string[] };
@@ -411,9 +452,12 @@ async function readEnabledWorkers(input: {
     }
     projectId = track.projectId;
   }
+  const trackSet = input.trackIds ? new Set(input.trackIds) : null;
+  if (trackSet && trackSet.size === 0) return [];
   const pbs = await visiblePlaybooks({
     userId: input.userId,
     playbookId: input.playbookId,
+    playbookIds: input.playbookIds,
     profileSlug: input.profileSlug,
   });
   // Three reads for the whole list, whatever its size (backend F13): every
@@ -446,6 +490,8 @@ async function readEnabledWorkers(input: {
       // A goal's workers are the ones enabled ON it — never its project's
       // or the space's (R1).
       if (input.trackId && en.trackId !== input.trackId) continue;
+      if (input.trackIds && !(en.trackId && trackSet!.has(en.trackId)))
+        continue;
       const paused = row.meta.draft === true;
       if (input.liveOnly && paused) continue;
       found.push({ pb, process, row, en, paused });
@@ -913,4 +959,147 @@ export async function setWorkerPaused(input: {
     status: "denied",
     reason: "reason" in r ? String(r.reason) : r.status,
   };
+}
+
+// ── What an automation or a playbook serves, and how it is doing ───────────
+
+/** A goal a worker serves, named. */
+export interface ServedGoal {
+  id: string;
+  name: string;
+}
+
+/** The names of the goals the caller may see, in one read (their floor). */
+async function visibleGoalNames(
+  userId: string,
+  trackIds: readonly string[]
+): Promise<Map<string, string>> {
+  if (trackIds.length === 0) return new Map();
+  const rows = await scopedDb(AccessContext.from({ userId })).findMany<{
+    id: string;
+    name: string;
+  }>(projectTracks, {
+    where: inArray(projectTracks.id, [...new Set(trackIds)]),
+    columns: { id: true, name: true },
+  });
+  return new Map(rows.map((r) => [r.id, r.name]));
+}
+
+/**
+ * For a page of AUTOMATIONS (pod admin's inventory): the goal each one serves
+ * (through its worker enablement: the rule that activates it, filed on a
+ * goal) and its run health, in a fixed number of reads for the whole page.
+ * An automation that serves no goal reads `goal: null`; every one gets a
+ * health. `paused` is a person's pause of the automation itself.
+ */
+export async function automationGoalsAndHealth(input: {
+  userId: string;
+  automations: ReadonlyArray<{
+    id: string;
+    status: string;
+    errorMessage: string | null;
+  }>;
+}): Promise<Map<string, { goal: ServedGoal | null; health: RunHealth }>> {
+  const ids = input.automations.map((a) => a.id);
+  const out = new Map<string, { goal: ServedGoal | null; health: RunHealth }>();
+  if (ids.length === 0) return out;
+  const edges = await db
+    .select({ ruleId: links.fromId, automationId: links.toId })
+    .from(links)
+    .where(
+      and(
+        eq(links.fromType, "skill"),
+        eq(links.toType, "automation"),
+        eq(links.linkType, "activates"),
+        inArray(links.toId, ids)
+      )
+    );
+  const ruleIds = [...new Set(edges.map((e) => e.ruleId))];
+  const rules = ruleIds.length
+    ? await db
+        .select({ id: skills.id, metadata: skills.metadata })
+        .from(skills)
+        .where(
+          and(inArray(skills.id, ruleIds), eq(skills.category, RULE_CATEGORY))
+        )
+    : [];
+  const trackOfRule = new Map<string, string>();
+  const workerTemplate = workerSeedTemplate("");
+  for (const r of rules) {
+    const seed = readRuleMetadata(r.metadata as Record<string, unknown>)?.seed;
+    if (!seed?.template.startsWith(workerTemplate)) continue;
+    const trackId = parseWorkerEnablementKey(seed.key)?.trackId;
+    if (trackId) trackOfRule.set(r.id, trackId);
+  }
+  const trackOfAutomation = new Map<string, string>();
+  for (const e of edges) {
+    const t = trackOfRule.get(e.ruleId);
+    if (t) trackOfAutomation.set(e.automationId, t);
+  }
+  const [names, runs, pending] = await Promise.all([
+    visibleGoalNames(input.userId, [...trackOfAutomation.values()]),
+    recentRunMarksOf(ids),
+    countWorkerPendingApprovalsBulk(ids),
+  ]);
+  for (const a of input.automations) {
+    const trackId = trackOfAutomation.get(a.id);
+    const name = trackId ? names.get(trackId) : undefined;
+    out.set(a.id, {
+      goal: trackId && name !== undefined ? { id: trackId, name } : null,
+      health: deriveRunHealth({
+        paused: a.status === "paused",
+        automationStatus: a.status,
+        automationError: a.errorMessage,
+        marks: [...(runs.get(a.id) ?? [])].reverse(),
+        pendingApprovals: pending.get(a.id) ?? 0,
+      }),
+    });
+  }
+  return out;
+}
+
+/**
+ * For a page of PLAYBOOKS: the goals its workers serve and how they are
+ * doing — the worst of its workers' health (`goalRunHealth` order), as that
+ * worker's `RunHealth`; null when it has no worker enabled. Reads: the
+ * workers of the page's playbooks (`listWorkerViews`, fixed reads) and the
+ * goals' names.
+ */
+export async function playbookGoalsAndHealth(input: {
+  userId: string;
+  playbookIds: readonly string[];
+}): Promise<Map<string, { goals: ServedGoal[]; health: RunHealth | null }>> {
+  const out = new Map<
+    string,
+    { goals: ServedGoal[]; health: RunHealth | null }
+  >(input.playbookIds.map((id) => [id, { goals: [], health: null }]));
+  if (input.playbookIds.length === 0) return out;
+  const workers = await listWorkerViews({
+    userId: input.userId,
+    playbookIds: input.playbookIds,
+  });
+  const names = await visibleGoalNames(
+    input.userId,
+    workers.flatMap((w) => (w.trackId ? [w.trackId] : []))
+  );
+  for (const id of input.playbookIds) {
+    const mine = workers.filter((w) => w.playbookId === id);
+    if (mine.length === 0) continue;
+    const worst = goalRunHealth(mine);
+    const goals: ServedGoal[] = [];
+    for (const w of mine) {
+      const name = w.trackId ? names.get(w.trackId) : undefined;
+      if (
+        w.trackId &&
+        name !== undefined &&
+        !goals.some((g) => g.id === w.trackId)
+      )
+        goals.push({ id: w.trackId, name });
+    }
+    out.set(id, {
+      goals,
+      health: mine.find((w) => w.health.state === worst)?.health ?? null,
+    });
+  }
+  return out;
 }

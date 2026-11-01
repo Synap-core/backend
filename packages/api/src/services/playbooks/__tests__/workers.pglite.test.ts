@@ -152,6 +152,7 @@ import {
   assertNoWorkerOverlap,
   enableWorker,
   listEnabledWorkers,
+  goalRunsOf,
   listWorkerViews,
   setWorkerPaused,
 } from "../workers.js";
@@ -847,5 +848,33 @@ describe("listWorkerViews — trigger words, runs and health from the pod", () =
     } finally {
       await q(`delete from playbooks where id = $1`, [PB2]);
     }
+  });
+});
+
+describe("goalRunsOf — a page of goals, its runs in fixed reads", () => {
+  it("each goal gets ITS workers' rollup; a goal with none gets the empty one", async () => {
+    const rule = await workerRule({ activatorKey: KEY, trackId: T1 });
+    const auto = await automationFor(rule);
+    h.pending.set(auto, 2);
+    await runAt(auto, "completed", 5);
+    h.bulkCalls.length = 0;
+    const runs = await goalRunsOf({ userId: USER, trackIds: [T1, T2] });
+    expect(runs.get(T1)).toMatchObject({
+      workerCount: 1,
+      runningCount: 1,
+      pendingApprovals: 2,
+      health: "waiting",
+      lastRunAt: "2026-11-01T09:05:00.000Z",
+    });
+    expect(runs.get(T2)).toMatchObject({
+      workerCount: 0,
+      runningCount: 0,
+      rhythm: null,
+      health: "not_running",
+      marks: [],
+    });
+    // One approvals read for the whole page, not one per goal.
+    expect(h.bulkCalls).toHaveLength(1);
+    h.pending.clear();
   });
 });
