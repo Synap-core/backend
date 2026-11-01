@@ -16,6 +16,7 @@ import {
   notificationPreferences,
 } from "@synap/database";
 import {
+  isSessionPushMuted,
   normalizePushPrefs,
   type PushCategory,
   type PushPrefs,
@@ -93,4 +94,47 @@ export async function writePushPrefs(
     });
 
   return readPushPrefs(userId);
+}
+
+/**
+ * Mute or unmute ONE session's pushes (`push_prefs.mutedSessions`, plan
+ * d679e92c C9), IN SQL, so two devices muting two sessions at once both land
+ * and a session already muted is not listed twice. Creates the pod-wide row
+ * when the person has none. The caller checks the person may read the
+ * session. Returns whether it is muted after the write (read back, never
+ * assumed). A FAILED write or read throws.
+ */
+export async function writeSessionMute(
+  userId: string,
+  sessionId: string,
+  muted: boolean
+): Promise<boolean> {
+  const id = sessionId.toLowerCase();
+  const pp = notificationPreferences.pushPrefs;
+  // The stored list, or [] when absent or not a list (a malformed value is
+  // replaced, never concatenated onto).
+  const current = drizzleSql`(CASE WHEN jsonb_typeof(${pp}->'mutedSessions') = 'array'
+    THEN ${pp}->'mutedSessions' ELSE '[]'::jsonb END)`;
+  // `jsonb - text` drops the id wherever it is; a mute appends it last, so the
+  // oldest mute is the one the read cap drops first.
+  const next = muted
+    ? drizzleSql`((${current} - ${id}::text) || to_jsonb(${id}::text))`
+    : drizzleSql`(${current} - ${id}::text)`;
+  await db
+    .insert(notificationPreferences)
+    .values({
+      userId,
+      workspaceId: null,
+      pushPrefs: muted ? { mutedSessions: [id] } : {},
+    })
+    .onConflictDoUpdate({
+      target: notificationPreferences.userId,
+      targetWhere: drizzleSql`workspace_id IS NULL`,
+      set: {
+        pushPrefs: drizzleSql`(coalesce(${pp}, '{}'::jsonb)
+          || jsonb_build_object('mutedSessions', ${next}))`,
+        updatedAt: new Date(),
+      },
+    });
+  return isSessionPushMuted(await readPushPrefs(userId), id);
 }

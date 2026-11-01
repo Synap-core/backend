@@ -23,6 +23,12 @@
  *      ask and is never held back, but it counts. The count is read only when
  *      the cap applies (`pushCapApplies`), so no exempt or forced push waits
  *      on it.
+ *   5. the person's SESSION MUTE ({@link withSessionMute}): a push about a
+ *      session they muted is held back, whatever its category (an ask too),
+ *      except what they sent to their phone themselves
+ *      (`PUSH_MUTE_EXEMPT_CATEGORIES`). Held back, never hidden: the row is
+ *      already in the bell and an owed ask stays in needs-you. Decided before
+ *      the budget, so a muted push is never counted.
  */
 import {
   and,
@@ -36,13 +42,16 @@ import {
   proposals,
   storedSessionSource,
 } from "@synap/database";
+import { UUID_RE } from "../services/focus-sessions/session-metadata.js";
 import { loadAgentPresence } from "../services/agent-presence.js";
 import { OPEN_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import {
   PUSH_CAP_EXEMPT_CATEGORIES,
   PUSH_DAILY_CAP,
+  PUSH_MUTE_EXEMPT_CATEGORIES,
   classifyPush,
   isPushCategoryEnabled,
+  isSessionPushMuted,
   pushCapExemptTypes,
   type PushCategory,
   type PushFacts,
@@ -54,7 +63,7 @@ export type PushDecision =
   | {
       push: false;
       category: PushCategory | null;
-      reason: "unclassified" | "category_off" | "over_cap";
+      reason: "unclassified" | "category_off" | "over_cap" | "session_muted";
     };
 
 /** Pure: rules 1-3 above, in order. */
@@ -97,6 +106,88 @@ export function withinPushCap(
   return pushCapApplies(d) && pushedToday >= PUSH_DAILY_CAP
     ? { push: false, category: d.category, reason: "over_cap" }
     : d;
+}
+
+/**
+ * Rule 5, pure: hold back a push about a session the person muted. `muted` is
+ * the answer of {@link pushAboutMutedSession}. A push in a mute-exempt
+ * category (what the person sent to their own phone) still goes out.
+ */
+export function withSessionMute(d: PushDecision, muted: boolean): PushDecision {
+  if (!d.push || !muted) return d;
+  if (d.category && PUSH_MUTE_EXEMPT_CATEGORIES.includes(d.category)) return d;
+  return { push: false, category: d.category, reason: "session_muted" };
+}
+
+/** What a notification says about where it comes from — the session lookup's input. */
+export interface NotificationSessionSource {
+  sourceType: string;
+  sourceId?: string;
+  target?: { kind: string; id: string } | null;
+  data?: Record<string, unknown>;
+  push?: { threadId?: string };
+}
+
+const isUuid = (v: unknown): v is string =>
+  typeof v === "string" && UUID_RE.test(v);
+
+/**
+ * The sessions a notification is ABOUT, from what it carries, no read: a
+ * session source (`sourceType: "session"`), a tap target on a session or its
+ * owed page, a `sessionId` in its data, and the iOS thread a session's pushes
+ * stack under (`threadId` = the session id, `notify-needs-you.ts`). Pure.
+ */
+export function notificationSessionIds(n: NotificationSessionSource): string[] {
+  const out = new Set<string>();
+  if (n.sourceType === "session" && isUuid(n.sourceId)) out.add(n.sourceId);
+  if (
+    n.target &&
+    (n.target.kind === "session" || n.target.kind === "owed") &&
+    isUuid(n.target.id)
+  ) {
+    out.add(n.target.id);
+  }
+  const dataSessionId = n.data?.sessionId;
+  if (isUuid(dataSessionId)) out.add(dataSessionId);
+  const threadId = n.push?.threadId;
+  if (isUuid(threadId)) out.add(threadId);
+  return [...new Set([...out].map((id) => id.toLowerCase()))];
+}
+
+/**
+ * Rule 5's question: is this notification about a session in `mutedSessions`?
+ * Free when nothing is muted (no read). Otherwise it also follows the two
+ * links a notification carries without naming the session: a proposal's
+ * session (`proposals.session_id`) and a room's session (the session whose
+ * room is `data.channelId`, e.g. an @mention there). A FAILED read throws
+ * (the caller skips the push decision's mute, logged — see NotificationService).
+ */
+export async function pushAboutMutedSession(
+  n: NotificationSessionSource,
+  mutedSessions: readonly string[] | undefined
+): Promise<boolean> {
+  if (!mutedSessions || mutedSessions.length === 0) return false;
+  const prefs = { mutedSessions: [...mutedSessions] };
+  const direct = notificationSessionIds(n);
+  if (direct.some((id) => isSessionPushMuted(prefs, id))) return true;
+  if (n.sourceType === "proposal" && isUuid(n.sourceId)) {
+    const [row] = await db
+      .select({ sessionId: proposals.sessionId })
+      .from(proposals)
+      .where(eq(proposals.id, n.sourceId))
+      .limit(1);
+    if (isSessionPushMuted(prefs, row?.sessionId)) return true;
+  }
+  const channelId = n.data?.channelId;
+  if (isUuid(channelId)) {
+    const [row] = await db
+      .select({ id: focusSessions.id })
+      .from(focusSessions)
+      .where(eq(focusSessions.channelId, channelId))
+      .limit(1);
+    if (isSessionPushMuted(prefs, row?.id)) return true;
+  }
+  return false;
 }
 
 /**

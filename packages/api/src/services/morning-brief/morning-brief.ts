@@ -46,6 +46,10 @@
  *
  * NOTHING TO SAY, NOTHING SENT. A read that FAILS skips that person (logged)
  * and the next tick retries: a failed read is never "nothing waits".
+ *
+ * THE SAME PASS raises the DELIVERED DIGEST (`delivered-digest.ts`): what
+ * agents delivered since the last digest, for every person due at this time,
+ * whether their brief is on or not (its off switch is its own push category).
  */
 
 import { createLogger } from "@synap-core/core";
@@ -78,6 +82,14 @@ import {
 import { CRITERIA_UNMET_NOTIFICATION_TYPE } from "../../notifications/session-criteria-unmet-reactor.js";
 import { sessionListConditions } from "../focus-sessions/session-list-conditions.js";
 import type { Signal } from "../signals/needs-you-union.js";
+import {
+  DELIVERED_DIGEST_TYPE,
+  composeDeliveredDigest,
+  digestSince,
+  readDeliveredSince,
+  readLastDigestAt,
+  type DeliveredFacts,
+} from "./delivered-digest.js";
 
 const logger = createLogger({ module: "morning-brief" });
 
@@ -368,6 +380,13 @@ export interface MorningBriefPassResult {
   sent: number;
   /** Reads that failed; the next tick retries them. */
   failed: number;
+  /** The delivered digest of the same pass (`delivered-digest.ts`). */
+  digest: {
+    /** Due now and not held back (the brief's `enabled` does not apply). */
+    due: number;
+    sent: number;
+    failed: number;
+  };
 }
 
 type Notify = (input: CreateNotificationInput) => Promise<string | undefined>;
@@ -378,12 +397,45 @@ export async function runMorningBriefs(args?: {
   now?: Date;
   notify?: Notify;
   readNeedsYou?: (userId: string) => Promise<NeedsYouForBrief>;
+  readDelivered?: (userId: string, since: Date) => Promise<DeliveredFacts>;
 }): Promise<MorningBriefPassResult> {
   const database = args?.database ?? defaultDb;
   const now = args?.now ?? new Date();
   const notify: Notify =
     args?.notify ?? ((input) => NotificationService.create(input));
   const readNeedsYou = args?.readNeedsYou ?? readNeedsYouForBrief;
+  const readDelivered =
+    args?.readDelivered ??
+    ((userId: string, since: Date) =>
+      readDeliveredSince(database, userId, since));
+
+  /** One person's digest: true when a row was written. THROWS on a failed read. */
+  const sendDeliveredDigest = async (
+    userId: string,
+    timeZone: string
+  ): Promise<boolean> => {
+    // Once a day, held as the brief is: a digest raised in the last 20 hours
+    // (read or not) means today's is sent.
+    const last = await readLastDigestAt(database, userId);
+    if (last && now.getTime() - last.getTime() < ONCE_WITHIN_MS) return false;
+    const since = digestSince(now, last);
+    const digest = composeDeliveredDigest(await readDelivered(userId, since));
+    if (!digest) return false;
+    const id = await notify({
+      type: DELIVERED_DIGEST_TYPE,
+      userId,
+      // Pod-wide: what was delivered in every space.
+      workspaceId: null,
+      sourceType: "proactive_message",
+      groupKey: `delivered-digest:${localDay(now, timeZone)}`,
+      data: {
+        ...digest,
+        proactiveType: "delivered_digest",
+        since: since.toISOString(),
+      },
+    });
+    return !!id;
+  };
 
   const candidates = await briefCandidates(database);
   const result: MorningBriefPassResult = {
@@ -391,12 +443,25 @@ export async function runMorningBriefs(args?: {
     due: 0,
     sent: 0,
     failed: 0,
+    digest: { due: 0, sent: 0, failed: 0 },
   };
   for (const c of candidates) {
     const schedule = morningBriefSchedule(c.settings, c.timeZone);
     if (proactivePostHeldBy(schedule.prefs, now)) continue;
-    if (!schedule.prefs.morningBriefing.enabled) continue;
     if (!morningBriefDue(now, schedule)) continue;
+    result.digest.due++;
+    try {
+      if (await sendDeliveredDigest(c.userId, schedule.timeZone)) {
+        result.digest.sent++;
+      }
+    } catch (err) {
+      result.digest.failed++;
+      logger.warn(
+        { err, userId: c.userId },
+        "delivered digest: a read failed — skipped, the next tick retries"
+      );
+    }
+    if (!schedule.prefs.morningBriefing.enabled) continue;
     result.due++;
     try {
       const since = new Date(now.getTime() - ONCE_WITHIN_MS);

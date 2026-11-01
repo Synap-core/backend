@@ -22,6 +22,10 @@ import {
   pushDeviceFacts,
   pushDeviceView,
   type PushDeviceRow,
+  PUSH_CAP_EXEMPT_CATEGORIES,
+  PUSH_MUTED_SESSIONS_MAX,
+  isSessionPushMuted,
+  pushCapExemptTypes,
 } from "./index.js";
 
 const slot = { sessionId: "s-1", label: "Tone" };
@@ -477,5 +481,52 @@ describe("pushDeviceFacts", () => {
         ago
       )
     ).toBe("iOS · added 5d ago");
+  });
+});
+
+describe("the delivered digest and the session mute (plan d679e92c C9)", () => {
+  it("the digest is its own passive category, outside the daily cap", () => {
+    expect(classifyPush("ai.proactive.delivered_digest")).toBe(
+      "delivered-digest"
+    );
+    expect(pushEnvelope("delivered-digest")).toEqual({
+      interruptionLevel: "passive",
+      sound: null,
+    });
+    expect(isPushCategoryEnabled({}, "delivered-digest")).toBe(true);
+    expect(PUSH_CAP_EXEMPT_CATEGORIES).toContain("delivered-digest");
+    expect(pushCapExemptTypes()).toContain("ai.proactive.delivered_digest");
+    // The morning brief still counts.
+    expect(pushCapExemptTypes()).not.toContain("ai.proactive.morning_briefing");
+  });
+
+  it("muted sessions are kept as lowercase uuids, once each, the newest kept past the cap", () => {
+    const A = "22222222-2222-4222-8222-222222222222";
+    const B = "33333333-3333-4333-8333-333333333333";
+    expect(
+      normalizePushPrefs({
+        mutedSessions: [A.toUpperCase(), A, "s-1", 7, null, B],
+      })
+    ).toEqual({ mutedSessions: [A, B] });
+    expect(normalizePushPrefs({ mutedSessions: "nope" })).toEqual({});
+    expect(normalizePushPrefs({ mutedSessions: [] })).toEqual({});
+    const many = Array.from(
+      { length: PUSH_MUTED_SESSIONS_MAX + 5 },
+      (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`
+    );
+    const kept = normalizePushPrefs({ mutedSessions: many }).mutedSessions!;
+    expect(kept).toHaveLength(PUSH_MUTED_SESSIONS_MAX);
+    expect(kept.at(-1)).toBe(many.at(-1));
+    expect(kept[0]).toBe(many[5]);
+  });
+
+  it("isSessionPushMuted reads the list, case-insensitively; nothing muted is never muted", () => {
+    const A = "22222222-2222-4222-8222-222222222222";
+    expect(isSessionPushMuted({ mutedSessions: [A] }, A.toUpperCase())).toBe(
+      true
+    );
+    expect(isSessionPushMuted({ mutedSessions: [A] }, null)).toBe(false);
+    expect(isSessionPushMuted({}, A)).toBe(false);
+    expect(isSessionPushMuted(null, A)).toBe(false);
   });
 });
