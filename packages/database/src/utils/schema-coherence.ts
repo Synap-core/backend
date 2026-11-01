@@ -168,6 +168,18 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "ref_key",
     addedBy: "0386_status_wait_episode.sql",
   },
+  // A living document's scope and refresher (0387). Every document read
+  // selects the row, so without them every document get and list 500s.
+  {
+    table: "documents",
+    column: "scope",
+    addedBy: "0387_document_scope_refresher.sql",
+  },
+  {
+    table: "documents",
+    column: "refresh_automation_id",
+    addedBy: "0387_document_scope_refresher.sql",
+  },
   // notification_preferences — per-person push categories (0289). The
   // producer reads it on every os-channel notification; missing, the push
   // decision read throws, the row is still written and the bell still

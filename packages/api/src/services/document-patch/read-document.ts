@@ -20,6 +20,7 @@ import {
 } from "../session-document/sections.js";
 import { readableMarkdown as coreReadableMarkdown } from "@synap-core/markdown-core/readable";
 import type { Embed } from "@synap-core/markdown-core/embeds";
+import type { LensScope } from "@synap-core/types/lens";
 import {
   diagnoseForDocument,
   readStoredDiagnostics,
@@ -110,6 +111,10 @@ export interface AgentDocumentRow {
   workspaceId: string | null;
   contentRevision: number;
   currentVersion: number;
+  /** The living document's `LensScope` (0387), or null. */
+  scope: LensScope | null;
+  /** The automation bound to refresh it (0387, D4), or null. */
+  refreshAutomationId: string | null;
   updatedAt: Date | string;
   createdAt: Date | string;
 }
@@ -132,6 +137,8 @@ export function projectAgentDocument(
     type: doc.type,
     language: doc.language,
     workspaceId: doc.workspaceId,
+    scope: doc.scope ?? null,
+    refreshAutomationId: doc.refreshAutomationId ?? null,
     format,
     content: format === "readable" ? readableMarkdown(raw) : raw,
     revision: doc.contentRevision,

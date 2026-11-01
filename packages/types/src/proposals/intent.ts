@@ -259,6 +259,7 @@ export const DOCUMENT_PATCH_PROPOSAL_TYPES = [
   "update",
   "section_update",
   "session_narrative_update",
+  "refresher_section_update",
   "user_edit",
 ] as const;
 export type DocumentPatchProposalType =

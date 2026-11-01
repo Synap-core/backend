@@ -2264,6 +2264,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "document/create": "reversible",
   "document/section_update": "reversible", // version history restores it
   "document/session_narrative_update": "reversible",
+  "document/refresher_section_update": "reversible", // version history restores it
   "document/update": "reversible", // version history restores it
   "entity/create": "reversible",
   "entity/delete": "disruptive", // destroy
@@ -2529,6 +2530,10 @@ export const GATE_WRITE_DOORS = {
   // `section_update` is every other section write (no rule → proposal).
   "document/section_update": "gate",
   "document/session_narrative_update": "gate",
+  // D4: a living document's BOUND refresher rewriting its own existing AI
+  // sections (the patch door picks it from server facts; a stored auto rule
+  // names it, like D10). Every other section write stays `section_update`.
+  "document/refresher_section_update": "gate",
   // The document patch door (`applyDocumentPatch`) for anything that is not a
   // section-only patch: `replace_text` / `append` / `replace_all` / `set_title`, and the
   // full-replace aliases (REST PATCH, MCP update_entity.content, IS

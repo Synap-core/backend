@@ -62,6 +62,10 @@ import {
   readableMarkdown,
 } from "../services/document-patch/read-document.js";
 import { emitSideEffects, getBoss } from "@synap/events";
+import {
+  podDocumentScopeFloor,
+  resolveDocumentScopeFields,
+} from "../services/document-scope/document-scope.js";
 
 // ============================================================================
 // SCHEMAS
@@ -120,6 +124,16 @@ const UpdateDocumentSchema = z.object({
   collab: z.boolean().optional(),
   message: z.string().optional(),
   title: z.string().optional(),
+  /**
+   * The living document's `LensScope` (0387, contract 3), or null to clear
+   * it. Read and floored by `resolveDocumentScope`. Absent = unchanged.
+   */
+  scope: z.unknown().optional(),
+  /**
+   * The automation bound to refresh it (0387, decision D4), or null to
+   * unbind. Absent = unchanged.
+   */
+  refreshAutomationId: z.string().uuid().nullable().optional(),
 });
 
 const CreateDocumentSchema = z.object({
@@ -148,6 +162,10 @@ const CreateDocumentSchema = z.object({
    * `metadata.duplicatedFrom = { documentId, revision }`.
    */
   duplicatedFrom: z.object({ documentId: z.string().uuid() }).optional(),
+  /** The living document's `LensScope` (0387, contract 3). */
+  scope: z.unknown().optional(),
+  /** The automation bound to refresh it (0387, decision D4). */
+  refreshAutomationId: z.string().uuid().nullable().optional(),
 });
 
 // ============================================================================
@@ -189,6 +207,11 @@ export const documentsRouter = router({
           }))
         : null;
       const docType = normalizeDocumentType(input.type, "markdown");
+      // Scope + refresher: read and floored BEFORE anything is written.
+      const scoped = await resolveDocumentScopeFields(
+        input,
+        podDocumentScopeFloor(userId)
+      );
       // The ONE create door: fresh-key upload + row + v1 checkpoint.
       const document = await createDocumentWithContent(db, eventRepository, {
         ownerUserId: userId,
@@ -197,6 +220,7 @@ export const documentsRouter = router({
         type: docType,
         content: input.content || "",
         mimeType: mimeTypeForDocType(docType),
+        ...scoped,
         ...(duplicatedFrom ? { metadata: { duplicatedFrom } } : {}),
         provenance: { createdByKind: "human" },
       });
@@ -354,6 +378,11 @@ export const documentsRouter = router({
       // 1. Edit rights follow the document's own floor (workspace editor+,
       //    or the owner of a pod-wide document).
       const document = await loadEditableDocument(userId, input.documentId);
+      // Scope + refresher: read and floored before anything is written.
+      const scoped = await resolveDocumentScopeFields(
+        input,
+        podDocumentScopeFloor(userId)
+      );
 
       // 2. Content goes through the ONE content-write door: compare-and-set on
       //    the content revision, author-switch checkpoint, storage upload.
@@ -384,6 +413,7 @@ export const documentsRouter = router({
       if (input.title) {
         updateFields.title = input.title;
       }
+      Object.assign(updateFields, scoped);
 
       await db
         .update(documents)
@@ -841,6 +871,8 @@ export const documentsRouter = router({
           createdAt: documents.createdAt,
           size: documents.size,
           userId: documents.userId,
+          scope: documents.scope,
+          refreshAutomationId: documents.refreshAutomationId,
         })
         .from(documents)
         .where(input.markdownOnly ? and(base, markdownish) : base)

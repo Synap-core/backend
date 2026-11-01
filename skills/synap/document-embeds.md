@@ -204,7 +204,21 @@ Never rewrite a whole document to change part of it. Read it, then patch it:
    - `replace_all {content}` — the whole body; needs `baseRevision` and is
      always reviewed;
    - `set_title {title}` — renames the document (its one title). A human name,
-     never an id or a slug; the content is left as it is.
+     never an id or a slug; the content is left as it is;
+   - `insert_embed {directive, ref, props?, fallback?, sectionId? | after?}` —
+     adds an embed written for you (`synap-cell` with `{cellKey}` and its props,
+     `synap-entity` with `{id}`, `synap-view` with `{viewId}`): prefer it to
+     typing directive text. It goes at the end, at the end of section
+     `sectionId`, or after the line holding `after` (exact once). Give it a
+     `fallback` sentence: it is what the phone and exports read;
+   - `set_scope {scope}` — what a LIVING document's cells read through:
+     `{kind:"pod"}`, `{kind:"workspace", workspaceId, projectId?}`,
+     `{kind:"project", projectId}`, `{kind:"track", trackId}` or
+     `{kind:"session", sessionId}` (null clears it). Never put a scope in a
+     cell's props: the host stamps the document's scope on every cell;
+   - `set_refresher {automationId}` — binds the automation that refreshes the
+     document (null unbinds). Its runs may rewrite the document's EXISTING
+     `ai` sections without review; anything else they write is reviewed.
 
 Refused, whatever the op: changing a section whose `owner` is `human` (the AI
 never rewrites a person's words — write a new section), and removing an embed

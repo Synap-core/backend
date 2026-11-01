@@ -764,12 +764,6 @@ const REENTRY_CLASS: Record<string, Classification> = {
       "i.e. policy intends it to auto-run; it is not destructive/admin/structural.",
   },
   "market.scaffold": "gated",
-  "document.update": {
-    ungated:
-      "documentsRouter.update has no checkPermissionOrPropose. Document edits " +
-      "are versioned (saveVersion/restoreVersion), so an update is recoverable " +
-      "content, not a destructive write.",
-  },
 };
 
 // ---------------------------------------------------------------------------

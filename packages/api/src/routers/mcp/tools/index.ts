@@ -1579,6 +1579,16 @@ export const tools = {
               description:
                 "The declared output slot this fulfils: its key or its label. One that names no output of the session is said in the reply's `warnings`; the document is created either way.",
             },
+            scope: {
+              type: ["object", "null"],
+              description:
+                'A living document\'s scope: what its embedded cells read through. {kind:"pod"} | {kind:"workspace", workspaceId, projectId?} | {kind:"project", projectId} | {kind:"track", trackId} | {kind:"session", sessionId}. Never put a scope in a cell\'s props: the host stamps this one on every cell. Refused when it names something you cannot read.',
+            },
+            refreshAutomationId: {
+              type: ["string", "null"],
+              description:
+                "The automation bound to refresh this document (an id synap_list_automations returns). Its runs may rewrite this document's existing AI sections without review; every other edit is governed as usual.",
+            },
             /**
              * WHY this write, in the person's own words — shown verbatim to the
              * reviewer. Without it the proposal detail reads "No reason was
@@ -1602,7 +1612,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Edit a document with ops — a section, a passage, an addition — instead of rewriting it. Read it first with synap_get_document and pass its `revision` as `baseRevision`. Ops, applied in order: `upsert_section {id, title, body}` writes ONE `::::synap-section` block by id (replaces your own `ai` section, or appends a new one); `replace_text {old, new}` — `old` must match EXACTLY once, copy it from the document and include enough context (0 or 2+ matches is refused with the count); `append {body}`; `replace_all {content}` (whole body — needs baseRevision, always goes to review); `set_title {title}` renames the document (its one title — a human name, never an id), governed like the other ops. Refused: changing a section whose owner is `human` (by any op), and removing an embed unless `allow_removing_embeds: true`. Usually returns 'proposed' (the person reviews a per-section before/after); a governance rule may apply it directly. The response carries `preview` and `diagnostics` (embeds that will not render, each with a `fix` — advisory, never a refusal). A 'changed after you read it' error means re-read and redraft.",
+          "Edit a document with ops — a section, a passage, an addition — instead of rewriting it. Read it first with synap_get_document and pass its `revision` as `baseRevision`. Ops, applied in order: `upsert_section {id, title, body}` writes ONE `::::synap-section` block by id (replaces your own `ai` section, or appends a new one); `replace_text {old, new}` — `old` must match EXACTLY once, copy it from the document and include enough context (0 or 2+ matches is refused with the count); `append {body}`; `replace_all {content}` (whole body — needs baseRevision, always goes to review); `set_title {title}` renames the document (its one title — a human name, never an id), governed like the other ops; `insert_embed {directive, ref, props?, fallback?, sectionId?|after?}` adds an embed (synap-cell {cellKey} + props, synap-entity {id}, synap-view {viewId}) written for you — never hand-write directive text — at the end, at the end of section `sectionId`, or after the line holding `after`; `set_scope {scope}` sets the living document's scope (same shape as synap_create_document's, null clears it); `set_refresher {automationId}` binds the automation whose runs refresh its AI sections (null unbinds). Refused: changing a section whose owner is `human` (by any op), and removing an embed unless `allow_removing_embeds: true`. Usually returns 'proposed' (the person reviews a per-section before/after); a governance rule may apply it directly. The response carries `preview` and `diagnostics` (embeds that will not render, each with a `fix` — advisory, never a refusal). A 'changed after you read it' error means re-read and redraft.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1628,6 +1638,9 @@ export const tools = {
                       "append",
                       "replace_all",
                       "set_title",
+                      "insert_embed",
+                      "set_scope",
+                      "set_refresher",
                     ],
                   },
                   id: {
@@ -1660,6 +1673,46 @@ export const tools = {
                   content: {
                     type: "string",
                     description: "replace_all: the whole new body.",
+                  },
+                  directive: {
+                    type: "string",
+                    enum: ["synap-cell", "synap-entity", "synap-view"],
+                    description: "insert_embed: what to embed.",
+                  },
+                  ref: {
+                    type: "object",
+                    description:
+                      "insert_embed: the reference — {cellKey} (cell), {id} (entity), {viewId} (view).",
+                  },
+                  props: {
+                    type: "object",
+                    description:
+                      "insert_embed: a cell's props (synap_list_widgets shows each cell's).",
+                  },
+                  fallback: {
+                    type: "string",
+                    description:
+                      "insert_embed: one sentence saying what it shows (the phone and exports read it).",
+                  },
+                  sectionId: {
+                    type: "string",
+                    description:
+                      "insert_embed: add it at the end of this section.",
+                  },
+                  after: {
+                    type: "string",
+                    description:
+                      "insert_embed: add it after the line holding this exact text (must occur once).",
+                  },
+                  scope: {
+                    type: ["object", "null"],
+                    description:
+                      "set_scope: the scope object, or null to clear it.",
+                  },
+                  automationId: {
+                    type: ["string", "null"],
+                    description:
+                      "set_refresher: the automation's id, or null to unbind it.",
                   },
                 },
                 required: ["op"],
