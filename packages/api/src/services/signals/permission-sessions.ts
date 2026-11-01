@@ -7,9 +7,12 @@
  * through the same rows as every other item (`countNeedsYou`), never a
  * second counter.
  *
- * The population is the needs-you owner floor the review half reads
- * (`sessionListConditions`, the same lenses, drafts out): the person's own
- * sessions, work and runs alike (a coding agent's dev session is a run).
+ * The population is the needs-you owner floor (`sessionListConditions`, the
+ * same space / project / track / subject lenses): the person's own sessions,
+ * work and runs alike. Unlike the review half, agent DRAFTS stay in (triage
+ * lens `all`): a coding agent opens its own session (origin `agent`, never
+ * accepted), and its permission dialog blocks it whether or not the person
+ * adopted the work. Drafts out would hide every such session.
  * "Live" is the runner read's own window (`RUNNER_LIVE_WINDOW_SECONDS`): a
  * runner gone quiet says nothing about now. A failed read THROWS (an empty
  * list would read as "nobody waits on you").
@@ -47,7 +50,7 @@ export async function listSessionsWaitingForPermission(q: {
     userId: q.userId,
     scope: { workspaceLens: q.workspaceId, projectLens: q.projectId },
     status: "all",
-    lens: "default",
+    lens: "all",
     kind: "all",
     ...(q.trackId ? { trackId: q.trackId } : {}),
     ...(q.subject ? { subject: q.subject } : {}),

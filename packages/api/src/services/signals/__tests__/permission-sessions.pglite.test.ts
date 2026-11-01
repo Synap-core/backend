@@ -6,10 +6,12 @@
  *   - a runner gone quiet (past the live window): nothing, it says nothing
  *     about now;
  *   - a busy runner, a closed session, someone else's session: nothing;
+ *   - every fixture is an agent's own session (origin `agent`, never
+ *     accepted), as a coding agent opens it: a draft still counts;
  * and `countNeedsYou` counts the SAME rows in its headline.
  *
- * Negative control: the reader without its live-window clause lists the
- * quiet session too.
+ * Negative controls: the reader without its live-window clause lists the
+ * quiet session too; with drafts out (triage lens `default`) it lists nothing.
  */
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
