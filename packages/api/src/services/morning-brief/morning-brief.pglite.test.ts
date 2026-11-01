@@ -28,6 +28,16 @@ import {
   runMorningBriefs,
   type NeedsYouForBrief,
 } from "./morning-brief.js";
+import {
+  DELIVERED_DIGEST_TYPE,
+  classifyOutcome,
+  composeDeliveredDigest,
+  digestSince,
+  foldDelivered,
+  outcomeMetAt,
+  readDeliveredSince,
+  type DeliveredFacts,
+} from "./delivered-digest.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -191,6 +201,16 @@ const NEEDS: Record<string, NeedsYouForBrief> = {
     readyToClose: 1,
   },
 };
+/** The brief's tests are about the brief: nothing delivered, no digest. */
+const NOTHING_DELIVERED: DeliveredFacts = {
+  prsMerged: 0,
+  commitsLanded: 0,
+  outcomesMet: 0,
+  sessionsClosed: 0,
+  closedTitles: [],
+  floor: false,
+};
+const readDelivered = async () => NOTHING_DELIVERED;
 const readNeedsYou = async (userId: string): Promise<NeedsYouForBrief> =>
   NEEDS[userId] ?? {
     needsYou: { count: 0, floor: false, next: [] },
@@ -401,9 +421,10 @@ describe("readClosedSince", () => {
 
 describe("runMorningBriefs", () => {
   beforeEach(async () => {
-    await client.query(`delete from notifications where type = $1`, [
-      "ai.proactive.morning_briefing",
-    ]);
+    await client.query(
+      `delete from notifications where type = $1 or type = $2`,
+      ["ai.proactive.morning_briefing", DELIVERED_DIGEST_TYPE]
+    );
   });
 
   it("sends one brief to who is due and has something to say; agents, the off switch, a snooze and the settings space are honoured", async () => {
@@ -413,12 +434,20 @@ describe("runMorningBriefs", () => {
       now: NOW,
       notify: door.notify,
       readNeedsYou,
+      readDelivered,
     });
     // People: A, B, C, D, E (the agent is not one). Due: A (08:00 on its
     // Paris clock) and B (16:00 Tokyo, not New York's 03:10). Not due: C
     // (off), D (snoozed), E (its stored-settings space turned the brief off).
     // B has nothing to say.
-    expect(result).toEqual({ people: 5, due: 2, sent: 1, failed: 0 });
+    // The digest is due for E too (its brief is off, not its digest).
+    expect(result).toEqual({
+      people: 5,
+      due: 2,
+      sent: 1,
+      failed: 0,
+      digest: { due: 3, sent: 0, failed: 0 },
+    });
     expect(door.calls).toHaveLength(1);
     expect(door.calls[0]).toMatchObject({
       type: "ai.proactive.morning_briefing",
@@ -445,6 +474,7 @@ describe("runMorningBriefs", () => {
       now: NOW,
       notify: first.notify,
       readNeedsYou,
+      readDelivered,
     });
     expect(first.calls).toHaveLength(1);
 
@@ -454,6 +484,7 @@ describe("runMorningBriefs", () => {
       now: new Date(NOW.getTime() + 15 * 60_000),
       notify: again.notify,
       readNeedsYou,
+      readDelivered,
     });
     expect(again.calls).toHaveLength(0);
     expect(rerun.sent).toBe(0);
@@ -464,6 +495,7 @@ describe("runMorningBriefs", () => {
       now: new Date(NOW.getTime() + 24 * 3_600_000),
       notify: tomorrow.notify,
       readNeedsYou,
+      readDelivered,
     });
     expect(tomorrow.calls.map((c) => c.userId)).toEqual([A]);
   });
@@ -477,8 +509,375 @@ describe("runMorningBriefs", () => {
       readNeedsYou: async () => {
         throw new Error("signals read failed");
       },
+      readDelivered,
     });
     expect(result).toMatchObject({ due: 2, sent: 0, failed: 2 });
     expect(door.calls).toHaveLength(0);
+  });
+});
+
+// ── The delivered digest (plan d679e92c C9) ─────────────────────────────────
+
+describe("composeDeliveredDigest — what got delivered, nothing when nothing", () => {
+  it("says nothing when nothing was delivered", () => {
+    expect(composeDeliveredDigest(NOTHING_DELIVERED)).toBeNull();
+  });
+
+  it("names each kind once, then the sessions closed", () => {
+    expect(
+      composeDeliveredDigest({
+        prsMerged: 2,
+        commitsLanded: 1,
+        outcomesMet: 3,
+        sessionsClosed: 4,
+        closedTitles: ["Ship the digest", "y".repeat(90), "Mute", "Fourth"],
+        floor: false,
+      })
+    ).toEqual({
+      title: "Delivered since your last digest",
+      body: `2 pull requests merged, 1 commit landed, 3 outcomes delivered, 4 sessions closed.\nClosed: Ship the digest · ${"y".repeat(59)}… · Mute`,
+    });
+  });
+
+  it("a capped read reads as a floor", () => {
+    expect(
+      composeDeliveredDigest({
+        ...NOTHING_DELIVERED,
+        sessionsClosed: 1,
+        floor: true,
+      })?.body
+    ).toBe("1 session+ closed.");
+  });
+});
+
+describe("what counts as delivered", () => {
+  const since = new Date(hoursAgo(24));
+  it("an outcome counts from the time the pod stamped it delivered, never a guess", () => {
+    expect(
+      outcomeMetAt({ status: "done", satisfiedByEvidence: { at: hoursAgo(2) } })
+    ).toBe(Date.parse(hoursAgo(2)));
+    expect(outcomeMetAt({ status: "done", attestedAt: hoursAgo(3) })).toBe(
+      Date.parse(hoursAgo(3))
+    );
+    // Done by an approval, with no recorded time: not counted.
+    expect(
+      outcomeMetAt({ status: "done", satisfiedByProposalId: "p" })
+    ).toBeNull();
+    expect(
+      outcomeMetAt({ status: "pending", attestedAt: hoursAgo(1) })
+    ).toBeNull();
+    expect(
+      outcomeMetAt({
+        status: "done",
+        attestedAt: hoursAgo(1),
+        retiredAt: hoursAgo(1),
+      })
+    ).toBeNull();
+  });
+
+  it("a PR is its ref, a commit its kind or url; a fact is a check, not a delivery", () => {
+    expect(
+      classifyOutcome({
+        kind: "output",
+        ref: { url: "https://github.com/Synap-core/backend/pull/7" },
+      })
+    ).toEqual({ kind: "pr", key: "synap-core/backend#7" });
+    expect(
+      classifyOutcome({ kind: "commit", key: "commit-browser-abc12345" })
+    ).toMatchObject({ kind: "commit" });
+    expect(
+      classifyOutcome({
+        kind: "output",
+        ref: { url: "https://github.com/Synap-core/browser/commit/abc12345" },
+      })
+    ).toMatchObject({ kind: "commit" });
+    expect(classifyOutcome({ kind: "fact" })).toEqual({ kind: "skip" });
+    expect(classifyOutcome({ kind: "document" })).toEqual({ kind: "outcome" });
+  });
+
+  it("a PR met as an outcome AND merged as a fact counts once", () => {
+    const facts = foldDelivered(
+      [
+        {
+          id: "s",
+          title: "Lane",
+          goal: null,
+          status: "active",
+          closedAt: null,
+          expectedOutputs: [
+            {
+              kind: "pull_request",
+              status: "done",
+              satisfiedByEvidence: { at: hoursAgo(1) },
+              ref: { url: "https://github.com/Synap-core/backend/pull/7" },
+            },
+          ],
+        },
+      ],
+      ["synap-core/backend#7", "synap-core/backend#8"],
+      since,
+      false
+    );
+    expect(facts.prsMerged).toBe(2);
+  });
+
+  it("since the last digest, else a day, never more than a week", () => {
+    expect(digestSince(NOW, null).toISOString()).toBe(hoursAgo(24));
+    expect(digestSince(NOW, new Date(hoursAgo(30))).toISOString()).toBe(
+      hoursAgo(30)
+    );
+    expect(digestSince(NOW, new Date(hoursAgo(24 * 30))).toISOString()).toBe(
+      hoursAgo(24 * 7)
+    );
+  });
+});
+
+describe("readDeliveredSince — through the real SQL", () => {
+  /** A person whose agents delivered; no space, so the pass never picks them. */
+  const F = "person-f";
+  const LANE = randomUUID();
+  const OLD = randomUUID();
+  const STRANGER = "person-s";
+  const STRANGER_LANE = randomUUID();
+
+  async function session(args: {
+    id: string;
+    user: string;
+    status: string;
+    updatedHoursAgo: number;
+    closedHoursAgo?: number;
+    title?: string;
+    outputs?: unknown[];
+  }) {
+    await client.query(
+      `insert into focus_sessions (id, user_id, title, goal, status, origin, metadata, criteria, expected_outputs, closed_at, updated_at)
+       values ($1, $2, $3, 'A goal', $4, 'agent', '{}'::jsonb, '[]'::jsonb, $5::jsonb, $6::timestamptz, $7::timestamptz)`,
+      [
+        args.id,
+        args.user,
+        args.title ?? null,
+        args.status,
+        JSON.stringify(args.outputs ?? []),
+        args.closedHoursAgo === undefined
+          ? null
+          : hoursAgo(args.closedHoursAgo),
+        hoursAgo(args.updatedHoursAgo),
+      ]
+    );
+  }
+
+  async function merged(
+    sessionId: string,
+    n: number,
+    h: number,
+    intoDefault: boolean
+  ) {
+    await client.query(
+      `insert into events (id, type, data, timestamp) values ($1, 'dev.pr_merged', $2::jsonb, $3::timestamptz)`,
+      [
+        randomUUID(),
+        JSON.stringify({
+          repo: "Synap-core/backend",
+          number: n,
+          url: `https://github.com/Synap-core/backend/pull/${n}`,
+          intoDefault,
+          sessionId,
+        }),
+        hoursAgo(h),
+      ]
+    );
+  }
+
+  beforeAll(async () => {
+    await person(F, "Europe/Paris");
+    await person(STRANGER, "UTC");
+    await session({
+      id: LANE,
+      user: F,
+      status: "closed",
+      updatedHoursAgo: 1,
+      closedHoursAgo: 1,
+      title: "Ship the digest",
+      outputs: [
+        // A PR met by evidence (and merged as a fact below): once.
+        {
+          key: "pr-backend-7",
+          kind: "pull_request",
+          label: "backend#7",
+          status: "done",
+          satisfiedByEvidence: { kind: "ref", id: "x", at: hoursAgo(2) },
+          ref: { url: "https://github.com/Synap-core/backend/pull/7" },
+        },
+        {
+          key: "commit-browser-abc12345",
+          kind: "commit",
+          label: "browser@abc12345",
+          status: "done",
+          satisfiedByEvidence: { kind: "ref", id: "y", at: hoursAgo(3) },
+          ref: { url: "https://github.com/Synap-core/browser/commit/abc12345" },
+        },
+        {
+          kind: "document",
+          label: "Report",
+          status: "done",
+          attestedAt: hoursAgo(4),
+        },
+        // Not counted: a fact, a met time never recorded, too old, withdrawn.
+        {
+          kind: "fact",
+          label: "Tests pass",
+          status: "done",
+          attestedAt: hoursAgo(1),
+        },
+        {
+          kind: "document",
+          label: "Approved",
+          status: "done",
+          satisfiedByProposalId: "p",
+        },
+        {
+          kind: "document",
+          label: "Old",
+          status: "done",
+          attestedAt: hoursAgo(30),
+        },
+        {
+          kind: "document",
+          label: "Dropped",
+          status: "done",
+          attestedAt: hoursAgo(1),
+          retiredAt: hoursAgo(1),
+        },
+      ],
+    });
+    // Closed too long ago, and untouched since: not news.
+    await session({
+      id: OLD,
+      user: F,
+      status: "closed",
+      updatedHoursAgo: 40,
+      closedHoursAgo: 40,
+    });
+    // Cancelled since: ended, not delivered.
+    await session({
+      id: randomUUID(),
+      user: F,
+      status: "cancelled",
+      updatedHoursAgo: 2,
+      closedHoursAgo: 2,
+    });
+    await session({
+      id: STRANGER_LANE,
+      user: STRANGER,
+      status: "closed",
+      updatedHoursAgo: 1,
+      closedHoursAgo: 1,
+    });
+    await merged(LANE, 7, 2, true);
+    await merged(LANE, 8, 5, true);
+    // Into a stacked branch: not on main, not delivered (founder F3).
+    await merged(LANE, 9, 5, false);
+    // Before the window.
+    await merged(LANE, 10, 30, true);
+    // Someone else's session.
+    await merged(STRANGER_LANE, 11, 1, true);
+  });
+
+  it("counts PRs merged (once each), commits landed, outcomes met and work sessions closed since then", async () => {
+    expect(
+      await readDeliveredSince(database, F, new Date(hoursAgo(24)))
+    ).toEqual({
+      prsMerged: 2,
+      commitsLanded: 1,
+      outcomesMet: 1,
+      sessionsClosed: 1,
+      closedTitles: ["Ship the digest"],
+      floor: false,
+    });
+  });
+
+  it("nothing since a later moment is nothing", async () => {
+    expect(
+      await readDeliveredSince(database, F, new Date(hoursAgo(0.5)))
+    ).toEqual(NOTHING_DELIVERED);
+  });
+});
+
+describe("runMorningBriefs — the digest in the same pass", () => {
+  beforeEach(async () => {
+    await client.query(
+      `delete from notifications where type = $1 or type = $2`,
+      ["ai.proactive.morning_briefing", DELIVERED_DIGEST_TYPE]
+    );
+  });
+
+  it("sends one digest to who is due and had something delivered, at most once a day, pod-wide and per day", async () => {
+    const door = fakeDoor(NOW);
+    const result = await runMorningBriefs({
+      database,
+      now: NOW,
+      notify: door.notify,
+      readNeedsYou,
+    });
+    // Due: A, B, E. Only A had work sessions closed in the last day (the
+    // two closed 2 h ago; the cancelled one, the old one and the automation
+    // run do not count).
+    expect(result.digest).toEqual({ due: 3, sent: 1, failed: 0 });
+    const digests = door.calls.filter((c) => c.type === DELIVERED_DIGEST_TYPE);
+    expect(digests).toHaveLength(1);
+    expect(digests[0]).toMatchObject({
+      userId: A,
+      workspaceId: null,
+      sourceType: "proactive_message",
+      groupKey: "delivered-digest:2026-10-29",
+      data: {
+        title: "Delivered since your last digest",
+        body: "2 sessions closed.\nClosed: A goal · A goal",
+        since: hoursAgo(24),
+      },
+    });
+
+    // A re-run the same morning sends no second digest.
+    const again = fakeDoor(NOW);
+    const rerun = await runMorningBriefs({
+      database,
+      now: new Date(NOW.getTime() + 15 * 60_000),
+      notify: again.notify,
+      readNeedsYou,
+    });
+    expect(rerun.digest.sent).toBe(0);
+    expect(again.calls.filter((c) => c.type === DELIVERED_DIGEST_TYPE)).toEqual(
+      []
+    );
+
+    // The next morning reports since the last digest: nothing new, nothing
+    // sent. D's snooze ends then, so D is due too (and had nothing delivered).
+    const tomorrow = fakeDoor(NOW);
+    const next = await runMorningBriefs({
+      database,
+      now: new Date(NOW.getTime() + 24 * 3_600_000),
+      notify: tomorrow.notify,
+      readNeedsYou,
+    });
+    expect(next.digest).toEqual({ due: 4, sent: 0, failed: 0 });
+  });
+
+  it("a failed read skips the person and is counted, never sent as an empty digest", async () => {
+    const door = fakeDoor(NOW);
+    const result = await runMorningBriefs({
+      database,
+      now: NOW,
+      notify: door.notify,
+      readNeedsYou,
+      readDelivered: async () => {
+        throw new Error("sessions read failed");
+      },
+    });
+    expect(result.digest).toEqual({ due: 3, sent: 0, failed: 3 });
+    // The brief is not held back by the digest's failure.
+    expect(result.sent).toBe(1);
+    expect(door.calls.map((c) => c.type)).toEqual([
+      "ai.proactive.morning_briefing",
+    ]);
   });
 });
