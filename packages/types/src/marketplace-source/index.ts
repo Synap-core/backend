@@ -84,7 +84,9 @@ export type MarketplacePackageKind = (typeof MARKETPLACE_PACKAGE_KINDS)[number];
  * knows those words is not refused: `workspace` is a template, `workflow` an
  * automation.
  */
-const KIND_ALIASES: Record<string, MarketplacePackageKind> = {
+export const MARKETPLACE_KIND_ALIASES: Readonly<
+  Record<string, MarketplacePackageKind>
+> = {
   workspace: "template",
   workflow: "automation",
 };
@@ -104,8 +106,10 @@ export const httpsUrlSchema = z
 /** A raw 32-byte ed25519 public key, base64. */
 export const ED25519_PUBLIC_KEY_PATTERN = /^[A-Za-z0-9+/]{43}=$/;
 
-const SLUG = /^[a-z0-9][a-z0-9._-]{0,99}$/;
-const CELL_SLUG = /^[a-z0-9][a-z0-9._-]{0,99}\/[a-z0-9][a-z0-9._-]{0,99}$/;
+/** A package slug; a cell's is `<owner>/<name>`. Pinned to the Control Plane's contract. */
+export const MARKETPLACE_SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]{0,99}$/;
+export const MARKETPLACE_CELL_SLUG_PATTERN =
+  /^[a-z0-9][a-z0-9._-]{0,99}\/[a-z0-9][a-z0-9._-]{0,99}$/;
 
 const SHA256_HEX = z
   .string()
@@ -119,7 +123,7 @@ const ed25519KeySchema = z
 const indexPackageShape = {
   slug: z.string(),
   kind: z.preprocess(
-    (k) => (typeof k === "string" ? (KIND_ALIASES[k] ?? k) : k),
+    (k) => (typeof k === "string" ? (MARKETPLACE_KIND_ALIASES[k] ?? k) : k),
     z.enum(MARKETPLACE_PACKAGE_KINDS)
   ),
   version: z.string().min(1).max(100),
@@ -142,7 +146,9 @@ function checkPackageSlug(
   ctx: z.RefinementCtx
 ): void {
   const ok =
-    pkg.kind === "cell" ? CELL_SLUG.test(pkg.slug) : SLUG.test(pkg.slug);
+    pkg.kind === "cell"
+      ? MARKETPLACE_CELL_SLUG_PATTERN.test(pkg.slug)
+      : MARKETPLACE_SLUG_PATTERN.test(pkg.slug);
   if (!ok) {
     ctx.addIssue({
       code: "custom",
@@ -220,6 +226,8 @@ export const CATALOG_KEY_MAX_LIFETIME_DAYS = 90;
 /** The longest a keys statement may say it stays valid, from now. */
 export const CATALOG_KEYS_MAX_LIFETIME_DAYS = 366;
 export const CATALOG_KEYS_MAX_BYTES = 64 * 1024;
+/** A keys statement names 1 to this many online keys. */
+export const CATALOG_KEYS_MAX_KEYS = 8;
 
 /**
  * One listing of Synap's signed index. Same fields as any source, plus the
@@ -284,7 +292,7 @@ export const catalogKeysStatementSchema = z.object({
       })
     )
     .min(1)
-    .max(8),
+    .max(CATALOG_KEYS_MAX_KEYS),
 });
 export type CatalogKeysStatement = z.infer<typeof catalogKeysStatementSchema>;
 

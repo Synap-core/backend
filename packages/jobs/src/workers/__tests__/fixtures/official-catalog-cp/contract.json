@@ -9,5 +9,45 @@
   "verifyAt": "2026-10-25T00:00:00.000Z",
   "keysVersion": 1,
   "indexExpires": "2026-11-03T00:00:00.000Z",
-  "packageCount": 9
+  "packageCount": 9,
+  "limits": {
+    "keyMaxLifetimeDays": 90,
+    "keysStatementMaxLifetimeDays": 366,
+    "indexMaxLifetimeDays": 31,
+    "keysStatementMaxBytes": 65536,
+    "keysStatementMaxKeys": 8,
+    "indexMaxBytes": 2097152,
+    "indexMaxPackages": 2000,
+    "signatureMaxBytes": 512,
+    "slugPattern": "^[a-z0-9][a-z0-9._-]{0,99}$",
+    "cellSlugPattern": "^[a-z0-9][a-z0-9._-]{0,99}\\/[a-z0-9][a-z0-9._-]{0,99}$",
+    "publicKeyPattern": "^[A-Za-z0-9+/]{43}=$",
+    "kinds": [
+      "capability",
+      "automation",
+      "template",
+      "cell",
+      "skill",
+      "view"
+    ],
+    "kindAliases": {
+      "workspace": "template",
+      "workflow": "automation"
+    }
+  },
+  "testOnlyKeys": {
+    "seedPrefix": "synap-catalog-signing TEST ONLY — never trusted: ",
+    "labels": [
+      "root (current)",
+      "root (standby)",
+      "online catalog key",
+      "next online catalog key"
+    ],
+    "publicKeys": [
+      "YDY0fHPyIC0HhquYpX9VCZkofytpwUXIlpmOeMisrSM=",
+      "9JbcGhV3YTcRHXJyXvHrfPolg0q1cnCW8r+VI1hUdfQ=",
+      "9nKD3a5Eb1k8DO5S/b4xR0LDsGg6P0eepQpAKOm4kEo=",
+      "kcEEiJitWq6Wow1uvWgqXgtexAmVPT1ARq6RwCZUsZU="
+    ]
+  }
 }
