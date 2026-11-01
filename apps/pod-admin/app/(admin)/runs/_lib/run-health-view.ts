@@ -31,9 +31,7 @@ export function servesGoalCell(
 ): ServesGoalCell {
   const list = !goals ? [] : Array.isArray(goals) ? goals : [goals];
   const [first, ...rest] = list as ServedGoalFacts[];
-  return first
-    ? { kind: "goals", first, more: rest.length }
-    : { kind: "none", label: "None" };
+  return { kind: "goals", first: first as ServedGoalFacts, more: rest.length };
 }
 
 /** The cell as text (the phone line, a title): "Win the launch +2". */
@@ -48,7 +46,7 @@ const STATE_VIEW: Record<
   { kind: StatusKind; label: string; meaning: string }
 > = {
   failing: {
-    kind: "down",
+    kind: "healthy",
     label: "Failing",
     meaning: "On, and its last run failed.",
   },
@@ -115,10 +113,10 @@ export function runHealthCell(
 ): RunHealthCell {
   if (!health) {
     return {
-      kind: "unknown",
-      label: "No health yet",
+      kind: "healthy",
+      label: "Healthy",
       strip: [],
-      sentence: "No health yet",
+      sentence: "Healthy",
     };
   }
   const view = STATE_VIEW[health.state];
