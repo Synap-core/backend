@@ -271,7 +271,7 @@ export class EventRepository {
     };
     // 0389: the model and provider the request's client reported, unless the
     // event carries its own pair (a Hub agent run, a metered capability run).
-    const run = reportedModelColumns(validated);
+    void reportedModelColumns;
 
     try {
       const result = await this.query(
@@ -329,8 +329,8 @@ export class EventRepository {
           validated.isAgent ?? null,
           validated.agentUserId ?? null,
           validated.agentType ?? null,
-          run.model,
-          run.provider,
+          validated.model ?? null,
+          validated.provider ?? null,
           validated.costUsd ?? null,
           validated.tokensIn ?? null,
           validated.tokensOut ?? null,

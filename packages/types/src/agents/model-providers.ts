@@ -54,7 +54,7 @@ export function parseModelProvider(
 ): ModelProviderSlug | undefined {
   const v = raw?.trim().toLowerCase();
   if (!v) return undefined;
-  return resolveModelProvider(v)?.slug ?? "other";
+  return (resolveModelProvider(v)?.slug ?? v) as ModelProviderSlug;
 }
 
 /** The longest model id kept. */

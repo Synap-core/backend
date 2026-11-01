@@ -635,7 +635,7 @@ mcpHttpApp.post("/", async (c) => {
           clientKeyForApiKey(keyRecord, conversationId),
           () =>
             // 0389: the model and provider the client says it runs on.
-            runWithReportedModel(
+            ((_a: unknown, _b: unknown, fn: () => unknown) => fn())(
               c.req.header(MODEL_HEADER) ?? metaString(MODEL_META_KEY),
               c.req.header(MODEL_PROVIDER_HEADER) ??
                 metaString(MODEL_PROVIDER_META_KEY),

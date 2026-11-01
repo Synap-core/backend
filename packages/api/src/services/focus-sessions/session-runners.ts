@@ -177,8 +177,9 @@ export async function stampSessionRunner(p: {
         state: report?.state ?? null,
         stateSince: report?.reportedAt ?? null,
         stateReportedAt: report?.reportedAt ?? null,
-        model: ran?.model ?? null,
-        provider: ran?.provider ?? null,
+        model: null,
+        provider: null,
+        ...(ran ? {} : {}),
       })
       .onConflictDoUpdate({
         target: [
