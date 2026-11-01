@@ -6,7 +6,8 @@
  * Ported from the desktop's `VIEW_FRAME_QUERY_OPS` (synap-app
  * `packages/web/src/cell-runtime/ViewFrame.tsx`) and its param whitelist
  * (`INTENT_READS`, browser `cells/createViewFrameHandlers.ts`), plus
- * `documents.get` for a document's content.
+ * `documents.get` for a document's content. This is the ONE table: both
+ * desktop hosts import it instead of keeping their own list.
  *
  * The LENS is never a param: `workspaceId` and `projectId` are in no list, so
  * a page cannot choose which space it reads. The host stamps its own lens
@@ -43,6 +44,10 @@ export const CELL_BRIDGE_READ_OPS = {
   "lifecycle.home": [],
   "lifecycle.moving": ["limit"],
   "documents.get": ["documentId", "format"],
+  // A lens page, WHOLE (`signals.list({ lens: "page" })`, the read every lens
+  // host makes): a space package's overview. The page may only bound
+  // Happened (`since`, an ISO instant); the host stamps the space and project.
+  "lens.page": ["since"],
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 export type CellBridgeReadOp = keyof typeof CELL_BRIDGE_READ_OPS;
@@ -58,6 +63,23 @@ export function isCellBridgeReadOp(op: unknown): op is CellBridgeReadOp {
     typeof op === "string" &&
     Object.prototype.hasOwnProperty.call(CELL_BRIDGE_READ_OPS, op)
   );
+}
+
+/**
+ * Ops that read ONE space's own page. A host with no space to stamp (a
+ * personal or pod-wide page) refuses them: unstamped, the pod would answer
+ * for every space, drawn in a frame that claims to be one space's.
+ */
+export const CELL_BRIDGE_SPACE_READ_OPS: ReadonlySet<CellBridgeReadOp> =
+  new Set<CellBridgeReadOp>(["lens.page"]);
+
+/** Why a host refuses `op` under this lens, or null when it may answer. */
+export function cellBridgeReadRefusal(
+  op: CellBridgeReadOp,
+  lens: { workspaceId: string | null }
+): string | null {
+  if (!CELL_BRIDGE_SPACE_READ_OPS.has(op) || lens.workspaceId) return null;
+  return `"${op}" reads one space, and this page is not in a space`;
 }
 
 /** A param value a host forwards: a primitive, nothing nested. */

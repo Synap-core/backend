@@ -16,10 +16,12 @@
  */
 
 import {
+  cellBridgeReadRefusal,
   narrowHomeToSpace,
   type CellBridgeParamValue,
   type CellBridgeReadOp,
 } from "@synap-core/types/cell-bridge";
+import { LENS_PAGE_READ_CAPS } from "@synap-core/types/lens";
 import type { trpc } from "../../../../lib/trpc";
 
 /** The console's vanilla tRPC client (`trpc.useUtils().client`). */
@@ -181,6 +183,21 @@ export async function readForPage(
       return client.lifecycle.moving.query(
         defined({ limit: int(p.limit, 1, 100) ?? 30, workspaceId: ws })
       );
+    case "lens.page": {
+      // One space's own page: refused with no space to stamp (the pod would
+      // answer for every space). The same read and caps as Hub
+      // `GET /attention/lens-page`, the desktop host's door.
+      const refusal = cellBridgeReadRefusal(op, lens);
+      if (refusal || !ws) throw new Error(refusal ?? `"${op}" needs a space.`);
+      return client.signals.list.query(
+        defined({
+          lens: "page" as const,
+          workspaceId: ws,
+          caps: { ...LENS_PAGE_READ_CAPS },
+          since: str(p.since),
+        })
+      );
+    }
     case "documents.get":
       return client.documents.get.query({
         documentId: required(op, "a documentId", str(p.documentId)),

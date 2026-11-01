@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import {
   BUILTIN_PACKAGE_IDS,
   CONTENT_KINDS,
@@ -20,6 +20,8 @@ import {
   renderRenderableFallback,
   requiredConfigFor,
 } from "./index.js";
+import { describeEmbed } from "./embed-model.js";
+import { LENS_EMPTY_ANSWERS, LENS_SECTION_ORDER } from "../lens/index.js";
 
 describe("renderables catalog", () => {
   it("every catalog widget key is a declared WidgetTypeKey", () => {
@@ -166,7 +168,14 @@ describe("example embed props (document grammar, plan §3)", () => {
 
 describe("configFieldsToJsonSchema", () => {
   it("emits only valid JSON Schema types for every catalog field", () => {
-    const valid = new Set(["string", "number", "boolean", "object", "array"]);
+    const valid = new Set([
+      "string",
+      "number",
+      "integer",
+      "boolean",
+      "object",
+      "array",
+    ]);
     let seen = 0;
     for (const def of WIDGET_DEFINITIONS) {
       const schema = configFieldsToJsonSchema(
@@ -199,6 +208,18 @@ describe("key namespaces", () => {
   });
 });
 
+/**
+ * Files outside this folder the leaf may read: each holds pure tables and
+ * imports nothing but another file on this list (checked below), so the leaf
+ * stays dependency-free transitively. The lens tables are here so the
+ * work-state widgets DERIVE their section enum, caps and empty answers.
+ */
+const LEAF_OUTSIDE_FILES: Readonly<Record<string, string>> = {
+  "../lens/sections.js": "../lens/sections.ts",
+  "../vocabulary/goal-fields.js": "../vocabulary/goal-fields.ts",
+};
+const IMPORT_FROM = /^\s*(?:import|export)[^;]*?from\s+"([^"]+)"/gm;
+
 describe("leaf subpath", () => {
   it("imports nothing but its own relative files (no zod, drizzle, react)", () => {
     const dir = import.meta.dirname;
@@ -209,14 +230,30 @@ describe("leaf subpath", () => {
     let imports = 0;
     for (const f of files) {
       const src = readFileSync(join(dir, f), "utf8");
-      for (const m of src.matchAll(
-        /^\s*(?:import|export)[^;]*?from\s+"([^"]+)"/gm
-      )) {
+      for (const m of src.matchAll(IMPORT_FROM)) {
         imports++;
+        if (Object.hasOwn(LEAF_OUTSIDE_FILES, m[1]!)) continue;
         expect(m[1], `${f} imports ${m[1]}`).toMatch(/^\.\//);
       }
     }
     expect(imports).toBeGreaterThan(5);
+  });
+
+  it("the files it reads outside its folder import only each other", () => {
+    const dir = import.meta.dirname;
+    for (const file of Object.values(LEAF_OUTSIDE_FILES)) {
+      const src = readFileSync(join(dir, file), "utf8");
+      for (const m of src.matchAll(IMPORT_FROM)) {
+        const target = posix.relative(
+          dir,
+          posix.resolve(dir, posix.dirname(file), m[1]!)
+        );
+        expect(
+          Object.hasOwn(LEAF_OUTSIDE_FILES, target),
+          `${file} imports ${m[1]} (${target})`
+        ).toBe(true);
+      }
+    }
   });
 
   it("keeps the content-kind taxonomy", () => {
@@ -237,5 +274,74 @@ describe("composite create_view types", () => {
     const views = await import("./views.js");
     const proposals = await import("../proposals/index.js");
     expect(proposals.COMPOSITE_VIEW_TYPES).toBe(views.COMPOSITE_VIEW_TYPES);
+  });
+});
+
+describe("work-state widgets (generative documents, contract 1)", () => {
+  const WORK_STATE = ["lens-section", "work-release", "status-mark"] as const;
+  const MADE_PLACEABLE = [
+    "active-sessions",
+    "agent-runs",
+    "agent-spend",
+    "session-goal-bar",
+  ] as const;
+
+  it("each is a catalog widget an agent may place in a document", () => {
+    for (const key of [...WORK_STATE, ...MADE_PLACEABLE]) {
+      const def = WIDGET_BY_KEY[key];
+      expect(def, key).toBeDefined();
+      expect(isAiPlaceable(def!), key).toBe(true);
+      expect(isDocumentEmbeddable(def!), key).toBe(true);
+      expect(def!.aiHint, key).toBeTruthy();
+    }
+  });
+
+  it("declares exactly the config each one cannot render without", () => {
+    expect(requiredConfigFor(WIDGET_BY_KEY["lens-section"]!)).toEqual([
+      "section",
+    ]);
+    expect(requiredConfigFor(WIDGET_BY_KEY["status-mark"]!)).toEqual(["id"]);
+    expect(requiredConfigFor(WIDGET_BY_KEY["work-release"]!)).toEqual([]);
+    expect(requiredConfigFor(WIDGET_BY_KEY["session-goal-bar"]!)).toEqual([
+      "sessionId",
+    ]);
+    for (const key of ["active-sessions", "agent-runs", "agent-spend"])
+      expect(requiredConfigFor(WIDGET_BY_KEY[key]!), key).toEqual([]);
+  });
+
+  it("lens-section's section is the lens section order, derived, never hand-listed", () => {
+    const schema = configFieldsToJsonSchema(
+      WIDGET_BY_KEY["lens-section"]!.configSchema,
+      requiredConfigFor(WIDGET_BY_KEY["lens-section"]!)
+    );
+    expect(schema.properties.section!.enum).toEqual([...LENS_SECTION_ORDER]);
+    expect(schema.properties.empty!.enum).toEqual([...LENS_EMPTY_ANSWERS]);
+    expect(schema.properties.limit).toMatchObject({
+      type: "integer",
+      minimum: 1,
+      maximum: 10,
+    });
+    expect(schema.required).toEqual(["section"]);
+  });
+
+  it("none takes a scope: the host stamps it from the document", () => {
+    for (const key of WORK_STATE) {
+      const keys = WIDGET_BY_KEY[key]!.configSchema.map((f) => f.key);
+      for (const scope of ["scope", "workspaceId", "projectId", "trackId"])
+        expect(keys, key).not.toContain(scope);
+    }
+  });
+
+  it("a document embed of each is drawn as a built-in cell", () => {
+    for (const key of WORK_STATE) {
+      expect(
+        describeEmbed({ kind: "cell", attrs: { cellKey: key } }),
+        key
+      ).toEqual({
+        kind: "cell-builtin",
+        cellKey: key,
+        label: WIDGET_BY_KEY[key]!.name,
+      });
+    }
   });
 });
