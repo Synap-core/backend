@@ -135,6 +135,7 @@ import {
   executeProposalsQueryStep,
 } from "./steps/ledger-query.js";
 import { executePlaybookRun } from "./steps/playbook-run.js";
+import { runFilingOfFlow } from "../utils/run-filing.js";
 import {
   AI_DISPATCH_GUARDRAILS,
   AUTOMATION_SKIP_REASONS,
@@ -501,6 +502,9 @@ async function executeAutomationFlow(params: {
       automationId,
       automationRunId: runId,
       channelId: boundChannelId,
+      // A worker enabled on a goal files its run in that goal (R3), the
+      // same goal its playbook_run node files the playbook sessions in.
+      ...runFilingOfFlow(flow),
       agentUserId: ownerUser?.userType === "agent" ? ownerId : undefined,
     });
     runSessionId = opened.sessionId;
