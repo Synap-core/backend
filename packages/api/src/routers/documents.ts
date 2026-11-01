@@ -38,11 +38,9 @@ import {
   eventRepository,
   createDocumentWithContent,
   resolveWorkspacePlacement,
-  notStagedImportItemWhere,
-  notLibraryItemWhere,
+  filedDocumentWhere,
 } from "@synap/database";
 
-import { notMediaCopyDocumentWhere } from "../services/media-copy/media-copy-documents.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { resolveActorNames } from "../utils/resolve-actor-names.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
@@ -797,13 +795,10 @@ export const documentsRouter = router({
           sessionRoster: rosterReadFor(ctx),
         }),
       ];
-      // A STAGED import item is nobody's document yet, and a Library item is
-      // never a document row (capture-vs-library decision 4): it lives in
-      // the Library, before and after its group is built.
-      conditions.push(notStagedImportItemWhere(documents.metadata));
-      conditions.push(notLibraryItemWhere(documents.metadata));
-      // A media copy is an entity's picture, not a filed document.
-      conditions.push(notMediaCopyDocumentWhere(documents.metadata));
+      // Only a FILED document: not staged intake, a Library item, a raw
+      // capture, an entity's picture, or another row's body (an entity, a
+      // whiteboard, a skill). One rule, `filedDocumentWhere`.
+      conditions.push(filedDocumentWhere(documents));
       if (input.type) {
         conditions.push(eq(documents.type, input.type));
       }
@@ -849,9 +844,7 @@ export const documentsRouter = router({
         eq(documents.workspaceId, workspaceId),
         isNull(documents.deletedAt),
         isNotNull(documents.storageKey),
-        notStagedImportItemWhere(documents.metadata),
-        notLibraryItemWhere(documents.metadata),
-        notMediaCopyDocumentWhere(documents.metadata)
+        filedDocumentWhere(documents)
       );
 
       const markdownish = or(
