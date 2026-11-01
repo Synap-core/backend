@@ -1572,7 +1572,7 @@ export interface AccessRequestsInput {
 
 /**
  * The fields every access-request row shares. The title goes through the
- * vocabulary SSOT like a cluster's ("Connect App "Acme CRM"") — what
+ * vocabulary SSOT like a cluster's ("Connect "Acme CRM"") — what
  * approving it WILL do, imperative — and the class is `access` (who may act).
  */
 function accessRequestSignal(args: {
@@ -1590,7 +1590,10 @@ function accessRequestSignal(args: {
     kind: "access-request",
     title: buildObjectActionTitle({
       action: args.action ?? "connect",
-      objectKind: args.access.subject,
+      // An outside app's name IS its identity: no noun in front of it
+      // ('Connect "Acme CRM"', never 'Connect Connected app "Acme CRM"').
+      objectKind:
+        args.access.subject === "application" ? null : args.access.subject,
       objectName: args.access.name,
       mood: "imperative",
     }),
