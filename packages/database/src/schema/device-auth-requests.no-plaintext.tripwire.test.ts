@@ -5,14 +5,17 @@
  * terminal: both may live here only as hashes, and no key is ever stored (keys
  * are minted at collection and returned once).
  *
- * DERIVED: every column of the drizzle table AND of migration 0321 is read; a
+ * DERIVED: every column of the drizzle table AND of the migrations is read
+ * (0321's CREATE TABLE, and every `ALTER TABLE "device_auth_requests" ADD
+ * COLUMN` of any migration after the baseline, e.g. 0388); a
  * column whose name speaks of a code, token, secret, password or key must be a
  * `*_hash` or be classified below with its reason. A new column joins the scan
  * by existing. DOES NOT SEE: a secret written into a column with an innocent
  * name (e.g. `user_agent`) — the service test asserts no row carries the codes.
  */
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import { deviceAuthRequests } from "./device-auth-requests.js";
@@ -25,17 +28,28 @@ const CLASSIFIED: Record<string, string> = {
   failed_code_attempts: "a counter",
 };
 
+const MIGRATIONS_DIR = fileURLToPath(
+  new URL("../../migrations/", import.meta.url)
+);
 const MIGRATION = readFileSync(
-  fileURLToPath(
-    new URL("../../migrations/0321_device_auth_requests.sql", import.meta.url)
-  ),
+  join(MIGRATIONS_DIR, "0321_device_auth_requests.sql"),
   "utf8"
 );
-const migrationColumns = [
+const createColumns = [
   ...MIGRATION.matchAll(
     /^\s+"([a-z_]+)"\s+(?:uuid|text|integer|timestamptz)/gm
   ),
 ].map((m) => m[1]!);
+/** Columns a later migration adds (the baseline repeats them; it is skipped). */
+const addedColumns = readdirSync(MIGRATIONS_DIR)
+  .filter((f) => /^\d{4}_.*\.sql$/.test(f) && !f.startsWith("0000_"))
+  .flatMap((f) => [
+    ...readFileSync(join(MIGRATIONS_DIR, f), "utf8").matchAll(
+      /ALTER TABLE "device_auth_requests"\s+ADD COLUMN (?:IF NOT EXISTS )?"([a-z_]+)"/g
+    ),
+  ])
+  .map((m) => m[1]!);
+const migrationColumns = [...createColumns, ...addedColumns];
 
 const offenders = (cols: string[]) =>
   cols.filter(
@@ -52,6 +66,8 @@ describe("device_auth_requests holds no plaintext secret", () => {
     expect(schemaColumns).toContain("user_code_hash");
     expect(migrationColumns).toContain("device_code_hash");
     expect(migrationColumns.length).toBeGreaterThanOrEqual(20);
+    // The ALTER scan sees a column added after 0321's CREATE TABLE (0388).
+    expect(addedColumns).toContain("computer_belongs_to");
     expect(offenders(["device_code"])).toEqual(["device_code"]);
   });
 

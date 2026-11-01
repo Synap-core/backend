@@ -101,21 +101,18 @@ describe("migration 0388 — users.computer_belongs_to", () => {
   });
 
   it("the baseline and the migration match the schema, and the coherence list names both columns", async () => {
-    for (const [table, block, cols] of [
-      ["users", USERS_BLOCK, getTableConfig(users).columns],
-      [
-        "device_auth_requests",
-        DEVICE_BLOCK,
-        getTableConfig(deviceAuthRequests).columns,
-      ],
+    for (const [table, cols] of [
+      ["users", getTableConfig(users).columns],
+      ["device_auth_requests", getTableConfig(deviceAuthRequests).columns],
     ] as const) {
       expect(cols.map((c) => c.name)).toContain("computer_belongs_to");
+      // Both tables, as the baseline builds them: 0388 alters both.
       const base = new PGlite();
       await base.exec(USERS_BLOCK);
       await base.exec(
         `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "agent_type" text`
       );
-      if (table !== "users") await base.exec(block);
+      await base.exec(DEVICE_BLOCK);
       expect(await columns(base, table)).toContain("computer_belongs_to");
       await base.exec(M0388);
       await base.close();

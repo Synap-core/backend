@@ -59,6 +59,7 @@ import {
   secrets,
 } from "@synap/database/schema";
 import {
+  mayCarryHostSeed,
   revokeHostSeeds,
   seedHostRules,
 } from "@synap/database/agent-governance";
@@ -861,13 +862,23 @@ export const governanceRulesRouter = router({
         await assertOwnsConnection(ctx.userId, existing.targetPattern);
       }
 
-      const [rule] = await db
-        .update(governanceRules)
-        .set({ revokedAt: new Date() })
-        .where(eq(governanceRules.id, input.id))
-        .returning();
-      // An agent's approval seeded on its box goes with it (host-seed.ts).
-      await revokeHostSeeds(db, [input.id]);
+      const revoke = (handle: Pick<typeof db, "update">) =>
+        handle
+          .update(governanceRules)
+          .set({ revokedAt: new Date() })
+          .where(eq(governanceRules.id, input.id))
+          .returning();
+      // An agent's approval seeded on its box goes with it (host-seed.ts), in
+      // the same transaction: a rule revoked while its seed stays would leave
+      // the box allowed, and a retry stops at `revokedAt` above. A rule that
+      // cannot carry a seed is revoked alone.
+      const [rule] = mayCarryHostSeed(existing)
+        ? await db.transaction(async (tx) => {
+            const rows = await revoke(tx);
+            await revokeHostSeeds(tx, [input.id]);
+            return rows;
+          })
+        : await revoke(db);
 
       return { rule };
     }),

@@ -156,9 +156,9 @@ beforeAll(async () => {
   await session(S_OF_PLAYBOOK, [ON_DEVBOX]);
   const runner = (sessionId: string, machine: string, lastSeenAt: string) =>
     q(
-      `insert into session_runners (id, session_id, client_key, user_id, harness, conversation_id, machine_user_id, last_seen_at)
-       values ($1, $2, $3, $4, 'claude-code', $3, $5, $6)`,
-      [randomUUID(), sessionId, randomUUID(), PERSON, machine, lastSeenAt]
+      `insert into session_runners (session_id, client_key, user_id, harness, conversation_id, machine_user_id, last_seen_at)
+       values ($1, $2, $3, 'claude-code', $2, $4, $5)`,
+      [sessionId, randomUUID(), PERSON, machine, lastSeenAt]
     );
   await runner(S_RUNNER, MAC, "2026-11-01T09:00:00Z");
   await runner(S_RUNNER, DEVBOX, "2026-11-01T10:00:00Z");

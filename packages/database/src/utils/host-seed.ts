@@ -111,6 +111,20 @@ export async function seedHostFor(
 }
 
 /**
+ * Whether a rule is one a seed copies: an `auto` rule for ONE agent. Only such
+ * a rule can have a seed, so only its revoke has a seed to take back.
+ */
+export function mayCarryHostSeed(
+  rule: Pick<SeedableRule, "principalKind" | "verdict" | "agentUserId">
+): boolean {
+  return (
+    rule.principalKind === "agent" &&
+    rule.verdict === "auto" &&
+    !!rule.agentUserId
+  );
+}
+
+/**
  * Write each seedable rule again for its agent's box (see the file header for
  * which are), with the rows as written (their ids): in the same transaction
  * when the writer has one. A seed that is not written leaves the box asking,
@@ -120,9 +134,7 @@ export async function seedHostRules(
   db: DbOrTx,
   rules: readonly SeedableRule[]
 ): Promise<string[]> {
-  const seedable = rules.filter(
-    (r) => r.principalKind === "agent" && r.verdict === "auto" && r.agentUserId
-  );
+  const seedable = rules.filter(mayCarryHostSeed);
   if (seedable.length === 0) return [];
   const hostOf = new Map<string, string | null>();
   const values: NewGovernanceRule[] = [];
