@@ -9601,6 +9601,457 @@ export type SessionRecallView = {
 	recalledAt: string;
 	status: "failed";
 };
+declare const SESSION_KINDS: readonly [
+	"work",
+	"run",
+	"receipt"
+];
+export type SessionKind = (typeof SESSION_KINDS)[number];
+declare const TRUST_RUNGS: readonly [
+	"ask",
+	"propose",
+	"do_tell",
+	"quiet"
+];
+export type TrustRung = (typeof TRUST_RUNGS)[number];
+/** The config a next-rung grant writes. */
+export type NextRungVia = "governance_rule";
+/**
+ * Where a grant applies: `space` = one space, `pod` = EVERY space. A pod-wide
+ * grant is legitimate (a personal record has no space) but never silent — a
+ * surface says "in every space" when `reach` is `pod`.
+ */
+export type NextRungReach = "pod" | "space";
+/**
+ * A card an ACTIVE rule already covers: the offer is withdrawn and this names
+ * the rule, so a surface shows "Already a rule" as a DOOR to it.
+ * `governanceRules.nextRungs` rows carry `covered: NextRungCovered | null`.
+ */
+export interface NextRungCovered {
+	ruleId: string;
+}
+/** One step up, and the config that grants it. */
+export interface NextRungOffer {
+	from: TrustRung;
+	to: TrustRung;
+	via: NextRungVia;
+	reach: NextRungReach;
+}
+export interface NextRungRuleInput {
+	/** The item the grant is made FROM — stored as the rule's lineage. */
+	proposalId: string;
+	agentUserId: string;
+	/** The proposal's workspace; `null` ⇒ a pod-scope rule. */
+	workspaceId?: string | null;
+	/** `proposalEventKey(row)`. */
+	eventKey: string;
+	/**
+	 * The profile slug the GATE saw for this write (`data.profileSlug` on a
+	 * receipt, `data.data.profileSlug` on a pending row) — never a slug looked
+	 * up afterwards, or the rule narrows to a key the write never carries and
+	 * never fires.
+	 */
+	profileSlug?: string | null;
+}
+declare function nextRungRuleDraft(input: NextRungRuleInput): GovernanceRuleDraft;
+/**
+ * How far an agent has earned one kind of work: `count` human approvals in a
+ * row (newest backwards), `met` once {@link STREAK_NEEDED} of them span
+ * {@link STREAK_MIN_DAYS} days. `since` is the oldest counted decision.
+ */
+export interface EarnedStreak {
+	met: boolean;
+	count: number;
+	needed: number;
+	since: string | null;
+}
+/**
+ * A grant on this card's kind that paused itself after undos
+ * ({@link RULE_PAUSED_AFTER_REVERTS}): the card offers "Ask me again" and the
+ * rule is a door. `governanceRules.nextRungs` rows carry `paused`.
+ */
+export interface NextRungPaused {
+	ruleId: string;
+	revokedAt: string;
+}
+/**
+ * THE AGENT × WORK MATRIX — the contract of `governance.matrix` (agent routing
+ * W2) and the pure rules every surface draws it with.
+ *
+ * Rows: agents, grouped type → computer → agent. Columns: per space, one per
+ * PROCESS (a playbook that works a kind's lifecycle — founder decision
+ * 2026-10-14: one column per process), one "Other work" per space, and one
+ * locked "Floors" column of platform limits no rule can widen. A cell is what
+ * the agent's write WOULD do there, answered by the ONE resolver
+ * (`dryRunAgentGovernanceDecision`), for each of the column's probes.
+ *
+ * Marks (founder decisions 2026-10-14): ✓ auto · ? ask · — off (no grant and
+ * capability-denied share ONE mark; the why-drawer names which) · ◐ mixed
+ * with its split. A collapsed group never shows one member's verdict.
+ *
+ * Pure + zero-dep — safe in browser, Electron, React Native, Node and CLI.
+ */
+/** What one probe would do: act, ask a person, or not at all. */
+export type MatrixVerdict = "ask" | "auto" | "off";
+/** A cell's mark: one verdict, or `mixed` when its probes / members disagree. */
+export type MatrixMark = MatrixVerdict | "mixed";
+export type MatrixLens = "mine" | "pod";
+/** One representative write a column tests. */
+export interface MatrixProbe {
+	key: string;
+	/** The governance event key (`entity.update`, `entity.transition`…). */
+	action: string;
+	/** The kind the probe writes, when it is about one. */
+	profileSlug: string | null;
+}
+export type MatrixColumnKind = "floors" | "other" | "process";
+export interface MatrixColumn {
+	id: string;
+	kind: MatrixColumnKind;
+	label: string;
+	/** The space it sits in (`null` = pod-wide: the floors column). */
+	workspaceId: string | null;
+	workspaceName: string | null;
+	/** A process column's playbook. */
+	playbookId: string | null;
+	probes: MatrixProbe[];
+}
+/** One probe's answer — what the why-drawer reads. */
+export interface MatrixProbeAnswer {
+	probeKey: string;
+	verdict: MatrixVerdict;
+	/** The ladder rung that decided (`rung_2_8`…) and its reason token. */
+	rung: string;
+	reason: string;
+	/** The rule that decided, when one did. */
+	ruleId: string | null;
+}
+export interface MatrixSplit {
+	auto: number;
+	ask: number;
+	off: number;
+}
+export interface MatrixCell {
+	mark: MatrixMark;
+	split: MatrixSplit;
+	/** Per-probe answers (an agent row only; a group row carries the split). */
+	answers?: MatrixProbeAnswer[];
+}
+export interface MatrixAgentRow {
+	agentUserId: string;
+	name: string;
+	agentType: string | null;
+	hostUserId: string | null;
+	paused: boolean;
+	/**
+	 * The reader owns this agent. Widening an agent you own writes the rule;
+	 * widening anyone else's files a proposal to its owner (founder decision 8,
+	 * 2026-10-14), so a surface says which before the click.
+	 */
+	ownedByViewer: boolean;
+	cells: Record<string, MatrixCell>;
+}
+export interface MatrixComputerGroup {
+	/** The computer agent's id, or `null` for agents on no computer. */
+	hostUserId: string | null;
+	label: string;
+	cells: Record<string, MatrixCell>;
+	agents: MatrixAgentRow[];
+}
+export interface MatrixTypeGroup {
+	agentType: string;
+	cells: Record<string, MatrixCell>;
+	computers: MatrixComputerGroup[];
+}
+export interface AgentMatrix {
+	lens: MatrixLens;
+	columns: MatrixColumn[];
+	groups: MatrixTypeGroup[];
+	/** Set when a bound was hit — the person sees what was left out. */
+	partial: null | {
+		agentsOmitted: number;
+		columnsOmitted: number;
+	};
+}
+declare const PACKAGE_FIELD_STATES: readonly [
+	"updates",
+	"yours",
+	"both",
+	"same"
+];
+export type PackageFieldState = (typeof PACKAGE_FIELD_STATES)[number];
+declare const PACKAGE_UPDATE_NEEDS: readonly [
+	"consent",
+	"choice",
+	"review",
+	"nothing"
+];
+export type PackageUpdateNeeds = (typeof PACKAGE_UPDATE_NEEDS)[number];
+/** How many fields of a package are in each state. */
+export type PackageFieldCounts = Record<PackageFieldState, number>;
+/** The kinds of installed row a plan compares today. */
+export type PackageUpdateRowKind = "automation" | "skill" | "view";
+/** One row of `GET /package-updates` / `packageUpdates.list`. */
+export interface PackageUpdateSummary {
+	slug: string;
+	/** The catalog kind of the package (`skill`, `view`, `automation`). */
+	kind: string;
+	name: string;
+	/** The version the pod's rows last converged to; null when never recorded. */
+	installedVersion: string | null;
+	latestVersion: string | null;
+	counts: PackageFieldCounts;
+	/** Records the update would change (space updates only; 0 otherwise). */
+	dataChanges: number;
+	needs: PackageUpdateNeeds;
+	/** The pod path that opens the review page (`/open/update/<slug>`). */
+	reviewUrl: string;
+}
+/**
+ * `GET /package-updates` / `packageUpdates.list`: every installed package
+ * whose catalog version moved, and every one whose catalog could not be read
+ * (named with the reason, never folded into "nothing waiting").
+ */
+export interface PackageUpdateList {
+	updates: PackageUpdateSummary[];
+	unreadable: Array<{
+		kind: string;
+		name: string;
+		reason: string;
+		slug: string;
+	}>;
+}
+/** One pending change to existing records a space update would run. */
+export interface PackageDataChange {
+	/** The op key `acceptDataChanges` names. */
+	id: string;
+	/** One plain sentence. */
+	sentence: string;
+	/** How many records it changes; null when the count failed (never 0). */
+	affected: number | null;
+	/** Never run by an update: an operator step. */
+	destructive: boolean;
+}
+/** One compared field of one installed row. */
+export interface PackageUpdateField {
+	/** The row field name (`body`, `description`, `flowDefinition`, …). */
+	key: string;
+	/** Its words for a person (`resolvePackageFieldLabel`). */
+	label: string;
+	state: PackageFieldState;
+	/** The catalog's value when installed (or last decided). */
+	base: unknown;
+	/** The catalog's value now. */
+	desired: unknown;
+	/** The pod's value now. */
+	live: unknown;
+	/**
+	 * `both` text fields only: the line-level 3-way merge of the two edits, or
+	 * null when they overlap (D2: "Combine both" is offered only without an
+	 * overlap). Absent for every other field.
+	 */
+	merged?: string | null;
+	/** `both` text fields only: the two edits touch the same lines. */
+	overlap?: boolean;
+}
+/** `GET /package-updates/:slug` / `packageUpdates.get`. */
+export interface PackageUpdatePlan {
+	slug: string;
+	kind: string;
+	name: string;
+	installedVersion: string | null;
+	latestVersion: string | null;
+	/** The catalog's change notes since the installed version, when it has any. */
+	notes?: string[];
+	rows: Array<{
+		fields: PackageUpdateField[];
+		name: string;
+		rowId: string;
+		rowKind: PackageUpdateRowKind;
+	}>;
+	/**
+	 * A space update's changes to existing records (the conversion engine's
+	 * pending ops, as `/packages/preflight` reports them). The person agrees by
+	 * sending each consentable item's `id` in `acceptDataChanges`. A
+	 * `destructive` item is never run by an update: it is an operator step on
+	 * pod admin (`needsPodAdmin`).
+	 */
+	dataChanges?: {
+		count: number;
+		items: PackageDataChange[];
+		needsPodAdmin: boolean;
+	};
+	/**
+	 * The choice the pod recommends per `both` field, keyed `<rowId>:<field>`:
+	 * `catalog` when the pod's edit is already inside the catalog's text,
+	 * `combine` when the two edits merge without overlapping. Absent = no
+	 * recommendation; a person decides.
+	 */
+	recommended?: Record<string, PackageUpdateChoiceName>;
+	counts: PackageFieldCounts;
+	needs: PackageUpdateNeeds;
+}
+declare const PACKAGE_UPDATE_CHOICE_NAMES: readonly [
+	"catalog",
+	"mine",
+	"combine"
+];
+export type PackageUpdateChoiceName = (typeof PACKAGE_UPDATE_CHOICE_NAMES)[number];
+/** One field an apply (or an undo) changed. */
+export interface PackageUpdateChange {
+	rowKind: PackageUpdateRowKind;
+	rowId: string;
+	field: string;
+	before: unknown;
+	after: unknown;
+}
+/**
+ * The receipt of one package update — kept in the pod's event log as a
+ * `package.updated` event. `source: 'automatic'` is the start-up pass applying
+ * fields nobody edited (D3); `person` is an apply from a door.
+ */
+export interface PackageUpdateReceipt {
+	id: string;
+	slug: string;
+	kind: string;
+	name: string;
+	fromVersion: string | null;
+	toVersion: string | null;
+	appliedAt: string;
+	source: "automatic" | "person";
+	changes: PackageUpdateChange[];
+	/** Undo refuses after this instant (D5: 30 days). */
+	undoUntil: string;
+	/** When it was undone, or null. */
+	undoneAt: string | null;
+}
+/**
+ * The answer of an apply or an undo. A person's write lands and returns its
+ * receipt; an agent's write is filed as proposals through each row's own
+ * governed `.update` door, and lands only when a person approves them.
+ */
+export type PackageUpdateApplyResult = {
+	receipt: PackageUpdateReceipt | null;
+	status: "applied";
+} | {
+	proposalIds: string[];
+	status: "proposed";
+};
+declare const SHIP_STAGES: readonly [
+	"working",
+	"checks",
+	"ready",
+	"on_main"
+];
+export type ShipStage = (typeof SHIP_STAGES)[number];
+declare const CHECK_VERDICTS: readonly [
+	"green",
+	"own_red",
+	"inherited",
+	"infra",
+	"queued",
+	"running",
+	"unmeasured"
+];
+export type CheckVerdict = (typeof CHECK_VERDICTS)[number];
+declare const SHIP_FOLDS: readonly [
+	"draft",
+	"negctl",
+	"dependabot",
+	"stale"
+];
+export type ShipFold = (typeof SHIP_FOLDS)[number] | null;
+export type BlockRef = {
+	kind: "pr";
+	number: number;
+	repo: string;
+} | {
+	kind: "main";
+	repo: string;
+};
+declare const WORK_RELEASE_SOURCE_STATES: {
+	readonly holders: readonly [
+		"ok",
+		"unavailable"
+	];
+	readonly pullRequests: readonly [
+		"ok",
+		"unavailable"
+	];
+	readonly sessions: readonly [
+		"ok",
+		"unavailable"
+	];
+	readonly snapshots: readonly [
+		"ok",
+		"stale",
+		"missing"
+	];
+};
+export interface WorkReleaseSources {
+	/** `stale` = the newest snapshot is older than {@link SNAPSHOT_STALE_MS}. */
+	snapshots: (typeof WORK_RELEASE_SOURCE_STATES.snapshots)[number];
+	sessions: (typeof WORK_RELEASE_SOURCE_STATES.sessions)[number];
+	holders: (typeof WORK_RELEASE_SOURCE_STATES.holders)[number];
+	/** The recorded PR facts; `unavailable` = the rows are the snapshot's alone. */
+	pullRequests: (typeof WORK_RELEASE_SOURCE_STATES.pullRequests)[number];
+}
+export interface WorkReleaseRepo {
+	/** `owner/name`, as the producer spelled it. */
+	repo: string;
+	/** The name without its owner: `backend`. */
+	label: string;
+	visibility: "private" | "public";
+	main: RepoSnapshotFact["main"];
+	live: NonNullable<RepoSnapshotFact["live"]> | null;
+	snapshotAt: string | null;
+}
+export interface WorkReleaseHolder {
+	/** A session holding the PR is working on it now (`isSessionWorkingNow`). */
+	live: boolean;
+	/** Who holds it: the session's agent, else its owner. */
+	label: string;
+	/** The session's newest activity; null when nothing was recorded. */
+	lastActiveAt: string | null;
+}
+export interface WorkReleasePr {
+	repo: string;
+	number: number;
+	title: string;
+	url: string;
+	stage: ShipStage;
+	verdict: CheckVerdict;
+	fold: ShipFold;
+	sessionId: string | null;
+	sessionTitle: string | null;
+	/** `null` when no session holds it, or the holders read failed (`sources`). */
+	holder: WorkReleaseHolder | null;
+	/** Explicit `dependsOn` still open, then (inherited red) its repo's main. */
+	blockedBy: BlockRef[];
+	/** Auto-merge is armed: green + clean merges it with no one. */
+	autoMerge: boolean;
+	updatedAt: string;
+	mergedAt?: string | null;
+}
+export interface WorkReleaseBlocker {
+	ref: BlockRef;
+	/** Open PRs + mains waiting behind it, transitively. */
+	waiting: number;
+	waitingPrs: number;
+	waitingMains: number;
+	/** A main: its `reason`; a PR: its title. */
+	reason: string | null;
+	/** A main: the PR that fixes it, when named. Absent on a PR. */
+	fixedBy?: BlockRef | null;
+}
+export interface WorkReleaseRead {
+	generatedAt: string;
+	sources: WorkReleaseSources;
+	repos: WorkReleaseRepo[];
+	prs: WorkReleasePr[];
+	/** The blocker with the most waiting behind it, transitively, first. */
+	blockers: WorkReleaseBlocker[];
+}
 /** A thing that can be held: an entity (kind lifecycle, or a role's facet), a goal, a session. */
 export interface HoldSubjectRef {
 	subjectType: TransitionSubjectType;
@@ -16053,12 +16504,6 @@ export interface SessionOutputsWithOutcomes extends SessionOutputsResult {
 		total: number;
 	};
 }
-declare const SESSION_KINDS: readonly [
-	"work",
-	"run",
-	"receipt"
-];
-export type SessionKind = (typeof SESSION_KINDS)[number];
 export interface SessionExternalAgent {
 	runId: string;
 	/** The run's own lifecycle (`running`, `failed`, `cancelled`, `proposed`, …). */
@@ -19727,172 +20172,6 @@ export interface MachineOwnerView {
 export interface AdminMachineView extends MachineView {
 	/** null = the approver's row is gone (or was never recorded). */
 	owner: MachineOwnerView | null;
-}
-/**
- * THE AGENT × WORK MATRIX — the contract of `governance.matrix` (agent routing
- * W2) and the pure rules every surface draws it with.
- *
- * Rows: agents, grouped type → computer → agent. Columns: per space, one per
- * PROCESS (a playbook that works a kind's lifecycle — founder decision
- * 2026-10-14: one column per process), one "Other work" per space, and one
- * locked "Floors" column of platform limits no rule can widen. A cell is what
- * the agent's write WOULD do there, answered by the ONE resolver
- * (`dryRunAgentGovernanceDecision`), for each of the column's probes.
- *
- * Marks (founder decisions 2026-10-14): ✓ auto · ? ask · — off (no grant and
- * capability-denied share ONE mark; the why-drawer names which) · ◐ mixed
- * with its split. A collapsed group never shows one member's verdict.
- *
- * Pure + zero-dep — safe in browser, Electron, React Native, Node and CLI.
- */
-/** What one probe would do: act, ask a person, or not at all. */
-export type MatrixVerdict = "ask" | "auto" | "off";
-/** A cell's mark: one verdict, or `mixed` when its probes / members disagree. */
-export type MatrixMark = MatrixVerdict | "mixed";
-export type MatrixLens = "mine" | "pod";
-/** One representative write a column tests. */
-export interface MatrixProbe {
-	key: string;
-	/** The governance event key (`entity.update`, `entity.transition`…). */
-	action: string;
-	/** The kind the probe writes, when it is about one. */
-	profileSlug: string | null;
-}
-export type MatrixColumnKind = "floors" | "other" | "process";
-export interface MatrixColumn {
-	id: string;
-	kind: MatrixColumnKind;
-	label: string;
-	/** The space it sits in (`null` = pod-wide: the floors column). */
-	workspaceId: string | null;
-	workspaceName: string | null;
-	/** A process column's playbook. */
-	playbookId: string | null;
-	probes: MatrixProbe[];
-}
-/** One probe's answer — what the why-drawer reads. */
-export interface MatrixProbeAnswer {
-	probeKey: string;
-	verdict: MatrixVerdict;
-	/** The ladder rung that decided (`rung_2_8`…) and its reason token. */
-	rung: string;
-	reason: string;
-	/** The rule that decided, when one did. */
-	ruleId: string | null;
-}
-export interface MatrixSplit {
-	auto: number;
-	ask: number;
-	off: number;
-}
-export interface MatrixCell {
-	mark: MatrixMark;
-	split: MatrixSplit;
-	/** Per-probe answers (an agent row only; a group row carries the split). */
-	answers?: MatrixProbeAnswer[];
-}
-export interface MatrixAgentRow {
-	agentUserId: string;
-	name: string;
-	agentType: string | null;
-	hostUserId: string | null;
-	paused: boolean;
-	/**
-	 * The reader owns this agent. Widening an agent you own writes the rule;
-	 * widening anyone else's files a proposal to its owner (founder decision 8,
-	 * 2026-10-14), so a surface says which before the click.
-	 */
-	ownedByViewer: boolean;
-	cells: Record<string, MatrixCell>;
-}
-export interface MatrixComputerGroup {
-	/** The computer agent's id, or `null` for agents on no computer. */
-	hostUserId: string | null;
-	label: string;
-	cells: Record<string, MatrixCell>;
-	agents: MatrixAgentRow[];
-}
-export interface MatrixTypeGroup {
-	agentType: string;
-	cells: Record<string, MatrixCell>;
-	computers: MatrixComputerGroup[];
-}
-export interface AgentMatrix {
-	lens: MatrixLens;
-	columns: MatrixColumn[];
-	groups: MatrixTypeGroup[];
-	/** Set when a bound was hit — the person sees what was left out. */
-	partial: null | {
-		agentsOmitted: number;
-		columnsOmitted: number;
-	};
-}
-declare const TRUST_RUNGS: readonly [
-	"ask",
-	"propose",
-	"do_tell",
-	"quiet"
-];
-export type TrustRung = (typeof TRUST_RUNGS)[number];
-/** The config a next-rung grant writes. */
-export type NextRungVia = "governance_rule";
-/**
- * Where a grant applies: `space` = one space, `pod` = EVERY space. A pod-wide
- * grant is legitimate (a personal record has no space) but never silent — a
- * surface says "in every space" when `reach` is `pod`.
- */
-export type NextRungReach = "pod" | "space";
-/**
- * A card an ACTIVE rule already covers: the offer is withdrawn and this names
- * the rule, so a surface shows "Already a rule" as a DOOR to it.
- * `governanceRules.nextRungs` rows carry `covered: NextRungCovered | null`.
- */
-export interface NextRungCovered {
-	ruleId: string;
-}
-/** One step up, and the config that grants it. */
-export interface NextRungOffer {
-	from: TrustRung;
-	to: TrustRung;
-	via: NextRungVia;
-	reach: NextRungReach;
-}
-export interface NextRungRuleInput {
-	/** The item the grant is made FROM — stored as the rule's lineage. */
-	proposalId: string;
-	agentUserId: string;
-	/** The proposal's workspace; `null` ⇒ a pod-scope rule. */
-	workspaceId?: string | null;
-	/** `proposalEventKey(row)`. */
-	eventKey: string;
-	/**
-	 * The profile slug the GATE saw for this write (`data.profileSlug` on a
-	 * receipt, `data.data.profileSlug` on a pending row) — never a slug looked
-	 * up afterwards, or the rule narrows to a key the write never carries and
-	 * never fires.
-	 */
-	profileSlug?: string | null;
-}
-declare function nextRungRuleDraft(input: NextRungRuleInput): GovernanceRuleDraft;
-/**
- * How far an agent has earned one kind of work: `count` human approvals in a
- * row (newest backwards), `met` once {@link STREAK_NEEDED} of them span
- * {@link STREAK_MIN_DAYS} days. `since` is the oldest counted decision.
- */
-export interface EarnedStreak {
-	met: boolean;
-	count: number;
-	needed: number;
-	since: string | null;
-}
-/**
- * A grant on this card's kind that paused itself after undos
- * ({@link RULE_PAUSED_AFTER_REVERTS}): the card offers "Ask me again" and the
- * rule is a door. `governanceRules.nextRungs` rows carry `paused`.
- */
-export interface NextRungPaused {
-	ruleId: string;
-	revokedAt: string;
 }
 type GovernanceRuleDraft$1 = ReturnType<typeof nextRungRuleDraft>;
 export interface NextRungProjection {
@@ -23659,121 +23938,6 @@ export interface LensPageWire {
 }
 /** The needs-you rows by fold: the headline, then each fold of the rule. */
 export type NeedsYouClassifiedRows = Record<"needs_you" | NeedsYouFold, Signal[]>;
-declare const SHIP_STAGES: readonly [
-	"working",
-	"checks",
-	"ready",
-	"on_main"
-];
-export type ShipStage = (typeof SHIP_STAGES)[number];
-declare const CHECK_VERDICTS: readonly [
-	"green",
-	"own_red",
-	"inherited",
-	"infra",
-	"queued",
-	"running",
-	"unmeasured"
-];
-export type CheckVerdict = (typeof CHECK_VERDICTS)[number];
-declare const SHIP_FOLDS: readonly [
-	"draft",
-	"negctl",
-	"dependabot",
-	"stale"
-];
-export type ShipFold = (typeof SHIP_FOLDS)[number] | null;
-export type BlockRef = {
-	kind: "pr";
-	number: number;
-	repo: string;
-} | {
-	kind: "main";
-	repo: string;
-};
-declare const WORK_RELEASE_SOURCE_STATES: {
-	readonly holders: readonly [
-		"ok",
-		"unavailable"
-	];
-	readonly pullRequests: readonly [
-		"ok",
-		"unavailable"
-	];
-	readonly sessions: readonly [
-		"ok",
-		"unavailable"
-	];
-	readonly snapshots: readonly [
-		"ok",
-		"stale",
-		"missing"
-	];
-};
-export interface WorkReleaseSources {
-	/** `stale` = the newest snapshot is older than {@link SNAPSHOT_STALE_MS}. */
-	snapshots: (typeof WORK_RELEASE_SOURCE_STATES.snapshots)[number];
-	sessions: (typeof WORK_RELEASE_SOURCE_STATES.sessions)[number];
-	holders: (typeof WORK_RELEASE_SOURCE_STATES.holders)[number];
-	/** The recorded PR facts; `unavailable` = the rows are the snapshot's alone. */
-	pullRequests: (typeof WORK_RELEASE_SOURCE_STATES.pullRequests)[number];
-}
-export interface WorkReleaseRepo {
-	/** `owner/name`, as the producer spelled it. */
-	repo: string;
-	/** The name without its owner: `backend`. */
-	label: string;
-	visibility: "private" | "public";
-	main: RepoSnapshotFact["main"];
-	live: NonNullable<RepoSnapshotFact["live"]> | null;
-	snapshotAt: string | null;
-}
-export interface WorkReleaseHolder {
-	/** A session holding the PR is working on it now (`isSessionWorkingNow`). */
-	live: boolean;
-	/** Who holds it: the session's agent, else its owner. */
-	label: string;
-	/** The session's newest activity; null when nothing was recorded. */
-	lastActiveAt: string | null;
-}
-export interface WorkReleasePr {
-	repo: string;
-	number: number;
-	title: string;
-	url: string;
-	stage: ShipStage;
-	verdict: CheckVerdict;
-	fold: ShipFold;
-	sessionId: string | null;
-	sessionTitle: string | null;
-	/** `null` when no session holds it, or the holders read failed (`sources`). */
-	holder: WorkReleaseHolder | null;
-	/** Explicit `dependsOn` still open, then (inherited red) its repo's main. */
-	blockedBy: BlockRef[];
-	/** Auto-merge is armed: green + clean merges it with no one. */
-	autoMerge: boolean;
-	updatedAt: string;
-	mergedAt?: string | null;
-}
-export interface WorkReleaseBlocker {
-	ref: BlockRef;
-	/** Open PRs + mains waiting behind it, transitively. */
-	waiting: number;
-	waitingPrs: number;
-	waitingMains: number;
-	/** A main: its `reason`; a PR: its title. */
-	reason: string | null;
-	/** A main: the PR that fixes it, when named. Absent on a PR. */
-	fixedBy?: BlockRef | null;
-}
-export interface WorkReleaseRead {
-	generatedAt: string;
-	sources: WorkReleaseSources;
-	repos: WorkReleaseRepo[];
-	prs: WorkReleasePr[];
-	/** The blocker with the most waiting behind it, transitively, first. */
-	blockers: WorkReleaseBlocker[];
-}
 /**
  * resolveEntityOpenTarget — WHERE opening this entity should go, decided on the
  * pod so every client (browser, relay) only dispatches.
@@ -23963,170 +24127,6 @@ export interface MarketplacePreflight extends MarketInstallSummary {
 		network: boolean;
 	};
 }
-declare const PACKAGE_FIELD_STATES: readonly [
-	"updates",
-	"yours",
-	"both",
-	"same"
-];
-export type PackageFieldState = (typeof PACKAGE_FIELD_STATES)[number];
-declare const PACKAGE_UPDATE_NEEDS: readonly [
-	"consent",
-	"choice",
-	"review",
-	"nothing"
-];
-export type PackageUpdateNeeds = (typeof PACKAGE_UPDATE_NEEDS)[number];
-/** How many fields of a package are in each state. */
-export type PackageFieldCounts = Record<PackageFieldState, number>;
-/** The kinds of installed row a plan compares today. */
-export type PackageUpdateRowKind = "automation" | "skill" | "view";
-/** One row of `GET /package-updates` / `packageUpdates.list`. */
-export interface PackageUpdateSummary {
-	slug: string;
-	/** The catalog kind of the package (`skill`, `view`, `automation`). */
-	kind: string;
-	name: string;
-	/** The version the pod's rows last converged to; null when never recorded. */
-	installedVersion: string | null;
-	latestVersion: string | null;
-	counts: PackageFieldCounts;
-	/** Records the update would change (space updates only; 0 otherwise). */
-	dataChanges: number;
-	needs: PackageUpdateNeeds;
-	/** The pod path that opens the review page (`/open/update/<slug>`). */
-	reviewUrl: string;
-}
-/**
- * `GET /package-updates` / `packageUpdates.list`: every installed package
- * whose catalog version moved, and every one whose catalog could not be read
- * (named with the reason, never folded into "nothing waiting").
- */
-export interface PackageUpdateList {
-	updates: PackageUpdateSummary[];
-	unreadable: Array<{
-		kind: string;
-		name: string;
-		reason: string;
-		slug: string;
-	}>;
-}
-/** One pending change to existing records a space update would run. */
-export interface PackageDataChange {
-	/** The op key `acceptDataChanges` names. */
-	id: string;
-	/** One plain sentence. */
-	sentence: string;
-	/** How many records it changes; null when the count failed (never 0). */
-	affected: number | null;
-	/** Never run by an update: an operator step. */
-	destructive: boolean;
-}
-/** One compared field of one installed row. */
-export interface PackageUpdateField {
-	/** The row field name (`body`, `description`, `flowDefinition`, …). */
-	key: string;
-	/** Its words for a person (`resolvePackageFieldLabel`). */
-	label: string;
-	state: PackageFieldState;
-	/** The catalog's value when installed (or last decided). */
-	base: unknown;
-	/** The catalog's value now. */
-	desired: unknown;
-	/** The pod's value now. */
-	live: unknown;
-	/**
-	 * `both` text fields only: the line-level 3-way merge of the two edits, or
-	 * null when they overlap (D2: "Combine both" is offered only without an
-	 * overlap). Absent for every other field.
-	 */
-	merged?: string | null;
-	/** `both` text fields only: the two edits touch the same lines. */
-	overlap?: boolean;
-}
-/** `GET /package-updates/:slug` / `packageUpdates.get`. */
-export interface PackageUpdatePlan {
-	slug: string;
-	kind: string;
-	name: string;
-	installedVersion: string | null;
-	latestVersion: string | null;
-	/** The catalog's change notes since the installed version, when it has any. */
-	notes?: string[];
-	rows: Array<{
-		fields: PackageUpdateField[];
-		name: string;
-		rowId: string;
-		rowKind: PackageUpdateRowKind;
-	}>;
-	/**
-	 * A space update's changes to existing records (the conversion engine's
-	 * pending ops, as `/packages/preflight` reports them). The person agrees by
-	 * sending each consentable item's `id` in `acceptDataChanges`. A
-	 * `destructive` item is never run by an update: it is an operator step on
-	 * pod admin (`needsPodAdmin`).
-	 */
-	dataChanges?: {
-		count: number;
-		items: PackageDataChange[];
-		needsPodAdmin: boolean;
-	};
-	/**
-	 * The choice the pod recommends per `both` field, keyed `<rowId>:<field>`:
-	 * `catalog` when the pod's edit is already inside the catalog's text,
-	 * `combine` when the two edits merge without overlapping. Absent = no
-	 * recommendation; a person decides.
-	 */
-	recommended?: Record<string, PackageUpdateChoiceName>;
-	counts: PackageFieldCounts;
-	needs: PackageUpdateNeeds;
-}
-declare const PACKAGE_UPDATE_CHOICE_NAMES: readonly [
-	"catalog",
-	"mine",
-	"combine"
-];
-export type PackageUpdateChoiceName = (typeof PACKAGE_UPDATE_CHOICE_NAMES)[number];
-/** One field an apply (or an undo) changed. */
-export interface PackageUpdateChange {
-	rowKind: PackageUpdateRowKind;
-	rowId: string;
-	field: string;
-	before: unknown;
-	after: unknown;
-}
-/**
- * The receipt of one package update — kept in the pod's event log as a
- * `package.updated` event. `source: 'automatic'` is the start-up pass applying
- * fields nobody edited (D3); `person` is an apply from a door.
- */
-export interface PackageUpdateReceipt {
-	id: string;
-	slug: string;
-	kind: string;
-	name: string;
-	fromVersion: string | null;
-	toVersion: string | null;
-	appliedAt: string;
-	source: "automatic" | "person";
-	changes: PackageUpdateChange[];
-	/** Undo refuses after this instant (D5: 30 days). */
-	undoUntil: string;
-	/** When it was undone, or null. */
-	undoneAt: string | null;
-}
-/**
- * The answer of an apply or an undo. A person's write lands and returns its
- * receipt; an agent's write is filed as proposals through each row's own
- * governed `.update` door, and lands only when a person approves them.
- */
-export type PackageUpdateApplyResult = {
-	receipt: PackageUpdateReceipt | null;
-	status: "applied";
-} | {
-	proposalIds: string[];
-	status: "proposed";
-};
 export type StandaloneKind = "automation" | "skill" | "view";
 export interface DetachResult {
 	detached: boolean;
