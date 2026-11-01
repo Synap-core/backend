@@ -72,6 +72,7 @@ function caller() {
   return hubWidgetDefinitionsRouter.createCaller({
     authenticated: true as const,
     userId: USER,
+    apiKeyId: "33333333-3333-4333-8333-333333333333",
     scopes: ["hub-protocol.write", "hub-protocol.read"],
   } as unknown as Context);
 }
