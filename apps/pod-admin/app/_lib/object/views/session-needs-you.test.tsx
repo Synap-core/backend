@@ -276,6 +276,9 @@ const text = (html: string) =>
     .replace(/&amp;/g, "&")
     .replace(/\s+/g, " ");
 
+const count = (haystack: string, needle: RegExp) =>
+  (haystack.match(new RegExp(needle, "g")) ?? []).length;
+
 afterEach(() => {
   seen.failed.signals = null;
   seen.failed.proposals = null;
@@ -521,6 +524,22 @@ describe("A criterion's grade — once, in the rail", () => {
     expect(railed).not.toContain("same turn-on doors");
     expect(railed).toContain("Which day do we ship?");
     expect(railed).toContain("1 waiting on you");
+  });
+
+  it("a row pod admin cannot act on says where to act, beside its door into the app", () => {
+    // Founder, 2026-11-01 (decision 869b2cd6): a bare "Open in app" told the
+    // reader nothing about why nothing could be done here.
+    seen.signals = [owedHere, criterionSlotOpenAsk];
+    const html = render(<NeedsYouSection sessionId={SESSION_ID} />);
+    const seenText = text(html);
+    expect(seenText).toContain("The Rules page turns a draft rule on");
+    expect(count(html, /data-acted-elsewhere/)).toBe(1);
+    const row = text(html.slice(html.indexOf("data-acted-elsewhere")));
+    const where = row.indexOf("Act on it in Relay or the Synap app.");
+    expect(where).toBeGreaterThan(-1);
+    expect(row.indexOf("Open in app")).toBeGreaterThan(where);
+    // The ask answered in place carries no such line.
+    expect(seenText.split("Act on it in Relay").length).toBe(2);
   });
 
   it("with only railed grades left, Needs you draws nothing", () => {
