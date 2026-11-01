@@ -27,6 +27,11 @@ import {
   assertWorkspaceUsable,
 } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
+import {
+  compactPlaybookMatches,
+  MATCH_PLAYBOOKS_MAX_LIMIT,
+} from "./mcp/handlers/match-playbooks-compact.js";
+import { listMemberWorkspaces } from "../utils/workspace-membership.js";
 import { loadVisibleProject } from "../services/projects/load-visible-project.js";
 import {
   countProjectsUsingMethod,
@@ -1290,6 +1295,217 @@ export async function assertPlaybookDefinitionWritable(
   }
 }
 
+/** The input of the ONE playbook matcher (`matchPlaybooks`). */
+const playbookMatchInput = z.object({
+  profileSlug: z.string().min(1).optional(),
+  // When provided, its live facet-role slugs WIDEN the match set (below);
+  // also round-tripped by the caller into `instantiate`/`run` as `subjectId`.
+  entityId: z.string().uuid().optional(),
+  workspaceId: z.string().uuid(),
+  /**
+   * What the user said they want (capture note / intent). Ranks the
+   * candidates, and is the ONLY reason a subject-less playbook is
+   * returned; see `rankRouteCandidates`. Sufficient on its own when
+   * `profileSlug` is omitted.
+   */
+  intentText: z.string().max(2000).optional(),
+  /**
+   * The caller works inside this project. Never a filter — it only
+   * lifts a TRACK template (scope project) above its own session twin
+   * (`preferTrackTemplates`). An intent naming "project"/"track" does
+   * the same.
+   */
+  projectId: z.string().uuid().optional(),
+  /**
+   * `entity-actions` — the entity page's action strip. The pod applies
+   * the strip's rules BEFORE the cap, so the client needs no per-row
+   * `playbooks.get` and never filters a truncated list: only playbooks in
+   * THIS workspace or pod-wide (the lens), with a subject, not a track
+   * method (`scope: project`), not pinned (`inputStrategy.kind: pinned`
+   * — the pin control is their door), and whose `subjectProfile.filter`
+   * PASSES on the entity (an unreadable filter is skipped). Without it
+   * (capture ranking), only a filter that FAILS on the entity drops a row.
+   */
+  purpose: z.enum(["entity-actions"]).optional(),
+});
+
+export type PlaybookMatchInput = z.infer<typeof playbookMatchInput>;
+
+/**
+ * The ONE playbook matcher: `playbooks.matchForEntity` (UI strips, capture),
+ * `playbooks.match` (the New goal flows) and MCP `synap_match_playbooks`
+ * (through `matchForEntity`) all rank here, never a second matcher. `ctx`
+ * carries the workspace lens the caller already validated.
+ */
+export async function matchPlaybooks(
+  ctx: {
+    userId: string;
+    agentUserId?: string | null;
+    isHubProtocol?: boolean;
+    workspaceId: string;
+  },
+  input: PlaybookMatchInput
+) {
+  const database = await getDb();
+  const visibility = scopedDb(AccessContext.from(ctx)).predicate(playbooks);
+
+  // Build the match set: the passed KIND slug (if any) plus, when an entity
+  // is given, its live facet-role slugs (deduped). loadFacetSlugsBatch
+  // enforces the canonical facet visibility lens (this workspace's facets +
+  // pod-wide, owner-floored), so a caller can only widen the set with
+  // facets it can see.
+  const matchSlugs: string[] = [];
+  if (input.profileSlug) matchSlugs.push(input.profileSlug);
+  const facetSlugs: string[] = [];
+  if (input.entityId) {
+    const facetSlugsByEntity = await loadFacetSlugsBatch(
+      database,
+      [input.entityId],
+      { userId: ctx.userId, workspaceId: ctx.workspaceId }
+    );
+    for (const slug of facetSlugsByEntity.get(input.entityId) ?? []) {
+      if (!matchSlugs.includes(slug)) matchSlugs.push(slug);
+      if (slug !== input.profileSlug) facetSlugs.push(slug);
+    }
+  }
+
+  const rows = await database
+    .select()
+    .from(playbooks)
+    .where(
+      and(
+        visibility,
+        eq(playbooks.status, "active"),
+        // When a kind/facet set is named: match those slugs OR a NULL
+        // subject (null-subject playbooks stay in the pool). When omitted,
+        // skip the subject filter so the pool is every active visible row.
+        // NOTE: do NOT use `= ANY(${matchSlugs})` — binding a JS array into
+        // the SQL template serializes it as a Postgres array literal, which
+        // the pod image's postgres.js driver faults on (same class of gotcha
+        // as `sql.json()` — see driver notes). An OR of scalar `=` params is
+        // the portable form (mirrors automations.matchForEntity).
+        matchSlugs.length > 0
+          ? or(
+              ...matchSlugs.map(
+                (slug) =>
+                  drizzleSql`${playbooks.subjectProfile}->>'profileSlug' = ${slug}`
+              ),
+              isNull(playbooks.subjectProfile)
+            )
+          : undefined
+      )
+    )
+    .orderBy(desc(playbooks.updatedAt));
+
+  // Ranked with a human-readable `reason` (suggest-and-confirm): intent
+  // words (rarity-weighted over this pool) first, then kind, then facet.
+  // Ties break by relevance, never by updatedAt (suggest-routes.ts).
+  // The subject filter is the pod's to judge (`evaluateSubjectFilter`):
+  // read the entity's properties once, only when a candidate has a filter.
+  const subjectFilterOf = (row: Playbook): unknown =>
+    (row.subjectProfile as { filter?: unknown } | null)?.filter;
+  let entityProperties: Record<string, unknown> | null = null;
+  if (
+    input.entityId &&
+    rows.some((r) => subjectFilterOf(r as Playbook) != null)
+  ) {
+    const [ent] = await database
+      .select({ properties: entities.properties })
+      .from(entities)
+      .where(
+        and(
+          eq(entities.id, input.entityId),
+          scopedDb(AccessContext.from(ctx)).predicate(entities)
+        )
+      )
+      .limit(1);
+    entityProperties =
+      (ent?.properties as Record<string, unknown> | null) ?? {};
+  }
+  const forStrip = input.purpose === "entity-actions";
+  const applicable = rows.filter((r) => {
+    const row = r as Playbook;
+    if (entityProperties) {
+      const verdict = evaluateSubjectFilter(
+        subjectFilterOf(row),
+        entityProperties
+      );
+      if (verdict === "fail") return false;
+      if (forStrip && verdict === "unreadable") return false;
+    }
+    if (!forStrip) return true;
+    const sp = row.subjectProfile as { profileSlug?: unknown } | null;
+    return (
+      (row.workspaceId == null || row.workspaceId === input.workspaceId) &&
+      typeof sp?.profileSlug === "string" &&
+      row.scope !== "project" &&
+      (row.inputStrategy as { kind?: unknown } | null)?.kind !== "pinned"
+    );
+  });
+
+  const ranked = rankRouteCandidates({
+    entity: {
+      entityId: input.entityId,
+      ...(input.profileSlug ? { profileSlug: input.profileSlug } : {}),
+      facetSlugs,
+    },
+    intentText: input.intentText,
+    candidates: applicable.map((p) => ({
+      kind: "playbook" as const,
+      id: p.id,
+      name: p.name,
+      text: [p.goalTemplate],
+      subjectProfileSlug:
+        (p.subjectProfile as { profileSlug?: string } | null)?.profileSlug ??
+        null,
+      row: p,
+    })),
+  });
+
+  const MATCH_LIMIT = 20;
+  // Scope + its noun ride on every row; under a project/track signal a
+  // track template sorts above its session twin (`template-kind.ts`).
+  const scoped = ranked
+    .filter((r) => r.signals.length > 0)
+    .map((r) => ({
+      ...r,
+      name: r.candidate.row.name,
+      ...templateKindFields(r.candidate.row.scope),
+    }));
+  return preferTrackTemplates(scoped, wantsTrackTemplate(input))
+    .slice(0, MATCH_LIMIT)
+    .map(({ candidate, score, reason, signals, scope, templateKind }) => ({
+      id: candidate.row.id,
+      name: candidate.row.name,
+      scope,
+      templateKind,
+      goalTemplate: candidate.row.goalTemplate,
+      subjectProfileSlug: candidate.subjectProfileSlug,
+      // The DECLARATION (name/type/required/options/default), so a caller
+      // choosing a candidate can see what it must supply BEFORE it runs —
+      // the match→confirm→run path's whole intake contract.
+      params: candidate.row.params,
+      executor: candidate.row.executor,
+      // What a surface needs to judge and disclose a row without a
+      // per-candidate `playbooks.get`.
+      workspaceId: candidate.row.workspaceId ?? null,
+      inputStrategyKind:
+        ((candidate.row.inputStrategy as { kind?: unknown } | null)?.kind as
+          string | undefined) ?? null,
+      subjectFilter:
+        (candidate.row.subjectProfile as { filter?: unknown } | null)?.filter ??
+        null,
+      forceProposeWrites:
+        (
+          (candidate.row.metadata as Record<string, unknown> | null)
+            ?.governance as { forceProposeWrites?: unknown } | undefined
+        )?.forceProposeWrites === true,
+      score,
+      reason,
+      signals,
+    }));
+}
+
 export const playbooksRouter = router({
   links: linksRouter,
   // Named `capabilityRegistry` (not `capabilities`) to avoid colliding with the
@@ -1540,199 +1756,59 @@ export const playbooksRouter = router({
    * null-subject rows. Returns the lean candidate shape; [] when none.
    */
   matchForEntity: workspaceProcedure
+    .input(playbookMatchInput)
+    .query(({ ctx, input }) => matchPlaybooks(ctx, input)),
+
+  /**
+   * "Which playbook would do this?" from the person's words — the New goal
+   * flows. The SAME matcher and the SAME envelope as MCP
+   * `synap_match_playbooks` (`matchPlaybooks` + `compactPlaybookMatches`:
+   * default 5 rows, a row carried by a shared word alone dropped, the goal
+   * text cut at 200 chars). Suggestions only: nothing runs.
+   *
+   * The space lens: `workspaceId`, else the request's `X-Workspace-Id`, else
+   * the caller's first member space, named back as `workspaceId` with
+   * `autoPicked: true` (pod-wide playbooks match whatever the lens).
+   */
+  match: protectedProcedure
     .input(
       z.object({
-        profileSlug: z.string().min(1).optional(),
-        // When provided, its live facet-role slugs WIDEN the match set (below);
-        // also round-tripped by the caller into `instantiate`/`run` as `subjectId`.
-        entityId: z.string().uuid().optional(),
-        workspaceId: z.string().uuid(),
-        /**
-         * What the user said they want (capture note / intent). Ranks the
-         * candidates, and is the ONLY reason a subject-less playbook is
-         * returned; see `rankRouteCandidates`. Sufficient on its own when
-         * `profileSlug` is omitted.
-         */
-        intentText: z.string().max(2000).optional(),
-        /**
-         * The caller works inside this project. Never a filter — it only
-         * lifts a TRACK template (scope project) above its own session twin
-         * (`preferTrackTemplates`). An intent naming "project"/"track" does
-         * the same.
-         */
+        intentText: z.string().trim().min(1).max(2000),
+        workspaceId: z.string().uuid().optional(),
         projectId: z.string().uuid().optional(),
-        /**
-         * `entity-actions` — the entity page's action strip. The pod applies
-         * the strip's rules BEFORE the cap, so the client needs no per-row
-         * `playbooks.get` and never filters a truncated list: only playbooks in
-         * THIS workspace or pod-wide (the lens), with a subject, not a track
-         * method (`scope: project`), not pinned (`inputStrategy.kind: pinned`
-         * — the pin control is their door), and whose `subjectProfile.filter`
-         * PASSES on the entity (an unreadable filter is skipped). Without it
-         * (capture ranking), only a filter that FAILS on the entity drops a row.
-         */
-        purpose: z.enum(["entity-actions"]).optional(),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(MATCH_PLAYBOOKS_MAX_LIMIT)
+          .optional(),
       })
     )
     .query(async ({ ctx, input }) => {
-      const database = await getDb();
-      const visibility = scopedDb(AccessContext.from(ctx)).predicate(playbooks);
-
-      // Build the match set: the passed KIND slug (if any) plus, when an entity
-      // is given, its live facet-role slugs (deduped). loadFacetSlugsBatch
-      // enforces the canonical facet visibility lens (this workspace's facets +
-      // pod-wide, owner-floored), so a caller can only widen the set with
-      // facets it can see.
-      const matchSlugs: string[] = [];
-      if (input.profileSlug) matchSlugs.push(input.profileSlug);
-      const facetSlugs: string[] = [];
-      if (input.entityId) {
-        const facetSlugsByEntity = await loadFacetSlugsBatch(
-          database,
-          [input.entityId],
-          { userId: ctx.userId, workspaceId: ctx.workspaceId }
-        );
-        for (const slug of facetSlugsByEntity.get(input.entityId) ?? []) {
-          if (!matchSlugs.includes(slug)) matchSlugs.push(slug);
-          if (slug !== input.profileSlug) facetSlugs.push(slug);
-        }
+      const named = input.workspaceId ?? ctx.workspaceId ?? undefined;
+      const workspaceId =
+        named ?? (await listMemberWorkspaces(ctx.userId))[0]?.id;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "You are in no space yet: playbooks are matched inside a space.",
+        });
       }
-
-      const rows = await database
-        .select()
-        .from(playbooks)
-        .where(
-          and(
-            visibility,
-            eq(playbooks.status, "active"),
-            // When a kind/facet set is named: match those slugs OR a NULL
-            // subject (null-subject playbooks stay in the pool). When omitted,
-            // skip the subject filter so the pool is every active visible row.
-            // NOTE: do NOT use `= ANY(${matchSlugs})` — binding a JS array into
-            // the SQL template serializes it as a Postgres array literal, which
-            // the pod image's postgres.js driver faults on (same class of gotcha
-            // as `sql.json()` — see driver notes). An OR of scalar `=` params is
-            // the portable form (mirrors automations.matchForEntity).
-            matchSlugs.length > 0
-              ? or(
-                  ...matchSlugs.map(
-                    (slug) =>
-                      drizzleSql`${playbooks.subjectProfile}->>'profileSlug' = ${slug}`
-                  ),
-                  isNull(playbooks.subjectProfile)
-                )
-              : undefined
-          )
-        )
-        .orderBy(desc(playbooks.updatedAt));
-
-      // Ranked with a human-readable `reason` (suggest-and-confirm): intent
-      // words (rarity-weighted over this pool) first, then kind, then facet.
-      // Ties break by relevance, never by updatedAt (suggest-routes.ts).
-      // The subject filter is the pod's to judge (`evaluateSubjectFilter`):
-      // read the entity's properties once, only when a candidate has a filter.
-      const subjectFilterOf = (row: Playbook): unknown =>
-        (row.subjectProfile as { filter?: unknown } | null)?.filter;
-      let entityProperties: Record<string, unknown> | null = null;
-      if (
-        input.entityId &&
-        rows.some((r) => subjectFilterOf(r as Playbook) != null)
-      ) {
-        const [ent] = await database
-          .select({ properties: entities.properties })
-          .from(entities)
-          .where(
-            and(
-              eq(entities.id, input.entityId),
-              scopedDb(AccessContext.from(ctx)).predicate(entities)
-            )
-          )
-          .limit(1);
-        entityProperties =
-          (ent?.properties as Record<string, unknown> | null) ?? {};
-      }
-      const forStrip = input.purpose === "entity-actions";
-      const applicable = rows.filter((r) => {
-        const row = r as Playbook;
-        if (entityProperties) {
-          const verdict = evaluateSubjectFilter(
-            subjectFilterOf(row),
-            entityProperties
-          );
-          if (verdict === "fail") return false;
-          if (forStrip && verdict === "unreadable") return false;
+      await assertWorkspaceUsable(ctx.userId, workspaceId);
+      const rows = await matchPlaybooks(
+        { ...ctx, workspaceId },
+        {
+          intentText: input.intentText,
+          workspaceId,
+          ...(input.projectId ? { projectId: input.projectId } : {}),
         }
-        if (!forStrip) return true;
-        const sp = row.subjectProfile as { profileSlug?: unknown } | null;
-        return (
-          (row.workspaceId == null || row.workspaceId === input.workspaceId) &&
-          typeof sp?.profileSlug === "string" &&
-          row.scope !== "project" &&
-          (row.inputStrategy as { kind?: unknown } | null)?.kind !== "pinned"
-        );
-      });
-
-      const ranked = rankRouteCandidates({
-        entity: {
-          entityId: input.entityId,
-          ...(input.profileSlug ? { profileSlug: input.profileSlug } : {}),
-          facetSlugs,
-        },
-        intentText: input.intentText,
-        candidates: applicable.map((p) => ({
-          kind: "playbook" as const,
-          id: p.id,
-          name: p.name,
-          text: [p.goalTemplate],
-          subjectProfileSlug:
-            (p.subjectProfile as { profileSlug?: string } | null)
-              ?.profileSlug ?? null,
-          row: p,
-        })),
-      });
-
-      const MATCH_LIMIT = 20;
-      // Scope + its noun ride on every row; under a project/track signal a
-      // track template sorts above its session twin (`template-kind.ts`).
-      const scoped = ranked
-        .filter((r) => r.signals.length > 0)
-        .map((r) => ({
-          ...r,
-          name: r.candidate.row.name,
-          ...templateKindFields(r.candidate.row.scope),
-        }));
-      return preferTrackTemplates(scoped, wantsTrackTemplate(input))
-        .slice(0, MATCH_LIMIT)
-        .map(({ candidate, score, reason, signals, scope, templateKind }) => ({
-          id: candidate.row.id,
-          name: candidate.row.name,
-          scope,
-          templateKind,
-          goalTemplate: candidate.row.goalTemplate,
-          subjectProfileSlug: candidate.subjectProfileSlug,
-          // The DECLARATION (name/type/required/options/default), so a caller
-          // choosing a candidate can see what it must supply BEFORE it runs —
-          // the match→confirm→run path's whole intake contract.
-          params: candidate.row.params,
-          executor: candidate.row.executor,
-          // What a surface needs to judge and disclose a row without a
-          // per-candidate `playbooks.get`.
-          workspaceId: candidate.row.workspaceId ?? null,
-          inputStrategyKind:
-            ((candidate.row.inputStrategy as { kind?: unknown } | null)
-              ?.kind as string | undefined) ?? null,
-          subjectFilter:
-            (candidate.row.subjectProfile as { filter?: unknown } | null)
-              ?.filter ?? null,
-          forceProposeWrites:
-            (
-              (candidate.row.metadata as Record<string, unknown> | null)
-                ?.governance as { forceProposeWrites?: unknown } | undefined
-            )?.forceProposeWrites === true,
-          score,
-          reason,
-          signals,
-        }));
+      );
+      return {
+        playbooks: compactPlaybookMatches(rows, input.limit),
+        workspaceId,
+        autoPicked: named === undefined,
+      };
     }),
 
   /**

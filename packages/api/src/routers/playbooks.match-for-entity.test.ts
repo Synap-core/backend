@@ -17,6 +17,7 @@ const {
   mockPredicate,
   mockAccessFrom,
   mockLoadFacetSlugsBatch,
+  mockListMemberWorkspaces,
 } = vi.hoisted(() => {
   const predicate = vi.fn(() => ({ __visibility: true }));
   return {
@@ -38,8 +39,16 @@ const {
       },
     },
     mockGetDb: vi.fn(),
+    mockListMemberWorkspaces: vi.fn(async () => [] as { id: string }[]),
   };
 });
+
+vi.mock("../utils/workspace-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../utils/workspace-membership.js")
+  >()),
+  listMemberWorkspaces: mockListMemberWorkspaces,
+}));
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
@@ -75,6 +84,7 @@ vi.mock("../access/index.js", () => ({
 }));
 
 import { playbooksRouter } from "./playbooks.js";
+import { compactPlaybookMatches } from "./mcp/handlers/match-playbooks-compact.js";
 
 const WORKSPACE = "00000000-0000-4000-8000-000000000010";
 
@@ -597,5 +607,98 @@ describe("playbooks.matchForEntity", () => {
       expect(got).toContain("other-space");
       expect(got).toContain("pinned");
     });
+  });
+});
+
+// `playbooks.match` — the New goal flows' door. The SAME matcher as
+// `matchForEntity` and the SAME envelope as MCP `synap_match_playbooks`
+// (`compactPlaybookMatches`), never a second ranking.
+describe("playbooks.match", () => {
+  const OTHER = "00000000-0000-4000-8000-000000000020";
+  const row = (id: string, name: string) => ({
+    id,
+    name,
+    goalTemplate: "x".repeat(300),
+    params: [],
+    executor: "is-agent",
+    subjectProfile: null,
+  });
+  // Seven rows that all carry "newsletter": a ranking keeps every one, so
+  // only the envelope cuts them to 5.
+  const ROWS = [
+    row("pb-1", "Weekly newsletter draft"),
+    row("pb-2", "Newsletter weekly send"),
+    row("pb-3", "Newsletter archive"),
+    row("pb-4", "Newsletter audience"),
+    row("pb-5", "Newsletter ideas"),
+    row("pb-6", "Newsletter review"),
+    row("pb-7", "Newsletter metrics"),
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPredicate.mockReturnValue({ __visibility: true });
+    mockLoadFacetSlugsBatch.mockResolvedValue(new Map<string, string[]>());
+    mockDb.query.workspaceMembers.findFirst.mockResolvedValue({
+      role: "editor",
+    });
+    mockDb.query.workspaces.findFirst.mockResolvedValue({ archivedAt: null });
+    mockListMemberWorkspaces.mockResolvedValue([]);
+    mockGetDb.mockImplementation(async () => ({
+      select: vi.fn(() => selectChain(ROWS)),
+    }));
+  });
+
+  it("returns exactly the agent door's envelope over matchForEntity's ranking", async () => {
+    const caller = playbooksRouter.createCaller(callerCtx());
+    const intentText = "a weekly newsletter";
+    const res = await caller.match({ intentText });
+    const ranked = await caller.matchForEntity({
+      workspaceId: WORKSPACE,
+      intentText,
+    });
+    expect(ranked.length).toBe(7);
+    expect(res.playbooks).toEqual(compactPlaybookMatches(ranked, undefined));
+    expect(res.playbooks.length).toBe(5);
+    expect(res.playbooks[0]!.goalTemplate!.length).toBe(201);
+    expect(res).toMatchObject({ workspaceId: WORKSPACE, autoPicked: false });
+    const two = await caller.match({ intentText, limit: 2 });
+    expect(two.playbooks.map((p) => p.id)).toEqual(
+      ranked.slice(0, 2).map((p) => p.id)
+    );
+  });
+
+  it("matches in the named space, else the first member space, and says it picked", async () => {
+    const noLens = {
+      authenticated: true,
+      userId: "user-1",
+      workspaceId: null,
+    } as never;
+    const named = await playbooksRouter
+      .createCaller(noLens)
+      .match({ intentText: "newsletter", workspaceId: OTHER });
+    expect(named).toMatchObject({ workspaceId: OTHER, autoPicked: false });
+    expect(mockListMemberWorkspaces).not.toHaveBeenCalled();
+
+    mockListMemberWorkspaces.mockResolvedValue([{ id: OTHER }]);
+    const picked = await playbooksRouter
+      .createCaller(noLens)
+      .match({ intentText: "newsletter" });
+    expect(picked).toMatchObject({ workspaceId: OTHER, autoPicked: true });
+    expect(picked.playbooks.length).toBe(5);
+  });
+
+  it("refuses a caller in no space, and empty words", async () => {
+    const noLens = {
+      authenticated: true,
+      userId: "user-1",
+      workspaceId: null,
+    } as never;
+    await expect(
+      playbooksRouter.createCaller(noLens).match({ intentText: "newsletter" })
+    ).rejects.toThrow(/no space/);
+    await expect(
+      playbooksRouter.createCaller(callerCtx()).match({ intentText: "   " })
+    ).rejects.toThrow();
   });
 });
