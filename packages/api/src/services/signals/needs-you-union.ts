@@ -36,6 +36,7 @@ import type { RuleRunFacts } from "./rule-runs.js";
 import {
   buildObjectActionTitle,
   resolveObjectNoun,
+  resolveRunnerStateLabel,
 } from "@synap-core/types/vocabulary";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import {
@@ -149,6 +150,13 @@ export type SignalKind =
    */
   | "session-review"
   /**
+   * One session whose agent waits on the person's PERMISSION — a live
+   * runner says `needs_permission` (0384; decision D-R1, the rule's
+   * `classifyRunnerWait`). ONE row per session, whatever its runners; the
+   * door is the session. Its runner word rides in `why`.
+   */
+  | "session-permission"
+  /**
    * One capture that still owes the person something (founder, 2026-10-12):
    * an OPEN question, or suggestions nobody filed or refused. The door opens
    * the capture thread (the session's `room` view); `captureStatus` says which.
@@ -196,6 +204,7 @@ export const SIGNAL_KINDS = [
   "owed-slot",
   "draft-asks",
   "session-review",
+  "session-permission",
   "capture",
   "access-request",
   "space-invite",
@@ -1469,6 +1478,50 @@ export function signalFromReviewSession(
   };
 }
 
+/** One session waiting for the person's permission (`listSessionsWaitingForPermission`). */
+export interface PermissionSessionSignalInput {
+  id: string;
+  title: string | null;
+  goal: string | null;
+  /** When its longest-waiting live runner began to wait. */
+  since: Date;
+  projectId?: string | null;
+  /** The session's space (the per-space split reads it). */
+  workspaceId?: string | null;
+}
+
+/**
+ * One session waiting on a permission → one signal (decision D-R1). Its
+ * title is the session's own (`resolveSessionTitle`); its words, the runner
+ * state's (`resolveRunnerStateLabel`); a door to the session, grouped with
+ * anything else the session owes. In the headline always: only the person
+ * can answer the dialog, and the agent stands still until they do.
+ */
+export function signalFromPermissionSession(
+  row: PermissionSessionSignalInput,
+  now: Date = new Date()
+): Signal {
+  const title = resolveSessionTitle(row);
+  return {
+    id: `permission:${row.id}`,
+    kind: "session-permission",
+    waitKind: "approval",
+    title,
+    count: 1,
+    occurredAt: row.since,
+    target: { kind: "session", id: row.id },
+    category: "ai",
+    why: resolveRunnerStateLabel("needs_permission"),
+    needsYouClass: "needs_you",
+    ...(row.goal ? { sessionGoal: row.goal } : {}),
+    ...(title ? { sessionTitle: title } : {}),
+    ...(row.projectId ? { sessionProjectId: row.projectId } : {}),
+    groupKey: sessionGroupKey(row.id),
+    ageBucket: ageBucketOf(row.since, now),
+    repeatCount: 1,
+  };
+}
+
 /** One unfinished capture, as `listUnfinishedCaptures` reads it. */
 export interface UnfinishedCaptureSignalInput {
   sessionId: string;
@@ -2045,6 +2098,8 @@ export function unionNeedsYou(args: {
   draftAsks?: DraftAsksInput;
   /** Sessions awaiting the person's review — at every scope. Absent ⇒ none. */
   reviewSessions?: readonly ReviewSessionSignalInput[];
+  /** Sessions whose agent waits on the person's permission (D-R1). Absent ⇒ none. */
+  permissionSessions?: readonly PermissionSessionSignalInput[];
   /** Captures that owe an answer or a filing decision. Absent ⇒ none. */
   unfinishedCaptures?: readonly UnfinishedCaptureSignalInput[];
   /** Pending issuers + app connection requests (pod admins). Absent ⇒ none. */
@@ -2069,6 +2124,9 @@ export function unionNeedsYou(args: {
       ...args.owedSlots.map((r) => signalFromOwedSlot(r, now)),
       ...(args.reviewSessions ?? []).map((r) =>
         signalFromReviewSession(r, now)
+      ),
+      ...(args.permissionSessions ?? []).map((r) =>
+        signalFromPermissionSession(r, now)
       ),
       ...liveCaptureRows(args).map((r) => signalFromUnfinishedCapture(r, now)),
       ...signalsFromAccessRequests(args.accessRequests, now),
@@ -2382,6 +2440,13 @@ export function countNeedsYou(args: {
   reviewSessions?: number;
   /** The review scan hit its cap, so its count is a floor. */
   reviewTruncated?: boolean;
+  /**
+   * The SAME input `unionNeedsYou` takes (D-R1) — one row per session waiting
+   * on the person's permission. Absent ⇒ the scope does not count it (0).
+   */
+  permissionSessions?: readonly PermissionSessionSignalInput[];
+  /** The permission scan hit its cap, so its count is a floor. */
+  permissionTruncated?: boolean;
   /** Undecided drafts that ask something — the SAME input `unionNeedsYou` takes. */
   draftAsks?: DraftAsksInput;
   /** The draft-slot scan hit its cap, so `drafts` is a floor. */
@@ -2439,6 +2504,8 @@ export function countNeedsYou(args: {
   notifications: number;
   /** Sessions awaiting your review / close (every scope). */
   review: number;
+  /** Sessions whose agent waits on your permission (`session-permission` rows, D-R1). */
+  permission: number;
   /** Captures that owe an answer or a filing decision (`capture` rows). */
   captures: number;
   /**
@@ -2528,6 +2595,10 @@ export function countNeedsYou(args: {
     changesToReview: 0,
   };
   const review = args.reviewSessions ?? 0;
+  // The SAME rows the list renders (`signalFromPermissionSession`), counted.
+  const permission = (args.permissionSessions ?? []).map((r) =>
+    signalFromPermissionSession(r, now)
+  ).length;
   const captures = liveCaptureRows({
     unfinishedCaptures: args.unfinishedCaptures,
     owedSlots: args.owedSlots,
@@ -2544,7 +2615,7 @@ export function countNeedsYou(args: {
   // the notification half. Drafts are PROPOSED (2026-10-04) and never count
   // as drafts; a draft's ASKS are owed slots, in `blocked` (2026-10-22).
   const needsYou =
-    needsYouTotal({ owed: blocked, decisions, review }) +
+    needsYouTotal({ owed: blocked, decisions, review, permission }) +
     notifications +
     captures +
     requests +
@@ -2571,11 +2642,13 @@ export function countNeedsYou(args: {
       args.notificationsTruncated ||
       args.owedTruncated ||
       (args.reviewTruncated ?? false) ||
+      (args.permissionTruncated ?? false) ||
       (args.capturesTruncated ?? false) ||
       (args.accessRequestsTruncated ?? false) ||
       (args.spaceInvitesTruncated ?? false),
     blocked,
     review,
+    permission,
     captures,
     requests,
     invites,

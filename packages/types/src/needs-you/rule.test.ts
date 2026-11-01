@@ -590,3 +590,21 @@ describe("fold words (vocabulary): one name and one hint per fold", () => {
     expect(NEEDS_YOU_OLDER_LABEL).toBe("Waiting over a week");
   });
 });
+
+describe("classifyRunnerWait (decision D-R1)", () => {
+  it("one needs-you item for a live runner waiting on a permission, on work that has not ended", async () => {
+    const { classifyRunnerWait } = await import("./rule.js");
+    expect(
+      classifyRunnerWait({ status: "active", runnerState: "needs_permission" })
+    ).toBe("needs_you");
+    expect(
+      classifyRunnerWait({ status: "paused", runnerState: "needs_permission" })
+    ).toBe("needs_you");
+    for (const runnerState of ["busy", "idle", "ended", null]) {
+      expect(classifyRunnerWait({ status: "active", runnerState })).toBeNull();
+    }
+    expect(
+      classifyRunnerWait({ status: "closed", runnerState: "needs_permission" })
+    ).toBeNull();
+  });
+});

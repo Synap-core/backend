@@ -102,6 +102,8 @@ import {
   foldRunnerState,
   loadSessionRunners,
   reportRunnerState,
+  resetRunnerReportDebounce,
+  RUNNER_REPORT_DEBOUNCE_MS,
   stampSessionRunner,
 } from "../session-runners.js";
 
@@ -833,6 +835,7 @@ describe("runner state (0384)", () => {
   // starts with none, so a count is this test's rows only.
   beforeEach(async () => {
     await q(`delete from session_runners where client_key = $1`, [CLIENT_KEY]);
+    resetRunnerReportDebounce();
   });
   /** One call from the runner's process, saying `state` (or nothing). */
   const as = <T>(fn: () => Promise<T>, state?: string, proc = MAC) =>
@@ -955,6 +958,69 @@ describe("runner state (0384)", () => {
     expect(r).toMatchObject({ state: "ended", live: false, twin: [] });
     expect(all.find((x) => x.processId === BOX)!.twin).toEqual([]);
     expect(foldRunnerState(all).state).toBe("busy");
+  });
+
+  it("the same word again from the same process is debounced: no query inside the window, a changed word never", async () => {
+    const { sessionId } = await seed();
+    await stamp(sessionId, "busy");
+    expect(await as(() => reportRunnerState(), "idle")).toBe(1);
+    // Moved behind its back: a repeat inside the window does not even look.
+    await q(`update session_runners set state = 'busy' where session_id = $1`, [
+      sessionId,
+    ]);
+    expect(await as(() => reportRunnerState(), "idle")).toBe(0);
+    expect((await row(sessionId))!.state).toBe("busy");
+    // Past the window it looks again.
+    expect(
+      await as(
+        () =>
+          reportRunnerState({
+            nowMs: Date.now() + RUNNER_REPORT_DEBOUNCE_MS + 1,
+          }),
+        "idle"
+      )
+    ).toBe(1);
+    // A changed word is never debounced.
+    expect(await as(() => reportRunnerState(), "needs_permission")).toBe(1);
+    expect((await row(sessionId))!.state).toBe("needs_permission");
+  });
+
+  it("a runner that said ended and waits again is back: its ended clears; a wait opened before the end never revives it", async () => {
+    const { sessionId } = await seed();
+    const opened = new Date(Date.now() - 1_000);
+    const stampOpened = (at: Date, state?: string) =>
+      as(
+        () =>
+          stampSessionRunner({
+            sessionId,
+            ownerId: OWNER,
+            agentUserId: AGENT,
+            waitOpenedAt: at,
+          }),
+        state
+      );
+    await stampOpened(opened);
+    await new Promise((r) => setTimeout(r, 5));
+    expect(await as(() => reportRunnerState(), "ended")).toBe(1);
+    // The wait opened before the end re-stamps a minute later: still ended.
+    await q(
+      `update session_runners set last_seen_at = now() - interval '2 minutes' where session_id = $1`,
+      [sessionId]
+    );
+    await stampOpened(opened);
+    expect((await row(sessionId))!.state).toBe("ended");
+    // The conversation comes back and opens a new wait, naming no state:
+    // unknown and live, never ended — inside the minute too.
+    await new Promise((r) => setTimeout(r, 5));
+    expect(await stampOpened(new Date())).toBe(true);
+    let [r] = await loadSessionRunners(sessionId);
+    expect(r).toMatchObject({ state: null, live: true });
+    // Ended again, then back naming its state: that state.
+    await as(() => reportRunnerState(), "ended");
+    await new Promise((r2) => setTimeout(r2, 5));
+    await stampOpened(new Date(), "busy");
+    [r] = await loadSessionRunners(sessionId);
+    expect(r).toMatchObject({ state: "busy", live: true });
   });
 
   it("a state report never writes the session row: no NOTIFY on the session channel", async () => {

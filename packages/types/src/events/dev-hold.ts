@@ -32,6 +32,7 @@ import {
   devboxJobWorkflow,
   pullRequestUrl,
 } from "./dev-loop.js";
+import { record } from "./fact-record.js";
 import { foldPullRequestState, type DevLoopEventRowLike } from "./pr-state.js";
 
 /**
@@ -81,12 +82,6 @@ export function holdDevRefNamed(
     label: holdDevRefLabel(ref),
     url: ref.kind === "pr" ? pullRequestUrl(ref) : null,
   };
-}
-
-function record(data: unknown): Record<string, unknown> {
-  return data && typeof data === "object"
-    ? (data as Record<string, unknown>)
-    : {};
 }
 
 function newest(

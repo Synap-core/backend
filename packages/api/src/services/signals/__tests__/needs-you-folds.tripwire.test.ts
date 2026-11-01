@@ -112,6 +112,17 @@ const REVIEW = [
   },
 ];
 
+// D-R1: a session whose agent waits on the person's permission dialog. A
+// count that adds it another way than the list's rows says two numbers.
+const PERMISSION = [
+  {
+    id: "perm-1",
+    title: "Run the migration",
+    goal: "Run the migration",
+    since: ago(DAY / 24),
+  },
+];
+
 const items = (rows: NeedsYouRow<Signal>[]) =>
   rows.flatMap((r) => (r.kind === "item" ? [r.signal] : r.items));
 
@@ -121,6 +132,7 @@ describe("needs-you folds: the count IS the rows (decision E)", () => {
     notifications: NOTIFICATIONS,
     owedSlots: OWED,
     reviewSessions: REVIEW,
+    permissionSessions: PERMISSION,
     now: NOW,
   });
   const count = countNeedsYou({
@@ -135,13 +147,18 @@ describe("needs-you folds: the count IS the rows (decision E)", () => {
     owedTruncated: false,
     reviewSessions: REVIEW.length,
     reviewSessionIds: REVIEW.map((r) => r.id),
+    permissionSessions: PERMISSION,
     now: NOW,
   });
   const rows = needsYouRows(signals);
 
   it("NON-VACUITY: every slot and cluster became a row, and every fold is reached", () => {
     expect(signals).toHaveLength(
-      OWED.length + CLUSTERS.length + NOTIFICATIONS.length + REVIEW.length
+      OWED.length +
+        CLUSTERS.length +
+        NOTIFICATIONS.length +
+        REVIEW.length +
+        PERMISSION.length
     );
     for (const f of [
       "working",
@@ -165,10 +182,18 @@ describe("needs-you folds: the count IS the rows (decision E)", () => {
         // The deploy approval cluster's and the review row's titles.
         signals.find((s) => s.id === "cluster:deploy")!.title,
         signals.find((s) => s.kind === "session-review")!.title,
+        "Run the migration",
       ].sort()
     );
-    // The notification and the review are headline rows too.
-    expect(count.blocked + count.decisions).toBe(headline.length - 2);
+    // The notification, the review and the permission are headline rows too.
+    expect(count.blocked + count.decisions).toBe(headline.length - 3);
+    // D-R1: one item per session waiting on a permission, in the headline.
+    expect(count.permission).toBe(1);
+    expect(signals.find((s) => s.kind === "session-permission")).toMatchObject({
+      target: { kind: "session", id: "perm-1" },
+      why: "Waiting for your permission",
+      groupKey: "session:perm-1",
+    });
     // ONE headline number: the folds state the same one (M5).
     expect(count.needsYou).toBe(headline.length);
     expect(count.folds.needsYou).toBe(count.needsYou);

@@ -130,6 +130,14 @@ export async function stampSessionRunner(p: {
   ownerId: string;
   /** The agent acting through the key, when an agent key is calling. */
   agentUserId?: string | null;
+  /**
+   * When the wait that stamps was OPENED. A runner that said `ended` before
+   * then has come back (a resumed conversation waits again): its `ended` is
+   * cleared — to the state this wait names, else unknown (`null`). A wait
+   * opened before the `ended` (its re-stamp a minute later) never revives it.
+   * Absent: nothing is revived.
+   */
+  waitOpenedAt?: Date;
 }): Promise<boolean> {
   const clientKey = getRequestClientKey();
   const parsed = parseRunnerClientKey(clientKey);
@@ -140,6 +148,12 @@ export async function stampSessionRunner(p: {
   const agentUserId = p.agentUserId ?? null;
   // The report is newer than the row's: it may move the state (0384).
   const fresher = drizzleSql`(excluded.state IS NOT NULL AND (${sessionRunners.stateReportedAt} IS NULL OR excluded.state_reported_at > ${sessionRunners.stateReportedAt}))`;
+  // The runner said `ended`, and this wait was opened after it said so: it
+  // is back. Without a state of its own the row reads unknown, never `ended`.
+  const opened = p.waitOpenedAt ?? null;
+  const revived = opened
+    ? drizzleSql`(${sessionRunners.state} = 'ended' AND (${sessionRunners.stateReportedAt} IS NULL OR ${sessionRunners.stateReportedAt} < ${opened.toISOString()}::timestamptz) AND NOT ${fresher})`
+    : drizzleSql`false`;
   try {
     // The computer: the agent's host (`users.host_user_id`), or the agent
     // itself when the key belongs to a `machine` agent user.
@@ -176,15 +190,19 @@ export async function stampSessionRunner(p: {
           cwd: drizzleSql`coalesce(excluded.cwd, ${sessionRunners.cwd})`,
           agentUserId: drizzleSql`excluded.agent_user_id`,
           machineUserId: drizzleSql`coalesce(excluded.machine_user_id, ${sessionRunners.machineUserId})`,
-          state: drizzleSql`CASE WHEN ${fresher} THEN excluded.state ELSE ${sessionRunners.state} END`,
-          stateSince: drizzleSql`CASE WHEN ${fresher} AND excluded.state IS DISTINCT FROM ${sessionRunners.state} THEN excluded.state_since ELSE ${sessionRunners.stateSince} END`,
-          stateReportedAt: drizzleSql`CASE WHEN ${fresher} THEN excluded.state_reported_at ELSE ${sessionRunners.stateReportedAt} END`,
+          state: drizzleSql`CASE WHEN ${fresher} THEN excluded.state WHEN ${revived} THEN NULL ELSE ${sessionRunners.state} END`,
+          stateSince: drizzleSql`CASE WHEN ${fresher} AND excluded.state IS DISTINCT FROM ${sessionRunners.state} THEN excluded.state_since WHEN ${revived} THEN now() ELSE ${sessionRunners.stateSince} END`,
+          stateReportedAt: drizzleSql`CASE WHEN ${fresher} THEN excluded.state_reported_at WHEN ${revived} THEN now() ELSE ${sessionRunners.stateReportedAt} END`,
         },
         // THE throttle: at most one write a minute per row — unless the
-        // runner says something new, which is written at once.
-        setWhere: drizzleSql`${sessionRunners.lastSeenAt} < now() - make_interval(secs => ${RUNNER_STAMP_INTERVAL_SECONDS}) OR (${fresher} AND excluded.state IS DISTINCT FROM ${sessionRunners.state})`,
+        // runner says something new, or came back, which is written at once.
+        setWhere: drizzleSql`${sessionRunners.lastSeenAt} < now() - make_interval(secs => ${RUNNER_STAMP_INTERVAL_SECONDS}) OR (${fresher} AND excluded.state IS DISTINCT FROM ${sessionRunners.state}) OR ${revived}`,
       })
       .returning({ sessionId: sessionRunners.sessionId });
+    // The row may have moved (a revived `ended`): the next report is news.
+    if (written.length > 0) {
+      lastReported.delete(`${clientKey}\u0000${proc?.key ?? ""}`);
+    }
     return written.length > 0;
   } catch (err) {
     logger.warn(
@@ -204,12 +222,26 @@ export async function stampSessionRunner(p: {
  * no row to update. Returns how many rows moved. Never throws.
  */
 export async function reportRunnerState(
-  opts: { database?: typeof db } = {}
+  opts: { database?: typeof db; nowMs?: number } = {}
 ): Promise<number> {
   try {
     const report = getRequestRunnerState();
     const clientKey = getRequestClientKey();
     if (!report || !clientKey || !parseRunnerClientKey(clientKey)) return 0;
+    const processKey = getRequestProcess()?.key ?? "";
+    // The debounce: a runner repeats its state on EVERY call; the same word
+    // from the same process inside the window costs no query.
+    const debounceKey = `${clientKey}\u0000${processKey}`;
+    const nowMs = opts.nowMs ?? Date.now();
+    const last = lastReported.get(debounceKey);
+    if (
+      last &&
+      last.state === report.state &&
+      nowMs - last.at < RUNNER_REPORT_DEBOUNCE_MS
+    ) {
+      return 0;
+    }
+    rememberReport(debounceKey, report.state, nowMs);
     const moved = await (opts.database ?? db)
       .update(sessionRunners)
       .set({
@@ -220,7 +252,7 @@ export async function reportRunnerState(
       .where(
         and(
           eq(sessionRunners.clientKey, clientKey),
-          eq(sessionRunners.processKey, getRequestProcess()?.key ?? ""),
+          eq(sessionRunners.processKey, processKey),
           drizzleSql`${sessionRunners.lastSeenAt} > now() - make_interval(secs => ${RUNNER_LIVE_WINDOW_SECONDS})`,
           drizzleSql`${sessionRunners.state} IS DISTINCT FROM ${report.state}`,
           or(
@@ -232,10 +264,38 @@ export async function reportRunnerState(
       .returning({ sessionId: sessionRunners.sessionId });
     return moved.length;
   } catch (err) {
-    // Called with `void` by the doors: it must never reject.
+    // Called with `void` by the doors: it must never reject. A failed write
+    // must not be debounced: the next call tries again.
+    lastReported.clear();
     logger.warn({ err }, "runner state report failed (non-fatal)");
     return 0;
   }
+}
+
+/**
+ * How long one process's repeated report of the SAME state is skipped
+ * ({@link reportRunnerState}). A missed move is caught within this window, or
+ * at once by the wait's own stamp; a CHANGED state is never debounced.
+ */
+export const RUNNER_REPORT_DEBOUNCE_MS = 30_000;
+/** Debounce entries kept per pod process (oldest dropped first). */
+const RUNNER_REPORT_DEBOUNCE_MAX = 5_000;
+
+/** client key + process → the last state reported and when (this pod process only). */
+const lastReported = new Map<string, { state: RunnerState; at: number }>();
+
+function rememberReport(key: string, state: RunnerState, at: number): void {
+  lastReported.delete(key);
+  lastReported.set(key, { state, at });
+  if (lastReported.size > RUNNER_REPORT_DEBOUNCE_MAX) {
+    const oldest = lastReported.keys().next().value;
+    if (oldest !== undefined) lastReported.delete(oldest);
+  }
+}
+
+/** Test seam: forget every debounced report. */
+export function resetRunnerReportDebounce(): void {
+  lastReported.clear();
 }
 
 /** One other live copy of the same conversation (0373). */
