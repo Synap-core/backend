@@ -1034,4 +1034,58 @@ describe("the status watcher, on dev work standing still", () => {
       }),
     ]);
   });
+
+  it("D-R2 across ticks: PRs escalating on different ticks share one row, and the push goes to a PR raised now", async () => {
+    // After every tick above. PR 1 is escalated on tick A; PRs 2 and 3 only
+    // escalate on tick B, when PR 1's escalation is an episode already raised.
+    const TA = new Date(T1.getTime() + WORK_CLOCK.stuck);
+    const TB = new Date(TA.getTime() + WORK_CLOCK.stuck - WORK_CLOCK.stale);
+    const BRIDGE = "Synap-core/synap-bridge";
+    const S_B = [randomUUID(), randomUUID(), randomUUID()];
+    for (const [i, id] of S_B.entries()) await session(id, `Bridge ${i}`);
+    const beforeA = (ms: number) => new Date(TA.getTime() - ms).toISOString();
+    await snapshotAt(TA, {
+      repo: BRIDGE,
+      observedAt: TA.toISOString(),
+      visibility: "private",
+      main: greenMain,
+      prs: [
+        // Listed first: before the fix it took the push slot on tick B.
+        pr(1, S_B[0]!, { updatedAt: beforeA(WORK_CLOCK.stuck + HOUR) }, BRIDGE),
+        pr(2, S_B[1]!, { updatedAt: beforeA(WORK_CLOCK.stale + HOUR) }, BRIDGE),
+        pr(3, S_B[2]!, { updatedAt: beforeA(WORK_CLOCK.stale + HOUR) }, BRIDGE),
+      ],
+      mergedToday: [],
+    });
+    const bridgePushes = () =>
+      h.pushes.filter((p) =>
+        S_B.includes(String((p.data as Record<string, unknown>)?.sourceId))
+      );
+
+    h.pushes.length = 0;
+    await q(`update notifications set pushed_at = null`);
+    await runStatusWatcher(TA);
+    expect(bridgePushes().map((p) => p.title)).toEqual([
+      "PR 1 is green and not merged",
+    ]);
+
+    h.pushes.length = 0;
+    await q(`update notifications set pushed_at = null`);
+    await runStatusWatcher(TB);
+    // Pushed once, for the fold, by a PR raised on THIS tick.
+    expect(bridgePushes().map((p) => p.title)).toEqual([
+      "synap-bridge: 3 PRs are stuck",
+    ]);
+    for (const id of S_B.slice(1)) {
+      expect(await titlesTo(id)).toEqual(["synap-bridge: 3 PRs are stuck"]);
+    }
+    // One collapse key for the repo, whichever tick each PR escalated on.
+    const keys = await q<{ group_key: string }>(
+      `select distinct group_key from notifications where source_id = any($1::text[])`,
+      [S_B]
+    );
+    expect(keys.rows.map((r) => r.group_key)).toEqual([
+      "status-signal:dev-prs:synap-core/synap-bridge",
+    ]);
+  });
 });

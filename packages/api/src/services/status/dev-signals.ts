@@ -158,8 +158,8 @@ export function ownsMainRed(
   });
 }
 
-/** `owner/name` → `name`; the snapshot's repo is already lowercased. */
-const repoName = (repo: string) => repo.split("/").pop() ?? repo;
+/** `owner/name` → `name` (`synap-core/backend` → `backend`): a repo in a person's words. */
+export const repoName = (repo: string) => repo.split("/").pop() || repo;
 
 /** The PR that turned a repo's main red, as a `dev.pr_merged` fact named it. */
 export interface CulpritFact {
@@ -317,10 +317,14 @@ export interface RepoStuckFold {
   labels: string[];
 }
 
-const PR_SIGNALS: ReadonlySet<DevSignal> = new Set([
+/** The dev signals about one PR (the others are about a repo's main). */
+export const PR_SIGNALS: ReadonlySet<string> = new Set<DevSignal>([
   "pr_green_unmerged",
   "pr_red_idle",
 ]);
+
+/** The needs-you collapse key of a repo's escalated PR signals (D-R2). */
+export const devPrsGroupKey = (repo: string) => `status-signal:dev-prs:${repo}`;
 
 /**
  * D-R2: the repos with {@link REPO_STUCK_AT} or more ESCALATED PR signals
