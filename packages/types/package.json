@@ -385,6 +385,10 @@
       "types": "./dist/workers/health.d.ts",
       "import": "./dist/workers/health.js"
     },
+    "./workers/goal": {
+      "types": "./dist/workers/goal.d.ts",
+      "import": "./dist/workers/goal.js"
+    },
     "./targets": {
       "types": "./dist/targets/index.d.ts",
       "import": "./dist/targets/index.js"
