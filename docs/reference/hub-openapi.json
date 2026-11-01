@@ -2032,7 +2032,9 @@
               { "type": "string" },
               { "type": "string", "format": "date-time" }
             ]
-          }
+          },
+          "scope": { "type": ["object", "null"], "additionalProperties": {} },
+          "refreshAutomationId": { "type": ["string", "null"] }
         },
         "required": ["id", "userId", "title"],
         "additionalProperties": {}
@@ -2056,7 +2058,9 @@
           "expectedLabel": { "type": "string" },
           "url": { "type": "string" },
           "entityId": { "type": "string" },
-          "idempotencyKey": { "type": "string" }
+          "idempotencyKey": { "type": "string" },
+          "scope": { "type": ["object", "null"], "additionalProperties": {} },
+          "refreshAutomationId": { "type": ["string", "null"] }
         },
         "required": ["userId", "title"]
       },
@@ -2150,6 +2154,59 @@
                     }
                   },
                   "required": ["op", "title"]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "op": { "type": "string", "enum": ["insert_embed"] },
+                    "directive": {
+                      "type": "string",
+                      "enum": ["synap-entity", "synap-view", "synap-cell"]
+                    },
+                    "ref": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string",
+                        "maxLength": 500
+                      }
+                    },
+                    "props": { "type": "object", "additionalProperties": {} },
+                    "fallback": { "type": "string", "maxLength": 10000 },
+                    "sectionId": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                    },
+                    "after": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 10000
+                    }
+                  },
+                  "required": ["op", "directive", "ref"]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "op": { "type": "string", "enum": ["set_scope"] },
+                    "scope": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": {} },
+                        { "type": "null" }
+                      ]
+                    }
+                  },
+                  "required": ["op", "scope"]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "op": { "type": "string", "enum": ["set_refresher"] },
+                    "automationId": {
+                      "type": ["string", "null"],
+                      "format": "uuid"
+                    }
+                  },
+                  "required": ["op", "automationId"]
                 }
               ]
             },
