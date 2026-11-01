@@ -14,7 +14,7 @@ afterEach(() => vi.useRealTimers());
 describe("catalogKindLabel", () => {
   it("names each catalog kind from the registry, tool-family kinds apart", () => {
     expect(catalogKindLabel("workspace")).toBe("Space");
-    expect(catalogKindLabel("automation")).toBe("Rule");
+    expect(catalogKindLabel("automation")).toBe("Automation");
     expect(catalogKindLabel("cell")).toBe("Card");
     expect(catalogKindLabel("capability")).toBe("Capability");
     expect(catalogKindLabel("skill")).toBe("Skill");
@@ -23,8 +23,8 @@ describe("catalogKindLabel", () => {
 
 describe("countNoun", () => {
   it("uses the registry's singular and plural", () => {
-    expect(countNoun("automation", 1)).toBe("1 rule");
-    expect(countNoun("automation", 3)).toBe("3 rules");
+    expect(countNoun("automation", 1)).toBe("1 automation");
+    expect(countNoun("automation", 3)).toBe("3 automations");
     expect(countNoun("view", 2)).toBe("2 views");
   });
 });
@@ -140,7 +140,7 @@ describe("describeInstall", () => {
     });
     expect(s.tone).toBe("stale");
     expect(s.sentence).toBe(
-      "Added 1 rule. 1 rule was already there. 1 rule could not be added: C (bad flow)."
+      "Added 1 automation. 1 automation was already there. 1 automation could not be added: C (bad flow)."
     );
   });
 

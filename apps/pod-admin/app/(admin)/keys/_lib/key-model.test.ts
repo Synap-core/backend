@@ -73,7 +73,7 @@ describe("categorize", () => {
   });
 
   it("labels app, computer and agent with the vocabulary's nouns", () => {
-    expect(CATEGORY_LABEL.app).toBe("App");
+    expect(CATEGORY_LABEL.app).toBe("Connected app");
     expect(CATEGORY_LABEL.computer).toBe("Computer");
     expect(CATEGORY_LABEL.agent).toBe("Agent");
   });

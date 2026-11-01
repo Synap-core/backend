@@ -961,7 +961,7 @@ describe("cleanup pack v2 (filer + executor)", () => {
 
     expect(h.archiveCalls).toEqual([]);
     expect(result.refusals).toEqual([
-      "Generate report (rule): Automation has run since the pack was filed",
+      "Generate report (automation): Automation has run since the pack was filed",
     ]);
   });
 
