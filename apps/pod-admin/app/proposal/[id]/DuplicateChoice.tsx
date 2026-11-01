@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * "Looks like X" (FB1020 B2) on the pod-admin review. The pod filed this write
+ * "Looks like X" on the pod-admin review. The pod filed this write
  * ANYWAY because its one duplicate door found a possible twin; the reviewer
  * decides. Every rule — which twins bind the verbs, the verbs themselves, their
  * order and words, the one primary, why a twin matched, the sample mark — is
