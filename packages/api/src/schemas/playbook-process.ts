@@ -28,6 +28,7 @@ import {
   WORKER_COUNT_MIN_FLOOR,
   WORKER_MAX_PENDING_APPROVALS_CEILING,
   WORKER_SIZES,
+  workerActivatorKey,
   type WorkerActivator,
 } from "@synap-core/types/workers";
 
@@ -131,20 +132,12 @@ export const playbookSubjectProfileSchema = z.looseObject({
   humanOnlyStatuses: humanOnlyStatusesSchema.optional(),
 });
 
-/** The stable identity of an activator within one playbook. */
-export function activatorKey(a: {
-  on: string;
-  status?: string | null;
-  cron?: string | null;
-}): string {
-  // size / mode / maxPendingApprovals stay OUT of the key: changing them
-  // moves the decl hash and the convergence UPDATES the same rule in place.
-  if (a.on === "enters_status") return `enters_status:${a.status ?? ""}`;
-  if (a.on === "count") return `count:${a.status ?? ""}`;
-  if (a.on === "schedule")
-    return `schedule:${(a.cron ?? "").trim().split(/\s+/).join(" ")}`;
-  return a.on;
-}
+/**
+ * The stable identity of an activator within one playbook — the ONE
+ * derivation in `@synap-core/types/workers` (`workerActivatorKey`), which the
+ * surfaces' "How often?" helper reads too.
+ */
+export const activatorKey = workerActivatorKey;
 
 /**
  * THE fold: wire top-level `activators` / `humanOnlyStatuses` → stored inside

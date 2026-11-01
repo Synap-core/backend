@@ -3,11 +3,13 @@ import { describe, expect, it } from "vitest";
 import { resolveUnitState } from "../units/state.js";
 import {
   RUN_HEALTH_STATES,
+  RUN_MARKS,
   consecutiveFailuresOf,
   deriveRunHealth,
   goalRunHealth,
   runHealthUnitInput,
   runMarkOfRunStatus,
+  runMarkUnitInput,
   workerTriggerKind,
   type RunMark,
   type RunMarkEntry,
@@ -142,6 +144,21 @@ describe("runHealthUnitInput — tone and glyph come from the unit-state door", 
       healthy: "scheduled",
       paused: "paused",
       not_running: "not_started",
+    });
+  });
+});
+
+describe("runMarkUnitInput — a strip dot's tone and glyph come from the unit-state door", () => {
+  it("every run mark has its own unit state", () => {
+    const got = Object.fromEntries(
+      RUN_MARKS.map((m) => [m, resolveUnitState(runMarkUnitInput(m)).state])
+    );
+    expect(got).toEqual({
+      done: "done",
+      failed: "failed",
+      waiting: "needs_you",
+      skipped: "paused",
+      running: "working",
     });
   });
 });

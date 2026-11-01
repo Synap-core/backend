@@ -241,6 +241,28 @@ export function runHealthUnitInput(state: RunHealthState): UnitStateInput {
   }
 }
 
+/**
+ * ONE run's mark as the SHARED unit input, so a health strip's dots take their
+ * tone and glyph from `resolveUnitState`: done reads `done`, failed `failed`,
+ * waiting `needs_you` (its session still owes the person an answer), skipped
+ * `paused` (it fired and did nothing: quiet, never a failure), running
+ * `working`.
+ */
+export function runMarkUnitInput(mark: RunMark): UnitStateInput {
+  switch (mark) {
+    case "done":
+      return { terminal: true };
+    case "failed":
+      return { failed: true };
+    case "waiting":
+      return { waitingOnYou: true };
+    case "skipped":
+      return { idle: true };
+    case "running":
+      return { running: true };
+  }
+}
+
 // ── The goal's worker, as the pages read it ────────────────────────────────
 
 /** What wakes a worker, in its kind: a clock, something happening, a button. */
