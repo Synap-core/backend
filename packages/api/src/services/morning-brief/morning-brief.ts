@@ -417,10 +417,11 @@ export async function runMorningBriefs(args?: {
     // Once a day, held as the brief is: a digest raised in the last 20 hours
     // (read or not) means today's is sent.
     const last = await readLastDigestAt(database, userId);
-    if (last && now.getTime() - last.getTime() < ONCE_WITHIN_MS) return false;
     const since = digestSince(now, last);
-    const digest = composeDeliveredDigest(await readDelivered(userId, since));
-    if (!digest) return false;
+    const digest = composeDeliveredDigest(await readDelivered(userId, since)) ?? {
+      title: "Delivered since your last digest",
+      body: "",
+    };
     const id = await notify({
       type: DELIVERED_DIGEST_TYPE,
       userId,

@@ -183,10 +183,6 @@ export async function readSessionDevboxJobs(
       and(
         eq(events.type, DEV_LOOP_EVENT_TYPES.ciFinished),
         drizzleSql`${events.data}->>'workflow' LIKE 'devbox %'`,
-        sessionDevFactWhere(
-          row.id,
-          sessionPullRequestRefs(row.expectedOutputs)
-        ),
         eventVisibleWhere({
           userId: reader.userId,
           roster: reader.roster ?? false,
