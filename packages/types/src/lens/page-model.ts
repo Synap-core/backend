@@ -27,7 +27,7 @@
  */
 
 import { needsYouRows, type NeedsYouRow } from "../needs-you/index.js";
-import { LENS_CAPS, lensCapShown } from "./classes.js";
+import { LENS_CAPS, lensCapShown, type AttentionClass } from "./classes.js";
 import {
   NEXT_HOUR_PICKS,
   nextMoveCandidateOfWire,
@@ -416,11 +416,34 @@ function regroupDays(
     .filter((d) => d.lines.length > 0);
 }
 
+/**
+ * A class's at-rest cap: the host's (a document's `lens-section` block names
+ * its `limit`), else the class's own (`LENS_CAPS`). A cap that is not a
+ * positive number is the class's own; the ONE cap rule (`lensCapShown`, a
+ * single hidden row is never hidden) applies to either.
+ */
+export function lensClassCap(
+  cls: AttentionClass,
+  caps?: Partial<Record<AttentionClass, number>>
+): number {
+  const cap = caps?.[cls];
+  return typeof cap === "number" && Number.isFinite(cap) && cap >= 1
+    ? Math.floor(cap)
+    : LENS_CAPS[cls];
+}
+
 /** THE page model — see the module header for the rules it owns. */
 export function lensPageModel<T extends LensPageSignal & LensNeedsYouSignal>(
   page: LensPage<T>,
-  opts: { timeZone: string; now?: Date; happened?: LensHappenedSpan }
+  opts: {
+    timeZone: string;
+    now?: Date;
+    happened?: LensHappenedSpan;
+    /** Per-class at-rest caps (absent = `LENS_CAPS`), see {@link lensClassCap}. */
+    caps?: Partial<Record<AttentionClass, number>>;
+  }
 ): LensPageModel<T> {
+  const capOf = (cls: AttentionClass) => lensClassCap(cls, opts.caps);
   const blockingAll = lensItemsOfClass(page.blocking.rows, "blocking");
   const proposedAll = lensItemsOfClass(page.proposed.rows, "proposed");
   const happeningAll = page.happening.rows.map((s) => lensRowOfLiveSignal(s));
@@ -444,7 +467,7 @@ export function lensPageModel<T extends LensPageSignal & LensNeedsYouSignal>(
   const happened = classModel(
     page.happened,
     todayLines,
-    LENS_CAPS.happened,
+    capOf("happened"),
     (l) => l.count,
     todayLines.reduce((n, l) => n + l.count, 0),
     {
@@ -459,7 +482,7 @@ export function lensPageModel<T extends LensPageSignal & LensNeedsYouSignal>(
   const blocking = classModel(
     page.blocking,
     blockingAll,
-    LENS_CAPS.blocking,
+    capOf("blocking"),
     itemUnits,
     lensClassCount(page.blocking),
     ofPod(page.blocking)
@@ -467,7 +490,7 @@ export function lensPageModel<T extends LensPageSignal & LensNeedsYouSignal>(
   const happening = classModel(
     page.happening,
     happeningAll,
-    LENS_CAPS.happening,
+    capOf("happening"),
     () => 1,
     lensClassCount(page.happening),
     ofPod(page.happening)
@@ -475,7 +498,7 @@ export function lensPageModel<T extends LensPageSignal & LensNeedsYouSignal>(
   const produced = classModel(
     page.produced,
     producedAll,
-    LENS_CAPS.produced,
+    capOf("produced"),
     () => 1,
     lensClassCount(page.produced),
     ofPod(page.produced)
@@ -489,7 +512,7 @@ export function lensPageModel<T extends LensPageSignal & LensNeedsYouSignal>(
     proposed: classModel(
       page.proposed,
       proposedAll,
-      LENS_CAPS.proposed,
+      capOf("proposed"),
       itemUnits,
       lensClassCount(page.proposed),
       ofPod(page.proposed)
