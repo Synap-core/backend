@@ -5,6 +5,7 @@
  * a stalled run resumable like a failed one, the door to what was created.
  */
 import { describe, expect, it } from "vitest";
+import { setAmbientCatalogLocale } from "@synap-core/types/i18n";
 import {
   approvalDoor,
   approvalProgressCopy,
@@ -98,7 +99,7 @@ describe("approvalProgressCopy", () => {
   });
 
   it("a failed READ is its own state: busy (it may still run), never done", () => {
-    expect(progressUnavailable).toMatchObject({ busy: true, door: null });
+    expect(progressUnavailable()).toMatchObject({ busy: true, door: null });
   });
 });
 
@@ -175,5 +176,81 @@ describe("a run that stopped on a record that already exists", () => {
       "2 left out: several existing records share the name"
     );
     expect(copy.tone).toBe("warning");
+  });
+});
+
+describe("in French", () => {
+  const withFrench = (fn: () => void) => {
+    setAmbientCatalogLocale("fr");
+    try {
+      fn();
+    } finally {
+      setAmbientCatalogLocale("en");
+    }
+  };
+  const flat = (s: string | null) => (s ?? "").replace(/\s+/g, " ");
+
+  it("every state says its numbers and its sentence in French", () => {
+    withFrench(() => {
+      const running = approvalProgressCopy(RUN);
+      expect(flat(running.title)).toBe("Création des fiches : 1 240 sur 4 222");
+      expect(flat(running.detail)).toBe(
+        "1 180 créées · 52 déjà présentes · 8 en échec"
+      );
+      expect(
+        flat(approvalProgressCopy({ ...RUN, state: "queued" }).title)
+      ).toBe("En attente de démarrage : 4 222 modifications");
+      expect(
+        flat(approvalProgressCopy({ ...RUN, state: "succeeded" }).title)
+      ).toBe("Approuvée : 4 222 modifications appliquées");
+      expect(
+        flat(approvalProgressCopy({ ...RUN, state: "stalled" }).title)
+      ).toBe("Arrêtée à 1 240 sur 4 222");
+      expect(flat(progressUnavailable().title)).toBe(
+        "Impossible de lire la progression de l’approbation"
+      );
+    });
+  });
+
+  it("no English sentence is left in any state", () => {
+    withFrench(() => {
+      const states = [
+        { ...RUN, state: "queued" as const },
+        RUN,
+        { ...RUN, phase: "finishing" as const },
+        { ...RUN, state: "succeeded" as const, relationsFailed: 3, skipped: 2 },
+        { ...RUN, state: "failed" as const },
+        {
+          ...RUN,
+          state: "failed" as const,
+          twins: [{ id: "t", title: "Acme", kind: "company" }],
+        },
+      ];
+      const seen = states
+        .flatMap((run) => {
+          const copy = approvalProgressCopy(run);
+          return [copy.title, copy.detail];
+        })
+        .concat(progressUnavailable().title, progressUnavailable().detail)
+        .join(" | ");
+      for (const english of [
+        "Creating records",
+        "Waiting to start",
+        "Finishing up",
+        "Approved:",
+        "Stopped at",
+        "already exists",
+        "created",
+        "already there",
+        "failed",
+        "did not land",
+        "left out",
+        "Can’t read",
+        "still applying",
+      ]) {
+        expect(seen).not.toContain(english);
+      }
+      expect(flat(seen)).toContain("« Acme » existe déjà");
+    });
   });
 });

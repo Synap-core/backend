@@ -40,6 +40,25 @@ export const en = {
   "decide.pickFirst": "Pick the record for each item first.",
   "decide.as": "You decide as {identity} · recorded in the",
   "decide.recorded": "Recorded in the",
+  "outcome.approved": "You approved this change: it’s now in your pod.",
+  "outcome.auto_approved":
+    "This matched an auto-approve rule and is already applied.",
+  "outcome.rejected": "You rejected this: the AI was told why.",
+  "outcome.reverted": "This change was undone after it was applied.",
+  "outcome.expired":
+    "Its moment passed before anyone decided: nothing was applied.",
+  "outcome.withdrawn": "The AI withdrew this request: nothing was applied.",
+  "repair.label": "Why approving failed",
+  "repair.default": "Approving this failed.",
+  "repair.loadFailed": "Couldn’t load what can be fixed.",
+  "repair.checking": "Checking what to fix…",
+  "repair.use": "Use “{value}” and approve",
+  "repair.add": "Add “{value}” as a choice and approve",
+  "repair.missingKind":
+    "The kind “{kind}” does not exist here. Create it, or ask the AI to file this under a kind that exists.",
+  "repair.approved": "Repaired and approved",
+  "repair.approveFailed": "Repaired, but couldn’t approve",
+  "repair.failed": "Couldn’t repair this request",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -77,7 +96,32 @@ export const fr: Catalog<typeof en> = {
   "decide.pickFirst": "Choisissez d’abord la fiche de chaque élément.",
   "decide.as": "Vous décidez en tant que {identity} · enregistré dans",
   "decide.recorded": "Enregistré dans",
+  "outcome.approved":
+    "Vous avez approuvé ce changement\u00a0: il est maintenant dans votre pod.",
+  "outcome.auto_approved":
+    "Cette demande correspondait à une règle d’approbation automatique et est déjà appliquée.",
+  "outcome.rejected":
+    "Vous avez rejeté cette demande\u00a0: l’IA a été prévenue du motif.",
+  "outcome.reverted": "Ce changement a été annulé après son application.",
+  "outcome.expired":
+    "Le délai est passé avant toute décision\u00a0: rien n’a été appliqué.",
+  "outcome.withdrawn":
+    "L’IA a retiré cette demande\u00a0: rien n’a été appliqué.",
+  "repair.label": "Pourquoi l’approbation a échoué",
+  "repair.default": "L’approbation a échoué.",
+  "repair.loadFailed": "Impossible de charger ce qui peut être corrigé.",
+  "repair.checking": "Recherche de ce qu’il faut corriger…",
+  "repair.use": "Utiliser «\u00a0{value}\u00a0» et approuver",
+  "repair.add": "Ajouter «\u00a0{value}\u00a0» comme choix et approuver",
+  "repair.missingKind":
+    "Le type «\u00a0{kind}\u00a0» n’existe pas ici. Créez-le, ou demandez à l’IA de classer cette demande sous un type qui existe.",
+  "repair.approved": "Corrigée et approuvée",
+  "repair.approveFailed": "Corrigée, mais impossible de l’approuver",
+  "repair.failed": "Impossible de corriger cette demande",
 };
+
+/** The catalog keys of a decided request's one-line outcome. */
+export type OutcomeKey = Extract<keyof typeof en, `outcome.${string}`>;
 
 /** The page's translator, in the ambient catalog locale. */
 export function proposalPageT() {
