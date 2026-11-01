@@ -305,12 +305,29 @@ describe("(d) idempotency follows the prevailing already-APPROVED guard", () => 
 
   it("uses the same guard shape as the other create/run executors", () => {
     // automation/create and cell/define both select proposals.status by id.
-    for (const key of ['key: "automation/create"', 'key: "cell/define"']) {
-      const start = EXECUTORS.indexOf(key);
-      const block = EXECUTORS.slice(start, start + 2500);
-      expect(block).toContain("ProposalStatus.APPROVED");
-      expect(block).toContain("alreadyApproved: true");
-    }
+    const start = EXECUTORS.indexOf('key: "automation/create"');
+    const block = EXECUTORS.slice(start, start + 2500);
+    expect(block).toContain("ProposalStatus.APPROVED");
+    expect(block).toContain("alreadyApproved: true");
+  });
+
+  it("cell/define keeps the guard in the one apply it delegates to, before the door", () => {
+    // backend#629: cell/define and the legacy widget/register share ONE apply
+    // (`applyCellDefineProposal`), so the guard lives there, not inline.
+    const reg = EXECUTORS.indexOf('key: "cell/define"');
+    expect(reg).toBeGreaterThan(-1);
+    expect(EXECUTORS.slice(reg, reg + 600)).toContain(
+      "applyCellDefineProposal("
+    );
+    const fnStart = EXECUTORS.indexOf(
+      "export async function applyCellDefineProposal("
+    );
+    expect(fnStart).toBeGreaterThan(-1);
+    const fn = EXECUTORS.slice(fnStart, EXECUTORS.indexOf("\n}\n", fnStart));
+    const guardIdx = fn.indexOf("alreadyApproved: true");
+    expect(fn).toContain("ProposalStatus.APPROVED");
+    expect(guardIdx).toBeGreaterThan(-1);
+    expect(guardIdx).toBeLessThan(fn.indexOf("defineCell({"));
   });
 
   /** Executable mirror: second approve is a no-op run-wise. */
