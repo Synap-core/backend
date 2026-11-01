@@ -1222,6 +1222,18 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "agent_paused_by",
     addedBy: "0329_agent_assignment_and_pause.sql",
   },
+  // Whose computer it is (0388): the device approval writes it and the seeding
+  // of a person's auto rule onto an agent's box reads it.
+  {
+    table: "users",
+    column: "computer_belongs_to",
+    addedBy: "0388_computer_belongs_to.sql",
+  },
+  {
+    table: "device_auth_requests",
+    column: "computer_belongs_to",
+    addedBy: "0388_computer_belongs_to.sql",
+  },
   {
     table: "governance_rules",
     column: "principal_class",

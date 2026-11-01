@@ -56,6 +56,12 @@ vi.mock("../../utils/project-scope.js", () => ({
   accessScopeWhere: vi.fn(() => ({ accessScope: true })),
 }));
 
+// Where a run ran is its own read (run-where.pglite.test.ts); these cases pin
+// the agent_write query alone, so its selects are not counted here.
+vi.mock("./run-where.js", () => ({
+  withRunWhere: async <T>(runs: T) => runs,
+}));
+
 import { listRuns } from "./index.js";
 
 const USER = "user-1";

@@ -58,6 +58,11 @@ import {
   proposals,
   secrets,
 } from "@synap/database/schema";
+import {
+  mayCarryHostSeed,
+  revokeHostSeeds,
+  seedHostRules,
+} from "@synap/database/agent-governance";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import {
   NEXT_RUNG_BATCH_MAX,
@@ -699,6 +704,9 @@ export const governanceRulesRouter = router({
           expiresAt: input.expiresAt ?? null,
         })
         .returning();
+      // The same rule for the agent's box, when the box is the agent's
+      // (host-seed.ts). A seed that fails leaves the box asking: stricter.
+      if (rule) await seedHostRules(db, [rule]);
 
       return { rule };
     }),
@@ -854,11 +862,23 @@ export const governanceRulesRouter = router({
         await assertOwnsConnection(ctx.userId, existing.targetPattern);
       }
 
-      const [rule] = await db
-        .update(governanceRules)
-        .set({ revokedAt: new Date() })
-        .where(eq(governanceRules.id, input.id))
-        .returning();
+      const revoke = (handle: Pick<typeof db, "update">) =>
+        handle
+          .update(governanceRules)
+          .set({ revokedAt: new Date() })
+          .where(eq(governanceRules.id, input.id))
+          .returning();
+      // An agent's approval seeded on its box goes with it (host-seed.ts), in
+      // the same transaction: a rule revoked while its seed stays would leave
+      // the box allowed, and a retry stops at `revokedAt` above. A rule that
+      // cannot carry a seed is revoked alone.
+      const [rule] = mayCarryHostSeed(existing)
+        ? await db.transaction(async (tx) => {
+            const rows = await revoke(tx);
+            await revokeHostSeeds(tx, [input.id]);
+            return rows;
+          })
+        : await revoke(db);
 
       return { rule };
     }),

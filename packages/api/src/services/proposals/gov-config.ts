@@ -27,6 +27,10 @@ import {
   type GovernanceCeilingAxis,
   type ConfigScopeKind,
 } from "@synap/database";
+import {
+  revokeHostSeeds,
+  seedHostRules,
+} from "@synap/database/agent-governance";
 
 /**
  * The unified gov-config settings payload — the ONE door for AI/cron/human to
@@ -187,6 +191,8 @@ export async function applyGovConfigChange(
         .returning({ id: governanceRules.id });
       ids = revoked.map((r) => r.id);
       rows = revoked.length;
+      // An agent's approval seeded on its box goes with it (host-seed.ts).
+      await revokeHostSeeds(db, ids);
     } else {
       const targetKind = spec.targetKind ?? "action";
       const targetPattern = spec.targetPattern ?? "*";
@@ -220,7 +226,10 @@ export async function applyGovConfigChange(
           sourceProposalId: sourceProposalId ?? null,
           createdBy,
         })
-        .returning({ id: governanceRules.id });
+        .returning();
+      // The same rule for the agent's box, when the box is the agent's
+      // (host-seed.ts). A seed that fails leaves the box asking: stricter.
+      await seedHostRules(db, inserted);
       ids = inserted.map((r) => r.id);
       rows = inserted.length;
     }

@@ -3,9 +3,9 @@
  *
  * A computer is an agent user of type `machine` that the person approved on
  * `/device`. This router is the person's view of THEIR computers (and, for a
- * pod admin, `adminList` — everyone's) and the three acts on one: rename, set
- * its key lifetime, revoke (which revokes the keys of every agent it hosts —
- * `revokeMachine`, the one door).
+ * pod admin, `adminList` — everyone's) and the acts on one: rename, set its
+ * key lifetime, "Runs scripts", whose computer it is, revoke (which revokes
+ * the keys of every agent it hosts — `revokeMachine`, the one door).
  *
  * Every mutation is a PERSON's, signed in: a key — a computer's own, or an
  * agent's — never renames, re-times or revokes a computer (the same rule as
@@ -30,7 +30,11 @@ import { auditLog } from "../utils/audit-log.js";
 import { assertSignedInPerson } from "../utils/signed-in-person.js";
 import { isPodAdmin } from "../utils/workspace-role.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
-import { revokeMachine } from "../services/machine-connect.js";
+import { COMPUTER_BELONGS_TO } from "@synap-core/types/computers";
+import {
+  revokeMachine,
+  setMachineBelongsTo,
+} from "../services/machine-connect.js";
 import {
   listAllMachines,
   listMachines,
@@ -155,6 +159,61 @@ export const machinesRouter = router({
         },
       });
       return { status: "updated" as const, runsScripts: input.enabled };
+    }),
+
+  /**
+   * Whose computer it is (0388): the person's own, an agent's box, or shared.
+   * A person's act, signed in, like rename. Setting "an agent's" widens what
+   * the box may do later (a person's auto rule for an agent on it is also
+   * written for the computer, host-seed.ts), so it rides the same gate as
+   * `setRunsScripts`; leaving it takes back every seeded approval.
+   */
+  setBelongsTo: credentialProcedure
+    .input(
+      z.object({
+        machineId: MachineIdShape,
+        belongsTo: z.enum(COMPUTER_BELONGS_TO),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      assertSignedInPerson(ctx, MANAGE_COMPUTER_SIGNED_IN);
+      const machine = await loadManageableMachine(
+        input.machineId,
+        ctx.userId,
+        await isPodAdmin(ctx.userId)
+      );
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        subjectType: "apiKey",
+        action: "update",
+        data: { machineUserId: machine.id, belongsTo: input.belongsTo },
+      });
+      if ("denied" in perm && perm.denied)
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      if ("proposalId" in perm)
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      const { seedsRevoked } = await setMachineBelongsTo(
+        machine.id,
+        input.belongsTo
+      );
+      void auditLog({
+        subjectType: "user",
+        action: "update",
+        phase: "completed",
+        subjectId: machine.id,
+        userId: ctx.userId,
+        workspaceId: null,
+        data: {
+          kind: "machine_belongs_to",
+          belongsTo: input.belongsTo,
+          seedsRevoked,
+        },
+      });
+      return {
+        status: "updated" as const,
+        belongsTo: input.belongsTo,
+        seedsRevoked,
+      };
     }),
 
   /**

@@ -45,6 +45,7 @@ import {
   countPendingAgentProposals,
 } from "../../utils/permission-check.js";
 import { MACHINE_AGENT_TYPE, type AgentReach } from "@synap-core/types/agents";
+import type { ComputerBelongsTo } from "@synap-core/types/computers";
 import { queryAgentUsers } from "../../routers/agent-users.js";
 import { loadAgentPresence } from "../agent-presence.js";
 import { machineName } from "../machine-roster.js";
@@ -69,6 +70,12 @@ export interface HandoffComputer {
   /** The computer's own principal; `null` when it is only a key label. */
   agentUserId: string | null;
   name: string;
+  /**
+   * Whose computer it is (`users.computer_belongs_to`, 0388): `person`,
+   * `agent` or `shared`. `null` when the computer is only a key label (no
+   * principal holds the fact).
+   */
+  belongsTo: ComputerBelongsTo | null;
 }
 
 /** What a hand-off from the calling agent would do right now. */
@@ -168,12 +175,16 @@ export async function readAgentsForHandoff(
           name: users.name,
           agentMetadata: users.agentMetadata,
           createdByUserId: users.createdByUserId,
+          belongsTo: users.computerBelongsTo,
         })
         .from(users)
         .where(inArray(users.id, machineIds))
     : [];
   const machineNameOf = new Map(
     machineRows.map((m) => [m.id, machineName(m)] as const)
+  );
+  const belongsToOf = new Map(
+    machineRows.map((m) => [m.id, m.belongsTo ?? null] as const)
   );
 
   const [presence, dispatch, verdicts, gate] = await Promise.all([
@@ -217,10 +228,13 @@ export async function readAgentsForHandoff(
       keyLabel: seen?.hostLabel,
     });
     const computer: HandoffComputer | null = named
-      ? {
-          agentUserId: named.source === "host" ? hostId : null,
-          name: named.name,
-        }
+      ? named.source === "host" && hostId
+        ? {
+            agentUserId: hostId,
+            name: named.name,
+            belongsTo: belongsToOf.get(hostId) ?? null,
+          }
+        : { agentUserId: null, name: named.name, belongsTo: null }
       : null;
     const summary = dispatch.get(r.id);
     const reach = summary?.reach ?? "pull";
@@ -290,7 +304,12 @@ export async function readAgentsForHandoff(
   for (const m of machineRows) {
     if (m.createdByUserId !== userId) continue;
     const name = machineNameOf.get(m.id)!;
-    computers.set(`id:${m.id}`, { agentUserId: m.id, name, agents: 0 });
+    computers.set(`id:${m.id}`, {
+      agentUserId: m.id,
+      name,
+      belongsTo: m.belongsTo ?? null,
+      agents: 0,
+    });
     if (!byName.has(nameKey(name))) byName.set(nameKey(name), `id:${m.id}`);
   }
   for (const a of agents) {

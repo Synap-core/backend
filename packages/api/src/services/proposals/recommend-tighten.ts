@@ -95,6 +95,7 @@ import {
   ProposalStatus,
   notAnAppAgent,
 } from "@synap/database";
+import { revokeHostSeeds } from "@synap/database/agent-governance";
 import { createLogger } from "@synap-core/core";
 import { RULE_PAUSED_AFTER_REVERTS } from "@synap-core/types/trust-ladder";
 import { computeProposalFingerprint } from "./fingerprint.js";
@@ -749,6 +750,11 @@ export async function pauseEarnedRuleAfterReverts(
       and(eq(governanceRules.id, ruleId), isNull(governanceRules.revokedAt))
     )
     .returning({ id: governanceRules.id });
+  // A paused rule's seed on the agent's box pauses with it (host-seed.ts).
+  await revokeHostSeeds(
+    db,
+    paused.map((r) => r.id)
+  );
   if (paused.length > 0) {
     logger.info(
       { ruleId },

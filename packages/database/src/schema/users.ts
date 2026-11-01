@@ -8,6 +8,7 @@
  */
 
 import type { AgentOrigin } from "@synap-core/types/agents";
+import type { ComputerBelongsTo } from "@synap-core/types/computers";
 import type { AgentPostureName } from "@synap/governance-policy/postures";
 import { pgTable, text, boolean, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
@@ -166,6 +167,12 @@ export const users = pgTable("users", {
     withTimezone: true,
   }),
   agentPausedBy: text("agent_paused_by"),
+  // WHOSE COMPUTER it is (0388, computers plan v2 §4 K3): set on a `machine`
+  // agent user only, NULL on every other row. 'person' (the default: agents on
+  // it are guests), 'agent' (a box an agent owns: a person's auto rule for an
+  // agent on it is also written for the computer, decision c83e0661),
+  // 'shared'. Written only by the device approval and `machines.setBelongsTo`.
+  computerBelongsTo: text("computer_belongs_to").$type<ComputerBelongsTo>(),
 
   // Sync metadata (nullable — agents have no Kratos identity)
   kratosIdentityId: text("kratos_identity_id"),

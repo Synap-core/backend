@@ -5,6 +5,7 @@ import {
   RECONNECT_COMMAND,
   activityLine,
   agentsPhrase,
+  belongsToMark,
   computerCounts,
   computerFilterOf,
   computerMatches,
@@ -332,5 +333,18 @@ describe("keys and the revoke's impact", () => {
     expect(revokeLine(computer({ key: key("revoked"), agents: [] }))).toBe(
       "Nothing on it can reach the pod now."
     );
+  });
+});
+
+describe("belongsToMark — whose computer it is", () => {
+  it("is the vocabulary's word for the stored value", () => {
+    expect(belongsToMark({ belongsTo: "person" })).toBe("Personal");
+    expect(belongsToMark({ belongsTo: "agent" })).toBe("An agent's");
+    expect(belongsToMark({ belongsTo: "shared" })).toBe("Shared");
+  });
+
+  it("is no mark when the pod did not say", () => {
+    expect(belongsToMark({ belongsTo: null })).toBeNull();
+    expect(belongsToMark({})).toBeNull();
   });
 });

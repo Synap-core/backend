@@ -1933,6 +1933,49 @@ export function resolveAccountTrustLabel(
 }
 
 /**
+ * Whose computer it is (`users.computer_belongs_to`, 0388), as a mark. Keyed
+ * by every `ComputerBelongsTo` (`@synap-core/types/computers`). Not "Yours":
+ * the pod admin's list shows other people's computers too.
+ */
+export const COMPUTER_BELONGS_TO_LABELS = {
+  person: "Personal",
+  agent: "An agent's",
+  shared: "Shared",
+} as const;
+
+/** The mark word for whose computer it is. Unknown values humanize. */
+export function resolveComputerBelongsToLabel(
+  value: string | null | undefined
+): string {
+  if (!value) return "";
+  return (
+    (COMPUTER_BELONGS_TO_LABELS as Readonly<Record<string, string>>)[
+      value.toLowerCase()
+    ] ?? humanizeToken(value)
+  );
+}
+
+/**
+ * Where a run ran (`RunWhere.kind`, `@synap-core/types/computers`), with no
+ * computer name. A named computer reads "On <name>" (`runWhereLine`).
+ */
+export const RUN_WHERE_LABELS = {
+  pod: "In the pod",
+  computer: "On a computer",
+  outside: "Outside the pod",
+} as const;
+
+/** The words for where a run ran. Unknown kinds humanize. */
+export function resolveRunWhereLabel(kind: string | null | undefined): string {
+  if (!kind) return "";
+  return (
+    (RUN_WHERE_LABELS as Readonly<Record<string, string>>)[
+      kind.toLowerCase()
+    ] ?? humanizeToken(kind)
+  );
+}
+
+/**
  * What the person hears about one connection (`connectionPrefs`, 0316) — the
  * words of each notify level. Keyed by every `ConnectionNotifyLevel`;
  * `membrane/index.ts` holds the compile-time floor and the ordered options.

@@ -13673,6 +13673,33 @@ export interface SessionActivityWire {
 	/** Sub-reads that FAILED. Non-empty ⇒ the list is partial, never "complete". */
 	unreadable: SessionActivitySource[];
 }
+declare const COMPUTER_BELONGS_TO: readonly [
+	"person",
+	"agent",
+	"shared"
+];
+export type ComputerBelongsTo = (typeof COMPUTER_BELONGS_TO)[number];
+/**
+ * Where a run ran, DERIVED at read time from what already exists (a box run's
+ * lease, a session's runner row, an agent's computer, an agent's reach), never
+ * stored beside `executor`. Where CODE runs stays `skills.execution_mode`.
+ *   - `pod`: the pod itself ran it (automations, captures, chat, a sync skill,
+ *     an agent the pod runs);
+ *   - `computer`: a computer ran it — `computer` names it;
+ *   - `outside`: an agent outside the pod with no computer of record.
+ * `null` on the run = nothing records where (a box run still queued, a session
+ * nobody worked yet): unknown, never "the pod".
+ */
+export type RunWhereKind = "computer" | "outside" | "pod";
+export interface RunWhere {
+	kind: RunWhereKind;
+	/** Set when `kind` is `computer`. */
+	computer: {
+		belongsTo: ComputerBelongsTo | null;
+		id: string;
+		name: string;
+	} | null;
+}
 /**
  * Which ledger a run came from.
  *
@@ -13729,6 +13756,14 @@ export interface UnifiedRun {
 	stepsFailed: number | null;
 	/** The definition version this run executed (from definitionSnapshot); null if unsnapshotted. */
 	definitionVersion: number | null;
+	/**
+	 * Where it ran — the pod, a named computer, or outside — DERIVED at read
+	 * time from what records it (a box run's lease, a session's runner row, an
+	 * agent's computer and reach: `run-where.ts`), never stored. `null` =
+	 * nothing records where (a box run still queued, a session nobody worked);
+	 * ABSENT = the where read failed, so it is not known whether anything does.
+	 */
+	where?: RunWhere | null;
 }
 /**
  * A run GROUP — one template's whole run footprint collapsed to a single row.
@@ -15484,6 +15519,8 @@ export interface DeviceRequestView {
 	expiresAt: Date;
 	/** The person's own computers with this hostname: reuse keeps agents, history, rules. */
 	reusableComputers: Array<{
+		/** Whose computer it is today (0388); the approval may change it. */
+		belongsTo: ComputerBelongsTo | null;
 		createdAt: Date;
 		id: string;
 		name: string;
@@ -20161,6 +20198,8 @@ export interface MachineView {
 	accessName: string | null;
 	/** "Runs scripts" is on: the computer leases its person's box runs. */
 	runsScripts: boolean;
+	/** Whose computer it is (0388). Null only on a row written before it. */
+	belongsTo: ComputerBelongsTo | null;
 	agents: HostedAgentView[];
 }
 /** Who a computer belongs to: the person who approved it on `/device`. */
@@ -25295,6 +25334,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		decideDeviceRequest: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				agents?: string[] | undefined;
+				belongsTo?: "agent" | "person" | "shared" | null | undefined;
 				computerName?: string | null | undefined;
 				decision: "approve" | "deny";
 				requestId: string;
@@ -39831,6 +39871,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "revoked";
 			};
 		}>;
+		setBelongsTo: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				belongsTo: "agent" | "person" | "shared";
+				machineId: string;
+			};
+			meta: object;
+			output: {
+				belongsTo?: undefined;
+				proposalId: string;
+				seedsRevoked?: undefined;
+				status: "proposed";
+			} | {
+				belongsTo: "agent" | "person" | "shared";
+				proposalId?: undefined;
+				seedsRevoked: number;
+				status: "updated";
+			};
+		}>;
 		setKeyTtl: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				keyTtlDays: number | null;
@@ -53077,6 +53135,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentTemplate: string | null;
 					agentType: string | null;
 					avatarUrl: string | null;
+					computerBelongsTo: "agent" | "person" | "shared" | null;
 					createdAt: Date;
 					createdByUserId: string | null;
 					createdVia: "cli" | "device" | "intelligence-service" | "system" | "ui" | null;
