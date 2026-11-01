@@ -1503,6 +1503,12 @@ export interface GetFocusSessionOptions {
 export interface HubFocusSessionWithContinuation extends HubFocusSession {
   rerun: unknown;
   continuation: unknown;
+  /**
+   * Who has the session (`session-holder.ts`): `{status: "ok", holder}` or
+   * `{status: "unavailable", reason}`. Also served beside a withheld packet
+   * to a key that reads the person's agents. Absent on an older pod.
+   */
+  holder?: unknown;
   criteria?: unknown;
   verdict?: unknown;
   evaluations?: unknown;

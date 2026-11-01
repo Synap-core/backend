@@ -164,6 +164,19 @@ export function isFencedGrant(grant: KeyGrant | null | undefined): boolean {
   return Boolean(grant) && !isFullAccessGrant(grant!);
 }
 
+/**
+ * May this request's key read a session's HOLDER (`session-holder.ts`) beside
+ * the row, when the packet is withheld? The holder names the agent on the
+ * session, its computer and whether anything runs it: the person's agent
+ * roster, what GET /agent-users serves. Every unfenced caller may; a fenced
+ * key when it reads `agent`, bounded as that door (PERSON).
+ */
+export function sessionHolderReadable(
+  grant: KeyGrant | null | undefined
+): boolean {
+  return !isFencedGrant(grant) || grantBoundsDoor(PERSON("agent"), grant!);
+}
+
 /** Hub REST GET routes that read only through a seam (relative to /api/hub). */
 export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   // Self-introspection: the caller's own identity and key, from the request

@@ -48,7 +48,10 @@ import {
   writeSessionPatch,
 } from "@synap/database";
 import { sessionReadableWhere } from "../../../access/session-visibility.js";
-import { sessionPacketReadable } from "../../../access/grant-door-fence.js";
+import {
+  sessionHolderReadable,
+  sessionPacketReadable,
+} from "../../../access/grant-door-fence.js";
 import {
   checkPermissionOrPropose,
   proposedMessageFor,
@@ -1767,8 +1770,17 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       }
 
       if (!sessionPacketReadable(getRequestGrant())) {
+        // Who has it (`session-holder.ts`) still rides with the row for a key
+        // that reads the person's agents: an app shows who holds its run
+        // without the packet (Content Studio's edit band).
+        const { readSessionHolder } =
+          await import("../../../services/focus-sessions/session-holder.js");
+        const holder = sessionHolderReadable(getRequestGrant())
+          ? await readSessionHolder(row, { userId: acting.userId })
+          : undefined;
         return c.json({
           ...attachSessionKind(attachTriage([row]))[0],
+          ...(holder ? { holder } : {}),
           packet: {
             status: "withheld",
             reason:
@@ -1837,6 +1849,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json({
         ...attachSessionKind(attachTriage([row]))[0],
         rerun: continuation.rerun,
+        // The same field the withheld answer carries: one place to read it.
+        holder: continuation.holder,
         continuation,
         outcomes,
         // Same projection as MCP `synap_get_session`: what the pod recalled
