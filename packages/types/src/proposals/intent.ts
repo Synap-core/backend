@@ -48,7 +48,7 @@
  * not made here.
  */
 
-import { summarizeGrant } from "../grants/index.js";
+import { POD_WIDE_HEADING, summarizeGrant } from "../grants/index.js";
 import type { UnitTone } from "../units/state.js";
 import { isNonWidenableGovernanceReason } from "./governance-grant-options.js";
 
@@ -608,6 +608,10 @@ export function isConnectProposal(p: AppConnectProposalLike): boolean {
   );
 }
 
+/**
+ * An AI's ask with no space reaches anywhere. An app's ask with no space is a
+ * pod-wide read (decision e1b59d38 "B"), named as consent and pod admin name it.
+ */
 const ANYWHERE = "Anywhere";
 
 function rec(v: unknown): Record<string, unknown> | null {
@@ -649,7 +653,9 @@ export function summarizeAppConnectRequest(input: {
     entry.name =
       entry.name ??
       (r.workspaceId === null
-        ? ANYWHERE
+        ? input.holderKind === "agent"
+          ? ANYWHERE
+          : POD_WIDE_HEADING
         : (r.workspaceName ?? input.workspaceNames?.[r.workspaceId] ?? null));
   }
   const lines = order.map((workspaceId) => {

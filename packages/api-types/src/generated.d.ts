@@ -5020,6 +5020,32 @@ export interface CatalogSyncStamp {
 	 */
 	retirementsUnreported?: true;
 }
+export interface GrantDraft {
+	/** Permission patterns, `<subject>[.<kind>].<action>`. */
+	readonly permissions: readonly string[];
+	/** null/undefined/[] = any workspace the person can reach. */
+	readonly workspaceIds?: readonly string[] | null;
+	/** null/undefined/[] = no project narrowing. */
+	readonly projectIds?: readonly string[] | null;
+	/** null/undefined/[] = no object pinning. */
+	readonly entityIds?: readonly string[] | null;
+	/** undefined → DEFAULT_KEY_TTL_DAYS; a number → that many days; null → never. */
+	readonly expiresInDays?: number | null;
+	/** What the person calls it ("Portfolio site"); a stored grant may have none. */
+	readonly label?: string | null;
+}
+export interface KeyDraft {
+	/** What the person calls it. Required. */
+	readonly name: string;
+	/** "Where will you keep it?" — stored with the key. */
+	readonly note?: string;
+	/** The template it started from (a built-in id or a stored role's id). */
+	readonly templateId?: string | null;
+	/** Where it is used (`KEY_USES` ids): this decides its scopes. */
+	readonly uses: readonly string[];
+	/** What it may touch, where, and for how long. */
+	readonly grant: GrantDraft;
+}
 /**
  * Apps — a developer's application identity (App Connect v1, 2026-10-06).
  *
@@ -8160,32 +8186,6 @@ declare const OBJECT_ROOM_CONTEXT_TYPES: readonly [
 	"entity"
 ];
 export type ObjectRoomType = (typeof OBJECT_ROOM_CONTEXT_TYPES)[number];
-export interface GrantDraft {
-	/** Permission patterns, `<subject>[.<kind>].<action>`. */
-	readonly permissions: readonly string[];
-	/** null/undefined/[] = any workspace the person can reach. */
-	readonly workspaceIds?: readonly string[] | null;
-	/** null/undefined/[] = no project narrowing. */
-	readonly projectIds?: readonly string[] | null;
-	/** null/undefined/[] = no object pinning. */
-	readonly entityIds?: readonly string[] | null;
-	/** undefined → DEFAULT_KEY_TTL_DAYS; a number → that many days; null → never. */
-	readonly expiresInDays?: number | null;
-	/** What the person calls it ("Portfolio site"); a stored grant may have none. */
-	readonly label?: string | null;
-}
-export interface KeyDraft {
-	/** What the person calls it. Required. */
-	readonly name: string;
-	/** "Where will you keep it?" — stored with the key. */
-	readonly note?: string;
-	/** The template it started from (a built-in id or a stored role's id). */
-	readonly templateId?: string | null;
-	/** Where it is used (`KEY_USES` ids): this decides its scopes. */
-	readonly uses: readonly string[];
-	/** What it may touch, where, and for how long. */
-	readonly grant: GrantDraft;
-}
 /**
  * What a key may touch, as a key list shows it:
  *   - `ungranted` — it never had a grant: it may touch NOTHING (P5);
@@ -15681,7 +15681,7 @@ export interface AppSignInDescription {
 	 * was SHOWN.
 	 */
 	fingerprint: string;
-	/** "<App> will act as you in: Sales, Content." */
+	/** "<App> will act as you in: Sales, Content." + its pod-wide reads: "Read Decisions, everywhere in your pod." */
 	headline: string;
 	spaces: AppSignInSpace[];
 	/** "It cannot delete, manage keys, approve outside these spaces, or see anything outside what a member of these spaces sees." */
