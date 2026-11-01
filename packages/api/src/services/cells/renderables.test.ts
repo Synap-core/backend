@@ -189,6 +189,32 @@ describe("builtinRenderableRows", () => {
   });
 });
 
+describe("app-surface widgets (generation contract rule 12)", () => {
+  const APP_SURFACE = [
+    "greeting",
+    "home-tabs",
+    "workspace-info",
+    "quick-access",
+    "ai-chat",
+  ];
+
+  it("synap_list_widgets never offers them on a document", () => {
+    const doc = discoverRenderables(builtinRenderableRows(), "document").map(
+      (e) => e.key
+    );
+    for (const key of APP_SURFACE) expect(doc, key).not.toContain(key);
+  });
+
+  it("their rows keep the bento placement only", () => {
+    const rows = builtinRenderableRows();
+    for (const key of APP_SURFACE) {
+      const row = rows.find((r) => r.typeKey === key);
+      expect(row, key).toBeDefined();
+      expect(row!.placements, key).toEqual(["bento"]);
+    }
+  });
+});
+
 describe("work-state widgets — what synap_list_widgets offers on a document", () => {
   const doc = discoverRenderables(builtinRenderableRows(), "document");
   const entry = (key: string) => doc.find((e) => e.key === key);
@@ -233,6 +259,9 @@ describe("work-state widgets — what synap_list_widgets offers on a document", 
       false
     );
     expect(schema.safeParse({ section: "needs-you" }).success).toBe(false);
+    // A section the lens page read does not carry is refused at write time.
+    expect(schema.safeParse({ section: "structure" }).success).toBe(false);
+    expect(schema.safeParse({ section: "doneWhen" }).success).toBe(false);
     expect(
       schema.safeParse({ section: "blocking", empty: "blank" }).success
     ).toBe(false);

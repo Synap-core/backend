@@ -42,7 +42,8 @@ const getDb = vi.fn(async () => ({
           updatedSet = set;
           return { returning: async () => [{ id: "w1" }] };
         },
-        then: (res: (v: unknown) => unknown) => res(undefined),
+        // The pod-global (no workspace) branch inserts plainly and reads the id.
+        returning: async () => [{ id: "w1" }],
       };
     },
   }),

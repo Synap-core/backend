@@ -419,6 +419,17 @@ const ACTION_VERB_ROWS = {
     imperative: "Keep it running",
     past: "Kept it running",
   },
+  // The SESSION verbs that bare tokens would misread (`SESSION_VERBS`,
+  // `@synap-core/types/focus-sessions`): Stop ends a session `cancelled`
+  // through the one close door; Wait on / Stop waiting on add and drop a
+  // `blocked_by` edge. Dotted keys, so a bare `stop` or `release` elsewhere
+  // keeps its own reading (pause, resume and rerun share their bare rows).
+  "session.stop": { imperative: "Stop", past: "Stopped" },
+  "session.wait_on": { imperative: "Wait on", past: "Waited on" },
+  "session.release": {
+    imperative: "Stop waiting on",
+    past: "Stopped waiting on",
+  },
   // The owner's two answers to a delegate's counter-offer — both re-ask the
   // delegate through the participants door (`op: "add"`): with the
   // counter-offer as the commitment, or with the original one.
@@ -915,6 +926,29 @@ const OBJECT_NOUN_ROWS = {
   // `resolveObjectNoun("verb")` answers, never `TOOL_KIND_LABELS`, which names
   // the capability ("Capability") a verb belongs to.
   verb: "Action",
+  // The D3 nouns of making and connecting (founder, 2026-10-31, decision
+  // 985a59a8, plan appendix dd15a7b0 M5). None is a registry kind: each names
+  // an object the registry has no row for, so each is a backend-only noun.
+  // A skill rule, the standing instruction a person writes for agents (D2).
+  // "Automation" is the `automation` kind; the two never share a word.
+  rule: "Rule",
+  // Something you open IN Synap (a built-in surface, a space's own front end:
+  // CRM, Calendar). The outside software holding a grant is the `application`
+  // kind, "Connected app" (N4).
+  app: "App",
+  // A person's link to an outside service (a provider connection): "Account"
+  // (N8), never Connection, Connector or Integration.
+  connection: "Account",
+  // A `profile` of kind `kind` is a "Kind" (N10): Data types, Schema, Profiles
+  // and Structure all retire.
+  profile: "Kind",
+  // A card bound to a kind's slot (a renderer binding) is a "Display" (N2).
+  // Renderer stays an engine word.
+  renderer: "Display",
+  // "Room" is the conversation only; the intake review is a "Review" (DP8,
+  // plan appendix e7308ad5).
+  room: "Room",
+  review: "Review",
 } satisfies Readonly<Record<string, string>>;
 
 export const OBJECT_NOUNS: Readonly<Record<string, string>> = OBJECT_NOUN_ROWS;
@@ -946,6 +980,13 @@ export const OBJECT_NOUN_PLURALS: Readonly<
   "ui-design": "UI designs",
   okr: "OKRs",
   verb: "Actions",
+  rule: "Rules",
+  app: "Apps",
+  connection: "Accounts",
+  profile: "Kinds",
+  renderer: "Displays",
+  room: "Rooms",
+  review: "Reviews",
 };
 
 // A backend-only noun never shares a slug with a registry kind: both live in
@@ -1423,9 +1464,9 @@ export const PROPOSAL_KIND_LABELS: Readonly<Record<string, string>> = {
   // handled.
   governance_structure_guideline: "Extraction guideline",
   governance_work_guideline: "Work guideline",
-  // "Tool" / "Rule" are the user words (concepts.md, founder D1/D2).
+  // "Tool" / "Automation" are the user words (concepts.md, founder D2, D3).
   capability_run: "Run tool",
-  automation_run: "Run rule",
+  automation_run: "Run automation",
   // Server-side dev-loop HUMAN GATES. The chip is the first thing a reviewer
   // reads, and the two gates ask genuinely different questions — one is about
   // work not yet done, one is about shipping work already verified — so they

@@ -1,29 +1,24 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq, transitionProposal } from "@synap/database";
+import { db, proposals, eq } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
-import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
-import { assertApplied, reportApproved } from "./shared.js";
 
 /**
- * Approve-executors for `widget` doors.
+ * Approve-executor for the LEGACY `widget/register` key.
  *
- * `widget/register` was the sharpest case in the severed-door audit: its gate
- * stored `rendererSourceLength` — the CHARACTER COUNT of agent-authored render
- * code, never the code. A reviewer was asked to approve something they could
- * not read, and approving it could not have registered a widget even if they
- * had. The payload now carries `rendererSource` itself; this is the other half.
- *
- * REPLAY, never reconstruct: `upsertWidgetDef` is an UPSERT
- * (`insert(...).onConflictDoUpdate(...)`, `hub-protocol/widget-definitions.ts`).
- * Re-implementing it here as a plain insert would fail on the second
- * registration of the same `typeKey` instead of updating it — and re-authoring
- * the conflict target is exactly how two writers drift apart.
+ * New Hub widget registrations are filed as `cell/define` (the Hub
+ * widget-definitions door goes through `defineCell`, the one writer of
+ * `widget_definitions`). This key stays registered so proposals filed before
+ * that change can still be approved: it reads the old payload shape and hands
+ * it to the same `applyCellDefineProposal` the `cell/define` executor uses, so
+ * the rendererType derivation, deps validation and `widget_definition` realtime
+ * event are identical. Old rows keep reading as before.
  */
 export function registerWidgetExecutors(): void {
   registerProposalExecutor({
     key: "widget/register",
-    async execute({ proposal, userId, input, deps }) {
+    async execute(ctx) {
+      const { proposal, input } = ctx;
       const raw = (proposal.data ?? {}) as Record<string, unknown>;
       const inner = (raw.data ?? raw ?? {}) as Record<string, unknown>;
 
@@ -56,59 +51,11 @@ export function registerWidgetExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
-      // Workspace lens from the STORED payload, never a request-supplied field.
-      const wsLens =
-        (inner.workspaceId as string | null | undefined) ??
-        proposal.workspaceId ??
-        undefined;
-
-      const { hubWidgetDefinitionsRouter } =
-        await import("../../hub-protocol/widget-definitions.js");
-      const caller = hubWidgetDefinitionsRouter.createCaller({
-        db,
-        authenticated: true as const,
-        userId,
-        workspaceId: wsLens ?? undefined,
-        // `upsertWidgetDef` is a scopedProcedure(["hub-protocol.write"]). The
-        // authorization already happened — at the gate when the proposal was
-        // filed, and again when this human approved it — so the replay context
-        // carries the scope the procedure checks for.
-        scopes: ["hub-protocol.write", "hub-protocol.read"],
-      } as unknown as Context);
-
-      assertApplied(
-        (await caller.upsertWidgetDef({
-          ...(inner as Record<string, unknown>),
-          userId,
-          typeKey,
-        } as unknown as Parameters<typeof caller.upsertWidgetDef>[0])) as {
-          status?: string;
-        }
-      );
-
-      // Mark APPROVED — the executor's job (the registry path does not do it).
-      // Without this, an approved widget registration stayed `pending` forever:
-      // still in the review queue, and re-approving re-ran the upsert. Same
-      // defect as the aiProvider executors; found by the convention guard in
-      // __tests__/executors-mark-approved.test.ts.
-      await transitionProposal(db, {
-        to: ProposalStatus.APPROVED,
-        set: {
-          reviewedBy: userId,
-          reviewedAt: new Date(),
-          updatedAt: new Date(),
-        },
-        where: eq(proposals.id, input.proposalId),
-      });
-
-      reportApproved(deps, proposal, input.proposalId);
-      deps.emitProposalReviewed(
-        input.proposalId,
-        proposal.workspaceId,
-        "approved",
-        userId
-      );
-      return { success: true };
+      // Delegate to the ONE cell writer. The scope is the REVIEWED scope
+      // (`proposal.workspaceId`), exactly as for `cell/define`; the old replay
+      // trusted a payload workspace over it.
+      const { applyCellDefineProposal } = await import("./cell.js");
+      return applyCellDefineProposal(ctx, inner);
     },
   });
 }

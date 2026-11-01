@@ -41,14 +41,17 @@ describe("describeCapabilityRun", () => {
         slug: "nudges",
         kind: "workflow",
       })
-    ).toBe('Install Rule "nudges"');
+    ).toBe('Install Automation "nudges"');
   });
 
   it("degrades honestly when the payload is thin", () => {
     // An unknown kind humanizes rather than leaking a token.
     expect(
-      describeCapabilityRun("market.install", { slug: "x", kind: "renderer" })
-    ).toBe('Install Renderer "x"');
+      describeCapabilityRun("market.install", {
+        slug: "x",
+        kind: "frobnicator",
+      })
+    ).toBe('Install Frobnicator "x"');
     // No kind at all — still name the package.
     expect(describeCapabilityRun("market.install", { slug: "x" })).toBe(
       'Install package "x"'

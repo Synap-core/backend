@@ -144,7 +144,7 @@ export const CONSOLE_NAV = [
       {
         id: "rules",
         href: "/rules",
-        label: "Rules",
+        label: "Automations",
         icon: "Zap",
         kind: "automation",
         audience: "admin",
@@ -231,7 +231,7 @@ export const CONSOLE_NAV = [
         // Every way an app connects (key, sign in with your pod, Claude/MCP).
         // `/apps/*` stays the member's self-service app page.
         href: "/applications",
-        label: "Apps",
+        label: "Connected apps",
         icon: "AppWindow",
         kind: "application",
         legacy: [{ source: "/origins" }],

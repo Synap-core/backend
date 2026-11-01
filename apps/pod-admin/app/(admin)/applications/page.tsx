@@ -204,7 +204,7 @@ function ApplicationsInner() {
             <ResourceRowEmpty message={emptyMessage(via, rows.length)} />
           ) : (
             <ResponsiveTable
-              ariaLabel="Apps"
+              ariaLabel="Connected apps"
               rows={shown}
               rowKey={(row) => `${row.via}:${row.id}`}
               rowId={(row) => row.id}

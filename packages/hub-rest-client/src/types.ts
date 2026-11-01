@@ -1329,9 +1329,9 @@ export type FocusSessionStatus =
 export type UpdatableFocusSessionStatus = Exclude<FocusSessionStatus, "stale">;
 
 /**
- * A session's population lens, duplicated from `SESSION_KINDS`
- * (`@synap/api/services/focus-sessions/session-kind.ts`) — projected, never
- * stored.
+ * A session's population lens, mirrored from `SESSION_KINDS`
+ * (`@synap-core/types/focus-sessions`) — projected, never stored. Pinned EQUAL
+ * by `parity/session-status.floor.ts`.
  */
 export type FocusSessionKind = "work" | "run" | "receipt";
 
