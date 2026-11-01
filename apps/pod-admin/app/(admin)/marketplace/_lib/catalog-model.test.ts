@@ -140,7 +140,7 @@ describe("describeInstall", () => {
     });
     expect(s.tone).toBe("stale");
     expect(s.sentence).toBe(
-      "Added 1 rule. 1 rule was already there. 1 rule could not be added: C (bad flow)."
+      "Added 1 automation. 1 automation was already there. 1 automation could not be added: C (bad flow)."
     );
   });
 

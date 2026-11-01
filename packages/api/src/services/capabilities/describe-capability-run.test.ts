@@ -41,7 +41,7 @@ describe("describeCapabilityRun", () => {
         slug: "nudges",
         kind: "workflow",
       })
-    ).toBe('Install Rule "nudges"');
+    ).toBe('Install Automation "nudges"');
   });
 
   it("degrades honestly when the payload is thin", () => {

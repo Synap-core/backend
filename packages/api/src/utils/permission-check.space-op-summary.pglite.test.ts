@@ -156,7 +156,7 @@ describe("space-op titles — the real payloads, names not ids", () => {
     const data = { id: WS_BEACON, name: "Beacon" };
     expect(
       await titleFor("workspace", "archive", WS_BEACON, data, OWNER, "Beacon")
-    ).toBe('Archive Space "Beacon": pauses 3 rules');
+    ).toBe('Archive Space "Beacon": pauses 3 automations');
     expect(
       await titleFor("workspace", "restore", WS_BEACON, data, OWNER, "Beacon")
     ).toBe('Restore Space "Beacon": 1 paused rule stays paused');

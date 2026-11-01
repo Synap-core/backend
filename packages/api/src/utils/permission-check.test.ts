@@ -427,7 +427,7 @@ describe("buildProposalSummary", () => {
 
   it("uses slug as label of last resort", () => {
     const summary = buildProposalSummary("profile", "create", { slug: "crm" });
-    expect(summary).toBe('Create Profile "crm"');
+    expect(summary).toBe('Create Kind "crm"');
   });
 
   it("uses goal as label on the generic path", () => {
