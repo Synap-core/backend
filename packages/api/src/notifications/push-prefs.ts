@@ -24,8 +24,11 @@ import {
 } from "@synap-core/types/push";
 
 /** No row ⇒ defaults (`{}`). A FAILED read throws — never read as defaults. */
-export async function readPushPrefs(userId: string): Promise<PushPrefs> {
-  return (await readPodPushSettings(userId)).prefs;
+export async function readPushPrefs(
+  userId: string,
+  database: typeof db = db
+): Promise<PushPrefs> {
+  return (await readPodPushSettings(userId, database)).prefs;
 }
 
 /**
@@ -35,11 +38,14 @@ export async function readPushPrefs(userId: string): Promise<PushPrefs> {
  * row can make it — a workspace override row must never ring a phone the
  * person silenced. A FAILED read throws.
  */
-export async function readPodPushSettings(userId: string): Promise<{
+export async function readPodPushSettings(
+  userId: string,
+  database: typeof db = db
+): Promise<{
   prefs: PushPrefs;
   routingRules: Record<string, string>;
 }> {
-  const row = await db.query.notificationPreferences.findFirst({
+  const row = await database.query.notificationPreferences.findFirst({
     where: and(
       eq(notificationPreferences.userId, userId),
       isNull(notificationPreferences.workspaceId)

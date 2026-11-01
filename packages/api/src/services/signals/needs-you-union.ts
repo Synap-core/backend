@@ -2602,10 +2602,9 @@ export function countNeedsYou(args: {
     changesToReview: 0,
   };
   const review = args.reviewSessions ?? 0;
-  // The SAME rows the list renders (`signalFromPermissionSession`), counted.
-  const permission = (args.permissionSessions ?? []).map((r) =>
-    signalFromPermissionSession(r, now)
-  ).length;
+  // The SAME rows the list renders: `signalFromPermissionSession` makes one
+  // row per session, so the count is the input's length.
+  const permission = args.permissionSessions?.length ?? 0;
   const captures = liveCaptureRows({
     unfinishedCaptures: args.unfinishedCaptures,
     owedSlots: args.owedSlots,

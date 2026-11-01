@@ -37,6 +37,7 @@ import {
   type AskAnswerValue,
 } from "../ask/index.js";
 import { humanizeToken } from "../vocabulary/index.js";
+import { isUuid } from "../property-render/structured-value.js";
 
 // ─── Categories ─────────────────────────────────────────────────────────────
 
@@ -367,9 +368,6 @@ export interface PushPrefs {
 /** At most this many muted sessions are kept (the oldest mute drops first). */
 export const PUSH_MUTED_SESSIONS_MAX = 200;
 
-const SESSION_ID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * Categories a session mute never holds back: what the person sent to their
  * phone themselves is their own ask, not the session's noise.
@@ -411,7 +409,7 @@ export function normalizePushPrefs(raw: unknown): PushPrefs {
       ...new Set(
         muted
           .filter((v): v is string => typeof v === "string")
-          .filter((v) => SESSION_ID_RE.test(v))
+          .filter((v) => isUuid(v))
           .map((v) => v.toLowerCase())
       ),
     ].slice(-PUSH_MUTED_SESSIONS_MAX);

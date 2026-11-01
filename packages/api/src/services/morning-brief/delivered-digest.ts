@@ -7,10 +7,12 @@
  * NOT A SECOND PRODUCER. It is raised by the morning brief's own pass
  * (`runMorningBriefs`, the `morning-brief` queue, every 15 minutes), for the
  * same people, at the same time on their clock, held by the same kill switch
- * and snooze (`proactivePostHeldBy`). Its own off switch is its push category
- * (`delivered-digest`, `@synap-core/types/push`), not the brief's `enabled`:
- * a person who turned the brief off has not said they want no news of what
- * shipped.
+ * and snooze (`proactivePostHeldBy`), and by the brief's own off switch
+ * (`morningBriefing.enabled`: a person who turned the morning summary off is
+ * not sent a second one; the lead's default for wave 065982de, the founder
+ * may override it). Its push category (`delivered-digest`,
+ * `@synap-core/types/push`) off writes no digest at all, not even the bell
+ * row: it is a summary, and nothing waits on it.
  *
  * ITS OWN CLASS: passive, outside the 3-a-day interruption budget (it is in
  * `PUSH_CAP_EXEMPT_CATEGORIES`, so it is neither held back nor counted), and
@@ -63,6 +65,7 @@ import {
   resolveObjectNounPlural,
 } from "@synap-core/types/vocabulary";
 import { sessionKindWhere } from "../focus-sessions/session-kind.js";
+import { capWords } from "../status/dev-signals.js";
 
 type Database = typeof defaultDb;
 
@@ -101,11 +104,6 @@ function plural(n: number, one: string, many: string): string {
   return n === 1 ? `1 ${one}` : `${n} ${many}`;
 }
 
-function clip(text: string): string {
-  const t = text.replace(/\s+/g, " ").trim();
-  return t.length > ITEM_MAX ? `${t.slice(0, ITEM_MAX - 1).trimEnd()}…` : t;
-}
-
 /** The digest in plain words; `null` when nothing was delivered. */
 export function composeDeliveredDigest(
   f: DeliveredFacts
@@ -132,7 +130,10 @@ export function composeDeliveredDigest(
     );
   if (parts.length === 0) return null;
   const lines = [`${parts.join(", ")}.`];
-  const named = f.closedTitles.map(clip).filter(Boolean).slice(0, NAMED_MAX);
+  const named = f.closedTitles
+    .map((t) => capWords(t, ITEM_MAX))
+    .filter((t): t is string => t !== null)
+    .slice(0, NAMED_MAX);
   if (named.length > 0) lines.push(`Closed: ${named.join(" · ")}`);
   return { title: "Delivered since your last digest", body: lines.join("\n") };
 }

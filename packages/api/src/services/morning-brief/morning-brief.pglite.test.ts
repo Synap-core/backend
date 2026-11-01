@@ -19,6 +19,7 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import type { db as DatabaseHandle } from "@synap/database";
 import type { CreateNotificationInput } from "../../notifications/NotificationService.js";
+import type { PushPrefs } from "@synap-core/types/push";
 import {
   countNeedsYou,
   signalFromReviewSession,
@@ -444,13 +445,13 @@ describe("runMorningBriefs", () => {
     // Paris clock) and B (16:00 Tokyo, not New York's 03:10). Not due: C
     // (off), D (snoozed), E (its stored-settings space turned the brief off).
     // B has nothing to say.
-    // The digest is due for E too (its brief is off, not its digest).
+    // The digest is held by the same switches: due for A and B only.
     expect(result).toEqual({
       people: 5,
       due: 2,
       sent: 1,
       failed: 0,
-      digest: { due: 3, sent: 0, failed: 0 },
+      digest: { due: 2, sent: 0, failed: 0 },
     });
     expect(door.calls).toHaveLength(1);
     expect(door.calls[0]).toMatchObject({
@@ -823,10 +824,10 @@ describe("runMorningBriefs — the digest in the same pass", () => {
       notify: door.notify,
       readNeedsYou,
     });
-    // Due: A, B, E. Only A had work sessions closed in the last day (the
-    // two closed 2 h ago; the cancelled one, the old one and the automation
-    // run do not count).
-    expect(result.digest).toEqual({ due: 3, sent: 1, failed: 0 });
+    // Due: A and B (E turned its brief off). Only A had work sessions closed
+    // in the last day (the two closed 2 h ago; the cancelled one, the old one
+    // and the automation run do not count).
+    expect(result.digest).toEqual({ due: 2, sent: 1, failed: 0 });
     const digests = door.calls.filter((c) => c.type === DELIVERED_DIGEST_TYPE);
     expect(digests).toHaveLength(1);
     expect(digests[0]).toMatchObject({
@@ -863,7 +864,62 @@ describe("runMorningBriefs — the digest in the same pass", () => {
       notify: tomorrow.notify,
       readNeedsYou,
     });
-    expect(next.digest).toEqual({ due: 4, sent: 0, failed: 0 });
+    expect(next.digest).toEqual({ due: 3, sent: 0, failed: 0 });
+  });
+
+  it("the brief's off switch holds the digest; its push category off writes no row at all", async () => {
+    const something: DeliveredFacts = {
+      ...NOTHING_DELIVERED,
+      sessionsClosed: 1,
+      closedTitles: ["Shipped"],
+    };
+    const digestsTo = async (readPrefs?: () => Promise<PushPrefs>) => {
+      const door = fakeDoor(NOW);
+      const result = await runMorningBriefs({
+        database,
+        now: NOW,
+        notify: door.notify,
+        readNeedsYou,
+        readDelivered: async () => something,
+        ...(readPrefs ? { readPrefs } : {}),
+      });
+      await client.query(`delete from notifications where type = $1`, [
+        DELIVERED_DIGEST_TYPE,
+      ]);
+      return {
+        result,
+        to: door.calls
+          .filter((c) => c.type === DELIVERED_DIGEST_TYPE)
+          .map((c) => c.userId)
+          .sort(),
+      };
+    };
+    // E is due at this time but turned its brief off: no digest for E.
+    expect((await digestsTo()).to).toEqual([A, B].sort());
+    // A turned the digest's push category off (the real read, its row).
+    await client.query(
+      `insert into notification_preferences (id, user_id, workspace_id, push_prefs, enabled) values ($1, $2, null, $3::jsonb, true)`,
+      [
+        randomUUID(),
+        A,
+        JSON.stringify({ categories: { "delivered-digest": false } }),
+      ]
+    );
+    try {
+      const off = await digestsTo();
+      expect(off.to).toEqual([B]);
+      expect(off.result.digest).toEqual({ due: 2, sent: 1, failed: 0 });
+    } finally {
+      await client.query(
+        `delete from notification_preferences where user_id = $1`,
+        [A]
+      );
+    }
+    // A failed preferences read is a failure, never "on" or "off".
+    const failed = await digestsTo(async () => {
+      throw new Error("prefs read failed");
+    });
+    expect(failed.result.digest).toEqual({ due: 2, sent: 0, failed: 2 });
   });
 
   it("a failed read skips the person and is counted, never sent as an empty digest", async () => {
@@ -877,7 +933,7 @@ describe("runMorningBriefs — the digest in the same pass", () => {
         throw new Error("sessions read failed");
       },
     });
-    expect(result.digest).toEqual({ due: 3, sent: 0, failed: 3 });
+    expect(result.digest).toEqual({ due: 2, sent: 0, failed: 2 });
     // The brief is not held back by the digest's failure.
     expect(result.sent).toBe(1);
     expect(door.calls.map((c) => c.type)).toEqual([

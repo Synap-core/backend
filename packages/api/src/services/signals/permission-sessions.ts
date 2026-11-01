@@ -24,6 +24,7 @@ import {
   db,
   desc,
   drizzleSql,
+  eq,
   focusSessions,
   inArray,
   sessionRunners,
@@ -59,14 +60,29 @@ export async function listSessionsWaitingForPermission(q: {
   });
   if (q.sessionId)
     conditions.push(drizzleSql`${focusSessions.id} = ${q.sessionId}`);
-  // When its longest-waiting live runner entered the state: the row's age.
-  const since = drizzleSql<Date | string | null>`(
-    SELECT min(coalesce(${sessionRunners.stateSince}, ${sessionRunners.lastSeenAt}))
-      FROM ${sessionRunners}
-     WHERE ${sessionRunners.sessionId} = ${focusSessions.id}
-       AND ${sessionRunners.state} = 'needs_permission'
-       AND ${sessionRunners.lastSeenAt} > now() - make_interval(secs => ${RUNNER_LIVE_WINDOW_SECONDS})
-  )`;
+  // FROM the runners, not the sessions: the live `needs_permission` rows are
+  // few, so the read starts there (one grouped scan) and joins the sessions
+  // that pass the floor, instead of one correlated subquery per open session.
+  // `since`: when its longest-waiting live runner entered the state, the
+  // row's age.
+  const waiting = database
+    .select({
+      sessionId: sessionRunners.sessionId,
+      since: drizzleSql<
+        Date | string
+      >`min(coalesce(${sessionRunners.stateSince}, ${sessionRunners.lastSeenAt}))`.as(
+        "since"
+      ),
+    })
+    .from(sessionRunners)
+    .where(
+      and(
+        eq(sessionRunners.state, "needs_permission"),
+        drizzleSql`${sessionRunners.lastSeenAt} > now() - make_interval(secs => ${RUNNER_LIVE_WINDOW_SECONDS})`
+      )
+    )
+    .groupBy(sessionRunners.sessionId)
+    .as("waiting");
   const rows = await database
     .select({
       id: focusSessions.id,
@@ -75,14 +91,14 @@ export async function listSessionsWaitingForPermission(q: {
       status: focusSessions.status,
       projectId: focusSessions.projectId,
       workspaceId: focusSessions.workspaceId,
-      since,
+      since: waiting.since,
     })
-    .from(focusSessions)
+    .from(waiting)
+    .innerJoin(focusSessions, eq(focusSessions.id, waiting.sessionId))
     .where(
       and(
         ...conditions,
-        inArray(focusSessions.status, [...OPEN_SESSION_STATUSES]),
-        drizzleSql`${since} IS NOT NULL`
+        inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])
       )
     )
     .orderBy(desc(focusSessions.updatedAt), desc(focusSessions.id))

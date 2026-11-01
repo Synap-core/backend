@@ -42,7 +42,7 @@ import {
   proposals,
   storedSessionSource,
 } from "@synap/database";
-import { UUID_RE } from "../services/focus-sessions/session-metadata.js";
+import { isUuid } from "@synap-core/types/property-render";
 import { loadAgentPresence } from "../services/agent-presence.js";
 import { OPEN_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import {
@@ -127,9 +127,6 @@ export interface NotificationSessionSource {
   data?: Record<string, unknown>;
   push?: { threadId?: string };
 }
-
-const isUuid = (v: unknown): v is string =>
-  typeof v === "string" && UUID_RE.test(v);
 
 /**
  * The sessions a notification is ABOUT, from what it carries, no read: a

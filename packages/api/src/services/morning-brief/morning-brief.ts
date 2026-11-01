@@ -48,8 +48,8 @@
  * and the next tick retries: a failed read is never "nothing waits".
  *
  * THE SAME PASS raises the DELIVERED DIGEST (`delivered-digest.ts`): what
- * agents delivered since the last digest, for every person due at this time,
- * whether their brief is on or not (its off switch is its own push category).
+ * agents delivered since the last digest, for every person due at this time
+ * whose brief is on; its own push category off writes no digest at all.
  */
 
 import { createLogger } from "@synap-core/core";
@@ -80,6 +80,8 @@ import {
   type CreateNotificationInput,
 } from "../../notifications/NotificationService.js";
 import { CRITERIA_UNMET_NOTIFICATION_TYPE } from "../../notifications/session-criteria-unmet-reactor.js";
+import { readPushPrefs } from "../../notifications/push-prefs.js";
+import { isPushCategoryEnabled, type PushPrefs } from "@synap-core/types/push";
 import { sessionListConditions } from "../focus-sessions/session-list-conditions.js";
 import type { Signal } from "../signals/needs-you-union.js";
 import {
@@ -382,7 +384,7 @@ export interface MorningBriefPassResult {
   failed: number;
   /** The delivered digest of the same pass (`delivered-digest.ts`). */
   digest: {
-    /** Due now and not held back (the brief's `enabled` does not apply). */
+    /** Due now and not held back (the brief's off switch holds it too). */
     due: number;
     sent: number;
     failed: number;
@@ -398,6 +400,7 @@ export async function runMorningBriefs(args?: {
   notify?: Notify;
   readNeedsYou?: (userId: string) => Promise<NeedsYouForBrief>;
   readDelivered?: (userId: string, since: Date) => Promise<DeliveredFacts>;
+  readPrefs?: (userId: string) => Promise<PushPrefs>;
 }): Promise<MorningBriefPassResult> {
   const database = args?.database ?? defaultDb;
   const now = args?.now ?? new Date();
@@ -408,12 +411,18 @@ export async function runMorningBriefs(args?: {
     args?.readDelivered ??
     ((userId: string, since: Date) =>
       readDeliveredSince(database, userId, since));
+  const readPrefs =
+    args?.readPrefs ?? ((userId: string) => readPushPrefs(userId, database));
 
   /** One person's digest: true when a row was written. THROWS on a failed read. */
   const sendDeliveredDigest = async (
     userId: string,
     timeZone: string
   ): Promise<boolean> => {
+    // Its push category off: no digest at all, not even the bell row. The
+    // digest is a summary sent to the person; nothing else waits on it.
+    if (!isPushCategoryEnabled(await readPrefs(userId), "delivered-digest"))
+      return false;
     // Once a day, held as the brief is: a digest raised in the last 20 hours
     // (read or not) means today's is sent.
     const last = await readLastDigestAt(database, userId);
@@ -449,6 +458,10 @@ export async function runMorningBriefs(args?: {
     const schedule = morningBriefSchedule(c.settings, c.timeZone);
     if (proactivePostHeldBy(schedule.prefs, now)) continue;
     if (!morningBriefDue(now, schedule)) continue;
+    // The brief's off switch holds the digest too (the lead's default for
+    // wave 065982de, founder may override): a person who turned the morning
+    // summary off is not sent a second one beside it.
+    if (!schedule.prefs.morningBriefing.enabled) continue;
     result.digest.due++;
     try {
       if (await sendDeliveredDigest(c.userId, schedule.timeZone)) {
@@ -461,7 +474,6 @@ export async function runMorningBriefs(args?: {
         "delivered digest: a read failed — skipped, the next tick retries"
       );
     }
-    if (!schedule.prefs.morningBriefing.enabled) continue;
     result.due++;
     try {
       const since = new Date(now.getTime() - ONCE_WITHIN_MS);
