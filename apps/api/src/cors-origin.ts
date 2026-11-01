@@ -92,9 +92,14 @@ function getBaseDomain(): string | null {
   const derived = host ? firstPartyBaseForPodHost(host) : null;
 
   if (!explicit) return derived; // nothing stored → self-derive from PUBLIC_URL
-  if (!host || !derived) return explicit; // can't derive (custom apex) → trust operator
+  if (!host) return explicit; // no PUBLIC_URL to check it against → trust operator
+  // An explicit base counts only while the pod lives under it (a custom apex
+  // like `synap.mycorp.io` under `mycorp.io` included).
   if (host === explicit || host.endsWith(`.${explicit}`)) return explicit;
-  return derived; // explicit is stale relative to PUBLIC_URL → heal
+  // Otherwise it is stale relative to PUBLIC_URL → heal to the derived base,
+  // which is none for a current-scheme Synap Cloud pod: a pod moved off
+  // `alice.synap.live` must not keep trusting its old names.
+  return derived;
 }
 
 /**
