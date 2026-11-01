@@ -21,7 +21,8 @@
  * that run, `workers.enable` with an `on: schedule` activator) carries the
  * project to say where its runs LAND, not which events it hears. When EVERY
  * node of the compiled THEN is a `playbook_run` filed in that same project
- * (`data.projectId`, the sentence grammar's `__projectId`), the project scope
+ * (`data.projectId`, the sentence grammar's `__projectId`; the flow's own
+ * `trigger` node is the WHEN, not an action), the project scope
  * holds by construction: there is one tick, and all it produces is filed in
  * the project. Such a rule is accepted, with its trigger unchanged. Any other
  * project-scoped schedule is refused exactly as before.
@@ -79,7 +80,10 @@ export function isClockFiledInProject(
   projectId: string
 ): boolean {
   if (compiled.trigger.triggerType !== "cron") return false;
-  const nodes = compiled.flow?.nodes ?? [];
+  // The flow's own `trigger` node is the WHEN, not an action.
+  const nodes = (compiled.flow?.nodes ?? []).filter(
+    (n) => n.type !== "trigger"
+  );
   return (
     nodes.length > 0 &&
     nodes.every(

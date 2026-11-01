@@ -60,6 +60,21 @@ describe("a schedule worker enabled on a goal passes the ONE rule door", () => {
     expect(applyRuleProjectScope(compiled, P).ok).toBe(false);
   });
 
+  it("a schedule with nothing but its trigger node files nothing: refused", () => {
+    expect(
+      isClockFiledInProject(
+        {
+          trigger: {
+            triggerType: "cron",
+            triggerConfig: { expression: "0 9 * * *" },
+          },
+          flow: { nodes: [{ type: "trigger", data: {} }] },
+        },
+        P
+      )
+    ).toBe(false);
+  });
+
   it("a plain project-scoped schedule that does something else keeps being refused", () => {
     expect(
       isClockFiledInProject(
@@ -70,6 +85,7 @@ describe("a schedule worker enabled on a goal passes the ONE rule door", () => {
           },
           flow: {
             nodes: [
+              { type: "trigger", data: {} },
               { type: "playbook_run", data: { projectId: P } },
               { type: "output", data: { outputType: "send_message" } },
             ],

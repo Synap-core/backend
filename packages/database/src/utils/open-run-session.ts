@@ -209,7 +209,9 @@ export async function openRunSession(
         // A goal only with ITS project: a placement that did not keep the
         // caller's project never carries a goal of another one.
         trackId:
-          input.trackId && placement.projectId === (input.projectId ?? null)
+          input.trackId &&
+          input.projectId &&
+          placement.projectId === input.projectId
             ? input.trackId
             : null,
         subjectEntityId: input.subjectEntityId ?? null,
