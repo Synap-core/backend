@@ -16504,6 +16504,48 @@ export interface SessionOutputsWithOutcomes extends SessionOutputsResult {
 		total: number;
 	};
 }
+export type PacketMuted = {
+	muted: boolean;
+	status: "ok";
+} | {
+	reason: string;
+	status: "unavailable";
+};
+/** One gate of a devbox job, as the devbox posted it (`{id, status}`). */
+export interface PacketDevboxGate {
+	/** The gate's name (`app-file`, `be-types`, …). */
+	id: string;
+	/** The devbox's own word for its result (`green`, `red`, `INFRA`, …). */
+	status: string;
+}
+/** A devbox gate job of this session: its NEWEST run. */
+export interface PacketDevboxJobItem {
+	/** The job name (`devbox <name>` workflow). */
+	job: string;
+	repo: string;
+	/** The commit the job checked, as posted (may be abbreviated). */
+	sha: string;
+	/** The run's status (`success`, `failure`, `cancelled`, …). */
+	status: string;
+	/** THE verdict (`ciVerdictOf`): null when the run settled nothing (cancelled, skipped). */
+	verdict: "failed" | "passed" | null;
+	/** The job's gates with their results; [] when the devbox posted none. */
+	gates: PacketDevboxGate[];
+	/** The run's page, when the devbox gave one; null otherwise (never a guess). */
+	url: string | null;
+	/** When the pod heard the run ended (ISO). */
+	at: string;
+	/** Runs of this job name among the runs read (≥ 1). */
+	runs: number;
+}
+export type PacketDevboxJobsSection = {
+	items: PacketDevboxJobItem[];
+	status: "ok";
+	total: number;
+} | {
+	reason: string;
+	status: "unavailable";
+};
 export interface SessionExternalAgent {
 	runId: string;
 	/** The run's own lifecycle (`running`, `failed`, `cancelled`, `proposed`, …). */
@@ -17336,6 +17378,21 @@ export interface ContinuationPacket {
 	 * prefix-matching X.
 	 */
 	gates: PacketGatesSection;
+	/**
+	 * DEVBOX JOBS — the devbox gate jobs run for this session (its `ci.finished`
+	 * facts of workflow `devbox <name>`), one per job name, its newest run,
+	 * newest first, at most 5 (`total` exact over the newest 100 runs). NOT the
+	 * stage gates above. A failed read is `unavailable`, never "no jobs".
+	 * Optional: an older pod does not send it (`session-notify.ts`).
+	 */
+	devboxJobs?: PacketDevboxJobsSection;
+	/**
+	 * Has the READER muted this session's pushes (tRPC
+	 * `notifCenter.setSessionMute`)? Muted holds back every push about the
+	 * session; nothing is hidden. A failed read is `unavailable`, never "not
+	 * muted". Optional: an older pod does not send it (`session-notify.ts`).
+	 */
+	muted?: PacketMuted;
 	/**
 	 * WHO IS ATTACHED — the client conversations holding this session's
 	 * change-feed wait, most recently seen first (`session-runners.ts`). An
@@ -20467,6 +20524,7 @@ declare const PUSH_CATEGORIES: readonly [
 	"late-or-stuck",
 	"mention",
 	"morning-brief",
+	"delivered-digest",
 	"sent-by-you",
 	"system"
 ];
@@ -40742,11 +40800,22 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		setPushPrefs: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				categories: Partial<Record<"blocking-ask" | "decision-blocking" | "late-or-stuck" | "mention" | "morning-brief" | "sent-by-you" | "system" | "work-broke", boolean>>;
+				categories: Partial<Record<"blocking-ask" | "decision-blocking" | "delivered-digest" | "late-or-stuck" | "mention" | "morning-brief" | "sent-by-you" | "system" | "work-broke", boolean>>;
 			};
 			meta: object;
 			output: {
 				categories: EffectivePushCategory[];
+			};
+		}>;
+		setSessionMute: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				muted: boolean;
+				sessionId: string;
+			};
+			meta: object;
+			output: {
+				muted: boolean;
+				sessionId: string;
 			};
 		}>;
 		snooze: import("@trpc/server").TRPCMutationProcedure<{
