@@ -710,7 +710,8 @@ export const NOTIFICATION_TARGET_KIND: Readonly<Record<string, string>> = {
   agent: "run",
   proactive_message: "channel",
   ai_proactive: "channel",
-  // `handoff.continue` (notif-center `requestHandoff`) — sourceId is the session id.
+  // `handoff.continue` / `handoff.to_phone` (notif-center `handoff`) and the
+  // session notices — sourceId is the session id.
   session: "session",
   // `track.kpi_reached` (services/tracks) — sourceId is the track id.
   track: "track",
@@ -720,6 +721,12 @@ export const NOTIFICATION_TARGET_KIND: Readonly<Record<string, string>> = {
   // `library.resurface` naming a project — sourceId is the PROJECT id; the
   // clients open the Library lensed to it.
   library: "library",
+  // A handoff (`notifCenter.handoff`) names its object by its own kind, so
+  // every `HANDOFF_KINDS` member maps to itself; these three have no other
+  // producer (pinned by `notif-center.handoff.pglite.test.ts`).
+  document: "document",
+  project: "project",
+  playbook: "playbook",
 };
 
 /**

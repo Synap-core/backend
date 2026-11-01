@@ -17,8 +17,9 @@
  *      statement about one type;
  *   4. the interruption budget ({@link withinPushCap}): an EARNED push past
  *      the person's {@link PUSH_DAILY_CAP} pushes today is held back — the row
- *      stays in the bell and in needs-you. "Something broke" (`work-broke`) is
- *      exempt and never counted; a forced push (rule 3) is the person's own
+ *      stays in the bell and in needs-you. "Something broke" (`work-broke`)
+ *      and what the person sent to their phone (`sent-by-you`) are exempt
+ *      and never counted (`PUSH_CAP_EXEMPT_CATEGORIES`); a forced push (rule 3) is the person's own
  *      ask and is never held back, but it counts. The count is read only when
  *      the cap applies (`pushCapApplies`), so no exempt or forced push waits
  *      on it.

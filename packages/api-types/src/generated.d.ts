@@ -20183,6 +20183,7 @@ declare const PUSH_CATEGORIES: readonly [
 	"late-or-stuck",
 	"mention",
 	"morning-brief",
+	"sent-by-you",
 	"system"
 ];
 export type PushCategory = (typeof PUSH_CATEGORIES)[number];
@@ -20277,11 +20278,21 @@ export interface NotificationNavigateHandler {
  * stores `def.actions` VERBATIM and the persisted row does not carry `data`, so
  * a templated id would reach the client as the literal `{{…}}` text. That was
  * already true of the `chat.mention` action this replaces.
+ *
+ * `kind` is OMITTED only by a type whose rows each point at a different KIND of
+ * object (the handoff types: any `HANDOFF_KINDS` member). It then means "this
+ * notification's own object" — the producer's `target`, else its
+ * `sourceType` — and `create()` writes it in (`materializeActions`), so a
+ * persisted row and the socket payload always carry a literal kind: no client
+ * ever reads a handler without one.
  */
 export interface NotificationNavigateObjectHandler {
 	type: "navigate-object";
-	/** Object-nav kind — see `fallbackNavTarget` in object-nav.ts. */
-	kind: string;
+	/**
+	 * Object-nav kind — see `fallbackNavTarget` in object-nav.ts. Omit ⇒ the
+	 * row's own object, written in at create (see above).
+	 */
+	kind?: string;
 	/** Literal object id. Omit ⇒ the notification's own `sourceId`. */
 	id?: string;
 	/**
@@ -20468,6 +20479,39 @@ export interface NotificationCatalogue {
 }
 export type PreferenceScope = "pod" | "workspace";
 export type RegisteredDeviceStatus = "connected" | "revoked";
+declare const OBJECT_NAV_VIEWS: readonly [
+	"room"
+];
+export type ObjectNavView = (typeof OBJECT_NAV_VIEWS)[number];
+declare const HANDOFF_DEVICES: readonly [
+	"desktop",
+	"phone"
+];
+export type HandoffDevice = (typeof HANDOFF_DEVICES)[number];
+/**
+ * Whether the person has a device of one class signed in, as the pod knows it
+ * (`notifCenter.handoffTargets`, and on every `handoff` answer).
+ *
+ * `signedIn` reads the Synap apps' sign-ins (`person_devices`), and for a
+ * phone also its push registration. It is a HINT for the words, never a gate:
+ * the door stores the request either way, and an app signed in before device
+ * sign-ins existed is not seen. `push` (phone only): a phone that gets pushes
+ * is connected, so the request rings it; otherwise it waits in the app.
+ */
+export interface HandoffReach {
+	signedIn: boolean;
+	/** The most recent use of a device of this class (ISO), or null. */
+	lastSeenAt: string | null;
+	/** Phone only: at least one phone gets pushes. */
+	push?: boolean;
+}
+export interface HandoffResult {
+	status: "already_sent" | "sent";
+	notificationId: string;
+	to: HandoffDevice;
+	/** What the pod knows of the person's devices of that class right now. */
+	reach: HandoffReach;
+}
 export interface LibraryKeepAliveSettings {
 	/** Quiet archive, weekly "Build one group" and resurfacing. Default false (opt-in). */
 	enabled: boolean;
@@ -22924,10 +22968,6 @@ export interface RuleRunFacts {
 	/** The newest run's status — a quiet row's mark is read from it. */
 	latestStatus: string;
 }
-declare const OBJECT_NAV_VIEWS: readonly [
-	"room"
-];
-export type ObjectNavView = (typeof OBJECT_NAV_VIEWS)[number];
 /** What a signal points AT — an object-nav address the browser can dispatch. */
 export interface SignalTarget {
 	/** An `objectNavTarget` kind: `proposal`, `channel`, `entity`, `automation`… */
@@ -40567,6 +40607,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId: string | null;
 			} | null;
 		}>;
+		handoff: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				target: {
+					id: string;
+					kind: "automation" | "document" | "entity" | "library_group" | "playbook" | "project" | "proposal" | "session" | "track";
+					view?: "room" | undefined;
+				};
+				to: "desktop" | "phone";
+			};
+			meta: object;
+			output: HandoffResult;
+		}>;
+		handoffTargets: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: Record<"desktop" | "phone", HandoffReach>;
+		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				category?: "ai" | "data" | "governance" | "inbox" | "system" | undefined;
@@ -40665,10 +40722,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				notificationId: string;
-				status: "already_sent";
-			} | {
-				notificationId: string;
-				status: "sent";
+				status: "already_sent" | "sent";
 			};
 		}>;
 		revokeDevice: import("@trpc/server").TRPCMutationProcedure<{
@@ -40683,7 +40737,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		setPushPrefs: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				categories: Partial<Record<"blocking-ask" | "decision-blocking" | "late-or-stuck" | "mention" | "morning-brief" | "system" | "work-broke", boolean>>;
+				categories: Partial<Record<"blocking-ask" | "decision-blocking" | "late-or-stuck" | "mention" | "morning-brief" | "sent-by-you" | "system" | "work-broke", boolean>>;
 			};
 			meta: object;
 			output: {

@@ -57,7 +57,11 @@ import {
   recordPush,
   withinPushCap,
 } from "./push-decision.js";
-import type { DeliveryChannel, NotificationDef } from "./registry.js";
+import type {
+  DeliveryChannel,
+  NotificationActionDef,
+  NotificationDef,
+} from "./registry.js";
 import {
   CONNECTION_PREF_DEFAULTS,
   connectionNoticeDelivered,
@@ -108,7 +112,12 @@ export interface CreateNotificationInput {
     | "entity"
     // Library keep-alive: a group's id, or (resurfacing) the project's id.
     | "library_group"
-    | "library";
+    | "library"
+    // A handoff (`notifCenter.handoff`): the object's own kind, any
+    // `HANDOFF_KINDS` member — these three are named only by it.
+    | "document"
+    | "project"
+    | "playbook";
   sourceId?: string;
   workspaceUrl?: string;
 
@@ -406,13 +415,14 @@ async function connectionNotifyLevel(
  */
 export function pushTarget(
   def: NotificationDef,
-  input: Pick<CreateNotificationInput, "sourceId" | "target">
+  input: Pick<CreateNotificationInput, "sourceId" | "target"> &
+    Partial<Pick<CreateNotificationInput, "sourceType">>
 ): { kind: string; id: string; view?: string } | undefined {
   if (input.target) return input.target;
 
-  for (const action of def.actions ?? []) {
+  for (const action of materializeActions(def.actions, input)) {
     const handler = action.handler;
-    if (handler.type !== "navigate-object") continue;
+    if (handler.type !== "navigate-object" || !handler.kind) continue;
     const id = handler.id ?? input.sourceId;
     if (!id) continue;
     return {
@@ -422,6 +432,54 @@ export function pushTarget(
     };
   }
   return undefined;
+}
+
+/**
+ * The actions a row STORES: the registry's, verbatim, except a
+ * `navigate-object` handler with no `kind` — "this row's own object", declared
+ * by a type whose rows point at different kinds (the handoff types). Its kind
+ * (and view, when the handler names none) are written in from the producer's
+ * `target`, else the row's `sourceType`, so every persisted row and socket
+ * payload carries a literal kind and no client ever reads one without.
+ *
+ * Returns the registry array itself when nothing needs writing in, so every
+ * other type is stored exactly as before. Pure.
+ */
+export function materializeActions(
+  actions: NotificationActionDef[] | undefined,
+  input: Pick<CreateNotificationInput, "target"> &
+    Partial<Pick<CreateNotificationInput, "sourceType">>
+): NotificationActionDef[] {
+  const list = actions ?? [];
+  if (
+    !list.some(
+      (a) =>
+        a.handler.type === "navigate-object" && a.handler.kind === undefined
+    )
+  ) {
+    return list;
+  }
+  const own: { kind?: string; view?: string } = input.target ?? {
+    kind: input.sourceType,
+  };
+  // No object to name: the handler stays kind-less and no reader routes it.
+  if (!own.kind) return list;
+  const kind = own.kind;
+  return list.map((action) => {
+    const handler = action.handler;
+    if (handler.type !== "navigate-object" || handler.kind !== undefined) {
+      return action;
+    }
+    const view = handler.view ?? own.view;
+    return {
+      ...action,
+      handler: {
+        ...handler,
+        kind,
+        ...(view ? { view } : {}),
+      },
+    };
+  });
 }
 
 /**
@@ -476,6 +534,7 @@ export const NotificationService = {
 
     const title = interpolate(def.titleTemplate, input.data);
     const body = interpolate(def.bodyTemplate, input.data);
+    const actions = materializeActions(def.actions, input);
 
     const groupKey = resolveNotificationGroupKey(def, input);
     const dedupeKey = resolveNotificationDedupeKey(def, groupKey);
@@ -647,7 +706,7 @@ export const NotificationService = {
         sourceType: input.sourceType,
         sourceId: input.sourceId ?? undefined,
         workspaceUrl: input.workspaceUrl ?? undefined,
-        actions: def.actions ?? [],
+        actions,
         groupKey: groupKey ?? undefined,
         dedupeKey: dedupeKey ?? undefined,
         expiresAt:
@@ -683,7 +742,7 @@ export const NotificationService = {
             sourceType: input.sourceType,
             sourceId: input.sourceId ?? null,
             workspaceUrl: input.workspaceUrl ?? null,
-            actions: def.actions ?? [],
+            actions,
             createdAt: drizzleSql`now()`,
             // Re-raised news expires from its new moment, not the old one.
             ...(def.expiresAfterMs
@@ -763,7 +822,7 @@ export const NotificationService = {
         sourceType: input.sourceType,
         sourceId: input.sourceId ?? undefined,
         workspaceUrl: input.workspaceUrl ?? undefined,
-        actions: def.actions ?? [],
+        actions,
         status: "unread",
         createdAt: new Date().toISOString(),
       };
