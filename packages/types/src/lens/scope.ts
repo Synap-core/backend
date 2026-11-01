@@ -239,6 +239,25 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,99}$/;
 
+/** The fields each scope kind carries, as {@link readLensScope} reads them. */
+const LENS_SCOPE_FIELDS: Record<
+  LensScopeKind,
+  { required: readonly string[]; optional: readonly string[] }
+> = {
+  pod: { required: [], optional: [] },
+  workspace: { required: ["workspaceId"], optional: ["projectId"] },
+  project: { required: ["projectId"], optional: [] },
+  track: { required: ["trackId"], optional: ["projectId"] },
+  session: {
+    required: ["sessionId"],
+    optional: ["trackId", "projectId"],
+  },
+  pipeline: {
+    required: ["profileSlug"],
+    optional: ["workspaceId", "projectId", "trackId"],
+  },
+};
+
 /** What {@link readLensScope} answers: the scope, or the one reason it is not one. */
 export type LensScopeRead =
   { ok: true; scope: LensScope } | { ok: false; reason: string };
@@ -266,24 +285,7 @@ export function readLensScope(value: unknown): LensScopeRead {
       reason: `\`kind\` is one of ${LENS_SCOPE_KINDS.join(", ")}`,
     };
   }
-  const FIELDS: Record<
-    LensScopeKind,
-    { required: string[]; optional: string[] }
-  > = {
-    pod: { required: [], optional: [] },
-    workspace: { required: ["workspaceId"], optional: ["projectId"] },
-    project: { required: ["projectId"], optional: [] },
-    track: { required: ["trackId"], optional: ["projectId"] },
-    session: {
-      required: ["sessionId"],
-      optional: ["trackId", "projectId"],
-    },
-    pipeline: {
-      required: ["profileSlug"],
-      optional: ["workspaceId", "projectId", "trackId"],
-    },
-  };
-  const { required, optional } = FIELDS[kind as LensScopeKind];
+  const { required, optional } = LENS_SCOPE_FIELDS[kind as LensScopeKind];
   const out: Record<string, string> = { kind };
   for (const key of Object.keys(v)) {
     if (key === "kind") continue;

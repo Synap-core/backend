@@ -464,19 +464,21 @@ async function writePatch(args: {
 // ─── The bound refresher (decision D4) ───────────────────────────────────────
 
 /**
- * D4, the OPS half: every op rewrites a section that already existed (an
- * `upsert_section` that replaced in place, never appended). The machine-writer
- * floor (`renderDocumentPatch`) has already refused any change to a person's
- * section, so a replaced section here was `owner="ai"`.
+ * D4, the OPS half: every op is an `upsert_section` of a section that was
+ * `owner="ai"` in the document AS READ, before the patch (`aiSectionsBefore`).
+ * Judged against the pre-patch sections, never the in-progress text: ops apply
+ * in order, so a second upsert of an id the first one appended would otherwise
+ * read as a rewrite, and creating a section must stay a reviewed
+ * `section_update`.
  */
 export function refresherRewritesOnlyItsSections(
   ops: readonly DocumentPatchOp[],
-  replacedSections: readonly string[]
+  aiSectionsBefore: readonly string[]
 ): boolean {
   return (
     ops.length > 0 &&
     ops.every(
-      (op) => op.op === "upsert_section" && replacedSections.includes(op.id)
+      (op) => op.op === "upsert_section" && aiSectionsBefore.includes(op.id)
     )
   );
 }
@@ -743,7 +745,7 @@ export async function applyDocumentPatch(
     !ownSession &&
     !input.session &&
     Boolean(agentUserId) &&
-    refresherRewritesOnlyItsSections(ops, rendered.replacedSections) &&
+    refresherRewritesOnlyItsSections(ops, rendered.aiSectionsBefore) &&
     (await isBoundRefresherRun({
       refreshAutomationId: doc.refreshAutomationId,
       sessionId: input.provenanceSessionId ?? null,

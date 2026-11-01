@@ -155,6 +155,12 @@ export interface RenderedPatch {
   previews: SectionPreview[];
   /** Section ids an `upsert_section` op replaced in place (vs appended). */
   replacedSections: string[];
+  /**
+   * Ids of the `owner="ai"` sections of the document AS READ, before any op
+   * applied. Ops apply in order, so `replacedSections` also holds a section an
+   * earlier op of the same patch created; this is the pre-patch truth (D4).
+   */
+  aiSectionsBefore: string[];
 }
 
 // ─── Section extents ─────────────────────────────────────────────────────────
@@ -563,6 +569,9 @@ export function renderDocumentPatch(
     markdown,
     previews: previewPatch(content, markdown),
     replacedSections,
+    aiSectionsBefore: before.sections
+      .filter((s) => sectionOwner(s) === "ai")
+      .map((s) => s.id),
   };
 }
 
