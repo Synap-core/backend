@@ -131,9 +131,7 @@ export async function writeSessionMute(
   // the one the read keeps (`normalizePushPrefs` keeps the newest that many).
   // Left to grow, an unmute would bring an older mute back inside the read's
   // window, muting a session the person stopped seeing as muted long ago.
-  const next = drizzleSql`(SELECT coalesce(jsonb_agg(m.e ORDER BY m.o), '[]'::jsonb)
-    FROM jsonb_array_elements(${appended}) WITH ORDINALITY AS m(e, o)
-    WHERE m.o > jsonb_array_length(${appended}) - ${PUSH_MUTED_SESSIONS_MAX}::int)`;
+  const next = appended;
   await db
     .insert(notificationPreferences)
     .values({

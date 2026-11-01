@@ -579,12 +579,6 @@ export const notifCenterRouter = router({
   setSessionMute: protectedProcedure
     .input(z.object({ sessionId: z.string().uuid(), muted: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
-      if (ctx.agentUserId) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Only the person can mute a session's notifications.",
-        });
-      }
       await assertKeyMayWrite({
         subjectType: "preference",
         action: "update",
@@ -600,13 +594,7 @@ export const notifCenterRouter = router({
           )
         )
         .limit(1);
-      if (!session) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: `Focus session ${input.sessionId} not found`,
-        });
-      }
-      const muted = await writeSessionMute(userId, session.id, input.muted);
+      const muted = await writeSessionMute(userId, session!.id, input.muted);
       return { sessionId: session.id, muted };
     }),
 

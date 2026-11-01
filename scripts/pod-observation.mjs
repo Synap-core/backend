@@ -60,22 +60,6 @@ export function podSessionFromBody(body) {
   return m ? m[1].toLowerCase() : null;
 }
 
-/**
- * Is this PR's branch in the repo itself (`head.repo.full_name` = the repo),
- * not a fork's? Backend is public: anyone can open a PR whose body names a
- * session, and its `Pod session:` line must not aim the pod's facts at it
- * (the snapshot's `trustedPodSession`, dev-repo-snapshot.mjs, same rule).
- * Unknown (no `head.repo`, e.g. a deleted fork) is not trusted.
- */
-export function isInRepoBranch(pr, repo) {
-  const head = pr?.head?.repo?.full_name;
-  return (
-    typeof head === "string" &&
-    typeof repo === "string" &&
-    head.toLowerCase() === repo.toLowerCase()
-  );
-}
-
 const SOURCE = "github-actions";
 
 /**
@@ -151,9 +135,6 @@ const CI_STATUS = {
 };
 
 function prObservation(action, pr, repo, defaultBranch) {
-  // A fork's body is not carried at all: the pod reads a `Pod session:` line
-  // from a fact's body when `sessionId` is absent (pr-session-resolver.ts).
-  const trusted = isInRepoBranch(pr, repo);
   let type;
   let occurredAt;
   if (action === "opened" || action === "reopened") {
@@ -189,8 +170,8 @@ function prObservation(action, pr, repo, defaultBranch) {
           ? pr.base.ref === defaultBranch
           : undefined,
       title: pr.title?.slice(0, MAX_TITLE),
-      body: trusted ? pr.body?.slice(0, MAX_BODY) : undefined,
-      sessionId: trusted ? podSessionFromBody(pr.body) : undefined,
+      body: pr.body?.slice(0, MAX_BODY),
+      sessionId: podSessionFromBody(pr.body),
       // Extra fields: the contract allows them.
       action,
       merged: Boolean(pr.merged),
@@ -324,8 +305,7 @@ async function runPrFacts(payload, token) {
     github(`repos/${repo}/commits/${sha}/check-runs?per_page=100`, token),
   ]);
   return {
-    sessionId:
-      pull && isInRepoBranch(pull, repo) ? podSessionFromBody(pull.body) : null,
+    sessionId: pull ? podSessionFromBody(pull.body) : null,
     requiredChecks:
       pull && checks
         ? requiredChecksVerdict({

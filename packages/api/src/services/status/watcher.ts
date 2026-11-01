@@ -97,10 +97,7 @@ import { BELONGS_TO_PROJECT } from "../../utils/project-scope.js";
 import { SNAPSHOT_LOOKBACK_MS } from "../dev-loop/work-release.js";
 import {
   culpritsToLookUp,
-  devPrsGroupKey,
   devSignalsOf,
-  PR_SIGNALS,
-  repoName,
   repoStuckFolds,
   type CulpritFact,
   type DevSignalCandidate,
@@ -546,43 +543,28 @@ async function devCandidates(
     }
   }
 
-  // D-R2: a repo's escalated PRs share ONE needs-you row from the first
-  // escalation on, so PRs that escalate on different ticks land in the same
-  // row; at three or more standing at once they also say one thing ("backend:
-  // 3 PRs are stuck"). Which one is pushed is chosen after the claim
-  // (`oneDevPushPerRepo`): the standing candidates here include episodes
-  // raised on earlier ticks, which are not raised again.
+  // D-R2: a repo with several PRs escalated at once is ONE signal to the
+  // person — the same words on each, one collapse key, one push.
   const folds = repoStuckFolds(raised);
+  const pushed = new Set<string>();
   for (const c of out) {
-    if (c.agentOnly || !PR_SIGNALS.has(c.signal)) continue;
     const repo = String(c.facts.repo);
-    c.groupKey = devPrsGroupKey(repo);
-    const fold = folds.get(repo);
-    if (fold)
-      c.facts = {
-        ...c.facts,
-        repoStuck: fold.count,
-        repoStuckLabels: fold.labels,
-      };
+    const fold = c.agentOnly ? undefined : folds.get(repo);
+    if (
+      !fold ||
+      (c.signal !== "pr_green_unmerged" && c.signal !== "pr_red_idle")
+    )
+      continue;
+    c.facts = {
+      ...c.facts,
+      repoStuck: fold.count,
+      repoStuckLabels: fold.labels,
+    };
+    c.groupKey = `status-signal:dev-prs:${repo}`;
+    if (pushed.has(repo)) c.inAppOnly = true;
+    else pushed.add(repo);
   }
   return out;
-}
-
-/**
- * D-R2's one push per folded repo: among the candidates CLAIMED this tick
- * (the new episodes, the only ones raised), the first folded PR signal of
- * each repo is pushed and the others land in-app only. Picked from the claims,
- * never the standing candidates: an older PR whose escalation was raised on an
- * earlier tick would hold the slot and push nothing. Below the fold each PR
- * is its own news and pushes on its own.
- */
-export function oneDevPushPerRepo(fresh: readonly SignalCandidate[]): void {
-  const pushed = new Set<string>();
-  for (const c of fresh) {
-    if (!c.groupKey || c.facts.repoStuck === undefined) continue;
-    if (pushed.has(c.groupKey)) c.inAppOnly = true;
-    else pushed.add(c.groupKey);
-  }
 }
 
 /**
@@ -969,7 +951,7 @@ export function signalWords(
           : [];
         const more = stuck > labels.length ? ", …" : "";
         return {
-          headline: `${repoName(String(f.repo ?? ""))}: ${stuck} PRs are stuck`,
+          headline: `${repoWord(f.repo)}: ${stuck} PRs are stuck`,
           detail: `${labels.join(", ")}${more} have been green and not merged, or red with no push, for over ${days(Math.floor(WORK_CLOCK.stuck / DAY_MS))}. Open each one, or pause the ones that wait on purpose.`,
         };
       }
@@ -998,6 +980,12 @@ export function signalWords(
     }
   }
 }
+
+/** `synap-core/backend` → `backend`: a repo in a person's words. */
+const repoWord = (repo: unknown) => {
+  const r = String(repo ?? "");
+  return r.split("/").pop() || r;
+};
 
 // ── Raising ─────────────────────────────────────────────────────────────────
 
@@ -1075,7 +1063,6 @@ export async function runStatusWatcher(
     waitEpisodes,
   };
   if (claims.length === 0) return result;
-  oneDevPushPerRepo(claims.map((c) => c.candidate));
 
   // Every claim this tick does not raise is given back — whatever throws — so
   // the next tick raises it; a claim kept for an unraised episode loses it.

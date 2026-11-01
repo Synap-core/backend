@@ -27,7 +27,6 @@ import {
   drizzleSql,
   eq,
   events,
-  gte,
   isNull,
   notificationPreferences,
 } from "@synap/database";
@@ -167,22 +166,12 @@ export function foldDevboxJobs(
   return [...byJob.values()];
 }
 
-/**
- * How far before a session began its devbox runs are read: a job queued just
- * before `synap_start_session` still counts, and the read stays bounded by
- * time (`idx_events_timestamp`), never the session's whole past.
- */
-const DEVBOX_JOBS_BEFORE_START_MS = 24 * 3_600_000;
-
 /** The session's devbox jobs (see the header). THROWS on a failed read. */
 export async function readSessionDevboxJobs(
   database: Database,
   reader: SessionReader,
-  row: { id: string; expectedOutputs: unknown; createdAt: Date | string }
+  row: { id: string; expectedOutputs: unknown }
 ): Promise<{ total: number; items: PacketDevboxJobItem[] }> {
-  const from = new Date(
-    new Date(row.createdAt).getTime() - DEVBOX_JOBS_BEFORE_START_MS
-  );
   const heardAt = drizzleSql`coalesce((${events.data}->>'ingestedAt')::timestamptz, ${events.timestamp})`;
   const rows = await database
     .select({
@@ -193,7 +182,6 @@ export async function readSessionDevboxJobs(
     .where(
       and(
         eq(events.type, DEV_LOOP_EVENT_TYPES.ciFinished),
-        gte(events.timestamp, from),
         drizzleSql`${events.data}->>'workflow' LIKE 'devbox %'`,
         sessionDevFactWhere(
           row.id,

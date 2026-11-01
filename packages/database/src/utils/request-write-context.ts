@@ -566,6 +566,7 @@ export const RUNNER_STATES = [
   "idle",
   "needs_permission",
   "ended",
+  "waiting",
 ] as const;
 export type RunnerState = (typeof RUNNER_STATES)[number];
 
