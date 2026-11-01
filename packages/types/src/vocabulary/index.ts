@@ -419,6 +419,17 @@ const ACTION_VERB_ROWS = {
     imperative: "Keep it running",
     past: "Kept it running",
   },
+  // The SESSION verbs that bare tokens would misread (`SESSION_VERBS`,
+  // `@synap-core/types/focus-sessions`): Stop ends a session `cancelled`
+  // through the one close door; Wait on / Stop waiting on add and drop a
+  // `blocked_by` edge. Dotted keys, so a bare `stop` or `release` elsewhere
+  // keeps its own reading (pause, resume and rerun share their bare rows).
+  "session.stop": { imperative: "Stop", past: "Stopped" },
+  "session.wait_on": { imperative: "Wait on", past: "Waited on" },
+  "session.release": {
+    imperative: "Stop waiting on",
+    past: "Stopped waiting on",
+  },
   // The owner's two answers to a delegate's counter-offer — both re-ask the
   // delegate through the participants door (`op: "add"`): with the
   // counter-offer as the commitment, or with the original one.
