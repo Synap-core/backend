@@ -4610,6 +4610,123 @@ export const tools = {
         },
       },
       {
+        name: "synap_list_workers",
+        annotations: {
+          title: "List a goal's workers",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "How a GOAL runs: the workers enabled on it (a goal is a TRACK in tool names; say 'goal' to the person). A worker is a playbook's declared trigger (a schedule, something happening, a count) turned on for the goal; each run of its playbook is filed in the goal. Only the workers enabled ON this goal, never its project's others. Each row: ruleId (what synap_pause_worker and synap_run_worker take), playbookId, playbookName, activatorKey, trigger { kind: schedule|event|manual, words — 'Every Monday at 09:00 UTC', never a raw cron }, mode (propose = asks before each run, run = acts), state (running|paused), pendingApprovals, lastRunAt, nextRunAt (from the pod, schedule workers only), health { state: failing|off|waiting|healthy|paused|not_running, marks (last 10 runs, oldest first: done|failed|waiting|skipped|running), consecutiveFailures, offReason — why the pod turned it off }. No rows = the goal is worked until it is done, nothing runs it on its own. Find the goal with synap_list_tracks.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            trackId: {
+              type: "string",
+              description: "UUID of the goal (synap_list_tracks).",
+            },
+          },
+          required: ["trackId"],
+        },
+      },
+      {
+        name: "synap_enable_worker",
+        annotations: {
+          title: "Make a goal run",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Make a GOAL run on its own: enable one of a playbook's declared workers on the goal (a track). activatorKey names the trigger the playbook declares (synap_list_playbooks shows `activators`): 'schedule:<cron>' (e.g. 'schedule:0 9 * * *' = every day at 09:00 UTC; 'schedule:0 9 * * 1' = every Monday), 'enters_status:<status>' (when a thing enters that status), 'count:<status>' (when enough things are in it), 'created'. Its runs are filed in the goal. A goal that should simply be worked until it is done needs NO worker. Refused when the same worker already runs for the goal's project or the whole space (the reply names the holder: pause it there first) and for a manual worker (run it with synap_run_worker or synap_run_playbook instead). Governed: status='proposed' is SUCCESS — say it awaits the person's review, do not retry. Otherwise status='enabled' with its ruleId.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            trackId: {
+              type: "string",
+              description: "UUID of the goal (synap_list_tracks).",
+            },
+            playbookId: {
+              type: "string",
+              description:
+                "UUID of the playbook whose worker to enable (synap_list_playbooks).",
+            },
+            activatorKey: {
+              type: "string",
+              description:
+                "The declared trigger's key: 'schedule:<cron>', 'enters_status:<status>', 'count:<status>' or 'created'.",
+            },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
+            },
+          },
+          required: ["trackId", "playbookId", "activatorKey"],
+        },
+      },
+      {
+        name: "synap_pause_worker",
+        annotations: {
+          title: "Pause or resume a goal's worker",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Pause (paused: true) or resume (paused: false) ONE worker of a goal, by its ruleId (synap_list_workers). Pausing stops what fires it; runs already going finish. Resuming is refused when the same worker now runs elsewhere over the same things (the reply names the holder). A worker the pod turned off after failures in a row (health.state 'off') is fixed first, then resumed. Governed: status='proposed' is SUCCESS — say it awaits review, do not retry. Otherwise status='updated' with the new state.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            ruleId: {
+              type: "string",
+              description: "The worker's ruleId (synap_list_workers).",
+            },
+            paused: {
+              type: "boolean",
+              description: "true = pause it, false = resume it.",
+            },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
+            },
+          },
+          required: ["ruleId", "paused"],
+        },
+      },
+      {
+        name: "synap_run_worker",
+        annotations: {
+          title: "Run a goal's worker now",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Run ONE worker of a goal NOW, once, by its ruleId (synap_list_workers): its playbook runs, filed in the goal — the same door and governance as synap_run_playbook with that trackId. Its schedule or trigger is unchanged. Governed: status='proposed' is SUCCESS — say it awaits review, do not retry. Otherwise the run and its session.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            ruleId: {
+              type: "string",
+              description: "The worker's ruleId (synap_list_workers).",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why run it now, in the person's words — shown to the reviewer. One line.",
+            },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
+            },
+          },
+          required: ["ruleId"],
+        },
+      },
+      {
         name: "synap_set_track_participant",
         annotations: {
           title: "Set goal participant",
