@@ -369,6 +369,73 @@ export interface UnitStateView {
 	glyph: UnitGlyph;
 	rail: UnitRail;
 }
+declare const AGENT_HARNESSES: readonly [
+	{
+		readonly label: "Claude Code";
+		readonly reopen: {
+			readonly command: (id: string) => string;
+			readonly idPattern: RegExp;
+		};
+		readonly slug: "claude-code";
+		readonly surface: true;
+	},
+	{
+		readonly label: "Claude Desktop";
+		readonly slug: "claude-desktop";
+		readonly surface: true;
+	},
+	{
+		readonly label: "Cursor";
+		readonly slug: "cursor";
+		readonly surface: true;
+	},
+	{
+		readonly label: "Raycast";
+		readonly slug: "raycast";
+		readonly surface: true;
+	},
+	{
+		readonly label: "Codex";
+		readonly slug: "codex";
+		readonly surface: true;
+	},
+	{
+		readonly label: "Open WebUI";
+		readonly slug: "openwebui";
+		readonly surface: true;
+	},
+	{
+		readonly label: "Discord";
+		readonly slug: "discord";
+		readonly surface: true;
+	},
+	{
+		readonly label: "Proton";
+		readonly slug: "proton";
+		readonly surface: true;
+	},
+	{
+		readonly label: "Generic";
+		readonly slug: "generic";
+		readonly surface: true;
+	}
+];
+/** Harnesses whose conversation id we can turn into a reopen door (the registry's `reopen`). */
+export type AgentConversationHarness = Extract<(typeof AGENT_HARNESSES)[number], {
+	reopen: unknown;
+}>["slug"];
+export interface AgentConversationRef {
+	harness: AgentConversationHarness;
+	/** The harness's own conversation id (Claude Code: the session UUID). */
+	conversationId: string;
+	/** Where it ran, when its client said so. Display only. */
+	cwd: string | null;
+	/**
+	 * The shell command that reopens it, on the computer it ran on. Built only
+	 * from a validated id, so it is safe to show and copy as-is.
+	 */
+	resumeCommand: string;
+}
 declare const SESSION_POST_INTENTS: readonly [
 	"blocked_on_you",
 	"handoff",
@@ -415,6 +482,15 @@ declare const AGENT_BINDING_ERROR_CODES: readonly [
 	"malformed"
 ];
 export type AgentBindingErrorCode = (typeof AGENT_BINDING_ERROR_CODES)[number];
+declare const EXTERNAL_AGENT_STATUSES: readonly [
+	"pending_start",
+	"running",
+	"needs_input",
+	"done",
+	"failed",
+	"cancelled"
+];
+export type ExternalAgentStatus = (typeof EXTERNAL_AGENT_STATUSES)[number];
 declare const AGENT_POSTURE_NAMES: readonly [
 	"ask-first",
 	"create-with-undo"
@@ -7715,6 +7791,13 @@ export interface KeyDraft {
 	/** What it may touch, where, and for how long. */
 	readonly grant: GrantDraft;
 }
+declare const RUNNER_STATES: readonly [
+	"busy",
+	"idle",
+	"needs_permission",
+	"ended"
+];
+export type RunnerState = (typeof RUNNER_STATES)[number];
 /**
  * What a key may touch, as a key list shows it:
  *   - `ungranted` — it never had a grant: it may touch NOTHING (P5);
@@ -16667,6 +16750,103 @@ export type PacketGatesSection = {
 	reason: string;
 	status: "unavailable";
 };
+/** One other live copy of the same conversation (0373). */
+export interface TwinCopy {
+	/** The copy's `X-Synap-Process` value — what a client compares to its own. */
+	processId: string;
+	host: string | null;
+	startedAt: string | null;
+	lastSeenAt: string;
+}
+export interface SessionRunner {
+	harness: string;
+	conversationId: string;
+	cwd: string | null;
+	agentUserId: string | null;
+	/** The computer hosting the agent (`users.id` of a `machine` agent user). */
+	machineUserId: string | null;
+	/** The OS process holding the wait (`<host>:<pid>:<startedAtMs>`); '' when its client named none. */
+	processId: string;
+	/** That process's host and start time, as it named itself. */
+	processHost: string | null;
+	processStartedAt: string | null;
+	/**
+	 * The OTHER live copies of this conversation on this session (never this
+	 * row); empty when there is no twin. Only rows that named a process count.
+	 */
+	twin: TwinCopy[];
+	/**
+	 * What it says it is doing (0384). `ended` when it said so, or when it left
+	 * the live window; `null` while live = its client names no state (unknown).
+	 */
+	state: RunnerState | null;
+	/** When it entered that state (for a runner gone quiet: when it was last seen). */
+	stateSince: string | null;
+	firstSeenAt: string;
+	lastSeenAt: string;
+	/** Stamped within {@link RUNNER_LIVE_WINDOW_SECONDS} of `now`, and not `ended`. */
+	live: boolean;
+	/** The reopen door (`claude --resume …`), or null for a harness we cannot reopen. */
+	conversation: AgentConversationRef | null;
+}
+/** The agent on a session, named in the one attribution order (S10). */
+export interface HolderAgent {
+	agentUserId: string;
+	name: string | null;
+	/** "Claude Code on devbox" (its host) or "Claude Code, last seen on MacBook" (a key label). */
+	displayName: string;
+	agentType: string | null;
+	/** Its computer: the host machine, else the label of the key it was last seen on. */
+	computer: {
+		/** The machine's own principal; `null` when it is only a key label. */
+		agentUserId: string | null;
+		name: string;
+		source: "host" | "key";
+	} | null;
+	reach: AgentReach;
+	/** The newest call a process RUNNING this agent made; `null` = never measured. */
+	servedAt: string | null;
+	/** `nobodyRunsOf`: true = nothing runs it now; null = not measured / not applicable. */
+	nobodyRuns: boolean | null;
+}
+/** Where the holder's word came from, in that source's own words. */
+export type HolderSource = {
+	from: "session";
+	status: string;
+} | {
+	from: "external_agent";
+	status: ExternalAgentStatus | "unknown";
+} | {
+	from: "runner";
+	state: SessionRunner["state"];
+} | {
+	from: "live";
+	working: boolean;
+} | {
+	from: "waiting_on";
+} | {
+	from: "roster";
+};
+export interface SessionHolder {
+	/** Whose move: the ball of `waitKind` (`agent` → agent, `me` → person); nobody when none. */
+	kind: "agent" | "nobody" | "person";
+	/** THE one word (`WAIT_KINDS`); `null` for nobody. */
+	waitKind: WaitKind | null;
+	/** When it entered this state (ISO); `null` = not measured. */
+	since: string | null;
+	/** The agent on it — for a person, the one that handed it back; `null` = none. */
+	agent: HolderAgent | null;
+	source: HolderSource;
+	/** Nobody only: the session ended, or no agent is on it. */
+	reason?: "ended" | "no_agent";
+}
+export type SessionHolderSection = {
+	holder: SessionHolder;
+	status: "ok";
+} | {
+	reason: string;
+	status: "unavailable";
+};
 export interface PacketInboxItem {
 	/** The message id — also the change-feed event id (a reply's `cause`). */
 	id: string;
@@ -17117,6 +17297,14 @@ export interface ContinuationPacket {
 		reason: string;
 		status: "unavailable";
 	};
+	/**
+	 * WHO HAS IT — the one holder read (`session-holder.ts`): agent, person or
+	 * nobody, with ONE wait kind as its word, since when, and the agent named
+	 * with its computer and whether anything runs it. Derived from the
+	 * sections this packet already read (`externalAgent`, `runners`, `live`,
+	 * `waitingOn`); any of them failed ⇒ `unavailable`, never "nobody".
+	 */
+	holder: SessionHolderSection;
 	outputs: PacketSection<PacketOutputItem>;
 	/**
 	 * Child sessions (detours and planned sub-sessions), oldest first. A parent
