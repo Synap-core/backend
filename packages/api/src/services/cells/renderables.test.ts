@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { WIDGET_DEFINITIONS } from "@synap-core/types/renderables";
 import { locateEmbeds } from "@synap-core/markdown-core/readable";
 import {
@@ -185,5 +186,75 @@ describe("builtinRenderableRows", () => {
     const rows = builtinRenderableRows();
     expect(rows.length).toBe(WIDGET_DEFINITIONS.length);
     expect(rows.every((r) => r.source === "catalog")).toBe(true);
+  });
+});
+
+describe("work-state widgets — what synap_list_widgets offers on a document", () => {
+  const doc = discoverRenderables(builtinRenderableRows(), "document");
+  const entry = (key: string) => doc.find((e) => e.key === key);
+
+  it("offers the three work-state cells and the four work cells", () => {
+    for (const key of [
+      "lens-section",
+      "work-release",
+      "status-mark",
+      "active-sessions",
+      "agent-runs",
+      "agent-spend",
+      "session-goal-bar",
+    ]) {
+      const e = entry(key);
+      expect(e, key).toBeDefined();
+      expect(e!.aiHint, key).toBeTruthy();
+      expect(e!.exampleDirective.split("\n")[0], key).toBe(
+        `:::synap-cell{cellKey="${key}"}`
+      );
+    }
+  });
+
+  it("lens-section's props schema holds the design constraints an agent reads", () => {
+    const schema = z.fromJSONSchema(
+      entry("lens-section")!.propsSchema as Parameters<
+        typeof z.fromJSONSchema
+      >[0]
+    );
+    expect(schema.safeParse({ section: "blocking" }).success).toBe(true);
+    expect(
+      schema.safeParse({ section: "happened", limit: 10, empty: "reassure" })
+        .success
+    ).toBe(true);
+    expect(schema.safeParse({ section: "blocking", limit: 11 }).success).toBe(
+      false
+    );
+    expect(schema.safeParse({ section: "blocking", limit: 0 }).success).toBe(
+      false
+    );
+    expect(schema.safeParse({ section: "blocking", limit: 2.5 }).success).toBe(
+      false
+    );
+    expect(schema.safeParse({ section: "needs-you" }).success).toBe(false);
+    expect(
+      schema.safeParse({ section: "blocking", empty: "blank" }).success
+    ).toBe(false);
+    expect(schema.safeParse({ limit: 3 }).success).toBe(false);
+  });
+
+  it("the arrange gate asks for what each cannot render without", () => {
+    expect(renderableArrangeError("lens-section", {}, NONE)).toMatch(
+      /needs config\.section/
+    );
+    expect(renderableArrangeError("status-mark", {}, NONE)).toMatch(
+      /needs config\.id/
+    );
+    expect(renderableArrangeError("session-goal-bar", {}, NONE)).toMatch(
+      /needs config\.sessionId/
+    );
+    for (const key of [
+      "work-release",
+      "active-sessions",
+      "agent-runs",
+      "agent-spend",
+    ])
+      expect(renderableArrangeError(key, {}, NONE), key).toBe(null);
   });
 });

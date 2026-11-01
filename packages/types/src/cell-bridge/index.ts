@@ -41,6 +41,8 @@
 export {
   CELL_BRIDGE_READ_OPS,
   CELL_BRIDGE_READ_OP_NAMES,
+  CELL_BRIDGE_SPACE_READ_OPS,
+  cellBridgeReadRefusal,
   isCellBridgeReadOp,
   pickBridgeParams,
   type CellBridgeParamValue,

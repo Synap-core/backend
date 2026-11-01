@@ -4,6 +4,7 @@ import {
   type CellBridgeParamValue,
   type CellBridgeReadOp,
 } from "@synap-core/types/cell-bridge";
+import { LENS_PAGE_READ_CAPS } from "@synap-core/types/lens";
 import {
   BRIDGE_MAX_ANSWER_CHARS,
   BRIDGE_MAX_IN_FLIGHT,
@@ -393,6 +394,39 @@ describe("the page bridge — through the console's own client", () => {
       ],
       ["documents.get", { documentId: "d1", format: "readable" }],
     ]);
+  });
+
+  it("a lens page is the page read IN the page's space, bounded only by since", async () => {
+    const { calls, send } = wired(SPACE);
+    await send(
+      query("lens.page", {
+        since: "2026-11-01T00:00:00.000Z",
+        workspaceId: "other",
+        projectId: "p1",
+      })
+    );
+    expect(calls.map((c) => [c.path, c.input])).toEqual([
+      [
+        "signals.list",
+        {
+          lens: "page",
+          workspaceId: SPACE,
+          caps: { ...LENS_PAGE_READ_CAPS },
+          since: "2026-11-01T00:00:00.000Z",
+        },
+      ],
+    ]);
+  });
+
+  it("a page in no space cannot read a lens page: refused, the pod is not asked", async () => {
+    const { calls, posted, send } = wired(null);
+    await send(query("lens.page"));
+    expect(calls).toEqual([]);
+    expect(posted[0]!.message).toEqual({
+      type: "synap:query:result",
+      id: "q1",
+      error: '"lens.page" reads one space, and this page is not in a space',
+    });
   });
 
   it("a read missing what it needs is an error, and asks the pod nothing", async () => {

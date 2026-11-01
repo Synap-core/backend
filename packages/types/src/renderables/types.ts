@@ -9,6 +9,7 @@
 
 import type { Placement } from "./content-kinds.js";
 import type { ChartDataShape } from "./chart-data.js";
+import type { LensEmptyAnswer, LensSection } from "../lens/sections.js";
 
 // ─── Display modes ────────────────────────────────────────────────────────────
 
@@ -121,6 +122,10 @@ export const WIDGET_TYPE_KEYS = [
   "agent-runs",
   // Agent spend ("what did I spend?")
   "agent-spend",
+  // Work state: the pod's own work read, placed in a document by an agent
+  "lens-section",
+  "work-release",
+  "status-mark",
 ] as const;
 
 /** A registered bento widget key — derived from {@link WIDGET_TYPE_KEYS}. */
@@ -826,6 +831,32 @@ export interface AgentSpendConfig {
   hideChart?: boolean;
 }
 
+/**
+ * Config for the lens-section cell: ONE section of the lens page (the pod's
+ * `signals.list({ lens: "page" })` read), drawn with the lens-page components.
+ * No scope: the host stamps it from the document's stored scope.
+ */
+export interface LensSectionConfig {
+  /** Which section ("blocking" = Needs you). */
+  section: LensSection;
+  /** Rows at rest, 1–10; absent = the section's own cap (`LENS_CAPS`). */
+  limit?: number;
+  /** What it shows when it has no rows; absent = the section's own answer. */
+  empty?: LensEmptyAnswer;
+}
+
+/** Config for the work-release cell (Work › Ship: can I release, what blocks it). */
+export interface WorkReleaseConfig {
+  /** One repo (`owner/name` as the release read names it); absent = every repo. */
+  repo?: string;
+}
+
+/** Config for the status-mark cell: where one session, goal or thing stands. */
+export interface StatusMarkConfig {
+  /** The session, goal (track) or entity id the pod's `statusOf` reads. */
+  id: string;
+}
+
 export interface SessionGoalBarConfig {
   sessionId?: string;
   /** Compact/dense mode */
@@ -941,6 +972,10 @@ export interface WidgetConfigByType {
   "agent-runs": AgentRunsConfig;
   // Agent spend
   "agent-spend": AgentSpendConfig;
+  // Work state
+  "lens-section": LensSectionConfig;
+  "work-release": WorkReleaseConfig;
+  "status-mark": StatusMarkConfig;
 }
 
 // ─── View config interfaces ───────────────────────────────────────────────────

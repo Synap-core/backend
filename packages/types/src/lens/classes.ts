@@ -15,59 +15,23 @@
  * neither: it is ONE deduplicated status banner ({@link placeSignal} → `banner`).
  */
 
-import { GOAL_FIELD_LABELS } from "../vocabulary/index.js";
+import {
+  LENS_CAPS,
+  LENS_SECTION_ORDER,
+  type AttentionClass,
+  type LensSection,
+} from "./sections.js";
 
-/** In SECTION order (the order {@link LENS_SECTION_ORDER} draws them). */
-export const ATTENTION_CLASSES = [
-  "blocking",
-  "happening",
-  "produced",
-  "proposed",
-  "happened",
-] as const;
-export type AttentionClass = (typeof ATTENTION_CLASSES)[number];
-
-/**
- * Below the top, in this order, at every scope (skill §3). Produced sits above
- * Happened because outcomes outrank process; Proposed sits below the work
- * because ignoring it is free. `structure` (Map | Steps | Zoom) exists only on
- * a project / track lens; `data` only where the scope owns data.
- *
- * A GOAL (track) page answers, in order (experience north star v2, W5
- * 2026-10-23): how close — `doneWhen` (its criteria) · what waits on you —
- * `blocking` · who is on it — `participants` · what it made — `produced`.
- * Those two keys exist only on a track lens ({@link lensSections}); every
- * other scope keeps the order it had. A session keeps its own criteria
- * section ("Done means", `SESSION_STEP_SECTIONS`) after Produced.
- */
-export const LENS_SECTION_ORDER = [
-  "doneWhen",
-  "blocking",
-  "participants",
-  "happening",
-  "produced",
-  "structure",
-  "proposed",
-  "happened",
-  "data",
-] as const;
-export type LensSection = (typeof LENS_SECTION_ORDER)[number];
-
-/** The section headings — one spelling for the header's count doors AND the sections. */
-export const LENS_SECTION_LABELS = {
-  // A goal's criteria — the goal field's own word (vocabulary door).
-  doneWhen: GOAL_FIELD_LABELS.criteria,
-  blocking: "Needs you",
-  participants: "Who's on it",
-  happening: "Happening",
-  produced: "Produced",
-  // The work-structure slot (Map | Steps | Zoom) is the PLAN (founder default,
-  // 2026-10-05): "Work" already names the app, its page and its breadcrumb.
-  structure: "Plan",
-  proposed: "Proposed",
-  happened: "Happened",
-  data: "Data",
-} as const satisfies Record<LensSection, string>;
+export {
+  ATTENTION_CLASSES,
+  LENS_CAPS,
+  LENS_EMPTY_ANSWERS,
+  LENS_SECTION_LABELS,
+  LENS_SECTION_ORDER,
+  type AttentionClass,
+  type LensEmptyAnswer,
+  type LensSection,
+} from "./sections.js";
 
 /**
  * The sections a lens of this scope kind draws, in order. Which of them OMIT
@@ -86,19 +50,6 @@ export function lensSections(
     return true;
   });
 }
-
-/**
- * At-rest caps (skill §6). Produced is a horizontal row of peers, so it takes
- * more; Proposed is a quiet lane, so it takes fewest; Happened is today's
- * batched lines.
- */
-export const LENS_CAPS = {
-  blocking: 5,
-  happening: 5,
-  produced: 8,
-  proposed: 3,
-  happened: 10,
-} as const satisfies Record<AttentionClass, number>;
 
 /**
  * How many of `total` rows a cap of `cap` draws: never hides exactly ONE row —

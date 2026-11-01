@@ -3,10 +3,12 @@ import {
   CELL_BRIDGE_READ_OPS,
   CELL_BRIDGE_READ_OP_NAMES,
   CELL_BRIDGE_SDK,
+  CELL_BRIDGE_SPACE_READ_OPS,
   CELL_BRIDGE_WRITE_REFUSED,
   CELL_FRAME_MAX_BYTES,
   CELL_FRAME_SANDBOX,
   buildCellFrameCsp,
+  cellBridgeReadRefusal,
   cellFrameHeadBlock,
   htmlByteLength,
   isCellBridgeReadOp,
@@ -219,7 +221,7 @@ describe("the in-frame SDK", () => {
 });
 
 describe("the read allowlist", () => {
-  it("is the desktop's view-frame reads plus documents.get, nothing more", () => {
+  it("is the desktop's view-frame reads (with the lens page) plus documents.get, nothing more", () => {
     expect([...CELL_BRIDGE_READ_OP_NAMES].sort()).toEqual(
       [
         "entities.list",
@@ -233,9 +235,35 @@ describe("the read allowlist", () => {
         "sessions.list",
         "lifecycle.home",
         "lifecycle.moving",
+        "lens.page",
         "documents.get",
       ].sort()
     );
+  });
+
+  it("a lens page is bounded only by since; the host stamps its scope", () => {
+    expect(CELL_BRIDGE_READ_OPS["lens.page"]).toEqual(["since"]);
+    expect(
+      pickBridgeParams("lens.page", {
+        since: "2026-11-01T00:00:00.000Z",
+        workspaceId: "w",
+        projectId: "p",
+        trackId: "t",
+        sessionId: "s",
+      })
+    ).toEqual({ since: "2026-11-01T00:00:00.000Z" });
+  });
+
+  it("a page in no space is refused a space's own page, and only that", () => {
+    expect([...CELL_BRIDGE_SPACE_READ_OPS]).toEqual(["lens.page"]);
+    expect(cellBridgeReadRefusal("lens.page", { workspaceId: null })).toBe(
+      '"lens.page" reads one space, and this page is not in a space'
+    );
+    expect(cellBridgeReadRefusal("lens.page", { workspaceId: "w" })).toBe(null);
+    for (const op of CELL_BRIDGE_READ_OP_NAMES) {
+      if (op === "lens.page") continue;
+      expect(cellBridgeReadRefusal(op, { workspaceId: null }), op).toBe(null);
+    }
   });
 
   it("refuses writes, unknown ops and inherited names", () => {
