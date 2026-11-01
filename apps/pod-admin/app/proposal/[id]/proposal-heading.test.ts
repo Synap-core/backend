@@ -134,6 +134,34 @@ describe("the review page heading", () => {
     );
   });
 
+  it("a ship verb names its act, before the tool run's '<action> · <tool>' (decision 4d6d7922)", () => {
+    const row = {
+      targetType: "capability",
+      targetName: null,
+      proposalType: "capability.run",
+      review: {
+        toolRun: { action: "Github merge pr", tool: "GitHub", parameters: [] },
+      },
+    };
+    const data = {
+      verbId: "github_merge_pr",
+      parameters: {
+        repo: "Synap-core/app-bases",
+        pr: 12,
+        expectedHeadSha: "a524c103d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6",
+        base: "main",
+      },
+    };
+    expect(proposalHeading(row, data).heading).toBe(
+      "Merge app-bases#12 into main at a524c103"
+    );
+    // Arguments that do not name the act: the tool run's heading stands.
+    expect(
+      proposalHeading(row, { verbId: "github_merge_pr", parameters: {} })
+        .heading
+    ).not.toMatch(/^Merge /);
+  });
+
   it("the decision card (page and Review drawer) renders the lines in place of the raw payload", () => {
     const src = readFileSync(join(__dirname, "ProposalReviewCard.tsx"), "utf8");
     expect(src).toMatch(/proposalHeading\(p, payload\)/);

@@ -20,6 +20,7 @@ import {
 } from "@synap-core/types/proposals/intent";
 import { describeHeldWritesProposal } from "@synap-core/types/proposals/deferred-writes";
 import { describeDevDeployProposal } from "@synap-core/types/proposals/dev-deploy";
+import { describeVerbRunProposal } from "@synap-core/types/proposals/capability-run";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { proposalPageT } from "./copy";
 import { reviewToolRun } from "./tool-run-model";
@@ -68,6 +69,10 @@ export function proposalHeading(
     heading:
       appConnect?.title ??
       heldWrites?.title ??
+      // A ship verb names its act ("Merge app-bases#12 into main at
+      // a524c103"), before the generic "<action> · <tool>" of a tool run.
+      describeVerbRunProposal({ proposalType: p.proposalType, data: payload })
+        ?.title ??
       toolRunTitle ??
       describeDevDeployProposal({ proposalType: p.proposalType, data: payload })
         ?.title ??

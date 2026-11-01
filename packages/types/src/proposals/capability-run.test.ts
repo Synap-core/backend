@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  CAPABILITY_RUN_PROPOSAL_TYPE,
   declaredToolParameters,
   describeToolRun,
+  describeVerbRun,
+  describeVerbRunProposal,
+  hasVerbRunHeading,
   toolRunActionLabel,
 } from "./capability-run.js";
 
@@ -154,6 +158,73 @@ describe("describeToolRun", () => {
   it("is null with no verb to name", () => {
     expect(
       describeToolRun({ verbId: null, parameters: {}, isSecretName })
+    ).toBeNull();
+  });
+});
+
+/**
+ * Decision 4d6d7922 (D2 A): an approval to merge names the act from the
+ * verb's own arguments, the heading every surface reads.
+ */
+describe("describeVerbRun: a ship verb's heading", () => {
+  const merge = {
+    repo: "Synap-core/app-bases",
+    pr: 12,
+    expectedHeadSha: "A524C103D1E2F3A4B5C6D7E8F9A0B1C2D3E4F5A6",
+    base: "main",
+    method: "squash",
+  };
+
+  it("names the repo, the PR, the base and the head it is pinned to", () => {
+    expect(describeVerbRun("github_merge_pr", merge)).toEqual({
+      verbId: "github_merge_pr",
+      title: "Merge app-bases#12 into main at a524c103",
+      recordTitle: "Merge of app-bases#12 into main at a524c103",
+    });
+    // A PR number passed as a string reads the same; no base, no "into".
+    expect(
+      describeVerbRun("github_merge_pr", { ...merge, pr: "12", base: "" })
+        ?.title
+    ).toBe("Merge app-bases#12 at a524c103");
+  });
+
+  it("arguments that do not name the act give no heading, never a half-filled one", () => {
+    for (const bad of [
+      { ...merge, expectedHeadSha: undefined },
+      { ...merge, expectedHeadSha: "main" },
+      { ...merge, pr: 0 },
+      { ...merge, pr: "12a" },
+      { ...merge, repo: "a/b/c" },
+      { ...merge, repo: "" },
+    ]) {
+      expect(describeVerbRun("github_merge_pr", bad)).toBeNull();
+    }
+  });
+
+  it("a verb with no heading of its own keeps the generic run title", () => {
+    expect(hasVerbRunHeading("github_merge_pr")).toBe(true);
+    expect(hasVerbRunHeading("github_pr_get")).toBe(false);
+    expect(hasVerbRunHeading("constructor")).toBe(false);
+    expect(describeVerbRun("github_pr_get", merge)).toBeNull();
+    expect(describeVerbRun(null, merge)).toBeNull();
+  });
+
+  it("reads a stored capability run, and only a capability run", () => {
+    const data = { verbId: "github_merge_pr", parameters: merge };
+    expect(
+      describeVerbRunProposal({
+        proposalType: CAPABILITY_RUN_PROPOSAL_TYPE,
+        data,
+      })?.title
+    ).toBe("Merge app-bases#12 into main at a524c103");
+    expect(
+      describeVerbRunProposal({ proposalType: "dev.deploy_approval", data })
+    ).toBeNull();
+    expect(
+      describeVerbRunProposal({
+        proposalType: CAPABILITY_RUN_PROPOSAL_TYPE,
+        data: { verbId: "github_merge_pr" },
+      })
     ).toBeNull();
   });
 });

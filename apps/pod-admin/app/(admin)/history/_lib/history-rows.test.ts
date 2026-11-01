@@ -93,6 +93,29 @@ describe("historyRow", () => {
     }
   });
 
+  it("a ship verb's run reads as the act, as a record, whatever its outcome", () => {
+    for (const status of ["approved", "rejected", "withdrawn"]) {
+      const row = historyRow(
+        proposal({
+          status,
+          proposalType: "capability.run",
+          targetType: "capability",
+          targetName: null,
+          data: {
+            verbId: "github_merge_pr",
+            parameters: {
+              repo: "Synap-core/app-bases",
+              pr: 12,
+              expectedHeadSha: "a524c103d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6",
+              base: "main",
+            },
+          },
+        })
+      );
+      expect(row.title).toBe("Merge of app-bases#12 into main at a524c103");
+    }
+  });
+
   it("names who asked, who decided, when, and where", () => {
     const row = historyRow(proposal());
     expect(row.askedBy).toBe("Scout");

@@ -13962,6 +13962,11 @@ export interface ProposalCluster {
 	/** Human label for the shared target (name, else `<type> · <shortId>`). */
 	targetLabel: string;
 	/**
+	 * `targetLabel` IS the whole heading (a deploy approval's, a ship verb's):
+	 * the row shows it as its title, with no action or kind around it.
+	 */
+	labelIsHeading?: true;
+	/**
 	 * Decision CLASS of the cluster — derived from the fingerprint's own
 	 * (proposalType, targetType), which every member shares BY CONSTRUCTION:
 	 * both columns are fingerprint inputs, so a cluster can never mix classes.

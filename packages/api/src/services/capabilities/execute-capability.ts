@@ -55,6 +55,7 @@ import {
 import {
   capabilityRunReasoning,
   describeEntityVerbRun,
+  describeVerbRun,
   entityVerbRunTarget,
   type EntityVerbRunSubject,
 } from "@synap-core/types/proposals/capability-run";
@@ -87,6 +88,11 @@ export function describeCapabilityRun(
 
   const entityRun = entityVerbRunTarget(verbId, parameters);
   if (entityRun) return describeEntityVerbRun(entityRun.action, entitySubject);
+
+  // A ship verb names its act from its arguments ("Merge app-bases#12 into
+  // main at a524c103"), the heading every surface reads (decision 4d6d7922).
+  const verbRun = describeVerbRun(verbId, parameters);
+  if (verbRun) return verbRun.title;
 
   if (verbId === "market.install") {
     const slug = typeof parameters.slug === "string" ? parameters.slug : null;
