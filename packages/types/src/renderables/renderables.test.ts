@@ -17,11 +17,16 @@ import {
   isDocumentEmbeddable,
   isInstalledRenderableKey,
   missingRequiredConfig,
+  placementsFor,
   renderRenderableFallback,
   requiredConfigFor,
 } from "./index.js";
 import { describeEmbed } from "./embed-model.js";
-import { LENS_EMPTY_ANSWERS, LENS_SECTION_ORDER } from "../lens/index.js";
+import {
+  ATTENTION_CLASSES,
+  LENS_EMPTY_ANSWERS,
+  LENS_SECTION_ORDER,
+} from "../lens/index.js";
 
 describe("renderables catalog", () => {
   it("every catalog widget key is a declared WidgetTypeKey", () => {
@@ -90,6 +95,21 @@ describe("renderables catalog", () => {
           key
         );
       }
+    }
+  });
+
+  it("the app-surface widgets are bento only, never in a document (generation contract rule 12)", () => {
+    for (const key of [
+      "greeting",
+      "home-tabs",
+      "workspace-info",
+      "quick-access",
+      "ai-chat",
+    ]) {
+      const def = WIDGET_BY_KEY[key];
+      expect(def, key).toBeDefined();
+      expect(isDocumentEmbeddable(def!), key).toBe(false);
+      expect(placementsFor(def!), key).toEqual(["bento"]);
     }
   });
 
@@ -309,12 +329,19 @@ describe("work-state widgets (generative documents, contract 1)", () => {
       expect(requiredConfigFor(WIDGET_BY_KEY[key]!), key).toEqual([]);
   });
 
-  it("lens-section's section is the lens section order, derived, never hand-listed", () => {
+  it("lens-section's section is the five attention classes, derived, never hand-listed", () => {
     const schema = configFieldsToJsonSchema(
       WIDGET_BY_KEY["lens-section"]!.configSchema,
       requiredConfigFor(WIDGET_BY_KEY["lens-section"]!)
     );
-    expect(schema.properties.section!.enum).toEqual([...LENS_SECTION_ORDER]);
+    expect(schema.properties.section!.enum).toEqual([...ATTENTION_CLASSES]);
+    // The page's other sections come from other reads: never placeable here.
+    const others = LENS_SECTION_ORDER.filter(
+      (s) => !(ATTENTION_CLASSES as readonly string[]).includes(s)
+    );
+    expect(others).toEqual(["doneWhen", "participants", "structure", "data"]);
+    for (const s of others)
+      expect(schema.properties.section!.enum, s).not.toContain(s);
     expect(schema.properties.empty!.enum).toEqual([...LENS_EMPTY_ANSWERS]);
     expect(schema.properties.limit).toMatchObject({
       type: "integer",
