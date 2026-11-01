@@ -18313,6 +18313,61 @@ export type CreateRuleGovernedResult = {
 	reason: string;
 	status: "denied";
 };
+declare const RUN_MARKS: readonly [
+	"done",
+	"failed",
+	"waiting",
+	"skipped",
+	"running"
+];
+export type RunMark = (typeof RUN_MARKS)[number];
+export interface RunMarkEntry {
+	/** The run (`automation_runs.id`) — its door. */
+	runId: string;
+	mark: RunMark;
+	/** ISO time the run started. */
+	at: string;
+}
+declare const RUN_HEALTH_STATES: readonly [
+	"failing",
+	"off",
+	"waiting",
+	"healthy",
+	"paused",
+	"not_running"
+];
+export type RunHealthState = (typeof RUN_HEALTH_STATES)[number];
+export interface RunHealth {
+	state: RunHealthState;
+	/** The newest runs, oldest → newest, at most {@link RUN_HEALTH_MARK_LIMIT}. */
+	marks: RunMarkEntry[];
+	consecutiveFailures: number;
+	/** Why it is `off` (the breaker's sentence); null otherwise. */
+	offReason: string | null;
+}
+export interface GoalRunsRollup {
+	/** "Every Monday at 09:00 UTC · when an issue is created"; null = nothing wakes it. */
+	rhythm: string | null;
+	/** The goal's ONE health state (`goalRunHealth`). */
+	health: RunHealthState;
+	/** Workers enabled on the goal, paused ones included. */
+	workerCount: number;
+	/** Of those, the ones not paused. */
+	runningCount: number;
+	/** Runs of its workers waiting on a person's approval. */
+	pendingApprovals: number;
+	/** The goal's newest runs across its workers, oldest → newest (≤ 10). */
+	marks: RunMarkEntry[];
+	/** ISO, the newest run of any worker; null = never ran. */
+	lastRunAt: string | null;
+	/** ISO, the soonest scheduled run of a running worker; null = none on a clock. */
+	nextRunAt: string | null;
+}
+/** A goal a worker serves, named. */
+export interface ServedGoal {
+	id: string;
+	name: string;
+}
 /** A slot the parse could not fill — the composer leaves it open. */
 export interface RuleParseGap {
 	slot: "actions" | "condition" | "trigger";
@@ -26966,6 +27021,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					nextRunAt: Date | null;
 					runCount: number;
+					runHealth: RunHealth | null;
+					servesGoal: ServedGoal | null;
 					state: Record<string, unknown>;
 					status: "active" | "archived" | "draft" | "error" | "paused";
 					successCount: number;
@@ -42661,8 +42718,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					params: unknown;
 					requiredIntents: unknown;
+					runHealth: RunHealth | null;
 					schedule: unknown;
 					scope: "project" | "session" | null;
+					servesGoals: ServedGoal[];
 					stages: unknown;
 					status: "active" | "archived" | "draft" | "paused";
 					subjectProfile: unknown;
@@ -50404,13 +50463,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				cursor?: string | undefined;
+				include?: "runs"[] | undefined;
 				includeArchived?: boolean | undefined;
 				limit?: number | undefined;
 				projectId?: string | undefined;
 			};
 			meta: object;
 			output: {
-				items: TrackView[];
+				items: (TrackView & {
+					runs?: GoalRunsRollup | null;
+				})[];
 				nextCursor: string | null;
 			};
 		}>;
@@ -51877,8 +51939,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | null;
 				activatorKey: string;
 				automationId: string | null;
+				health: {
+					consecutiveFailures: number;
+					marks: {
+						at: string;
+						mark: "done" | "failed" | "running" | "skipped" | "waiting";
+						runId: string;
+					}[];
+					offReason: string | null;
+					state: "failing" | "healthy" | "not_running" | "off" | "paused" | "waiting";
+				};
+				lastRunAt: string | null;
 				maxPendingApprovals: number;
 				mode: "propose" | "run";
+				nextRunAt: string | null;
 				pendingApprovals: number;
 				playbookId: string;
 				playbookName: string;
@@ -51889,6 +51963,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				size: "per_moment" | "per_thing";
 				state: "paused" | "running";
 				trackId: string | null;
+				trigger: {
+					kind: "event" | "manual" | "schedule";
+					words: string | null;
+				};
 			}[];
 		}>;
 		setPaused: import("@trpc/server").TRPCMutationProcedure<{
