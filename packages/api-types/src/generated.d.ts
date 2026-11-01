@@ -36955,7 +36955,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetKind: "action" | "capability" | "connection" | "profile";
 				targetPattern: string;
 				targetProfile?: string | undefined;
-				verdict: "auto" | "propose";
+				verdict: "auto" | "deny" | "propose";
 				window?: number | undefined;
 				workspaceId?: string | undefined;
 			};

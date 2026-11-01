@@ -985,6 +985,8 @@ Every write returns a `status` field:
 "denied"    → blocked, explain reason to user
 ```
 
+**`DENIED_BY_RULE` is a person's "Never".** A refusal whose reason opens with `DENIED_BY_RULE` (a write's `reason`, a run's `reasonCode`) means the person said never for this agent and this kind of act. It was not done. Do not retry it or do it another way; ask the person if it is needed. Only a pod admin can take that back, in pod admin Settings.
+
 **`"proposed"` is not an error.** It's the governance system queueing your change. When you get it:
 
 1. Tell the user exactly what was queued — use the `summary` field **verbatim**. Don't paraphrase.
