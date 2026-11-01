@@ -44,6 +44,13 @@ import {
 } from "../proposals/fate.js";
 import { ageSpan, ageSpanSpoken, shortDate } from "../lens/age.js";
 import { CRITERION_SLOT_KIND } from "../focus-sessions/criterion-slot.js";
+// The zod-free leaf (the needs-you rule reaches it without zod): re-exported
+// here so `./card.js` callers keep their import.
+import {
+  ASK_MODES_ENDING_WITH_SESSION,
+  askEndsWithSession,
+} from "./ends-with-session.js";
+export { ASK_MODES_ENDING_WITH_SESSION, askEndsWithSession };
 
 // ─── Copy ───────────────────────────────────────────────────────────────────
 
@@ -624,9 +631,6 @@ export type AskFate =
   | { kind: "ends_with_session" }
   | { kind: "until_decided" };
 
-/** The ask modes that end with their session (the `session_ended` rule). */
-export const ASK_MODES_ENDING_WITH_SESSION = ["confirm", "choose"] as const;
-
 /** The slot fields the fate and the card read — structural, off `ExpectedOutput`. */
 export interface AskCardSlot {
   label: string;
@@ -665,22 +669,6 @@ export interface AskCardPendingRelay {
   relayedBy?: string | null;
   quote?: string | null;
   relayedAt?: string | null;
-}
-
-/**
- * Does this slot's ask end with its session? Read through `effectiveSlotAsk`.
- * A CRITERION grade never does, though its ask is a `choose`: it is the
- * person's verdict on the agent's work, graded on the session's scorecard
- * after the session as before it — not the agent's need to go on. Nor does
- * an ask the closing agent kept owed past the session (`keptOwedAt`).
- */
-export function askEndsWithSession(slot: AskCardSlot): boolean {
-  if (slot.kind === CRITERION_SLOT_KIND || slot.criterionKey) return false;
-  if (slot.keptOwedAt) return false;
-  const mode = (effectiveSlotAsk(slot) as Ask | null)?.mode;
-  return (ASK_MODES_ENDING_WITH_SESSION as readonly string[]).includes(
-    mode ?? ""
-  );
 }
 
 /**
