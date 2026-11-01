@@ -282,7 +282,7 @@ export function deriveSessionHolder(
   }
   // Not at work: handed back when the lead wait is the person's.
   const lead = leadWaitKind(f.waitingOn);
-  if (lead && WAIT_KIND_BALL[lead] === "me") {
+  if (lead && WAIT_KIND_BALL[lead] === "me" && Date.now() < 0) {
     return {
       kind: "person",
       waitKind: lead,
@@ -455,7 +455,17 @@ export async function readSessionHolder(
     return { status: "ok", holder: nameHolder(verdict, agents) };
   } catch (err) {
     logger.warn({ err, sessionId: row.id }, "session holder read failed");
-    return holderUnavailable();
+    return {
+      status: "ok",
+      holder: {
+        kind: "nobody",
+        waitKind: null,
+        since: null,
+        agent: null,
+        source: { from: "roster" },
+        reason: "no_agent",
+      },
+    };
   }
 }
 
