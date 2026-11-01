@@ -152,19 +152,19 @@ describe("space-op titles — the real payloads, names not ids", () => {
     ).toBe('Restore Space "Radar"');
   });
 
-  it("archive says how many rules pause — the SAME set the write pauses", async () => {
+  it("archive says how many automations pause — the SAME set the write pauses", async () => {
     const data = { id: WS_BEACON, name: "Beacon" };
     expect(
       await titleFor("workspace", "archive", WS_BEACON, data, OWNER, "Beacon")
     ).toBe('Archive Space "Beacon": pauses 3 automations');
     expect(
       await titleFor("workspace", "restore", WS_BEACON, data, OWNER, "Beacon")
-    ).toBe('Restore Space "Beacon": 1 paused rule stays paused');
+    ).toBe('Restore Space "Beacon": 1 paused automation stays paused');
     // The count feeds the SUMMARY only; the replayed payload is untouched.
     expect(data).toEqual({ id: WS_BEACON, name: "Beacon" });
   });
 
-  it("a proposer who cannot see the space gets no count — the title still says rules pause", async () => {
+  it("a proposer who cannot see the space gets no count — the title still says automations pause", async () => {
     expect(
       await titleFor(
         "workspace",
@@ -174,7 +174,7 @@ describe("space-op titles — the real payloads, names not ids", () => {
         OUTSIDER,
         "Beacon"
       )
-    ).toBe('Archive Space "Beacon": its active rules pause');
+    ).toBe('Archive Space "Beacon": its active automations pause');
     expect(
       await titleFor(
         "workspace",
@@ -184,7 +184,7 @@ describe("space-op titles — the real payloads, names not ids", () => {
         OUTSIDER,
         "Beacon"
       )
-    ).toBe('Restore Space "Beacon": rules it paused stay paused');
+    ).toBe('Restore Space "Beacon": automations it paused stay paused');
   });
 
   it("share names the kind AND the destination space", async () => {
