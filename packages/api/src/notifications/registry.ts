@@ -1012,6 +1012,26 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     needsYou: "suggestion",
   },
   {
+    // What agents delivered since the last digest (plan d679e92c C9), raised
+    // by the morning brief's own pass (`services/morning-brief/
+    // delivered-digest.ts`), only when something was delivered. One PASSIVE
+    // push a day under `delivered-digest`, outside the daily cap. News, never
+    // an ask: informational, and it goes stale on its own.
+    type: "ai.proactive.delivered_digest",
+    category: "ai",
+    label: "Delivered digest",
+    icon: "package",
+    priority: "low",
+    titleTemplate: "{{title}}",
+    bodyTemplate: "{{body}}",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    // One open digest per person-day (`delivered-digest:<YYYY-MM-DD>`).
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
+  },
+  {
     type: "ai.proactive.weekly_digest",
     category: "ai",
     label: "Weekly Digest",
