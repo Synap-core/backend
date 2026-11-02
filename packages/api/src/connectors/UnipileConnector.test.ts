@@ -257,6 +257,7 @@ describe("chats and messages — account id in the PATH", () => {
         externalMessageId: "m1",
         threadId: "chat-1",
         senderName: "Ada",
+        senderProviderId: "li-ada",
         body: "Hi",
         sentAt: "2026-10-27T10:00:00.000Z",
         direction: "inbound",
@@ -266,6 +267,7 @@ describe("chats and messages — account id in the PATH", () => {
         externalMessageId: "m2",
         threadId: "chat-1",
         senderName: "me",
+        senderProviderId: "me",
         body: "",
         sentAt: "2026-10-27T10:01:00.000Z",
         direction: "outbound",
@@ -278,7 +280,8 @@ describe("chats and messages — account id in the PATH", () => {
     route("POST", at("/acc_li/chats/chat-1/messages/send"), () =>
       json({ object: "MessageSent", message_id: "m3" })
     );
-    await connector().sendMessage("acc_li", "chat-1", "On my way");
+    const sent = await connector().sendMessage("acc_li", "chat-1", "On my way");
+    expect(sent).toEqual({ messageId: "m3" });
     expect(calls.map((c) => [c.method, c.url, c.body])).toEqual([
       [
         "POST",
@@ -408,6 +411,7 @@ describe("webhooks — /v2/webhooks/endpoints/, signed deliveries", () => {
         externalMessageId: "m9",
         threadId: "chat-1",
         senderName: "Ada",
+        senderProviderId: "li-ada",
         body: "Ping",
         sentAt: "2026-10-28T09:00:00.000Z",
         direction: "inbound",
@@ -549,5 +553,507 @@ describe("webhooks — /v2/webhooks/endpoints/, signed deliveries", () => {
     expect(
       await deliver({ event: "message_created", account_id: "acc_li" })
     ).toBeNull();
+  });
+});
+
+// ── Channels lane B (2026-11-02): what the channel needs from the adapter ──
+// Inbound: the sender's provider id, the message id and the direction survive
+// the webhook. Outbound: a send returns the message id, a first message
+// returns the chat id. Identity: a profile lookup gives the member id, the
+// public handle and the network distance. History: pages with a cursor.
+// Health: whether the pod's endpoint is registered for every handled event.
+
+describe("message ids and chat ids from sends", () => {
+  it("a send whose answer carries several ids (attachments apart) returns the first; none → null", async () => {
+    let reply: unknown = { object: "MessageSent", message_id: ["m4", "m5"] };
+    route("POST", at("/acc_li/chats/chat-1/messages/send"), () => json(reply));
+    expect(await connector().sendMessage("acc_li", "chat-1", "x")).toEqual({
+      messageId: "m4",
+    });
+    reply = { object: "MessageSent", message_id: null };
+    expect(await connector().sendMessage("acc_li", "chat-1", "x")).toEqual({
+      messageId: null,
+    });
+  });
+
+  it("a 2xx send with an unreadable body is sent (messageId null), never a throw that invites a resend", async () => {
+    route(
+      "POST",
+      at("/acc_li/chats/chat-1/messages/send"),
+      () => new Response("", { status: 201 })
+    );
+    expect(await connector().sendMessage("acc_li", "chat-1", "x")).toEqual({
+      messageId: null,
+    });
+  });
+
+  it("LinkedIn starts a 1to1 chat from the CLASSIC_PRIMARY inbox with ONE id as a string", async () => {
+    route("GET", at("/accounts/acc_li"), () =>
+      json(account("acc_li", "linkedin"))
+    );
+    route("POST", at("/acc_li/inboxes/CLASSIC_PRIMARY/chats/send"), () =>
+      json({ object: "ChatStarted", chat_id: "chat-9", message_id: "m10" })
+    );
+    const started = await connector().startChat("acc_li", "ACoAda", "Hello");
+    expect(started).toEqual({ chatId: "chat-9", messageId: "m10" });
+    const send = calls.find((c) => c.method === "POST")!;
+    expect(send.url).toBe(`${BASE}/acc_li/inboxes/CLASSIC_PRIMARY/chats/send`);
+    // An array, even of one id, would ask Unipile for a group chat.
+    expect(send.body).toEqual({ text: "Hello", users_ids: "ACoAda" });
+  });
+
+  it("another provider starts the chat with POST /{account}/chats/send", async () => {
+    route("GET", at("/accounts/acc_wa"), () =>
+      json(account("acc_wa", "whatsapp"))
+    );
+    route("POST", at("/acc_wa/chats/send"), () =>
+      json({ object: "ChatStarted", chat_id: "wa-chat", message_id: null })
+    );
+    expect(await connector().startChat("acc_wa", "33600", "Hi")).toEqual({
+      chatId: "wa-chat",
+      messageId: null,
+    });
+  });
+
+  it("a refused first message throws (no chat, no message)", async () => {
+    route("GET", at("/accounts/acc_li"), () =>
+      json(account("acc_li", "linkedin"))
+    );
+    route("POST", at("/acc_li/inboxes/CLASSIC_PRIMARY/chats/send"), () =>
+      json({ type: "errors/no_connection_with_recipient" }, 422)
+    );
+    await expect(
+      connector().startChat("acc_li", "ACoBob", "Hi")
+    ).rejects.toThrow(/startChat failed: 422/);
+  });
+
+  it("a 2xx first message with no chat_id throws and says the message WAS sent", async () => {
+    route("GET", at("/accounts/acc_li"), () =>
+      json(account("acc_li", "linkedin"))
+    );
+    route("POST", at("/acc_li/inboxes/CLASSIC_PRIMARY/chats/send"), () =>
+      json({ object: "ChatStarted", message_id: "m11" })
+    );
+    await expect(
+      connector().startChat("acc_li", "ACoAda", "Hi")
+    ).rejects.toThrow(/sent but the answer has no chat_id/);
+  });
+});
+
+describe("profiles and chats — GET /{account}/users/{id}, GET /{account}/chats/{chat}", () => {
+  const profile = (extra: Record<string, unknown> = {}) => ({
+    object: "UserProfile",
+    id: "ACoAda",
+    type: "individual",
+    public_identifier: "ada-lovelace",
+    display_name: "Ada Lovelace",
+    first_name: "Ada",
+    last_name: "Lovelace",
+    provider: "linkedin",
+    is_blocked: false,
+    specifics: { network_distance: "FIRST_DEGREE" },
+    ...extra,
+  });
+
+  it("a LinkedIn lookup by public handle gives the member id, the handle and the distance", async () => {
+    route("GET", at("/accounts/acc_li"), () =>
+      json(account("acc_li", "linkedin"))
+    );
+    route(
+      "GET",
+      at("/acc_li/users/ada-lovelace?variant=linkedin_classic"),
+      () => json(profile())
+    );
+    expect(await connector().getProfile("acc_li", "ada-lovelace")).toEqual({
+      providerId: "ACoAda",
+      publicIdentifier: "ada-lovelace",
+      name: "Ada Lovelace",
+      networkDistance: "FIRST_DEGREE",
+    });
+  });
+
+  it("reads the distance wherever the shape puts it (specifics.linkedin, top level, v1 DISTANCE_n); unknown → null", async () => {
+    route("GET", at("/accounts/acc_li"), () =>
+      json(account("acc_li", "linkedin"))
+    );
+    let body: unknown = profile({
+      specifics: { linkedin: { network_distance: "SECOND_DEGREE" } },
+    });
+    route("GET", at("/acc_li/users/ACoAda?variant=linkedin_classic"), () =>
+      json(body)
+    );
+    const c = connector();
+    expect((await c.getProfile("acc_li", "ACoAda"))!.networkDistance).toBe(
+      "SECOND_DEGREE"
+    );
+    body = profile({ specifics: {}, network_distance: "DISTANCE_1" });
+    expect((await c.getProfile("acc_li", "ACoAda"))!.networkDistance).toBe(
+      "FIRST_DEGREE"
+    );
+    body = profile({
+      specifics: {},
+      display_name: undefined,
+      public_identifier: undefined,
+    });
+    expect(await c.getProfile("acc_li", "ACoAda")).toEqual({
+      providerId: "ACoAda",
+      publicIdentifier: null,
+      name: "Ada Lovelace",
+      networkDistance: null,
+    });
+  });
+
+  it("another provider is looked up without the LinkedIn variant", async () => {
+    route("GET", at("/accounts/acc_ig"), () =>
+      json(account("acc_ig", "instagram"))
+    );
+    route("GET", at("/acc_ig/users/ada.ig"), () =>
+      json(profile({ id: "ig-1", public_identifier: "ada.ig", specifics: {} }))
+    );
+    expect(await connector().getProfile("acc_ig", "ada.ig")).toMatchObject({
+      providerId: "ig-1",
+      networkDistance: null,
+    });
+  });
+
+  it("no such person (404) is null; any other failure throws — never read as 'not found'", async () => {
+    route("GET", at("/accounts/acc_li"), () =>
+      json(account("acc_li", "linkedin"))
+    );
+    route("GET", at("/acc_li/users/nobody?variant=linkedin_classic"), () =>
+      json({ type: "errors/resource_not_found" }, 404)
+    );
+    route("GET", at("/acc_li/users/limited?variant=linkedin_classic"), () =>
+      json({ type: "errors/too_many_requests" }, 429)
+    );
+    const c = connector();
+    expect(await c.getProfile("acc_li", "nobody")).toBeNull();
+    await expect(c.getProfile("acc_li", "limited")).rejects.toThrow(/429/);
+  });
+
+  it("a 1to1 chat names its counterpart; a group has none; 404 → null", async () => {
+    route("GET", at("/acc_li/chats/chat-1"), () =>
+      json({
+        object: "Chat",
+        id: "chat-1",
+        name: "Ada Lovelace",
+        type: "1to1",
+        is_group: false,
+        user_id: "ACoAda",
+        user: {
+          object: "User",
+          id: "ACoAda",
+          display_name: "Ada Lovelace",
+          public_identifier: "ada-lovelace",
+        },
+      })
+    );
+    route("GET", at("/acc_li/chats/group-1"), () =>
+      json({
+        object: "Chat",
+        id: "group-1",
+        name: "Team",
+        type: "group",
+        is_group: true,
+      })
+    );
+    route("GET", at("/acc_li/chats/gone"), () => json({}, 404));
+    route("GET", at("/acc_li/chats/broken"), () => json({}, 500));
+    const c = connector();
+    expect(await c.getChat("acc_li", "chat-1")).toEqual({
+      chatId: "chat-1",
+      counterpart: {
+        providerId: "ACoAda",
+        name: "Ada Lovelace",
+        publicIdentifier: "ada-lovelace",
+      },
+    });
+    expect(await c.getChat("acc_li", "group-1")).toEqual({
+      chatId: "group-1",
+      counterpart: null,
+    });
+    expect(await c.getChat("acc_li", "gone")).toBeNull();
+    await expect(c.getChat("acc_li", "broken")).rejects.toThrow(/500/);
+  });
+});
+
+describe("paged messages — cursor in, next_cursor out", () => {
+  const msg = (id: string) => ({
+    object: "Message",
+    id,
+    chat_id: "chat-1",
+    sender_id: "ACoAda",
+    text: id,
+    timestamp: "2026-10-27T10:00:00.000Z",
+    is_sender: false,
+  });
+
+  it("walks pages with the cursor until there is none", async () => {
+    route("GET", at("/acc_li/chats/chat-1/messages?limit=25"), () =>
+      json({ data: [msg("m3"), msg("m2")], next_cursor: "p2" })
+    );
+    route("GET", at("/acc_li/chats/chat-1/messages?limit=25&cursor=p2"), () =>
+      json({ data: [msg("m1")], next_cursor: null })
+    );
+    const c = connector();
+    const first = await c.getMessagesPage("acc_li", "chat-1");
+    expect(first.messages.map((m) => m.externalMessageId)).toEqual([
+      "m3",
+      "m2",
+    ]);
+    expect(first.nextCursor).toBe("p2");
+    const last = await c.getMessagesPage("acc_li", "chat-1", first.nextCursor);
+    expect(last).toEqual({
+      messages: [
+        expect.objectContaining({
+          externalMessageId: "m1",
+          senderProviderId: "ACoAda",
+          direction: "inbound",
+        }),
+      ],
+    });
+  });
+
+  it("the unpaged getMessages(account, chat) still answers the first page as an array", async () => {
+    route("GET", at("/acc_li/chats/chat-1/messages?limit=25"), () =>
+      json({ data: [msg("m3")], next_cursor: "p2" })
+    );
+    const messages = await connector().getMessages("acc_li", "chat-1");
+    expect(messages.map((m) => m.externalMessageId)).toEqual(["m3"]);
+  });
+
+  it("a failed page throws — never an empty page a caller reads as 'no history'", async () => {
+    route("GET", at("/acc_li/chats/chat-1/messages?limit=25&cursor=p9"), () =>
+      json({ type: "errors/invalid_cursor" }, 400)
+    );
+    await expect(
+      connector().getMessagesPage("acc_li", "chat-1", "p9")
+    ).rejects.toThrow(/400/);
+  });
+});
+
+describe("webhook payloads the channel reads, and the endpoint's health", () => {
+  const URL = "https://pod.example/api/webhooks/messaging";
+  const SECRET = "whsec_1";
+  const sign = (body: string, t = "1761650000") =>
+    `t=${t},v0=${createHmac("sha256", SECRET).update(`${t}.${body}`).digest("hex")}`;
+  const endpoint = (events: string[], extra: Record<string, unknown> = {}) => ({
+    object: "WebhookEndpoint",
+    id: "we_1",
+    url: URL,
+    trigger_events: events,
+    secret: SECRET,
+    enabled: true,
+    ...extra,
+  });
+  const deliver = (e: Record<string, unknown>) => {
+    const body = JSON.stringify(e);
+    return connector().parseWebhook({ "unipile-signature": sign(body) }, body);
+  };
+  beforeEach(() => {
+    route("GET", at("/webhooks/endpoints/?offset=0"), () =>
+      json({ data: [endpoint([...UNIPILE_WEBHOOK_EVENTS])], has_more: false })
+    );
+  });
+
+  it("message.new keeps the sender's provider id, public handle, message id and direction", async () => {
+    const event = await deliver({
+      id: "evt_2",
+      type: "message.new",
+      account_id: "acc_li",
+      account_provider: "linkedin",
+      payload: {
+        object: "Message",
+        id: "m20",
+        chat_id: "chat-1",
+        sender_id: "ACoAda",
+        sender: {
+          object: "User",
+          id: "ACoAda",
+          display_name: "Ada",
+          public_identifier: "ada-lovelace",
+        },
+        text: "Sounds good",
+        timestamp: "2026-11-02T09:00:00.000Z",
+        is_sender: false,
+      },
+    });
+    expect(event).toMatchObject({
+      type: "message.created",
+      threadId: "chat-1",
+      message: {
+        externalMessageId: "m20",
+        senderProviderId: "ACoAda",
+        senderPublicIdentifier: "ada-lovelace",
+        direction: "inbound",
+      },
+    });
+  });
+
+  it("a message the person sent from their own device is outbound, with their own id", async () => {
+    const event = await deliver({
+      type: "message.new",
+      account_id: "acc_li",
+      account_provider: "linkedin",
+      payload: {
+        id: "m21",
+        chat_id: "chat-1",
+        sender_id: "ACoMe",
+        text: "Sent from my phone",
+        timestamp: "2026-11-02T09:01:00.000Z",
+        is_sender: true,
+      },
+    });
+    expect(event).toMatchObject({
+      type: "message.created",
+      message: {
+        externalMessageId: "m21",
+        senderProviderId: "ACoMe",
+        direction: "outbound",
+      },
+    });
+  });
+
+  it("a message.new with no sender at all still becomes message.created (no sender id)", async () => {
+    const event = await deliver({
+      type: "message.new",
+      account_id: "acc_li",
+      account_provider: "linkedin",
+      payload: {
+        id: "m22",
+        chat_id: "chat-1",
+        text: "system note",
+        timestamp: "2026-11-02T09:02:00.000Z",
+        is_sender: false,
+      },
+    });
+    expect(event?.type).toBe("message.created");
+    if (event?.type !== "message.created") throw new Error("unreachable");
+    expect(event.message.externalMessageId).toBe("m22");
+    expect(event.message).not.toHaveProperty("senderProviderId");
+    expect(event.message.direction).toBe("inbound");
+  });
+
+  it("read and delivery receipts become message.status by message id", async () => {
+    expect(
+      await deliver({
+        type: "message.receipt.read",
+        account_id: "acc_li",
+        account_provider: "linkedin",
+        payload: {
+          chat_id: "chat-1",
+          message_id: "m20",
+          user_id: "ACoAda",
+          timestamp: "2026-11-02T10:00:00.000Z",
+        },
+      })
+    ).toEqual({
+      type: "message.status",
+      accountExternalId: "acc_li",
+      provider: "linkedin",
+      threadId: "chat-1",
+      externalMessageId: "m20",
+      status: "read",
+      at: "2026-11-02T10:00:00.000Z",
+    });
+    expect(
+      await deliver({
+        type: "message.receipt.delivery",
+        account_id: "acc_fb",
+        account_provider: "facebook",
+        payload: {
+          chat_id: "fb-chat",
+          message_id: "fb-m",
+          user_id: "u",
+          timestamp: "2026-11-02T10:01:00.000Z",
+        },
+      })
+    ).toMatchObject({ type: "message.status", status: "delivered" });
+    // A receipt without the message id it is about is not one.
+    expect(
+      await deliver({
+        type: "message.receipt.read",
+        account_id: "acc_li",
+        payload: { chat_id: "chat-1" },
+      })
+    ).toBeNull();
+  });
+
+  it("an unsigned receipt is dropped like any unsigned delivery", async () => {
+    const body = JSON.stringify({
+      type: "message.receipt.read",
+      account_id: "acc_li",
+      payload: { chat_id: "chat-1", message_id: "m20" },
+    });
+    expect(await connector().parseWebhook({}, body)).toBeNull();
+  });
+
+  it("describeWebhook: registered, missing events, missing, disabled, no public URL", async () => {
+    let endpoints: unknown[] = [endpoint([...UNIPILE_WEBHOOK_EVENTS])];
+    routes = [];
+    route("GET", at("/webhooks/endpoints/?offset=0"), () =>
+      json({ data: endpoints, has_more: false })
+    );
+    const c = connector();
+    expect(await c.describeWebhook("https://pod.example/")).toEqual({
+      state: "registered",
+      url: URL,
+      missingEvents: [],
+    });
+    endpoints = [endpoint(["message.new", "account.add"])];
+    const partial = await c.describeWebhook("https://pod.example");
+    expect(partial.state).toBe("missing-events");
+    expect(partial.missingEvents).toContain("message.receipt.read");
+    expect(partial.missingEvents).not.toContain("message.new");
+    endpoints = [
+      {
+        ...endpoint([...UNIPILE_WEBHOOK_EVENTS]),
+        url: "https://other.example/api/webhooks/messaging",
+      },
+    ];
+    expect((await c.describeWebhook("https://pod.example")).state).toBe(
+      "missing"
+    );
+    endpoints = [endpoint([...UNIPILE_WEBHOOK_EVENTS], { enabled: false })];
+    expect(await c.describeWebhook("https://pod.example")).toMatchObject({
+      state: "missing",
+      error: expect.stringMatching(/disabled/),
+    });
+    const before = calls.length;
+    expect(await c.describeWebhook(undefined)).toEqual({
+      state: "no-public-url",
+      url: null,
+      missingEvents: [...UNIPILE_WEBHOOK_EVENTS],
+    });
+    expect(calls.length).toBe(before); // nothing asked of Unipile
+  });
+
+  it("describeWebhook: a failed read is 'unknown' with the error, never 'missing'", async () => {
+    routes = [];
+    route("GET", at("/webhooks/endpoints/?offset=0"), () =>
+      json({ type: "errors/invalid_api_key" }, 401)
+    );
+    const health = await connector().describeWebhook("https://pod.example");
+    expect(health).toMatchObject({ state: "unknown", url: URL });
+    expect(health.error).toMatch(/401/);
+  });
+
+  it("ensureWebhooksRegistered asks for the receipt events too", async () => {
+    routes = [];
+    route("GET", at("/webhooks/endpoints/?offset=0"), () =>
+      json({ data: [endpoint(["message.new"])], has_more: false })
+    );
+    route("PATCH", at("/webhooks/endpoints/we_1"), () =>
+      json(endpoint([...UNIPILE_WEBHOOK_EVENTS]))
+    );
+    await connector().ensureWebhooksRegistered("https://pod.example");
+    const patched = (calls.at(-1)!.body as { trigger_events: string[] })
+      .trigger_events;
+    expect(patched).toEqual(
+      expect.arrayContaining([
+        "message.receipt.read",
+        "message.receipt.delivery",
+      ])
+    );
   });
 });
