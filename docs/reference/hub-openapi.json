@@ -5572,12 +5572,22 @@
             "properties": {
               "snapshots": {
                 "type": "string",
-                "enum": ["ok", "stale", "missing"]
+                "enum": ["ok", "stale", "missing", "withheld"]
               },
-              "sessions": { "type": "string", "enum": ["ok", "unavailable"] },
-              "holders": { "type": "string", "enum": ["ok", "unavailable"] }
+              "sessions": {
+                "type": "string",
+                "enum": ["ok", "unavailable", "withheld"]
+              },
+              "holders": {
+                "type": "string",
+                "enum": ["ok", "unavailable", "withheld"]
+              },
+              "pullRequests": {
+                "type": "string",
+                "enum": ["ok", "unavailable", "withheld"]
+              }
             },
-            "required": ["snapshots", "sessions", "holders"]
+            "required": ["snapshots", "sessions", "holders", "pullRequests"]
           },
           "repos": {
             "type": "array",
@@ -5635,6 +5645,24 @@
               ],
               "additionalProperties": {}
             }
+          },
+          "narrowed": {
+            "type": "object",
+            "properties": {
+              "snapshotSpaces": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "withheld": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": ["snapshots", "sessions", "holders", "pullRequests"]
+                }
+              },
+              "reason": { "type": "string" }
+            },
+            "required": ["snapshotSpaces", "withheld", "reason"]
           }
         },
         "required": ["generatedAt", "sources", "repos", "prs", "blockers"]
@@ -38980,7 +39008,7 @@
       "get": {
         "tags": ["FocusSessions"],
         "summary": "Work › Ship: can I release, and what blocks it",
-        "description": "The release read (`services/dev-loop/work-release.ts`): the newest `dev.repo_snapshot` per repo (posted by the devbox producer), each PR's stage on the road to main (working, checks, ready, on_main), its check verdict (own red vs red inherited from main), its fold (draft, negctl, dependabot, stale), the session holding it and whether that session is working now, and the blockers ranked by how much waits behind them transitively. `sources` says which read was stale, missing or failed: a failed read is `unavailable`, never an empty list. A workspace-bound key reads its own workspace's facts.",
+        "description": "The release read (`services/dev-loop/work-release.ts`): the newest `dev.repo_snapshot` per repo (posted by the devbox producer), each PR's stage on the road to main (working, checks, ready, on_main), its check verdict (own red vs red inherited from main), its fold (draft, negctl, dependabot, stale), the session holding it and whether that session is working now, and the blockers ranked by how much waits behind them transitively. `sources` says which read was stale, missing or failed: a failed read is `unavailable`, never an empty list. A workspace-bound key reads its own workspace's facts. A key pinned to spaces (a pod app) reads the snapshots recorded in those spaces when it reads `dev` events (`event.dev.read` or `event.read`), the sessions its `session` grant reaches, never the holders, and the recorded PR facts only when it reads dev events in every space: each part it does not reach is `withheld` in `sources`, and `narrowed` says what was read.",
         "security": [{ "bearerAuth": [] }],
         "responses": {
           "200": {

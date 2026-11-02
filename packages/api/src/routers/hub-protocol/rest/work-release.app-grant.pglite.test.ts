@@ -249,6 +249,7 @@ describe("GET /work-release — an app pinned to Builder reads Ship, narrowed", 
       snapshots: "ok",
       sessions: "ok",
       holders: "ok",
+      pullRequests: "ok",
     });
     expect(prOf(r, 278)?.sessionTitle).toBe("Secret elsewhere");
     expect(prOf(r, 363)?.holder).toMatchObject({
