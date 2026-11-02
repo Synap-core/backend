@@ -85,7 +85,12 @@ import {
 } from "@synap-core/types/proposals/review-package";
 import type { ProposalClass } from "../proposals/proposal-class.js";
 import { needsYouFoldBy, needsYouRole } from "../../notifications/registry.js";
-import { waitKindOf, type WaitKind } from "@synap-core/types/units";
+import {
+  RUNNER_STATE_WAIT_KIND,
+  waitKindOf,
+  type LiveRunnerState,
+  type WaitKind,
+} from "@synap-core/types/units";
 
 /** What a signal points AT — an object-nav address the browser can dispatch. */
 export interface SignalTarget {
@@ -150,10 +155,12 @@ export type SignalKind =
    */
   | "session-review"
   /**
-   * One session whose agent waits on the person's PERMISSION — a live
-   * runner says `needs_permission` (0384; decision D-R1, the rule's
+   * One session whose agent waits on the person AT THE TERMINAL — a live
+   * runner says `needs_permission` (a permission dialog) or `needs_answer`
+   * (a question, a plan to accept) (0384; decision D-R1, the rule's
    * `classifyRunnerWait`). ONE row per session, whatever its runners; the
-   * door is the session. Its runner word rides in `why`.
+   * door is the session. Its runner word rides in `why`, its wait kind in
+   * `waitKind` (`approval` / `answer`, the one runner order).
    */
   | "session-permission"
   /**
@@ -1478,11 +1485,13 @@ export function signalFromReviewSession(
   };
 }
 
-/** One session waiting for the person's permission (`listSessionsWaitingForPermission`). */
+/** One session waiting for the person at the terminal (`listSessionsWaitingForPermission`). */
 export interface PermissionSessionSignalInput {
   id: string;
   title: string | null;
   goal: string | null;
+  /** Its most urgent live runner word: `needs_permission` or `needs_answer`. */
+  runnerState: LiveRunnerState;
   /** When its longest-waiting live runner began to wait. */
   since: Date;
   projectId?: string | null;
@@ -1491,11 +1500,13 @@ export interface PermissionSessionSignalInput {
 }
 
 /**
- * One session waiting on a permission → one signal (decision D-R1). Its
- * title is the session's own (`resolveSessionTitle`); its words, the runner
- * state's (`resolveRunnerStateLabel`); a door to the session, grouped with
- * anything else the session owes. In the headline always: only the person
- * can answer the dialog, and the agent stands still until they do.
+ * One session waiting on the person at the terminal → one signal (decision
+ * D-R1). Its title is the session's own (`resolveSessionTitle`); its words,
+ * the runner state's (`resolveRunnerStateLabel`: "Waiting for your
+ * permission" / "Waiting for your answer"); its wait kind, the runner word's
+ * (`RUNNER_STATE_WAIT_KIND`); a door to the session, grouped with anything else
+ * the session owes. In the headline always: only the person can answer the
+ * dialog, and the agent stands still until they do.
  */
 export function signalFromPermissionSession(
   row: PermissionSessionSignalInput,
@@ -1505,13 +1516,13 @@ export function signalFromPermissionSession(
   return {
     id: `permission:${row.id}`,
     kind: "session-permission",
-    waitKind: "approval",
+    waitKind: RUNNER_STATE_WAIT_KIND[row.runnerState],
     title,
     count: 1,
     occurredAt: row.since,
     target: { kind: "session", id: row.id },
     category: "ai",
-    why: resolveRunnerStateLabel("needs_permission"),
+    why: resolveRunnerStateLabel(row.runnerState),
     needsYouClass: "needs_you",
     ...(row.goal ? { sessionGoal: row.goal } : {}),
     ...(title ? { sessionTitle: title } : {}),

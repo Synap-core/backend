@@ -65,6 +65,8 @@ import { askEndsWithSession } from "../ask/ends-with-session.js";
 import type { AskCardSlot } from "../ask/card.js";
 import { TERMINAL_SESSION_STATUSES } from "../focus-sessions/statuses.js";
 import { deliverableOwedBy } from "../units/deliverable.js";
+import { runnerStateWaitKind } from "../units/runner-state.js";
+import { WAIT_KIND_BALL } from "../units/wait-kind.js";
 import { REVIEW_LATER_AFTER_MS } from "../proposals/fate.js";
 import type { ProposalWaits } from "../proposals/fate.js";
 import { SESSION_WORKING_WINDOW_MS } from "../run-activity/live.js";
@@ -375,33 +377,42 @@ export function classifyOwedAsk(
   return "needs_you";
 }
 
-// ─── A runner waiting for a permission (decision D-R1) ──────────────────────
+// ─── A runner waiting at the terminal (decision D-R1) ───────────────────────
 
 /** The facts the rule reads for a session's runners (0384, `foldRunnerState`). */
 export interface NeedsYouRunnerFacts {
   /** The session's status. */
   status: string;
   /**
-   * The session's LIVE runners, folded (`needs_permission` over `busy` over
-   * `idle`); `null` = no live runner named a state.
+   * The session's LIVE runners, folded in the one runner order
+   * (`RUNNER_STATE_ORDER`: `needs_permission` over `needs_answer` over `busy`
+   * over `idle`); `null` = no live runner named a state.
    */
   runnerState: string | null;
 }
 
 /**
- * THE rule for a session whose agent waits on a permission dialog (decision
- * D-R1, founder 2026-11-01): ONE needs-you item per session ("Waiting for
- * your permission"), whatever its other asks and however many of its runners
- * wait — counted through the same rows as every other item, never a second
- * counter. Only the person can answer the dialog, and the agent stands still
- * until they do, so it is never Working, never ages and has a real asker.
- * `null` when no live runner waits on one, or the work ended.
+ * THE rule for a session whose agent waits on the person AT THE TERMINAL
+ * (decision D-R1, founder 2026-11-01): ONE needs-you item per session, whatever
+ * its other asks and however many of its runners wait — counted through the
+ * same rows as every other item, never a second counter. Only the person can
+ * answer the dialog, and the agent stands still until they do, so it is never
+ * Working, never ages and has a real asker.
+ *
+ * Which words count is DERIVED, never listed: a runner word whose wait kind
+ * (`RUNNER_STATE_WAIT_KIND`) is the person's move (`WAIT_KIND_BALL` `me`) —
+ * today `needs_permission` (a permission dialog) and `needs_answer` (a
+ * question or a plan to accept). D-R1 was worded "permission"; counting
+ * `needs_answer` too is the cockpit plan's named default (W1), so the founder
+ * can override it here, in one place.
+ * `null` when no live runner waits on the person, or the work ended.
  */
 export function classifyRunnerWait(
   facts: NeedsYouRunnerFacts
 ): "needs_you" | null {
   if (sessionEnded(facts.status)) return null;
-  return facts.runnerState === "needs_permission" ? "needs_you" : null;
+  const kind = runnerStateWaitKind(facts.runnerState);
+  return kind && WAIT_KIND_BALL[kind] === "me" ? "needs_you" : null;
 }
 
 // ─── Proposals ──────────────────────────────────────────────────────────────

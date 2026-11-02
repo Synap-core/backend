@@ -67,6 +67,7 @@ import {
 } from "../../access/session-visibility.js";
 import { grantReadPredicate } from "../../access/grant-read.js";
 import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
+import type { EventReader } from "../../access/event-visibility.js";
 import { OPEN_SESSION_STATUSES } from "../focus-sessions/session-statuses.js";
 import type { SessionSubject } from "../focus-sessions/session-subject-where.js";
 import { extractProposalName } from "../proposals/fingerprint.js";
@@ -258,7 +259,15 @@ export function sessionWaitingOnQuestion(sessionId: string): WaitingOnQuestion {
  * Who reads the waiting-on: THE session read rule (`sessionReadableWhere`;
  * `roster` is the door's, `rosterReadFor`, default owner-only).
  */
-export type WaitingOnReader = Pick<SessionReader, "userId" | "roster">;
+export type WaitingOnReader = Pick<SessionReader, "userId" | "roster"> & {
+  /**
+   * The event lens (`EventReader.lens`): the PR facts (events) are read under
+   * it, as the work graph (`readGraphPullRequests`) and the packet's own work
+   * units (`withPullRequestStates`) read theirs — a bound key's PR facts stay
+   * in its workspace. Absent = every event the reader may see.
+   */
+  lens?: EventReader["lens"];
+};
 
 /**
  * What a set of things WAITS ON, in the goal's own vocabulary (R4,
@@ -268,9 +277,9 @@ export type WaitingOnReader = Pick<SessionReader, "userId" | "roster">;
 export async function readWaitingOn(
   input: WaitingOnReader & WaitingOnQuestion
 ): Promise<WaitingOnMark[]> {
-  const { userId, roster, ...question } = input;
+  const { userId, roster, lens, ...question } = input;
   const out = await readWaitingOnFor(
-    { userId, roster },
+    { userId, roster, ...(lens !== undefined ? { lens } : {}) },
     new Map([["all", question]])
   );
   return out.get("all") ?? [];
@@ -766,7 +775,11 @@ async function readOpenWorkUnits(
   if (open.length === 0) return out;
   const states = await readPullRequestStates(
     open.map((o) => o.ref),
-    { userId: reader.userId, roster: reader.roster ?? false }
+    {
+      userId: reader.userId,
+      roster: reader.roster ?? false,
+      ...(reader.lens !== undefined ? { lens: reader.lens } : {}),
+    }
   );
   for (const o of open) {
     const facts = states.get(pullRequestKey(o.ref));

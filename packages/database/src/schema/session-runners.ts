@@ -17,7 +17,7 @@
  * that stamped it — a loop.
  *
  * Since 0384 a row also carries what the runner SAYS it is doing (`state`:
- * busy / idle / needs_permission / ended), reported by any harness adapter on
+ * busy / idle / needs_permission / needs_answer / ended), reported by any harness adapter on
  * any key-auth call (`X-Synap-Runner-State`).
  *
  * Since 0389 it also carries the model and provider the runner says it runs
@@ -84,7 +84,8 @@ export const sessionRunners = pgTable(
     }),
     /**
      * What the runner last said it is doing (0384): `busy`, `idle`,
-     * `needs_permission` or `ended` (`RUNNER_STATES`, `X-Synap-Runner-State`).
+     * `needs_permission`, `needs_answer` or `ended` (`RUNNER_STATES`,
+     * `X-Synap-Runner-State`). Text, so a new word needs no migration.
      * NULL for a client that names none.
      */
     state: text("state"),

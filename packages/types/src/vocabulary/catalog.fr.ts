@@ -288,6 +288,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "action.track.reopen.past": "Nouvelle version ouverte",
   "action.track.keep_running.imperative": "Le garder actif",
   "action.track.keep_running.past": "Gardé actif",
+  "action.terminal.open.imperative": "Ouvrir le terminal",
+  "action.terminal.open.past": "Terminal ouvert",
   "action.session.stop.imperative": "Arrêter",
   "action.session.stop.past": "Arrêté",
   "action.session.wait_on.imperative": "Attendre",

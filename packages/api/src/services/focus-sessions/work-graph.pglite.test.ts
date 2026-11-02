@@ -408,6 +408,30 @@ describe("buildWorkGraph — honest truncation", () => {
   });
 });
 
+describe("buildWorkGraph — who has it (sessions cockpit C5)", () => {
+  it("every node carries the holder, read for the whole graph at once — 500 nodes too", async () => {
+    // The row-by-row convergence with `readSessionHolder` is pinned in
+    // `session-holder.pglite.test.ts`; here, that the graph attaches it.
+    for (const user of [USER, BIG]) {
+      const g = await graph(user);
+      expect(g.nodes.length).toBeGreaterThan(0);
+      for (const n of g.nodes) {
+        expect({ id: n.id, holder: n.holder.status }).toEqual({
+          id: n.id,
+          holder: "ok",
+        });
+      }
+    }
+    // An ended session is held by nobody, because it ended.
+    const g = await graph(USER);
+    const closed = g.nodes.find((n) => n.id === S.closedRecent)!;
+    expect(closed.holder).toMatchObject({
+      status: "ok",
+      holder: { kind: "nobody", reason: "ended" },
+    });
+  });
+});
+
 describe("buildWorkGraph — the owner / roster floor", () => {
   it("never returns another person's session, as a node or as a far end", async () => {
     const g = await graph(USER);

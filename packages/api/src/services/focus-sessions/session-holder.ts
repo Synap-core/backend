@@ -11,9 +11,13 @@
  *   session status done / lost (closed, failed, cancelled) → nobody (ended)
  *   external agent (`EXTERNAL_AGENT_STATUSES`, its newest run)
  *     running → agent_work · pending_start → approval · needs_input → answer
- *   a LIVE runner of an agent (`RUNNER_STATES`, the most urgent first)
- *     needs_permission → approval · busy → agent_work · idle → agent_stopped
+ *   a LIVE runner of an agent (the one runner order, `RUNNER_STATE_WAIT_KIND`
+ *     in @synap-core/types/units, the most urgent first)
+ *     needs_permission → approval · needs_answer → answer
+ *     busy → agent_work · idle → agent_stopped
  *     no word (its client names none) → the live rule below
+ *     (an ENDED runner is not live: the roster's live rule decides, so with
+ *     a roster it reads agent_stopped, never "nobody")
  *   the session's last-added roster agent, by the live rule
  *     (`isSessionWorkingNow` on the agent's own clock, `lastAgentWorkAt`)
  *     working → agent_work · not working → agent_stopped
@@ -46,6 +50,8 @@ import {
 } from "@synap-core/types/run-activity";
 import {
   leadWaitKind,
+  runnerStateRank,
+  runnerStateWaitKind,
   WAIT_KIND_BALL,
   type WaitKind,
   type WaitingOnMark,
@@ -55,17 +61,20 @@ import { actorComputer, nameWithComputer } from "../actor-computer.js";
 import { loadAgentPresence, nobodyRunsOf } from "../agent-presence.js";
 import { loadAgentDispatchSummaries } from "../agent-dispatch/agent-binding.js";
 import {
-  readSessionExternalAgent,
+  readSessionExternalAgentsFor,
   type SessionExternalAgent,
 } from "../agent-dispatch/session-external-agent.js";
 import { loadMachineNames } from "../machine-roster.js";
 import { loadSessionLiveness } from "../runs/session-liveness.js";
 import {
-  readWaitingOn,
+  readWaitingOnFor,
   sessionWaitingOnQuestion,
 } from "../status/status-facts.js";
 import { isOwedSlot } from "./owed-outputs.js";
-import { loadSessionRunners, type SessionRunner } from "./session-runners.js";
+import {
+  loadSessionRunnersFor,
+  type SessionRunner,
+} from "./session-runners.js";
 
 const logger = createLogger({ module: "session-holder" });
 
@@ -150,19 +159,10 @@ const iso = (v: Date | string | null | undefined): string | null => {
   return Number.isFinite(t) ? new Date(t).toISOString() : null;
 };
 
-/** The order a runner's word outranks another's (as `foldRunnerState`). */
-const RUNNER_RANK = ["needs_permission", "busy", "idle"] as const;
-
 const EXTERNAL_WORD: Partial<Record<ExternalAgentStatus, WaitKind>> = {
   running: "agent_work",
   pending_start: "approval",
   needs_input: "answer",
-};
-
-const RUNNER_WORD: Record<(typeof RUNNER_RANK)[number], WaitKind> = {
-  needs_permission: "approval",
-  busy: "agent_work",
-  idle: "agent_stopped",
 };
 
 /** The earliest hand-back among the person's owed slots on the row. */
@@ -240,16 +240,12 @@ export function deriveSessionHolder(
     );
     const onRoster = live.filter((r) => roster.includes(r.agentUserId));
     const pool = onRoster.length > 0 ? onRoster : live;
-    const rank = (s: SessionRunner["state"]) => {
-      const i = RUNNER_RANK.indexOf(s as (typeof RUNNER_RANK)[number]);
-      return i === -1 ? RUNNER_RANK.length : i;
-    };
-    const runner = [...pool].sort((a, b) => rank(a.state) - rank(b.state))[0];
+    // The one order (`RUNNER_STATE_ORDER`), the fold's: most urgent first.
+    const runner = [...pool].sort(
+      (a, b) => runnerStateRank(a.state) - runnerStateRank(b.state)
+    )[0];
     if (runner) {
-      const said =
-        runner.state && runner.state !== "ended"
-          ? RUNNER_WORD[runner.state]
-          : null;
+      const said = runnerStateWaitKind(runner.state);
       candidate = said
         ? {
             agentUserId: runner.agentUserId,
@@ -396,67 +392,194 @@ export interface HolderSessionRow {
 /**
  * The holder of one session, read on its own — for a door that does not build
  * the continuation packet (Hub GET /focus-sessions/:id when the packet is
- * withheld from an app key). The packet derives the same answer from the
- * sections it already read. The row must already be read through the
- * caller's floor. A failed read is `unavailable`, never "nobody".
+ * withheld from an app key). One row of {@link readSessionHolders}, the read
+ * the list and graph rows run too. The packet derives the same answer from
+ * the sections it already read, through the same loaders. The row must
+ * already be read through the caller's floor. A failed read is
+ * `unavailable`, never "nobody".
  */
 export async function readSessionHolder(
   row: HolderSessionRow,
   ctx: { userId: string; roster?: boolean; database?: typeof db; now?: Date }
 ): Promise<SessionHolderSection> {
+  return (
+    (await readSessionHolders([row], ctx)).get(row.id) ?? holderUnavailable()
+  );
+}
+
+/**
+ * THE holder of MANY sessions, in a bounded number of reads whatever their
+ * number: the runners (one query), the external agents (one query, plus a
+ * few for the sessions that have one), the liveness (taken from `live` when
+ * the caller already attached it, else one batch), the waiting-on (one
+ * collector call for every session) and the agents' names (four queries). An
+ * ended session needs none of them.
+ *
+ * EMPTY vs FAILED, per row: a read that failed makes `unavailable` every row
+ * that needed it (a row whose liveness is `null`, a row whose agent could not
+ * be named), never "nobody". Every row is in the map. Rows are read through
+ * the caller's floor.
+ */
+export async function readSessionHolders(
+  rows: readonly HolderSessionRow[],
+  ctx: {
+    userId: string;
+    roster?: boolean;
+    /** A bound key's workspace: the waiting-on's PR facts are read under it. */
+    lens?: string;
+    database?: typeof db;
+    now?: Date;
+    /**
+     * Liveness already read for these rows (`attachSessionLiveness`, same
+     * reader): not read again. A row absent from it is read; a `null` is a
+     * failed read and stays one.
+     */
+    live?: ReadonlyMap<string, SessionActivityLive | null>;
+  }
+): Promise<Map<string, SessionHolderSection>> {
   const now = ctx.now ?? new Date();
   const database = ctx.database ?? db;
-  const session = {
+  const out = new Map<string, SessionHolderSection>();
+  const sessionOf = (row: HolderSessionRow) => ({
     status: row.status,
     agentIds: row.agentIds,
     expectedOutputs: row.expectedOutputs,
     startedAt: row.startedAt,
     closedAt: row.closedAt,
     updatedAt: row.updatedAt,
-  };
-  const ended = ["done", "lost"].includes(
-    sessionStatusCategory(row.status) ?? ""
-  );
-  try {
-    if (ended) {
-      const verdict = deriveSessionHolder({
-        session,
-        externalAgent: null,
-        runners: [],
-        live: { turnInFlight: false, since: null, lastAt: null },
-        waitingOn: [],
-        now: now.getTime(),
-      });
-      return { status: "ok", holder: nameHolder(verdict, new Map()) };
+  });
+  const open: HolderSessionRow[] = [];
+  for (const row of rows) {
+    const ended = ["done", "lost"].includes(
+      sessionStatusCategory(row.status) ?? ""
+    );
+    if (!ended) {
+      open.push(row);
+      continue;
     }
-    const [externalAgent, runners, liveness, waitingOn] = await Promise.all([
-      readSessionExternalAgent(row.id, database),
-      loadSessionRunners(row.id, { database, limit: 100, now }),
-      loadSessionLiveness({ userId: ctx.userId, roster: !!ctx.roster }, [row]),
-      readWaitingOn({
-        userId: ctx.userId,
-        roster: ctx.roster,
-        ...sessionWaitingOnQuestion(row.id),
-      }),
-    ]);
-    const live = liveness.get(row.id) ?? null;
-    if (!live) return holderUnavailable();
     const verdict = deriveSessionHolder({
-      session,
-      externalAgent,
-      runners,
-      live,
-      waitingOn,
+      session: sessionOf(row),
+      externalAgent: null,
+      runners: [],
+      live: { turnInFlight: false, since: null, lastAt: null },
+      waitingOn: [],
       now: now.getTime(),
     });
-    const agents = verdict.agentUserId
-      ? await loadHolderAgents([verdict.agentUserId], now)
-      : new Map<string, HolderAgent>();
-    return { status: "ok", holder: nameHolder(verdict, agents) };
-  } catch (err) {
-    logger.warn({ err, sessionId: row.id }, "session holder read failed");
-    return holderUnavailable();
+    out.set(row.id, { status: "ok", holder: nameHolder(verdict, new Map()) });
   }
+  if (open.length === 0) return out;
+
+  const ids = open.map((r) => r.id);
+  const toRead = open.filter((r) => !ctx.live?.has(r.id));
+  let facts: {
+    externalAgents: Map<string, SessionExternalAgent | null>;
+    runners: Map<string, SessionRunner[]>;
+    liveness: Map<string, SessionActivityLive | null>;
+    waitingOn: Map<string, WaitingOnMark[]>;
+  };
+  try {
+    const [externalAgents, runners, liveness, waitingOn] = await Promise.all([
+      readSessionExternalAgentsFor(ids, database),
+      loadSessionRunnersFor(ids, { database, limit: 100, now }),
+      toRead.length > 0
+        ? loadSessionLiveness(
+            { userId: ctx.userId, roster: !!ctx.roster },
+            toRead
+          )
+        : Promise.resolve(new Map<string, SessionActivityLive | null>()),
+      readWaitingOnFor(
+        {
+          userId: ctx.userId,
+          roster: ctx.roster,
+          ...(ctx.lens !== undefined ? { lens: ctx.lens } : {}),
+        },
+        new Map(ids.map((id) => [id, sessionWaitingOnQuestion(id)]))
+      ),
+    ]);
+    facts = { externalAgents, runners, liveness, waitingOn };
+  } catch (err) {
+    logger.warn({ err, sessions: ids.length }, "session holder read failed");
+    for (const id of ids) out.set(id, holderUnavailable());
+    return out;
+  }
+
+  const verdicts = new Map<string, SessionHolderVerdict>();
+  for (const row of open) {
+    const live = ctx.live?.has(row.id)
+      ? ctx.live.get(row.id)
+      : facts.liveness.get(row.id);
+    if (!live) {
+      out.set(row.id, holderUnavailable());
+      continue;
+    }
+    verdicts.set(
+      row.id,
+      deriveSessionHolder({
+        session: sessionOf(row),
+        externalAgent: facts.externalAgents.get(row.id) ?? null,
+        runners: facts.runners.get(row.id) ?? [],
+        live,
+        waitingOn: facts.waitingOn.get(row.id) ?? [],
+        now: now.getTime(),
+      })
+    );
+  }
+
+  const agentIds = [...verdicts.values()].flatMap((v) =>
+    v.agentUserId ? [v.agentUserId] : []
+  );
+  let agents: Map<string, HolderAgent> | null = new Map();
+  if (agentIds.length > 0) {
+    try {
+      agents = await loadHolderAgents(agentIds, now);
+    } catch (err) {
+      logger.warn(
+        { err, agents: agentIds.length },
+        "session holder agents read failed"
+      );
+      agents = null;
+    }
+  }
+  for (const [id, verdict] of verdicts) {
+    out.set(
+      id,
+      verdict.agentUserId && agents === null
+        ? holderUnavailable()
+        : { status: "ok", holder: nameHolder(verdict, agents ?? new Map()) }
+    );
+  }
+  return out;
+}
+
+/**
+ * THE holder on every list and graph row (sessions cockpit C5): the
+ * `attachNextMove` / `attachSessionLiveness` family's member for "who has
+ * it", run AFTER liveness so its `live` is reused, never read twice. Same
+ * floor as the rows' door. Each row gets `holder`, a section: `unavailable`
+ * when a fact it needed could not be read, never "nobody".
+ */
+export async function attachSessionHolder<
+  R extends HolderSessionRow & { live?: SessionActivityLive | null },
+>(
+  rows: readonly R[],
+  ctx: {
+    userId: string;
+    roster?: boolean;
+    /** A bound key's workspace (the graph door's `boundWorkspaceId`). */
+    lens?: string;
+    database?: typeof db;
+    now?: Date;
+  }
+): Promise<Array<R & { holder: SessionHolderSection }>> {
+  const live = new Map<string, SessionActivityLive | null>();
+  for (const r of rows) {
+    if (r.live !== undefined) live.set(r.id, r.live);
+  }
+  const holders = await readSessionHolders(rows, { ...ctx, live });
+  return rows.map((r) => ({
+    ...r,
+    holder: holders.get(r.id) ?? holderUnavailable(),
+  }));
 }
 
 export const HOLDER_UNAVAILABLE_REASON =

@@ -20,6 +20,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { RUNNER_STATES, type RunnerState } from "@synap-core/types/units";
 import { sql, type SQL } from "drizzle-orm";
 import { PROBE_KEY_SCOPE } from "../schema/api-keys.js";
 import { entities } from "../schema/entities.js";
@@ -568,13 +569,9 @@ export function parseProcessIdentity(
  */
 export const RUNNER_STATE_HEADER = "x-synap-runner-state";
 export const RUNNER_STATE_META_KEY = "live.synap/runnerState";
-export const RUNNER_STATES = [
-  "busy",
-  "idle",
-  "needs_permission",
-  "ended",
-] as const;
-export type RunnerState = (typeof RUNNER_STATES)[number];
+// The words and their one order live in `@synap-core/types/units`
+// (`runner-state.ts`): busy, idle, needs_permission, needs_answer, ended.
+export { RUNNER_STATES, type RunnerState };
 
 export interface RunnerStateReport {
   state: RunnerState;

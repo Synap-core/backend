@@ -55,6 +55,7 @@ import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
 import type { WaitKind } from "../units/wait-kind.js";
+import type { RunnerState } from "../units/runner-state.js";
 import type {
   PackageFieldState,
   PackageUpdateNeeds,
@@ -417,6 +418,14 @@ const ACTION_VERB_ROWS = {
   "track.keep_running": {
     imperative: "Keep it running",
     past: "Kept it running",
+  },
+  // The ONE desktop door to a Claude Code session's terminal (sessions
+  // cockpit C7): it focuses, attaches or reopens it, so a dialog that waits
+  // there (`needs_permission`, `needs_answer`) is one click away. Its own
+  // dotted key, so bare `open` keeps its readers.
+  "terminal.open": {
+    imperative: "Open terminal",
+    past: "Opened terminal",
   },
   // The SESSION verbs that bare tokens would misread (`SESSION_VERBS`,
   // `@synap-core/types/focus-sessions`): Stop ends a session `cancelled`
@@ -2256,14 +2265,15 @@ export const WAIT_KIND_LABELS = {
 /**
  * What a session's runner says it is doing (0384, `RUNNER_STATES`), in a
  * person's words: the mark a session page and a needs-you row wear (decision
- * D-R1). Keyed by every state.
+ * D-R1). Keyed by EVERY state: a word with no label stops the build.
  */
 export const RUNNER_STATE_LABELS = {
   busy: "Working",
   idle: "Idle",
   needs_permission: "Waiting for your permission",
+  needs_answer: "Waiting for your answer",
   ended: "Ended",
-} as const satisfies Readonly<Record<string, string>>;
+} as const satisfies Readonly<Record<RunnerState, string>>;
 
 /** The words for a runner state; unknown values humanize, never leak. */
 export function resolveRunnerStateLabel(v: string | null | undefined) {

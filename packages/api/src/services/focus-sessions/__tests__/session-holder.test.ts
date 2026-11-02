@@ -14,7 +14,7 @@
  * `session-holder.pglite.test.ts`.
  */
 import { describe, it, expect } from "vitest";
-import type { WaitingOnMark } from "@synap-core/types/units";
+import type { RunnerState, WaitingOnMark } from "@synap-core/types/units";
 import {
   deriveSessionHolder,
   type SessionHolderFacts,
@@ -47,7 +47,7 @@ const facts = (over: Partial<SessionHolderFacts> = {}): SessionHolderFacts => ({
 
 const runner = (
   agentUserId: string | null,
-  state: "busy" | "idle" | "needs_permission" | "ended" | null,
+  state: RunnerState | null,
   live = true
 ) => ({
   agentUserId,
@@ -169,6 +169,48 @@ describe("deriveSessionHolder", () => {
         facts({
           session: { status: "active", agentIds: [], expectedOutputs: [] },
           runners: [runner(B, "busy", false), runner(null, "busy")],
+        })
+      )
+    ).toMatchObject({ kind: "nobody", reason: "no_agent" });
+  });
+
+  it("needs_answer: a question at the terminal is the person's answer, below a permission dialog", () => {
+    expect(
+      deriveSessionHolder(
+        facts({ runners: [runner(A, "busy"), runner(A, "needs_answer")] })
+      )
+    ).toMatchObject({
+      kind: "person",
+      waitKind: "answer",
+      agentUserId: A,
+      since: ago(30_000),
+      source: { from: "runner", state: "needs_answer" },
+    });
+    // The one order: a permission dialog outranks a question.
+    expect(
+      deriveSessionHolder(
+        facts({
+          runners: [runner(A, "needs_answer"), runner(A, "needs_permission")],
+        })
+      )
+    ).toMatchObject({ kind: "person", waitKind: "approval" });
+  });
+
+  it("an ended runner is not live: with a roster the live rule reads agent_stopped, never nobody", () => {
+    expect(
+      deriveSessionHolder(facts({ runners: [runner(A, "ended", false)] }))
+    ).toMatchObject({
+      kind: "agent",
+      waitKind: "agent_stopped",
+      agentUserId: A,
+      source: { from: "live", working: false },
+    });
+    // Only an empty roster reads nobody.
+    expect(
+      deriveSessionHolder(
+        facts({
+          session: { status: "active", agentIds: [], expectedOutputs: [] },
+          runners: [runner(A, "ended", false)],
         })
       )
     ).toMatchObject({ kind: "nobody", reason: "no_agent" });

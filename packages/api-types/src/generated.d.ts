@@ -1589,6 +1589,16 @@ export interface LensPagePicks {
 	/** Halves that FAILED. Non-empty ⇒ never "nothing to do". */
 	unreadable: string[];
 }
+declare const RUNNER_STATES: readonly [
+	"busy",
+	"idle",
+	"needs_permission",
+	"needs_answer",
+	"ended"
+];
+export type RunnerState = (typeof RUNNER_STATES)[number];
+/** A word a LIVE runner says (an ended one says nothing about now). */
+export type LiveRunnerState = Exclude<RunnerState, "ended">;
 /** The loop as stored on the goal (`project_tracks.loop`, 0350). */
 export interface GoalLoopSettings {
 	on: boolean;
@@ -8309,13 +8319,6 @@ declare const OBJECT_ROOM_CONTEXT_TYPES: readonly [
 	"entity"
 ];
 export type ObjectRoomType = (typeof OBJECT_ROOM_CONTEXT_TYPES)[number];
-declare const RUNNER_STATES: readonly [
-	"busy",
-	"idle",
-	"needs_permission",
-	"ended"
-];
-export type RunnerState = (typeof RUNNER_STATES)[number];
 /**
  * What a key may touch, as a key list shows it:
  *   - `ungranted` — it never had a grant: it may touch NOTHING (P5);
@@ -17218,11 +17221,13 @@ export interface PacketRunnerItem {
 		startedAt?: string;
 	}>;
 	/**
-	 * What the runner says it is doing (0384, `X-Synap-Runner-State`): `busy`,
-	 * `idle`, `needs_permission`, or `ended` (it said so, or left the live
-	 * window). `null` while live = its client names no state: unknown, not idle.
+	 * What the runner says it is doing (0384, `X-Synap-Runner-State`; the words
+	 * are `RUNNER_STATES`, @synap-core/types/units): `busy`, `idle`,
+	 * `needs_permission`, `needs_answer`, or `ended` (it said so, or left the
+	 * live window). `null` while live = its client names no state: unknown, not
+	 * idle.
 	 */
-	state: "busy" | "ended" | "idle" | "needs_permission" | null;
+	state: RunnerState | null;
 	/** When it entered that state; for a runner gone quiet, when it was last seen. */
 	stateSince?: string;
 	/**
@@ -17745,14 +17750,15 @@ export interface ContinuationPacket {
 		measuredAt: string;
 		/**
 		 * What the LIVE runners SAY they are doing (0384), folded by
-		 * `foldRunnerState`: `needs_permission` over `busy` over `idle`;
+		 * `foldRunnerState` in the one runner order (`RUNNER_STATE_ORDER`):
+		 * `needs_permission` over `needs_answer` over `busy` over `idle`;
 		 * `state: null` = no live runner named one. The harness's own word,
 		 * beside the pod-activity `state` above and never folded into it. A
 		 * failed runners read is `unavailable` (see `runners`), never null.
 		 */
 		runner: {
 			since: string | null;
-			state: "busy" | "idle" | "needs_permission" | null;
+			state: LiveRunnerState | null;
 			status: "ok";
 		} | {
 			reason: string;
@@ -21864,6 +21870,11 @@ export interface WorkGraphWindow {
 }
 /** One node: the list row (`focusSessions.list({ nextMove: true })`), plus whether it is IN the window or only the far end of an edge. */
 export type WorkGraphNode = Awaited<ReturnType<typeof projectSessionRows>>[number] & {
+	/**
+	 * Who has it now (`readSessionHolder`'s derivation, `attachSessionHolder`):
+	 * `unavailable` when a fact it needs could not be read, never "nobody".
+	 */
+	holder: SessionHolderSection;
 	inWindow: boolean;
 	live: SessionActivityLive | null;
 	nextMove: ContinuationNextMove;
@@ -23827,10 +23838,12 @@ export type SignalKind =
  */
  | "session-review"
 /**
- * One session whose agent waits on the person's PERMISSION — a live
- * runner says `needs_permission` (0384; decision D-R1, the rule's
+ * One session whose agent waits on the person AT THE TERMINAL — a live
+ * runner says `needs_permission` (a permission dialog) or `needs_answer`
+ * (a question, a plan to accept) (0384; decision D-R1, the rule's
  * `classifyRunnerWait`). ONE row per session, whatever its runners; the
- * door is the session. Its runner word rides in `why`.
+ * door is the session. Its runner word rides in `why`, its wait kind in
+ * `waitKind` (`approval` / `answer`, the one runner order).
  */
  | "session-permission"
 /**
@@ -24283,11 +24296,13 @@ export interface OwedSlotSignalInput {
 	/** What the answer unblocks, straight from `listOwedSlots`. */
 	unblocks?: string;
 }
-/** One session waiting for the person's permission (`listSessionsWaitingForPermission`). */
+/** One session waiting for the person at the terminal (`listSessionsWaitingForPermission`). */
 export interface PermissionSessionSignalInput {
 	id: string;
 	title: string | null;
 	goal: string | null;
+	/** Its most urgent live runner word: `needs_permission` or `needs_answer`. */
+	runnerState: LiveRunnerState;
 	/** When its longest-waiting live runner began to wait. */
 	since: Date;
 	projectId?: string | null;
@@ -36064,6 +36079,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} & SessionParticipants & {
 				verdict?: SessionVerdict;
 			} & Partial<SessionEdges> & Partial<SessionOutputDependencies> & {
+				holder?: SessionHolderSection;
 				interactions?: SessionInteractionsSection;
 				live?: SessionActivityLive | null;
 				nextMove?: ContinuationNextMove;

@@ -30,10 +30,12 @@
  * (`process_key = ''`); that row is never read as a twin. SIGNAL ONLY: nothing
  * here refuses a write or a wait ({@link markTwins}).
  *
- * A runner SAYS WHAT IT IS DOING (0384): `busy`, `idle`, `needs_permission`
- * or `ended`, named by any harness adapter on ANY key-auth call
+ * A runner SAYS WHAT IT IS DOING (0384): `busy`, `idle`, `needs_permission`,
+ * `needs_answer` or `ended` (`RUNNER_STATES`, @synap-core/types/units, with
+ * the one urgency order `RUNNER_STATE_ORDER`), named by any harness adapter
+ * on ANY key-auth call
  * (`X-Synap-Runner-State`, or `_meta["live.synap/runnerState"]` on MCP;
- * `RUNNER_STATES`, `request-write-context.ts`). ONE door, two writes:
+ * parsed in `request-write-context.ts`). ONE door, two writes:
  *   - the wait's stamp records it with the row ({@link stampSessionRunner});
  *     a state that changed is written at once, past the once-a-minute throttle;
  *   - every other call that carries it updates that conversation's process
@@ -61,6 +63,7 @@
 
 import {
   db,
+  focusSessions,
   sessionRunners,
   users,
   eq,
@@ -72,8 +75,10 @@ import {
   getRequestRunnerState,
   getRequestReportedModel,
   and,
+  inArray,
   isNull,
   lt,
+  lte,
   or,
   RUNNER_STATES,
   type RunnerState,
@@ -85,6 +90,10 @@ import {
   type AgentConversationRef,
   type ModelProviderSlug,
 } from "@synap-core/types/agents";
+import {
+  RUNNER_STATE_ORDER,
+  type LiveRunnerState,
+} from "@synap-core/types/units";
 
 const logger = createLogger({ module: "session-runners" });
 
@@ -232,6 +241,95 @@ export async function stampSessionRunner(p: {
 }
 
 /**
+ * WHO WORKS IT NOW (sessions cockpit C3): record that THIS request's OS
+ * process wrote to `sessionId`. A runner used to be created only by a held
+ * wait, so a lane that wrote to its own session but waited on its lead's read
+ * `runner: null`; a write is the surest sign a process works a session.
+ *
+ * Called by THE write-attribution point every AI write door shares — the
+ * governance gate (`checkPermissionOrPropose`, where the write's session is
+ * resolved and `recordWriteSessionFiling` runs) — with `void`, off the
+ * request path. Reads never reach the gate, so a read never stamps. It stamps
+ * only when the request NAMES ITS PROCESS (`X-Synap-Process`) and its
+ * conversation (`X-Synap-Conversation`): without a process the row could not
+ * be told from the wait's legacy `''` row (0373).
+ *
+ * Cost: at most one stamp per (session, conversation, process) per
+ * {@link RUNNER_STAMP_INTERVAL_SECONDS} in this pod process — a capture that
+ * writes 1,600 rows costs one stamp — then the stamp's own SQL throttle. The
+ * session must be the owner's (`ownerId`, the gate's subject): a write filed
+ * on another person's session records no runner. Never throws.
+ */
+export async function stampWritingRunner(p: {
+  sessionId: string | null | undefined;
+  /** The person whose data is in scope (the gate's `userId`). */
+  ownerId: string;
+  agentUserId?: string | null;
+  database?: typeof db;
+  nowMs?: number;
+}): Promise<boolean> {
+  try {
+    if (!p.sessionId) return false;
+    const proc = getRequestProcess();
+    const clientKey = getRequestClientKey();
+    if (!proc || !clientKey || !parseRunnerClientKey(clientKey)) return false;
+    const key = `${p.sessionId}\u0000${clientKey}\u0000${proc.key}`;
+    const nowMs = p.nowMs ?? Date.now();
+    const last = lastWriteStamp.get(key);
+    if (
+      last !== undefined &&
+      nowMs - last < RUNNER_STAMP_INTERVAL_SECONDS * 1000
+    )
+      return false;
+    rememberWriteStamp(key, nowMs);
+    const [owned] = await (p.database ?? db)
+      .select({ id: focusSessions.id })
+      .from(focusSessions)
+      .where(
+        and(
+          eq(focusSessions.id, p.sessionId),
+          eq(focusSessions.userId, p.ownerId)
+        )
+      )
+      .limit(1);
+    if (!owned) return false;
+    return await stampSessionRunner({
+      sessionId: p.sessionId,
+      ownerId: p.ownerId,
+      agentUserId: p.agentUserId ?? null,
+    });
+  } catch (err) {
+    // Called with `void` by the gate: it must never reject. A failed stamp
+    // is not remembered, so the next write tries again.
+    lastWriteStamp.clear();
+    logger.warn(
+      { err, sessionId: p.sessionId },
+      "writing runner stamp failed (non-fatal)"
+    );
+    return false;
+  }
+}
+
+/** Write stamps remembered per pod process (oldest dropped first). */
+const WRITE_STAMP_MAX = 5_000;
+/** session + client key + process → when this pod process last stamped it. */
+const lastWriteStamp = new Map<string, number>();
+
+function rememberWriteStamp(key: string, at: number): void {
+  lastWriteStamp.delete(key);
+  lastWriteStamp.set(key, at);
+  if (lastWriteStamp.size > WRITE_STAMP_MAX) {
+    const oldest = lastWriteStamp.keys().next().value;
+    if (oldest !== undefined) lastWriteStamp.delete(oldest);
+  }
+}
+
+/** Test seam: forget every write stamp. */
+export function resetWritingRunnerStamps(): void {
+  lastWriteStamp.clear();
+}
+
+/**
  * Record what THIS request's runner says it is doing (0384) on its process's
  * LIVE rows — every session whose wait it holds — when the state differs and
  * the report is newer. Both key-auth doors call it on every request, off the
@@ -365,14 +463,37 @@ export interface SessionRunner {
  * The runners attached to a session, most recently seen first. Keyed by
  * session id only — the caller has read the session through its own floor. A
  * failed read THROWS (an empty list would read as "nobody is attached").
+ * One session of {@link loadSessionRunnersFor}: the packet, the holder and the
+ * list rows read runners through the same loader.
  */
 export async function loadSessionRunners(
   sessionId: string,
   opts: { now?: Date; limit?: number; database?: typeof db } = {}
 ): Promise<SessionRunner[]> {
+  return (await loadSessionRunnersFor([sessionId], opts)).get(sessionId) ?? [];
+}
+
+/**
+ * The runners of MANY sessions in ONE query: each session's most recently
+ * seen first, at most `limit` per session (default 20, at most 100). Every
+ * asked id is in the map (an empty list = no runner ever attached). Keyed by
+ * session ids the caller read through its own floor. THROWS on a failed read.
+ */
+export async function loadSessionRunnersFor(
+  sessionIds: readonly string[],
+  opts: { now?: Date; limit?: number; database?: typeof db } = {}
+): Promise<Map<string, SessionRunner[]>> {
+  const ids = [...new Set(sessionIds)];
+  const out = new Map<string, SessionRunner[]>(ids.map((id) => [id, []]));
+  if (ids.length === 0) return out;
   const now = (opts.now ?? new Date()).getTime();
-  const rows = await (opts.database ?? db)
+  const limit = Math.max(1, Math.min(opts.limit ?? 20, 100));
+  const database = opts.database ?? db;
+  // Each session's newest `limit` rows (rows are never deleted: a session's
+  // old processes stay, so the cap is per session, in SQL).
+  const ranked = database
     .select({
+      sessionId: sessionRunners.sessionId,
       clientKey: sessionRunners.clientKey,
       harness: sessionRunners.harness,
       conversationId: sessionRunners.conversationId,
@@ -388,45 +509,67 @@ export async function loadSessionRunners(
       provider: sessionRunners.provider,
       firstSeenAt: sessionRunners.firstSeenAt,
       lastSeenAt: sessionRunners.lastSeenAt,
+      rank: drizzleSql<number>`row_number() OVER (PARTITION BY ${sessionRunners.sessionId} ORDER BY ${sessionRunners.lastSeenAt} DESC)`.as(
+        "runner_rank"
+      ),
     })
     .from(sessionRunners)
-    .where(eq(sessionRunners.sessionId, sessionId))
-    .orderBy(desc(sessionRunners.lastSeenAt))
-    .limit(Math.max(1, Math.min(opts.limit ?? 20, 100)));
-  return markTwins(
-    rows.map((r) => {
-      const said = parseStoredState(r.state);
-      const live =
-        said !== "ended" &&
-        now - r.lastSeenAt.getTime() <= RUNNER_LIVE_WINDOW_SECONDS * 1000;
-      return {
-        harness: r.harness,
-        conversationId: r.conversationId,
-        cwd: r.cwd,
-        agentUserId: r.agentUserId,
-        machineUserId: r.machineUserId,
-        processId: r.processKey,
-        processHost: r.processHost,
-        processStartedAt: r.processStartedAt?.toISOString() ?? null,
-        twin: [],
-        state: live ? said : "ended",
-        stateSince:
-          live || said === "ended"
-            ? (r.stateSince?.toISOString() ?? null)
-            : r.lastSeenAt.toISOString(),
-        model: r.model,
-        // Read through the one rule: a slug dropped since reads `other`.
-        provider: parseModelProvider(r.provider) ?? null,
-        firstSeenAt: r.firstSeenAt.toISOString(),
-        lastSeenAt: r.lastSeenAt.toISOString(),
-        live,
-        conversation: resolveAgentConversation({
-          clientKey: r.clientKey,
-          conversationCwd: r.cwd,
-        }),
-      };
-    })
-  );
+    .where(inArray(sessionRunners.sessionId, ids))
+    .as("ranked_runners");
+  const rows = await database
+    .select()
+    .from(ranked)
+    .where(lte(ranked.rank, limit))
+    .orderBy(ranked.sessionId, desc(ranked.lastSeenAt));
+  const bySession = new Map<string, SessionRunner[]>();
+  for (const r of rows) {
+    const lastSeenAt = asDate(r.lastSeenAt);
+    const said = parseStoredState(r.state);
+    const live =
+      said !== "ended" &&
+      now - lastSeenAt.getTime() <= RUNNER_LIVE_WINDOW_SECONDS * 1000;
+    const stateSince = r.stateSince ? asDate(r.stateSince) : null;
+    const processStartedAt = r.processStartedAt
+      ? asDate(r.processStartedAt)
+      : null;
+    const list = bySession.get(r.sessionId) ?? [];
+    list.push({
+      harness: r.harness,
+      conversationId: r.conversationId,
+      cwd: r.cwd,
+      agentUserId: r.agentUserId,
+      machineUserId: r.machineUserId,
+      processId: r.processKey,
+      processHost: r.processHost,
+      processStartedAt: processStartedAt?.toISOString() ?? null,
+      twin: [],
+      state: live ? said : "ended",
+      stateSince:
+        live || said === "ended"
+          ? (stateSince?.toISOString() ?? null)
+          : lastSeenAt.toISOString(),
+      model: r.model,
+      // Read through the one rule: a slug dropped since reads `other`.
+      provider: parseModelProvider(r.provider) ?? null,
+      firstSeenAt: asDate(r.firstSeenAt).toISOString(),
+      lastSeenAt: lastSeenAt.toISOString(),
+      live,
+      conversation: resolveAgentConversation({
+        clientKey: r.clientKey,
+        conversationCwd: r.cwd,
+      }),
+    });
+    bySession.set(r.sessionId, list);
+  }
+  for (const [sessionId, list] of bySession) {
+    out.set(sessionId, markTwins(list));
+  }
+  return out;
+}
+
+/** A timestamp column read through a subquery: a Date, or the driver's string. */
+function asDate(v: Date | string): Date {
+  return v instanceof Date ? v : new Date(v);
 }
 
 /** A stored state the pod knows, else null (a row from before 0384, or a word dropped since). */
@@ -436,21 +579,26 @@ function parseStoredState(raw: string | null): RunnerState | null {
 
 /** What a session's runners say, folded: the most urgent word among the LIVE ones. */
 export interface RunnerStateFold {
-  /** `needs_permission` over `busy` over `idle`; null = no live runner named a state. */
-  state: Exclude<RunnerState, "ended"> | null;
+  /**
+   * The most urgent word in the one order (`RUNNER_STATE_ORDER`):
+   * `needs_permission` over `needs_answer` over `busy` over `idle`;
+   * null = no live runner named a state.
+   */
+  state: LiveRunnerState | null;
   /** When the longest-standing runner in that state entered it. */
   since: string | null;
 }
 
-const FOLD_ORDER = ["needs_permission", "busy", "idle"] as const;
-
 /**
- * THE session-level runner word: a person waiting on a permission dialog
- * outranks an agent at work, which outranks one at rest. Only live runners
- * count (an ended one says nothing about now). Pure.
+ * THE session-level runner word: a person waiting at the terminal (a
+ * permission dialog, then a question) outranks an agent at work, which
+ * outranks one at rest — the one order, `RUNNER_STATE_ORDER`. Only live
+ * runners count (an ended one says nothing about now). Pure.
  */
-export function foldRunnerState(runners: SessionRunner[]): RunnerStateFold {
-  for (const state of FOLD_ORDER) {
+export function foldRunnerState(
+  runners: ReadonlyArray<Pick<SessionRunner, "live" | "state" | "stateSince">>
+): RunnerStateFold {
+  for (const state of RUNNER_STATE_ORDER) {
     const inState = runners.filter((r) => r.live && r.state === state);
     if (inState.length === 0) continue;
     const since = inState

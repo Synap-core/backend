@@ -192,6 +192,10 @@ import {
   queryUserSessions,
 } from "../services/focus-sessions/session-list-rows.js";
 import {
+  attachSessionHolder,
+  type SessionHolderSection,
+} from "../services/focus-sessions/session-holder.js";
+import {
   buildWorkGraph,
   WORK_GRAPH_DEFAULT_WINDOW_HOURS,
   WORK_GRAPH_MAX_WINDOW_HOURS,
@@ -478,6 +482,12 @@ type SessionListRow = FocusSession & { parentSessionId: string | null } & {
      * now" rule reads. `null` = the liveness read FAILED (never "quiet").
      */
     live?: SessionActivityLive | null;
+    /**
+     * Present with `nextMove: true` — who has it now, through the session
+     * read's own derivation (`attachSessionHolder`): `unavailable` when a fact
+     * it needs could not be read, never "nobody".
+     */
+    holder?: SessionHolderSection;
     interactions?: SessionInteractionsSection;
     /**
      * `owner` | `member` (decision C) — present on every row the door returns;
@@ -565,7 +575,9 @@ export const focusSessionsRouter = router({
          * from the same reads, so a state mark needs no second request — and
          * `live` (turn in flight + newest activity, `loadSessionLiveness`, the
          * SAME read the activity door uses), so the row's "working" mark obeys
-         * the one rule (D1, `isSessionWorkingNow`) the session page does.
+         * the one rule (D1, `isSessionWorkingNow`) the session page does —
+         * and `holder` (who has it now, `attachSessionHolder`, the session
+         * read's own derivation over that same `live`; sessions cockpit C5).
          */
         nextMove: z.boolean().optional(),
         /**
@@ -661,11 +673,14 @@ export const focusSessionsRouter = router({
       );
       const withParticipants = await projectSessionRows(sessions, ctx.userId);
       const withMove: SessionListRow[] = input.nextMove
-        ? await attachSessionLiveness(
-            await attachNextMove(withParticipants, {
-              userId: requireUserId(ctx.userId),
-              logContext: { door: "focusSessions.list" },
-            }),
+        ? await attachSessionHolder(
+            await attachSessionLiveness(
+              await attachNextMove(withParticipants, {
+                userId: requireUserId(ctx.userId),
+                logContext: { door: "focusSessions.list" },
+              }),
+              { userId: requireUserId(ctx.userId), roster: rosterReadFor(ctx) }
+            ),
             { userId: requireUserId(ctx.userId), roster: rosterReadFor(ctx) }
           )
         : withParticipants;

@@ -104,8 +104,10 @@ import {
   loadSessionRunners,
   reportRunnerState,
   resetRunnerReportDebounce,
+  resetWritingRunnerStamps,
   RUNNER_REPORT_DEBOUNCE_MS,
   stampSessionRunner,
+  stampWritingRunner,
 } from "../session-runners.js";
 
 const OWNER = "11111111-1111-4111-8111-111111111111";
@@ -827,6 +829,81 @@ describe("session runners", () => {
       });
     }
     expect(await loadSessionRunners(sessionId)).toEqual([]);
+  });
+});
+
+describe("who works it now: a write stamps its process (sessions cockpit C3)", () => {
+  const PROC = "mac-a:4242:1761600000000";
+  const write = (
+    sessionId: string,
+    o: { proc?: string; ownerId?: string; nowMs?: number } = {}
+  ) =>
+    runWithClientKey(
+      CLIENT_KEY,
+      () =>
+        stampWritingRunner({
+          sessionId,
+          ownerId: o.ownerId ?? OWNER,
+          agentUserId: AGENT,
+          ...(o.nowMs !== undefined ? { nowMs: o.nowMs } : {}),
+        }),
+      CWD,
+      o.proc
+    );
+
+  it("a write from a NAMED process stamps one runner row on the session it was filed on, read back live", async () => {
+    resetWritingRunnerStamps();
+    const { sessionId } = await seed();
+    expect(await write(sessionId, { proc: PROC })).toBe(true);
+    expect(await loadSessionRunners(sessionId)).toEqual([
+      expect.objectContaining({
+        harness: "claude-code",
+        conversationId: CC_ID,
+        agentUserId: AGENT,
+        processId: PROC,
+        processHost: "mac-a",
+        live: true,
+      }),
+    ]);
+  });
+
+  it("a lane: one process writing to two sessions holds a row on EACH", async () => {
+    resetWritingRunnerStamps();
+    const lead = await seed();
+    const lane = await seed();
+    expect(await write(lead.sessionId, { proc: PROC })).toBe(true);
+    expect(await write(lane.sessionId, { proc: PROC })).toBe(true);
+    for (const s of [lead, lane]) {
+      expect(
+        (await loadSessionRunners(s.sessionId)).map((r) => r.processId)
+      ).toEqual([PROC]);
+    }
+  });
+
+  it("stamps nothing without a process, nor on another person's session, nor twice in a minute", async () => {
+    resetWritingRunnerStamps();
+    const { sessionId } = await seed();
+    // No `X-Synap-Process`: the row could not be told from the wait's '' row.
+    expect(await write(sessionId)).toBe(false);
+    // The gate's subject is not the session's owner.
+    expect(await write(sessionId, { proc: PROC, ownerId: TEAMMATE })).toBe(
+      false
+    );
+    expect(await loadSessionRunners(sessionId)).toEqual([]);
+    // Once a minute per (session, conversation, process), in this process.
+    resetWritingRunnerStamps();
+    const t0 = Date.now();
+    expect(await write(sessionId, { proc: PROC, nowMs: t0 })).toBe(true);
+    await q(
+      `update session_runners set last_seen_at = now() - interval '2 minutes' where session_id = $1`,
+      [sessionId]
+    );
+    expect(await write(sessionId, { proc: PROC, nowMs: t0 + 30_000 })).toBe(
+      false
+    );
+    expect(await write(sessionId, { proc: PROC, nowMs: t0 + 61_000 })).toBe(
+      true
+    );
   });
 });
 
