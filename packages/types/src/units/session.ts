@@ -222,23 +222,34 @@ export interface ProjectAggregateSessionFact {
 export function aggregateNeedsYou(
   session: ProjectAggregateSessionFact
 ): boolean {
+  const facts = factsOf(session);
+  if (facts) return sessionNeedsYou(facts);
   if (session.draft) return false;
-  return session.unitFacts
-    ? sessionNeedsYou(session.unitFacts)
-    : session.nextMoveActor === "user";
+  return session.nextMoveActor === "user";
+}
+
+/**
+ * The row's `unitFacts` with its own triage folded in: a draft still needs
+ * you for its agent's terminal wait (D-R1), and for nothing else.
+ */
+function factsOf(
+  session: ProjectAggregateSessionFact
+): NeedsYouFacts | undefined {
+  if (!session.unitFacts) return undefined;
+  return session.draft
+    ? { ...session.unitFacts, draft: true }
+    : session.unitFacts;
 }
 
 /**
  * The session's needs-you count could not be read: its `unitFacts` say a
- * part FAILED (`needsYouItems` → null). A draft never needs you, so it is
- * never unread. Legacy `nextMoveActor` rows carry no count to fail.
+ * part FAILED (`needsYouItems` → null). A draft counts only its terminal
+ * wait, so it is unread only when its runner read failed. Legacy
+ * `nextMoveActor` rows carry no count to fail.
  */
 function needsYouUnread(session: ProjectAggregateSessionFact): boolean {
-  return (
-    !session.draft &&
-    session.unitFacts !== undefined &&
-    needsYouItems(session.unitFacts) === null
-  );
+  const facts = factsOf(session);
+  return facts !== undefined && needsYouItems(facts) === null;
 }
 
 export interface ProjectAggregateStateInput {
@@ -270,7 +281,7 @@ export function projectAggregateInput(
   if (total === 0) return { everStarted: false };
 
   // THE rule (`needs-you.ts`): owed + pending decisions + awaiting review,
-  // drafts excluded.
+  // drafts excluded, + an agent waiting on you at the terminal.
   const needsYou = input.sessions.filter(aggregateNeedsYou).length;
   const closed = input.sessions.filter((s) =>
     isTerminalSessionStatus(s.status)

@@ -747,3 +747,57 @@ describe("a closed session whose needs-you count FAILED claims no Done (team-lea
     ).toBe("unmeasured");
   });
 });
+
+describe("an agent stopped on the person at the terminal (D-R1, review M1)", () => {
+  const live = { turnInFlight: false, lastAt: null };
+  const waiting = { status: "active", runnerState: "needs_permission" };
+  const calm = {
+    owedFromYou: 0,
+    pendingDecisions: 0,
+    awaitingReview: false,
+    draft: false,
+  };
+
+  it("a path row whose agent waits on a dialog reads needs you, with one item — an agent's own draft too", () => {
+    for (const triage of [undefined, { pending: true }]) {
+      const row = {
+        status: "active",
+        unitFacts: { ...calm, runnerWait: waiting },
+        live,
+        ...(triage ? { triage } : {}),
+      };
+      expect(pathRowUnitView(row as never).state).toBe("needs_you");
+      expect(pathRowNeedsYouItems(row as never)).toBe(1);
+    }
+    // Rules out a rule that reads the runner and not its word.
+    expect(
+      pathRowUnitView({
+        status: "active",
+        unitFacts: {
+          ...calm,
+          runnerWait: { status: "active", runnerState: "busy" },
+        },
+        live,
+      } as never).state
+    ).not.toBe("needs_you");
+  });
+
+  it("the project needs you when one of its sessions' agents waits; a failed runner read is unmeasured", () => {
+    const state = (runnerWait: unknown) =>
+      resolveUnitState(
+        projectAggregateInput({
+          sessions: [
+            { status: "active", unitFacts: calm, live },
+            {
+              status: "active",
+              unitFacts: { ...calm, runnerWait } as never,
+              live,
+            },
+          ],
+          unreadable: false,
+        })
+      ).state;
+    expect(state(waiting)).toBe("needs_you");
+    expect(state(null)).toBe("unmeasured");
+  });
+});

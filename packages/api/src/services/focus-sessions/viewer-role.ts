@@ -17,7 +17,10 @@
  *   - `awaitingReview` is false — closing is an owner write;
  *   - `pendingDecisions` is 0 — zero decisions owed BY the member through this
  *     row. Review rights are workspace roles and reach a member through
- *     `proposals.groups` (the decision tray), never through a session row.
+ *     `proposals.groups` (the decision tray), never through a session row;
+ *   - `runnerWait` is dropped — the agent's permission dialog or question waits
+ *     at the OWNER's terminal (the needs-you union counts it for the owner
+ *     only, `permission-sessions.ts`).
  * So a shared session can never count toward the member's needs-you tally.
  */
 import {
@@ -33,11 +36,12 @@ export function withViewerRole<
 >(row: R, viewerId: string): R & { viewerRole: SessionViewerRole } {
   const viewerRole = sessionViewerRole(row, viewerId);
   if (viewerRole === "owner" || !row.unitFacts) return { ...row, viewerRole };
+  const { runnerWait: _ownerOnly, ...facts } = row.unitFacts;
   return {
     ...row,
     viewerRole,
     unitFacts: {
-      ...row.unitFacts,
+      ...facts,
       owedFromYou: 0,
       awaitingReview: false,
       pendingDecisions: 0,

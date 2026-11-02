@@ -61,6 +61,7 @@ import {
   events,
   messages,
   playbookRuns,
+  sessionRunners,
 } from "@synap/database";
 import { isNeedsYou } from "@synap-core/types/needs-you/rule";
 import { deliverableCountsOf, getProjectPath } from "./project-path.js";
@@ -190,6 +191,8 @@ beforeAll(async () => {
     // The needs-you counts (`unitFacts`) classify pending proposals through
     // the waits read, which reads the session's parked runs.
     playbookRuns,
+    // …and the runner read, THE rule's terminal-wait input (`runnerWait`).
+    sessionRunners,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -507,6 +510,8 @@ describe("getProjectPath", () => {
         // THE needs-you rule's third population, from the SAME packet.
         awaitingReview: packet.nextMove.kind === "ready_to_close",
         draft: false,
+        // No runner on these fixtures: read, and nobody waits at a terminal.
+        runnerWait: { status: item.status, runnerState: null },
       });
       expect(item.blockedBy).toEqual(["list-shape"]);
       kinds.add(item.nextMove.kind);
