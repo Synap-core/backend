@@ -20,6 +20,7 @@ import type postgres from "postgres";
 import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { SynapEventSchema, type SynapEvent } from "@synap-core/core";
+import { reportedModelColumns } from "../utils/request-write-context.js";
 
 /**
  * Event Hook Callback Type
@@ -268,6 +269,9 @@ export class EventRepository {
       version: validated.version,
       requestId: validated.requestId,
     };
+    // 0389: the model and provider the request's client reported, unless the
+    // event carries its own pair (a Hub agent run, a metered capability run).
+    const run = reportedModelColumns(validated);
 
     try {
       const result = await this.query(
@@ -325,8 +329,8 @@ export class EventRepository {
           validated.isAgent ?? null,
           validated.agentUserId ?? null,
           validated.agentType ?? null,
-          validated.model ?? null,
-          validated.provider ?? null,
+          run.model,
+          run.provider,
           validated.costUsd ?? null,
           validated.tokensIn ?? null,
           validated.tokensOut ?? null,

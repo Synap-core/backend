@@ -39,6 +39,9 @@ import {
   CONVERSATION_CWD_HEADER,
   PROCESS_HEADER,
   RUNNER_STATE_HEADER,
+  runWithReportedModel,
+  MODEL_HEADER,
+  MODEL_PROVIDER_HEADER,
   isProbeApiKey,
   isPodJwtShaped,
   grantOfScope,
@@ -608,11 +611,17 @@ export const hubAuthMiddleware = async (
               keyRecord,
               requestConversationId(c.req.header(CONVERSATION_HEADER))
             ),
-            () => {
-              // 0384: what the runner says it is doing, recorded off the request path.
-              void reportRunnerState();
-              return runWithGrant(keyIdentity.grant, () => next());
-            },
+            () =>
+              // 0389: the model and provider the client says it runs on.
+              runWithReportedModel(
+                c.req.header(MODEL_HEADER),
+                c.req.header(MODEL_PROVIDER_HEADER),
+                () => {
+                  // 0384: what the runner says it is doing, recorded off the request path.
+                  void reportRunnerState();
+                  return runWithGrant(keyIdentity.grant, () => next());
+                }
+              ),
             c.req.header(CONVERSATION_CWD_HEADER),
             c.req.header(PROCESS_HEADER),
             c.req.header(RUNNER_STATE_HEADER)
