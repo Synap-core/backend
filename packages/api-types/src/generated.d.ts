@@ -13039,6 +13039,37 @@ export interface SlotSubjectEdge {
 	at: string;
 }
 /**
+ * A playbook ACTIVATOR — a DECLARATION that the process starts (or is
+ * proposed) when a subject of `subjectProfile.profileSlug` is created or
+ * ENTERS a status. Never runtime engine code: the pod compiles each into a
+ * governed rule (api `services/playbooks/playbook-activators.ts`) linked in
+ * `playbook_automations` with role `"activator"`.
+ */
+export interface PlaybookActivator {
+	/**
+	 * `created` / `enters_status` — the thing is created / enters `status`.
+	 * `count` — at least `min` things sit in `status` (always per_moment).
+	 * `schedule` — on `cron` (UTC), over the things in `status` (per_moment).
+	 * `manual` — a button, never by itself: compiles no rule.
+	 * Mirror of `WorkerActivator` (`@synap-core/types/workers`); this package
+	 * is dependency-free, the pod's zod schema (`playbook-process.ts`) is
+	 * `satisfies` both.
+	 */
+	on: "count" | "created" | "enters_status" | "manual" | "schedule";
+	/** Required for `enters_status` / `count`; optional for `schedule`. */
+	status?: string;
+	/** Required for `schedule`. */
+	cron?: string;
+	/** Required for `count` (≥ 2). */
+	min?: number;
+	/** `per_thing` (default) or `per_moment`; count/schedule are per_moment. */
+	size?: "per_moment" | "per_thing";
+	/** `run` starts the run; `propose` files a proposal (the public default). */
+	mode: "propose" | "run";
+	/** Pending approvals before the worker stops starting runs (default 20). */
+	maxPendingApprovals?: number;
+}
+/**
  * The ASK on a human-owned slot — HOW to answer it.
  *
  * STRUCTURAL MIRROR of `Ask` in `@synap-core/types/ask` (the zod schema, its
@@ -42778,6 +42809,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				autoPicked: boolean;
 				playbooks: {
+					activators: PlaybookActivator[];
 					executor: PlaybookExecutorRef;
 					forceProposeWrites: boolean;
 					goalTemplate: string;
@@ -42786,6 +42818,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					params: unknown;
 					reason: string;
+					runsWithoutSubject: boolean;
 					scope: PlaybookScope;
 					score: number;
 					signals: RouteSignal[];
@@ -42808,6 +42841,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				activators: PlaybookActivator[];
 				executor: PlaybookExecutorRef;
 				forceProposeWrites: boolean;
 				goalTemplate: string;
@@ -42816,6 +42850,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				params: unknown;
 				reason: string;
+				runsWithoutSubject: boolean;
 				scope: PlaybookScope;
 				score: number;
 				signals: RouteSignal[];
@@ -51930,9 +51965,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		enable: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				activatorKey: string;
+				activatorKey?: string | undefined;
+				mode?: "propose" | "run" | undefined;
 				playbookId: string;
 				projectId?: string | undefined;
+				schedule?: {
+					kind: "daily";
+					time: string;
+				} | {
+					day: number;
+					kind: "weekly";
+					time: string;
+				} | undefined;
 				trackId?: string | undefined;
 			};
 			meta: object;
