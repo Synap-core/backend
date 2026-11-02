@@ -109,6 +109,28 @@ function ddlFor(table: PgTable): string {
   });
   return `create table "${cfg.name}" (${cols.join(", ")});`;
 }
+/** `create unique index` for each unique index made only of plain columns. */
+function uniqueIndexDdl(table: PgTable): string[] {
+  const cfg = getTableConfig(table);
+  const out: string[] = [];
+  for (const idx of cfg.indexes) {
+    const c = idx.config as {
+      name?: string;
+      unique?: boolean;
+      where?: unknown;
+      columns: Array<{ name?: unknown }>;
+    };
+    if (!c.unique || c.where || !c.name) continue;
+    const names = c.columns.map((col) => col.name);
+    if (!names.every((n): n is string => typeof n === "string")) continue;
+    out.push(
+      `create unique index if not exists "${c.name}" on "${cfg.name}" (${names
+        .map((n) => `"${n}"`)
+        .join(", ")});`
+    );
+  }
+  return out;
+}
 const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
 
 const OPERATIONS = [
@@ -154,6 +176,12 @@ beforeAll(async () => {
   );
   const byName = new Map(tables.map((t) => [getTableConfig(t).name, t]));
   for (const t of byName.values()) await h.client!.exec(ddlFor(t));
+  // The schema's plain-column UNIQUE indexes too: writers' ON CONFLICT targets
+  // need them (entity_external_links' (provider, external_id,
+  // nango_connection_id) is hit by every entity the graph creates).
+  for (const t of byName.values()) {
+    for (const sql of uniqueIndexDdl(t)) await h.client!.exec(sql);
+  }
 
   await q(
     `insert into users (id, email) values ($1,'me@x.test'),($2,'them@x.test')`,
