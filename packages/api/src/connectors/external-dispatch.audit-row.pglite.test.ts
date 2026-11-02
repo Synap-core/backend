@@ -100,6 +100,8 @@ const rowsFor = async (correlationId: string): Promise<EventRow[]> =>
   ).rows;
 
 const SESSION = "11111111-1111-4111-8111-111111111111";
+// `events.correlation_id` is a uuid: the door mints one per call.
+const PROVIDER_CALL = "33333333-3333-4333-8333-333333333333";
 const WORKSPACE = "22222222-2222-4222-8222-222222222222";
 
 beforeAll(async () => {
@@ -141,13 +143,13 @@ describe("a completed external send writes its audit row", () => {
         channel: "nango",
         action: "action",
         userId: "owner-1",
-        correlationId: "corr-provider-1",
+        correlationId: PROVIDER_CALL,
         target: "github:POST /repos/x/issues",
         status: "sent",
         data: { method: "POST" },
       })
     ).resolves.toBeUndefined();
-    const rows = await rowsFor("corr-provider-1");
+    const rows = await rowsFor(PROVIDER_CALL);
     expect(rows.map((r) => [r.type, r.source])).toEqual([
       ["nango.action.completed", WORKER_SEND_EVENT_SOURCE],
     ]);
