@@ -45,11 +45,18 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** Two kind names quoted side by side in a list: a copy of the kind list. */
+/**
+ * Three kind names quoted side by side, in the list's order: a copy of the
+ * kind list. Two are not: session-changes.ts reads `["pr_merged",
+ * "pr_closed"]` as the pair of PR kinds it handles.
+ */
+const quoted = (k: string) => `["']${k}["']`;
 const LIST_COPY = new RegExp(
-  SESSION_CHANGE_KINDS.slice(0, -1)
-    .map(
-      (k, i) => `["']${k}["']\\s*,\\s*["']${SESSION_CHANGE_KINDS[i + 1]}["']`
+  SESSION_CHANGE_KINDS.slice(0, -2)
+    .map((k, i) =>
+      [k, SESSION_CHANGE_KINDS[i + 1]!, SESSION_CHANGE_KINDS[i + 2]!]
+        .map(quoted)
+        .join("\\s*,\\s*")
     )
     .join("|")
 );
