@@ -105,7 +105,7 @@ const corsStandIn: MiddlewareHandler = async (c, next) => {
       403
     );
   }
-  await next();
+  return next();
 };
 
 /** `requestSizeLimit`: reads Content-Length only. */
@@ -119,7 +119,7 @@ const sizeLimitStandIn: MiddlewareHandler = async (c, next) => {
       413
     );
   }
-  await next();
+  return next();
 };
 
 /** `rateLimitMiddleware` (hono-rate-limiter + `classHandler`): a `Bearer burst-*` key gets one call. */
