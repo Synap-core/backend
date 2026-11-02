@@ -49,7 +49,6 @@ import {
   agents,
   workspaceMembers,
   type messages,
-  ChannelStatus,
   MessageRole,
 } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
@@ -58,7 +57,6 @@ import {
   getAgentIdBySlug,
 } from "../utils/personal-channel.js";
 import { queryChannelMessages } from "../utils/query-channel-messages.js";
-import { channelVisibilityWhere } from "../utils/channel-visibility.js";
 import { createLogger } from "@synap-core/core";
 import { appSessionMiddleware } from "../middleware/app-session.js";
 import { refuseGuestSession } from "../access/guest-containment.js";
@@ -78,6 +76,7 @@ import {
 } from "../services/chat-turns/chat-turn-store.js";
 import { abortActiveChatTurn } from "../services/chat-turns/chat-turn-runtime.js";
 import { findUserDefaultWorkspaceId } from "../utils/user-default-workspace.js";
+import { resolveChatTarget } from "../utils/resolve-chat-target.js";
 
 const logger = createLogger({ module: "chat-stream" });
 
@@ -355,72 +354,17 @@ chatStreamApp.post("/stream", async (c) => {
     return c.json({ error: "Request body must be valid JSON" }, 400);
   }
 
-  // ── Resolve workspaceId ──────────────────────────────────────────────────
-  let resolvedWorkspaceId: string;
-  if (input.workspaceId) {
-    const membership = await db.query.workspaceMembers.findFirst({
-      where: and(
-        eq(workspaceMembers.workspaceId, input.workspaceId),
-        eq(workspaceMembers.userId, userId)
-      ),
-      columns: { workspaceId: true },
-    });
-    if (!membership) {
-      return c.json({ error: "Workspace not found or access denied" }, 404);
-    }
-    resolvedWorkspaceId = input.workspaceId;
-  } else {
-    // D7: never the pod-admin console, never archived (the ONE fallback).
-    const fallback = await findUserDefaultWorkspaceId(db, userId);
-    if (!fallback) {
-      return c.json({ error: "No workspace found for this user" }, 404);
-    }
-    resolvedWorkspaceId = fallback;
+  // ── Resolve workspace + channel (the ONE resolver, shared with the
+  // external chat route so the two can never drift again) ─────────────────
+  const target = await resolveChatTarget(db, userId, {
+    workspaceId: input.workspaceId,
+    channelId: input.channelId,
+  });
+  if (!target.ok) {
+    return c.json({ error: target.error }, target.status);
   }
-
-  // ── Resolve channelId ────────────────────────────────────────────────────
-  let resolvedChannelId: string;
-  if (input.channelId) {
-    const channel = await db.query.channels.findFirst({
-      where: and(
-        eq(channels.id, input.channelId),
-        eq(channels.status, ChannelStatus.ACTIVE),
-        channelVisibilityWhere(userId)
-      ),
-      columns: { id: true, workspaceId: true },
-    });
-    if (!channel) {
-      return c.json({ error: "Channel not found" }, 404);
-    }
-    if (channel.workspaceId) {
-      const membership = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.workspaceId, channel.workspaceId),
-          eq(workspaceMembers.userId, userId)
-        ),
-        columns: { workspaceId: true },
-      });
-      if (!membership) {
-        // 404 instead of 403 to avoid leaking channel existence
-        return c.json({ error: "Channel not found" }, 404);
-      }
-    }
-    resolvedChannelId = input.channelId;
-  } else {
-    try {
-      const orchestratorId = await getAgentIdBySlug("orchestrator");
-      if (!orchestratorId)
-        return c.json({ error: "Default agent not found" }, 500);
-      const personalChannel = await ensureAgentThread(userId, orchestratorId);
-      resolvedChannelId = personalChannel.id;
-    } catch (err) {
-      logger.error(
-        { err: err instanceof Error ? err.message : String(err) },
-        "Failed to resolve default agent thread"
-      );
-      return c.json({ error: "Failed to resolve chat channel" }, 500);
-    }
-  }
+  const resolvedWorkspaceId = target.workspaceId;
+  const resolvedChannelId = target.channelId;
 
   // ── Read channel's assigned agent to drive IS routing and agentType ────────
   let channelAgentId: string | null = null;
