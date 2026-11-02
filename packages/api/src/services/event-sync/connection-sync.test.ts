@@ -893,7 +893,7 @@ describe("steady run under an auto rule", () => {
       subjectId: "id:google:ev1",
       userId: "u1",
       workspaceId: "ws-1",
-      source: "connection_sync",
+      source: "sync",
       data: { profileSlug: "event", source: "google" },
       origin: "sync",
     });

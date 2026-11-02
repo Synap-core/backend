@@ -11,7 +11,7 @@
  */
 
 import { randomUUID } from "crypto";
-import type { EnhancedEventMetadata } from "@synap-core/core";
+import type { EnhancedEventMetadata, SynapEventSource } from "@synap-core/core";
 import type { EventAction, EventPhase } from "@synap-core/types/events/unified";
 
 export type { EventAction, EventPhase };
@@ -62,15 +62,8 @@ export interface UnifiedEvent<
   data: UnifiedEventData;
   metadata?: EnhancedEventMetadata;
   userId: string;
-  source:
-    | "api"
-    | "automation"
-    | "sync"
-    | "migration"
-    | "system"
-    | "intelligence"
-    | "iot"
-    | "enterprise";
+  /** `events.source`: one of `EVENT_SOURCES` (@synap-core/core). */
+  source: SynapEventSource;
   timestamp: Date;
   correlationId?: string;
   causationId?: string;

@@ -908,7 +908,7 @@ export async function suggestDocumentPatch(input: {
     targetId: doc.id,
     proposalType: "user_edit",
     action: "update",
-    source: "user",
+    source: "api",
     summary: buildObjectActionTitle({
       action: "update",
       objectKind: "document",

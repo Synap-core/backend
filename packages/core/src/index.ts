@@ -15,6 +15,8 @@ export * from "./metrics.js";
 export {
   SynapEventSchema,
   type SynapEvent,
+  EVENT_SOURCES,
+  type SynapEventSource,
   EventTypeSchemas,
   type EventTypeWithSchema,
   validateEventData,

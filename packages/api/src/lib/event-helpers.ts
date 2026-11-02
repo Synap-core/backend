@@ -8,25 +8,21 @@
 import { db } from "@synap/database";
 import { events } from "@synap/database/schema";
 import { randomUUID } from "crypto";
+import { EVENT_SOURCES } from "@synap-core/core";
 
 /**
- * The closed set of valid event sources — mirrors `SynapEventSchema` in
- * `@synap-core/core`. `events.source` is a plain `text` column (no DB check
- * constraint), and THIS raw-insert path has no Zod gate (unlike `auditLog`),
+ * The closed set of valid event sources: `EVENT_SOURCES` (`@synap-core/core`),
+ * the vocabulary `SynapEventSchema` validates, never a copy (a copy here would
+ * coerce `"external-dispatch"` to `"api"`). `events.source` is a plain `text`
+ * column (no DB check constraint), and THIS raw-insert path has no Zod gate
+ * (unlike `auditLog`),
  * so without a guard an invalid source (e.g. the legacy `"agent"`) drifts
  * silently into the event spine — a class of data-integrity bug that consumers
  * treating `source` as a closed union then mis-handle. `normalizeEventSource`
  * is the ONE place that guarantees a valid value: it maps known legacy aliases
  * to their canonical member and coerces anything else to `"api"` with a warn.
  */
-const VALID_EVENT_SOURCES = new Set([
-  "api",
-  "automation",
-  "sync",
-  "migration",
-  "system",
-  "intelligence",
-]);
+const VALID_EVENT_SOURCES: ReadonlySet<string> = new Set(EVENT_SOURCES);
 
 /** Legacy/business values callers have historically passed as a `source`. */
 const EVENT_SOURCE_ALIASES: Record<string, string> = {

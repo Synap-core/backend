@@ -1848,7 +1848,9 @@ export async function submitCaptureGraph(
     targetId: randomUUID(),
     proposalType: "import.graph",
     action: "create",
-    source,
+    // `events.source` is the door (`EVENT_SOURCES`), as on the auto-applied
+    // path above; the caller's origin (`HubWriteSource`) is `data.source`.
+    source: "api",
     summary,
     // D3: input.agentUserId is the genuine agent-key signal (see the field's
     // doc comment above) — already used to derive agent-mode auto-apply, but

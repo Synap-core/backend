@@ -25,7 +25,7 @@ import {
   and,
   isNull,
 } from "@synap/database";
-import { createLogger } from "@synap-core/core";
+import { createLogger, type SynapEventSource } from "@synap-core/core";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
 import type { OrchestratorContext } from "./types.js";
@@ -227,7 +227,8 @@ export async function suggestViewsFromImportGraph(
   operations: ReadonlyArray<CompositeProposalOperation>,
   opts?: {
     agentUserId?: string | null;
-    source?: string;
+    /** `events.source` of the proposals' `.requested` event (and their `data.source`). */
+    source?: SynapEventSource;
     /**
      * Entities newly created by this apply. When 0, skip filing views —
      * idempotent re-apply / empty materialize must not spam the inbox.

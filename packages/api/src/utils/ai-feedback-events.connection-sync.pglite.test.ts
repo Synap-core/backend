@@ -177,7 +177,8 @@ async function fileOrdinaryImport(): Promise<string> {
     targetId: randomUUID(),
     proposalType: "import.graph",
     action: "create",
-    source: "csv",
+    // `events.source` is the door; the import format is not a source.
+    source: "api",
     summary: "CSV import",
     data: { operations: [] },
   });
