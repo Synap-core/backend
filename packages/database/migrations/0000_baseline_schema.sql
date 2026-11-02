@@ -5648,3 +5648,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS "uq_status_wait_episode_open"
 
 CREATE INDEX IF NOT EXISTS "idx_status_wait_episode_subject"
   ON "status_wait_episode" ("subject_type", "subject_id", "opened_at");
+
+-- 0392: the exact cause of each 5xx, keyed by the client's errorId — mirrors
+-- 0392_server_faults.sql.
+CREATE TABLE IF NOT EXISTS "server_faults" (
+  "error_id"      text        PRIMARY KEY,
+  "occurred_at"   timestamptz NOT NULL DEFAULT now(),
+  "door"          text        NOT NULL,
+  "method"        text,
+  "path"          text,
+  "status"        integer     NOT NULL,
+  "user_id"       text,
+  "agent_user_id" text,
+  "error_name"    text        NOT NULL,
+  "message"       text        NOT NULL,
+  "stack"         text,
+  "causes"        jsonb       NOT NULL DEFAULT '[]'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS "idx_server_faults_occurred_at"
+  ON "server_faults" ("occurred_at");

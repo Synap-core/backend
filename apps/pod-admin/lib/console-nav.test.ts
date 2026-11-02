@@ -12,6 +12,7 @@ import {
   navLabel,
   pendingIssuerHref,
   SEARCH_DESTINATION,
+  serverErrorHref,
 } from "./console-nav";
 
 describe("activeNavId", () => {
@@ -151,15 +152,21 @@ describe("SEARCH_DESTINATION", () => {
 });
 
 describe("Pod group", () => {
-  it("lists Pod security, Backups, Updates, Audit log, admin-only", () => {
+  it("lists Pod security, Backups, Updates, Audit log, Server errors, admin-only", () => {
     const pod = navFor("admin", { allTools: true }).find((g) => g.id === "pod");
     expect(pod?.items.map((i) => [i.id, i.audience])).toEqual([
       ["security", "admin"],
       ["backups", "admin"],
       ["updates", "admin"],
       ["audit", "admin"],
+      ["errors", "admin"],
     ]);
     expect(navLabel("updates")).toBe("Pod updates");
     expect(activeNavId("/updates")).toBe("updates");
+  });
+
+  it("opens a server error on its own page, the path a 5xx body links to", () => {
+    expect(serverErrorHref("a74f6adc-012e")).toBe("/errors/a74f6adc-012e");
+    expect(activeNavId("/errors/a74f6adc-012e")).toBe("errors");
   });
 });

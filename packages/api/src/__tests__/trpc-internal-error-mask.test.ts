@@ -23,6 +23,17 @@ import { NotFoundError } from "@synap-core/core";
 
 const logged = vi.hoisted(() => ({
   errors: [] as Array<{ obj: Record<string, unknown>; msg: string }>,
+  rows: [] as Array<Record<string, unknown>>,
+}));
+
+// The fault row (`server_faults`), stubbed at the database boundary. The rest
+// of the module stays real: `errorCatchingMiddleware` maps its typed errors.
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
+  insertServerFault: async (_db: unknown, row: Record<string, unknown>) => {
+    logged.rows.push(row);
+  },
+  deleteExpiredServerFaults: async () => 0,
 }));
 
 vi.mock("@synap-core/core", async (importOriginal) => {
@@ -105,6 +116,7 @@ async function call(
 afterEach(() => {
   vi.unstubAllEnvs();
   logged.errors.length = 0;
+  logged.rows.length = 0;
 });
 
 describe("tRPC server faults in production", () => {
@@ -125,6 +137,29 @@ describe("tRPC server faults in production", () => {
     );
     expect(entry).toBeDefined();
     expect(String((entry!.obj.err as Error).message)).toBe(DRIVER_MESSAGE);
+    expect((entry!.obj.fault as { message: string }).message).toBe(
+      DRIVER_MESSAGE
+    );
+  });
+
+  it("stores the original cause under the client's errorId and links to it", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const { error, raw } = await call("driverError");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(logged.rows).toHaveLength(1);
+    expect(logged.rows[0]).toMatchObject({
+      errorId: error.data.errorId,
+      door: "trpc",
+      path: "driverError",
+      status: 500,
+      errorName: "Error",
+      message: DRIVER_MESSAGE,
+    });
+    expect(String(error.data.causeUrl)).toMatch(
+      new RegExp(`/errors/${error.data.errorId}$`)
+    );
+    expect(raw).not.toContain(DRIVER_MESSAGE);
   });
 
   it("an INTERNAL TRPCError thrown with its own message is masked too", async () => {
@@ -134,6 +169,11 @@ describe("tRPC server faults in production", () => {
     expect(status).toBe(500);
     expect(error.message).toBe(SERVER_FAULT_MESSAGE);
     expect(raw).not.toContain("sk-secret");
+    // The stored cause keeps the message, with the credential cut.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(String(logged.rows[0]?.message)).toBe(
+      "provider fetch failed: https://api.example/v1?key=[redacted]"
+    );
   });
 
   it("a typed 4xx keeps its message (only server faults are masked)", async () => {

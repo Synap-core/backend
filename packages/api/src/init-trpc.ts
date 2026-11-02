@@ -19,12 +19,17 @@ import {
   zodIssuesSentence,
 } from "./utils/zod-field-errors.js";
 import { SERVER_FAULT_MESSAGE } from "./middleware/error-egress.js";
+import { describeFault } from "./services/server-faults/describe-fault.js";
+import {
+  faultCauseUrl,
+  recordServerFault,
+} from "./services/server-faults/record.js";
 
 const logger = createLogger({ module: "trpc" });
 
 export const t = initTRPC.context<Context>().create({
   transformer: superjson,
-  errorFormatter({ shape, error, type, path }) {
+  errorFormatter({ shape, error, type, path, ctx }) {
     const isInternal = shape.data.code === "INTERNAL_SERVER_ERROR";
     // THE one place a tRPC server fault is masked (audit 2026-10-28 F2). tRPC
     // 11 hands a resolver throw to `errorCatchingMiddleware` as a RESOLVED
@@ -37,7 +42,14 @@ export const t = initTRPC.context<Context>().create({
     const masked = isInternal && process.env.NODE_ENV === "production";
     const errorId = isInternal ? randomUUID() : undefined;
 
-    if (isInternal) {
+    // Where a pod admin reads the stored cause (a link; the content stays
+    // behind the pod-admin floor, services/server-faults/read.ts).
+    const causeUrl = errorId ? faultCauseUrl(errorId) : undefined;
+    if (isInternal && errorId) {
+      // The ORIGINAL error (tRPC wraps a resolver throw; its `cause` is what
+      // was thrown), with its own cause chain: logged and stored under the
+      // errorId the client gets, so an admin reads it without ssh.
+      const fault = describeFault(error.cause ?? error);
       logger.error(
         {
           err: error.cause ?? error,
@@ -45,9 +57,20 @@ export const t = initTRPC.context<Context>().create({
           path,
           code: shape.data.code,
           errorId,
+          fault,
         },
         "Internal server error in tRPC procedure"
       );
+      void recordServerFault({
+        errorId,
+        door: "trpc",
+        method: type,
+        path: path ?? null,
+        status: 500,
+        userId: ctx?.userId ?? null,
+        agentUserId: ctx?.agentUserId ?? null,
+        fault,
+      });
     } else {
       logger.debug(
         { type, path, code: shape.data.code, message: shape.message },
@@ -137,6 +160,7 @@ export const t = initTRPC.context<Context>().create({
       data: {
         ...baseData,
         ...(errorId ? { errorId } : {}),
+        ...(causeUrl ? { causeUrl } : {}),
         ...(typeof captureQuestionStatus === "string"
           ? { captureQuestionStatus }
           : {}),

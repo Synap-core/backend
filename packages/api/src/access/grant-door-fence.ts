@@ -530,6 +530,13 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // transition log, dev facts and proposals, or a PR's dev facts. Same as MCP
   // `synap_get_timeline`.
   [/^\/timeline\/?$/, READS("track", "session", "event", "proposal")],
+  // Server faults (0392, `services/server-faults/read.ts`): the exact cause of
+  // every 5xx on the pod, whoever met it. Pod owner or admin only, like
+  // `/usage`; no grant can narrow it, so a scoped key is refused.
+  [
+    /^\/errors\/[^/]+\/?$/,
+    REFUSED("Pod internals: the cause of every server error on the pod."),
+  ],
 ];
 
 /**
