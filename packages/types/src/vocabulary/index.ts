@@ -51,6 +51,7 @@ import {
 import type { SpaceBrief } from "../space-brief/index.js";
 import type { NextRungOutcome, TrustRung } from "../trust-ladder/index.js";
 import type { GovernanceRung, MatrixMark } from "../agent-matrix/index.js";
+import type { AgentWriteMode } from "../agents/index.js";
 import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
@@ -3512,6 +3513,30 @@ export function resolveGovernanceRungLabel(
   return (
     (GOVERNANCE_RUNG_LABELS as Readonly<Record<string, string>>)[rung] ??
     humanizeToken(rung)
+  );
+}
+
+/**
+ * How an agent's writes land, as the choice a person makes for it and the
+ * mark a list shows (`@synap-core/types/agents` `AgentWriteMode`; the
+ * sentence under it is `AGENT_WRITE_MODE_LINE`). `pod-default` is the choice
+ * "no posture of its own": the pod's default decides. Keyed by the mode, so a
+ * new mode is a BUILD error here until it is named.
+ */
+export const AGENT_WRITE_MODE_LABELS: Readonly<Record<AgentWriteMode, string>> =
+  {
+    "pod-default": "Follows the pod default",
+    "create-with-undo": "Creates with undo",
+    "ask-first": "Asks first",
+  };
+
+/** A write mode's words; an unknown mode humanizes rather than leaks. */
+export function resolveAgentWriteModeLabel(
+  mode: AgentWriteMode | (string & {})
+): string {
+  return (
+    (AGENT_WRITE_MODE_LABELS as Readonly<Record<string, string>>)[mode] ??
+    humanizeToken(mode)
   );
 }
 

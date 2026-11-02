@@ -10,7 +10,7 @@ import type { Catalog } from "@synap-core/types/i18n";
 export const en = {
   title: "Settings",
   description:
-    "Your language, how requests from your AIs are laid out, and what you always or never allow.",
+    "Your language, how requests from your AIs are laid out, how your AIs act, and what you always or never allow.",
   "language.title": "Language",
   "language.hint": "The language this site speaks to you, on every device.",
   "language.en": "English",
@@ -30,6 +30,26 @@ export const en = {
   "layout.hint":
     "Each kind of decision opens in its own shape. Switch any of them to a plain list.",
   "layout.aria": "{name}: layout",
+  "podDefaults.title": "How your AIs act",
+  "podDefaults.hint":
+    "The pod’s default for every AI. An AI’s own page can make it ask more, never less.",
+  "podDefaults.reversible.label": "Act directly on what can be undone",
+  "podDefaults.reversible.line":
+    "They create, edit and link without asking, each change with Undo.",
+  "podDefaults.ownOrganise.label": "Tidy their own new work",
+  "podDefaults.ownOrganise.line":
+    "They file what they made in the last day into the project you named and close their own tasks, each with Undo. Anything you changed since still asks.",
+  "podDefaults.failed": "Couldn’t read this setting.",
+  "podDefaults.notChanged": "Couldn’t change this setting",
+  "podDefaults.notChangedHint": "Nothing changed. Try again.",
+  "podDefaults.on": "On",
+  "podDefaults.off": "Off",
+  "podDefaults.turnedOn": "On: {name}",
+  "podDefaults.turnedOff": "Off: {name}",
+  "podDefaults.adminOnly": "Only a pod admin can change these.",
+  "podDefaults.floors": "These always ask, whatever you choose",
+  "podDefaults.floorsFailed": "Couldn’t read what always asks.",
+  retry: "Retry",
   "handOffs.title": "Hand-offs you always allow",
   "handOffs.hint":
     "An AI here may pass work to another AI without asking you. It never covers deletes or access.",
@@ -60,7 +80,7 @@ export const en = {
 export const fr: Catalog<typeof en> = {
   title: "Réglages",
   description:
-    "Votre langue, la présentation des demandes de vos IA, et ce que vous autorisez toujours ou jamais.",
+    "Votre langue, la présentation des demandes de vos IA, la façon dont vos IA agissent, et ce que vous autorisez toujours ou jamais.",
   "language.title": "Langue",
   "language.hint": "La langue de ce site, sur tous vos appareils.",
   "language.en": "English",
@@ -81,6 +101,27 @@ export const fr: Catalog<typeof en> = {
   "layout.hint":
     "Chaque type de décision s’ouvre dans sa propre forme. Passez-en n’importe lequel en simple liste.",
   "layout.aria": "{name} : présentation",
+  "podDefaults.title": "Comment vos IA agissent",
+  "podDefaults.hint":
+    "Le réglage par défaut du pod pour toutes les IA. La page d’une IA peut la faire demander davantage, jamais moins.",
+  "podDefaults.reversible.label":
+    "Agir directement sur ce qui peut être annulé",
+  "podDefaults.reversible.line":
+    "Elles créent, modifient et relient sans demander, chaque modification avec Annuler.",
+  "podDefaults.ownOrganise.label": "Ranger leur propre travail récent",
+  "podDefaults.ownOrganise.line":
+    "Elles classent ce qu’elles ont créé depuis un jour dans le projet que vous avez indiqué et ferment leurs propres tâches, chaque fois avec Annuler. Ce que vous avez modifié depuis demande toujours.",
+  "podDefaults.failed": "Impossible de lire ce réglage.",
+  "podDefaults.notChanged": "Impossible de modifier ce réglage",
+  "podDefaults.notChangedHint": "Rien n’a changé. Réessayez.",
+  "podDefaults.on": "Activé",
+  "podDefaults.off": "Désactivé",
+  "podDefaults.turnedOn": "Activé\u00a0: {name}",
+  "podDefaults.turnedOff": "Désactivé\u00a0: {name}",
+  "podDefaults.adminOnly": "Seul un administrateur du pod peut les modifier.",
+  "podDefaults.floors": "Ceci demande toujours, quel que soit votre choix",
+  "podDefaults.floorsFailed": "Impossible de lire ce qui demande toujours.",
+  retry: "Réessayer",
   "handOffs.title": "Passations toujours autorisées",
   "handOffs.hint":
     "Une IA de cette liste peut confier du travail à une autre IA sans vous demander. Cela ne couvre jamais les suppressions ni les accès.",
