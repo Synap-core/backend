@@ -31,7 +31,7 @@ import { isLikelyUUID } from "@synap-core/types/proposals";
 import { resolvePrivateObjectLabel } from "@synap-core/types/vocabulary";
 import { HELD_WRITES_PROPOSAL_TYPE } from "../../utils/held-writes-pack.js";
 import {
-  sessionReadableWhere,
+  sessionDecidableWhere,
   type SessionReader,
 } from "../../access/session-visibility.js";
 
@@ -129,7 +129,12 @@ export function proposalSessionIds(row: {
   return [...new Set(ids)];
 }
 
-/** Of `ids`, those that EXIST and `reader` may not read. Two batched selects. */
+/**
+ * Of `ids`, those that EXIST and `reader` may not read. Two batched selects.
+ * "Read" here is the DECIDE rule (`sessionDecidableWhere`): on a human door a
+ * session owned by an agent the reader created counts as readable, so the
+ * decide gate and the redaction keep agreeing (never redacted-but-decidable).
+ */
 async function unreadableSessionIds(
   ids: readonly string[],
   reader: SessionReader
@@ -145,7 +150,7 @@ async function unreadableSessionIds(
       .select({ id: focusSessions.id })
       .from(focusSessions)
       .where(
-        and(inArray(focusSessions.id, unique), sessionReadableWhere(reader))
+        and(inArray(focusSessions.id, unique), sessionDecidableWhere(reader))
       ),
   ]);
   const ok = new Set(readable.map((r) => r.id));

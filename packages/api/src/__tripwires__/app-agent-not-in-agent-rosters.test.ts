@@ -59,6 +59,11 @@ const INCLUDES_APP_AGENTS: Record<string, { sites: number; reason: string }> = {
     reason:
       "joins `dispatched_via` links — only a dispatch binding writes one, never an app",
   },
+  "access/session-visibility.ts": {
+    sites: 1,
+    reason:
+      "sessionDecidableWhere — the creator of an agent decides proposals filed in that agent's sessions, an app's included: an app's proposals are its owner's review queue like any of their agents'",
+  },
 };
 
 const SITE = /eq\(users\.userType,\s*"agent"\)|user_type\s*=\s*'agent'/;

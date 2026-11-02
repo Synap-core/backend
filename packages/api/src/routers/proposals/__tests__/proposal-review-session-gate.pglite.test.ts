@@ -558,3 +558,113 @@ describe("(2) a held-writes pack is not gated by the session it was stamped with
     });
   });
 });
+
+// An agent's ordinary write is filed in a session the pod mints for it, and
+// when the write's principal is the agent itself that session is owned by the
+// AGENT. The human who created the agent was then neither owner nor roster and
+// got "Only people in this session can approve" (live: proposal 1e193849,
+// 2026-11-02; the 2026-10-27 fix above covered held-writes packs only).
+describe("(2) a proposal filed in a session owned by the viewer's own agent", () => {
+  const AGENT = randomUUID(); // created by COLLEAGUE
+  const NOT_AN_AGENT = randomUUID(); // a HUMAN row that names COLLEAGUE as creator
+  const AGENT_SESSION = randomUUID();
+  const HUMAN_SESSION = randomUUID();
+
+  beforeAll(async () => {
+    await q(
+      `insert into users (id, user_type, created_by_user_id) values ($1, 'agent', $2), ($3, 'human', $2)`,
+      [AGENT, COLLEAGUE, NOT_AN_AGENT]
+    );
+    for (const [sid, owner] of [
+      [AGENT_SESSION, AGENT],
+      [HUMAN_SESSION, NOT_AN_AGENT],
+    ] as const) {
+      await q(
+        `insert into focus_sessions (id, user_id, workspace_id, goal, status, metadata, expected_outputs, created_at, updated_at, started_at)
+         values ($1, $2, $3, 'Receipt', 'active', '{}'::jsonb, '[]'::jsonb, now(), now(), now())`,
+        [sid, owner, WS]
+      );
+    }
+  });
+
+  async function fileIn(
+    sessionId: string,
+    agentUserId: string
+  ): Promise<string> {
+    const id = randomUUID();
+    const docId = randomUUID();
+    await q(
+      `insert into proposals (id, status, proposal_type, target_type, target_id, workspace_id, session_id, agent_user_id, data, revision_history, created_at, updated_at)
+       values ($1, 'pending', 'create', 'document', $2, $3, $4, $5, $6::jsonb, '[]'::jsonb, now(), now())`,
+      [
+        id,
+        docId,
+        WS,
+        sessionId,
+        agentUserId,
+        JSON.stringify({
+          targetType: "document",
+          targetId: docId,
+          changeType: "create",
+          sourceId: agentUserId,
+          source: "intelligence",
+          sessionSource: "derived",
+          data: { id: docId, title: "Launch readiness" },
+        }),
+      ]
+    );
+    return id;
+  }
+
+  it("the agent's creator may decide it on a human door; list/get agree", async () => {
+    const id = await fileIn(AGENT_SESSION, AGENT);
+    const got = (await caller(human(COLLEAGUE)).get({ proposalId: id })) as {
+      viewerCanReview: boolean;
+      viewerCanReviewReason: string;
+    };
+    expect(got.viewerCanReviewReason).not.toBe("session-only");
+    expect(got.viewerCanReview).toBe(true);
+    const listed = (await caller(human(COLLEAGUE)).list({
+      workspaceId: WS,
+      limit: 50,
+      offset: 0,
+    } as never)) as {
+      items: Array<{ id: string; viewerCanReview: boolean }>;
+    };
+    expect(listed.items.find((r) => r.id === id)).toMatchObject({
+      viewerCanReview: true,
+    });
+    await caller(human(COLLEAGUE)).approve({ proposalId: id });
+    expect(h.applied).toEqual([id]);
+  });
+
+  it("an editor who did not create that agent stays refused", async () => {
+    const id = await fileIn(AGENT_SESSION, AGENT);
+    await expect(
+      caller(human(MEMBER)).approve({ proposalId: id })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringContaining("Only people in this session"),
+    });
+    expect(h.applied).toEqual([]);
+  });
+
+  it("the agent door gains nothing (owner-only, as before)", async () => {
+    const id = await fileIn(AGENT_SESSION, AGENT);
+    await expect(
+      caller(hubDoor(COLLEAGUE)).reject({ proposalId: id })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await statusOf(id)).toBe("pending");
+  });
+
+  it("a HUMAN the viewer created does not count as their agent", async () => {
+    const id = await fileIn(HUMAN_SESSION, AGENT);
+    await expect(
+      caller(human(COLLEAGUE)).approve({ proposalId: id })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringContaining("Only people in this session"),
+    });
+    expect(h.applied).toEqual([]);
+  });
+});
