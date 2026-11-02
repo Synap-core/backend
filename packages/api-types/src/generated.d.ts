@@ -17916,8 +17916,8 @@ export interface ContinuationPacket {
 	devboxJobs?: PacketDevboxJobsSection;
 	/**
 	 * Has the READER muted this session's pushes (tRPC
-	 * `notifCenter.setSessionMute`)? Muted holds back every push about the
-	 * session; nothing is hidden. A failed read is `unavailable`, never "not
+	 * `notifCenter.setSessionMute`)? Muted holds back the pushes about the
+	 * session, except what needs the person (an ask, a decision); nothing is hidden. A failed read is `unavailable`, never "not
 	 * muted". Optional: an older pod does not send it (`session-notify.ts`).
 	 */
 	muted?: PacketMuted;
