@@ -96,6 +96,8 @@ import { entityBodyDocumentIdFrom } from "../../utils/store-entity-source-blob.j
 import { computeEntityPropertyDiff } from "../../utils/entity-property-diff.js";
 import { recordSessionArtifact } from "../../services/focus-sessions/record-session-artifact.js";
 import { stampAutoApprovedCreate } from "../../services/proposals/stamp-materialized.js";
+import { describeMissingKind } from "../../services/profiles/kind-elsewhere.js";
+import { kindMissingError } from "../../utils/kind-missing.js";
 
 const logger = createLogger({ module: "entities-router" });
 
@@ -1073,6 +1075,19 @@ export const createProcs = {
         );
       }
       if (!earlyResolvedProfile) {
+        // TYPED refusal (`utils/kind-missing.ts`): same NOT_FOUND and message,
+        // plus where the kind DOES exist, so a failed graph reads
+        // `kind_missing` ("isn't available in Foundation. It exists in
+        // Ecosystem.") instead of `target_missing`.
+        if (profileSlug) {
+          throw kindMissingError(
+            await describeMissingKind({
+              profileSlug,
+              userId: ctx.userId,
+              workspaceId: governanceWorkspaceId,
+            })
+          );
+        }
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Profile not found: ${profileSlug}`,

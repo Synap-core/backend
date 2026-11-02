@@ -36,7 +36,11 @@ import { ProposalStatus } from "@synap/database/schema";
 import type { ProposalMaterializedRecord } from "@synap-core/types";
 import { opRef } from "@synap-core/types/proposals";
 import { createLogger } from "@synap-core/core";
-import type { MaterializeResult } from "../../utils/materialize-composite.js";
+import {
+  readPartialMaterialization,
+  type MaterializeResult,
+  type PartialMaterialization,
+} from "../../utils/materialize-composite.js";
 import {
   computeEntityUpdateDiff,
   entityBodyChange,
@@ -49,6 +53,7 @@ import {
   classifyThrownFailure,
   failureRecord,
   safeFailureSentence,
+  type ProposalFailureMeta,
 } from "../../routers/proposals/failure-classification.js";
 import { redactForStorage } from "../../utils/redact-secrets.js";
 import {
@@ -106,7 +111,53 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
    * (`<sourceRef>-><targetRef>:<type>`), which survives chunking and retries.
    */
   byOp?: Record<string, MaterializedOpRecord>;
+  /**
+   * How many ops a run that STOPPED part-way was given (a non-plan graph
+   * whose op threw). Only such a run stamps it and the three fields below,
+   * together with what DID land (the fields above, the shape a complete run
+   * stamps), so "N of M filed" is derived from the record, never from the
+   * status (which stays `approval_failed`). A later stamp without it (a
+   * complete run) drops all four.
+   */
+  opCount?: number;
+  /** The op that threw: what it was and why, in the person's words. */
+  failedOp?: MaterializedFailedOp;
+  /** Ops the run never reached, because it stopped at `failedOp`. */
+  notRun?: MaterializedOpRef[];
+  /** Ops that ran and were left out without stopping the run (a relation that did not resolve, a twin left out). */
+  skipped?: MaterializedSkippedOp[];
 }
+
+/** One op of a run, addressed the way `byOp` keys it. */
+export interface MaterializedOpRef {
+  /** The `byOp` key (its `ref`, `opRef(n)` for a ref-less entity, the edge for a relation). */
+  key: string;
+  /** Its index in the ops the run was given. */
+  opIndex: number;
+  op: string;
+  /** Its title or name as the op carried it, when it has one. */
+  title?: string;
+}
+
+export interface MaterializedFailedOp extends MaterializedOpRef {
+  /** The SAFE, classified sentence (the row's `rejectionReason`). */
+  reason: string;
+  /** `data.failure.errorClass` of the same failure. */
+  errorClass: string;
+}
+
+export interface MaterializedSkippedOp extends MaterializedOpRef {
+  /** Why it was left out — redacted at write. */
+  reason: string;
+}
+
+/** The fields only a stopped run stamps — owned by the NEWEST stamp. */
+const STOPPED_RUN_FIELDS = [
+  "opCount",
+  "failedOp",
+  "notRun",
+  "skipped",
+] as const satisfies ReadonlyArray<keyof CompleteMaterializedRecord>;
 
 /**
  * The rows a `row_patch` may restore: the config tables an `update_*` op may
@@ -643,7 +694,188 @@ export function mergeMaterializedRecords(
     merged.byOp = byOp;
   }
   merged.stampedAt = newer.stampedAt ?? older?.stampedAt;
+  // How the LATEST run ended is the newer stamp's to say: a retry that
+  // completed must not keep reading "1 could not be filed".
+  if (newer.opCount === undefined) {
+    for (const field of STOPPED_RUN_FIELDS) delete merged[field];
+  }
   return merged;
+}
+
+type LooseOp = { op: string } & Record<string, unknown>;
+
+function opTitle(op: LooseOp): string | undefined {
+  for (const field of ["title", "name", "goal"] as const) {
+    const v = op[field];
+    if (typeof v === "string" && v.trim()) return v.trim().slice(0, 200);
+  }
+  return undefined;
+}
+
+/**
+ * Every op's `byOp` key, the way `buildByOp` keys a result: a create_entity
+ * by its ref or `opRef(n)` (n = its ordinal among create_entity ops), a
+ * relation by the edge it asked for, anything else by its ref.
+ */
+function opKeys(operations: readonly LooseOp[]): string[] {
+  let entityOrdinal = 0;
+  return operations.map((op, index) => {
+    const ref = typeof op.ref === "string" && op.ref ? op.ref : undefined;
+    if (op.op === "create_entity") return ref ?? opRef(entityOrdinal++);
+    if (op.op === "create_relation") {
+      return relationOpKey({
+        sourceRef: String(op.sourceRef ?? ""),
+        targetRef: String(op.targetRef ?? ""),
+        type: String(op.type ?? ""),
+      });
+    }
+    return ref ?? `$${op.op}${index}`;
+  });
+}
+
+/**
+ * The record of a run that STOPPED part-way: what landed (the same shape
+ * {@link buildMaterializedRecord} stamps for a complete run), the op that
+ * threw, the ops it never reached, and the ops it left out on the way.
+ *
+ * What landed is read from the result's own `opIndex`es (a relation, which
+ * has none, by its edge key). LIMIT, stated: a create_entity op the
+ * relation-slug guard dropped leaves no result and no `relationsFailed` row,
+ * so it reads as `notRun` although it was reached.
+ */
+export function buildStoppedRunRecord(
+  partial: PartialMaterialization,
+  failure: { reason: string; errorClass: string }
+): CompleteMaterializedRecord {
+  const operations = partial.operations as unknown as LooseOp[];
+  const { result } = partial;
+  const keys = opKeys(operations);
+  const ref = (index: number): MaterializedOpRef => {
+    const op = operations[index]!;
+    const title = opTitle(op);
+    return {
+      key: keys[index]!,
+      opIndex: index,
+      op: op.op,
+      ...(title ? { title } : {}),
+    };
+  };
+
+  const landed = new Set<number>();
+  const skippedAt = new Map<number, string>();
+  for (const rows of [
+    result.entities,
+    result.skills ?? [],
+    result.automations ?? [],
+    result.rules ?? [],
+    result.playbooks ?? [],
+    result.views ?? [],
+    result.updates ?? [],
+    result.projects ?? [],
+    result.sessions ?? [],
+    result.links ?? [],
+    result.documents ?? [],
+  ] as Array<ReadonlyArray<{ opIndex: number }>>) {
+    for (const row of rows) landed.add(row.opIndex);
+  }
+  // An edge carries no index: claim the first create_relation op asking for it.
+  const claimEdge = (key: string): number | undefined => {
+    const index = operations.findIndex(
+      (op, i) =>
+        op.op === "create_relation" &&
+        keys[i] === key &&
+        !landed.has(i) &&
+        !skippedAt.has(i)
+    );
+    return index >= 0 ? index : undefined;
+  };
+  for (const r of result.relations) {
+    if (!r.requested) continue;
+    const at = claimEdge(relationOpKey(r.requested));
+    if (at !== undefined) landed.add(at);
+  }
+  for (const f of result.relationsFailed ?? []) {
+    const at = claimEdge(relationOpKey(f));
+    if (at !== undefined) {
+      skippedAt.set(at, redactForStorage(f.reason, SKIPPED_REASON_MAX));
+    }
+  }
+  for (const twin of result.entitiesSkipped ?? []) {
+    const at = keys.findIndex(
+      (k, i) =>
+        k === twin.ref &&
+        operations[i]!.op === "create_entity" &&
+        !landed.has(i) &&
+        !skippedAt.has(i)
+    );
+    if (at >= 0) {
+      skippedAt.set(
+        at,
+        "A record with this name already exists, so it was left out."
+      );
+    }
+  }
+
+  const failedAt =
+    partial.failedOpIndex >= 0 &&
+    partial.failedOpIndex < operations.length &&
+    !landed.has(partial.failedOpIndex) &&
+    !skippedAt.has(partial.failedOpIndex)
+      ? partial.failedOpIndex
+      : undefined;
+  const notRun: MaterializedOpRef[] = [];
+  operations.forEach((_, i) => {
+    if (!landed.has(i) && !skippedAt.has(i) && i !== failedAt) {
+      notRun.push(ref(i));
+    }
+  });
+
+  return {
+    ...buildMaterializedRecord(result),
+    opCount: operations.length,
+    // The op being applied is unknown when the throw came between ops (the
+    // index then names one that landed): no failedOp is better than a wrong one.
+    ...(failedAt !== undefined
+      ? {
+          failedOp: {
+            ...ref(failedAt),
+            reason: failure.reason,
+            errorClass: failure.errorClass,
+          },
+        }
+      : {}),
+    notRun,
+    skipped: [...skippedAt.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([i, reason]) => ({ ...ref(i), reason })),
+  };
+}
+
+const SKIPPED_REASON_MAX = 300;
+
+/**
+ * The stopped-run record a thrown materialization carries, merged over the
+ * row's own record — or undefined when the throw carried no partial result
+ * (a refusal before any op, a plan, a non-graph door).
+ */
+export function stoppedRunRecordOf(
+  err: unknown,
+  meta: ProposalFailureMeta,
+  sentence: string,
+  older: unknown
+): CompleteMaterializedRecord | undefined {
+  const partial = readPartialMaterialization(err);
+  if (!partial) return undefined;
+  const record = buildStoppedRunRecord(partial, {
+    reason: sentence,
+    errorClass: meta.errorClass ?? "unknown",
+  });
+  return mergeMaterializedRecords(
+    older && typeof older === "object"
+      ? (older as CompleteMaterializedRecord)
+      : undefined,
+    { ...record, stampedAt: new Date().toISOString() }
+  );
 }
 
 /**
@@ -1097,12 +1329,37 @@ export async function runMaterializationUnderReceipt<T>(
         // it holds is now ALSO the redacted `detail`, and the class + safe
         // sentence ride alongside.
         const meta = classifyThrownFailure(err);
+        const sentence = safeFailureSentence(err, meta);
+        // What DID land before the throw (a non-plan graph keeps it), in the
+        // shape a complete run stamps, plus the op that threw and the ops it
+        // never reached. Without it the receipt kept its placeholder
+        // `materialized: { entityIds: [] }` and read "nothing was created"
+        // while the landed rows carried its id (proposal e8fc00d6).
+        // Best-effort: describing what landed must never stop the row from
+        // being marked failed.
+        let stopped: CompleteMaterializedRecord | undefined;
+        try {
+          stopped = stoppedRunRecordOf(
+            err,
+            meta,
+            sentence,
+            receipt.data?.materialized
+          );
+        } catch (recordErr) {
+          logger.warn(
+            { err: recordErr, proposalId: receipt.id },
+            "materialization failed and what landed could not be described — the receipt records the failure only"
+          );
+        }
         await transitionProposal(database, {
           to: ProposalStatus.APPROVAL_FAILED,
           set: {
-            rejectionReason: safeFailureSentence(err, meta),
+            rejectionReason: sentence,
             data: {
               ...(receipt.data ?? {}),
+              // Its reasons are the safe sentence above and `skipped` reasons
+              // redacted at build: classified in failure-projection.ts.
+              ...(stopped ? { materialized: stopped } : {}),
               // REDACTED at write. This field is projected VERBATIM by every
               // user-facing door (`projectProposalDataForViewer` only reaches
               // inside `data.failure`), so storing the raw message here put the

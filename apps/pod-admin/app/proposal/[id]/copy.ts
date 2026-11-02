@@ -59,6 +59,20 @@ export const en = {
   "repair.approved": "Repaired and approved",
   "repair.approveFailed": "Repaired, but couldn’t approve",
   "repair.failed": "Couldn’t repair this request",
+  "stopped.filed":
+    "{filed} of {total, plural, one {# item} other {# items}} filed",
+  "stopped.couldNot": "{n} could not be filed",
+  "stopped.notTried": "{n} not tried",
+  "stopped.landed": "Filed",
+  "stopped.linked": "already there, linked",
+  "stopped.failed": "Could not be filed",
+  "stopped.skipped": "Left out",
+  "stopped.notRun": "Not tried: filing stopped before these",
+  "stopped.kindMissing": "Kind “{kind}” isn’t available in {space}.",
+  "stopped.kindMissingHere": "Kind “{kind}” isn’t available in this space.",
+  "stopped.kindElsewhere": "It exists in {spaces}.",
+  "stopped.kindNowhere": "No other space you can see has it either.",
+  "stopped.and": "and",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -118,6 +132,23 @@ export const fr: Catalog<typeof en> = {
   "repair.approved": "Corrigée et approuvée",
   "repair.approveFailed": "Corrigée, mais impossible de l’approuver",
   "repair.failed": "Impossible de corriger cette demande",
+  "stopped.filed":
+    "{filed} sur {total, plural, one {# élément classé} other {# éléments classés}}",
+  "stopped.couldNot":
+    "{n, plural, one {# n’a pas pu être classé} other {# n’ont pas pu être classés}}",
+  "stopped.notTried": "{n} non tentés",
+  "stopped.landed": "Classés",
+  "stopped.linked": "déjà là, relié",
+  "stopped.failed": "N’a pas pu être classé",
+  "stopped.skipped": "Laissés de côté",
+  "stopped.notRun": "Non tentés : le classement s’est arrêté avant",
+  "stopped.kindMissing":
+    "Le type « {kind} » n’est pas disponible dans {space}.",
+  "stopped.kindMissingHere":
+    "Le type « {kind} » n’est pas disponible dans cet espace.",
+  "stopped.kindElsewhere": "Il existe dans {spaces}.",
+  "stopped.kindNowhere": "Aucun autre espace visible ne l’a non plus.",
+  "stopped.and": "et",
 };
 
 /** The catalog keys of a decided request's one-line outcome. */
