@@ -36,7 +36,10 @@ import {
   QUALIFIED_GRANT_SUBJECTS,
   type GrantScope,
 } from "@synap/governance-policy/grants";
-import type { WorkReleasePart } from "@synap-core/types/work-release";
+import {
+  WORK_RELEASE_SOURCE_STATES,
+  type WorkReleasePart,
+} from "@synap-core/types/work-release";
 
 /** How a fenced read door is bounded by a grant. */
 export type FencedReadDoor =
@@ -375,9 +378,12 @@ export function workReleaseReach(
     // snapshot's own.
     pullRequests: () => snapshotSpaces === "all",
   } satisfies Record<WorkReleasePart, () => boolean>;
-  const withheld = (Object.keys(mayRead) as WorkReleasePart[]).filter(
-    (part) => !mayRead[part]()
-  );
+  // Derived from the parts themselves, so a part with no predicate at runtime
+  // (a stale build) is withheld, never served.
+  const readable: Partial<Record<WorkReleasePart, () => boolean>> = mayRead;
+  const withheld = (
+    Object.keys(WORK_RELEASE_SOURCE_STATES) as WorkReleasePart[]
+  ).filter((part) => !readable[part]?.());
   return { full: false, snapshotSpaces, withheld };
 }
 
