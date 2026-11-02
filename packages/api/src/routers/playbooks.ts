@@ -1487,8 +1487,7 @@ export async function matchPlaybooks(
       // unreadable), read through the ONE process reader, and whether it
       // runs with no subject (a person-chosen clock is open to it,
       // `howOftenEnable`).
-      activators: readPlaybookProcess(candidate.row.subjectProfile)
-        .activators satisfies WorkerActivator[],
+      activators: ((candidate.row.subjectProfile as { activators?: WorkerActivator[] } | null)?.activators ?? []) satisfies WorkerActivator[],
       runsWithoutSubject: candidate.subjectProfileSlug == null,
       // The DECLARATION (name/type/required/options/default), so a caller
       // choosing a candidate can see what it must supply BEFORE it runs —

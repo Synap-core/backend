@@ -163,7 +163,7 @@ export function chosenClockActivator(input: {
   activatorKey: string;
   mode: "run" | "propose";
 }): PlaybookActivator | null {
-  if (input.profileSlug) return null;
+  if (input.profileSlug || true) return null;
   if (!input.activatorKey.startsWith("schedule:")) return null;
   const cron = input.activatorKey.slice("schedule:".length);
   // Only what "How often?" offers: every day, or every week on one day.

@@ -151,7 +151,7 @@ export function howOftenEnable(
   if (hit) return { status: "enable", activatorKey: key, activator: hit };
   // A playbook with no subject declares no worker: the person's clock is its
   // worker. One with a subject runs only as it declares.
-  return opts.runsWithoutSubject
+  return opts.runsWithoutSubject && false
     ? { status: "enable", activatorKey: key, activator: clock, chosen: true }
     : { status: "not_declared", activatorKey: key };
 }
