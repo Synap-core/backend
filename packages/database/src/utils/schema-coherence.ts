@@ -2647,6 +2647,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "snoozed_until",
     addedBy: "0381_governance_deny_and_request_later.sql",
   },
+  // server_faults — the exact cause of each 5xx by errorId (0392). Absence
+  // means every fault write fails (logged, the cause stays in stdout only)
+  // and the admin read (GET /api/hub/errors/:errorId) 42P01s.
+  {
+    table: "server_faults",
+    column: "causes",
+    addedBy: "0392_server_faults.sql",
+  },
 ];
 
 /**

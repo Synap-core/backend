@@ -1383,16 +1383,21 @@ app.onError((err, c) => {
   const shouldLogStack =
     synapError.statusCode >= 500 || config.server.nodeEnv === "development";
 
+  // A server fault logs the ORIGINAL error, not the wrapper `toSynapError`
+  // made ("An unexpected error occurred", its own stack): pino's serializer
+  // gives the original's name, message, stack and `cause` chain. The egress
+  // door (middleware/error-egress.ts) stores it under the same errorId.
+  const logged = synapError.statusCode >= 500 ? err : synapError;
   apiLogger[synapError.statusCode >= 500 ? "error" : "warn"](
     {
-      err: synapError,
+      err: logged,
       errorId,
       // Redacted: a 4xx/5xx on a secret-in-path route (calendar feed, agent
       // setup) would otherwise file the capability into the error log.
       path: redactSecretPath(c.req.path),
       method: c.req.method,
       statusCode: synapError.statusCode,
-      ...(shouldLogStack && { stack: synapError.stack }),
+      ...(shouldLogStack && { stack: logged.stack }),
     },
     synapError.statusCode >= 500 ? "Server error" : "Client error"
   );

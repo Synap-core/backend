@@ -7,9 +7,25 @@
  * No Postgres and no app bootstrap needed — the middleware is pure Hono.
  */
 
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import { Hono } from "hono";
-import { sanitizeErrorEgress } from "./error-egress.js";
+
+// The fault row (`server_faults`), stubbed at the database boundary so this
+// stays a pure Hono test: what `insertServerFault` receives is what the table
+// stores (the table itself: database `server-faults.pglite.test.ts`).
+const h = vi.hoisted(() => ({ rows: [] as Array<Record<string, unknown>> }));
+vi.mock("@synap/database", () => ({
+  db: {},
+  SERVER_FAULT_RETENTION_DAYS: 30,
+  insertServerFault: async (_db: unknown, row: Record<string, unknown>) => {
+    h.rows.push(row);
+  },
+  deleteExpiredServerFaults: async () => 0,
+}));
+
+const { sanitizeErrorEgress } = await import("./error-egress.js");
+const { resetServerFaultBudget } =
+  await import("../services/server-faults/record.js");
 
 // The literal shape DrizzleQueryError produces (drizzle-orm/errors.ts):
 //   super(`Failed query: ${query}\nparams: ${params}`)
@@ -123,5 +139,131 @@ describe("sanitizeErrorEgress (development)", () => {
   it("keeps full detail so local debugging is unaffected", async () => {
     const res = await app(true).request("/returned");
     expect(await res.text()).toContain("Failed query");
+  });
+});
+
+/**
+ * The cause is KEPT (founder ask 2026-11-02, errorId a74f6adc): the 5xx log
+ * line and the stored fault carry the ORIGINAL error, never the wrapper an
+ * `onError` made, under the errorId the client got; the client body still
+ * carries no cause, only where a pod admin reads it.
+ */
+describe("sanitizeErrorEgress keeps the exact cause", () => {
+  const ORIGINAL = "Cannot read properties of undefined (reading 'stages')";
+  const DRIZZLE =
+    'Failed query: insert into "skills" ("name") values ($1)\nparams: sk-live-SECRET';
+  const USER = "11111111-1111-4111-8111-111111111111";
+
+  function build(isDev = false) {
+    const lines: Array<{ obj: Record<string, unknown>; msg: string }> = [];
+    const log = {
+      error: (obj: unknown, msg: string) =>
+        lines.push({ obj: obj as Record<string, unknown>, msg }),
+    };
+    const a = new Hono();
+    a.use("*", sanitizeErrorEgress({ isDev, log }));
+    a.use("*", async (c, next) => {
+      (c.set as (k: string, v: unknown) => void)("userId", USER);
+      await next();
+    });
+    a.post("/api/hub/packages/apply", () => {
+      const template = undefined as unknown as { stages: unknown };
+      // A real TypeError, thrown the way a handler bug throws it.
+      return (template.stages as never)[0];
+    });
+    a.get("/api/hub/returned", (c) => c.json({ error: DRIZZLE }, 500));
+    // apps/api's onError: the WRAPPER `toSynapError` makes, with an errorId.
+    a.onError((_err, c) =>
+      c.json(
+        {
+          error: "InternalServerError",
+          code: "INTERNAL_SERVER_ERROR",
+          message: "An unexpected error occurred",
+          errorId: "0b7f0c1e-1111-4222-8333-444455556666",
+        },
+        500
+      )
+    );
+    return { a, lines };
+  }
+
+  /** Let the fire-and-forget write land. */
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+
+  beforeEach(() => {
+    h.rows.length = 0;
+    resetServerFaultBudget();
+  });
+
+  it("logs a thrown TypeError's own name, message and stack, not the wrapper", async () => {
+    const { a, lines } = build();
+    const res = await a.request("/api/hub/packages/apply", { method: "POST" });
+    const { errorId } = (await res.json()) as { errorId: string };
+    expect(errorId).toBe("0b7f0c1e-1111-4222-8333-444455556666");
+
+    const line = lines.find((l) => l.obj.errorId === errorId);
+    const fault = line?.obj.fault as
+      { name: string; message: string; stack: string } | undefined;
+    expect(fault?.name).toBe("TypeError");
+    expect(fault?.message).toBe(ORIGINAL);
+    expect(fault?.stack).toMatch(/^TypeError/);
+    expect(line!.msg).toContain(ORIGINAL);
+  });
+
+  it("stores ONE fault row under the errorId the client got, with the caller", async () => {
+    const { a } = build();
+    const res = await a.request("/api/hub/packages/apply", { method: "POST" });
+    const { errorId } = (await res.json()) as { errorId: string };
+    await settle();
+
+    expect(h.rows).toHaveLength(1);
+    expect(h.rows[0]).toMatchObject({
+      errorId,
+      door: "rest",
+      method: "POST",
+      path: "/api/hub/packages/apply",
+      status: 500,
+      userId: USER,
+      errorName: "TypeError",
+      message: ORIGINAL,
+    });
+  });
+
+  it("tells the client nothing of the cause, only where an admin reads it", async () => {
+    const { a } = build();
+    const res = await a.request("/api/hub/packages/apply", { method: "POST" });
+    const raw = await res.text();
+    const body = JSON.parse(raw) as Record<string, string>;
+
+    expect(raw).not.toContain("stages");
+    expect(raw).not.toContain("TypeError");
+    expect(body.message).toBe(
+      "An unexpected server error occurred. Quote errorId when reporting it."
+    );
+    expect(body.causeUrl).toMatch(new RegExp(`/errors/${body.errorId}$`));
+  });
+
+  it("stores a RETURNED 5xx (no throw) with its bound params cut", async () => {
+    const { a } = build();
+    const res = await a.request("/api/hub/returned");
+    const raw = await res.text();
+    const { errorId } = JSON.parse(raw) as { errorId: string };
+    await settle();
+
+    expect(raw).not.toContain("sk-live-SECRET");
+    expect(h.rows).toHaveLength(1);
+    expect(h.rows[0]).toMatchObject({ errorId, door: "rest", status: 500 });
+    expect(String(h.rows[0]!.message)).toContain(
+      'Failed query: insert into "skills"'
+    );
+    expect(JSON.stringify(h.rows[0])).not.toContain("sk-live-SECRET");
+  });
+
+  it("stores the fault in development too, and leaves the body as it was", async () => {
+    const { a } = build(true);
+    const res = await a.request("/api/hub/returned");
+    expect(await res.text()).toContain("sk-live-SECRET");
+    await settle();
+    expect(h.rows).toHaveLength(1);
   });
 });

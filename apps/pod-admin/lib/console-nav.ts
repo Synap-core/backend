@@ -43,6 +43,7 @@ export type NavIconName =
   | "HardDrive"
   | "RefreshCw"
   | "ScrollText"
+  | "Bug"
   | "SlidersHorizontal";
 
 /**
@@ -356,6 +357,15 @@ export const CONSOLE_NAV = [
         icon: "ScrollText",
         audience: "admin",
       },
+      {
+        // The exact cause of each 5xx (`server_faults`); a 5xx body links
+        // here (`causeUrl`, @synap/api services/server-faults/record.ts `faultCauseUrl`).
+        id: "errors",
+        href: "/errors",
+        label: "Server errors",
+        icon: "Bug",
+        audience: "admin",
+      },
     ],
   },
 ] as const satisfies readonly NavGroup[];
@@ -401,6 +411,15 @@ export function navHref(
  */
 export function computerHref(id: string): string {
   return `${navHref("computers")}/${encodeURIComponent(id)}`;
+}
+
+/**
+ * One server error's page — the ONE spelling of "open this errorId" in the
+ * console. The pod builds the same path in a 5xx body's `causeUrl`
+ * (@synap/api `faultCauseUrl`, services/server-faults/record.ts): keep them equal.
+ */
+export function serverErrorHref(errorId: string): string {
+  return `${navHref("errors")}/${encodeURIComponent(errorId)}`;
 }
 
 /** True when a viewer with `role` may open (and so see) this item. */
