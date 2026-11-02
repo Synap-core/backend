@@ -259,3 +259,82 @@ describe("POST /packages/apply — LIVE preflight gate", () => {
     expect(mockMaterialize).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * A body that does not fit `PackageApplySchema` is a 400 naming the field,
+ * on BOTH package doors — never a 500 (incident 2026-11-02: `synap market
+ * update` sent Content OS, whose Produce Content "draft" stage goal was 5,225
+ * characters against the stage schema's 5,000; `PackageApplySchema.parse`
+ * threw a ZodError and the app's error handler answered an opaque 500 on
+ * `/packages/preflight` and `/packages/apply`). The playbook is the real
+ * stage's shape, cut down; the 5,000-character twin is the control that the
+ * cap, and nothing else in the body, is what is refused.
+ */
+describe("POST /packages/{preflight,apply} — a body the schema refuses", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const contentOsLike = (goalLength: number) => ({
+    _meta: { slug: "content-os" },
+    playbooks: [
+      {
+        name: "Produce Content",
+        goalTemplate: "Produce content for {platform} from this idea ({post}).",
+        stages: [
+          {
+            key: "draft",
+            name: "Draft",
+            category: "started",
+            subjectStatus: "In Draft",
+            gate: { kind: "human" },
+            onFail: { toStage: "script" },
+            goal: "x".repeat(goalLength),
+          },
+        ],
+      },
+    ],
+  });
+
+  function post(path: string, body: unknown) {
+    return buildApp().request(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  for (const path of ["/packages/preflight", "/packages/apply"]) {
+    it(`${path}: an over-long stage goal is a 400 that names the field`, async () => {
+      const res = await post(path, contentOsLike(5225));
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as {
+        error: string;
+        fieldErrors: Record<string, string[]>;
+      };
+      expect(Object.keys(json.fieldErrors)).toEqual([
+        "playbooks.0.stages.0.goal",
+      ]);
+      expect(json.error).toContain("playbooks.0.stages.0.goal");
+      // Refused at the door: nothing past the parse ran.
+      expect(mockComposeTarget).not.toHaveBeenCalled();
+      expect(mockPreflight).not.toHaveBeenCalled();
+      expect(mockCheckPermission).not.toHaveBeenCalled();
+    });
+  }
+
+  it("/packages/preflight: the same body at the 5,000 cap is read", async () => {
+    mockComposeTarget.mockResolvedValue(undefined);
+    mockPreflight.mockResolvedValue(okReport);
+    const res = await post("/packages/preflight", contentOsLike(5000));
+    expect(res.status).not.toBe(400);
+    expect(mockPreflight).toHaveBeenCalledTimes(1);
+  });
+
+  it("an unreadable JSON body is a 400, not a 500", async () => {
+    const res = await buildApp().request("/packages/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: '{"_meta":',
+    });
+    expect(res.status).toBe(400);
+  });
+});
