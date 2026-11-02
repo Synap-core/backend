@@ -1091,7 +1091,11 @@ describe("applyDocumentPatch — the bound refresher (decision D4)", () => {
     const sessionId = randomUUID();
     await q(
       `insert into focus_sessions (id, user_id, status, metadata) values ($1, $2, 'active', $3)`,
-      [sessionId, USER, JSON.stringify({ automationRunId: runId })]
+      [
+        sessionId,
+        USER,
+        JSON.stringify({ automationRunId: runId, startedByAgentId: AGENT }),
+      ]
     );
     await refresh(id, sessionId);
     expect(h.gate.map((g) => g.action)).toEqual(["refresher_section_update"]);
