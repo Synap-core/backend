@@ -301,6 +301,49 @@ describe("od-design-system — token set reading", () => {
     expect(odTokensFromTokenJson(undefined)).toEqual({});
   });
 
+  it("reads a DTCG file: explicit mappings, refs followed, slide sizes left out", () => {
+    const dtcg = JSON.stringify({
+      $description: "x",
+      color: {
+        $type: "color",
+        ink: { $value: "#2B2620" },
+        ochre: { $value: "#A86E2E" },
+      },
+      theme: {
+        paper: {
+          ground: { $value: "#F5EAD4" },
+          card: { $value: "#FFFDF8" },
+          text: { $value: "{color.ink}" },
+          accent: { $value: "{color.ochre}" },
+        },
+        ink: { ground: { $value: "#211D18" } },
+      },
+      font: {
+        family: {
+          serif: { $value: ["Fraunces", "Georgia", "serif"] },
+          mono: { $value: ["Geist Mono", "ui-monospace", "monospace"] },
+        },
+        tracking: { display: { $value: -0.028 } },
+        size: { display: { $value: "156px" } },
+      },
+      radius: { card: { $value: "18px" }, pill: { $value: "999px" } },
+    });
+    expect(odTokensFromTokenJson(dtcg)).toEqual({
+      "--bg": "#F5EAD4",
+      "--surface": "#FFFDF8",
+      "--fg": "#2B2620",
+      "--accent": "#A86E2E",
+      "--font-display": "Fraunces, Georgia, serif",
+      "--font-mono": '"Geist Mono", ui-monospace, monospace',
+      "--tracking-display": "-0.028em",
+      "--radius-pill": "999px",
+    });
+    // A token set fills --accent, so --accent-on is derived, not guessed.
+    const p = od([], odTokensFromTokenJson(dtcg));
+    expect(p.manifest.guessed).not.toContain("--accent-on");
+    expect(p.manifest.guessed).toContain("--text-4xl");
+  });
+
   it("takes only the approved token set, base mode first", () => {
     const set = (title: string, props: Record<string, unknown>) =>
       e("brand-token-set", title, props);
