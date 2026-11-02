@@ -385,6 +385,34 @@
           "failedStep"
         ]
       },
+      "PackageUpdateRefusal": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string" },
+          "fieldErrors": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "description": "On INVALID_CATALOG_DEFINITION: dotted field path of the catalog's definition → its messages."
+          },
+          "reasonCode": {
+            "type": "string",
+            "enum": [
+              "INVALID_CATALOG_DEFINITION",
+              "NEEDS_PERSON",
+              "CHOICES_NEEDED"
+            ],
+            "description": "`NEEDS_PERSON`: only a person can do it, on `reviewUrl`. `CHOICES_NEEDED`: a field both sides changed needs a choice. `INVALID_CATALOG_DEFINITION`: the catalog's definition does not fit this pod (`fieldErrors`)."
+          },
+          "reviewUrl": {
+            "type": "string",
+            "description": "The pod path of the update's review page on pod admin."
+          }
+        },
+        "required": ["error"]
+      },
       "Thread": {
         "type": "object",
         "properties": {
@@ -7287,7 +7315,7 @@
       "post": {
         "tags": ["Packages"],
         "summary": "Apply a package update with a choice per field",
-        "description": "`choices` is keyed `<rowId>:<field>`: `catalog`, `mine`, `combine` or `{value}`. Every field both sides changed needs one; a field only the catalog changed defaults to `catalog`. `expectedVersion` is the catalog version the plan showed: a newer one answers 409. Each row is written through its own governed `.update` door as the caller: a person's write lands and returns its receipt (Undo for 30 days, on pod admin); an agent's is filed as proposals. A space or capability package (`comparedBy: package`) takes no choices: a person's apply runs the space's agreed `acceptDataChanges`, then its template apply (or the capability's reconcile); an agent is refused (403). Pod admins only. Requires hub-protocol.write scope.",
+        "description": "`choices` is keyed `<rowId>:<field>`: `catalog`, `mine`, `combine` or `{value}`. Every field both sides changed needs one; a field only the catalog changed defaults to `catalog`. `expectedVersion` is the catalog version the plan showed: a newer one answers 409. Each row is written through its own governed `.update` door as the caller: a person's write lands and returns its receipt (Undo for 30 days, on pod admin); an agent's is filed as proposals. A space or capability package (`comparedBy: package`) takes no choices: a person's apply runs the space's agreed `acceptDataChanges`, then its template apply (or the capability's reconcile); an agent's is filed for the person's approval (`proposed`), and approving runs that same apply as the person. What only a person can do answers `reasonCode` `NEEDS_PERSON` (a space update that changes existing records, a view) or `CHOICES_NEEDED` (a field both sides changed), with the review page as `reviewUrl`; a catalog definition the pod refuses answers 400 `INVALID_CATALOG_DEFINITION`, naming the template and each field (`fieldErrors`). Pod admins only. Requires hub-protocol.write scope.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -7414,18 +7442,22 @@
             }
           },
           "400": {
-            "description": "Bad request",
+            "description": "Bad request, a choice needed, or an invalid definition",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
+                "schema": {
+                  "$ref": "#/components/schemas/PackageUpdateRefusal"
+                }
               }
             }
           },
           "403": {
-            "description": "Forbidden",
+            "description": "Forbidden, or only a person can do it",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
+                "schema": {
+                  "$ref": "#/components/schemas/PackageUpdateRefusal"
+                }
               }
             }
           },
@@ -7439,6 +7471,14 @@
           },
           "409": {
             "description": "The catalog moved",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "Consent missing, or the template would not apply",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
