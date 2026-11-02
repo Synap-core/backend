@@ -24,7 +24,7 @@ import {
 import { describeEmbed } from "./embed-model.js";
 import {
   ATTENTION_CLASSES,
-  LENS_EMPTY_ANSWERS,
+  LENS_SECTION_EMPTY_ANSWERS,
   LENS_SECTION_ORDER,
 } from "../lens/index.js";
 
@@ -342,7 +342,11 @@ describe("work-state widgets (generative documents, contract 1)", () => {
     expect(others).toEqual(["doneWhen", "participants", "structure", "data"]);
     for (const s of others)
       expect(schema.properties.section!.enum, s).not.toContain(s);
-    expect(schema.properties.empty!.enum).toEqual([...LENS_EMPTY_ANSWERS]);
+    // A block has no action to offer, so INVITE is never one of its answers.
+    expect(schema.properties.empty!.enum).toEqual([
+      ...LENS_SECTION_EMPTY_ANSWERS,
+    ]);
+    expect(schema.properties.empty!.enum).not.toContain("invite");
     expect(schema.properties.limit).toMatchObject({
       type: "integer",
       minimum: 1,

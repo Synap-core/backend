@@ -31,6 +31,7 @@ import {
   type SQL,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { isUuid } from "@synap-core/types/property-render";
 import { recordSessionArtifact } from "../focus-sessions/record-session-artifact.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 
@@ -38,9 +39,6 @@ const logger = createLogger({ module: "session-document" });
 
 import { SESSION_DOCUMENT_LABEL } from "./label.js";
 export { SESSION_DOCUMENT_LABEL };
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface OwnedSession {
   id: string;
@@ -83,7 +81,7 @@ async function loadSessionWhere(
   sessionId: string,
   floor: SQL
 ): Promise<OwnedSession> {
-  const row = UUID_RE.test(sessionId)
+  const row = isUuid(sessionId)
     ? (
         await db
           .select({

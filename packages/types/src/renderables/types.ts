@@ -9,7 +9,10 @@
 
 import type { Placement } from "./content-kinds.js";
 import type { ChartDataShape } from "./chart-data.js";
-import type { AttentionClass, LensEmptyAnswer } from "../lens/sections.js";
+import type {
+  AttentionClass,
+  LensSectionEmptyAnswer,
+} from "../lens/sections.js";
 
 // ─── Display modes ────────────────────────────────────────────────────────────
 
@@ -841,8 +844,11 @@ export interface LensSectionConfig {
   section: AttentionClass;
   /** Rows at rest, 1–10; absent = the section's own cap (`LENS_CAPS`). */
   limit?: number;
-  /** What it shows when it has no rows; absent = the section's own answer. */
-  empty?: LensEmptyAnswer;
+  /**
+   * What it shows when it has no rows; absent = the section's own answer
+   * (`lensSectionDefaultEmpty`). No `invite`: a block has no action to offer.
+   */
+  empty?: LensSectionEmptyAnswer;
 }
 
 /** Config for the work-release cell (Work › Ship: can I release, what blocks it). */

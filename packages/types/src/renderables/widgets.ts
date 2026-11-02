@@ -18,11 +18,11 @@ import {
   chartDataJsonSchema,
   type ChartCellKey,
 } from "./chart-data.js";
-import type { LensEmptyAnswer } from "../lens/sections.js";
+import type { LensSectionEmptyAnswer } from "../lens/sections.js";
 import {
   ATTENTION_CLASSES,
   LENS_CAPS,
-  LENS_EMPTY_ANSWERS,
+  LENS_SECTION_EMPTY_ANSWERS,
   LENS_SECTION_LABELS,
 } from "../lens/sections.js";
 
@@ -3210,13 +3210,15 @@ const agentSpend: WidgetCapabilityDef = {
 // components that draw it elsewhere. None takes a scope: the host stamps it
 // from the document's stored scope.
 
-/** The settings words of the four empty answers (ui-composition §2). */
+/**
+ * The settings words of a block's empty answers (ui-composition §2). No
+ * INVITE: a block has no action to offer (`LENS_SECTION_EMPTY_ANSWERS`).
+ */
 const EMPTY_ANSWER_LABELS = {
   omit: "Hide the section",
-  invite: "Invite to fill it",
   explain: "Say why it is empty",
   reassure: "Say all is clear",
-} as const satisfies Record<LensEmptyAnswer, string>;
+} as const satisfies Record<LensSectionEmptyAnswer, string>;
 
 const lensSectionDefaults = (
   Object.keys(LENS_CAPS) as Array<keyof typeof LENS_CAPS>
@@ -3228,8 +3230,7 @@ const lensSection: WidgetCapabilityDef = {
   key: "lens-section",
   package: "synap.bento-widgets",
   requiredConfig: ["section"],
-  aiHint:
-    'One section of the scope\'s work page: config.section. "blocking" is Needs you (there is no separate needs-you widget), "happening" what agents do now, "produced" what work made, "proposed" what the AI suggests, "happened" what changed. The scope is the document\'s, never a prop. Optional limit (1-10) and empty (omit | invite | explain | reassure).',
+  aiHint: `One section of the scope's work page: config.section. "blocking" is Needs you (there is no separate needs-you widget), "happening" what agents do now, "produced" what work made, "proposed" what the AI suggests, "happened" what changed. The scope is the document's, never a prop. Optional limit (1-10) and empty (${LENS_SECTION_EMPTY_ANSWERS.join(" | ")}).`,
   name: "Work section",
   description:
     "One section of a work page (Needs you, Happening, Produced, Proposed, Happened) for the page's own scope, drawn as the work page draws it.",
@@ -3274,8 +3275,8 @@ const lensSection: WidgetCapabilityDef = {
       label: "When empty",
       type: "select",
       description:
-        "What the section shows with no rows. Absent = the section's own answer.",
-      options: LENS_EMPTY_ANSWERS.map((value) => ({
+        "What the section shows with no rows. Absent = the section's own answer: Needs you says all is clear, every other section hides.",
+      options: LENS_SECTION_EMPTY_ANSWERS.map((value) => ({
         value,
         label: EMPTY_ANSWER_LABELS[value],
       })),

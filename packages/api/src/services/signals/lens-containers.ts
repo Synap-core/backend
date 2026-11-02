@@ -39,6 +39,7 @@ import {
   type SQL,
 } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import { isUuid } from "@synap-core/types/property-render";
 import {
   sessionReadableWhere,
   type SessionReader,
@@ -78,8 +79,6 @@ export function notificationRef(row: NotificationSignalInput): NotificationRef {
   return null;
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * notification id → its container, for every row whose subject resolves to a
  * session the reader may read. A row absent from the map has NO container
@@ -96,9 +95,9 @@ export async function resolveNotificationContainers(
   for (const [, ref] of refs) {
     // Ids are text on the notification row; a non-uuid can name nothing here
     // and would make the uuid comparison throw.
-    if (ref?.kind === "session" && UUID.test(ref.sessionId))
+    if (ref?.kind === "session" && isUuid(ref.sessionId))
       sessionIds.add(ref.sessionId);
-    if (ref?.kind === "message" && UUID.test(ref.messageId))
+    if (ref?.kind === "message" && isUuid(ref.messageId))
       messageIds.add(ref.messageId);
   }
   if (sessionIds.size === 0 && messageIds.size === 0) return out;
@@ -243,7 +242,7 @@ export async function sessionsWithOwedSlot(
   userId: string,
   sessionIds: readonly string[]
 ): Promise<Set<string>> {
-  const ids = [...new Set(sessionIds)].filter((id) => UUID.test(id));
+  const ids = [...new Set(sessionIds)].filter((id) => isUuid(id));
   if (ids.length === 0) return new Set();
   const rows = await db
     .select({ id: focusSessions.id })

@@ -265,6 +265,10 @@ describe("work-state widgets — what synap_list_widgets offers on a document", 
     expect(
       schema.safeParse({ section: "blocking", empty: "blank" }).success
     ).toBe(false);
+    // INVITE needs an action a block cannot offer: refused at write time.
+    expect(
+      schema.safeParse({ section: "blocking", empty: "invite" }).success
+    ).toBe(false);
     expect(schema.safeParse({ limit: 3 }).success).toBe(false);
   });
 

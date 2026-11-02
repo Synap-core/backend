@@ -39,6 +39,7 @@ import {
   missingRequiredConfig,
   type WidgetCapabilityDef,
 } from "@synap-core/types/renderables";
+import { isUuid } from "@synap-core/types/property-render";
 import type { Embed } from "@synap-core/markdown-core/embeds";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { listRenderables, type RenderableRow } from "../cells/renderables.js";
@@ -122,9 +123,6 @@ export interface EmbedResolver {
   ): Promise<ReadonlyMap<string, ReferentStatus>>;
 }
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 const REFERENT_TABLE = {
   entity: entities,
   view: views,
@@ -149,8 +147,8 @@ export function podEmbedResolver(args: {
     },
     async referents(kind, ids) {
       const out = new Map<string, ReferentStatus>();
-      const uuids = [...new Set(ids.filter((id) => UUID_RE.test(id)))];
-      for (const id of ids) if (!UUID_RE.test(id)) out.set(id, "not_found");
+      const uuids = [...new Set(ids.filter((id) => isUuid(id)))];
+      for (const id of ids) if (!isUuid(id)) out.set(id, "not_found");
       if (uuids.length === 0) return out;
       const table = REFERENT_TABLE[kind];
       const where = inArray(table.id, uuids);
