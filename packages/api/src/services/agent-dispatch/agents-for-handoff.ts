@@ -44,7 +44,12 @@ import {
   agentProposalLimitLine,
   countPendingAgentProposals,
 } from "../../utils/permission-check.js";
-import { MACHINE_AGENT_TYPE, type AgentReach } from "@synap-core/types/agents";
+import {
+  MACHINE_AGENT_TYPE,
+  resolveAgentLaunch,
+  type AgentLaunchRef,
+  type AgentReach,
+} from "@synap-core/types/agents";
 import type { ComputerBelongsTo } from "@synap-core/types/computers";
 import { queryAgentUsers } from "../../routers/agent-users.js";
 import {
@@ -110,6 +115,12 @@ export interface HandoffAgent {
    * a route refusal.
    */
   nobodyRuns: boolean | null;
+  /**
+   * The command that opens this agent on its `computer`, rendered by the pod
+   * from its harness's launch template (`resolveAgentLaunch`); `null` when
+   * its harness has none. Never a command an agent wrote.
+   */
+  open: AgentLaunchRef | null;
   /** direct = lands on the roster now; asks_you = the person approves first. */
   handOff: HandOffPreview;
   /** Why it asks or is blocked (the resolver's or the route's words). */
@@ -277,6 +288,7 @@ export async function readAgentsForHandoff(
       lastSeenAt,
       servedAt,
       nobodyRuns,
+      open: resolveAgentLaunch({ agentType: kindOf.get(r.id)?.agentType }),
       ...preview,
     };
   });

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { resolveServiceName } from "../service-marks/index.js";
 import {
   AGENT_HARNESSES,
+  LAUNCHABLE_HARNESS_SLUGS,
   REOPENABLE_HARNESS_SLUGS,
   SURFACE_HARNESS_SLUGS,
   resolveHarness,
@@ -21,6 +22,10 @@ describe("the harness registry", () => {
     expect(REOPENABLE_HARNESS_SLUGS).toEqual(["claude-code"]);
     expect(resolveHarness("coder")).toBeNull();
     expect(resolveHarness(null)).toBeNull();
+  });
+
+  it("Claude Code and Codex are the harnesses a person starts with a command", () => {
+    expect(LAUNCHABLE_HARNESS_SLUGS).toEqual(["claude-code", "codex"]);
   });
 
   it("the surface allowlist keeps the order the setup door always had", () => {

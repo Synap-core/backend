@@ -24,6 +24,7 @@ import { hubValidationHook } from "./hub-protocol/rest/_validation-hook.js";
 import {
   type HubHono,
   registerAgentConfigsRoutes,
+  registerAgentPresetsRoutes,
   registerAgentUsersRoutes,
   registerAgentsRoutes,
   registerAuthRoutes,
@@ -309,6 +310,7 @@ registerKnowledgeRoutes(app); // /knowledge*, /graph/traverse
 registerCommandsRoutes(app); // /commands*, /commands/execute
 registerAgentUsersRoutes(app); // /agent-users
 registerAgentConfigsRoutes(app); // /agent-configs
+registerAgentPresetsRoutes(app); // /agent-users/:id/presets
 registerViewsRoutes(app); // /views*
 registerProfilesRoutes(app); // /profiles*, /property-defs*
 registerProjectsRoutes(app); // /projects*

@@ -42,6 +42,7 @@ import { trackParticipants } from "../schema/track-participants.js";
 import { libraryGroups } from "../schema/library-groups.js";
 import { documentPassages } from "../schema/document-passages.js";
 import { statusWaitEpisode } from "../schema/status-wait-episode.js";
+import { agentConfigs } from "../schema/agent-configs.js";
 
 /**
  * A single column the runtime requires to exist.
@@ -1944,6 +1945,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "provider",
     addedBy: "0389_session_runners_model.sql",
   },
+  // Presets per agent (0390). Absence means every preset read and write
+  // 42703s (the preset door names `preset_key`).
+  {
+    table: "agent_configs",
+    column: "skill_slugs",
+    addedBy: "0390_agent_presets.sql",
+  },
 
   // proposal_apply_runs — a large approval applied by the background job
   // (0352). Absence means every approve at or above the background threshold
@@ -2726,6 +2734,9 @@ const REQUIRED_INDEX_TABLES = [
   // episode per subject, facet, wait kind and ref"; the watcher's insert
   // relies on it (ON CONFLICT DO NOTHING) to keep an episode single.
   statusWaitEpisode,
+  // Presets (0390): the preset upsert conflicts on the partial unique index
+  // `agent_configs_user_preset_unique`, which IS "one preset per key per agent".
+  agentConfigs,
 ] as const;
 
 /** Every index declared in the drizzle schema but absent from the live DB. */
