@@ -343,6 +343,21 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
     /^\/installed\/?$/,
     READS("proposal", "tool", "view", "skill", "automation", "widget"),
   ],
+  // The one verdict of "this installed package has an update"
+  // (`services/package-updates/`, `synap market update`, pod admin's
+  // Updates): the spaces' template state (read under `proposal`, as
+  // `/installed`), capability containers (`tool`), and the source-linked
+  // views, skills and automations; `/:slug` plans one of them over the same
+  // rows. Without it a computer's key (finding de33a075) could not run
+  // `synap market update`, which reads this list.
+  [
+    /^\/package-updates\/?$/,
+    READS("proposal", "tool", "view", "skill", "automation"),
+  ],
+  [
+    /^\/package-updates\/[^/]+\/?$/,
+    READS("proposal", "tool", "view", "skill", "automation"),
+  ],
   // The session row, narrowed by the route (`sessionPacketReadable`): the
   // packet is added only for a key that reads all of it.
   [

@@ -547,6 +547,30 @@ describe("a computer's key reads what is installed (finding de33a075)", () => {
       )
     ).toBe(false);
   });
+  it.each([
+    "/package-updates",
+    "/package-updates/",
+    "/package-updates/brand-library",
+  ])(
+    "GET %s (the one 'has an update' verdict) is open to a computer's key, never to a pinned or deny-all key",
+    (path) => {
+      expect(restDoorAllowed("GET", path, COMPUTER)).toBe(true);
+      expect(restDoorAllowed("GET", path, PINNED)).toBe(false);
+      expect(restDoorAllowed("GET", path, key({ permissions: [] }))).toBe(
+        false
+      );
+      expect(restDoorAllowed("GET", path, DOC_ONLY)).toBe(false);
+    }
+  );
+  it("the package-updates read needs every kind it compares", () => {
+    expect(
+      restDoorAllowed(
+        "GET",
+        "/package-updates",
+        key({ permissions: ["proposal.read", "view.read", "skill.read"] })
+      )
+    ).toBe(false);
+  });
   it("opens the two lists only, never a space's own doors", () => {
     for (const path of [
       "/workspaces/11111111-1111-4111-8111-111111111111",
