@@ -105,7 +105,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_enable_worker: {
     "pod-mcp": "synap_enable_worker",
-    "cp-connector": null,
+    "cp-connector": "pod__enable_worker",
   },
   synap_evaluate_session: {
     "pod-mcp": "synap_evaluate_session",
@@ -228,7 +228,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_list_widgets",
     "cp-connector": "pod__list_widgets",
   },
-  synap_list_workers: { "pod-mcp": "synap_list_workers", "cp-connector": null },
+  synap_list_workers: {
+    "pod-mcp": "synap_list_workers",
+    "cp-connector": "pod__list_workers",
+  },
   synap_list_workspaces: {
     "pod-mcp": "synap_list_workspaces",
     "cp-connector": "pod__list_workspaces",
@@ -254,7 +257,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__organize_library",
   },
   synap_orient: { "pod-mcp": "synap_orient", "cp-connector": "pod__orient" },
-  synap_pause_worker: { "pod-mcp": "synap_pause_worker", "cp-connector": null },
+  synap_pause_worker: {
+    "pod-mcp": "synap_pause_worker",
+    "cp-connector": "pod__pause_worker",
+  },
   synap_post_message: {
     "pod-mcp": "synap_post_message",
     "cp-connector": "pod__post_message",
@@ -327,7 +333,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_run_playbook",
     "cp-connector": "pod__run_playbook",
   },
-  synap_run_worker: { "pod-mcp": "synap_run_worker", "cp-connector": null },
+  synap_run_worker: {
+    "pod-mcp": "synap_run_worker",
+    "cp-connector": "pod__run_worker",
+  },
   synap_set_project_focus: {
     "pod-mcp": "synap_set_project_focus",
     "cp-connector": "pod__set_project_focus",
