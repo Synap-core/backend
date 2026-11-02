@@ -172,6 +172,8 @@ export async function listConversationChanges(p: {
   skipPickedUp?: boolean;
   roomSince?: Date | null;
   limit?: number;
+  /** The reading key's agent user (null: a person): the `wake` verdict's viewer. */
+  viewerAgentUserId?: string | null;
   /** Called with the set once it is known, before its changes are read. */
   onSessions?: (ids: readonly string[]) => void;
 }): Promise<ConversationChangesPage> {
@@ -215,6 +217,7 @@ export async function listConversationChanges(p: {
           : {}),
         ...(p.roomSince !== undefined ? { roomSince: p.roomSince } : {}),
         limit: p.limit,
+        viewerAgentUserId: p.viewerAgentUserId ?? null,
       }).then((page) => ({ s, page }))
     )
   );

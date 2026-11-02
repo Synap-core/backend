@@ -845,6 +845,28 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
     reason:
       "INTERNAL ONLY — same rule; pod apps never hold `mcp.*` (app-connect scopes), and a model-written record would put words in the reviewer's mouth. CHECKABLE: `SERVER_DERIVED_PARAMS` in `contracts/capability-execute.ts`.",
   },
+  // ── `automationRun`: the run a step of an automation belongs to ───────────
+  {
+    service: "execute-capability",
+    param: "automationRun",
+    door: "routers/capabilities.ts:execute",
+    reason:
+      "INTERNAL ONLY. It names the automation run a capability step belongs to (the run's session and the agent the run writes as), and only the automation executor, through the jobs IoC slot, holds one. `document.update` writes as that agent in that session, which is what decision D4 judges, so a client able to send it would be claiming another writer's identity. A browser run is the person acting. CHECKABLE: it is one of `SERVER_DERIVED_PARAMS` in `contracts/capability-execute.ts`, and the schema-freshness test fails if it ever appears in the published client contract.",
+  },
+  {
+    service: "execute-capability",
+    param: "automationRun",
+    door: "routers/hub-protocol/rest/capabilities-execute.ts:/capabilities/execute",
+    reason:
+      "INTERNAL ONLY — the door an AGENT KEY reaches. An agent that could name a run would write as the run's agent in the run's session and earn the bound refresher's rule (D4) for itself. CHECKABLE: `SERVER_DERIVED_PARAMS` in `contracts/capability-execute.ts`.",
+  },
+  {
+    service: "execute-capability",
+    param: "automationRun",
+    door: "routers/mcp/handlers/capability.ts:synap_run_capability",
+    reason:
+      "INTERNAL ONLY — same rule; a model must never claim an automation run's identity. CHECKABLE: `SERVER_DERIVED_PARAMS` in `contracts/capability-execute.ts`.",
+  },
   // ── Identity: derived from the transport, never from the body ─────────────
   {
     service: "execute-capability",

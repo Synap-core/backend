@@ -129,6 +129,17 @@ export interface BuiltinVerbContext {
    * the send door so a stage worker's send ceiling sees the send.
    */
   sessionId?: string | null;
+  /**
+   * The AUTOMATION RUN this verb runs in, set only by the automation executor
+   * (`executeCapability`'s internal `automationRun`, never a client field):
+   * the run's session and the agent the run records for its writes (its
+   * session's `startedByAgentId`: the automation's runtime principal when that
+   * is an agent user; null for a person's automation). Read by
+   * `document.update` alone, so a bound refresher's run reaches the patch door
+   * with the identity and run session decision D4 judges. Every other verb is
+   * unchanged by it, and the capability gate never sees it.
+   */
+  automationRun?: { sessionId: string; agentUserId: string | null } | null;
 }
 
 export type BuiltinVerbHandler = (
@@ -1702,6 +1713,10 @@ export const DOCUMENT_UPDATE_VERB_AUTHOR = "verb:document.update";
 
 const documentUpdateHandler: BuiltinVerbHandler = async (params, ctx) => {
   const input = documentUpdateParams.parse(params);
+  // The writer: the calling agent, else the agent the automation run writes
+  // as (D4: a refresher's run is judged as ITS agent, in ITS run session).
+  const agentUserId = ctx.agentUserId ?? ctx.automationRun?.agentUserId ?? null;
+  const sessionId = ctx.sessionId ?? ctx.automationRun?.sessionId ?? null;
   const ops: unknown[] = [
     ...(input.ops ?? []),
     ...(input.content !== undefined
@@ -1722,14 +1737,14 @@ const documentUpdateHandler: BuiltinVerbHandler = async (params, ctx) => {
     (await loadPatchDocument(input.documentId)).contentRevision;
   return applyDocumentPatch({
     userId: ctx.userId,
-    agentUserId: ctx.agentUserId ?? null,
+    agentUserId,
     // No agent identity still means a machine: the floors apply all the same.
-    ...(ctx.agentUserId ? {} : { systemAuthor: DOCUMENT_UPDATE_VERB_AUTHOR }),
+    ...(agentUserId ? {} : { systemAuthor: DOCUMENT_UPDATE_VERB_AUTHOR }),
     documentId: input.documentId,
     baseRevision,
     ops: ops as Parameters<typeof applyDocumentPatch>[0]["ops"],
     allowRemovingEmbeds: input.allowRemovingEmbeds,
-    provenanceSessionId: ctx.sessionId ?? null,
+    provenanceSessionId: sessionId,
   });
 };
 
@@ -1834,6 +1849,42 @@ const documentReadHandler: BuiltinVerbHandler = async (params, ctx) => {
   }
 
   return { document: doc };
+};
+
+/**
+ * lens.page — READ a lens page WHOLE at a scope: every class (Needs you,
+ * Proposed, Happening, Produced, Happened) plus the status banner, exactly what
+ * a lens widget reads. It is the SAME read the browser's `lens.page` bridge op
+ * makes (`GET /attention/lens-page`): `signals.list` through the ONE input
+ * builder `lensPageListInput`, never a second derivation of the rows. Read as
+ * the caller (a person context: no agent, not the hub door), under their
+ * floor. Exists so a document refresher can GROUND its words in a flow:
+ * lens.page → ai.generate → document.update upsert_section.
+ */
+const lensPageParams = z.object({
+  workspaceId: z.string().uuid().optional(),
+  projectId: z.string().uuid().optional(),
+  trackId: z.string().uuid().optional(),
+  sessionId: z.string().uuid().optional(),
+  /** Happened from this instant; absent = the whole history. */
+  since: z.string().datetime({ offset: true }).optional(),
+});
+
+const lensPageHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = lensPageParams.parse(params);
+  const [{ signalsRouter }, { lensPageListInput }] = await Promise.all([
+    import("../../routers/signals.js"),
+    import("../signals/lens-page-read.js"),
+  ]);
+  const caller = signalsRouter.createCaller({
+    db,
+    authenticated: true,
+    userId: ctx.userId,
+    workspaceId: null,
+    agentUserId: null,
+    isHubProtocol: false,
+  } as unknown as Context);
+  return caller.list(lensPageListInput(input));
 };
 
 // ── Kind + Facets (roles) ─────────────────────────────────────────────────────
@@ -4062,6 +4113,8 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   // step between the assembler and create-report).
   "document.freeze_charts": documentFreezeChartsHandler,
   "document.stamp_diagnostics": documentStampDiagnosticsHandler,
+  // D4 — a refresher's grounding read: the lens page, as the widgets read it.
+  "lens.page": lensPageHandler,
   // Kind + Facets — role attach/update/detach/list over the one facet door.
   "entity_facet.attach": entityFacetAttachHandler,
   "entity_facet.update": entityFacetUpdateHandler,
@@ -4165,6 +4218,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "document.read": documentReadParams,
   "document.freeze_charts": documentFreezeChartsParams,
   "document.stamp_diagnostics": documentStampDiagnosticsParams,
+  "lens.page": lensPageParams,
   "entity_facet.attach": entityFacetAttachParams,
   "entity_facet.update": entityFacetUpdateParams,
   "entity_facet.detach": entityFacetDetachParams,
@@ -4251,6 +4305,10 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // floor and RETURNS markdown; it writes nothing (create-report does). Must
   // auto-run inside the report flow (a propose verdict would stall it).
   "document.freeze_charts",
+  // lens.page — the lens page read (signals.list, the caller's floor); writes
+  // nothing. Must auto-run inside a refresher flow (a propose verdict would
+  // stall it before the document.update it grounds).
+  "lens.page",
   // entity_facet.list — floor-scoped facet read (see handler doc above).
   "entity_facet.list",
   // market.search — cache-only read (see handler doc above). market.install is

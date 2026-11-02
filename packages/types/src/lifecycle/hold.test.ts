@@ -7,9 +7,13 @@ import { describe, expect, it } from "vitest";
 import {
   HOLD_REQUIRED_MESSAGE,
   HOLD_UNSPECIFIED_BY_AGENT_MESSAGE,
+  HOLD_WAIT_MOVES_HELP,
   decideMoveHold,
+  holdProblem,
+  holdWaitSlotMatches,
   holdWokenBy,
   parseHoldDevRef,
+  parseHoldWaitRef,
   resolveOccurredAt,
   type RecordedHold,
 } from "./hold.js";
@@ -381,5 +385,97 @@ describe("a hold on a DEV FACT (pr: / main: / job:)", () => {
     expect(d).toMatchObject({ ok: false, code: "HOLD_INVALID" });
     expect(!d.ok && d.message).toContain("pr:<owner/name>#<n>");
     expect(HOLD_REQUIRED_MESSAGE).toContain("job:<devbox job name>");
+  });
+});
+
+// Plan 07f8a997 "Agents wait on anything", W1 part C: sleep until the person
+// answers or decides.
+describe("a hold that waits on the person (answer: / proposal:)", () => {
+  const SID = "8E0B6F2A-1C3D-4E5F-8A9B-0C1D2E3F4A5B";
+  const PID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+  const pauseOn = (until: { moves: string; to?: string }) =>
+    decideMoveHold({
+      ...pause,
+      actorKind: "agent",
+      given: { on: "person", until },
+    });
+
+  it("parses the two forms, and nothing else", () => {
+    expect(parseHoldWaitRef(`answer:${SID}/Founder picks a host`)).toEqual({
+      kind: "answer",
+      sessionId: SID.toLowerCase(),
+      slot: "Founder picks a host",
+    });
+    // A slot label may itself hold a slash: only the first one splits.
+    expect(parseHoldWaitRef(`answer:${SID}/a/b`)).toMatchObject({
+      slot: "a/b",
+    });
+    expect(parseHoldWaitRef(`proposal:${PID}`)).toEqual({
+      kind: "proposal",
+      proposalId: PID,
+    });
+    for (const bad of [
+      "answer:Founder picks a host",
+      `answer:${SID}`,
+      `answer:${SID}/`,
+      `answer:${SID}/   `,
+      `answer:not-a-uuid/slot`,
+      `answer:${SID}/${"x".repeat(501)}`,
+      "proposal:123",
+      `proposal:${PID}x`,
+      `question:${PID}`,
+    ]) {
+      expect(parseHoldWaitRef(bad), bad).toBeNull();
+    }
+  });
+
+  it("holdProblem takes both forms, refuses a `to`, and spells the forms out on a bad one", () => {
+    expect(
+      holdProblem({ on: "person", until: { moves: `answer:${SID}/x` } }, NOW)
+    ).toBeNull();
+    expect(
+      holdProblem({ on: "decision", until: { moves: `proposal:${PID}` } }, NOW)
+    ).toBeNull();
+    expect(
+      holdProblem(
+        { on: "person", until: { moves: `answer:${SID}/x`, to: "done" } },
+        NOW
+      )
+    ).toMatch(/does not apply to "answer:"/);
+    expect(
+      holdProblem(
+        { on: "decision", until: { moves: `proposal:${PID}`, to: "approved" } },
+        NOW
+      )
+    ).toMatch(/does not apply to "proposal:"/);
+    const bad = holdProblem(
+      { on: "person", until: { moves: "answer:my slot" } },
+      NOW
+    );
+    expect(bad).toContain(HOLD_WAIT_MOVES_HELP);
+    expect(HOLD_REQUIRED_MESSAGE).toContain(
+      "answer:<session id>/<slot key or label>"
+    );
+    expect(HOLD_REQUIRED_MESSAGE).toContain("proposal:<proposal id>");
+  });
+
+  it("is recorded in ONE spelling (ids lowercased, the slot as named), with its review date", () => {
+    const a = pauseOn({ moves: `answer:${SID}/ Founder picks a host ` });
+    expect(a.ok && a.hold?.until).toEqual({
+      moves: `answer:${SID.toLowerCase()}/Founder picks a host`,
+    });
+    const p = pauseOn({ moves: `proposal:${PID.toUpperCase()}` });
+    expect(p.ok && p.hold?.until).toEqual({ moves: `proposal:${PID}` });
+    expect(a.ok && a.hold?.reviewBy).toBe(
+      new Date(NOW.getTime() + 14 * DAY).toISOString()
+    );
+  });
+
+  it("a slot answers to its key or its label, in any case", () => {
+    const slot = { key: "host-choice", label: "Founder picks a host" };
+    expect(holdWaitSlotMatches(slot, "host-choice")).toBe(true);
+    expect(holdWaitSlotMatches(slot, "founder picks a HOST")).toBe(true);
+    expect(holdWaitSlotMatches(slot, "Founder picks")).toBe(false);
+    expect(holdWaitSlotMatches(null, "host-choice")).toBe(false);
   });
 });

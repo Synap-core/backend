@@ -15,11 +15,19 @@
  *  - an unstamped one is "can't check" with why, never "up to date";
  *  - a space's changes to existing records make it `consent`, and the apply
  *    runs only the agreed ones, then the ONE template apply per space;
- *  - an agent is refused; a moved catalog answers CONFLICT.
+ *  - a moved catalog answers CONFLICT, for a person and an agent;
+ *  - ONE rule for an agent key (founder, 2026-11-02: "the CLI should be able
+ *    to do everything"): its space update is filed per space through
+ *    `proposeTemplateApply` (an overlay onto its base space), its capability
+ *    update as a `capability/capability.update` proposal whose approval runs
+ *    the person's apply as the approver; a space update that changes existing
+ *    records is NEEDS_PERSON, never filed.
  *
  * Stubbed: the template apply door (`installTemplateFromCatalog`), the
- * capability reconcile, the conversion engine's pending/run (they need a real
- * Postgres), and the template resolver.
+ * catalog body (`resolveCatalogTemplateBody`), the template-apply filing door
+ * (`admitTemplateApply` / `proposeTemplateApply`), the pending-proposal
+ * insert, the capability reconcile, the conversion engine's pending/run (they
+ * need a real Postgres), and the template resolver.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -33,6 +41,8 @@ const h = vi.hoisted(() => ({
   installCalls: [] as Array<{ slug: string; workspaceId?: string }>,
   ranOps: [] as string[][],
   reconciled: [] as string[][],
+  filed: [] as Array<Record<string, unknown>>,
+  pendingProposals: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -78,6 +88,31 @@ vi.mock("../../routers/workspaces.js", () => ({
     h.installCalls.push(input);
     return { warning: null };
   },
+  // The catalog's body, as the server resolves it (never the caller's).
+  resolveCatalogTemplateBody: async (_userId: string, slug: string) => ({
+    pkg: {},
+    body: { _meta: { slug }, profiles: [{ slug: "brand" }] },
+    version: undefined,
+  }),
+}));
+// An overlay pack is filed onto its base space; a space's own template not.
+vi.mock("../../routers/workspaces/template-door.js", () => ({
+  installTarget: async (workspaceId: string, slug: string) =>
+    slug === "business-model" ? workspaceId : undefined,
+}));
+vi.mock("../template-apply/propose.js", () => ({
+  admitTemplateApply: async () => ({ ok: true }),
+  proposeTemplateApply: async (input: Record<string, unknown>) => {
+    h.filed.push(input);
+    return { kind: "proposed", proposalId: `space-proposal-${h.filed.length}` };
+  },
+}));
+vi.mock("../../utils/permission-check.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  createPendingProposal: async (input: Record<string, unknown>) => {
+    h.pendingProposals.push(input);
+    return { id: "cap-proposal-1" };
+  },
 }));
 vi.mock("../capabilities/reconcile-capabilities-to-templates.js", () => ({
   reconcileCapabilitiesToTemplates: async (opts: {
@@ -101,6 +136,9 @@ import { db } from "@synap/database";
 import type { Context } from "../../types/context.js";
 import { getPackageUpdatePlan, listPackageUpdates } from "./plan.js";
 import { applyPackageUpdate } from "./apply.js";
+import { refusalReasonOf } from "./refusals.js";
+import { proposalExecRegistry } from "../../routers/proposals/execution-registry.js";
+import { registerPackageUpdateExecutors } from "../../routers/proposals/executors/package-update.js";
 
 const CP = "https://cp.example.test";
 process.env.CONTROL_PLANE_URL = CP; // the official catalog's source key
@@ -187,12 +225,14 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await h.client!.exec(
-    `delete from workspaces; delete from capabilities; delete from cp_catalog_cache;`
+    `delete from workspaces; delete from capabilities; delete from cp_catalog_cache; delete from proposals;`
   );
   h.pending = [];
   h.installCalls = [];
   h.ranOps = [];
   h.reconciled = [];
+  h.filed = [];
+  h.pendingProposals = [];
   const at = "2026-10-20T00:00:00.000Z";
   // brand-library: stamped behind the catalog, with an overlay pack behind too.
   await seedWorkspace(WS_BRAND, "Brand Library", {
@@ -378,21 +418,206 @@ describe("applying a whole-package update", () => {
     expect(h.reconciled).toEqual([[CAP_GMAIL]]);
   });
 
-  it("refuses an agent and a moved catalog", async () => {
-    await expect(
-      applyPackageUpdate(agent(), {
-        slug: "brand-library",
-        expectedVersion: "h-336546",
-        choices: {},
-      })
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
-    await expect(
-      applyPackageUpdate(person(), {
-        slug: "brand-library",
-        expectedVersion: "h-ee6503",
-        choices: {},
-      })
-    ).rejects.toMatchObject({ code: "CONFLICT" });
+  it("refuses a moved catalog, for a person and an agent", async () => {
+    for (const ctx of [person(), agent()]) {
+      await expect(
+        applyPackageUpdate(ctx, {
+          slug: "brand-library",
+          expectedVersion: "h-ee6503",
+          choices: {},
+        })
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+    }
     expect(h.installCalls).toEqual([]);
+    expect(h.filed).toEqual([]);
+  });
+});
+
+describe("an agent key's whole-package update is filed for the person", () => {
+  it("a space: the catalog's body is filed as that space's template update", async () => {
+    const ctx = agent();
+    const res = await applyPackageUpdate(ctx, {
+      slug: "brand-library",
+      expectedVersion: "h-336546",
+      choices: {},
+    });
+    expect(res).toEqual({
+      status: "proposed",
+      proposalIds: ["space-proposal-1"],
+    });
+    expect(h.filed).toEqual([
+      {
+        userId: OWNER,
+        agentUserId: (ctx as unknown as { agentUserId: string }).agentUserId,
+        body: {
+          _meta: { slug: "brand-library" },
+          profiles: [{ slug: "brand" }],
+        },
+        via: "package-updates.apply",
+      },
+    ]);
+    // Filed, not applied.
+    expect(h.installCalls).toEqual([]);
+    expect(h.ranOps).toEqual([]);
+  });
+
+  it("an overlay pack is filed onto the space it is composed on", async () => {
+    await applyPackageUpdate(agent(), {
+      slug: "business-model",
+      expectedVersion: "h-p2",
+      choices: {},
+    });
+    expect(h.filed).toEqual([
+      expect.objectContaining({
+        body: expect.objectContaining({ targetWorkspaceId: WS_BRAND }),
+      }),
+    ]);
+  });
+
+  it("a space whose update changes existing records needs the person (NEEDS_PERSON), nothing filed", async () => {
+    h.pending = [
+      {
+        opKey: "op-1",
+        description: "x",
+        affected: 2,
+        destructive: false,
+        counts: {},
+      },
+    ];
+    const err = await applyPackageUpdate(agent(), {
+      slug: "brand-library",
+      expectedVersion: "h-336546",
+      choices: {},
+      acceptDataChanges: ["op-1"],
+    }).catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringContaining("/open/update/brand-library"),
+    });
+    expect(refusalReasonOf(err)).toBe("NEEDS_PERSON");
+    expect(h.filed).toEqual([]);
+    expect(h.ranOps).toEqual([]);
+  });
+
+  it("a capability: one capability.update proposal for its containers, nothing reconciled", async () => {
+    const ctx = agent();
+    const res = await applyPackageUpdate(ctx, {
+      slug: "gmail",
+      expectedVersion: `h-${"b".repeat(12)}`,
+      choices: {},
+    });
+    expect(res).toEqual({
+      status: "proposed",
+      proposalIds: ["cap-proposal-1"],
+    });
+    expect(h.pendingProposals).toEqual([
+      expect.objectContaining({
+        userId: OWNER,
+        workspaceId: null,
+        targetType: "capability",
+        proposalType: "capability.update",
+        agentUserId: (ctx as unknown as { agentUserId: string }).agentUserId,
+        data: expect.objectContaining({
+          slug: "gmail",
+          toVersion: `h-${"b".repeat(12)}`,
+          containerIds: [CAP_GMAIL],
+        }),
+      }),
+    ]);
+    expect(h.reconciled).toEqual([]);
+  });
+
+  it("approving it runs the person's apply as the approver, once", async () => {
+    registerPackageUpdateExecutors();
+    const executor = proposalExecRegistry.resolve(
+      "capability/capability.update",
+      "capability.update"
+    );
+    expect(executor?.widensCredential).toBe(true);
+    const proposalId = randomUUID();
+    const approver = randomUUID();
+    await q(
+      `insert into proposals (id, status, target_type, proposal_type, data) values ($1,'pending','capability','capability.update',$2::jsonb)`,
+      [
+        proposalId,
+        JSON.stringify({ slug: "gmail", toVersion: `h-${"b".repeat(12)}` }),
+      ]
+    );
+    const deps = {
+      emitProposalReviewed: vi.fn(),
+      reportProposalOutcome: vi.fn(),
+    };
+    const args = {
+      proposal: {
+        id: proposalId,
+        targetType: "capability",
+        proposalType: "capability.update",
+        workspaceId: null,
+        agentUserId: randomUUID(),
+        data: { slug: "gmail", toVersion: `h-${"b".repeat(12)}` },
+      },
+      payload: {},
+      userId: approver,
+      input: { proposalId },
+      deps,
+    } as unknown as Parameters<NonNullable<typeof executor>["execute"]>[0];
+    await expect(executor!.execute(args)).resolves.toMatchObject({
+      success: true,
+    });
+    expect(h.reconciled).toEqual([[CAP_GMAIL]]);
+    const { rows } = await q(
+      `select status, reviewed_by from proposals where id = $1`,
+      [proposalId]
+    );
+    expect(rows[0]).toMatchObject({
+      status: "approved",
+      reviewed_by: approver,
+    });
+    expect(deps.emitProposalReviewed).toHaveBeenCalledWith(
+      proposalId,
+      null,
+      "approved",
+      approver
+    );
+    // Re-approving converges: nothing runs twice.
+    await executor!.execute(args);
+    expect(h.reconciled).toEqual([[CAP_GMAIL]]);
+  });
+
+  it("approving it after the catalog moved is refused: asked again", async () => {
+    registerPackageUpdateExecutors();
+    const executor = proposalExecRegistry.resolve(
+      "capability/capability.update",
+      "capability.update"
+    )!;
+    const proposalId = randomUUID();
+    await expect(
+      executor.execute({
+        proposal: {
+          id: proposalId,
+          targetType: "capability",
+          proposalType: "capability.update",
+          workspaceId: null,
+          data: { slug: "gmail", toVersion: "h-older" },
+        },
+        payload: {},
+        userId: randomUUID(),
+        input: { proposalId },
+        deps: {},
+      } as never)
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(h.reconciled).toEqual([]);
+  });
+
+  it("a person's apply is unchanged: applied directly, nothing filed", async () => {
+    const res = await applyPackageUpdate(person(), {
+      slug: "gmail",
+      expectedVersion: `h-${"b".repeat(12)}`,
+      choices: {},
+    });
+    expect(res).toEqual({ status: "applied", receipt: null });
+    expect(h.reconciled).toEqual([[CAP_GMAIL]]);
+    expect(h.pendingProposals).toEqual([]);
+    expect(h.filed).toEqual([]);
   });
 });

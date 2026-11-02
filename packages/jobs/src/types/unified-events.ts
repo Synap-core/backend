@@ -9,7 +9,7 @@
  */
 
 import { randomUUID } from "crypto";
-import type { EnhancedEventMetadata } from "@synap-core/core";
+import type { EnhancedEventMetadata, SynapEventSource } from "@synap-core/core";
 import {
   SUBJECT_TYPES,
   EVENT_ACTIONS,
@@ -139,15 +139,9 @@ export interface UnifiedEvent<
 
   // Ownership & Source
   userId: string; // Who triggered this
-  source:
-    | "api"
-    | "automation"
-    | "sync"
-    | "migration"
-    | "system"
-    | "intelligence"
-    | "iot"
-    | "enterprise";
+  // `events.source`: the ONE vocabulary is `EVENT_SOURCES` (@synap-core/core),
+  // which `EventRepository.append` validates against.
+  source: SynapEventSource;
   timestamp: Date;
 
   // Tracing

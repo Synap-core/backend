@@ -348,6 +348,8 @@ const INTENTIONALLY_UNROUTABLE: Record<string, string> = {
     "Rewrites chart embeds into snapshots in a local string. Read-only, pod-local, no artifact produced for a consumer.",
   "document.stamp_diagnostics":
     "Writes an advisory diagnostics stamp onto a pod-local document.",
+  "lens.page":
+    "Reads the lens page the pod already computes for a scope. Pod-local, writes nothing, no artifact produced for a consumer.",
   // ── configuration revision: the pod administering itself ───────────────
   "playbook.update": "Revises a playbook definition stored in the pod.",
   "playbook.archive": "Retires a playbook stored in the pod.",

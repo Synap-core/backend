@@ -2727,6 +2727,12 @@ export const DIRECT_PROPOSAL_DOORS = {
   // kept write through its own door as the agent.
   "agent/held_writes": "direct",
   "capability/capability.install": "direct",
+  // An agent key's capability UPDATE through `POST /package-updates/{slug}/apply`
+  // (`services/package-updates/apply-whole.ts`): a reconcile is a person's act,
+  // so it is filed, never gated. Approved by
+  // `routers/proposals/executors/package-update.ts`, which runs the person's apply
+  // as the approver.
+  "capability/capability.update": "direct",
   // Lane E: an agent hitting an installed-but-not-enabled pack files ONE
   // enable request (never auto-enables); executor already registered.
   "capability/capability.enable": "direct",

@@ -346,7 +346,9 @@ export async function submitSyncGraphToImport(
     targetId,
     proposalType: "capture.graph",
     action: "create",
-    source: "import",
+    // `events.source` is the door (`EVENT_SOURCES`): a connection's sync.
+    // The import format is `data.source` below.
+    source: "sync",
     summary: input.summary,
     data: {
       ...buildImportGraphProposalData({

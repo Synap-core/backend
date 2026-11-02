@@ -23,7 +23,7 @@
  *      `document.section_update` (or `document.session_narrative_update` for an
  *      agent in its own session — the D10 rule; or
  *      `document.refresher_section_update` for the document's bound refresher
- *      rewriting its own existing AI sections — the D4 rule), anything else as
+ *      rewriting AI sections it wrote itself — the D4 rule), anything else as
  *      `document.update`. No default auto-approve; a `governance_rules` row may
  *      auto-apply (D-gov). An agent `replace_all` is forced to a proposal.
  *
@@ -46,6 +46,7 @@ import {
   documents,
   focusSessions,
   drizzleSql,
+  SESSION_STARTED_BY_AGENT_KEY,
   claimDocumentRevision,
   emitDocumentContentReplaced,
   DocumentRevisionConflictError,
@@ -81,6 +82,7 @@ import {
   renderDocumentPatch,
   resolvePatchFields,
   resolvePatchTitle,
+  type AiSectionBefore,
   type DocumentPatchOp,
   type PatchRename,
   type PatchWriter,
@@ -464,48 +466,112 @@ async function writePatch(args: {
 // ─── The bound refresher (decision D4) ───────────────────────────────────────
 
 /**
- * D4, the OPS half: every op is an `upsert_section` of a section that was
- * `owner="ai"` in the document AS READ, before the patch (`aiSectionsBefore`).
+ * D4, the OPS half: every op is an `upsert_section` of a section that, in the
+ * document AS READ (before the patch, `aiSectionsBefore`), was `owner="ai"`
+ * AND stamped as written by this refresher (`refresher="<automationId>"`,
+ * founder, 2 Nov). Another agent's AI section carries no stamp (an upsert
+ * rewrites every attribute), so it stays a reviewed `section_update`.
  * Judged against the pre-patch sections, never the in-progress text: ops apply
  * in order, so a second upsert of an id the first one appended would otherwise
  * read as a rewrite, and creating a section must stay a reviewed
- * `section_update`.
+ * `section_update` (a person approves the refresher's section once; the
+ * approval writes the stamp).
  */
 export function refresherRewritesOnlyItsSections(
   ops: readonly DocumentPatchOp[],
-  aiSectionsBefore: readonly string[]
+  aiSectionsBefore: readonly AiSectionBefore[],
+  refreshAutomationId: string
 ): boolean {
+  const own = new Set(
+    aiSectionsBefore
+      .filter((s) => s.refresher === refreshAutomationId)
+      .map((s) => s.id)
+  );
   return (
     ops.length > 0 &&
-    ops.every(
-      (op) => op.op === "upsert_section" && aiSectionsBefore.includes(op.id)
-    )
+    ops.every((op) => op.op === "upsert_section" && own.has(op.id))
+  );
+}
+
+/**
+ * The run sessions of automation `automationId` that agent `agentUserId`
+ * started: the agent the run RECORDS for its writes (`openRunSession` and the
+ * playbook spine stamp `metadata.startedByAgentId` once, at creation; no door
+ * writes it afterwards). The run's automation is read through
+ * `sessionAutomationWhere`, the one "sessions of automation X" predicate.
+ * Strict equality on the stamp: an unstamped session (a person's automation,
+ * a pre-stamp row) has no agent of its own, so it qualifies no agent.
+ */
+function refresherRunWhere(args: {
+  sessionId: string;
+  automationId: string;
+  agentUserId: string;
+}) {
+  return and(
+    eq(focusSessions.id, args.sessionId),
+    drizzleSql`${focusSessions.metadata} ->> ${SESSION_STARTED_BY_AGENT_KEY} = ${args.agentUserId}`,
+    sessionAutomationWhere(args.automationId)
   );
 }
 
 /**
  * D4, the WRITER half, from server-resolved facts only: the request's session
  * (the verified ambient session, or the run session a verb was handed) is an
- * open run of the automation bound to this document, owned by the principal.
- * The run's automation is read through `sessionAutomationWhere`, the one
- * "sessions of automation X" predicate.
+ * OPEN run of the automation bound to this document, owned by the principal,
+ * AND the writing agent is the run's own agent (founder, 2 Nov): another agent
+ * key of the same person sending the run's session id does not qualify.
  */
 export async function isBoundRefresherRun(args: {
   refreshAutomationId: string | null;
   sessionId: string | null;
   userId: string;
+  agentUserId: string | null;
 }): Promise<boolean> {
-  if (!args.refreshAutomationId || !args.sessionId) return false;
+  if (!args.refreshAutomationId || !args.sessionId || !args.agentUserId) {
+    return false;
+  }
   const [run] = await db
     .select({ id: focusSessions.id })
     .from(focusSessions)
     .where(
       and(
-        eq(focusSessions.id, args.sessionId),
+        refresherRunWhere({
+          sessionId: args.sessionId,
+          automationId: args.refreshAutomationId,
+          agentUserId: args.agentUserId,
+        }),
         eq(focusSessions.userId, args.userId),
-        drizzleSql`${focusSessions.closedAt} IS NULL`,
-        sessionAutomationWhere(args.refreshAutomationId)
+        drizzleSql`${focusSessions.closedAt} IS NULL`
       )
+    )
+    .limit(1);
+  return Boolean(run);
+}
+
+/**
+ * The approval half of the stamp: an approved proposal writes the refresher
+ * stamp only when its OWN columns (the session it was filed in and the agent
+ * that drafted it, both server-written at filing, never the revisable payload)
+ * name a run of the document's bound refresher started by that agent. The run
+ * may have closed since: approval comes after the run.
+ */
+async function approvedFromRefresherRun(args: {
+  refreshAutomationId: string | null;
+  sessionId: string | null;
+  agentUserId: string | null;
+}): Promise<boolean> {
+  if (!args.refreshAutomationId || !args.sessionId || !args.agentUserId) {
+    return false;
+  }
+  const [run] = await db
+    .select({ id: focusSessions.id })
+    .from(focusSessions)
+    .where(
+      refresherRunWhere({
+        sessionId: args.sessionId,
+        automationId: args.refreshAutomationId,
+        agentUserId: args.agentUserId,
+      })
     )
     .limit(1);
   return Boolean(run);
@@ -646,11 +712,13 @@ function writerOf(input: {
   agentUserId: string | null;
   systemAuthor: string | null;
   sessionState?: string;
+  refresher?: string | null;
 }): PatchWriter {
   return {
     isMachine: Boolean(input.agentUserId) || Boolean(input.systemAuthor),
     author: input.agentUserId ?? input.systemAuthor ?? input.userId,
     ...(input.sessionState ? { sessionState: input.sessionState } : {}),
+    ...(input.refresher ? { refresher: input.refresher } : {}),
   };
 }
 
@@ -714,12 +782,23 @@ export async function applyDocumentPatch(
     assertDocumentBaseVersion(base.version, doc.currentVersion);
   }
 
-  // 3. Render + floors.
+  // 3. Render + floors. D4's writer half is resolved first: the bound
+  // refresher's own run stamps the sections it writes (a new one included,
+  // which is still reviewed below), so a later run can tell them apart.
+  const refresherRun =
+    !input.session &&
+    (await isBoundRefresherRun({
+      refreshAutomationId: doc.refreshAutomationId,
+      sessionId: input.provenanceSessionId ?? null,
+      userId: input.userId,
+      agentUserId,
+    }));
   const writer = writerOf({
     userId: input.userId,
     agentUserId,
     systemAuthor,
     sessionState: input.session?.sessionState,
+    refresher: refresherRun ? doc.refreshAutomationId : null,
   });
   const baseContent = await readPatchDocumentContent(doc);
   const rendered = renderDocumentPatch(baseContent, ops, {
@@ -742,15 +821,13 @@ export async function applyDocumentPatch(
     input.session.ambientSessionId === input.session.sessionId;
   const boundRefresher =
     sectionOnly &&
-    !ownSession &&
-    !input.session &&
-    Boolean(agentUserId) &&
-    refresherRewritesOnlyItsSections(ops, rendered.aiSectionsBefore) &&
-    (await isBoundRefresherRun({
-      refreshAutomationId: doc.refreshAutomationId,
-      sessionId: input.provenanceSessionId ?? null,
-      userId: input.userId,
-    }));
+    refresherRun &&
+    doc.refreshAutomationId !== null &&
+    refresherRewritesOnlyItsSections(
+      ops,
+      rendered.aiSectionsBefore,
+      doc.refreshAutomationId
+    );
   const action = sectionOnly
     ? ownSession
       ? SESSION_NARRATIVE_ACTION
@@ -908,7 +985,7 @@ export async function suggestDocumentPatch(input: {
     targetId: doc.id,
     proposalType: "user_edit",
     action: "update",
-    source: "user",
+    source: "api",
     summary: buildObjectActionTitle({
       action: "update",
       objectKind: "document",
@@ -936,6 +1013,8 @@ type ApprovableProposal = {
   targetId: string;
   agentUserId: string | null;
   createdBy?: string | null;
+  /** The `proposals.session_id` column: the session the patch was filed in. */
+  sessionId?: string | null;
   data: unknown;
 };
 
@@ -1048,10 +1127,18 @@ export async function applyApprovedDocumentPatch(
   const isMachine = Boolean(proposal.agentUserId) || Boolean(systemAuthor);
   // The words' author: the drafting agent, else the person who suggested them.
   const humanAuthor = proposal.createdBy ?? approverUserId;
+  const refresher = (await approvedFromRefresherRun({
+    refreshAutomationId: doc.refreshAutomationId,
+    sessionId: proposal.sessionId ?? null,
+    agentUserId: proposal.agentUserId,
+  }))
+    ? doc.refreshAutomationId
+    : null;
   const writer: PatchWriter = {
     isMachine,
     author: author ?? proposal.agentUserId ?? systemAuthor ?? humanAuthor,
     ...(sessionState ? { sessionState } : {}),
+    ...(refresher ? { refresher } : {}),
   };
   const baseContent = await readPatchDocumentContent(doc);
   const rendered = renderDocumentPatch(baseContent, ops, {

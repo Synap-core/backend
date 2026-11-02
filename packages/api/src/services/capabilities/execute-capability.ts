@@ -444,6 +444,14 @@ export function skillRequiresTool(toolId: string) {
   )`;
 }
 
+/** An automation run, as a step of it hands a verb (`executeCapability.automationRun`). */
+export interface AutomationRunContext {
+  /** The run's focus session (`openRunSession`). */
+  sessionId: string;
+  /** The agent the run records for its writes (its session's `startedByAgentId`), or null. */
+  agentUserId: string | null;
+}
+
 export async function executeCapability(input: {
   /** Capability verb = backing skill NAME. One of verbId/skillId required. */
   verbId?: string;
@@ -554,6 +562,17 @@ export async function executeCapability(input: {
    * client names an action, never this record.
    */
   intentRequest?: IntentRequestRecord | null;
+  /**
+   * The AUTOMATION RUN this call is a step of — its session, and the agent the
+   * run records for its writes (null for a person's automation). Set only by
+   * the automation executor (the jobs IoC slot). Handed to a builtin
+   * handler's context (`BuiltinVerbContext.automationRun`), where
+   * `document.update` writes as that agent in that session (decision D4).
+   * NEVER read by the capability gate: the run keeps the governance it had.
+   * INTERNAL ONLY (see `SERVER_DERIVED_PARAMS`): a client naming a run would
+   * be claiming another writer's identity.
+   */
+  automationRun?: AutomationRunContext | null;
 }): Promise<ExecuteCapabilityResult> {
   const { verbId, skillId, parameters, workspaceId, userId } = input;
   if (!verbId && !skillId) {
@@ -941,6 +960,7 @@ export async function executeCapability(input: {
         idempotencyKey: input.idempotencyKey,
         sessionId: input.sessionId ?? null,
         observability: input.observability ?? "full",
+        automationRun: input.automationRun ?? null,
       }),
       skillRow,
       userId,
@@ -955,6 +975,7 @@ export async function executeCapability(input: {
     connectionSelector: input.connectionSelector ?? null,
     agentUserId: input.agentUserId ?? null,
     sessionId: input.sessionId ?? null,
+    automationRun: input.automationRun ?? null,
   });
   const metered = {
     metadata: skillRow.metadata,
@@ -1173,6 +1194,7 @@ async function runDirectWriteVerbOnce(opts: {
   idempotencyKey?: string;
   sessionId?: string | null;
   observability: "full" | "mirror";
+  automationRun?: AutomationRunContext | null;
 }): Promise<ExecuteCapabilityResult> {
   const key = resolveWriteIdempotencyKey(
     opts.idempotencyKey,
@@ -1295,6 +1317,7 @@ async function runDirectWriteVerbOnce(opts: {
     connectionSelector: opts.connectionSelector,
     agentUserId: opts.agentUserId,
     sessionId: opts.sessionId ?? null,
+    automationRun: opts.automationRun ?? null,
   });
   const metered = {
     metadata: opts.skillRow.metadata,
@@ -1682,6 +1705,8 @@ async function runResolvedSkillInner(
      * (builtins must not see an agent there). Never read by any gate.
      */
     provenance?: { agentUserId?: string | null; proposalId?: string | null };
+    /** The automation run this is a step of (builtin handlers only; never a gate). */
+    automationRun?: AutomationRunContext | null;
   }
 ): Promise<
   | { kind: "run"; skillId: string; result: unknown }
@@ -1765,6 +1790,7 @@ async function runResolvedSkillInner(
       workspaceId: ctx.workspaceId,
       agentUserId: ctx.agentUserId ?? null,
       sessionId: ctx.sessionId ?? null,
+      ...(ctx.automationRun ? { automationRun: ctx.automationRun } : {}),
       // The verb identity is known HERE and was previously dropped at the
       // handler boundary. Handlers that create durable objects need it to stamp
       // provenance (channel origin), so it is threaded rather than re-derived.

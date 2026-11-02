@@ -800,7 +800,7 @@ async function recordSyncWrite(
     subjectId,
     userId: ctx.owner,
     workspaceId: ctx.workspaceId,
-    source: "connection_sync",
+    source: "sync",
     ...(fanOutData ? { logData: data, data: fanOutData } : { data }),
     origin: "sync",
   });
@@ -1237,7 +1237,7 @@ async function recordRunCompleted(
     subjectId: conn.id,
     userId: conn.userId,
     workspaceId,
-    source: "connection_sync",
+    source: "sync",
     data: {
       provider,
       connectionId: conn.id,

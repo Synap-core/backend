@@ -27,6 +27,7 @@ const answer = (over: Partial<SessionAnswerItem> = {}): SessionAnswerItem => ({
   value: null,
   answeredAt: "2026-09-28T10:00:00.000Z",
   answeredBy: "u1",
+  relayedBy: null,
   messageId: null,
   slot: { label: "Stripe account", kind: "decision", question: "Which?" },
   question: null,

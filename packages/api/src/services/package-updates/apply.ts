@@ -22,6 +22,7 @@ import { getActingAgentUserId } from "@synap/database";
 import {
   applyPackageUpdateInputSchema,
   packageUpdateComparedBy,
+  packageUpdateReviewPath,
   type ApplyPackageUpdateInput,
   type PackageUpdateApplyResult,
   type PackageUpdateChange,
@@ -42,6 +43,7 @@ import {
 import type { Context } from "../../types/context.js";
 import { planPackageRows, type PlannedRow } from "./plan.js";
 import { applyWholePackageUpdate } from "./apply-whole.js";
+import { packageUpdateRefusal } from "./refusals.js";
 import { listInstalledPackages } from "./standing.js";
 import {
   getPackageUpdateReceipt,
@@ -64,16 +66,18 @@ function actingAgentOf(ctx: Context): string | undefined {
  */
 function refuseUngovernedAgentWrite(
   ctx: Context,
+  slug: string,
   kinds: Iterable<StandaloneKind>
 ): void {
   if (!actingAgentOf(ctx)) return;
   for (const kind of kinds) {
     if (kind === "view") {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message:
-          "An agent cannot change a view through a package update yet: views have no review step for agents. Ask a person to apply it on pod admin.",
-      });
+      throw packageUpdateRefusal(
+        "FORBIDDEN",
+        "NEEDS_PERSON",
+        `An agent cannot change a view through a package update yet: views have no review step for agents. A person applies it on pod admin: ${packageUpdateReviewPath(slug)}.`,
+        { reviewUrl: packageUpdateReviewPath(slug) }
+      );
     }
   }
 }
@@ -110,6 +114,7 @@ interface RowWrite {
 
 /** Turn the choices into one governed write per row (validated first). */
 function buildRowWrites(
+  slug: string,
   planned: PlannedRow[],
   choices: Record<string, PackageUpdateChoice>
 ): RowWrite[] {
@@ -174,10 +179,12 @@ function buildRowWrites(
     });
   }
   if (missing.length > 0) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: `Both the catalog and this pod changed ${missing.join(", ")}: choose "catalog", "mine", "combine" or your own value for each.`,
-    });
+    throw packageUpdateRefusal(
+      "BAD_REQUEST",
+      "CHOICES_NEEDED",
+      `Both the catalog and this pod changed ${missing.join(", ")}: choose "catalog", "mine", "combine" or your own value for each (pod admin asks: ${packageUpdateReviewPath(slug)}).`,
+      { reviewUrl: packageUpdateReviewPath(slug), missing }
+    );
   }
   return writes;
 }
@@ -204,6 +211,7 @@ export async function applyPackageUpdate(
   const planned = await planPackageRows(input.slug);
   refuseUngovernedAgentWrite(
     ctx,
+    input.slug,
     planned.map((p) => p.resolved.adapter.kind)
   );
 
@@ -215,7 +223,7 @@ export async function applyPackageUpdate(
     });
   }
 
-  const writes = buildRowWrites(planned, input.choices);
+  const writes = buildRowWrites(input.slug, planned, input.choices);
   const proposalIds: string[] = [];
   const landed: PackageUpdateChange[] = [];
   for (const w of writes) {
@@ -284,6 +292,7 @@ export async function undoPackageUpdate(
   }
   refuseUngovernedAgentWrite(
     ctx,
+    receipt.slug,
     receipt.changes.map((c) => c.rowKind)
   );
 

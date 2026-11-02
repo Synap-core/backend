@@ -20,13 +20,17 @@
  * whose `reviewBy` has passed (the status watcher, W6). A passed `reviewBy`
  * never moves anything.
  */
-import { and, inArray, isNull, sql, type SQL } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { ISO_STAMP_PATTERN } from "@synap-core/types/needs-you/rule";
-import type {
-  MoveHoldDecision,
-  RecordedHold,
-  TransitionSubjectType,
+import {
+  HOLD_WAIT_NOT_YOURS_MESSAGE,
+  holdWaitSlotMatches,
+  parseHoldWaitRef,
+  type Hold,
+  type MoveHoldDecision,
+  type RecordedHold,
+  type TransitionSubjectType,
 } from "@synap-core/types/lifecycle";
 import type * as schema from "../../schema/index.js";
 import { lifecycleTransitionOutbox } from "../../schema/lifecycle-transition-outbox.js";
@@ -34,6 +38,7 @@ import { entities } from "../../schema/entities.js";
 import { entityFacets } from "../../schema/entity-facets.js";
 import { projectTracks } from "../../schema/project-tracks.js";
 import { focusSessions } from "../../schema/focus-sessions.js";
+import { proposals } from "../../schema/proposals.js";
 
 type Db = PostgresJsDatabase<typeof schema>;
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
@@ -77,6 +82,62 @@ export class HoldRefusedError extends Error {
   }
 }
 
+/**
+ * A hold that waits on an answer or a proposal (`HoldWaitRef`, plan 07f8a997
+ * W1 part C) names the WAITER's own work: the slot must be declared on a
+ * session `ownerUserId` owns, the proposal filed under one. Refused
+ * (`HOLD_INVALID`, a 400) before anything is written, so a typo or someone
+ * else's id never becomes a pause nothing can resume. Any other hold passes.
+ * The hold-resume worker reads the same floor again when it evaluates.
+ */
+export async function assertHoldWaitRefOwned(
+  db: Db | Tx,
+  hold: Hold | null | undefined,
+  ownerUserId: string | null | undefined
+): Promise<void> {
+  const until = hold?.until;
+  if (!until || !("moves" in until)) return;
+  const ref = parseHoldWaitRef(until.moves);
+  if (!ref) return;
+  const refuse = () => {
+    throw new HoldRefusedError({
+      ok: false,
+      code: "HOLD_INVALID",
+      message: HOLD_WAIT_NOT_YOURS_MESSAGE,
+    });
+  };
+  if (!ownerUserId) refuse();
+  if (ref.kind === "answer") {
+    const [row] = await db
+      .select({ expectedOutputs: focusSessions.expectedOutputs })
+      .from(focusSessions)
+      .where(
+        and(
+          eq(focusSessions.id, ref.sessionId),
+          eq(focusSessions.userId, ownerUserId!)
+        )
+      )
+      .limit(1);
+    const slots = Array.isArray(row?.expectedOutputs)
+      ? (row!.expectedOutputs as Array<{ key?: unknown; label?: unknown }>)
+      : [];
+    if (!slots.some((slot) => holdWaitSlotMatches(slot, ref.slot))) refuse();
+    return;
+  }
+  const [row] = await db
+    .select({ id: proposals.id })
+    .from(proposals)
+    .innerJoin(focusSessions, eq(focusSessions.id, proposals.sessionId))
+    .where(
+      and(
+        eq(proposals.id, ref.proposalId),
+        eq(focusSessions.userId, ownerUserId!)
+      )
+    )
+    .limit(1);
+  if (!row) refuse();
+}
+
 export type HoldFilter =
   | { subjects: readonly HoldSubjectRef[] }
   | { resumeDueBy: Date }
@@ -84,6 +145,8 @@ export type HoldFilter =
   | { awaiting: { subjectType: string; subjectId: string } }
   /** Every hold whose `until.moves` names a dev fact (`HoldDevRef`). */
   | { awaitingDevFacts: true }
+  /** Every hold whose `until.moves` names an answer or a proposal (`HoldWaitRef`). */
+  | { awaitingWaitRefs: true }
   /** Every current hold (the status watcher's wait episodes ask about each). */
   | { current: true };
 
@@ -123,6 +186,9 @@ function filterSql(filter: HoldFilter): SQL {
   if ("current" in filter) return sql`TRUE`;
   if ("awaitingDevFacts" in filter) {
     return sql`(o.transition->'hold'->'until'->>'moves') ~ '^(pr|main|job):'`;
+  }
+  if ("awaitingWaitRefs" in filter) {
+    return sql`(o.transition->'hold'->'until'->>'moves') ~ '^(answer|proposal):'`;
   }
   return sql`o.transition->'hold'->'until'->>'moves' = ${`${filter.awaiting.subjectType}:${filter.awaiting.subjectId}`}`;
 }
