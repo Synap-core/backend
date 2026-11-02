@@ -1885,7 +1885,16 @@ export async function relaySessionAnswer(p: {
   if (chosen && "refused" in chosen) return { status: chosen.refused };
   const slot = chosen ? outputs[chosen.index]! : null;
 
-  // 2. Whose it is: the asker's.
+  // 2. Still the person's? A slot with no room question that is no longer
+  // owed (the person answered it, or it was never theirs) has nothing left to
+  // relay — and its hand-back dropped `askedBy` with the ask, so the identity
+  // check below would fall to the roster and tell the asker "not yours" for
+  // what is really "already answered".
+  if (!question && slot && slot.owner !== "human") {
+    return { status: "not_open" };
+  }
+
+  // 3. Whose it is: the asker's.
   const mine = question
     ? question.agentUserId === p.agentUserId
     : slot?.askedBy
@@ -1899,7 +1908,7 @@ export async function relaySessionAnswer(p: {
     return withdrawRelayedQuestion({ ...p, now, question, slot, facts });
   }
 
-  // 3. ANSWERED — the person's words first.
+  // 4. ANSWERED — the person's words first.
   const quote = p.quote?.trim().slice(0, ASK_LIMITS.answerTextMaxChars);
   if (!quote) return { status: "quote_required" };
   // Capped like the wire schema caps it: the stamp rides on the slot, and the
