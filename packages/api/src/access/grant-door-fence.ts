@@ -36,7 +36,10 @@ import {
   QUALIFIED_GRANT_SUBJECTS,
   type GrantScope,
 } from "@synap/governance-policy/grants";
-import type { WorkReleasePart } from "@synap-core/types/work-release";
+import {
+  WORK_RELEASE_SOURCE_STATES,
+  type WorkReleasePart,
+} from "@synap-core/types/work-release";
 
 /** How a fenced read door is bounded by a grant. */
 export type FencedReadDoor =
@@ -362,15 +365,25 @@ export function workReleaseReach(
   const snapshotSpaces = snapshotScopes.some((s) => !s.workspaceIds)
     ? "all"
     : [...new Set(snapshotScopes.flatMap((s) => [...s.workspaceIds!]))];
-  const withheld: WorkReleasePart[] = [];
-  if (snapshotSpaces !== "all" && snapshotSpaces.length === 0)
-    withheld.push("snapshots");
-  if (!grantReadsSubject(grant!, "session")) withheld.push("sessions");
-  withheld.push("holders");
-  // The recorded PR facts are `dev.*` events from anywhere in the pod: read
-  // only by a scope that reads every dev event; else the rows stay the
-  // snapshot's own.
-  if (snapshotSpaces !== "all") withheld.push("pullRequests");
+  // DEFAULT-CLOSED: every part is classified here, and `satisfies` makes a
+  // part added to `WORK_RELEASE_SOURCE_STATES` without a line below a BUILD
+  // error. A part is withheld unless its predicate says the grant reads it.
+  const mayRead = {
+    snapshots: () => !(snapshotSpaces !== "all" && snapshotSpaces.length === 0),
+    sessions: () => grantReadsSubject(grant!, "session"),
+    // Never for a narrowed key (see the rule above).
+    holders: () => false,
+    // The recorded PR facts are `dev.*` events from anywhere in the pod: read
+    // only by a scope that reads every dev event; else the rows stay the
+    // snapshot's own.
+    pullRequests: () => snapshotSpaces === "all",
+  } satisfies Record<WorkReleasePart, () => boolean>;
+  // Derived from the parts themselves, so a part with no predicate at runtime
+  // (a stale build) is withheld, never served.
+  const readable: Partial<Record<WorkReleasePart, () => boolean>> = mayRead;
+  const withheld = (
+    Object.keys(WORK_RELEASE_SOURCE_STATES) as WorkReleasePart[]
+  ).filter((part) => !readable[part]?.());
   return { full: false, snapshotSpaces, withheld };
 }
 
