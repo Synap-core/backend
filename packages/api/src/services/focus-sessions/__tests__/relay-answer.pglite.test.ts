@@ -841,8 +841,10 @@ describe("the relay door", () => {
       OTHER_AGENT
     );
     expect(late.status).toBe(409);
-    expect(((await late.json()) as { error: string }).error).toMatch(
-      /no longer open/
+    // It names the real state: the person's answer, and when they gave it.
+    const tapped = (await slot(sessionId)).answer!.answeredAt as string;
+    expect(((await late.json()) as { error: string }).error).toBe(
+      `That question is no longer open: the person already answered it at ${tapped}, and a relay never overwrites their answer. Read it with synap_get_session.`
     );
     // Withdrawing it is no longer possible either, for the same reason.
     const withdraw = await relay(
