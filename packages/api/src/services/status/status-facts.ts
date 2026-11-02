@@ -8,7 +8,6 @@
  *
  * Every reader here THROWS on a failed read; the caller says `unavailable`.
  */
-import { UUID_RE } from "../focus-sessions/session-metadata.js";
 import {
   and,
   asc,
@@ -72,6 +71,7 @@ import { OPEN_SESSION_STATUSES } from "../focus-sessions/session-statuses.js";
 import type { SessionSubject } from "../focus-sessions/session-subject-where.js";
 import { extractProposalName } from "../proposals/fingerprint.js";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 /** Counts per lifecycle category; a category with none is left out. */
 export type CategoryCounts = Partial<Record<LifecycleCategory, number>>;
@@ -668,7 +668,7 @@ async function readableSessionIds(
   reader: WaitingOnReader,
   sessionIds: readonly string[]
 ): Promise<Set<string>> {
-  const ids = [...new Set(sessionIds)].filter((id) => UUID_RE.test(id));
+  const ids = [...new Set(sessionIds)].filter((id) => isUuid(id));
   if (ids.length === 0) return new Set();
   const rows = await db
     .select({ id: focusSessions.id })
@@ -792,7 +792,7 @@ async function readStepWaits(
   entityIds: readonly string[]
 ): Promise<Map<string, WaitingOnSource>> {
   const out = new Map<string, WaitingOnSource>();
-  const ids = [...new Set(entityIds)].filter((id) => UUID_RE.test(id));
+  const ids = [...new Set(entityIds)].filter((id) => isUuid(id));
   if (ids.length === 0) return out;
   const rows = await db
     .select({
@@ -845,7 +845,7 @@ async function readStepWaits(
       source,
       reason,
       refId:
-        typeof value === "string" && UUID_RE.test(value) && value !== r.id
+        typeof value === "string" && isUuid(value) && value !== r.id
           ? value
           : null,
     });

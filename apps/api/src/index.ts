@@ -24,6 +24,7 @@ import { HTTPException } from "hono/http-exception";
 
 import { logger } from "hono/logger";
 import { redactSecretPath } from "./middleware/redact-secret-path.js";
+import { isUuid } from "@synap-core/types/property-render";
 import { secureHeaders } from "hono/secure-headers";
 import { getCookie } from "hono/cookie";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
@@ -778,9 +779,7 @@ app.get("/open/:id", async (c) => {
   }
   // Keywords such as `proposals` are not UUIDs. Bounce without probing —
   // a uuid `eq` would throw 22P02.
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
-  ) {
+  if (!isUuid(id)) {
     return applyOpenDispatch(c, undefined, id);
   }
 

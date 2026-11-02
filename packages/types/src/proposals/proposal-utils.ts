@@ -12,15 +12,14 @@ import {
   buildObjectActionTitle,
   resolveObjectNoun,
 } from "../vocabulary/index.js";
+import { isUuid } from "../property-render/structured-value.js";
 
 /**
  * Determine if a string looks like a UUID (v4 hex format).
  * Used to decide whether to show a raw ID or attempt name resolution.
  */
 export function isLikelyUUID(s: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-    s
-  );
+  return isUuid(s);
 }
 
 /**

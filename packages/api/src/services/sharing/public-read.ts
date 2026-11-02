@@ -41,6 +41,7 @@ import { resourceShares } from "@synap/database/schema";
 import { hashToken } from "../../utils/share-token.js";
 import { isPublicationLive } from "./publication-live.js";
 import { publicDoorsOpenFor } from "./public-doors-switch.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 /** The ONE body every miss is answered with. */
 export const PUBLIC_NOT_FOUND_BODY = { error: "Not found" } as const;
@@ -50,8 +51,6 @@ const MAX_TOKEN_LENGTH = 256;
 
 const UUID_GLOBAL =
   /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-const UUID_EXACT =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** What replaces an internal id inside served text. */
 export const REDACTED_ID = "[redacted]";
@@ -100,7 +99,7 @@ export function projectPublishedProperties(
   )) {
     if (IDENTITY_KEYS.has(key.toLowerCase())) continue;
     if (typeof value === "string") {
-      if (UUID_EXACT.test(value.trim())) continue;
+      if (isUuid(value.trim())) continue;
       out[key] = redactInternalIds(value);
     } else if (typeof value === "number") {
       if (Number.isFinite(value)) out[key] = value;

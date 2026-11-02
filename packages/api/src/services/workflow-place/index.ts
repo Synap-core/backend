@@ -64,6 +64,7 @@ import type {
   WorkflowFeedItem,
   WorkflowPlaceFeed,
 } from "./types.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 const FOCUS_SESSION_SUBJECT = "focus_session";
 /** Bound each sub-derivation so one place read stays a handful of queries. */
@@ -529,9 +530,6 @@ function encodeCursor(c: FeedCursor): string {
   return Buffer.from(`${c.ts.getTime()}:${c.id}`, "utf8").toString("base64url");
 }
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 function decodeCursor(raw: string | undefined): FeedCursor | null {
   if (!raw) return null;
   try {
@@ -542,7 +540,7 @@ function decodeCursor(raw: string | undefined): FeedCursor | null {
     const id = decoded.slice(sep + 1);
     // The id is cast to ::uuid in SQL — a tampered cursor must degrade to
     // "no cursor" (first page), not a raw Postgres cast error.
-    if (!Number.isFinite(ms) || !UUID_RE.test(id)) return null;
+    if (!Number.isFinite(ms) || !isUuid(id)) return null;
     return { ts: new Date(ms), id };
   } catch {
     return null;

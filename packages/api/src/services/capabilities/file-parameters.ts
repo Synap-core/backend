@@ -66,6 +66,7 @@ import type {
   ParameterRepair,
   PodFileProblem,
 } from "./validate-verb-parameters.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "file-parameters" });
 
@@ -131,8 +132,6 @@ export interface PodFileHandles {
 export const FILE_SENT_EVENT = "file.sent";
 
 const FILE_TYPE = /^file(\[\])?(?::([a-z]+))?(\?)?$/;
-const UUID_SHAPE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Read one type-map entry as a file parameter, or null when it is not one.
@@ -233,7 +232,7 @@ function idsOf(
   const list = p.many ? value : [value];
   if (
     !Array.isArray(list) ||
-    list.some((v) => typeof v !== "string" || !UUID_SHAPE.test(v))
+    list.some((v) => typeof v !== "string" || !isUuid(v))
   ) {
     return { problem: { field: p.field, problem: "not_a_file_id" } };
   }

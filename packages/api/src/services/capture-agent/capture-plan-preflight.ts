@@ -43,6 +43,7 @@ import {
   validatePlanOperations,
   type CapturePlanProblem,
 } from "./capture-plan.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 type PlanDb = typeof db;
 
@@ -91,9 +92,7 @@ export async function preflightPlanOperations(
       noteSession(op.sessionId, i);
     }
   });
-  const uuidShaped = [...sessionRefsById.keys()].filter((id) =>
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
-  );
+  const uuidShaped = [...sessionRefsById.keys()].filter((id) => isUuid(id));
   if (uuidShaped.length > 0) {
     const owned = await database
       .select({ id: focusSessions.id })

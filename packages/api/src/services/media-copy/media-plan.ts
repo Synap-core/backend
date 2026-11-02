@@ -31,6 +31,7 @@ import {
 } from "@synap-core/types/presentation";
 import type { ImageFetchFailure } from "./fetch-image.js";
 import { PERMANENT_FETCH_FAILURES } from "./remote-fetch.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 /** The property a producer writes capture-provided media URLs into. */
 export const CAPTURED_MEDIA_URLS_PROPERTY = "media-urls";
@@ -76,9 +77,6 @@ function httpUrls(value: unknown): string[] {
     .map((v) => v.trim());
 }
 
-const STORED_ID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * The http(s) URLs the DECLARED sources make this entity's media, walked in
  * the resolver's order (`resolveEntityMedia` (a)/(b)): the first source that
@@ -99,13 +97,13 @@ function declaredMediaUrls(
         return i === 0 && presentation?.family === "link" ? [] : urls;
       }
       const first = Array.isArray(value) ? value[0] : value;
-      if (typeof first === "string" && STORED_ID.test(first.trim())) return [];
+      if (typeof first === "string" && isUuid(first.trim())) return [];
     } else if ("documentId" in source) {
       if (documentId) return [];
     } else {
       const ref = props[source.entityRef];
       const first = Array.isArray(ref) ? ref[0] : ref;
-      if (typeof first === "string" && STORED_ID.test(first.trim())) return [];
+      if (typeof first === "string" && isUuid(first.trim())) return [];
     }
   }
   return [];

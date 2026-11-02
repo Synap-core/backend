@@ -17,7 +17,6 @@
  * In-app history only: nothing here notifies or pushes, and there is no
  * backfill — the first tick after deploy opens what waits now.
  */
-import { UUID_RE } from "../focus-sessions/session-metadata.js";
 import {
   and,
   db,
@@ -49,6 +48,7 @@ import {
   sessionWaitingOnQuestion,
   type WaitingOnQuestion,
 } from "./status-facts.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "status-wait-episodes" });
 
@@ -187,7 +187,7 @@ export async function syncWaitEpisodesTick(
   const subjects = new Map<string, WaitEpisodeSubject>();
   const add = (s: WaitEpisodeSubject) => {
     // Ids only: a malformed id must not fail a whole chunk's read.
-    if (UUID_RE.test(s.subjectId)) subjects.set(keyOf(s), s);
+    if (isUuid(s.subjectId)) subjects.set(keyOf(s), s);
   };
   for (const s of noticed) add(s);
   for (const s of openSessions)

@@ -66,6 +66,7 @@ import { visibleSkillsAnyWorkspaceWhere } from "../skills/visibility.js";
 import { EXTERNAL_DISPATCH_SOURCE } from "../../connectors/external-dispatch-constants.js";
 import { AI_DECISION } from "../../lib/ai-events.js";
 import type { ObjectKind } from "./types.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 /** `events.data.kind` for a capability run's ai_decision event (see runs/index.ts). */
 const CAPABILITY_RUN_EVENT_KIND = "capability_run";
@@ -146,12 +147,9 @@ export const PROBE_ORDER: ObjectKind[] = [
   "entity",
 ];
 
-const FULL_UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** True for a complete UUID — the only shape any probed column can hold. */
 export function isFullUuid(id: string): boolean {
-  return FULL_UUID_RE.test(id);
+  return isUuid(id);
 }
 
 /** What a probe returns on a hit: the display metadata off the matched row.

@@ -34,6 +34,7 @@ import type { AiPosture } from "../schema/profiles.js";
 import { DEFAULT_AI_POSTURES } from "../utils/ai-posture-defaults.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 export interface EffectiveProperty extends PropertyDef {
   required: boolean;
@@ -631,9 +632,7 @@ export class ProfileResolutionService {
     // Try by ID — only if the identifier looks like a UUID to avoid a
     // guaranteed-failing query (and confusing postgres errors) when a slug
     // is passed that simply doesn't exist in the DB yet.
-    const UUID_RE =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!UUID_RE.test(identifier)) return null;
+    if (!isUuid(identifier)) return null;
 
     // By ID through the SAME floor the list read uses — `getAccessibleProfiles`
     // with `ids` — so a profile is reachable by id exactly when it is listed for

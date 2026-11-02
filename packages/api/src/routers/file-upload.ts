@@ -39,6 +39,7 @@ import {
   storeDocumentFromPresignedUpload,
   parsePresignedUploadKey,
 } from "./file-upload-presign.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "file-upload" });
 
@@ -122,9 +123,6 @@ export interface UploadEntityFields {
   projectId?: string;
 }
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 export function parseUploadEntityFields(
   body: Record<string, unknown>
 ): UploadEntityFields | { error: string } {
@@ -146,7 +144,7 @@ export function parseUploadEntityFields(
     properties = parsed as Record<string, unknown>;
   }
   const projectId = str(body["projectId"]);
-  if (projectId !== undefined && !UUID_RE.test(projectId)) {
+  if (projectId !== undefined && !isUuid(projectId)) {
     return { error: "projectId must be a UUID" };
   }
   return {
@@ -830,7 +828,7 @@ fileUploadApp.get("/documents/:documentId/url", async (c) => {
     // property its kind declares). `?entityId=` names that entity, so the door
     // checks one row instead of searching for a holder.
     const viaEntityId = c.req.query("entityId");
-    if (viaEntityId !== undefined && !UUID_RE.test(viaEntityId)) {
+    if (viaEntityId !== undefined && !isUuid(viaEntityId)) {
       return c.json({ error: "entityId must be a uuid" }, 400);
     }
     const document = await loadSignableDocument(userId, documentId, {

@@ -58,6 +58,7 @@ import {
   REQUIRED_LINK_DEBT_UNCHECKED_WARNING,
   type RequiredLinkDebt,
 } from "./links/required-links.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "template-health" });
 
@@ -551,13 +552,11 @@ export function overlayHealthFor(
 export async function awaitingApprovalByWorkspace(
   rows: Array<{ id: string; settings: unknown }>
 ): Promise<Map<string, string[]>> {
-  const UUID =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const recorded = rows.map((r) => {
     const t = readTemplateState(r.settings);
     const ids =
       t?.state === "awaiting-approval"
-        ? (t.proposals ?? []).filter((p) => UUID.test(p))
+        ? (t.proposals ?? []).filter((p) => isUuid(p))
         : [];
     return { id: r.id, ids };
   });

@@ -12,11 +12,9 @@ import {
   PINNED_ENTITY_IDS_KEY,
 } from "@synap-core/types/vocabulary";
 import type { PinnedFallback } from "@synap/playbooks";
+import { isUuid } from "@synap-core/types/property-render";
 
 export { PIN_LIST_CAP, PINNED_ENTITY_IDS_KEY };
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface PinnedStrategy {
   kind: "pinned";
@@ -77,7 +75,7 @@ export function readPinnedIds(metadata: unknown): string[] {
   for (const item of raw) {
     if (typeof item !== "string") continue;
     const id = item.trim();
-    if (!UUID_RE.test(id) || seen.has(id)) continue;
+    if (!isUuid(id) || seen.has(id)) continue;
     seen.add(id);
     out.push(id);
     if (out.length >= PIN_LIST_CAP) break;
@@ -106,7 +104,7 @@ export function parsePinnedEntityIds(raw: unknown): PinnedIdsParse {
   const ids: string[] = [];
   const seen = new Set<string>();
   for (const item of raw) {
-    if (typeof item !== "string" || !UUID_RE.test(item)) {
+    if (typeof item !== "string" || !isUuid(item)) {
       return { ok: false, message: "Each pin has to be a record id." };
     }
     if (seen.has(item)) {

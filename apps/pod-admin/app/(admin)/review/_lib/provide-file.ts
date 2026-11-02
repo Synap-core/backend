@@ -12,6 +12,7 @@
 
 import { provideFileAccepts } from "@synap-core/types/ask";
 import type { FileLanding } from "./provide-options";
+import { isUuid } from "@synap-core/types/property-render";
 
 /** The buffered upload door's ceiling (`MAX_FILE_SIZE` on the pod). */
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -50,9 +51,6 @@ export function uploadRefusalWords(status: number): string {
 export type UploadResult =
   { ok: true; fileId: string } | { ok: false; status: number; message: string };
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * Send the file to the pod and return the new file's id — the reference the
  * answer carries. A network failure or an unreadable reply is a failed
@@ -89,7 +87,7 @@ export async function uploadProvidedFile(p: {
     json && typeof json === "object"
       ? (json as { entityId?: unknown }).entityId
       : undefined;
-  return typeof id === "string" && UUID_RE.test(id)
+  return typeof id === "string" && isUuid(id)
     ? { ok: true, fileId: id }
     : { ok: false, status: res.status, message: uploadRefusalWords(0) };
 }

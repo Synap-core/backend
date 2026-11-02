@@ -54,7 +54,6 @@ import {
 } from "@synap-core/types/units";
 import { readCriteria, type ExpectedOutput } from "@synap/playbooks";
 import { createLogger } from "@synap-core/core";
-import { UUID_RE } from "./session-metadata.js";
 import { deriveSlotKeys } from "./slot-keys.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
@@ -62,6 +61,7 @@ import {
   resolveEntityProfileRefs,
   type EntityProfileRef,
 } from "../profiles/entity-profile-refs.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 /**
  * One thing a session produced. `id` is the STABLE join coordinate
@@ -776,7 +776,7 @@ async function resolveTitles(
   const byKind = new Map<string, Set<string>>();
   for (const r of refs) {
     const kind = normalizeObjectKind(r.kind);
-    if (!UUID_RE.test(r.refId)) continue;
+    if (!isUuid(r.refId)) continue;
     const set = byKind.get(kind) ?? new Set<string>();
     set.add(r.refId);
     byKind.set(kind, set);
