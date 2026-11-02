@@ -53,7 +53,9 @@ export function withGrantDenialCode(
     ...b,
     code: b.code ?? GRANT_DENIED,
     reasonCode: b.reasonCode ?? GRANT_DENIED,
-    action: b.action ?? match.action,
+    ...(b.action !== undefined || match.action !== undefined
+      ? { action: b.action ?? match.action }
+      : {}),
   };
 }
 

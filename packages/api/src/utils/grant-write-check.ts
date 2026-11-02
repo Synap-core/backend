@@ -58,8 +58,8 @@ export const GRANT_DENIED = "GRANT_DENIED" as const;
 
 /** One grant denial produced during a request: its words and the refused action. */
 export interface GrantDenialRecord {
-  /** The request key the grant did not allow, e.g. `workspace.update`. */
-  action: string;
+  /** The request key the grant did not allow, e.g. `workspace.update`, when named. */
+  action?: string;
   /** The exact sentence `grantWriteDenial` returned. */
   message: string;
 }
@@ -76,6 +76,14 @@ export function runCollectingGrantDenials<T>(
   fn: () => T
 ): T {
   return denialSink.run(sink, fn);
+}
+
+/**
+ * Record a grant denial worded outside `grantWriteDenial` (a door's own
+ * sentence for the same refusal), so its 403 carries the code too.
+ */
+export function recordGrantDenial(message: string, action?: string): void {
+  denialSink.getStore()?.push({ message, ...(action ? { action } : {}) });
 }
 
 const str = (v: unknown): string | undefined =>
@@ -166,7 +174,7 @@ export async function grantWriteDenial(
     const message = `This key's grant does not allow "${key}"${
       req.workspaceId ? ` in workspace ${req.workspaceId}` : ""
     }.`;
-    denialSink.getStore()?.push({ action: key, message });
+    recordGrantDenial(message, key);
     return message;
   }
   return null;

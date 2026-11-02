@@ -61,6 +61,7 @@ import { actingAgentUserId } from "./utils.js";
 import { assertKeyMayWrite } from "../../utils/assert-key-may-write.js";
 import { assertChannelWrite } from "../../utils/assert-channel-write.js";
 import { TRPCError } from "@trpc/server";
+import { recordGrantDenial } from "../../utils/grant-write-check.js";
 
 /**
  * Sources we can map straight to {@link ExternalMessagePlatform} for the
@@ -205,10 +206,9 @@ export const channelsRouter = router({
         )
         .limit(1);
       if (readable.length === 0) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "This key's grant does not allow reading this channel.",
-        });
+        const message = "This key's grant does not allow reading this channel.";
+        recordGrantDenial(message, "channel.read");
+        throw new TRPCError({ code: "FORBIDDEN", message });
       }
       return { channel };
     }),

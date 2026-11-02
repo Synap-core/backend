@@ -12,10 +12,12 @@
  *  - the same sentence typed by hand, with no denial produced, is left alone
  *    (no prefix matching: only a denial the producer recorded is tagged);
  *  - a field the route set is never overwritten;
- *  - the hub mounts it OUTSIDE auth, so every route is wrapped.
+ *  - the hub mounts it OUTSIDE auth, so every route is wrapped;
+ *  - every source file that WORDS a grant denial records it
+ *    (`recordGrantDenial` / `grantWriteDenial`), derived from the tree.
  */
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import { grantOfScope, runWithGrant } from "@synap/database";
@@ -107,5 +109,34 @@ describe("a grant denial on Hub REST carries its code", () => {
     const auth = src.indexOf('app.use("/*", hubAuthMiddleware)');
     expect(code).toBeGreaterThan(-1);
     expect(auth).toBeGreaterThan(code);
+  });
+
+  // A door that words its own grant denial must record it, or its 403
+  // carries no code. Derived from the source tree, never a hand list.
+  it("every file that words a grant denial records it", () => {
+    const root = join(__dirname, "../../..");
+    // Its own structured code already (`code: "GRANT_PROPOSAL_DENIED"`).
+    const OWN_CODE = new Set(["access/fenced-proposal.ts"]);
+    const wording = /["'`]This key's grant does not allow/;
+    const words: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const p = join(dir, name);
+        if (statSync(p).isDirectory()) {
+          if (name !== "node_modules") walk(p);
+        } else if (/\.ts$/.test(name) && !/\.test\.ts$/.test(name)) {
+          if (wording.test(readFileSync(p, "utf8"))) words.push(p);
+        }
+      }
+    };
+    walk(root);
+    expect(words.length).toBeGreaterThanOrEqual(4);
+    const silent = words
+      .map((p) => relative(root, p))
+      .filter((r) => !OWN_CODE.has(r))
+      .filter(
+        (r) => !/recordGrantDenial\(/.test(readFileSync(join(root, r), "utf8"))
+      );
+    expect(silent).toEqual([]);
   });
 });
