@@ -11,7 +11,7 @@
  */
 import { build } from "esbuild";
 import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { builtinModules, createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -58,8 +58,13 @@ for (const name of ["document-access", "access-door"]) {
     for (const imp of input.imports)
       if (imp.external) externals.add(pkgName(imp.path));
   }
+  // A Node builtin (`node:async_hooks`, which esbuild reports as
+  // `async_hooks`) ships with Node itself, not as a dependency to declare.
+  const isBuiltin = (dep) =>
+    dep.startsWith("node:") || builtinModules.includes(dep);
   const bad = [...externals].filter(
-    (dep) => dep === "@synap/api" || !prodDeps.includes(dep)
+    (dep) =>
+      dep === "@synap/api" || (!isBuiltin(dep) && !prodDeps.includes(dep))
   );
   if (bad.length > 0) {
     console.error(
