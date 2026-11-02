@@ -65,22 +65,22 @@ async function resolveWith(response: Response) {
 }
 
 describe("a dead Nango connection is a reconnect, not a retry", () => {
-  it.each([
-    ["424 refresh exhausted", 424, EXHAUSTED],
-    ["400 provider refused the refresh", 400, REFUSED],
-  ])("%s → auth, carrying the connection", async (_label, status, message) => {
-    const result = await resolveWith(
-      json(nangoRefreshFailure(message), status)
-    );
-    expect(result).toMatchObject({
-      success: false,
-      status: 424,
-      errorClass: "auth",
-      connectionId: "c-1",
-    });
-    expect(result.error).toContain(message);
-    expect(result.error).toContain("reconnected");
-  });
+  it.each([["424 refresh exhausted", 424, EXHAUSTED]])(
+    "%s → auth, carrying the connection",
+    async (_label, status, message) => {
+      const result = await resolveWith(
+        json(nangoRefreshFailure(message), status)
+      );
+      expect(result).toMatchObject({
+        success: false,
+        status: 424,
+        errorClass: "auth",
+        connectionId: "c-1",
+      });
+      expect(result.error).toContain(message);
+      expect(result.error).toContain("reconnected");
+    }
+  );
 
   it("the control plane's relay of the same answer is the same reconnect", async () => {
     h.broker = new CpBrokerConnector({
@@ -110,6 +110,14 @@ describe("everything else stays what it was", () => {
       "424 refresh backoff (failed < 30s ago)",
       424,
       nangoRefreshFailure(BACKOFF),
+    ],
+    // Nango 0.70.9 builds this one for ANY refresh failure (a provider's 5xx,
+    // 429 or network error as much as a refusal): a retry until Nango itself
+    // escalates it to the 424 refresh-exhausted (nango-dead-credential.ts).
+    [
+      "400 refresh external error (any provider failure)",
+      400,
+      nangoRefreshFailure(REFUSED),
     ],
     ["5xx even with a credential word", 503, nangoRefreshFailure(REFUSED)],
     ["429", 429, { error: { code: "too_many_requests" } }],

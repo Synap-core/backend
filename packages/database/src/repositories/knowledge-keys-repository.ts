@@ -361,6 +361,11 @@ export class KnowledgeKeysRepository {
 
     if (safeTerms.length === 0) return [];
 
+    if (options) {
+      return this.searchNaturalLanguage(safeTerms, workspaceId, limit, options);
+    }
+
+    // THE KEYWORD DOOR (`GET /knowledge/search`, no options): unchanged.
     // OR-join (not AND): a natural-language question ("how to deploy the backend
     // runbook") must match a runbook even though the doc contains none of the
     // filler words ("how", "the", "runbook"). The 'simple' config keeps stopwords
@@ -372,21 +377,6 @@ export class KnowledgeKeysRepository {
     const conditions: ReturnType<typeof and>[] = [
       sql`${sql.raw("to_tsvector('simple', value)")} @@ ${tsquery}`,
     ];
-
-    // Count DISTINCT query terms the row matches. Terms are the sanitized
-    // alphanumerics above — same trust basis as the `sql.raw` tsquery.
-    const matched = sql.raw(
-      `(${safeTerms
-        .map(
-          (t) =>
-            `(to_tsvector('simple', value) @@ to_tsquery('simple', '${t}:*'::text))::int`
-        )
-        .join(" + ")})`
-    );
-    const required = Math.min(options?.minMatchedTerms ?? 1, safeTerms.length);
-    if (required > 1) {
-      conditions.push(sql`${matched} >= ${required}`);
-    }
 
     const ws = wsCondition(workspaceId);
     if (ws) conditions.push(ws);
@@ -404,13 +394,90 @@ export class KnowledgeKeysRepository {
         author: knowledgeKeys.author,
         createdAt: knowledgeKeys.createdAt,
         updatedAt: knowledgeKeys.updatedAt,
-        rank: options
-          ? sql<number>`ts_rank(to_tsvector('simple', value), ${tsquery}, 1)`
-          : sql<number>`ts_rank(to_tsvector('simple', value), ${tsquery})`,
+        rank: sql<number>`ts_rank(to_tsvector('simple', value), ${tsquery})`,
       })
       .from(knowledgeKeys)
       .where(conditions.length ? and(...conditions) : undefined)
-      .orderBy((r) => (options ? [desc(matched), desc(r.rank)] : desc(r.rank)))
+      .orderBy((r) => desc(r.rank))
+      .limit(limit);
+
+    return rows.map((r: any) => parseRow(r));
+  }
+
+  /**
+   * The natural-language path of `searchFullText` (`ask`'s procedural lane):
+   * the matched-term floor and the ranking documented on its `options`.
+   *
+   * SHORT TERMS MATCH EXACTLY. A term of 4+ characters is prefix-matched
+   * (`backup:*` finds "backups"); a shorter one must be the whole word. As a
+   * prefix, `id` / `up` / `set` hit "identity", "update", "settings": almost
+   * any long note, carried over the two-term floor by two such hits (the
+   * defect cf0d7bb3a fixed for pronouns, still open for every other short
+   * word). Exactly matched, a short word counts only where the note says it.
+   *
+   * ONE VECTOR PER ROW. `to_tsvector` is computed once, in a LATERAL subquery
+   * fenced by `OFFSET 0` (without the fence Postgres flattens it and repeats
+   * the expression at every reference: verified with EXPLAIN VERBOSE on
+   * PGlite). The per-term matches, the floor, the rank and the ordering all
+   * read that one vector, where they used to recompute it ~2N+2 times a row.
+   * The first condition keeps the indexed `to_tsvector('simple', value)` form
+   * so `idx_knowledge_value_ft` still prefilters the candidates.
+   */
+  private async searchNaturalLanguage(
+    terms: string[],
+    workspaceId: string | undefined,
+    limit: number,
+    options: { minMatchedTerms?: number }
+  ): Promise<KnowledgeKeyRow[]> {
+    // Terms are the sanitized alphanumerics of `searchFullText`: the same
+    // trust basis as the `sql.raw` tsqueries below.
+    const termQueries = terms.map((t) => (t.length >= 4 ? `${t}:*` : t));
+    const tsquery = sql.raw(
+      `to_tsquery('simple', '${termQueries.join(" | ")}'::text)`
+    );
+    const doc = sql.raw(`"kk_doc"."doc"`);
+
+    // DISTINCT query terms the row matches, read off the one vector.
+    const matched = sql<number>`${sql.raw(
+      `(${termQueries
+        .map(
+          (q) => `("kk_doc"."doc" @@ to_tsquery('simple', '${q}'::text))::int`
+        )
+        .join(" + ")})`
+    )}`;
+
+    const conditions: ReturnType<typeof and>[] = [
+      sql`${sql.raw("to_tsvector('simple', value)")} @@ ${tsquery}`,
+    ];
+    const required = Math.min(options.minMatchedTerms ?? 1, terms.length);
+    if (required > 1) {
+      conditions.push(sql`${matched} >= ${required}`);
+    }
+    const ws = wsCondition(workspaceId);
+    if (ws) conditions.push(ws);
+
+    const rows = await this.db
+      .select({
+        id: knowledgeKeys.id,
+        key: knowledgeKeys.key,
+        namespace: knowledgeKeys.namespace,
+        slug: knowledgeKeys.slug,
+        value: knowledgeKeys.value,
+        workspaceId: knowledgeKeys.workspaceId,
+        version: knowledgeKeys.version,
+        status: knowledgeKeys.status,
+        author: knowledgeKeys.author,
+        createdAt: knowledgeKeys.createdAt,
+        updatedAt: knowledgeKeys.updatedAt,
+        matched: matched.as("matched"),
+        rank: sql<number>`ts_rank(${doc}, ${tsquery}, 1)`.as("rank"),
+      })
+      .from(knowledgeKeys)
+      .crossJoinLateral(
+        sql`(select to_tsvector('simple', ${knowledgeKeys.value}) as doc offset 0) as "kk_doc"`
+      )
+      .where(and(...conditions))
+      .orderBy((r) => [desc(r.matched), desc(r.rank)])
       .limit(limit);
 
     return rows.map((r: any) => parseRow(r));

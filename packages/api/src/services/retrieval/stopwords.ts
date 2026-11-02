@@ -41,8 +41,12 @@ export const QUESTION_WORDS = new Set([
  * never about i, am, do, its.
  *
  * Kept apart from COMMON_STOPWORDS so the consumers of that set keep their
- * behaviour; the procedural recall lane needs it because it prefix-matches
- * every term, so a kept `i` becomes `i:*` and hits every word starting with i.
+ * behaviour. The procedural recall lane needs it even though it matches a
+ * term under 4 characters exactly (`searchFullText`): function words appear
+ * verbatim in almost any prose, so an exact `i`, `do` or `its` still carries a
+ * long note over the two-term floor. Every entry is a function word; a short
+ * CONTENT word (`id`, `up`, `set`) is left out on purpose, since the exact
+ * match already stops it hitting "identity", "update" or "settings".
  */
 export const CONVERSATIONAL_WORDS = new Set([
   "i",
@@ -89,4 +93,19 @@ export const CONVERSATIONAL_WORDS = new Set([
   "so",
   "but",
   "not",
+  // Flattened contractions of 4+ characters, prefix-matched otherwise
+  // ("whats" → "whatsapp", "lets" → "letsencrypt"). "id" and "ill" are not
+  // here: "id" is a content word in this pod, and both are matched exactly.
+  "dont",
+  "doesnt",
+  "didnt",
+  "cant",
+  "wont",
+  "isnt",
+  "arent",
+  "lets",
+  "whats",
+  "thats",
+  "theres",
+  "youre",
 ]);

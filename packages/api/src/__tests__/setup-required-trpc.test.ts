@@ -79,6 +79,33 @@ const testRouter = t.router({
       message: HOLD_REQUIRED_MESSAGE,
     });
   }),
+  /**
+   * A service's coded refusal, the exact shape `createFocusSession` throws for
+   * an unknown templateId (and NO_CRITERIA, a bad title, a stray trackStage):
+   * a plain Error with a tRPC `code`, shared with the Hub REST and MCP doors
+   * that read `err.code` themselves. Was an opaque 500 on this door.
+   */
+  codedRefusal: t.procedure.use(errorCatchingMiddleware).mutation(() => {
+    throw Object.assign(
+      new Error(
+        "templateId tpl-x names no playbook you can see. Call list_playbooks for the ids you can start from, or pass templateId: null to start without one."
+      ),
+      { code: "BAD_REQUEST" }
+    );
+  }),
+  /** The same shape carrying a machine reason (NO_CRITERIA). */
+  codedRefusalWithReason: t.procedure
+    .use(errorCatchingMiddleware)
+    .mutation(() => {
+      throw Object.assign(new Error("Declare at least one criterion."), {
+        code: "BAD_REQUEST",
+        reasonCode: "NO_CRITERIA",
+      });
+    }),
+  /** A `code` that is NOT a tRPC code (a Postgres SQLSTATE) stays a fault. */
+  foreignCode: t.procedure.use(errorCatchingMiddleware).mutation(() => {
+    throw Object.assign(new Error("duplicate key value"), { code: "23505" });
+  }),
   /** An honest unknown — MUST stay an opaque 500 (the unchanged contract). */
   boom: t.procedure.use(errorCatchingMiddleware).mutation(() => {
     throw new Error("kaboom");
@@ -161,6 +188,27 @@ describe("tRPC door — setup-required payload survives the hop", () => {
     expect(error.data.code).toBe("BAD_REQUEST");
     expect(status).toBe(400);
     expect(error.message).toBe(HOLD_REQUIRED_MESSAGE);
+  });
+
+  it("a service's coded refusal (plain Error + code BAD_REQUEST) → BAD_REQUEST/400 with its sentence", async () => {
+    const { status, error } = await call("codedRefusal");
+    expect(error.data.code).toBe("BAD_REQUEST");
+    expect(status).toBe(400);
+    expect(error.message).toBe(
+      "templateId tpl-x names no playbook you can see. Call list_playbooks for the ids you can start from, or pass templateId: null to start without one."
+    );
+  });
+
+  it("…and keeps its reasonCode (NO_CRITERIA)", async () => {
+    const { status, error } = await call("codedRefusalWithReason");
+    expect(status).toBe(400);
+    expect(error.data.reasonCode).toBe("NO_CRITERIA");
+  });
+
+  it("an error whose code is not a tRPC code (SQLSTATE 23505) stays INTERNAL_SERVER_ERROR", async () => {
+    const { status, error } = await call("foreignCode");
+    expect(error.data.code).toBe("INTERNAL_SERVER_ERROR");
+    expect(status).toBe(500);
   });
 
   it("an unclassified error stays an opaque INTERNAL_SERVER_ERROR", async () => {
