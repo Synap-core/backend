@@ -59,36 +59,22 @@ import {
   type RequiredLinkDebt,
 } from "./links/required-links.js";
 import { isUuid } from "@synap-core/types/property-render";
+import { packageHasUpdate } from "@synap-core/types/package-updates";
 
 const logger = createLogger({ module: "template-health" });
 
 /**
- * Is `installed` behind `latest`? Plan option (a): CP mints content-hash
- * versions ("h-<hash>") for which drift is plain inequality; a rare
- * hand-authored semver template drifts only when `latest` is strictly newer
- * (never flag a downgrade). Null-safe: an unstamped install or a cache-cold slug
- * is "not known-drifted" (`false`), never a false positive.
+ * Is `installed` behind `latest`? THE rule `packageHasUpdate`
+ * (`@synap-core/types/package-updates`), under this module's name: one rule
+ * for a space's template, an overlay pack and every other installed package
+ * (pod admin's Updates, `market update`). Content-hash versions ("h-<hash>"):
+ * any inequality; a hand-authored semver: strictly newer only. Null-safe.
  */
 export function isTemplateDrifted(
   installed: string | null,
   latest: string | null
 ): boolean {
-  if (!installed || !latest || installed === latest) return false;
-  // Content-hash versions: any inequality (already true here) is drift.
-  if (installed.startsWith("h-") || latest.startsWith("h-")) return true;
-  // Semver-ish: drift only when latest is strictly greater than installed.
-  const parts = (v: string): number[] =>
-    v
-      .replace(/^v/, "")
-      .split(".")
-      .map((n) => Number.parseInt(n, 10) || 0);
-  const a = parts(latest);
-  const b = parts(installed);
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const d = (a[i] ?? 0) - (b[i] ?? 0);
-    if (d !== 0) return d > 0;
-  }
-  return false;
+  return packageHasUpdate(installed, latest);
 }
 
 /**

@@ -43,12 +43,17 @@ export function countsLine(
   return parts.join(" · ");
 }
 
-/** "Skill · 1 to choose · 2 stay yours": a row's second line. */
+/**
+ * "Skill · 1 to choose · 2 stay yours": a row's second line. A space or a
+ * capability has no fields to count: "Space · New version in the catalog"
+ * (+ its changes to records).
+ */
 export function rowSecondary(t: T, s: PackageUpdateSummary): string {
-  return t("row.secondary", {
-    kind: catalogKindLabel(s.kind),
-    counts: countsLine(t, s),
-  });
+  const counts =
+    s.comparedBy === "package"
+      ? [t("row.newVersion"), countsLine(t, s)].filter(Boolean).join(" · ")
+      : countsLine(t, s);
+  return t("row.secondary", { kind: catalogKindLabel(s.kind), counts });
 }
 
 /** The words of an update's mark, from the group it sits in. */

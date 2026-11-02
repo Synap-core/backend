@@ -16,7 +16,9 @@
 import { z } from "zod";
 import {
   applyPackageUpdateInputSchema,
+  INSTALLED_PACKAGE_KINDS,
   PACKAGE_FIELD_STATES,
+  PACKAGE_UPDATE_COMPARED_BY,
   PACKAGE_UPDATE_NEEDS,
 } from "@synap-core/types/package-updates";
 
@@ -45,9 +47,16 @@ const CountsSchema = z.object({
   same: z.number(),
 });
 
+const ComparedBySchema = z
+  .enum(PACKAGE_UPDATE_COMPARED_BY)
+  .describe(
+    "`field`: compared and applied field by field (view, skill, automation). `package`: applied as a whole through the kind's own template door (workspace, capability); no field rows."
+  );
+
 const SummarySchema = z.object({
   slug: z.string(),
   kind: z.string(),
+  comparedBy: ComparedBySchema,
   name: z.string(),
   installedVersion: z.string().nullable(),
   latestVersion: z.string().nullable(),
@@ -67,6 +76,26 @@ const ListResponseSchema = z.object({
       reason: z.string(),
     })
   ),
+  installed: z
+    .array(
+      z.object({
+        slug: z.string(),
+        kind: z.enum(INSTALLED_PACKAGE_KINDS),
+        name: z.string(),
+        installedVersion: z.string().nullable(),
+        latestVersion: z.string().nullable(),
+        hasUpdate: z
+          .boolean()
+          .nullable()
+          .describe(
+            "true/false = compared by the one rule (the catalog's content-hash version against the one the pod converged to). null = not compared: `reason` says why. Never a defaulted false."
+          ),
+        reason: z.string().optional(),
+      })
+    )
+    .describe(
+      "Every installed package (one per slug and kind) with its verdict, the up-to-date ones included."
+    ),
 });
 
 const FieldSchema = z.object({
@@ -83,6 +112,7 @@ const FieldSchema = z.object({
 const PlanResponseSchema = z.object({
   slug: z.string(),
   kind: z.string(),
+  comparedBy: ComparedBySchema,
   name: z.string(),
   installedVersion: z.string().nullable(),
   latestVersion: z.string().nullable(),
@@ -104,6 +134,12 @@ const ApplyRequestSchema = applyPackageUpdateInputSchema.omit({ slug: true });
 const ApplyResponseSchema = z.union([
   z.object({
     status: z.literal("applied"),
+    warning: z
+      .string()
+      .optional()
+      .describe(
+        "A whole-package update that landed but did not finish: what is left."
+      ),
     receipt: z
       .object({
         id: z.string(),
@@ -164,10 +200,14 @@ export function registerPackageUpdatesRoutes(app: HubHono): void {
     tags: ["Packages"],
     summary: "List the package updates waiting on this pod",
     description:
-      "Every installed view/skill/automation package whose catalog version " +
-      "moved, with how many fields each update changes per state (updates / " +
-      "yours / both / same) and what it needs from a person. A package whose " +
-      "catalog cannot be read is listed under `unreadable` with the reason. " +
+      "Every installed package (space template, overlay pack, capability, " +
+      "view, skill, automation) whose catalog version moved, by the one rule " +
+      "every surface reads: the catalog's content-hash version against the " +
+      "one the pod converged to. A view/skill/automation update counts how " +
+      "many fields it changes per state (updates / yours / both / same); a " +
+      "space or capability is updated as a whole (`comparedBy: package`). A " +
+      "package that cannot be compared is listed under `unreadable` with the " +
+      "reason; `installed` carries every package's verdict. " +
       "Pod admins only. Requires hub-protocol.read scope.",
     responses: {
       200: { description: "Waiting updates", schema: ListResponseSchema },
