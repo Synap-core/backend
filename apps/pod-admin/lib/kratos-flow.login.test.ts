@@ -10,6 +10,7 @@ import {
   createLoginFlow,
   existingSessionAction,
   loginFlowRefusal,
+  pauseSeconds,
   unconfirmedSessionCopy,
 } from "./kratos-flow";
 
@@ -35,6 +36,7 @@ beforeEach(() => {
   process.env.POD_PUBLIC_URL = "https://pod.example.com";
 });
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   delete process.env.POD_PUBLIC_URL;
 });
@@ -70,7 +72,24 @@ function answerSeq(create: Response | (() => Response), seq: Response[]) {
   );
   return calls;
 }
-const NOW = { retryDelayMs: 0 };
+
+/** Runs `createLoginFlow` to the end on fake timers; returns it and the ms it waited. */
+async function settle(returnTo?: string) {
+  vi.useFakeTimers();
+  const start = Date.now();
+  const p = createLoginFlow(returnTo);
+  let done = false;
+  void p.finally(() => (done = true));
+  await vi.advanceTimersByTimeAsync(0);
+  while (!done) await vi.advanceTimersByTimeAsync(250);
+  return { result: await p, waitedMs: Date.now() - start };
+}
+
+const tooMany = (retryAfter?: string) =>
+  new Response("{}", {
+    status: 429,
+    headers: retryAfter ? { "Retry-After": retryAfter } : {},
+  });
 
 describe("loginFlowRefusal", () => {
   it("reads session_already_available from Kratos' error envelope", () => {
@@ -107,29 +126,43 @@ describe("createLoginFlow", () => {
     ).resolves.toEqual({ existingSession: SESSION });
   });
 
-  it("retries whoami once after a 500, then reports the session", async () => {
+  it("retries whoami once, a second later, after a 500, then reports the session", async () => {
     const calls = answerSeq(json(ALREADY, 400), [json({}, 500), json(SESSION)]);
-    await expect(createLoginFlow(undefined, NOW)).resolves.toEqual({
-      existingSession: SESSION,
-    });
+    const { result, waitedMs } = await settle();
+    expect(result).toEqual({ existingSession: SESSION });
     expect(calls.whoami).toBe(2);
+    expect(waitedMs).toBeGreaterThanOrEqual(1000);
   });
 
-  it("reports rate-limited with Retry-After after two 429s", async () => {
-    const calls = answerSeq(json(ALREADY, 400), [
-      new Response("{}", { status: 429, headers: { "Retry-After": "7" } }),
-    ]);
-    await expect(createLoginFlow(undefined, NOW)).resolves.toEqual({
-      unconfirmed: { kind: "rate_limited", retryAfterSeconds: 7 },
+  it("a short Retry-After is waited out before whoami is asked again", async () => {
+    const calls = answerSeq(json(ALREADY, 400), [tooMany("3"), json(SESSION)]);
+    const { result, waitedMs } = await settle();
+    expect(result).toEqual({ existingSession: SESSION });
+    expect(calls.whoami).toBe(2);
+    expect(waitedMs).toBeGreaterThanOrEqual(3000);
+  });
+
+  it("a long Retry-After is not asked inside: rate-limited at once, with the wait", async () => {
+    const calls = answerSeq(json(ALREADY, 400), [tooMany("60")]);
+    const { result, waitedMs } = await settle();
+    expect(result).toEqual({
+      unconfirmed: { kind: "rate_limited", retryAfterSeconds: 60 },
     });
+    expect(calls.whoami).toBe(1);
+    expect(waitedMs).toBe(0);
+  });
+
+  it("a 429 without Retry-After is asked again once, a second later", async () => {
+    const calls = answerSeq(json(ALREADY, 400), [tooMany()]);
+    const { result } = await settle();
+    expect(result).toEqual({ unconfirmed: { kind: "rate_limited" } });
     expect(calls.whoami).toBe(2);
   });
 
   it("reports unavailable after two 503s, without throwing", async () => {
     const calls = answerSeq(json(ALREADY, 400), [json({}, 503)]);
-    await expect(createLoginFlow(undefined, NOW)).resolves.toEqual({
-      unconfirmed: { kind: "unavailable" },
-    });
+    const { result } = await settle();
+    expect(result).toEqual({ unconfirmed: { kind: "unavailable" } });
     expect(calls.whoami).toBe(2);
   });
 
@@ -140,7 +173,7 @@ describe("createLoginFlow", () => {
       () => (n++ === 0 ? json(ALREADY, 400) : json(FLOW)),
       [json({}, 401)]
     );
-    const r = await createLoginFlow(undefined, NOW);
+    const r = await createLoginFlow();
     expect(r.flow?.id).toBe("f2");
     expect(r.unconfirmed).toBeUndefined();
     expect(calls.whoami).toBe(1);
@@ -149,7 +182,7 @@ describe("createLoginFlow", () => {
 
   it("signed out twice: stops after one re-ask (no loop)", async () => {
     const calls = answerSeq(json(ALREADY, 400), [json({}, 401)]);
-    await expect(createLoginFlow(undefined, NOW)).resolves.toEqual({
+    await expect(createLoginFlow()).resolves.toEqual({
       unconfirmed: { kind: "signed_out" },
     });
     expect(calls.create).toBe(2);
@@ -160,7 +193,7 @@ describe("createLoginFlow", () => {
       json({ id: "f1", ui: { action: "x", method: "POST", nodes: [] } }),
       [json({}, 500)]
     );
-    const r = await createLoginFlow(undefined, NOW);
+    const r = await createLoginFlow();
     expect(r.flow?.id).toBe("f1");
     expect(calls.whoami).toBe(0);
   });
@@ -188,19 +221,48 @@ describe("existingSessionAction", () => {
 });
 
 describe("unconfirmedSessionCopy", () => {
-  it("says how long to wait when the pod told us", () => {
-    const c = unconfirmedSessionCopy({
-      kind: "rate_limited",
-      retryAfterSeconds: 7,
+  it("signed out: says the sign-in ended and offers a fresh sign-in, never a reload", () => {
+    const c = unconfirmedSessionCopy({ kind: "signed_out" });
+    expect(c).toEqual({
+      title: "Sign in again",
+      body: "This browser's sign-in to the console has ended.",
+      actionLabel: "Sign in",
+      action: "sign_in",
     });
-    expect(c.body).toMatch(/Wait 7 s, then continue/);
-    expect(c.actionLabel).toBe("Continue");
+  });
+
+  it("rate-limited: still signed in, and counts the pause down", () => {
+    const f = { kind: "rate_limited" as const, retryAfterSeconds: 7 };
+    expect(pauseSeconds(f)).toBe(7);
+    const c = unconfirmedSessionCopy(f);
+    expect(c.title).toBe("You're still signed in");
+    expect(c.body).toBe(
+      "The pod asked for a short pause. You can continue in 7 seconds."
+    );
+    expect(c.action).toBe("continue");
+    expect(unconfirmedSessionCopy(f, 1).body).toMatch(/in 1 second\.$/);
+    expect(unconfirmedSessionCopy(f, 0).body).toBe(
+      "The pod asked for a short pause. You can continue now."
+    );
+  });
+
+  it("rate-limited with no Retry-After still pauses (the default)", () => {
+    expect(pauseSeconds({ kind: "rate_limited" })).toBeGreaterThan(0);
+    expect(pauseSeconds({ kind: "unavailable" })).toBe(0);
+    expect(pauseSeconds({ kind: "signed_out" })).toBe(0);
+  });
+
+  it("only a busy pod is offered a reload", () => {
+    expect(unconfirmedSessionCopy({ kind: "unavailable" }).action).toBe(
+      "retry"
+    );
   });
 
   it("never leads with a status code", () => {
     for (const f of [
       { kind: "unavailable" as const },
       { kind: "rate_limited" as const },
+      { kind: "signed_out" as const },
     ]) {
       expect(unconfirmedSessionCopy(f).title).not.toMatch(/\d{3}/);
     }
