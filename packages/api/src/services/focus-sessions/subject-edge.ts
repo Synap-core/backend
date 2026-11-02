@@ -41,7 +41,7 @@ import type { ExpectedOutput, SlotSubjectEdge } from "@synap/playbooks";
 import { isBuiltinRelationType } from "../../utils/relation-types.js";
 import type { Context } from "../../types/context.js";
 import { deriveSlotKeys } from "./slot-keys.js";
-import { UUID_RE } from "./session-metadata.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "focus-sessions/subject-edge" });
 
@@ -76,10 +76,10 @@ export function outputEntityFromSlot(slot: ExpectedOutput): string | null {
   const ev = slot.satisfiedByEvidence?.id;
   if (typeof ev === "string") {
     const m = /^entity:(.+)$/.exec(ev);
-    if (m && UUID_RE.test(m[1]!)) return m[1]!;
+    if (m && isUuid(m[1]!)) return m[1]!;
   }
   const ref = slot.ref;
-  if (ref && "kind" in ref && ref.kind === "entity" && UUID_RE.test(ref.id)) {
+  if (ref && "kind" in ref && ref.kind === "entity" && isUuid(ref.id)) {
     return ref.id;
   }
   return null;
@@ -94,7 +94,7 @@ async function outputEntityFromProposal(
     .from(proposals)
     .where(eq(proposals.id, proposalId))
     .limit(1);
-  if (!p || p.targetType !== "entity" || !UUID_RE.test(p.targetId)) return null;
+  if (!p || p.targetType !== "entity" || !isUuid(p.targetId)) return null;
   const [e] = await db
     .select({ id: entities.id })
     .from(entities)

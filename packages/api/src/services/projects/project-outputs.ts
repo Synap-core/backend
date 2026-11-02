@@ -53,6 +53,7 @@ import {
   type SessionOutput,
 } from "../focus-sessions/session-outputs.js";
 import { projectPathConditions } from "./project-path.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 export const PROJECT_OUTPUTS_MAX_LIMIT = 100;
 
@@ -145,9 +146,6 @@ function newerFirst(a: Key, b: Key): number {
   return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
 }
 
-const UUID_SHAPE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * THE SCAN — the one fetch every outputs door runs: the floored session set
  * named by `where` (most recently ACTIVE first, bounded by
@@ -201,7 +199,7 @@ export async function scanSessionOutputs(
     ...new Set(
       [...joined.values()].flatMap((j) =>
         j.outputs
-          .filter((o) => o.kind === "entity" && UUID_SHAPE.test(o.refId))
+          .filter((o) => o.kind === "entity" && isUuid(o.refId))
           .map((o) => o.refId)
       )
     ),

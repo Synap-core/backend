@@ -27,6 +27,7 @@ import { sql as pgSql } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { postToBridge } from "./domain-event-bridge.js";
 import { sessionReaderIds } from "../access/session-visibility.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "session-changed-listener" });
 
@@ -38,9 +39,6 @@ export const FOCUS_SESSION_UPDATED = "focus_session:updated";
 
 /** Heartbeat payload — not a uuid, so it can never be read as a session id. */
 const PING = "__listener_ping__";
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * In-process WAKE subscribers, keyed by session id — how a long-poll
@@ -186,7 +184,7 @@ export async function startSessionChangedListener(
       pingOutstanding = false;
       return;
     }
-    if (!UUID_RE.test(payload)) {
+    if (!isUuid(payload)) {
       logger.warn(
         { payload },
         "focus_session_changed: ignored non-uuid payload"

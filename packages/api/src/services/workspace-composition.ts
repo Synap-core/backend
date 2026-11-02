@@ -39,6 +39,7 @@ import type {
 } from "@synap/database";
 import { validateWorkspaceAccess } from "../utils/workspace-membership.js";
 import { createLogger } from "@synap-core/core";
+import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "workspace-composition" });
 
@@ -60,9 +61,6 @@ export interface ResolveExtendsResult {
   provenance: WorkspaceComposedFromEntry[];
 }
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * Resolve a `source` ref to a readable source workspace row.
  *
@@ -78,7 +76,7 @@ async function resolveReadableSource(
   userId: string
 ): Promise<{ id: string } | null> {
   // Resolve the ref → a candidate workspace row.
-  const row = UUID_RE.test(source)
+  const row = isUuid(source)
     ? await db.query.workspaces.findFirst({
         where: eq(workspaces.id, source),
         columns: { id: true, settings: true },

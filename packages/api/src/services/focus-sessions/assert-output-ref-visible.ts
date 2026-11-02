@@ -50,8 +50,8 @@ import { isHttpUrl } from "@synap/shared-utils";
 import { ASK_LOOKED_AT_KINDS } from "@synap-core/types/ask";
 import type { SessionArtifactKind } from "./record-session-artifact.js";
 import type { ExpectedOutput } from "@synap/playbooks";
+import { isUuid } from "@synap-core/types/property-render";
 // ONE uuid shape floor for the session services — this file had its own copy.
-import { UUID_RE } from "./session-metadata.js";
 
 /**
  * True when `userId` may already see the object `kind:refId` names — i.e. when
@@ -83,8 +83,8 @@ export async function isOutputRefVisible(params: {
 
   // The three backed kinds are keyed by uuid columns; a non-uuid can name no
   // row, and comparing it would be a PG 22P02 rather than a refusal. The read
-  // side skips non-uuid refs for the same reason (`resolveTitles`' UUID_RE).
-  if (!UUID_RE.test(refId)) return false;
+  // side skips non-uuid refs for the same reason (`resolveTitles`' isUuid).
+  if (!isUuid(refId)) return false;
 
   const access = AccessContext.operator({ userId });
 

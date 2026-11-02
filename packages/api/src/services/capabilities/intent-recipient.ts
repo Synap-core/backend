@@ -57,6 +57,7 @@ import type {
   RecipientAddress,
   RecipientAddresses,
 } from "./intent-input.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 /** A conversation the pod holds with the recipient (an EXTERNAL channel). */
 export interface RecipientConversation {
@@ -98,9 +99,6 @@ export interface RecipientTarget {
 const SENT_TO = "sent_to";
 const NOT_SENT_STATUSES = new Set(["drafted"]);
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -123,7 +121,7 @@ export async function loadRecipient(
   ctx: { userId: string; agentUserId: string | null },
   entityId: string
 ): Promise<IntentRecipient | null> {
-  if (!UUID_RE.test(entityId)) return null;
+  if (!isUuid(entityId)) return null;
   const entity = await scopedDb(
     AccessContext.agent({ userId: ctx.userId, agentUserId: ctx.agentUserId })
   ).findFirst<{

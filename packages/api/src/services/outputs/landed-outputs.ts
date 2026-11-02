@@ -82,7 +82,6 @@ import type { Lens } from "../../access/context.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { displayNameForUser } from "../../routers/proposals/helper-functions.js";
 import { sessionListConditions } from "../focus-sessions/session-list-conditions.js";
-import { UUID_RE } from "../focus-sessions/session-metadata.js";
 import {
   findCreatingProposals,
   type CreatingProposal,
@@ -95,6 +94,7 @@ import {
   type ProjectOutputItem,
   type ScannedSession,
 } from "../projects/project-outputs.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 export const LANDED_OUTPUTS_MAX_LIMIT = PROJECT_OUTPUTS_MAX_LIMIT;
 
@@ -251,7 +251,7 @@ export async function attachLandedProvenance(
   const idsOf = (kind: string) => [
     ...new Set(
       items
-        .filter((i) => i.kind === kind && UUID_RE.test(i.ref.id))
+        .filter((i) => i.kind === kind && isUuid(i.ref.id))
         .map((i) => i.ref.id)
     ),
   ];
@@ -322,8 +322,7 @@ export async function attachLandedProvenance(
   // creation; an output with no object row is bounded by when it was produced.
   const creatingQueries = new Map<string, CreatingProposalQuery>();
   for (const item of items) {
-    if (!UUID_RE.test(item.ref.id) || creatingQueries.has(item.ref.id))
-      continue;
+    if (!isUuid(item.ref.id) || creatingQueries.has(item.ref.id)) continue;
     const obj = provenance.get(coord(item.kind, item.ref.id));
     creatingQueries.set(item.ref.id, {
       id: item.ref.id,
@@ -332,9 +331,7 @@ export async function attachLandedProvenance(
     });
   }
   const pendingTargets = [
-    ...new Set(
-      pendingRows.map((p) => p.targetId).filter((id) => UUID_RE.test(id))
-    ),
+    ...new Set(pendingRows.map((p) => p.targetId).filter((id) => isUuid(id))),
   ];
   const [creating, liveEntities, liveDocuments] = await Promise.all([
     findCreatingProposals(database, [...creatingQueries.values()], viewer),

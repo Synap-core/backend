@@ -40,6 +40,7 @@ import {
   normalizeIdentitySignal,
 } from "@synap/database";
 import { normalizeLinkTargetName } from "./import-items.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 /** A same-kind, same-name entity already in the pod. */
 export interface PodIdentityCandidate {
@@ -248,8 +249,6 @@ export function planImportIdentities(args: {
   return plan;
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** Rows listed per bucket on the proposal (counts are always complete). */
 const IDENTITY_LIST_CAP = 200;
 
@@ -274,9 +273,9 @@ export function summarizeIdentities(
   plan: ImportIdentityPlan
 ): ImportIdentitiesSummary {
   const pod = (list: ImportIdentityDecision[]) =>
-    list.filter((d) => d.target && UUID.test(d.target));
+    list.filter((d) => d.target && isUuid(d.target));
   const inFile = [...plan.linkedBySignal, ...plan.matchedByName].filter(
-    (d) => !d.target || !UUID.test(d.target)
+    (d) => !d.target || !isUuid(d.target)
   );
   return {
     linkedBySignal: pod(plan.linkedBySignal).length,

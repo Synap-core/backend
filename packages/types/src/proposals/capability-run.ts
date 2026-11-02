@@ -27,6 +27,7 @@ import {
   resolveToolLabel,
 } from "../vocabulary/index.js";
 import { formatFieldLabel } from "../property-render/field-label.js";
+import { isUuid } from "../property-render/structured-value.js";
 
 /**
  * Verbs of the shape `entity.<action>` that act on ONE existing entity named by
@@ -35,8 +36,6 @@ import { formatFieldLabel } from "../property-render/field-label.js";
  */
 const ENTITY_VERB = /^entity\.([a-z][a-z_]*)$/;
 const NOT_AN_OBJECT_ACTION = new Set(["create", "query"]);
-const UUID_SHAPE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface EntityVerbRunTarget {
   /** The action token (`delete`, `update`, …) — resolved by the vocabulary. */
@@ -57,7 +56,7 @@ export function entityVerbRunTarget(
   const m = ENTITY_VERB.exec(verbId);
   if (!m || NOT_AN_OBJECT_ACTION.has(m[1]!)) return null;
   const entityId = parameters?.entityId;
-  if (typeof entityId !== "string" || !UUID_SHAPE.test(entityId)) return null;
+  if (typeof entityId !== "string" || !isUuid(entityId)) return null;
   return { action: m[1]!, entityId };
 }
 

@@ -1,3 +1,5 @@
+import { isUuid } from "@synap-core/types/property-render";
+
 // Crawler / unfurl tokens only. Product names (discord, slack, telegram,
 // whatsapp) also appear in in-app browsers — those humans must 302 to
 // pod-admin, not bounce. Generic "bot" / "preview" / "embed" are too wide.
@@ -184,9 +186,6 @@ export function podAdminResolveTarget(id: string, adminBase: string): string {
   return new URL(`/open/${id}`, adminBase).toString();
 }
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * The "View in browser" escape on a BOUNCE page (shown when `synap://` did
  * nothing): pod-admin's page for this object, when it has one. Proposal is
@@ -202,7 +201,7 @@ export function podAdminBrowserUrl(
   if (type === "proposal" || isWebHostedOpenKind(type)) {
     return podAdminTarget(type, id, adminBase, addressQuery(type, flowType));
   }
-  if (!type && UUID_RE.test(id)) return podAdminResolveTarget(id, adminBase);
+  if (!type && isUuid(id)) return podAdminResolveTarget(id, adminBase);
   return undefined;
 }
 
@@ -346,7 +345,7 @@ export function dispatchOpen(opts: {
     };
   }
 
-  if (adminBase && !bot && !mobile && !type && UUID_RE.test(id)) {
+  if (adminBase && !bot && !mobile && !type && isUuid(id)) {
     return { action: "redirect", url: podAdminResolveTarget(id, adminBase) };
   }
 

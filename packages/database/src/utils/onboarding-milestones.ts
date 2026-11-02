@@ -41,9 +41,9 @@ import {
 } from "../schema/pod-settings.js";
 import { ProposalStatus, proposals } from "../schema/proposals.js";
 import { workspaces } from "../schema/workspaces.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 const DAY_MS = 86_400_000;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ── The switch ─────────────────────────────────────────────────────────────
 
@@ -182,7 +182,7 @@ export async function readOnboardingMilestoneFacts(): Promise<OnboardingMileston
   const setup = isRecord(start.setup) ? start.setup : null;
   // A stored pointer that is not a uuid would fail the read's cast forever.
   const setupProposalId =
-    typeof setup?.proposalId === "string" && UUID.test(setup.proposalId)
+    typeof setup?.proposalId === "string" && isUuid(setup.proposalId)
       ? setup.proposalId
       : null;
   if (setupProposalId) {

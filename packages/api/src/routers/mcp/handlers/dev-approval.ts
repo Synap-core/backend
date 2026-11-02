@@ -19,7 +19,6 @@ import {
   createDevApprovalProposal,
   DEV_DEPLOY_APPROVAL_TYPE,
 } from "../../../services/proposals/dev-approval.js";
-import { UUID_RE } from "../../../services/focus-sessions/session-metadata.js";
 import {
   ok,
   requireScope,
@@ -27,6 +26,7 @@ import {
   type CallToolResult,
   type McpHandlerMap,
 } from "./shared.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 export const devApprovalHandlers: McpHandlerMap = {
   synap_request_deploy_approval: async (
@@ -37,7 +37,7 @@ export const devApprovalHandlers: McpHandlerMap = {
 
     const sessionId = args.sessionId;
     const session =
-      typeof sessionId === "string" && UUID_RE.test(sessionId)
+      typeof sessionId === "string" && isUuid(sessionId)
         ? await db.query.focusSessions.findFirst({
             where: and(
               eq(focusSessions.id, sessionId),

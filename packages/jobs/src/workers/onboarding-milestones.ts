@@ -39,6 +39,7 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
+import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "onboarding-milestones" });
 
@@ -82,7 +83,6 @@ export interface OnboardingMilestonesPayload {
 
 /** A short lowercase token (a template slug, a view type, an arm). */
 const TOKEN = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const rec = (v: unknown): Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v)
@@ -177,7 +177,7 @@ export function buildOnboardingMilestonesPayload(
   const next = rec(facts.journey.start.nextReturn);
   const at = iso(next.at);
   const sessionId =
-    typeof next.sessionId === "string" && UUID.test(next.sessionId)
+    typeof next.sessionId === "string" && isUuid(next.sessionId)
       ? next.sessionId
       : null;
   return {

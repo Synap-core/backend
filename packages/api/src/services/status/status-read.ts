@@ -30,7 +30,6 @@
  * (the screens' door): one function, three doors. An id the caller cannot see
  * reads exactly like one that does not exist: `type: "unknown"`.
  */
-import { UUID_RE } from "../focus-sessions/session-metadata.js";
 import { z } from "zod";
 import { createLogger } from "@synap-core/core";
 import {
@@ -126,6 +125,7 @@ import {
   sessionWaitingOnQuestion,
   type WaitingOnQuestion,
 } from "./status-facts.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "status-read" });
 
@@ -322,7 +322,7 @@ export async function readStatusOf(
   // The doors cap the list (`statusOfInput`); nothing is dropped here.
   const asked = [...new Set(rawIds)];
   // Every id column is a uuid: anything else is simply not a thing here.
-  const ids = asked.filter((id) => UUID_RE.test(id));
+  const ids = asked.filter((id) => isUuid(id));
   if (ids.length === 0) return asked.map((id) => ({ id, type: "unknown" }));
   // THE statusOf floor (`status-floor.ts`), shared with the realtime status
   // events: whatever this read answers `unknown` for, no event reaches.

@@ -47,6 +47,7 @@ import {
   isDerivedSession,
   type SessionSource,
 } from "../utils/request-write-context.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 /**
  * The resolver runs on the CALLER'S executor so that a row minted earlier in the
@@ -56,22 +57,6 @@ import {
  */
 type BaseDb = PostgresJsDatabase<typeof schema>;
 type Db = BaseDb | Parameters<Parameters<BaseDb["transaction"]>[0]>[0];
-
-/**
- * Postgres `uuid` accepts only this shape; anything else raises a 22P02 STATEMENT
- * error — and inside a transaction a failed statement ABORTS THE ENCLOSING
- * TRANSACTION. Several doors take `sessionId` / `channelId` straight off a
- * request body without validating them, so a malformed id must cost the project
- * LENS, never the write it was being resolved for.
- *
- * Moved here from `deriveProposalProjectId` (@synap/database's proposal insert
- * door), which had this guard while this shared ladder had none — the single
- * blocker to those two ladders being one. Purely ADDITIVE: it can only skip a
- * lookup that was guaranteed to throw, so no input that previously resolved a
- * project stops resolving one.
- */
-const UUID_SHAPE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * 3.5 is deliberately fractional: the declared-focus rung was inserted BETWEEN
@@ -156,15 +141,18 @@ export async function resolveProjectPlacement(
   }
 
   // ── Rung 2 — the active focus session's project. ──
-  // SHAPE-GUARDED (see UUID_SHAPE above): a body-supplied non-uuid is excluded
-  // BEFORE the query, not caught after it — inside a transaction a 22P02 has
-  // already aborted the tx by the time a catch could run.
+  // SHAPE-GUARDED (`isUuid`): Postgres `uuid` accepts only that shape, and
+  // several doors take `sessionId` / `channelId` straight off a request body.
+  // A body-supplied non-uuid is excluded BEFORE the query, not caught after it
+  // — inside a transaction a 22P02 has already aborted the tx by the time a
+  // catch could run, and a malformed id must cost the project LENS, never the
+  // write it was being resolved for.
   // A derived session is skipped (A1, see `isDerivedSession`): a guess falls
   // through to the non-guess rungs — channel, declared focus, relational.
   if (
     input.sessionId &&
     !isDerivedSession(input.sessionId, input.sessionSource) &&
-    UUID_SHAPE.test(input.sessionId)
+    isUuid(input.sessionId)
   ) {
     const session = await db.query.focusSessions.findFirst({
       where: eq(focusSessions.id, input.sessionId),
@@ -181,7 +169,7 @@ export async function resolveProjectPlacement(
 
   // ── Rung 3 — the bound channel's project. ──
   // Same shape guard as rung 2, and for the same reason.
-  if (input.channelId && UUID_SHAPE.test(input.channelId)) {
+  if (input.channelId && isUuid(input.channelId)) {
     const channel = await db.query.channels.findFirst({
       where: eq(channels.id, input.channelId),
       columns: { projectId: true },

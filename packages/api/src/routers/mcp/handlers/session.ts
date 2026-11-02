@@ -72,9 +72,8 @@ import {
   SESSIONS_PAGE_MAX,
 } from "./shared.js";
 import { moveHoldToolArgs } from "../../../services/lifecycle/hold-input.js";
+import { isUuid } from "@synap-core/types/property-render";
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** One line, not a transcript — mirrors the tool schema's `maxLength`. */
 const SUSPENDED_INTENT_MAX = 400;
 
@@ -195,7 +194,7 @@ function parseBlockerEdits(
     if (
       !Array.isArray(raw) ||
       raw.length > BLOCKER_IDS_MAX ||
-      !raw.every((id) => typeof id === "string" && UUID_RE.test(id))
+      !raw.every((id) => typeof id === "string" && isUuid(id))
     ) {
       return {
         error: `${key} must be an array of at most ${BLOCKER_IDS_MAX} session UUIDs — NOTHING WAS CHANGED.`,
@@ -294,7 +293,7 @@ function readParamsArg(raw: unknown): Record<string, unknown> | undefined {
 function readTemplateIdArg(raw: unknown): string | null | undefined {
   if (raw === null || raw === "null") return null;
   if (typeof raw !== "string" || raw.trim() === "") return undefined;
-  if (UUID_RE.test(raw)) return raw;
+  if (isUuid(raw)) return raw;
   throw Object.assign(
     new Error(
       `templateId must be a playbook UUID (list_playbooks lists the ones you can start from), or null to start without one — got "${raw.slice(0, 80)}".`
@@ -327,7 +326,7 @@ export const sessionHandlers: McpHandlerMap = {
       typeof args.sessionId === "string" ? args.sessionId.trim() : "";
     // A conversation wait may name its bound session (its runner row); it
     // needs none.
-    if (!UUID_RE.test(sessionId) && !(isConversation && sessionId === "")) {
+    if (!isUuid(sessionId) && !(isConversation && sessionId === "")) {
       return ok({ error: `Focus session ${sessionId || "(none)"} not found` });
     }
     let since: Date | null = null;
@@ -452,7 +451,7 @@ export const sessionHandlers: McpHandlerMap = {
     }
     const sessionId =
       typeof args.sessionId === "string" ? args.sessionId.trim() : "";
-    if (!UUID_RE.test(sessionId)) {
+    if (!isUuid(sessionId)) {
       return ok({ error: `Focus session ${sessionId || "(none)"} not found` });
     }
     // The ONE relay schema, as on the Hub door — never a hand check.
@@ -509,8 +508,7 @@ export const sessionHandlers: McpHandlerMap = {
     if (
       parentSessionIdArg !== undefined &&
       parentSessionIdArg !== null &&
-      (typeof parentSessionIdArg !== "string" ||
-        !UUID_RE.test(parentSessionIdArg))
+      (typeof parentSessionIdArg !== "string" || !isUuid(parentSessionIdArg))
     ) {
       return ok({
         error:
@@ -534,7 +532,7 @@ export const sessionHandlers: McpHandlerMap = {
       blockedByArg !== null &&
       (!Array.isArray(blockedByArg) ||
         blockedByArg.length > 20 ||
-        !blockedByArg.every((id) => typeof id === "string" && UUID_RE.test(id)))
+        !blockedByArg.every((id) => typeof id === "string" && isUuid(id)))
     ) {
       return ok({
         error:
@@ -875,7 +873,7 @@ export const sessionHandlers: McpHandlerMap = {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const sessionId = typeof args.sessionId === "string" ? args.sessionId : "";
-    if (!UUID_RE.test(sessionId)) {
+    if (!isUuid(sessionId)) {
       return ok({ error: "sessionId must be a focus session UUID." });
     }
     const [session] = await db
@@ -891,7 +889,7 @@ export const sessionHandlers: McpHandlerMap = {
     const asked = [
       ...(Array.isArray(args.proposalIds) ? args.proposalIds : []),
       ...(args.proposalId !== undefined ? [args.proposalId] : []),
-    ].filter((id): id is string => typeof id === "string" && UUID_RE.test(id));
+    ].filter((id): id is string => typeof id === "string" && isUuid(id));
     const { proposals } = await import("@synap/database");
     const { ProposalStatus } = await import("@synap/database/schema");
     const { openLink } = await import("../../../utils/deep-links.js");
@@ -937,7 +935,7 @@ export const sessionHandlers: McpHandlerMap = {
     const dryRun = args.dryRun === true;
     requireScope(apiKeyScopes, dryRun ? "mcp.read" : "mcp.write", toolName);
     const sessionId = typeof args.sessionId === "string" ? args.sessionId : "";
-    if (!UUID_RE.test(sessionId)) {
+    if (!isUuid(sessionId)) {
       return ok({ error: "sessionId must be a focus session UUID." });
     }
     if (args.mode !== "replace" && args.mode !== "add") {
@@ -945,7 +943,7 @@ export const sessionHandlers: McpHandlerMap = {
     }
     const ids = Array.isArray(args.sourceDocumentIds)
       ? args.sourceDocumentIds.filter(
-          (id): id is string => typeof id === "string" && UUID_RE.test(id)
+          (id): id is string => typeof id === "string" && isUuid(id)
         )
       : [];
     const reasoning =
@@ -1005,7 +1003,7 @@ export const sessionHandlers: McpHandlerMap = {
     // `eq(focusSessions.id, wantedId)` — postgres throws invalid-uuid-syntax
     // there, which surfaces as a tool-call error rather than "not found".
     // Same as Hub REST GET /focus-sessions/:id.
-    if (!UUID_RE.test(wantedId)) {
+    if (!isUuid(wantedId)) {
       return ok({ error: `Focus session ${wantedId} not found` });
     }
     const [session] = await db
@@ -1113,7 +1111,7 @@ export const sessionHandlers: McpHandlerMap = {
     const subjectEntityId = idArg(args.subjectEntityId);
     // The subject predicate compares as text, so a malformed id would match
     // nothing instead of failing: say so.
-    if (subjectEntityId && !UUID_RE.test(subjectEntityId)) {
+    if (subjectEntityId && !isUuid(subjectEntityId)) {
       return ok({
         error: `subjectEntityId is not a valid id: ${subjectEntityId}`,
       });
@@ -1262,7 +1260,7 @@ export const sessionHandlers: McpHandlerMap = {
       ["trackId", trackIdArg],
       ["rootSessionId", rootArg],
     ] as const) {
-      if (value && !UUID_RE.test(value)) {
+      if (value && !isUuid(value)) {
         return ok({ error: `${name} is not a valid id: ${value}` });
       }
     }

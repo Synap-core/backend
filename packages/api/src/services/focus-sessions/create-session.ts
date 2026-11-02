@@ -101,12 +101,9 @@ import {
   canAutoRetitle,
   buildDerivedSessionTitle,
 } from "@synap-core/types/focus-sessions";
+import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "focus-sessions/create-session" });
-
-/** RFC-4122 UUID shape — templateId may be a legacy free-text template name. */
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * The key of a playbook's first stage, or null for a stageless playbook.
@@ -142,7 +139,7 @@ async function inheritParentTrack(p: {
   projectId: string;
 }): Promise<{ trackId: string; trackStage: string | null } | null> {
   // A uuid only: comparing the uuid column to other text throws in Postgres.
-  if (!UUID_RE.test(p.parentSessionId)) return null;
+  if (!isUuid(p.parentSessionId)) return null;
   const [parent] = await db
     .select({
       trackId: focusSessions.trackId,
@@ -537,7 +534,7 @@ export async function createFocusSession(
   // as `proposedEntityId` / `proposedDocumentId`.
   let heldSessionId: string | null = null;
   // A uuid only: comparing the uuid column to other text throws in Postgres.
-  if (params.proposedSessionId && UUID_RE.test(params.proposedSessionId)) {
+  if (params.proposedSessionId && isUuid(params.proposedSessionId)) {
     const taken = await db.query.focusSessions.findFirst({
       where: eq(focusSessions.id, params.proposedSessionId),
     });
@@ -693,8 +690,7 @@ export async function createFocusSession(
   // A UUID that names no playbook the caller can see is REFUSED, before the
   // dedup and the membrane: starting ad-hoc instead read as "following a
   // playbook" to the agent that named it, while nothing was followed.
-  const namedPlaybookId =
-    templateId && UUID_RE.test(templateId) ? templateId : null;
+  const namedPlaybookId = templateId && isUuid(templateId) ? templateId : null;
   const playbook = namedPlaybookId
     ? ((await scopedDb(AccessContext.agent({ userId, agentUserId })).findFirst<
         typeof playbooks.$inferSelect
