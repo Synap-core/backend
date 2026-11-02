@@ -6,15 +6,18 @@
  * variant calls it with an overridden `notificationType`), so promoting it
  * here covers both. Everything except the mapping/event-append logic under
  * test is mocked — DB writes, Discord posting, and NotificationService are
- * not what this test is pinning.
+ * not what this test is pinning. The cooldown claim against a real database
+ * is pinned by `notify-connector-unhealthy.claim.pglite.test.ts`.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const h = vi.hoisted(() => ({
   createNotification: vi.fn(async () => "notif-1"),
   appendEvent: vi.fn(async (_event: Record<string, unknown>) => {}),
+  // The cooldown claim: rows returned = this call won the window.
+  claimed: [{ id: "tool-1" }] as Array<{ id: string }>,
   dbUpdate: vi.fn(() => ({
-    set: () => ({ where: async () => {} }),
+    set: () => ({ where: () => ({ returning: async () => h.claimed }) }),
   })),
 }));
 
@@ -44,13 +47,13 @@ const baseOpts = {
   userId: "user-1",
   workspaceId: "ws-1",
   watermarkToolId: "tool-1",
-  watermarkMetadata: { connectionHealth: {} },
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
   h.createNotification.mockResolvedValue("notif-1");
   h.appendEvent.mockResolvedValue(undefined);
+  h.claimed = [{ id: "tool-1" }];
 });
 
 describe("notifyConnectorUnhealthy — event-spine promotion", () => {
@@ -79,13 +82,9 @@ describe("notifyConnectorUnhealthy — event-spine promotion", () => {
   });
 
   it("dedupes the event append via the SAME 6h cooldown as the notification", async () => {
-    // Already nudged 1 minute ago — well inside the 6h cooldown.
-    const recent = await notifyConnectorUnhealthy({
-      ...baseOpts,
-      watermarkMetadata: {
-        connectionHealth: { google: { lastNotifiedMs: Date.now() - 60_000 } },
-      },
-    });
+    // The claim updated no row: the window is already held (nudged inside 6h).
+    h.claimed = [];
+    const recent = await notifyConnectorUnhealthy(baseOpts);
 
     expect(recent).toBe(false);
     expect(h.createNotification).not.toHaveBeenCalled();

@@ -15,6 +15,7 @@ import {
   tools,
   intelligenceServices,
   eq,
+  and,
   drizzleSql,
   ensureExternalChannel,
   insertChannelMessage,
@@ -155,7 +156,6 @@ interface NotifyConnectorOpts {
    * connector caller keeps working unchanged.
    */
   watermarkTable?: HealthWatermarkTable;
-  watermarkMetadata: Record<string, unknown> | null | undefined;
   /** Optional Discord team channel (external id) to also post the nudge into. */
   discordTeamChannelId?: string;
   errorMessage?: string;
@@ -176,19 +176,96 @@ interface NotifyConnectorOpts {
 }
 
 /**
+ * CLAIM the cooldown for one connector: ONE conditional UPDATE that advances
+ * `metadata.connectionHealth.<key>.lastNotifiedMs` to now only WHERE the stored
+ * value is absent or older than the cooldown, RETURNING the row. True = this
+ * caller won the window and must emit; false = someone already holds it.
+ *
+ * Why in the database and not from a metadata snapshot: the caller's snapshot
+ * was read BEFORE the run, so every run that shared it passed the check before
+ * any of them wrote the watermark. One Google tool row's connection sync runs
+ * contact / email.thread / event for each of its connections against the SAME
+ * snapshot, and each failing run nudged: 292 identical "Google needs
+ * re-authorization" rows on one pod, 8 per burst, from 2026-10-18 to 11-01.
+ * Concurrent claims serialize on the row lock, and Postgres re-checks the WHERE
+ * against the winner's new row, so exactly one claim per window returns a row.
+ *
+ * A failed claim (DB error) emits nothing: a nudge that cannot record itself
+ * would repeat every tick, which is the storm this exists to stop.
+ */
+async function claimNudgeWindow(opts: NotifyConnectorOpts): Promise<boolean> {
+  const now = Date.now();
+  const cutoff = now - NUDGE_COOLDOWN_MS;
+  // The connector key is a bound array element, never interpolated into SQL.
+  const watermarkPath = drizzleSql`ARRAY['connectionHealth', ${opts.connectorKey}, 'lastNotifiedMs']::text[]`;
+  // Nested jsonb_set ensures the parent object exists. Same expression against
+  // whichever table holds the row: the two branches differ only in which
+  // `metadata` column and id they bind.
+  const watermarkSql = (
+    column: typeof tools.metadata | typeof intelligenceServices.metadata
+  ) =>
+    drizzleSql`jsonb_set(
+        jsonb_set(COALESCE(${column}, '{}'::jsonb), '{connectionHealth}', COALESCE(${column}#>'{connectionHealth}', '{}'::jsonb), true),
+        ARRAY['connectionHealth', ${opts.connectorKey}]::text[], jsonb_build_object('lastNotifiedMs', ${now}::bigint), true)`;
+  const outsideCooldown = (
+    column: typeof tools.metadata | typeof intelligenceServices.metadata
+  ) =>
+    drizzleSql`COALESCE((${column} #>> ${watermarkPath})::numeric, 0) < ${cutoff}::bigint`;
+
+  try {
+    const claimed =
+      (opts.watermarkTable ?? "tools") === "intelligence_services"
+        ? await db
+            .update(intelligenceServices)
+            .set({
+              metadata: watermarkSql(intelligenceServices.metadata),
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(intelligenceServices.id, opts.watermarkToolId),
+                outsideCooldown(intelligenceServices.metadata)
+              )
+            )
+            .returning({ id: intelligenceServices.id })
+        : await db
+            .update(tools)
+            .set({
+              metadata: watermarkSql(tools.metadata),
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(tools.id, opts.watermarkToolId),
+                outsideCooldown(tools.metadata)
+              )
+            )
+            .returning({ id: tools.id });
+    return claimed.length > 0;
+  } catch (err) {
+    logger.error(
+      {
+        err,
+        connector: opts.connectorKey,
+        table: opts.watermarkTable ?? "tools",
+      },
+      "connection-health: cooldown claim failed — nudge NOT emitted"
+    );
+    return false;
+  }
+}
+
+/**
  * Emit a reconnect nudge for an unhealthy connector, at most once per cooldown.
  * Never throws. Returns true if a nudge was actually emitted this call.
  */
 export async function notifyConnectorUnhealthy(
   opts: NotifyConnectorOpts
 ): Promise<boolean> {
-  // Dedup: skip if we already nudged for this connector within the cooldown.
-  const health = (opts.watermarkMetadata?.connectionHealth ?? {}) as Record<
-    string,
-    { lastNotifiedMs?: number }
-  >;
-  const last = health[opts.connectorKey]?.lastNotifiedMs ?? 0;
-  if (Date.now() - last < NUDGE_COOLDOWN_MS) return false;
+  // Dedup: claim the cooldown window first; only the claim's winner emits.
+  // Also false when no row has `watermarkToolId`: with nowhere to record the
+  // nudge it could not be deduped, so it is not sent.
+  if (!(await claimNudgeWindow(opts))) return false;
 
   // 1. In-app notification — `connector.auth.expired` by default, or the
   //    caller's own registry type when the failure is a different thing.
@@ -215,7 +292,7 @@ export async function notifyConnectorUnhealthy(
   //     `notification.created` wrapper NotificationService.create() always
   //     appends carries no domain-specific type, so nothing that filters or
   //     projects BY event type can recognize this occurrence. Gated on the
-  //     SAME cooldown check above (early-returned before this point), so a
+  //     SAME cooldown claim above (early-returned before this point), so a
   //     repeated probe within the 6h window never appends a duplicate.
   const mappedEventType = NOTIFICATION_EVENT_TYPE_MAP[notificationType];
   if (mappedEventType) {
@@ -286,39 +363,6 @@ export async function notifyConnectorUnhealthy(
       "connection-health: no Discord notice channel resolved — alert is in-app ONLY (set discord.feedbackChannel on the discord tool row)"
     );
   }
-
-  // 3. Advance the watermark (nested jsonb_set ensures the parent object exists;
-  //    the connector key is a bound array element, never interpolated into SQL).
-  //    Same statement against whichever table holds the row — the two branches
-  //    differ only in which `metadata` column and id they bind.
-  const watermarkAt = Date.now();
-  const watermarkSql = (
-    column: typeof tools.metadata | typeof intelligenceServices.metadata
-  ) =>
-    drizzleSql`jsonb_set(
-        jsonb_set(COALESCE(${column}, '{}'::jsonb), '{connectionHealth}', COALESCE(${column}#>'{connectionHealth}', '{}'::jsonb), true),
-        ARRAY['connectionHealth', ${opts.connectorKey}]::text[], jsonb_build_object('lastNotifiedMs', ${watermarkAt}::bigint), true)`;
-
-  const persistWatermark =
-    (opts.watermarkTable ?? "tools") === "intelligence_services"
-      ? db
-          .update(intelligenceServices)
-          .set({
-            metadata: watermarkSql(intelligenceServices.metadata),
-            updatedAt: new Date(),
-          })
-          .where(eq(intelligenceServices.id, opts.watermarkToolId))
-      : db
-          .update(tools)
-          .set({
-            metadata: watermarkSql(tools.metadata),
-            updatedAt: new Date(),
-          })
-          .where(eq(tools.id, opts.watermarkToolId));
-
-  await persistWatermark.catch((err) =>
-    logger.warn({ err }, "connection-health: watermark persist failed")
-  );
 
   logger.info(
     {
