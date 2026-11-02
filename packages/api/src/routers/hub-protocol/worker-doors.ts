@@ -16,6 +16,7 @@
  * `playbooks.run`. Nothing here decides a permission.
  */
 import { TRPCError } from "@trpc/server";
+import type { HowOften } from "@synap-core/types/workers/how-often";
 import {
   WorkerScopeOverlapError,
   enableWorker,
@@ -102,7 +103,10 @@ export function enableWorkerDoor(
   identity: PlaybookDoorIdentity,
   input: {
     playbookId: string;
-    activatorKey: string;
+    activatorKey?: string;
+    /** The "How often?" clock (`howOftenEnable`), instead of a key. */
+    schedule?: HowOften;
+    mode?: "run" | "propose";
     trackId?: string;
     projectId?: string;
   }
@@ -118,7 +122,9 @@ export function enableWorkerDoor(
       userId: identity.userId,
       agentUserId: identity.agentUserId ?? null,
       playbookId: input.playbookId,
-      activatorKey: input.activatorKey,
+      ...(input.activatorKey ? { activatorKey: input.activatorKey } : {}),
+      ...(input.schedule ? { schedule: input.schedule } : {}),
+      ...(input.mode ? { mode: input.mode } : {}),
       ...(input.trackId ? { trackId: input.trackId } : {}),
       ...(input.projectId ? { projectId: input.projectId } : {}),
     })

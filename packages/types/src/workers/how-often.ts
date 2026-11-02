@@ -13,8 +13,11 @@
  * {@link howOftenEnable} says what to do with that answer and the chosen
  * playbook's declared activators: enable the declared worker (its
  * `activatorKey`), enable nothing, or tell the person the playbook does not
- * run that way (only a DECLARED activator can be enabled: `enableWorker`
- * refuses any other key). The cron is built by the rule grammar's own
+ * run that way. Only a DECLARED activator can be enabled, with one
+ * exception: a playbook that works on no subject declares none, and the
+ * person's own clock (daily / weekly) is enabled for it (`chosen: true`;
+ * `workers.enable` takes the same answer as `schedule` and compiles it
+ * through the same governed rule door). The cron is built by the rule grammar's own
  * builder (`cronExpressionOf`), never spelled here, and the key by the one
  * {@link workerActivatorKey}.
  */
@@ -94,8 +97,17 @@ export function howOftenEvents(
 export type HowOftenEnable =
   /** Until it's done: enable nothing. */
   | { status: "no_worker" }
-  /** Call `workers.enable({ playbookId, trackId, activatorKey })`. */
-  | { status: "enable"; activatorKey: string; activator: WorkerActivator }
+  /**
+   * Call `workers.enable({ playbookId, trackId, activatorKey })`, or, for a
+   * `chosen` clock (a playbook with no subject: nothing is declared),
+   * `workers.enable({ playbookId, trackId, schedule: <the answer> })`.
+   */
+  | {
+      status: "enable";
+      activatorKey: string;
+      activator: WorkerActivator;
+      chosen?: true;
+    }
   /**
    * The playbook declares no such worker: the person picks another answer
    * or another playbook (a clock it does not declare would need the
@@ -113,7 +125,9 @@ export type HowOftenEnable =
  */
 export function howOftenEnable(
   choice: HowOften,
-  declared: readonly WorkerActivator[]
+  declared: readonly WorkerActivator[],
+  /** The playbook works on no subject (`runsWithoutSubject` on a match row). */
+  opts: { runsWithoutSubject?: boolean } = {}
 ): HowOftenEnable {
   if (choice.kind === "until_done") return { status: "no_worker" };
   if (choice.kind === "event") {
@@ -134,7 +148,10 @@ export function howOftenEnable(
   const hit = declared.find(
     (a) => a.on === "schedule" && workerActivatorKey(a) === key
   );
-  return hit
-    ? { status: "enable", activatorKey: key, activator: hit }
+  if (hit) return { status: "enable", activatorKey: key, activator: hit };
+  // A playbook with no subject declares no worker: the person's clock is its
+  // worker. One with a subject runs only as it declares.
+  return opts.runsWithoutSubject
+    ? { status: "enable", activatorKey: key, activator: clock, chosen: true }
     : { status: "not_declared", activatorKey: key };
 }

@@ -37,6 +37,7 @@ import { TRPCError } from "@trpc/server";
 import {
   db,
   and,
+  or,
   eq,
   inArray,
   lte,
@@ -54,6 +55,7 @@ import { AccessContext, scopedDb } from "../../access/index.js";
 import type { PlaybookActivator } from "@synap/playbooks";
 import {
   DEFAULT_WORKER_MAX_PENDING_APPROVALS,
+  DEFAULT_WORKER_MODE,
   effectiveWorkerSize,
   type WorkerScopeKind,
   type WorkerSize,
@@ -69,6 +71,10 @@ import {
   type RunMarkEntry,
 } from "@synap-core/types/workers/health";
 import { workerWhen } from "@synap-core/types/workers/words";
+import {
+  howOftenEnable,
+  type HowOften,
+} from "@synap-core/types/workers/how-often";
 import {
   goalRunsRollup,
   type GoalRunsRollup,
@@ -93,6 +99,8 @@ import {
   activatorRuleDecl,
   activatorSeedTemplate,
   applyPlaybookActivators,
+  chosenClockActivator,
+  modeOfCompiledRule,
   parseWorkerEnablementKey,
   readSubjectProfile,
   rulesOfSeedTemplate,
@@ -181,7 +189,12 @@ async function visiblePlaybooks(input: {
               drizzleSql`${playbooks.subjectProfile}->>'profileSlug' = ${input.profileSlug}`,
             ]
           : []),
-        drizzleSql`jsonb_array_length(coalesce(${playbooks.subjectProfile}->'activators', '[]'::jsonb)) > 0`
+        // A playbook with workers: declared ones, or (no subject) a clock a
+        // person chose when enabling it (`chosenClockActivator`).
+        or(
+          drizzleSql`jsonb_array_length(coalesce(${playbooks.subjectProfile}->'activators', '[]'::jsonb)) > 0`,
+          drizzleSql`coalesce(${playbooks.subjectProfile}->>'profileSlug', '') = ''`
+        )
       )
     );
 }
@@ -517,7 +530,13 @@ async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
     if (input.liveOnly && !automationId) continue;
     const activator =
       process.activators.find((a) => activatorKey(a) === en.activatorKey) ??
-      null;
+      (en.scope === "project"
+        ? chosenClockActivator({
+            profileSlug: process.profileSlug,
+            activatorKey: en.activatorKey,
+            mode: modeOfCompiledRule(row.meta),
+          })
+        : null);
     out.push({
       automations: automationsOf.get(row.id) ?? { current: null, all: [] },
       worker: {
@@ -679,12 +698,23 @@ export type EnableWorkerResult =
  * Enable a declared worker for ONE project (or one track, which files its
  * sessions there and enables for the track's project). See the header for
  * overlap and governance.
+ *
+ * Name the worker by its `activatorKey`, or answer "How often?" with a clock
+ * (`schedule`, daily / weekly), read by the ONE `howOftenEnable`: a clock the
+ * playbook declares enables that declared worker; on a playbook that works on
+ * no subject (it declares none) the clock is the person's own, compiled in
+ * `mode` (default `propose`: each run is asked first). Either way the rule
+ * goes through the same governed rule door (an agent's enable is proposed).
+ * Event workers are only ever the declared ones.
  */
 export async function enableWorker(input: {
   userId: string;
   agentUserId?: string | null;
   playbookId: string;
-  activatorKey: string;
+  activatorKey?: string;
+  schedule?: HowOften;
+  /** A chosen clock's mode; a declared worker runs in its declared mode. */
+  mode?: "run" | "propose";
   projectId?: string | null;
   trackId?: string | null;
 }): Promise<EnableWorkerResult> {
@@ -705,16 +735,9 @@ export async function enableWorker(input: {
     });
   }
   const process = readPlaybookProcess(pb.subjectProfile);
-  const activator = process.activators.find(
-    (a) => activatorKey(a) === input.activatorKey
-  );
-  if (!activator || !process.profileSlug) {
-    const declared = process.activators.map((a) => activatorKey(a));
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: `"${pb.name}" declares no worker "${input.activatorKey}". Declared: ${declared.join(", ") || "none"}.`,
-    });
-  }
+  const picked = pickWorkerToEnable(pb.name, process, input);
+  const activator = picked.activator;
+  const workerKey = picked.activatorKey;
   if (activator.on === "manual") {
     throw new TRPCError({
       code: "BAD_REQUEST",
@@ -758,11 +781,13 @@ export async function enableWorker(input: {
   }
 
   const key = workerEnablementKey({
-    activatorKey: input.activatorKey,
+    activatorKey: workerKey,
     projectId,
     trackId,
   });
-  const subject = await readSubjectProfile(process.profileSlug, pb.workspaceId);
+  const subject = process.profileSlug
+    ? await readSubjectProfile(process.profileSlug, pb.workspaceId)
+    : { profileKind: "kind" as const, lifecycleProperty: null };
   const decl = activatorRuleDecl({
     activator,
     playbookId: pb.id,
@@ -789,7 +814,7 @@ export async function enableWorker(input: {
   // Overlap: refused BEFORE anything is written, naming the holder.
   const before = await findOverlap({
     playbookId: pb.id,
-    activatorKey: input.activatorKey,
+    activatorKey: workerKey,
     projectId: project,
   });
   if (before) throw before;
@@ -804,7 +829,7 @@ export async function enableWorker(input: {
   if (result.status === "enabled") {
     const after = await findOverlap({
       playbookId: pb.id,
-      activatorKey: input.activatorKey,
+      activatorKey: workerKey,
       projectId: project,
       excludeRuleId: result.ruleId,
     });
@@ -891,6 +916,79 @@ export async function enableWorker(input: {
     await applyPlaybookActivators({ playbookId: pb.id, userId: input.userId });
   }
   return result;
+}
+
+/**
+ * Which worker an enable names: the declared one of `activatorKey`, or the
+ * one a "How often?" clock reads as (`howOftenEnable`, the one derivation).
+ * Throws BAD_REQUEST, naming what the playbook declares, for anything else.
+ */
+function pickWorkerToEnable(
+  playbookName: string,
+  process: ReturnType<typeof readPlaybookProcess>,
+  input: {
+    activatorKey?: string;
+    schedule?: HowOften;
+    mode?: "run" | "propose";
+  }
+): { activatorKey: string; activator: PlaybookActivator } {
+  const declared = process.activators;
+  const refuse = (what: string): never => {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `"${playbookName}" declares no worker ${what}. Declared: ${declared.map((a) => activatorKey(a)).join(", ") || "none"}.`,
+    });
+  };
+  if ((input.activatorKey === undefined) === (input.schedule === undefined)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "Name the worker to enable: its activatorKey, or a schedule (daily or weekly).",
+    });
+  }
+  if (input.schedule) {
+    if (input.schedule.kind !== "daily" && input.schedule.kind !== "weekly") {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "schedule is a clock (daily or weekly); a worker on an event is enabled by its activatorKey.",
+      });
+    }
+    const read = howOftenEnable(input.schedule, declared, {
+      runsWithoutSubject: !process.profileSlug,
+    });
+    if (read.status === "invalid") {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "That is not a time (HH:MM, UTC) or a day (0-6).",
+      });
+    }
+    if (read.status !== "enable") return refuse("on that schedule");
+    if (read.chosen) {
+      return {
+        activatorKey: read.activatorKey,
+        activator: {
+          on: "schedule",
+          cron: read.activator.cron ?? "",
+          mode: input.mode ?? DEFAULT_WORKER_MODE,
+        },
+      };
+    }
+    const hit = declared.find((a) => activatorKey(a) === read.activatorKey);
+    return hit
+      ? { activatorKey: read.activatorKey, activator: hit }
+      : refuse("on that schedule");
+  }
+  const key = input.activatorKey!;
+  const hit = declared.find((a) => activatorKey(a) === key);
+  if (hit && process.profileSlug) return { activatorKey: key, activator: hit };
+  // A chosen clock named by its key (a resume, or a client that kept it).
+  const chosen = chosenClockActivator({
+    profileSlug: process.profileSlug,
+    activatorKey: key,
+    mode: input.mode ?? DEFAULT_WORKER_MODE,
+  });
+  return chosen ? { activatorKey: key, activator: chosen } : refuse(`"${key}"`);
 }
 
 export type SetWorkerPausedResult =

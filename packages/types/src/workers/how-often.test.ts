@@ -99,6 +99,33 @@ describe("howOftenEnable", () => {
     ).toBe("not_declared");
   });
 
+  it("on a playbook with no subject, a clock it does not declare is the person's own worker", () => {
+    const free = { runsWithoutSubject: true };
+    expect(
+      howOftenEnable({ kind: "weekly", day: 5, time: "17:00" }, [], free)
+    ).toEqual({
+      status: "enable",
+      activatorKey: "schedule:0 17 * * 5",
+      activator: { on: "schedule", cron: "0 17 * * 5" },
+      chosen: true,
+    });
+    // A declared clock is still the declared worker, not a chosen one.
+    expect(
+      howOftenEnable({ kind: "daily", time: "07:30" }, DECLARED, free)
+    ).toEqual({
+      status: "enable",
+      activatorKey: "schedule:30 7 * * *",
+      activator: DECLARED[1],
+    });
+    // An event is never chosen: only declared ones run.
+    expect(
+      howOftenEnable({ kind: "event", activatorKey: "created" }, [], free)
+    ).toEqual({ status: "not_declared", activatorKey: "created" });
+    expect(howOftenEnable({ kind: "daily", time: "25:00" }, [], free)).toEqual({
+      status: "invalid",
+    });
+  });
+
   it("an event answer enables the declared worker", () => {
     expect(
       howOftenEnable({ kind: "event", activatorKey: "count:idea" }, DECLARED)

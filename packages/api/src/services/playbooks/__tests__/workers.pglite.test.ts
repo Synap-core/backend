@@ -932,3 +932,170 @@ describe("pod admin rows — the goal an automation or a playbook serves", () =>
     });
   });
 });
+
+// Goals that run: the "How often?" clock on enable (`howOftenEnable`, the one
+// derivation). A declared schedule is that declared worker; on a playbook with
+// no subject (it declares none) the person's clock compiles through the same
+// governed rule door, in the mode they chose (default propose).
+describe("enableWorker — a 'How often?' clock", () => {
+  const PB_SCHED = "66666666-6666-4666-8666-666666666668";
+  const PB_FREE = "66666666-6666-4666-8666-666666666669";
+  beforeAll(async () => {
+    await q(
+      `insert into playbooks (id, name, status, workspace_id, created_by, goal_template, subject_profile)
+       values ($1, 'Weekly deals', 'active', $3, $4, 'g', $5::jsonb),
+              ($2, 'Weekly newsletter', 'active', $3, $4, 'g', null)`,
+      [
+        PB_SCHED,
+        PB_FREE,
+        WS,
+        USER,
+        JSON.stringify({
+          profileSlug: "deal",
+          activators: [{ on: "schedule", cron: "0  9 * * 1", mode: "run" }],
+        }),
+      ]
+    );
+  });
+  const created = () =>
+    vi.mocked(createRuleGoverned).mock.calls.at(-1)![0] as unknown as {
+      agentUserId?: string;
+      seed: { key: string };
+      sentence: {
+        trigger: { triggerType: string };
+        actions: Array<{ config: Record<string, unknown> }>;
+      };
+    };
+
+  it("a clock the playbook declares enables THAT declared worker", async () => {
+    const res = await enableWorker({
+      userId: USER,
+      playbookId: PB_SCHED,
+      schedule: { kind: "weekly", day: 1, time: "09:00" },
+      trackId: T1,
+    });
+    expect(res).toMatchObject({ status: "enabled" });
+    const call = created();
+    expect(call.seed.key).toBe(`schedule:0 9 * * 1@project:${P1}@track:${T1}`);
+    // The declared worker's compile: its worker spec, over its subject kind.
+    expect(call.sentence.actions[0]!.config.__worker).toMatchObject({
+      key: "schedule:0 9 * * 1",
+      profileSlug: "deal",
+    });
+    // A clock it does not declare is refused, naming what it declares.
+    await expect(
+      enableWorker({
+        userId: USER,
+        playbookId: PB_SCHED,
+        schedule: { kind: "daily", time: "09:00" },
+        trackId: T2,
+      })
+    ).rejects.toThrow(
+      /declares no worker on that schedule.*schedule:0 9 \* \* 1/
+    );
+  });
+
+  it("on a playbook with no subject, the person's clock compiles: one run per tick, filed in the goal, asked first by default", async () => {
+    const res = await enableWorker({
+      userId: USER,
+      agentUserId: "agent-1",
+      playbookId: PB_FREE,
+      schedule: { kind: "daily", time: "07:30" },
+      trackId: T1,
+    });
+    expect(res).toMatchObject({ status: "enabled" });
+    const call = created();
+    // Through the one rule door, as the agent (whose write it proposes).
+    expect(call.agentUserId).toBe("agent-1");
+    expect(call.seed.key).toBe(`schedule:30 7 * * *@project:${P1}@track:${T1}`);
+    expect(call.sentence.trigger.triggerType).toBe("cron");
+    const node = call.sentence.actions[0]!.config;
+    expect(node).toMatchObject({ __mode: "propose" });
+    expect(node).not.toHaveProperty("__worker");
+    expect(Object.values(node)).toEqual(
+      expect.arrayContaining([PB_FREE, P1, T1])
+    );
+    const [w] = await listEnabledWorkers({ userId: USER, trackId: T1 });
+    expect(w).toMatchObject({
+      playbookId: PB_FREE,
+      activatorKey: "schedule:30 7 * * *",
+      activator: { on: "schedule", cron: "30 7 * * *", mode: "propose" },
+      profileSlug: null,
+      mode: "propose",
+      size: "per_moment",
+    });
+  });
+
+  it("a chosen clock may just run; its mode is read back off its rule", async () => {
+    await enableWorker({
+      userId: USER,
+      playbookId: PB_FREE,
+      schedule: { kind: "weekly", day: 5, time: "17:00" },
+      mode: "run",
+      trackId: T2,
+    });
+    expect(created().sentence.actions[0]!.config).not.toHaveProperty("__mode");
+    const [w] = await listEnabledWorkers({ userId: USER, trackId: T2 });
+    expect(w).toMatchObject({
+      mode: "run",
+      activatorKey: "schedule:0 17 * * 5",
+    });
+  });
+
+  it("an event, an hourly clock or a bad time is never a chosen worker", async () => {
+    const free = (o: Record<string, unknown>) =>
+      enableWorker({ userId: USER, playbookId: PB_FREE, trackId: T1, ...o });
+    await expect(free({ activatorKey: "created" })).rejects.toThrow(
+      /declares no worker/
+    );
+    await expect(free({ activatorKey: "schedule:0 * * * *" })).rejects.toThrow(
+      /declares no worker/
+    );
+    await expect(
+      free({ schedule: { kind: "daily", time: "24:00" } })
+    ).rejects.toThrow(/not a time/);
+    await expect(
+      free({
+        activatorKey: "schedule:0 9 * * *",
+        schedule: { kind: "daily", time: "09:00" },
+      })
+    ).rejects.toThrow(/activatorKey, or a schedule/);
+    const { rows } = await q(`select count(*)::int as n from skills`);
+    expect((rows[0] as { n: number }).n).toBe(0);
+  });
+
+  it("the activator pass keeps a live chosen clock, and retires it once the playbook is archived", async () => {
+    const res = (await enableWorker({
+      userId: USER,
+      playbookId: PB_FREE,
+      schedule: { kind: "daily", time: "07:30" },
+      mode: "run",
+      trackId: T1,
+    })) as { ruleId: string };
+    const real = await vi.importActual<
+      typeof import("../playbook-activators.js")
+    >("../playbook-activators.js");
+    vi.mocked(updateRuleGoverned).mockClear();
+    const pass = await real.applyPlaybookActivators({
+      playbookId: PB_FREE,
+      userId: USER,
+    });
+    expect(pass.outcomes).toEqual([
+      expect.objectContaining({ ruleId: res.ruleId, status: "unchanged" }),
+    ]);
+    expect(updateRuleGoverned).not.toHaveBeenCalled();
+    await q(`update playbooks set status = 'archived' where id = $1`, [
+      PB_FREE,
+    ]);
+    try {
+      await real.applyPlaybookActivators({ playbookId: PB_FREE, userId: USER });
+      expect(updateRuleGoverned).toHaveBeenCalledWith(
+        expect.objectContaining({ ruleId: res.ruleId, draft: true })
+      );
+    } finally {
+      await q(`update playbooks set status = 'active' where id = $1`, [
+        PB_FREE,
+      ]);
+    }
+  });
+});

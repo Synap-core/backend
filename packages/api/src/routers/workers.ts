@@ -29,6 +29,10 @@ import {
   listWorkerViews,
   setWorkerPaused,
 } from "../services/playbooks/workers.js";
+import {
+  workerModeSchema,
+  workerScheduleSchema,
+} from "../schemas/worker-enable.js";
 
 const activatorWire = z.object({
   on: z.enum(["created", "enters_status", "count", "schedule", "manual"]),
@@ -101,12 +105,22 @@ export const workersRouter = router({
         .object({
           playbookId: z.string().uuid(),
           /** The declared activator's key (`activatorKey`). */
-          activatorKey: z.string().min(1),
+          activatorKey: z.string().min(1).optional(),
+          /**
+           * Or the "How often?" clock (`howOftenEnable`): a declared schedule,
+           * or, on a playbook with no subject, the person's own.
+           */
+          schedule: workerScheduleSchema.optional(),
+          /** A chosen clock's mode (default `propose`). */
+          mode: workerModeSchema.optional(),
           projectId: z.string().uuid().optional(),
           trackId: z.string().uuid().optional(),
         })
         .refine((i) => !!i.projectId || !!i.trackId, {
           message: "Enable a worker for a project or a goal.",
+        })
+        .refine((i) => !i.activatorKey !== !i.schedule, {
+          message: "Name the worker: its activatorKey or a schedule.",
         })
     )
     .output(

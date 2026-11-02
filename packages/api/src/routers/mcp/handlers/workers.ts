@@ -96,11 +96,16 @@ export const workerHandlers: McpHandlerMap = {
           "playbookId (uuid), activatorKey (one the playbook declares: synap_list_playbooks shows its activators) and trackId (the goal) are required.",
       });
     }
+    const mode = ctx.args.mode;
+    if (mode !== undefined && mode !== "run" && mode !== "propose") {
+      return ok({ error: "mode is 'propose' (the default) or 'run'." });
+    }
     return render(
       await enableWorkerDoor(identity(ctx), {
         playbookId,
         activatorKey,
         trackId,
+        ...(mode ? { mode } : {}),
       }),
       ctx.userId
     );

@@ -4638,7 +4638,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Make a GOAL run on its own: enable one of a playbook's declared workers on the goal (a track). activatorKey names the trigger the playbook declares (synap_list_playbooks shows `activators`): 'schedule:<cron>' (e.g. 'schedule:0 9 * * *' = every day at 09:00 UTC; 'schedule:0 9 * * 1' = every Monday), 'enters_status:<status>' (when a thing enters that status), 'count:<status>' (when enough things are in it), 'created'. Its runs are filed in the goal. A goal that should simply be worked until it is done needs NO worker. Refused when the same worker already runs for the goal's project or the whole space (the reply names the holder: pause it there first) and for a manual worker (run it with synap_run_worker or synap_run_playbook instead). Governed: status='proposed' is SUCCESS — say it awaits the person's review, do not retry. Otherwise status='enabled' with its ruleId.",
+          "Make a GOAL run on its own: enable one of a playbook's declared workers on the goal (a track). activatorKey names the trigger the playbook declares (synap_list_playbooks shows `activators`): 'schedule:<cron>' (e.g. 'schedule:0 9 * * *' = every day at 09:00 UTC; 'schedule:0 9 * * 1' = every Monday), 'enters_status:<status>' (when a thing enters that status), 'count:<status>' (when enough things are in it), 'created'. A playbook with NO subject declares no workers: give it your own clock, every day ('schedule:<m> <h> * * *') or every week on one day ('schedule:<m> <h> * * <0-6>'), and say with mode whether each run is asked first ('propose', the default) or just runs ('run'). Its runs are filed in the goal. A goal that should simply be worked until it is done needs NO worker. Refused when the same worker already runs for the goal's project or the whole space (the reply names the holder: pause it there first) and for a manual worker (run it with synap_run_worker or synap_run_playbook instead). Governed: status='proposed' is SUCCESS — say it awaits the person's review, do not retry. Otherwise status='enabled' with its ruleId.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4654,7 +4654,13 @@ export const tools = {
             activatorKey: {
               type: "string",
               description:
-                "The declared trigger's key: 'schedule:<cron>', 'enters_status:<status>', 'count:<status>' or 'created'.",
+                "The declared trigger's key: 'schedule:<cron>', 'enters_status:<status>', 'count:<status>' or 'created'; on a playbook with no subject, a daily or weekly 'schedule:<cron>' you choose.",
+            },
+            mode: {
+              type: "string",
+              enum: ["propose", "run"],
+              description:
+                "Only for a clock you chose on a playbook with no subject: 'propose' (default) files each run for the person to approve; 'run' runs it. A declared worker runs in the mode its playbook declares.",
             },
             sessionId: {
               type: "string",

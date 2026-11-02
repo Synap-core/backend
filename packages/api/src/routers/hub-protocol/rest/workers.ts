@@ -4,8 +4,9 @@
  *
  *   GET   /workers?trackId=…            the workers enabled on a goal (strict),
  *                                       each a GoalWorkerView (or ?projectId=…)
- *   POST  /workers                      enable { playbookId, activatorKey,
- *                                       trackId | projectId, agentUserId? }
+ *   POST  /workers                      enable { playbookId, activatorKey |
+ *                                       schedule, mode?, trackId | projectId,
+ *                                       agentUserId? }
  *   POST  /workers/:ruleId/paused       { paused, agentUserId? } — pause / resume
  *   POST  /workers/:ruleId/run          { reasoning?, agentUserId? } — run now,
  *                                       filed in its goal
@@ -23,6 +24,10 @@ import {
   type WorkerDoorOutcome,
 } from "../worker-doors.js";
 import type { PlaybookDoorIdentity } from "../playbook-doors.js";
+import {
+  workerModeSchema,
+  workerScheduleSchema,
+} from "../../../schemas/worker-enable.js";
 import { jsonGoverned } from "../proposal-response.js";
 import {
   errCode,
@@ -50,13 +55,20 @@ const ListQuery = z
 const EnableBody = z
   .object({
     playbookId: z.string().uuid(),
-    activatorKey: z.string().trim().min(1).max(500),
+    activatorKey: z.string().trim().min(1).max(500).optional(),
+    /** The "How often?" clock instead of a key (`howOftenEnable`). */
+    schedule: workerScheduleSchema.optional(),
+    /** A chosen clock's mode (default `propose`). */
+    mode: workerModeSchema.optional(),
     trackId: z.string().uuid().optional(),
     projectId: z.string().uuid().optional(),
     agentUserId: z.string().optional(),
   })
   .refine((b) => !!b.trackId || !!b.projectId, {
     message: "Enable a worker for a goal (trackId) or a project (projectId).",
+  })
+  .refine((b) => !b.activatorKey !== !b.schedule, {
+    message: "Name the worker: its activatorKey or a schedule.",
   });
 
 const PausedBody = z.object({
@@ -175,7 +187,11 @@ export function registerWorkersRoutes(app: HubHono): void {
         c,
         await enableWorkerDoor(doorIdentity(c, agent.agentUserId), {
           playbookId: parsed.data.playbookId,
-          activatorKey: parsed.data.activatorKey,
+          ...(parsed.data.activatorKey
+            ? { activatorKey: parsed.data.activatorKey }
+            : {}),
+          ...(parsed.data.schedule ? { schedule: parsed.data.schedule } : {}),
+          ...(parsed.data.mode ? { mode: parsed.data.mode } : {}),
           ...(parsed.data.trackId ? { trackId: parsed.data.trackId } : {}),
           ...(parsed.data.projectId
             ? { projectId: parsed.data.projectId }
