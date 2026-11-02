@@ -18,6 +18,12 @@
  * was refused. The last block drives `reconcileCapabilitiesToTemplates`
  * itself: an automatic pass now holds such an update for the owner and keeps
  * the approved version running; the owner's "Apply updates" lands it.
+ *
+ * Founder, 2026-11-02: "when updating a capability from marketplace, it seem
+ * to switch it off". The owner's Apply landed the new version AND the
+ * demotion: `skills.approved` went true → false, so the capability read
+ * "Its actions are off". The person applying an update approves the new
+ * version (`personApprovesUpdate`): what they turned on stays on.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { is } from "drizzle-orm";
@@ -398,7 +404,7 @@ describe("a catalog update never switches off an approved capability on its own"
     expect(report.updatesAvailable[0]!.reason).toContain("fal_generate_image");
   });
 
-  it("the owner's Apply updates lands it, and the changed skill re-earns its approval", async () => {
+  it("the owner's Apply updates lands it, and what the owner turned on stays on", async () => {
     await installAsContainer();
     await ownerTurnsItOn();
     const next = "return { ok: true, images: [args.prompt] };";
@@ -410,6 +416,45 @@ describe("a catalog update never switches off an approved capability on its own"
 
     expect(report.applied.map((a) => a.containerId)).toEqual([CONTAINER]);
     expect(await skillCode()).toBe(next);
+    expect((await skillRows())[0]!.approved).toBe(true);
+    expect((await toolRows())[0]!.approved).toBe(true);
+  });
+
+  it("the owner's Apply never turns ON a skill the owner left off", async () => {
+    await installAsContainer();
+    const next = "return { ok: true, images: [args.prompt] };";
+    catalogPublishes(falDefinition(next));
+
+    await reconcileCapabilitiesToTemplates({ applyNotifyPolicy: true });
+
+    expect(await skillCode()).toBe(next);
+    expect((await skillRows())[0]!.approved).toBe(false);
+  });
+
+  it("the owner's Apply still turns off a skill that moves to run on their computer (box)", async () => {
+    await installAsContainer();
+    await ownerTurnsItOn();
+    const def = falDefinition();
+    catalogPublishes({
+      ...def,
+      skills: def.skills.map((sk) => ({
+        ...sk,
+        kind: "code",
+        executionMode: "box",
+        code: "print('hi')",
+        metadata: {
+          readOnly: false,
+          box: { language: "python", entrypoint: "main.py" },
+        },
+      })),
+    });
+
+    const report = await reconcileCapabilitiesToTemplates({
+      applyNotifyPolicy: true,
+    });
+
+    expect(report.conflicts).toEqual([]);
+    expect(report.applied.map((a) => a.containerId)).toEqual([CONTAINER]);
     expect((await skillRows())[0]!.approved).toBe(false);
   });
 

@@ -536,6 +536,20 @@ export interface CreateCapabilityOptions {
    * package dependency, a third-party source.
    */
   officialSource?: boolean;
+  /**
+   * A PERSON is applying this definition as an update they chose: the owner's
+   * "Apply" on a catalog update (pod admin, `capabilities.applyUpdates`, or
+   * the approval of an agent's update proposal, which runs as the approver).
+   * That choice approves the new version, so a skill or MCP server that was
+   * on stays on even when what it runs changed (founder, 2026-11-02: "when
+   * updating a capability from marketplace, it seems to switch it off").
+   * Absent (an automatic pass, an install, an inline definition): a change to
+   * what an approved row runs demotes it, the content-swap-under-approval
+   * rule. A skill that newly moves to `box` (it would start running on the
+   * person's computer) is demoted either way, and approval is only ever
+   * KEPT, never granted: a row that was off stays off.
+   */
+  personApprovesUpdate?: boolean;
 }
 
 /**
@@ -857,12 +871,14 @@ export async function createCapabilityFromDefinition(
     if (existingMcp) {
       // SAME rule as `mcpServersRouter.update`: a re-apply that re-points an
       // approved server demotes it. Compared by VALUE, so an unchanged
-      // re-apply keeps the owner's approval.
+      // re-apply keeps the owner's approval, and so does an update the
+      // person applying it approved (`personApprovesUpdate`).
       const execChanged = execFieldsChanged(
         MCP_SERVER_RE_APPROVAL_FIELDS,
         execPatch,
         existingMcp as unknown as Record<string, unknown>
       );
+      const personApproves = opts.personApprovesUpdate === true;
       await db
         .update(mcpServersTable)
         .set({
@@ -870,8 +886,11 @@ export async function createCapabilityFromDefinition(
           description: m.description ?? null,
           ...execPatch,
           toolPolicy: m.toolPolicy ?? null,
-          enabled: m.enabled !== false,
-          ...(execChanged ? { approved: false } : {}),
+          // `enabled` is the owner's switch (`mcpServersRouter.update`): set
+          // from the definition only when the row is created, never on a
+          // re-apply, so an update cannot turn a server the owner switched
+          // off back on, or the reverse.
+          ...(personApproves ? {} : execChanged ? { approved: false } : {}),
           metadata: {
             ...((m.metadata as Record<string, unknown>) ?? {}),
             sourceCapability: def.key,
@@ -1176,6 +1195,16 @@ export async function createCapabilityFromDefinition(
         assertSkillCodeAllowed(s.kind ?? "code", s.code, s.executionMode);
       }
 
+      // The demotion, unless the person applying this update approves the new
+      // version (`personApprovesUpdate`). A move to box is demoted even then:
+      // the script would start running on the person's computer.
+      const movesToBox =
+        s.executionMode === "box" && existingSkill.executionMode !== "box";
+      const demote =
+        (execContentChanged || requiresWidened) &&
+        existingSkill.approved &&
+        (opts.personApprovesUpdate !== true || movesToBox);
+
       await db
         .update(skillsTable)
         .set({
@@ -1213,9 +1242,7 @@ export async function createCapabilityFromDefinition(
           // live bag (marketSource, rule, counters) is then untouched.
           metadata: projectSkillMetadata(existingSkill.metadata, s.metadata),
           updatedAt: new Date(),
-          ...((execContentChanged || requiresWidened) && existingSkill.approved
-            ? { approved: false }
-            : {}),
+          ...(demote ? { approved: false } : {}),
         })
         .where(eq(skillsTable.id, existingSkill.id));
       if (requiredToolIds.length > 0) {
