@@ -37,7 +37,6 @@ export function countAiTrpcProcedures(url: string): number {
     .length;
 }
 
-/** `app.use("/trpc/*", trpcRefusal(trpcAiRateLimit(aiRateLimitMiddleware)))`. */
 export function trpcAiRateLimit(limiter: MiddlewareHandler): MiddlewareHandler {
   return async (c, next) => {
     const charges = countAiTrpcProcedures(c.req.url);

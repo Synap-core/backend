@@ -110,7 +110,11 @@ import { configureLocalMode, safeTokenEqual } from "@synap/auth";
 import { buildKratosProxyTargetUrl } from "./kratos-proxy-url.js";
 import { trpcSessionGate } from "./trpc-session-gate.js";
 import { trpcAiRateLimit } from "./trpc-ai-rate-limit.js";
-import { trpcRefusals } from "@synap/api/trpc-refusal";
+import {
+  markTrpcAnswer,
+  TRPC_MAX_BATCH_SIZE,
+  trpcEnvelope,
+} from "@synap/api/trpc-refusal";
 import { createRequire } from "node:module";
 import {
   DEFAULT_POD_STATE_DIR,
@@ -277,6 +281,12 @@ if (!hasConfiguredOrigins() && process.env.NODE_ENV === "production") {
     "[SECURITY] Neither SYNAP_BASE_DOMAIN nor ALLOWED_ORIGINS is set — all cross-origin browser requests will be denied. Set SYNAP_BASE_DOMAIN to your pod's base domain (e.g. example.com) so first-party surfaces (studio., app., …) can reach the pod."
   );
 }
+
+// Every /trpc answer is a tRPC response, the refusals below included (the
+// CORS 403, the size limit's 413, the rate limit's 429, the session gate's
+// 401): OUTERMOST on /trpc, so it sees what every middleware answered. See
+// packages/api middleware/trpc-refusal.ts.
+app.use("/trpc/*", trpcEnvelope(appRouter));
 
 // Credentialless public doors FIRST (outermost): their transport policy must
 // never be seen, widened or 403'd by the credentialed CORS below.
@@ -1054,11 +1064,8 @@ mountAdminEventStream(app);
 // tRPC routes — session auth on every call except the public procedures
 // (health.*, setup.*, invite preview/accept). See trpc-session-gate.ts. The
 // session is a Kratos one or a Synap app's device token, and no other bearer
-// (packages/api middleware/app-session.ts). Its refusals, and the AI rate
-// limit's below, reach the client as tRPC errors (packages/api
-// middleware/trpc-refusal.ts).
-const trpcRefusal = trpcRefusals(appRouter);
-app.use("/trpc/*", trpcRefusal(trpcSessionGate(appSessionMiddleware())));
+// (packages/api middleware/app-session.ts).
+app.use("/trpc/*", trpcSessionGate(appSessionMiddleware()));
 
 // WebSocket ticket minting (see ws-auth.ts for the CSWSH rationale). The browser
 // exchanges its authenticated session for a short-lived, single-use ticket, then
@@ -1201,6 +1208,7 @@ app.use("/api/hub/trpc/*", async (c) => {
     endpoint: "/api/hub/trpc",
     req,
     router: hubProtocolRouter,
+    maxBatchSize: TRPC_MAX_BATCH_SIZE,
     createContext: async () => context as any,
     onError({ error, path }) {
       apiLogger.error({ err: error, path }, "hub tRPC error");
@@ -1287,7 +1295,7 @@ app.route("/api/media", mediaTranscribeApp);
 
 // AI rate limiting — charged once per AI procedure in the request, batched or
 // not (chat.sendMessage, channels.sendMessage). See trpc-ai-rate-limit.ts.
-app.use("/trpc/*", trpcRefusal(trpcAiRateLimit(aiRateLimitMiddleware)));
+app.use("/trpc/*", trpcAiRateLimit(aiRateLimitMiddleware));
 
 // tRPC endpoint
 // NOTE: Using fetchRequestHandler directly from @trpc/server instead of
@@ -1335,12 +1343,14 @@ app.use("/trpc/*", async (c) => {
     endpoint,
     req,
     router: appRouter,
+    maxBatchSize: TRPC_MAX_BATCH_SIZE,
     createContext: async () => context as any,
     onError({ error, path }) {
       apiLogger.error({ err: error, path }, "tRPC error");
     },
   });
 
+  markTrpcAnswer(c);
   return c.newResponse(res.body, res);
 });
 
