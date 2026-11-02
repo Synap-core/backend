@@ -22,6 +22,7 @@
  */
 import { and, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import { createLogger } from "@synap-core/core";
 import { ISO_STAMP_PATTERN } from "@synap-core/types/needs-you/rule";
 import {
   HOLD_WAIT_NOT_YOURS_MESSAGE,
@@ -39,6 +40,8 @@ import { entityFacets } from "../../schema/entity-facets.js";
 import { projectTracks } from "../../schema/project-tracks.js";
 import { focusSessions } from "../../schema/focus-sessions.js";
 import { proposals } from "../../schema/proposals.js";
+
+const logger = createLogger({ module: "holds" });
 
 type Db = PostgresJsDatabase<typeof schema>;
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
@@ -270,10 +273,6 @@ export async function listHolds(
       };
     });
 }
-
-import { createLogger } from "@synap-core/core";
-
-const logger = createLogger({ module: "holds" });
 
 /**
  * The dated holds whose `until.date` has come. A date that does not parse is
