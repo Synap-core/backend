@@ -37,6 +37,44 @@ declare const STATUS_SIGNALS: readonly [
 	"main_red_unowned"
 ];
 export type StatusSignal = (typeof STATUS_SIGNALS)[number];
+export interface GrantDraft {
+	/** Permission patterns, `<subject>[.<kind>].<action>`. */
+	readonly permissions: readonly string[];
+	/** null/undefined/[] = any workspace the person can reach. */
+	readonly workspaceIds?: readonly string[] | null;
+	/** null/undefined/[] = no project narrowing. */
+	readonly projectIds?: readonly string[] | null;
+	/** null/undefined/[] = no object pinning. */
+	readonly entityIds?: readonly string[] | null;
+	/** undefined → DEFAULT_KEY_TTL_DAYS; a number → that many days; null → never. */
+	readonly expiresInDays?: number | null;
+	/** What the person calls it ("Portfolio site"); a stored grant may have none. */
+	readonly label?: string | null;
+}
+/** Where a grant (or one request) reaches. */
+export type Place = {
+	readonly kind: "pod";
+} | {
+	readonly kind: "unbounded";
+} | {
+	readonly ids: readonly [
+		string,
+		...string[]
+	];
+	readonly kind: "spaces";
+};
+export interface KeyDraft {
+	/** What the person calls it. Required. */
+	readonly name: string;
+	/** "Where will you keep it?" — stored with the key. */
+	readonly note?: string;
+	/** The template it started from (a built-in id or a stored role's id). */
+	readonly templateId?: string | null;
+	/** Where it is used (`KEY_USES` ids): this decides its scopes. */
+	readonly uses: readonly string[];
+	/** What it may touch, where, and for how long. */
+	readonly grant: GrantDraft;
+}
 /**
  * Why a handed-over secret came with no read for the agent.
  *   `agent_unknown`  — the pod cannot tell which agent asked.
@@ -921,44 +959,6 @@ declare const GOAL_CONVERTIBLE_KINDS: readonly [
 	"okr"
 ];
 export type GoalConvertibleKind = (typeof GOAL_CONVERTIBLE_KINDS)[number];
-export interface GrantDraft {
-	/** Permission patterns, `<subject>[.<kind>].<action>`. */
-	readonly permissions: readonly string[];
-	/** null/undefined/[] = any workspace the person can reach. */
-	readonly workspaceIds?: readonly string[] | null;
-	/** null/undefined/[] = no project narrowing. */
-	readonly projectIds?: readonly string[] | null;
-	/** null/undefined/[] = no object pinning. */
-	readonly entityIds?: readonly string[] | null;
-	/** undefined → DEFAULT_KEY_TTL_DAYS; a number → that many days; null → never. */
-	readonly expiresInDays?: number | null;
-	/** What the person calls it ("Portfolio site"); a stored grant may have none. */
-	readonly label?: string | null;
-}
-/** Where a grant (or one request) reaches. */
-export type Place = {
-	readonly kind: "pod";
-} | {
-	readonly kind: "unbounded";
-} | {
-	readonly ids: readonly [
-		string,
-		...string[]
-	];
-	readonly kind: "spaces";
-};
-export interface KeyDraft {
-	/** What the person calls it. Required. */
-	readonly name: string;
-	/** "Where will you keep it?" — stored with the key. */
-	readonly note?: string;
-	/** The template it started from (a built-in id or a stored role's id). */
-	readonly templateId?: string | null;
-	/** Where it is used (`KEY_USES` ids): this decides its scopes. */
-	readonly uses: readonly string[];
-	/** What it may touch, where, and for how long. */
-	readonly grant: GrantDraft;
-}
 /**
  * WHO is asking for access, on an `access-request` row — a pod-level request
  * that is not a proposal: an external service asking to be a TRUSTED ISSUER
