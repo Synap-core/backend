@@ -31,6 +31,7 @@ import {
   users,
 } from "@synap/database/schema";
 import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
+import { isUuid } from "@synap-core/types/property-render";
 import type { RunWhere } from "@synap-core/types/computers";
 import { createLogger } from "@synap-core/core";
 import { resolveAgentReachMany } from "../agent-dispatch/agent-binding.js";
@@ -38,9 +39,6 @@ import { machineName } from "../machine-roster.js";
 import type { UnifiedRun } from "./types.js";
 
 const logger = createLogger({ module: "run-where" });
-
-const UUID_SHAPE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const POD: RunWhere = { kind: "pod", computer: null };
 
@@ -124,9 +122,7 @@ export async function loadRunWhereFacts(
   runs: readonly Pick<UnifiedRun, "id" | "flowType" | "triggeredBy">[]
 ): Promise<RunWhereFacts> {
   const ids = (f: UnifiedRun["flowType"]) =>
-    runs
-      .filter((r) => r.flowType === f && UUID_SHAPE.test(r.id))
-      .map((r) => r.id);
+    runs.filter((r) => r.flowType === f && isUuid(r.id)).map((r) => r.id);
   const capabilityIds = ids("capability");
   const playbookRunIds = ids("playbook");
 
