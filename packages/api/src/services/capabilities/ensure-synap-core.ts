@@ -759,6 +759,28 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         },
       },
     },
+    {
+      name: "lens.page",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Read a lens page WHOLE at a scope, exactly as the lens widgets read it (signals.list with lens 'page', the caller's floor): Needs you, Proposed, Happening, Produced, Happened, plus the status banner. Scope = the narrowing axes, each ANDed: workspaceId (optionally with projectId), projectId, trackId, sessionId; none = the whole pod. A document refresher reads it to ground the sections it rewrites (lens.page, then ai.generate, then document.update upsert_section). Read-only.",
+      parameters: {
+        type: "object",
+        properties: {
+          workspaceId: { type: "string", format: "uuid" },
+          projectId: { type: "string", format: "uuid" },
+          trackId: { type: "string", format: "uuid" },
+          sessionId: { type: "string", format: "uuid" },
+          since: {
+            type: "string",
+            format: "date-time",
+            description:
+              "Happened from this instant; absent = the whole history.",
+          },
+        },
+      },
+    },
     // ── Kind + Facets (roles) — attach/detach/list over the one facet door ──
     {
       name: "entity_facet.attach",

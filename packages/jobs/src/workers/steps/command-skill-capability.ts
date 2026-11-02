@@ -307,6 +307,9 @@ export async function executeCapabilityNode(
     // The automation's `triggerConfig.connectionId` — the connection its steps
     // run against when a node names none of its own.
     triggerConnectionId?: string | null;
+    // The run this step belongs to (its session + the agent it writes as),
+    // handed to builtin verbs only — see `CapabilityExecutorInput.automationRun`.
+    automationRun?: { sessionId: string; agentUserId: string | null } | null;
   }
 ): Promise<unknown> {
   const verbId = data.verbId;
@@ -373,6 +376,7 @@ export async function executeCapabilityNode(
     workspaceId: opts.workspaceId,
     ownerId: opts.ownerId,
     connectionSelector,
+    automationRun: opts.automationRun ?? null,
   });
 }
 
@@ -388,6 +392,7 @@ async function runVerbOnRouter(
     workspaceId: string;
     ownerId: string;
     connectionSelector?: ReturnType<typeof resolveCapabilityConnectionSelector>;
+    automationRun?: { sessionId: string; agentUserId: string | null } | null;
   }
 ): Promise<unknown> {
   // ── Canonical dispatch (SAME door as `case "skill"`) ──────────────
@@ -403,6 +408,7 @@ async function runVerbOnRouter(
     workspaceId: opts.workspaceId,
     userId: opts.ownerId,
     connectionSelector: opts.connectionSelector,
+    ...(opts.automationRun ? { automationRun: opts.automationRun } : {}),
   });
   if (capDispatch.kind === "deny") {
     throw new Error(

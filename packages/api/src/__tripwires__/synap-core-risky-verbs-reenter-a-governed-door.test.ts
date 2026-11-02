@@ -764,6 +764,15 @@ const REENTRY_CLASS: Record<string, Classification> = {
       "i.e. policy intends it to auto-run; it is not destructive/admin/structural.",
   },
   "market.scaffold": "gated",
+  "lens.page": {
+    ungated:
+      "lens.page is a READ: it re-enters signalsRouter.list (a query, no " +
+      "write branch to gate) as the caller in a person context (agentUserId " +
+      "null, not the hub door), so the rows are the caller's own floor, the " +
+      "same read the browser's lens.page bridge op makes. It exists so a " +
+      "document refresher can ground its words; the write that follows " +
+      "(document.update) goes through applyDocumentPatch and D4.",
+  },
 };
 
 // ---------------------------------------------------------------------------

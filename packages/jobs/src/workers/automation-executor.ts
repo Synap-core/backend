@@ -469,13 +469,25 @@ async function executeAutomationFlow(params: {
   let sessionOwned = automationContext.focusSessionOwned ?? false;
   let runSuspended = false;
 
-  if (!isPlaybookDelegate && !runSessionId) {
-    const [ownerUser] = await db
-      .select({ userType: users.userType })
-      .from(users)
-      .where(eq(users.id, ownerId))
-      .limit(1);
+  // The agent this run writes as: the automation's runtime principal when it
+  // is an agent user (the identity `openRunSession` stamps as the session's
+  // `startedByAgentId`), else none (a person's automation acts as the person).
+  // Read where it is used: to open the session, and on a delay-resumption that
+  // still has capability steps to run (so they carry the same identity as the
+  // first pass did).
+  const needsRunAgent =
+    !isPlaybookDelegate &&
+    (!runSessionId || flow.nodes.some((n) => n.type === "capability"));
+  const [ownerUser] = needsRunAgent
+    ? await db
+        .select({ userType: users.userType })
+        .from(users)
+        .where(eq(users.id, ownerId))
+        .limit(1)
+    : [];
+  const runAgentUserId = ownerUser?.userType === "agent" ? ownerId : null;
 
+  if (!isPlaybookDelegate && !runSessionId) {
     // Channel resolution — the ONE door shared with the run-narration path
     // (`resolveRunChannel`), switching on `metadata.resultRouting`: a per-entity
     // automation lands each run in its subject's own channel; otherwise an
@@ -502,7 +514,7 @@ async function executeAutomationFlow(params: {
       // A worker enabled on a goal files its run in that goal (R3), the
       // same goal its playbook_run node files the playbook sessions in.
       ...runFilingOfFlow(flow),
-      agentUserId: ownerUser?.userType === "agent" ? ownerId : undefined,
+      agentUserId: runAgentUserId ?? undefined,
     });
     runSessionId = opened.sessionId;
     sessionOwned = !opened.reused;
@@ -515,6 +527,12 @@ async function executeAutomationFlow(params: {
     focusSessionId: runSessionId,
     focusSessionOwned: sessionOwned,
   };
+  // What a capability step hands a builtin verb about this run (decision D4:
+  // a bound refresher's `document.update` is judged as the run's agent, in
+  // the run's session). Absent when the run has no session of its own.
+  const automationRun = runSessionId
+    ? { sessionId: runSessionId, agentUserId: runAgentUserId }
+    : null;
 
   const closeSessionIfOwned = async (): Promise<void> => {
     if (sessionOwned && runSessionId && !runSuspended) {
@@ -1299,6 +1317,7 @@ async function executeAutomationFlow(params: {
                             ownerId,
                             producerAgentUserId,
                             triggerConnectionId,
+                            automationRun,
                           }
                         );
                         break;
@@ -1745,6 +1764,7 @@ async function executeAutomationFlow(params: {
                   stepRun,
                   producerAgentUserId,
                   triggerConnectionId,
+                  automationRun,
                 }
               );
               break;

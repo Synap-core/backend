@@ -30,12 +30,15 @@ export const SECTION_UPDATE_ACTION = "section_update" as const;
 /**
  * `document.refresher_section_update` — decision D4 (Generative UI plan
  * 678c56c4): a document's BOUND refresher (`documents.refresh_automation_id`)
- * rewriting sections of that document which already exist and are
- * `owner="ai"`, from an open run session of that automation. Chosen by the
- * patch door from server facts (`isBoundRefresherRun` +
- * `refresherRewritesOnlyItsSections`); applies through a stored rule
- * (`ensureDocumentRefresherRule`) exactly like D10. A new section, a person's
- * section, any other op, any other writer: `section_update` / `update`.
+ * rewriting sections of that document which already exist, are `owner="ai"`
+ * and carry its own stamp (`refresher="<automationId>"`, written by the
+ * refresher's run and kept by the approval of its first proposal), from an
+ * open run session of that automation, written by the run's OWN agent (the
+ * session's `startedByAgentId`; founder, 2 Nov). Chosen by the patch door from
+ * server facts (`isBoundRefresherRun` + `refresherRewritesOnlyItsSections`);
+ * applies through a stored rule (`ensureDocumentRefresherRule`) exactly like
+ * D10. A new section, another agent's AI section, a person's section, any
+ * other op, any other writer: `section_update` / `update`.
  */
 export const REFRESHER_SECTION_ACTION = "refresher_section_update" as const;
 
