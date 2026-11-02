@@ -10,6 +10,8 @@ import {
 } from "@synap-core/types/agent-matrix";
 import {
   TYPE_GROUP_CAP,
+  agentOnlyRows,
+  agentsAndWorkHref,
   cellAriaLabel,
   columnGroups,
   combineWidenOutcomes,
@@ -18,6 +20,7 @@ import {
   gridKeyAction,
   hasNoProcesses,
   markView,
+  matrixAgents,
   matrixState,
   probeViews,
   toggleExpanded,
@@ -391,5 +394,42 @@ describe("page state", () => {
   it("knows when no space has a process yet", () => {
     expect(hasNoProcesses(MATRIX)).toBe(false);
     expect(hasNoProcesses(matrix(MATRIX.groups, [FLOORS, OTHER]))).toBe(true);
+  });
+});
+
+describe("one agent's grid (Agents & work leads with the agents)", () => {
+  it("lists every agent once, in the matrix's order, with its computer", () => {
+    expect(
+      matrixAgents(MATRIX).map((a) => [a.agent.agentUserId, a.computer])
+    ).toEqual([
+      ["cc-1", "Mac"],
+      ["cc-2", "Mac"],
+      ["codex-1", null],
+    ]);
+  });
+
+  it("narrows the grid to that agent alone, at the top level, even under a collapsed group", () => {
+    const rows = agentOnlyRows(MATRIX, "cc-2")!;
+    expect(rows.map((r) => [r.key, r.kind, r.level])).toEqual([
+      ["agent:cc-2", "agent", 1],
+    ]);
+    // Its own verdicts, never its group's split.
+    expect(rows[0]!.cells["process:pb"]!.mark).toBe("mixed");
+    expect(rows[0]!.agent?.agentUserId).toBe("cc-2");
+  });
+
+  it("an agent the read does not hold is null — never an empty grid", () => {
+    expect(agentOnlyRows(MATRIX, "gone")).toBeNull();
+  });
+
+  it("links to the list, one agent's grid and the whole grid", () => {
+    const base = "/governance/agents";
+    expect(agentsAndWorkHref(base)).toBe(base);
+    expect(agentsAndWorkHref(base, { agentUserId: "a b" })).toBe(
+      "/governance/agents?agent=a%20b"
+    );
+    expect(agentsAndWorkHref(base, "grid")).toBe(
+      "/governance/agents?view=grid"
+    );
   });
 });
