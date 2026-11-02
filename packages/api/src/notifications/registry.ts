@@ -785,31 +785,22 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     type: "connector.auth.expired",
     category: "data",
     connectionNotice: "problem",
-    label: "Account needs sign-in",
+    label: "Connector Auth Expired",
     icon: "key",
     priority: "high",
-    // "Re-authorization" / "reconnect" is jargon (`needs_reauth` in the
-    // vocabulary reads "Needs sign-in"): say what the person does.
-    titleTemplate: "Sign in to {{connectorName}} again",
-    bodyTemplate: "{{connectorName}} stopped syncing. Sign in again to resume.",
+    titleTemplate: "{{connectorName}} needs re-authorization",
+    bodyTemplate: "Your connection expired. Reconnect to resume syncing.",
     defaultChannels: ["in_app", "os"],
-    // One account that stays signed out is ONE piece of news until the person
-    // reads it, not one row per producer cooldown: the producer
-    // (`notifyConnectorUnhealthy`) keys `groupKey` on the account and nudges
-    // at most every 6 h; this window keeps the bell (and the phone, since a
-    // suppressed row is never pushed) to one open row a day, and needs-you
-    // folds what slips through into one row.
-    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
-    foldBy: "groupKey",
     actions: [
       {
         id: "reconnect",
-        label: "Sign in again",
+        label: "Reconnect",
         variant: "primary",
-        // The ACCOUNT itself (`account:<provider>`, the Connected page's key):
-        // the producer passes the provider as `sourceId`, so the button and
-        // the push tap (`pushTarget`) both name it.
-        handler: { type: "navigate-object", kind: "account" },
+        handler: {
+          type: "navigate",
+          app: "settings",
+          params: { tab: "connectors" },
+        },
       },
     ],
     ttl: 0,

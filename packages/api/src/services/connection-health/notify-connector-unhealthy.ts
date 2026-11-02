@@ -270,22 +270,18 @@ export async function notifyConnectorUnhealthy(
   // 1. In-app notification — `connector.auth.expired` by default, or the
   //    caller's own registry type when the failure is a different thing.
   const notificationType = opts.notificationType ?? "connector.auth.expired";
-  // A connector's key IS its provider — the Connected page's ACCOUNT key
-  // (`account:<provider>`). An intelligence service is no account.
-  const isAccount = (opts.watermarkTable ?? "tools") === "tools";
   await NotificationService.create({
     type: notificationType,
     sourceType: "connector",
-    // The account the notice is about: the registry's `navigate-object`
-    // action (kind `account`) and the push tap read it as the object id.
-    sourceId: isAccount ? opts.connectorKey : undefined,
     userId: opts.userId,
     workspaceId: opts.workspaceId,
-    // The person's notify level for that account gates it; an intelligence
-    // service is no membrane connection: ungated.
-    connection: isAccount
-      ? { kind: "account", id: opts.connectorKey }
-      : undefined,
+    // A connector's key IS its provider — the Connected page's ACCOUNT key
+    // (`account:<provider>`), so the person's notify level for that account
+    // gates it. An intelligence service is no membrane connection: ungated.
+    connection:
+      (opts.watermarkTable ?? "tools") === "tools"
+        ? { kind: "account", id: opts.connectorKey }
+        : undefined,
     groupKey: `${opts.workspaceId ?? "pod"}:${notificationType}:${opts.connectorKey}`,
     data: { connectorName: opts.connectorName, ...opts.notificationData },
   }).catch((err) =>
