@@ -2095,7 +2095,7 @@ try {
               await getBoss().send(
                 MESSAGING_WEBHOOK_ENSURE_QUEUE,
                 {},
-                { startAfter: 60, singletonKey: "boot" }
+                { startAfter: 60 }
               );
             } catch (err) {
               apiLogger.warn(

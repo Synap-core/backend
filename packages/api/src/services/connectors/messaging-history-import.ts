@@ -105,7 +105,6 @@ async function enqueueImport(
 ): Promise<void> {
   await getBoss().send(MESSAGING_HISTORY_IMPORT_QUEUE, data, {
     startAfter: Math.max(1, Math.round(startAfterSeconds)),
-    singletonKey: `${data.accountExternalId}:${data.entityId ?? "all"}`,
   });
 }
 

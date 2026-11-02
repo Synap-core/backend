@@ -83,6 +83,8 @@ export async function resolveExternalChannel(args: {
   // the id names (e.g. only label it `entityId` when this is "entity").
   contextObjectType: string | null;
   branchPurpose: string | null;
+  /** `metadata.lastMessageAt`: the newest message the cache describes. */
+  lastMessageAt: string | null;
 } | null> {
   const row = await db.query.channels.findFirst({
     where: and(
@@ -97,6 +99,7 @@ export async function resolveExternalChannel(args: {
       contextObjectId: true,
       contextObjectType: true,
       branchPurpose: true,
+      metadata: true,
     },
     // Deterministic oldest-wins so a duplicate external channel resolves to a
     // stable survivor run-to-run.
@@ -110,6 +113,11 @@ export async function resolveExternalChannel(args: {
         contextObjectId: row.contextObjectId,
         contextObjectType: row.contextObjectType,
         branchPurpose: row.branchPurpose,
+        lastMessageAt: (() => {
+          const v = (row.metadata as Record<string, unknown> | null)
+            ?.lastMessageAt;
+          return typeof v === "string" ? v : null;
+        })(),
       }
     : null;
 }
@@ -172,6 +180,11 @@ export interface ResolveOrCreateExternalChannelArgs {
    * message never repeats it.
    */
   participantLookup?: ParticipantLookupRecord;
+  /**
+   * Mark the channel unread (default true). False for the owner's own
+   * outbound message and for history: neither is news to the owner.
+   */
+  markUnread?: boolean;
 }
 
 /** `channels.metadata.participantLookup` — one lookup per chat, never two. */
@@ -247,6 +260,13 @@ export async function resolveOrCreateExternalChannel(
 
   if (existing) {
     assertExternalChannelOwner(existing, args);
+    // The last-message cache describes the NEWEST message: an older one (the
+    // history import walks a chat newest first) never replaces it.
+    const storedAt = existing.lastMessageAt
+      ? Date.parse(existing.lastMessageAt)
+      : NaN;
+    const isNewest =
+      Number.isNaN(storedAt) || Date.parse(lastMessageAt) >= storedAt;
     const cacheMerge = drizzleSql`${channels.metadata} || ${JSON.stringify({
       ...(args.participant ? { participantName: args.participant } : {}),
       // Backfill the participant external-id (e.g. an email sender address) on
@@ -256,9 +276,13 @@ export async function resolveOrCreateExternalChannel(
       ...(args.participantExternalId
         ? { participantExternalId: args.participantExternalId }
         : {}),
-      lastMessageAt,
-      lastMessagePreview: args.preview,
-      unread: true,
+      ...(isNewest
+        ? {
+            lastMessageAt,
+            lastMessagePreview: args.preview,
+            ...(args.markUnread === false ? {} : { unread: true }),
+          }
+        : {}),
       ...(args.participantLookup
         ? { participantLookup: args.participantLookup }
         : {}),
@@ -357,7 +381,7 @@ export async function resolveOrCreateExternalChannel(
           : {}),
         lastMessageAt,
         lastMessagePreview: args.preview,
-        unread: true,
+        unread: args.markUnread !== false,
         ...(args.participantLookup
           ? { participantLookup: args.participantLookup }
           : {}),
@@ -411,7 +435,7 @@ export async function resolveOrCreateExternalChannel(
           : {}),
         lastMessageAt,
         lastMessagePreview: args.preview,
-        unread: true,
+        unread: args.markUnread !== false,
         // Provider-native coordinates (Discord guild id, Slack team id) — the
         // ids the channel-level deep link is built from. Omitted entirely when
         // the caller has none, so the stored shape is unchanged for them.
@@ -705,15 +729,11 @@ export async function openPersonChannel(
   // is open whether or not the import could be asked for).
   if (account) {
     try {
-      await getBoss().send(
-        MESSAGING_HISTORY_IMPORT_QUEUE,
-        {
-          accountExternalId: account,
-          userId: args.userId,
-          entityId: person.id,
-        } satisfies MessagingHistoryImportJobData,
-        { singletonKey: `${account}:${person.id}` }
-      );
+      await getBoss().send(MESSAGING_HISTORY_IMPORT_QUEUE, {
+        accountExternalId: account,
+        userId: args.userId,
+        entityId: person.id,
+      } satisfies MessagingHistoryImportJobData);
     } catch (err) {
       logger.warn(
         { err, channelId: inserted.id },
@@ -912,6 +932,8 @@ export async function recordInboundMessage(
       ...(args.participantLookup
         ? { participantLookup: args.participantLookup }
         : {}),
+      // The owner's own message and history are not news to the owner.
+      ...(outbound || args.suppressSideEffects ? { markUnread: false } : {}),
     });
 
   // Dual-use note: this is an inbound *delivery* fingerprint

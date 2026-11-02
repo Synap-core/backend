@@ -394,6 +394,11 @@ describe("a message lands once in the person's channel", () => {
       ["m2", "inbound"],
     ]);
     expect(rows[0]!.delivery_status).toBe("sent");
+    // The channel still shows its NEWEST message, not the oldest imported.
+    const [after] = await channelOf("chat-marie");
+    expect(Date.parse(after!.metadata.lastMessageAt as string)).toBe(
+      Date.parse(T(5))
+    );
     // History is not news: no automation event, no webhook fan-out.
     expect(h.emitSideEffects).not.toHaveBeenCalled();
     // Progress is kept on the account.
@@ -611,11 +616,14 @@ describe("a person's channel before the first message", () => {
     expect(a).toMatchObject({ externalId: null, created: true });
     expect(b).toEqual({ ...a, created: false });
     // Opening it asked for the person's history, once.
-    expect(h.send).toHaveBeenCalledWith(
-      "messaging-history-import",
-      { accountExternalId: "acc-1", userId: OWNER, entityId: LEAD },
-      expect.anything()
-    );
+    expect(
+      h.send.mock.calls.filter((c) => c[0] === "messaging-history-import")
+    ).toEqual([
+      [
+        "messaging-history-import",
+        { accountExternalId: "acc-1", userId: OWNER, entityId: LEAD },
+      ],
+    ]);
 
     await webhook(msg("chat-lead", "l1", { from: "ACoLead" }));
     const { rows } = await q<{ id: string; external_id: string | null }>(

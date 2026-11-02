@@ -649,7 +649,7 @@ export function registerMessagingRoutes(app: HubHono): void {
       responses: {
         ...trpcErrorResponses,
         202: {
-          description: "Import queued (or already queued)",
+          description: "Import queued",
           content: {
             "application/json": {
               schema: z
@@ -711,14 +711,10 @@ export function registerMessagingRoutes(app: HubHono): void {
       });
       if (!row) return c.json({ error: "Account not found" }, 404);
       try {
-        const jobId = await getBoss().send(
-          MESSAGING_HISTORY_IMPORT_QUEUE,
-          {
-            accountExternalId: row.externalId,
-            userId,
-          } satisfies MessagingHistoryImportJobData,
-          { singletonKey: `${row.externalId}:all` }
-        );
+        const jobId = await getBoss().send(MESSAGING_HISTORY_IMPORT_QUEUE, {
+          accountExternalId: row.externalId,
+          userId,
+        } satisfies MessagingHistoryImportJobData);
         const progress =
           ((row.metadata as Record<string, unknown> | null)?.historyImport as
             | {
@@ -730,11 +726,9 @@ export function registerMessagingRoutes(app: HubHono): void {
                 reason?: string;
               }
             | undefined) ?? null;
-        // A null job id = the same import is already queued (singleton).
-        return c.json(
-          { queued: jobId !== null, accountId: row.id, progress },
-          202
-        );
+        // Two runs at once are harmless (every message dedups); a standard
+        // pg-boss queue does not enforce a singleton key, so none is claimed.
+        return c.json({ queued: !!jobId, accountId: row.id, progress }, 202);
       } catch (err) {
         logger.error(
           { err, accountId },

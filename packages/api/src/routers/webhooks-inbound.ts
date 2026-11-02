@@ -1100,19 +1100,11 @@ webhooksInboundRouter.post("/messaging", async (c) => {
           // the account is connected either way.
           try {
             const boss = getBoss();
-            await boss.send(
-              MESSAGING_WEBHOOK_ENSURE_QUEUE,
-              {},
-              { singletonKey: "account-created" }
-            );
-            await boss.send(
-              MESSAGING_HISTORY_IMPORT_QUEUE,
-              {
-                accountExternalId: account.externalId,
-                userId: event.userId,
-              } satisfies MessagingHistoryImportJobData,
-              { singletonKey: `${account.externalId}:all` }
-            );
+            await boss.send(MESSAGING_WEBHOOK_ENSURE_QUEUE, {});
+            await boss.send(MESSAGING_HISTORY_IMPORT_QUEUE, {
+              accountExternalId: account.externalId,
+              userId: event.userId,
+            } satisfies MessagingHistoryImportJobData);
           } catch (err) {
             logger.warn(
               { err, externalId: event.accountExternalId },
