@@ -19,7 +19,9 @@
  * filed: "4 of 11 items filed · 1 could not be filed · 6 not tried", the
  * filed records as links, the item that failed with its reason (a missing
  * kind names the space and where the kind exists), and what was never tried.
- * Approve and Reject are unchanged.
+ * The item it waits on comes with the pod's choices (`ResolveItems`):
+ * file it where its kind lives, make the kind available here, file it as
+ * another kind, or skip it. Approve and Reject are unchanged.
  */
 
 import { addToast, Button } from "@heroui/react";
@@ -34,6 +36,12 @@ import {
   type StoppedGraphReport,
   type StoppedItem,
 } from "./stopped-graph-model";
+import {
+  resolveRows,
+  resolvedToast,
+  type ResolveAction,
+  type ResolveRow,
+} from "./resolve-item-model";
 import {
   pickAct,
   repairRows,
@@ -202,6 +210,120 @@ export function StoppedGraph({ report }: { report: StoppedGraphReport }) {
   );
 }
 
+/**
+ * The item a stopped graph waits on, with the pod's choices
+ * (`proposals.resolveOptions`, `resolve-item-model.ts`), recommended first.
+ * A press sends `proposals.resolveItem`: the pod files that one item and the
+ * links that need it, then what never ran; the landed records are never
+ * filed again. The proposal is then read afresh.
+ */
+function ResolveItems({
+  proposalId,
+  onDecided,
+}: {
+  proposalId: string;
+  onDecided: () => void;
+}) {
+  const t = proposalPageT();
+  const utils = trpc.useUtils();
+  const options = trpc.proposals.resolveOptions.useQuery({ proposalId });
+  const resolve = trpc.proposals.resolveItem.useMutation({
+    onSuccess: (result) => {
+      void utils.proposals.invalidate();
+      addToast(resolvedToast(result, t));
+      if (result.complete) onDecided();
+    },
+    onError: (e) => {
+      void utils.proposals.invalidate();
+      addToast({
+        title: t("resolve.failed"),
+        description: e.message,
+        color: "danger",
+        timeout: Infinity,
+      });
+    },
+  });
+  if (options.isError) {
+    return (
+      <div className="flex items-center gap-2 text-[12px] text-foreground/65">
+        <span>{t("resolve.loadFailed")}</span>
+        <Button
+          size="sm"
+          variant="light"
+          onPress={() => void options.refetch()}
+        >
+          {t("read.retry")}
+        </Button>
+      </div>
+    );
+  }
+  if (options.isLoading) {
+    return (
+      <p className="text-[12px] text-foreground/55">{t("resolve.loading")}</p>
+    );
+  }
+  const rows = resolveRows(options.data, t);
+  if (rows.length === 0) return null;
+  const press = (row: ResolveRow, action: ResolveAction) =>
+    resolve.mutate({ proposalId, itemRef: row.itemRef, action });
+  return (
+    <section
+      aria-label={t("resolve.label")}
+      data-resolve-items=""
+      className="flex flex-col gap-3"
+    >
+      {rows.map((row) => (
+        <div
+          key={row.itemRef}
+          data-resolve-item={row.itemRef}
+          className="flex flex-col gap-2 text-[13px]"
+        >
+          <span className="font-medium text-foreground/85">{row.title}</span>
+          {row.heldNote && (
+            <span className="text-[12px] text-foreground/65">
+              {row.heldNote}
+            </span>
+          )}
+          {row.dependentsNote && (
+            <span className="text-[12px] text-foreground/55">
+              {row.dependentsNote}
+            </span>
+          )}
+          <ul className="flex flex-col gap-1.5">
+            {row.choices.map((choice) => (
+              <li
+                key={choice.key}
+                className="flex flex-wrap items-center gap-2"
+              >
+                <Button
+                  size="sm"
+                  color={choice.recommended ? "primary" : "default"}
+                  variant={choice.recommended ? "solid" : "flat"}
+                  isDisabled={resolve.isPending}
+                  onPress={() => press(row, choice.action)}
+                >
+                  {choice.label}
+                </Button>
+                {choice.recommended && (
+                  <span className="text-[12px] text-foreground/55">
+                    {t("resolve.recommended")}
+                    {choice.hint ? ` · ${choice.hint}` : ""}
+                  </span>
+                )}
+                {!choice.recommended && choice.hint && (
+                  <span className="text-[12px] text-foreground/55">
+                    {choice.hint}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 export function FailedApproval({
   proposalId,
   reason,
@@ -268,6 +390,9 @@ export function FailedApproval({
         <span>{reason ?? t("repair.default")}</span>
       </p>
       {stopped && <StoppedGraph report={stopped} />}
+      {stopped && (
+        <ResolveItems proposalId={proposalId} onDecided={onDecided} />
+      )}
       {options.isError ? (
         <div className="flex items-center gap-2 text-[12px] text-foreground/65">
           <span>{t("repair.loadFailed")}</span>

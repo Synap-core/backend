@@ -73,6 +73,32 @@ export const en = {
   "stopped.kindElsewhere": "It exists in {spaces}.",
   "stopped.kindNowhere": "No other space you can see has it either.",
   "stopped.and": "and",
+  "resolve.label": "What to do with the item that waits",
+  "resolve.loading": "Looking for ways to file it…",
+  "resolve.loadFailed": "Couldn’t load the ways to file it.",
+  "resolve.recommended": "Recommended",
+  "resolve.fileHereNow": "File it now: {kind} is available here",
+  "resolve.fileIn": "File it in {space}",
+  "resolve.fileInHint": "Same kind, {kind}: nothing new is created",
+  "resolve.widen": "Make {kind} available in {space}",
+  "resolve.widenHint":
+    "Lets this space use the kind; you may be asked to review it",
+  "resolve.useKind": "File it as {kind}",
+  "resolve.retry": "Try again",
+  "resolve.skip": "Skip this item",
+  "resolve.dependents":
+    "{n, plural, one {Its link is filed with it.} other {Its # links are filed with it.}}",
+  "resolve.held": "Waits for a review before it can be filed.",
+  "resolve.heldWiden":
+    "Waits for the review that makes {kind} available in {space}.",
+  "resolve.done.complete": "Every item is filed",
+  "resolve.done.held": "Waiting for the review: the rest is filed",
+  "resolve.done.failedAgain": "It still couldn’t be filed",
+  "resolve.done.skipped":
+    "{n, plural, =0 {Item skipped} one {Item skipped · # still waits} other {Item skipped · # still wait}}",
+  "resolve.done.filed":
+    "{n, plural, =0 {Filed} one {Filed · # still waits} other {Filed · # still wait}}",
+  "resolve.failed": "Couldn’t file this item",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -149,6 +175,32 @@ export const fr: Catalog<typeof en> = {
   "stopped.kindElsewhere": "Il existe dans {spaces}.",
   "stopped.kindNowhere": "Aucun autre espace visible ne l’a non plus.",
   "stopped.and": "et",
+  "resolve.label": "Que faire de l’élément en attente",
+  "resolve.loading": "Recherche des façons de le classer…",
+  "resolve.loadFailed": "Impossible de charger les façons de le classer.",
+  "resolve.recommended": "Recommandé",
+  "resolve.fileHereNow": "Le classer maintenant : {kind} est disponible ici",
+  "resolve.fileIn": "Le classer dans {space}",
+  "resolve.fileInHint": "Même type, {kind} : rien de nouveau n’est créé",
+  "resolve.widen": "Rendre {kind} disponible dans {space}",
+  "resolve.widenHint":
+    "Permet à cet espace d’utiliser ce type ; une validation peut vous être demandée",
+  "resolve.useKind": "Le classer comme {kind}",
+  "resolve.retry": "Réessayer",
+  "resolve.skip": "Ignorer cet élément",
+  "resolve.dependents":
+    "{n, plural, one {Son lien est classé avec lui.} other {Ses # liens sont classés avec lui.}}",
+  "resolve.held": "Attend une validation avant d’être classé.",
+  "resolve.heldWiden":
+    "Attend la validation qui rend {kind} disponible dans {space}.",
+  "resolve.done.complete": "Tous les éléments sont classés",
+  "resolve.done.held": "En attente de validation : le reste est classé",
+  "resolve.done.failedAgain": "Il n’a toujours pas pu être classé",
+  "resolve.done.skipped":
+    "{n, plural, =0 {Élément ignoré} one {Élément ignoré · # attend encore} other {Élément ignoré · # attendent encore}}",
+  "resolve.done.filed":
+    "{n, plural, =0 {Classé} one {Classé · # attend encore} other {Classé · # attendent encore}}",
+  "resolve.failed": "Impossible de classer cet élément",
 };
 
 /** The catalog keys of a decided request's one-line outcome. */
