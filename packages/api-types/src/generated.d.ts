@@ -1804,7 +1804,7 @@ export interface TrackParticipant {
 }
 /** A session's deliverables, counted — the progress rail and the owed badge. */
 export interface DeliverableCounts {
-	/** Stamped done. */
+	/** Delivered: stamped done, or decided by the person's answer. */
 	done: number;
 	/** Done + still owed. A RETIRED slot is in neither: it was let go, not delivered. */
 	total: number;
