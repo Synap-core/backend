@@ -285,13 +285,13 @@ describe("who may write a preset", () => {
 
   it("a scoped key without agent.update is GRANT_DENIED; with it, it writes", async () => {
     const without = await put(CLAUDE, "reviewer", REVIEWER, {
-      grant: { scopes: [{ permissions: ["entity.read"] }] },
+      grant: { scopes: [{ permissions: ["entity.read"] }], clientId: null },
     });
     expect(without.status).toBe(403);
     expect(await code(without)).toBe("GRANT_DENIED");
     expect(await presetRows()).toEqual([]);
     const withIt = await put(CLAUDE, "reviewer", REVIEWER, {
-      grant: { scopes: [{ permissions: ["agent.update"] }] },
+      grant: { scopes: [{ permissions: ["agent.update"] }], clientId: null },
     });
     expect(withIt.status).toBe(200);
   });
