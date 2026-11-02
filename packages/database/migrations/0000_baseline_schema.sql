@@ -5346,7 +5346,7 @@ END $$;
 -- session × client conversation holding its change-feed wait). Telemetry,
 -- stamped by the wait at most once a minute; never on focus_sessions (0277's
 -- trigger would wake the waiter). Mirrors 0342_session_runners.sql + 0373 (process)
--- + 0384 (state).
+-- + 0384 (state) + 0389 (model, provider).
 CREATE TABLE IF NOT EXISTS "session_runners" (
   "session_id"      uuid        NOT NULL REFERENCES "focus_sessions"("id") ON DELETE CASCADE,
   "client_key"      text        NOT NULL,
@@ -5363,6 +5363,8 @@ CREATE TABLE IF NOT EXISTS "session_runners" (
   "state"              text,
   "state_since"        timestamptz,
   "state_reported_at"  timestamptz,
+  "model"              text,
+  "provider"           text,
   "first_seen_at"   timestamptz NOT NULL DEFAULT now(),
   "last_seen_at"    timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY ("session_id", "client_key", "process_key")

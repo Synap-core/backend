@@ -26,11 +26,15 @@ export {
   ATTENTION_CLASSES,
   LENS_CAPS,
   LENS_EMPTY_ANSWERS,
+  LENS_SECTION_EMPTY_ANSWERS,
   LENS_SECTION_LABELS,
   LENS_SECTION_ORDER,
+  lensSectionDefaultEmpty,
+  readLensSectionEmpty,
   type AttentionClass,
   type LensEmptyAnswer,
   type LensSection,
+  type LensSectionEmptyAnswer,
 } from "./sections.js";
 
 /**

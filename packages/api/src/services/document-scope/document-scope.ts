@@ -36,6 +36,7 @@ import {
   type LensScope,
   type LensScopeKind,
 } from "@synap-core/types/lens";
+import { isUuid } from "@synap-core/types/property-render";
 import { AccessContext, scopedDb } from "../../access/index.js";
 
 /** The kinds a document's scope may be (contract 3). */
@@ -136,9 +137,6 @@ export async function resolveDocumentScope(
   return scope;
 }
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * Read a refresher a write SENT: `null` unbinds, anything else must be the id
  * of an automation the writer can see.
@@ -148,7 +146,7 @@ export async function resolveDocumentRefresher(
   floor: DocumentScopeFloor
 ): Promise<string | null> {
   if (value === null) return null;
-  if (typeof value !== "string" || !UUID_RE.test(value)) {
+  if (!isUuid(value)) {
     refuse("refreshAutomationId: an automation's id (a UUID), or null.");
   }
   const seen = await floor.visible("automation", [value]);
