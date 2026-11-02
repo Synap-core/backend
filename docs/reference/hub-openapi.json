@@ -38821,6 +38821,44 @@
         }
       }
     },
+    "/errors/{errorId}": {
+      "get": {
+        "tags": ["Runs"],
+        "summary": "One server error (5xx) by the errorId its client got",
+        "description": "The stored cause of one server fault: the original error's name, message, stack and cause chain, with when, door, method, path, status and caller. A 5xx body names this read in `causeUrl`. Pod owner or admin only; 404 when nothing is stored under the id (kept 30 days).",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string" },
+            "required": true,
+            "name": "errorId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server fault",
+            "content": { "application/json": { "schema": {} } }
+          },
+          "403": {
+            "description": "Not a pod admin",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No fault stored under this id",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/workflows/{kind}/{id}/place": {
       "get": {
         "tags": ["Workflows"],
