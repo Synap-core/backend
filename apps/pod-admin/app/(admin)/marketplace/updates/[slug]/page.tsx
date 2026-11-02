@@ -52,6 +52,7 @@ import { packageUpdateHref } from "../_lib/updates-tab";
 import { stateCountLabel, summaryMark } from "../_lib/update-words";
 import {
   applyInput,
+  catalogDefinitionRefusalOf,
   decisionOf,
   fieldMark,
   groupMark,
@@ -161,7 +162,7 @@ function PackageUpdate() {
 type Outcome =
   | { kind: "editing" }
   | { kind: "conflict" }
-  | { kind: "failed" }
+  | { kind: "failed"; why?: string | null }
   | {
       kind: "receipt";
       result: PackageUpdateApplyResult;
@@ -208,9 +209,11 @@ function ReviewUpdate({
       });
       window.scrollTo({ top: 0 });
     } catch (err) {
-      setOutcome({
-        kind: updateFailureOf(err) === "conflict" ? "conflict" : "failed",
-      });
+      setOutcome(
+        updateFailureOf(err) === "conflict"
+          ? { kind: "conflict" }
+          : { kind: "failed", why: catalogDefinitionRefusalOf(err) }
+      );
     }
   }
 
@@ -435,6 +438,7 @@ function ReviewUpdate({
         plan={plan}
         decision={decision}
         failed={outcome.kind === "failed"}
+        failedWhy={outcome.kind === "failed" ? outcome.why : null}
         busy={busy}
         onApply={() => void onApply()}
         onStop={() => setStopping(true)}
@@ -549,6 +553,7 @@ function DecisionBar({
   plan,
   decision,
   failed,
+  failedWhy,
   busy,
   onApply,
   onStop,
@@ -556,6 +561,8 @@ function DecisionBar({
   plan: PackageUpdatePlan;
   decision: Decision;
   failed: boolean;
+  /** The pod's sentence for a refusal Try again cannot fix (an invalid catalog definition). */
+  failedWhy?: string | null;
   busy: boolean;
   onApply: () => void;
   onStop: () => void;
@@ -599,7 +606,7 @@ function DecisionBar({
     >
       {failed && (
         <p role="alert" className="text-[12.5px] text-status-down">
-          {t("apply.failed")}
+          {failedWhy ?? t("apply.failed")}
         </p>
       )}
       <div className="flex flex-wrap items-center gap-2">

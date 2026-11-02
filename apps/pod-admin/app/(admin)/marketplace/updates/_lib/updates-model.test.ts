@@ -20,6 +20,7 @@ import {
   recommendedChoice,
   resultOf,
   stateCounts,
+  catalogDefinitionRefusalOf,
   updateFailureOf,
   updateGroupOf,
   updatesNeedingNothing,
@@ -386,6 +387,29 @@ describe("updateFailureOf — a failed read is never 'no updates'", () => {
   it("reads anything else as a failure to retry", () => {
     expect(updateFailureOf(new Error("network"))).toBe("failed");
     expect(updateFailureOf(null)).toBe("failed");
+  });
+});
+
+describe("catalogDefinitionRefusalOf — the pod's reason, not 'didn't apply'", () => {
+  const SENTENCE =
+    'The catalog\'s definition of "content-os" does not fit this pod (playbooks.0.stages.0.goal: Too big).';
+  it("reads the pod's sentence for an invalid catalog definition", () => {
+    expect(
+      catalogDefinitionRefusalOf({
+        message: SENTENCE,
+        data: { code: "BAD_REQUEST", reasonCode: "INVALID_CATALOG_DEFINITION" },
+      })
+    ).toBe(SENTENCE);
+  });
+  it("is null for any other failure (the page keeps its own words)", () => {
+    expect(
+      catalogDefinitionRefusalOf({
+        message: "x",
+        data: { code: "BAD_REQUEST" },
+      })
+    ).toBeNull();
+    expect(catalogDefinitionRefusalOf(new Error("network"))).toBeNull();
+    expect(catalogDefinitionRefusalOf(null)).toBeNull();
   });
 });
 

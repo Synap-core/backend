@@ -544,3 +544,22 @@ export function updateFailureOf(error: unknown): UpdateFailure {
   if (code === "PRECONDITION_FAILED" || status === 412) return "expired";
   return "failed";
 }
+
+/**
+ * The pod's own sentence when the catalog's definition of the package does
+ * not fit this pod (`reasonCode: INVALID_CATALOG_DEFINITION`): it names the
+ * template and each failing field, so the person reads WHY instead of "the
+ * update didn't apply" (incident 2026-11-02: Content OS's 5,225-character
+ * stage goal). Try again cannot fix it; the catalog must. `null` for every
+ * other failure.
+ */
+export function catalogDefinitionRefusalOf(error: unknown): string | null {
+  if (!error || typeof error !== "object") return null;
+  const data = (error as { data?: { reasonCode?: unknown } }).data;
+  const message = (error as { message?: unknown }).message;
+  return data?.reasonCode === "INVALID_CATALOG_DEFINITION" &&
+    typeof message === "string" &&
+    message.length > 0
+    ? message
+    : null;
+}

@@ -24,6 +24,7 @@ import {
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
+import { hubValidationHook } from "./_validation-hook.js";
 import {
   errCode,
   hasScope,
@@ -39,6 +40,14 @@ import {
   listPackageUpdates,
 } from "../../../services/package-updates/plan.js";
 import { applyPackageUpdate } from "../../../services/package-updates/apply.js";
+import {
+  PACKAGE_UPDATE_REFUSALS,
+  refusalReasonOf,
+} from "../../../services/package-updates/refusals.js";
+import {
+  zodFieldErrors,
+  zodIssuesOf,
+} from "../../../utils/zod-field-errors.js";
 
 const CountsSchema = z.object({
   updates: z.number(),
@@ -172,12 +181,54 @@ const ApplyResponseSchema = z.union([
 
 const SlugParams = z.object({ slug: z.string().min(1) });
 
-/** A service error as its HTTP answer (409 for a moved catalog); a 500 is logged. */
+/** A refusal of the apply: the Hub error, plus what the client branches on. */
+const RefusalSchema = z
+  .object({
+    error: z.string(),
+    fieldErrors: z
+      .record(z.string(), z.array(z.string()))
+      .optional()
+      .describe(
+        "On INVALID_CATALOG_DEFINITION: dotted field path of the catalog's definition → its messages."
+      ),
+    reasonCode: z
+      .enum(PACKAGE_UPDATE_REFUSALS)
+      .optional()
+      .describe(
+        "`NEEDS_PERSON`: only a person can do it, on `reviewUrl`. `CHOICES_NEEDED`: a field both sides changed needs a choice. `INVALID_CATALOG_DEFINITION`: the catalog's definition does not fit this pod (`fieldErrors`)."
+      ),
+    reviewUrl: z
+      .string()
+      .optional()
+      .describe("The pod path of the update's review page on pod admin."),
+  })
+  .openapi("PackageUpdateRefusal");
+
+/**
+ * A service error as its HTTP answer (409 for a moved catalog); a 500 is
+ * logged. A typed refusal (`services/package-updates/refusals.ts`) also names
+ * its `reasonCode`, the fields a catalog definition failed (`fieldErrors`) and
+ * the review page a person finishes it on (`reviewUrl`, pod-relative).
+ */
 function errorBody(err: unknown, what: string) {
   const status = httpStatusForTrpcError(err);
   if (status === 500) logger.error({ err }, `package-updates ${what} failed`);
+  const reasonCode = refusalReasonOf(err);
+  const cause =
+    err && typeof err === "object"
+      ? ((err as { cause?: unknown }).cause as
+          { reviewUrl?: unknown } | undefined)
+      : undefined;
+  const issues = reasonCode ? zodIssuesOf(cause) : null;
   return {
-    body: { error: err instanceof Error ? err.message : "Unknown error" },
+    body: {
+      error: err instanceof Error ? err.message : "Unknown error",
+      ...(reasonCode ? { reasonCode } : {}),
+      ...(issues ? { fieldErrors: zodFieldErrors(issues) } : {}),
+      ...(reasonCode && typeof cause?.reviewUrl === "string"
+        ? { reviewUrl: cause.reviewUrl }
+        : {}),
+    },
     status,
   };
 }
@@ -288,15 +339,32 @@ export function registerPackageUpdatesRoutes(app: HubHono): void {
       "pod admin); an agent's is filed as proposals. A space or capability " +
       "package (`comparedBy: package`) takes no choices: a person's apply " +
       "runs the space's agreed `acceptDataChanges`, then its template apply " +
-      "(or the capability's reconcile); an agent is refused (403). " +
+      "(or the capability's reconcile); an agent's is filed for the " +
+      "person's approval (`proposed`), and approving runs that same apply " +
+      "as the person. What only a person can do answers `reasonCode` " +
+      "`NEEDS_PERSON` (a space update that changes existing records, a " +
+      "view) or `CHOICES_NEEDED` (a field both sides changed), with the " +
+      "review page as `reviewUrl`; a catalog definition the pod refuses " +
+      "answers 400 `INVALID_CATALOG_DEFINITION`, naming the template and " +
+      "each field (`fieldErrors`). " +
       "Pod admins only. Requires hub-protocol.write scope.",
     request: { params: SlugParams, body: ApplyRequestSchema },
     responses: {
       200: { description: "Applied or proposed", schema: ApplyResponseSchema },
-      400: { description: "Bad request", schema: ErrorSchema },
-      403: { description: "Forbidden", schema: ErrorSchema },
+      400: {
+        description: "Bad request, a choice needed, or an invalid definition",
+        schema: RefusalSchema,
+      },
+      403: {
+        description: "Forbidden, or only a person can do it",
+        schema: RefusalSchema,
+      },
       404: { description: "Nothing installed from it", schema: ErrorSchema },
       409: { description: "The catalog moved", schema: ErrorSchema },
+      412: {
+        description: "Consent missing, or the template would not apply",
+        schema: ErrorSchema,
+      },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -311,7 +379,9 @@ export function registerPackageUpdatesRoutes(app: HubHono): void {
     const jsonRead = await readJsonBody(c);
     if (!jsonRead.ok) return jsonRead.res;
     const parsed = ApplyRequestSchema.safeParse(jsonRead.body);
-    if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
+    // The Hub's one validation refusal (`{ error, fieldErrors }`, as
+    // `POST /packages/apply` answers since backend#672), never zod's JSON dump.
+    if (!parsed.success) return hubValidationHook(parsed, c) as Response;
 
     const userId = c.get("userId") as string;
     try {

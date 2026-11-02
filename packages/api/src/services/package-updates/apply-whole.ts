@@ -16,10 +16,20 @@
  *                containers, with the person's consent to a `notify` policy:
  *                the engine of `capabilities.applyUpdates`.
  *
- * A person's act: an agent is refused with where to go (an agent cannot agree
- * to data changes, and a capability reconcile is an operator pass, like
- * `POST /capabilities/reconcile`). An agent asks for a space update through
- * `POST /packages/apply`, which files it for review.
+ * ONE rule for every caller (founder, 2026-11-02: "the CLI should be able to
+ * do everything"): a person applies; an agent's apply is FILED for the
+ * person's approval, and the approval runs the same apply as that person.
+ *
+ *   workspace  — `proposeTemplateApply` per space (the filing door of
+ *                `POST /packages/apply`, backend#661), with the catalog body
+ *                the server resolves itself; approved by `workspace/update`.
+ *   capability — a `capability/capability.update` proposal; approved by its
+ *                executor (`routers/proposals/executors/package-update.ts`), which
+ *                runs `applyWholeUpdateAsPerson` as the approver.
+ *
+ * An agent never agrees to changes to existing records (Contract C): a space
+ * update that has some is a `NEEDS_PERSON` refusal naming the review page,
+ * never a proposal that would apply the template and leave the data behind.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -29,18 +39,26 @@ import {
   runConsentedDataChanges,
   getActingAgentUserId,
 } from "@synap/database";
-import type {
-  ApplyPackageUpdateInput,
-  PackageUpdateApplyResult,
+import {
+  packageUpdateReviewPath,
+  type ApplyPackageUpdateInput,
+  type PackageUpdateApplyResult,
 } from "@synap-core/types/package-updates";
 
 import { reconcileCapabilitiesToTemplates } from "../capabilities/reconcile-capabilities-to-templates.js";
+import { createPendingProposal } from "../../utils/permission-check.js";
 import type { Context } from "../../types/context.js";
 import type { InstalledPackage } from "./standing.js";
 import { pendingSpaceDataChanges } from "./plan.js";
+import { packageUpdateRefusal } from "./refusals.js";
 
-export const AGENT_WHOLE_PACKAGE_REFUSAL =
-  "An agent cannot apply a space or capability update here: it may change existing records, which only a person agrees to. Ask a person to apply it on pod admin (Marketplace, Updates), or request it with POST /packages/apply, which files it for review.";
+type WholeInput = Pick<
+  ApplyPackageUpdateInput,
+  "expectedVersion" | "acceptDataChanges"
+>;
+
+/** The door name an agent's space update is filed under (`data.via`). */
+export const PACKAGE_UPDATES_VIA = "package-updates.apply";
 
 /** The data changes a space update runs first, with the person's consent. */
 async function runAgreedDataChanges(
@@ -72,33 +90,58 @@ async function runAgreedDataChanges(
   }
 }
 
-export async function applyWholePackageUpdate(
-  ctx: Context,
+/** The update the caller saw still waits, at the version it saw. */
+export function assertUpdateStillWaits(
   pkg: InstalledPackage,
-  input: Pick<ApplyPackageUpdateInput, "expectedVersion" | "acceptDataChanges">
-): Promise<PackageUpdateApplyResult> {
-  if (
-    getActingAgentUserId() ??
-    (ctx as { agentUserId?: string | null }).agentUserId
-  ) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: AGENT_WHOLE_PACKAGE_REFUSAL,
-    });
-  }
+  expectedVersion: string
+): void {
   if (pkg.hasUpdate !== true) {
     throw new TRPCError({
       code: "NOT_FOUND",
       message: `No update waits for "${pkg.slug}".`,
     });
   }
-  if (pkg.latestVersion !== input.expectedVersion) {
+  if (pkg.latestVersion !== expectedVersion) {
     throw new TRPCError({
       code: "CONFLICT",
-      message: `The catalog moved to ${pkg.latestVersion ?? "an unknown version"} since this update was shown (${input.expectedVersion}). Review it again.`,
+      message: `The catalog moved to ${pkg.latestVersion ?? "an unknown version"} since this update was shown (${expectedVersion}). Review it again.`,
     });
   }
+}
+
+function refuseFieldKind(pkg: InstalledPackage): never {
+  throw new TRPCError({
+    code: "BAD_REQUEST",
+    message: `"${pkg.slug}" is a ${pkg.kind}: it is updated field by field.`,
+  });
+}
+
+export async function applyWholePackageUpdate(
+  ctx: Context,
+  pkg: InstalledPackage,
+  input: WholeInput
+): Promise<PackageUpdateApplyResult> {
+  assertUpdateStillWaits(pkg, input.expectedVersion);
   const userId = ctx.userId as string;
+  const agentUserId =
+    getActingAgentUserId() ??
+    ((ctx as { agentUserId?: string | null }).agentUserId || undefined);
+  if (agentUserId) {
+    return fileWholePackageUpdate(userId, agentUserId, pkg, input);
+  }
+  return applyWholeUpdateAsPerson(userId, pkg, input);
+}
+
+/**
+ * The person's apply: what a person does on pod admin, and what approving an
+ * agent's capability update runs (as the approver). The caller checked that
+ * the update still waits (`assertUpdateStillWaits`).
+ */
+export async function applyWholeUpdateAsPerson(
+  userId: string,
+  pkg: InstalledPackage,
+  input: WholeInput
+): Promise<PackageUpdateApplyResult> {
   const warnings: string[] = [];
 
   if (pkg.kind === "workspace") {
@@ -125,15 +168,132 @@ export async function applyWholePackageUpdate(
       warnings.push(`${c.name}: ${c.reason}`);
     }
   } else {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: `"${pkg.slug}" is a ${pkg.kind}: it is updated field by field.`,
-    });
+    refuseFieldKind(pkg);
   }
 
   // No receipt: a receipt records field changes to undo, and a whole-package
   // update changed none (additive, the pod's edits kept). The space records
   // its own apply (`settings.template`), the capability its stamp.
+  return {
+    status: "applied",
+    receipt: null,
+    ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
+  };
+}
+
+/** An agent's whole-package update, filed for the person's approval. */
+async function fileWholePackageUpdate(
+  userId: string,
+  agentUserId: string,
+  pkg: InstalledPackage,
+  input: WholeInput
+): Promise<PackageUpdateApplyResult> {
+  if (pkg.kind === "workspace") {
+    return fileSpaceUpdate(userId, agentUserId, pkg);
+  }
+  if (pkg.kind === "capability") {
+    const from = pkg.installedVersion ?? "an unstamped version";
+    const proposal = await createPendingProposal({
+      userId,
+      workspaceId: null,
+      targetType: "capability",
+      targetId: `update:${pkg.slug}`,
+      proposalType: "capability.update",
+      agentUserId,
+      data: {
+        slug: pkg.slug,
+        kind: "capability",
+        name: pkg.name,
+        fromVersion: pkg.installedVersion,
+        // The version the agent saw: approving applies THIS one, or is
+        // refused when the catalog moved since (asked again).
+        toVersion: input.expectedVersion,
+        containerIds: pkg.containerIds,
+      },
+      notificationDescription: `Update the capability "${pkg.name}" from ${from} to ${input.expectedVersion}`,
+    });
+    return { status: "proposed", proposalIds: [proposal.id] };
+  }
+  return refuseFieldKind(pkg);
+}
+
+/**
+ * A space update asked by an agent: each space's template apply filed through
+ * the ONE filing door (`proposeTemplateApply`), after the same admission
+ * `POST /packages/apply` runs, with the body the catalog holds (never one the
+ * caller sent). A slug the space holds as its own template is a
+ * `template_update` of it; an overlay pack is filed onto its base space.
+ */
+async function fileSpaceUpdate(
+  userId: string,
+  agentUserId: string,
+  pkg: InstalledPackage
+): Promise<PackageUpdateApplyResult> {
+  const pending = await pendingSpaceDataChanges(pkg.slug);
+  if (pending.length > 0) {
+    throw packageUpdateRefusal(
+      "FORBIDDEN",
+      "NEEDS_PERSON",
+      `This update of "${pkg.slug}" changes existing records (${pending
+        .map((c) => c.opKey)
+        .join(
+          ", "
+        )}), which only a person agrees to. A person applies it on pod admin: ${packageUpdateReviewPath(pkg.slug)}. Nothing was filed.`,
+      { reviewUrl: packageUpdateReviewPath(pkg.slug) }
+    );
+  }
+  const [{ resolveCatalogTemplateBody, installTemplateFromCatalog }, door] =
+    await Promise.all([
+      import("../../routers/workspaces.js"),
+      import("../../routers/workspaces/template-door.js"),
+    ]);
+  const { admitTemplateApply, proposeTemplateApply } =
+    await import("../template-apply/propose.js");
+  const { body } = await resolveCatalogTemplateBody(userId, pkg.slug);
+
+  const proposalIds: string[] = [];
+  const warnings: string[] = [];
+  for (const workspaceId of pkg.workspaceIds) {
+    const targetWorkspaceId = await door.installTarget(workspaceId, pkg.slug);
+    const spaceBody = {
+      ...body,
+      ...(targetWorkspaceId ? { targetWorkspaceId } : {}),
+    };
+    const admission = await admitTemplateApply({ userId, body: spaceBody });
+    if (!admission.ok) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message:
+          admission.refusal === "preflight"
+            ? `The catalog's "${pkg.slug}" would not apply cleanly to this pod (${
+                admission.preflight.validationErrors.join("; ") ||
+                "a kind it declares conflicts with the pod's"
+              }). Nothing was filed.`
+            : admission.reply.guidance,
+      });
+    }
+    const filed = await proposeTemplateApply({
+      userId,
+      agentUserId,
+      body: spaceBody,
+      via: PACKAGE_UPDATES_VIA,
+    });
+    if (filed.kind === "denied") {
+      throw new TRPCError({ code: "FORBIDDEN", message: filed.reason });
+    }
+    if (filed.kind === "proposed") {
+      proposalIds.push(filed.proposalId);
+      continue;
+    }
+    // The gate let this agent write directly: the same apply a person runs,
+    // attributed to the agent.
+    const reply = await installTemplateFromCatalog(
+      { userId, agentUserId },
+      { slug: pkg.slug, workspaceId }
+    );
+    if (reply.warning) warnings.push(reply.warning);
+  }
+  if (proposalIds.length > 0) return { status: "proposed", proposalIds };
   return {
     status: "applied",
     receipt: null,

@@ -51,6 +51,7 @@ import { registerCellExecutors } from "./executors/cell.js";
 import { registerWorkspaceExecutors } from "./executors/workspace.js";
 import { registerMessagingExecutors } from "./executors/messaging.js";
 import { registerCapabilityExecutors } from "./executors/capability.js";
+import { registerPackageUpdateExecutors } from "./executors/package-update.js";
 import { registerProviderExecutors } from "./executors/provider.js";
 // NB: distinct from `provider.js` above — that one dispatches external
 // connector HTTP actions (`provider.action`). This one materializes AI MODEL
@@ -105,6 +106,7 @@ export function registerApproveExecutors(): void {
   registerWorkspaceExecutors();
   registerMessagingExecutors();
   registerCapabilityExecutors();
+  registerPackageUpdateExecutors();
   registerProviderExecutors();
   registerAiProviderExecutors();
   registerWidgetExecutors();

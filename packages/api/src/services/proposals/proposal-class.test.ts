@@ -193,6 +193,9 @@ describe("classifyProposal", () => {
       // Files the SAME `capability.install` row as marketplace-install for a
       // workspace's intent gap — an install request, not a run.
       "services/capabilities/propose-intent-gap-install.ts",
+      // An agent key's capability UPDATE (`capability.update`), filed for
+      // the person's approval: it changes what is installed, not a run.
+      "services/package-updates/apply-whole.ts",
     ]);
 
     for (const site of sites) {
@@ -205,17 +208,18 @@ describe("classifyProposal", () => {
         ).toBe("ephemeral");
         continue;
       }
-      // Anything else must be a NON-run capability proposal. `capability.install`
-      // is object work: it changes what is installed, and stays answerable.
+      // Anything else must be a NON-run capability proposal.
+      // `capability.install` and `capability.update` are object work: they
+      // change what is installed, and stay answerable.
       expect(
-        site.proposalType,
+        ['"capability.install"', '"capability.update"'],
         `${site.file} writes a bare proposalType literal on a capability ` +
           `proposal — if it is a RUN, import CAPABILITY_RUN_PROPOSAL_TYPE; ` +
           `"run" was the literal that made three producers disagree`
-      ).toBe('"capability.install"');
-      expect(classifyProposal("capability.install", "capability")).toBe(
-        "objectWork"
-      );
+      ).toContain(site.proposalType);
+      expect(
+        classifyProposal(JSON.parse(site.proposalType) as string, "capability")
+      ).toBe("objectWork");
     }
   });
 
