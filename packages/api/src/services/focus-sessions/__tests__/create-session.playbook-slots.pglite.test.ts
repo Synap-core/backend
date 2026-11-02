@@ -167,6 +167,10 @@ beforeAll(async () => {
       }
     }
   }
+  // The follow door's provenance edge is idempotent on this index.
+  await h.client!.exec(
+    `create unique index if not exists idx_links_unique_edge on links (from_type, from_id, to_type, to_id, link_type);`
+  );
   await q(
     `insert into users (id, email, name, user_type) values ($1, 'a@x.test', 'Antoine', 'human')`,
     [USER]

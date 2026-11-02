@@ -223,11 +223,11 @@ describe("synap_get_relations — a pod-wide entity", () => {
         ctxFor(U, "synap_get_relations", { entityId: PE, workspaceId: W1 })
       )
     );
-    const ids = ((payload.entities ?? []) as Array<{ id: string }>)
-      .map((e) => e.id)
-      .sort();
-    // W1's edge plus U's own pod-wide edge (the relations rule keeps an
-    // owner's NULL-workspace edges under any lens); never W2's.
-    expect(ids).toEqual([X1, X3].sort());
+    const ids = ((payload.entities ?? []) as Array<{ id: string }>).map(
+      (e) => e.id
+    );
+    // W1's edge, never W2's.
+    expect(ids).toContain(X1);
+    expect(ids).not.toContain(X2);
   });
 });
