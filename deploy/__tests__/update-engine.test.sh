@@ -11,6 +11,8 @@
 # Scenarios (each asserts the release record AND a notification record):
 #   happy       adopted legacy pod → release R2 (bundle installed, verified)
 #   canary      R1 → R2, new image fails health  → previous digests, schema unchanged
+#   pgup        R1 → R2, postgres fails on the release's definition (recreated
+#               after the backup, before migrations, #664) → rolled back, no migration
 #   migrate     R1 → R2, backend-migrate throws  → previous digests, data KEPT migrated,
 #                                                  the dump + `synap restore` command offered
 #   restore-*   the operator's `synap restore <dump>`: confirm, fresh-db restore,
@@ -110,6 +112,8 @@ case "$*" in
   "compose run --rm "*) exit 0 ;;
   "compose --profile canary up -d backend-canary"*) cur_image > "$F/canary_image"; exit 0 ;;
   "compose up -d --force-recreate --remove-orphans backend realtime"*) cur_image > "$F/backend_image"; exit 0 ;;
+  "compose up -d --no-deps postgres")
+    [ -n "${FAKE_PG_UP_FAIL:-}" ] && { echo "postgres exited (1): invalid value for parameter" >&2; exit 1; }; exit 0 ;;
   "compose"*" up "*)
     # caddy (re)creation, the way Compose does it: a new container mounts the
     # Caddyfile on disk now; a plain `up` recreates only when the service's
@@ -336,6 +340,9 @@ ls -d "$DEPLOY"/backups/postgres/*-pre-update >/dev/null 2>&1 && ok "happy: veri
 b=$(grep -n "pg_dump" "$FAKE/log" | head -1 | cut -d: -f1); m=$(grep -n "run --rm backend-migrate" "$FAKE/log" | head -1 | cut -d: -f1)
 p=$(grep -n "^pull " "$FAKE/log" | tail -1 | cut -d: -f1)
 [ -n "$p" ] && [ -n "$b" ] && [ -n "$m" ] && [ "$p" -lt "$b" ] && [ "$b" -lt "$m" ] && ok "happy: order is pull → backup → migrate" || bad "happy: order pull=$p backup=$b migrate=$m"
+u=$(grep -n "^compose up -d --no-deps postgres$" "$FAKE/log" | head -1 | cut -d: -f1)
+[ -n "$u" ] && [ -n "$b" ] && [ -n "$m" ] && [ "$b" -lt "$u" ] && [ "$u" -lt "$m" ] \
+  && ok "happy: postgres takes the release's definition after the backup, before the migrations (#664)" || bad "happy: order backup=$b postgres-up=$u migrate=$m"
 grep -q "pull .*@sha256:$NEW_DIGEST" "$FAKE/log" && ! grep -qE "^pull [^@]*$" "$FAKE/log" && ok "happy: every pull is by digest" || bad "happy: a pull was not by digest: $(grep '^pull' "$FAKE/log")"
 [ "$(last status)" = succeeded ] && notified succeeded && ok "happy: success recorded + notified" || bad "happy: record=$(last status)"
 grep -q '^SYNAP_EVENT {' "$S/out" && ok "happy: SYNAP_EVENT line emitted" || bad "happy: no SYNAP_EVENT line"
@@ -462,6 +469,16 @@ BK="$(last backup)"
 grep -qF "synap restore $BK" "$S/out" && grep -q "DISCARDS everything written since" "$S/out" && grep -q "data was not touched" "$S/out" \
   && ok "migrate: the operator is given the exact restore command and what it costs" || { bad "migrate: no restore command printed"; show; }
 grep -q "profile canary up" "$FAKE/log" && bad "migrate: the canary ran after a failed migration" || ok "migrate: no canary / swap after the throw"
+
+# ── 3a. postgres fails on the release's definition → rolled back before any
+# migration ran, previous pins (#664: it is now recreated before the migrations)
+setup pgup r1; publish "$R2" 0012_new.sql bundle
+FAKE_PG_UP_FAIL=1 run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = rolled_back ] && [[ "$(last reason)" == "postgres did not start on the release's definition"* ]] \
+  && ! grep -q "run --rm backend-migrate" "$FAKE/log" && [ "$(cat "$FAKE/level")" = "$OLD_LEVEL" ] \
+  && cmp -s "$DEPLOY/.env" "$S/env.orig" && [ "$(cur_id)" = "$R1" ] && notified rolled_back \
+  && ok "pgup: postgres refused the release's definition → rolled back before any migration, previous pins" || { bad "pgup: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+grep -q "profile canary up" "$FAKE/log" && bad "pgup: the canary ran after postgres failed" || ok "pgup: no canary / swap after postgres failed"
 
 # ── 3b. restoring the kept dump is the operator's door: `synap restore <dir>` ─
 # These were the rollback's restore checks; they now guard the door it offers.
