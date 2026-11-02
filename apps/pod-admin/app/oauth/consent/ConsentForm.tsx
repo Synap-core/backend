@@ -30,15 +30,18 @@ import {
 } from "lucide-react";
 
 import Link from "next/link";
-import { FIRST_PARTY_CLIENT_NAMES } from "@synap-core/types/vocabulary";
+import {
+  FIRST_PARTY_CLIENT_NAMES,
+  resolveOAuthScopeLabel,
+} from "@synap-core/types/vocabulary";
 import { SIGNED_IN_APPS_COPY } from "@synap-core/types/sign-in";
 import { formatRelative } from "../../../lib/format";
 import { trpc } from "../../../lib/trpc";
 import {
-  actsAsHeadline,
   allowBlockedReason,
   allowNewAsks,
   alsoSeeLine,
+  consentHeadline,
   consentWidth,
   decideLine,
   decisionsHeading,
@@ -59,14 +62,13 @@ import {
   otherSpaces,
   permissionLabel,
   POD_WIDE_HEADING,
-  POD_WIDE_NOTE,
   podWideLabel,
   podWideNote,
   podWideToApproved,
   readsSpaceRecords,
   reasonOf,
+  placeReachNote,
   scopeLabel,
-  spaceReachNote,
   sectionCheckboxLabel,
   sectionState,
   setObjectLevel,
@@ -88,20 +90,6 @@ import {
   type PodWideSelection,
   type Selection,
 } from "./consent-model";
-
-/**
- * Plain-language descriptions for the pod-grammar scopes this AS grants.
- *
- * A consent screen that shows raw scope tokens is not consent — the human has
- * to be able to tell what they are agreeing to. Unknown scopes fall back to the
- * token itself rather than being hidden, so an unlabeled scope is visible rather
- * than silently approved.
- */
-const SCOPE_DESCRIPTIONS: Record<string, string> = {
-  "mcp.read": "Read your entities, documents, and relations",
-  "mcp.write":
-    "Create and update things in your pod — every write still goes through your workspace's AI governance as a proposal you review",
-};
 
 export interface ConsentParams {
   clientId: string;
@@ -363,13 +351,16 @@ export function ConsentForm({
                 to connect to your pod{podHost ? ` ${podHost}` : ""}
                 {identity ? ` as ${identity}` : ""}.
               </p>
-              {/* A Synap app acts AS the person: said plainly, from the
-                  server's words and the spaces ticked below (the grant). */}
-              {app.actsAs.kind === "person" ? (
-                <p className="text-[13px] font-medium leading-relaxed text-foreground/90">
-                  {actsAsHeadline(app.actsAs.lead, selection, app.permissions)}
-                </p>
-              ) : null}
+              {/* The ONE access sentence over what is ticked below: the
+                  grant the token will carry, as the app's page will say it. */}
+              <p className="text-[13px] font-medium leading-relaxed text-foreground/90">
+                {consentHeadline(
+                  selection,
+                  app.permissions,
+                  podWideSelection,
+                  app.podWide
+                )}
+              </p>
             </>
           ) : (
             <>
@@ -581,7 +572,7 @@ export function ConsentForm({
                                 strokeWidth={2.4}
                               />
                               <span className="text-xs leading-relaxed text-foreground/75">
-                                {SCOPE_DESCRIPTIONS[s] ?? s}
+                                {resolveOAuthScopeLabel(s)}
                               </span>
                             </li>
                           ))}
@@ -1443,7 +1434,7 @@ export function AppConsent({
         {/* Once, under the rows or the matrix, for any record read (rv-ui U1/U3). */}
         {readsSpaceRecords(app.permissions) && (
           <p className="text-pretty text-xs leading-relaxed text-foreground/75">
-            {spaceReachNote(app.podWide.length > 0)}
+            {placeReachNote("spaces")}
           </p>
         )}
         {rows.length > 0 && (
@@ -1694,7 +1685,7 @@ function PodWideReads({
         })}
       </ul>
       <p className="text-pretty text-xs leading-relaxed text-foreground/75">
-        {POD_WIDE_NOTE}
+        {placeReachNote("pod")}
       </p>
     </section>
   );

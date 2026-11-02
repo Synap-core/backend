@@ -40,9 +40,15 @@ import {
   isKindQualifiedGrantSubject,
   parsePermission,
   resolveEventFamilyPermissionLabel,
+  accessModel,
+  describeAccess,
+  grantsOfRequests,
+  type Place,
+} from "@synap-core/types/grants";
+import {
   EVERYWHERE_IN_POD,
   POD_WIDE_HEADING,
-} from "@synap-core/types/grants";
+} from "@synap-core/types/vocabulary";
 import { intentRunLabel } from "@synap-core/types/capability-intents";
 import { isAppPublicId } from "@synap-core/types/membrane";
 import { FIRST_PARTY_CLIENT_NAMES } from "@synap-core/types/vocabulary";
@@ -513,25 +519,38 @@ export function toApproved(
 }
 
 /**
- * The line under the space choice when the app may read records (rv-ui U1).
- * A space grant reads what a member of the space reads (founder "option 1",
- * 2026-10-23): what is stored there, plus any record of the pod with a role
- * there (a pod-wide person or company, or a record of another space).
+ * The ONE reach line of a place, under its section (rv-ui U1; access model B,
+ * plan 2c8fca91 §1). Each line says what that place gives and nothing about
+ * another place, so two sections can never contradict each other (the old
+ * "Nothing else in your pod" under the spaces denied the pod-wide section
+ * above it, and a second hand-written variant patched it).
+ *
+ *  - spaces: a space grant reads what a member of the space reads (founder
+ *    "option 1", 2026-10-23): what is stored there, plus any record of the
+ *    pod with a role there (a pod-wide person or company, or a record of
+ *    another space);
+ *  - the pod: a pod-wide read reads its kinds everywhere, as the person can,
+ *    and changes nothing;
+ *  - anywhere: an app is never offered it; said truthfully if it ever is.
+ *
+ * Taking it back is said once, under Allow, never in a section.
  */
-export const SPACE_REACH_NOTE =
-  "It sees what a member of these spaces sees: what is stored there, plus the people, companies and other records of your pod that have a role there or were filed there. Nothing else in your pod.";
+export function placeReachNote(kind: Place["kind"]): string {
+  switch (kind) {
+    case "spaces":
+      return "It sees what a member of these spaces sees: what is stored there, plus the people, companies and other records of your pod that have a role there or were filed there.";
+    case "pod":
+      return "It reads these in every space and outside any space, as you can. It cannot change them.";
+    case "unbounded":
+      return "It reaches anything you can reach in your pod, as you can.";
+    default:
+      return unreachableKind(kind);
+  }
+}
 
-/**
- * The same line when the app also asks for pod-wide reads: "Nothing else in
- * your pod" would contradict the section above it ("Everywhere in your pod"),
- * so it names that section as the one exception.
- */
-export const SPACE_REACH_NOTE_WITH_POD_WIDE =
-  "It sees what a member of these spaces sees: what is stored there, plus the people, companies and other records of your pod that have a role there or were filed there. Outside these spaces, it reads only what is listed under Everywhere in your pod.";
-
-/** The reach line for this offer: with pod-wide reads on offer, it names their section. */
-export function spaceReachNote(hasPodWide: boolean): string {
-  return hasPodWide ? SPACE_REACH_NOTE_WITH_POD_WIDE : SPACE_REACH_NOTE;
+/** A fourth place kind fails to compile in `placeReachNote`. */
+function unreachableKind(kind: never): never {
+  throw new Error(`Unknown place kind: ${String(kind)}`);
 }
 
 /**
@@ -558,29 +577,27 @@ export function readsSpaceRecords(
 }
 
 /**
- * A Synap app's headline: the server's `lead` ("Content Studio will act as
- * you in") ended with the spaces ticked — the grant the token will carry, so
- * the sentence changes as the person ticks: "…: Content OS, Ecosystem.".
+ * The consent's headline: the ONE access sentence (`describeAccess`) over
+ * what is ticked now — the grant the token will carry, so it changes as the
+ * person ticks, and it is the sentence the app's page shows once allowed
+ * ("Reads decisions everywhere in your pod; changes posts in Content OS.").
  */
-export function actsAsHeadline(
-  lead: string,
+export function consentHeadline(
   selection: Selection,
-  offer: readonly OfferedPermission[]
+  offer: readonly OfferedPermission[],
+  podWideSelection: PodWideSelection = new Set(),
+  podWide: readonly PodWideOffer[] = []
 ): string {
-  const names: string[] = [];
-  for (const o of offer) {
-    for (const w of o.workspaces) {
-      if (
-        selection.has(key(o.permission, w.workspaceId)) &&
-        !names.includes(w.workspaceName)
-      ) {
-        names.push(w.workspaceName);
-      }
-    }
-  }
-  return names.length > 0
-    ? `${lead}: ${names.join(", ")}.`
-    : `${lead} the spaces you choose below.`;
+  const names: Record<string, string> = {};
+  for (const o of offer)
+    for (const w of o.workspaces) names[w.workspaceId] = w.workspaceName;
+  const ticked = [
+    ...podWideToApproved(podWideSelection, podWide),
+    ...toApproved(selection, offer),
+  ];
+  return describeAccess(accessModel(grantsOfRequests(ticked), "app"), {
+    names,
+  }).sentence;
 }
 
 /** The permissions the person has NO space to give in. */
@@ -1101,10 +1118,6 @@ export function podWideNote(row: ConsentObject): string {
 // Where a pod-wide read applies ("everywhere in your pod"), and the heading of
 // its section here and on the app page: one definition, shared with the pod.
 export { EVERYWHERE_IN_POD, POD_WIDE_HEADING };
-
-/** Under the pod-wide section: what such a read does, what it never does, and how to take it back. */
-export const POD_WIDE_NOTE =
-  "It reads these in every space and outside any space, as you can. It cannot change them, and it reads nothing else beyond the spaces you give it. You can take these reads back on the app's page without disconnecting it.";
 
 /**
  * A permission the app asks for EVERYWHERE in the pod (the server's
