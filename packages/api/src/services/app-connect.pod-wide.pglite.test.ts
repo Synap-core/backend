@@ -57,7 +57,13 @@ import { isPodWideReadScope } from "@synap/database/schema";
 import { GrantRepository, runWithGrant, type KeyGrant } from "@synap/database";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { attachGrantsOrRevoke } from "./key-grant.js";
-import { grantsForApprovedRequests } from "./app-connect.js";
+import {
+  appApprovalWithinAsked,
+  appRequestsWithin,
+  grantsForApprovedRequests,
+} from "./app-connect.js";
+import { requestsWithin } from "./agent-connect.js";
+import { describeAppSignIn } from "../routers/oauth/app-client.js";
 import { keyGrantReadClause } from "../access/grant-read.js";
 import {
   grantBoundsDoor,
@@ -247,5 +253,86 @@ describe("writes stay pinned to the spaces it was given", () => {
     // Past the grant rung (no membership row in this harness, so the next
     // rung answers): not a thrown error read as "not denied".
     expect((r as { reason?: string }).reason).toMatch(/not a member/);
+  });
+});
+
+// The consent's "is it on offer" check (`connectOAuthApp`) and the executor's
+// "within what was asked" check (`appApprovalWithinAsked`). Rules out: an
+// app's pod-wide ask read as "any space", which let a hand-edited consent
+// approve `entity.decision.read` IN FINANCE (FINANCE never offered) and make
+// the app's agent a viewer of FINANCE.
+describe("an app's pod-wide ask covers the pod-wide read only", () => {
+  const ASKED = [
+    { permission: "entity.task.create", workspaceId: SALES },
+    { permission: "entity.decision.read", workspaceId: null },
+  ];
+
+  it("accepts what was asked, place by place", () => {
+    expect(appRequestsWithin(ASKED, ASKED)).toBe(true);
+    expect(appRequestsWithin([ASKED[1]!], ASKED)).toBe(true);
+  });
+
+  it("refuses the pod-wide read moved into a space, offered there or not", () => {
+    for (const ws of [FINANCE, SALES]) {
+      const forged = [{ permission: "entity.decision.read", workspaceId: ws }];
+      expect(appRequestsWithin(forged, ASKED), ws).toBe(false);
+      expect(
+        appApprovalWithinAsked({
+          data: { data: { asked: ASKED } },
+          revisionHistory: [],
+          approved: forged,
+        }),
+        ws
+      ).toBe(false);
+    }
+  });
+
+  it("still refuses a space-pinned ask widened to pod-wide", () => {
+    expect(
+      appRequestsWithin(
+        [{ permission: "entity.task.create", workspaceId: null }],
+        ASKED
+      )
+    ).toBe(false);
+  });
+
+  it("leaves an AI's ask with no space covering any space (agent/connect)", () => {
+    expect(
+      requestsWithin(
+        [{ permission: "entity.decision.read", workspaceId: FINANCE }],
+        ASKED
+      )
+    ).toBe(true);
+  });
+});
+
+// The owner's sign-in keeps its pod-wide reads (`appSignInReach`). Rules out:
+// a sign-in screen that leaves them out and still says the app sees nothing
+// outside its spaces.
+describe("the owner's sign-in names the pod-wide reads it carries", () => {
+  it("says them after the spaces, and drops 'nothing outside these spaces'", async () => {
+    await h.client!.query(
+      `insert into workspaces (id, name) values ($1, 'Sales') on conflict do nothing`,
+      [SALES]
+    );
+    const d = await describeAppSignIn("DevPlane", "Antoine", [
+      { permission: "entity.task.read", workspaceId: SALES },
+      { permission: "entity.decision.read", workspaceId: null },
+    ]);
+    expect(d.headline).toMatch(
+      /^DevPlane will act as you in: Sales\. .*Decisions.*, everywhere in your pod\.$/
+    );
+    expect(d.spaces.map((s) => s.name)).toEqual(["Sales"]);
+    expect(d.cannot).toContain("see anything else outside");
+  });
+
+  it("without pod-wide reads, reads as before", async () => {
+    const d = await describeAppSignIn("DevPlane", "Antoine", [
+      { permission: "entity.task.read", workspaceId: SALES },
+    ]);
+    expect(d.headline).toBe("DevPlane will act as you in: Sales.");
+    expect(d.cannot).toContain(
+      "see anything outside what a member of these spaces sees"
+    );
   });
 });

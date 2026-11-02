@@ -16,7 +16,7 @@
  * authorize a tool run: the capability gate consults the resolver, which
  * skips every broad rule for a run (the outward floor). There is no
  * "Everything, always" here: `deriveGovernanceGrantOptions` writes no wildcard
- * rule in pod admin (finding c173cc51).
+ * rule in pod admin.
  *
  * Both speak through the decision's receipt door (`decision-receipt.ts`):
  * "Approved" only when the pod's answer says it applied, a failure stays until
@@ -212,13 +212,20 @@ function deriveGrantOptions(p: ProposalForRule, t: T): Granularity[] {
 export function AlwaysApproveMenu({
   proposal,
   disabled,
+  onRunningChange,
   onDone,
 }: {
   proposal: ProposalForRule;
   disabled?: boolean;
+  /** Tells the bar a decision is in flight, so it holds every other verb. */
+  onRunningChange?: (running: boolean) => void;
   onDone: () => void;
 }) {
-  const [running, setRunning] = useState(false);
+  const [running, setRunningState] = useState(false);
+  const setRunning = (value: boolean) => {
+    setRunningState(value);
+    onRunningChange?.(value);
+  };
   const approve = trpc.proposals.approve.useMutation();
   const createRule = trpc.governanceRules.create.useMutation();
 
@@ -280,7 +287,7 @@ export function AlwaysApproveMenu({
       <DropdownTrigger>
         <Button
           variant="flat"
-          className="min-h-10"
+          className="h-auto min-h-10 max-w-full whitespace-normal py-2 text-left"
           startContent={<Repeat size={14} />}
           endContent={<ChevronDown size={14} />}
           isLoading={running}
@@ -315,13 +322,20 @@ export function AlwaysApproveMenu({
 export function RejectNeverMenu({
   proposal,
   disabled,
+  onRunningChange,
   onDone,
 }: {
   proposal: ProposalForRule;
   disabled?: boolean;
+  /** Tells the bar a decision is in flight, so it holds every other verb. */
+  onRunningChange?: (running: boolean) => void;
   onDone: () => void;
 }) {
-  const [running, setRunning] = useState(false);
+  const [running, setRunningState] = useState(false);
+  const setRunning = (value: boolean) => {
+    setRunningState(value);
+    onRunningChange?.(value);
+  };
   const reject = trpc.proposals.reject.useMutation();
   const createRule = trpc.governanceRules.create.useMutation();
 
@@ -390,7 +404,7 @@ export function RejectNeverMenu({
         <Button
           color="danger"
           variant="light"
-          className="min-h-10"
+          className="h-auto min-h-10 max-w-full whitespace-normal py-2 text-left"
           startContent={<Ban size={14} />}
           endContent={<ChevronDown size={14} />}
           isLoading={running}

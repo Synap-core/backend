@@ -17,6 +17,7 @@
  * In-app history only: nothing here notifies or pushes, and there is no
  * backfill — the first tick after deploy opens what waits now.
  */
+import { UUID_RE } from "../focus-sessions/session-metadata.js";
 import {
   and,
   db,
@@ -154,8 +155,6 @@ async function holdersOf(
   return holderOf;
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 function chunk<T>(xs: readonly T[], n = 1_000): T[][] {
   return Array.from({ length: Math.ceil(xs.length / n) }, (_, i) =>
     xs.slice(i * n, (i + 1) * n)
@@ -188,7 +187,7 @@ export async function syncWaitEpisodesTick(
   const subjects = new Map<string, WaitEpisodeSubject>();
   const add = (s: WaitEpisodeSubject) => {
     // Ids only: a malformed id must not fail a whole chunk's read.
-    if (UUID.test(s.subjectId)) subjects.set(keyOf(s), s);
+    if (UUID_RE.test(s.subjectId)) subjects.set(keyOf(s), s);
   };
   for (const s of noticed) add(s);
   for (const s of openSessions)

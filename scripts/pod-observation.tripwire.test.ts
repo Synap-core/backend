@@ -69,7 +69,11 @@ const pr = (over: Record<string, unknown> = {}) => ({
   updated_at: "2026-10-26T11:00:00Z",
   closed_at: "2026-10-26T12:00:00Z",
   merged_at: null,
-  head: { ref: "feat/x", sha: "bead001" },
+  head: {
+    ref: "feat/x",
+    sha: "bead001",
+    repo: { full_name: "Synap-core/backend" },
+  },
   base: { ref: "main" },
   user: { login: "antoine" },
   ...over,
@@ -203,6 +207,32 @@ describe("pod-observation: the facts it carries", () => {
       intoDefault: true,
       sessionId: SID,
     });
+  });
+
+  it("a fork's PR names no session: its body is not carried, so no Pod session line reaches the pod", () => {
+    for (const head of [
+      { ref: "feat/x", sha: "bead001", repo: { full_name: "someone/backend" } },
+      // A deleted fork: GitHub sends no head repo. Unknown is not trusted.
+      { ref: "feat/x", sha: "bead001", repo: null },
+    ]) {
+      for (const merged of [true, false]) {
+        const o = observationFromEvent("pull_request", {
+          action: "closed",
+          pull_request: pr({
+            head,
+            merged,
+            merged_at: merged ? "2026-10-26T12:00:00Z" : null,
+          }),
+          repository,
+        });
+        expect(o?.type).toBe(merged ? "dev.pr_merged" : "dev.pr_closed");
+        expect(o?.data).not.toHaveProperty("sessionId");
+        expect(o?.data).not.toHaveProperty("body");
+        expect(checkDevLoopPayload(o!.type, o!.data)).toMatchObject({
+          ok: true,
+        });
+      }
+    }
   });
 
   it("a stacked PR merged into its parent branch is not into the default branch", () => {

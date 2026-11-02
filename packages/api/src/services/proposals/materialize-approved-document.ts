@@ -17,6 +17,7 @@ import {
   type CreateDocumentInput,
   normalizeDocumentType,
 } from "@synap/database";
+import type { DocumentScopeFields } from "../document-scope/document-scope.js";
 
 export async function materializeApprovedDocument(input: {
   /** The id the row is written with (a proposal's targetId, or a fresh one). */
@@ -30,6 +31,8 @@ export async function materializeApprovedDocument(input: {
   workspaceId: string | null;
   /** Lineage — null when no proposal row exists to point at (FK). */
   sourceProposalId: string | null;
+  /** Scope / refresher (0387), already read through the floor by the caller. */
+  fields?: DocumentScopeFields;
 }): Promise<{ id: string }> {
   const docRepo = new DocumentRepository(db, eventRepository);
   const title = input.title || "Untitled";
@@ -51,6 +54,7 @@ export async function materializeApprovedDocument(input: {
         size: 0,
         mimeType: null,
         metadata: { external: true },
+        ...input.fields,
         userId: input.userId,
         workspaceId: input.workspaceId,
         ...(input.sourceProposalId
@@ -80,6 +84,7 @@ export async function materializeApprovedDocument(input: {
     type: docType,
     content: input.content || "",
     mimeType,
+    ...input.fields,
     provenance: {
       createdByKind: "human",
       ...(input.sourceProposalId

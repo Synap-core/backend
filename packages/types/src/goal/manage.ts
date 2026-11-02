@@ -4,7 +4,8 @@
  *
  *   - which doors the goal page's menu offers this viewer (`goalManageDoors`):
  *     Edit goal · Add someone · Confirm kind (only while the AI's kind waits
- *     for a person) · Repeat runs (the loop);
+ *     for a person). Repeating a goal is its workers ("How it runs", goals
+ *     that run), never a menu door;
  *   - the edit draft and the `tracks.setDirection` patch it becomes — only
  *     the fields that changed, each WHOLE (`goalEditDraftOf`,
  *     `goalDirectionPatch`), checked by the same criteria rule as New goal;
@@ -46,7 +47,6 @@ export const GOAL_MANAGE_COPY = {
   edit: "Edit goal",
   addSomeone: "Add someone",
   confirmKind: "Confirm kind",
-  repeatRuns: "Repeat runs",
   makeItAGoal: "Make it a goal",
   commitmentNeeded: "Say what they commit to.",
   nobodyChosen: "Choose who to add.",
@@ -55,8 +55,7 @@ export const GOAL_MANAGE_COPY = {
 
 // ── which doors ─────────────────────────────────────────────────────────────
 
-export type GoalManageDoorKey =
-  "edit" | "add_someone" | "confirm_kind" | "repeat_runs";
+export type GoalManageDoorKey = "edit" | "add_someone" | "confirm_kind";
 
 export interface GoalManageDoor {
   key: GoalManageDoorKey;
@@ -66,8 +65,7 @@ export interface GoalManageDoor {
 /**
  * The menu doors this viewer may use: the goal's owner or judge, a person,
  * on an open goal. "Confirm kind" only while a kind or uncertainty waits for
- * a person's confirmation; "Repeat runs" only on a goal with criteria (the
- * loop proposes runs while a required criterion is unmet).
+ * a person's confirmation.
  */
 export function goalManageDoors(
   goal: GoalLike,
@@ -81,8 +79,6 @@ export function goalManageDoors(
   if ((goal.workKind || goal.uncertainty) && !goal.kindConfirmedBy) {
     doors.push({ key: "confirm_kind", label: GOAL_MANAGE_COPY.confirmKind });
   }
-  if (goal.criteria.length > 0)
-    doors.push({ key: "repeat_runs", label: GOAL_MANAGE_COPY.repeatRuns });
   return doors;
 }
 
@@ -201,7 +197,7 @@ export interface GoalLoopView {
   max: number;
 }
 
-/** The loop as the "Repeat runs" sheet shows it — a goal read without one is OFF. */
+/** The goal loop as a sheet shows it — a goal read without one is OFF. */
 export function goalLoopView(goal: {
   loop?: GoalLoopSettings | null;
 }): GoalLoopView {

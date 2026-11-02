@@ -47,11 +47,8 @@ import {
   type StatusSinceWindows,
 } from "./session-status-filter.js";
 import { triagePendingWhere, notTriagePendingWhere } from "./triage.js";
-import {
-  sessionKindWhere,
-  sessionAutomationWhere,
-  type SessionKind,
-} from "./session-kind.js";
+import { sessionKindWhere, sessionAutomationWhere } from "./session-kind.js";
+import type { SessionKindFilter } from "@synap-core/types/focus-sessions";
 import type { SessionStatus } from "./session-statuses.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import {
@@ -61,8 +58,8 @@ import {
 
 /** Triage lens: `default` hides undecided agent drafts, `triage` shows only them. */
 export type SessionLens = "default" | "triage" | "all";
-/** Population lens (`session-kind.ts`), plus the `all` filter sentinel. */
-export type SessionKindFilter = SessionKind | "all";
+/** Population lens (`@synap-core/types/focus-sessions`), plus `all`. */
+export type { SessionKindFilter };
 
 /** Everything that decides WHICH sessions a list door returns. */
 export interface SessionListQuery {

@@ -353,11 +353,10 @@ describe("diagnostics", () => {
       "::::",
       ":::::",
     ].join("\n");
-    const found = collectDiagnostics(md).map((d) => [
-      d.code,
-      d.severity,
-      d.line,
-    ]);
+    // The column grammar only: the empty `## S` is the design pass's to name.
+    const found = collectDiagnostics(md)
+      .filter((d) => d.code !== "empty-heading")
+      .map((d) => [d.code, d.severity, d.line]);
     expect(found).toEqual([
       ["invalid-width", "info", 1],
       ["columns-stray-content", "warning", 2],

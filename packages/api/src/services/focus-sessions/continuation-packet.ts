@@ -98,6 +98,7 @@ import {
 import {
   isSessionWorkingNow,
   SESSION_WORKING_WINDOW_MS,
+  type SessionActivityLive,
 } from "@synap-core/types/run-activity";
 import {
   resolveSessionTitle,
@@ -153,6 +154,12 @@ import {
 } from "./session-kind.js";
 import { createLogger } from "@synap-core/core";
 import {
+  readSessionDevboxJobs,
+  readSessionMuted,
+  type PacketDevboxJobsSection,
+  type PacketMuted,
+} from "./session-notify.js";
+import {
   sessionReadableWhere,
   type SessionReader,
 } from "../../access/session-visibility.js";
@@ -169,6 +176,13 @@ import {
   type RunnerStateFold,
   type SessionRunner,
 } from "./session-runners.js";
+import {
+  deriveSessionHolder,
+  holderUnavailable,
+  loadHolderAgents,
+  nameHolder,
+  type SessionHolderSection,
+} from "./session-holder.js";
 import {
   readSessionInbox,
   type PacketInboxItem,
@@ -280,6 +294,17 @@ export interface PacketRunnerItem {
   state: "busy" | "idle" | "needs_permission" | "ended" | null;
   /** When it entered that state; for a runner gone quiet, when it was last seen. */
   stateSince?: string;
+  /**
+   * The model it says it runs on (0389, `X-Synap-Model`), as its client names
+   * it. Absent = its client names none (unknown). Claimed, not attested.
+   */
+  model?: string;
+  /**
+   * The provider serving that model (0389, `X-Synap-Model-Provider`): a
+   * `MODEL_PROVIDERS` slug (`@synap-core/types/agents`). Absent = unknown,
+   * never "anthropic".
+   */
+  provider?: string;
   firstSeenAt: string;
   lastSeenAt: string;
   /** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read, and not `ended`. */
@@ -668,6 +693,14 @@ export interface ContinuationPacket {
   externalAgent:
     | { status: "ok"; agent: SessionExternalAgent | null }
     | { status: "unavailable"; reason: string };
+  /**
+   * WHO HAS IT — the one holder read (`session-holder.ts`): agent, person or
+   * nobody, with ONE wait kind as its word, since when, and the agent named
+   * with its computer and whether anything runs it. Derived from the
+   * sections this packet already read (`externalAgent`, `runners`, `live`,
+   * `waitingOn`); any of them failed ⇒ `unavailable`, never "nobody".
+   */
+  holder: SessionHolderSection;
   outputs: PacketSection<PacketOutputItem>;
   /**
    * Child sessions (detours and planned sub-sessions), oldest first. A parent
@@ -862,6 +895,21 @@ export interface ContinuationPacket {
    */
   gates: PacketGatesSection;
   /**
+   * DEVBOX JOBS — the devbox gate jobs run for this session (its `ci.finished`
+   * facts of workflow `devbox <name>`), one per job name, its newest run,
+   * newest first, at most 5 (`total` exact over the newest 100 runs). NOT the
+   * stage gates above. A failed read is `unavailable`, never "no jobs".
+   * Optional: an older pod does not send it (`session-notify.ts`).
+   */
+  devboxJobs?: PacketDevboxJobsSection;
+  /**
+   * Has the READER muted this session's pushes (tRPC
+   * `notifCenter.setSessionMute`)? Muted holds back every push about the
+   * session; nothing is hidden. A failed read is `unavailable`, never "not
+   * muted". Optional: an older pod does not send it (`session-notify.ts`).
+   */
+  muted?: PacketMuted;
+  /**
    * WHO IS ATTACHED — the client conversations holding this session's
    * change-feed wait, most recently seen first (`session-runners.ts`). An
    * empty list means nobody has listened; a failed read is `unavailable`.
@@ -997,6 +1045,8 @@ function runnerItem(r: SessionRunner): PacketRunnerItem {
       : {}),
     state: r.state,
     ...(r.stateSince ? { stateSince: r.stateSince } : {}),
+    ...(r.model ? { model: r.model } : {}),
+    ...(r.provider ? { provider: r.provider } : {}),
     firstSeenAt: r.firstSeenAt,
     lastSeenAt: r.lastSeenAt,
     live: r.live,
@@ -2731,6 +2781,28 @@ export async function projectContinuationPacket(
     ? getTrack(row.trackId, { userId: reader.userId })
     : Promise.resolve(null);
   trackRead.catch(() => undefined);
+  // The person's notification facts (`session-notify.ts`), read beside the
+  // sections below; each failure is its own `unavailable`.
+  const notifyReads = Promise.all([
+    readSessionDevboxJobs(database, reader, row)
+      .then((r): PacketDevboxJobsSection => ({ status: "ok", ...r }))
+      .catch(
+        unavailable(
+          row.id,
+          "devboxJobs",
+          "This session's devbox jobs could not be read."
+        )
+      ),
+    readSessionMuted(database, ctx.userId, row.id)
+      .then((muted): PacketMuted => ({ status: "ok", muted }))
+      .catch(
+        unavailable(
+          row.id,
+          "muted",
+          "Whether you muted this session could not be read."
+        )
+      ),
+  ]);
 
   const [
     project,
@@ -2962,9 +3034,11 @@ export async function projectContinuationPacket(
         ): {
           section: ContinuationPacket["runners"];
           fold: RunnerStateFold | null;
+          all: SessionRunner[] | null;
         } => ({
           section: section(all.map(runnerItem)),
           fold: foldRunnerState(all),
+          all,
         })
       )
       .catch((err: unknown) => ({
@@ -2974,6 +3048,7 @@ export async function projectContinuationPacket(
           "Who is attached to this session could not be read."
         )(err),
         fold: null,
+        all: null,
       })),
     readSessionInbox(database, {
       sessionId: row.id,
@@ -3034,6 +3109,13 @@ export async function projectContinuationPacket(
 
   const runners = runnersRead.section;
   const measuredAt = Date.now();
+  const holder = await packetHolder(row, {
+    externalAgent,
+    runners: runnersRead.all,
+    live: liveFacts,
+    waitingOn,
+    now: measuredAt,
+  });
   const live: ContinuationPacket["live"] = liveFacts
     ? {
         status: "ok",
@@ -3089,6 +3171,7 @@ export async function projectContinuationPacket(
       );
 
   const manifest = readSessionRunManifest(row.metadata);
+  const [devboxJobs, muted] = await notifyReads;
 
   return {
     version: 1,
@@ -3108,6 +3191,7 @@ export async function projectContinuationPacket(
     aiCanDo,
     blockers,
     externalAgent,
+    holder,
     outputs,
     children,
     parent,
@@ -3146,6 +3230,8 @@ export async function projectContinuationPacket(
     room,
     live,
     gates,
+    devboxJobs,
+    muted,
     runners,
     inbox,
     nextMove: deriveNextMove({
@@ -3164,6 +3250,67 @@ export async function projectContinuationPacket(
     }),
     evaluation,
   };
+}
+
+/**
+ * The holder (`session-holder.ts`) from the sections the packet already read:
+ * the same derivation as `readSessionHolder`, no second read of them. Any of
+ * them unavailable ⇒ the holder is too. Only the agent's naming is read here.
+ */
+async function packetHolder(
+  row: SessionRow,
+  s: {
+    externalAgent: ContinuationPacket["externalAgent"];
+    runners: SessionRunner[] | null;
+    live: SessionActivityLive | null;
+    waitingOn: ContinuationPacket["waitingOn"];
+    now: number;
+  }
+): Promise<SessionHolderSection> {
+  const facts = {
+    session: row,
+    externalAgent: null,
+    runners: [],
+    live: { turnInFlight: false, since: null, lastAt: null },
+    waitingOn: [],
+    now: s.now,
+  };
+  const ended = ["done", "lost"].includes(
+    sessionStatusCategory(row.status) ?? ""
+  );
+  if (ended) {
+    return {
+      status: "ok",
+      holder: nameHolder(deriveSessionHolder(facts), new Map()),
+    };
+  }
+  if (
+    s.externalAgent.status !== "ok" ||
+    !s.runners ||
+    !s.live ||
+    s.waitingOn.status !== "ok"
+  ) {
+    return holderUnavailable();
+  }
+  try {
+    const verdict = deriveSessionHolder({
+      ...facts,
+      externalAgent: s.externalAgent.agent,
+      runners: s.runners,
+      live: s.live,
+      waitingOn: s.waitingOn.marks,
+    });
+    const agents = verdict.agentUserId
+      ? await loadHolderAgents([verdict.agentUserId], new Date(s.now))
+      : new Map();
+    return { status: "ok", holder: nameHolder(verdict, agents) };
+  } catch (err) {
+    logger.warn(
+      { err, sessionId: row.id, section: "holder" },
+      "continuation packet: section read failed"
+    );
+    return holderUnavailable();
+  }
 }
 
 /**

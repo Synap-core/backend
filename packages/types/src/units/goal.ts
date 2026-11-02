@@ -735,7 +735,10 @@ export function operationPeriodReading(
  * current hold of a pause, the wait a thing's current step declares
  * (`waits`), open pull requests and open sub-sessions. `external`
  * (an outside party: a vendor, a client, CI) and `date` (a calendar date) were
- * added for holds and PRs (decision D4, 2026-10-30).
+ * added for holds and PRs (decision D4, 2026-10-30). `outside_world` was
+ * merged into `external` (decision D-R4, 2026-11-01): two reasons a person
+ * could not tell apart. Nothing produces it any more; it stays in the list
+ * only so an older reader's value still parses, and reads "Outside party".
  */
 export const WAITING_ON_REASONS = [
   "input",
@@ -760,7 +763,9 @@ export const BLOCKED_REASON_WAITING_ON = {
   capability: "access",
   policy: "access",
   decision: "input",
-  physical: "outside_world",
+  // An act in the world waits on an outside party, like a vendor or a
+  // client (decision D-R4, 2026-11-01: one reason, "Outside party").
+  physical: "external",
 } as const satisfies Record<string, WaitingOnReason>;
 
 /**

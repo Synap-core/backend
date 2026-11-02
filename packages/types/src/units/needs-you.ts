@@ -75,7 +75,7 @@ export function sessionNeedsYou(facts: NeedsYouFacts): boolean {
   return needsYouReason(facts) !== null;
 }
 
-/** The three item populations, counted. */
+/** The item populations, counted. */
 export interface NeedsYouParts {
   /** Owed slots. */
   owed: number;
@@ -83,11 +83,17 @@ export interface NeedsYouParts {
   decisions: number;
   /** Sessions awaiting the person's review / close. */
   review: number;
+  /**
+   * Sessions whose agent waits on the person's permission (decision D-R1,
+   * `classifyRunnerWait`): one item per session. Absent = not counted (an
+   * older reader).
+   */
+  permission?: number;
 }
 
 /** THE item total — one sum, so no surface adds the parts its own way. */
 export function needsYouTotal(parts: NeedsYouParts): number {
-  return parts.owed + parts.decisions + parts.review;
+  return parts.owed + parts.decisions + parts.review + (parts.permission ?? 0);
 }
 
 /**

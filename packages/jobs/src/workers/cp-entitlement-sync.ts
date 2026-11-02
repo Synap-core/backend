@@ -30,6 +30,7 @@ import {
   recordControlPlaneEntitlementFailure,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 
 const logger = createLogger({ module: "cp-entitlement-sync" });
 
@@ -52,9 +53,7 @@ let loggedCredentialSkip = false;
 
 /** Called by the cron tick and the startup enqueue. */
 export async function handleCpEntitlementSync(): Promise<void> {
-  const cpUrl = (process.env.CONTROL_PLANE_URL ?? "")
-    .trim()
-    .replace(/\/+$/, "");
+  const cpUrl = controlPlaneBaseUrl();
   if (!cpUrl) {
     if (!loggedEnvSkip) {
       logger.info(

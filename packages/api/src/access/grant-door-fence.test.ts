@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AI_READ_PROPOSE_ROLE_ID,
+  aiDefaultCapabilities,
   GRANT_PRESETS,
 } from "@synap-core/types/grants";
 import {
@@ -476,6 +477,84 @@ describe("agent roster door: the person's agents, by a named read", () => {
       "/agent-users/7455fd94-e6bc-4da4-ad98-6a75e021634d/keys",
     ])
       expect(restDoorAllowed("GET", path, READER), path).toBe(false);
+  });
+});
+
+describe("a computer's key reads what is installed (finding de33a075)", () => {
+  // The key a computer gets at enrolment (`machine-connect.ts`): one scope,
+  // no pin, the AI read-and-propose permissions.
+  const COMPUTER = key({ permissions: aiDefaultCapabilities() });
+  const PINNED = key({
+    permissions: aiDefaultCapabilities(),
+    workspaceIds: ["w1"],
+  });
+  const DOORS = ["/workspaces", "/workspaces/", "/installed", "/installed/"];
+  it.each(DOORS)("GET %s is open to a computer's key", (path) => {
+    expect(isFencedGrant(COMPUTER)).toBe(true);
+    expect(restDoorAllowed("GET", path, COMPUTER)).toBe(true);
+  });
+  it.each(DOORS)(
+    "GET %s stays refused to a pinned key: the route cannot narrow its list",
+    (path) => {
+      expect(restDoorAllowed("GET", path, PINNED)).toBe(false);
+      expect(
+        restDoorAllowed(
+          "GET",
+          path,
+          key({ permissions: ["*"], workspaceIds: ["w1"] })
+        )
+      ).toBe(false);
+    }
+  );
+  it.each(DOORS)(
+    "GET %s fails closed for a deny-all key or a key missing a subject",
+    (path) => {
+      expect(restDoorAllowed("GET", path, key({ permissions: [] }))).toBe(
+        false
+      );
+      expect(restDoorAllowed("GET", path, DOC_ONLY)).toBe(false);
+    }
+  );
+  it("each door needs the subjects IT reads", () => {
+    // The space list reads the template steps' proposals too.
+    const entityAndProject = key({
+      permissions: ["entity.read", "project.read"],
+    });
+    expect(restDoorAllowed("GET", "/workspaces", entityAndProject)).toBe(false);
+    expect(
+      restDoorAllowed(
+        "GET",
+        "/workspaces",
+        key({ permissions: ["entity.read", "project.read", "proposal.read"] })
+      )
+    ).toBe(true);
+    // One kind of entity is not every entity: a count over all of them.
+    expect(
+      restDoorAllowed(
+        "GET",
+        "/workspaces",
+        key({
+          permissions: ["entity.task.read", "project.read", "proposal.read"],
+        })
+      )
+    ).toBe(false);
+    // What is installed: every kind's table, not the space list's subjects.
+    expect(
+      restDoorAllowed(
+        "GET",
+        "/installed",
+        key({ permissions: ["entity.read", "project.read", "proposal.read"] })
+      )
+    ).toBe(false);
+  });
+  it("opens the two lists only, never a space's own doors", () => {
+    for (const path of [
+      "/workspaces/11111111-1111-4111-8111-111111111111",
+      "/workspaces/11111111-1111-4111-8111-111111111111/governance",
+      "/workspaces/11111111-1111-4111-8111-111111111111/home",
+      "/workspaces/11111111-1111-4111-8111-111111111111/digest",
+    ])
+      expect(restDoorAllowed("GET", path, COMPUTER), path).toBe(false);
   });
 });
 

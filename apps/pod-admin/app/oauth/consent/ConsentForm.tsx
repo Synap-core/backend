@@ -19,6 +19,7 @@ import {
 import {
   Check,
   ChevronRight,
+  Globe,
   Monitor,
   Plug,
   ShieldAlert,
@@ -65,7 +66,7 @@ import {
   readsSpaceRecords,
   reasonOf,
   scopeLabel,
-  SPACE_REACH_NOTE,
+  spaceReachNote,
   sectionCheckboxLabel,
   sectionState,
   setObjectLevel,
@@ -1351,6 +1352,15 @@ export function AppConsent({
         />
       )}
       <div className="flex flex-col gap-3 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
+        {/* The widest reach first, as on the app's page: no space limits it. */}
+        {app.podWide.length > 0 && (
+          <PodWideReads
+            podWide={app.podWide}
+            selection={podWideSelection}
+            onToggle={(permission) => onTogglePodWide([permission])}
+            busy={busy}
+          />
+        )}
         {!customize && objects.length > 0 && (
           <section
             aria-labelledby={`${groupId}-objects`}
@@ -1430,18 +1440,10 @@ export function AppConsent({
             </p>
           </section>
         )}
-        {app.podWide.length > 0 && (
-          <PodWideReads
-            podWide={app.podWide}
-            selection={podWideSelection}
-            onToggle={(permission) => onTogglePodWide([permission])}
-            busy={busy}
-          />
-        )}
         {/* Once, under the rows or the matrix, for any record read (rv-ui U1/U3). */}
         {readsSpaceRecords(app.permissions) && (
           <p className="text-pretty text-xs leading-relaxed text-foreground/75">
-            {SPACE_REACH_NOTE}
+            {spaceReachNote(app.podWide.length > 0)}
           </p>
         )}
         {rows.length > 0 && (
@@ -1658,7 +1660,7 @@ function PodWideReads({
         id={`${id}-pod`}
         className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/65"
       >
-        <ShieldCheck className="h-3 w-3" aria-hidden /> {POD_WIDE_HEADING}
+        <Globe className="h-3 w-3" aria-hidden /> {POD_WIDE_HEADING}
       </p>
       <ul className="flex flex-col">
         {podWide.map((p) => {

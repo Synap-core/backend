@@ -38,6 +38,7 @@
 import { db, podCpAuthHeaders, readControlPlaneLink } from "@synap/database";
 import { projects } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
+import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 
 const logger = createLogger({ module: "cp-project-sync" });
 
@@ -129,9 +130,7 @@ let loggedCredentialSkip = false;
 
 /** Called by the cron tick, the startup enqueue, and repository-triggered one-offs. */
 export async function handleCpProjectSync(): Promise<void> {
-  const cpUrl = (process.env.CONTROL_PLANE_URL ?? "")
-    .trim()
-    .replace(/\/+$/, "");
+  const cpUrl = controlPlaneBaseUrl();
   if (!cpUrl) {
     if (!loggedEnvSkip) {
       logger.info(

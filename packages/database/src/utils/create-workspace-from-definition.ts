@@ -1202,9 +1202,14 @@ export async function createWorkspaceFromDefinition(
             );
             for (const pd of pdMap.values()) existingPropSlugs.add(pd.slug);
           }
-        } catch {
-          // If we can't determine existing props, skip property creation for reused profiles
-          continue;
+        } catch (err) {
+          // Unreadable existing properties are a failed step, never "skip":
+          // a `continue` here silently dropped this profile's properties AND
+          // its lifecycle declaration while the space reported success.
+          await handleStepError(
+            `profiles[${profile.slug}].existingProperties`,
+            err
+          );
         }
       }
       if (profileIsReused && (resolvedProperties ?? []).length === 0) continue;

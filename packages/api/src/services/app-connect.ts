@@ -100,7 +100,7 @@ import {
 } from "../routers/oauth/config.js";
 import type { Context } from "../types/context.js";
 import { isAgentCaller } from "./library/agent-door.js";
-import { requestsWithin } from "./agent-connect.js";
+import { EVERYWHERE_IN_POD, permissionWithin } from "@synap-core/types/grants";
 
 /**
  * A request as a door sends it: a permission plus EITHER the workspace's id
@@ -660,9 +660,30 @@ const touchesAsked = (fields: unknown): boolean => {
 };
 
 /**
+ * approved ⊆ asked for an APP, place by place. An app's ask with no space is a
+ * pod-wide read (decision e1b59d38 "B"): it covers that same pod-wide read and
+ * never the read in one space, so a forged consent cannot turn "read decisions
+ * everywhere" into "member of FINANCE". An AI's ask with no space does cover
+ * any space (`requestsWithin`, agent-connect).
+ */
+export function appRequestsWithin(
+  approved: readonly AppApprovedRequest[],
+  asked: readonly AppApprovedRequest[]
+): boolean {
+  return approved.every((a) =>
+    permissionWithin(
+      a.permission,
+      asked
+        .filter((b) => b.workspaceId === a.workspaceId)
+        .map((b) => b.permission)
+    )
+  );
+}
+
+/**
  * Is an `app/connect` approval within what the app ASKED for? `asked` is the
  * copy frozen at filing; the approved `requests` may have been narrowed by a
- * revise, never widened (`requestsWithin` — the rule `agent/connect` uses).
+ * revise, never widened (`appRequestsWithin`).
  *
  * `asked` cannot be trusted once a revise has touched it — false. A request
  * filed before `asked` existed and never revised still holds what was filed.
@@ -678,7 +699,7 @@ export function appApprovalWithinAsked(args: {
   if (history.some((r) => touchesAsked(r.patch))) return false;
   if (inner.asked === undefined) return history.length === 0;
   const asked = readAppConnectRequests({ requests: inner.asked });
-  return requestsWithin(args.approved, asked);
+  return appRequestsWithin(args.approved, asked);
 }
 
 /**
@@ -1252,9 +1273,6 @@ export async function oauthAppOffer(
   }));
 }
 
-/** How a pod-wide pair names its place, where a space's name would go. */
-export const EVERYWHERE_IN_POD = "everywhere in your pod";
-
 /**
  * The permissions a pod app may be given POD-WIDE: those it asked for that
  * its document declared pod-wide (`requestedPodWide`) AND that are a read of
@@ -1377,8 +1395,8 @@ export async function connectOAuthApp(args: {
     [null, EVERYWHERE_IN_POD],
   ]);
   assertPodWideReadsOnly(approved);
-  if (!requestsWithin(approved, asked)) {
-    const beyond = approved.filter((r) => !requestsWithin([r], asked));
+  if (!appRequestsWithin(approved, asked)) {
+    const beyond = approved.filter((r) => !appRequestsWithin([r], asked));
     throw new TRPCError({
       code: "FORBIDDEN",
       message: `You can only give this app what it asked for, in spaces you may give it: ${beyond

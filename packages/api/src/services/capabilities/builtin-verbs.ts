@@ -1491,9 +1491,9 @@ const feedReadHandler: BuiltinVerbHandler = async (params, ctx) => {
 //   document.create → delegates to the governed `documentsRouter.create`
 //     caller (`workspaceProcedure` — requires an acting workspace lens),
 //     mirroring channel.create / graph.link's membership pre-check.
-//   document.update → delegates to `documentsRouter.update` (`protectedProcedure`
-//     — its own gate is direct row ownership, not workspace membership, so
-//     there is no workspace lens to pre-check here).
+//   document.update → THE document patch door (`applyDocumentPatch`) as a
+//     machine writer: the human-section and embed floors, its own gate on the
+//     real key, checkpointed with undo (see the handler).
 //   document.read   → READS through the access layer (`documents` already
 //     carries a registered VisibilityRule), mirroring entity.query — metadata
 //     only (not the MinIO-stored body), so it stays a pure access-layer read.
@@ -1671,36 +1671,66 @@ const documentCreateHandler: BuiltinVerbHandler = async (params, ctx) => {
   return result;
 };
 
-/** document.update — update a document through the governed `documentsRouter.update` caller. */
+/**
+ * document.update — edit a document through THE document patch door
+ * (`applyDocumentPatch`), never the person's editor save.
+ *
+ * WHY NOT `documentsRouter.update`: that is the editor's save — a person's
+ * write, authored `user`, with no section floor. A verb run by an agent or an
+ * automation re-entering it could overwrite a person's `owner="human"`
+ * section or drop an embed (Generative UI plan 678c56c4, P0). Through the
+ * patch door the verb is a MACHINE writer: the human-section and embed floors
+ * hold, the write is governed on its real key (`document.update`, or a
+ * section key for a section-only patch — D4's `refresher_section_update` for
+ * a document's bound refresher in its run session), and it is checkpointed
+ * with undo. `content` is one `replace_all` (the base pinned here when not
+ * given); `title` is a `set_title`; `ops` passes the door's own ops.
+ */
 const documentUpdateParams = z.object({
   documentId: z.string().min(1),
   content: z.string().max(200000).optional(),
   title: z.string().max(500).optional(),
+  /** The door's ops (upsert_section, replace_text, append, insert_embed, …). */
+  ops: z.array(z.unknown()).min(1).max(50).optional(),
+  /** The content revision the writer read; pinned at the call when absent. */
+  baseRevision: z.number().int().min(0).optional(),
+  allowRemovingEmbeds: z.boolean().optional(),
 });
+
+/** The author stamped when no agent identity reaches the verb (an automation run as its owner). */
+export const DOCUMENT_UPDATE_VERB_AUTHOR = "verb:document.update";
 
 const documentUpdateHandler: BuiltinVerbHandler = async (params, ctx) => {
   const input = documentUpdateParams.parse(params);
-
-  // documents.update is a protectedProcedure whose gate is direct row
-  // ownership (documents.userId = ctx.userId), not workspace membership — it
-  // takes no workspaceId input, so there is no workspace lens to pre-check
-  // here (unlike the workspace-scoped writes above).
-  const { documentsRouter } = await import("../../routers/documents.js");
-  const caller = documentsRouter.createCaller({
-    db,
-    authenticated: true as const,
+  const ops: unknown[] = [
+    ...(input.ops ?? []),
+    ...(input.content !== undefined
+      ? [{ op: "replace_all", content: input.content }]
+      : []),
+    ...(input.title ? [{ op: "set_title", title: input.title }] : []),
+  ];
+  if (ops.length === 0) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "document.update needs `content`, `title` or `ops`.",
+    });
+  }
+  const { applyDocumentPatch, loadPatchDocument } =
+    await import("../document-patch/apply-document-patch.js");
+  const baseRevision =
+    input.baseRevision ??
+    (await loadPatchDocument(input.documentId)).contentRevision;
+  return applyDocumentPatch({
     userId: ctx.userId,
-    workspaceId: ctx.workspaceId,
-  } as unknown as Context);
-
-  const result = await caller.update({
+    agentUserId: ctx.agentUserId ?? null,
+    // No agent identity still means a machine: the floors apply all the same.
+    ...(ctx.agentUserId ? {} : { systemAuthor: DOCUMENT_UPDATE_VERB_AUTHOR }),
     documentId: input.documentId,
-    delta:
-      input.content !== undefined ? [{ content: input.content }] : undefined,
-    title: input.title,
+    baseRevision,
+    ops: ops as Parameters<typeof applyDocumentPatch>[0]["ops"],
+    allowRemovingEmbeds: input.allowRemovingEmbeds,
+    provenanceSessionId: ctx.sessionId ?? null,
   });
-
-  return result;
 };
 
 /**

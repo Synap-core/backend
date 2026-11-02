@@ -19,6 +19,7 @@ import {
   packageCellTypeKey,
 } from "../services/cells/install-cell-from-definition.js";
 import { assertOfficialDefinition } from "../services/capabilities/official-catalog-trust.js";
+import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 
 function requireAdminRole(role: string | undefined | null) {
   if (!["owner", "admin"].includes(role ?? "")) {
@@ -31,11 +32,7 @@ function requireAdminRole(role: string | undefined | null) {
 }
 
 function getCpUrl(): string {
-  const url = (
-    process.env.CONTROL_PLANE_URL ??
-    process.env.CP_URL ??
-    ""
-  ).replace(/\/$/, "");
+  const url = controlPlaneBaseUrl();
   if (!url) {
     throw new TRPCError({
       code: "INTERNAL_SERVER_ERROR",

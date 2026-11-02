@@ -44,12 +44,12 @@ describe("ApprovalProgressLines", () => {
 
   it("a failed read: still a bar (it may be running) and Retry", () => {
     const html = render(
-      <ApprovalProgressLines copy={progressUnavailable} onRetry={() => {}} />
+      <ApprovalProgressLines copy={progressUnavailable()} onRetry={() => {}} />
     );
     expect(html).toContain('role="progressbar"');
-    // The BUTTON, not the word: the detail sentence also says "Retry"
+    // The BUTTON, not the word: the detail sentence says "Check again"
     // (a text match stayed green with the button removed — negctl 2026-10-23).
-    expect(html).toMatch(/<button[^>]*>(?:(?!<\/button>)[\s\S])*Retry/);
+    expect(html).toMatch(/<button[^>]*>(?:(?!<\/button>)[\s\S])*Try again/);
   });
 
   it("stopped: no bar, the reason", () => {

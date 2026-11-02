@@ -4,7 +4,7 @@
  * `BLOCKED_REASONS` (`@synap/playbooks`) is the closed set of why a slot is
  * owed to a person; `BLOCKED_REASON_WAITING_ON` (`@synap-core/types/units`)
  * maps each one to the waiting-on reasons a goal shows (input · approval
- * · access · another_work · outside_world). The mapping function falls back
+ * · access · another_work · external). The mapping function falls back
  * to "input" for a reason it does not know — right for a slot that recorded
  * no reason, WRONG for a seventh blocked reason nobody mapped (a missing
  * credential would read as "waiting on input"). So the fallback must never be
@@ -64,7 +64,8 @@ describe("blocked reasons ↔ waiting-on reasons", () => {
       );
     }
     // The R4 cut, pinned: the credential/permission/capability/policy family
-    // is ACCESS, a person's choice is INPUT, a physical act is the OUTSIDE WORLD.
+    // is ACCESS, a person's choice is INPUT, a physical act waits on an
+    // OUTSIDE PARTY (`external`; `outside_world` merged into it, D-R4).
     expect(
       waitingOnReasonOf({ kind: "owed_slot", blockedReason: "credential" })
     ).toBe("access");
@@ -73,7 +74,7 @@ describe("blocked reasons ↔ waiting-on reasons", () => {
     ).toBe("input");
     expect(
       waitingOnReasonOf({ kind: "owed_slot", blockedReason: "physical" })
-    ).toBe("outside_world");
+    ).toBe("external");
     expect(waitingOnReasonOf({ kind: "owed_slot" })).toBe("input");
     expect(waitingOnReasonOf({ kind: "pending_proposal" })).toBe("approval");
     expect(waitingOnReasonOf({ kind: "blocked_by" })).toBe("another_work");

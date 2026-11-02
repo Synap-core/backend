@@ -58,6 +58,15 @@ vi.mock("../services/signals/access-requests.js", async (orig) => ({
   listPendingKeyRequests: async (...args: unknown[]) => keyRequestsSpy(...args),
 }));
 const brokenConnectionsSpy = vi.fn();
+// The sessions waiting on a permission (D-R1): pinned by their own suites
+// (`needs-you-folds.tripwire.test.ts`, `permission-sessions.pglite.test.ts`);
+// none here (this file creates no session_runners table).
+vi.mock("../services/signals/permission-sessions.js", () => ({
+  listSessionsWaitingForPermission: async () => ({
+    sessions: [],
+    truncated: false,
+  }),
+}));
 vi.mock("../services/signals/broken-connections.js", () => ({
   listBrokenConnections: async (...args: unknown[]) =>
     brokenConnectionsSpy(...args),

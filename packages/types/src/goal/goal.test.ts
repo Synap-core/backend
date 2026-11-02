@@ -233,9 +233,9 @@ describe("goal marks", () => {
     expect(line("main:synap-core/app-bases")).toBe(
       "for 2h · resumes when app-bases main is green"
     );
-    expect(line("job:kit-h")).toBe("for 2h · resumes when job kit-h finishes");
+    expect(line("job:kit-h")).toBe("for 2h · resumes when the tests finish");
     expect(line("job:kit-h", "failed")).toBe(
-      "for 2h · resumes when job kit-h fails"
+      "for 2h · resumes when the tests fail"
     );
   });
 

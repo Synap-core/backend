@@ -375,6 +375,35 @@ export function classifyOwedAsk(
   return "needs_you";
 }
 
+// ─── A runner waiting for a permission (decision D-R1) ──────────────────────
+
+/** The facts the rule reads for a session's runners (0384, `foldRunnerState`). */
+export interface NeedsYouRunnerFacts {
+  /** The session's status. */
+  status: string;
+  /**
+   * The session's LIVE runners, folded (`needs_permission` over `busy` over
+   * `idle`); `null` = no live runner named a state.
+   */
+  runnerState: string | null;
+}
+
+/**
+ * THE rule for a session whose agent waits on a permission dialog (decision
+ * D-R1, founder 2026-11-01): ONE needs-you item per session ("Waiting for
+ * your permission"), whatever its other asks and however many of its runners
+ * wait — counted through the same rows as every other item, never a second
+ * counter. Only the person can answer the dialog, and the agent stands still
+ * until they do, so it is never Working, never ages and has a real asker.
+ * `null` when no live runner waits on one, or the work ended.
+ */
+export function classifyRunnerWait(
+  facts: NeedsYouRunnerFacts
+): "needs_you" | null {
+  if (sessionEnded(facts.status)) return null;
+  return facts.runnerState === "needs_permission" ? "needs_you" : null;
+}
+
 // ─── Proposals ──────────────────────────────────────────────────────────────
 
 /** The pending proposal facts the rule reads. */

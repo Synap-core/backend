@@ -12,9 +12,11 @@ import {
   previewPatch,
   removedEmbeds,
   renderDocumentPatch,
+  resolvePatchFields,
   resolvePatchTitle,
   type PatchWriter,
 } from "./patch-ops.js";
+import { locateEmbeds } from "@synap-core/markdown-core/readable";
 
 const AGENT: PatchWriter = { isMachine: true, author: "agent-1" };
 const PERSON: PatchWriter = { isMachine: false, author: "user-1" };
@@ -364,5 +366,112 @@ describe("set_title — the name, never the body", () => {
       ])
     ).toBeNull();
     expect(resolvePatchTitle("Plan", [{ op: "append", body: "x" }])).toBeNull();
+  });
+});
+
+describe("insert_embed — the embed is written for the writer (serializeEmbed)", () => {
+  const ENTITY = "8f14e45f-ceea-4e7d-9b2a-1c2d3e4f5a6b";
+  const cell = {
+    op: "insert_embed",
+    directive: "synap-cell",
+    ref: { cellKey: "status-mark" },
+    props: { id: ENTITY },
+    fallback: "Where the import stands.",
+  };
+
+  it("appends at the end by default, and the result reads back as that embed", () => {
+    const out = render(DOC, [cell]);
+    expect(out.markdown.startsWith(DOC.replace(/\s+$/, ""))).toBe(true);
+    const found = locateEmbeds(out.markdown).map(({ embed }) => ({
+      directive: embed.directive,
+      ref: embed.ref,
+      props: embed.props,
+    }));
+    expect(found).toContainEqual({
+      directive: "synap-cell",
+      ref: { cellKey: "status-mark" },
+      props: { id: ENTITY },
+    });
+    expect(out.markdown).toMatch(/Where the import stands\.\n:::\n$/);
+  });
+
+  it("at the end of a section: inside its fence, so the section owns it", () => {
+    const out = render(DOC, [{ ...cell, sectionId: "summary" }]);
+    const summary = out.markdown.slice(
+      out.markdown.indexOf('::::synap-section{id="summary"'),
+      out.markdown.indexOf(CHART)
+    );
+    expect(summary).toContain('cellKey="status-mark"');
+    expect(summary.trimEnd().endsWith("::::")).toBe(true);
+    expect(out.previews.map((p) => p.sectionId)).toEqual(["summary"]);
+  });
+
+  it("after the line holding `after` — never in the middle of it", () => {
+    const out = render(DOC, [{ ...cell, after: "Intro paragraph" }]);
+    expect(out.markdown).toContain(
+      'Intro paragraph about the week.\n\n:::synap-cell{cellKey="status-mark"}'
+    );
+  });
+
+  it("refuses an `after` matching 0 or 2+ times, an unknown section, and both positions", () => {
+    expect(() => render(DOC, [{ ...cell, after: "nowhere" }])).toThrow(
+      /was not found/
+    );
+    expect(() => render(DOC, [{ ...cell, after: "## " }])).toThrow(
+      /matches 2 times/
+    );
+    expect(() => render(DOC, [{ ...cell, sectionId: "nope" }])).toThrow(
+      /no section "nope"/
+    );
+    expect(() =>
+      render(DOC, [{ ...cell, sectionId: "summary", after: "Intro" }])
+    ).toThrow(/not both/);
+  });
+
+  it("an agent cannot drop it into a person's section (the floor holds)", () => {
+    expect(() => render(DOC, [{ ...cell, sectionId: "mine" }])).toThrow(
+      /belongs to a person/
+    );
+  });
+
+  it("refuses what serializeEmbed cannot write losslessly, and a directive that is not an embed", () => {
+    expect(() => render(DOC, [{ ...cell, ref: { cellProps: "{}" } }])).toThrow(
+      /insert_embed: .*props channel/
+    );
+    expect(() =>
+      DocumentPatchOpsSchema.parse([{ ...cell, directive: "synap-section" }])
+    ).toThrow();
+  });
+});
+
+describe("set_scope / set_refresher — fields, never the body", () => {
+  const A = "55555555-5555-4555-8555-555555555555";
+  it("leave the content as it is, and the last op of each kind wins", () => {
+    const ops = DocumentPatchOpsSchema.parse([
+      { op: "set_scope", scope: { kind: "pod" } },
+      { op: "set_refresher", automationId: A },
+      { op: "set_scope", scope: null },
+    ]);
+    expect(render(DOC, ops).markdown).toBe(DOC);
+    expect(resolvePatchFields(ops)).toEqual({
+      scope: null,
+      refreshAutomationId: A,
+    });
+    expect(
+      resolvePatchFields(
+        DocumentPatchOpsSchema.parse([{ op: "append", body: "x" }])
+      )
+    ).toEqual({});
+  });
+
+  it("the schema refuses a refresher that is not an id and a scope that is not an object", () => {
+    expect(() =>
+      DocumentPatchOpsSchema.parse([
+        { op: "set_refresher", automationId: "daily" },
+      ])
+    ).toThrow();
+    expect(() =>
+      DocumentPatchOpsSchema.parse([{ op: "set_scope", scope: "project:x" }])
+    ).toThrow();
   });
 });

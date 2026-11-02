@@ -164,6 +164,19 @@ export function isFencedGrant(grant: KeyGrant | null | undefined): boolean {
   return Boolean(grant) && !isFullAccessGrant(grant!);
 }
 
+/**
+ * May this request's key read a session's HOLDER (`session-holder.ts`) beside
+ * the row, when the packet is withheld? The holder names the agent on the
+ * session, its computer and whether anything runs it: the person's agent
+ * roster, what GET /agent-users serves. Every unfenced caller may; a fenced
+ * key when it reads `agent`, bounded as that door (PERSON).
+ */
+export function sessionHolderReadable(
+  grant: KeyGrant | null | undefined
+): boolean {
+  return !isFencedGrant(grant) || grantBoundsDoor(PERSON("agent"), grant!);
+}
+
 /** Hub REST GET routes that read only through a seam (relative to /api/hub). */
 export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   // Self-introspection: the caller's own identity and key, from the request
@@ -309,6 +322,27 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // they can see (`readAgentAssignment`), the read half of
   // PUT /agent-users/:id/assignment. Same subject, same PERSON door.
   [/^\/agent-users\/assignments\/?$/, PERSON("agent")],
+  // The person's spaces with their template health (`synap market update`,
+  // `market installed`, `orient`): the spaces the person can open, each one's
+  // live entity count and the pod-wide count (entities, through
+  // `readWorkspaceEntityStats`), the projects using it
+  // (`listProjectsUsingWorkspaces`) and where its last template apply stands,
+  // with the proposals it waits on (`templateStepsByWorkspace`). The same
+  // rule as MCP `synap_list_workspaces`, plus `proposal` for the steps. A
+  // space carries no grant subject of its own, so the route cannot narrow
+  // its list to a pin: a key pinned to a space, project or object stays
+  // refused (finding de33a075: a computer's key, unpinned, was refused).
+  [/^\/workspaces\/?$/, READS("entity", "project", "proposal")],
+  // What is installed, every kind (`installed.ts`): the spaces' template
+  // state and steps (proposals), capabilities (subject `tool`, as MCP
+  // `synap_list_capabilities`), views, skills, automations and cells
+  // (`widget`), in the person's spaces and pod-wide. `?drift=true` adds the
+  // write-free reconcile preview, which reads the same views, skills and
+  // automations.
+  [
+    /^\/installed\/?$/,
+    READS("proposal", "tool", "view", "skill", "automation", "widget"),
+  ],
   // The session row, narrowed by the route (`sessionPacketReadable`): the
   // packet is added only for a key that reads all of it.
   [
@@ -482,6 +516,9 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_match_playbooks: READS("playbook"),
   synap_list_capabilities: READS("tool", "command", "playbook", "automation"),
   synap_list_automations: READS("automation"),
+  // A goal's workers (`listWorkerViews`): the goal, its playbooks, the
+  // worker rules and their automation runs, and the approvals they wait on.
+  synap_list_workers: READS("track", "playbook", "automation", "proposal"),
   synap_list_widgets: READS("widget", "view"),
   synap_template_health: READS("tool", "playbook", "automation", "view"),
   synap_governance: READS("proposal", "agent", "tool"),

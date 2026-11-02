@@ -41,6 +41,8 @@ import {
   type TrackActor,
 } from "../services/tracks/tracks-service.js";
 import { readTrackHistory } from "../services/tracks/track-history.js";
+import { goalRunsOf } from "../services/playbooks/workers.js";
+import type { GoalRunsRollup } from "@synap-core/types/workers/goal";
 import {
   convertEntityToGoal,
   convertToGoalInputSchema,
@@ -81,6 +83,10 @@ export const tracksRouter = router({
    * (`listTracks`); each item carries the derived marks every track read
    * returns (`criteria[].mark`, `inReview`, `waitingOn`, `participants`).
    * `nextCursor` is null on the last page (and on an unpaged project read).
+   * `include: ["runs"]` adds each goal's `runs` (`GoalRunsRollup`, rolled up
+   * from the workers enabled on it: rhythm, health, last runs, approvals,
+   * next run) for the whole page in a fixed number of reads — what the Goals
+   * collection's attention groups read (`goalFilterQuery`).
    */
   list: podProcedure
     .input(
@@ -91,9 +97,24 @@ export const tracksRouter = router({
         limit: z.number().int().min(1).max(TRACK_LIST_PAGE_MAX).optional(),
         /** `nextCursor` from the previous page. */
         cursor: z.string().min(1).max(500).optional(),
+        /** Extra parts per goal: `runs` = its workers' runs, rolled up. */
+        include: z
+          .array(z.enum(["runs"]))
+          .max(1)
+          .optional(),
       })
     )
     .query(async ({ ctx, input }) => {
+      const withRuns = async <T extends { id: string }>(
+        items: T[]
+      ): Promise<Array<T & { runs?: GoalRunsRollup | null }>> => {
+        if (!input.include?.includes("runs")) return items;
+        const runs = await goalRunsOf({
+          userId: ctx.userId,
+          trackIds: items.map((t) => t.id),
+        });
+        return items.map((t) => ({ ...t, runs: runs.get(t.id) ?? null }));
+      };
       const cursor = decodeTrackListCursor(input.cursor);
       if (input.cursor && !cursor) {
         throw new TRPCError({
@@ -115,7 +136,10 @@ export const tracksRouter = router({
             message: "Project not found",
           });
         }
-        return { items: await loadTrackViews(rows, ctx), nextCursor: null };
+        return {
+          items: await withRuns(await loadTrackViews(rows, ctx)),
+          nextCursor: null,
+        };
       }
       const page = await listTracksPage({
         projectId: input.projectId,
@@ -131,7 +155,7 @@ export const tracksRouter = router({
         });
       }
       return {
-        items: await loadTrackViews(page.rows, ctx),
+        items: await withRuns(await loadTrackViews(page.rows, ctx)),
         nextCursor: page.nextCursor,
       };
     }),

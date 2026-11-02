@@ -36,6 +36,7 @@ import {
   type GrantSubjectSpec,
 } from "./catalog.js";
 import { isFullAccess, type GrantDraft } from "./draft.js";
+import { isPodWideReadScope } from "./pod-wide.js";
 import {
   parsePermission,
   patternMatches,
@@ -172,10 +173,18 @@ const isPast = (v: Date | string | null | undefined, now: number) => {
   return d !== null && d.getTime() <= now;
 };
 
-/** Spaces a set of grants reaches: null = anywhere, else the union. */
+/**
+ * Spaces a set of grants reaches: null = anywhere, else the union. A pod-wide
+ * read part (`isPodWideReadScope`) only reads its kinds everywhere, so it never
+ * makes the grants "anywhere": an app that changes notes in Sales and reads
+ * decisions pod-wide still changes notes in Sales only. Only when every part is
+ * a pod-wide read does the holder reach anywhere (it reads, nothing else).
+ */
 function grantSpaces(grants: readonly GrantDraft[]): Set<string> | null {
+  const spaced = grants.filter((g) => !isPodWideReadScope(g));
+  if (spaced.length === 0 && grants.length > 0) return null;
   const out = new Set<string>();
-  for (const g of grants) {
+  for (const g of spaced) {
     if (!g.workspaceIds || g.workspaceIds.length === 0) return null;
     for (const id of g.workspaceIds) out.add(id);
   }

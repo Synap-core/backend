@@ -941,10 +941,17 @@ async function resolveOrCreateKratosIdentity(input: {
   ).catch(() => null);
   if (!existing?.ok) return { status: "unavailable" };
 
-  const identities = (await existing.json().catch(() => [])) as Array<{
-    id?: unknown;
-  }>;
-  const existingIdentityId = identities.find(
+  // An answer we cannot read is a failed lookup, never "no identity": reading
+  // it as an empty list went on to create a second identity for an email
+  // Kratos may already hold.
+  let identities: unknown;
+  try {
+    identities = await existing.json();
+  } catch {
+    return { status: "failed" };
+  }
+  if (!Array.isArray(identities)) return { status: "failed" };
+  const existingIdentityId = (identities as Array<{ id?: unknown }>).find(
     (identity): identity is { id: string } => typeof identity.id === "string"
   )?.id;
   if (existingIdentityId) {

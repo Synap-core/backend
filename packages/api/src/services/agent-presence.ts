@@ -19,6 +19,33 @@
  */
 
 import { apiKeys, db, and, eq, inArray, isNull } from "@synap/database";
+import type { AgentReach } from "@synap-core/types/agents";
+
+/**
+ * A pulling agent counts as LIVE when it called the pod within this window.
+ * `synap worker` polls every 30s and key use is stamped at most once a minute
+ * (`apiKeyService.recordKeyUse`); its back-off on failed reads caps at 10
+ * minutes. 15 minutes covers a worker that is polling, slowly or not.
+ */
+export const PULL_LIVE_WINDOW_MS = 15 * 60_000;
+
+/**
+ * THE "nobody runs this agent" rule (plan v2 S2), read by the hand-off roster
+ * and the session holder (`session-holder.ts`): a pull agent on a computer
+ * whose newest runner stamp (`servedAt`) is older than
+ * {@link PULL_LIVE_WINDOW_MS} is run by nobody. `null` = not measured (no
+ * runner ever stamped) or not applicable (dispatch, pod, no computer):
+ * `false` is never said of an agent nobody measured.
+ */
+export function nobodyRunsOf(p: {
+  reach: AgentReach;
+  onComputer: boolean;
+  servedAt: string | null;
+  now: Date;
+}): boolean | null {
+  if (p.reach !== "pull" || !p.onComputer || !p.servedAt) return null;
+  return p.now.getTime() - Date.parse(p.servedAt) > PULL_LIVE_WINDOW_MS;
+}
 
 export interface AgentPresence {
   /** ISO — most recent authenticated call on any of the agent's keys; `null` = never. */

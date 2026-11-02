@@ -21,6 +21,7 @@ import {
   initialSelection,
   newAsks,
   SPACE_REACH_NOTE,
+  SPACE_REACH_NOTE_WITH_POD_WIDE,
   toggle,
   type OfferedPermission,
   type PodWideSelection,
@@ -545,6 +546,26 @@ describe("pod-wide reads (decision e1b59d38 B): their own section, everywhere in
     expect(box(out, "Read decisions, everywhere in your pod")).toContain(
       'data-selected="true"'
     );
+  });
+
+  // Rules out: the space note's "Nothing else in your pod." shown beside the
+  // section that reads everywhere in the pod (the review of 1 Nov), and the
+  // widest read placed last, after every space row.
+  it("the space note names the pod-wide section instead of contradicting it, and that section comes first", () => {
+    for (const customize of [false, true]) {
+      const out = html(
+        initialSelection(DEVPLANE.permissions, []),
+        customize,
+        DEVPLANE,
+        initialPodWide(DEVPLANE.podWide, [])
+      );
+      expect(out).not.toContain("Nothing else in your pod");
+      expect(out.split(SPACE_REACH_NOTE_WITH_POD_WIDE).length - 1).toBe(1);
+      const pod = out.indexOf("data-pod-wide");
+      expect(pod).toBeGreaterThan(-1);
+      expect(pod).toBeLessThan(out.indexOf("It asks to"));
+      expect(section(out)).toContain("take these reads back");
+    }
   });
 
   it("an app that asks for nothing pod-wide shows no such section", () => {

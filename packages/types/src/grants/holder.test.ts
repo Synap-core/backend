@@ -305,6 +305,39 @@ describe("resolveHolderAccess — agents", () => {
 });
 
 describe("resolveHolderAccess — apps", () => {
+  // Rules out: a pod-wide read part (decision e1b59d38 "B", no space) read as
+  // "anywhere", which dropped "in Sales" from an app that writes in Sales only.
+  it("a pod-wide read keeps the writes in their spaces; alone, it reaches anywhere", () => {
+    const app = (grants: Parameters<typeof grant>[]) =>
+      resolveHolderAccess({
+        kind: "app",
+        name: "DevPlane",
+        limits: {
+          source: "grants",
+          access: "granted",
+          grants: grants.map((g) => grant(...g)),
+        },
+        workspaceNames: { "ws-sales": "Sales" },
+        now: NOW,
+      });
+    const mixed = app([
+      [["entity.note.create"], { workspaceIds: ["ws-sales"] }],
+      [["entity.decision.read"], { workspaceIds: null }],
+    ]);
+    expect(mixed.where.anywhere).toBe(false);
+    expect(mixed.where.spaces).toEqual([{ id: "ws-sales", name: "Sales" }]);
+    expect(mixed.sentence).toMatch(/ in Sales\.$/);
+    // An unpinned part that is NOT a pod-wide read still reaches anywhere.
+    const unpinned = app([
+      [["entity.note.create"], { workspaceIds: ["ws-sales"] }],
+      [["entity.note.update"], { workspaceIds: null }],
+    ]);
+    expect(unpinned.where.anywhere).toBe(true);
+    const podOnly = app([[["entity.decision.read"], { workspaceIds: null }]]);
+    expect(podOnly.where.anywhere).toBe(true);
+    expect(podOnly.where.spaces).toEqual([]);
+  });
+
   // Rules out: per-space grants merged into one cross product.
   it("per-space grants: one line each, spaces named, no single draft", () => {
     const h = resolveHolderAccess({

@@ -11,7 +11,11 @@
  * "done" and never empty: the apply may still be running.
  */
 
+import { ambientCatalogLocale } from "@synap-core/types/i18n";
 import type { ExitTarget } from "../../../lib/open-in";
+import { approvalProgressT } from "./copy";
+
+type T = ReturnType<typeof approvalProgressT>;
 
 /** `proposals.approvalProgress` — the fields this model reads. */
 export interface ApprovalRun {
@@ -72,7 +76,12 @@ export interface ApprovalProgressCopy {
   resumable: boolean;
 }
 
-const n = (value: number) => value.toLocaleString("en-US");
+/** A count as the person's language writes it ("4,222" / "4 222"). */
+const n = (value: number) =>
+  value.toLocaleString(ambientCatalogLocale() === "fr" ? "fr-FR" : "en-US");
+
+/** A number's two params: the formatted `n` to read, the raw `count` to pluralise. */
+const num = (value: number) => ({ n: n(value), count: value });
 
 /** Is the run still applying (poll it, keep the toast)? */
 export function isApplying(run: ApprovalRun | null | undefined): boolean {
@@ -80,11 +89,14 @@ export function isApplying(run: ApprovalRun | null | undefined): boolean {
 }
 
 /** "1,180 created · 52 already there · 8 failed" — zero parts omitted. */
-export function countsLine(run: ApprovalRun): string | null {
+export function countsLine(
+  run: ApprovalRun,
+  t: T = approvalProgressT()
+): string | null {
   const parts = [
-    run.created > 0 ? `${n(run.created)} created` : null,
-    run.linked > 0 ? `${n(run.linked)} already there` : null,
-    run.failed > 0 ? `${n(run.failed)} failed` : null,
+    run.created > 0 ? t("counts.created", num(run.created)) : null,
+    run.linked > 0 ? t("counts.linked", num(run.linked)) : null,
+    run.failed > 0 ? t("counts.failed", num(run.failed)) : null,
   ].filter((p): p is string => p !== null);
   return parts.length > 0 ? parts.join(" · ") : null;
 }
@@ -107,15 +119,19 @@ function percentOf(run: ApprovalRun): number | null {
   return Math.min(100, Math.round((run.done / run.total) * 100));
 }
 
-export function approvalProgressCopy(run: ApprovalRun): ApprovalProgressCopy {
-  const counts = countsLine(run);
+export function approvalProgressCopy(
+  run: ApprovalRun,
+  t: T = approvalProgressT()
+): ApprovalProgressCopy {
+  const counts = countsLine(run, t);
+  const of = { done: n(run.done), total: n(run.total) };
   switch (run.state) {
     case "queued":
       return {
         tone: "default",
         busy: true,
-        title: `Waiting to start: ${n(run.total)} changes`,
-        detail: "Another large approval is ahead of it.",
+        title: t("queued.title", num(run.total)),
+        detail: t("queued.detail"),
         percent: null,
         door: null,
         resumable: false,
@@ -126,8 +142,8 @@ export function approvalProgressCopy(run: ApprovalRun): ApprovalProgressCopy {
         busy: true,
         title:
           run.phase === "finishing"
-            ? `Finishing up: ${n(run.done)} of ${n(run.total)}`
-            : `Creating records: ${n(run.done)} of ${n(run.total)}`,
+            ? t("running.finishing", of)
+            : t("running.creating", of),
         detail: counts,
         percent: percentOf(run),
         door: null,
@@ -136,20 +152,17 @@ export function approvalProgressCopy(run: ApprovalRun): ApprovalProgressCopy {
     case "succeeded": {
       const relationsNote =
         run.relationsFailed > 0
-          ? `${n(run.relationsFailed)} connections did not land`
+          ? t("done.relationsFailed", num(run.relationsFailed))
           : null;
       const skipped = run.skipped ?? 0;
-      const skippedNote =
-        skipped > 0
-          ? `${n(skipped)} left out: several existing records share the name`
-          : null;
+      const skippedNote = skipped > 0 ? t("done.skipped", num(skipped)) : null;
       return {
         tone:
           run.failed > 0 || run.relationsFailed > 0 || skipped > 0
             ? "warning"
             : "success",
         busy: false,
-        title: `Approved: ${n(run.total)} changes applied`,
+        title: t("done.title", num(run.total)),
         detail:
           [counts, relationsNote, skippedNote].filter(Boolean).join(" · ") ||
           null,
@@ -166,10 +179,9 @@ export function approvalProgressCopy(run: ApprovalRun): ApprovalProgressCopy {
           tone: "danger",
           busy: false,
           title: name
-            ? `Stopped at ${n(run.done)} of ${n(run.total)}: “${name}” already exists`
-            : `Stopped at ${n(run.done)} of ${n(run.total)}: a record already exists`,
-          detail:
-            "Choose what happens to every record that already exists, then the approval goes on. What was created is kept.",
+            ? t("stopped.twinNamed", { ...of, name })
+            : t("stopped.twin", of),
+          detail: t("stopped.twinDetail"),
           percent: percentOf(run),
           door: null,
           resumable: true,
@@ -178,10 +190,8 @@ export function approvalProgressCopy(run: ApprovalRun): ApprovalProgressCopy {
       return {
         tone: "danger",
         busy: false,
-        title: `Stopped at ${n(run.done)} of ${n(run.total)}`,
-        detail:
-          run.error ??
-          "The approval stopped before it finished. What was created is kept.",
+        title: t("stopped.title", of),
+        detail: run.error ?? t("stopped.detail"),
         percent: percentOf(run),
         door: null,
         resumable: true,
@@ -190,12 +200,16 @@ export function approvalProgressCopy(run: ApprovalRun): ApprovalProgressCopy {
 }
 
 /** A failed read of progress: the apply may still be running. */
-export const progressUnavailable: ApprovalProgressCopy = {
-  tone: "warning",
-  busy: true,
-  title: "Can't read the approval's progress",
-  detail: "It may still be applying. Retry to check again.",
-  percent: null,
-  door: null,
-  resumable: false,
-};
+export function progressUnavailable(
+  t: T = approvalProgressT()
+): ApprovalProgressCopy {
+  return {
+    tone: "warning",
+    busy: true,
+    title: t("unavailable.title"),
+    detail: t("unavailable.detail"),
+    percent: null,
+    door: null,
+    resumable: false,
+  };
+}

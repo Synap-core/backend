@@ -77,6 +77,15 @@ body {
   .shimmer-pulse {
     animation: none !important;
   }
+
+  /* A toast's exit slide is a CSS transform (`translate-x-full` on
+   * `data-toast-exiting`), not a framer animation, so HeroUI's
+   * `reducedMotion="user"` never reaches it. Keep the opacity fade: the toast
+   * closes on its `transitionend`, so the transition must still run. */
+  [data-toast][data-toast-exiting="true"] {
+    transform: none !important;
+    transition-property: opacity !important;
+  }
 }
 
 /* ----------------------------------------------------------------------

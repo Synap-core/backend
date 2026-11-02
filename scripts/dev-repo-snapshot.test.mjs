@@ -368,6 +368,7 @@ test("buildPr: GitHub checks first, devbox when none, inherited, session, depend
     mergeStateStatus: "CLEAN",
     autoMergeRequest: { mergeMethod: "MERGE" },
     body: `Pod session: ${SID}\n\nDepends on #363`,
+    isCrossRepository: false,
     statusCheckRollup: [run("Release gate", "COMPLETED", "FAILURE")],
   };
   const pr = buildPr(raw, R, {
@@ -391,6 +392,15 @@ test("buildPr: GitHub checks first, devbox when none, inherited, session, depend
   });
   assert.equal(fromDevbox.checks, "green");
   assert.equal("redInheritedFromMain" in fromDevbox, false);
+  // A fork's PR (an outsider's) names no session, whatever its body says;
+  // nor does one whose origin gh did not say.
+  for (const isCrossRepository of [true, undefined]) {
+    const fork = buildPr({ ...raw, isCrossRepository }, R, {
+      mainFailing: [],
+      devbox: () => assert.fail("not asked"),
+    });
+    assert.equal(fork.podSessionId, null);
+  }
 });
 
 test("mergedTodayFrom and startOfDayMs", () => {
@@ -404,8 +414,14 @@ test("mergedTodayFrom and startOfDayMs", () => {
         number: 2,
         mergedAt: "2026-10-27T08:00:00Z",
         body: `Pod session: ${SID}`,
+        isCrossRepository: false,
       },
-      { number: 3, mergedAt: "2026-10-27T20:00:00Z" },
+      {
+        number: 3,
+        mergedAt: "2026-10-27T20:00:00Z",
+        body: `Pod session: ${SID}`,
+        isCrossRepository: true,
+      },
     ],
     start
   );
@@ -414,6 +430,7 @@ test("mergedTodayFrom and startOfDayMs", () => {
     [3, 2]
   );
   assert.equal(out[1].podSessionId, SID);
+  assert.equal(out[0].podSessionId, null); // a fork's merged PR
 });
 
 test("fingerprint ignores observedAt; observation shape", () => {

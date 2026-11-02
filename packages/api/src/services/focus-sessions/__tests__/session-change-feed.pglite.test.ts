@@ -94,6 +94,7 @@ import {
   messages,
   proposals,
   runWithClientKey,
+  runWithReportedModel,
 } from "@synap/database";
 import { registerFocusSessionsRoutes } from "../../../routers/hub-protocol/rest/focus-sessions.js";
 import { sessionHandlers } from "../../../routers/mcp/handlers/session.js";
@@ -102,6 +103,8 @@ import {
   foldRunnerState,
   loadSessionRunners,
   reportRunnerState,
+  resetRunnerReportDebounce,
+  RUNNER_REPORT_DEBOUNCE_MS,
   stampSessionRunner,
 } from "../session-runners.js";
 
@@ -280,6 +283,7 @@ beforeAll(async () => {
   await h.client!.exec(migration("0342_session_runners.sql"));
   await h.client!.exec(migration("0373_session_runners_process.sql"));
   await h.client!.exec(migration("0384_session_runners_state.sql"));
+  await h.client!.exec(migration("0389_session_runners_model.sql"));
   await q(
     `insert into users (id, email, name, timezone, user_type, agent_type, host_user_id) values
       ($1, 'o@example.test', 'Owner', 'UTC', 'human', null, null),
@@ -833,6 +837,7 @@ describe("runner state (0384)", () => {
   // starts with none, so a count is this test's rows only.
   beforeEach(async () => {
     await q(`delete from session_runners where client_key = $1`, [CLIENT_KEY]);
+    resetRunnerReportDebounce();
   });
   /** One call from the runner's process, saying `state` (or nothing). */
   const as = <T>(fn: () => Promise<T>, state?: string, proc = MAC) =>
@@ -957,6 +962,69 @@ describe("runner state (0384)", () => {
     expect(foldRunnerState(all).state).toBe("busy");
   });
 
+  it("the same word again from the same process is debounced: no query inside the window, a changed word never", async () => {
+    const { sessionId } = await seed();
+    await stamp(sessionId, "busy");
+    expect(await as(() => reportRunnerState(), "idle")).toBe(1);
+    // Moved behind its back: a repeat inside the window does not even look.
+    await q(`update session_runners set state = 'busy' where session_id = $1`, [
+      sessionId,
+    ]);
+    expect(await as(() => reportRunnerState(), "idle")).toBe(0);
+    expect((await row(sessionId))!.state).toBe("busy");
+    // Past the window it looks again.
+    expect(
+      await as(
+        () =>
+          reportRunnerState({
+            nowMs: Date.now() + RUNNER_REPORT_DEBOUNCE_MS + 1,
+          }),
+        "idle"
+      )
+    ).toBe(1);
+    // A changed word is never debounced.
+    expect(await as(() => reportRunnerState(), "needs_permission")).toBe(1);
+    expect((await row(sessionId))!.state).toBe("needs_permission");
+  });
+
+  it("a runner that said ended and waits again is back: its ended clears; a wait opened before the end never revives it", async () => {
+    const { sessionId } = await seed();
+    const opened = new Date(Date.now() - 1_000);
+    const stampOpened = (at: Date, state?: string) =>
+      as(
+        () =>
+          stampSessionRunner({
+            sessionId,
+            ownerId: OWNER,
+            agentUserId: AGENT,
+            waitOpenedAt: at,
+          }),
+        state
+      );
+    await stampOpened(opened);
+    await new Promise((r) => setTimeout(r, 5));
+    expect(await as(() => reportRunnerState(), "ended")).toBe(1);
+    // The wait opened before the end re-stamps a minute later: still ended.
+    await q(
+      `update session_runners set last_seen_at = now() - interval '2 minutes' where session_id = $1`,
+      [sessionId]
+    );
+    await stampOpened(opened);
+    expect((await row(sessionId))!.state).toBe("ended");
+    // The conversation comes back and opens a new wait, naming no state:
+    // unknown and live, never ended — inside the minute too.
+    await new Promise((r) => setTimeout(r, 5));
+    expect(await stampOpened(new Date())).toBe(true);
+    let [r] = await loadSessionRunners(sessionId);
+    expect(r).toMatchObject({ state: null, live: true });
+    // Ended again, then back naming its state: that state.
+    await as(() => reportRunnerState(), "ended");
+    await new Promise((r2) => setTimeout(r2, 5));
+    await stampOpened(new Date(), "busy");
+    [r] = await loadSessionRunners(sessionId);
+    expect(r).toMatchObject({ state: "busy", live: true });
+  });
+
   it("a state report never writes the session row: no NOTIFY on the session channel", async () => {
     const { sessionId } = await seed();
     await stamp(sessionId, "busy");
@@ -972,5 +1040,68 @@ describe("runner state (0384)", () => {
     } finally {
       await unlisten();
     }
+  });
+});
+
+describe("runner model and provider (0389)", () => {
+  const MAC = "mac-a:4242:1761600000000";
+  beforeEach(async () => {
+    await q(`delete from session_runners where client_key = $1`, [CLIENT_KEY]);
+  });
+  /** The wait's stamp, from a client that reports `model` / `provider` (or nothing). */
+  const stamp = (sessionId: string, model?: string, provider?: string) =>
+    runWithClientKey(
+      CLIENT_KEY,
+      () =>
+        runWithReportedModel(model, provider, () =>
+          stampSessionRunner({ sessionId, ownerId: OWNER, agentUserId: AGENT })
+        ),
+      CWD,
+      MAC
+    );
+  const row = async (sessionId: string) =>
+    (
+      await q<{ model: string | null; provider: string | null }>(
+        `select model, provider from session_runners where session_id = $1 and process_key = $2`,
+        [sessionId, MAC]
+      )
+    ).rows[0];
+
+  it("absent headers stamp unknown (null), never anthropic", async () => {
+    const { sessionId } = await seed();
+    expect(await stamp(sessionId)).toBe(true);
+    expect(await row(sessionId)).toEqual({ model: null, provider: null });
+    const [r] = await loadSessionRunners(sessionId);
+    expect(r).toMatchObject({ model: null, provider: null });
+  });
+
+  it("the wait's stamp records what the runner says; a switch is written at once, past the throttle; a call that names none keeps it", async () => {
+    const { sessionId } = await seed();
+    expect(await stamp(sessionId, "claude-opus-5-5", "anthropic")).toBe(true);
+    expect(await row(sessionId)).toEqual({
+      model: "claude-opus-5-5",
+      provider: "anthropic",
+    });
+    // Same facts inside the minute: throttled.
+    expect(await stamp(sessionId, "claude-opus-5-5", "anthropic")).toBe(false);
+    // `/model` to GLM on Z.ai inside the minute: written now.
+    expect(await stamp(sessionId, "glm-4.6", "zai")).toBe(true);
+    const [r] = await loadSessionRunners(sessionId);
+    expect(r).toMatchObject({ model: "glm-4.6", provider: "zai" });
+    // A later call that names nothing does not erase what the runner said.
+    await q(
+      `update session_runners set last_seen_at = now() - interval '2 minutes' where session_id = $1`,
+      [sessionId]
+    );
+    expect(await stamp(sessionId)).toBe(true);
+    expect(await row(sessionId)).toEqual({ model: "glm-4.6", provider: "zai" });
+  });
+
+  it("junk is bounded: an oversized model is dropped, an unlisted provider reads other", async () => {
+    const { sessionId } = await seed();
+    expect(
+      await stamp(sessionId, "x".repeat(500), "https://api.z.ai/api/anthropic")
+    ).toBe(true);
+    expect(await row(sessionId)).toEqual({ model: null, provider: "other" });
   });
 });

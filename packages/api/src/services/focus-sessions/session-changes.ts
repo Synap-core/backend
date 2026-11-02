@@ -899,53 +899,57 @@ export async function listSessionChanges(p: {
           )
         )
     ).map((r) => r.id);
-    if (blockerIds.length > 0) {
+    // THE session read floor, like every other kind: a blocker the caller
+    // may not read is not news to them (its end, its title, its id).
+    const named =
+      blockerIds.length > 0
+        ? await db
+            .select({
+              id: focusSessions.id,
+              title: focusSessions.title,
+              goal: focusSessions.goal,
+            })
+            .from(focusSessions)
+            .where(
+              and(
+                inArray(focusSessions.id, blockerIds),
+                sessionReadableWhere({ userId: p.userId })
+              )
+            )
+        : [];
+    const readableBlockers = named.map((r) => r.id);
+    if (readableBlockers.length > 0) {
       const recordedAt = msIso(
         drizzleSql`coalesce((${lifecycleTransitionOutbox.transition}->>'recordedAt')::timestamptz, ${lifecycleTransitionOutbox.createdAt})`
       );
-      const [rows, named] = await Promise.all([
-        db
-          .select({
-            id: lifecycleTransitionOutbox.transitionId,
-            transition: lifecycleTransitionOutbox.transition,
-            at: recordedAt,
-          })
-          .from(lifecycleTransitionOutbox)
-          .where(
-            and(
-              inArray(
-                drizzleSql`coalesce(${lifecycleTransitionOutbox.transition}->>'subjectId', ${lifecycleTransitionOutbox.transition}->>'entityId')`,
-                blockerIds
-              ),
-              drizzleSql`${lifecycleTransitionOutbox.transition}->>'subjectType' = 'focus_session'`,
-              inArray(
-                drizzleSql`${lifecycleTransitionOutbox.transition}->>'category'`,
-                ["done", "lost"]
-              ),
-              ...(floor
-                ? [
-                    drizzleSql`${lifecycleTransitionOutbox.createdAt} > ${floor}::timestamptz - interval '1 minute'`,
-                    drizzleSql`${recordedAt} > ${floor}`,
-                  ]
-                : [])
-            )
+      const rows = await db
+        .select({
+          id: lifecycleTransitionOutbox.transitionId,
+          transition: lifecycleTransitionOutbox.transition,
+          at: recordedAt,
+        })
+        .from(lifecycleTransitionOutbox)
+        .where(
+          and(
+            inArray(
+              drizzleSql`coalesce(${lifecycleTransitionOutbox.transition}->>'subjectId', ${lifecycleTransitionOutbox.transition}->>'entityId')`,
+              readableBlockers
+            ),
+            drizzleSql`${lifecycleTransitionOutbox.transition}->>'subjectType' = 'focus_session'`,
+            inArray(
+              drizzleSql`${lifecycleTransitionOutbox.transition}->>'category'`,
+              ["done", "lost"]
+            ),
+            ...(floor
+              ? [
+                  drizzleSql`${lifecycleTransitionOutbox.createdAt} > ${floor}::timestamptz - interval '1 minute'`,
+                  drizzleSql`${recordedAt} > ${floor}`,
+                ]
+              : [])
           )
-          .orderBy(asc(recordedAt), asc(lifecycleTransitionOutbox.transitionId))
-          .limit(limit + 1),
-        db
-          .select({
-            id: focusSessions.id,
-            title: focusSessions.title,
-            goal: focusSessions.goal,
-          })
-          .from(focusSessions)
-          .where(
-            and(
-              inArray(focusSessions.id, blockerIds),
-              sessionReadableWhere({ userId: p.userId })
-            )
-          ),
-      ]);
+        )
+        .orderBy(asc(recordedAt), asc(lifecycleTransitionOutbox.transitionId))
+        .limit(limit + 1);
       const titleOf = new Map(
         named.map((r) => [r.id, resolveSessionTitle(r) || null])
       );
@@ -978,6 +982,9 @@ export async function listSessionChanges(p: {
       .where(
         and(
           eq(eventsTable.type, "focus_session.signal.completed"),
+          // Subject type first: the (subject_type, subject_id, timestamp)
+          // index (`idx_events_subject`) needs its leading column.
+          eq(eventsTable.subjectType, "focus_session"),
           eq(eventsTable.subjectId, session.id),
           eventVisibleWhere({ userId: p.userId, roster: false }),
           ...(floor
