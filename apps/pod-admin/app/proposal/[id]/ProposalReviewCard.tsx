@@ -1087,6 +1087,9 @@ export function ProposalReviewBody({
       {/* The change first. */}
       {appConnect ? (
         <Section label="What it asks for">
+          {/* The ONE access sentence: what approving lets it do, as its
+              page will say it once approved (access model B). */}
+          <p className="text-[13px] text-foreground/90">{appConnect.access}</p>
           <ul className="flex flex-col gap-1">
             {appConnect.lines.map((line) => (
               <li
