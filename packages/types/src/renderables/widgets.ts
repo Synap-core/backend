@@ -3276,10 +3276,15 @@ const lensSection: WidgetCapabilityDef = {
       type: "select",
       description:
         "What the section shows with no rows. Absent = the section's own answer: Needs you says all is clear, every other section hides.",
-      options: LENS_SECTION_EMPTY_ANSWERS.map((value) => ({
-        value,
-        label: EMPTY_ANSWER_LABELS[value],
-      })),
+      options: [...LENS_SECTION_EMPTY_ANSWERS, "invite" as const].map(
+        (value) => ({
+          value,
+          label:
+            value === "invite"
+              ? "Invite to fill it"
+              : EMPTY_ANSWER_LABELS[value],
+        })
+      ),
     },
   ],
 };

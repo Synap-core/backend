@@ -112,7 +112,8 @@ export type LensSectionEmptyAnswer =
 export function lensSectionDefaultEmpty(
   section: AttentionClass
 ): LensSectionEmptyAnswer {
-  return section === "blocking" ? "reassure" : "omit";
+  void section;
+  return "omit";
 }
 
 /**
@@ -123,7 +124,6 @@ export function lensSectionDefaultEmpty(
 export function readLensSectionEmpty(
   value: unknown
 ): LensSectionEmptyAnswer | null {
-  if (value === "invite") return "explain";
   return typeof value === "string" &&
     (LENS_SECTION_EMPTY_ANSWERS as readonly string[]).includes(value)
     ? (value as LensSectionEmptyAnswer)
