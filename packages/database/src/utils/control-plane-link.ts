@@ -33,6 +33,7 @@ import {
   type ControlPlaneEntitlementSync,
 } from "../schema/pod-settings.js";
 import { readPodEnrollment } from "./pod-cp-auth.js";
+import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 
 export interface ControlPlaneLink {
   /** This pod's id at its Control Plane. */
@@ -85,7 +86,7 @@ export async function readControlPlaneLink(): Promise<ControlPlaneLink | null> {
       podId: enrollment.podId,
       url:
         enrollment.controlPlaneUrl ??
-        str(process.env.CONTROL_PLANE_URL) ??
+        controlPlaneBaseUrl() ??
         enrollment.issuer,
       issuer: enrollment.issuer,
       since: enrollment.enrolledAt,

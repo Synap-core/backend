@@ -36,6 +36,7 @@ import {
   TOOL_DEMAND_FORWARD_QUEUE,
   TOOL_KEY_PATTERN,
 } from "@synap-core/types/tools";
+import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 
 const logger = createLogger({ module: "tool-demand-forward" });
 
@@ -142,9 +143,7 @@ async function finish(
 }
 
 export async function handleToolDemandForward(): Promise<ToolDemandForwardOutcome> {
-  const cpUrl = (process.env.CONTROL_PLANE_URL ?? "")
-    .trim()
-    .replace(/\/+$/, "");
+  const cpUrl = controlPlaneBaseUrl();
   if (!cpUrl) {
     return finish({
       status: "not-forwarded",

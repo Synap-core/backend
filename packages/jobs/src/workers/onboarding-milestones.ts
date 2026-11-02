@@ -38,6 +38,7 @@ import {
   type OnboardingMilestoneFacts,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 
 const logger = createLogger({ module: "onboarding-milestones" });
 
@@ -193,7 +194,7 @@ let loggedCredentialSkip = false;
 /** Called by the cron tick and the startup enqueue. */
 export async function handleOnboardingMilestones(): Promise<void> {
   const link = await readControlPlaneLink();
-  const cpUrl = (link?.url ?? process.env.CONTROL_PLANE_URL ?? "")
+  const cpUrl = (link?.url ?? controlPlaneBaseUrl() ?? "")
     .trim()
     .replace(/\/+$/, "");
   if (!link || !cpUrl) {

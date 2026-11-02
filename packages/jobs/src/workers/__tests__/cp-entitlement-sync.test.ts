@@ -142,6 +142,21 @@ describe("handleCpEntitlementSync", () => {
     expect(h.failures).toEqual([]);
   });
 
+  it("a pod configured with the legacy CP_URL alone syncs too (the one CP URL reading)", async () => {
+    delete process.env.CONTROL_PLANE_URL;
+    process.env.CP_URL = ` ${CP}/ `;
+    try {
+      fetchMock.mockResolvedValueOnce(answer(200, PLAN));
+      await handleCpEntitlementSync();
+    } finally {
+      delete process.env.CP_URL;
+    }
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      `${CP}/internal/plan?podId=pod_lab`
+    );
+    expect(h.recorded).toHaveLength(1);
+  });
+
   it("stays on its queue name and a 15-minute cron", () => {
     expect(CP_ENTITLEMENT_SYNC_QUEUE).toBe("cp-entitlement-sync");
     expect(CP_ENTITLEMENT_SYNC_CRON).toBe("*/15 * * * *");

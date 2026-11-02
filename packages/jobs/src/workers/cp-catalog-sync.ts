@@ -67,6 +67,7 @@ import {
   checkOfficialCatalogSignature,
   reportUnverifiedOfficialRows,
 } from "./official-catalog-signature.js";
+import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 
 const logger = createLogger({ module: "cp-catalog-sync" });
 
@@ -181,11 +182,7 @@ export const OFFICIAL_SOURCE_NAME = "Synap";
  * resolved even while the catalog is switched off (the rows stay readable).
  */
 export function officialCatalogUrl(): string {
-  return (
-    process.env.CONTROL_PLANE_URL ||
-    process.env.CP_URL ||
-    DEFAULT_CATALOG_SOURCE
-  ).replace(/\/$/, "");
+  return (controlPlaneBaseUrl() ?? DEFAULT_CATALOG_SOURCE).replace(/\/$/, "");
 }
 
 /** `SYNAP_CATALOG_SOURCE=off`: a pod that must make no outbound catalog calls. */

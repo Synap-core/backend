@@ -293,6 +293,22 @@ describe("captures API", () => {
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
+  it("cursor keeps microseconds: two captures inside one millisecond across a page boundary both come back", async () => {
+    // created_at is a µs timestamptz. A millisecond cursor (a JS Date) taken
+    // at `later` reads as .000 and skips `earlier` (.000100 > .000).
+    const earlier = await capture({ at: "2026-09-14T10:00:00.000100Z" });
+    const later = await capture({ at: "2026-09-14T10:00:00.000900Z" });
+    const first = await caller(A).list({ limit: 1 });
+    expect(first.items.map((i) => i.documentId)).toEqual([later]);
+    expect(first.nextCursor).not.toBeNull();
+    const second = await caller(A).list({
+      limit: 1,
+      cursor: first.nextCursor!,
+    });
+    expect(second.items.map((i) => i.documentId)).toEqual([earlier]);
+    expect(second.nextCursor).toBeNull();
+  });
+
   it("derives status and producedCount per row, and the status filter uses the same derivation", async () => {
     // document edge (live) + a deleted target that must not count; AI ran (no marker)
     const structured = await capture({

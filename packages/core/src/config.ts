@@ -15,6 +15,7 @@
 
 import { z } from "zod";
 import { createLogger } from "./logger.js";
+import { controlPlaneBaseUrl } from "./control-plane-url.js";
 
 const configLogger = createLogger({ module: "config" });
 
@@ -265,7 +266,7 @@ function loadConfig(): Config {
         nodeEnv: process.env.NODE_ENV,
         corsOrigins: process.env.CORS_ORIGINS,
         logLevel: process.env.LOG_LEVEL,
-        controlPlaneUrl: process.env.CONTROL_PLANE_URL || undefined,
+        controlPlaneUrl: controlPlaneBaseUrl() ?? undefined,
         sharedPodMode: process.env.SHARED_POD_MODE,
         vectorSearchEnabled: process.env.VECTOR_SEARCH_ENABLED,
         localMode: process.env.LOCAL_MODE,

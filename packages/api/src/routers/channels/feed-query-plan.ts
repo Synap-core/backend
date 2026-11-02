@@ -13,6 +13,7 @@
 
 import { CpRelayVaultUnresolvedError, podCpAuthHeaders } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 
 const logger = createLogger({ module: "feed-query-plan" });
 
@@ -45,9 +46,7 @@ export async function deriveFeedQueries(
   const raw = (archetypeConfig.config ?? {}) as Record<string, unknown>;
   // Source-config rows don't always carry the CP URL.
   const relayUrl =
-    (raw.relayUrl as string | undefined) ??
-    process.env.CP_URL ??
-    process.env.CONTROL_PLANE_URL;
+    (raw.relayUrl as string | undefined) ?? controlPlaneBaseUrl();
   if (!relayUrl) return { status: "unavailable" };
 
   let authHeaders: Record<string, string>;
