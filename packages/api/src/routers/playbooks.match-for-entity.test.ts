@@ -153,6 +153,8 @@ describe("playbooks.matchForEntity", () => {
         templateKind: "Work template",
         goalTemplate: "Produce content for {{platform}} from {{subject}}",
         subjectProfileSlug: "post",
+        activators: [],
+        runsWithoutSubject: false,
         params: [{ key: "platform", type: "string" }],
         executor: "is-agent",
         workspaceId: null,
@@ -230,6 +232,8 @@ describe("playbooks.matchForEntity", () => {
         templateKind: "Work template",
         goalTemplate: "Enrich {{subject}}",
         subjectProfileSlug: "lead",
+        activators: [],
+        runsWithoutSubject: false,
         params: [],
         executor: "is-agent",
         workspaceId: null,
@@ -686,6 +690,50 @@ describe("playbooks.match", () => {
       .match({ intentText: "newsletter" });
     expect(picked).toMatchObject({ workspaceId: OTHER, autoPicked: true });
     expect(picked.playbooks.length).toBe(5);
+  });
+
+  it("each row carries its declared workers and whether it runs with no subject", async () => {
+    const weekly = { on: "schedule", cron: "0 9 * * 1", mode: "propose" };
+    const onIdea = { on: "enters_status", status: "Idea", mode: "run" };
+    mockGetDb.mockImplementation(async () => ({
+      select: vi.fn(() =>
+        selectChain([
+          {
+            ...row("pb-declared", "Newsletter from ideas"),
+            subjectProfile: {
+              profileSlug: "post",
+              activators: [weekly, onIdea],
+            },
+          },
+          {
+            ...row("pb-corrupt", "Newsletter corrupt"),
+            subjectProfile: {
+              profileSlug: "post",
+              activators: [{ on: "every_full_moon" }],
+            },
+          },
+          row("pb-free", "Newsletter on its own"),
+        ])
+      ),
+    }));
+    const res = await playbooksRouter
+      .createCaller(callerCtx())
+      .match({ intentText: "newsletter" });
+    const byId = new Map(res.playbooks.map((p) => [p.id, p]));
+    // Read through the ONE process reader: parsed, never the raw jsonb.
+    expect(byId.get("pb-declared")).toMatchObject({
+      activators: [weekly, onIdea],
+      runsWithoutSubject: false,
+    });
+    // A declaration that does not parse offers nothing (not the raw value).
+    expect(byId.get("pb-corrupt")).toMatchObject({
+      activators: [],
+      runsWithoutSubject: false,
+    });
+    expect(byId.get("pb-free")).toMatchObject({
+      activators: [],
+      runsWithoutSubject: true,
+    });
   });
 
   it("refuses a caller in no space, and empty words", async () => {

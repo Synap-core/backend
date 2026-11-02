@@ -20,6 +20,7 @@ import { randomUUID } from "node:crypto";
 import { createLogger } from "@synap-core/core";
 import { z } from "zod";
 import { decodeHtmlEntities } from "@synap-core/types/text";
+import type { WorkerActivator } from "@synap-core/types/workers";
 import {
   router,
   protectedProcedure,
@@ -83,6 +84,7 @@ import {
   playbookActivatorsSchema,
   playbookSubjectProfileSchema,
   ProcessDeclarationError,
+  readPlaybookProcess,
 } from "../schemas/playbook-process.js";
 import { sessionCriteriaSchema } from "../schemas/session-criteria.js";
 import { playbookScheduleInputSchema } from "../schemas/playbook-schedule.js";
@@ -1481,6 +1483,13 @@ export async function matchPlaybooks(
       templateKind,
       goalTemplate: candidate.row.goalTemplate,
       subjectProfileSlug: candidate.subjectProfileSlug,
+      // The workers it declares ("How often?" offers these; [] when none or
+      // unreadable), read through the ONE process reader, and whether it
+      // runs with no subject (a person-chosen clock is open to it,
+      // `howOftenEnable`).
+      activators: readPlaybookProcess(candidate.row.subjectProfile)
+        .activators satisfies WorkerActivator[],
+      runsWithoutSubject: candidate.subjectProfileSlug == null,
       // The DECLARATION (name/type/required/options/default), so a caller
       // choosing a candidate can see what it must supply BEFORE it runs —
       // the match→confirm→run path's whole intake contract.
