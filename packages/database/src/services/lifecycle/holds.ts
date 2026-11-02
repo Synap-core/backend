@@ -109,7 +109,10 @@ function filterSql(filter: HoldFilter): SQL {
     )})`;
   }
   if ("resumeDueBy" in filter) {
-    return sql`(o.transition->'hold'->'until'->>'date')::timestamptz <= ${filter.resumeDueBy.toISOString()}::timestamptz`;
+    // Never cast in SQL: one stored date that does not parse would fail the
+    // whole sweep. Every dated hold is read; `listHolds` keeps the due ones
+    // and skips (and logs) a date that does not parse.
+    return sql`jsonb_typeof(o.transition->'hold'->'until'->'date') = 'string'`;
   }
   if ("reviewDueBy" in filter) {
     // Compared as TEXT in the one stamp shape `recordHold` writes: a stored
@@ -177,6 +180,7 @@ export async function listHolds(
       wanted.has(`${t.subjectType}:${t.subjectId}:${t.facetId ?? ""}`)
     );
   }
+  if ("resumeDueBy" in filter) held = dueByDate(held, filter.resumeDueBy);
   const standing = await statusesNow(db, held);
   const nowMs = now.getTime();
   return held
@@ -199,6 +203,40 @@ export async function listHolds(
           t.hold.reviewBy != null && Date.parse(t.hold.reviewBy) <= nowMs,
       };
     });
+}
+
+import { createLogger } from "@synap-core/core";
+
+const logger = createLogger({ module: "holds" });
+
+/**
+ * The dated holds whose `until.date` has come. A date that does not parse is
+ * one bad row, not a failed sweep: it is skipped and logged with its subject,
+ * and every other hold still resumes.
+ */
+function dueByDate(
+  held: readonly HeldTransition[],
+  dueBy: Date
+): HeldTransition[] {
+  const dueMs = dueBy.getTime();
+  return held.filter((t) => {
+    const until = t.hold.until;
+    const at =
+      until != null && "date" in until ? Date.parse(String(until.date)) : NaN;
+    if (Number.isNaN(at)) {
+      logger.warn(
+        {
+          subjectType: t.subjectType,
+          subjectId: t.subjectId,
+          transitionId: t.transitionId,
+          date: until != null && "date" in until ? until.date : null,
+        },
+        "hold: until.date does not parse — this hold is skipped, the others resume"
+      );
+      return false;
+    }
+    return at <= dueMs;
+  });
 }
 
 function keyOf(t: {

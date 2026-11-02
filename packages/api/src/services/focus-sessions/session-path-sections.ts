@@ -29,7 +29,10 @@
  * card, a pill or the graph say "Needs you" (rv-ui-ux U1): the same classes
  * `signals.count` counts, so the two numbers are one. The section items
  * (`owedSlots`, `pendingProposals`) still list everything owed: they are
- * what the next move reads.
+ * what the next move reads. `runnerWait` carries the session's live runners'
+ * folded word (`foldRunnerState`), so the rule's fourth population — an agent
+ * waiting on the person at the terminal (D-R1, `waitsOnYouAtTerminal`) — is
+ * counted on the row as the Inbox counts it (`permission-sessions.ts`).
  *
  * ── A FAILED READ IS NOT AN EMPTY ONE ───────────────────────────────────────
  * A batched section that fails marks that section `unavailable` on every row
@@ -84,6 +87,7 @@ import {
 import { projectOwedSlots, type OwedSlot } from "./owed-outputs.js";
 import { attachSessionVerdicts } from "./evaluations/record.js";
 import { isNeedsYou } from "@synap-core/types/needs-you/rule";
+import { foldRunnerState, loadSessionRunnersFor } from "./session-runners.js";
 import { owedSlotClassOf } from "../signals/needs-you-union.js";
 import { classifyPendingProposals } from "../proposals/proposal-needs-you.js";
 import { readDependencyFacts } from "../links/dependency-links.js";
@@ -166,6 +170,17 @@ export interface SessionUnitCounts {
   awaitingReview: boolean;
   /** An agent/automation draft still in triage (`projectTriage(row).pending`). */
   draft: boolean;
+  /**
+   * The session's status and its LIVE runners' folded word
+   * (`loadSessionRunnersFor` → `foldRunnerState`): THE rule's terminal-wait
+   * input (`waitsOnYouAtTerminal`). `null` = the runner read FAILED. Always
+   * set by `attachPathSections`; absent on a member row (`withViewerRole`):
+   * the dialog is the owner's to answer. Structurally a `NeedsYouRunnerFacts`.
+   */
+  runnerWait?: {
+    runnerState: string | null;
+    status: string;
+  } | null;
 }
 
 /**
@@ -524,6 +539,7 @@ export async function attachPathSections<R extends PathSourceRow>(
     verdicts,
     workUnits,
     holds,
+    runners,
   ] = await Promise.all([
     settle(
       ctx,
@@ -617,6 +633,19 @@ export async function attachPathSections<R extends PathSourceRow>(
             })
           : [];
         return new Map(current.map((h) => [h.subjectId, h.hold]));
+      }
+    ),
+    // The page's runners, folded per session (the packet's and the holder's
+    // loader, one query): THE needs-you rule's terminal-wait input.
+    settle(
+      ctx,
+      "runners",
+      "Whether an agent waits on you in these sessions could not be read.",
+      async () => {
+        const all = await loadSessionRunnersFor(ids, { database, now });
+        return new Map(
+          [...all].map(([id, list]) => [id, foldRunnerState(list).state])
+        );
       }
     ),
   ]);
@@ -732,6 +761,13 @@ export async function attachPathSections<R extends PathSourceRow>(
             : null,
         awaitingReview: nextMove.kind === "ready_to_close",
         draft: projectTriage(row).pending,
+        runnerWait:
+          runners.status === "ok"
+            ? {
+                status: row.status,
+                runnerState: runners.value.get(row.id) ?? null,
+              }
+            : null,
       },
     };
   });

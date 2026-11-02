@@ -8,7 +8,7 @@
  *   `NEEDS_YOU_ITEM_NOUNS`), so English has ONE home and each row's rationale
  *   stays beside it. Keys are today's tokens: `kind.<slug>.one|other`,
  *   `action.<token>.imperative|past|progressive|present`, `status.<token>`,
- *   `needsYou.count.<kind>`. A row added to a table is a key of this catalog,
+ *   `needsYou.count.<kind>`, `runner.<state>`. A row added to a table is a key of this catalog,
  *   and `Catalog<VocabularyEn>` then refuses every translation without it;
  * - the SENTENCES the door used to splice by hand (titles, button labels,
  *   "Private …", "Handed to …"), written here as messages. A sentence that
@@ -24,6 +24,7 @@ import type {
   ActionVerbRows,
   NeedsYouItemNounRows,
   ObjectNounRows,
+  RunnerStateLabelRows,
   StatusLabelRows,
 } from "./index.js";
 import type { ObjectKindRows } from "./object-kinds.js";
@@ -48,6 +49,8 @@ type ActionKey = {
 type StatusKey = `status.${keyof StatusLabelRows & string}`;
 
 type NeedsYouCountKey = `needsYou.count.${keyof NeedsYouItemNounRows & string}`;
+
+type RunnerStateKey = `runner.${keyof RunnerStateLabelRows & string}`;
 
 /**
  * The door's sentences. Each English text reproduces what the door returned
@@ -119,7 +122,10 @@ export type VocabularySentencesEn = typeof vocabularySentencesEn;
 
 /** The English vocabulary catalog's type: every derived word, then the sentences. */
 export type VocabularyEn = Readonly<
-  Record<NounKey | ActionKey | StatusKey | NeedsYouCountKey, string>
+  Record<
+    NounKey | ActionKey | StatusKey | NeedsYouCountKey | RunnerStateKey,
+    string
+  >
 > &
   VocabularySentencesEn;
 
@@ -133,6 +139,7 @@ export interface VocabularyTables {
   readonly verbs: Readonly<Record<string, ActionVerb>>;
   readonly statuses: Readonly<Record<string, string>>;
   readonly needsYouNouns: Readonly<Record<string, readonly [string, string]>>;
+  readonly runnerStates: Readonly<Record<string, string>>;
 }
 
 /**
@@ -166,6 +173,9 @@ export function buildVocabularyEn(tables: VocabularyTables): VocabularyEn {
   for (const [kind, [one, other]] of Object.entries(tables.needsYouNouns)) {
     words[`needsYou.count.${kind}`] =
       `{n, plural, one {# ${one}} other {# ${other}}}`;
+  }
+  for (const [state, label] of Object.entries(tables.runnerStates)) {
+    words[`runner.${state}`] = label;
   }
   return { ...words, ...vocabularySentencesEn } as VocabularyEn;
 }

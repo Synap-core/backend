@@ -50,7 +50,7 @@
  * (`watcher.ts`, `agentOnly`). D-R2: once one repo has
  * {@link REPO_STUCK_AT} or more PRs escalated at once, the person reads ONE
  * signal for the repo ("backend: 5 PRs are stuck"), not one per PR
- * ({@link foldRepoStuck}).
+ * ({@link repoStuckFolds}).
  *
  * PURE: the watcher reads the snapshots and the owning sessions
  * (`watcher.ts`, `devCandidates`), this file decides what they say.

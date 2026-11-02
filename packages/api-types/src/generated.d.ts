@@ -21846,6 +21846,17 @@ export interface SessionUnitCounts {
 	awaitingReview: boolean;
 	/** An agent/automation draft still in triage (`projectTriage(row).pending`). */
 	draft: boolean;
+	/**
+	 * The session's status and its LIVE runners' folded word
+	 * (`loadSessionRunnersFor` → `foldRunnerState`): THE rule's terminal-wait
+	 * input (`waitsOnYouAtTerminal`). `null` = the runner read FAILED. Always
+	 * set by `attachPathSections`; absent on a member row (`withViewerRole`):
+	 * the dialog is the owner's to answer. Structurally a `NeedsYouRunnerFacts`.
+	 */
+	runnerWait?: {
+		runnerState: string | null;
+		status: string;
+	} | null;
 }
 export type SessionInteractionType = "triggered" | "updated";
 export interface SessionInteraction {

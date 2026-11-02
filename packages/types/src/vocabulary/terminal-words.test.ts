@@ -8,7 +8,10 @@
 import { describe, it, expect } from "vitest";
 import {
   resolveActionLabel,
+  resolveObjectNoun,
+  resolveObjectNounPlural,
   resolveRunnerStateLabel,
+  resolveStatusLabel,
   RUNNER_STATE_LABELS,
 } from "./index.js";
 
@@ -40,5 +43,31 @@ describe("terminal words", () => {
       "needs_answer",
       "ended",
     ]);
+  });
+
+  it("the runner words take a locale: French has its own for EVERY state, English stays the table's", () => {
+    for (const state of Object.keys(RUNNER_STATE_LABELS)) {
+      expect(resolveRunnerStateLabel(state, "en")).toBe(
+        RUNNER_STATE_LABELS[state as keyof typeof RUNNER_STATE_LABELS]
+      );
+      const fr = resolveRunnerStateLabel(state, "fr");
+      expect(fr).not.toBe("");
+      // Rules out a French reader that falls back to English.
+      expect(fr).not.toBe(resolveRunnerStateLabel(state, "en"));
+    }
+    expect(resolveRunnerStateLabel("needs_permission", "fr")).toBe(
+      "Attend votre autorisation"
+    );
+    // An unknown word humanizes, in any locale.
+    expect(resolveRunnerStateLabel("compacting", "fr")).toBe("Compacting");
+  });
+
+  it("a session's test runs and its muted mark have their own rows (French included, never 'Test run')", () => {
+    expect(resolveObjectNoun("test_run")).toBe("Test run");
+    expect(resolveObjectNounPlural("test_run")).toBe("Test runs");
+    expect(resolveObjectNoun("test_run", "fr")).toBe("Série de tests");
+    expect(resolveObjectNounPlural("test_run", "fr")).toBe("Séries de tests");
+    expect(resolveStatusLabel("muted")).toBe("Muted");
+    expect(resolveStatusLabel("muted", "fr")).toBe("En sourdine");
   });
 });

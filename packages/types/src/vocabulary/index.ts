@@ -957,6 +957,10 @@ const OBJECT_NOUN_ROWS = {
   // plan appendix e7308ad5).
   room: "Room",
   review: "Review",
+  // One devbox gate job a session ran (`devboxJobs` on the session read,
+  // backend#637): what a person reads as "its test runs", never a job's name
+  // (D-R4). Humanized it read "Test run" in every locale.
+  test_run: "Test run",
 } satisfies Readonly<Record<string, string>>;
 
 export const OBJECT_NOUNS: Readonly<Record<string, string>> = OBJECT_NOUN_ROWS;
@@ -995,6 +999,7 @@ export const OBJECT_NOUN_PLURALS: Readonly<
   renderer: "Displays",
   room: "Rooms",
   review: "Reviews",
+  test_run: "Test runs",
 };
 
 // A backend-only noun never shares a slug with a registry kind: both live in
@@ -1750,6 +1755,9 @@ const STATUS_LABEL_ROWS = {
   // read "Wont fix" — no apostrophe. `open` / `investigating` / `fixed`
   // humanize correctly and need no row.
   wont_fix: "Won't fix",
+  // A session the person silenced (per-session mute, backend#637): its pushes
+  // stop, its rows stay. The mark on its page and its Mute control.
+  muted: "Muted",
 } satisfies Readonly<Record<string, string>>;
 
 export const STATUS_LABELS: Readonly<Record<string, string>> =
@@ -2275,9 +2283,24 @@ export const RUNNER_STATE_LABELS = {
   ended: "Ended",
 } as const satisfies Readonly<Record<RunnerState, string>>;
 
-/** The words for a runner state; unknown values humanize, never leak. */
-export function resolveRunnerStateLabel(v: string | null | undefined) {
-  return resolveFrom(RUNNER_STATE_LABELS, v);
+/** The runner state rows, exactly typed: the keys of the `runner.*` catalog. */
+export type RunnerStateLabelRows = typeof RUNNER_STATE_LABELS;
+
+/**
+ * The words for a runner state, in `locale` (else the ambient catalog
+ * locale), through `runner.<state>`; unknown values humanize, never leak.
+ */
+export function resolveRunnerStateLabel(
+  v: string | null | undefined,
+  locale?: Locale
+): string {
+  if (!v) return "";
+  const key = v.trim().toLowerCase();
+  if (!Object.hasOwn(RUNNER_STATE_LABELS, key)) return humanizeToken(v);
+  return (
+    translatedWord(`runner.${key}`, catalogLocaleOf(locale)) ??
+    RUNNER_STATE_LABELS[key as keyof RunnerStateLabelRows]
+  );
 }
 
 /** The words for a wait kind; unknown values humanize, never leak. */
@@ -3609,6 +3632,7 @@ export const vocabularyEn = buildVocabularyEn({
   verbs: ACTION_VERBS,
   statuses: STATUS_LABELS,
   needsYouNouns: NEEDS_YOU_ITEM_NOUNS,
+  runnerStates: RUNNER_STATE_LABELS,
 });
 
 /** Every locale's vocabulary catalog, for `createT` and the parity test. */

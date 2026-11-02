@@ -250,7 +250,21 @@ async function devHoldsMet(
     const until = h.hold.until;
     if (!until || !("moves" in until)) return [];
     const ref = parseHoldDevRef(until.moves);
-    return ref ? [{ h, ref, until, moves: until.moves }] : [];
+    if (!ref) return [];
+    // One pause whose start does not parse is one bad row: skipped and
+    // logged, never a failed read of every other dev hold.
+    if (Number.isNaN(Date.parse(h.hold.since))) {
+      logger.warn(
+        {
+          subjectType: h.subjectType,
+          subjectId: h.subjectId,
+          since: h.hold.since,
+        },
+        "dev hold: its pause start does not parse — this hold is skipped, the others resume"
+      );
+      return [];
+    }
+    return [{ h, ref, until, moves: until.moves }];
   });
   if (dev.length === 0) return [];
   const rows = await readDevFactRows(dev);

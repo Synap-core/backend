@@ -223,6 +223,68 @@ describe("the hourly sweep (until.date)", () => {
   });
 });
 
+// Review 459d5e5b: one hold with a bad stored date failed the whole hourly
+// sweep (a `::timestamptz` cast of every row in SQL; `new Date(NaN)` in the
+// dev-fact read). Each row is decided on its own: a bad one is skipped and
+// logged, the others resume.
+describe("the hourly sweep isolates a bad row", () => {
+  const corrupt = (id: string, path: string, value: string) =>
+    q(
+      `update lifecycle_transition_outbox
+          set transition = jsonb_set(transition, $2::text[], to_jsonb($3::text))
+        where transition->>'subjectId' = $1 and transition->>'to' = 'paused'`,
+      [id, path, value]
+    );
+  async function pausedUntil(until: Record<string, unknown>) {
+    const id = await session();
+    await setSessionStatus(db, {
+      sessionId: id,
+      from: "active",
+      to: "paused",
+      actor: HUMAN,
+      hold: { on: "external", until } as never,
+    });
+    return id;
+  }
+
+  it("a hold whose until.date does not parse is skipped; the due ones still resume", async () => {
+    const good = await pausedUntil({ date: SOON });
+    const bad = await pausedUntil({ date: SOON });
+    await corrupt(bad, "{hold,until,date}", "not-a-date");
+    expect((await lastOwed(bad)).hold).toMatchObject({
+      until: { date: "not-a-date" },
+    });
+    await handleHoldResume({}, AFTER);
+    expect(await statusOf("focus_sessions", good)).toBe("active");
+    expect(await statusOf("focus_sessions", bad)).toBe("paused");
+  });
+
+  it("a dev hold whose pause start does not parse is skipped; the other dev holds are still decided", async () => {
+    const REPO = "acme/isolation";
+    const good = await pausedUntil({ moves: `main:${REPO}` });
+    const bad = await pausedUntil({ moves: `main:${REPO}` });
+    await corrupt(bad, "{hold,since}", "garbage");
+    const at = new Date(Date.now() + 1_000);
+    await q(
+      `insert into events (id, type, user_id, subject_id, subject_type, data, timestamp)
+       values ($1, 'dev.repo_snapshot', 'u1', $2, 'observation', $3::jsonb, $4)`,
+      [
+        randomUUID(),
+        randomUUID(),
+        JSON.stringify({
+          repo: REPO,
+          observedAt: at.toISOString(),
+          main: { health: "ok" },
+        }),
+        at,
+      ]
+    );
+    await handleHoldResume({}, new Date(Date.now() + 2_000));
+    expect(await statusOf("focus_sessions", good)).toBe("active");
+    expect(await statusOf("focus_sessions", bad)).toBe("paused");
+  });
+});
+
 describe("the awaited thing moved (until.moves)", () => {
   it("resumes what waited on it, only when it reached the awaited status", async () => {
     const awaited = await session();

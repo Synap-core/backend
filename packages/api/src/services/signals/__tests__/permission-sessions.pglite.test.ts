@@ -12,6 +12,13 @@
  *
  * Negative controls: the reader without its live-window clause lists the
  * quiet session too; with drafts out (triage lens `default`) it lists nothing.
+ *
+ * SEAM (review 459d5e5b M1): the session ROWS (`attachNextMove`, the path /
+ * list / map batch) carry the same runner fact in `unitFacts.runnerWait`, and
+ * THE per-session rule over them names exactly the sessions this reader lists
+ * — a `stale` one included, which the old `OPEN_SESSION_STATUSES` prefilter
+ * left out of the Inbox while the rule counted it. Negative control: without
+ * the runner read on the rows, no row needs you and the seam test is red.
  */
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -41,6 +48,14 @@ vi.mock("@synap/database", async (importOriginal) => {
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { listSessionsWaitingForPermission } from "../permission-sessions.js";
 import { countNeedsYou, unionNeedsYou } from "../needs-you-union.js";
+import { attachNextMove } from "../../focus-sessions/session-path-sections.js";
+import { focusSessions } from "@synap/database/schema";
+import { db } from "@synap/database";
+import {
+  needsYouItems,
+  needsYouReason,
+  waitsOnYouAtTerminal,
+} from "@synap-core/types/units";
 
 const ME = "user-me";
 const OTHER = "user-other";
@@ -110,6 +125,7 @@ let waiting = "";
 let twice = "";
 let asking = "";
 let both = "";
+let stale = "";
 
 beforeAll(async () => {
   for (const t of h.tables) {
@@ -141,6 +157,10 @@ beforeAll(async () => {
   both = await session("Asks and needs a permission");
   await runner(both, "needs_answer");
   await runner(both, "needs_permission");
+  // The reaper marked it stale, yet its agent is live at a dialog: the rule
+  // counts it (only an ended session is out).
+  stale = await session("Stale but waiting", ME, "stale");
+  await runner(stale, "needs_permission");
 });
 
 describe("sessions waiting for your permission (D-R1)", () => {
@@ -153,6 +173,7 @@ describe("sessions waiting for your permission (D-R1)", () => {
       "Asks a question",
       "Asks and needs a permission",
       "Run the migration",
+      "Stale but waiting",
       "Two copies wait",
     ]);
     expect(sessions.every((s) => s.since instanceof Date)).toBe(true);
@@ -207,8 +228,9 @@ describe("sessions waiting for your permission (D-R1)", () => {
       "session-permission",
       "session-permission",
       "session-permission",
+      "session-permission",
     ]);
-    expect(count.permission).toBe(4);
+    expect(count.permission).toBe(5);
     expect(count.needsYou).toBe(rows.length);
     expect(count.folds.needsYou).toBe(count.needsYou);
   });
@@ -219,5 +241,30 @@ describe("sessions waiting for your permission (D-R1)", () => {
       sessionId: twice,
     });
     expect(sessions.map((s) => s.id)).toEqual([twice]);
+  });
+
+  it("SEAM: the session rows' own rule names exactly the sessions the Inbox lists (one rule, M1)", async () => {
+    const { sessions } = await listSessionsWaitingForPermission({
+      userId: ME,
+    });
+    const mine = (await db.select().from(focusSessions)).filter(
+      (r) => r.userId === ME
+    );
+    const rows = await attachNextMove(mine, { userId: ME, database: db });
+    // NON-VACUITY: every fixture came back with a runner read, none failed.
+    expect(rows).toHaveLength(mine.length);
+    expect(rows.every((r) => r.unitFacts.runnerWait !== null)).toBe(true);
+    const onRows = rows
+      .filter((r) => waitsOnYouAtTerminal(r.unitFacts.runnerWait))
+      .map((r) => r.id)
+      .sort();
+    expect(onRows.length).toBeGreaterThan(0);
+    expect(onRows).toEqual(sessions.map((s) => s.id).sort());
+    // Each is one item on its own row, and its reason says why.
+    for (const r of rows.filter((r) => onRows.includes(r.id))) {
+      expect(needsYouReason(r.unitFacts)).toBe("permission");
+      const items = needsYouItems(r.unitFacts);
+      if (items !== null) expect(items).toBeGreaterThanOrEqual(1);
+    }
   });
 });

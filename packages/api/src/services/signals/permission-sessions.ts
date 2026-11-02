@@ -4,10 +4,14 @@
  * row per session one of whose LIVE runners (0384, `session-runners.ts`) says
  * it waits on the person — a permission dialog (`needs_permission`) or a
  * question / a plan to accept (`needs_answer`; the cockpit plan's named
- * default, extending D-R1 which was worded "permission"). Which words count
- * is THE rule's (`classifyRunnerWait`, `@synap-core/types/needs-you/rule`),
- * derived here from the one runner order, never listed; counted through the
- * same rows as every other item (`countNeedsYou`), never a second counter.
+ * default, extending D-R1 which was worded "permission"). Which words and
+ * which session statuses count is THE per-session rule's clause
+ * (`waitsOnYouAtTerminal`, `@synap-core/types/units` — the one every row, project
+ * tally and session header counts with, over `classifyRunnerWait`), derived
+ * here from the one runner order and the one status list, never listed; so
+ * the Inbox and a session's own header count one number
+ * (`needs-you-one-rule.tripwire.test.ts`). Counted through the same rows as
+ * every other item (`countNeedsYou`), never a second counter.
  * A session whose runners say both reads the more urgent word
  * (`RUNNER_STATE_ORDER`), as the session-level fold does.
  *
@@ -33,14 +37,17 @@ import {
   inArray,
   sessionRunners,
 } from "@synap/database";
-import { classifyRunnerWait } from "@synap-core/types/needs-you/rule";
 import {
   RUNNER_STATE_ORDER,
   runnerStateRank,
+  waitsOnYouAtTerminal,
   type LiveRunnerState,
 } from "@synap-core/types/units";
 import { RUNNER_LIVE_WINDOW_SECONDS } from "../focus-sessions/session-runners.js";
-import { OPEN_SESSION_STATUSES } from "../focus-sessions/session-statuses.js";
+import {
+  SESSION_STATUSES,
+  type SessionStatus,
+} from "../focus-sessions/session-statuses.js";
 import { sessionListConditions } from "../focus-sessions/session-list-conditions.js";
 import type { SessionSubject } from "../focus-sessions/session-subject-where.js";
 import type { PermissionSessionSignalInput } from "./needs-you-union.js";
@@ -49,15 +56,41 @@ import type { PermissionSessionSignalInput } from "./needs-you-union.js";
 export const PERMISSION_SCAN_LIMIT = 200;
 
 /**
- * The runner words that put a session in needs-you: THE rule asked of each
- * word of the one order (an open session), never a hand-written list.
+ * The runner words that put a session in needs-you: THE per-session clause
+ * asked of each word of the one order (an active session), never a
+ * hand-written list.
  */
 export const TERMINAL_WAIT_STATES: readonly LiveRunnerState[] =
-  RUNNER_STATE_ORDER.filter(
-    (state) =>
-      classifyRunnerWait({ status: "active", runnerState: state }) ===
-      "needs_you"
+  RUNNER_STATE_ORDER.filter((state) =>
+    waitsOnYouAtTerminal({ status: "active", runnerState: state })
   );
+
+/**
+ * The session statuses in which such a wait needs you: THE per-session clause
+ * asked of every stored status, never `OPEN_SESSION_STATUSES` (which leaves
+ * out `stale`, a status the rule counts: the row and the Inbox would disagree).
+ */
+export const TERMINAL_WAIT_SESSION_STATUSES: readonly SessionStatus[] =
+  SESSION_STATUSES.filter((status) =>
+    TERMINAL_WAIT_STATES.some((runnerState) =>
+      waitsOnYouAtTerminal({ status, runnerState })
+    )
+  );
+
+/**
+ * One candidate row → its terminal-wait word when THE per-session clause
+ * counts it, else `null`. The SQL only finds candidates; this decides.
+ */
+export function terminalWaitOf(row: {
+  status: string;
+  state: string | null;
+}): LiveRunnerState | null {
+  const state = TERMINAL_WAIT_STATES.find((s) => s === row.state);
+  return state &&
+    waitsOnYouAtTerminal({ status: row.status, runnerState: state })
+    ? state
+    : null;
+}
 
 export async function listSessionsWaitingForPermission(q: {
   userId: string;
@@ -121,7 +154,7 @@ export async function listSessionsWaitingForPermission(q: {
     .where(
       and(
         ...conditions,
-        inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])
+        inArray(focusSessions.status, [...TERMINAL_WAIT_SESSION_STATUSES])
       )
     )
     .orderBy(desc(focusSessions.updatedAt), desc(focusSessions.id))
@@ -140,16 +173,10 @@ export async function listSessionsWaitingForPermission(q: {
   const truncated = folded.length > PERMISSION_SCAN_LIMIT;
   const sessions = folded
     .slice(0, PERMISSION_SCAN_LIMIT)
-    // THE rule decides; the SQL only found the candidates.
+    // THE per-session clause decides; the SQL only found the candidates.
     .flatMap((r) => {
-      const state = TERMINAL_WAIT_STATES.find((s) => s === r.state);
-      if (
-        !state ||
-        classifyRunnerWait({ status: r.status, runnerState: state }) !==
-          "needs_you"
-      ) {
-        return [];
-      }
+      const state = terminalWaitOf(r);
+      if (!state) return [];
       return [
         {
           id: r.id,

@@ -168,6 +168,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "kind.room.other": "Salons",
   "kind.review.one": "Revue",
   "kind.review.other": "Revues",
+  "kind.test_run.one": "Série de tests",
+  "kind.test_run.other": "Séries de tests",
   // ── Verbs: `action.<token>.imperative` (infinitive) / `.past` (masculine
   // participle, D4) / `.progressive` / `.present` ──
   "action.create.imperative": "Créer",
@@ -533,6 +535,13 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "status.needs_provision": "Prêt à activer",
   "status.__unclassified": "Aucun statut déclaré",
   "status.wont_fix": "Ne sera pas corrigé",
+  "status.muted": "En sourdine",
+  // ── Runner states: `runner.<state>` (what a session's agent says it does) ──
+  "runner.busy": "Au travail",
+  "runner.idle": "Inactif",
+  "runner.needs_permission": "Attend votre autorisation",
+  "runner.needs_answer": "Attend votre réponse",
+  "runner.ended": "Terminé",
   // ── Needs-you counts: `needsYou.count.<kind>` (French counts 0 and 1 as
   // singular; `many` is a whole number of millions: "1000000 de décisions") ──
   "needsYou.count.decision":
@@ -714,4 +723,5 @@ export const vocabularyFrNouns: Readonly<Record<NounSlug, FrenchNounGrammar>> =
     renderer: { gender: "m", elides: true },
     room: { gender: "m", elides: false },
     review: { gender: "f", elides: false },
+    test_run: { gender: "f", elides: false },
   };
