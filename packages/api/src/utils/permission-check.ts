@@ -73,6 +73,7 @@ import {
   ProposalStatus,
 } from "@synap/database/schema";
 import { randomUUID } from "crypto";
+import { resolveProposalTargetId } from "./proposal-target-id.js";
 import { createLogger } from "@synap-core/core";
 import {
   DEFERRED_WRITES_MAX,
@@ -4460,17 +4461,9 @@ async function createProposal(args: {
     projectId,
   } = envelope.provenance;
 
-  // An ENTITY write names its record in `data.id`; a `documentId` beside it is
-  // the body being attached, not the target. Read first, it filed every body
-  // attach against the document: the record's pending changes, the card's
-  // name and before-values, and revert all looked at the wrong row.
-  const targetId = ((subjectType === "entity" || subjectType === "entities"
-    ? data.id || data.entityId
-    : undefined) ||
-    data.documentId ||
-    data.entityId ||
-    data.id ||
-    randomUUID()) as string;
+  // The target the proposal names (`utils/proposal-target-id.ts`: an entity
+  // write names `data.id`, a document create names the document it will make).
+  const targetId = resolveProposalTargetId(subjectType, action, data);
   // PINNED LITERAL — `severed-approval-doors.test.ts` (5) source-scans for this
   // exact shape, paired with `subjectType: "workspaces"` in routers/workspaces.ts,
   // to prove the gate's plural subject and the executor's singular key still

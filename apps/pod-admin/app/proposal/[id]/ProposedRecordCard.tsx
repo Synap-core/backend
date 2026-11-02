@@ -20,6 +20,7 @@ import type { MediaRef } from "@synap-core/types/presentation";
 import { MediaView } from "../../_lib/media/media-view";
 import { TextDiff } from "../../_lib/object/content/document-changes";
 import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
+import { ProposedDocumentBody } from "./ProposedDocumentBody";
 import type { PartEdge } from "./composite-parts-model";
 import type { RecordGroup } from "./record-groups";
 import {
@@ -69,23 +70,53 @@ export function CodeValue({ text, lines }: { text: string; lines: number }) {
   );
 }
 
+/**
+ * A text value. A long one is folded to four lines and a cut one (`full`) is
+ * clipped by the model: both say so with "Show all", which opens the whole
+ * text. Nothing a reviewer approves is hidden without a way to read it.
+ */
+function TextValue({
+  value,
+}: {
+  value: Extract<RecordValue, { kind: "text" }>;
+}) {
+  const [all, setAll] = useState(false);
+  // Roughly four lines at the card's width, or cut by the model.
+  const hasMore =
+    value.full !== undefined ||
+    value.text.split("\n").length > 4 ||
+    value.text.length > 280;
+  return (
+    <span className="flex min-w-0 flex-col items-start gap-0.5">
+      <span
+        className={
+          value.long
+            ? `${all ? "" : "line-clamp-4 "}whitespace-pre-line break-words`
+            : "break-words"
+        }
+      >
+        {all ? (value.full ?? value.text) : value.text}
+      </span>
+      {hasMore && !all && (
+        <Button
+          size="sm"
+          variant="light"
+          className="h-6 min-w-0 px-1 text-[12px] text-foreground/65"
+          onPress={() => setAll(true)}
+        >
+          Show all
+        </Button>
+      )}
+    </span>
+  );
+}
+
 function Value({ value }: { value: RecordValue }) {
   switch (value.kind) {
     case "code":
       return <CodeValue text={value.text} lines={value.lines} />;
     case "text":
-      return (
-        <span
-          className={
-            value.long
-              ? "line-clamp-4 whitespace-pre-line break-words"
-              : "break-words"
-          }
-          title={value.long ? value.text : undefined}
-        >
-          {value.text}
-        </span>
-      );
+      return <TextValue value={value} />;
     case "status": {
       const pill = statusPillFor(value.raw);
       return pill ? (
@@ -269,6 +300,9 @@ export function ProposedRecordCard({
             <Field key={field.key} field={field} />
           ))}
         </dl>
+      )}
+      {record.body !== undefined && (
+        <ProposedDocumentBody content={record.body} />
       )}
       {hidden > 0 && (
         <Button

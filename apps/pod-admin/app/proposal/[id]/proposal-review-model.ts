@@ -15,6 +15,7 @@
  * The change itself is `proposal-record-model.ts`.
  */
 
+import { isUuid } from "../../../lib/format";
 import { governanceReasonMark } from "@synap-core/types/proposals";
 import { GOVERNANCE_REASON_RULE_REACH } from "@synap-core/types/trust-ladder";
 
@@ -94,4 +95,40 @@ export function reviewReadsWide(drawn: {
     drawn.toolArguments.some((a) => a.wide) ||
     drawn.records.some((r) => r.fields.some((f) => f.wide))
   );
+}
+
+/** The object an approved create made, named so the page can open it. */
+export interface CreatedObject {
+  /** The object kind `openIn` opens (`document`, `entity`). */
+  kind: string;
+  id: string;
+  title: string | null;
+}
+
+/** Target types the review can open after a create: id known, page hosted. */
+const OPENABLE_CREATED: ReadonlySet<string> = new Set(["document", "entity"]);
+
+/**
+ * What an approved create made, when the page can open it: the proposal's own
+ * `targetId` + `targetType` (the id the document was written under), so it
+ * reads the same when the page is reopened later. A capture graph's target id
+ * is not one object's, so it names nothing. `null` for anything else.
+ */
+export function createdObject(input: {
+  status: string;
+  action: string;
+  targetType: string | null | undefined;
+  targetId: string | null | undefined;
+  title: string | null | undefined;
+  graph: boolean;
+}): CreatedObject | null {
+  if (input.status !== "approved" && input.status !== "auto_approved") {
+    return null;
+  }
+  if (input.action !== "create" || input.graph) return null;
+  const kind = input.targetType ?? "";
+  if (!OPENABLE_CREATED.has(kind)) return null;
+  const id = input.targetId ?? "";
+  if (!isUuid(id)) return null;
+  return { kind, id, title: input.title?.trim() || null };
 }

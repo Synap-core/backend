@@ -40,7 +40,7 @@ export function registerDocumentExecutors(): void {
         },
         podDocumentScopeFloor(docUserId)
       );
-      await materializeApprovedDocument({
+      const created = await materializeApprovedDocument({
         documentId,
         title: (data.title as string) || "Untitled",
         type: (data.type as string) || "markdown",
@@ -71,7 +71,19 @@ export function registerDocumentExecutors(): void {
         "approved",
         userId
       );
-      return { success: true };
+      // The id the document was written under (the proposal's targetId): the
+      // review page links "Open document" from it, like a patch's `documentId`.
+      return {
+        success: true,
+        primaryId: created.id,
+        created: 1,
+        effect: {
+          applied: "verified",
+          rows: 1,
+          ids: [created.id],
+          subject: "documents",
+        },
+      };
     },
   });
 

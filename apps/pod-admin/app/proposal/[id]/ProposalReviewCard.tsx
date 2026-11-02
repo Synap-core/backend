@@ -76,7 +76,7 @@ import {
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
 import { openIn, type Exit } from "../../../lib/open-in";
-import { ExitFallback } from "../../../lib/exit-link";
+import { ExitFallback, ExitLink } from "../../../lib/exit-link";
 /* The pod's own uuid predicate, not a fourth regex. `workspaceId` is a TEXT
    column while `workspaces.get` takes `.uuid()` — without this guard a
    non-uuid workspace ref would fire a request that can only fail. */
@@ -136,6 +136,8 @@ import {
   undoMark,
   type ProposalChangeInput,
   type ReviewMark,
+  createdObject,
+  type CreatedObject,
 } from "./proposal-review-model";
 import { proposalWhy } from "./proposal-why";
 import {
@@ -521,7 +523,13 @@ const OUTCOME_TONE: Record<
   },
 };
 
-function Outcome({ status }: { status: string }) {
+function Outcome({
+  status,
+  created,
+}: {
+  status: string;
+  created?: CreatedObject | null;
+}) {
   const o = terminalOutcome(status);
   const tone = OUTCOME_TONE[o.tone];
   const t = proposalPageT();
@@ -540,8 +548,37 @@ function Outcome({ status }: { status: string }) {
         <span className="text-[13px] leading-relaxed text-foreground/60">
           {t(o.messageKey)}
         </span>
+        {created && <CreatedDoor created={created} />}
       </div>
     </div>
+  );
+}
+
+/**
+ * What this approval made, named, with the way into it: "Created · Q3 plan →
+ * Open document". The id is the proposal's own `targetId`, so it reads the same
+ * when the page is reopened later. Plain words from the vocabulary door.
+ */
+function CreatedDoor({ created }: { created: CreatedObject }) {
+  const noun = resolveObjectNoun(created.kind);
+  return (
+    <span
+      data-created-object={created.id}
+      className="mt-1.5 flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1 text-[13px] text-foreground/80"
+    >
+      <span className="min-w-0 break-words">
+        {resolveActionLabel("create", "past")}
+        {created.title ? ` · ${created.title}` : ""}
+      </span>
+      <ExitLink
+        exit={openIn({
+          kind: "object",
+          objectKind: created.kind,
+          id: created.id,
+        })}
+        label={`Open ${noun.toLowerCase()}`}
+      />
+    </span>
   );
 }
 
@@ -1240,7 +1277,19 @@ export function ProposalReviewBody({
           </>
         ) : (
           <>
-            <Outcome status={status} />
+            <Outcome
+              status={status}
+              created={createdObject({
+                status,
+                action,
+                targetType: p.targetType ? String(p.targetType) : null,
+                targetId: p.targetId ?? null,
+                title:
+                  records[0]?.title ??
+                  (p.targetName ? String(p.targetName) : null),
+                graph,
+              })}
+            />
             {afterDecision}
           </>
         )}

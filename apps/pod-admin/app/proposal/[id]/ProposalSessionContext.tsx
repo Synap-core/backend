@@ -284,17 +284,19 @@ export function AfterDecision({
   );
   if (after.kind === "next") {
     return (
-      <DoorButton
-        exit={openIn({
-          kind: "object",
-          objectKind: "proposal",
-          id: after.proposalId,
-        })}
-        marker={after.proposalId}
-        focus={focus}
-      >
-        Next: {after.title}
-      </DoorButton>
+      <QueueRow label="Next in your queue">
+        <DoorButton
+          exit={openIn({
+            kind: "object",
+            objectKind: "proposal",
+            id: after.proposalId,
+          })}
+          marker={after.proposalId}
+          focus={focus}
+        >
+          {after.title}
+        </DoorButton>
+      </QueueRow>
     );
   }
   if (after.kind === "review") {
@@ -320,6 +322,25 @@ export function AfterDecision({
       <Check aria-hidden className="h-3.5 w-3.5 text-success" />
       Nothing else is waiting on you.
     </p>
+  );
+}
+
+/**
+ * The next item waiting on you, set apart from this proposal's own outcome
+ * (what it created, its link) and named as the queue's: it is not a follow-up
+ * of what was just decided.
+ */
+function QueueRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div
+      data-review-queue=""
+      className="mt-1 flex min-w-0 flex-col gap-1.5 border-t border-foreground/[0.06] pt-3"
+    >
+      <span className="text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
+        {label}
+      </span>
+      {children}
+    </div>
   );
 }
 
