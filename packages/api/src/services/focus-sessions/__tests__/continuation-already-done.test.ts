@@ -12,6 +12,7 @@ import type { ExpectedOutput } from "@synap/playbooks";
 import {
   deriveAlreadyDone,
   PACKET_TOP_N,
+  workUnitsSection,
   type PacketDoneItem,
 } from "../continuation-packet.js";
 import type { SessionOutput } from "../session-outputs.js";
@@ -153,5 +154,85 @@ describe("deriveAlreadyDone", () => {
       "p-2",
       "p-1",
     ]);
+  });
+});
+
+/**
+ * An answered confirm / choose whose decision the pod filed IS delivered
+ * (`isDeliverableDelivered`, backend#658). The packet's readers follow the
+ * projection: the "do not redo" ledger lists it (dated by the answer) and a
+ * work unit carrying it reads `met`. A form answer files no decision, and a
+ * choose with no filed decision is still owed: neither counts.
+ */
+describe("an answered decision is delivered in the packet", () => {
+  const ANSWERED_AT = "2026-11-02T10:00:00.000Z";
+  const answer = (mode: string) => ({
+    text: "Option A",
+    messageId: null,
+    answeredBy: "user-1",
+    answeredAt: ANSWERED_AT,
+    askSnapshot: { mode },
+  });
+
+  it("deriveAlreadyDone lists it, at the answer's time", () => {
+    const r = deriveAlreadyDone({
+      outputs: [],
+      expectedOutputs: [
+        {
+          kind: "decision",
+          label: "Pick the plan",
+          decisionId: "d-1",
+          answer: answer("choose"),
+        },
+        {
+          kind: "decision",
+          label: "Form only",
+          decisionId: "d-2",
+          answer: answer("form"),
+        },
+        {
+          kind: "decision",
+          label: "Not filed",
+          answer: answer("confirm"),
+        },
+      ] as unknown as ExpectedOutput[],
+      appliedProposals: none,
+    });
+    expect(r).toEqual({
+      status: "ok",
+      total: 1,
+      items: [
+        {
+          source: "deliverable",
+          kind: "decision",
+          title: "Pick the plan",
+          at: ANSWERED_AT,
+          sourceId: null,
+        },
+      ],
+    });
+  });
+
+  it("workUnitsSection reads it met", () => {
+    const url = "https://github.com/Synap-core/backend/pull/1";
+    const r = workUnitsSection([
+      {
+        kind: "pull_request",
+        label: "Ship it?",
+        ref: { url },
+        decisionId: "d-1",
+        answer: answer("confirm"),
+      },
+      {
+        kind: "pull_request",
+        label: "Form",
+        ref: { url },
+        decisionId: "d-2",
+        answer: answer("form"),
+      },
+    ] as unknown as ExpectedOutput[]);
+    expect(r.status).toBe("ok");
+    if (r.status !== "ok") return;
+    expect(r.items.map((i) => i.state)).toEqual(["met", "open"]);
   });
 });

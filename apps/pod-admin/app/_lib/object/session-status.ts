@@ -36,6 +36,10 @@ import {
 } from "@synap-core/types/focus-sessions";
 import { getEnumTone } from "@synap-core/types/property-render";
 import {
+  isDeliverableDelivered,
+  type DeliverableFacts,
+} from "@synap-core/types/units";
+import {
   resolveActionLabel,
   resolveProvenanceLabel,
   resolveStatusLabel,
@@ -270,20 +274,22 @@ export interface DeliverableRow {
 
 /**
  * The session's declared deliverables (`expectedOutputs`, a JSONB list whose
- * SSOT is `ExpectedOutput` in `@synap/playbooks`). `done` is the pod's own
- * stamp (`status: "done"`); an agent's `claimedDone` is NOT delivery.
+ * SSOT is `ExpectedOutput` in `@synap/playbooks`). `done` is THE delivered
+ * rule (`isDeliverableDelivered`): the pod's own stamp (`status: "done"`), or a
+ * confirm / choose the person answered whose decision the pod filed. An
+ * agent's `claimedDone` is NOT delivery.
  */
 export function deliverableRows(raw: unknown): DeliverableRow[] {
   if (!Array.isArray(raw)) return [];
   const rows: DeliverableRow[] = [];
   raw.forEach((item, i) => {
     if (!item || typeof item !== "object") return;
-    const o = item as { key?: unknown; label?: unknown; status?: unknown };
+    const o = item as DeliverableFacts & { key?: unknown; label?: unknown };
     if (typeof o.label !== "string" || !o.label.trim()) return;
     rows.push({
       key: typeof o.key === "string" && o.key ? o.key : `${i}`,
       label: o.label.trim(),
-      done: o.status === "done",
+      done: isDeliverableDelivered(o),
     });
   });
   return rows;

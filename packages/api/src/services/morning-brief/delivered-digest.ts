@@ -30,7 +30,8 @@
  *   - sessions closed: their WORK sessions closed (delivered, not cancelled
  *     or failed) since.
  * "Met since" = the time the pod stamped the delivery: the evidence verdict
- * (`satisfiedByEvidence.at`) or the person's attestation (`attestedAt`).
+ * (`satisfiedByEvidence.at`), the person's attestation (`attestedAt`), or the
+ * person's answer that decided it (`answer.answeredAt`, `isDecidedByAnswer`).
  *
  * SINCE THE LAST DIGEST: the newest digest row of the person (read or not),
  * else the last day; never further back than a week.
@@ -59,6 +60,11 @@ import {
   pullRequestKey,
 } from "@synap-core/types";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  isDecidedByAnswer,
+  isDeliverableDelivered,
+  type DeliverableFacts,
+} from "@synap-core/types/units";
 import {
   nounInSentence,
   resolveObjectNoun,
@@ -140,17 +146,23 @@ export function composeDeliveredDigest(
 
 // ── Pure: what counts ───────────────────────────────────────────────────────
 
-/** When the pod stamped this outcome delivered; null when it never did (or did not record when). */
+/**
+ * When the pod stamped this outcome delivered; null when it never did (or did
+ * not record when). Delivered is THE rule (`isDeliverableDelivered`): stamped
+ * `done`, or a confirm / choose the person answered and whose decision the pod
+ * filed — that one was delivered when the person answered (`answer.answeredAt`).
+ */
 export function outcomeMetAt(o: unknown): number | null {
   if (!o || typeof o !== "object") return null;
-  const s = o as {
-    status?: unknown;
-    retiredAt?: unknown;
+  const s = o as DeliverableFacts & {
     satisfiedByEvidence?: { at?: unknown } | null;
     attestedAt?: unknown;
   };
-  if (s.status !== "done" || s.retiredAt) return null;
-  const times = [s.satisfiedByEvidence?.at, s.attestedAt]
+  if (!isDeliverableDelivered(s) || s.retiredAt) return null;
+  const answeredAt = isDecidedByAnswer(s)
+    ? (s.answer as { answeredAt?: unknown }).answeredAt
+    : undefined;
+  const times = [s.satisfiedByEvidence?.at, s.attestedAt, answeredAt]
     .filter((t): t is string => typeof t === "string")
     .map((t) => Date.parse(t))
     .filter((t) => Number.isFinite(t));

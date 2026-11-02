@@ -67,6 +67,10 @@ import {
   derivePodWideBindWorkspace,
 } from "../../../utils/propose-channel-bind.js";
 import { isUuid } from "@synap-core/types/property-render";
+import {
+  isDeliverableDelivered,
+  type DeliverableFacts,
+} from "@synap-core/types/units";
 
 /**
  * Shared gate for Discord channel write operations (rename, pin).
@@ -1232,10 +1236,12 @@ export function registerChannelsRoutes(app: HubHono): void {
         );
       const sessions = sessRows.map((s) => {
         const items = Array.isArray(s.expectedOutputs)
-          ? (s.expectedOutputs as Array<{ label?: string; status?: string }>)
+          ? (s.expectedOutputs as Array<DeliverableFacts & { label?: string }>)
           : [];
+        // The current stage = the first slot not yet DELIVERED (stamped done,
+        // or a decision the person's answer filed: one rule, `@synap-core/types/units`).
         const cur =
-          items.find((it) => it && it.status !== "done") ??
+          items.find((it) => it && !isDeliverableDelivered(it)) ??
           items[items.length - 1];
         return {
           id: s.id,

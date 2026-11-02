@@ -584,6 +584,32 @@ describe("what counts as delivered", () => {
     ).toBeNull();
   });
 
+  it("an answered confirm / choose whose decision was filed is delivered, at the answer's time", () => {
+    const answer = (mode: string) => ({
+      text: "Yes",
+      messageId: null,
+      answeredBy: "u-1",
+      answeredAt: hoursAgo(4),
+      askSnapshot: { mode },
+    });
+    expect(outcomeMetAt({ decisionId: "d-1", answer: answer("confirm") })).toBe(
+      Date.parse(hoursAgo(4))
+    );
+    // A form answer files no decision; an unfiled one is still owed.
+    expect(
+      outcomeMetAt({ decisionId: "d-1", answer: answer("form") })
+    ).toBeNull();
+    expect(outcomeMetAt({ answer: answer("choose") })).toBeNull();
+    // Withdrawn after the answer: not delivered.
+    expect(
+      outcomeMetAt({
+        decisionId: "d-1",
+        answer: answer("choose"),
+        retiredAt: hoursAgo(1),
+      })
+    ).toBeNull();
+  });
+
   it("a PR is its ref, a commit its kind or url; a fact is a check, not a delivery", () => {
     expect(
       classifyOutcome({
