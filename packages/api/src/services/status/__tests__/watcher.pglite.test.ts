@@ -735,21 +735,40 @@ describe("the status watcher, on dev work standing still", () => {
   const S_ESCALATED = randomUUID();
   const S_NOT_POSTERS = randomUUID();
   const S_OWNS_BROWSER = randomUUID();
+  const S_STALE_OWNER = randomUUID();
+  const S_PAUSED = randomUUID();
+  const S_QUIET = randomUUID();
+  const S_OLD_CULPRIT = randomUUID();
+  const S_R = [randomUUID(), randomUUID(), randomUUID()];
   const BE = "Synap-core/backend";
+  const CLI = "Synap-core/synap-cli";
+  const AB = "Synap-core/app-bases";
+  const RELAY = "Synap-core/relay-app";
 
-  const session = (id: string, title: string, owner = ME, status = "active") =>
+  const session = (
+    id: string,
+    title: string,
+    owner = ME,
+    status = "active",
+    startedAt: string | null = null
+  ) =>
     q(
       `insert into focus_sessions (id, user_id, workspace_id, goal, title, status, origin, expected_outputs, metadata, started_at, created_at, updated_at)
-       values ($1, $2, $3, $4, $5, $6, 'agent', '[]'::jsonb, '{}'::jsonb, now(), now(), now())`,
+       values ($1, $2, $3, $4, $5, $6, 'agent', '[]'::jsonb, '{}'::jsonb, coalesce($7::timestamptz, now()), now(), now())`,
       // goal (text) and title (varchar) each get their own parameter: one
       // parameter in both makes Postgres deduce two types for it.
-      [id, owner, W, title, title, status]
+      [id, owner, W, title, title, status, startedAt]
     );
-  const pr = (number: number, podSessionId: string, over = {}) => ({
+  const pr = (
+    number: number,
+    podSessionId: string,
+    over: Record<string, unknown> = {},
+    repo = BE
+  ) => ({
     number,
     title: `PR ${number}`,
-    url: `https://github.com/${BE}/pull/${number}`,
-    headSha: `${String(number)}${"a".repeat(37)}`,
+    url: `https://github.com/${repo}/pull/${number}`,
+    headSha: `${String(number)}${"a".repeat(40 - String(number).length)}`,
     draft: false,
     author: "agent",
     updatedAt: before(WORK_CLOCK.stale + HOUR),
@@ -759,19 +778,28 @@ describe("the status watcher, on dev work standing still", () => {
     autoMerge: false,
     ...over,
   });
-  const snapshotAt = (when: Date, data: Record<string, unknown>) =>
+  const escalated = { updatedAt: before(WORK_CLOCK.stuck + HOUR) };
+  const fact = (
+    type: string,
+    when: Date,
+    subject: string,
+    data: Record<string, unknown>
+  ) =>
     q(
       `insert into events (id, type, subject_id, subject_type, data, user_id, workspace_id, source, timestamp)
-       values ($1, 'dev.repo_snapshot', $2, 'repo', $3::jsonb, $4, $5, 'observation', $6)`,
+       values ($1, $2, $3, 'repo', $4::jsonb, $5, $6, 'observation', $7)`,
       [
         randomUUID(),
-        String(data.repo),
+        type,
+        subject,
         JSON.stringify(data),
         ME,
         W,
         when.toISOString(),
       ]
     );
+  const snapshotAt = (when: Date, data: Record<string, unknown>) =>
+    fact("dev.repo_snapshot", when, String(data.repo), data);
   const titlesTo = async (sessionId: string) =>
     (
       await q<{ title: string }>(
@@ -779,6 +807,18 @@ describe("the status watcher, on dev work standing still", () => {
         [sessionId]
       )
     ).rows.map((r) => r.title);
+  const redMain = (prNumber: number, sha: string, sinceMs: number) => ({
+    sha: "b".repeat(40),
+    health: "red",
+    source: "github-checks",
+    redSince: { sha: sha.repeat(40), prNumber, at: before(sinceMs) },
+    reason: "typecheck: proposalType",
+  });
+  const greenMain = {
+    sha: "b".repeat(40),
+    health: "ok",
+    source: "github-checks",
+  };
 
   beforeAll(async () => {
     await session(S_GREEN, "Ship the dev watcher");
@@ -787,39 +827,51 @@ describe("the status watcher, on dev work standing still", () => {
     await session(S_ESCALATED, "An old PR");
     // A session the snapshot's poster may not read: its PR says nothing.
     await session(S_NOT_POSTERS, "Someone else's", GOAL_OWNER);
-    // An open session that owns browser's red main.
+    // An open session that owns browser's red main (started after it).
     await session(S_OWNS_BROWSER, "main red: browser tsc @1234abcd");
+    // An active owner of an EARLIER red of synap-cli: it owns nothing now.
+    await session(
+      S_STALE_OWNER,
+      "main red: synap-cli tsc @00000000",
+      ME,
+      "active",
+      before(WORK_CLOCK.quiet + 3 * HOUR)
+    );
+    // Held on purpose: never told.
+    await session(S_PAUSED, "Held work", ME, "paused");
+    await session(S_QUIET, "Waits for main");
+    await session(S_OLD_CULPRIT, "Landed last week", ME, "closed");
+    for (const [i, id] of S_R.entries()) await session(id, `Relay ${i}`);
+
     await snapshotAt(T1, {
       repo: BE,
       observedAt: T1.toISOString(),
       visibility: "public",
-      main: {
-        sha: "b".repeat(40),
-        health: "red",
-        source: "github-checks",
-        redSince: {
-          sha: "c".repeat(40),
-          prNumber: 530,
-          at: before(WORK_CLOCK.quiet + HOUR),
-        },
-        reason: "typecheck: proposalType",
-      },
+      main: greenMain,
       prs: [
         pr(539, S_GREEN),
         pr(540, S_RED, { checks: "red" }),
         // Red because main is: not this PR's red.
         pr(541, S_RED, { checks: "red", redInheritedFromMain: true }),
         pr(542, S_NOT_POSTERS),
+        pr(543, S_PAUSED, escalated),
         // Past the escalate rung a while: escalated, fresh news, pushed.
-        pr(600, S_ESCALATED, {
-          updatedAt: before(WORK_CLOCK.stuck + HOUR),
-        }),
+        pr(600, S_ESCALATED, escalated),
       ],
+      mergedToday: [],
+    });
+    await snapshotAt(T1, {
+      repo: CLI,
+      observedAt: T1.toISOString(),
+      visibility: "public",
+      main: redMain(530, "c", WORK_CLOCK.quiet + HOUR),
+      // Green while main is red: the queue holds it for main.
+      prs: [pr(77, S_QUIET, {}, CLI)],
       mergedToday: [
         {
           number: 530,
           title: "feat(types)",
-          url: `https://github.com/${BE}/pull/530`,
+          url: `https://github.com/${CLI}/pull/530`,
           mergedAt: before(2 * HOUR),
           podSessionId: S_CULPRIT,
         },
@@ -850,9 +902,33 @@ describe("the status watcher, on dev work standing still", () => {
         },
       ],
     });
+    // The culprit merged before today: only its dev.pr_merged fact names it.
+    await fact("dev.pr_merged", new Date(T1.getTime() - 50 * HOUR), "pr", {
+      repo: AB,
+      number: 90,
+      url: `https://github.com/${AB}/pull/90`,
+      title: "feat: the old change",
+      sessionId: S_OLD_CULPRIT,
+    });
+    await snapshotAt(T1, {
+      repo: AB,
+      observedAt: T1.toISOString(),
+      visibility: "private",
+      main: redMain(90, "f", WORK_CLOCK.quiet + HOUR),
+      prs: [],
+      mergedToday: [],
+    });
+    await snapshotAt(T1, {
+      repo: RELAY,
+      observedAt: T1.toISOString(),
+      visibility: "private",
+      main: greenMain,
+      prs: S_R.map((id, i) => pr(i + 1, id, escalated, RELAY)),
+      mergedToday: [],
+    });
   });
 
-  it("raises each on the session that owns it, in-app first; the escalation is pushed", async () => {
+  it("raises each on the session that owns it: the agent first, the person on escalation, one per repo at three", async () => {
     h.pushes.length = 0;
     await q(`update notifications set pushed_at = null`);
     const r = await runStatusWatcher(T1);
@@ -868,35 +944,41 @@ describe("the status watcher, on dev work standing still", () => {
       [
         ["pr_green_unmerged", S_GREEN, false],
         ["pr_red_idle", S_RED, false],
+        // synap-cli: an older `main red:` session does not own this red.
         ["main_red_unowned", S_CULPRIT, false],
+        // app-bases: its culprit found through the dev.pr_merged fact.
+        ["main_red_unowned", S_OLD_CULPRIT, false],
         ["pr_green_unmerged", S_ESCALATED, true],
+        ...S_R.map((id) => ["pr_green_unmerged", id, true]),
       ].sort()
     );
     for (const e of raised) {
       expect(e.type).toBe("focus_session.signal.completed");
       expect(e.data.ownerId).toBe(ME);
     }
-    expect(await titlesTo(S_GREEN)).toEqual([
-      "backend#539 is green and not merged",
+    // D-R3: a first raise is the agent's — no person is told.
+    for (const id of [S_GREEN, S_RED, S_CULPRIT, S_OLD_CULPRIT]) {
+      expect(await titlesTo(id)).toEqual([]);
+    }
+    expect(await titlesTo(S_ESCALATED)).toEqual([
+      "PR 600 is green and not merged",
     ]);
-    expect(await titlesTo(S_RED)).toEqual([
-      expect.stringMatching(/^backend#540 has been red for .+ with no push$/),
-    ]);
-    expect(await titlesTo(S_CULPRIT)).toEqual([
-      expect.stringMatching(
-        /^backend main has been red for .+ and nobody owns the fix$/
-      ),
-    ]);
-    // Nothing for a session the poster cannot read, a red that is main's, or
-    // a main that has an owner session.
-    expect(await titlesTo(S_NOT_POSTERS)).toEqual([]);
+    // D-R2: three escalated PRs of one repo read as one signal.
+    for (const id of S_R) {
+      expect(await titlesTo(id)).toEqual(["relay-app: 3 PRs are stuck"]);
+    }
+    // Nothing for a session the poster cannot read, a held one, a green PR
+    // while its main is red, a red that is main's, or a main with an owner.
+    for (const id of [S_NOT_POSTERS, S_PAUSED, S_QUIET]) {
+      expect(await signalEvents(id)).toEqual([]);
+    }
     expect(raised.filter((e) => e.data.repo === "synap-core/browser")).toEqual(
       []
     );
-    // First raises are in-app only; only the escalation was pushed.
-    expect(h.pushes.map((p) => p.title)).toEqual([
-      "backend#600 is green and not merged",
-    ]);
+    // Only escalations are pushed, and a folded repo once.
+    expect(h.pushes.map((p) => p.title).sort()).toEqual(
+      ["PR 600 is green and not merged", "relay-app: 3 PRs are stuck"].sort()
+    );
   });
 
   it("does not raise the same episode again, and escalates once when it still stands", async () => {
@@ -913,6 +995,8 @@ describe("the status watcher, on dev work standing still", () => {
       (e) => e.data.signal === "pr_green_unmerged"
     );
     expect(twice.map((e) => e.data.escalated)).toEqual([false, true]);
+    // Now backend has three escalated at once (539, 540, 600): one signal.
+    expect(await titlesTo(S_GREEN)).toEqual(["backend: 3 PRs are stuck"]);
   });
 
   it("an open `main red: <repo>` session owns the red: nothing is raised; once it closes, it is", async () => {
@@ -937,8 +1021,9 @@ describe("the status watcher, on dev work standing still", () => {
         kind: "signal_raised",
         signal: expect.objectContaining({
           signal: "pr_green_unmerged",
-          headline: "backend#539 is green and not merged",
-          detail: expect.stringContaining("Ship the dev watcher:"),
+          // The words lead with the work; the PR's name follows.
+          headline: "PR 539 is green and not merged",
+          detail: expect.stringContaining("backend#539 passed its checks"),
           escalated: false,
           url: `https://github.com/${BE}/pull/539`,
         }),
@@ -947,6 +1032,60 @@ describe("the status watcher, on dev work standing still", () => {
         kind: "signal_raised",
         signal: expect.objectContaining({ escalated: true }),
       }),
+    ]);
+  });
+
+  it("D-R2 across ticks: PRs escalating on different ticks share one row, and the push goes to a PR raised now", async () => {
+    // After every tick above. PR 1 is escalated on tick A; PRs 2 and 3 only
+    // escalate on tick B, when PR 1's escalation is an episode already raised.
+    const TA = new Date(T1.getTime() + WORK_CLOCK.stuck);
+    const TB = new Date(TA.getTime() + WORK_CLOCK.stuck - WORK_CLOCK.stale);
+    const BRIDGE = "Synap-core/synap-bridge";
+    const S_B: string[] = [randomUUID(), randomUUID(), randomUUID()];
+    for (const [i, id] of S_B.entries()) await session(id, `Bridge ${i}`);
+    const beforeA = (ms: number) => new Date(TA.getTime() - ms).toISOString();
+    await snapshotAt(TA, {
+      repo: BRIDGE,
+      observedAt: TA.toISOString(),
+      visibility: "private",
+      main: greenMain,
+      prs: [
+        // Listed first: before the fix it took the push slot on tick B.
+        pr(1, S_B[0]!, { updatedAt: beforeA(WORK_CLOCK.stuck + HOUR) }, BRIDGE),
+        pr(2, S_B[1]!, { updatedAt: beforeA(WORK_CLOCK.stale + HOUR) }, BRIDGE),
+        pr(3, S_B[2]!, { updatedAt: beforeA(WORK_CLOCK.stale + HOUR) }, BRIDGE),
+      ],
+      mergedToday: [],
+    });
+    const bridgePushes = () =>
+      h.pushes.filter((p) =>
+        S_B.includes(String((p.data as Record<string, unknown>)?.sourceId))
+      );
+
+    h.pushes.length = 0;
+    await q(`update notifications set pushed_at = null`);
+    await runStatusWatcher(TA);
+    expect(bridgePushes().map((p) => p.title)).toEqual([
+      "PR 1 is green and not merged",
+    ]);
+
+    h.pushes.length = 0;
+    await q(`update notifications set pushed_at = null`);
+    await runStatusWatcher(TB);
+    // Pushed once, for the fold, by a PR raised on THIS tick.
+    expect(bridgePushes().map((p) => p.title)).toEqual([
+      "synap-bridge: 3 PRs are stuck",
+    ]);
+    for (const id of S_B.slice(1)) {
+      expect(await titlesTo(id)).toEqual(["synap-bridge: 3 PRs are stuck"]);
+    }
+    // One collapse key for the repo, whichever tick each PR escalated on.
+    const keys = await q<{ group_key: string }>(
+      `select distinct group_key from notifications where source_id = any($1::text[])`,
+      [S_B]
+    );
+    expect(keys.rows.map((r) => r.group_key)).toEqual([
+      "status-signal:dev-prs:synap-core/synap-bridge",
     ]);
   });
 });

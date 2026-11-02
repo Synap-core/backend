@@ -131,6 +131,7 @@ export const AI_GATE_VERBS: readonly string[] = [
   "context.link",
   "document.section_update",
   "document.session_narrative_update",
+  "document.refresher_section_update",
   "entity.*.renderer_set",
   // A lifecycle status move (the moveStatus door): reversible, and the door
   // floors done/lost and humanOnly options on its own.

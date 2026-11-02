@@ -16,6 +16,13 @@ import { parseMarkdownWithDiagnostics } from "./processor.js";
 import { readEmbed } from "./embeds.js";
 import { DIRECTIVE_ATTRIBUTES } from "./directive-registry.js";
 import { columnsDiagnostics } from "./columns.js";
+import {
+  DESIGN_DIAGNOSTIC_CODES,
+  designDiagnostics,
+} from "./design-diagnostics.js";
+
+export { DESIGN_DIAGNOSTIC_CODES } from "./design-diagnostics.js";
+export type { DesignDiagnosticCode } from "./design-diagnostics.js";
 
 /**
  * Diagnostics about an EMBED — a `:::synap-*` directive that shows content
@@ -63,10 +70,16 @@ export const LAYOUT_DIAGNOSTIC_CODES = [
   "invalid-width",
 ] as const;
 
-/** Every diagnostic code, derived from the two groups above — never a third list. */
+/**
+ * Every diagnostic code, derived from the groups — never a separate list. The
+ * DESIGN group (`design-diagnostics.ts`) is where a document breaks the
+ * generation contract: it still renders, it just does not read like a Synap
+ * page.
+ */
 export const DIAGNOSTIC_CODES = [
   ...EMBED_DIAGNOSTIC_CODES,
   ...LAYOUT_DIAGNOSTIC_CODES,
+  ...DESIGN_DIAGNOSTIC_CODES,
 ] as const;
 export type DiagnosticCode = (typeof DIAGNOSTIC_CODES)[number];
 
@@ -99,6 +112,10 @@ export const GRAMMAR_WIRE_CODE = {
   "single-column": "bad_columns",
   "empty-column": "bad_columns",
   "invalid-width": "bad_width",
+  "empty-heading": "empty_heading",
+  "bare-id": "bare_id",
+  "raw-html": "raw_html",
+  "banned-phrase": "banned_phrase",
 } as const satisfies Record<DiagnosticCode, string>;
 
 export type GrammarWireCode = (typeof GRAMMAR_WIRE_CODE)[DiagnosticCode];
@@ -114,10 +131,14 @@ export interface Diagnostic {
   directive?: string;
 }
 
-/** Every grammar diagnostic for a markdown document, in source order. */
+/** Every grammar and design diagnostic for a markdown document, in source order. */
 export function collectDiagnostics(markdown: string): Diagnostic[] {
   const { tree, diagnostics } = parseMarkdownWithDiagnostics(markdown);
-  const out = [...diagnostics, ...columnsDiagnostics(tree)];
+  const out = [
+    ...diagnostics,
+    ...columnsDiagnostics(tree),
+    ...designDiagnostics(tree),
+  ];
   visit(
     tree as Node,
     ["textDirective", "leafDirective", "containerDirective"],

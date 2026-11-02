@@ -16,6 +16,7 @@
  *  - `key-draft`— the New key page's model: sections, review, validation, mint.
  *  - `access-levels` — families (Records, Content, Work, Activity, Decide) at one level.
  *  - `key-steps` — where a key acts, who holds it, which templates work there.
+ *  - `pod-wide` — the one rule for an app's pod-wide reads, and its words.
  *
  * Pure and dependency-free: browser, Electron, landing, Node and CLI.
  */
@@ -33,3 +34,4 @@ export * from "./key-uses.js";
 export * from "./key-draft.js";
 export * from "./access-levels.js";
 export * from "./key-steps.js";
+export * from "./pod-wide.js";

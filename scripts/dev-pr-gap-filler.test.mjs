@@ -29,7 +29,11 @@ function listedPr(over = {}) {
     closed_at: "2026-10-29T10:00:00Z",
     merged_at: "2026-10-29T10:00:00Z",
     merge_commit_sha: "a".repeat(40),
-    head: { sha: "b".repeat(40), ref: "fix/door" },
+    head: {
+      sha: "b".repeat(40),
+      ref: "fix/door",
+      repo: { full_name: "Synap-core/backend" },
+    },
     base: { ref: "main" },
     user: { login: "someone" },
     ...over,
@@ -46,6 +50,23 @@ test("a merged PR from the list endpoint is dev.pr_merged, the workflow's shape,
   assert.equal(obs.data.sessionId, SID);
   assert.equal(obs.data.url, `https://github.com/${R}/pull/12`);
   assert.equal(obs.data.source, SOURCE);
+});
+
+test("a fork's merged PR names no session (the same in-repo-branch rule as the workflow)", () => {
+  const obs = closedPullObservation(
+    listedPr({
+      head: {
+        sha: "b".repeat(40),
+        ref: "fix/door",
+        repo: { full_name: "someone/backend" },
+      },
+    }),
+    R,
+    "main"
+  );
+  assert.equal(obs.type, "dev.pr_merged");
+  assert.equal(obs.data.sessionId, undefined);
+  assert.equal(obs.data.body, undefined);
 });
 
 test("a closed, unmerged PR is dev.pr_closed at its closed_at", () => {

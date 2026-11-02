@@ -5,6 +5,7 @@ import {
   firstPartyBaseForPodHost,
   firstPartyWebOrigins,
   isPodName,
+  isRefusedFirstPartyBase,
   isRefusedSiteBase,
   isTenantZone,
   legacyPairFor,
@@ -217,7 +218,11 @@ describe("sharedCookieDomain", () => {
 
 describe("firstPartyBaseForPodHost", () => {
   it.each([
-    ["alice.pod.synap.live", "alice.pod.synap.live"],
+    // A current-scheme pod has no subtree base: the sites its tenant runs
+    // under its name are not the pod; its console is first-party by
+    // POD_ADMIN_URL.
+    ["alice.pod.synap.live", null],
+    // A legacy nested pod keeps its base until the moves end (1c7398f2).
     ["pod.alice.synap.live", "alice.synap.live"],
     ["alice.synap.live", null],
     ["pod.synap.live", null],
@@ -228,6 +233,41 @@ describe("firstPartyBaseForPodHost", () => {
     ["pod.com", null],
   ])("%s → %s", (host, base) => {
     expect(firstPartyBaseForPodHost(host)).toBe(base);
+  });
+});
+
+describe("isRefusedFirstPartyBase", () => {
+  it.each([
+    "alice.pod.synap.live",
+    "shop.alice.pod.synap.live",
+    "alice.pod.staging.synap.live",
+    "Alice.Pod.Synap.Live.",
+    "pod.synap.live",
+    "pod.staging.synap.live",
+    "synap.live",
+    "staging.synap.live",
+    "io",
+    "",
+  ])("refuses %j", (base) => {
+    expect(isRefusedFirstPartyBase(base)).toBe(true);
+  });
+
+  it.each(["acme.example", "team.mycorp.co.uk"])("keeps %j", (base) => {
+    expect(isRefusedFirstPartyBase(base)).toBe(false);
+  });
+
+  it("keeps a legacy nested base until the moves end (decision 1c7398f2)", () => {
+    // arch-dashboard at app.thearch.synap.live calls pod.thearch.synap.live
+    // with credentials; refusing this base would break its sign-in.
+    expect(isRefusedFirstPartyBase("thearch.synap.live")).toBe(false);
+    expect(isRefusedFirstPartyBase("alice.staging.synap.live")).toBe(false);
+  });
+
+  it("refuses for CORS what it still allows as a cookie domain", () => {
+    expect(
+      sharedCookieDomain("alice.pod.synap.live", "admin.alice.pod.synap.live")
+    ).toBe("alice.pod.synap.live");
+    expect(isRefusedFirstPartyBase("alice.pod.synap.live")).toBe(true);
   });
 });
 
@@ -266,9 +306,7 @@ describe("host normalisation (case, the DNS root dot, IPs, empty labels)", () =>
     expect(consoleHostForPod("alice.pod.synap.live.")).toBe(
       "admin.alice.pod.synap.live"
     );
-    expect(firstPartyBaseForPodHost("x.POD.synap.live")).toBe(
-      "x.pod.synap.live"
-    );
+    expect(firstPartyBaseForPodHost("x.POD.synap.live")).toBeNull();
   });
 
   it.each(["", "   ", "a..b", "10.0.0.5", "[::1]", "::1", "."])(

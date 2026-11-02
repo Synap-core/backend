@@ -8,6 +8,7 @@
  *
  * Every reader here THROWS on a failed read; the caller says `unavailable`.
  */
+import { UUID_RE } from "../focus-sessions/session-metadata.js";
 import {
   and,
   asc,
@@ -57,6 +58,7 @@ import type { OpenBlocker } from "@synap-core/types/connections";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import {
   buildObjectActionTitle,
+  resolveWaitKindLabel,
   resolveWaitingOnReasonLabel,
 } from "@synap-core/types/vocabulary";
 import type { ExpectedOutput } from "@synap/playbooks";
@@ -583,8 +585,6 @@ export const WAITING_READ_CAP = 100;
 const holdKey = (h: HoldSubjectRef) =>
   `${h.subjectType}:${h.subjectId}:${h.facetId ?? ""}`;
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** `person:<uuid>`-style refs a mover writes: the id, never shown as words. */
 const TYPED_ID =
   /^[a-z_]+:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
@@ -609,8 +609,8 @@ function unnamed(source: WaitingOnSource): WaitingOnSource {
  * date, else its reason's words. A `<kind>:<uuid>` ref is an id, never shown.
  * With `readable`, a session it resumes on is named only when the reader may
  * read it. A hold on a DEV FACT names that fact, in the hold line's words
- * (`holdDevRefNamed`): `backend#539` with its GitHub page, `backend main`,
- * `job kit-h`.
+ * (`holdDevRefNamed`): `backend#539` with its GitHub page, `backend main`;
+ * a devbox job as "Tests running" (D-R4).
  */
 export function holdWaitingOnRef(
   hold: RecordedHold,
@@ -619,6 +619,15 @@ export function holdWaitingOnRef(
   const until = hold.until;
   const dev = until && "moves" in until ? holdDevRefNamed(until.moves) : null;
   if (dev) {
+    // A devbox job reaches a person as "Tests running", never its raw name
+    // (decision D-R4); the session's own jobs list is where it opens.
+    if (dev.ref.kind === "job") {
+      return {
+        kind: "thing",
+        label: resolveWaitKindLabel("devbox_job"),
+        waitKind: "devbox_job",
+      };
+    }
     return dev.url
       ? { kind: "pull_request", url: dev.url, label: dev.label }
       : { kind: "thing", label: dev.label };
@@ -659,7 +668,7 @@ async function readableSessionIds(
   reader: WaitingOnReader,
   sessionIds: readonly string[]
 ): Promise<Set<string>> {
-  const ids = [...new Set(sessionIds)].filter((id) => UUID.test(id));
+  const ids = [...new Set(sessionIds)].filter((id) => UUID_RE.test(id));
   if (ids.length === 0) return new Set();
   const rows = await db
     .select({ id: focusSessions.id })
@@ -783,7 +792,7 @@ async function readStepWaits(
   entityIds: readonly string[]
 ): Promise<Map<string, WaitingOnSource>> {
   const out = new Map<string, WaitingOnSource>();
-  const ids = [...new Set(entityIds)].filter((id) => UUID.test(id));
+  const ids = [...new Set(entityIds)].filter((id) => UUID_RE.test(id));
   if (ids.length === 0) return out;
   const rows = await db
     .select({
@@ -836,7 +845,7 @@ async function readStepWaits(
       source,
       reason,
       refId:
-        typeof value === "string" && UUID.test(value) && value !== r.id
+        typeof value === "string" && UUID_RE.test(value) && value !== r.id
           ? value
           : null,
     });

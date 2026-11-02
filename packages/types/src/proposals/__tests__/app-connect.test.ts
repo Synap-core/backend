@@ -116,6 +116,24 @@ describe("app/connect proposal words", () => {
   });
 });
 
+// Rules out: an app's pod-wide read named "Anywhere" in Relay and the browser
+// while consent and pod admin say "Everywhere in your pod".
+describe("an app's ask with no space is named as consent names it", () => {
+  it("an app reads 'Everywhere in your pod'; an AI still 'Anywhere'", () => {
+    const requests = [
+      { permission: "entity.decision.read", workspaceId: null },
+    ] as const;
+    const app = summarizeAppConnectRequest({ appName: "DevPlane", requests });
+    expect(app.lines[0]!.where).toBe("Everywhere in your pod");
+    const ai = summarizeAppConnectRequest({
+      appName: "Claude Code",
+      requests,
+      holderKind: "agent",
+    });
+    expect(ai.lines[0]!.where).toBe("Anywhere");
+  });
+});
+
 describe("describeAppConnectProposal carries what the holder reader needs", () => {
   // Rules out: a card that can only print the asks, never what approving enables.
   it("the requests as read, and who asks (app vs AI)", () => {

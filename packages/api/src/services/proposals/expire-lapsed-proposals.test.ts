@@ -140,6 +140,7 @@ describe("diesWithSession", () => {
       "update",
       "section_update",
       "session_narrative_update",
+      "refresher_section_update",
       "user_edit",
     ]) {
       expect(diesWithSession(t, "document")).toBe(true);

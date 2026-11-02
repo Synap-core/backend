@@ -21,7 +21,9 @@
  *   4. diagnose the result (advisory — never rejects);
  *   5. GOVERNANCE via `checkPermissionOrPropose`: a section-only patch files as
  *      `document.section_update` (or `document.session_narrative_update` for an
- *      agent in its own session — the D10 rule), anything else as
+ *      agent in its own session — the D10 rule; or
+ *      `document.refresher_section_update` for the document's bound refresher
+ *      rewriting its own existing AI sections — the D4 rule), anything else as
  *      `document.update`. No default auto-approve; a `governance_rules` row may
  *      auto-apply (D-gov). An agent `replace_all` is forced to a proposal.
  *
@@ -42,6 +44,7 @@ import {
   eq,
   and,
   documents,
+  focusSessions,
   drizzleSql,
   claimDocumentRevision,
   emitDocumentContentReplaced,
@@ -62,13 +65,21 @@ import {
 } from "../../utils/document-base-version.js";
 import { loadEditableDocument } from "../../utils/document-edit-access.js";
 import {
+  REFRESHER_SECTION_ACTION,
   SECTION_UPDATE_ACTION,
   SESSION_NARRATIVE_ACTION,
 } from "../session-document/governance-keys.js";
+import { sessionAutomationWhere } from "../focus-sessions/session-kind.js";
+import {
+  podDocumentScopeFloor,
+  resolveDocumentScopeFields,
+  type DocumentScopeFields,
+} from "../document-scope/document-scope.js";
 import {
   DocumentPatchOpsSchema,
   isSectionOnlyPatch,
   renderDocumentPatch,
+  resolvePatchFields,
   resolvePatchTitle,
   type DocumentPatchOp,
   type PatchRename,
@@ -97,6 +108,8 @@ export type PatchDocumentRow = {
   storageKey: string | null;
   currentVersion: number;
   contentRevision: number;
+  /** The automation bound to refresh it (0387, D4), or null. */
+  refreshAutomationId: string | null;
 };
 
 export async function loadPatchDocument(
@@ -112,6 +125,7 @@ export async function loadPatchDocument(
       storageKey: documents.storageKey,
       currentVersion: documents.currentVersion,
       contentRevision: documents.contentRevision,
+      refreshAutomationId: documents.refreshAutomationId,
     })
     .from(documents)
     .where(eq(documents.id, documentId))
@@ -286,25 +300,30 @@ function renameConflict(rename: PatchRename): DocumentRevisionConflictError {
 }
 
 /**
- * A rename-only patch: the name moves, the content does not, so no content
- * revision is claimed and no version row is cut. Compare-and-set on the base
- * the writer read AND on the name they renamed from — a rename drafted against
- * an older revision, or over a name someone changed since, is a CONFLICT and
- * writes nothing.
+ * A fields-only patch (a rename, a scope, a refresher): the fields move, the
+ * content does not, so no content revision is claimed and no version row is
+ * cut. Compare-and-set on the base the writer read AND, for a rename, on the
+ * name they renamed from — a patch drafted against an older revision, or a
+ * rename over a name someone changed since, is a CONFLICT and writes nothing.
  */
-async function writeRenameOnly(args: {
+async function writeFieldsOnly(args: {
   doc: PatchDocumentRow;
   base: PatchBase;
-  rename: PatchRename;
+  rename: PatchRename | null;
+  fields: DocumentScopeFields;
 }): Promise<AppliedPatchWrite> {
-  const { doc, base, rename } = args;
+  const { doc, base, rename, fields } = args;
   const [renamed] = await db
     .update(documents)
-    .set({ title: rename.after, updatedAt: new Date() })
+    .set({
+      ...(rename ? { title: rename.after } : {}),
+      ...fields,
+      updatedAt: new Date(),
+    })
     .where(
       and(
         eq(documents.id, doc.id),
-        eq(documents.title, rename.before),
+        ...(rename ? [eq(documents.title, rename.before)] : []),
         base.revision !== undefined
           ? eq(documents.contentRevision, base.revision)
           : eq(documents.currentVersion, base.version)
@@ -321,19 +340,20 @@ async function writeRenameOnly(args: {
       .from(documents)
       .where(eq(documents.id, doc.id))
       .limit(1);
-    if (now && now.title !== rename.before) throw renameConflict(rename);
+    if (rename && now && now.title !== rename.before)
+      throw renameConflict(rename);
     throw new DocumentRevisionConflictError(
-      "This document changed after the rename was drafted. Nothing was applied — reload the document and draft it again."
+      "This document changed after the edit was drafted. Nothing was applied — reload the document and draft it again."
     );
   }
-  // Re-index under the new name.
+  // Re-index (under the new name, when renamed).
   void emitSideEffects({
     subjectType: "document",
     action: "update",
     subjectId: doc.id,
     userId: doc.userId,
     workspaceId: renamed.workspaceId,
-    data: { id: doc.id, title: rename.after },
+    data: { id: doc.id, title: rename?.after ?? doc.title },
   });
   return {
     revision: renamed.contentRevision,
@@ -352,10 +372,14 @@ async function writePatch(args: {
   message: string;
   diagnostics: DiagnosticsOutcome;
   rename: PatchRename | null;
+  /** Scope / refresher the patch sets, already read through the floor. */
+  fields?: DocumentScopeFields;
 }): Promise<AppliedPatchWrite> {
   const { doc, base, baseContent, newContent, author, message, rename } = args;
-  if (rename && newContent === baseContent) {
-    return writeRenameOnly({ doc, base, rename });
+  const fields = args.fields ?? {};
+  const hasFields = Object.keys(fields).length > 0;
+  if ((rename || hasFields) && newContent === baseContent) {
+    return writeFieldsOnly({ doc, base, rename, fields });
   }
   const claimed = await db.transaction(async (tx) => {
     // The name first: compare-and-set on the name renamed from (row-locking
@@ -369,6 +393,9 @@ async function writePatch(args: {
         )
         .returning({ id: documents.id });
       if (!renamed) throw renameConflict(rename);
+    }
+    if (hasFields) {
+      await tx.update(documents).set(fields).where(eq(documents.id, doc.id));
     }
     return claimDocumentRevision(
       tx,
@@ -432,6 +459,56 @@ async function writePatch(args: {
     versionId: claimed.checkpointVersionId,
     undoVersionId: claimed.undoVersionId,
   };
+}
+
+// ─── The bound refresher (decision D4) ───────────────────────────────────────
+
+/**
+ * D4, the OPS half: every op is an `upsert_section` of a section that was
+ * `owner="ai"` in the document AS READ, before the patch (`aiSectionsBefore`).
+ * Judged against the pre-patch sections, never the in-progress text: ops apply
+ * in order, so a second upsert of an id the first one appended would otherwise
+ * read as a rewrite, and creating a section must stay a reviewed
+ * `section_update`.
+ */
+export function refresherRewritesOnlyItsSections(
+  ops: readonly DocumentPatchOp[],
+  aiSectionsBefore: readonly string[]
+): boolean {
+  return (
+    ops.length > 0 &&
+    ops.every(
+      (op) => op.op === "upsert_section" && aiSectionsBefore.includes(op.id)
+    )
+  );
+}
+
+/**
+ * D4, the WRITER half, from server-resolved facts only: the request's session
+ * (the verified ambient session, or the run session a verb was handed) is an
+ * open run of the automation bound to this document, owned by the principal.
+ * The run's automation is read through `sessionAutomationWhere`, the one
+ * "sessions of automation X" predicate.
+ */
+export async function isBoundRefresherRun(args: {
+  refreshAutomationId: string | null;
+  sessionId: string | null;
+  userId: string;
+}): Promise<boolean> {
+  if (!args.refreshAutomationId || !args.sessionId) return false;
+  const [run] = await db
+    .select({ id: focusSessions.id })
+    .from(focusSessions)
+    .where(
+      and(
+        eq(focusSessions.id, args.sessionId),
+        eq(focusSessions.userId, args.userId),
+        drizzleSql`${focusSessions.closedAt} IS NULL`,
+        sessionAutomationWhere(args.refreshAutomationId)
+      )
+    )
+    .limit(1);
+  return Boolean(run);
 }
 
 // ─── The door ────────────────────────────────────────────────────────────────
@@ -604,6 +681,11 @@ export async function applyDocumentPatch(
   // equal to the NEW name when a patch renames and rewrites together.
   const rename = resolvePatchTitle(doc.title, parsedOps);
   const ops = withoutTitleHeading(parsedOps, rename?.after ?? doc.title);
+  // Scope / refresher: read and floored (as the principal) before the gate.
+  const fields = await resolveDocumentScopeFields(
+    resolvePatchFields(ops),
+    podDocumentScopeFloor(input.userId)
+  );
 
   // 2. The base the writer read.
   const hasReplaceAll = ops.some((op) => op.op === "replace_all");
@@ -658,10 +740,23 @@ export async function applyDocumentPatch(
     Boolean(agentUserId) &&
     !!input.session &&
     input.session.ambientSessionId === input.session.sessionId;
+  const boundRefresher =
+    sectionOnly &&
+    !ownSession &&
+    !input.session &&
+    Boolean(agentUserId) &&
+    refresherRewritesOnlyItsSections(ops, rendered.aiSectionsBefore) &&
+    (await isBoundRefresherRun({
+      refreshAutomationId: doc.refreshAutomationId,
+      sessionId: input.provenanceSessionId ?? null,
+      userId: input.userId,
+    }));
   const action = sectionOnly
     ? ownSession
       ? SESSION_NARRATIVE_ACTION
-      : SECTION_UPDATE_ACTION
+      : boundRefresher
+        ? REFRESHER_SECTION_ACTION
+        : SECTION_UPDATE_ACTION
     : DOCUMENT_UPDATE_ACTION;
   const data: DocumentPatchProposalData = {
     documentId: doc.id,
@@ -735,6 +830,7 @@ export async function applyDocumentPatch(
     message: checkpointMessage(ops, false),
     diagnostics,
     rename,
+    fields,
   });
   return {
     status: "applied",
@@ -932,6 +1028,11 @@ export async function applyApprovedDocumentPatch(
     typeof drafted?.before === "string" ? drafted.before : doc.title,
     ops
   );
+  // Re-read through the floor at approval: what was named may be gone since.
+  const fields = await resolveDocumentScopeFields(
+    resolvePatchFields(ops),
+    podDocumentScopeFloor(approverUserId)
+  );
   const base: PatchBase =
     baseRevision !== undefined
       ? { revision: baseRevision }
@@ -977,6 +1078,7 @@ export async function applyApprovedDocumentPatch(
     message: checkpointMessage(ops, true),
     diagnostics,
     rename,
+    fields,
   });
   return { ...applied, documentId: doc.id, diagnostics };
 }

@@ -300,18 +300,38 @@ export function sharedCookieDomain(
 }
 
 /**
+ * A base no pod may make first-party to its API and realtime (credentialed
+ * CORS): what {@link isRefusedSiteBase} refuses, and any host under a CURRENT
+ * tenant zone (`pod.synap.live`, its staging twin). Under such a zone the names
+ * below a pod's host are its tenant's other sites (`shop.alice.pod.synap.live`),
+ * which are not the pod: a current-scheme pod trusts its own origins
+ * (PUBLIC_URL, POD_ADMIN_URL) and ALLOWED_ORIGINS, never a subtree.
+ *
+ * A host under a LEGACY zone (`alice.synap.live`) is not refused yet (founder,
+ * 2026-11-01, decision 1c7398f2): a legacy nested pod's own apps still call it
+ * from siblings of its name (arch-dashboard at `app.thearch.synap.live` calls
+ * `pod.thearch.synap.live` with credentials). Refuse those too once no pod uses
+ * the legacy nested scheme. A cookie domain is a different question
+ * ({@link sharedCookieDomain}).
+ */
+export function isRefusedFirstPartyBase(base: string): boolean {
+  const b = normalizeHost(base);
+  return !b || isRefusedSiteBase(b) || tenantZoneOf(b)?.legacy === false;
+}
+
+/**
  * The base under which a pod's own surfaces are first-party to it, derived from
- * its public host. A Synap Cloud pod: `{name}.pod.synap.live` (its console and
- * the tenant's other sites), legacy nested `{name}.synap.live`, legacy flat none.
- * A self-hosted pod: its host without the `pod.` / `pod-admin.` service label
- * (`pod.acme.example` → `acme.example`); any other host none. Never a TLD or a
- * tenant zone.
+ * its public host. A current-scheme Synap Cloud pod (`{name}.pod.synap.live`):
+ * none, see {@link isRefusedFirstPartyBase} (its console is first-party by
+ * POD_ADMIN_URL). Legacy nested `pod.{name}.synap.live`: `{name}.synap.live`
+ * until the moves end; legacy flat none. A self-hosted pod: its host without
+ * the `pod.` / `pod-admin.` service label (`pod.acme.example` →
+ * `acme.example`); any other host none. Never a TLD or a tenant zone.
  */
 export function firstPartyBaseForPodHost(host: string): string | null {
   const h = normalize(host);
   const tenant = parseTenantPodHost(h);
   if (tenant) {
-    if (tenant.scheme === "current") return tenant.podHost;
     if (tenant.scheme === "legacy-nested")
       return `${tenant.name}.${tenant.zone}`;
     return null;
@@ -320,7 +340,7 @@ export function firstPartyBaseForPodHost(host: string): string | null {
   const labels = h.split(".");
   if (labels[0] !== "pod" && labels[0] !== "pod-admin") return null;
   const base = labels.slice(1).join(".");
-  return isRefusedSiteBase(base) ? null : base;
+  return isRefusedFirstPartyBase(base) ? null : base;
 }
 
 /**

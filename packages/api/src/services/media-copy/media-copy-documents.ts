@@ -19,15 +19,15 @@
  * `intakeSource.fileSha256` (the per-user bytes ledger, so the same bytes
  * kept twice are stored once). It belongs to the item and goes with it.
  */
-import { sql, type SQL } from "drizzle-orm";
-import type { AnyPgColumn } from "drizzle-orm/pg-core";
+// The predicate lives in `@synap/database` (`filed-document.ts`) beside the
+// rest of "is this a filed document?", so the search indexer can use it too.
+export { notMediaCopyDocumentWhere } from "@synap/database";
 
+// The mark is a literal here, not a re-export: the store path
+// (`file-upload.ts`) reads it at module load and its tests mock
+// `@synap/database` whole. `media-copy-documents.pglite.test.ts` pins it equal
+// to `@synap/database`'s.
 export const MEDIA_COPY_UPLOAD_KIND = "media-copy";
-
-/** `metadata` is NOT a media copy. A row with no metadata (NULL) is kept. */
-export function notMediaCopyDocumentWhere(metadataColumn: AnyPgColumn): SQL {
-  return sql`(${metadataColumn} ->> 'uploadKind') IS DISTINCT FROM ${MEDIA_COPY_UPLOAD_KIND}`;
-}
 
 /** The metadata key naming the Library item a media copy was minted for. */
 export const LIBRARY_MEDIA_COPY_OF = "mediaCopyOfLibraryItem";

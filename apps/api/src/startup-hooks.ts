@@ -35,6 +35,7 @@ import {
   ensureCoreRenderers,
   ensureCaptureAgent,
   ensureSessionNarrativeRule,
+  ensureDocumentRefresherRule,
   convergeActivatorsAtBoot,
   reconcileCapabilitiesToTemplates,
   reconcileStandaloneConfigsToTemplates,
@@ -854,6 +855,18 @@ async function runStartupHooksInner(): Promise<void> {
     logger.warn(
       { err },
       "Failed to seed the session narrative governance rule (non-fatal)"
+    );
+  }
+
+  // Seed the D4 governance rule: a document's BOUND refresher rewriting its own
+  // existing AI sections auto-applies (with undo). Same contract as D10: a
+  // stored rule a person can revoke, never re-seeded after a revoke. Non-fatal.
+  try {
+    await ensureDocumentRefresherRule();
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Failed to seed the document refresher governance rule (non-fatal)"
     );
   }
 

@@ -19,12 +19,22 @@ const h = vi.hoisted(() => ({
   imported: [] as Array<Record<string, unknown>>,
   indexedIds: [] as string[],
   deleted: [] as string[],
+  // What the `documents` reads were asked for (the `where` they passed).
+  documentWheres: [] as unknown[],
 }));
 
 vi.mock("@synap/database", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap/database")>()),
   getDb: async () => ({
-    query: { entities: { findMany: async () => h.entityRows } },
+    query: {
+      entities: { findMany: async () => h.entityRows },
+      documents: {
+        findMany: async (opts: { where: unknown }) => {
+          h.documentWheres.push(opts.where);
+          return [];
+        },
+      },
+    },
     // loadActiveFacetWorkspaceIds: no facets.
     select: () => ({ from: () => ({ where: async () => [] }) }),
   }),
@@ -79,6 +89,7 @@ beforeEach(() => {
   h.imported = [];
   h.indexedIds = [];
   h.deleted = [];
+  h.documentWheres = [];
 });
 
 describe("fullReindex('entities')", () => {
@@ -126,5 +137,49 @@ describe("fullReindex('entities')", () => {
 
     expect(h.bodyCalls.map((c) => c.length)).toEqual([200, 200, 50]);
     expect(h.imported).toHaveLength(450);
+  });
+});
+
+describe("what the `documents` index reads", () => {
+  // The rendered SQL of the `where` a documents read passed. The rule itself
+  // is proven on a real Postgres (`filed-document.pglite.test.ts`); this proves
+  // BOTH index paths reach it, so a body can never be indexed as a document.
+  const text = (x: unknown): string => {
+    if (Array.isArray(x)) return x.map(text).join("");
+    const o = x as { queryChunks?: unknown; value?: unknown } | null;
+    if (o?.queryChunks) return text(o.queryChunks);
+    if (Array.isArray(o?.value)) return (o.value as string[]).join("");
+    return "";
+  };
+  const render = async (where: unknown): Promise<string> => {
+    const { and, isNull } = await import("@synap/database");
+    const { documents } = await import("@synap/database/schema");
+    return text(
+      typeof where === "function"
+        ? (where as (d: unknown, ops: unknown) => unknown)(documents, {
+            and,
+            isNull,
+          })
+        : where
+    );
+  };
+
+  it("a full reindex leaves out another row's body (entity, view, skill)", async () => {
+    await new IndexingService().fullReindex(["documents"]);
+    const sql = await render(h.documentWheres[0]);
+    expect(sql).toContain("entities.document_id");
+    expect(sql).toContain("views.document_id");
+    expect(sql).toContain("skills.body_document_id");
+  });
+
+  it("an incremental index of one document leaves them out too", async () => {
+    await new IndexingService().indexNow({
+      collection: "documents",
+      operation: "upsert",
+      documentId: "d1",
+      timestamp: 0,
+    });
+    const sql = await render(h.documentWheres[0]);
+    expect(sql).toContain("entities.document_id");
   });
 });

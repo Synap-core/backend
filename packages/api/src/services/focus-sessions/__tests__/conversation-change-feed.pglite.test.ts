@@ -609,6 +609,34 @@ describe("the conversation change feed", () => {
     expect((pause.move as { hold: unknown }).hold).toBeNull();
   });
 
+  it("blocker_ended reads through the session read floor: a blocker the caller may not read is not news", async () => {
+    const waiter = await session({ title: "Waits on a stranger" });
+    // Someone else's private session (no space, no roster): unreadable to OWNER.
+    const theirs = await session({
+      owner: STRANGER,
+      clientKey: null,
+      title: "Their private work",
+    });
+    await q(
+      `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata, created_at)
+       values (gen_random_uuid(), 'session', $1, 'session', $2, 'blocked_by', '{}'::jsonb, now())`,
+      [waiter.sessionId, theirs.sessionId]
+    );
+    const cursor = new Date(Date.now() - 1).toISOString();
+    await setSessionStatus(db, {
+      sessionId: theirs.sessionId,
+      from: "active",
+      to: "cancelled",
+      actor: { kind: "human", userId: STRANGER },
+    });
+    const res = await wait({ events: ["blocker_ended"], since: cursor });
+    const mine = (res.events ?? []).filter(
+      (e) => e.session!.id === waiter.sessionId
+    );
+    expect(mine).toEqual([]);
+    expect(JSON.stringify(res)).not.toContain(theirs.sessionId);
+  });
+
   it("is always a peek: an answer read through it stays unread for the agent's own wait", async () => {
     const s = await session({
       outputs: [

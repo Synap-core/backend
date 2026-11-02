@@ -37,10 +37,13 @@ import {
   dataBindingFor,
   hasChartSnapshot,
   missingRequiredConfig,
+  type WidgetCapabilityDef,
 } from "@synap-core/types/renderables";
+import type { Embed } from "@synap-core/markdown-core/embeds";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { listRenderables, type RenderableRow } from "../cells/renderables.js";
 import { locateEmbeds } from "@synap-core/markdown-core/readable";
+import { embedFallback } from "@synap-core/markdown-core/plain-text";
 import { TEXT_TONES } from "@synap-core/markdown-core/inline-format";
 import {
   MAX_COLUMNS,
@@ -66,6 +69,18 @@ export const DOCUMENT_DIAGNOSTIC_CODES = [
   "bad_columns",
   /** A column width that is not a width, on only some columns, or not adding up to 100%. */
   "bad_width",
+  /** DESIGN (generation contract rule 6): a heading with nothing under it. */
+  "empty_heading",
+  /** DESIGN (rule 5): a bare id in prose, where a reader needs a door. */
+  "bare_id",
+  /** DESIGN (rules 1, 16): hand-typed HTML in the body, outside a sandboxed cell. */
+  "raw_html",
+  /** DESIGN (rule 13): a phrase the failure-words door bans. */
+  "banned_phrase",
+  /** DESIGN (rule 7, catalog pass): a list cell asks for more rows than its cap. */
+  "over_cap",
+  /** DESIGN (rule 10, catalog pass): a chart snapshot with no sentence saying what it shows. */
+  "chart_no_finding",
   /**
    * RUN-TIME, not grammar: a chart the report flow could not snapshot (its
    * read failed), so it was left live. Never derived from content — stamped
@@ -199,6 +214,17 @@ export const GRAMMAR_FIX: Record<DocumentDiagnosticCode, string> = {
     "Search with synap_find (entities) or synap_list_views (views) and use an id it returns.",
   not_visible:
     "Embed something the document's readers can see, or move the object into this document's workspace.",
+  empty_heading:
+    "Write what belongs under the heading, or remove the heading (omit a section with nothing to say).",
+  bare_id:
+    "Name the thing as a door: `[[kind:id|label]]` or an embed (`:::synap-entity{id}`), never the bare id.",
+  raw_html:
+    "Write it as markdown or a Synap directive; HTML belongs only inside an `html-embed` cell's props.",
+  banned_phrase:
+    'Say what happened and what to do next, plainly ("Couldn’t …"), without "Oops", "Sorry" or "Something went wrong".',
+  over_cap: `Lower the limit to the cap and let "Show all" open the full list (synap_list_widgets({ surface: "document" }) shows each cell's props).`,
+  chart_no_finding:
+    "Write one sentence after the chart's ```json block saying what it shows; the phone and exports read that sentence.",
   freeze_failed:
     "The chart still reads live. Press Freeze on it once its data can be read, or leave it live.",
 };
@@ -229,7 +255,7 @@ function firstOf(
  * served for as long as their text does not change. Bump it whenever the
  * checker's verdicts change meaning.
  */
-export const DOCUMENT_DIAGNOSTICS_CHECKER = 2;
+export const DOCUMENT_DIAGNOSTICS_CHECKER = 3;
 
 /**
  * Codes a flow may stamp: run-time facts only; content codes are derived,
@@ -237,6 +263,63 @@ export const DOCUMENT_DIAGNOSTICS_CHECKER = 2;
  * so a re-check of the same revision carries them over.
  */
 export const RUN_TIME_DIAGNOSTIC_CODES = ["freeze_failed"] as const;
+
+/**
+ * The generation contract's cap on a list cell's rows (rule 7): a document is
+ * read, not scrolled; more rows go behind "Show all". A widget whose config
+ * field declares its own maximum is held to that instead.
+ */
+export const LIST_PROP_CAP = 8;
+const LIST_PROP_KEYS = ["limit", "maxItems"] as const;
+
+/** The maximum a widget's config field declares for itself, when it declares one. */
+function declaredMax(field: unknown): number | undefined {
+  const f = field as {
+    max?: unknown;
+    constraints?: { max?: unknown };
+  } | null;
+  const max = f?.constraints?.max ?? f?.max;
+  return typeof max === "number" && Number.isFinite(max) ? max : undefined;
+}
+
+/**
+ * The catalog half of the design pass (generation contract rules 7 and 10):
+ * what only the widget's own definition can say. Advisory, like every
+ * diagnostic.
+ */
+function designOfCell(
+  key: string,
+  builtin: WidgetCapabilityDef,
+  embed: Pick<Embed, "props" | "fallback">,
+  at: { line?: number; directive: string; ref: Record<string, string> }
+): DocumentDiagnostic[] {
+  const out: DocumentDiagnostic[] = [];
+  for (const prop of LIST_PROP_KEYS) {
+    const value = embed.props?.[prop];
+    if (typeof value !== "number") continue;
+    const field = builtin.configSchema?.find((f) => f.key === prop);
+    const cap = declaredMax(field) ?? LIST_PROP_CAP;
+    if (value > cap) {
+      out.push({
+        code: "over_cap",
+        severity: "warning",
+        message: `"${key}" asks for ${prop} ${value}; a document shows at most ${cap} rows of it.`,
+        fix: GRAMMAR_FIX.over_cap,
+        ...at,
+      });
+    }
+  }
+  if (hasChartSnapshot(embed.props) && embedFallback(embed) === "") {
+    out.push({
+      code: "chart_no_finding",
+      severity: "warning",
+      message: `The "${key}" snapshot says nothing in words; on the phone and in exports it reads as a bare chip.`,
+      fix: GRAMMAR_FIX.chart_no_finding,
+      ...at,
+    });
+  }
+  return out;
+}
 
 /** Every diagnostic for `markdown`, judged with `resolver`. Never throws on content. */
 export async function diagnoseDocument(
@@ -335,6 +418,7 @@ export async function diagnoseDocument(
           ...at,
         });
       }
+      if (builtin) out.push(...designOfCell(key, builtin, embed, at));
     }
   }
 

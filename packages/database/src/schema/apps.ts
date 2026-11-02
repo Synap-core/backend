@@ -44,41 +44,12 @@ export interface AppApprovedRequest {
   workspaceId: string | null;
 }
 
-/**
- * The ONE rule for what an app may hold pod-wide (decision e1b59d38 "B"):
- * a READ of ONE named kind, `entity.<kind>.read`. Never a write or a gate
- * verb, never a whole kind (`entity.decision` = every verb), never every kind
- * (`entity.read`, `entity.*.read`), never `*`, never another subject. Checked
- * where an app declares it (the client metadata document), where the person
- * ticks it (consent, the `app/connect` executor), where it is stored and
- * read back (`readAppConnectRequests`) and where it becomes a grant
- * (`grantsForApprovedRequests`).
- */
-export function isPodWideReadPermission(permission: string): boolean {
-  return /^entity\.[a-z0-9][a-z0-9_-]*\.read$/.test(permission);
-}
-
-/**
- * A grant scope that is only a pod-wide read: no space, project or object
- * limit, and every permission `isPodWideReadPermission`. Such a scope reads
- * its kinds everywhere and does nothing else, so the doors that treat a scope
- * with no space as "not limited to spaces" (facet reach, capture routing, a
- * role write, a space-level check) must not count it as one.
- */
-export function isPodWideReadScope(scope: {
-  permissions: readonly string[];
-  workspaceIds?: readonly string[] | null;
-  projectIds?: readonly string[] | null;
-  entityIds?: readonly string[] | null;
-}): boolean {
-  return (
-    !scope.workspaceIds &&
-    !scope.projectIds &&
-    !scope.entityIds &&
-    scope.permissions.length > 0 &&
-    scope.permissions.every(isPodWideReadPermission)
-  );
-}
+// The pod-wide read rule lives in `@synap-core/types/grants` (pod-wide.ts), so
+// the holder reader, pod admin and the api share one definition.
+export {
+  isPodWideReadPermission,
+  isPodWideReadScope,
+} from "@synap-core/types/grants";
 
 export const apps = pgTable(
   "apps",

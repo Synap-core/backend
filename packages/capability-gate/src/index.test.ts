@@ -349,7 +349,7 @@ describe("propose decisions carry a structured cause", () => {
 });
 
 /**
- * A person's "Never" (founder decision G3, 0381): a `deny` rule naming this
+ * A person's "Never" (a founder decision, 0381): a `deny` rule naming this
  * capability refuses the agent's run, typed, before every other rung — an
  * auto grant, a declared read and an auto rule included.
  */
@@ -439,5 +439,61 @@ describe("gateCapabilityExecution — a deny rule refuses the run", () => {
     });
     expect(decision.decision).toBe("deny");
     expect(decision).not.toHaveProperty("reasonCode");
+  });
+});
+
+/**
+ * One rule read per run: the "Never" refusal and the rule widening rank the
+ * SAME stored rows, so the gate reads them once and derives both answers.
+ * Every route that consults a rule is driven here, and each reads it once.
+ */
+describe("gateCapabilityExecution — one rule lookup per run", () => {
+  beforeEach(() => {
+    findCapabilityGrantMock.mockReset();
+    resolveGovernanceRuleMock.mockReset();
+    resolveOriginTrustMock.mockReset();
+    resolveOriginTrustMock.mockResolvedValue(undefined);
+  });
+
+  const AUTO_RULE = { verdict: "auto", matchedPattern: "tool-123" };
+
+  it("no grant + an auto rule: run, from one lookup", async () => {
+    findCapabilityGrantMock.mockResolvedValue({ ok: false });
+    resolveGovernanceRuleMock.mockResolvedValue(AUTO_RULE);
+    expect(await gateCapabilityExecution(BASE_INPUT)).toEqual({
+      decision: "run",
+    });
+    expect(resolveGovernanceRuleMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a propose-mode grant + an auto rule: run, from one lookup", async () => {
+    findCapabilityGrantMock.mockResolvedValue({
+      ok: true,
+      execMode: "propose",
+    });
+    resolveGovernanceRuleMock.mockResolvedValue(AUTO_RULE);
+    expect(await gateCapabilityExecution(BASE_INPUT)).toEqual({
+      decision: "run",
+    });
+    expect(resolveGovernanceRuleMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("no grant + no rule: propose, from one lookup", async () => {
+    findCapabilityGrantMock.mockResolvedValue({ ok: false });
+    resolveGovernanceRuleMock.mockResolvedValue(undefined);
+    expect((await gateCapabilityExecution(BASE_INPUT)).decision).toBe(
+      "propose"
+    );
+    expect(resolveGovernanceRuleMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a deny rule refuses from that same one lookup", async () => {
+    findCapabilityGrantMock.mockResolvedValue({ ok: false });
+    resolveGovernanceRuleMock.mockResolvedValue({ verdict: "deny" });
+    expect(await gateCapabilityExecution(BASE_INPUT)).toMatchObject({
+      decision: "deny",
+      reasonCode: "DENIED_BY_RULE",
+    });
+    expect(resolveGovernanceRuleMock).toHaveBeenCalledTimes(1);
   });
 });

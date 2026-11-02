@@ -3,7 +3,7 @@
  * ops against a document's markdown and enforce the floors, with no database,
  * storage or governance in sight.
  *
- * Five ops, applied in order to the evolving content:
+ * Eight ops, applied in order to the evolving content:
  *   - `upsert_section {id, title, body}` — one `::::synap-section` block by id
  *     (replace in place, or append), the session-document door's op;
  *   - `replace_text {old, new}` — str_replace: `old` must occur EXACTLY ONCE,
@@ -12,7 +12,17 @@
  *   - `replace_all {content}` — the whole body;
  *   - `set_title {title}` — the document's NAME (`documents.title`, its one
  *     title). It leaves the content alone; `resolvePatchTitle` reads it, and
- *     the last one in the list wins.
+ *     the last one in the list wins;
+ *   - `insert_embed {directive, ref, props?, fallback?, sectionId? | after?}` —
+ *     one `:::synap-entity|view|cell` block written by `serializeEmbed` (the
+ *     ONE embed writer), so an agent never hand-writes directive text. At the
+ *     end of the document, at the end of section `sectionId`, or after the
+ *     line holding `after` (exact once, like `replace_text`);
+ *   - `set_scope {scope}` / `set_refresher {automationId}` — the living
+ *     document's `LensScope` and its bound refresher (0387). Like `set_title`
+ *     they leave the content alone; `resolvePatchFields` reads them (last one
+ *     wins) and the door reads them through the scope floor
+ *     (`document-scope.ts`) before anything is written or proposed.
  *
  * FLOORS, checked against the RESULT of every op together (so no op order can
  * slip past them), and refused BEFORE anything is written or proposed:
@@ -33,7 +43,12 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
-import type { Embed } from "@synap-core/markdown-core/embeds";
+import {
+  EMBED_DIRECTIVES,
+  EmbedSerializeError,
+  serializeEmbed,
+  type Embed,
+} from "@synap-core/markdown-core/embeds";
 import { locateEmbeds } from "@synap-core/markdown-core/readable";
 import {
   parseSections,
@@ -83,6 +98,30 @@ export const DocumentPatchOpSchema = z.discriminatedUnion("op", [
       .max(500)
       .regex(/^[^\r\n]+$/, "set_title: a title is one line"),
   }),
+  z.object({
+    op: z.literal("insert_embed"),
+    directive: z.enum(EMBED_DIRECTIVES),
+    /** Reference attributes: `{id}` (entity), `{viewId}` (view), `{cellKey}` (cell). */
+    ref: z.record(z.string(), z.string().max(500)),
+    /** Written as the ```json props block (a cell's config). */
+    props: z.record(z.string(), z.unknown()).optional(),
+    /** The prose after the props: what the phone and exports read. */
+    fallback: z.string().max(10_000).optional(),
+    /** Insert at the end of this section (by id). */
+    sectionId: z.string().regex(SECTION_ID_RE).optional(),
+    /** Insert after the line holding this exact text (must occur once). */
+    after: z.string().min(1).max(10_000).optional(),
+  }),
+  z.object({
+    op: z.literal("set_scope"),
+    /** A `LensScope` object, or null to clear it (the document's space, else the pod). */
+    scope: z.union([z.record(z.string(), z.unknown()), z.null()]),
+  }),
+  z.object({
+    op: z.literal("set_refresher"),
+    /** The automation bound to refresh the document, or null to unbind it. */
+    automationId: z.string().uuid().nullable(),
+  }),
 ]);
 export type DocumentPatchOp = z.infer<typeof DocumentPatchOpSchema>;
 
@@ -116,6 +155,12 @@ export interface RenderedPatch {
   previews: SectionPreview[];
   /** Section ids an `upsert_section` op replaced in place (vs appended). */
   replacedSections: string[];
+  /**
+   * Ids of the `owner="ai"` sections of the document AS READ, before any op
+   * applied. Ops apply in order, so `replacedSections` also holds a section an
+   * earlier op of the same patch created; this is the pre-patch truth (D4).
+   */
+  aiSectionsBefore: string[];
 }
 
 // ─── Section extents ─────────────────────────────────────────────────────────
@@ -289,10 +334,82 @@ function applyOp(
     }
     case "replace_all":
       return op.content;
+    case "insert_embed":
+      return insertEmbed(content, op);
     case "set_title":
-      // The name, not the body: `resolvePatchTitle` reads it.
+    case "set_scope":
+    case "set_refresher":
+      // Fields, not the body: `resolvePatchTitle` / `resolvePatchFields` read them.
       return content;
   }
+}
+
+type InsertEmbedOp = Extract<DocumentPatchOp, { op: "insert_embed" }>;
+
+/**
+ * Write one embed through `serializeEmbed` and place it. A position that does
+ * not resolve (an unknown section, `after` matching 0 or 2+ times, both given)
+ * is refused with what to do next; the floors over the whole result still run.
+ */
+function insertEmbed(content: string, op: InsertEmbedOp): string {
+  if (op.sectionId && op.after) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "insert_embed: give `sectionId` or `after`, not both (leave both out to add it at the end).",
+    });
+  }
+  let block: string;
+  try {
+    block = serializeEmbed({
+      directive: op.directive,
+      ref: op.ref,
+      ...(op.props ? { props: op.props } : {}),
+      ...(op.fallback ? { fallback: op.fallback } : {}),
+    });
+  } catch (err) {
+    if (err instanceof EmbedSerializeError) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `insert_embed: ${err.message}`,
+      });
+    }
+    throw err;
+  }
+  const lines = content.split("\n");
+  if (op.sectionId) {
+    const parsed = parseSections(content);
+    refuseUnlocatable(parsed, "before");
+    const section = parsed.sections.find((s) => s.id === op.sectionId);
+    if (!section) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `insert_embed: there is no section "${op.sectionId}". Read the document again (get_document lists its sections).`,
+      });
+    }
+    // Before the section's closing fence, after its last line of content.
+    const head = lines.slice(0, section.endLine).join("\n").replace(/\s+$/, "");
+    const tail = lines.slice(section.endLine).join("\n");
+    return `${head}\n\n${block}\n${tail}`;
+  }
+  if (op.after) {
+    const at = occurrences(content, op.after);
+    if (at.length !== 1) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          at.length === 0
+            ? "insert_embed: `after` was not found in the document. Copy the text exactly from get_document."
+            : `insert_embed: \`after\` matches ${at.length > 20 ? "more than 20" : at.length} times; it must match exactly once. Include more of the line.`,
+      });
+    }
+    const lineEnd = content.indexOf("\n", at[0]! + op.after.length);
+    const cut = lineEnd === -1 ? content.length : lineEnd;
+    const rest = content.slice(cut).replace(/^\n+/, "");
+    return `${content.slice(0, cut)}\n\n${block}\n${rest ? `\n${rest}` : ""}`;
+  }
+  const head = content.replace(/\s+$/, "");
+  return head ? `${head}\n\n${block}\n` : `${block}\n`;
 }
 
 // ─── Previews ────────────────────────────────────────────────────────────────
@@ -452,6 +569,9 @@ export function renderDocumentPatch(
     markdown,
     previews: previewPatch(content, markdown),
     replacedSections,
+    aiSectionsBefore: before.sections
+      .filter((s) => sectionOwner(s) === "ai")
+      .map((s) => s.id),
   };
 }
 
@@ -507,6 +627,26 @@ export function resolvePatchTitle(
     return null;
   }
   return { before: currentTitle, after: next };
+}
+
+/**
+ * The living-document FIELDS `ops` set (`set_scope`, `set_refresher`), as
+ * SENT — the last op of each kind wins; absent = unchanged. The door reads
+ * them through the scope floor (`resolveDocumentScopeFields`) before the gate.
+ */
+export function resolvePatchFields(ops: readonly DocumentPatchOp[]): {
+  scope?: Record<string, unknown> | null;
+  refreshAutomationId?: string | null;
+} {
+  const out: {
+    scope?: Record<string, unknown> | null;
+    refreshAutomationId?: string | null;
+  } = {};
+  for (const op of ops) {
+    if (op.op === "set_scope") out.scope = op.scope;
+    if (op.op === "set_refresher") out.refreshAutomationId = op.automationId;
+  }
+  return out;
 }
 
 /** Is every op a section write? Governance files those under the section keys. */

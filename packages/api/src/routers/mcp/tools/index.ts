@@ -33,6 +33,7 @@ import {
   SESSION_POST_REFS_MAX,
 } from "@synap-core/types/agents";
 import { PROPOSAL_REJECTION_REASONS } from "@synap-core/types/proposals";
+import { DENIED_BY_RULE_REASON } from "@synap/governance-policy";
 import { workClockIn } from "@synap-core/types/work-clock";
 import {
   SESSION_STATUSES,
@@ -592,6 +593,13 @@ const ROOM_QUESTION_ASK_JSON_SCHEMA = {
   description:
     "With kind 'question' + slotLabel: HOW the person answers — 'confirm' (yes/no), 'choose' (1-8 options, ≤1 recommended; an option may open ONE follow-up {prompt, 2-4 options} and carry a `caution`), 'form' (small flat form; never a secret), 'act' (a physical/world task only; they answer 'I did this'), 'provide' (connection {service} | file {accept} | secret {name}, via the vault). Prefer confirm/choose for any decision. Any mode may carry `risk` ('high' | 'medium' | 'low'). Omit for a free-text answer.",
 };
+
+/**
+ * A person's "Never" (0381), named in the capability tools' texts so an agent
+ * knows it before it meets one: the refusal's own sentence, never a second
+ * phrasing.
+ */
+const DENIED_BY_RULE_TOOL_NOTE = `A run refused with ${DENIED_BY_RULE_REASON} Only a pod admin can take that back, in pod admin Settings.`;
 
 /**
  * JSON Schema for `synap_run_capability`, DERIVED from the ONE
@@ -1579,6 +1587,16 @@ export const tools = {
               description:
                 "The declared output slot this fulfils: its key or its label. One that names no output of the session is said in the reply's `warnings`; the document is created either way.",
             },
+            scope: {
+              type: ["object", "null"],
+              description:
+                'A living document\'s scope: what its embedded cells read through. {kind:"pod"} | {kind:"workspace", workspaceId, projectId?} | {kind:"project", projectId} | {kind:"track", trackId} | {kind:"session", sessionId}. Never put a scope in a cell\'s props: the host stamps this one on every cell. Refused when it names something you cannot read.',
+            },
+            refreshAutomationId: {
+              type: ["string", "null"],
+              description:
+                "The automation bound to refresh this document (an id synap_list_automations returns). Its runs may rewrite this document's existing AI sections without review; every other edit is governed as usual.",
+            },
             /**
              * WHY this write, in the person's own words — shown verbatim to the
              * reviewer. Without it the proposal detail reads "No reason was
@@ -1602,7 +1620,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Edit a document with ops — a section, a passage, an addition — instead of rewriting it. Read it first with synap_get_document and pass its `revision` as `baseRevision`. Ops, applied in order: `upsert_section {id, title, body}` writes ONE `::::synap-section` block by id (replaces your own `ai` section, or appends a new one); `replace_text {old, new}` — `old` must match EXACTLY once, copy it from the document and include enough context (0 or 2+ matches is refused with the count); `append {body}`; `replace_all {content}` (whole body — needs baseRevision, always goes to review); `set_title {title}` renames the document (its one title — a human name, never an id), governed like the other ops. Refused: changing a section whose owner is `human` (by any op), and removing an embed unless `allow_removing_embeds: true`. Usually returns 'proposed' (the person reviews a per-section before/after); a governance rule may apply it directly. The response carries `preview` and `diagnostics` (embeds that will not render, each with a `fix` — advisory, never a refusal). A 'changed after you read it' error means re-read and redraft.",
+          "Edit a document with ops — a section, a passage, an addition — instead of rewriting it. Read it first with synap_get_document and pass its `revision` as `baseRevision`. Ops, applied in order: `upsert_section {id, title, body}` writes ONE `::::synap-section` block by id (replaces your own `ai` section, or appends a new one); `replace_text {old, new}` — `old` must match EXACTLY once, copy it from the document and include enough context (0 or 2+ matches is refused with the count); `append {body}`; `replace_all {content}` (whole body — needs baseRevision, always goes to review); `set_title {title}` renames the document (its one title — a human name, never an id), governed like the other ops; `insert_embed {directive, ref, props?, fallback?, sectionId?|after?}` adds an embed (synap-cell {cellKey} + props, synap-entity {id}, synap-view {viewId}) written for you — never hand-write directive text — at the end, at the end of section `sectionId`, or after the line holding `after`; `set_scope {scope}` sets the living document's scope (same shape as synap_create_document's, null clears it); `set_refresher {automationId}` binds the automation whose runs refresh its AI sections (null unbinds). Refused: changing a section whose owner is `human` (by any op), and removing an embed unless `allow_removing_embeds: true`. Usually returns 'proposed' (the person reviews a per-section before/after); a governance rule may apply it directly. The response carries `preview` and `diagnostics` (embeds that will not render, each with a `fix` — advisory, never a refusal). A 'changed after you read it' error means re-read and redraft.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1628,6 +1646,9 @@ export const tools = {
                       "append",
                       "replace_all",
                       "set_title",
+                      "insert_embed",
+                      "set_scope",
+                      "set_refresher",
                     ],
                   },
                   id: {
@@ -1660,6 +1681,46 @@ export const tools = {
                   content: {
                     type: "string",
                     description: "replace_all: the whole new body.",
+                  },
+                  directive: {
+                    type: "string",
+                    enum: ["synap-cell", "synap-entity", "synap-view"],
+                    description: "insert_embed: what to embed.",
+                  },
+                  ref: {
+                    type: "object",
+                    description:
+                      "insert_embed: the reference — {cellKey} (cell), {id} (entity), {viewId} (view).",
+                  },
+                  props: {
+                    type: "object",
+                    description:
+                      "insert_embed: a cell's props (synap_list_widgets shows each cell's).",
+                  },
+                  fallback: {
+                    type: "string",
+                    description:
+                      "insert_embed: one sentence saying what it shows (the phone and exports read it).",
+                  },
+                  sectionId: {
+                    type: "string",
+                    description:
+                      "insert_embed: add it at the end of this section.",
+                  },
+                  after: {
+                    type: "string",
+                    description:
+                      "insert_embed: add it after the line holding this exact text (must occur once).",
+                  },
+                  scope: {
+                    type: ["object", "null"],
+                    description:
+                      "set_scope: the scope object, or null to clear it.",
+                  },
+                  automationId: {
+                    type: ["string", "null"],
+                    description:
+                      "set_refresher: the automation's id, or null to unbind it.",
                   },
                 },
                 required: ["op"],
@@ -5678,7 +5739,8 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Discover what the user can actually DO. Returns a SECTIONED view: `integrations` (their connected services + tools, one per name, each with its `verbs` nested — e.g. google → gmail_send, gmail_search, calendar_list; the verb `id` is what you pass to synap_run_capability), `skills` (standalone runnable skills), and `commands`. Each integration shows `connection.connected` (needs connecting if false) and each verb shows `granted`/`effectiveExecMode` (an ungranted verb is PROPOSED for review when run, not refused). A verb carrying `blocked: "not_enabled"` is installed but switched off: synap_run_capability WILL refuse it, so do not run it first — hand the user its `enable.url` to turn it on. Core built-in tools (already available to you directly as MCP tools) and teaching docs are folded out of this actionable view BY DEFAULT and only COUNTED under `excluded` — pass kind:"builtin-tool" or kind:"teaching-doc" to list them here instead, or synap_load_skill("catalog") for every teaching doc grouped by topic. Pass `query` to search across integrations/verbs/skills (e.g. query:"send email").',
+          'Discover what the user can actually DO. Returns a SECTIONED view: `integrations` (their connected services + tools, one per name, each with its `verbs` nested — e.g. google → gmail_send, gmail_search, calendar_list; the verb `id` is what you pass to synap_run_capability), `skills` (standalone runnable skills), and `commands`. Each integration shows `connection.connected` (needs connecting if false) and each verb shows `granted`/`effectiveExecMode` (an ungranted verb is PROPOSED for review when run, not refused). A verb carrying `blocked: "not_enabled"` is installed but switched off: synap_run_capability WILL refuse it, so do not run it first — hand the user its `enable.url` to turn it on. Core built-in tools (already available to you directly as MCP tools) and teaching docs are folded out of this actionable view BY DEFAULT and only COUNTED under `excluded` — pass kind:"builtin-tool" or kind:"teaching-doc" to list them here instead, or synap_load_skill("catalog") for every teaching doc grouped by topic. Pass `query` to search across integrations/verbs/skills (e.g. query:"send email"). ' +
+          DENIED_BY_RULE_TOOL_NOTE,
         inputSchema: {
           type: "object",
           properties: {
@@ -5733,7 +5795,8 @@ export const tools = {
           openWorldHint: true,
         },
         description:
-          'Run a registered capability verb (discover via synap_list_capabilities) with dynamic inputs — e.g. send an email, search Gmail, create a calendar event. Pass verbId + parameters. A DRAFT (un-enabled) capability is refused — ask the user to enable it first. Governed like any write: an ungranted verb comes back as `{ kind: "proposed", proposalId, reviewUrl }` instead of running — that is SUCCESS, not an error. You MUST surface the `reviewUrl` as a clickable link in your reply (never just say \'proposed\' with no link) — e.g. "Queued that email send for your review: [Review proposal](<reviewUrl>)" — and continue the conversation without waiting for approval.',
+          'Run a registered capability verb (discover via synap_list_capabilities) with dynamic inputs — e.g. send an email, search Gmail, create a calendar event. Pass verbId + parameters. A DRAFT (un-enabled) capability is refused — ask the user to enable it first. Governed like any write: an ungranted verb comes back as `{ kind: "proposed", proposalId, reviewUrl }` instead of running — that is SUCCESS, not an error. You MUST surface the `reviewUrl` as a clickable link in your reply (never just say \'proposed\' with no link) — e.g. "Queued that email send for your review: [Review proposal](<reviewUrl>)" — and continue the conversation without waiting for approval. ' +
+          DENIED_BY_RULE_TOOL_NOTE,
         // DERIVED from the shared capability-execute contract, not hand-written
         // here — the same reasoning as the automation data contract and the
         // rule sentence above. A hand-written literal is how this tool came to

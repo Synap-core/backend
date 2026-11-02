@@ -1,6 +1,6 @@
 /**
  * The words of a decision's receipt, as catalogs (`@synap-core/types/i18n`):
- * English is the source and the type. Client words (audit 110dd4ab G1): a request,
+ * English is the source and the type. Client words: a request,
  * never a proposal. DRAFT French, awaiting the founder's review.
  */
 import {
