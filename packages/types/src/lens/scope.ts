@@ -17,6 +17,7 @@ import {
   parseActivityScope,
   type ActivityScope,
 } from "../activity/heat.js";
+import { isUuid } from "../property-render/structured-value.js";
 
 export const LENS_SCOPE_KINDS = [
   "pod",
@@ -235,8 +236,6 @@ export function lensActivityScope(scope: LensScope): ActivityScope {
   }
 }
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,99}$/;
 
 /** The fields each scope kind carries, as {@link readLensScope} reads them. */
@@ -303,7 +302,7 @@ export function readLensScope(value: unknown): LensScopeRead {
     }
     const valid =
       typeof raw === "string" &&
-      (key === "profileSlug" ? SLUG_RE.test(raw) : UUID_RE.test(raw));
+      (key === "profileSlug" ? SLUG_RE.test(raw) : isUuid(raw));
     if (!valid) {
       return {
         ok: false,

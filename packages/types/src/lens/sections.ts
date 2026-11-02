@@ -87,3 +87,45 @@ export const LENS_CAPS = {
   proposed: 3,
   happened: 10,
 } as const satisfies Record<AttentionClass, number>;
+
+/**
+ * The empty answers a `lens-section` block may be GIVEN (the catalog's
+ * `empty` prop): the four minus INVITE. INVITE needs an action the reader
+ * takes (ui-composition §2), and a block in a document has none to offer, so
+ * the clients drew it as EXPLAIN anyway. A stored `invite` reads as `explain`
+ * ({@link readLensSectionEmpty}).
+ */
+export const LENS_SECTION_EMPTY_ANSWERS = [
+  "omit",
+  "explain",
+  "reassure",
+] as const satisfies readonly LensEmptyAnswer[];
+export type LensSectionEmptyAnswer =
+  (typeof LENS_SECTION_EMPTY_ANSWERS)[number];
+
+/**
+ * The answer of a section drawn ALONE (a `lens-section` block) with no
+ * `empty` prop: the lens page's own under a block, where no header says "all
+ * clear" for it. An empty Needs you REASSURES ("All clear"); every other class
+ * OMITS. The one source for the web block and the phone.
+ */
+export function lensSectionDefaultEmpty(
+  section: AttentionClass
+): LensSectionEmptyAnswer {
+  return section === "blocking" ? "reassure" : "omit";
+}
+
+/**
+ * A stored or sent `empty` prop read back as a block's answer, or null when it
+ * names none. A legacy `invite` (offered until the catalog narrowed it) reads
+ * as `explain`, the way both clients drew it.
+ */
+export function readLensSectionEmpty(
+  value: unknown
+): LensSectionEmptyAnswer | null {
+  if (value === "invite") return "explain";
+  return typeof value === "string" &&
+    (LENS_SECTION_EMPTY_ANSWERS as readonly string[]).includes(value)
+    ? (value as LensSectionEmptyAnswer)
+    : null;
+}
