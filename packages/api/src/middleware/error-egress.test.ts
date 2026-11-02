@@ -14,7 +14,8 @@ import { Hono } from "hono";
 // stays a pure Hono test: what `insertServerFault` receives is what the table
 // stores (the table itself: database `server-faults.pglite.test.ts`).
 const h = vi.hoisted(() => ({ rows: [] as Array<Record<string, unknown>> }));
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: {},
   SERVER_FAULT_RETENTION_DAYS: 30,
   insertServerFault: async (_db: unknown, row: Record<string, unknown>) => {

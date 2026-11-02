@@ -133,7 +133,7 @@ function ddlFor(table: PgTable): string {
         ? " default false"
         : c.name === "created_at" || c.name === "updated_at"
           ? " default now()"
-          : c.name === "status"
+          : c.name === "status" && type === "text"
             ? " default 'active'"
             : c.name === "metadata" || c.name === "config"
               ? " default '{}'::jsonb"
