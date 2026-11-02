@@ -328,6 +328,10 @@ const INTENTIONALLY_UNROUTABLE: Record<string, string> = {
     "Sets a local association and explicitly never posts. It is not a send, and it does not acquire anything.",
   "feed.read":
     "Reads messages already stored in the pod. Enumerating a kind's records would misdescribe a channel's history.",
+  "channel.history":
+    "Reads a person's conversations already stored in the pod (messages and proposed messages). No external record is fetched and no kind's records are listed, so neither fetch_record nor list_records describes it.",
+  "messaging.accounts":
+    "Lists the person's connected messaging accounts: the account source of messaging.send's input map (send_message). Pod bookkeeping, not a record of any kind and nothing fetched from outside.",
   // ── graph + facet bookkeeping: pod-internal structure ──────────────────
   "graph.relations": "Reads relation edges already in the pod graph.",
   "graph.link":

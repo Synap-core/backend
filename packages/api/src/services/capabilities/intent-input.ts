@@ -54,6 +54,8 @@ import type {
 /** `$.field`, `$.field.sub` (the app's input), `$account.field` or `$to.address`. */
 const PATH_RE = /^\$(account|to)?(\.[A-Za-z_][A-Za-z0-9_]*)+$/;
 const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** A verb name: a provider verb (`postiz_list_integrations`) or a dotted builtin (`messaging.accounts`). */
+const VERB_RE = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 
 /** The fields of an account a map may read (`$account.<field>`). */
 export const ACCOUNT_FIELDS = ["id", "label", "provider"] as const;
@@ -110,9 +112,11 @@ function accountsShapeProblems(raw: unknown): string[] {
       problems.push(
         `inputMap.accounts.${k} is not part of the mapping language`
       );
-  for (const k of ["verb", "id", "label"] as const)
+  if (typeof raw.verb !== "string" || !VERB_RE.test(raw.verb))
+    problems.push("inputMap.accounts.verb must name a verb");
+  for (const k of ["id", "label"] as const)
     if (typeof raw[k] !== "string" || !NAME_RE.test(raw[k] as string))
-      problems.push(`inputMap.accounts.${k} must name a field or a verb`);
+      problems.push(`inputMap.accounts.${k} must name a field`);
   if (
     raw.provider !== undefined &&
     (typeof raw.provider !== "string" || !NAME_RE.test(raw.provider))

@@ -101,7 +101,7 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => ({
   createPendingProposal: async (input: Record<string, unknown>) => {
     const id = randomUUID();
     await h.client!.query(
-      `insert into proposals (id, user_id, created_by, workspace_id, target_type, target_id, proposal_type, status, data, agent_user_id, governance_reason, created_at, updated_at)
+      `insert into proposals (id, proposed_by_user_id, created_by, workspace_id, target_type, target_id, proposal_type, status, data, agent_user_id, governance_reason, created_at, updated_at)
        values ($1,$2,$3,$4,$5,$6,$7,'pending',$8,$9,$10,now(),now())`,
       [
         id,
@@ -204,7 +204,7 @@ const executor = () =>
 async function approve(proposalId: string) {
   const [row] = (
     await q<Record<string, unknown>>(
-      `select id, user_id as "userId", workspace_id as "workspaceId", session_id as "sessionId",
+      `select id, workspace_id as "workspaceId", session_id as "sessionId",
               target_type as "targetType", target_id as "targetId", proposal_type as "proposalType",
               agent_user_id as "agentUserId", data from proposals where id=$1`,
       [proposalId]
@@ -398,10 +398,18 @@ describe("an app's send is a proposed message on the person's channel", () => {
 });
 
 describe("an agent with no grant never sends", () => {
-  it("files the proposed message through the real gate; the provider is never called", async () => {
+  it("through the outer gate (mustPropose) it files the proposed message; the provider is never called", async () => {
     const out = (await handler()(
       { to: PERSON, content: "Hi from the agent" },
-      { userId: OWNER, workspaceId: CRM, agentUserId: AGENT }
+      {
+        userId: OWNER,
+        workspaceId: CRM,
+        agentUserId: AGENT,
+        // What execute-capability hands a self-gated verb when the agent's
+        // run has no grant (the outer gate proposes).
+        mustPropose: true,
+        governanceReason: "CAPABILITY_PROPOSE",
+      }
     )) as Record<string, unknown>;
     expect(out).toMatchObject({ proposed: true, success: false });
     const filed = await proposalsOn(out.channelId as string);
@@ -409,6 +417,16 @@ describe("an agent with no grant never sends", () => {
     expect(filed[0]!.data).toMatchObject({
       draftedBy: { agentUserId: AGENT, appClientId: null },
     });
+    expect(send).not.toHaveBeenCalled();
+    expect(startChat).not.toHaveBeenCalled();
+  });
+
+  it("straight into the send door (no outer gate), the real gate never lets it send", async () => {
+    const out = (await handler()(
+      { to: PERSON, content: "Hi from the agent" },
+      { userId: OWNER, workspaceId: CRM, agentUserId: AGENT }
+    )) as Record<string, unknown>;
+    expect(out.success).toBe(false);
     expect(send).not.toHaveBeenCalled();
     expect(startChat).not.toHaveBeenCalled();
   });
