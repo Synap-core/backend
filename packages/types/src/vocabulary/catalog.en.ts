@@ -103,6 +103,12 @@ export const vocabularySentencesEn = {
   "vocabulary.membersDecide.unnamed": "Item members decide",
   // `resolveHandedToLabel`: a slot handed to an agent (past).
   "vocabulary.handedTo": "Handed to {name}",
+  // `resolveRunnerStateLabelFor`: a runner's wait read by someone other than
+  // the person it waits on (a room member): never "your".
+  "vocabulary.runner.needs_permission.named": "Waiting for {name}'s permission",
+  "vocabulary.runner.needs_permission.unnamed": "Waiting for permission",
+  "vocabulary.runner.needs_answer.named": "Waiting for {name}'s answer",
+  "vocabulary.runner.needs_answer.unnamed": "Waiting for an answer",
   // `resolveNextRungOfferLabel`: a trust offer that reaches every space.
   "vocabulary.offer.everySpace": "{offer} in every space",
   // `resolveTemplateNoun`: a template's noun, derived from its scope.

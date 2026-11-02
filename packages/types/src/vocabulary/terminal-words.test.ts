@@ -11,6 +11,7 @@ import {
   resolveObjectNoun,
   resolveObjectNounPlural,
   resolveRunnerStateLabel,
+  resolveRunnerStateLabelFor,
   resolveStatusLabel,
   RUNNER_STATE_LABELS,
 } from "./index.js";
@@ -69,5 +70,53 @@ describe("terminal words", () => {
     expect(resolveObjectNounPlural("test_run", "fr")).toBe("Séries de tests");
     expect(resolveStatusLabel("muted")).toBe("Muted");
     expect(resolveStatusLabel("muted", "fr")).toBe("En sourdine");
+  });
+
+  it("a runner's wait says 'your' only to the person it waits on (M2): another reader reads that person's name", () => {
+    const you = { isViewer: true, name: "Ana" };
+    const ana = { isViewer: false, name: "Ana" };
+    const someone = { isViewer: false, name: " " };
+    for (const state of Object.keys(RUNNER_STATE_LABELS)) {
+      // The viewer's own wait, or no holder: exactly the plain words.
+      for (const locale of ["en", "fr"] as const) {
+        expect(resolveRunnerStateLabelFor(state, you, locale)).toBe(
+          resolveRunnerStateLabel(state, locale)
+        );
+        expect(resolveRunnerStateLabelFor(state, null, locale)).toBe(
+          resolveRunnerStateLabel(state, locale)
+        );
+      }
+    }
+    expect(resolveRunnerStateLabelFor("needs_permission", ana, "en")).toBe(
+      "Waiting for Ana's permission"
+    );
+    expect(resolveRunnerStateLabelFor("needs_answer", ana, "en")).toBe(
+      "Waiting for Ana's answer"
+    );
+    expect(resolveRunnerStateLabelFor("needs_permission", someone, "en")).toBe(
+      "Waiting for permission"
+    );
+    expect(resolveRunnerStateLabelFor("needs_answer", someone, "en")).toBe(
+      "Waiting for an answer"
+    );
+    expect(resolveRunnerStateLabelFor("needs_permission", ana, "fr")).toBe(
+      "Attend l’autorisation de Ana"
+    );
+    expect(resolveRunnerStateLabelFor("needs_answer", someone, "fr")).toBe(
+      "Attend une réponse"
+    );
+    // Never "your" to anyone but the person waited on, in either locale.
+    for (const state of ["needs_permission", "needs_answer"]) {
+      for (const holder of [ana, someone]) {
+        expect(resolveRunnerStateLabelFor(state, holder, "en")).not.toMatch(
+          /\byour\b/i
+        );
+        expect(resolveRunnerStateLabelFor(state, holder, "fr")).not.toMatch(
+          /\bvotre\b/i
+        );
+      }
+    }
+    // A state that waits on nobody reads the same to every reader.
+    expect(resolveRunnerStateLabelFor("busy", ana, "en")).toBe("Working");
   });
 });

@@ -11,7 +11,8 @@
  *                      inherits from main (`redInheritedFromMain`) — and
  *                      nothing changed it for the first rung;
  *   main_red_unowned   main is red, nobody owns the fix (no ACTIVE session
- *                      titled `main red: <repo> …` started at or after main
+ *                      the snapshot's poster may read, titled
+ *                      `main red: <repo> …`, started at or after main
  *                      turned red — CI's own owner rule, `culprit-finder.mjs`
  *                      `revertDecision` — and no fix PR named in
  *                      `main.fixedBy`), for the first rung. Told to the
@@ -200,7 +201,10 @@ export function devSignalsOf(
   snapshot: RepoSnapshotFact,
   opts: {
     now: Date;
-    /** The ACTIVE `main red: …` sessions ({@link ownsMainRed}). */
+    /**
+     * The ACTIVE `main red: …` sessions the snapshot's poster may read
+     * ({@link ownsMainRed}): another person's never silences this red.
+     */
     owners: readonly MainRedOwner[];
     /**
      * The culprit PR's `dev.pr_merged` fact, by PR number, for a culprit the

@@ -2303,6 +2303,60 @@ export function resolveRunnerStateLabel(
   );
 }
 
+/**
+ * Whose answer a session's runner waits on, as the READER sees it: the
+ * reader themselves, or another person (by display name, when it is known).
+ */
+export interface RunnerWaitHolder {
+  /** The reader is the person the agent waits on. */
+  readonly isViewer: boolean;
+  /** That person's display name, when the reader is someone else. */
+  readonly name?: string | null;
+}
+
+/** The runner states that wait on one person: the only ones a holder changes. */
+const RUNNER_WAIT_SENTENCES = {
+  needs_permission: {
+    named: "vocabulary.runner.needs_permission.named",
+    unnamed: "vocabulary.runner.needs_permission.unnamed",
+  },
+  needs_answer: {
+    named: "vocabulary.runner.needs_answer.named",
+    unnamed: "vocabulary.runner.needs_answer.unnamed",
+  },
+} as const satisfies Partial<
+  Record<
+    RunnerState,
+    {
+      named: keyof VocabularySentencesEn;
+      unnamed: keyof VocabularySentencesEn;
+    }
+  >
+>;
+
+/**
+ * The words for a runner state FOR ITS READER (review 459d5e5b M2): "Waiting
+ * for your permission" only to the person the agent waits on; another reader
+ * (a room member) reads "Waiting for Ana's permission", or "Waiting for
+ * permission" when that person's name is unknown. A state that waits on
+ * nobody, a missing holder or the viewer's own wait read exactly
+ * {@link resolveRunnerStateLabel}.
+ */
+export function resolveRunnerStateLabelFor(
+  v: string | null | undefined,
+  holder: RunnerWaitHolder | null | undefined,
+  locale?: Locale
+): string {
+  const key = (v ?? "").trim().toLowerCase();
+  if (!holder || holder.isViewer || !Object.hasOwn(RUNNER_WAIT_SENTENCES, key))
+    return resolveRunnerStateLabel(v, locale);
+  const sentence =
+    RUNNER_WAIT_SENTENCES[key as keyof typeof RUNNER_WAIT_SENTENCES];
+  const name = holder.name?.trim();
+  const t = sentences(catalogLocaleOf(locale));
+  return name ? t(sentence.named, { name }) : t(sentence.unnamed);
+}
+
 /** The words for a wait kind; unknown values humanize, never leak. */
 export function resolveWaitKindLabel(v: string | null | undefined) {
   return resolveFrom(WAIT_KIND_LABELS, v);
