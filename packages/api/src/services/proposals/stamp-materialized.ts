@@ -702,7 +702,7 @@ export function mergeMaterializedRecords(
   return merged;
 }
 
-type LooseOp = { op: string } & Record<string, unknown>;
+export type LooseOp = { op: string } & Record<string, unknown>;
 
 function opTitle(op: LooseOp): string | undefined {
   for (const field of ["title", "name", "goal"] as const) {
@@ -717,11 +717,18 @@ function opTitle(op: LooseOp): string | undefined {
  * by its ref or `opRef(n)` (n = its ordinal among create_entity ops), a
  * relation by the edge it asked for, anything else by its ref.
  */
-function opKeys(operations: readonly LooseOp[]): string[] {
+export function opKeys(operations: readonly LooseOp[]): string[] {
   let entityOrdinal = 0;
   return operations.map((op, index) => {
     const ref = typeof op.ref === "string" && op.ref ? op.ref : undefined;
-    if (op.op === "create_entity") return ref ?? opRef(entityOrdinal++);
+    if (op.op === "create_entity") {
+      // EVERY create_entity counts, ref or not — as `buildByOp` counts. Only
+      // counting ref-less ones keyed a ref-less entity after a ref'd one as
+      // `$op0` while `byOp` named it `$op1`.
+      const key = ref ?? opRef(entityOrdinal);
+      entityOrdinal++;
+      return key;
+    }
     if (op.op === "create_relation") {
       return relationOpKey({
         sourceRef: String(op.sourceRef ?? ""),

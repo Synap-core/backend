@@ -193,9 +193,15 @@ export {
 } from "./proposals/revert.js";
 import {
   applyProposalApproval,
+  assertProposalMayBeApproved,
   emitProposalReviewed,
   reportProposalOutcome,
 } from "./proposals/apply-approval.js";
+import { assertAppSignInMayApprove } from "../services/app-sign-in-policy.js";
+import {
+  describeResolveOptions,
+  resolveProposalItem,
+} from "../services/proposals/resolve-item.js";
 import {
   identityResolutionByRefInput,
   identityResolutionForTwinsInput,
@@ -2043,6 +2049,121 @@ export const proposalsRouter = router({
         revision:
           input.expectedRevision + (Object.keys(input.set).length > 0 ? 1 : 0),
       };
+    }),
+
+  /**
+   * The waiting items of a graph that stopped part-way, each with its ranked
+   * choices (`services/proposals/resolve-item.ts`) — one read for pod-admin
+   * and the app, so both offer the same choices. Same floor as
+   * `repairOptions`: the `get` floor, then the approve ladder (one who sees
+   * it but cannot approve it gets NOT_FOUND). Anything that is not a stopped
+   * graph answers `resolvable: false` with why.
+   */
+  resolveOptions: protectedProcedure
+    .input(z.object({ proposalId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      await assertProposalVisibleTo(input.proposalId, userId, { db });
+      const proposal = await db.query.proposals.findFirst({
+        where: eq(proposals.id, input.proposalId),
+      });
+      if (proposal) assertNotForeignLibraryProposal(proposal, userId);
+      if (!proposal) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Proposal not found",
+        });
+      }
+      const { allowed } = await computeCanReviewApproval({
+        proposal,
+        userId,
+        roster: rosterReadFor(ctx),
+        purpose: "approve",
+        actingAgentUserId: ctx.agentUserId,
+      });
+      if (!allowed) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Proposal not found",
+        });
+      }
+      return describeResolveOptions(proposal, userId);
+    }),
+
+  /**
+   * Resolve ONE waiting item of a graph that stopped part-way: file it in
+   * another space, file it as another kind, make its kind available here
+   * (the governed scope-change door; may yield a review the item then waits
+   * on) or skip it — then resume what never ran. Never re-runs the landed
+   * items: a relation to one resolves through the receipt's record of it.
+   * The receipt records the item's outcome, and reads approved once nothing
+   * waits. The SAME authority as approving the proposal, and the human step
+   * like it: an agent caller is refused.
+   */
+  resolveItem: protectedProcedure
+    .input(
+      z.object({
+        proposalId: z.string(),
+        /** The waiting item's key, as `resolveOptions` gives it (`itemRef`). */
+        itemRef: z.string().min(1).max(500),
+        action: z.discriminatedUnion("type", [
+          z.object({
+            type: z.literal("file_in_workspace"),
+            workspaceId: z.string().uuid(),
+          }),
+          z.object({
+            type: z.literal("use_kind"),
+            profileSlug: z.string().min(1).max(100),
+          }),
+          z.object({ type: z.literal("skip") }),
+          z.object({ type: z.literal("create_kind") }),
+          z.object({
+            type: z.literal("widen_kind_scope"),
+            profileId: z.string().uuid(),
+          }),
+        ]),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      assertMayDecideProposal("approve", "resolve");
+      // It applies writes as approving does: the human step.
+      refuseAgentProposalApprover(ctx);
+      const userId = requireUserId(ctx.userId);
+      await assertProposalVisibleTo(input.proposalId, userId, { db });
+      const proposal = await db.query.proposals.findFirst({
+        where: eq(proposals.id, input.proposalId),
+      });
+      if (proposal) assertNotForeignLibraryProposal(proposal, userId);
+      if (!proposal) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Proposal not found",
+        });
+      }
+      // D3: a key bounded to some spaces resolves only there.
+      assertMayDecideProposalAt("approve", "resolve", proposal);
+      const { allowed, reason } = await computeCanReviewApproval({
+        proposal,
+        userId,
+        roster: rosterReadFor(ctx),
+        purpose: "approve",
+        actingAgentUserId: ctx.agentUserId,
+      });
+      if (!allowed) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: reviewRefusalMessage(reason, "approve"),
+        });
+      }
+      // The approve door's remaining gates, reused (apply-approval.ts).
+      await assertAppSignInMayApprove(proposal);
+      assertProposalMayBeApproved(proposal);
+      return resolveProposalItem({
+        proposal,
+        userId,
+        itemRef: input.itemRef,
+        action: input.action,
+      });
     }),
 
   /**

@@ -15090,6 +15090,25 @@ declare const FAILURE_ERROR_CLASSES: readonly [
 	"unknown"
 ];
 export type FailureErrorClass = (typeof FAILURE_ERROR_CLASSES)[number];
+/** A space the caller can see that holds an active kind with the slug. */
+export interface KindElsewhere {
+	workspaceId: string;
+	/** The space's name. */
+	name: string;
+}
+/** What a person needs to understand a missing kind. */
+export interface KindMissingDetail {
+	/** The slug the write named. */
+	profileSlug: string;
+	/** The kind's display name where it exists (first match), when known. */
+	kindName?: string;
+	/** The space the kind was looked up in (null = no space lens). */
+	workspaceId: string | null;
+	/** That space's name, when known. */
+	workspaceName?: string;
+	/** Other spaces the caller can see where the kind exists. Empty = nowhere. */
+	foundIn: KindElsewhere[];
+}
 /**
  * THE EFFECT RECEIPT — what the approval ACTUALLY did to storage.
  *
@@ -15424,6 +15443,151 @@ export interface MaterializedOpRecord {
 	/** Set when THIS op was reverted on its own (`proposals.revert` with `opKey`). */
 	revertedAt?: string;
 	revertedBy?: string;
+}
+declare const RESOLVE_ACTION_TYPES: readonly [
+	"file_in_workspace",
+	"use_kind",
+	"skip",
+	"create_kind",
+	"widen_kind_scope"
+];
+export type ResolveActionType = (typeof RESOLVE_ACTION_TYPES)[number];
+/** How one item was resolved — `materialized.resolutions[key]`. */
+export interface ItemResolution {
+	action: ResolveActionType;
+	/** filed: it ran (see `byOp`); skipped: left out; held: waits on a review. */
+	outcome: "filed" | "held" | "skipped";
+	by: string;
+	at: string;
+	workspaceId?: string;
+	profileSlug?: string;
+	/** The review it waits on (a kind scope change that needs approval). */
+	reviewProposalId?: string;
+}
+export interface WaitingItem extends MaterializedOpRef {
+	/** failed: the op that threw; not_run: never reached; held: waits on a review. */
+	state: "failed" | "held" | "not_run";
+	reason?: string;
+	errorClass?: string;
+	reviewProposalId?: string;
+}
+export interface KindSuggestionSignals {
+	sameSlug: boolean;
+	vocabulary: boolean;
+	/** 0..1 — share of the item's property keys the candidate has. */
+	fieldOverlap: number;
+	/** 0..1 — name closeness, or 0.5 when the candidate is named in the title. */
+	similarity: number;
+}
+export interface OptionBase {
+	recommended: boolean;
+	/** false: shown for what it will be, refused for now (`unavailableReason`). */
+	available: boolean;
+	unavailableReason?: "not_yet" | "review_pending";
+}
+/** One choice for a waiting item. `kind` picks the words; `action` is sent back. */
+export type ResolveOption = OptionBase & ({
+	action: {
+		profileSlug: string;
+		type: "use_kind";
+	};
+	/** The item's own kind is available where it lands now. */
+	kind: "file_here_now";
+	kindName: string;
+} | {
+	action: {
+		type: "file_in_workspace";
+		workspaceId: string;
+	};
+	kind: "file_in_workspace";
+	kindName: string;
+	workspaceName: string;
+} | {
+	action: {
+		profileId: string;
+		type: "widen_kind_scope";
+	};
+	fromWorkspaceName: string;
+	intoWorkspaceName: string;
+	kind: "widen_kind_scope";
+	kindName: string;
+} | {
+	action: {
+		profileSlug: string;
+		type: "use_kind";
+	};
+	kind: "use_kind";
+	kindName: string;
+	signals: KindSuggestionSignals;
+} | {
+	action: {
+		type: "create_kind";
+	};
+	draft: {
+		displayName: string;
+		fields: Array<{
+			slug: string;
+			valueType: string;
+		}>;
+		slug: string;
+	};
+	intoWorkspaceName?: string;
+	kind: "create_kind";
+} | {
+	action: {
+		profileSlug: string;
+		type: "use_kind";
+	};
+	/** File it again as it was proposed (a failure that was not its kind). */
+	kind: "retry";
+} | {
+	action: {
+		type: "skip";
+	};
+	kind: "skip";
+});
+export interface ResolveItemView {
+	/** The item's key on the receipt — what `resolveItem` takes as `itemRef`. */
+	itemRef: string;
+	opIndex: number;
+	op: string;
+	title?: string;
+	state: WaitingItem["state"];
+	/** The safe sentence of why it failed (the failed item only). */
+	reason?: string;
+	errorClass?: string;
+	/** The review a held item waits on. */
+	reviewProposalId?: string;
+	/** A missing kind, described for THIS caller (only spaces they can read). */
+	kindMissing?: KindMissingDetail;
+	/** The keys of the waiting links that need this item. */
+	dependents: string[];
+	/** Best first; at most one is `recommended`. */
+	options: ResolveOption[];
+}
+export interface ResolveOptionsResult {
+	resolvable: boolean;
+	reason?: "already_decided" | "not_a_stopped_graph" | "nothing_waiting" | "record_mismatch";
+	opCount?: number;
+	items: ResolveItemView[];
+}
+export interface ResolveItemResult {
+	/** Nothing waits any more: the proposal now reads approved. */
+	complete: boolean;
+	status: "approval_failed" | "approved";
+	/** failed: the resumed run stopped on this same item again. */
+	outcome: ItemResolution["outcome"] | "failed";
+	/** Records and links this resolution filed (created or linked). */
+	filed: number;
+	/** Items still waiting after it. */
+	waiting: number;
+	/** The review the item now waits on (a kind scope change). */
+	reviewProposalId?: string;
+	/** A later item the resumed run stopped on. */
+	stoppedOn?: {
+		itemRef: string;
+		reason: string;
+	};
 }
 declare const SystemEventTypes: {
 	readonly WEBHOOK_DELIVERY: "webhooks.deliver.requested";
@@ -46806,6 +46970,35 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: ProposalRepair;
+		}>;
+		resolveItem: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				action: {
+					type: "file_in_workspace";
+					workspaceId: string;
+				} | {
+					profileSlug: string;
+					type: "use_kind";
+				} | {
+					type: "skip";
+				} | {
+					type: "create_kind";
+				} | {
+					profileId: string;
+					type: "widen_kind_scope";
+				};
+				itemRef: string;
+				proposalId: string;
+			};
+			meta: object;
+			output: ResolveItemResult;
+		}>;
+		resolveOptions: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				proposalId: string;
+			};
+			meta: object;
+			output: ResolveOptionsResult;
 		}>;
 		restoreItem: import("@trpc/server").TRPCMutationProcedure<{
 			input: {

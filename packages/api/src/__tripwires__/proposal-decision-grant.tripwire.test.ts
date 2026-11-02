@@ -46,6 +46,9 @@ const DECIDES: Record<string, "approve" | "reject"> = {
   // grows a kind's allowed values and revises a failed proposal for the
   // reviewer to approve next: it asks the approve right (decision fa6c8833)
   repair: "approve",
+  // files one waiting item of a stopped graph and resumes the rest: writes
+  // with the reviewer's authority, the approve right (resolve-item.ts)
+  resolveItem: "approve",
 };
 /** Decisions whose key check needs the row, so it runs in a shared core. */
 const DECIDES_IN_CORE: Record<string, string> = {

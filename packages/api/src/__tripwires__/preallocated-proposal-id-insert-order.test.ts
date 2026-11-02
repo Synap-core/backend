@@ -160,6 +160,8 @@ describe("a pre-allocated proposal id is inserted before it is stamped onto FK r
       "playbook/run approval replay — stamps `proposal.id`, a row loaded from the DB, so the FK target already exists; it also tells `playbooks.run` to gate on the approver, not the agent.",
     "services/proposals/redecide-graph-revision.ts":
       "re-decide of an agent's revised graph — stamps `claimed.id`, the row its compare-and-set just RETURNED (pending → auto_approved), so the FK target exists.",
+    "services/proposals/resolve-item.ts":
+      "resolving one waiting item of a stopped graph — stamps `proposal.id`, a row the door loaded (and the resolution claimed under a compare-and-set), so the FK target exists.",
     "services/forms/direct-materialize.ts":
       "guest form DIRECT mode (Sites W4) — stamps `input.receiptId`, the gate's `autoApprovedProposalId`, which the gate returns only AFTER its receipt insert succeeded (absent when that insert failed), so the FK target exists.",
   };
@@ -199,6 +201,9 @@ describe("a pre-allocated proposal id is inserted before it is stamped onto FK r
     // freshly minted uuid.
     expect(found.get("routers/proposals/apply-approval.ts")).toEqual([
       "proposal.id",
+      "proposal.id",
+    ]);
+    expect(found.get("services/proposals/resolve-item.ts")).toEqual([
       "proposal.id",
     ]);
 
