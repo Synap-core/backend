@@ -10253,13 +10253,48 @@ declare const PACKAGE_UPDATE_NEEDS: readonly [
 export type PackageUpdateNeeds = (typeof PACKAGE_UPDATE_NEEDS)[number];
 /** How many fields of a package are in each state. */
 export type PackageFieldCounts = Record<PackageFieldState, number>;
-/** The kinds of installed row a plan compares today. */
+/** The kinds of installed row a plan compares field by field. */
 export type PackageUpdateRowKind = "automation" | "skill" | "view";
+declare const INSTALLED_PACKAGE_KINDS: readonly [
+	"workspace",
+	"capability",
+	"view",
+	"skill",
+	"automation"
+];
+export type InstalledPackageKind = (typeof INSTALLED_PACKAGE_KINDS)[number];
+declare const PACKAGE_UPDATE_COMPARED_BY: readonly [
+	"field",
+	"package"
+];
+export type PackageUpdateComparedBy = (typeof PACKAGE_UPDATE_COMPARED_BY)[number];
+/**
+ * One installed package and its verdict under `packageHasUpdate`: one entry
+ * per package (slug + kind), whatever number of rows it installed.
+ */
+export interface PackageStanding {
+	slug: string;
+	kind: InstalledPackageKind;
+	name: string;
+	/** The version the pod last converged to; null = never stamped. */
+	installedVersion: string | null;
+	/** The catalog's version now; null = not in the pod's copy of the catalog. */
+	latestVersion: string | null;
+	/**
+	 * true / false = compared by `packageHasUpdate`. null = NOT compared (no
+	 * stamp, no catalog version, the catalog unreadable): `reason` says why.
+	 * Never a defaulted false.
+	 */
+	hasUpdate: boolean | null;
+	reason?: string;
+}
 /** One row of `GET /package-updates` / `packageUpdates.list`. */
 export interface PackageUpdateSummary {
 	slug: string;
-	/** The catalog kind of the package (`skill`, `view`, `automation`). */
+	/** The catalog kind of the package (`workspace`, `capability`, `skill`, …). */
 	kind: string;
+	/** Field by field, or as a whole package (`packageUpdateComparedBy`). */
+	comparedBy: PackageUpdateComparedBy;
 	name: string;
 	/** The version the pod's rows last converged to; null when never recorded. */
 	installedVersion: string | null;
@@ -10284,6 +10319,12 @@ export interface PackageUpdateList {
 		reason: string;
 		slug: string;
 	}>;
+	/**
+	 * Every installed package with its verdict (`packageHasUpdate`), the ones
+	 * with no update included: what a reader lists as "up to date" or "can't
+	 * check" reads it here instead of comparing versions itself.
+	 */
+	installed: PackageStanding[];
 }
 /** One pending change to existing records a space update would run. */
 export interface PackageDataChange {
@@ -10322,6 +10363,8 @@ export interface PackageUpdateField {
 export interface PackageUpdatePlan {
 	slug: string;
 	kind: string;
+	/** `package`: no field rows; the update applies as a whole (see the type). */
+	comparedBy: PackageUpdateComparedBy;
 	name: string;
 	installedVersion: string | null;
 	latestVersion: string | null;
@@ -10397,6 +10440,12 @@ export interface PackageUpdateReceipt {
 export type PackageUpdateApplyResult = {
 	receipt: PackageUpdateReceipt | null;
 	status: "applied";
+	/**
+	 * A whole-package update that landed but did not finish (part of a
+	 * space's template waits on an approval or a setup): the pod's one
+	 * sentence for what is left.
+	 */
+	warning?: string;
 } | {
 	proposalIds: string[];
 	status: "proposed";

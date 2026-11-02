@@ -93,13 +93,30 @@ export function waitingUpdates(
     .flatMap((g) => g.items);
 }
 
-/** The updates that need nothing from anyone (the batch primary). */
+/**
+ * The updates that need nothing from anyone (the batch primary): field
+ * updates only. A space or capability update (`comparedBy: "package"`) is
+ * opened and applied on its own page, never in a batch.
+ */
 export function updatesNeedingNothing(
   list: readonly PackageUpdateSummary[]
 ): PackageUpdateSummary[] {
   return (
-    groupUpdates(list).groups.find((g) => g.group === "review")?.items ?? []
+    groupUpdates(list)
+      .groups.find((g) => g.group === "review")
+      ?.items.filter((s) => s.comparedBy !== "package") ?? []
   );
+}
+
+/**
+ * An update applied as a whole (a space's template, a capability): no field
+ * cards, no "Stop updates", no Undo; the pod's door adds what the new version
+ * brings and keeps the pod's edits.
+ */
+export function isWholePackage(
+  p: Pick<PackageUpdatePlan, "comparedBy">
+): boolean {
+  return p.comparedBy === "package";
 }
 
 export interface QueuePosition {
@@ -377,8 +394,12 @@ export function resultOf(
 
 // ─── The decision ────────────────────────────────────────────────────────────
 
-/** Why the primary cannot be pressed yet, the first that holds. */
-export type DecisionBlock = "choices" | "version";
+/**
+ * Why the primary cannot be pressed yet, the first that holds. `records`: a
+ * whole-package update runs only with every change to records agreed (the
+ * pod refuses it otherwise; a field update runs without the unticked ones).
+ */
+export type DecisionBlock = "choices" | "version" | "records";
 
 /**
  * The changes to records a person can agree to: a destructive one is never
@@ -405,7 +426,10 @@ export interface Decision {
 }
 
 export function decisionOf(
-  plan: Pick<PackageUpdatePlan, "rows" | "dataChanges" | "latestVersion">,
+  plan: Pick<
+    PackageUpdatePlan,
+    "rows" | "dataChanges" | "latestVersion" | "comparedBy"
+  >,
   chosen: Readonly<Record<string, ChoiceId>>,
   edits: Readonly<Record<string, string>>,
   accepted: ReadonlySet<string>
@@ -433,6 +457,21 @@ export function decisionOf(
   }
   const consentable = consentableDataChanges(plan);
   const ticked = consentable.filter((c) => accepted.has(c.id)).length;
+  if (isWholePackage(plan)) {
+    return {
+      changing: 0,
+      keeping: 0,
+      missing: [],
+      // There is always something to apply: the catalog's new version.
+      primary: "update",
+      blocked: !plan.latestVersion
+        ? "version"
+        : ticked < consentable.length
+          ? "records"
+          : null,
+      recordsSkipped: 0,
+    };
+  }
   const blocked: DecisionBlock | null =
     missing.length > 0 ? "choices" : !plan.latestVersion ? "version" : null;
   return {

@@ -19,7 +19,11 @@ import {
   undoPackageUpdateInputSchema,
 } from "@synap-core/types/package-updates";
 
-import { router, podAdminProcedure } from "../trpc.js";
+import {
+  router,
+  podAdminProcedure,
+  requireFreshAuthentication,
+} from "../trpc.js";
 import {
   getPackageUpdatePlan,
   listPackageUpdates,
@@ -45,7 +49,11 @@ export const packageUpdatesRouter = router({
    * `get`. Not named `apply`: tRPC reserves `apply`, `call` and `then` as
    * procedure names (a router using one fails to build).
    */
+  // A whole space update re-applies the template (`installTemplateFromCatalog`),
+  // which can enrol agents in the space (workspace_members): a credential
+  // write, so a device session needs a fresh sign-in, as `workspaces.installFromCatalog`.
   applyUpdate: podAdminProcedure
+    .use(requireFreshAuthentication)
     .input(applyPackageUpdateInputSchema)
     .mutation(({ ctx, input }) => applyPackageUpdate(ctx, input)),
 

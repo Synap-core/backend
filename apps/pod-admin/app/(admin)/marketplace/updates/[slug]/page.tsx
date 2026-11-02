@@ -56,6 +56,7 @@ import {
   fieldMark,
   groupMark,
   initialChoices,
+  isWholePackage,
   nextAfter,
   queuePosition,
   recommendedChoice,
@@ -241,7 +242,7 @@ function ReviewUpdate({
       summary={
         outcome.kind === "receipt" || outcome.kind === "stopped"
           ? null
-          : reviewSummary(t, group, kindWord)
+          : reviewSummary(t, group, kindWord, isWholePackage(plan))
       }
       breadcrumb={[
         { label: navLabel("marketplace"), href: navHref("marketplace") },
@@ -411,9 +412,21 @@ function ReviewUpdate({
           {t("after.title")}
         </h2>
         <ul className="flex list-disc flex-col gap-1 pl-5 text-[12.5px] leading-relaxed text-foreground/75">
-          <li>{t("after.write", { kind: kindWord.toLowerCase() })}</li>
-          <li>{t("after.baseline")}</li>
-          <li>{t("after.undo")}</li>
+          {isWholePackage(plan) ? (
+            <>
+              <li>
+                {t("after.package.add", { kind: kindWord.toLowerCase() })}
+              </li>
+              <li>{t("after.package.stamp")}</li>
+              <li>{t("after.package.noUndo")}</li>
+            </>
+          ) : (
+            <>
+              <li>{t("after.write", { kind: kindWord.toLowerCase() })}</li>
+              <li>{t("after.baseline")}</li>
+              <li>{t("after.undo")}</li>
+            </>
+          )}
           <li>{t("after.agents")}</li>
         </ul>
       </section>
@@ -444,9 +457,13 @@ function ReviewUpdate({
 function reviewSummary(
   t: TFunction<typeof en>,
   group: ReturnType<typeof summaryMark>["group"],
-  kind: string
+  kind: string,
+  whole: boolean
 ): string {
   const k = kind.toLowerCase();
+  if (whole && group !== "consent") {
+    return t("review.summary.package", { kind: k });
+  }
   switch (group) {
     case "choice":
       return t("review.summary.choose", { kind: k });
@@ -553,19 +570,23 @@ function DecisionBar({
         })
       : decision.blocked === "version"
         ? t("bar.version")
-        : [
-            decision.primary === "keep"
-              ? t("bar.nothing")
-              : t("bar.update", { changing: decision.changing }),
-            decision.primary === "update" && decision.keeping > 0
-              ? t("bar.keep", { keeping: decision.keeping })
-              : null,
-            decision.recordsSkipped > 0
-              ? t("bar.withoutRecords", { n: decision.recordsSkipped })
-              : null,
-          ]
-            .filter(Boolean)
-            .join(" · ");
+        : decision.blocked === "records"
+          ? t("bar.records")
+          : isWholePackage(plan)
+            ? t("bar.package")
+            : [
+                decision.primary === "keep"
+                  ? t("bar.nothing")
+                  : t("bar.update", { changing: decision.changing }),
+                decision.primary === "update" && decision.keeping > 0
+                  ? t("bar.keep", { keeping: decision.keeping })
+                  : null,
+                decision.recordsSkipped > 0
+                  ? t("bar.withoutRecords", { n: decision.recordsSkipped })
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" · ");
   const primaryLabel =
     decision.primary === "keep"
       ? t("bar.keepMine")
@@ -588,15 +609,18 @@ function DecisionBar({
         >
           {line}
         </p>
-        <Button
-          size="sm"
-          variant="light"
-          radius="md"
-          isDisabled={busy}
-          onPress={onStop}
-        >
-          {t("bar.stop")}
-        </Button>
+        {/* "Stop updates" detaches rows; a space or capability has none. */}
+        {!isWholePackage(plan) && (
+          <Button
+            size="sm"
+            variant="light"
+            radius="md"
+            isDisabled={busy}
+            onPress={onStop}
+          >
+            {t("bar.stop")}
+          </Button>
+        )}
         <Button
           as={Link}
           href={UPDATES_HREF}
@@ -676,8 +700,9 @@ function Receipt({
       name: plan.name,
       version: r?.toVersion ?? plan.latestVersion ?? "",
     });
-    detail =
-      outcome.changedNothing || changed.length === 0
+    detail = isWholePackage(plan)
+      ? [t("receipt.package"), outcome.result.warning].filter(Boolean).join(" ")
+      : outcome.changedNothing || changed.length === 0
         ? t("receipt.nothing")
         : t("receipt.changed", { fields: changed.join(", ") });
     undoable = r && changed.length > 0 ? r.id : null;

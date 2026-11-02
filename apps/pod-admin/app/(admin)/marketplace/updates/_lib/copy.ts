@@ -29,7 +29,8 @@ export const en = {
   "group.review.meta": "Nobody edited what changed",
   "group.nothing.meta": "You edited it; the catalog has not changed it",
   "group.unreadable": "Can’t check",
-  "group.unreadable.meta": "The pod could not read these packages’ catalog",
+  "group.unreadable.meta":
+    "The pod could not compare these packages with the catalog: each says why",
   "mark.choice": "Your edit and a catalog change",
   "mark.consent": "Changes your records",
   "mark.review": "Ready",
@@ -44,6 +45,7 @@ export const en = {
   "count.data":
     "{n, plural, one {# change to your records} other {# changes to your records}}",
   "row.secondary": "{kind} · {counts}",
+  "row.newVersion": "New version in the catalog",
   "review.loading": "Loading the update",
   "review.failed": "Couldn’t read this update from the pod.",
   "review.retry": "Try again",
@@ -64,6 +66,8 @@ export const en = {
   "review.summary.yours":
     "You edited this {kind}; the catalog has not changed what you edited.",
   "review.version": "Version",
+  "review.summary.package":
+    "The catalog has a new version of this {kind}. Updating adds what it brings and keeps your edits.",
   "review.queue": "{index} of {total}",
   "review.previous": "Previous update",
   "review.next": "Next update",
@@ -124,6 +128,11 @@ export const en = {
   "after.baseline":
     "Records the catalog’s version as the new starting point: the update leaves the list, and the next catalog change is compared with it.",
   "after.undo": "Keeps what it replaced: Undo puts it back for 30 days.",
+  "after.package.add":
+    "Applies the new version as you, through the {kind}’s own update: it adds what is new and keeps what you edited (a playbook or a rule you changed is merged, never overwritten).",
+  "after.package.stamp":
+    "Records the new version once all of it applied: the update leaves the list.",
+  "after.package.noUndo": "There is no Undo: nothing you edited is replaced.",
   "after.agents":
     "Agents get the new version the next time they load it; a run already going keeps what it loaded.",
   "bar.update":
@@ -141,6 +150,8 @@ export const en = {
   "bar.stop": "Stop updates",
   "bar.version": "The catalog named no version: reload the update.",
   "bar.applying": "Applying…",
+  "bar.package": "Applies the catalog’s new version; your edits are kept.",
+  "bar.records": "Agree to each change to your records first.",
   "stop.title": "Stop updates for {name}?",
   "stop.body":
     "It becomes fully yours: the catalog never changes it again, and it leaves this list. You can install the catalog’s version again later.",
@@ -151,6 +162,8 @@ export const en = {
   "receipt.applied": "Updated. {name} follows the catalog’s version {version}.",
   "receipt.changed": "Changed: {fields}. What it replaced is kept for 30 days.",
   "receipt.nothing": "Your choice is recorded; nothing on the pod changed.",
+  "receipt.package":
+    "What the new version brings was added; your edits were kept.",
   "receipt.proposed":
     "Sent for approval. It applies once someone with access approves it.",
   "receipt.openRequest": "Open the request",
@@ -198,7 +211,8 @@ export const fr: Catalog<typeof en> = {
   "group.review.meta": "Personne n’a modifié ce qui a changé",
   "group.nothing.meta": "Vous l’avez modifié ; le catalogue ne l’a pas changé",
   "group.unreadable": "Vérification impossible",
-  "group.unreadable.meta": "Le pod n’a pas pu lire le catalogue de ces paquets",
+  "group.unreadable.meta":
+    "Le pod n’a pas pu comparer ces paquets au catalogue : chacun dit pourquoi",
   "mark.choice": "Votre modification et celle du catalogue",
   "mark.consent": "Modifie vos fiches",
   "mark.review": "Prête",
@@ -213,6 +227,7 @@ export const fr: Catalog<typeof en> = {
   "count.data":
     "{n, plural, one {# changement sur vos fiches} other {# changements sur vos fiches}}",
   "row.secondary": "{kind} · {counts}",
+  "row.newVersion": "Nouvelle version dans le catalogue",
   "review.loading": "Chargement de la mise à jour",
   "review.failed": "Impossible de lire cette mise à jour sur le pod.",
   "review.retry": "Réessayer",
@@ -233,6 +248,8 @@ export const fr: Catalog<typeof en> = {
   "review.summary.yours":
     "Vous avez modifié cet élément ({kind}) ; le catalogue n’a pas changé ce que vous avez modifié.",
   "review.version": "Version",
+  "review.summary.package":
+    "Le catalogue a une nouvelle version de cet élément ({kind}). La mise à jour ajoute ce qu’elle apporte et garde vos modifications.",
   "review.queue": "{index} sur {total}",
   "review.previous": "Mise à jour précédente",
   "review.next": "Mise à jour suivante",
@@ -298,6 +315,12 @@ export const fr: Catalog<typeof en> = {
     "Enregistre la version du catalogue comme nouveau point de départ : la mise à jour quitte la liste, et le prochain changement du catalogue est comparé à elle.",
   "after.undo":
     "Garde ce qu’elle remplace : Annuler le remet en place pendant 30 jours.",
+  "after.package.add":
+    "Applique la nouvelle version en votre nom, par la mise à jour propre à l’élément ({kind}) : elle ajoute ce qui est nouveau et garde ce que vous avez modifié (un playbook ou une règle que vous avez changé est fusionné, jamais écrasé).",
+  "after.package.stamp":
+    "Enregistre la nouvelle version une fois tout appliqué : la mise à jour quitte la liste.",
+  "after.package.noUndo":
+    "Pas d’annulation : rien de ce que vous avez modifié n’est remplacé.",
   "after.agents":
     "Les agents reçoivent la nouvelle version au prochain chargement ; une exécution en cours garde ce qu’elle a chargé.",
   "bar.update":
@@ -316,6 +339,10 @@ export const fr: Catalog<typeof en> = {
   "bar.version":
     "Le catalogue n’a pas donné de version : rechargez la mise à jour.",
   "bar.applying": "Application…",
+  "bar.package":
+    "Applique la nouvelle version du catalogue ; vos modifications sont gardées.",
+  "bar.records":
+    "Donnez d’abord votre accord à chaque changement sur vos fiches.",
   "stop.title": "Arrêter les mises à jour de {name} ?",
   "stop.body":
     "Il devient entièrement le vôtre : le catalogue ne le change plus jamais, et il quitte cette liste. Vous pourrez réinstaller la version du catalogue plus tard.",
@@ -328,6 +355,8 @@ export const fr: Catalog<typeof en> = {
   "receipt.changed":
     "Modifié : {fields}. Ce qui a été remplacé est gardé 30 jours.",
   "receipt.nothing": "Votre choix est enregistré ; rien n’a changé sur le pod.",
+  "receipt.package":
+    "Ce qu’apporte la nouvelle version a été ajouté ; vos modifications sont gardées.",
   "receipt.proposed":
     "Envoyée pour approbation. Elle s’applique dès qu’une personne autorisée l’approuve.",
   "receipt.openRequest": "Ouvrir la demande",

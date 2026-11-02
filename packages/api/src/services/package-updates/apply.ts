@@ -21,6 +21,7 @@ import { TRPCError } from "@trpc/server";
 import { getActingAgentUserId } from "@synap/database";
 import {
   applyPackageUpdateInputSchema,
+  packageUpdateComparedBy,
   type ApplyPackageUpdateInput,
   type PackageUpdateApplyResult,
   type PackageUpdateChange,
@@ -32,6 +33,7 @@ import {
   MARKET_SOURCE_COMPARATOR_VERSION,
 } from "../capabilities/market-source.js";
 import {
+  loadInstalledStandaloneRows,
   loadStandaloneRows,
   writeStandaloneRow,
   type StandaloneKind,
@@ -39,6 +41,8 @@ import {
 } from "../capabilities/reconcile-standalone-configs-to-templates.js";
 import type { Context } from "../../types/context.js";
 import { planPackageRows, type PlannedRow } from "./plan.js";
+import { applyWholePackageUpdate } from "./apply-whole.js";
+import { listInstalledPackages } from "./standing.js";
 import {
   getPackageUpdateReceipt,
   recordPackageUpdateReceipt,
@@ -183,8 +187,20 @@ export async function applyPackageUpdate(
   rawInput: ApplyPackageUpdateInput
 ): Promise<PackageUpdateApplyResult> {
   const input = applyPackageUpdateInputSchema.parse(rawInput);
-  // `acceptDataChanges` is for a space update's data changes; the rows this
-  // door applies today (view, skill, automation) change no records.
+  // A space or capability package is applied as a whole, through its own
+  // door (`apply-whole.ts`); `acceptDataChanges` is that space update's.
+  const installed = await loadInstalledStandaloneRows({
+    packageSlugs: [input.slug],
+  });
+  if (installed.length === 0) {
+    const whole = (await listInstalledPackages()).find(
+      (p) =>
+        p.slug === input.slug && packageUpdateComparedBy(p.kind) === "package"
+    );
+    if (whole) return applyWholePackageUpdate(ctx, whole, input);
+  }
+  // The rows this door applies field by field (view, skill, automation)
+  // change no records.
   const planned = await planPackageRows(input.slug);
   refuseUngovernedAgentWrite(
     ctx,

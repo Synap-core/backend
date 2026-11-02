@@ -7006,7 +7006,7 @@
       "get": {
         "tags": ["Packages"],
         "summary": "List the package updates waiting on this pod",
-        "description": "Every installed view/skill/automation package whose catalog version moved, with how many fields each update changes per state (updates / yours / both / same) and what it needs from a person. A package whose catalog cannot be read is listed under `unreadable` with the reason. Pod admins only. Requires hub-protocol.read scope.",
+        "description": "Every installed package (space template, overlay pack, capability, view, skill, automation) whose catalog version moved, by the one rule every surface reads: the catalog's content-hash version against the one the pod converged to. A view/skill/automation update counts how many fields it changes per state (updates / yours / both / same); a space or capability is updated as a whole (`comparedBy: package`). A package that cannot be compared is listed under `unreadable` with the reason; `installed` carries every package's verdict. Pod admins only. Requires hub-protocol.read scope.",
         "security": [{ "bearerAuth": [] }],
         "responses": {
           "200": {
@@ -7023,6 +7023,11 @@
                         "properties": {
                           "slug": { "type": "string" },
                           "kind": { "type": "string" },
+                          "comparedBy": {
+                            "type": "string",
+                            "enum": ["field", "package"],
+                            "description": "`field`: compared and applied field by field (view, skill, automation). `package`: applied as a whole through the kind's own template door (workspace, capability); no field rows."
+                          },
                           "name": { "type": "string" },
                           "installedVersion": { "type": ["string", "null"] },
                           "latestVersion": { "type": ["string", "null"] },
@@ -7046,6 +7051,7 @@
                         "required": [
                           "slug",
                           "kind",
+                          "comparedBy",
                           "name",
                           "installedVersion",
                           "latestVersion",
@@ -7068,9 +7074,45 @@
                         },
                         "required": ["slug", "kind", "name", "reason"]
                       }
+                    },
+                    "installed": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "slug": { "type": "string" },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "workspace",
+                              "capability",
+                              "view",
+                              "skill",
+                              "automation"
+                            ]
+                          },
+                          "name": { "type": "string" },
+                          "installedVersion": { "type": ["string", "null"] },
+                          "latestVersion": { "type": ["string", "null"] },
+                          "hasUpdate": {
+                            "type": ["boolean", "null"],
+                            "description": "true/false = compared by the one rule (the catalog's content-hash version against the one the pod converged to). null = not compared: `reason` says why. Never a defaulted false."
+                          },
+                          "reason": { "type": "string" }
+                        },
+                        "required": [
+                          "slug",
+                          "kind",
+                          "name",
+                          "installedVersion",
+                          "latestVersion",
+                          "hasUpdate"
+                        ]
+                      },
+                      "description": "Every installed package (one per slug and kind) with its verdict, the up-to-date ones included."
                     }
                   },
-                  "required": ["updates", "unreadable"]
+                  "required": ["updates", "unreadable", "installed"]
                 }
               }
             }
@@ -7118,6 +7160,11 @@
                   "properties": {
                     "slug": { "type": "string" },
                     "kind": { "type": "string" },
+                    "comparedBy": {
+                      "type": "string",
+                      "enum": ["field", "package"],
+                      "description": "`field`: compared and applied field by field (view, skill, automation). `package`: applied as a whole through the kind's own template door (workspace, capability); no field rows."
+                    },
                     "name": { "type": "string" },
                     "installedVersion": { "type": ["string", "null"] },
                     "latestVersion": { "type": ["string", "null"] },
@@ -7181,6 +7228,7 @@
                   "required": [
                     "slug",
                     "kind",
+                    "comparedBy",
                     "name",
                     "installedVersion",
                     "latestVersion",
@@ -7231,7 +7279,7 @@
       "post": {
         "tags": ["Packages"],
         "summary": "Apply a package update with a choice per field",
-        "description": "`choices` is keyed `<rowId>:<field>`: `catalog`, `mine`, `combine` or `{value}`. Every field both sides changed needs one; a field only the catalog changed defaults to `catalog`. `expectedVersion` is the catalog version the plan showed: a newer one answers 409. Each row is written through its own governed `.update` door as the caller: a person's write lands and returns its receipt (Undo for 30 days, on pod admin); an agent's is filed as proposals. Pod admins only. Requires hub-protocol.write scope.",
+        "description": "`choices` is keyed `<rowId>:<field>`: `catalog`, `mine`, `combine` or `{value}`. Every field both sides changed needs one; a field only the catalog changed defaults to `catalog`. `expectedVersion` is the catalog version the plan showed: a newer one answers 409. Each row is written through its own governed `.update` door as the caller: a person's write lands and returns its receipt (Undo for 30 days, on pod admin); an agent's is filed as proposals. A space or capability package (`comparedBy: package`) takes no choices: a person's apply runs the space's agreed `acceptDataChanges`, then its template apply (or the capability's reconcile); an agent is refused (403). Pod admins only. Requires hub-protocol.write scope.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -7286,6 +7334,10 @@
                       "type": "object",
                       "properties": {
                         "status": { "type": "string", "enum": ["applied"] },
+                        "warning": {
+                          "type": "string",
+                          "description": "A whole-package update that landed but did not finish: what is left."
+                        },
                         "receipt": {
                           "type": ["object", "null"],
                           "properties": {

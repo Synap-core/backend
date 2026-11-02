@@ -14,6 +14,7 @@ import {
   groupMark,
   groupUpdates,
   initialChoices,
+  isWholePackage,
   nextAfter,
   queuePosition,
   recommendedChoice,
@@ -32,6 +33,7 @@ function summary(over: Partial<PackageUpdateSummary>): PackageUpdateSummary {
   return {
     slug: "pkg",
     kind: "skill",
+    comparedBy: "field",
     name: "Package",
     installedVersion: "h-1",
     latestVersion: "h-2",
@@ -62,6 +64,7 @@ function plan(
   return {
     slug: "pkg",
     kind: "skill",
+    comparedBy: "field",
     name: "Package",
     installedVersion: "h-1",
     latestVersion: "h-2",
@@ -383,5 +386,57 @@ describe("updateFailureOf — a failed read is never 'no updates'", () => {
   it("reads anything else as a failure to retry", () => {
     expect(updateFailureOf(new Error("network"))).toBe("failed");
     expect(updateFailureOf(null)).toBe("failed");
+  });
+});
+
+describe("a whole-package update (a space, a capability)", () => {
+  const space = (over: Partial<PackageUpdatePlan> = {}) =>
+    plan([], {
+      kind: "workspace",
+      comparedBy: "package",
+      rows: [],
+      needs: "review",
+      ...over,
+    });
+
+  it("always has something to apply: the catalog's new version", () => {
+    const d = decisionOf(space(), {}, {}, NONE);
+    expect(isWholePackage(space())).toBe(true);
+    expect(d.primary).toBe("update");
+    expect(d.blocked).toBeNull();
+  });
+
+  it("waits until every change to records is agreed (the pod refuses otherwise)", () => {
+    const withRecords = space({
+      needs: "consent",
+      dataChanges: {
+        count: 2,
+        needsPodAdmin: true,
+        items: [
+          { id: "op-a", sentence: "A", affected: 3, destructive: false },
+          { id: "op-b", sentence: "B", affected: 1, destructive: true },
+        ],
+      },
+    });
+    expect(decisionOf(withRecords, {}, {}, NONE).blocked).toBe("records");
+    // A destructive change is an operator step: it never blocks.
+    expect(
+      decisionOf(withRecords, {}, {}, new Set(["op-a"])).blocked
+    ).toBeNull();
+  });
+
+  it("is never applied by the batch primary", () => {
+    const list = [
+      summary({ slug: "a", needs: "review", counts: { ...ZERO, updates: 1 } }),
+      summary({
+        slug: "brand-library",
+        kind: "workspace",
+        comparedBy: "package",
+        needs: "review",
+      }),
+    ];
+    expect(updatesNeedingNothing(list).map((s) => s.slug)).toEqual(["a"]);
+    // ...but it is waiting, so it is in the queue.
+    expect(waitingUpdates(list).map((s) => s.slug)).toContain("brand-library");
   });
 });
