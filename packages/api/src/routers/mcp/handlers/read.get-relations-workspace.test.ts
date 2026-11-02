@@ -3,9 +3,10 @@
  *
  * When the caller gives no `workspaceId`, relations must be read from the
  * ENTITY'S OWN workspace, not an arbitrary member workspace (`ids[0]`, which
- * is unordered Postgres natural order). Only when the entity's own workspace
- * can't be resolved (deleted / no workspaceId / not visible) does the handler
- * fall back to the old ids[0] pick — and it must say so via the honesty note.
+ * is unordered Postgres natural order). When the entity has no workspace (a
+ * pod-wide entity, or a deleted / missing one) the handler reads at the
+ * caller's USER FLOOR (`listRelationsPodWide`), never a picked member
+ * workspace: the pod-wide entity's edges live in several spaces.
  *
  * `db.query.entities.findFirst` and `getUserMemberWorkspaceIds` are mocked so
  * this exercises the handler's own branching, not the DB or the tRPC caller.
@@ -13,13 +14,17 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { findFirst, getUserMemberWorkspaceIds, listRelations } = vi.hoisted(
-  () => ({
-    findFirst: vi.fn(),
-    getUserMemberWorkspaceIds: vi.fn(),
-    listRelations: vi.fn(),
-  })
-);
+const {
+  findFirst,
+  getUserMemberWorkspaceIds,
+  listRelations,
+  listRelationsPodWide,
+} = vi.hoisted(() => ({
+  findFirst: vi.fn(),
+  getUserMemberWorkspaceIds: vi.fn(),
+  listRelations: vi.fn(),
+  listRelationsPodWide: vi.fn(),
+}));
 
 vi.mock("@synap/database", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap/database")>()),
@@ -47,7 +52,7 @@ function makeCtx(overrides: Partial<McpToolContext> = {}): McpToolContext {
     userId: "user-1",
     apiKeyScopes: ["mcp.read"],
     caller: {
-      relations: { listRelations },
+      relations: { listRelations, listRelationsPodWide },
     } as unknown as McpToolContext["caller"],
     lensCaller: {} as McpToolContext["lensCaller"],
     workspaceAccessible: false,
@@ -59,6 +64,7 @@ describe("synap_get_relations — workspace resolution", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listRelations.mockResolvedValue([]);
+    listRelationsPodWide.mockResolvedValue({ entities: [], configLinks: [] });
   });
 
   it("scopes to the entity's OWN workspace when none is given (not ids[0])", async () => {
@@ -79,19 +85,23 @@ describe("synap_get_relations — workspace resolution", () => {
     expect(payload.note).toBeUndefined();
   });
 
-  it("falls back to the old ids[0] pick + an honesty note when the entity's workspace can't be resolved", async () => {
-    findFirst.mockResolvedValue(undefined); // deleted / not visible / pod-global
+  it("reads at the USER FLOOR, never a picked member workspace, when the entity has no workspace", async () => {
+    findFirst.mockResolvedValue({ workspaceId: null }); // a pod-wide entity
     getUserMemberWorkspaceIds.mockResolvedValue(["ws-a", "ws-b", "ws-c"]);
 
     const result = await readHandlers.synap_get_relations!(makeCtx());
 
-    expect(listRelations).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceId: "ws-a" })
-    );
+    expect(listRelationsPodWide).toHaveBeenCalledWith({
+      userId: "user-1",
+      entityId: "entity-1",
+    });
+    expect(listRelations).not.toHaveBeenCalled();
+    expect(getUserMemberWorkspaceIds).not.toHaveBeenCalled();
     const block = result.content?.[0];
     if (!block || block.type !== "text") throw new Error("expected text");
     const payload = JSON.parse(block.text) as Record<string, unknown>;
-    expect(String(payload.note)).toContain("3 member workspaces");
+    expect(payload.note).toBeUndefined();
+    expect(payload.scopedWorkspaceId).toBeUndefined();
   });
 
   it("still honors an explicit workspaceId untouched (byte-identical common case)", async () => {
@@ -101,6 +111,7 @@ describe("synap_get_relations — workspace resolution", () => {
 
     expect(findFirst).not.toHaveBeenCalled();
     expect(getUserMemberWorkspaceIds).not.toHaveBeenCalled();
+    expect(listRelationsPodWide).not.toHaveBeenCalled();
     expect(listRelations).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceId: "ws-explicit" })
     );

@@ -320,6 +320,23 @@ export interface EntityWorkspaceResolution {
 }
 
 /**
+ * The workspace an entity LIVES in, or `undefined` when it has none: a
+ * pod-wide entity (NULL workspace), a deleted one, a missing id. Only a lens
+ * candidate, never an access decision: the read that uses it applies the
+ * caller's own floor.
+ */
+export async function entityHomeWorkspaceId(
+  entityId: string | undefined
+): Promise<string | undefined> {
+  if (!entityId) return undefined;
+  const entityRow = await db.query.entities.findFirst({
+    columns: { workspaceId: true },
+    where: and(eq(entities.id, entityId), isNull(entities.deletedAt)),
+  });
+  return entityRow?.workspaceId ?? undefined;
+}
+
+/**
  * Resolve the workspace lens for a tool call that names an entity but was
  * given no explicit `workspaceId`: the entity's OWN workspace is the right
  * lens (not an arbitrary member workspace), so a "no results" answer
@@ -327,26 +344,17 @@ export interface EntityWorkspaceResolution {
  * sort first. Falls back to the first member workspace — and says so via
  * `autoPicked`/`memberCount` — only when the entity's workspace can't be
  * resolved (missing entityId, deleted, pod-global/no workspaceId, or not
- * visible to this caller). Extracted from `synap_get_relations` (Wave: third
- * arbitrary-workspace-pick fix) so `synap_match_playbooks` shares the same
- * floor instead of re-deriving it.
+ * visible to this caller). Used by `synap_match_playbooks`, whose read needs
+ * SOME workspace. `synap_get_relations` does not use the fallback: a read with
+ * no lens has a user floor there (`listRelationsPodWide`), so it never picks.
  */
 export async function resolveEntityWorkspaceId(
   userId: string,
   entityId: string | undefined
 ): Promise<EntityWorkspaceResolution> {
-  if (entityId) {
-    const entityRow = await db.query.entities.findFirst({
-      columns: { workspaceId: true },
-      where: and(eq(entities.id, entityId), isNull(entities.deletedAt)),
-    });
-    if (entityRow?.workspaceId) {
-      return {
-        workspaceId: entityRow.workspaceId,
-        autoPicked: false,
-        memberCount: 0,
-      };
-    }
+  const home = await entityHomeWorkspaceId(entityId);
+  if (home) {
+    return { workspaceId: home, autoPicked: false, memberCount: 0 };
   }
   const ids = await getUserMemberWorkspaceIds(userId);
   return { workspaceId: ids[0], autoPicked: true, memberCount: ids.length };

@@ -15,64 +15,22 @@
  * Design doc: team/platform/playbooks-capability-substrate.mdx (§4.4).
  */
 
-import {
-  getDb,
-  insertChannelMessage,
-  skills,
-  links,
-  eq,
-  and,
-  desc,
-  drizzleSql,
-} from "@synap/database";
+import { insertChannelMessage } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { MessageAuthorType, MessageRole } from "@synap/database/schema";
 import { triggerAutoRespond } from "../../../utils/trigger-auto-respond.js";
 import { resolveActiveAgentBySlug } from "../../agent-identity-service.js";
+import type { Executor, RunContext, RunResult } from "@synap/playbooks";
 import {
-  readStageLessons,
-  type Executor,
-  type PlaybookStage,
-  type RunContext,
-  type RunResult,
-} from "@synap/playbooks";
+  loadPlaybookContextSkill,
+  renderPlaybookMethod,
+} from "../playbook-method.js";
 
 /**
- * The kickoff's active-stage section: name, goal, expected outputs, suggested
- * tasks, advisory grants, and the stage's LESSONS — what earlier runs of this
- * stage taught (`PlaybookStage.lessons`, revised by the lessons scanner). One
- * channel: lessons ride with the goal they qualify, never a second prompt.
+ * The stage section moved to the ONE method renderer (`playbook-method.ts`),
+ * which the MCP binding doors share. Re-exported for existing importers.
  */
-export function buildStageSection(stage: PlaybookStage): string {
-  const lines = [`## Current stage: ${stage.name}`];
-  if (stage.goal) lines.push(stage.goal);
-  if (stage.expectedOutputs?.length) {
-    lines.push(
-      `Expected outputs: ${stage.expectedOutputs
-        .map((o) => o.label)
-        .join(", ")}`
-    );
-  }
-  if (stage.suggestedTasks?.length) {
-    lines.push(`Suggested tasks: ${stage.suggestedTasks.join(", ")}`);
-  }
-  const lessons = readStageLessons(stage);
-  if (lessons.length) {
-    lines.push(
-      `Lessons from earlier runs of this stage:\n${lessons
-        .map((l) => `- ${l}`)
-        .join("\n")}`
-    );
-  }
-  if (stage.grants?.length) {
-    lines.push(
-      `Capabilities available at this stage: ${stage.grants
-        .map((g) => g.id)
-        .join(", ")}`
-    );
-  }
-  return lines.join("\n");
-}
+export { buildStageSection } from "../playbook-method.js";
 
 const logger = createLogger({ module: "is-agent-executor" });
 
@@ -86,8 +44,6 @@ export class IsAgentExecutor implements Executor {
         error: "is-agent executor requires a channel (runner must create one)",
       };
     }
-
-    const db = await getDb();
 
     // AGENT SELECTOR — resolve the requested agent BEFORE writing anything, so an
     // unknown slug costs no kickoff message in the channel. Absent ⇒ null ⇒
@@ -119,61 +75,26 @@ export class IsAgentExecutor implements Executor {
 
     // Active-stage section — surfaces the run's current stage so the agent knows
     // WHICH phase it is in and what's expected of it. Additive: when the run is
-    // stageless (currentStage null/absent) or no declared stage matches, this
-    // section is omitted and the kickoff is exactly `base`.
+    // stageless (currentStage null/absent) or no declared stage matches, the
+    // section is omitted.
     // NOTE: stage-scoped-grant ENFORCEMENT (intersecting stage.grants into the
     // resolved capability set) is a deliberate follow-up — here the stage's grant
     // ids are listed ADVISORY only.
     const stage = ctx.currentStage
       ? ctx.stages?.find((s) => s.key === ctx.currentStage)
       : undefined;
-    const stageSection = stage ? `\n\n${buildStageSection(stage)}` : "";
 
-    // Layer-2 CONTEXT SKILL — the AI-generated "how to run THIS playbook"
-    // instruction, linked to the playbook via a non-grant `documents` edge (kept
-    // out of the grantable/runnable set on purpose). Prepended to the kickoff so
-    // the agent gets the HOW alongside the goal. Absent ⇒ no prefix. Non-fatal:
-    // a lookup failure must never block the run.
-    let contextPrefix = "";
+    // Layer-2 CONTEXT SKILL — the human-approved "how to run THIS playbook"
+    // instruction (`loadPlaybookContextSkill`). Prepended so the agent gets the
+    // HOW alongside the goal. Absent ⇒ no prefix. Non-fatal: a lookup failure
+    // must never block the run.
+    let contextSkill: string | null = null;
     if (ctx.playbookId) {
       try {
-        const [ctxSkill] = await db
-          .select({ body: skills.body })
-          .from(links)
-          // Same uuid=text mismatch as capability-registry.ts: `skills.id` is
-          // uuid, `links.toId` is text → SQLSTATE 42883. This throw was swallowed
-          // by the surrounding "non-fatal" try/catch, so the playbook context-
-          // skill prefix silently never injected on any pod with real data. Cast
-          // the uuid side to text.
-          .innerJoin(skills, eq(drizzleSql`${skills.id}::text`, links.toId))
-          .where(
-            and(
-              eq(links.fromType, "playbook"),
-              eq(links.fromId, ctx.playbookId),
-              eq(links.linkType, "documents"),
-              eq(links.toType, "skill"),
-              eq(skills.kind, "instruction"),
-              // SECURITY — inject only HUMAN-APPROVED prose. This body is
-              // prepended verbatim to every kickoff, i.e. it is system-prompt
-              // surface. Agent-authored instruction skills are born unapproved
-              // (playbooks.ts / skills.ts) precisely so an agent cannot write
-              // into its own future prompts without review. That matters most
-              // when a "learning" is derived from fetched web content: without
-              // this filter a hostile page could persist itself into the prompt.
-              eq(skills.approved, true)
-            )
-          )
-          // Deterministic pick: a composed template or re-install can leave more
-          // than one instruction skill linked; always take the newest.
-          .orderBy(desc(skills.createdAt))
-          .limit(1);
-        if (ctxSkill?.body?.trim()) {
-          contextPrefix = `## How to run this playbook\n${ctxSkill.body.trim()}\n\n`;
-        }
+        contextSkill = await loadPlaybookContextSkill(ctx.playbookId);
       } catch (err) {
-        // Non-fatal — the run proceeds without the HOW. Logged because this
-        // query runs on EVERY playbook run: a persistent failure would silently
-        // degrade every run otherwise.
+        // Logged because this query runs on EVERY playbook run: a persistent
+        // failure would silently degrade every run otherwise.
         logger.warn(
           { err, playbookId: ctx.playbookId },
           "is-agent: context skill lookup failed (non-fatal)"
@@ -181,7 +102,8 @@ export class IsAgentExecutor implements Executor {
       }
     }
 
-    const kickoff = `${contextPrefix}${base}${stageSection}`;
+    // THE method renderer, shared with the MCP binding doors.
+    const kickoff = renderPlaybookMethod({ contextSkill, body: base, stage });
 
     // Post the resolved goal as a USER message — the persisted kickoff message
     // the IS responds to. Attributed to the run's acting principal, hence the

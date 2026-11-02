@@ -60,7 +60,7 @@ import {
   untrusted,
   requireScope,
   buildGraphEnvelope,
-  resolveEntityWorkspaceId,
+  entityHomeWorkspaceId,
   type McpToolContext,
   type CallToolResult,
   type McpHandlerMap,
@@ -917,53 +917,31 @@ export const readHandlers: McpHandlerMap = {
   synap_get_relations: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    let relWsId = args.workspaceId as string | undefined;
-    // HONEST FALLBACK: relations are workspace-scoped. When the caller gives
-    // no workspaceId, the entity's OWN workspace is the right lens — not an
-    // arbitrary member workspace — so a "no relations" answer reflects the
-    // entity's real home instead of whichever workspace happened to sort
-    // first. Only fall back to the old ids[0] pick (and say so) when the
-    // entity's workspace can't be resolved (deleted, pod-global/no
-    // workspaceId, or not visible to this caller). Shared with
-    // synap_match_playbooks via resolveEntityWorkspaceId (shared.ts).
-    let autoPicked = false;
-    let memberCount = 0;
+    const entityId = args.entityId as string;
+    // The lens, in order: the caller's explicit workspaceId; else the
+    // entity's OWN workspace (a "no relations" answer then reflects its real
+    // home, not whichever member workspace sorted first).
+    const relWsId =
+      (args.workspaceId as string | undefined) ??
+      (await entityHomeWorkspaceId(entityId));
+    // No lens at all: a POD-WIDE entity (NULL workspace), or one that is
+    // deleted or missing. Its edges live in whatever workspaces they were
+    // drawn in, so ONE picked member workspace (the old `ids[0]` fallback)
+    // hid every edge outside it while synap_get_graph showed them. Read at
+    // the caller's USER FLOOR instead, the same read the REST door
+    // (`GET /relations` with no workspaceId) and get_graph make: the access
+    // layer's `relations` rule still gates every row (member workspaces +
+    // the caller's own pod-wide edges), so nothing outside it is reachable.
     if (!relWsId) {
-      const resolved = await resolveEntityWorkspaceId(
-        userId,
-        args.entityId as string | undefined
+      return ok(
+        await caller.relations.listRelationsPodWide({ userId, entityId })
       );
-      relWsId = resolved.workspaceId;
-      autoPicked = resolved.autoPicked;
-      memberCount = resolved.memberCount;
     }
-    if (!relWsId) return ok({ error: "No accessible workspace found" });
     const result = await caller.relations.listRelations({
       userId,
       workspaceId: relWsId,
-      entityId: args.entityId as string,
+      entityId,
     });
-    // Only reshape in the AMBIGUOUS case (we auto-picked among several
-    // workspaces); the explicit-workspaceId common case stays byte-identical,
-    // so no consumer that expects the raw shape can break. `getRelated` may
-    // return an array or an object, so attach the honesty note without
-    // clobbering either shape.
-    if (autoPicked && memberCount > 1) {
-      // Labeled deliberately: this is the MEMBER-only count
-      // (getUserMemberWorkspaceIds), not the wider "accessible" count synap_orient
-      // reports (member ∪ pod-visible) — the two are correct, separate lenses, and
-      // an unlabeled bare number is exactly what reads as a bug when they disagree.
-      const note = `The entity's own workspace could not be resolved, so relations were read from ONE workspace (${relWsId}) of your ${memberCount} member workspaces. If this looks empty or incomplete, the entity's relations may live in another workspace — pass an explicit workspaceId to scope deliberately.`;
-      return ok(
-        Array.isArray(result)
-          ? { relations: result, scopedWorkspaceId: relWsId, note }
-          : {
-              ...(result as Record<string, unknown>),
-              scopedWorkspaceId: relWsId,
-              note,
-            }
-      );
-    }
     return ok(result);
   },
   synap_get_graph: async (ctx: McpToolContext): Promise<CallToolResult> => {

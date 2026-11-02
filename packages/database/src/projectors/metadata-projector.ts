@@ -21,7 +21,7 @@ import {
   reasoningTraces,
 } from "../schema/enrichments.js";
 import type { SynapEvent, EventMetadata } from "@synap-core/core";
-import { createLogger } from "@synap-core/core";
+import { canonicalRelationType, createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "metadata-projector" });
 
@@ -144,8 +144,9 @@ export async function projectEventMetadata(
           .values({
             sourceEntityId: entityId,
             targetEntityId: rel.targetEntityId,
-            relationshipType:
-              rel.type as (typeof entityRelationships.$inferInsert)["relationshipType"],
+            relationshipType: canonicalRelationType(
+              rel.type
+            ) as (typeof entityRelationships.$inferInsert)["relationshipType"],
             sourceEventId: event.id,
             agentId: ai.agent,
             confidence: String(rel.confidence),
@@ -160,8 +161,9 @@ export async function projectEventMetadata(
             .values({
               sourceEntityId: rel.targetEntityId,
               targetEntityId: entityId,
-              relationshipType:
-                rel.type as (typeof entityRelationships.$inferInsert)["relationshipType"],
+              relationshipType: canonicalRelationType(
+                rel.type
+              ) as (typeof entityRelationships.$inferInsert)["relationshipType"],
               sourceEventId: event.id,
               agentId: ai.agent,
               confidence: String(rel.confidence),
