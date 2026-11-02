@@ -2,7 +2,8 @@
  * The HARNESS registry: every AI client a person connects, once. A harness is
  * the program that holds an agent's key (Claude Code, Cursor, Raycast…): its
  * slug is the agent's `agentType`, its label is how a person calls it, and
- * where its conversations can be reopened, its reopen template lives here.
+ * where its conversations can be reopened, its reopen template lives here,
+ * and where a person can start one, its launch template.
  *
  * Three lists used to say this in three places (the API's surface allowlist,
  * the reopenable-conversation list, the device door's enum) and the Claude
@@ -22,6 +23,19 @@ export interface HarnessReopen {
   command: (conversationId: string) => string;
 }
 
+/**
+ * How a person starts a NEW conversation with a harness, on the computer it
+ * runs on (review M5): data only. The pod renders the command from it plus
+ * validated parameters (`resolveAgentLaunch`), so no agent key ever writes a
+ * command a person is told to run.
+ */
+export interface HarnessLaunch {
+  /** The program a person runs. */
+  program: string;
+  /** The flag that picks the model, when the harness has one. */
+  modelFlag?: string;
+}
+
 export interface AgentHarness {
   /** The agent's `agentType`. */
   slug: string;
@@ -34,6 +48,8 @@ export interface AgentHarness {
   surface: boolean;
   /** Present only where a conversation can be reopened. */
   reopen?: HarnessReopen;
+  /** Present only where a person starts one with a command. */
+  launch?: HarnessLaunch;
 }
 
 export const AGENT_HARNESSES = [
@@ -46,11 +62,17 @@ export const AGENT_HARNESSES = [
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
       command: (id) => `claude --resume ${id}`,
     },
+    launch: { program: "claude", modelFlag: "--model" },
   },
   { slug: "claude-desktop", label: "Claude Desktop", surface: true },
   { slug: "cursor", label: "Cursor", surface: true },
   { slug: "raycast", label: "Raycast", surface: true },
-  { slug: "codex", label: "Codex", surface: true },
+  {
+    slug: "codex",
+    label: "Codex",
+    surface: true,
+    launch: { program: "codex", modelFlag: "--model" },
+  },
   { slug: "openwebui", label: "Open WebUI", surface: true },
   { slug: "discord", label: "Discord", surface: true },
   { slug: "proton", label: "Proton", surface: true },
@@ -77,4 +99,9 @@ export const SURFACE_HARNESS_SLUGS = AGENT_HARNESSES.filter(
 /** Slugs whose conversations can be reopened. */
 export const REOPENABLE_HARNESS_SLUGS = AGENT_HARNESSES.filter(
   (h) => "reopen" in h
+).map((h) => h.slug) as AgentHarnessSlug[];
+
+/** Slugs a person can start with a command. */
+export const LAUNCHABLE_HARNESS_SLUGS = AGENT_HARNESSES.filter(
+  (h) => "launch" in h
 ).map((h) => h.slug) as AgentHarnessSlug[];

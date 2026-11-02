@@ -21,6 +21,9 @@
  *     refusal ⇒ blocked; else the governance dry run for
  *     `focus_session.assign_agent` (no rule ⇒ proposes ⇒ asks_you); the
  *     caller itself and a person (no caller) ⇒ direct;
+ *   - open: the command the pod renders from the agent's harness launch
+ *     template (Claude Code, Codex), and none for a harness that has no
+ *     template (Cursor, a dispatch or house agent, no type at all);
  *   - PARITY: for every row, `canTakeYourWork` is exactly what the real
  *     `route()` answers when a hand-off NAMES that agent for this person.
  */
@@ -284,6 +287,24 @@ describe("readAgentsForHandoff — is anything running it (servedAt)", () => {
     // Pull, but no computer at all.
     expect(row(NEVER).computer).toBeNull();
     expect(row(NEVER).nobodyRuns).toBeNull();
+  });
+});
+
+describe("readAgentsForHandoff — how to open it", () => {
+  it("the pod renders the open command from the harness's launch template", () => {
+    expect(row(ON_DEVBOX).open).toEqual({
+      harness: "claude-code",
+      command: "claude",
+    });
+    expect(row(ON_LABEL_DEVBOX).open).toEqual({
+      harness: "codex",
+      command: "codex",
+    });
+  });
+
+  it("a harness with no launch template has no open door, never a guess", () => {
+    for (const id of [PAUSED, HOUSE, BOUND, NEVER])
+      expect(row(id).open).toBeNull();
   });
 });
 

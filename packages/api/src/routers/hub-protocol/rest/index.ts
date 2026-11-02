@@ -50,6 +50,7 @@ export { registerKnowledgeRoutes } from "./knowledge.js";
 export { registerCommandsRoutes } from "./commands.js";
 export { registerAgentUsersRoutes } from "./agent-users.js";
 export { registerAgentConfigsRoutes } from "./agent-configs.js";
+export { registerAgentPresetsRoutes } from "./agent-presets.js";
 export { registerViewsRoutes } from "./views.js";
 export { registerProfilesRoutes } from "./profiles.js";
 export { registerProjectsRoutes } from "./projects.js";

@@ -7,8 +7,17 @@
  *
  * agent_type is a free-form string defined by the intelligence service
  * (e.g. 'assistant', 'research', 'analysis', 'persona-elon').
+ *
+ * PRESETS (0390): a row with a `preset_key` is a named way an agent runs for a
+ * purpose (a role: reviewer, video editor). It belongs to the agent user
+ * (`user_id`), pod-wide (`workspace_id` is NULL, enforced by a CHECK), one per
+ * key. Its harness and computer are the agent's own (`users.agent_type`,
+ * `users.host_user_id`), never stored again here; its model and provider are
+ * DEFAULTS, while what a run used stays a per-run fact (0389). The row with no
+ * `preset_key` keeps its meaning: the IS's per-workspace override.
  */
 
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   uuid,
@@ -18,6 +27,7 @@ import {
   integer,
   index,
   unique,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { workspaces } from "./workspaces.js";
 
@@ -55,6 +65,15 @@ export const agentConfigs = pgTable(
     /** Override the LLM model (null = use agent default) */
     modelOverride: text("model_override"),
 
+    /** A preset's key (a slug, unique per agent); null = not a preset (0390). */
+    presetKey: text("preset_key"),
+    /** How a person calls the preset (0390). */
+    presetLabel: text("preset_label"),
+    /** A preset's default provider, a MODEL_PROVIDERS slug (0390). */
+    providerOverride: text("provider_override"),
+    /** Skill slugs a preset loads (0390). */
+    skillSlugs: jsonb("skill_slugs").$type<string[]>().default([]).notNull(),
+
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -71,6 +90,10 @@ export const agentConfigs = pgTable(
       table.workspaceId
     ),
     agentTypeIdx: index("agent_configs_agent_type_idx").on(table.agentType),
+    // One preset per key per agent (0390); the preset upsert conflicts on it.
+    userPresetUnique: uniqueIndex("agent_configs_user_preset_unique")
+      .on(table.userId, table.presetKey)
+      .where(sql`${table.presetKey} IS NOT NULL`),
   })
 );
 

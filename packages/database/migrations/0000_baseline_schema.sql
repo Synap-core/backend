@@ -2427,10 +2427,18 @@ CREATE TABLE IF NOT EXISTS "agent_configs" (
   "disabled_tool_ids"  jsonb   NOT NULL DEFAULT '[]',
   "max_steps_override" integer,
   "model_override"     text,
+  -- Presets (0390): a row with a preset_key is a named preset of the agent
+  -- user_id, pod-wide (workspace_id NULL).
+  "preset_key"         text,
+  "preset_label"       text,
+  "provider_override"  text,
+  "skill_slugs"        jsonb   NOT NULL DEFAULT '[]',
   "created_at"         timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"         timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT "agent_configs_user_workspace_agent_unique"
-    UNIQUE ("user_id", "workspace_id", "agent_type")
+    UNIQUE ("user_id", "workspace_id", "agent_type"),
+  CONSTRAINT "agent_configs_preset_pod_wide"
+    CHECK ("preset_key" IS NULL OR "workspace_id" IS NULL)
 );
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
 ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "user_id" text;
@@ -2441,6 +2449,10 @@ ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "extra_tool_ids" jsonb DEFA
 ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "disabled_tool_ids" jsonb DEFAULT '[]';
 ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "max_steps_override" integer;
 ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "model_override" text;
+ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "preset_key" text;
+ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "preset_label" text;
+ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "provider_override" text;
+ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "skill_slugs" jsonb NOT NULL DEFAULT '[]';
 ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
@@ -2452,6 +2464,10 @@ CREATE INDEX IF NOT EXISTS "agent_configs_workspace_id_idx"
 
 CREATE INDEX IF NOT EXISTS "agent_configs_agent_type_idx"
   ON "agent_configs" ("agent_type");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "agent_configs_user_preset_unique"
+  ON "agent_configs" ("user_id", "preset_key")
+  WHERE "preset_key" IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_users_agent_template
   ON users ((agent_metadata->>'agentTemplate'))

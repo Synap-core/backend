@@ -9,8 +9,9 @@
  *  1. `setup.ts` exports `SURFACE_AGENT_TYPES` as the registry's list;
  *  2. no backend source (derived: every .ts under `packages/*` and `apps/*`
  *     but tests, build output and the name registry) spells the registry's
- *     distinctive slugs as string literals, builds its own reopen command, or
- *     brings back the retired `AGENT_CONVERSATION_HARNESSES`.
+ *     distinctive slugs as string literals, builds its own reopen or launch
+ *     command (the pod renders both from the registry, review M5), or brings
+ *     back the retired `AGENT_CONVERSATION_HARNESSES`.
  *
  * Each forbidden pattern is checked against a literal sample so a loosened
  * regex cannot go blind. WHAT IT DOES NOT SEE: another repo's copy (synap-cli
@@ -69,6 +70,11 @@ const FORKS: Array<{ name: string; re: RegExp; sample: string }> = [
     name: "a hand-built reopen command",
     re: /claude --resume/,
     sample: "`claude --resume ${id}`",
+  },
+  {
+    name: "a hand-built launch command",
+    re: /\b(?:claude|codex) --model\b/,
+    sample: "`claude --model ${model}`",
   },
   {
     name: "the retired conversation-harness list",
