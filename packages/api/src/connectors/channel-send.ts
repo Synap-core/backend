@@ -34,6 +34,7 @@ import {
   and,
   eq,
   isNull,
+  isNotNull,
   drizzleSql,
   getRequestGrant,
   insertChannelMessage,
@@ -125,6 +126,37 @@ export async function loadSendChannel(
   const row = await db.query.channels.findFirst({
     where: eq(channels.id, channelId),
     columns: SEND_CHANNEL_COLUMNS,
+  });
+  return (row as SendChannel | undefined) ?? null;
+}
+
+/**
+ * The channel an APPROVED send goes to when the one it was filed on was
+ * retired: its chat turned out to be held by another channel of the same
+ * person (`fillChatId`). The person's active channel on the same tool and
+ * account, with a chat. null = none.
+ */
+export async function successorChannel(
+  retired: SendChannel
+): Promise<SendChannel | null> {
+  const personId = channelPersonId(retired);
+  if (!personId || !retired.externalSource) return null;
+  const account = text(channelMeta(retired).accountId);
+  const row = await db.query.channels.findFirst({
+    where: and(
+      eq(channels.userId, retired.userId),
+      eq(channels.channelType, ChannelType.EXTERNAL),
+      eq(channels.externalSource, retired.externalSource),
+      eq(channels.contextObjectType, "entity"),
+      eq(channels.contextObjectId, personId),
+      eq(channels.status, "active"),
+      isNotNull(channels.externalId),
+      account
+        ? drizzleSql`coalesce(${channels.metadata} ->> 'accountId', ${account}) = ${account}`
+        : undefined
+    ),
+    columns: SEND_CHANNEL_COLUMNS,
+    orderBy: (c, { desc }) => [desc(c.updatedAt)],
   });
   return (row as SendChannel | undefined) ?? null;
 }
@@ -287,6 +319,20 @@ async function fillChatId(
       .update(channels)
       .set({ status: "archived", updatedAt: new Date() })
       .where(and(eq(channels.id, channel.id), isNull(channels.externalId)));
+    // The holder follows the person too, when nobody bound it yet (an echo
+    // that arrived before its person was known). A bound one is never moved.
+    if (channel.contextObjectType === "entity" && channel.contextObjectId) {
+      await db
+        .update(channels)
+        .set({
+          contextObjectType: "entity",
+          contextObjectId: channel.contextObjectId,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(eq(channels.id, holder.id), isNull(channels.contextObjectId))
+        );
+    }
   }
   return holder.id;
 }

@@ -88,6 +88,7 @@ import {
   channelPersonId,
   loadSendChannel,
   messagingSendGrantDenial,
+  successorChannel,
   planChannelSend,
   recordChannelSend,
   resolveSendAccount,
@@ -836,9 +837,14 @@ export async function sendExternalMessage(
 
   // A send that names the person's CHANNEL (the one door for apps, agents and
   // automations): it is filed and delivered on that channel.
-  const sendChannel = input.channelId
+  let sendChannel = input.channelId
     ? await loadSendChannel(input.channelId)
     : null;
+  // An approved send whose pending channel was retired meanwhile (its chat
+  // was already held by another channel of the person) goes to that one.
+  if (sendChannel && sendChannel.status !== "active" && input.alreadyApproved) {
+    sendChannel = (await successorChannel(sendChannel)) ?? sendChannel;
+  }
   if (
     input.channelId &&
     (!sendChannel ||
@@ -1083,6 +1089,16 @@ async function sendOnChannel(args: {
 }): Promise<SendExternalMessageResult> {
   const { input, channel, connector } = args;
   const provider = args.provider ?? "unipile";
+  // A message goes out through the channel OWNER's account, as them: nobody
+  // else sends (or approves a send) through it.
+  if (channel.userId !== input.userId) {
+    return {
+      success: false,
+      error: "Only the person whose conversation this is can send in it.",
+      errorClass: "permission",
+      providerRef: provider,
+    };
+  }
   let accountId = "";
   if (connector.requiresAccount()) {
     const resolved = await resolveSendAccount(channel, input.accountId);

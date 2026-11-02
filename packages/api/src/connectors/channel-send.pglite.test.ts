@@ -596,6 +596,14 @@ describe("approval sends once and records the outbound message", () => {
     ).rows;
     expect(p!.data.channelId).toBe(holder);
     expect(p!.target_id).toBe(holder);
+    // The holder now follows the person.
+    const [held] = (
+      await q<{ context_object_id: string | null }>(
+        `select context_object_id from channels where id=$1`,
+        [holder]
+      )
+    ).rows;
+    expect(held!.context_object_id).toBe(PERSON);
   });
 
   it("the provider's echo landed first: one row, carrying this send's metadata", async () => {

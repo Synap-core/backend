@@ -3272,7 +3272,10 @@ const messagingSendHandler: BuiltinVerbHandler = async (params, ctx) => {
       .from(channels)
       .where(eq(channels.id, input.channelId!))
       .limit(1);
-    if (!channel) {
+    // Only a conversation the caller can read (the key's grant included).
+    const { canUserSeeChannel } =
+      await import("../../utils/channel-visibility.js");
+    if (!channel || !(await canUserSeeChannel(db, channel.id, ctx.userId))) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Channel not found." });
     }
     if (
