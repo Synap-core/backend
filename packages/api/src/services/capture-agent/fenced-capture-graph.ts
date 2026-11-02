@@ -39,8 +39,17 @@ import type {
   CompositeProposalOperation,
 } from "@synap-core/types/proposals";
 import { isFencedGrant } from "../../access/grant-door-fence.js";
-import { grantWriteDenial } from "../../utils/grant-write-check.js";
+import {
+  grantWriteDenial,
+  recordGrantDenial,
+} from "../../utils/grant-write-check.js";
 import { isUuid } from "@synap-core/types/property-render";
+
+/** A grant denial worded here, recorded so its 403 carries the code. */
+const recordedGrantDenial = (message: string): string => {
+  recordGrantDenial(message);
+  return message;
+};
 
 const refuse = (message: string): never => {
   throw new TRPCError({ code: "FORBIDDEN", message });
@@ -129,7 +138,11 @@ export async function fenceCaptureGraphOperations(
         !isUuid(entityOp.existingEntityId) ||
         !(await grantMayLinkRecord(entityOp.existingEntityId, grant))
       )
-        refuse("This key's grant does not allow linking that existing record.");
+        refuse(
+          recordedGrantDenial(
+            "This key's grant does not allow linking that existing record."
+          )
+        );
       continue;
     }
     entityOp.targetWorkspaceId ??= workspaceId!;

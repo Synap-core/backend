@@ -34,6 +34,7 @@
  *               project-restricted grant fails closed)
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { db, eq, getRequestGrant, type KeyGrant } from "@synap/database";
 import { entities, profiles } from "@synap/database/schema";
 import { grantRequestKey, grantRequestKeys } from "@synap/governance-policy";
@@ -45,6 +46,44 @@ export interface GrantWriteInput {
   workspaceId?: string | null;
   projectId?: string | null;
   data?: Record<string, unknown> | null;
+}
+
+/**
+ * The machine-readable code of a write refused by the key's grant. A client
+ * reads it (and `action`) instead of matching the sentence: Hub REST adds both
+ * to every 403 that carries a denial this module produced
+ * (`hub-protocol/_middleware/grant-denial-code.ts`).
+ */
+export const GRANT_DENIED = "GRANT_DENIED" as const;
+
+/** One grant denial produced during a request: its words and the refused action. */
+export interface GrantDenialRecord {
+  /** The request key the grant did not allow, e.g. `workspace.update`, when named. */
+  action?: string;
+  /** The exact sentence `grantWriteDenial` returned. */
+  message: string;
+}
+
+const denialSink = new AsyncLocalStorage<GrantDenialRecord[]>();
+
+/**
+ * Run `fn` collecting every grant denial `grantWriteDenial` produces under it
+ * into `sink`. Entered once per Hub REST request, so the door's 403 can carry
+ * the structured code without any route re-deriving it from its words.
+ */
+export function runCollectingGrantDenials<T>(
+  sink: GrantDenialRecord[],
+  fn: () => T
+): T {
+  return denialSink.run(sink, fn);
+}
+
+/**
+ * Record a grant denial worded outside `grantWriteDenial` (a door's own
+ * sentence for the same refusal), so its 403 carries the code too.
+ */
+export function recordGrantDenial(message: string, action?: string): void {
+  denialSink.getStore()?.push({ message, ...(action ? { action } : {}) });
 }
 
 const str = (v: unknown): string | undefined =>
@@ -132,9 +171,11 @@ export async function grantWriteDenial(
     const key = [req.subject, req.qualifier, req.action]
       .filter(Boolean)
       .join(".");
-    return `This key's grant does not allow "${key}"${
+    const message = `This key's grant does not allow "${key}"${
       req.workspaceId ? ` in workspace ${req.workspaceId}` : ""
     }.`;
+    recordGrantDenial(message, key);
+    return message;
   }
   return null;
 }

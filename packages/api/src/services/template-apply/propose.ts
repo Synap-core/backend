@@ -109,6 +109,9 @@ export type ProposeTemplateApplyResult =
  *
  * An agent (`agentUserId`) always proposes: `workspace/create` is floored for
  * agents (governance rung 2.09) and `workspace/update` is an ADMIN action.
+ * An update stays a proposal even when the agent's key grant leaves out
+ * `workspace.update` (`proposeBeyondGrant`); a create beyond the grant is
+ * denied.
  */
 export async function proposeTemplateApply(input: {
   userId: string;
@@ -123,12 +126,19 @@ export async function proposeTemplateApply(input: {
     !body.targetWorkspaceId && packageSlug
       ? await installedTemplateSpace(packageSlug, userId)
       : null;
+  const isUpdate = !!(body.targetWorkspaceId || existingSpace);
   const perm = await checkPermissionOrPropose({
     userId,
     agentUserId,
     workspaceId: body.targetWorkspaceId ?? null,
     subjectType: "workspace",
-    action: body.targetWorkspaceId || existingSpace ? "update" : "create",
+    action: isUpdate ? "update" : "create",
+    // An agent's key whose grant leaves out `workspace.update` (the AI
+    // preset: "Space administration") ASKS for a template update instead of
+    // being refused (founder, 2026-11-02): a pending proposal the person
+    // approves; the key itself still cannot apply it. A fresh install
+    // (`workspace.create`) stays refused.
+    proposeBeyondGrant: isUpdate,
     data: {
       name:
         existingSpace?.name ??

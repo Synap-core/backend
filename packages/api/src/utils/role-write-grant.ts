@@ -62,7 +62,11 @@ import {
   keyGrantReadClause,
   sharedRoleRowsInSpacesWhere,
 } from "../access/grant-read.js";
-import { grantWriteDenial, type GrantWriteInput } from "./grant-write-check.js";
+import {
+  grantWriteDenial,
+  recordGrantDenial,
+  type GrantWriteInput,
+} from "./grant-write-check.js";
 import { roleInSpacesWhere } from "./project-scope.js";
 
 /** Which facet door: add, change (incl. a stage move) or remove the role. */
@@ -248,7 +252,9 @@ function outOfReach(
     spaces.length === 1
       ? `workspace ${spaces[0]}`
       : `workspaces ${spaces.join(", ")}`;
-  return `This key's grant does not allow "${subject}.${action}" on a record outside ${where}: a role goes only on a record that space already reaches (stored in it, or wearing a role there).`;
+  const message = `This key's grant does not allow "${subject}.${action}" on a record outside ${where}: a role goes only on a record that space already reaches (stored in it, or wearing a role there).`;
+  recordGrantDenial(message, `${subject}.${action}`);
+  return message;
 }
 
 /**

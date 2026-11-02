@@ -1149,6 +1149,23 @@ export interface PermissionCheckBaseOpts {
    */
   lifecycleMove?: { intoTerminal: boolean; humanOnly: boolean };
   /**
+   * An AGENT's write its key's grant does not permit is filed as a PENDING
+   * proposal the person approves, instead of being denied at rung 0 (founder
+   * decision, 2026-11-02: "the CLI files it for my approval"). The key is
+   * never widened: the write still cannot apply on its own, it lands only
+   * when a person approves it, and an agent credential can never approve
+   * (`refuseAgentProposalApprover`, proposals/review-authority.ts). Every
+   * other rung still runs first (RBAC on the agent), and nothing after it
+   * can auto-approve the write.
+   *
+   * Set ONLY by `proposeTemplateApply` (services/template-apply/propose.ts)
+   * for a template UPDATE of a space (`workspace/update`), so a computer's
+   * key running `synap market update --yes` asks instead of failing. A
+   * caller with no agent attribution is still denied: the floor that keeps
+   * the key from approving its own request holds for agent credentials only.
+   */
+  proposeBeyondGrant?: boolean;
+  /**
    * Lifecycle complete escape for focus sessions (pack mode).
    *
    * Two effects when true:
@@ -1506,6 +1523,9 @@ async function evaluatePermission(
   // DENIED (never proposed: approving it would widen the grant). No grant on
   // the request = a legacy key, unchanged. Before every other rung so no
   // policy, rule or role can let an out-of-grant write through.
+  // The one exception is a door that asks for it (`proposeBeyondGrant`, a
+  // template update) on an AGENT's write: it goes on to RBAC, then is filed
+  // as a pending proposal below (`beyondGrant`) — never executed.
   const grantDenied = await grantWriteDenial({
     subjectType,
     action,
@@ -1514,7 +1534,9 @@ async function evaluatePermission(
     projectId,
     data: data as Record<string, unknown> | undefined,
   });
-  if (grantDenied) {
+  const beyondGrant =
+    !!grantDenied && !!opts.proposeBeyondGrant && !!agentUserId;
+  if (grantDenied && !beyondGrant) {
     logger.warn(
       { subjectType, action, userId, agentUserId, workspaceId },
       "Write refused by the key's grant"
@@ -1766,6 +1788,31 @@ async function evaluatePermission(
         );
         return { denied: true, reason: result.reason || "Permission denied" };
       }
+    }
+
+    // 4a. Beyond the key's grant, on a door that asks for it (rung 0,
+    // `proposeBeyondGrant`): always a PENDING proposal — after RBAC, before
+    // any rung that could auto-approve it (a governance rule, an agent's
+    // autoApproveFor, the default whitelist). The person's approval is the
+    // only way it applies.
+    if (beyondGrant) {
+      logger.info(
+        { subjectType, action, userId, agentUserId, workspaceId },
+        "Write beyond the key's grant filed for the person's approval"
+      );
+      if (dryRun) return DRY_RUN_PROPOSE;
+      return createProposal({
+        createdBy: opts.machineAuthor,
+        envelope: writeEnvelope,
+        workspaceId: filedWorkspaceId,
+        subjectType,
+        action,
+        data,
+        duplicateCheck: opts.duplicateCheck,
+        requiredLinks: opts.requiredLinks,
+        reasoning: opts.reasoning,
+        policyReason: `${grantDenied} It waits for the person's approval and applies only once they approve it.`,
+      });
     }
 
     // 4b. Untrusted issuer → always propose (after RBAC, before any other policy).
