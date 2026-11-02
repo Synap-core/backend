@@ -46,7 +46,11 @@ import {
 } from "../../utils/permission-check.js";
 import { MACHINE_AGENT_TYPE, type AgentReach } from "@synap-core/types/agents";
 import { queryAgentUsers } from "../../routers/agent-users.js";
-import { loadAgentPresence } from "../agent-presence.js";
+import {
+  loadAgentPresence,
+  nobodyRunsOf,
+  PULL_LIVE_WINDOW_MS,
+} from "../agent-presence.js";
 import { machineName } from "../machine-roster.js";
 import { actorComputer } from "../actor-computer.js";
 import { loadAgentDispatchSummaries } from "./agent-binding.js";
@@ -57,13 +61,7 @@ import {
   type RouteRefusal,
 } from "./route.js";
 
-/**
- * A pulling agent counts as LIVE when it called the pod within this window.
- * `synap worker` polls every 30s and key use is stamped at most once a minute
- * (`apiKeyService.recordKeyUse`); its back-off on failed reads caps at 10
- * minutes. 15 minutes covers a worker that is polling, slowly or not.
- */
-export const PULL_LIVE_WINDOW_MS = 15 * 60_000;
+export { PULL_LIVE_WINDOW_MS } from "../agent-presence.js";
 
 export interface HandoffComputer {
   /** The computer's own principal; `null` when it is only a key label. */
@@ -233,12 +231,12 @@ export async function readAgentsForHandoff(
             now.getTime() - Date.parse(lastSeenAt) <= PULL_LIVE_WINDOW_MS
           : true;
     const servedAt = seen?.servedAt ?? null;
-    const nobodyRuns =
-      reach !== "pull" || !computer
-        ? null
-        : servedAt
-          ? now.getTime() - Date.parse(servedAt) > PULL_LIVE_WINDOW_MS
-          : null;
+    const nobodyRuns = nobodyRunsOf({
+      reach,
+      onComputer: !!computer,
+      servedAt,
+      now,
+    });
     const whyNot = verdicts.get(r.id)?.refusal ?? null;
     // An agent adding ITSELF is joining, not a hand-off: never gated.
     const preview: { handOff: HandOffPreview; handOffReason: string | null } =

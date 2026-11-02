@@ -98,6 +98,7 @@ import {
 import {
   isSessionWorkingNow,
   SESSION_WORKING_WINDOW_MS,
+  type SessionActivityLive,
 } from "@synap-core/types/run-activity";
 import {
   resolveSessionTitle,
@@ -175,6 +176,13 @@ import {
   type RunnerStateFold,
   type SessionRunner,
 } from "./session-runners.js";
+import {
+  deriveSessionHolder,
+  holderUnavailable,
+  loadHolderAgents,
+  nameHolder,
+  type SessionHolderSection,
+} from "./session-holder.js";
 import {
   readSessionInbox,
   type PacketInboxItem,
@@ -674,6 +682,14 @@ export interface ContinuationPacket {
   externalAgent:
     | { status: "ok"; agent: SessionExternalAgent | null }
     | { status: "unavailable"; reason: string };
+  /**
+   * WHO HAS IT — the one holder read (`session-holder.ts`): agent, person or
+   * nobody, with ONE wait kind as its word, since when, and the agent named
+   * with its computer and whether anything runs it. Derived from the
+   * sections this packet already read (`externalAgent`, `runners`, `live`,
+   * `waitingOn`); any of them failed ⇒ `unavailable`, never "nobody".
+   */
+  holder: SessionHolderSection;
   outputs: PacketSection<PacketOutputItem>;
   /**
    * Child sessions (detours and planned sub-sessions), oldest first. A parent
@@ -3005,9 +3021,11 @@ export async function projectContinuationPacket(
         ): {
           section: ContinuationPacket["runners"];
           fold: RunnerStateFold | null;
+          all: SessionRunner[] | null;
         } => ({
           section: section(all.map(runnerItem)),
           fold: foldRunnerState(all),
+          all,
         })
       )
       .catch((err: unknown) => ({
@@ -3017,6 +3035,7 @@ export async function projectContinuationPacket(
           "Who is attached to this session could not be read."
         )(err),
         fold: null,
+        all: null,
       })),
     readSessionInbox(database, {
       sessionId: row.id,
@@ -3077,6 +3096,13 @@ export async function projectContinuationPacket(
 
   const runners = runnersRead.section;
   const measuredAt = Date.now();
+  const holder = await packetHolder(row, {
+    externalAgent,
+    runners: runnersRead.all,
+    live: liveFacts,
+    waitingOn,
+    now: measuredAt,
+  });
   const live: ContinuationPacket["live"] = liveFacts
     ? {
         status: "ok",
@@ -3152,6 +3178,7 @@ export async function projectContinuationPacket(
     aiCanDo,
     blockers,
     externalAgent,
+    holder,
     outputs,
     children,
     parent,
@@ -3210,6 +3237,67 @@ export async function projectContinuationPacket(
     }),
     evaluation,
   };
+}
+
+/**
+ * The holder (`session-holder.ts`) from the sections the packet already read:
+ * the same derivation as `readSessionHolder`, no second read of them. Any of
+ * them unavailable ⇒ the holder is too. Only the agent's naming is read here.
+ */
+async function packetHolder(
+  row: SessionRow,
+  s: {
+    externalAgent: ContinuationPacket["externalAgent"];
+    runners: SessionRunner[] | null;
+    live: SessionActivityLive | null;
+    waitingOn: ContinuationPacket["waitingOn"];
+    now: number;
+  }
+): Promise<SessionHolderSection> {
+  const facts = {
+    session: row,
+    externalAgent: null,
+    runners: [],
+    live: { turnInFlight: false, since: null, lastAt: null },
+    waitingOn: [],
+    now: s.now,
+  };
+  const ended = ["done", "lost"].includes(
+    sessionStatusCategory(row.status) ?? ""
+  );
+  if (ended) {
+    return {
+      status: "ok",
+      holder: nameHolder(deriveSessionHolder(facts), new Map()),
+    };
+  }
+  if (
+    s.externalAgent.status !== "ok" ||
+    !s.runners ||
+    !s.live ||
+    s.waitingOn.status !== "ok"
+  ) {
+    return holderUnavailable();
+  }
+  try {
+    const verdict = deriveSessionHolder({
+      ...facts,
+      externalAgent: s.externalAgent.agent,
+      runners: s.runners,
+      live: s.live,
+      waitingOn: s.waitingOn.marks,
+    });
+    const agents = verdict.agentUserId
+      ? await loadHolderAgents([verdict.agentUserId], new Date(s.now))
+      : new Map();
+    return { status: "ok", holder: nameHolder(verdict, agents) };
+  } catch (err) {
+    logger.warn(
+      { err, sessionId: row.id, section: "holder" },
+      "continuation packet: section read failed"
+    );
+    return holderUnavailable();
+  }
 }
 
 /**
