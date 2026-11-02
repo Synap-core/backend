@@ -15050,6 +15050,7 @@ declare const FAILURE_ERROR_CLASSES: readonly [
 	"missing_field",
 	"validation",
 	"conflict",
+	"kind_missing",
 	"unknown"
 ];
 export type FailureErrorClass = (typeof FAILURE_ERROR_CLASSES)[number];
@@ -15303,6 +15304,41 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
 	 * (`<sourceRef>-><targetRef>:<type>`), which survives chunking and retries.
 	 */
 	byOp?: Record<string, MaterializedOpRecord>;
+	/**
+	 * How many ops a run that STOPPED part-way was given (a non-plan graph
+	 * whose op threw). Only such a run stamps it and the three fields below,
+	 * together with what DID land (the fields above, the shape a complete run
+	 * stamps), so "N of M filed" is derived from the record, never from the
+	 * status (which stays `approval_failed`). A later stamp without it (a
+	 * complete run) drops all four.
+	 */
+	opCount?: number;
+	/** The op that threw: what it was and why, in the person's words. */
+	failedOp?: MaterializedFailedOp;
+	/** Ops the run never reached, because it stopped at `failedOp`. */
+	notRun?: MaterializedOpRef[];
+	/** Ops that ran and were left out without stopping the run (a relation that did not resolve, a twin left out). */
+	skipped?: MaterializedSkippedOp[];
+}
+/** One op of a run, addressed the way `byOp` keys it. */
+export interface MaterializedOpRef {
+	/** The `byOp` key (its `ref`, `opRef(n)` for a ref-less entity, the edge for a relation). */
+	key: string;
+	/** Its index in the ops the run was given. */
+	opIndex: number;
+	op: string;
+	/** Its title or name as the op carried it, when it has one. */
+	title?: string;
+}
+export interface MaterializedFailedOp extends MaterializedOpRef {
+	/** The SAFE, classified sentence (the row's `rejectionReason`). */
+	reason: string;
+	/** `data.failure.errorClass` of the same failure. */
+	errorClass: string;
+}
+export interface MaterializedSkippedOp extends MaterializedOpRef {
+	/** Why it was left out — redacted at write. */
+	reason: string;
 }
 declare const ROW_PATCH_KINDS: readonly [
 	"skill",
@@ -32405,7 +32441,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				error?: string | undefined;
 				failure?: {
 					enableProposalId?: string | undefined;
-					errorClass: "auth" | "conflict" | "missing_field" | "no_connection" | "permission" | "provider" | "target_missing" | "transient" | "unknown" | "validation";
+					errorClass: "auth" | "conflict" | "kind_missing" | "missing_field" | "no_connection" | "permission" | "provider" | "target_missing" | "transient" | "unknown" | "validation";
 					next?: {
 						hint: string;
 						kind: "add" | "connect" | "enable" | "none" | "run";
@@ -46664,6 +46700,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					entityDocumentIds?: string[];
 					entityIds?: string[];
 					facetIds?: string[];
+					failedOp?: MaterializedFailedOp;
 					linkIds?: string[];
 					merge?: {
 						deletedRelationIds?: string[];
@@ -46683,6 +46720,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						winnerFacetIds?: string[];
 						winnerId: string;
 					};
+					notRun?: MaterializedOpRef[];
+					opCount?: number;
 					playbookIds?: string[];
 					projectIds?: string[];
 					projectSubjectIds?: Record<string, string>;
@@ -46692,6 +46731,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					ruleIds?: string[];
 					sessionIds?: string[];
 					skillIds?: string[];
+					skipped?: MaterializedSkippedOp[];
 					stampedAt?: string;
 					viewIds?: string[];
 				};

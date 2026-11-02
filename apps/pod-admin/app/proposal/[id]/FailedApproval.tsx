@@ -14,12 +14,26 @@
  * with exactly the revision the repair made, so every approval gate runs and
  * a revise landing in between is refused. A failed read says so with a
  * retry; it never reads as "nothing to fix".
+ *
+ * A GRAPH that stopped part-way (`stopped-graph-model.ts`) says what it
+ * filed: "4 of 11 items filed · 1 could not be filed · 6 not tried", the
+ * filed records as links, the item that failed with its reason (a missing
+ * kind names the space and where the kind exists), and what was never tried.
+ * Approve and Reject are unchanged.
  */
 
 import { addToast, Button } from "@heroui/react";
 import { TriangleAlert } from "lucide-react";
 import { trpc } from "../../../lib/trpc";
+import { openIn } from "../../../lib/open-in";
 import { proposalPageT } from "./copy";
+import {
+  kindMissingLine,
+  stoppedGraphReport,
+  stoppedHeader,
+  type StoppedGraphReport,
+  type StoppedItem,
+} from "./stopped-graph-model";
 import {
   pickAct,
   repairRows,
@@ -90,11 +104,111 @@ function Row({
   );
 }
 
+function ItemLabel({ item }: { item: StoppedItem }) {
+  const t = proposalPageT();
+  return (
+    <>
+      {item.entityId ? (
+        <a
+          href={
+            openIn({ kind: "object", objectKind: "entity", id: item.entityId })
+              .href
+          }
+          className="text-foreground/85 underline decoration-foreground/25 underline-offset-2 hover:decoration-foreground/60"
+        >
+          {item.label}
+        </a>
+      ) : (
+        <span className="text-foreground/85">{item.label}</span>
+      )}
+      {item.linked && (
+        <span className="text-foreground/50"> · {t("stopped.linked")}</span>
+      )}
+    </>
+  );
+}
+
+/** What a graph that stopped part-way filed, failed on and never tried. */
+export function StoppedGraph({ report }: { report: StoppedGraphReport }) {
+  const t = proposalPageT();
+  const failedReason = report.kindMissing
+    ? kindMissingLine(report.kindMissing, t)
+    : report.failed?.reason;
+  return (
+    <div data-stopped-graph="" className="flex flex-col gap-3 text-[13px]">
+      <p className="font-medium text-foreground/85">
+        {stoppedHeader(report, t)}
+      </p>
+      {report.failed && (
+        <div data-stopped-failed="" className="flex flex-col gap-1">
+          <span className="text-[12px] text-foreground/55">
+            {t("stopped.failed")}
+          </span>
+          <span>
+            <ItemLabel item={report.failed} />
+          </span>
+          {failedReason && (
+            <span className="text-[12px] text-foreground/70">
+              {failedReason}
+            </span>
+          )}
+        </div>
+      )}
+      {report.landed.length > 0 && (
+        <div data-stopped-landed="" className="flex flex-col gap-1">
+          <span className="text-[12px] text-foreground/55">
+            {t("stopped.landed")}
+          </span>
+          <ul className="flex flex-col gap-0.5">
+            {report.landed.map((item) => (
+              <li key={item.key}>
+                <ItemLabel item={item} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {report.skipped.length > 0 && (
+        <div data-stopped-skipped="" className="flex flex-col gap-1">
+          <span className="text-[12px] text-foreground/55">
+            {t("stopped.skipped")}
+          </span>
+          <ul className="flex flex-col gap-0.5">
+            {report.skipped.map((item) => (
+              <li key={item.key}>
+                <ItemLabel item={item} />
+                <span className="text-[12px] text-foreground/55">
+                  {" "}
+                  · {item.reason}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {report.notRun.length > 0 && (
+        <div data-stopped-not-run="" className="flex flex-col gap-1">
+          <span className="text-[12px] text-foreground/55">
+            {t("stopped.notRun")}
+          </span>
+          <ul className="flex flex-col gap-0.5 text-foreground/65">
+            {report.notRun.map((item) => (
+              <li key={item.key}>{item.label}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function FailedApproval({
   proposalId,
   reason,
   expectedRevision,
   onDecided,
+  data,
+  graph,
 }: {
   proposalId: string;
   /** `renderedRevision` of the proposal this page drew: a revise after it refuses the repair. */
@@ -102,7 +216,12 @@ export function FailedApproval({
   /** The pod's classified sentence for the failure, when it recorded one. */
   reason: string | null;
   onDecided: () => void;
+  /** The proposal's stored payload (`data.materialized` says what a stopped graph filed). */
+  data?: unknown;
+  /** The pod's review graph, for the items' titles. */
+  graph?: unknown;
 }) {
+  const stopped = stoppedGraphReport({ data, graph });
   const utils = trpc.useUtils();
   const t = proposalPageT();
   const options = trpc.proposals.repairOptions.useQuery({ proposalId });
@@ -148,6 +267,7 @@ export function FailedApproval({
         />
         <span>{reason ?? t("repair.default")}</span>
       </p>
+      {stopped && <StoppedGraph report={stopped} />}
       {options.isError ? (
         <div className="flex items-center gap-2 text-[12px] text-foreground/65">
           <span>{t("repair.loadFailed")}</span>
