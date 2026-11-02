@@ -52,6 +52,7 @@ import { createLogger } from "@synap-core/core";
 import { getBoss } from "@synap/events";
 import { deriveEventSubjectEntityId } from "../utils/run-subject.js";
 import { syncProcessOnEvent } from "../utils/process-sync.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "automation-trigger-matcher" });
 
@@ -872,11 +873,6 @@ export function deriveEventScopeEntityId(input: {
 }): string | undefined {
   return deriveEventSubjectEntityId(input, { includeDeleted: true });
 }
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const isUuid = (v: unknown): v is string =>
-  typeof v === "string" && UUID_RE.test(v);
 
 /**
  * The projects an event is ON. ONE call per event (the caller caches it for

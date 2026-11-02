@@ -21,14 +21,7 @@ import {
 } from "@synap/database/schema";
 import type { BoxRunDetail, RunStatus, UnifiedRun } from "../runs/types.js";
 import { boxRunReadStatus, type BoxRunReadStatus } from "./box-runs.js";
-
-/**
- * `box_runs.id` is a uuid column, and the run doors pass ids of every ledger
- * (a correlation id, a chat turn id): only a uuid-shaped one is looked up here,
- * so a foreign id is "not a box run", never a Postgres syntax error.
- */
-const UUID_SHAPE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isUuid } from "@synap-core/types/property-render";
 
 /** The unified status of a box run's read status. */
 export function unifiedBoxRunStatus(status: BoxRunReadStatus): RunStatus {
@@ -151,7 +144,10 @@ export async function listBoxRunsForFeed(
 ): Promise<UnifiedRun[]> {
   if (lens.projectId || lens.subjectEntityId) return [];
   if (lens.skillIds && lens.skillIds.length === 0) return [];
-  if (exactRunId !== undefined && !UUID_SHAPE.test(exactRunId)) return [];
+  // `box_runs.id` is a uuid column, and the run doors pass ids of every ledger
+  // (a correlation id, a chat turn id): only a uuid-shaped one is looked up,
+  // so a foreign id is "not a box run", never a Postgres syntax error.
+  if (exactRunId !== undefined && !isUuid(exactRunId)) return [];
   const stored = status ? storedStatusesFor(status) : null;
   if (stored && stored.length === 0) return [];
   const where: Array<SQL | undefined> = [
@@ -178,7 +174,7 @@ export async function loadBoxRunDetail(
   userId: string,
   id: string
 ): Promise<{ run: UnifiedRun; boxRun: BoxRunDetail } | null> {
-  if (!UUID_SHAPE.test(id)) return null;
+  if (!isUuid(id)) return null;
   const [row] = await db
     .select()
     .from(boxRuns)

@@ -23,6 +23,7 @@ import {
   type PresentationMediaSource,
   type ProfilePresentation,
 } from "./index.js";
+import { isUuid } from "../property-render/structured-value.js";
 
 /** The minimal entity shape the resolver reads. */
 export interface MediaEntityInput {
@@ -39,7 +40,6 @@ export interface ResolvedEntityMedia {
   all: MediaRef[];
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HTTP_URL = /^https?:\/\/\S+$/i;
 
 /**
@@ -106,13 +106,13 @@ function resolvePrimary(
         // (b) not copied (yet): an external reference, drawn as a link, never an <img>.
         return { via: "external", url: value, kind };
       }
-      if (value && UUID.test(value)) return stored({ documentId: value, mime });
+      if (value && isUuid(value)) return stored({ documentId: value, mime });
     } else if ("documentId" in source) {
       const documentId = str(entity.documentId);
       if (documentId) return stored({ documentId, mime });
     } else {
       const entityId = firstString(props[source.entityRef]);
-      if (entityId && UUID.test(entityId)) return { via: "stored", entityId };
+      if (entityId && isUuid(entityId)) return { via: "stored", entityId };
     }
     return null;
   };

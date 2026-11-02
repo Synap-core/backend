@@ -40,8 +40,7 @@ import type {
 } from "@synap-core/types/proposals";
 import { isFencedGrant } from "../../access/grant-door-fence.js";
 import { grantWriteDenial } from "../../utils/grant-write-check.js";
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isUuid } from "@synap-core/types/property-render";
 
 const refuse = (message: string): never => {
   throw new TRPCError({ code: "FORBIDDEN", message });
@@ -127,7 +126,7 @@ export async function fenceCaptureGraphOperations(
       );
     if (entityOp.existingEntityId) {
       if (
-        !UUID.test(entityOp.existingEntityId) ||
+        !isUuid(entityOp.existingEntityId) ||
         !(await grantMayLinkRecord(entityOp.existingEntityId, grant))
       )
         refuse("This key's grant does not allow linking that existing record.");

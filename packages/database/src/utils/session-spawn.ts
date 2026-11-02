@@ -36,9 +36,7 @@ import { and, eq, inArray, sql as drizzleSql } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { focusSessions } from "../schema/focus-sessions.js";
 import { links } from "../schema/links.js";
-
-export const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isUuid } from "@synap-core/types/property-render";
 
 export interface RecordSessionSpawnInput {
   /** The newly-opened (child / detour) session. */
@@ -79,7 +77,7 @@ export async function recordSessionSpawn(
   // malformed handle reaches Postgres as `22P02 invalid input syntax for type
   // uuid` — a THROW, from a door whose whole contract is that a bad parent
   // handle drops the edge instead of failing the child's creation.
-  if (!UUID_RE.test(input.parentSessionId)) {
+  if (!isUuid(input.parentSessionId)) {
     return { linked: false, reason: "parent_not_found" };
   }
 

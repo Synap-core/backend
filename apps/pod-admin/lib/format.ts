@@ -98,13 +98,8 @@ export function oneLine(text: string, max: number): string {
   return flat.length > max ? `${flat.slice(0, max).trimEnd()}…` : flat;
 }
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** True for a canonical uuid — the shape every pod object id has. */
-export function isUuid(value: string): boolean {
-  return UUID_RE.test(value);
-}
+export { isUuid } from "@synap-core/types/property-render";
 
 /**
  * A server error message worth showing a person, or `undefined`. tRPC surfaces

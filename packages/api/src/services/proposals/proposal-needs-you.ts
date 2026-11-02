@@ -45,13 +45,11 @@ import {
   resolveProposalWaits,
   type ProposalWaitsRow,
 } from "./proposal-waits.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 export interface ProposalNeedsYouRow extends ProposalWaitsRow {
   createdAt: Date | string;
 }
-
-const isUuid = (v: string) =>
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
 
 /** id → class, for every PENDING row (a decided row has no class). */
 export async function classifyPendingProposals(

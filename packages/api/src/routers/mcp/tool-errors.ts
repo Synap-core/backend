@@ -20,6 +20,7 @@
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { createLogger } from "@synap-core/core";
+import { isUuid } from "@synap-core/types/property-render";
 
 const logger: any = createLogger({ module: "mcp-tool-errors" });
 
@@ -27,9 +28,6 @@ const logger: any = createLogger({ module: "mcp-tool-errors" });
 export function toolError(text: string): CallToolResult {
   return { isError: true, content: [{ type: "text", text }] };
 }
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Lens args that land in a `uuid` DB column (workspaces.id / projects.id).
@@ -49,7 +47,7 @@ export function validateUuidArgs(
 ): CallToolResult | null {
   for (const key of UUID_ARGS) {
     const value = args[key];
-    if (typeof value === "string" && !UUID_RE.test(value)) {
+    if (typeof value === "string" && !isUuid(value)) {
       return toolError(
         `Tool '${toolName}' got an invalid ${key}: "${value}" is not a UUID. ` +
           `Call synap_orient() with no arguments to list the ${key === "workspaceId" ? "workspaces" : "projects"} you can access, then retry with one of their ids.`

@@ -41,6 +41,7 @@ import { readItemCuration, toItemView } from "../imports/read-model.js";
 import { libraryReadConsentOf } from "./read-consent.js";
 import { readStoredLibraryRead } from "./light-read-store.js";
 import { mediaSkippedExpired } from "../media-copy/library-media-skip.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 export type LibraryDb = typeof defaultDb;
 
@@ -329,8 +330,6 @@ function encodeCursor(row: { createdAtText: string; id: string }): string {
   ).toString("base64url");
 }
 
-const CURSOR_UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Postgres `timestamptz::text`: `2026-10-13 10:00:00.123007+00`. */
 const CURSOR_TS =
   /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?)(Z|[+-]\d{2}(?::?\d{2})?)$/;
@@ -367,7 +366,7 @@ export function decodeCursor(cursor: string): {
     if (
       typeof parsed.c !== "string" ||
       typeof parsed.i !== "string" ||
-      !CURSOR_UUID.test(parsed.i) ||
+      !isUuid(parsed.i) ||
       !cursorInstantOk(parsed.c)
     ) {
       throw new Error("malformed");

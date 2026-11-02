@@ -157,6 +157,7 @@ import type {
   ExecutionPayload,
   StepContext,
 } from "./automation-executor-types.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 // ── Backward-compat re-exports ───────────────────────────────────────────────
 // Every symbol this file used to define directly and export now lives in one
@@ -268,13 +269,8 @@ export function buildRunDefinitionSnapshot(
  * only when it is actually a uuid; anything else becomes NULL rather than
  * failing the INSERT (and with it the entire run) inside postgres.
  */
-const COMMAND_ID_UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 function normalizeCommandId(raw: unknown): string | undefined {
-  return typeof raw === "string" && COMMAND_ID_UUID_RE.test(raw)
-    ? raw
-    : undefined;
+  return typeof raw === "string" && isUuid(raw) ? raw : undefined;
 }
 
 // ── Main Executor ───────────────────────────────────────────────────────────
@@ -830,7 +826,7 @@ async function executeAutomationFlow(params: {
           // where it is only a taskId label). So a non-uuid is recorded as
           // NULL — the column is nullable and its FK is unenforced — and the
           // slug stays on the node where the executor actually reads it.
-          // Same guard, same reason as ProfileResolutionService's UUID_RE.
+          // Same guard, same reason as ProfileResolutionService's isUuid check.
           commandId:
             node.type === "command"
               ? normalizeCommandId(

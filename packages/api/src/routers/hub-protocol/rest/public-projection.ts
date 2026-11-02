@@ -49,14 +49,12 @@ import {
   PublicProjectionResponseSchema,
 } from "./_codecs/public-projection.js";
 import { logger, type HubHono, httpStatusForTrpcError } from "./_shared.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 /** Default page size when `limit` is omitted or unparseable. */
 export const PROJECTION_DEFAULT_LIMIT = 20;
 /** Hard ceiling — no full-pod enumeration. */
 export const PROJECTION_MAX_LIMIT = 50;
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Validated public-projection config. `enabled` MUST be the boolean `true` and at
@@ -289,7 +287,7 @@ export function registerPublicProjectionRoutes(app: HubHono): void {
    */
   app.get("/public/projection", async (c) => {
     const workspaceId = c.req.query("workspace");
-    if (!workspaceId || !UUID_RE.test(workspaceId)) {
+    if (!workspaceId || !isUuid(workspaceId)) {
       // Invalid/absent id — 404 (never reveal existence, never let a bad id
       // reach Postgres and 500 on invalid-uuid syntax).
       return c.json({ error: "Not found" }, 404);

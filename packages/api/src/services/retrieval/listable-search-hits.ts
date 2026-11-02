@@ -18,9 +18,7 @@
 
 import { db, and, inArray, listableEntityWhere } from "@synap/database";
 import { entities } from "@synap/database/schema";
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isUuid } from "@synap-core/types/property-render";
 
 interface HitLike {
   id: string;
@@ -51,7 +49,7 @@ export async function withoutUnlistableEntityHits<
 
   // A hit whose id is not a uuid names no `entities` row: not listable (and
   // a non-uuid in the IN list would fail the whole read).
-  const candidates = entityIds.filter((id) => UUID_RE.test(id));
+  const candidates = entityIds.filter((id) => isUuid(id));
   const listable =
     candidates.length === 0
       ? []

@@ -18,15 +18,14 @@
  * cleared by the page (`history.replaceState`); nothing here logs it.
  */
 
+import { isUuid } from "@synap-core/types/property-render";
+
 export type LinkCloudFragment =
   | { kind: "start" }
   | { kind: "ceremony"; intentId: string; assertion: string }
   | { kind: "linked" }
   | { kind: "cancelled" }
   | { kind: "broken" };
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** What the CP sent this page, from `location.hash` (with or without `#`). */
 export function readLinkCloudFragment(hash: string): LinkCloudFragment {
@@ -37,7 +36,7 @@ export function readLinkCloudFragment(hash: string): LinkCloudFragment {
   const params = new URLSearchParams(raw);
   const intentId = params.get("intent") ?? "";
   const assertion = params.get("assertion") ?? "";
-  if (UUID_RE.test(intentId) && assertion.length > 0) {
+  if (isUuid(intentId) && assertion.length > 0) {
     return { kind: "ceremony", intentId, assertion };
   }
   return { kind: "broken" };

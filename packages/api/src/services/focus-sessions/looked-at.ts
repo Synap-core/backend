@@ -24,7 +24,7 @@ import type { SlotAsk, SlotAskLookedAt } from "@synap/playbooks";
 // The BARREL: importing it runs `registry.ts`'s registrations, without which
 // `scopedDb` throws on every table.
 import { AccessContext, scopedDb } from "../../access/index.js";
-import { UUID_RE } from "./session-metadata.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 type Named = { id: string; title?: string | null; name?: string | null };
 
@@ -35,7 +35,7 @@ async function visibleNames(
 ): Promise<Map<string, string | null>> {
   const byKind = new Map<string, string[]>();
   for (const r of refs) {
-    if (!UUID_RE.test(r.id)) continue;
+    if (!isUuid(r.id)) continue;
     const ids = byKind.get(r.kind) ?? [];
     if (!ids.includes(r.id)) ids.push(r.id);
     byKind.set(r.kind, ids);

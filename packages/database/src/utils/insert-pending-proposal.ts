@@ -30,6 +30,7 @@ import {
   isDerivedSession,
   type SessionSource,
 } from "./request-write-context.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 /** The `proposals.data` key persisting a derived session for approval time. */
 const SESSION_SOURCE_MARKER_KEY = "sessionSource";
@@ -643,7 +644,9 @@ export async function insertPendingProposal(
   // the triggering message), one indexed read.
   const sourceMessageId =
     input.sourceMessageId ||
-    (input.agentUserId && input.sessionId && UUID_RE.test(input.sessionId)
+    // Shape check BEFORE the uuid-typed read: a 22P02 would abort a caller's
+    // transaction.
+    (input.agentUserId && input.sessionId && isUuid(input.sessionId)
       ? await latestAgentRoomPost(input.agentUserId, input.sessionId, executor)
       : null);
 
@@ -818,10 +821,6 @@ export async function actionProposalNotifications(
       )
     );
 }
-
-/** Shape check BEFORE the uuid-typed read: a 22P02 would abort a caller's transaction. */
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The agent's newest live post in the room of `sessionId`, or null. */
 async function latestAgentRoomPost(

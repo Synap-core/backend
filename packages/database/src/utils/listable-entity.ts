@@ -58,6 +58,7 @@ import { links } from "../schema/links.js";
 import { notProbeEntityWhere } from "./request-write-context.js";
 import { BELONGS_TO_PROJECT } from "./entity-project-membership.js";
 import type { getDb } from "../client-pg.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 /**
  * The `entities` row is filed into (or is the subject of) a live project whose
@@ -125,9 +126,6 @@ export interface ListableEntityOptions {
   revealSampleOf?: string | null;
 }
 
-const UUID_SHAPE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** The `entities` row is filed into, or is the subject of, `projectId`. */
 function inProjectWhere(projectId: string): SQL {
   const filed = db
@@ -168,7 +166,7 @@ export function listableEntityWhere(opts: ListableEntityOptions = {}): SQL {
     : typeof lens === "string" && lens.length > 0;
   if (lensed) return notProbeEntityWhere();
   const reveal = opts.revealSampleOf;
-  if (typeof reveal === "string" && UUID_SHAPE.test(reveal)) {
+  if (typeof reveal === "string" && isUuid(reveal)) {
     return sql`(${notProbeEntityWhere()} AND (NOT ${sampleEntityWhere()} OR ${inProjectWhere(reveal)}))`;
   }
   return sql`(${notProbeEntityWhere()} AND NOT ${sampleEntityWhere()})`;

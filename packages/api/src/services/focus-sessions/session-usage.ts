@@ -69,8 +69,8 @@ import {
   withSessionParticipants,
   type SessionParticipant,
 } from "./participants.js";
-import { UUID_RE } from "./session-metadata.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 /** One capability (skill) the session ran, with how often and how recently. */
 export interface SessionUsageCapability {
@@ -147,8 +147,6 @@ const GRANT_KINDS: readonly SessionGrantKind[] = [...PART_KINDS, "capability"];
 
 /** Tool kinds that reach an external service — what "connector" means here. */
 const CONNECTOR_TOOL_KINDS = ["provider", "mcp", "api"] as const;
-
-const isUuid = (v: string) => UUID_RE.test(v);
 
 /**
  * The capability runs of one session, aggregated per skill. Two grouped reads

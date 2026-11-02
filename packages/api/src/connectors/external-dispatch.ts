@@ -239,6 +239,7 @@ const CONNECT_AFFORDANCE =
 export { EXTERNAL_DISPATCH_SOURCE } from "./external-dispatch-constants.js";
 import { refuseWorkerSendPastCeiling } from "../services/playbooks/worker-send-ceiling.js";
 import { EXTERNAL_DISPATCH_SOURCE } from "./external-dispatch-constants.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 /**
  * Record a completed external send to the run/event spine — the UNIVERSAL SINK
@@ -2509,11 +2510,7 @@ export async function triggerProviderAction(
       : isNull(tools.workspaceId);
     // `tools.id` is a uuid column — comparing it to a non-uuid string throws a
     // Postgres cast error (22P02), so only match by id when `provider` IS a uuid.
-    const isUuid =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-        provider
-      );
-    const nameOrId = isUuid
+    const nameOrId = isUuid(provider)
       ? or(eq(tools.name, provider), eq(tools.id, provider))
       : eq(tools.name, provider);
     const matches = await db.select().from(tools).where(and(nameOrId, scope));

@@ -87,7 +87,3 @@ export function withoutServerOwnedSessionMetadata(
   for (const key of SERVER_OWNED_SESSION_METADATA_KEYS) delete out[key];
   return out;
 }
-
-/** Shape floor for ids that reach a query — a non-uuid can never match a row. */
-export const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

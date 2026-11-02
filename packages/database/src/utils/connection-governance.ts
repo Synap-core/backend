@@ -5,7 +5,7 @@ import { governanceRules } from "../schema/governance-rules.js";
 import { proposals } from "../schema/proposals.js";
 import { secrets } from "../schema/secrets-vault.js";
 import { authoredCreatedBy } from "./governance-rule-provenance.js";
-import { UUID_RE } from "./session-spawn.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 /**
  * Per-CONNECTION governance for sync writes.
@@ -483,7 +483,7 @@ export async function isConnectionSyncProposal(
   proposalId: string,
   db: DbHandle = sharedDb
 ): Promise<boolean> {
-  if (!UUID_RE.test(proposalId)) return false;
+  if (!isUuid(proposalId)) return false;
   const rows = await db
     .select({ id: proposals.id })
     .from(proposals)
@@ -518,7 +518,7 @@ export async function applyConnectionSyncApprovalForProposal(input: {
   | { applied: false; skipped: "proposal-not-approved" | "proposal-not-found" }
 > {
   const db = input.db ?? sharedDb;
-  if (!UUID_RE.test(input.proposalId)) {
+  if (!isUuid(input.proposalId)) {
     return { applied: false, skipped: "proposal-not-found" };
   }
   const [row] = await db

@@ -55,7 +55,6 @@ import {
   links,
 } from "@synap/database";
 import { DEPENDENCY_LINK_TYPE } from "@synap-core/types/connections";
-import { UUID_RE } from "./session-metadata.js";
 import {
   closesDependencyCycle,
   deleteDependencyEdge,
@@ -67,6 +66,7 @@ import {
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 import { linkProposalTitle } from "../links/link-proposal-title.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 export interface BlockerEdgeInput {
   /** The session that cannot proceed. */
@@ -115,8 +115,7 @@ async function bothOwned(
   // Shape floor BEFORE the query: `focus_sessions.id` is a `uuid` column, so a
   // malformed handle reaches Postgres as `22P02` — a THROW from a door whose
   // contract is to drop, not fail.
-  if (!UUID_RE.test(sessionId) || !UUID_RE.test(blockerSessionId))
-    return { ok: false };
+  if (!isUuid(sessionId) || !isUuid(blockerSessionId)) return { ok: false };
 
   // Owner floor — never `scopedDb`/`userVisibleWhere`, which have an
   // owner-blind NULL-workspace branch on this table.
@@ -561,7 +560,7 @@ export async function attachSessionEdges<T extends { id: string }>(
  * Nothing stores it.
  */
 export async function openBlockerIds(sessionId: string): Promise<string[]> {
-  if (!UUID_RE.test(sessionId)) return [];
+  if (!isUuid(sessionId)) return [];
   const [owner] = await db
     .select({ userId: focusSessions.userId })
     .from(focusSessions)

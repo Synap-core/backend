@@ -157,6 +157,7 @@ import {
   FOCUS_SESSION_RELAY_CORRECTED_EVENT_TYPE,
   FOCUS_SESSION_QUESTION_WITHDRAWN_EVENT_TYPE,
 } from "./lifecycle-events.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "session-answer" });
 
@@ -330,7 +331,7 @@ async function findRoomQuestion(
   channelId: string,
   messageId: string
 ): Promise<(OpenQuestion & { meta: RoomPostMeta }) | null> {
-  if (!UUID_SHAPE.test(messageId)) return null;
+  if (!isUuid(messageId)) return null;
   const [row] = await db
     .select({
       id: messages.id,
@@ -849,8 +850,6 @@ export type AnswerSessionSlotResult =
  * (`summarizeAnswer`) — what the room post says and what every text-only
  * reader (CLI, continuation packet) reads.
  */
-const UUID_SHAPE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * The grant request an ANSWER is, for the key half of both answer doors (tRPC
@@ -873,7 +872,7 @@ export async function answerGrantWrite(sessionId: string): Promise<{
     getRequestGrant()?.scopes.some((s) => s.workspaceIds || s.projectIds) ??
     false;
   const [row] =
-    placed && UUID_SHAPE.test(sessionId)
+    placed && isUuid(sessionId)
       ? await db
           .select({
             workspaceId: focusSessions.workspaceId,
