@@ -82,6 +82,40 @@ export function parsePlace(scope: PlaceScopeLike, holder: PlaceHolder): Place {
     : UNBOUNDED_PLACE;
 }
 
+/**
+ * Who holds a stored grant: one minted for an OAuth client (`client_id`: an
+ * app's key, a person's app sign-in) is an app's; any other is a key's — a
+ * person's or an AI's, which read "no space" alike (unbounded).
+ */
+export function holderOfGrant(grant: {
+  readonly clientId?: string | null;
+}): PlaceHolder {
+  return grant.clientId ? "app" : "key";
+}
+
+/** The spaces a place names; none for the pod or anywhere. */
+export function placeSpaceIds(place: Place): readonly string[] {
+  return place.kind === "spaces" ? place.ids : [];
+}
+
+/**
+ * Where a scope reaches for anything BEYOND reading named kinds — the question
+ * the write, template, role and routing doors ask ("may it add an AI to this
+ * space?"). A scope with no space that only reads named kinds
+ * (`isPodWideReadScope`) reaches no space for that, whoever holds it: null.
+ * Otherwise its place as a key's (`parsePlace`): its spaces, or anywhere.
+ */
+export function placeBeyondPodWideReads(
+  scope: PlaceScopeLike
+): SpacesOrAnywhere | null {
+  if (scope.workspaceIds == null && isPodWideReadScope(scope)) return null;
+  const place = parsePlace(scope, "key");
+  return place.kind === "pod" ? null : place;
+}
+
+/** A place that is not the pod: what a scope reaches beyond its pod-wide reads. */
+export type SpacesOrAnywhere = Exclude<Place, { readonly kind: "pod" }>;
+
 /** One request as a connect proposal, `approved_requests` or `synap_grant` carry it. */
 export interface PlaceRequestLike {
   readonly permission: string;
@@ -140,6 +174,23 @@ export function requestScopeOf(place: Place): "space" | "pod" | null {
     default:
       return assertNeverPlace(place);
   }
+}
+
+/**
+ * An app's request with its explicit place on the wire (`scope` beside
+ * `workspaceId`, additive since access model B): what `approved_requests`, a
+ * token's `synap_grant` and an `app/connect` proposal's `requests` carry. A
+ * request with no place an app may hold (a write with no space) is refused.
+ */
+export function withAppRequestScope<T extends PlaceRequestLike>(
+  request: T
+): T & { scope: "space" | "pod" } {
+  const scope = requestScopeOf(parseRequestPlace(request, "app"));
+  if (scope === null)
+    throw new PlaceError(
+      `An app holds ${request.permission} only in a space, or as a pod-wide read.`
+    );
+  return { ...request, scope };
 }
 
 /** A stable key for grouping by place ("pod", "unbounded", "spaces:a,b"). */

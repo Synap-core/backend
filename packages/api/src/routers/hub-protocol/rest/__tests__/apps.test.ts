@@ -607,7 +607,11 @@ describe("approve executor — app/connect writes approved_requests", () => {
       {
         appId: APP_UUID,
         requests: [
-          { permission: "entity.person.create", workspaceId: WORKSPACE_ID },
+          {
+            permission: "entity.person.create",
+            workspaceId: WORKSPACE_ID,
+            scope: "space",
+          },
         ],
       },
     ]);

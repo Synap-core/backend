@@ -18,11 +18,14 @@
  * every partial overlap, which clipped a key to nothing and revoked it.
  *
  * Pinnings (`workspaceIds` / `projectIds` / `entityIds`): `null`, `undefined`
- * and `[]` all mean UNPINNED here — the same reading as the one grant write
- * door (`GrantRepository` stores `[]` as null), so no stored grant ever
- * carries `[]`. `permits` itself would read a raw `[]` as "no place at all";
- * that spelling cannot reach it from the store, and the property tests
- * compare against `permits` on the normalised scope.
+ * and `[]` all mean UNPINNED here. No stored grant carries `[]`: the one grant
+ * write door (`GrantRepository`) refuses it, and the place parse
+ * (`parsePlace`, `./reach.ts`) refuses it for spaces. `permits` itself would
+ * read a raw `[]` as "no place at all"; that spelling cannot reach it from
+ * the store, and the property tests compare against `permits` on the
+ * normalised scope. (The algebra works on the raw lists, every axis alike:
+ * which holder a missing space list belongs to is the parse's question, not
+ * the algebra's.)
  *
  * KNOWN LIMIT (measured in algebra.test.ts): `permits` reads `projectIds` as
  * "the object is in ANY of these projects". Two such predicates do not meet

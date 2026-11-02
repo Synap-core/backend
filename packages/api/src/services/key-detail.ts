@@ -32,7 +32,36 @@ import {
   users,
   workspaces,
 } from "@synap/database/schema";
+import {
+  assertNeverPlace,
+  holderOfGrant,
+  parsePlace,
+  placeSpaceIds,
+  type Place,
+} from "@synap-core/types/grants";
 import { readUsageForCaller } from "./usage/read-usage.js";
+
+/** A grant's place, and its spaces by name (none for the pod or anywhere). */
+function placedSpaces(
+  place: Place,
+  spaceName: ReadonlyMap<string, string>
+): Pick<KeyDetail["grants"][number], "place" | "workspaces"> {
+  switch (place.kind) {
+    case "spaces":
+      return {
+        place,
+        workspaces: place.ids.map((id) => ({
+          id,
+          name: spaceName.get(id) ?? null,
+        })),
+      };
+    case "pod":
+    case "unbounded":
+      return { place, workspaces: null };
+    default:
+      return assertNeverPlace(place);
+  }
+}
 
 /** How many of the key's latest proposals and sessions the panel lists. */
 export const KEY_DETAIL_RECENT = 20;
@@ -42,8 +71,13 @@ export interface KeyDetail {
     id: string;
     label: string | null;
     permissions: string[];
-    /** null = no narrowing on that axis. */
+    /** null = no space list (its `place` says what that means for it). */
     workspaces: Array<{ id: string; name: string | null }> | null;
+    /**
+     * Where it reaches, parsed once (`parsePlace`): an app's grant with no
+     * space is a pod-wide read, any other "anywhere you can reach".
+     */
+    place: Place;
     projectIds: string[] | null;
     entityIds: string[] | null;
     onBehalfOf: { id: string; name: string | null };
@@ -132,7 +166,11 @@ export async function readKeyDetail(
   ]);
 
   // Names for the spaces the grants pin and the people they act for.
-  const spaceIds = [...new Set(grantRows.flatMap((g) => g.workspaceIds ?? []))];
+  const spaceIds = [
+    ...new Set(
+      grantRows.flatMap((g) => placeSpaceIds(parsePlace(g, holderOfGrant(g))))
+    ),
+  ];
   const personIds = [...new Set(grantRows.map((g) => g.onBehalfOf))];
   const [spaceRows, personRows] = await Promise.all([
     spaceIds.length
@@ -181,9 +219,7 @@ export async function readKeyDetail(
       id: g.id,
       label: g.label,
       permissions: g.permissions,
-      workspaces: g.workspaceIds
-        ? g.workspaceIds.map((id) => ({ id, name: spaceName.get(id) ?? null }))
-        : null,
+      ...placedSpaces(parsePlace(g, holderOfGrant(g)), spaceName),
       projectIds: g.projectIds,
       entityIds: g.entityIds,
       onBehalfOf: {

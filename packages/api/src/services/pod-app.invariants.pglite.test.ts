@@ -528,6 +528,7 @@ describe("I2 — the key is exactly the consented subset; narrowing works, widen
         workspaceId: BRAND,
         workspaceName: "Brand",
         templateSlug: "content-os",
+        scope: "space",
       },
     ]);
     expect(body.synap_user).toEqual({ id: OWNER, name: "Ada" });
@@ -883,7 +884,7 @@ describe("I6 — revocation is immediate", () => {
     const row = (await appRow(OWNER, STUDIO))!;
     expect(row.revoked_at).toBeNull();
     expect(row.approved_requests).toEqual([
-      { permission: READ, workspaceId: SHARED },
+      { permission: READ, workspaceId: SHARED, scope: "space" },
     ]);
     expect(await liveGrantsOf(record.id)).toEqual([
       { permissions: [READ], workspaceIds: [SHARED] },

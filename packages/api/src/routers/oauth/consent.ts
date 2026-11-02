@@ -545,8 +545,8 @@ export interface OAuthAppConsent {
   verified: boolean;
   /**
    * Who its token will act as, and the words for it (`describePodAppActsAs`):
-   * a Synap app acts AS THE PERSON ("<app> will act as you in: <the spaces
-   * ticked>"); every other app is its own agent, every change for review.
+   * a Synap app acts AS THE PERSON; every other app is its own agent, every
+   * change for review.
    */
   actsAs: PodAppActsAsDescription;
   /** The document's `client_uri` (same origin as the client_id), or null. */

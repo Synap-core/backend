@@ -475,7 +475,6 @@ describe("the consent screen says 'act as you' for a Synap app only", () => {
     expect(ctx.app?.verified).toBe(true);
     expect(ctx.app?.actsAs).toEqual({
       kind: "person",
-      lead: "Content Studio will act as you in",
       note: "What you do in Content Studio is saved as you, right away — not sent for review, approving changes included. It cannot delete, or create keys. You can sign it out any time from Connected.",
     });
     // The review verb is offered where OWNER may give a write.

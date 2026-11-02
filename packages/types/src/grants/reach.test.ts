@@ -4,14 +4,18 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  holderOfGrant,
   joinPlaces,
   meetPlaces,
   parsePlace,
   parseRequestPlace,
   placeCovers,
   placeKey,
+  placeBeyondPodWideReads,
   PlaceError,
+  placeSpaceIds,
   requestScopeOf,
+  withAppRequestScope,
   type Place,
 } from "./index.js";
 
@@ -142,5 +146,47 @@ describe("place algebra", () => {
   it("a place key ignores the order of its spaces", () => {
     expect(placeKey(spaces("b", "a"))).toBe(placeKey(spaces("a", "b")));
     expect(placeKey({ kind: "pod" })).not.toBe(placeKey({ kind: "unbounded" }));
+  });
+});
+
+describe("the doors' helpers", () => {
+  it("an OAuth client's grant is an app's; any other a key's", () => {
+    expect(holderOfGrant({ clientId: "app_x" })).toBe("app");
+    expect(holderOfGrant({ clientId: null })).toBe("key");
+    expect(holderOfGrant({})).toBe("key");
+  });
+
+  // Rules out: a read of named kinds with no space counted as "every space"
+  // by a write door (#546, #636).
+  it("beyond pod-wide reads: a read-only no-space scope reaches no space", () => {
+    expect(
+      placeBeyondPodWideReads({ permissions: ["entity.decision.read"] })
+    ).toBeNull();
+    expect(
+      placeBeyondPodWideReads({ permissions: ["entity.decision.update"] })
+    ).toEqual({ kind: "unbounded" });
+    expect(
+      placeBeyondPodWideReads({
+        permissions: ["entity.decision.read"],
+        workspaceIds: ["a"],
+      })
+    ).toEqual(spaces("a"));
+    expect(placeSpaceIds(spaces("a", "b"))).toEqual(["a", "b"]);
+    expect(placeSpaceIds({ kind: "pod" })).toEqual([]);
+  });
+
+  it("an app request carries its explicit scope; a write with no space is refused", () => {
+    expect(
+      withAppRequestScope({ permission: "entity.note", workspaceId: "w" })
+    ).toEqual({ permission: "entity.note", workspaceId: "w", scope: "space" });
+    expect(
+      withAppRequestScope({
+        permission: "entity.decision.read",
+        workspaceId: null,
+      }).scope
+    ).toBe("pod");
+    expect(() =>
+      withAppRequestScope({ permission: "entity.note", workspaceId: null })
+    ).toThrow(PlaceError);
   });
 });
