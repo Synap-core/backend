@@ -65,6 +65,7 @@ import { materializePodAdminsIntoWorkspace } from "../utils/workspace-role.js";
 import { findUnsafeAutoApproveEntries } from "@synap/governance-policy";
 import { auditLog } from "../utils/audit-log.js";
 import { assertPackageTierAccess } from "../utils/tier-check.js";
+import { invalidCatalogDefinition } from "../services/package-updates/refusals.js";
 import { emitSideEffects, getBoss } from "@synap/events";
 import { storage } from "@synap/storage";
 import { workspaceRuntimePrimarySurfaceSchema } from "../schemas/workspace-primary-surface.js";
@@ -1314,23 +1315,38 @@ export const workspacesRouter = router({
  * auth + the tier gate here (the human door; `ensureTemplate` gates an agent
  * before it gets here).
  */
-export async function installTemplateFromCatalog(
-  ctx: { userId: string; agentUserId?: string | null },
-  input: { slug: string; workspaceId?: string; proposalId?: string }
-): Promise<TemplateDoorReply> {
-  const resolved = await resolveWorkspaceTemplate(input.slug);
+/**
+ * The catalog's definition of a workspace template, as the pod applies it:
+ * resolved (cache first), stamped with its slug and catalog version, and
+ * checked against `PackageApplySchema`. A definition that does not fit is the
+ * typed `INVALID_CATALOG_DEFINITION` refusal naming the template and each
+ * failing field (never a bare "invalid definition"). Shared by the person's
+ * apply below and an agent's update request (`package-updates/apply-whole.ts`),
+ * so both read one body.
+ */
+export async function resolveCatalogTemplateBody(
+  userId: string,
+  slug: string
+): Promise<{
+  pkg: Record<string, unknown>;
+  body: import("zod").infer<
+    (typeof import("./hub-protocol/rest/packages.js"))["PackageApplySchema"]
+  >;
+  version: string | undefined;
+}> {
+  const resolved = await resolveWorkspaceTemplate(slug);
   if (!resolved) {
     throw new TRPCError({
       code: "NOT_FOUND",
-      message: `Unknown workspace template: ${input.slug}`,
+      message: `Unknown workspace template: ${slug}`,
     });
   }
-  await assertPackageTierAccess(ctx.userId, input.slug);
+  await assertPackageTierAccess(userId, slug);
   const pkg = {
     ...resolved.packageDefinition,
     _meta: {
       ...(resolved.packageDefinition._meta ?? {}),
-      slug: input.slug,
+      slug,
       ...(resolved.version ? { version: resolved.version } : {}),
     },
   };
@@ -1340,23 +1356,31 @@ export async function installTemplateFromCatalog(
   const parsed = PackageApplySchema.safeParse(pkg);
   if (!parsed.success) {
     logger.error(
-      { slug: input.slug, issues: parsed.error.issues },
+      { slug, issues: parsed.error.issues },
       "installFromCatalog: catalog package failed validation"
     );
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: `Template "${input.slug}" has an invalid definition. Nothing was applied.`,
-    });
+    throw invalidCatalogDefinition(slug, parsed.error);
   }
+  return { pkg, body: parsed.data, version: resolved.version };
+}
+
+export async function installTemplateFromCatalog(
+  ctx: { userId: string; agentUserId?: string | null },
+  input: { slug: string; workspaceId?: string; proposalId?: string }
+): Promise<TemplateDoorReply> {
+  const { pkg, body, version } = await resolveCatalogTemplateBody(
+    ctx.userId,
+    input.slug
+  );
   const applied = await applyTemplateForTrpc({
     userId: ctx.userId,
     agentUserId: ctx.agentUserId ?? undefined,
     source: "trpc.installFromCatalog",
     definition: pkg as unknown as WorkspaceDefinitionInput,
-    layerTwoBody: parsed.data as unknown as LayerTwoBody,
+    layerTwoBody: body as unknown as LayerTwoBody,
     targetWorkspaceId: await installTarget(input.workspaceId, input.slug),
     // The server resolved this body from the catalog: its version names it.
-    catalogVersion: resolved.version,
+    catalogVersion: version,
     identity: {
       packageSlug: input.slug,
       proposalId: input.proposalId,
