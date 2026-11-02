@@ -880,7 +880,7 @@ jobs:
       # never commits to a branch.
       - name: Regenerate docs/reference (on a red)
         id: docs-drift
-        if: failure() && steps.docs-check.outcome == 'failure'
+        if: ${{ failure() && env.RUN_WORK == 'true' && steps.docs-check.outcome == 'failure' }}
         run: |
           if pnpm docs:reference && [ -n "$(git status --porcelain -- docs/reference)" ]; then
             echo "drift=true" >> "$GITHUB_OUTPUT"
@@ -889,14 +889,14 @@ jobs:
             echo "drift=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Upload the regenerated reference docs
-        if: failure() && steps.docs-drift.outputs.drift == 'true'
+        if: ${{ failure() && env.RUN_WORK == 'true' && steps.docs-drift.outputs.drift == 'true' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: reference-docs
           path: docs/reference/
           retention-days: 7
       - name: How to apply the regenerated reference docs
-        if: failure() && steps.docs-drift.outputs.drift == 'true'
+        if: ${{ failure() && env.RUN_WORK == 'true' && steps.docs-drift.outputs.drift == 'true' }}
         env:
           FIX: gh run download ${{ github.run_id }} -R ${{ github.repository }} -n reference-docs -D docs/reference
           TESTED: ${{ github.sha }}
