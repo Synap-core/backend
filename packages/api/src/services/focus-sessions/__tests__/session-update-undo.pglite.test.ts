@@ -311,6 +311,30 @@ describe("an agent's auto-approved session update can be undone", () => {
     expect((await sessionOf(sessionId)).title).toBe("Mine now");
   });
 
+  it("only an update with nothing to undo asks for its receipt on the spine (0.7)", async () => {
+    // Rules out "every session update drops its proposals receipt": an
+    // undoable one keeps it, since its Undo is stamped there.
+    const sessionId = await seedSession();
+    autoApprove();
+    await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      title: "Founder radar",
+    });
+    expect(permSpy.mock.calls.at(-1)![0]).not.toHaveProperty("sessionReceipt");
+
+    await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      currentStage: "build",
+    });
+    expect(permSpy.mock.calls.at(-1)![0]).toMatchObject({
+      sessionReceipt: "activity",
+    });
+  });
+
   it("an update that also changes the status is never offered an Undo", async () => {
     const sessionId = await seedSession();
     autoApprove();
