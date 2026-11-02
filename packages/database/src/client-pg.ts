@@ -13,6 +13,7 @@ import {
   InternalServerError,
 } from "@synap-core/core";
 import * as schema from "./schema/index.js";
+import { dbPoolSize } from "./pool-size.js";
 
 const logger = createLogger({ module: "database" });
 
@@ -47,7 +48,7 @@ const DATABASE_URL =
 // The compose file sets every cap explicitly, so this default does not reach a
 // pod. Raise a cap there and you raise POSTGRES_MAX_CONNECTIONS with it, or
 // deploy/__tests__/pg-connection-budget.test.sh goes red.
-const DB_POOL_SIZE = parseInt(process.env.DB_POOL_SIZE || "50", 10);
+const DB_POOL_SIZE = dbPoolSize();
 
 // Idle connection timeout (seconds).
 //

@@ -36,8 +36,8 @@ export const PUBLIC_TRPC_PROCEDURES: ReadonlySet<string> = new Set([
 ]);
 
 /** The procedure paths tRPC will run for this URL (batch paths split on ","). */
-export function trpcProcedurePaths(url: string, endpoint = "/trpc"): string[] {
-  return trpcPath(url, endpoint).split(",");
+export function trpcProcedurePaths(url: string): string[] {
+  return trpcPath(url).split(",");
 }
 
 function isPublicProcedure(procedurePath: string): boolean {
@@ -48,8 +48,8 @@ function isPublicProcedure(procedurePath: string): boolean {
 }
 
 /** True only when EVERY procedure the request runs is public. */
-export function isPublicTrpcRequest(url: string, endpoint = "/trpc"): boolean {
-  const paths = trpcProcedurePaths(url, endpoint);
+export function isPublicTrpcRequest(url: string): boolean {
+  const paths = trpcProcedurePaths(url);
   return paths.length > 0 && paths.every(isPublicProcedure);
 }
 

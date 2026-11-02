@@ -4968,6 +4968,17 @@ synap_update_engine() {
     UE_SERVICES=()
     local _svc
     while IFS= read -r _svc; do [ -n "$_svc" ] && UE_SERVICES+=("$_svc"); done < <(_ue_services "$UE_EDGE" "${UE_PROFILE_ARGS[@]}")
+    # postgres takes the release's definition (image, `-c max_connections`…)
+    # BEFORE the migrations and the canary, which must meet the postgres the
+    # release ships (#664): it used to be recreated only in _ue_bring_up_rest,
+    # after both. `up -d` recreates it only when its definition changed; a
+    # failure rolls back, and the rollback's _ue_bring_up_rest brings the
+    # previous definition back. A fresh pod (no data yet) starts it there.
+    if [ "$(SYNAP_DEPLOY_DIR="$(pwd)" COMPOSE_CMD="command docker compose" pgdata_layout)" = "ok" ] \
+        && printf '%s\n' "${UE_SERVICES[@]}" | grep -qx postgres; then
+        docker compose up -d --no-deps postgres || _ue_rollback "postgres did not start on the release's definition"
+        _pgs_wait_ready "$(_pgs_container)" || _ue_rollback "postgres not ready on the release's definition"
+    fi
 
     local domain
     domain="$(_ue_env_get DOMAIN)"; domain="${domain:-localhost}"
