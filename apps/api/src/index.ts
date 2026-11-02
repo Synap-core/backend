@@ -70,6 +70,7 @@ import {
 } from "@synap/api";
 import { serve } from "@hono/node-server";
 import {
+  getBoss,
   startBoss,
   stopBoss,
   registerAllWorkers,
@@ -1951,6 +1952,11 @@ try {
               registerFirefliesIngestRunner,
               registerFirefliesBackfillRunner,
             } = await import("@synap/jobs/workers/fireflies-worker.js");
+            const {
+              registerMessagingHistoryImportRunner,
+              registerMessagingWebhookEnsureRunner,
+              MESSAGING_WEBHOOK_ENSURE_QUEUE,
+            } = await import("@synap/jobs/workers/messaging-sync.js");
             const { registerSessionRecallRunner } =
               await import("@synap/jobs/workers/session-recall-worker.js");
             const { registerGoalLoopSweeper, registerSessionLifecycleSweeper } =
@@ -2075,6 +2081,28 @@ try {
               api.runFirefliesIngest(input)
             );
             registerFirefliesBackfillRunner(() => api.runFirefliesBackfill());
+            // Messaging: the silent history import and the webhook
+            // self-registration (messaging-sync.ts) run api-side code.
+            registerMessagingHistoryImportRunner((input) =>
+              api.runMessagingHistoryImport(input)
+            );
+            registerMessagingWebhookEnsureRunner(() =>
+              api.runMessagingWebhookEnsure()
+            );
+            // Deferred and non-fatal: check the webhook a minute after boot
+            // rather than waiting for the hourly cron.
+            try {
+              await getBoss().send(
+                MESSAGING_WEBHOOK_ENSURE_QUEUE,
+                {},
+                { startAfter: 60, singletonKey: "boot" }
+              );
+            } catch (err) {
+              apiLogger.warn(
+                { err },
+                "messaging-webhook-ensure boot check not queued (non-fatal)"
+              );
+            }
             // Session recall (on start / the sweep floor) delegates to the
             // api-side runner — requested by session synap-68.
             registerSessionRecallRunner((d) => api.runSessionRecall(d));

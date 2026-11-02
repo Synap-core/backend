@@ -198,6 +198,14 @@ describe("the messaging service's Unipile key is the installed capability's key"
       capabilityId: cap,
       problem: null,
       message: null,
+      // No webhook check has run in this process yet.
+      webhook: {
+        state: "unknown",
+        url: null,
+        missingEvents: [],
+        error: null,
+        checkedAt: null,
+      },
     });
   });
 

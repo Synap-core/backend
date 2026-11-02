@@ -132,6 +132,10 @@ import {
   FIREFLIES_BACKFILL_CRON,
 } from "./workers/fireflies-worker.js";
 import {
+  MESSAGING_WEBHOOK_ENSURE_QUEUE,
+  MESSAGING_WEBHOOK_ENSURE_CRON,
+} from "./workers/messaging-sync.js";
+import {
   CONNECTION_SYNC_RUN_QUEUE,
   CONNECTION_SYNC_CRON,
 } from "./workers/connection-sync-run.js";
@@ -533,6 +537,16 @@ export async function registerCronSchedules(): Promise<void> {
     {}
   );
   logger.info("Registered cron: fireflies-backfill-cron (every 30min)");
+
+  // Messaging webhook self-registration (hourly) — the pod's endpoint stays
+  // registered for every event it handles; its health feeds service-config.
+  await scheduleSafe(
+    boss,
+    MESSAGING_WEBHOOK_ENSURE_QUEUE,
+    MESSAGING_WEBHOOK_ENSURE_CRON,
+    {}
+  );
+  logger.info("Registered cron: messaging-webhook-ensure (hourly)");
 
   // Event sync (every 6 hours — the cron worker invokes the api-side runner
   // in-process (IoC slot) which mirrors upcoming Synap events + Stellar

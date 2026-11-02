@@ -65,15 +65,27 @@ vi.mock("@synap/database", () => ({
   eq: vi.fn(),
   and: vi.fn(),
   asc: vi.fn(),
+  desc: vi.fn(),
+  ne: vi.fn(),
+  lte: vi.fn(),
+  isNull: vi.fn(),
   isNotNull: vi.fn(),
   drizzleSql: vi.fn(),
   channels: {},
+  entities: {},
   messages: {},
   ChannelType: { EXTERNAL: "external" },
   ChannelScope: { WORKSPACE: "workspace", POD: "pod" },
-  MessageRole: { USER: "user" },
-  MessageAuthorType: { EXTERNAL: "external" },
+  MessageRole: { USER: "user", ASSISTANT: "assistant" },
+  MessageAuthorType: { EXTERNAL: "external", HUMAN: "human" },
   MessageCategory: { CHAT: "chat" },
+  MessageDirection: { INBOUND: "inbound", OUTBOUND: "outbound" },
+  MessageDeliveryStatus: {
+    SENT: "sent",
+    DELIVERED: "delivered",
+    READ: "read",
+    FAILED: "failed",
+  },
   resolveIdentity: vi.fn(),
 }));
 
@@ -84,6 +96,9 @@ vi.mock("@synap/events", () => ({
 
 vi.mock("@synap/jobs/workers/inbound-attachment-worker.js", () => ({
   INBOUND_ATTACHMENT_QUEUE: "inbound-attachment",
+}));
+vi.mock("@synap/jobs/workers/messaging-sync.js", () => ({
+  MESSAGING_HISTORY_IMPORT_QUEUE: "messaging-history-import",
 }));
 
 vi.mock("../external-user-mapping.js", () => ({

@@ -150,6 +150,45 @@ export async function resolveUnipileConnection(): Promise<UnipileConnection> {
   }
 }
 
+/**
+ * Whether the provider delivers this pod's events, as the last check found
+ * it (`messaging-webhook-ensure`: hourly, shortly after boot, and when an
+ * account connects). `checkedAt: null` = not checked since this process
+ * started; `unknown` with an `error` = the check could not read the provider.
+ */
+export interface MessagingWebhookState {
+  state:
+    "registered" | "missing" | "missing-events" | "no-public-url" | "unknown";
+  url: string | null;
+  missingEvents: string[];
+  error: string | null;
+  checkedAt: string | null;
+}
+
+const NOT_CHECKED: MessagingWebhookState = {
+  state: "unknown",
+  url: null,
+  missingEvents: [],
+  error: null,
+  checkedAt: null,
+};
+
+// Held in the process that runs the check (the API process runs the pg-boss
+// workers in-process); the next check after a restart refills it.
+let lastWebhookState: MessagingWebhookState = NOT_CHECKED;
+
+/** Record the result of a webhook check (the ensure job). */
+export function recordMessagingWebhookState(
+  state: MessagingWebhookState
+): void {
+  lastWebhookState = state;
+}
+
+/** The last webhook check, or "not checked". */
+export function messagingWebhookState(): MessagingWebhookState {
+  return lastWebhookState;
+}
+
 /** The messaging service's connection state, as the settings screens read it. */
 export interface MessagingServiceState {
   configured: boolean;
@@ -157,10 +196,13 @@ export interface MessagingServiceState {
   capabilityId: string | null;
   problem: UnipileConnectionProblem | null;
   message: string | null;
+  /** Whether inbound messages reach the pod (the last webhook check). */
+  webhook: MessagingWebhookState;
 }
 
 export async function describeMessagingService(): Promise<MessagingServiceState> {
   const conn = await resolveUnipileConnection();
+  const webhook = messagingWebhookState();
   return conn.ok
     ? {
         configured: true,
@@ -168,6 +210,7 @@ export async function describeMessagingService(): Promise<MessagingServiceState>
         capabilityId: conn.capabilityId,
         problem: null,
         message: null,
+        webhook,
       }
     : {
         configured: false,
@@ -175,5 +218,6 @@ export async function describeMessagingService(): Promise<MessagingServiceState>
         capabilityId: conn.capabilityId,
         problem: conn.problem,
         message: conn.error,
+        webhook,
       };
 }

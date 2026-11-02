@@ -30,15 +30,22 @@ import {
   eq,
   and,
   asc,
+  desc,
+  ne,
+  lte,
+  isNull,
   isNotNull,
   drizzleSql,
   channels,
+  entities,
   messages,
   ChannelType,
   ChannelScope,
   MessageRole,
   MessageAuthorType,
   MessageCategory,
+  MessageDirection,
+  MessageDeliveryStatus,
 } from "@synap/database";
 import { emitSideEffects, getBoss } from "@synap/events";
 import { resolveIdentity } from "@synap/database";
@@ -46,6 +53,10 @@ import {
   INBOUND_ATTACHMENT_QUEUE,
   type InboundAttachmentJobData,
 } from "@synap/jobs/workers/inbound-attachment-worker.js";
+import {
+  MESSAGING_HISTORY_IMPORT_QUEUE,
+  type MessagingHistoryImportJobData,
+} from "@synap/jobs/workers/messaging-sync.js";
 import { resolveExistingExternalUser } from "../external-user-mapping.js";
 import { emitMessageObservation } from "../../utils/emit-message-observation.js";
 import {
@@ -148,6 +159,29 @@ export interface ResolveOrCreateExternalChannelArgs {
    * born before the bridge sent the guild id would otherwise never get a link.
    */
   externalCoordinates?: { guildId?: string; teamId?: string };
+  /**
+   * The person this conversation is with, when the caller already knows them
+   * (an email sender's strong match, a provider id the lookup resolved). A new
+   * channel is born bound to them; an existing UNBOUND one is bound now. A
+   * channel already bound to someone is never re-bound here.
+   */
+  contextEntityId?: string | null;
+  /**
+   * The outcome of the one profile lookup for this chat's participant
+   * (participant-lookup.ts), cached as `metadata.participantLookup` so a later
+   * message never repeats it.
+   */
+  participantLookup?: ParticipantLookupRecord;
+}
+
+/** `channels.metadata.participantLookup` — one lookup per chat, never two. */
+export interface ParticipantLookupRecord {
+  at: string;
+  /**
+   * matched / no-match / not-found are final; no-budget and failed let a later
+   * message try again.
+   */
+  result: "matched" | "no-match" | "not-found" | "no-budget" | "failed";
 }
 
 export class ExternalChannelOwnershipError extends Error {
@@ -225,6 +259,9 @@ export async function resolveOrCreateExternalChannel(
       lastMessageAt,
       lastMessagePreview: args.preview,
       unread: true,
+      ...(args.participantLookup
+        ? { participantLookup: args.participantLookup }
+        : {}),
     })}::jsonb`;
     // Provider coordinates are backfilled onto existing channels too (same
     // rationale as participantExternalId above — a channel born before the
@@ -243,6 +280,19 @@ export async function resolveOrCreateExternalChannel(
         updatedAt: new Date(),
       })
       .where(eq(channels.id, existing.id));
+    if (!existing.contextObjectId && args.contextEntityId) {
+      const bound = await bindChannelToEntity(
+        existing.id,
+        args.contextEntityId
+      );
+      if (bound) {
+        return {
+          channelId: existing.id,
+          contextObjectId: args.contextEntityId,
+          contextObjectType: "entity",
+        };
+      }
+    }
     return {
       channelId: existing.id,
       contextObjectId: existing.contextObjectId,
@@ -260,7 +310,15 @@ export async function resolveOrCreateExternalChannel(
   let bornContextObjectId: string | null = null;
   let bornContextObjectType: string | null = null;
   let titleAtBirth = args.title;
-  if (args.participantExternalId) {
+  if (args.contextEntityId) {
+    const person = await liveEntity(args.contextEntityId);
+    if (person) {
+      bornContextObjectId = person.id;
+      bornContextObjectType = "entity";
+      if (person.title) titleAtBirth = person.title;
+    }
+  }
+  if (!bornContextObjectId && args.participantExternalId) {
     const resolution = await resolveIdentity(db, {
       userId: args.userId,
       signals: [
@@ -274,6 +332,52 @@ export async function resolveOrCreateExternalChannel(
       bornContextObjectId = resolution.entity.id;
       bornContextObjectType = "entity";
       if (resolution.entity.title) titleAtBirth = resolution.entity.title;
+    }
+  }
+
+  // ADOPT the person's PENDING channel (opened before the provider gave a chat
+  // id: a lead's first draft, openPersonChannel) instead of creating a twin.
+  // Race-safe with the executor that starts the chat: the UPDATE only lands
+  // while `external_id IS NULL`, and losing it to the unique index (the same
+  // chat already has a channel) falls through to the re-select below.
+  if (bornContextObjectId) {
+    const adopted = await adoptPendingChannel({
+      userId: args.userId,
+      provider: args.provider,
+      entityId: bornContextObjectId,
+      accountExternalId: args.accountExternalId,
+      externalId: args.externalId,
+      metadataPatch: {
+        ...(args.participant ? { participantName: args.participant } : {}),
+        ...(args.participantExternalId
+          ? { participantExternalId: args.participantExternalId }
+          : {}),
+        ...(args.accountExternalId
+          ? { accountId: args.accountExternalId }
+          : {}),
+        lastMessageAt,
+        lastMessagePreview: args.preview,
+        unread: true,
+        ...(args.participantLookup
+          ? { participantLookup: args.participantLookup }
+          : {}),
+      },
+    });
+    if (adopted) {
+      logger.info(
+        {
+          channelId: adopted,
+          provider: args.provider,
+          externalId: args.externalId,
+          linkedEntityId: bornContextObjectId,
+        },
+        "Adopted the person's pending EXTERNAL channel for this chat"
+      );
+      return {
+        channelId: adopted,
+        contextObjectId: bornContextObjectId,
+        contextObjectType: "entity",
+      };
     }
   }
 
@@ -312,6 +416,9 @@ export async function resolveOrCreateExternalChannel(
         // ids the channel-level deep link is built from. Omitted entirely when
         // the caller has none, so the stored shape is unchanged for them.
         ...(externalPatch ? { external: externalPatch } : {}),
+        ...(args.participantLookup
+          ? { participantLookup: args.participantLookup }
+          : {}),
       },
     })
     .onConflictDoNothing({
@@ -368,6 +475,256 @@ export async function resolveOrCreateExternalChannel(
   };
 }
 
+/** A live (not deleted) entity's id + title, or null. */
+async function liveEntity(
+  entityId: string
+): Promise<{ id: string; title: string | null } | null> {
+  const row = await db.query.entities.findFirst({
+    where: and(eq(entities.id, entityId), isNull(entities.deletedAt)),
+    columns: { id: true, title: true },
+  });
+  return row ?? null;
+}
+
+/**
+ * Bind an UNBOUND channel to a person and title it after them. Only while it
+ * is still unbound (`context_object_id IS NULL`): a channel someone already
+ * bound is never moved by an inbound message. True when it bound.
+ */
+async function bindChannelToEntity(
+  channelId: string,
+  entityId: string
+): Promise<boolean> {
+  const person = await liveEntity(entityId);
+  if (!person) return false;
+  const rows = await db
+    .update(channels)
+    .set({
+      contextObjectType: "entity",
+      contextObjectId: person.id,
+      ...(person.title ? { title: person.title } : {}),
+      updatedAt: new Date(),
+    })
+    .where(and(eq(channels.id, channelId), isNull(channels.contextObjectId)))
+    .returning({ id: channels.id });
+  return rows.length > 0;
+}
+
+/** Postgres unique_violation. */
+function isUniqueViolation(err: unknown): boolean {
+  const e = err as { code?: string; cause?: { code?: string } } | null;
+  return e?.code === "23505" || e?.cause?.code === "23505";
+}
+
+/**
+ * Give the person's pending channel its provider chat id. The pending channel
+ * is the one `openPersonChannel` made: EXTERNAL, active, no `external_id`,
+ * bound to the person, same provider, and the same account (or none named).
+ * Returns the adopted channel id, or null when there is none to adopt or the
+ * chat already has a channel (lost the race to the unique index).
+ */
+async function adoptPendingChannel(args: {
+  userId: string;
+  provider: string;
+  entityId: string;
+  accountExternalId?: string;
+  externalId: string;
+  metadataPatch: Record<string, unknown>;
+}): Promise<string | null> {
+  const account = args.accountExternalId ?? "";
+  const [pending] = await db
+    .select({ id: channels.id })
+    .from(channels)
+    .where(
+      and(
+        eq(channels.userId, args.userId),
+        eq(channels.channelType, ChannelType.EXTERNAL),
+        eq(channels.externalSource, args.provider),
+        eq(channels.contextObjectId, args.entityId),
+        eq(channels.status, "active"),
+        isNull(channels.externalId),
+        drizzleSql`COALESCE(${channels.metadata} ->> 'accountId', '') IN (${account}, '')`
+      )
+    )
+    // The pending channel on this very account first, then one with none.
+    .orderBy(
+      desc(
+        drizzleSql`(COALESCE(${channels.metadata} ->> 'accountId', '') = ${account})`
+      ),
+      asc(channels.createdAt)
+    )
+    .limit(1);
+  if (!pending) return null;
+  try {
+    const rows = await db
+      .update(channels)
+      .set({
+        externalId: args.externalId,
+        externalChannelId: args.externalId,
+        metadata: drizzleSql`COALESCE(${channels.metadata}, '{}'::jsonb) || ${JSON.stringify(
+          args.metadataPatch
+        )}::jsonb`,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(channels.id, pending.id), isNull(channels.externalId)))
+      .returning({ id: channels.id });
+    return rows[0]?.id ?? null;
+  } catch (err) {
+    if (isUniqueViolation(err)) return null;
+    throw err;
+  }
+}
+
+// ── A person's channel, before the first message ───────────────────────────────
+
+export interface OpenPersonChannelArgs {
+  /** The pod owner the channel belongs to. */
+  userId: string;
+  /** The person (or company) the conversation is with. */
+  entityId: string;
+  /** Provider slug, as the connector reports it (`linkedin`, `instagram`…). */
+  provider: string;
+  /** The messaging account's provider id (`messaging_accounts.external_id`). */
+  accountId?: string | null;
+  /** The person's id on the provider, when known (the send's attendee). */
+  participantExternalId?: string | null;
+  /** Workspace pin; `null`/absent = pod-level (the channel follows its person). */
+  workspaceId?: string | null;
+}
+
+export interface OpenPersonChannelResult {
+  channelId: string;
+  /** The provider chat id, or null while the channel is pending. */
+  externalId: string | null;
+  /** True when this call made the pending channel. */
+  created: boolean;
+}
+
+/**
+ * The person's channel on a tool and account, made if it does not exist yet
+ * (founder decision 2: a lead's channel exists from the first draft). Returns
+ * the person's existing channel there (one with a chat id first), else their
+ * PENDING one, else makes a pending one: EXTERNAL, `external_id` NULL, bound to
+ * the person, `metadata.accountId`. Idempotent under a race through the
+ * one-pending-channel index (0393). The first inbound or sent message on the
+ * chat fills its chat id (`adoptPendingChannel`).
+ *
+ * A new channel also asks for the person's history on that account (silent
+ * import, design §7). Lane D's send executor calls this for a lead with no
+ * chat yet.
+ */
+export async function openPersonChannel(
+  args: OpenPersonChannelArgs
+): Promise<OpenPersonChannelResult> {
+  const account = args.accountId ?? "";
+  const accountMatch = account
+    ? drizzleSql`COALESCE(${channels.metadata} ->> 'accountId', '') = ${account}`
+    : drizzleSql`true`;
+  const findExisting = async () => {
+    const [row] = await db
+      .select({ id: channels.id, externalId: channels.externalId })
+      .from(channels)
+      .where(
+        and(
+          eq(channels.userId, args.userId),
+          eq(channels.channelType, ChannelType.EXTERNAL),
+          eq(channels.externalSource, args.provider),
+          eq(channels.contextObjectType, "entity"),
+          eq(channels.contextObjectId, args.entityId),
+          eq(channels.status, "active"),
+          accountMatch
+        )
+      )
+      // A real chat before a pending one; the most recently used first.
+      .orderBy(
+        desc(drizzleSql`(${channels.externalId} IS NOT NULL)`),
+        desc(channels.updatedAt)
+      )
+      .limit(1);
+    return row ?? null;
+  };
+
+  const existing = await findExisting();
+  if (existing) {
+    return {
+      channelId: existing.id,
+      externalId: existing.externalId,
+      created: false,
+    };
+  }
+
+  const person = await liveEntity(args.entityId);
+  if (!person) {
+    throw new Error(
+      `openPersonChannel: entity ${args.entityId} does not exist or was deleted`
+    );
+  }
+
+  const workspaceId = args.workspaceId ?? null;
+  const [inserted] = await db
+    .insert(channels)
+    .values({
+      userId: args.userId,
+      workspaceId,
+      channelType: ChannelType.EXTERNAL,
+      scope: workspaceId ? ChannelScope.WORKSPACE : ChannelScope.POD,
+      title: person.title ?? args.provider,
+      contextObjectType: "entity",
+      contextObjectId: person.id,
+      externalSource: args.provider,
+      externalChannelId: null,
+      externalId: null,
+      metadata: {
+        ...(account ? { accountId: account } : {}),
+        ...(person.title ? { participantName: person.title } : {}),
+        ...(args.participantExternalId
+          ? { participantExternalId: args.participantExternalId }
+          : {}),
+      },
+    })
+    // The one-pending-channel index (0393) is an expression index, so the
+    // arbiter is left implicit: a concurrent open collapses onto one row.
+    .onConflictDoNothing()
+    .returning({ id: channels.id });
+
+  if (!inserted) {
+    const survivor = await findExisting();
+    if (!survivor) {
+      throw new Error(
+        `openPersonChannel: conflict for ${args.provider}:${args.entityId} but no channel found on re-select`
+      );
+    }
+    return {
+      channelId: survivor.id,
+      externalId: survivor.externalId,
+      created: false,
+    };
+  }
+
+  // The person's history on that account, silently (non-fatal: the channel
+  // is open whether or not the import could be asked for).
+  if (account) {
+    try {
+      await getBoss().send(
+        MESSAGING_HISTORY_IMPORT_QUEUE,
+        {
+          accountExternalId: account,
+          userId: args.userId,
+          entityId: person.id,
+        } satisfies MessagingHistoryImportJobData,
+        { singletonKey: `${account}:${person.id}` }
+      );
+    } catch (err) {
+      logger.warn(
+        { err, channelId: inserted.id },
+        "openPersonChannel: history import enqueue failed (non-fatal)"
+      );
+    }
+  }
+
+  return { channelId: inserted.id, externalId: null, created: true };
+}
+
 // ── Inbound message record ─────────────────────────────────────────────────────
 
 export interface RecordInboundMessageArgs {
@@ -400,10 +757,23 @@ export interface RecordInboundMessageArgs {
    * with the provider into the message `hash` column; a duplicate delivery with
    * the same seed no-ops (insert) and is reported via `recorded: false`.
    *
-   * Unipile uses `${threadId}:${sentAt}:${body}` (no native message id);
-   * Discord uses the gateway message id.
+   * Unipile uses `${chatId}:${messageId}` (the webhook and the history import
+   * alike, so a message both see lands once); Discord uses the gateway
+   * message id.
    */
   idempotencySeed: string;
+  /**
+   * Which way the message went. `inbound` (default) = the person sent it;
+   * `outbound` = the account owner sent it (from the provider's own app, or
+   * the provider's echo of a send the pod made). An outbound row is HUMAN /
+   * ASSISTANT with `delivery_status` 'sent', and fires `external_message.sent`
+   * (source 'provider'), never `external_message.received`.
+   */
+  direction?: MessageDirection;
+  /** See ResolveOrCreateExternalChannelArgs.contextEntityId. */
+  contextEntityId?: string | null;
+  /** See ResolveOrCreateExternalChannelArgs.participantLookup. */
+  participantLookup?: ParticipantLookupRecord;
   /** Message timestamp; defaults to now. */
   sentAt?: string | Date;
   /**
@@ -420,10 +790,11 @@ export interface RecordInboundMessageArgs {
    */
   senderKeyId?: string;
   /**
-   * The native message id from the external provider (e.g. Discord snowflake).
-   * Surfaced in the `external_message.received` event data so automations can
-   * read `{{trigger.payload.data.messageId}}` and later pin or reference the
-   * source message.
+   * The native message id from the external provider (e.g. Discord snowflake,
+   * Unipile message id). Stored as `messages.external_message_id`: one row per
+   * provider message per channel (`messages_channel_ext_msg_uniq`), so the
+   * provider's echo of a message the pod sent never doubles it. Surfaced in
+   * the event data so automations can read `{{trigger.payload.data.messageId}}`.
    */
   messageId?: string;
   /**
@@ -498,18 +869,26 @@ export interface RecordInboundMessageResult {
 }
 
 /**
- * Resolve-or-create the EXTERNAL channel, dedup-insert the inbound message
- * (role=user, authorType=external), and emit `external_message.received`.
+ * Resolve-or-create the EXTERNAL channel, dedup-insert the message with its
+ * direction, and emit `external_message.received` (inbound; with `isReply`,
+ * `repliesToMessageId`, `lastOutboundAt` when the channel had an outbound
+ * message before it) or `external_message.sent` (outbound, source
+ * 'provider').
  *
- * Idempotent: a duplicate delivery (same provider + idempotencySeed) does not
- * re-insert and returns `recorded: false`, so callers can skip duplicate work
- * (e.g. a second IS turn). The automation event only fires on a fresh record.
+ * Idempotent: a duplicate delivery (same provider + idempotencySeed), or a
+ * provider message already in the channel (same external message id), does
+ * not re-insert and returns `recorded: false`, so callers can skip duplicate
+ * work (e.g. a second IS turn). The automation event only fires on a fresh
+ * record.
  */
 export async function recordInboundMessage(
   args: RecordInboundMessageArgs
 ): Promise<RecordInboundMessageResult> {
   const preview = args.text.slice(0, 120);
   const sentAt = args.sentAt ? new Date(args.sentAt) : new Date();
+  const direction = args.direction ?? MessageDirection.INBOUND;
+  const outbound = direction === MessageDirection.OUTBOUND;
+  const externalMessageId = args.messageId?.trim() || null;
 
   const { channelId, contextObjectId, contextObjectType } =
     await resolveOrCreateExternalChannel({
@@ -527,6 +906,12 @@ export async function recordInboundMessage(
         typeof args.sentAt === "string" ? args.sentAt : sentAt.toISOString(),
       origin: args.origin,
       externalCoordinates: args.externalCoordinates,
+      ...(args.contextEntityId !== undefined
+        ? { contextEntityId: args.contextEntityId }
+        : {}),
+      ...(args.participantLookup
+        ? { participantLookup: args.participantLookup }
+        : {}),
     });
 
   // Dual-use note: this is an inbound *delivery* fingerprint
@@ -570,23 +955,32 @@ export async function recordInboundMessage(
         }
       : undefined;
 
-  // Race-safe claim: UNIQUE(messages.hash) + ON CONFLICT DO NOTHING is the
-  // concurrency boundary. Loser re-SELECTs and reports recorded:false so
-  // callers skip a second IS turn / side-effect fan-out.
+  // Race-safe claim: TWO unique indexes are the concurrency boundary —
+  // UNIQUE(messages.hash) (the same delivery twice) and (channel_id,
+  // external_message_id) (the same provider message through another path:
+  // the history import, or the echo of a message the pod sent). ON CONFLICT DO
+  // NOTHING with no target covers both. The loser re-SELECTs and reports
+  // recorded:false so callers skip a second IS turn / side-effect fan-out.
+  const authorType =
+    args.authorType ??
+    (outbound ? MessageAuthorType.HUMAN : MessageAuthorType.EXTERNAL);
   const [inserted] = await db
     .insert(messages)
     .values({
       channelId,
       userId: args.userId,
-      // Default = historical inbound shape (EXTERNAL/USER); an OUTBOUND backfill
-      // overrides to HUMAN/ASSISTANT so the inbox attributes it to the operator.
-      role: args.role ?? MessageRole.USER,
-      authorType: args.authorType ?? MessageAuthorType.EXTERNAL,
+      // Inbound = EXTERNAL/USER; outbound = the operator's own message,
+      // HUMAN/ASSISTANT, so the inbox attributes it to them.
+      role: args.role ?? (outbound ? MessageRole.ASSISTANT : MessageRole.USER),
+      authorType,
       messageCategory: MessageCategory.CHAT,
       externalSource: args.provider,
       content: args.text,
       hash: inboundHash,
       timestamp: sentAt,
+      direction,
+      deliveryStatus: outbound ? MessageDeliveryStatus.SENT : null,
+      externalMessageId,
       // ONE merged metadata object — `sender` (attribution) and `attachments`
       // (inbound media) coexist. Attachments are stored as {type,url} to match
       // ConversationMessageMetadataSchema.attachments (AttachmentSchema drops
@@ -618,18 +1012,29 @@ export async function recordInboundMessage(
           }
         : {}),
     })
-    .onConflictDoNothing({ target: messages.hash })
+    .onConflictDoNothing()
     .returning({ id: messages.id });
 
   if (!inserted) {
-    // Lost the race or exact replay — hash already claimed.
-    const existing = await db.query.messages.findFirst({
-      where: eq(messages.hash, inboundHash),
-      columns: { id: true },
-    });
+    // Lost the race, an exact replay, or this provider message is already in
+    // the channel (import, or the echo of our own send).
+    const existing =
+      (await db.query.messages.findFirst({
+        where: eq(messages.hash, inboundHash),
+        columns: { id: true },
+      })) ??
+      (externalMessageId
+        ? await db.query.messages.findFirst({
+            where: and(
+              eq(messages.channelId, channelId),
+              eq(messages.externalMessageId, externalMessageId)
+            ),
+            columns: { id: true },
+          })
+        : undefined);
     if (!existing) {
       throw new Error(
-        `inbound-recorder: hash conflict for ${args.provider} but no row found on reselect`
+        `inbound-recorder: conflict for ${args.provider} but no row found on reselect`
       );
     }
     return { channelId, contextObjectId, inboundHash, recorded: false };
@@ -667,7 +1072,7 @@ export async function recordInboundMessage(
   // historical backfill), not a fan-out replay. Points at the real channel
   // (+ the bound entity, when linked) — never copies the message body.
   await emitMessageObservation({
-    type: "message.received",
+    type: outbound ? "message.sent" : "message.received",
     userId: args.userId,
     channelId,
     messageId: inserted.id,
@@ -682,7 +1087,8 @@ export async function recordInboundMessage(
     // happened, which is the whole point of a replayable-over-history log.
     timestamp: sentAt,
     data: {
-      authorType: args.authorType ?? MessageAuthorType.EXTERNAL,
+      authorType,
+      direction,
       externalSource: args.provider,
       threadId: args.externalId,
     },
@@ -718,6 +1124,48 @@ export async function recordInboundMessage(
     return { channelId, contextObjectId, inboundHash, recorded: true };
   }
 
+  const entityId = contextObjectType === "entity" ? contextObjectId : undefined;
+  // The latest OUTBOUND message before this one: an inbound after it is a
+  // reply; an outbound with none before it is the first contact.
+  const lastOutbound = await db.query.messages.findFirst({
+    where: and(
+      eq(messages.channelId, channelId),
+      eq(messages.direction, MessageDirection.OUTBOUND),
+      lte(messages.timestamp, sentAt),
+      ne(messages.id, inserted.id)
+    ),
+    columns: { id: true, timestamp: true },
+    orderBy: [desc(messages.timestamp), desc(messages.id)],
+  });
+
+  if (outbound) {
+    // The owner's own message, seen through the provider (sent from their
+    // phone, or the provider's copy of a send the pod made before the
+    // executor recorded it). Never `received`: an auto-reply rule must not
+    // answer our own message.
+    await emitSideEffects({
+      subjectType: "external_message",
+      action: "sent",
+      subjectId: (contextObjectId ?? channelId) as string,
+      userId: args.userId,
+      workspaceId: args.workspaceId,
+      data: {
+        entityId,
+        channelId,
+        provider: args.provider,
+        threadId: args.externalId,
+        messageId: args.messageId,
+        source: "provider",
+        first: !lastOutbound,
+        messagePreview: preview,
+        content: args.text.slice(0, 4000),
+      },
+    }).catch((err) => {
+      logger.warn({ err, channelId }, "emitSideEffects failed (non-fatal)");
+    });
+    return { channelId, contextObjectId, inboundHash, recorded: true };
+  }
+
   // Fire for ALL inbound messages (pre-linked or not). Automations with
   // eventPattern "external_message.received.completed" match. When the channel
   // is bound to a context entity, surface it so entity-scoped automations fire.
@@ -734,12 +1182,20 @@ export async function recordInboundMessage(
       // an entity. `deriveMessageEnvelope` and `deriveEventSubjectEntityId`
       // both read this key as an entity id — an unguarded document id made a
       // rule's entity filter match a non-entity.
-      entityId: contextObjectType === "entity" ? contextObjectId : undefined,
+      entityId,
       channelId,
       provider: args.provider,
       threadId: args.externalId,
       messageId: args.messageId,
       participantName: args.participant,
+      // A reply: the channel had an outbound message before this one.
+      ...(lastOutbound
+        ? {
+            isReply: true,
+            repliesToMessageId: lastOutbound.id,
+            lastOutboundAt: lastOutbound.timestamp.toISOString(),
+          }
+        : {}),
       messagePreview: preview,
       // Full text so automations can extract URLs/structure past the 120-char
       // preview. Bounded to 4k: this `data` blob is persisted verbatim in
@@ -764,4 +1220,50 @@ export async function recordInboundMessage(
   });
 
   return { channelId, contextObjectId, inboundHash, recorded: true };
+}
+
+// ── Delivery status (provider receipts) ────────────────────────────────────────
+
+/** Which statuses each receipt may move an outbound message FROM. */
+const DELIVERY_STATUS_FROM: Record<"delivered" | "read", string[]> = {
+  delivered: [MessageDeliveryStatus.SENT],
+  read: [MessageDeliveryStatus.SENT, MessageDeliveryStatus.DELIVERED],
+};
+
+/**
+ * Move an outbound message's `delivery_status` FORWARD on a provider receipt
+ * (sent → delivered → read), found by its provider message id in the account
+ * owner's channel for that chat. Never backwards, never out of `failed`, never
+ * on an inbound row. Returns how many rows moved (0 = unknown message, or the
+ * receipt is stale).
+ */
+export async function advanceDeliveryStatus(args: {
+  provider: string;
+  userId: string;
+  threadId: string;
+  externalMessageId: string;
+  status: "delivered" | "read";
+}): Promise<number> {
+  const from = DELIVERY_STATUS_FROM[args.status];
+  const rows = await db
+    .update(messages)
+    .set({ deliveryStatus: args.status })
+    .where(
+      and(
+        eq(messages.externalMessageId, args.externalMessageId),
+        eq(messages.direction, MessageDirection.OUTBOUND),
+        drizzleSql`(${messages.deliveryStatus} IS NULL OR ${messages.deliveryStatus} IN (${drizzleSql.join(
+          from.map((f) => drizzleSql`${f}`),
+          drizzleSql`, `
+        )}))`,
+        drizzleSql`${messages.channelId} IN (
+          SELECT ${channels.id} FROM ${channels}
+           WHERE ${channels.userId} = ${args.userId}
+             AND ${channels.channelType} = ${ChannelType.EXTERNAL}
+             AND ${channels.externalSource} = ${args.provider}
+             AND ${channels.externalId} = ${args.threadId})`
+      )
+    )
+    .returning({ id: messages.id });
+  return rows.length;
 }
