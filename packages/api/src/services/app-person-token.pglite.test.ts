@@ -553,7 +553,7 @@ describe("a registered, approved app signs the owner in", () => {
       appName: "Studio",
       // The holder's sentence, each tier in its own place (access model B).
       headline:
-        "Reads people in Sales and Finance; changes people in Sales; approves requests in Sales.",
+        "Reads people in Sales and Finance; changes people and jobs in Sales; approves requests in Sales.",
       cannot:
         "It cannot delete, manage keys, approve outside these spaces, or see anything outside what a member of these spaces sees.",
       expiresInDays: 30,

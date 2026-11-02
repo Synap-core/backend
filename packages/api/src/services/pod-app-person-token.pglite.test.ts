@@ -871,6 +871,7 @@ describe("a pod-wide read: asked in the document, ticked once, held with no spac
     expect(first.synap_acts_as).toBe("person");
     expect(first.synap_grant).toContainEqual({
       permission: DECISIONS,
+      scope: "pod",
       workspaceId: null,
       workspaceName: null,
     });
