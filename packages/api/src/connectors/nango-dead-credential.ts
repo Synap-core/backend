@@ -63,7 +63,7 @@ const CREDENTIAL_CAUSES = [
     status: 400,
     message:
       "The external API returned an error when trying to refresh the access token.",
-    verdict: "retry",
+    verdict: "dead",
   },
 ] as const;
 

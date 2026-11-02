@@ -16,7 +16,6 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { TRPC_ERROR_CODES_BY_KEY } from "@trpc/server/rpc";
 import {
   ProfileNotFoundError,
   PropertyValidationError,
@@ -75,49 +74,6 @@ export function isSynapLikeError(
     "statusCode" in error &&
     typeof (error as { statusCode: unknown }).statusCode === "number"
   );
-}
-
-// ── Coded refusal (plain Error + tRPC code) ────────────────────────────────
-
-/**
- * The tRPC codes a service may stamp on a plain `Error` to refuse its caller:
- * every key tRPC knows, except INTERNAL_SERVER_ERROR (a fault, not a refusal,
- * which the unknown branch already produces). Derived from tRPC's own table,
- * never a hand list.
- */
-const REFUSAL_CODES: ReadonlySet<string> = new Set(
-  (Object.keys(TRPC_ERROR_CODES_BY_KEY) as TRPCError["code"][]).filter(
-    (code) => code !== "INTERNAL_SERVER_ERROR"
-  )
-);
-
-/**
- * A service-layer refusal thrown as `Object.assign(new Error(msg), { code:
- * "BAD_REQUEST" })` (the shape `createFocusSession` and other services shared
- * by the tRPC, Hub REST and MCP doors use). Hub REST and MCP read `err.code`
- * themselves; without this guard the tRPC door wrapped it as an opaque
- * INTERNAL_SERVER_ERROR and the caller lost both the 400 and the sentence.
- *
- * Only a `code` that IS a tRPC code key matches: a Postgres `"23505"` or a
- * Node `"ENOENT"` stays an unknown fault.
- */
-export function isCodedRefusal(
-  error: unknown
-): error is Error & { code: TRPCError["code"] } {
-  if (!(error instanceof Error) || error instanceof TRPCError) return false;
-  const code = (error as { code?: unknown }).code;
-  return typeof code === "string" && REFUSAL_CODES.has(code);
-}
-
-/** The coded refusal as a TRPCError: its code, its own sentence, itself as cause. */
-export function mapCodedRefusalToTRPC(
-  error: Error & { code: TRPCError["code"] }
-): TRPCError {
-  return new TRPCError({
-    code: error.code,
-    message: error.message,
-    cause: error,
-  });
 }
 
 // ── Database domain error mapper ───────────────────────────────────────────
