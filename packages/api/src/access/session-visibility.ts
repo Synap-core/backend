@@ -69,6 +69,7 @@ import {
   users,
 } from "@synap/database/schema";
 import { SESSION_DOCUMENT_LABEL } from "../services/session-document/label.js";
+import { ownAgentUserFilter } from "../services/agent-identity-service.js";
 import { workspaceLensWhere } from "../utils/user-visible-where.js";
 import { SESSION_ROOM_CONTEXT_TYPE } from "../utils/channel-visibility.js";
 
@@ -226,7 +227,7 @@ export function sessionReadableWhere(reader: SessionReader): SQL {
  * The session rule for DECIDING a proposal filed in (or about) a session, and
  * for the redaction that must agree with it: {@link sessionReadableWhere}, OR
  * (human door only) the session is owned by an AGENT principal that `reader`
- * created (`users.user_type = 'agent'` AND `users.created_by_user_id = me`),
+ * created (`ownAgentUserFilter`: an agent principal whose `created_by_user_id` is me),
  * floored on the session's workspace exactly like the roster branch.
  *
  * Why: an agent's writes are filed in sessions the pod mints for it (receipt /
@@ -250,12 +251,11 @@ export function sessionDecidableWhere(reader: SessionReader): SQL {
   const readable = sessionReadableWhere(reader);
   if (!reader.roster) return readable;
   const { userId, lens } = reader;
-  const ownAgents = qb
-    .select({ id: users.id })
-    .from(users)
-    .where(and(eq(users.userType, "agent"), eq(users.createdByUserId, userId)));
+  // THE agent-lineage set (agent principals this human created), app agents
+  // included: an app's proposals are its owner's review queue like any of
+  // their agents'.
   const ownedByOwnAgent = and(
-    inArray(focusSessions.userId, ownAgents),
+    ownAgentUserFilter(focusSessions.userId, userId),
     workspaceLensWhere(focusSessions.workspaceId, userId, lens)
   )!;
   const grant = grantReadPredicate(focusSessions);
