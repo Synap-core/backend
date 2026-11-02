@@ -11,7 +11,8 @@
  *     true, so a missing EXISTS half would hold sessions that wait on nothing;
  *   - a second, non-PR outstanding slot: a missing NOT EXISTS half holds work
  *     that still has work;
- *   - a retired (`retiredAt: ""`), optional or done non-PR slot: they are not
+ *   - a retired (`retiredAt: ""`), optional or done non-PR slot, or a
+ *     decision the person answered (`isDecidedByAnswer`): they are not
  *     outstanding, so they must not cancel the hold;
  *   - a person-owned slot: outstanding (and owed), so not "only PRs";
  *   - a PR slot without a GitHub pull url: nothing to resume on.
@@ -59,6 +60,22 @@ const ROWS: ReadonlyArray<{ rulesOut: string; slots: Slot[] }> = [
   {
     rulesOut: "an optional slot read as owed",
     slots: [PR, { ...WORK, optional: true }],
+  },
+  {
+    rulesOut: "a decision the person answered read as open",
+    slots: [
+      PR,
+      {
+        kind: "decision",
+        label: "Tasks model",
+        decisionId: "d-1",
+        answer: { text: "Graph node", askSnapshot: { mode: "choose" } },
+      },
+    ],
+  },
+  {
+    rulesOut: "an open decision ask (decisionId, no answer) read as decided",
+    slots: [PR, { kind: "decision", label: "Tasks model", decisionId: "d-1" }],
   },
   {
     rulesOut: "a person's slot read as not outstanding",

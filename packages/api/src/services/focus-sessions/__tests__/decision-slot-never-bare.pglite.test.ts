@@ -220,8 +220,9 @@ describe("a decision slot is never closed by a bare 'I did this' (#12)", () => {
     });
     // The decision record, like any confirm.
     expect(h.creates).toHaveLength(1);
+    // Named by what was decided (the slot's label), not by why it was asked.
     expect(h.creates[0]!.input).toMatchObject({
-      title: WHY,
+      title: LABEL,
       properties: { decisionStatus: "accepted", chosenOption: "yes" },
     });
     expect((yes as { decision?: unknown }).decision).toMatchObject({

@@ -122,12 +122,17 @@ export function decisionFromAnswer(
   const snapshot =
     answer.askSnapshot ?? buildAskSnapshot(slot.ask, answer.value, slot.why);
 
+  // The decision is named by WHAT was decided, never by why it was asked: the
+  // prompt (a confirm's question), else the slot's label (the agent's name
+  // for the decision, e.g. "Tasks model"), else the question the answer
+  // recorded, and only then the reason it was asked (`why`, which is context:
+  // "248 of 314 tasks are todo…" titled four filed decisions on 2 Nov 2026).
   const title = clip(
     (
-      snapshot.prompt ||
-      snapshot.why ||
-      answer.question ||
-      slot.label ||
+      snapshot.prompt?.trim() ||
+      slot.label?.trim() ||
+      answer.question?.trim() ||
+      snapshot.why?.trim() ||
       "Decision"
     ).trim(),
     TITLE_MAX

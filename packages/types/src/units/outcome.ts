@@ -48,6 +48,11 @@
  *     the pod's evidence verdict (a claim + a produced object attributed to
  *     the slot, or its `ref`). `metBy` names which one — a `done` with no
  *     lineage is `unverified` (stamped by the pre-A3 agent mark).
+ *  6b. A confirm / choose the person ANSWERED, whose decision the pod filed,
+ *     is MET by that answer (`isDecidedByAnswer`, founder 2 Nov 2026: "an
+ *     answer that filed its decision IS the proof"): `metBy: "answer"`, owned
+ *     and checked by the person, the decision its evidence. Read-time, through
+ *     the same floor the close gate reads, so the two cannot disagree.
  *  7. A criterion's state is its CURRENT verdict (`latestEvaluationPerCriterion`
  *     — a human row beats any later non-human row). A slot and a criterion that
  *     share a key are ONE outcome (the slot names it, the criterion checks it).
@@ -77,6 +82,8 @@ import {
 import { humanizeToken } from "../vocabulary/index.js";
 import {
   deliverableUnitInput,
+  isDecidedByAnswer,
+  isDeliverableDelivered,
   isDeliverableOutstanding,
   type DeliverableFacts,
 } from "./deliverable.js";
@@ -259,16 +266,18 @@ export type OutcomeVerify = EvaluatorKind;
 
 /**
  * WHICH door met an outcome: an approved proposal, the person's attestation,
- * the pod's evidence verdict, a criterion's `pass` verdict — or `unverified`,
- * a `done` with no receipt at all (the pre-A3 agent self-mark).
+ * the pod's evidence verdict, a criterion's `pass` verdict, the person's
+ * answer to a confirm / choose whose decision the pod filed — or
+ * `unverified`, a `done` with no receipt at all (the pre-A3 agent self-mark).
  */
 export type OutcomeMetBy =
-  "approval" | "attestation" | "evidence" | "verdict" | "unverified";
+  "approval" | "attestation" | "evidence" | "verdict" | "answer" | "unverified";
 
 function slotMetBy(slot: SlotFacts): OutcomeMetBy {
   if (text(slot.satisfiedByProposalId)) return "approval";
   if (text(slot.attestedBy)) return "attestation";
   if (slot.satisfiedByEvidence != null) return "evidence";
+  if (isDecidedByAnswer(slot)) return "answer";
   return "unverified";
 }
 
@@ -376,8 +385,13 @@ function isoOf(v: Date | string): string {
   return Number.isNaN(d.getTime()) ? String(v) : d.toISOString();
 }
 
+/**
+ * Who yields the slot. A decision the person answered is THEIRS even though
+ * the answer handed the slot back to the agent (the hand-back deletes
+ * `owner`): the answer is what met it.
+ */
 function slotOwner(slot: SlotFacts): "agent" | "human" {
-  return slot.owner === "human" ? "human" : "agent";
+  return slot.owner === "human" || isDecidedByAnswer(slot) ? "human" : "agent";
 }
 
 function inputState(slot: SlotFacts): UnitStateInput {
@@ -480,7 +494,7 @@ export function projectSessionOutcomes<P extends ProducedItemLike>(
     if (criterion) folded.add(key);
     const verdict = criterion ? (verdictByKey.get(key) ?? null) : null;
     const retired = slot.retiredAt != null;
-    const delivered = slot.status === "done";
+    const delivered = isDeliverableDelivered(slot);
     const met = !retired && (delivered || verdict?.verdict === "pass");
     const state = resolveUnitState(
       // A verdict on the folded criterion is the stronger fact; without one
@@ -499,7 +513,7 @@ export function projectSessionOutcomes<P extends ProducedItemLike>(
       owner: slotOwner(slot),
       verify: criterion
         ? criterion.check.kind
-        : slot.owner === "human"
+        : slotOwner(slot) === "human"
           ? "human"
           : "evidence",
       // An OPTIONAL slot never holds a gate; its folded criterion still can.

@@ -124,6 +124,7 @@ import {
 import {
   deriveTrackStages,
   filedStageKey,
+  isDeliverableDelivered,
   type GoalCriterionMark,
   type TrackKpi,
   type WaitKind,
@@ -1072,14 +1073,15 @@ function owedItem(slot: OwedSlot): PacketSlotItem {
 }
 
 /**
- * Agent-owned slots nobody has claimed: not the human's, not done, not
+ * Agent-owned slots nobody has claimed: not the human's, not delivered (done,
+ * or a decision the person's answer filed: `isDeliverableDelivered`), not
  * retired, and no claim of delivery. Absent `owner` means `agent`
  * (`ExpectedOutput.owner` docblock).
  */
 export function isOpenAgentSlot(slot: ExpectedOutput): boolean {
   return (
     slot.owner !== "human" &&
-    slot.status !== "done" &&
+    !isDeliverableDelivered(slot) &&
     slot.retiredAt == null &&
     slot.claimedDone !== true
   );

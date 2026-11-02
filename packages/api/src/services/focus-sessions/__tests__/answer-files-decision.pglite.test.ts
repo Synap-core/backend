@@ -204,7 +204,7 @@ describe("answer → decision (W2)", () => {
     expect(h.creates).toHaveLength(1);
     const { scope, input } = h.creates[0]!;
     expect(scope).toEqual({ userId: OWNER, workspaceId: null, sessionId: id });
-    expect(input.title).toBe(WHY);
+    expect(input.title).toBe(LABEL);
     expect(input.projectId).toBe(PROJECT);
     expect(input.properties).toMatchObject({
       summary: "US account",

@@ -18,7 +18,9 @@
  * The `jsonb_typeof` guard: `jsonb_array_elements` ERRORS on a non-array, and
  * `expected_outputs` is untyped JSONB a legacy row can hold anything in.
  *
- * THE RULE THIS MIRRORS is `deliverableOwedBy(slot) === "you"`
+ * THE RULE THIS MIRRORS is `deliverableOwedBy(slot) === "you"`, whose floor
+ * (`isDeliverableOutstanding`) counts a decision the person answered as
+ * delivered (`isDecidedByAnswer`, the last clause)
  * (`@synap-core/types/units`, `deliverable.ts`) — the one deliverable rule
  * every surface calls; the api's `isOwedSlot` calls it directly. A WHERE clause
  * cannot call TypeScript, so the SQL is a mirror held to the rule by a
@@ -33,6 +35,24 @@ import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { focusSessions } from "../schema/focus-sessions.js";
 
 /**
+ * NOT a decision the person answered (`isDecidedByAnswer`,
+ * `@synap-core/types/units`): delivered when the slot names a non-empty
+ * string `decisionId`, its answer is an object whose `askSnapshot.mode` is
+ * confirm / choose, and it is not a criterion's grade slot. The whole test
+ * sits in `coalesce(…, false)`: a missing field reads NULL, and a NULL here
+ * would drop the row instead of keeping it owed.
+ */
+const DECIDED_BY_ANSWER_CLAUSE = `NOT coalesce(${[
+  "jsonb_typeof(slot->'decisionId') = 'string'",
+  "slot->>'decisionId' <> ''",
+  "slot->>'kind' IS DISTINCT FROM 'criterion'",
+  "NOT coalesce(jsonb_typeof(slot->'criterionKey') = 'string' AND slot->>'criterionKey' <> '', false)",
+  "jsonb_typeof(slot->'answer') = 'object'",
+  "jsonb_typeof(slot->'answer'->'askSnapshot') = 'object'",
+  "slot->'answer'->'askSnapshot'->>'mode' IN ('confirm', 'choose')",
+].join(" AND ")}, false)`;
+
+/**
  * The clause SET, as data — a WHERE and an ORDER BY composing the same value
  * cannot drift apart, and a guard can assert the set rather than membership.
  */
@@ -44,6 +64,9 @@ export const OWED_SLOT_CLAUSES = [
   // renders a jsonb `true` as 'true'; only that lets go — absent, `false` or
   // a string "false" stay owed, exactly as `optional !== true` reads them.
   "slot->>'optional' IS DISTINCT FROM 'true'",
+  // A DECISION the person answered, whose `decision` the pod filed, is
+  // delivered, so owed by nobody (see the clause above).
+  DECIDED_BY_ANSWER_CLAUSE,
 ] as const;
 
 /** The clauses as ONE fragment, over a row aliased `slot`. */

@@ -61,8 +61,8 @@ describe("decisionFromAnswer — a choose", () => {
     askedByAgent: "agent-1",
   })!;
 
-  it("title = the question; summary = the pick", () => {
-    expect(d.title).toBe(why);
+  it("title = the slot's label (a choose has no prompt); summary = the pick", () => {
+    expect(d.title).toBe("Stripe account");
     expect(d.properties.summary).toBe("US account");
   });
   it("keeps the structured mesh: options, pick, recommendation, followed", () => {
@@ -298,5 +298,51 @@ describe("decisionFromAnswer — a pick through a follow-up (the decision tree)"
   it("the summary is the whole path, and the note survives it", () => {
     expect(d.properties.summary).toBe("Ship it → Production");
     expect(d.properties.rationale).toMatch(/^after the freeze/);
+  });
+});
+
+describe("decisionFromAnswer — the title names what was decided", () => {
+  const why = "248 of 314 tasks are todo and nothing closes them";
+  const choose = {
+    mode: "choose" as const,
+    options: [{ label: "Graph node", recommended: true }, { label: "Retire" }],
+  };
+  const pick = { type: "chip" as const, chip: { label: "Graph node" } };
+  const titleOf = (
+    slot: { label: string; ask: never; why?: string },
+    answer: SlotAnswer
+  ) => decisionFromAnswer({ slot, answer, sessionId: "s1" })!.title;
+
+  it("prompt first: a confirm's own question", () => {
+    const confirm = { mode: "confirm" as const, prompt: "Ship on Friday?" };
+    const answer = answerTo(
+      confirm,
+      { type: "confirm", confirmed: true },
+      "Yes",
+      why
+    );
+    expect(titleOf({ label: "Ship", ask: confirm as never, why }, answer)).toBe(
+      "Ship on Friday?"
+    );
+  });
+  it("then the slot's label, never the why (the 2 Nov titles)", () => {
+    const answer = {
+      ...answerTo(choose, pick, "Graph node", why),
+      question: why,
+    };
+    expect(
+      titleOf({ label: "Tasks model", ask: choose as never, why }, answer)
+    ).toBe("Tasks model");
+  });
+  it("then the question the answer recorded, then the why", () => {
+    const withQuestion = {
+      ...answerTo(choose, pick, "Graph node", why),
+      question: "How do tasks close?",
+    };
+    expect(
+      titleOf({ label: "  ", ask: choose as never, why }, withQuestion)
+    ).toBe("How do tasks close?");
+    const bare = answerTo(choose, pick, "Graph node", why);
+    expect(titleOf({ label: "", ask: choose as never, why }, bare)).toBe(why);
   });
 });

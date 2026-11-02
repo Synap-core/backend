@@ -10,8 +10,10 @@
  * source token for token. This is the rule they now all call.
  *
  * ── THE TWO QUESTIONS, ASKED IN THIS ORDER ─────────────────────────────────
- * 1. OUTSTANDING — still owed at all: not stamped `done`, not retired, and
- *    not OPTIONAL. An optional slot (`optional: true`, declared at its birth —
+ * 1. OUTSTANDING — still owed at all: not DELIVERED, not retired, and
+ *    not OPTIONAL. Delivered is `done` stamped by its door, OR a decision the
+ *    person answered and the pod filed ({@link isDecidedByAnswer}: founder,
+ *    2 Nov 2026, "an answer that filed its decision IS the proof"). An optional slot (`optional: true`, declared at its birth —
  *    e.g. a milestone invoice an `at-close` engagement never produces) is owed
  *    by NOBODY: no needs-you row, no reaper hold, never an unmet required
  *    outcome. Filled, it is `done` like any other and counts as produced.
@@ -32,7 +34,7 @@
  * before `pendingDecisions`, so setting two facts would let the wrong one win.
  * This adapter sets exactly one:
  *
- *   stamped done                        → terminal       → done
+ *   stamped done, or decided by answer  → terminal       → done
  *   retired                             → terminal       → done (as a
  *       cancelled run is: it stopped; nobody is waiting on it. The receipt
  *       stays readable on the slot — the mark is not where it lives.)
@@ -49,6 +51,7 @@
  * (`resolveBlockedReasonLabel`); this answers only where the slot stands.
  */
 
+import { CRITERION_SLOT_KIND } from "../focus-sessions/criterion-slot.js";
 import {
   resolveUnitState,
   type UnitStateInput,
@@ -73,19 +76,100 @@ export interface DeliverableFacts {
   returnedReason?: string | null;
   /** Declared at birth: produce it if it applies, never owe it. */
   optional?: boolean | null;
+  /** The slot's kind (`criterion` = an escalated grade, never a decision). */
+  kind?: string | null;
+  /** Set on an escalated criterion's grade slot. */
+  criterionKey?: string | null;
+  /** The `decision` entity the person's answer filed (or the ask was opened for). */
+  decisionId?: string | null;
+  /** The person's answer; `askSnapshot.mode` is the ask it answered. Opaque. */
+  answer?: unknown;
 }
+
+/** The ask modes whose answer IS a decision (the answer door files one). */
+export const DECIDING_ASK_MODES = ["confirm", "choose"] as const;
+
+/**
+ * The person answered a confirm / choose on this slot and the pod filed its
+ * `decision` — the answer IS the proof the slot asked for (founder, 2 Nov
+ * 2026). Three facts, all stored on the slot by the answer door:
+ *   - `decisionId`: the decision exists (the filing stamps it; a FAILED
+ *     filing stamps nothing, so the slot stays owed and says so);
+ *   - `answer`: the person's answer is on the slot NOW (a re-ask archives it
+ *     to `answerHistory`, a relay the person corrected drops it — either way
+ *     the slot is owed again);
+ *   - `answer.askSnapshot.mode` is `confirm` / `choose`: the ask the answer
+ *     was given to is one that files a decision (a form, an act, a provide or
+ *     words with no ask file none).
+ * A criterion's grade slot never counts, though its ask is a choose: it is a
+ * verdict on the agent's work, discharged by the grade door, not a decision.
+ *
+ * READ-TIME, so a slot answered before the rule existed reads delivered too,
+ * and a re-answer or a relay correction moves it with no second write. The
+ * SQL mirror is `owed-slot-predicate.ts` (`@synap/database`), held to this by
+ * its PGlite parity test: change both or neither.
+ */
+export function isDecidedByAnswer(
+  slot: Pick<
+    DeliverableFacts,
+    "kind" | "criterionKey" | "decisionId" | "answer"
+  >
+): boolean {
+  if (typeof slot.decisionId !== "string" || slot.decisionId === "") {
+    return false;
+  }
+  if (slot.kind === CRITERION_SLOT_KIND) return false;
+  if (typeof slot.criterionKey === "string" && slot.criterionKey !== "") {
+    return false;
+  }
+  const answer = slot.answer;
+  if (!answer || typeof answer !== "object" || Array.isArray(answer)) {
+    return false;
+  }
+  const snapshot = (answer as { askSnapshot?: unknown }).askSnapshot;
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+    return false;
+  }
+  const mode = (snapshot as { mode?: unknown }).mode;
+  return (DECIDING_ASK_MODES as readonly unknown[]).includes(mode);
+}
+
+/**
+ * Delivered: stamped `done` by its door, or decided by the person's answer
+ * ({@link isDecidedByAnswer}). THE "is it delivered" question every reader
+ * asks — the outstanding floor, the tallies, the outcome projection.
+ */
+export function isDeliverableDelivered(
+  slot: Pick<
+    DeliverableFacts,
+    "status" | "kind" | "criterionKey" | "decisionId" | "answer"
+  >
+): boolean {
+  return slot.status === "done" || isDecidedByAnswer(slot);
+}
+
+/** The fields the outstanding floor reads. */
+type FloorFacts = Pick<
+  DeliverableFacts,
+  | "status"
+  | "retiredAt"
+  | "optional"
+  | "kind"
+  | "criterionKey"
+  | "decisionId"
+  | "answer"
+>;
 
 /** Who an outstanding deliverable is owed by. */
 export type DeliverableOwedBy = "you" | "session";
 
 /**
- * Still owed at all — not stamped done, not retired, not optional. THE floor:
- * every "owed" reader (needs-you, tallies, reapers via the SQL mirror, the
- * stage gate via `outcome.ts`'s `required`) derives from it.
+ * Still owed at all — not delivered (done, or decided by the person's
+ * answer), not retired, not optional. THE floor: every "owed" reader
+ * (needs-you, tallies, reapers via the SQL mirror, the stage gate via
+ * `outcome.ts`'s `required`, the close gate) derives from it.
  */
-export function isDeliverableOutstanding(
-  slot: Pick<DeliverableFacts, "status" | "retiredAt" | "optional">
-): boolean {
+export function isDeliverableOutstanding(slot: FloorFacts): boolean {
   // `retiredAt == null`, never `!retiredAt`: the pod's SQL mirror reads
   // `slot->>'retiredAt' IS NULL`, so a stamped-but-empty `""` is RETIRED there.
   // A falsy test here read it as still owed, and the row's TS tally then
@@ -93,19 +177,21 @@ export function isDeliverableOutstanding(
   // `optional !== true`, never `!optional`: the SQL mirror reads
   // `slot->>'optional' IS DISTINCT FROM 'true'` — only a real `true` lets go.
   return (
-    slot.status !== "done" && slot.retiredAt == null && slot.optional !== true
+    !isDeliverableDelivered(slot) &&
+    slot.retiredAt == null &&
+    slot.optional !== true
   );
 }
 
 /**
- * An optional slot nobody has filled — not done, not retired. Owed by nobody
- * (see the floor above), and not done either: it reads `not_started`.
+ * An optional slot nobody has filled — not delivered, not retired. Owed by
+ * nobody (see the floor above), and not done either: it reads `not_started`.
  */
-export function isUnfilledOptional(
-  slot: Pick<DeliverableFacts, "status" | "retiredAt" | "optional">
-): boolean {
+export function isUnfilledOptional(slot: FloorFacts): boolean {
   return (
-    slot.optional === true && slot.status !== "done" && slot.retiredAt == null
+    slot.optional === true &&
+    !isDeliverableDelivered(slot) &&
+    slot.retiredAt == null
   );
 }
 
@@ -116,7 +202,7 @@ export function isUnfilledOptional(
  * construction.
  */
 export function deliverableOwedBy(
-  slot: Pick<DeliverableFacts, "status" | "retiredAt" | "owner" | "optional">
+  slot: FloorFacts & Pick<DeliverableFacts, "owner">
 ): DeliverableOwedBy | null {
   if (!isDeliverableOutstanding(slot)) return null;
   return slot.owner === "human" ? "you" : "session";
@@ -161,7 +247,7 @@ export function resolveDeliverableState(
 
 /** A session's deliverables, counted — the progress rail and the owed badge. */
 export interface DeliverableCounts {
-  /** Stamped done. */
+  /** Delivered: stamped done, or decided by the person's answer. */
   done: number;
   /** Done + still owed. A RETIRED slot is in neither: it was let go, not delivered. */
   total: number;
@@ -177,7 +263,7 @@ export function tallyDeliverables(
   let owed = 0;
   let owedByYou = 0;
   for (const slot of slots) {
-    if (slot.status === "done") {
+    if (isDeliverableDelivered(slot)) {
       done += 1;
       continue;
     }
