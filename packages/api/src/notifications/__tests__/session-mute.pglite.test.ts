@@ -3,7 +3,7 @@
  * d679e92c C9, wave 065982de W3-notify), through the real door,
  * `NotificationService.create`, on PGlite:
  *
- *   - a muted session's pushes are held back whatever reaches it: a status
+ *   - a muted session's pushes are held back (needs-you excepted, D-MUTE): a status
  *     signal about it (`sourceType: "session"`), an @mention in its room
  *     (`data.channelId`), a proposal filed in it (`proposals.session_id`);
  *   - held back, never hidden: each row still lands, unread (bell +
@@ -225,7 +225,7 @@ describe("the per-session mute", () => {
     expect(h.pushes).toHaveLength(2);
   });
 
-  it("an @mention in the muted session's room and a proposal filed in it are held back too", async () => {
+  it("an @mention in the muted session's room is held back; a proposal that blocks the session still pushes (needs-you)", async () => {
     await writeSessionMute(USER, MUTED, true);
     await NotificationService.create({
       type: "chat.mention",
@@ -249,7 +249,8 @@ describe("the per-session mute", () => {
       data: { proposalType: "update_entity", description: "A change" },
       push: { facts: { proposalBlocksOpenSession: true } },
     });
-    expect(h.pushes).toHaveLength(0);
+    // The mention is held; the blocking proposal waits on the person, so it rings.
+    expect(h.pushes).toHaveLength(1);
     expect(
       (await q<{ n: number }>(`select count(*)::int as n from notifications`))
         .rows[0]!.n

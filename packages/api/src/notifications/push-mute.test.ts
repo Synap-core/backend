@@ -60,14 +60,46 @@ describe("withSessionMute", () => {
     facts: {},
     prefs: {},
   });
-  it("holds back any push about a muted session, an ask too", () => {
+  it("a muted session's needs-you push (ask, decision) is delivered", () => {
     expect(earned).toMatchObject({ push: true, category: "blocking-ask" });
-    expect(withSessionMute(earned, true)).toEqual({
+    expect(withSessionMute(earned, true)).toBe(earned);
+    const permission = decidePush({
+      type: "ai_request.terminal_exec",
+      typeRule: undefined,
+      facts: {},
+      prefs: {},
+    });
+    expect(permission).toMatchObject({
+      push: true,
+      category: "decision-blocking",
+    });
+    expect(withSessionMute(permission, true)).toBe(permission);
+  });
+
+  it("holds back a muted session's progress and digest pushes", () => {
+    const progress = decidePush({
+      type: "session.signal",
+      typeRule: undefined,
+      facts: {},
+      prefs: {},
+    });
+    expect(progress).toMatchObject({ push: true, category: "late-or-stuck" });
+    expect(withSessionMute(progress, true)).toEqual({
       push: false,
-      category: "blocking-ask",
+      category: "late-or-stuck",
       reason: "session_muted",
     });
-    expect(withSessionMute(earned, false)).toBe(earned);
+    expect(withSessionMute(progress, false)).toBe(progress);
+    const digest = decidePush({
+      type: "ai.proactive.delivered_digest",
+      typeRule: undefined,
+      facts: {},
+      prefs: {},
+    });
+    expect(withSessionMute(digest, true)).toMatchObject({
+      push: false,
+      reason: "session_muted",
+    });
   });
 
   it("never holds what the person sent to their own phone", () => {
