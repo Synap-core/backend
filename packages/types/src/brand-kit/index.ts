@@ -52,7 +52,6 @@ export * from "./resolve.js";
 export * from "./open-design.js";
 import {
   renderOdDesignSystem,
-  odTokensFromEntities,
   type OdDesignSystemOptions,
 } from "./open-design.js";
 
