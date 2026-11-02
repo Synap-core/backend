@@ -54,6 +54,8 @@ describe("notifyConnectorUnhealthy — names its connection", () => {
       kind: "account",
       id: "google",
     });
+    // …and is ABOUT that account: the object its action and push tap open.
+    expect(h.createNotification.mock.calls[0]![0].sourceId).toBe("google");
   });
 
   it("an intelligence service's notice names none (never gated)", async () => {
@@ -64,5 +66,6 @@ describe("notifyConnectorUnhealthy — names its connection", () => {
       notificationType: "system.intelligence_degraded",
     });
     expect(h.createNotification.mock.calls[0]![0].connection).toBeUndefined();
+    expect(h.createNotification.mock.calls[0]![0].sourceId).toBeUndefined();
   });
 });
