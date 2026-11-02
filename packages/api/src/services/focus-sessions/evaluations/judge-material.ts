@@ -99,13 +99,17 @@ export const ROOM_MESSAGES_N = 20;
  */
 const ROOM_MESSAGE_MIN = 400;
 const CLIP_NOTE_HEAD = "NOTE: CLIPPED MATERIAL";
-/** The header note of a material with any cut in it. */
-const clipNote = (sections: number) =>
-  `${CLIP_NOTE_HEAD} — ${sections} section${sections === 1 ? "" : "s"} below ${
-    sections === 1 ? "was" : "were"
-  } cut to fit (each cut says "[clipped: N chars omitted]"). Judge only what is shown; a criterion that needs an omitted part is "unmeasured".`;
-/** Room for the note at its widest (a 4-digit section count) + its separator. */
-const CLIP_NOTE_RESERVE = clipNote(9999).length + 2;
+/**
+ * The header note of a material with any cut in it: `cut` of the `total`
+ * sections below were cut (a cut of the WHOLE material counts as one more
+ * section on both sides).
+ */
+const clipNote = (cut: number, total: number) =>
+  `${CLIP_NOTE_HEAD} — ${cut} of ${total} section${total === 1 ? "" : "s"} below ${
+    cut === 1 ? "was" : "were"
+  } cut to fit (each cut says "[clipped: N chars omitted]"). Judge only what is shown; a criterion that needs an omitted part is "unmeasured". If you answer unmeasured because of a cut, say so in the rationale.`;
+/** Room for the note at its widest (4-digit counts) + its separator. */
+const CLIP_NOTE_RESERVE = clipNote(9999, 9999).length + 2;
 
 /** True when a built material had to cut anything (it opens with the note). */
 export function isClippedMaterial(material: string): boolean {
@@ -449,12 +453,13 @@ export function fairShares(
  * message gets a fair share of the budget ({@link fairShares}); while a share
  * would cut a message below {@link ROOM_MESSAGE_MIN}, the OLDEST message is
  * dropped whole and the room opens with one mark naming what that cost.
- * `cut` = anything was dropped or clipped.
+ * `cut` = anything was dropped or clipped; `kept` = how many messages the
+ * text shows (the room heading counts these, never the messages read).
  */
 function packRoom(
   messages: ReadonlyArray<{ author: string; text: string }>,
   budget: number
-): { text: string; cut: boolean } {
+): { text: string; cut: boolean; kept: number } {
   const lines = messages.map((m) => ({
     prefix: `[${m.author}] `,
     text: m.text,
@@ -485,12 +490,23 @@ function packRoom(
           .filter(Boolean)
           .join("\n"),
         cut: from > 0 || kept.some((l, i) => l.text.length > shares[i]!),
+        kept: kept.length,
       };
     }
     dropped += lines[from]!.prefix.length + lines[from]!.text.length + 1;
   }
-  return { text: "", cut: false };
+  return { text: "", cut: false, kept: 0 };
 }
+
+/**
+ * The room heading for the `kept` messages the room shows, `dropped` older
+ * ones having been left out to fit. It counts what is SHOWN, so the judge
+ * never reads "latest 20" over a room that shows 6.
+ */
+const roomHeadingFor = (kept: number, dropped: number) =>
+  dropped > 0
+    ? `SESSION ROOM (latest ${kept} message${kept === 1 ? "" : "s"}, oldest first; ${dropped} older dropped to fit):`
+    : `SESSION ROOM (latest ${kept} message${kept === 1 ? "" : "s"}, oldest first):`;
 
 /**
  * Pure: the judge's material, ≤ `max` chars ({@link MATERIAL_MAX} unless the
@@ -562,7 +578,9 @@ export function buildJudgeMaterial(
       : room.status === "refused"
         ? "SESSION ROOM: not readable — the session owner cannot read this room."
         : room.messages.length
-          ? `SESSION ROOM (latest ${room.messages.length} messages, oldest first):`
+          ? // Budgeted at its widest; the heading the room is printed under
+            // is built from what packRoom kept (`assemble` below).
+            roomHeadingFor(room.messages.length, room.messages.length)
           : "";
   const roomText =
     room.status === "ok"
@@ -603,9 +621,9 @@ export function buildJudgeMaterial(
     const packed =
       room.status === "ok"
         ? packRoom(room.messages, shares[produced.length]!)
-        : { text: "", cut: false };
+        : { text: "", cut: false, kept: 0 };
     const roomPart = packed.text
-      ? `${roomHeading}\n${packed.text}`
+      ? `${roomHeadingFor(packed.kept, room.messages.length - packed.kept)}\n${packed.text}`
       : roomHeading;
     const roomCut = packed.cut;
     return {
@@ -625,6 +643,7 @@ export function buildJudgeMaterial(
   // or evidence), so the WHOLE body is cut last, and marked like any other.
   const { body, cut } = assemble(CLIP_NOTE_RESERVE);
   const whole = body.length > max - CLIP_NOTE_RESERVE;
-  const note = clipNote(cut + (whole ? 1 : 0));
+  const sections = texts.filter(Boolean).length;
+  const note = clipNote(cut + (whole ? 1 : 0), sections + (whole ? 1 : 0));
   return `${note}\n\n${clip(body, max - note.length - 2, "head")}`;
 }

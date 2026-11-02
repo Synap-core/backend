@@ -11,7 +11,10 @@ import type {
   ConnectionBroker,
   SyncFailureReportResult,
 } from "./ConnectionBroker.js";
-import { deadCredential } from "./nango-dead-credential.js";
+import { createLogger } from "@synap-core/core";
+import { credentialCause } from "./nango-dead-credential.js";
+
+const logger = createLogger({ module: "nango-connector" });
 
 const NangoRecordSchema = z
   .object({
@@ -254,15 +257,23 @@ export class NangoConnector implements SyncConnector, ConnectionBroker {
     if (!res.ok) {
       // Reading a connection makes Nango refresh its token. A credential it can
       // no longer refresh is a reconnect, not an outage (nango-dead-credential).
-      const dead = deadCredential(
+      const cause = credentialCause(
         res.status,
         await res.json().catch(() => null)
       );
-      if (dead) {
+      if (cause?.verdict === "unknown") {
+        // A credential failure this rule does not know: a reworded or new
+        // Nango cause. Still a retry, but visible.
+        logger.warn(
+          { status: res.status, nangoMessage: cause.message, connectionId },
+          "Nango answered invalid_credentials with a cause the dead-credential rule does not know"
+        );
+      }
+      if (cause?.verdict === "dead") {
         return {
           ok: false,
           reason: "needs_reauth",
-          error: `Nango returned ${res.status}: ${dead}`,
+          error: `Nango returned ${res.status}: ${cause.message}`,
         };
       }
       return {
