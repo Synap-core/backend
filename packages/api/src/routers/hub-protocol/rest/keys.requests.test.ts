@@ -160,6 +160,74 @@ describe("POST /keys/requests", () => {
   });
 });
 
+// 2 Nov 2026: an agent asks for the exact permissions it needs instead of a
+// template (`services/key-request-permissions.ts`). The route decides only
+// the shape: one of the two, and the same key + scope rules as a template ask.
+describe("POST /keys/requests — by permissions", () => {
+  const SILLAGE = [
+    "entity.source.read",
+    "entity.company.create",
+    "facet.create",
+  ];
+
+  it("passes the list and its uses through, with no template", async () => {
+    const W = "33333333-3333-4333-8333-333333333333";
+    const res = await post(app(), "/keys/requests", {
+      permissions: SILLAGE,
+      uses: ["hub"],
+      workspaceId: W,
+      name: "sillage-ingest",
+      expiresInDays: 120,
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    const args = svc.createKeyRequest.mock.calls[0]![0];
+    expect(args).toMatchObject({
+      requesterUserId: COMPUTER,
+      personUserId: PERSON,
+      permissions: SILLAGE,
+      uses: ["hub"],
+      workspaceId: W,
+      name: "sillage-ingest",
+      expiresInDays: 120,
+    });
+    expect(args.templateId).toBeUndefined();
+  });
+
+  // Rules out: a body naming both filed as the template (the list ignored)
+  // or as the list (the template ignored), and an empty body filed at all.
+  it("both a template and permissions, or neither, is a 400 that says so", async () => {
+    const both = await post(app(), "/keys/requests", {
+      template: "read-only",
+      permissions: SILLAGE,
+    });
+    expect(both.status).toBe(400);
+    expect(((await both.json()) as { error: string }).error).toMatch(
+      /not both/
+    );
+    const neither = await post(app(), "/keys/requests", { name: "x" });
+    expect(neither.status).toBe(400);
+    expect(((await neither.json()) as { error: string }).error).toMatch(
+      /template or .*permissions/
+    );
+    expect(svc.createKeyRequest).not.toHaveBeenCalled();
+  });
+
+  it("needs a key and hub-protocol.write, exactly as a template ask", async () => {
+    const noKey = await post(app({ keyId: null }), "/keys/requests", {
+      permissions: SILLAGE,
+    });
+    expect(noKey.status).toBe(401);
+    const readOnly = await post(
+      app({ scopes: ["hub-protocol.read"] }),
+      "/keys/requests",
+      { permissions: SILLAGE }
+    );
+    expect(readOnly.status).toBe(403);
+    expect(svc.createKeyRequest).not.toHaveBeenCalled();
+  });
+});
+
 describe("POST /keys/requests/token", () => {
   it("pending → 400 authorization_pending with its words, polled as the computer", async () => {
     const res = await post(app(), "/keys/requests/token", {
