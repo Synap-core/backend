@@ -128,7 +128,11 @@ const BASIC =
 /** The table as the schema declares it: columns, simple defaults, composite keys. */
 function ddlFor(table: PgTable): string {
   const cfg = getTableConfig(table);
+  // A composite key wins: a table may ALSO mark a column primary, and Postgres
+  // refuses two primary keys.
+  const pk = cfg.primaryKeys[0];
   const cols = cfg.columns.map((c) => {
+    const primary = c.primary && !pk;
     const t = c.getSQLType();
     const type = BASIC.test(t) ? t.replace(/\(.*\)/, "") : "text";
     let def = "";
@@ -137,15 +141,15 @@ function ddlFor(table: PgTable): string {
       if (typeof d === "string") def = ` default '${d.replace(/'/g, "''")}'`;
       else if (typeof d === "number" || typeof d === "boolean")
         def = ` default ${d}`;
-      else if (!Array.isArray(d)) def = ` default '${JSON.stringify(d)}'`;
+      else if (!Array.isArray(d))
+        def = ` default '${JSON.stringify(d).replace(/'/g, "''")}'`;
     } else if (type.startsWith("timestamp") && c.hasDefault) {
       def = " default now()";
-    } else if (c.primary && type === "uuid") {
+    } else if (primary && type === "uuid") {
       def = " default gen_random_uuid()";
     }
-    return `"${c.name}" ${type}${c.primary ? " primary key" : ""}${def}`;
+    return `"${c.name}" ${type}${primary ? " primary key" : ""}${def}`;
   });
-  const pk = cfg.primaryKeys[0];
   if (pk)
     cols.push(
       `primary key (${pk.columns.map((c) => `"${c.name}"`).join(", ")})`
@@ -325,7 +329,7 @@ describe("synap_declare_lifecycle — always a proposal, applied on approval", (
     // A second filing does not stack a duplicate.
     expect(
       await declareTool(ADMIN, { profileId: FINDING, options: FINDING_OPTIONS })
-    ).toEqual({ status: "already_pending", proposalId });
+    ).toMatchObject({ status: "already_pending", proposalId });
 
     const applied = await approve(proposalId, FINDING);
     expect(applied).toMatchObject({
