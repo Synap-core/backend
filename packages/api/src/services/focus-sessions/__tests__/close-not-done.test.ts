@@ -93,6 +93,63 @@ describe("openRequiredWork", () => {
   });
 });
 
+/**
+ * ONE rule with the outcome projection: a decision the person answered, whose
+ * decision the pod filed, is delivered (`isDecidedByAnswer`, through the
+ * shared floor), so it neither refuses nor waits. The fixture is session
+ * 2c9791ac as the pod stored it, minus the claims the agent had to add to get
+ * past NOT_DONE (2 Nov 2026).
+ */
+describe("an answered decision does not hold the close", () => {
+  const answered = (key: string, label: string) => ({
+    key,
+    kind: "decision",
+    label,
+    answer: {
+      text: "Advisory only",
+      question: "Decides whether rung 4 of the proof ladder can close anything",
+      answeredAt: "2026-11-02T02:04:16.803Z",
+      answeredBy: "u1",
+      askSnapshot: { mode: "choose", chosenKey: "Advisory only" },
+    },
+    decisionId: `dec-${key}`,
+  });
+  const slots = [
+    {
+      key: "options-doc",
+      kind: "document",
+      label: "Proof-first options document",
+      status: "done",
+    },
+    answered("d1-close-on-proof", "Closing on proof"),
+    answered("d2-judge-as-proof", "AI judge as proof"),
+    answered("d3-playbooks", "Playbooks: explain or bind"),
+    answered("d4-tasks", "Tasks model"),
+  ];
+
+  it("closes with nothing open and nothing waiting", () => {
+    const work = openRequiredWork({
+      criteria: [],
+      latest: [],
+      agentMovable: new Set(),
+      expectedOutputs: slots,
+    });
+    expect(hasOpenRequiredWork(work)).toBe(false);
+    expect(work.waiting).toEqual({ criteria: [], outcomes: [] });
+  });
+
+  it("an answer whose decision was never filed still holds it, as the agent's", () => {
+    const { decisionId: _d, ...unfiled } = answered("d4-tasks", "Tasks model");
+    const work = openRequiredWork({
+      criteria: [],
+      latest: [],
+      agentMovable: new Set(),
+      expectedOutputs: [unfiled],
+    });
+    expect(work.outcomes.map((o) => o.key)).toEqual(["d4-tasks"]);
+  });
+});
+
 describe("the close reason", () => {
   it("is trimmed, blank is none, and clipped at 1000", () => {
     expect(boundReason("  ok  ")).toBe("ok");

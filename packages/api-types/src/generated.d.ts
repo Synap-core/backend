@@ -1814,7 +1814,7 @@ export interface TrackParticipant {
 }
 /** A session's deliverables, counted — the progress rail and the owed badge. */
 export interface DeliverableCounts {
-	/** Stamped done. */
+	/** Delivered: stamped done, or decided by the person's answer. */
 	done: number;
 	/** Done + still owed. A RETIRED slot is in neither: it was let go, not delivered. */
 	total: number;
@@ -1836,10 +1836,11 @@ export interface ProducedItemLike {
 export type OutcomeVerify = EvaluatorKind;
 /**
  * WHICH door met an outcome: an approved proposal, the person's attestation,
- * the pod's evidence verdict, a criterion's `pass` verdict — or `unverified`,
- * a `done` with no receipt at all (the pre-A3 agent self-mark).
+ * the pod's evidence verdict, a criterion's `pass` verdict, the person's
+ * answer to a confirm / choose whose decision the pod filed — or
+ * `unverified`, a `done` with no receipt at all (the pre-A3 agent self-mark).
  */
-export type OutcomeMetBy = "approval" | "attestation" | "evidence" | "unverified" | "verdict";
+export type OutcomeMetBy = "answer" | "approval" | "attestation" | "evidence" | "unverified" | "verdict";
 /** The CURRENT verdict behind a criterion outcome. */
 export interface OutcomeVerdict {
 	verdict: EvaluationVerdict;

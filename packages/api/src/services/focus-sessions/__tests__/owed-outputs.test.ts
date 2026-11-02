@@ -130,7 +130,7 @@ describe("owedSlotOrder — the SQL ordering must agree with the TS sort", () =>
   it("shares the owed predicate with the WHERE clause, verbatim", () => {
     // Ordering on a different population than you filtered on is its own bug.
     const where = new PgDialect().sqlToQuery(owedSlotWhere()).sql;
-    expect(OWED_SLOT_CLAUSES.length).toBe(4);
+    expect(OWED_SLOT_CLAUSES.length).toBe(5);
     for (const clause of OWED_SLOT_CLAUSES) {
       expect(where).toContain(clause);
       expect(sql).toContain(clause);
@@ -412,9 +412,19 @@ describe("the owed predicate is a SET, not three strings that happen to appear",
     new Set([...text.matchAll(/slot->>?'([A-Za-z]+)'/g)].map((m) => m[1]));
 
   it("the constant is not vacuous and names the fields the rule is about", () => {
-    expect(OWED_SLOT_CLAUSES.length).toBe(4);
+    expect(OWED_SLOT_CLAUSES.length).toBe(5);
     expect(keysIn(OWED_SLOT_CLAUSES.join(" "))).toEqual(
-      new Set(["owner", "status", "retiredAt", "optional"])
+      new Set([
+        "owner",
+        "status",
+        "retiredAt",
+        "optional",
+        // A decision the person answered is delivered (`isDecidedByAnswer`).
+        "decisionId",
+        "kind",
+        "criterionKey",
+        "answer",
+      ])
     );
   });
 
