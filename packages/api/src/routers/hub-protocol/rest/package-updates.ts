@@ -285,8 +285,11 @@ export function registerPackageUpdatesRoutes(app: HubHono): void {
       "catalog version the plan showed: a newer one answers 409. Each row is " +
       "written through its own governed `.update` door as the caller: a " +
       "person's write lands and returns its receipt (Undo for 30 days, on " +
-      "pod admin); an agent's is filed as proposals. Pod admins only. " +
-      "Requires hub-protocol.write scope.",
+      "pod admin); an agent's is filed as proposals. A space or capability " +
+      "package (`comparedBy: package`) takes no choices: a person's apply " +
+      "runs the space's agreed `acceptDataChanges`, then its template apply " +
+      "(or the capability's reconcile); an agent is refused (403). " +
+      "Pod admins only. Requires hub-protocol.write scope.",
     request: { params: SlugParams, body: ApplyRequestSchema },
     responses: {
       200: { description: "Applied or proposed", schema: ApplyResponseSchema },

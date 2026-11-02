@@ -29,7 +29,8 @@ export const en = {
   "group.review.meta": "Nobody edited what changed",
   "group.nothing.meta": "You edited it; the catalog has not changed it",
   "group.unreadable": "Can’t check",
-  "group.unreadable.meta": "The pod could not read these packages’ catalog",
+  "group.unreadable.meta":
+    "The pod could not compare these packages with the catalog: each says why",
   "mark.choice": "Your edit and a catalog change",
   "mark.consent": "Changes your records",
   "mark.review": "Ready",
@@ -210,7 +211,8 @@ export const fr: Catalog<typeof en> = {
   "group.review.meta": "Personne n’a modifié ce qui a changé",
   "group.nothing.meta": "Vous l’avez modifié ; le catalogue ne l’a pas changé",
   "group.unreadable": "Vérification impossible",
-  "group.unreadable.meta": "Le pod n’a pas pu lire le catalogue de ces paquets",
+  "group.unreadable.meta":
+    "Le pod n’a pas pu comparer ces paquets au catalogue : chacun dit pourquoi",
   "mark.choice": "Votre modification et celle du catalogue",
   "mark.consent": "Modifie vos fiches",
   "mark.review": "Prête",
