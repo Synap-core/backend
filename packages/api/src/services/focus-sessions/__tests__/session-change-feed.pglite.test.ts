@@ -514,9 +514,7 @@ describe("the session change feed", () => {
       }),
     ]);
     // A stage move is news to show, never a doorbell (plan 07f8a997 W1).
-    for (const e of moved.body.events as Array<{ wake: unknown }>) {
-      expect(e.wake).toBe(false);
-    }
+    for (const e of moved.body.events ?? []) expect(e.wake).toBe(false);
     // Past the cursor: nothing new, and the state fallback stays quiet.
     const after = await hubWait(
       sessionId,
