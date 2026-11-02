@@ -105,6 +105,11 @@ beforeAll(async () => {
       }
     }
   }
+  // The derived DDL carries no constraints; the property link upserts on
+  // (profile_id, property_def_id), which needs its unique index.
+  await q(
+    `create unique index if not exists profile_properties_link on profile_properties (profile_id, property_def_id)`
+  );
   await q(`insert into users (id, email) values ($1, 'u@x.test')`, [USER]);
 }, 120_000);
 
