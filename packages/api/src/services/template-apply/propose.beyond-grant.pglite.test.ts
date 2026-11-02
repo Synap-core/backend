@@ -213,6 +213,14 @@ async function proposalRow(id: string) {
   return rows[0];
 }
 
+async function spaceSettings() {
+  const { rows } = await q<{ settings: Record<string, unknown> }>(
+    `select settings from workspaces where id = $1`,
+    [SPACE]
+  );
+  return rows[0]!.settings;
+}
+
 let PROPOSAL_ID = "";
 
 beforeAll(async () => {
@@ -231,10 +239,10 @@ beforeAll(async () => {
     `insert into users (id, email, user_type, created_by_user_id) values ($1, $2, 'agent', $3)`,
     [AGENT, "computer@x.test", OWNER]
   );
-  // The installed space holding the template, at its first version.
+  // The installed space holding the template (no template state yet).
   await q(
-    `insert into workspaces (id, name, owner_id, package_slug, package_version, provisioning_status, settings) values ($1,'Brand library',$2,$3,$4,'ready','{}'::jsonb)`,
-    [SPACE, OWNER, SLUG, `${SLUG}-1`]
+    `insert into workspaces (id, name, owner_id, package_slug, provisioning_status, settings) values ($1,'Brand library',$2,$3,'ready','{}'::jsonb)`,
+    [SPACE, OWNER, SLUG]
   );
   await q(
     `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner')`,
@@ -277,12 +285,8 @@ describe("a template update beyond the key's grant is filed for the person's app
       operation: "template_update",
       source: "packages.apply",
     });
-    // Nothing applied yet: the space is still at its old version.
-    const { rows } = await q<{ package_version: string }>(
-      `select package_version from workspaces where id = $1`,
-      [SPACE]
-    );
-    expect(rows[0]!.package_version).toBe(`${SLUG}-1`);
+    // Nothing applied yet: no template apply wrote the space's state.
+    expect(await spaceSettings()).toEqual({});
   });
 
   it("with no agent on the request, the same key is still refused", async () => {
@@ -346,6 +350,8 @@ describe("a template update beyond the key's grant is filed for the person's app
       [SLUG]
     );
     expect(rows.map((s) => s.id)).toEqual([SPACE]);
+    // The template apply ran on it (it wrote the space's template state).
+    expect(await spaceSettings()).not.toEqual({});
   });
 });
 
