@@ -13,6 +13,12 @@ x-backend-env: &backend-env
   # running (2026-10-19).
   BACKEND_VERSION: ${BACKEND_VERSION:-}
   DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
+  # Postgres connection budget: every service's pool cap must sum under the
+  # postgres service's max_connections (packages/database/src/client-pg.ts
+  # lists the consumers; deploy/__tests__/pg-connection-budget.test.sh sums them).
+  # DB_POOL_SIZE caps the Drizzle pool, PGBOSS_POOL_SIZE pg-boss's own pool.
+  DB_POOL_SIZE: ${DB_POOL_SIZE:-50}
+  PGBOSS_POOL_SIZE: ${PGBOSS_POOL_SIZE:-10}
   ADMIN_EMAIL: ${ADMIN_EMAIL:-}
   PROVISIONING_TOKEN: ${PROVISIONING_TOKEN:-}
   # Generic issuer signatures are verified against the owner-approved trusted
@@ -290,6 +296,11 @@ services:
     restart: "no"
     environment:
       <<: *backend-env
+      # The canary only has to boot and pass a health check, but it runs
+      # BESIDE the production backend on the same Postgres. With the shared
+      # 50 + 10 it could take 60 more connections mid-update and starve Kratos.
+      DB_POOL_SIZE: ${CANARY_DB_POOL_SIZE:-10}
+      PGBOSS_POOL_SIZE: ${CANARY_PGBOSS_POOL_SIZE:-5}
     depends_on:
       postgres:
         condition: service_healthy
@@ -333,6 +344,11 @@ services:
       # compatibility behavior.
       BRIDGE_SECRET: ${BRIDGE_SECRET:-}
       DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
+      # Realtime imports @synap/database, so it gets its own pool (default 50
+      # otherwise). Its queries are short and bursty: the socket handshake's
+      # key/session lookups, room grant checks, and debounced Yjs document
+      # loads/saves. It starts no pg-boss. 10 is ample for one pod.
+      DB_POOL_SIZE: ${REALTIME_DB_POOL_SIZE:-10}
       KRATOS_PUBLIC_URL: http://kratos:4433
       STORAGE_PROVIDER: minio
       MINIO_ENDPOINT: http://minio:9000
@@ -427,6 +443,9 @@ services:
     working_dir: /app
     environment:
       DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
+      # migrate.js opens max 1; the seed scripts import @synap/database's
+      # pool (default 50). They run one query after another, so 5 is plenty.
+      DB_POOL_SIZE: "5"
       HUB_PROTOCOL_API_KEY: ${HUB_PROTOCOL_API_KEY:-}
       HUB_PROTOCOL_API_KEYS: ${HUB_PROTOCOL_API_KEYS:-}
       NODE_ENV: production
@@ -534,7 +553,12 @@ services:
         fi
         exec /docker-entrypoint.sh "$$@"
       - postgres-guard
-    command: ["postgres"]
+    # `sh -c SCRIPT postgres-guard ARGS…`: postgres-guard is $0, so "$$@" above
+    # is exactly this list. A `-c` flag outranks postgresql.conf and
+    # postgresql.auto.conf. 200 leaves headroom over the per-service pool caps
+    # (client-pg.ts lists them); the default 100 ran out at login 2026-11-02.
+    command:
+      ["postgres", "-c", "max_connections=${POSTGRES_MAX_CONNECTIONS:-200}"]
     volumes:
       - postgres_data:/home/postgres/pgdata
       - ./state:/synap-state:ro
@@ -716,7 +740,9 @@ services:
         delay: 5s
         max_attempts: 5
     environment:
-      DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/kratos?sslmode=disable
+      # max_conns caps Ory's pool (unset it is 2 x CPUs); it counts against
+      # the postgres max_connections budget (client-pg.ts).
+      DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/kratos?sslmode=disable&max_conns=10&max_idle_conns=5
     command: migrate sql -e --yes
     depends_on:
       postgres:
@@ -729,7 +755,10 @@ services:
     image: ${SYNAP_IMAGE_KRATOS:-oryd/kratos:v1.3.1}
     restart: always
     environment:
-      DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/kratos?sslmode=disable
+      # Login and whoami need a connection: an explicit cap of Ory's pool
+      # (unset it is 2 x CPUs), counted in the postgres max_connections
+      # budget (client-pg.ts), so the other services cannot crowd it out.
+      DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/kratos?sslmode=disable&max_conns=10&max_idle_conns=5
       # Each is an ORDERED comma list `new,old` (Ory parses a non-JSON value of
       # an array key as CSV): the first signs/encrypts, all verify/decrypt. A
       # single value is a one-item list. Cipher items are exactly 32 chars.
