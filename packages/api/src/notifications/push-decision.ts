@@ -24,10 +24,10 @@
  *      the cap applies (`pushCapApplies`), so no exempt or forced push waits
  *      on it.
  *   5. the person's SESSION MUTE ({@link withSessionMute}): a push about a
- *      session they muted is held back, whatever its category (an ask too),
- *      except what they sent to their phone themselves
- *      (`PUSH_MUTE_EXEMPT_CATEGORIES`). Held back, never hidden: the row is
- *      already in the bell and an owed ask stays in needs-you. Decided before
+ *      session they muted is held back, except what needs them (an ask or a
+ *      decision: needs-you always pushes, founder 2026-11-02) and what they
+ *      sent to their phone themselves (`PUSH_MUTE_EXEMPT_CATEGORIES`). Held
+ *      back, never hidden: the row is already in the bell. Decided before
  *      the budget, so a muted push is never counted.
  */
 import {
@@ -111,7 +111,8 @@ export function withinPushCap(
 /**
  * Rule 5, pure: hold back a push about a session the person muted. `muted` is
  * the answer of {@link pushAboutMutedSession}. A push in a mute-exempt
- * category (what the person sent to their own phone) still goes out.
+ * category (what needs the person, what they sent to their own phone) still
+ * goes out.
  */
 export function withSessionMute(d: PushDecision, muted: boolean): PushDecision {
   if (!d.push || !muted) return d;
