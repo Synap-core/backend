@@ -93,7 +93,6 @@ export async function runCalBackfill(): Promise<RunCalBackfillResult> {
       userId: owner,
       workspaceId,
       watermarkToolId: calTool.id,
-      watermarkMetadata: metadata,
       // System notice → the configured feedback/notices channel (if the operator
       // set one); no feature channel fallback here.
       discordTeamChannelId: resolveNoticeChannelId(metadata, undefined),

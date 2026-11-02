@@ -18,7 +18,11 @@ vi.mock("@synap/database", async (importOriginal) => {
     ...actual,
     db: {
       ...actual.db,
-      update: () => ({ set: () => ({ where: async () => {} }) }),
+      update: () => ({
+        set: () => ({
+          where: () => ({ returning: async () => [{ id: "tool-1" }] }),
+        }),
+      }),
     },
     eventRepository: { ...actual.eventRepository, append: async () => {} },
   };
@@ -39,7 +43,6 @@ const baseOpts = {
   userId: "user-1",
   workspaceId: "ws-1",
   watermarkToolId: "tool-1",
-  watermarkMetadata: { connectionHealth: {} },
 };
 
 beforeEach(() => vi.clearAllMocks());
