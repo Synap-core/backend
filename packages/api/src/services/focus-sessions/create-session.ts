@@ -1044,7 +1044,9 @@ export async function createFocusSession(
     { askedBy: agentUserId }
   );
   const playbookSlots: ExpectedOutput[] = playbook
-    ? playbookSlotsMissingFrom(playbook, [...declaredSlots, ...paramSlots])
+    ? sanitizeDeclaredOutputs(
+        playbookSlotsMissingFrom(playbook, [...declaredSlots, ...paramSlots])
+      )
     : [];
 
   // Session + its playbook_runs ledger row land in ONE transaction: the

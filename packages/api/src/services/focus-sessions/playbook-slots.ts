@@ -13,13 +13,22 @@
  * the playbook the session was started from — never files a slot twice. Keys
  * are minted from the label by the birth door (`stampSlotKeys`), so the same
  * deliverable gets the same key on every session.
+ *
+ * A pure FILTER, deliberately: it returns the playbook's stored declarations
+ * as they are. The DOOR that writes them sanitizes them
+ * (`sanitizeDeclaredOutputs`) and carries the block-guidance and needs-you
+ * nets on the same write; a helper that sanitized here would be a slot
+ * writer with neither (`block-guidance-every-door`,
+ * `needs-you-every-handoff-door` tripwires).
  */
 
 import type { ExpectedOutput } from "@synap/playbooks";
 import { normalizeExpectedLabel } from "./expected-label.js";
-import { sanitizeDeclaredOutputs } from "./update-session.js";
 
-/** The playbook's slots that `current` does not already carry, by label. */
+/**
+ * The playbook's slots that `current` does not already carry, by label —
+ * UNSANITIZED: the writing door sanitizes them.
+ */
 export function playbookSlotsMissingFrom(
   playbook: { expectedOutputs: unknown },
   current: readonly ExpectedOutput[]
@@ -31,12 +40,10 @@ export function playbookSlotsMissingFrom(
     ? (playbook.expectedOutputs as ExpectedOutput[])
     : [];
   const seen = new Set<string>();
-  return sanitizeDeclaredOutputs(
-    fromPlaybook.filter((o) => {
-      const key = normalizeExpectedLabel(o?.label);
-      if (!key || have.has(key) || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-  );
+  return fromPlaybook.filter((o) => {
+    const key = normalizeExpectedLabel(o?.label);
+    if (!key || have.has(key) || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }

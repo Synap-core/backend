@@ -95,7 +95,10 @@ import {
   type BlockGuidance,
 } from "./block-guidelines.js";
 import { notifySessionNeedsYou } from "./notify-needs-you.js";
-import { mergeExpectedOutputs } from "./update-session.js";
+import {
+  mergeExpectedOutputs,
+  sanitizeDeclaredOutputs,
+} from "./update-session.js";
 import { STAGE_GATE_TARGET_TYPE } from "../playbooks/stage-gate.js";
 import { buildDefinitionSnapshot } from "../playbooks/run-playbook.js";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
@@ -434,7 +437,9 @@ export async function followPlaybook(
       // Merged by label like the playbook's own slots, so following twice does
       // not file the same question again.
       const added = [
-        ...playbookSlotsMissingFrom(playbook, currentOutputs),
+        ...sanitizeDeclaredOutputs(
+          playbookSlotsMissingFrom(playbook, currentOutputs)
+        ),
         ...paramSlots.filter(
           (slot) =>
             !currentOutputs.some(
