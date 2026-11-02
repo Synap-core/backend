@@ -119,6 +119,7 @@ const PERMISSION = [
     id: "perm-1",
     title: "Run the migration",
     goal: "Run the migration",
+    runnerState: "needs_permission" as const,
     since: ago(DAY / 24),
   },
 ];
