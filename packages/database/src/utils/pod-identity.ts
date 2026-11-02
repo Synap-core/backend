@@ -298,6 +298,82 @@ function b64url(value: unknown): string {
   return Buffer.from(JSON.stringify(value)).toString("base64url");
 }
 
+// ── Proof of possession for a moved pod (plan 5b923276 D3, decision e9d91a22) ──
+//
+// Before a desktop or phone app follows a Synap Cloud pod to a new address, the
+// new host must show it holds THIS key: the app picks a fresh nonce, the host
+// signs it, the app verifies the signature with the key whose thumbprint the
+// Control Plane registered. Comparing the CP's thumbprint with the host's JWKS
+// alone proves nothing: a JWKS is public, any host can serve a copy.
+//
+// A narrow sibling of `signPodJwt`, not a purpose of it, on purpose:
+//   - its `typ` is NOT `pod+jwt`, so a proof is never a pod token. The CP's
+//     `verifyPodJwt` and `verifyOwnPodJwt` both refuse any other `typ`, and a
+//     public route that signs a caller's bytes must not mint anything another
+//     verifier accepts;
+//   - its `aud` is a fixed label, not an origin (`signPodJwt` requires a bare
+//     origin and would have to be loosened);
+//   - the caller chooses only the nonce, and only as 16–64 canonical base64url
+//     bytes. No other claim, no `purpose`, no `jti`, a fixed 60 s lifetime.
+
+export const POD_PROOF_TYP = "synap-pod-proof+jwt";
+export const POD_PROOF_AUDIENCE = "synap-pod-proof";
+export const POD_PROOF_TTL_SECONDS = 60;
+export const POD_PROOF_NONCE_MIN_BYTES = 16;
+export const POD_PROOF_NONCE_MAX_BYTES = 64;
+
+/**
+ * Whether `value` is a proof nonce this pod will sign: unpadded base64url
+ * (RFC 4648 §5) that decodes to 16–64 bytes and re-encodes to itself (one
+ * spelling per byte string).
+ */
+export function isPodProofNonce(value: unknown): value is string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) {
+    return false;
+  }
+  const bytes = Buffer.from(value, "base64url");
+  return (
+    bytes.length >= POD_PROOF_NONCE_MIN_BYTES &&
+    bytes.length <= POD_PROOF_NONCE_MAX_BYTES &&
+    bytes.toString("base64url") === value
+  );
+}
+
+/**
+ * Sign a client's nonce AS this pod: a compact JWS, ES256,
+ *   header  { alg: "ES256", kid: <RFC 7638 thumbprint>, typ: "synap-pod-proof+jwt" }
+ *   payload { iss: <this pod's PUBLIC_URL origin>, aud: "synap-pod-proof", nonce, iat, exp: iat + 60 }
+ * Throws `PodIdentityError` (`POD_JWT_BAD_REQUEST` for a nonce
+ * `isPodProofNonce` refuses, or the identity errors when this pod holds no
+ * usable key or no PUBLIC_URL).
+ */
+export function signPodProof(
+  nonce: string,
+  nowSeconds: number = Math.floor(Date.now() / 1000)
+): string {
+  if (!isPodProofNonce(nonce)) {
+    throw new PodIdentityError(
+      "POD_JWT_BAD_REQUEST",
+      `A proof nonce is ${POD_PROOF_NONCE_MIN_BYTES}–${POD_PROOF_NONCE_MAX_BYTES} bytes, unpadded base64url.`
+    );
+  }
+  const { privateKey, kid } = loadIdentity();
+  const header = { alg: "ES256", kid, typ: POD_PROOF_TYP };
+  const payload = {
+    iss: podIssuerOrigin(),
+    aud: POD_PROOF_AUDIENCE,
+    nonce,
+    iat: nowSeconds,
+    exp: nowSeconds + POD_PROOF_TTL_SECONDS,
+  };
+  const signingInput = `${b64url(header)}.${b64url(payload)}`;
+  const signature = crypto.sign("sha256", Buffer.from(signingInput), {
+    key: privateKey,
+    dsaEncoding: "ieee-p1363",
+  });
+  return `${signingInput}.${signature.toString("base64url")}`;
+}
+
 function decodeSegment(segment: string): Record<string, unknown> | null {
   try {
     const parsed: unknown = JSON.parse(

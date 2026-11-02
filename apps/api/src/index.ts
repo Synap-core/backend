@@ -1252,6 +1252,8 @@ app.route("/mcp", mcpHttpApp);
 app.route("/", oauthApp);
 // GET /.well-known/synap-pod-jwks — the public half of this pod's identity key
 // Public + cacheable; the CP trusts only the key registered with it.
+// POST /.well-known/synap-pod-proof — signs a client's nonce with that key, so
+// an app following a moved pod can check the new host holds it (plan D3).
 app.route("/", podIdentityJwksApp);
 
 // External API — Skills invocation (API key auth, scope: skills.invoke)
