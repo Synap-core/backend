@@ -28,6 +28,11 @@ import {
   isNarrowedScope,
   type GrantScope,
 } from "@synap/governance-policy/grants";
+import {
+  parseModelProvider,
+  parseReportedModel,
+  type ModelProviderSlug,
+} from "@synap-core/types/agents";
 
 export interface RequestWriteContext {
   /** D8 — the request's key is an explicitly declared probe key. */
@@ -50,6 +55,8 @@ export interface RequestWriteContext {
   readonly process?: ProcessIdentity;
   /** 0384 — what that conversation says it is doing, and when the pod heard it. */
   readonly runnerState?: RunnerStateReport;
+  /** 0389 — the model and provider the calling client says it runs on. */
+  readonly reportedModel?: ReportedModel;
   /** W1 — what the calling key may touch (absent = a key with no grant). */
   readonly grant?: KeyGrant;
   /** B4 — the sessions this request's writes were FILED under (see below). */
@@ -644,6 +651,73 @@ export function conversationCwdPatch(clientKey: string | null | undefined): {
   return clientKey && store?.clientKey === clientKey && store.conversationCwd
     ? { conversationCwd: store.conversationCwd }
     : {};
+}
+
+// ═══ Concern: REPORTED MODEL (0389) ═══════════════════════════════════════════
+//
+// The model a run uses and the provider serving it (decision 5e7c77dc): facts
+// the client CLAIMS on any key-auth call, never identity. Header
+// `X-Synap-Model` / `X-Synap-Model-Provider`, or `_meta["live.synap/model"]` /
+// `_meta["live.synap/modelProvider"]` for an MCP client that cannot set
+// headers. Parsed by the ONE rule in `@synap-core/types/agents`
+// (`model-providers.ts`): a junk model is dropped, an unlisted provider reads
+// `other`, nothing sent reads unknown. Stamped on every event the request
+// appends (`EventRepository.append`, {@link reportedModelColumns}) and on the
+// calling runner's `session_runners` row.
+
+export const MODEL_HEADER = "x-synap-model";
+export const MODEL_PROVIDER_HEADER = "x-synap-model-provider";
+export const MODEL_META_KEY = "live.synap/model";
+export const MODEL_PROVIDER_META_KEY = "live.synap/modelProvider";
+
+export interface ReportedModel {
+  model?: string;
+  provider?: ModelProviderSlug;
+}
+
+/** Run `fn` with what the client reported; nothing usable enters no scope. */
+export function runWithReportedModel<T>(
+  rawModel: string | null | undefined,
+  rawProvider: string | null | undefined,
+  fn: () => T
+): T {
+  const model = parseReportedModel(rawModel);
+  const provider = parseModelProvider(rawProvider);
+  if (!model && !provider) return fn();
+  return runWithPatch(
+    {
+      reportedModel: {
+        ...(model ? { model } : {}),
+        ...(provider ? { provider } : {}),
+      },
+    },
+    fn
+  );
+}
+
+/** What the calling client says it runs on, when it said anything. */
+export function getRequestReportedModel(): ReportedModel | undefined {
+  return storage.getStore()?.reportedModel;
+}
+
+/**
+ * The `model` / `provider` columns an event is stored with. An event that
+ * carries its own (a Hub agent run, a metered capability run, whose provider
+ * is the capability's) keeps its own pair whole; any other takes what the
+ * request's client reported; else both stay null.
+ */
+export function reportedModelColumns(own: {
+  model?: string | null;
+  provider?: string | null;
+}): { model: string | null; provider: string | null } {
+  if (own.model || own.provider) {
+    return { model: own.model ?? null, provider: own.provider ?? null };
+  }
+  const reported = getRequestReportedModel();
+  return {
+    model: reported?.model ?? null,
+    provider: reported?.provider ?? null,
+  };
 }
 
 // ═══ Concern: WHERE THE WRITES LANDED (B4 2026-10-21) ═════════════════════════

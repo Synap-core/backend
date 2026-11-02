@@ -27,6 +27,9 @@ import {
   parseRunnerState,
   getRequestRunnerState,
   RUNNER_STATES,
+  runWithReportedModel,
+  getRequestReportedModel,
+  reportedModelColumns,
 } from "./request-write-context.js";
 
 const S = "11111111-1111-4111-8111-111111111111";
@@ -318,5 +321,57 @@ describe("the runner state (0384)", () => {
         "asleep"
       )
     ).toBeUndefined();
+  });
+});
+
+describe("reported model (0389)", () => {
+  it("composes with the calling client; parsed by the one rule", async () => {
+    const seen = await runWithClientKey("key:k|conv:claude-code:c", () =>
+      runWithReportedModel(" glm-4.6 ", "ZAI", async () => {
+        await tick();
+        return {
+          key: getRequestClientKey(),
+          ran: getRequestReportedModel(),
+        };
+      })
+    );
+    expect(seen).toEqual({
+      key: "key:k|conv:claude-code:c",
+      ran: { model: "glm-4.6", provider: "zai" },
+    });
+  });
+
+  it("nothing usable enters no scope: unknown, never anthropic", () => {
+    expect(
+      runWithReportedModel(undefined, undefined, () =>
+        getRequestReportedModel()
+      )
+    ).toBeUndefined();
+    expect(
+      runWithReportedModel("a b", "", () => getRequestReportedModel())
+    ).toBeUndefined();
+    expect(
+      runWithReportedModel("x".repeat(129), "groq", () =>
+        getRequestReportedModel()
+      )
+    ).toEqual({ provider: "other" });
+  });
+
+  it("an event's own pair wins whole; otherwise the request's; else null", () => {
+    runWithReportedModel("glm-4.6", "zai", () => {
+      expect(reportedModelColumns({})).toEqual({
+        model: "glm-4.6",
+        provider: "zai",
+      });
+      expect(reportedModelColumns({ provider: "firecrawl" })).toEqual({
+        model: null,
+        provider: "firecrawl",
+      });
+      expect(reportedModelColumns({ model: "gpt-5" })).toEqual({
+        model: "gpt-5",
+        provider: null,
+      });
+    });
+    expect(reportedModelColumns({})).toEqual({ model: null, provider: null });
   });
 });
