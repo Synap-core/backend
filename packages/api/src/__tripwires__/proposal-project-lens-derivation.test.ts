@@ -205,12 +205,12 @@ describe("proposals carry the project lens", () => {
     // derivation; this asserts it arrived, and that both body-supplied rungs
     // carry it.
     expect(
-      /UUID_SHAPE\.test\(input\.sessionId\)/.test(ladder),
+      /isUuid\(input\.sessionId\)/.test(ladder),
       "a non-uuid sessionId must be excluded before the query — otherwise a " +
         "bad id costs the enclosing transaction, not just the lens"
     ).toBe(true);
     expect(
-      /UUID_SHAPE\.test\(input\.channelId\)/.test(ladder),
+      /isUuid\(input\.channelId\)/.test(ladder),
       "the channel rung takes a body-supplied id too and needs the same guard"
     ).toBe(true);
   });

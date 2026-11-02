@@ -55,6 +55,7 @@ import {
   SESSION_UNDO_COLUMNS,
   type SessionUndoColumn,
 } from "../focus-sessions/session-undo.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "stamp-materialized" });
 
@@ -879,6 +880,7 @@ export async function readSessionUndoSnapshot(
       goal: focusSessions.goal,
       progress: focusSessions.progress,
       projectId: focusSessions.projectId,
+      criteria: focusSessions.criteria,
       trackId: focusSessions.trackId,
       trackStage: focusSessions.trackStage,
     })
@@ -981,14 +983,11 @@ export async function stampAutoApprovedCreate(args: {
   }
 }
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** `data.sourceDocumentIds` as written by the capture doors: uuid strings only. */
 function readSourceDocumentIds(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return unique(
-    value.filter((v): v is string => typeof v === "string" && UUID_RE.test(v))
+    value.filter((v): v is string => typeof v === "string" && isUuid(v))
   );
 }
 

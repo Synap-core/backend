@@ -3,7 +3,10 @@
  *   - an AGENT key cannot change how the person is interrupted —
  *     `setPushPrefs` and `updatePrefs` both refuse it, writing nothing;
  *   - the push-prefs write is ONE upsert on the partial unique index (0290):
- *     concurrent first writes leave exactly one pod-wide row, and merge.
+ *     concurrent first writes leave exactly one pod-wide row, and merge;
+ *   - `setSessionMute`: an agent key is refused (FORBIDDEN), a session the
+ *     caller cannot read is NOT_FOUND (never muted, never confirmed), and the
+ *     person's mute of their own session lands.
  *
  * Real: the router doors, `writePushPrefs`, the unique index. Tables: every
  * `@synap/database` table (derived), plus the 0290 index by hand (the derived
@@ -53,6 +56,9 @@ import { notifCenterRouter } from "./notif-center.js";
 const USER = "11111111-1111-4111-8111-111111111111";
 const AGENT = "22222222-2222-4222-8222-222222222222";
 const WS = "33333333-3333-4333-8333-333333333333";
+const OTHER = "44444444-4444-4444-8444-444444444444";
+const MINE = "55555555-5555-4555-8555-555555555555";
+const THEIRS = "66666666-6666-4666-8666-666666666666";
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
 
@@ -114,6 +120,13 @@ describe("notification settings doors", () => {
       `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
       [randomUUID(), WS, USER]
     );
+    // One session of the caller's, one of someone else's they cannot read.
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, goal, status, origin, expected_outputs, metadata, agent_ids)
+       values ($1, $2, null, 'Mine', 'active', 'human', '[]'::jsonb, '{}'::jsonb, '{}'),
+              ($3, $4, null, 'Theirs', 'active', 'human', '[]'::jsonb, '{}'::jsonb, '{}')`,
+      [MINE, USER, THEIRS, OTHER]
+    );
   }, 120_000);
 
   beforeEach(async () => {
@@ -142,6 +155,29 @@ describe("notification settings doors", () => {
     });
     await caller().updatePrefs({ routingRules: { "chat.mention": "in_app" } });
     expect(await podRows()).toHaveLength(1);
+  });
+
+  it("an agent key cannot mute a session — nothing is written", async () => {
+    await expect(
+      caller(AGENT).setSessionMute({ sessionId: MINE, muted: true })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await podRows()).toHaveLength(0);
+  });
+
+  it("a session the caller cannot read is NOT_FOUND — never muted", async () => {
+    await expect(
+      caller().setSessionMute({ sessionId: THEIRS, muted: true })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(await podRows()).toHaveLength(0);
+  });
+
+  it("non-vacuity: the person mutes their own session", async () => {
+    expect(
+      await caller().setSessionMute({ sessionId: MINE, muted: true })
+    ).toEqual({ sessionId: MINE, muted: true });
+    expect((await podRows())[0]!.push_prefs).toEqual({
+      mutedSessions: [MINE],
+    });
   });
 
   it("concurrent FIRST writes leave ONE pod-wide row, with both categories merged", async () => {

@@ -27,11 +27,11 @@ import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
 import { emitHubRealtimeEvent } from "../utils/domain-event-bridge.js";
 import type { Artifact } from "@synap/database/schema";
 import { SESSION_ARTIFACT_KINDS } from "../services/focus-sessions/record-session-artifact.js";
-import { UUID_RE } from "../services/focus-sessions/session-metadata.js";
 import {
   resolveEntityProfileRefs,
   type EntityProfileRef,
 } from "../services/profiles/entity-profile-refs.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 // ── Shared input schemas ────────────────────────────────────────────────────
 
@@ -108,7 +108,7 @@ export async function queryArtifacts(
   const entityIds = [
     ...new Set(
       rows
-        .filter((r) => r.kind === "entity" && r.refId && UUID_RE.test(r.refId))
+        .filter((r) => r.kind === "entity" && r.refId && isUuid(r.refId))
         .map((r) => r.refId as string)
     ),
   ];

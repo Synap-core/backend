@@ -330,18 +330,25 @@ describe("test-ratchet --select: the PR selection, judged as CI judges it", () =
   });
 
   it("a file two runs reached: its red is never overwritten by a later green", () => {
-    // EXTRA[0] is red in its own run and passes in a run collected AFTER it
-    // (vitest's file filters are substrings: one file can run twice).
-    const own = large.runs.findIndex((x) => x.files.includes(EXTRA[0]));
-    const later = large.runs[large.runs.length - 1];
-    expect(large.runs.indexOf(later)).toBeGreaterThan(own);
+    // An EXTRA file is red in its own run and passes in a run collected AFTER
+    // it (vitest's file filters are substrings: one file can run twice). The
+    // file is derived: one whose own run is not the last, since which run a
+    // file lands in moves with every tripwire added to the repo (adding
+    // scripts/ci/semantic-overlap.tripwire.test.ts put EXTRA[0] in the last).
+    const last = large.runs.length - 1;
+    const file = EXTRA.find((f) => {
+      const i = large.runs.findIndex((x) => x.files.includes(f));
+      return i >= 0 && i < last;
+    });
+    expect(file, "an EXTRA file outside the last run").toBeDefined();
+    const later = large.runs[last];
     const r = judge(large, {
-      red: [EXTRA[0]],
-      echo: { file: EXTRA[0], into: later.id },
+      red: [file],
+      echo: { file, into: later.id },
     });
     expect(r.status).toBe(1);
     expect(r.out).toContain("[new-failure]");
-    expect(r.out).toContain(EXTRA[0]);
+    expect(r.out).toContain(file);
   });
 
   it("a plan whose runs are not its selection, or that runs a file twice: red", () => {

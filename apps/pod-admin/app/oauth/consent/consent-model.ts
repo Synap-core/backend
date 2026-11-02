@@ -40,6 +40,8 @@ import {
   isKindQualifiedGrantSubject,
   parsePermission,
   resolveEventFamilyPermissionLabel,
+  EVERYWHERE_IN_POD,
+  POD_WIDE_HEADING,
 } from "@synap-core/types/grants";
 import { intentRunLabel } from "@synap-core/types/capability-intents";
 import { isAppPublicId } from "@synap-core/types/membrane";
@@ -518,6 +520,19 @@ export function toApproved(
  */
 export const SPACE_REACH_NOTE =
   "It sees what a member of these spaces sees: what is stored there, plus the people, companies and other records of your pod that have a role there or were filed there. Nothing else in your pod.";
+
+/**
+ * The same line when the app also asks for pod-wide reads: "Nothing else in
+ * your pod" would contradict the section above it ("Everywhere in your pod"),
+ * so it names that section as the one exception.
+ */
+export const SPACE_REACH_NOTE_WITH_POD_WIDE =
+  "It sees what a member of these spaces sees: what is stored there, plus the people, companies and other records of your pod that have a role there or were filed there. Outside these spaces, it reads only what is listed under Everywhere in your pod.";
+
+/** The reach line for this offer: with pod-wide reads on offer, it names their section. */
+export function spaceReachNote(hasPodWide: boolean): string {
+  return hasPodWide ? SPACE_REACH_NOTE_WITH_POD_WIDE : SPACE_REACH_NOTE;
+}
 
 /**
  * Whether any permission on offer reads records (entities) of ANY kind: the
@@ -1083,15 +1098,13 @@ export function podWideNote(row: ConsentObject): string {
 
 // ─── Pod-wide reads (decision e1b59d38 "B", 2026-10-30) ─────────────────────
 
-/** Where a pod-wide read applies, after its verb. */
-export const EVERYWHERE_IN_POD = "everywhere in your pod";
+// Where a pod-wide read applies ("everywhere in your pod"), and the heading of
+// its section here and on the app page: one definition, shared with the pod.
+export { EVERYWHERE_IN_POD, POD_WIDE_HEADING };
 
-/** The heading of the pod-wide section, and of its entry on the app page. */
-export const POD_WIDE_HEADING = "Everywhere in your pod";
-
-/** Under the pod-wide section: what such a read does, and what it never does. */
+/** Under the pod-wide section: what such a read does, what it never does, and how to take it back. */
 export const POD_WIDE_NOTE =
-  "It reads these in every space and outside any space, as you can. It cannot change them, and it reads nothing else beyond the spaces you give it.";
+  "It reads these in every space and outside any space, as you can. It cannot change them, and it reads nothing else beyond the spaces you give it. You can take these reads back on the app's page without disconnecting it.";
 
 /**
  * A permission the app asks for EVERYWHERE in the pod (the server's

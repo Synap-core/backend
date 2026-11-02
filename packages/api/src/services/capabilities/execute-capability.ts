@@ -49,12 +49,14 @@ import { randomUUID } from "crypto";
 import {
   isKnownToolName,
   nounInSentence,
+  resolveGovernanceRungLabel,
   resolveObjectNoun,
   resolveToolLabel,
 } from "@synap-core/types/vocabulary";
 import {
   capabilityRunReasoning,
   describeEntityVerbRun,
+  describeVerbRun,
   entityVerbRunTarget,
   type EntityVerbRunSubject,
 } from "@synap-core/types/proposals/capability-run";
@@ -87,6 +89,11 @@ export function describeCapabilityRun(
 
   const entityRun = entityVerbRunTarget(verbId, parameters);
   if (entityRun) return describeEntityVerbRun(entityRun.action, entitySubject);
+
+  // A ship verb names its act from its arguments ("Merge app-bases#12 into
+  // main at a524c103"), the heading every surface reads (decision 4d6d7922).
+  const verbRun = describeVerbRun(verbId, parameters);
+  if (verbRun) return verbRun.title;
 
   if (verbId === "market.install") {
     const slug = typeof parameters.slug === "string" ? parameters.slug : null;
@@ -686,7 +693,8 @@ export async function executeCapability(input: {
 
   // A person's "Never" (0381) is not an approval problem: enabling would not
   // lift it, so it carries no enable-link and files no enable request. It is
-  // recorded for the person all the same, under its own reason.
+  // recorded for the person all the same, under its own reason and in the
+  // person's words: the agent's sentence ("do not retry it…") is for the agent.
   if (decision.decision === "deny" && decision.reasonCode === DENIED_BY_RULE) {
     await recordRefusedCapabilityRun({
       userId,
@@ -694,7 +702,7 @@ export async function executeCapability(input: {
       skillId: skillRow.id,
       verbId: verbId ?? null,
       refusalReason: "denied_by_rule",
-      reason: decision.reason,
+      reason: resolveGovernanceRungLabel("denied-by-rule"),
     });
     return {
       kind: "deny",

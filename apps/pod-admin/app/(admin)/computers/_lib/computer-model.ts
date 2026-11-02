@@ -13,18 +13,36 @@
  * person's own): the rows are the same shape, `owner` is only on the admin's.
  */
 
-import { AGENT_CONNECT_COMMAND } from "@synap-core/types/agents";
-import { DAY_MS } from "../../../../lib/format";
+import {
+  computerKeyRead,
+  computerKeyState,
+  days,
+  isLiveKey,
+  seenLine,
+  type ComputerBelongsTo,
+  type ComputerKeyLike as SharedComputerKeyLike,
+  type ComputerKeyState,
+} from "@synap-core/types/computers";
+import { resolveComputerBelongsToLabel } from "@synap-core/types/vocabulary";
 import type { SubjectEventLike } from "../../../_lib/object/subject-activity";
 import type { StatusKind } from "../../components/status-pill";
 
-export type ComputerKeyState =
-  "active" | "expiring" | "expired" | "revoked" | "none";
+// The key rule, the "never seen" words, the OS names and the commands are the
+// ONE computer rule (`@synap-core/types/computers`), shared with the desktop
+// and Relay. This file keeps only what is the console's: pills, filters, impact.
+export {
+  computerKeyState,
+  days,
+  daysLeft,
+  CONNECT_COMMAND,
+  isLiveKey,
+  platformLabel,
+  RECONNECT_COMMAND,
+  type ComputerKeyState,
+} from "@synap-core/types/computers";
 
-export interface ComputerKeyLike {
+export interface ComputerKeyLike extends SharedComputerKeyLike {
   id: string;
-  state: ComputerKeyState;
-  expiresAt: Date | string | null;
 }
 
 export interface ComputerAgentLike {
@@ -52,69 +70,40 @@ export interface ComputerLike {
   accessName: string | null;
   /** "Runs scripts" is on: it leases its person's box runs. */
   runsScripts?: boolean;
+  /** Whose computer it is (0388): the person's own, an agent's, or shared. */
+  belongsTo?: ComputerBelongsTo | null;
   agents: ComputerAgentLike[];
   owner?: { id: string; name: string } | null;
 }
 
-/**
- * The one line a person runs ON the computer to give it new keys: the device
- * flow again, which offers the same computer and replaces its key. Spelled
- * from the ONE connect command, exactly as the desktop spells it.
- */
-export const RECONNECT_COMMAND = AGENT_CONNECT_COMMAND.replace(
-  / init$/,
-  " pods reconnect"
-);
-/** The one line that connects a machine as a computer. */
-export const CONNECT_COMMAND = AGENT_CONNECT_COMMAND;
-
 // ─── Key state → words ───────────────────────────────────────────────
 
-/** Whole days until `expiresAt` (at least 1 while it has not passed). */
-export function daysLeft(expiresAt: Date | string, now: number): number {
-  return Math.max(1, Math.ceil((new Date(expiresAt).getTime() - now) / DAY_MS));
-}
-
-export const days = (n: number): string => `${n} day${n === 1 ? "" : "s"}`;
+const KEY_PILL: Record<ComputerKeyState, StatusKind> = {
+  active: "healthy",
+  expiring: "stale",
+  expired: "down",
+  revoked: "unknown",
+  none: "unknown",
+};
 
 /**
  * A key's state as the console's pill. A live key is healthy; one about to
  * lapse is amber and says how long it has (the computer renews it on its own
  * at `synap login`); a lapsed key failed; a revoked one is simply off.
+ *
+ * `withDetail` is for a pill with room (the computer's own header): an active
+ * key then adds the shared rule's detail, "Active · 12 days left".
  */
 export function keyStatus(
   key: ComputerKeyLike | null,
-  now: number = Date.now()
+  now: number = Date.now(),
+  { withDetail = false }: { withDetail?: boolean } = {}
 ): { kind: StatusKind; label: string } {
-  switch (key?.state) {
-    case "active":
-      return { kind: "healthy", label: "Active" };
-    case "expiring":
-      return {
-        kind: "stale",
-        label: key.expiresAt
-          ? `Expires in ${days(daysLeft(key.expiresAt, now))}`
-          : "Expiring",
-      };
-    case "expired":
-      return { kind: "down", label: "Expired" };
-    case "revoked":
-      return { kind: "unknown", label: "Revoked" };
-    default:
-      return { kind: "unknown", label: "No key" };
-  }
-}
-
-/** The computer's own key state ("none" when it holds no key). */
-export function computerKeyState(
-  c: Pick<ComputerLike, "key">
-): ComputerKeyState {
-  return c.key?.state ?? "none";
-}
-
-/** A key that still lets its holder in. */
-export function isLiveKey(key: ComputerKeyLike | null): boolean {
-  return key?.state === "active" || key?.state === "expiring";
+  const { state, label, detail } = computerKeyRead(key, now);
+  return {
+    kind: KEY_PILL[state],
+    label: withDetail && detail ? `${label} · ${detail}` : label,
+  };
 }
 
 // ─── The list ────────────────────────────────────────────────────────
@@ -181,24 +170,11 @@ export function rosterLine(computers: readonly ComputerLike[]): string {
   return `${plural(agents, "agent")} on ${plural(computers.length, "computer")}`;
 }
 
-/** The operating system in a person's words (`process.platform` → "macOS"). */
-export function platformLabel(
-  platform: string | null | undefined
-): string | null {
-  const raw = platform?.trim();
-  if (!raw) return null;
-  switch (raw.toLowerCase()) {
-    case "darwin":
-    case "macos":
-      return "macOS";
-    case "linux":
-      return "Linux";
-    case "win32":
-    case "windows":
-      return "Windows";
-    default:
-      return raw.charAt(0).toUpperCase() + raw.slice(1);
-  }
+/** How many computers lost their key to expiry. */
+export function expiredCount(
+  computers: readonly Pick<ComputerLike, "key">[]
+): number {
+  return computers.filter((c) => computerKeyState(c) === "expired").length;
 }
 
 /**
@@ -209,11 +185,18 @@ export function platformLabel(
 export function expiredLine(
   computers: readonly Pick<ComputerLike, "key">[]
 ): string | null {
-  const n = computers.filter((c) => computerKeyState(c) === "expired").length;
+  const n = expiredCount(computers);
   if (n === 0) return null;
   return n === 1
     ? "One computer's key has expired"
     : `${n} computers' keys have expired`;
+}
+
+/** The callout's body over the reconnect command, for `n` expired computers. */
+export function expiredReconnectLine(n: number): string {
+  return n === 1
+    ? "Its agents can't reach the pod until it has a fresh key. Run this on that computer:"
+    : "Their agents can't reach the pod until each has a fresh key. Run this on each of those computers:";
 }
 
 // ─── One computer ────────────────────────────────────────────────────
@@ -232,7 +215,35 @@ export function ownerWords(
 }
 
 /**
- * The header's one sentence: "Runs 3 agents for Antoine. Last seen 4m ago."
+ * Whose computer it is, as its mark: "Personal", "An agent's", "Shared" —
+ * the vocabulary's words. Null when the pod did not say (a row from before
+ * 0388): no mark, never a guess.
+ */
+export function belongsToMark(
+  c: Pick<ComputerLike, "belongsTo">
+): string | null {
+  return c.belongsTo ? resolveComputerBelongsToLabel(c.belongsTo) : null;
+}
+
+/**
+ * Whose scripts "Runs scripts" runs, in the reader's words. The computer
+ * leases its OWNER's box runs, never the viewer's: an admin on Marie's
+ * computer reads "Marie's scripts", Marie reads "your scripts", and an owner
+ * the console does not know reads "its owner's".
+ */
+export function scriptsOwnerWords(
+  c: Pick<ComputerLike, "owner">,
+  viewerId: string | null
+): { whose: string; approves: string } {
+  const owner = ownerWords(c, viewerId);
+  if (owner === "you") return { whose: "your", approves: "you approve" };
+  if (owner) return { whose: `${owner}'s`, approves: `${owner} approves` };
+  return { whose: "its owner's", approves: "its owner approves" };
+}
+
+/**
+ * The header's one sentence: "Runs 3 agents for Antoine. Seen 4m ago." The
+ * seen part is the shared rule's (`seenLine`: "Seen …" or "Not seen yet").
  * `relative` is the console's `formatRelative`, injected so this stays pure.
  */
 export function computerSummary(
@@ -248,10 +259,7 @@ export function computerSummary(
         ? `No agents run on it; it belongs to ${owner}.`
         : "No agents run on it."
       : `${agentsPhrase(n)}${owner ? ` for ${owner}` : ""}.`;
-  const seen = c.lastSeenAt
-    ? ` Last seen ${relative(c.lastSeenAt)}.`
-    : " It has not called the pod yet.";
-  return `${runs}${seen}`;
+  return `${runs} ${seenLine(c.lastSeenAt, relative)}.`;
 }
 
 /** "90 days (pod default)" · "30 days (this computer)". */
@@ -316,10 +324,12 @@ export function revokeImpact(c: ComputerLike): {
 /**
  * One activity row in words. The computer's own acts (`machines.*`) carry a
  * `data.kind`; anything else falls back to its event type, humanized.
+ * `whose` is `scriptsOwnerWords(…).whose`: the scripts are its owner's.
  */
 export function activityLine(
   e: SubjectEventLike,
-  humanize: (token: string) => string
+  humanize: (token: string) => string,
+  whose: string
 ): string {
   const data = (e.data ?? {}) as Record<string, unknown>;
   switch (data.kind) {
@@ -333,8 +343,8 @@ export function activityLine(
         : "Key lifetime back to the pod default";
     case "machine_runs_scripts":
       return data.enabled === true
-        ? "Set to run your scripts"
-        : "Stopped running your scripts";
+        ? `Set to run ${whose} scripts`
+        : `Stopped running ${whose} scripts`;
     case "machine_revoke":
       return typeof data.revokedKeys === "number"
         ? `Revoked — ${data.revokedKeys} key${data.revokedKeys === 1 ? "" : "s"} stopped working`

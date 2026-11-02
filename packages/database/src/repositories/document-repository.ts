@@ -10,6 +10,7 @@ import { documents, documentVersions } from "../schema/documents.js";
 import { stampProvenance } from "../utils/stamp-provenance.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
+import type { LensScope } from "@synap-core/types/lens";
 import type {
   Document,
   DocumentVersionAuthor,
@@ -44,6 +45,10 @@ export interface CreateDocumentInput {
   mimeType: string | null;
   projectId?: string;
   metadata?: Record<string, unknown>;
+  /** `documents.scope` (0387) — a scope the door already read and floored. */
+  scope?: LensScope | null;
+  /** `documents.refresh_automation_id` (0387) — a refresher the door already checked. */
+  refreshAutomationId?: string | null;
   userId: string;
   workspaceId?: string | null;
   /**
@@ -130,6 +135,10 @@ export class DocumentRepository extends BaseRepository<
           size: data.size,
           mimeType: data.mimeType,
           metadata: data.metadata,
+          ...(data.scope ? { scope: data.scope } : {}),
+          ...(data.refreshAutomationId
+            ? { refreshAutomationId: data.refreshAutomationId }
+            : {}),
           currentVersion: 1,
           lastSavedVersion:
             data.content !== undefined || data.preUploadedVersion ? 1 : 0,

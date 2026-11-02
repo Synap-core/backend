@@ -4,12 +4,10 @@
  * is owed again, and the record of it is pruned on the next run.
  */
 import { db, and, inArray, isNull, documents } from "@synap/database";
-
-const DOCUMENT_ID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isUuid } from "@synap-core/types/property-render";
 
 export async function liveDocumentIds(ids: string[]): Promise<Set<string>> {
-  const wellFormed = [...new Set(ids.filter((id) => DOCUMENT_ID.test(id)))];
+  const wellFormed = [...new Set(ids.filter((id) => isUuid(id)))];
   if (wellFormed.length === 0) return new Set();
   const rows = await db
     .select({ id: documents.id })

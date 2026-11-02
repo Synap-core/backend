@@ -107,6 +107,8 @@ export const vocabularySentencesEn = {
   "vocabulary.templateNoun.goal.other": "Goal templates",
   "vocabulary.templateNoun.work.one": "Work template",
   "vocabulary.templateNoun.work.other": "Work templates",
+  "vocabulary.templateNoun.space.one": "Space template",
+  "vocabulary.templateNoun.space.other": "Space templates",
   // `resolveNeedsYouItemCount` for a kind no table names: its words are a
   // humanized token, counted with English plural rules.
   "vocabulary.needsYou.count.uncurated":

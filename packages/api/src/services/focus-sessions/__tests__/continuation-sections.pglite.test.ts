@@ -874,6 +874,42 @@ describe("continuation packet — runners", () => {
     });
   });
 
+  it("each runner carries the model and provider it said it runs on (0389); one that said none carries neither (unknown)", async () => {
+    const sid = randomUUID();
+    await session(sid);
+    const keyId = randomUUID();
+    const ran = (proc: string, model: string | null, provider: string | null) =>
+      q(
+        // The test schema is columns only (no defaults): seen times are given.
+        `insert into session_runners (session_id, client_key, process_key, user_id, api_key_id, harness, conversation_id, model, provider, first_seen_at, last_seen_at)
+         values ($1, $2, $3, $4, $5, 'claude-code', $6, $7, $8, now(), now())`,
+        [
+          sid,
+          `key:${keyId}|conv:claude-code:${CC_CONV}`,
+          proc,
+          OWNER,
+          keyId,
+          CC_CONV,
+          model,
+          provider,
+        ]
+      );
+    await ran("mac:1:1761600000000", "glm-4.6", "zai");
+    await ran("mac:2:1761600000000", null, null);
+    const packet = await packetFor(sid);
+    if (packet.runners.status !== "ok") throw new Error("runners unavailable");
+    const by = (p: string) =>
+      packet.runners.status === "ok"
+        ? packet.runners.items.find((i) => i.processId === p)!
+        : undefined;
+    expect(by("mac:1:1761600000000")).toMatchObject({
+      model: "glm-4.6",
+      provider: "zai",
+    });
+    expect(by("mac:2:1761600000000")).not.toHaveProperty("model");
+    expect(by("mac:2:1761600000000")).not.toHaveProperty("provider");
+  });
+
   it("a TWIN: two live processes of one conversation each carry the other's host and start time", async () => {
     const sid = randomUUID();
     await session(sid);

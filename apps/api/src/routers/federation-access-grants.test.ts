@@ -228,6 +228,39 @@ describe("POST /access-grants", () => {
     );
   });
 
+  it.each([
+    [
+      "an unreadable body",
+      {
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError("Unexpected token < in JSON");
+        },
+      },
+    ],
+    ["a body that is not a list", kratosResponse({ error: "odd" })],
+  ])(
+    "a Kratos lookup answering 200 with %s fails; it never creates a second identity",
+    async (_label, lookup) => {
+      mocks.assertFederatedAccessTarget.mockResolvedValue(undefined);
+      fetchMock.mockResolvedValueOnce(lookup);
+
+      const response = await federationRouter.request("/access-grants", {
+        headers: { Authorization: `Bearer ${accessGrantAssertion()}` },
+        method: "POST",
+      });
+
+      expect(response.status).toBe(502);
+      await expect(response.json()).resolves.toEqual({
+        error: "Could not resolve Pod identity",
+      });
+      // Only the lookup: no POST /admin/identities.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(mocks.activateFederatedMember).not.toHaveBeenCalled();
+    }
+  );
+
   it("stops a durable assertion replay before Pod target or Kratos work", async () => {
     mocks.consumeFederatedAssertionReceipt.mockResolvedValue("replayed");
 

@@ -98,6 +98,7 @@ import {
 import {
   isSessionWorkingNow,
   SESSION_WORKING_WINDOW_MS,
+  type SessionActivityLive,
 } from "@synap-core/types/run-activity";
 import {
   resolveSessionTitle,
@@ -123,7 +124,10 @@ import {
 import {
   deriveTrackStages,
   filedStageKey,
+  isDeliverableDelivered,
   type GoalCriterionMark,
+  type LiveRunnerState,
+  type RunnerState,
   type TrackKpi,
   type WaitKind,
   type WaitingOnMark,
@@ -153,6 +157,12 @@ import {
 } from "./session-kind.js";
 import { createLogger } from "@synap-core/core";
 import {
+  readSessionDevboxJobs,
+  readSessionMuted,
+  type PacketDevboxJobsSection,
+  type PacketMuted,
+} from "./session-notify.js";
+import {
   sessionReadableWhere,
   type SessionReader,
 } from "../../access/session-visibility.js";
@@ -169,6 +179,13 @@ import {
   type RunnerStateFold,
   type SessionRunner,
 } from "./session-runners.js";
+import {
+  deriveSessionHolder,
+  holderUnavailable,
+  loadHolderAgents,
+  nameHolder,
+  type SessionHolderSection,
+} from "./session-holder.js";
 import {
   readSessionInbox,
   type PacketInboxItem,
@@ -273,13 +290,26 @@ export interface PacketRunnerItem {
     lastSeenAt: string;
   }>;
   /**
-   * What the runner says it is doing (0384, `X-Synap-Runner-State`): `busy`,
-   * `idle`, `needs_permission`, or `ended` (it said so, or left the live
-   * window). `null` while live = its client names no state: unknown, not idle.
+   * What the runner says it is doing (0384, `X-Synap-Runner-State`; the words
+   * are `RUNNER_STATES`, @synap-core/types/units): `busy`, `idle`,
+   * `needs_permission`, `needs_answer`, or `ended` (it said so, or left the
+   * live window). `null` while live = its client names no state: unknown, not
+   * idle.
    */
-  state: "busy" | "idle" | "needs_permission" | "ended" | null;
+  state: RunnerState | null;
   /** When it entered that state; for a runner gone quiet, when it was last seen. */
   stateSince?: string;
+  /**
+   * The model it says it runs on (0389, `X-Synap-Model`), as its client names
+   * it. Absent = its client names none (unknown). Claimed, not attested.
+   */
+  model?: string;
+  /**
+   * The provider serving that model (0389, `X-Synap-Model-Provider`): a
+   * `MODEL_PROVIDERS` slug (`@synap-core/types/agents`). Absent = unknown,
+   * never "anthropic".
+   */
+  provider?: string;
   firstSeenAt: string;
   lastSeenAt: string;
   /** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read, and not `ended`. */
@@ -668,6 +698,14 @@ export interface ContinuationPacket {
   externalAgent:
     | { status: "ok"; agent: SessionExternalAgent | null }
     | { status: "unavailable"; reason: string };
+  /**
+   * WHO HAS IT — the one holder read (`session-holder.ts`): agent, person or
+   * nobody, with ONE wait kind as its word, since when, and the agent named
+   * with its computer and whether anything runs it. Derived from the
+   * sections this packet already read (`externalAgent`, `runners`, `live`,
+   * `waitingOn`); any of them failed ⇒ `unavailable`, never "nobody".
+   */
+  holder: SessionHolderSection;
   outputs: PacketSection<PacketOutputItem>;
   /**
    * Child sessions (detours and planned sub-sessions), oldest first. A parent
@@ -838,7 +876,8 @@ export interface ContinuationPacket {
         windowMs: number;
         /**
          * What the LIVE runners SAY they are doing (0384), folded by
-         * `foldRunnerState`: `needs_permission` over `busy` over `idle`;
+         * `foldRunnerState` in the one runner order (`RUNNER_STATE_ORDER`):
+         * `needs_permission` over `needs_answer` over `busy` over `idle`;
          * `state: null` = no live runner named one. The harness's own word,
          * beside the pod-activity `state` above and never folded into it. A
          * failed runners read is `unavailable` (see `runners`), never null.
@@ -846,7 +885,7 @@ export interface ContinuationPacket {
         runner:
           | {
               status: "ok";
-              state: "busy" | "idle" | "needs_permission" | null;
+              state: LiveRunnerState | null;
               since: string | null;
             }
           | { status: "unavailable"; reason: string };
@@ -861,6 +900,21 @@ export interface ContinuationPacket {
    * prefix-matching X.
    */
   gates: PacketGatesSection;
+  /**
+   * DEVBOX JOBS — the devbox gate jobs run for this session (its `ci.finished`
+   * facts of workflow `devbox <name>`), one per job name, its newest run,
+   * newest first, at most 5 (`total` exact over the newest 100 runs). NOT the
+   * stage gates above. A failed read is `unavailable`, never "no jobs".
+   * Optional: an older pod does not send it (`session-notify.ts`).
+   */
+  devboxJobs?: PacketDevboxJobsSection;
+  /**
+   * Has the READER muted this session's pushes (tRPC
+   * `notifCenter.setSessionMute`)? Muted holds back every push about the
+   * session; nothing is hidden. A failed read is `unavailable`, never "not
+   * muted". Optional: an older pod does not send it (`session-notify.ts`).
+   */
+  muted?: PacketMuted;
   /**
    * WHO IS ATTACHED — the client conversations holding this session's
    * change-feed wait, most recently seen first (`session-runners.ts`). An
@@ -918,6 +972,12 @@ export interface ProjectContinuationPacketCtx {
   userId: string;
   /** Honour the human-roster read branch (`sessionReadableWhere`). Default false. */
   roster?: boolean;
+  /**
+   * Whose deploy approvals `gates.ownerDeploys` lists: `all` (default) = every
+   * session of the owner; `own` = this session's only (the lean read, C8). The
+   * rest are read by commit through `readDeployGate`.
+   */
+  ownerDeploys?: "all" | "own";
 }
 
 function toIso(value: Date | string | null | undefined): string | null {
@@ -991,6 +1051,8 @@ function runnerItem(r: SessionRunner): PacketRunnerItem {
       : {}),
     state: r.state,
     ...(r.stateSince ? { stateSince: r.stateSince } : {}),
+    ...(r.model ? { model: r.model } : {}),
+    ...(r.provider ? { provider: r.provider } : {}),
     firstSeenAt: r.firstSeenAt,
     lastSeenAt: r.lastSeenAt,
     live: r.live,
@@ -1016,14 +1078,15 @@ function owedItem(slot: OwedSlot): PacketSlotItem {
 }
 
 /**
- * Agent-owned slots nobody has claimed: not the human's, not done, not
+ * Agent-owned slots nobody has claimed: not the human's, not delivered (done,
+ * or a decision the person's answer filed: `isDeliverableDelivered`), not
  * retired, and no claim of delivery. Absent `owner` means `agent`
  * (`ExpectedOutput.owner` docblock).
  */
 export function isOpenAgentSlot(slot: ExpectedOutput): boolean {
   return (
     slot.owner !== "human" &&
-    slot.status !== "done" &&
+    !isDeliverableDelivered(slot) &&
     slot.retiredAt == null &&
     slot.claimedDone !== true
   );
@@ -2725,6 +2788,28 @@ export async function projectContinuationPacket(
     ? getTrack(row.trackId, { userId: reader.userId })
     : Promise.resolve(null);
   trackRead.catch(() => undefined);
+  // The person's notification facts (`session-notify.ts`), read beside the
+  // sections below; each failure is its own `unavailable`.
+  const notifyReads = Promise.all([
+    readSessionDevboxJobs(database, reader, row)
+      .then((r): PacketDevboxJobsSection => ({ status: "ok", ...r }))
+      .catch(
+        unavailable(
+          row.id,
+          "devboxJobs",
+          "This session's devbox jobs could not be read."
+        )
+      ),
+    readSessionMuted(database, ctx.userId, row.id)
+      .then((muted): PacketMuted => ({ status: "ok", muted }))
+      .catch(
+        unavailable(
+          row.id,
+          "muted",
+          "Whether you muted this session could not be read."
+        )
+      ),
+  ]);
 
   const [
     project,
@@ -2935,7 +3020,8 @@ export async function projectContinuationPacket(
         playbookId: row.playbookId ?? null,
         userId: row.userId,
       },
-      ctx.userId
+      ctx.userId,
+      ctx.ownerDeploys
     )
       .then(({ items, deploy, ownerDeploys }): ContinuationPacket["gates"] => ({
         status: "ok",
@@ -2955,9 +3041,11 @@ export async function projectContinuationPacket(
         ): {
           section: ContinuationPacket["runners"];
           fold: RunnerStateFold | null;
+          all: SessionRunner[] | null;
         } => ({
           section: section(all.map(runnerItem)),
           fold: foldRunnerState(all),
+          all,
         })
       )
       .catch((err: unknown) => ({
@@ -2967,6 +3055,7 @@ export async function projectContinuationPacket(
           "Who is attached to this session could not be read."
         )(err),
         fold: null,
+        all: null,
       })),
     readSessionInbox(database, {
       sessionId: row.id,
@@ -3027,6 +3116,13 @@ export async function projectContinuationPacket(
 
   const runners = runnersRead.section;
   const measuredAt = Date.now();
+  const holder = await packetHolder(row, {
+    externalAgent,
+    runners: runnersRead.all,
+    live: liveFacts,
+    waitingOn,
+    now: measuredAt,
+  });
   const live: ContinuationPacket["live"] = liveFacts
     ? {
         status: "ok",
@@ -3082,6 +3178,7 @@ export async function projectContinuationPacket(
       );
 
   const manifest = readSessionRunManifest(row.metadata);
+  const [devboxJobs, muted] = await notifyReads;
 
   return {
     version: 1,
@@ -3101,6 +3198,7 @@ export async function projectContinuationPacket(
     aiCanDo,
     blockers,
     externalAgent,
+    holder,
     outputs,
     children,
     parent,
@@ -3139,6 +3237,8 @@ export async function projectContinuationPacket(
     room,
     live,
     gates,
+    devboxJobs,
+    muted,
     runners,
     inbox,
     nextMove: deriveNextMove({
@@ -3157,6 +3257,67 @@ export async function projectContinuationPacket(
     }),
     evaluation,
   };
+}
+
+/**
+ * The holder (`session-holder.ts`) from the sections the packet already read:
+ * the same derivation as `readSessionHolder`, no second read of them. Any of
+ * them unavailable ⇒ the holder is too. Only the agent's naming is read here.
+ */
+async function packetHolder(
+  row: SessionRow,
+  s: {
+    externalAgent: ContinuationPacket["externalAgent"];
+    runners: SessionRunner[] | null;
+    live: SessionActivityLive | null;
+    waitingOn: ContinuationPacket["waitingOn"];
+    now: number;
+  }
+): Promise<SessionHolderSection> {
+  const facts = {
+    session: row,
+    externalAgent: null,
+    runners: [],
+    live: { turnInFlight: false, since: null, lastAt: null },
+    waitingOn: [],
+    now: s.now,
+  };
+  const ended = ["done", "lost"].includes(
+    sessionStatusCategory(row.status) ?? ""
+  );
+  if (ended) {
+    return {
+      status: "ok",
+      holder: nameHolder(deriveSessionHolder(facts), new Map()),
+    };
+  }
+  if (
+    s.externalAgent.status !== "ok" ||
+    !s.runners ||
+    !s.live ||
+    s.waitingOn.status !== "ok"
+  ) {
+    return holderUnavailable();
+  }
+  try {
+    const verdict = deriveSessionHolder({
+      ...facts,
+      externalAgent: s.externalAgent.agent,
+      runners: s.runners,
+      live: s.live,
+      waitingOn: s.waitingOn.marks,
+    });
+    const agents = verdict.agentUserId
+      ? await loadHolderAgents([verdict.agentUserId], new Date(s.now))
+      : new Map();
+    return { status: "ok", holder: nameHolder(verdict, agents) };
+  } catch (err) {
+    logger.warn(
+      { err, sessionId: row.id, section: "holder" },
+      "continuation packet: section read failed"
+    );
+    return holderUnavailable();
+  }
 }
 
 /**

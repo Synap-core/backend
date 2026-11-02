@@ -65,7 +65,11 @@
 import { createLogger } from "@synap-core/core";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { effectiveWorkerSize } from "@synap-core/types/workers";
-import { playbookActivatorSentence } from "@synap-core/types/automations";
+import {
+  PLAYBOOK_RUN_MODE_KEY,
+  isSentenceCron,
+  playbookActivatorSentence,
+} from "@synap-core/types/automations";
 import {
   db,
   skills,
@@ -139,6 +143,46 @@ export function parseWorkerEnablementKey(key: string): {
   const m = /^(.*)@project:([^@]+)(?:@track:([^@]+))?$/.exec(key);
   if (!m) return null;
   return { activatorKey: m[1]!, projectId: m[2]!, trackId: m[3] ?? null };
+}
+
+/** The crons "How often?" builds: every day, or every week on one day. */
+const CHOSEN_CLOCK_CRON = /^\d{1,2} \d{1,2} \* \* (\*|[0-6])$/;
+
+/**
+ * A clock a PERSON chose when enabling a playbook that works on no subject
+ * (goals that run: "every Monday at 09:00", `howOftenEnable` with
+ * `chosen: true`). Such a playbook declares no activators (they fire on a
+ * subject kind's events), so its project enablement is the whole record: the
+ * clock is its key (`schedule:<cron>`), the mode its compiled rule's
+ * (`modeOfCompiledRule`). null for a playbook with a subject (only its
+ * declared workers run), any other key, or a cron the rule grammar cannot
+ * spell, or one that is not daily or weekly.
+ */
+export function chosenClockActivator(input: {
+  profileSlug: string | null;
+  activatorKey: string;
+  mode: "run" | "propose";
+}): PlaybookActivator | null {
+  if (input.profileSlug) return null;
+  if (!input.activatorKey.startsWith("schedule:")) return null;
+  const cron = input.activatorKey.slice("schedule:".length);
+  // Only what "How often?" offers: every day, or every week on one day.
+  if (!CHOSEN_CLOCK_CRON.test(cron) || !isSentenceCron(cron)) return null;
+  return { on: "schedule", cron, mode: input.mode };
+}
+
+/**
+ * The mode a compiled worker rule runs in, read off its stored sentence: its
+ * `playbook_run` node says `propose`, else it runs. A sentence that cannot be
+ * read reads as `propose` (asking is the safe side).
+ */
+export function modeOfCompiledRule(meta: RuleMetadata): "run" | "propose" {
+  const actions = (meta.sentence as { actions?: unknown } | undefined)?.actions;
+  const config = Array.isArray(actions)
+    ? (actions[0] as { config?: Record<string, unknown> } | undefined)?.config
+    : undefined;
+  if (!config) return "propose";
+  return config[PLAYBOOK_RUN_MODE_KEY] === "propose" ? "propose" : "run";
 }
 
 /** Every rule of one seed namespace, with its parsed metadata. */
@@ -234,7 +278,8 @@ export function activatorRuleDecl(input: {
   activator: PlaybookActivator;
   playbookId: string;
   playbookName: string;
-  profileSlug: string;
+  /** null: the playbook works on no subject — only a chosen clock compiles. */
+  profileSlug: string | null;
   statusProperty: string | null;
   /**
    * The subject profile as the pod knows it: a kind or a role, and the
@@ -251,6 +296,33 @@ export function activatorRuleDecl(input: {
   const { activator: a, playbookId, profileSlug, subject } = input;
   const key = activatorKey(a);
   if (a.on === "manual") return { key, manual: true };
+  if (!profileSlug) {
+    // No subject (a chosen clock): one run per tick, filed in the project,
+    // over nothing — no worker spec (it names the kind a batch is read from).
+    // Its cadence (daily / weekly) is its bound; `propose` asks a person
+    // before each run.
+    if (a.on !== "schedule" || !input.scope) {
+      return {
+        key,
+        error:
+          "a playbook with no subject runs only on a clock enabled for a project or goal",
+      };
+    }
+    const verb = a.mode === "propose" ? "propose running" : "run";
+    return {
+      key,
+      intent: `On schedule (${a.cron}), ${verb} "${input.playbookName}" in this project.`,
+      sentence: playbookActivatorSentence({
+        playbookId,
+        profileSlug: "",
+        mode: a.mode,
+        projectId: input.scope.projectId,
+        ...(input.scope.trackId ? { trackId: input.scope.trackId } : {}),
+        on: "schedule",
+        cron: a.cron ?? "",
+      }),
+    };
+  }
   const kind = resolveObjectNoun(profileSlug).toLowerCase();
   const size = effectiveWorkerSize(a);
   const perMoment = size === "per_moment";
@@ -767,11 +839,20 @@ async function applyOnce(input: {
     const key = row.meta.seed!.key;
     try {
       const parsed = parseWorkerEnablementKey(key);
+      // A declared worker, or (a live playbook with no subject) the clock a
+      // person chose for it, kept in the mode it was enabled in.
       const activator = parsed
-        ? declared.find((a) => activatorKey(a) === parsed.activatorKey)
+        ? (declared.find((a) => activatorKey(a) === parsed.activatorKey) ??
+          (pb.status === "active"
+            ? chosenClockActivator({
+                profileSlug: process.profileSlug,
+                activatorKey: parsed.activatorKey,
+                mode: modeOfCompiledRule(row.meta),
+              })
+            : null))
         : undefined;
       const built =
-        parsed && activator && process.profileSlug
+        parsed && activator
           ? activatorRuleDecl({
               activator,
               playbookId: pb.id,

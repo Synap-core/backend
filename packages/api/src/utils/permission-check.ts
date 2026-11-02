@@ -127,6 +127,7 @@ import {
   slotKeyAt,
 } from "../services/focus-sessions/slot-keys.js";
 import { reviveSessionForWrite } from "../services/focus-sessions/revive-stale-session.js";
+import { stampWritingRunner } from "../services/focus-sessions/session-runners.js";
 import { normalizeExpectedLabel } from "../services/focus-sessions/expected-label.js";
 import { logEvent } from "../lib/event-helpers.js";
 import { AGENT_WRITE_EVENT_KIND } from "../lib/run-event-kinds.js";
@@ -1118,6 +1119,15 @@ export interface PermissionCheckBaseOpts {
    */
   possibleDuplicate?: boolean;
   /**
+   * The session update's door PROVED the session is the acting agent's OWN
+   * (plan d679e92c C6, founder 2026-10-31): an agent session the agent is on
+   * and no person ever wrote on (`isAgentsOwnSession`, update-session.ts).
+   * Its criteria change then applies directly — with a revertible line in the
+   * room — instead of being floored to a `CRITERIA_CHANGE` proposal. Set ONLY
+   * by `updateFocusSession`; every other floor and rule still decides.
+   */
+  ownSessionCriteria?: boolean;
+  /**
    * The duplicate door's answer for this create, stored at the TOP LEVEL of the
    * proposal's `data` (pending row AND auto-approve receipt) so the review card
    * can show "looks like X". Read back with `readDuplicateCheck`.
@@ -1930,8 +1940,11 @@ async function evaluatePermission(
     // validates or rewrites it; every other `focus_session.update` is
     // untouched. See `isFocusSessionCriteriaUpdate` for why this is narrow on
     // all three axes.
+    // Its OWN session's criteria apply directly (C6): the door proved it.
     const isAgentCriteriaChange =
-      isAiWrite && isFocusSessionCriteriaUpdate(subjectType, action, data);
+      isAiWrite &&
+      isFocusSessionCriteriaUpdate(subjectType, action, data) &&
+      !(subjectType === "focus_session" && opts.ownSessionCriteria === true);
     // A create the duplicate door found a possible twin of (B2c): an AI write
     // is filed anyway, as a proposal, and the reviewer decides. A person's own
     // create is never forced (B2e) — `isAiWrite` keeps the human path out.
@@ -2160,6 +2173,20 @@ async function evaluatePermission(
       // no-op outside an MCP call; never for a dry run or a session's own update.
       if (!dryRun && !subjectType.startsWith("focus_session")) {
         recordWriteSessionFiling(governedSessionId, receiptProjectKey);
+      }
+
+      // WHO WORKS IT NOW (sessions cockpit C3): the OS process that wrote holds
+      // this session as a runner, so a lane that writes to its own session
+      // reads as worked even while its lead holds the wait. THE write-
+      // attribution point every AI write door shares (reads never come here).
+      // Off the request path, never thrown; stamps only when the request named
+      // its process and conversation, at most once a minute per row.
+      if (!dryRun) {
+        void stampWritingRunner({
+          sessionId: governedSessionId,
+          ownerId: userId,
+          agentUserId,
+        });
       }
 
       // Re-stamp the frozen envelope ONLY when the hoist actually resolved a

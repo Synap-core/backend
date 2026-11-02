@@ -1,5 +1,5 @@
 /**
- * The client's nouns (founder decision G1, 30 Oct 2026; audit X-08): what
+ * The client's nouns (audit 110dd4ab G1, 30 Oct 2026; audit X-08): what
  * waits for a person's yes is a Request (Demande), a person's unit of work is
  * a Job (Travail), and their pod is "Your company" (Votre entreprise). The
  * kind tokens stay (`proposal`, `session`, `pod`); only the words change, at

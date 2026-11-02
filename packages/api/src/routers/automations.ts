@@ -10,6 +10,7 @@ import { withoutServerOwnedAutomationMetadata } from "../services/automations/se
 import { createLogger } from "@synap-core/core";
 import { router, protectedProcedure } from "../trpc.js";
 import { AccessContext, scopedDb } from "../access/index.js";
+import { automationGoalsAndHealth } from "../services/playbooks/workers.js";
 // The `capabilities` table has NO access-registry VisibilityRule, so its floor is
 // the canonical `userVisibleWhere` (same predicate `resolveCapabilityMode` and the
 // capabilities router apply) — a pod-wide (null-workspace) capability is visible to
@@ -2098,8 +2099,18 @@ export const automationsRouter = router({
       const hasNextPage = rows.length > limit;
       const page = hasNextPage ? rows.slice(0, limit) : rows;
       const last = page.at(-1);
-      return {
+      // Each row: the goal it serves (its worker enablement) and its run
+      // health — for the whole page in a fixed number of reads.
+      const served = await automationGoalsAndHealth({
+        userId: ctx.userId,
         automations: page,
+      });
+      return {
+        automations: page.map((a) => ({
+          ...a,
+          servesGoal: served.get(a.id)?.goal ?? null,
+          runHealth: served.get(a.id)?.health ?? null,
+        })),
         nextCursor:
           hasNextPage && last
             ? encodeDefinitionCursor({ at: last.updatedAt, id: last.id })
@@ -3489,6 +3500,12 @@ export const automationsRouter = router({
         },
       });
 
+      // The run's focus session is opened by the WORKER (`automation-execute`,
+      // pg-boss), after this reply: there is no session id to return without
+      // racing it, and a pre-opened one would skip the executor's channel and
+      // precondition rules. The honest handle is `runId`: the caller reads
+      // `runs.get({ flowType: "automation", id: runId }).sessionId`, null until
+      // the worker has opened the session (and for a run that never does).
       return {
         status: "triggered" as const,
         runId: run.id as string | null,

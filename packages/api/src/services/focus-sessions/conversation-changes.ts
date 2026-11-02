@@ -13,9 +13,15 @@
  * conversation opened (`metadata.clientKey`, stamped at create), so the pod
  * derives the set — no client keeps a list that could drift.
  *
- * THE SET: the caller's own sessions (owner floor) whose client key names this
- * conversation (`…|conv:<harness>:<id>`, any key: the bridge and the agent may
- * hold different keys of one person), receipts included, that are open or were
+ * THE SET (one definition, {@link conversationSessionsWhere}): the caller's
+ * own sessions (owner floor) that this conversation STARTED — whose client key
+ * names it (`…|conv:<harness>:<id>`, any key: the bridge and the agent may
+ * hold different keys of one person), receipts included — UNION the sessions
+ * it WORKS NOW: those it holds a LIVE runner row on (`session_runners`, any
+ * key and process; live = seen within `RUNNER_LIVE_WINDOW_SECONDS` and not
+ * `ended`). A teammate lane's session is started under its lead's
+ * conversation key or none, so without the second half a person's room post
+ * to that lane reached no conversation (sessions cockpit C3, M5). Open, or
  * closed in the last {@link CONVERSATION_CLOSED_GRACE_HOURS} h (a proposal is
  * often decided after its session closed). Newest first, at most
  * {@link CONVERSATION_SESSIONS_MAX}.
@@ -35,6 +41,7 @@ import { createLogger } from "@synap-core/core";
 import {
   db,
   focusSessions,
+  sessionRunners,
   and,
   desc,
   eq,
@@ -49,7 +56,10 @@ import {
   type SessionChangeEvent,
   type SessionChangeKind,
 } from "./session-changes.js";
-import { parseRunnerClientKey } from "./session-runners.js";
+import {
+  parseRunnerClientKey,
+  RUNNER_LIVE_WINDOW_SECONDS,
+} from "./session-runners.js";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
 import {
   SESSION_ANSWERS_DEFAULT_LIMIT,
@@ -89,13 +99,37 @@ export function namedConversationOf(
   return parsed ? `${parsed.harness}:${parsed.conversationId}` : null;
 }
 
-/** The sessions a conversation opened that are worth watching now. */
+/**
+ * THE set of sessions a conversation belongs to, as one WHERE on
+ * `focus_sessions`: those it STARTED (`metadata.clientKey` names it) ∪ those
+ * it holds a LIVE runner on. `conversation` is `<harness>:<id>`. The owner
+ * floor is the caller's; this adds no floor of its own.
+ */
+export function conversationSessionsWhere(conversation: string, now?: Date) {
+  const suffix = `|conv:${conversation}`;
+  const colon = conversation.indexOf(":");
+  const harness = conversation.slice(0, colon);
+  const conversationId = conversation.slice(colon + 1);
+  const liveSince = new Date(
+    (now ?? new Date()).getTime() - RUNNER_LIVE_WINDOW_SECONDS * 1000
+  );
+  return or(
+    // `right(…) = suffix`, not LIKE: a conversation id may hold `%` or `_`.
+    drizzleSql`right(${focusSessions.metadata} ->> 'clientKey', ${suffix.length}) = ${suffix}`,
+    // A live runner of this conversation (the runner primary key leads with
+    // the session id, so this is one index probe per candidate).
+    colon > 0
+      ? drizzleSql`EXISTS (SELECT 1 FROM ${sessionRunners} WHERE ${sessionRunners.sessionId} = ${focusSessions.id} AND ${sessionRunners.harness} = ${harness} AND ${sessionRunners.conversationId} = ${conversationId} AND ${sessionRunners.lastSeenAt} > ${liveSince.toISOString()}::timestamptz AND ${sessionRunners.state} IS DISTINCT FROM 'ended')`
+      : drizzleSql`false`
+  );
+}
+
+/** The sessions a conversation started or works now that are worth watching. */
 export async function listConversationSessions(p: {
   userId: string;
   conversation: string;
   now?: Date;
 }): Promise<Array<{ id: string; title: string; status: string }>> {
-  const suffix = `|conv:${p.conversation}`;
   const graceStart = new Date(
     (p.now ?? new Date()).getTime() -
       CONVERSATION_CLOSED_GRACE_HOURS * 3_600_000
@@ -111,8 +145,7 @@ export async function listConversationSessions(p: {
     .where(
       and(
         eq(focusSessions.userId, p.userId),
-        // `right(…) = suffix`, not LIKE: a conversation id may hold `%` or `_`.
-        drizzleSql`right(${focusSessions.metadata} ->> 'clientKey', ${suffix.length}) = ${suffix}`,
+        conversationSessionsWhere(p.conversation, p.now),
         or(
           inArray(focusSessions.status, [...OPEN_SESSION_STATUSES]),
           gt(focusSessions.updatedAt, graceStart)

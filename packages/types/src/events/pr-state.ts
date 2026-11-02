@@ -23,6 +23,7 @@
  *    names the PR's merge commit itself.
  */
 
+import { record } from "./fact-record.js";
 import {
   DEV_LOOP_EVENT_TYPES,
   ciVerdictOf,
@@ -100,12 +101,6 @@ const SAME_INSTANT_RANK: Readonly<Record<PullRequestState, number>> = {
   closed: 1,
   open: 0,
 };
-
-function record(data: unknown): Record<string, unknown> {
-  return data && typeof data === "object"
-    ? (data as Record<string, unknown>)
-    : {};
-}
 
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v.length > 0 ? v : undefined;

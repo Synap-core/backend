@@ -75,7 +75,7 @@ export const GRANT_SUBJECT_DESCRIPTIONS: Readonly<Record<string, string>> = {
   session: "Focus sessions, their outputs and progress",
   proposal: "Changes waiting for review",
   playbook: "Reusable step-by-step processes",
-  automation: "Rules that run when something happens",
+  automation: "Automations that run when something happens",
   channel: "Conversations and their messages",
   event: "What happened: commits, builds, observations",
   profile: "Kinds and roles: the shape of your records",

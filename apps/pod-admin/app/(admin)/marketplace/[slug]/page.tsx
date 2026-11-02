@@ -73,6 +73,7 @@ import {
   type ConfirmKey,
 } from "../_lib/sources-model";
 import { TrustChip } from "../_lib/sources-tab";
+import { InstalledState, UpdatePromise } from "../updates/_lib/installed-state";
 import type {
   CatalogDetail,
   CatalogEntry,
@@ -247,11 +248,15 @@ function Detail({ target }: { target: Target }) {
         </div>
       </div>
 
+      {/* ── How the installed copy stands against the catalog ────────── */}
+      {pkg.installed && <InstalledState slug={target.slug} />}
+
       {/* ── 2. What it contains ───────────────────────────────────────── */}
       <Contents pkg={pkg} />
 
       {/* ── 3 + 4. What it will do here, then confirm ─────────────────── */}
       <InstallPanel target={target} pkg={pkg} />
+      {!pkg.installed && <UpdatePromise />}
 
       <AdvancedPanel
         ids={[

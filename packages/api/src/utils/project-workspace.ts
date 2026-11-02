@@ -72,6 +72,7 @@ export async function hydrateUsedWorkspaces(
   return out;
 }
 import { createLink } from "../services/links/links-service.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 export type LinkProjectToWorkspaceResult =
   | {
@@ -194,9 +195,6 @@ export async function unlinkProjectFromWorkspace(
   return { unlinked: true, rows: removed.length };
 }
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * The ONE relaxation of the remove door's endpoint floor (R8a).
  *
@@ -213,7 +211,7 @@ export async function archivedUsesTargetRemovable(
   database: Awaited<ReturnType<typeof getDb>>,
   args: { projectId: string; workspaceId: string; userId: string }
 ): Promise<boolean> {
-  if (!UUID_RE.test(args.projectId) || !UUID_RE.test(args.workspaceId)) {
+  if (!isUuid(args.projectId) || !isUuid(args.workspaceId)) {
     return false;
   }
   const [ws] = await database

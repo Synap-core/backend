@@ -560,6 +560,14 @@ export const entityHandlers: McpHandlerMap = {
       ...(typeof args.expectedLabel === "string"
         ? { expectedLabel: args.expectedLabel }
         : {}),
+      // The living document's scope / bound refresher (0387): read and
+      // floored by the hub door; a malformed one is refused there.
+      ...(args.scope !== undefined
+        ? { scope: args.scope as Record<string, unknown> | null }
+        : {}),
+      ...(args.refreshAutomationId !== undefined
+        ? { refreshAutomationId: args.refreshAutomationId as string | null }
+        : {}),
     });
     // ATTACHMENT (the description used to claim it without doing it). The
     // link lives on `entities.documentId` — `documents.entityId` was removed —

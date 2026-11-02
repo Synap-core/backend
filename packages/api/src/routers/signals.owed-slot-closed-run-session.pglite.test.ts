@@ -75,6 +75,20 @@ vi.mock("../services/signals/access-requests.js", async (orig) => ({
   listPendingAppRequests: async () => ({ rows: [], truncated: false }),
   listPendingKeyRequests: async () => ({ rows: [], truncated: false }),
 }));
+// The broken-connection half: pinned by its own PGlite suite
+// (`broken-connections.pglite.test.ts`); none here.
+// The sessions waiting on a permission (D-R1): pinned by their own suites
+// (`needs-you-folds.tripwire.test.ts`, `permission-sessions.pglite.test.ts`);
+// none here (this file creates no session_runners table).
+vi.mock("../services/signals/permission-sessions.js", () => ({
+  listSessionsWaitingForPermission: async () => ({
+    sessions: [],
+    truncated: false,
+  }),
+}));
+vi.mock("../services/signals/broken-connections.js", () => ({
+  listBrokenConnections: async () => ({ rows: [], truncated: false }),
+}));
 // The viewer's open space invites: pinned by their own PGlite suite
 // (`space-invites.pglite.test.ts`); none here.
 vi.mock("../services/signals/space-invites.js", () => ({

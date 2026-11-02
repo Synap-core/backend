@@ -22,6 +22,10 @@ export const WireDocumentSchema = z
     type: DocumentTypeSchema.optional(),
     createdAt: z.union([z.string(), z.date()]).optional(),
     updatedAt: z.union([z.string(), z.date()]).optional(),
+    /** The living document's `LensScope` (0387): what its cells read through; null = its space, else the pod. */
+    scope: z.record(z.string(), z.unknown()).nullable().optional(),
+    /** The automation bound to refresh it (0387, D4), or null. */
+    refreshAutomationId: z.string().nullable().optional(),
   })
   .passthrough()
   .openapi("Document");
@@ -49,6 +53,15 @@ export const CreateDocumentRequestSchema = z
     entityId: z.string().optional(),
     /** A retry with the same key returns the prior document. */
     idempotencyKey: z.string().optional(),
+    /**
+     * The living document's `LensScope` (0387): `{kind:"pod"}`,
+     * `{kind:"workspace", workspaceId, projectId?}`, `{kind:"project",
+     * projectId}`, `{kind:"track", trackId}` or `{kind:"session", sessionId}`.
+     * Refused (403) when it names something you cannot read.
+     */
+    scope: z.record(z.string(), z.unknown()).nullable().optional(),
+    /** The automation bound to refresh it (0387, D4). Its runs may rewrite its existing AI sections without review. */
+    refreshAutomationId: z.string().nullable().optional(),
   })
   .openapi("CreateDocumentRequest");
 

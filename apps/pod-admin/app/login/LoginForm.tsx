@@ -41,6 +41,8 @@ import {
   pageForFlow,
   submitLoginFlow,
   type KratosFlow,
+  type WhoamiFailure,
+  unconfirmedSessionCopy,
 } from "../../lib/kratos-flow";
 import {
   classifySignInFlow,
@@ -94,6 +96,8 @@ export function LoginForm({
   // Signed in, but the session cookie does not reach this address: explain
   // and offer a reload instead of a form that would loop back here.
   const [cookieScope, setCookieScope] = useState(false);
+  // Kratos refused a flow for a session whoami would not confirm.
+  const [unconfirmed, setUnconfirmed] = useState<WhoamiFailure | null>(null);
 
   // `returnTo` is always a path on this origin (`lib/safe-return-to.ts`), so
   // an in-app navigation is enough and keeps the Next.js bundle.
@@ -142,6 +146,10 @@ export function LoginForm({
           const r = await createLoginFlow(window.location.href, { refresh });
           if (r.existingSession) {
             if (!cancelled) onExistingSession();
+            return;
+          }
+          if (r.unconfirmed) {
+            if (!cancelled) setUnconfirmed(r.unconfirmed);
             return;
           }
           if (!r.flow) throw new Error("Kratos returned no flow");
@@ -214,6 +222,10 @@ export function LoginForm({
               onExistingSession();
               return;
             }
+            if (fresh.unconfirmed) {
+              setUnconfirmed(fresh.unconfirmed);
+              return;
+            }
             if (fresh.flow) {
               setFlow(fresh.flow);
               setFlowKind("login");
@@ -250,6 +262,7 @@ export function LoginForm({
   // The flow is answered by a state panel, not the form.
   const stateView =
     cookieScope ||
+    unconfirmed !== null ||
     signIn.kind === "access_required" ||
     signIn.kind === "self_registration_disabled" ||
     (flowKind === "registration" && flow !== null);
@@ -293,6 +306,19 @@ export function LoginForm({
 
           {loading ? (
             <SignInHeader refresh={refresh} reason={reason} />
+          ) : unconfirmed ? (
+            <RefusalPanel
+              icon={<RefreshCw className="h-5 w-5" strokeWidth={2} />}
+              title={unconfirmedSessionCopy(unconfirmed).title}
+              actionLabel={unconfirmedSessionCopy(unconfirmed).actionLabel}
+              onAction={() =>
+                unconfirmed.kind === "rate_limited"
+                  ? goReturn()
+                  : window.location.reload()
+              }
+            >
+              <p>{unconfirmedSessionCopy(unconfirmed).body}</p>
+            </RefusalPanel>
           ) : cookieScope ? (
             <RefusalPanel
               icon={<RefreshCw className="h-5 w-5" strokeWidth={2} />}

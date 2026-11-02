@@ -52,8 +52,20 @@
  * stamps `done` with `satisfiedByEvidence` lineage. Deterministic, no human
  * needed, and never for a person's slot or one a criterion checks.
  *
- * Three floors make it a different act from the approval path rather than a
- * bypass of it: only the slot's OWNER may attest, only on a slot whose `owner`
+ * ── THE FOURTH PATH: A RECORDED MERGE ───────────────────────────────────────
+ * A `dev.pr_merged` fact the pod recorded (into the default branch) closes the
+ * slot that IS that pull request: `satisfyPullRequestByMerge` (bottom of this
+ * file), plan d679e92c C11(a). It is the POD's act, run by the merge sweeper
+ * outside the posting key's grant: the key that posts PR facts holds only
+ * `event.create` (founder F1) and keeps it. What makes it safe: the fact is
+ * checked against the slot's OWN `ref` (same repo, same number), the sweeper
+ * calls it only for the session the PR body's `Pod session:` line names, and
+ * it never closes a person's slot or one a criterion checks. It stamps the
+ * same `satisfiedByEvidence: {kind:'ref'}` an agent's claim plus that ref
+ * would have earned, and no `claimedDone`: nobody claimed it.
+ *
+ * Three floors make the attestation a different act from the approval path
+ * rather than a bypass of it: only the slot's OWNER may attest, only on a slot whose `owner`
  * is `human`, and the stamp is `attestedBy`/`attestedAt` — never a fabricated
  * `satisfiedByProposalId`, which would make an attestation unfalsifiable by
  * dressing it as approval lineage.
@@ -69,6 +81,11 @@ import {
   resolveAskResolution,
 } from "@synap-core/types/ask";
 import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
+import {
+  parsePullRequestRef,
+  samePullRequest,
+  type PullRequestRef,
+} from "@synap-core/types";
 import {
   readCriteria,
   type ExpectedOutput,
@@ -939,6 +956,119 @@ export async function satisfyClaimsByEvidence(params: {
     })
     .then(async (r) => {
       // After commit — the evidenced slots' declared output → subject edges.
+      if (r.satisfied.length > 0) {
+        await linkSatisfiedOutputsToSubject({ sessionId, now });
+      }
+      return r;
+    });
+}
+
+// ── THE FOURTH PATH: A RECORDED MERGE (plan d679e92c C11(a)) ──────────────
+
+/** The pull request a slot's own `ref.url` points at, or null. */
+function slotPullRequest(slot: ExpectedOutput): PullRequestRef | null {
+  const ref = slot.ref;
+  if (!ref || !("url" in ref) || typeof ref.url !== "string") return null;
+  return parsePullRequestRef(ref.url);
+}
+
+/**
+ * WHICH slots a merge of `pr` closes. Pure. A slot is closed only when ALL
+ * hold:
+ *   - its key is `slotKey` (the one the sweeper resolved), when given;
+ *   - it is not already done and not retired;
+ *   - it is NOT the person's (`owner: 'human'`);
+ *   - no CRITERION shares its key (that criterion's evaluator checks it);
+ *   - its OWN `ref.url` is this pull request: same repo (any case), same
+ *     number. A slot with no ref, a ref to another PR or another repo, or
+ *     only a conventional key, is never closed here.
+ * No claim is needed: the recorded merge is the fact, the ref is the check.
+ */
+export function selectMergedPullRequestSlots(
+  outputs: readonly ExpectedOutput[],
+  pr: PullRequestRef,
+  criterionKeys: ReadonlySet<string>,
+  slotKey?: string
+): Array<{ index: number; evidence: SlotEvidence }> {
+  const keys = deriveSlotKeys(outputs);
+  const out: Array<{ index: number; evidence: SlotEvidence }> = [];
+  outputs.forEach((slot, index) => {
+    const key = keys[index];
+    if (!slot || !key) return;
+    if (slotKey !== undefined && key !== slotKey) return;
+    if (slot.status === "done" || slot.retiredAt != null) return;
+    if (slot.owner === "human") return;
+    if (criterionKeys.has(key)) return;
+    const points = slotPullRequest(slot);
+    if (!points || !samePullRequest(points, pr)) return;
+    const evidence = refEvidence(slot);
+    if (evidence) out.push({ index, evidence });
+  });
+  return out;
+}
+
+/**
+ * THE MERGE VERDICT — the pod closes the slot that IS a merged pull request.
+ *
+ * Called by the merge sweeper (`dev-loop/merge-sweeper.ts`) ONLY for the
+ * session the PR body names (`Pod session:`) and only for a merge into the
+ * default branch; this door re-checks the PR against the slot's own ref under
+ * the row lock. Owner-floored like every slot door. Idempotent: a slot already
+ * done is never re-stamped. It reads no grant and files no proposal: it is the
+ * pod recording a verified fact, not a write the posting key makes.
+ */
+export async function satisfyPullRequestByMerge(params: {
+  sessionId: string;
+  userId: string;
+  pr: PullRequestRef;
+  slotKey?: string;
+  now?: Date;
+}): Promise<SatisfyClaimsByEvidenceResult> {
+  const { sessionId, userId, pr, slotKey } = params;
+  const now = params.now ?? new Date();
+  return db
+    .transaction(async (tx): Promise<SatisfyClaimsByEvidenceResult> => {
+      const [locked] = await tx
+        .select({
+          expectedOutputs: focusSessions.expectedOutputs,
+          criteria: focusSessions.criteria,
+        })
+        .from(focusSessions)
+        .where(
+          and(eq(focusSessions.id, sessionId), eq(focusSessions.userId, userId))
+        )
+        .for("update");
+      if (!locked) return { satisfied: [] };
+      const current: ExpectedOutput[] = Array.isArray(locked.expectedOutputs)
+        ? (locked.expectedOutputs as ExpectedOutput[])
+        : [];
+      const criterionKeys = new Set(
+        readCriteria(locked.criteria).map((c) => c.key)
+      );
+      const picks = selectMergedPullRequestSlots(
+        current,
+        pr,
+        criterionKeys,
+        slotKey
+      );
+      if (picks.length === 0) return { satisfied: [] };
+      const next = stampEvidenced(current, picks, now);
+      await tx
+        .update(focusSessions)
+        .set({ expectedOutputs: next, updatedAt: now })
+        .where(eq(focusSessions.id, sessionId));
+      const currentKeys = deriveSlotKeys(current);
+      return {
+        satisfied: picks.map((p) => ({
+          key: currentKeys[p.index]!,
+          label: current[p.index]!.label,
+          evidence: p.evidence,
+        })),
+        outputs: next,
+      };
+    })
+    .then(async (r) => {
+      // After commit — the closed slots' declared output → subject edges.
       if (r.satisfied.length > 0) {
         await linkSatisfiedOutputsToSubject({ sessionId, now });
       }

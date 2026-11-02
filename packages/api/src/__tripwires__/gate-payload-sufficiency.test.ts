@@ -82,8 +82,8 @@ const DOORS: DoorPin[] = [
   },
   {
     file: "routers/hub-protocol/widget-definitions.ts",
-    subjectType: "widget",
-    action: "register",
+    subjectType: "cell",
+    action: "define",
     // `rendererSource` is THE field: the code itself, not its length.
     fields: ["rendererSource", "configSchema", "defaultConfig", "workspaceId"],
   },
@@ -186,7 +186,7 @@ describe("governed doors carry a payload sufficient to apply", () => {
  * field but a MISLEADING one. `rendererSourceLength` looks like provenance and
  * reads like diligence, and it is the reason the thinness survived review.
  */
-describe("widget/register never regresses to storing a length", () => {
+describe("the Hub widget door (cell.define) never regresses to storing a length", () => {
   it("stores the renderer source, not its character count", () => {
     const src = readFileSync(
       join(SRC, "routers/hub-protocol/widget-definitions.ts"),
@@ -194,8 +194,8 @@ describe("widget/register never regresses to storing a length", () => {
     );
     const block = gatePayloadBlock(src, {
       file: "routers/hub-protocol/widget-definitions.ts",
-      subjectType: "widget",
-      action: "register",
+      subjectType: "cell",
+      action: "define",
       fields: [],
     })!;
     expect(block, "gate payload not found").toBeTruthy();

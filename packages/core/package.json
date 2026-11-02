@@ -10,6 +10,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./control-plane-url": {
+      "types": "./dist/control-plane-url.d.ts",
+      "import": "./dist/control-plane-url.js",
+      "default": "./dist/control-plane-url.js"
     }
   },
   "files": [

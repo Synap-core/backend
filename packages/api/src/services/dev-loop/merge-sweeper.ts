@@ -5,6 +5,15 @@
  *
  * `dev.pr_merged` INTO THE DEFAULT BRANCH (`intoDefault`, founder F3) — for
  * every session the PR resolves to (`pr-session-resolver.ts`):
+ *   0. THE POD'S OWN ACT (plan d679e92c C11(a)): when the session is the one
+ *      the PR body's `Pod session:` line names, the pod closes the slot itself
+ *      through the done door (`satisfyPullRequestByMerge`), outside the
+ *      posting key's grant, because the fact is checked against the slot's
+ *      OWN `ref` (same repo, same number) under the row lock. The posting key
+ *      keeps only `event.create`. A slot whose ref does not match, a person's
+ *      slot, a slot a criterion checks, or any other session the PR resolves
+ *      to (an outcome ref on a session the body does not name) falls through
+ *      to step 1, where the key's grant decides as before;
  *   1. the outcome is completed through the ONE session write door,
  *      `updateFocusSession({ completeOutput })` — governed by
  *      `checkPermissionOrPropose` with the PRODUCER agent as the actor, inside
@@ -38,7 +47,8 @@
  */
 
 import { createLogger } from "@synap-core/core";
-import type { PullRequestEvent } from "@synap-core/types";
+import { podSessionIdFromBody, type PullRequestEvent } from "@synap-core/types";
+import { satisfyPullRequestByMerge } from "../focus-sessions/satisfy-expected-output.js";
 import { updateFocusSession } from "../focus-sessions/update-session.js";
 import {
   resolvePullRequestSessions,
@@ -74,6 +84,11 @@ export interface MergeSweepOutcome {
   slotKey: string | null;
   via: PrSessionVia;
   result: MergeSweepResult;
+  /**
+   * `pod`: the pod closed it itself, the fact checked against the slot's own
+   * ref (step 0). Absent: the governed door, inside the posting key's grant.
+   */
+  by?: "pod";
   proposalId?: string;
   reason?: string;
 }
@@ -112,6 +127,34 @@ async function resolveOpenSlots(input: SweepInput): Promise<{
   return { open, answered };
 }
 
+/**
+ * The criteria about a merged outcome, graded with the merge as evidence. A
+ * failed re-check never undoes the completion: it is logged and the criterion
+ * keeps its last grade.
+ */
+async function recheckAfterMerge(p: {
+  sessionId: string;
+  userId: string;
+  agentUserId: string | undefined;
+  slotKey: string;
+  event: PullRequestEvent;
+}): Promise<void> {
+  try {
+    await recheckCriteriaForOutcome({
+      sessionId: p.sessionId,
+      userId: p.userId,
+      agentUserId: p.agentUserId ?? null,
+      outcomeKey: p.slotKey,
+      evidence: { passed: true, detail: `Merged: ${p.event.url}` },
+    });
+  } catch (err) {
+    logger.error(
+      { err, sessionId: p.sessionId, slotKey: p.slotKey },
+      "merge sweeper: criteria re-check failed"
+    );
+  }
+}
+
 /** `dev.pr_merged` → the PR outcome is completed (into the default branch only). */
 export async function sweepMergedPullRequest(
   input: SweepInput
@@ -120,6 +163,10 @@ export async function sweepMergedPullRequest(
   const agentUserId = input.producerAgentUserId ?? undefined;
   const { open, answered } = await resolveOpenSlots(input);
   const outcomes: MergeSweepOutcome[] = [...answered];
+  // The session the PR itself names: ONLY the body's `Pod session:` line. Not
+  // `event.sessionId`, which the observation door may have DERIVED from an
+  // outcome ref (`sessionForDevLoopFact`) rather than read from the PR.
+  const namedSessionId = podSessionIdFromBody(event.body);
   for (const { base, slotKey } of open) {
     // F3: a merge into a feature branch (a stacked PR) is not on main yet.
     // Absent `intoDefault` is not known to be the default: fail closed.
@@ -132,6 +179,39 @@ export async function sweepMergedPullRequest(
           : "The producer did not say the merge was into the default branch.",
       });
       continue;
+    }
+    // Step 0: the pod's own act, for the session the PR names only.
+    if (namedSessionId !== null && namedSessionId === base.sessionId) {
+      try {
+        const pod = await satisfyPullRequestByMerge({
+          sessionId: base.sessionId,
+          userId,
+          pr: { repo: event.repo, number: event.number },
+          slotKey,
+        });
+        if (pod.satisfied.some((s) => s.key === slotKey)) {
+          await recheckAfterMerge({
+            sessionId: base.sessionId,
+            userId,
+            agentUserId,
+            slotKey,
+            event,
+          });
+          outcomes.push({ ...base, result: "completed", by: "pod" });
+          continue;
+        }
+      } catch (err) {
+        logger.error(
+          { err, sessionId: base.sessionId, slotKey },
+          "merge sweeper: the pod's own completion failed"
+        );
+        outcomes.push({
+          ...base,
+          result: "failed",
+          reason: err instanceof Error ? err.message : String(err),
+        });
+        continue;
+      }
     }
     try {
       const r = await updateFocusSession({
@@ -164,23 +244,13 @@ export async function sweepMergedPullRequest(
             ? "claimed"
             : "refused";
 
-      // The criteria about this PR, graded with the merge as evidence. A
-      // failed re-check never undoes the completion: it is logged and the
-      // criterion keeps its last grade.
-      try {
-        await recheckCriteriaForOutcome({
-          sessionId: base.sessionId,
-          userId,
-          agentUserId: agentUserId ?? null,
-          outcomeKey: slotKey,
-          evidence: { passed: true, detail: `Merged: ${event.url}` },
-        });
-      } catch (err) {
-        logger.error(
-          { err, sessionId: base.sessionId, slotKey },
-          "merge sweeper: criteria re-check failed"
-        );
-      }
+      await recheckAfterMerge({
+        sessionId: base.sessionId,
+        userId,
+        agentUserId,
+        slotKey,
+        event,
+      });
 
       outcomes.push({
         ...base,

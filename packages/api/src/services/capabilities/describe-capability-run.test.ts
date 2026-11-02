@@ -41,14 +41,17 @@ describe("describeCapabilityRun", () => {
         slug: "nudges",
         kind: "workflow",
       })
-    ).toBe('Install Rule "nudges"');
+    ).toBe('Install Automation "nudges"');
   });
 
   it("degrades honestly when the payload is thin", () => {
     // An unknown kind humanizes rather than leaking a token.
     expect(
-      describeCapabilityRun("market.install", { slug: "x", kind: "renderer" })
-    ).toBe('Install Renderer "x"');
+      describeCapabilityRun("market.install", {
+        slug: "x",
+        kind: "frobnicator",
+      })
+    ).toBe('Install Frobnicator "x"');
     // No kind at all — still name the package.
     expect(describeCapabilityRun("market.install", { slug: "x" })).toBe(
       'Install package "x"'
@@ -76,5 +79,22 @@ describe("describeCapabilityRun", () => {
     ] as [string | null, Record<string, unknown>][]) {
       expect(describeCapabilityRun(verb, params).length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("describeCapabilityRun: a ship verb (decision 4d6d7922)", () => {
+  it("a merge is titled from its arguments, never 'Run GitHub merge pr'", () => {
+    expect(
+      describeCapabilityRun("github_merge_pr", {
+        repo: "Synap-core/app-bases",
+        pr: 12,
+        expectedHeadSha: "a524c103d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6",
+        base: "main",
+      })
+    ).toBe("Merge app-bases#12 into main at a524c103");
+    // Arguments that do not name the act keep the generic title.
+    expect(describeCapabilityRun("github_merge_pr", { pr: 12 })).toBe(
+      "Run GitHub merge pr"
+    );
   });
 });

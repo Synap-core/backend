@@ -309,6 +309,10 @@
       "types": "./dist/skill-code/index.d.ts",
       "import": "./dist/skill-code/index.js"
     },
+    "./skill-box": {
+      "types": "./dist/skill-box/index.d.ts",
+      "import": "./dist/skill-box/index.js"
+    },
     "./navigation": {
       "types": "./dist/navigation/index.d.ts",
       "import": "./dist/navigation/index.js"
@@ -376,6 +380,18 @@
     "./workers/words": {
       "types": "./dist/workers/words.d.ts",
       "import": "./dist/workers/words.js"
+    },
+    "./workers/health": {
+      "types": "./dist/workers/health.d.ts",
+      "import": "./dist/workers/health.js"
+    },
+    "./workers/goal": {
+      "types": "./dist/workers/goal.d.ts",
+      "import": "./dist/workers/goal.js"
+    },
+    "./workers/how-often": {
+      "types": "./dist/workers/how-often.d.ts",
+      "import": "./dist/workers/how-often.js"
     },
     "./targets": {
       "types": "./dist/targets/index.d.ts",

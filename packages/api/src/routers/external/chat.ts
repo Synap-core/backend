@@ -25,10 +25,7 @@ import { channels, workspaceMembers } from "@synap/database/schema";
 import { getPodCallback } from "../../utils/pod-callback.js";
 import { ChannelType, ChannelStatus } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
-import {
-  ensureAgentThread,
-  getAgentIdBySlug,
-} from "../../utils/personal-channel.js";
+import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import { createLogger } from "@synap-core/core";
 import { externalApiKeyAuth, type ExternalApiVariables } from "./middleware.js";
 import {
@@ -43,7 +40,7 @@ import {
   hasUsefulAssistantForTurn,
   reopenChatTurn,
 } from "../../services/chat-turns/chat-turn-store.js";
-import { findUserDefaultWorkspaceId } from "../../utils/user-default-workspace.js";
+import { resolveChatTarget } from "../../utils/resolve-chat-target.js";
 
 const logger = createLogger({ module: "external-chat" });
 
@@ -97,7 +94,9 @@ externalChatApp.get(
             eq(channels.contextObjectType, "workspace")
           )
         )!,
-        eq(channels.status, ChannelStatus.ACTIVE)
+        eq(channels.status, ChannelStatus.ACTIVE),
+        // Only what POST /stream will accept (the same read floor).
+        channelVisibilityWhere(userId)
       ),
       columns: {
         id: true,
@@ -125,8 +124,9 @@ externalChatApp.get(
  * Proxies a chat request to the Intelligence Service as SSE.
  *
  * Steps:
- *   1. Resolve workspaceId (from body or first membership)
- *   2. Resolve channelId (from body or personal channel via ensurePersonalChannel)
+ *   1-2. Resolve workspace + channel through `resolveChatTarget` (the same
+ *        resolver as `/api/chat/stream`: body ids, else the default workspace
+ *        and the personal agent thread)
  *   3. Reserve durable chat_turn (full external ledger)
  *   4. Resolve IS endpoint + key (resolveIntelligenceService)
  *   5. Build IS request body
@@ -154,71 +154,25 @@ externalChatApp.post(
       return c.json({ error: "Request body must be valid JSON" }, 400);
     }
 
-    // ── Step 1: Resolve workspaceId ──────────────────────────────────────────
-    let resolvedWorkspaceId: string;
-
-    if (input.workspaceId) {
-      // Verify membership
-      const membership = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.workspaceId, input.workspaceId),
-          eq(workspaceMembers.userId, userId)
-        ),
-        columns: { workspaceId: true },
-      });
-      if (!membership) {
-        return c.json({ error: "Workspace not found or access denied" }, 404);
-      }
-      resolvedWorkspaceId = input.workspaceId;
-    } else {
-      // D7: the user's default domain workspace — never pod-admin/archived.
-      const fallback = await findUserDefaultWorkspaceId(db, userId);
-      if (!fallback) {
-        return c.json({ error: "No workspace found for this user" }, 404);
-      }
-      resolvedWorkspaceId = fallback;
+    // ── Steps 1-2: Resolve workspace + channel ──────────────────────────────
+    // The ONE resolver, shared with `/api/chat/stream`: an explicit channelId
+    // must be an ACTIVE channel the caller can read (never resolved by id
+    // alone), and a refusal is a 404 that does not reveal the channel exists.
+    const target = await resolveChatTarget(db, userId, {
+      workspaceId: input.workspaceId,
+      channelId: input.channelId,
+    });
+    if (!target.ok) {
+      // This route has always answered a missing default agent like any
+      // other personal-thread failure.
+      const error =
+        target.reason === "no_default_agent"
+          ? "Failed to resolve chat channel"
+          : target.error;
+      return c.json({ error }, target.status);
     }
-
-    // ── Step 2: Resolve channelId ────────────────────────────────────────────
-    let resolvedChannelId: string;
-
-    if (input.channelId) {
-      // Verify the channel exists and user has access (member of channel's workspace)
-      const channel = await db.query.channels.findFirst({
-        where: eq(channels.id, input.channelId),
-        columns: { id: true, workspaceId: true },
-      });
-      if (!channel) {
-        return c.json({ error: "Channel not found" }, 404);
-      }
-      if (channel.workspaceId) {
-        const membership = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.workspaceId, channel.workspaceId),
-            eq(workspaceMembers.userId, userId)
-          ),
-          columns: { workspaceId: true },
-        });
-        if (!membership) {
-          return c.json({ error: "Channel not found" }, 404); // 404 to avoid info leak
-        }
-      }
-      resolvedChannelId = input.channelId;
-    } else {
-      // Auto-create or retrieve the user's personal thread
-      try {
-        const orchestratorId = await getAgentIdBySlug("orchestrator");
-        if (!orchestratorId) throw new Error("Default agent not found");
-        const personalChannel = await ensureAgentThread(userId, orchestratorId);
-        resolvedChannelId = personalChannel.id;
-      } catch (err) {
-        logger.error(
-          { err: err instanceof Error ? err.message : String(err) },
-          "Failed to ensure personal channel"
-        );
-        return c.json({ error: "Failed to resolve chat channel" }, 500);
-      }
-    }
+    const resolvedWorkspaceId = target.workspaceId;
+    const resolvedChannelId = target.channelId;
 
     // ── Step 3: Reserve durable chat_turn ────────────────────────────────────
     const requestId = resolveExternalRequestId(

@@ -88,7 +88,11 @@ export interface HoldResumeJobData {
 }
 
 /**
- * The facts a dev hold is decided on: its owner's, newest first, bounded.
+ * The facts the dev holds are decided on — ONE query per kind of ref, for
+ * every hold at once (never one per hold: the hourly sweep re-checks every
+ * dev hold). Each hold then reads its own rows: its owner's, of its ref,
+ * after its pause began where the ref is decided by the newest fact (a main,
+ * a job). Returned per hold, in `held` order.
  *
  * Deliberately the OWNER floor (`events.userId = h.userId`), not the shared
  * `eventVisibleWhere` the PR fold reads with: a read shows a fact, a hold
@@ -97,83 +101,162 @@ export interface HoldResumeJobData {
  * someone else's hold. The producers post under the owner's key, so the owner
  * floor loses no real fact. (`eventVisibleWhere` also lives in `@synap/api`,
  * which depends on this package.)
+ *
+ * Bounded: a PR's facts are the few its number names; a main's and a job's
+ * are the NEWEST one per owner and repo (job) since the earliest pause that
+ * waits on it — what the per-hold `limit 1` read before.
  */
 async function readDevFactRows(
-  ref: HoldDevRef,
-  h: CurrentHold
-): Promise<DevLoopEventRowLike[]> {
+  holds: ReadonlyArray<{ ref: HoldDevRef; h: CurrentHold }>
+): Promise<DevLoopEventRowLike[][]> {
   const select = {
+    userId: events.userId,
     type: events.type,
     timestamp: events.timestamp,
     data: events.data,
   };
-  const mine = eq(events.userId, h.userId);
-  const repoIs = (repo: string) =>
-    drizzleSql`lower(${events.data}->>'repo') = ${repo.toLowerCase()}`;
-  switch (ref.kind) {
-    case "pr":
-      return db
-        .select(select)
-        .from(events)
-        .where(
-          and(
-            mine,
-            inArray(events.type, [
-              DEV_LOOP_EVENT_TYPES.prOpened,
-              DEV_LOOP_EVENT_TYPES.prMerged,
-              DEV_LOOP_EVENT_TYPES.prClosed,
-            ]),
-            repoIs(ref.repo),
-            drizzleSql`${events.data}->>'number' = ${String(ref.number)}`
+  const repoOf = drizzleSql`lower(${events.data}->>'repo')`;
+  const prs = holds.flatMap(({ ref, h }) =>
+    ref.kind === "pr"
+      ? [{ user: h.userId, repo: ref.repo.toLowerCase(), number: ref.number }]
+      : []
+  );
+  const mains = holds.flatMap(({ ref, h }) =>
+    ref.kind === "main"
+      ? [{ user: h.userId, repo: ref.repo.toLowerCase(), since: h.hold.since }]
+      : []
+  );
+  const jobs = holds.flatMap(({ ref, h }) =>
+    ref.kind === "job"
+      ? [
+          {
+            user: h.userId,
+            workflow: devboxJobWorkflow(ref.name),
+            since: h.hold.since,
+          },
+        ]
+      : []
+  );
+  const earliest = (xs: ReadonlyArray<{ since: string }>) =>
+    new Date(Math.min(...xs.map((x) => Date.parse(x.since))));
+  const tuples = (rows: ReadonlyArray<ReadonlyArray<string>>) =>
+    drizzleSql.join(
+      rows.map(
+        (r) =>
+          drizzleSql`(${drizzleSql.join(
+            r.map((v) => drizzleSql`${v}::text`),
+            drizzleSql`, `
+          )})`
+      ),
+      drizzleSql`, `
+    );
+  type Row = DevLoopEventRowLike & { userId: string };
+  const [prRows, mainRows, jobRows] = await Promise.all([
+    prs.length
+      ? db
+          .select(select)
+          .from(events)
+          .where(
+            and(
+              inArray(events.type, [
+                DEV_LOOP_EVENT_TYPES.prOpened,
+                DEV_LOOP_EVENT_TYPES.prMerged,
+                DEV_LOOP_EVENT_TYPES.prClosed,
+              ]),
+              drizzleSql`(${events.userId}, ${repoOf}, ${events.data}->>'number') in (${tuples(
+                prs.map((p) => [p.user, p.repo, String(p.number)])
+              )})`
+            )
           )
+      : Promise.resolve([] as Row[]),
+    mains.length
+      ? db
+          .selectDistinctOn([events.userId, repoOf], select)
+          .from(events)
+          .where(
+            and(
+              eq(events.type, DEV_LOOP_EVENT_TYPES.repoSnapshot),
+              drizzleSql`(${events.userId}, ${repoOf}) in (${tuples(
+                mains.map((m) => [m.user, m.repo])
+              )})`,
+              gt(events.timestamp, earliest(mains))
+            )
+          )
+          .orderBy(events.userId, repoOf, desc(events.timestamp))
+      : Promise.resolve([] as Row[]),
+    jobs.length
+      ? db
+          .selectDistinctOn(
+            [events.userId, drizzleSql`${events.data}->>'workflow'`],
+            select
+          )
+          .from(events)
+          .where(
+            and(
+              eq(events.type, DEV_LOOP_EVENT_TYPES.ciFinished),
+              drizzleSql`(${events.userId}, ${events.data}->>'workflow') in (${tuples(
+                jobs.map((j) => [j.user, j.workflow])
+              )})`,
+              gt(events.timestamp, earliest(jobs))
+            )
+          )
+          .orderBy(
+            events.userId,
+            drizzleSql`${events.data}->>'workflow'`,
+            desc(events.timestamp)
+          )
+      : Promise.resolve([] as Row[]),
+  ]);
+  const data = (r: Row) => (r.data ?? {}) as Record<string, unknown>;
+  const after = (r: Row, since: string) =>
+    new Date(r.timestamp).getTime() > Date.parse(since);
+  return holds.map(({ ref, h }) => {
+    const mine = (r: Row) => r.userId === h.userId;
+    switch (ref.kind) {
+      case "pr": {
+        const repo = ref.repo.toLowerCase();
+        return (prRows as Row[]).filter(
+          (r) =>
+            mine(r) &&
+            String(data(r).repo ?? "").toLowerCase() === repo &&
+            data(r).number === ref.number
         );
-    case "main":
-      return db
-        .select(select)
-        .from(events)
-        .where(
-          and(
-            mine,
-            eq(events.type, DEV_LOOP_EVENT_TYPES.repoSnapshot),
-            repoIs(ref.repo),
-            gt(events.timestamp, new Date(h.hold.since))
-          )
-        )
-        .orderBy(desc(events.timestamp))
-        .limit(1);
-    case "job":
-      return db
-        .select(select)
-        .from(events)
-        .where(
-          and(
-            mine,
-            eq(events.type, DEV_LOOP_EVENT_TYPES.ciFinished),
-            drizzleSql`${events.data}->>'workflow' = ${devboxJobWorkflow(ref.name)}`,
-            gt(events.timestamp, new Date(h.hold.since))
-          )
-        )
-        .orderBy(desc(events.timestamp))
-        .limit(1);
-  }
+      }
+      case "main": {
+        const repo = ref.repo.toLowerCase();
+        return (mainRows as Row[]).filter(
+          (r) =>
+            mine(r) &&
+            String(data(r).repo ?? "").toLowerCase() === repo &&
+            after(r, h.hold.since)
+        );
+      }
+      case "job": {
+        const workflow = devboxJobWorkflow(ref.name);
+        return (jobRows as Row[]).filter(
+          (r) =>
+            mine(r) && data(r).workflow === workflow && after(r, h.hold.since)
+        );
+      }
+    }
+  });
 }
 
 /** The dev holds whose fact is in, with the ref each waited on. */
 async function devHoldsMet(
   held: readonly CurrentHold[]
 ): Promise<Array<{ h: CurrentHold; moves: string }>> {
-  const met: Array<{ h: CurrentHold; moves: string }> = [];
-  for (const h of held) {
+  const dev = held.flatMap((h) => {
     const until = h.hold.until;
-    if (!until || !("moves" in until)) continue;
+    if (!until || !("moves" in until)) return [];
     const ref = parseHoldDevRef(until.moves);
-    if (!ref) continue;
-    const rows = await readDevFactRows(ref, h);
-    if (holdDevRefMet(ref, until, h.hold.since, rows)) {
-      met.push({ h, moves: until.moves });
-    }
-  }
-  return met;
+    return ref ? [{ h, ref, until, moves: until.moves }] : [];
+  });
+  if (dev.length === 0) return [];
+  const rows = await readDevFactRows(dev);
+  return dev.flatMap(({ h, ref, until, moves }, i) =>
+    holdDevRefMet(ref, until, h.hold.since, rows[i]!) ? [{ h, moves }] : []
+  );
 }
 
 export async function handleHoldResume(

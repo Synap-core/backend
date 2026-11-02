@@ -447,11 +447,13 @@ describe("resolveObjectNoun", () => {
     expect(resolveObjectNoun("env_variable")).toBe("Environment variable");
   });
 
-  it("names an Application 'App' — distinct from a Tool", () => {
+  it("names an Application 'Connected app' — distinct from a Tool and from an App", () => {
     // App Connect v1: an application is what USES the pod (inbound); a tool is
     // what the pod USES (outbound). They must never collapse to one word.
-    expect(resolveObjectNoun("application")).toBe("App");
-    expect(resolveObjectNounPlural("application")).toBe("Apps");
+    expect(resolveObjectNoun("application")).toBe("Connected app");
+    expect(resolveObjectNounPlural("application")).toBe("Connected apps");
+    // "App" is what you open IN Synap (founder D3, N4).
+    expect(resolveObjectNoun("app")).toBe("App");
     expect(resolveObjectNoun("tool")).toBe("Tool");
     expect(resolveObjectNoun("application")).not.toBe(
       resolveObjectNoun("tool")

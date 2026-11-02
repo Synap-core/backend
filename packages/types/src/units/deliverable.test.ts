@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   deliverableOwedBy,
+  isDecidedByAnswer,
+  isDeliverableDelivered,
   isDeliverableOutstanding,
   resolveDeliverableState,
   tallyDeliverables,
@@ -229,5 +231,69 @@ describe("tallyDeliverables", () => {
 
   it("nothing declared is zero of zero, not a failure", () => {
     expect(tallyDeliverables([])).toEqual({ done: 0, total: 0, owedByYou: 0 });
+  });
+});
+
+/**
+ * Delivered = `done` OR decided by the person's answer (`isDecidedByAnswer`).
+ * The floor every owed reader shares, so a decided slot is owed by nobody,
+ * counts as done, and reads done. Rival ruled out: "delivered ⇔ status done"
+ * (an answered decision then sits in the agent's open work forever).
+ */
+describe("a decision the person answered is delivered", () => {
+  const ANSWER = { text: "EU", askSnapshot: { mode: "choose" } };
+  const decided: DeliverableFacts = {
+    kind: "decision",
+    decisionId: "d-1",
+    answer: ANSWER,
+  };
+
+  it("is decided only with a decision AND a confirm/choose answer, never a grade", () => {
+    expect(isDecidedByAnswer(decided)).toBe(true);
+    expect(
+      isDecidedByAnswer({
+        ...decided,
+        answer: { askSnapshot: { mode: "confirm" } },
+      })
+    ).toBe(true);
+    expect(isDecidedByAnswer({ ...decided, decisionId: undefined })).toBe(
+      false
+    );
+    expect(isDecidedByAnswer({ ...decided, decisionId: "" })).toBe(false);
+    expect(isDecidedByAnswer({ ...decided, answer: undefined })).toBe(false);
+    expect(isDecidedByAnswer({ ...decided, answer: { text: "EU" } })).toBe(
+      false
+    );
+    expect(
+      isDecidedByAnswer({
+        ...decided,
+        answer: { askSnapshot: { mode: "act" } },
+      })
+    ).toBe(false);
+    expect(isDecidedByAnswer({ ...decided, kind: "criterion" })).toBe(false);
+    expect(isDecidedByAnswer({ ...decided, criterionKey: "c1" })).toBe(false);
+  });
+
+  it("is delivered, owed by nobody, done in the tally and the state", () => {
+    expect(isDeliverableDelivered(decided)).toBe(true);
+    expect(isDeliverableOutstanding(decided)).toBe(false);
+    expect(deliverableOwedBy({ ...decided, owner: "human" })).toBeNull();
+    expect(tallyDeliverables([decided, { kind: "doc" }])).toEqual({
+      done: 1,
+      total: 2,
+      owedByYou: 0,
+    });
+    expect(
+      resolveDeliverableState(
+        { ...decided, claimedDone: true },
+        { sessionTerminal: false }
+      ).state
+    ).toBe("done");
+  });
+
+  it("an open ask on a decision (no answer yet) is still the person's", () => {
+    const asked = { kind: "decision", decisionId: "d-1", owner: "human" };
+    expect(isDeliverableOutstanding(asked)).toBe(true);
+    expect(deliverableOwedBy(asked)).toBe("you");
   });
 });

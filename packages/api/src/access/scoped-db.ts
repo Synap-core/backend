@@ -37,6 +37,8 @@ export interface ScopedFindOptions {
   limit?: number;
   offset?: number;
   columns?: Record<string, boolean>;
+  /** Computed columns (Drizzle relational `extras`), e.g. a keyset instant. */
+  extras?: Record<string, unknown>;
 }
 
 export class ScopedDb {

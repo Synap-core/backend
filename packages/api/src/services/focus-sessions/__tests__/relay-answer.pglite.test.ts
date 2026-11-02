@@ -781,6 +781,83 @@ describe("the relay door", () => {
     expect((await slot(fresh.sessionId)).answer).toBeUndefined();
   });
 
+  // A slot filed by an agent that is NOT on the session's roster (filed
+  // through `update_session`, so `askedBy` names it, and no room question).
+  // The 2 Nov 14:13Z case: the person tapped the card, then the asker relayed
+  // the same answer from the chat and was told "not yours" — the hand-back of
+  // the tap drops `askedBy`, so the identity check fell to the roster.
+  const askedOffRoster = () =>
+    seed({
+      outputs: [
+        {
+          kind: "decision",
+          label: LABEL,
+          owner: "human",
+          blockedReason: "decision",
+          owedSince: "2026-11-02T14:00:00.000Z",
+          ask: CHOOSE,
+          askedBy: OTHER_AGENT,
+        },
+      ],
+    });
+
+  it("the agent that asked a slot relays it, on the session's roster or not; another agent may not", async () => {
+    const { sessionId } = await askedOffRoster();
+    const body = {
+      disposition: "answered",
+      slotLabel: LABEL,
+      quote: "the EU one",
+      value: EU,
+    };
+    // AGENT is on the roster but did not ask this slot.
+    const notAsker = await relay(sessionId, body, AGENT);
+    expect(notAsker.status).toBe(403);
+    expect((await slot(sessionId)).answer).toBeUndefined();
+    // The asker is not on the roster, and relays it.
+    const res = await relay(sessionId, body, OTHER_AGENT);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ status: "relayed" });
+    expect((await slot(sessionId)).answer).toMatchObject({
+      via: "relayed",
+      relayedBy: OTHER_AGENT,
+    });
+  });
+
+  it("a relay after the person's tap is told the slot is no longer open, never that it is not the asker's", async () => {
+    const { sessionId } = await askedOffRoster();
+    expect(
+      (await personAnswer(sessionId, { expectedLabel: LABEL, value: EU }))
+        .status
+    ).toBe(200);
+    // The tap handed the slot back: who asked it is gone with the ask.
+    expect((await slot(sessionId)).askedBy).toBeUndefined();
+    const late = await relay(
+      sessionId,
+      {
+        disposition: "answered",
+        slotLabel: LABEL,
+        quote: "it says everything updated, and agree",
+      },
+      OTHER_AGENT
+    );
+    expect(late.status).toBe(409);
+    // It names the real state: the person's answer, and when they gave it.
+    const tapped = (await slot(sessionId)).answer!.answeredAt as string;
+    expect(((await late.json()) as { error: string }).error).toBe(
+      `That question is no longer open: the person already answered it at ${tapped}, and a relay never overwrites their answer. Read it with synap_get_session.`
+    );
+    // Withdrawing it is no longer possible either, for the same reason.
+    const withdraw = await relay(
+      sessionId,
+      { disposition: "withdrawn", slotLabel: LABEL, note: "settled" },
+      OTHER_AGENT
+    );
+    expect(withdraw.status).toBe(409);
+    const s = await slot(sessionId);
+    expect(s.answer).toMatchObject({ value: EU });
+    expect(s.answer!.via).toBeUndefined();
+  });
+
   it("the MCP door is bounded by the key's grant, like the Hub door", async () => {
     const SPACE_A = randomUUID();
     const SPACE_B = randomUUID();

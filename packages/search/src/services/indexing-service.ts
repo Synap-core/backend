@@ -12,7 +12,7 @@ import {
   eq,
   isNull,
   loadDocumentBodyTexts,
-  searchIndexableDocumentWhere,
+  indexableDocumentWhere,
 } from "@synap/database";
 import * as schema from "@synap/database/schema";
 import { markdownToPlainText } from "@synap-core/markdown-core/plain-text";
@@ -183,10 +183,12 @@ export class IndexingService {
       case "documents": {
         const docRows = await db.query.documents.findMany({
           // A staged import item is not indexed — except a Library item, which
-          // is (title-only until its light read; see fullReindex below).
+          // is (title-only until its light read; see fullReindex below). An
+          // entity's, view's or skill's body is not indexed as a document: its
+          // owner is (`indexableDocumentWhere`).
           where: and(
             inArray(schema.documents.id, ids),
-            searchIndexableDocumentWhere(schema.documents.metadata)
+            indexableDocumentWhere(schema.documents)
           ),
         });
         return this.withStoredBodies("documents", db, docRows);
@@ -354,10 +356,7 @@ export class IndexingService {
               // except a Library item (`importItem`): kept means findable, by
               // its title before the light read and its read text after.
               where: (d, { isNull, and }) =>
-                and(
-                  isNull(d.deletedAt),
-                  searchIndexableDocumentWhere(d.metadata)
-                ),
+                and(isNull(d.deletedAt), indexableDocumentWhere(d)),
             });
             break;
           case "views":

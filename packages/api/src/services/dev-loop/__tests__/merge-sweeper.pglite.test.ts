@@ -718,3 +718,202 @@ describe("the sweep's verdict is said in the session room (a denial is never sil
     expect((await stored(id))[0]!.retiredAt).toBeTruthy();
   });
 });
+
+describe("the pod completes the outcome the merged PR names, outside the key's grant (C11a)", () => {
+  beforeEach(() => {
+    h.perm.length = 0;
+    h.notices.length = 0;
+    h.evaluations.length = 0;
+    h.verdict = { granted: true };
+  });
+
+  // The key that posts PR facts today: `event.create` and nothing else (F1).
+  const EVENT_ONLY_KEY = {
+    scopes: [{ permissions: ["event.create"] }],
+    clientId: "app-obs",
+  };
+  const body = (sessionId: string) =>
+    `Does the thing.\n\nPod session: ${sessionId}\n`;
+
+  it("a merge of the PR the body names completes its outcome, as the pod, with no gate call; the room says it is delivered", async () => {
+    const id = await seed([
+      prSlot(1100),
+      { kind: "document", label: "Notes", key: "notes" },
+    ]);
+    const r = await runDevLoopObservation({
+      ...job(
+        "dev.pr_merged",
+        merged({ number: 1100, url: prUrl(1100), body: body(id) }),
+        EVENT_ONLY_KEY
+      ),
+      eventId: "ev-1100",
+    });
+    expect(r).toEqual({
+      status: "swept",
+      outcomes: [
+        {
+          sessionId: id,
+          slotKey: "pr-backend-1100",
+          via: "outcome_ref",
+          result: "completed",
+          by: "pod",
+        },
+      ],
+    });
+    const slots = await stored(id);
+    expect(slots[0]).toMatchObject({
+      status: "done",
+      satisfiedByEvidence: { kind: "ref", id: prUrl(1100) },
+    });
+    // Nobody claimed it: the pod recorded a verified fact.
+    expect(slots[0]!.claimedDone ?? false).toBe(false);
+    expect(slots[1]!.status ?? "pending").toBe("pending");
+    // The key's grant was never asked to stretch: no governed write ran.
+    expect(h.perm).toHaveLength(0);
+    expect(h.notices).toEqual([
+      {
+        sessionId: id,
+        content:
+          'Synap-core/backend#1100 merged into main: the pod recorded "pr-backend-1100" as delivered.',
+        key: `dev-loop:ev-1100:${id}:pr-backend-1100`,
+      },
+    ]);
+  });
+
+  it("a mismatched REPO is never completed: the slot's ref is another repo's PR with the same number", async () => {
+    const id = await seed([
+      prSlot(1101, {
+        ref: { url: "https://github.com/Synap-core/browser/pull/1101" },
+      }),
+    ]);
+    const r = await runDevLoopObservation(
+      job(
+        "dev.pr_merged",
+        merged({ number: 1101, url: prUrl(1101), body: body(id) }),
+        EVENT_ONLY_KEY
+      )
+    );
+    // The body names the session and its conventional key matches, but the
+    // slot's own ref says browser#1101: the pod refuses, the key is denied.
+    expect(r).toMatchObject({
+      outcomes: [
+        {
+          sessionId: id,
+          slotKey: "pr-backend-1101",
+          via: "pr_body",
+          result: "denied",
+        },
+      ],
+    });
+    const slot = (await stored(id))[0]!;
+    expect(slot.status ?? "pending").toBe("pending");
+    expect(slot.claimedDone ?? false).toBe(false);
+  });
+
+  it("a mismatched NUMBER is never completed: the slot's ref is another PR of the same repo", async () => {
+    const id = await seed([prSlot(1102, { ref: { url: prUrl(1112) } })]);
+    const r = await runDevLoopObservation(
+      job(
+        "dev.pr_merged",
+        merged({ number: 1102, url: prUrl(1102), body: body(id) }),
+        EVENT_ONLY_KEY
+      )
+    );
+    expect(r).toMatchObject({
+      outcomes: [
+        {
+          sessionId: id,
+          slotKey: "pr-backend-1102",
+          via: "pr_body",
+          result: "denied",
+        },
+      ],
+    });
+    expect((await stored(id))[0]!.status ?? "pending").toBe("pending");
+  });
+
+  it("an event.create-only key still completes nothing on a session the PR body does not name", async () => {
+    const declared = await seed([prSlot(1103)]);
+    const elsewhere = await seed([{ kind: "document", label: "x", key: "x" }]);
+    for (const b of [undefined, "No session line here.", body(elsewhere)]) {
+      h.perm.length = 0;
+      const r = await runDevLoopObservation(
+        job(
+          "dev.pr_merged",
+          merged({ number: 1103, url: prUrl(1103), body: b }),
+          EVENT_ONLY_KEY
+        )
+      );
+      expect(r).toMatchObject({
+        outcomes: [{ sessionId: declared, result: "denied" }],
+      });
+      expect(h.perm).toHaveLength(1);
+    }
+    expect((await stored(declared))[0]!.status ?? "pending").toBe("pending");
+  });
+
+  it("a session id the observation door derived (event.sessionId) is not the PR naming it", async () => {
+    const id = await seed([prSlot(1104)]);
+    const r = await runDevLoopObservation(
+      job(
+        "dev.pr_merged",
+        merged({ number: 1104, url: prUrl(1104), sessionId: id }),
+        EVENT_ONLY_KEY
+      )
+    );
+    expect(r).toMatchObject({
+      outcomes: [{ sessionId: id, result: "denied" }],
+    });
+    expect((await stored(id))[0]!.status ?? "pending").toBe("pending");
+  });
+
+  it("never closes the person's slot or one a criterion checks, even on the named session", async () => {
+    const human = await seed([prSlot(1105, { owner: "human" })]);
+    const checked = await seed([prSlot(1106)], {
+      criteria: [
+        {
+          key: "pr-backend-1106",
+          statement: "Merged",
+          check: { kind: "judge" },
+        },
+      ],
+    });
+    for (const [id, n] of [
+      [human, 1105],
+      [checked, 1106],
+    ] as const) {
+      const r = await runDevLoopObservation(
+        job(
+          "dev.pr_merged",
+          merged({ number: n, url: prUrl(n), body: body(id) }),
+          EVENT_ONLY_KEY
+        )
+      );
+      expect(r).toMatchObject({
+        outcomes: [{ sessionId: id, result: "denied" }],
+      });
+      expect((await stored(id))[0]!.status ?? "pending").toBe("pending");
+    }
+  });
+
+  it("a merge into another branch is still not delivered, even on the named session", async () => {
+    const id = await seed([prSlot(1107)]);
+    const r = await runDevLoopObservation(
+      job(
+        "dev.pr_merged",
+        merged({
+          number: 1107,
+          url: prUrl(1107),
+          body: body(id),
+          base: "feat/parent",
+          intoDefault: false,
+        }),
+        EVENT_ONLY_KEY
+      )
+    );
+    expect(r).toMatchObject({
+      outcomes: [{ sessionId: id, result: "not_default_base" }],
+    });
+    expect((await stored(id))[0]!.status ?? "pending").toBe("pending");
+  });
+});

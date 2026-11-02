@@ -88,6 +88,9 @@ export function ProposalReview({
       identity={identity}
       footer={footer}
       pinsBar={pinsBar}
+      /* Widens to a document's width when the review shows text
+         (`reviewReadsWide`, drawn by the body as `READS_WIDE_ATTR`). */
+      width="auto"
     >
       {children}
     </ReceiverShell>
@@ -96,7 +99,7 @@ export function ProposalReview({
   if (query.isLoading) {
     return shell(
       <CardBody className="items-center gap-3 px-7 py-16">
-        <Spinner label="Loading proposal…" />
+        <Spinner label={t("read.loading")} />
       </CardBody>
     );
   }

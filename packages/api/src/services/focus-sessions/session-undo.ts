@@ -5,7 +5,7 @@
  * {@link SESSION_UNDO_COLUMNS}: plain columns whose earlier value can be put
  * back compare-and-set (`row_patch` in `safe-revert.ts`). Everything else a
  * session update can do has effects a column write cannot reverse — a stage
- * advance (gates, events), a status, the deliverables, the criteria, the
+ * advance (gates, events), a status, the deliverables, the
  * roster, the subject, a playbook follow, a space move (moves the room and its
  * artifacts) — so such an update is never stamped and revert says it cannot be
  * undone.
@@ -32,7 +32,18 @@
  */
 
 /** The plain columns an Undo restores, whatever the update. */
-const PLAIN_UNDO_COLUMNS = ["title", "goal", "progress", "projectId"] as const;
+const PLAIN_UNDO_COLUMNS = [
+  "title",
+  "goal",
+  "progress",
+  "projectId",
+  // The acceptance contract (plan d679e92c C6): an agent's change to its own
+  // session's criteria applies directly and must be revertible. The column is
+  // the whole contract — the grades live in `session_evaluations`, never on
+  // the row — so the compare-and-set row patch restores it exactly, and
+  // refuses once anything rewrote the list since.
+  "criteria",
+] as const;
 
 /** A goal filing's columns: restored only for a filing with no `uses` stamp. */
 const TRACK_FILING_UNDO_COLUMNS = ["trackId", "trackStage"] as const;

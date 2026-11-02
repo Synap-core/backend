@@ -224,6 +224,30 @@ async function approvedSkillsAnUpdateSwitchesOff(
   return out;
 }
 
+/**
+ * The skills an update would newly run on the person's computer: a definition
+ * skill in `box` mode that the container does not hold in `box` mode yet (it
+ * moved from sync/async, or it is new). A box script runs outside the pod with
+ * packages and network, so an automatic pass never lands it, approved or not:
+ * it waits for the owner's "Apply updates" like `updatePolicy:"notify"`,
+ * whatever the template's own policy says.
+ */
+export function skillsAnUpdateMovesToBox(
+  def: CapabilityDefinition,
+  installedSkills: ReadonlyArray<
+    Pick<InstalledSkillRow, "name" | "executionMode">
+  >
+): string[] {
+  const modeByName = new Map(
+    installedSkills.map((r) => [r.name, r.executionMode ?? "sync"])
+  );
+  return (def.skills ?? [])
+    .filter(
+      (s) => s.executionMode === "box" && modeByName.get(s.name) !== "box"
+    )
+    .map((s) => s.name);
+}
+
 /** Build the acting Context for a governed re-apply of ONE container. Mirrors
  * `ensureSynapCoreCapability`'s inline operator ctx: attribute the write to the
  * container's own creator, scoped to its own workspace (null = pod-wide). */
@@ -604,6 +628,21 @@ export async function reconcileCapabilitiesToTemplates(
             name: container.name,
             templateKey,
             reason: `${driftReason} — waits for you: applying it turns off ${switchedOff.join(", ")} until you turn it on again (what it runs changed)`,
+          });
+          continue;
+        }
+      }
+
+      // A skill that would start running on the person's computer is never an
+      // automatic update, whatever `updatePolicy` the template declares.
+      if (!opts.applyNotifyPolicy) {
+        const movesToBox = skillsAnUpdateMovesToBox(cachedDef, installedSkills);
+        if (movesToBox.length > 0) {
+          report.updatesAvailable.push({
+            containerId: container.id,
+            name: container.name,
+            templateKey,
+            reason: `${driftReason} — waits for you: applying it makes ${movesToBox.join(", ")} run on your computer in a box`,
           });
           continue;
         }

@@ -49,6 +49,7 @@ import { buildHandlers } from "./handlers/build.js";
 import { ruleHandlers } from "./handlers/rule.js";
 import { trackHandlers } from "./handlers/track.js";
 import { trackParticipantHandlers } from "./handlers/track-participants.js";
+import { workerHandlers } from "./handlers/workers.js";
 import { devApprovalHandlers } from "./handlers/dev-approval.js";
 import { parseJsonObject, withUiStructuredContent } from "./ui-tools.js";
 import {
@@ -79,6 +80,7 @@ const TOOL_HANDLERS: McpHandlerMap = {
   ...ruleHandlers,
   ...trackHandlers,
   ...trackParticipantHandlers,
+  ...workerHandlers,
   ...devApprovalHandlers,
 };
 

@@ -24,6 +24,7 @@ import { HTTPException } from "hono/http-exception";
 
 import { logger } from "hono/logger";
 import { redactSecretPath } from "./middleware/redact-secret-path.js";
+import { isUuid } from "@synap-core/types/property-render";
 import { secureHeaders } from "hono/secure-headers";
 import { getCookie } from "hono/cookie";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
@@ -96,6 +97,7 @@ import {
   isSafeOpenId,
   isTypedOpenKind,
   normalizeOpenId,
+  packageUpdateOpenTarget,
   podAdminBrowserUrl,
 } from "./open-dispatch.js";
 import {
@@ -108,6 +110,7 @@ import { configureLocalMode, safeTokenEqual } from "@synap/auth";
 import { buildKratosProxyTargetUrl } from "./kratos-proxy-url.js";
 import { trpcSessionGate } from "./trpc-session-gate.js";
 import { trpcAiRateLimit } from "./trpc-ai-rate-limit.js";
+import { trpcRefusals } from "@synap/api/trpc-refusal";
 import { createRequire } from "node:module";
 import {
   DEFAULT_POD_STATE_DIR,
@@ -703,12 +706,27 @@ function applyOpenDispatch(
   return c.html(renderDeepLinkPage(result.deep, browserUrl));
 }
 
+// A template update's link (`/open/update/<slug>`, `/open/updates`): the page
+// lives on pod-admin only, so a pod without it has nowhere to send the reader.
+function applyPackageUpdateOpen(
+  c: HonoContext,
+  type: string | undefined,
+  id: string
+) {
+  const admin = configuredPodAdminBase();
+  c.header("Cache-Control", "private, no-store");
+  if (!admin.ok) return c.text("This pod has no admin website", 404);
+  const target = packageUpdateOpenTarget(type, id, admin.base.toString());
+  return target ? c.redirect(target, 302) : c.text("Invalid deep link", 400);
+}
+
 app.get("/open/:type/:id", (c) => {
   // `project` / `workspace` are lens targets (not rows the app "opens" as a
   // surface) — the browser deep-link handler switches the active lens and lands
   // on that lens's home dashboard. Backs clickable statusline links (synap-cli).
   const type = c.req.param("type").trim().toLowerCase();
   const id = normalizeOpenId(c.req.param("id"));
+  if (type === "update") return applyPackageUpdateOpen(c, type, id);
   // id is a UUID or a cell typeKey — allow only url/HTML-safe chars so it can be
   // interpolated into href/JS without escaping concerns.
   if (!isTypedOpenKind(type) || !isSafeOpenId(id)) {
@@ -754,15 +772,14 @@ app.get("/open/:id", async (c) => {
   if (!isSafeOpenId(id)) {
     return c.text("Invalid deep link", 400);
   }
+  if (id === "updates") return applyPackageUpdateOpen(c, undefined, id);
   const inferred = inferOpenTypeFromId(id);
   if (inferred) {
     return applyOpenDispatch(c, inferred, id);
   }
   // Keywords such as `proposals` are not UUIDs. Bounce without probing —
   // a uuid `eq` would throw 22P02.
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
-  ) {
+  if (!isUuid(id)) {
     return applyOpenDispatch(c, undefined, id);
   }
 
@@ -1037,8 +1054,11 @@ mountAdminEventStream(app);
 // tRPC routes — session auth on every call except the public procedures
 // (health.*, setup.*, invite preview/accept). See trpc-session-gate.ts. The
 // session is a Kratos one or a Synap app's device token, and no other bearer
-// (packages/api middleware/app-session.ts).
-app.use("/trpc/*", trpcSessionGate(appSessionMiddleware()));
+// (packages/api middleware/app-session.ts). Its refusals, and the AI rate
+// limit's below, reach the client as tRPC errors (packages/api
+// middleware/trpc-refusal.ts).
+const trpcRefusal = trpcRefusals(appRouter);
+app.use("/trpc/*", trpcRefusal(trpcSessionGate(appSessionMiddleware())));
 
 // WebSocket ticket minting (see ws-auth.ts for the CSWSH rationale). The browser
 // exchanges its authenticated session for a short-lived, single-use ticket, then
@@ -1267,7 +1287,7 @@ app.route("/api/media", mediaTranscribeApp);
 
 // AI rate limiting — charged once per AI procedure in the request, batched or
 // not (chat.sendMessage, channels.sendMessage). See trpc-ai-rate-limit.ts.
-app.use("/trpc/*", trpcAiRateLimit(aiRateLimitMiddleware));
+app.use("/trpc/*", trpcRefusal(trpcAiRateLimit(aiRateLimitMiddleware)));
 
 // tRPC endpoint
 // NOTE: Using fetchRequestHandler directly from @trpc/server instead of
@@ -1644,7 +1664,7 @@ void (async () => {
 // the transport-derived origin. It does NOT mutate the trusted-issuer registry.
 // Skipped when CONTROL_PLANE_URL is unset (self-hosted without a CP).
 void (async () => {
-  const controlPlaneUrl = process.env.CONTROL_PLANE_URL?.trim();
+  const controlPlaneUrl = controlPlaneBaseUrl();
   if (!controlPlaneUrl) return; // self-hosted without a CP — nothing to probe
 
   const transportIssuer = normalizeIssuerUrl(controlPlaneUrl);
@@ -1916,7 +1936,7 @@ try {
             } = await import("@synap/jobs/workers/fireflies-worker.js");
             const { registerSessionRecallRunner } =
               await import("@synap/jobs/workers/session-recall-worker.js");
-            const { registerGoalLoopSweeper } =
+            const { registerGoalLoopSweeper, registerSessionLifecycleSweeper } =
               await import("@synap/jobs/workers/focus-session-reaper.js");
             const { registerInboundAttachmentIngestRunner } =
               await import("@synap/jobs/workers/inbound-attachment-worker.js");
@@ -2044,6 +2064,14 @@ try {
             // The goal loop's hourly re-check (W4) rides the focus-session
             // reaper's tick: no scheduler of its own.
             registerGoalLoopSweeper(() => api.sweepGoalLoops());
+            // The session lifecycle (C6) rides the same tick: met work closes,
+            // work waiting on a merge is held, a week-stale unowed agent
+            // session is cancelled, an ended run closes — and the stale sweeps
+            // leave runs to their run (the kind's RUN predicate).
+            registerSessionLifecycleSweeper({
+              sweep: () => api.sweepSessionLifecycle(),
+              runSessionWhere: () => api.runSessionWhere(),
+            });
             // Inbound attachments: fetch bytes off the sensor path → GOVERNED
             // file door → link to channel + message (IoC across the api↔jobs dep).
             registerInboundAttachmentIngestRunner((input) =>
@@ -2246,6 +2274,7 @@ import {
   startupHooksState,
   validateCriticalSecrets,
 } from "./startup-hooks.js";
+import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 runStartupHooks().catch((err) => {
   apiLogger.error({ err }, "Startup hooks failed (non-fatal)");
 });

@@ -562,3 +562,106 @@ describe("reconcileCapabilitiesToTemplates — install-time params beyond skill 
     expect(report.updatesAvailable).toHaveLength(0);
   });
 });
+
+/**
+ * A skill that would start running on the person's computer (box mode) is never
+ * an automatic update: the template's own `updatePolicy` does not matter. The
+ * installed row may be unapproved (so the approved-skill hold does not catch
+ * it), which is exactly the case the box rule exists for.
+ */
+describe("reconcileCapabilitiesToTemplates — a skill moving to box waits for the owner", () => {
+  const container: Row = {
+    id: "container-1",
+    name: "Test Capability",
+    createdBy: "user-1",
+    workspaceId: null,
+    metadata: { templateKey: "tmpl-key", contentHash: "old-hash" },
+  };
+  const boxSkill = {
+    name: "crunch",
+    kind: "code",
+    code: "print(1)",
+    executionMode: "box",
+    metadata: { box: { language: "python" } },
+  };
+  const template = (skill: Record<string, unknown>) => ({
+    key: "tmpl-key",
+    name: "Test Capability",
+    updatePolicy: "auto" as const,
+    contentHash: "new-hash",
+    tools: [{ name: "toolA" }],
+    skills: [skill],
+  });
+  const installed = (executionMode: string) => ({
+    id: "skill-1",
+    name: "crunch",
+    kind: "code",
+    code: "print(1)",
+    executionMode,
+    approved: false,
+    metadata: executionMode === "box" ? { box: BOX_NORMALISED } : null,
+  });
+  const BOX_NORMALISED = {
+    language: "python",
+    entrypoint: "main.py",
+    packages: [],
+    hosts: [],
+    limits: {
+      wallSeconds: 900,
+      cpus: 2,
+      memoryMb: 2048,
+      diskMb: 8192,
+      outMb: 200,
+    },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    state.containersRows = [container];
+    state.memberSkillLinkRows = [{ fromId: "skill-1" }];
+    state.memberToolRows = [{ name: "toolA" }];
+    state.updateCalls.length = 0;
+    createCapabilityFromDefinition.mockResolvedValue(undefined);
+  });
+
+  it("sync -> box under updatePolicy auto is held, never applied", async () => {
+    state.installedSkillRows = [installed("sync")];
+    loadCapabilityTemplate.mockResolvedValue(template(boxSkill));
+    const { reconcileCapabilitiesToTemplates } =
+      await import("./reconcile-capabilities-to-templates.js");
+    const report = await reconcileCapabilitiesToTemplates({});
+
+    expect(createCapabilityFromDefinition).not.toHaveBeenCalled();
+    expect(report.applied).toHaveLength(0);
+    expect(report.updatesAvailable).toHaveLength(1);
+    expect(report.updatesAvailable[0]!.reason).toContain(
+      "crunch run on your computer in a box"
+    );
+  });
+
+  it("the owner's Apply updates (applyNotifyPolicy) lands it", async () => {
+    state.installedSkillRows = [installed("sync")];
+    loadCapabilityTemplate.mockResolvedValue(template(boxSkill));
+    const { reconcileCapabilitiesToTemplates } =
+      await import("./reconcile-capabilities-to-templates.js");
+    const report = await reconcileCapabilitiesToTemplates({
+      applyNotifyPolicy: true,
+    });
+
+    expect(createCapabilityFromDefinition).toHaveBeenCalledTimes(1);
+    expect(report.applied).toHaveLength(1);
+  });
+
+  it("CONTROL: a skill already in box mode that drifts (new code) still auto-reconciles", async () => {
+    state.installedSkillRows = [installed("box")];
+    loadCapabilityTemplate.mockResolvedValue(
+      template({ ...boxSkill, code: "print(2)" })
+    );
+    const { reconcileCapabilitiesToTemplates } =
+      await import("./reconcile-capabilities-to-templates.js");
+    const report = await reconcileCapabilitiesToTemplates({});
+
+    expect(createCapabilityFromDefinition).toHaveBeenCalledTimes(1);
+    expect(report.updatesAvailable).toHaveLength(0);
+  });
+});

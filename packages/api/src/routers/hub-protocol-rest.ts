@@ -24,6 +24,7 @@ import { hubValidationHook } from "./hub-protocol/rest/_validation-hook.js";
 import {
   type HubHono,
   registerAgentConfigsRoutes,
+  registerAgentPresetsRoutes,
   registerAgentUsersRoutes,
   registerAgentsRoutes,
   registerAuthRoutes,
@@ -53,6 +54,7 @@ import {
   registerProfilesRoutes,
   registerProjectsRoutes,
   registerTracksRoutes,
+  registerWorkersRoutes,
   registerTrackParticipantsRoutes,
   registerSharesRoutes,
   registerFormsRoutes,
@@ -308,10 +310,12 @@ registerKnowledgeRoutes(app); // /knowledge*, /graph/traverse
 registerCommandsRoutes(app); // /commands*, /commands/execute
 registerAgentUsersRoutes(app); // /agent-users
 registerAgentConfigsRoutes(app); // /agent-configs
+registerAgentPresetsRoutes(app); // /agent-users/:id/presets
 registerViewsRoutes(app); // /views*
 registerProfilesRoutes(app); // /profiles*, /property-defs*
 registerProjectsRoutes(app); // /projects*
 registerTracksRoutes(app); // /tracks*
+registerWorkersRoutes(app); // /workers* (a goal's workers: list, enable, pause, run)
 registerTrackParticipantsRoutes(app); // /tracks/:id/participants* (W3)
 registerSharesRoutes(app); // /shares* (Sites W2 S3 owner share doors)
 registerFormsRoutes(app); // /forms* (Sites W4 owner public-form doors)

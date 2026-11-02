@@ -20,6 +20,7 @@ import {
   reviewRowMembers,
   reviewSessionOf,
   rowsInView,
+  rejectedRows,
   summarizeBatch,
   NEEDS_YOU_PAGE_LIMIT,
   type ProposalFacts,
@@ -595,6 +596,15 @@ describe("batch", () => {
       approved: 1,
       failures: [{ title: "c2", error: "It could not be approved." }],
     });
+  });
+
+  it("a reject counts ROWS, like approve: a row is rejected whole", () => {
+    const b = batchOf(rows, new Set(["c1", "c2"]));
+    // 3 requests in 2 rows: the answer counts 2 rows, never 3.
+    expect(rejectedRows(b.rows, ["c1-p1", "x", "y"])).toBe(2);
+    // A member decided meanwhile leaves its row out of the count.
+    expect(rejectedRows(b.rows, ["c1-p1", "x"])).toBe(1);
+    expect(rejectedRows(b.rows, [])).toBe(0);
   });
 });
 

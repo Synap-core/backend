@@ -33,7 +33,11 @@ import {
   readTemplateState,
   type KeyGrant,
 } from "@synap/database";
-import { cpCatalogCache, workspaces } from "@synap/database/schema";
+import {
+  cpCatalogCache,
+  isPodWideReadScope,
+  workspaces,
+} from "@synap/database/schema";
 import { officialCatalogCondition } from "./capabilities/catalog-cache-query.js";
 import { getWorkspaceTemplate } from "@synap-core/workspace-templates";
 import {
@@ -100,6 +104,9 @@ export interface AvailableTemplate {
  * unbounded `*`: yes. Otherwise ONE scope that permits something and is not
  * pinned to a project or object, on every space (no list) or on this one. A
  * project- or object-pinned scope does not cover a whole space (fail closed).
+ * A pod-wide read (`isPodWideReadScope`, decision e1b59d38 "B") reads its
+ * kinds everywhere and reaches no space, so it never covers one: an app that
+ * reads decisions pod-wide learns nothing here of spaces it was not given.
  */
 function grantCoversSpace(
   grant: KeyGrant | undefined,
@@ -111,6 +118,7 @@ function grantCoversSpace(
       scope.permissions.length > 0 &&
       !scope.projectIds &&
       !scope.entityIds &&
+      !isPodWideReadScope(scope) &&
       (!scope.workspaceIds || scope.workspaceIds.includes(workspaceId))
   );
 }

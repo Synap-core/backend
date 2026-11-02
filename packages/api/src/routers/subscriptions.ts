@@ -67,6 +67,7 @@ import {
   INTERNAL_REACTION_KINDS,
   EXTERNAL_REACTION_KINDS,
 } from "../types/reactions.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 // ── Input schemas ────────────────────────────────────────────────────────────
 
@@ -239,10 +240,6 @@ function filterReactionsByLens(
   return reactions.filter((r) => allowed.includes(r.kind));
 }
 
-/** Matches a canonical v4-shaped UUID (the id form of every uuid PK column). */
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** Map key for a resolved subject: `${subjectType}:${subjectId}`. */
 export function subjectKey(subjectType: string, subjectId: string): string {
   return `${subjectType}:${subjectId}`;
@@ -322,7 +319,7 @@ export async function resolveSubjectNames(
   // (e.g. a subjectId that fell back to a slug) would raise a Postgres cast
   // error rather than fail open.
   const uuidsOf = (s: Set<string>): string[] =>
-    Array.from(s).filter((x) => UUID_RE.test(x));
+    Array.from(s).filter((x) => isUuid(x));
 
   const entityIdList = uuidsOf(entityIds);
   const workspaceIdList = uuidsOf(workspaceIds);

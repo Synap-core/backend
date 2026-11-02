@@ -7,6 +7,7 @@ import { describe, expect, it, beforeAll } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { pgTable, text, jsonb } from "drizzle-orm/pg-core";
+import { MEDIA_COPY_UPLOAD_KIND as DATABASE_MEDIA_COPY_UPLOAD_KIND } from "@synap/database";
 import {
   MEDIA_COPY_UPLOAD_KIND,
   notMediaCopyDocumentWhere,
@@ -34,6 +35,12 @@ beforeAll(async () => {
       JSON.stringify({ importItem: { id: "x" } }),
     ]
   );
+});
+
+describe("the media-copy mark", () => {
+  it("is the one `@synap/database` filters on", () => {
+    expect(MEDIA_COPY_UPLOAD_KIND).toBe(DATABASE_MEDIA_COPY_UPLOAD_KIND);
+  });
 });
 
 describe("notMediaCopyDocumentWhere", () => {

@@ -39,6 +39,7 @@ import {
   trustedCacheRevision,
   UNSTAMPED_EDITOR_SCHEMA,
 } from "./document-room.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 export interface YjsServerConfig {
   io: SocketIOServer;
@@ -60,10 +61,6 @@ function parseRoomName(roomName: string): string | null {
   }
   return null;
 }
-
-/** A room name only maps to a document when its id is a real UUID. */
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** What a socket may do in a Yjs room. */
 export type RoomAccess = "edit" | "read" | "none";
@@ -112,7 +109,8 @@ export async function authorizeRoomAccess(
   userId: string
 ): Promise<RoomAccess> {
   const documentId = parseRoomName(roomName);
-  if (!documentId || !UUID_RE.test(documentId)) return "none";
+  // A room name only maps to a document when its id is a real UUID.
+  if (!documentId || !isUuid(documentId)) return "none";
   const access = await resolveDocumentRoomAccess(userId, documentId);
   if (access === "none") return "none";
   const doc = await db.query.documents.findFirst({

@@ -14,6 +14,11 @@
  *   - `owner` absent    — `=== "agent"` / `!= 'human'` spellings disagree;
  *   - retired + human / retired + agent — retirement on one owner branch only;
  *   - JSON `false` / `0` stamps — a falsy test reads them as not retired.
+ *   - a DECISION the person answered (`isDecidedByAnswer`): delivered only
+ *     with a non-empty string `decisionId` AND an answer object whose
+ *     `askSnapshot.mode` is confirm / choose, never on a criterion's grade
+ *     slot. Each half missing is a row: a NULL in the SQL test must keep the
+ *     slot owed, never drop it.
  *
  * The SQL and the TypeScript rule cannot be one declaration (Postgres runs
  * the one, Node the other), which is why this parity test exists at all.
@@ -38,6 +43,15 @@ import { OWED_SLOT_CLAUSES, owedSlotExistsIn } from "./owed-slot-predicate.js";
 import { deliverableOwedBy } from "@synap-core/types/units";
 
 const STAMP = "2026-09-08T13:00:00.000Z";
+/** An answer as the answer door stores it (trimmed to what the rule reads). */
+const DECIDED_CHOOSE = {
+  text: "EU account",
+  askSnapshot: { mode: "choose", chosenKey: "eu" },
+};
+const DECIDED_CONFIRM = {
+  text: "Yes",
+  askSnapshot: { mode: "confirm", chosenKey: "yes" },
+};
 
 const ROWS: ReadonlyArray<{ rulesOut: string; slot: Record<string, unknown> }> =
   [
@@ -93,6 +107,77 @@ const ROWS: ReadonlyArray<{ rulesOut: string; slot: Record<string, unknown> }> =
       rulesOut: "optional = false read as optional",
       slot: { owner: "human", optional: false },
     },
+    {
+      rulesOut: "an answered choose with its decision filed read as owed",
+      slot: { owner: "human", decisionId: "d-1", answer: DECIDED_CHOOSE },
+    },
+    {
+      rulesOut: "an answered confirm with its decision filed read as owed",
+      slot: { owner: "human", decisionId: "d-1", answer: DECIDED_CONFIRM },
+    },
+    {
+      rulesOut: "a decisionId alone read as decided (the ask is still open)",
+      slot: { owner: "human", decisionId: "d-1" },
+    },
+    {
+      rulesOut: "an answer alone read as decided (its filing failed)",
+      slot: { owner: "human", answer: DECIDED_CHOOSE },
+    },
+    {
+      rulesOut: "an empty decisionId read as a decision",
+      slot: { owner: "human", decisionId: "", answer: DECIDED_CHOOSE },
+    },
+    {
+      rulesOut: "a JSON null decisionId read as a decision",
+      slot: { owner: "human", decisionId: null, answer: DECIDED_CHOOSE },
+    },
+    {
+      rulesOut: "a non-string decisionId read as a decision",
+      slot: { owner: "human", decisionId: 7, answer: DECIDED_CHOOSE },
+    },
+    {
+      rulesOut: "a form answer read as a decision",
+      slot: {
+        owner: "human",
+        decisionId: "d-1",
+        answer: { text: "x", askSnapshot: { mode: "form" } },
+      },
+    },
+    {
+      rulesOut: "an answer with no ask snapshot read as a decision",
+      slot: { owner: "human", decisionId: "d-1", answer: { text: "x" } },
+    },
+    {
+      rulesOut: "a JSON null answer read as a decision",
+      slot: { owner: "human", decisionId: "d-1", answer: null },
+    },
+    {
+      rulesOut: "a criterion grade (kind) read as a decision",
+      slot: {
+        owner: "human",
+        kind: "criterion",
+        decisionId: "d-1",
+        answer: DECIDED_CHOOSE,
+      },
+    },
+    {
+      rulesOut: "a criterion grade (criterionKey) read as a decision",
+      slot: {
+        owner: "human",
+        criterionKey: "tests-pass",
+        decisionId: "d-1",
+        answer: DECIDED_CHOOSE,
+      },
+    },
+    {
+      rulesOut: "an empty criterionKey read as a criterion",
+      slot: {
+        owner: "human",
+        criterionKey: "",
+        decisionId: "d-1",
+        answer: DECIDED_CHOOSE,
+      },
+    },
   ];
 
 let client: PGlite;
@@ -120,7 +205,7 @@ afterAll(async () => {
 
 describe("owed-slot SQL === deliverableOwedBy(slot) === 'you'", () => {
   it("non-vacuity: the table holds both answers and the clause set is real", async () => {
-    expect(OWED_SLOT_CLAUSES.length).toBe(4);
+    expect(OWED_SLOT_CLAUSES.length).toBe(5);
     const answers = ROWS.map(
       (r) => deliverableOwedBy(r.slot as never) === "you"
     );

@@ -26,6 +26,11 @@ export interface FailureWording {
   forbidden?: string;
   /** The sentence for a read that failed (not a not-found or a refusal). */
   failed?: string;
+  /**
+   * The titles, for a page that speaks the reader's language: the defaults
+   * are English templates around the noun.
+   */
+  titles?: { notFound?: string; forbidden?: string; failed?: string };
 }
 
 /**
@@ -50,7 +55,8 @@ export function loadFailure(
       return notFound(noun, wording);
     case "FORBIDDEN":
       return {
-        title: `You don’t have access to this ${n}`,
+        title:
+          wording.titles?.forbidden ?? `You don’t have access to this ${n}`,
         message:
           wording.forbidden ??
           (wording.inApp === false
@@ -72,7 +78,9 @@ export function notFound(
   wording: FailureWording = {}
 ): LoadFailure {
   return {
-    title: `This ${noun.toLowerCase()} couldn’t be found`,
+    title:
+      wording.titles?.notFound ??
+      `This ${noun.toLowerCase()} couldn’t be found`,
     message:
       wording.notFound ??
       (wording.inApp === false
@@ -89,7 +97,7 @@ export function couldNotLoad(
 ): LoadFailure {
   const n = noun.toLowerCase();
   return {
-    title: `This ${n} couldn’t be loaded`,
+    title: wording.titles?.failed ?? `This ${n} couldn’t be loaded`,
     message:
       wording.failed ??
       (wording.inApp === false

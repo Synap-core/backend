@@ -26,15 +26,12 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { createAndLinkPropertyDef } from "../profiles/create-and-link-property-def.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "reconcile-proposal-properties" });
 
 /** Entity-column keys that live on the row, not the property bag — never a def. */
 const RESERVED_KEYS: ReadonlySet<string> = new Set(["title"]);
-
-/** `profiles.id` is a uuid column — anything else is a slug passed as an id. */
-const PROFILE_ID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface ReconcileApprovedPropertiesResult {
   /** The final property bag to write (remapped keys, refused keys dropped, new keys under their slug or verbatim fallback). */
@@ -76,7 +73,7 @@ export async function reconcileApprovedProperties(args: {
   //    reached a uuid column (a Postgres cast error, caught below) and, had it
   //    got further, `propertyDefs.create`'s `z.string().uuid()`. Refuse it here,
   //    by name, for every caller.
-  if (!profileId || !PROFILE_ID_RE.test(profileId)) {
+  if (!profileId || !isUuid(profileId)) {
     logger.warn(
       { profileId, workspaceId, keys: Object.keys(properties) },
       "reconcile: target profile did not resolve to an id — skipping def creation, storing properties verbatim"

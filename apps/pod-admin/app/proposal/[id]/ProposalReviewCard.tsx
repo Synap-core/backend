@@ -70,6 +70,7 @@ import {
   type ProposalTurnsOn,
 } from "@synap-core/types/proposals";
 import {
+  resolveActionLabel,
   resolveObjectNoun,
   resolveProvenanceLabel,
   resolveStatusLabel,
@@ -87,6 +88,7 @@ import { mediaAlt } from "../../_lib/media/stored-media-model";
 import { useConsoleRole } from "../../(admin)/components/side-nav-role";
 import { AdvancedPanel } from "../../_lib/object/advanced-panel";
 import { kindIcon } from "../../_lib/object/kind-icon";
+import { READS_WIDE_ATTR } from "../../_lib/receiver-shell";
 import {
   AgentMark,
   PersonAvatar,
@@ -96,6 +98,7 @@ import { deriveDeferredWritesReview } from "@synap-core/types/proposals/deferred
 import { DocumentChanges } from "../../_lib/object/content/document-changes";
 import { documentChanges } from "../../_lib/object/content/document-changes-model";
 import { AlwaysApproveMenu, RejectNeverMenu } from "./AlwaysApproveMenu";
+import { proposalPageT, type OutcomeKey } from "./copy";
 import { DeferredWritesList } from "./DeferredWritesList";
 import { FailedApproval } from "./FailedApproval";
 import {
@@ -129,6 +132,7 @@ import {
 } from "./proposal-record-model";
 import {
   reasonMark,
+  reviewReadsWide,
   undoMark,
   type ProposalChangeInput,
   type ReviewMark,
@@ -154,7 +158,7 @@ import {
 } from "./use-proposal-decision";
 import { useRecordDefinitions } from "./use-record-definitions";
 import { ToolRunArguments } from "./ToolRunArguments";
-import { reviewToolRun } from "./tool-run-model";
+import { reviewToolRun, toolRunArguments } from "./tool-run-model";
 
 /**
  * `pending` and `approval_failed` are the two states a reviewer can still decide;
@@ -458,45 +462,44 @@ function RequesterNote({ who, text }: { who: string | null; text: string }) {
 function terminalOutcome(status: string): {
   tone: "success" | "danger" | "muted";
   icon: ReactNode;
-  message: string;
+  messageKey: OutcomeKey;
 } {
   switch (status) {
     case "approved":
       return {
         tone: "success",
         icon: <Check className="h-6 w-6" strokeWidth={2.2} />,
-        message: "You approved this change — it's now in your pod.",
+        messageKey: "outcome.approved",
       };
     case "auto_approved":
       return {
         tone: "success",
         icon: <Check className="h-6 w-6" strokeWidth={2.2} />,
-        message: "This matched an auto-approve rule and is already applied.",
+        messageKey: "outcome.auto_approved",
       };
     case "rejected":
       return {
         tone: "danger",
         icon: <X className="h-6 w-6" strokeWidth={2.2} />,
-        message: "You rejected this — the agent was told why.",
+        messageKey: "outcome.rejected",
       };
     case "reverted":
       return {
         tone: "muted",
         icon: <X className="h-6 w-6" strokeWidth={2.2} />,
-        message: "This change was undone after it was applied.",
+        messageKey: "outcome.reverted",
       };
     case "expired":
       return {
         tone: "muted",
         icon: <Clock className="h-6 w-6" strokeWidth={2.2} />,
-        message:
-          "Its moment passed before anyone decided — nothing was applied.",
+        messageKey: "outcome.expired",
       };
     default:
       return {
         tone: "muted",
         icon: <X className="h-6 w-6" strokeWidth={2.2} />,
-        message: "The agent withdrew this proposal — nothing was applied.",
+        messageKey: "outcome.withdrawn",
       };
   }
 }
@@ -521,6 +524,7 @@ const OUTCOME_TONE: Record<
 function Outcome({ status }: { status: string }) {
   const o = terminalOutcome(status);
   const tone = OUTCOME_TONE[o.tone];
+  const t = proposalPageT();
   return (
     <div aria-live="polite" className="flex items-center gap-3">
       <span
@@ -534,7 +538,7 @@ function Outcome({ status }: { status: string }) {
           {resolveStatusLabel(status)}
         </span>
         <span className="text-[13px] leading-relaxed text-foreground/60">
-          {o.message}
+          {t(o.messageKey)}
         </span>
       </div>
     </div>
@@ -581,12 +585,19 @@ function DecisionButtons({
   const [reason, setReason] = useState("");
   const [rejecting, setRejecting] = useState(false);
   const [pickedId, setPickedId] = useState<string | null>(null);
+  // A rule menu decides through its own calls (approve or reject, then a
+  // rule): the bar holds every verb while either it or a menu is deciding.
+  const [ruleRunning, setRuleRunning] = useState(false);
   const decision = useProposalDecision(p.id, onDecided, {
     onRejected: () => setRejecting(false),
     expectedRevision: renderedRevision(p),
-    revertable: (p as { revertable?: boolean | null }).revertable,
+    revertable: p.revertable,
   });
-  const { busy } = decision;
+  const busy = decision.busy || ruleRunning;
+  const t = proposalPageT();
+  // A rule is a pod admin's to set (`assertCanManageRule`): anyone else would
+  // decide, then be refused the rule they chose, so the menus are not offered.
+  const mayRule = useConsoleRole() === "admin";
 
   if (rejecting) {
     return (
@@ -594,8 +605,8 @@ function DecisionButtons({
         <Textarea
           value={reason}
           onValueChange={setReason}
-          label="Reason (optional)"
-          placeholder="Why are you rejecting this? The agent sees this."
+          label={t("decide.reason.label")}
+          placeholder={t("decide.reason.placeholder")}
           minRows={2}
         />
         <div className="flex items-center gap-2">
@@ -603,9 +614,10 @@ function DecisionButtons({
             color="danger"
             className="min-h-10"
             isLoading={decision.rejecting}
+            isDisabled={busy}
             onPress={() => decision.reject(reason)}
           >
-            Confirm reject
+            {resolveActionLabel("reject")}
           </Button>
           <Button
             variant="light"
@@ -613,7 +625,7 @@ function DecisionButtons({
             isDisabled={decision.rejecting}
             onPress={() => setRejecting(false)}
           >
-            Cancel
+            {t("decide.cancel")}
           </Button>
         </div>
       </div>
@@ -629,7 +641,7 @@ function DecisionButtons({
       isDisabled={busy}
       onPress={() => setRejecting(true)}
     >
-      Reject…
+      {`${resolveActionLabel("reject")}…`}
     </Button>
   );
   const undoChip = undo && <DisclosedMark mark={undo} icon={TriangleAlert} />;
@@ -702,23 +714,34 @@ function DecisionButtons({
         isDisabled={busy || waiting}
         onPress={() => decision.approve(choice)}
       >
-        {resume ? "Resume" : "Approve"}
+        {resolveActionLabel(resume ? "resume" : "approve")}
       </Button>
       {rejectButton}
       {/* Never widen autonomy beside the approval of something that acts on
           its own: that moment is for reading it, not for "always". */}
-      {mode.kind === "plain" &&
+      {mayRule &&
+        mode.kind === "plain" &&
         !pageOnlyReasonActs(proposalPageOnlyReason(p)) && (
-          <AlwaysApproveMenu proposal={p} disabled={busy} onDone={onDecided} />
+          <AlwaysApproveMenu
+            proposal={p}
+            disabled={busy}
+            onRunningChange={setRuleRunning}
+            onDone={onDecided}
+          />
         )}
       {/* "Never" narrows, so it stays beside a change that acts on its own. */}
-      {mode.kind === "plain" && (
-        <RejectNeverMenu proposal={p} disabled={busy} onDone={onDecided} />
+      {mayRule && mode.kind === "plain" && (
+        <RejectNeverMenu
+          proposal={p}
+          disabled={busy}
+          onRunningChange={setRuleRunning}
+          onDone={onDecided}
+        />
       )}
       {undoChip}
       {waiting && (
         <span className="text-[12px] text-foreground/60">
-          Pick the record for each item first.
+          {t("decide.pickFirst")}
         </span>
       )}
     </div>
@@ -757,17 +780,10 @@ function WhoDecides({ identity }: { identity?: string }) {
     ) : (
       audit.label
     );
+  const t = proposalPageT();
   return (
     <p className="text-[11.5px] text-foreground/55">
-      {identity ? (
-        <>
-          You decide as <span className="text-foreground/75">{identity}</span>
-          {" · recorded in the "}
-        </>
-      ) : (
-        "Recorded in the "
-      )}
-      {log}
+      {identity ? t("decide.as", { identity }) : t("decide.recorded")} {log}
     </p>
   );
 }
@@ -979,7 +995,7 @@ export function ProposalReviewBody({
     reasoning: p.review.reasoning,
   });
   const reason = reasonMark(p.governanceReason);
-  const undo = undoMark((p as { revertable?: boolean | null }).revertable);
+  const undo = undoMark(p.revertable);
   const { actor } = proposalRequesterParts(p);
   // Present only when `proposals.source` named it: a session the reader may
   // read (the session floor, decision D1).
@@ -1006,8 +1022,19 @@ export function ProposalReviewBody({
     (item) => !records.some((r) => r.ref === item.forRef)
   );
 
+  /* A review that shows text (a document, code, prose) reads at a
+     document's width; the receiver card widens on this mark. */
+  const readsWide = reviewReadsWide({
+    documentChanges: !!docChanges,
+    toolArguments: toolRun ? toolRunArguments(toolRun) : [],
+    records,
+  });
+
   return (
-    <div className="flex flex-col gap-5">
+    <div
+      className="flex flex-col gap-5"
+      {...(readsWide ? { [READS_WIDE_ATTR]: "" } : {})}
+    >
       <ProvenanceLine
         proposal={p}
         sourceExits={sourceExits}
@@ -1197,7 +1224,7 @@ export function ProposalReviewBody({
                 run that is in fact applying. */}
             {progress.isError && (
               <ApprovalProgressLines
-                copy={progressUnavailable}
+                copy={progressUnavailable()}
                 onRetry={() => void progress.refetch()}
               />
             )}

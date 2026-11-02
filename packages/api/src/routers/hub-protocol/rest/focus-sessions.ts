@@ -48,7 +48,10 @@ import {
   writeSessionPatch,
 } from "@synap/database";
 import { sessionReadableWhere } from "../../../access/session-visibility.js";
-import { sessionPacketReadable } from "../../../access/grant-door-fence.js";
+import {
+  sessionHolderReadable,
+  sessionPacketReadable,
+} from "../../../access/grant-door-fence.js";
 import {
   checkPermissionOrPropose,
   proposedMessageFor,
@@ -200,6 +203,12 @@ import {
 import { moveHoldInputShape } from "../../../services/lifecycle/hold-input.js";
 import { lifecycleConflictOf } from "../../../services/lifecycle/conflict.js";
 import { sessionMoveRefusal } from "../../../services/focus-sessions/update-session.js";
+import {
+  parseSessionReadDetail,
+  readLeanSession,
+  readSessionDeploys,
+  SESSION_READ_DETAIL_ERROR,
+} from "../../../services/focus-sessions/session-lean.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
@@ -1761,13 +1770,57 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       }
 
       if (!sessionPacketReadable(getRequestGrant())) {
+        // Who has it (`session-holder.ts`) still rides with the row for a key
+        // that reads the person's agents: an app shows who holds its run
+        // without the packet (Content Studio's edit band).
+        const { readSessionHolder } =
+          await import("../../../services/focus-sessions/session-holder.js");
+        const holder = sessionHolderReadable(getRequestGrant())
+          ? await readSessionHolder(row, { userId: acting.userId })
+          : undefined;
         return c.json({
           ...attachSessionKind(attachTriage([row]))[0],
+          ...(holder ? { holder } : {}),
           packet: {
             status: "withheld",
             reason:
               "This key does not read everything a session's packet holds (its room, outcomes, links and more): only the session itself is shown.",
           },
+        });
+      }
+
+      // `?detail=` (C8), the same three values as MCP `synap_get_session`:
+      // `full` (default) · `lean` (a wake's read) · `deploys` (by `commitSha`).
+      const detail = parseSessionReadDetail(c.req.query("detail"));
+      if (detail === null) {
+        return c.json(
+          { error: SESSION_READ_DETAIL_ERROR(c.req.query("detail")) },
+          400
+        );
+      }
+      if (detail === "deploys") {
+        return c.json(
+          await readSessionDeploys(row, {
+            userId: acting.userId,
+            commitSha: c.req.query("commitSha") || undefined,
+          })
+        );
+      }
+      if (detail === "lean") {
+        const lean = await readLeanSession(row, { userId: acting.userId });
+        // The row's long columns (goal, criteria, stages, metadata) are not
+        // repeated: `continuation.session` carries the identity a wake needs.
+        return c.json({
+          id: row.id,
+          title: row.title,
+          status: row.status,
+          kind: attachSessionKind(attachTriage([row]))[0]?.kind,
+          workspaceId: row.workspaceId,
+          projectId: row.projectId,
+          trackId: row.trackId,
+          channelId: row.channelId,
+          updatedAt: row.updatedAt,
+          ...lean,
         });
       }
 
@@ -1796,6 +1849,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json({
         ...attachSessionKind(attachTriage([row]))[0],
         rerun: continuation.rerun,
+        // The same field the withheld answer carries: one place to read it.
+        holder: continuation.holder,
         continuation,
         outcomes,
         // Same projection as MCP `synap_get_session`: what the pod recalled

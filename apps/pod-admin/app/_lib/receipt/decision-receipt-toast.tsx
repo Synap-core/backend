@@ -12,7 +12,6 @@
  */
 
 import { Button, addToast, closeToast } from "@heroui/react";
-import { useState } from "react";
 import { trpc } from "../../../lib/trpc";
 import { receiptT } from "./copy";
 import {
@@ -24,18 +23,12 @@ import {
   type Receipt,
 } from "./decision-receipt";
 
-const COLOR: Record<Receipt["tone"], "success" | "default" | "danger"> = {
-  success: "success",
-  default: "default",
-  danger: "danger",
-};
-
 /** Show a receipt that offers no Undo. */
 export function showReceipt(receipt: Receipt): void {
   addToast({
     title: receipt.title,
     ...(receipt.description ? { description: receipt.description } : {}),
-    color: COLOR[receipt.tone],
+    color: receipt.tone,
     ...(receipt.tone === "danger" ? { timeout: 0 } : {}),
   });
 }
@@ -58,7 +51,7 @@ export function showDecisionReceipt(
   holder.key = addToast({
     title: receipt.title,
     ...(receipt.description ? { description: receipt.description } : {}),
-    color: COLOR[receipt.tone],
+    color: receipt.tone,
     timeout: UNDO_WINDOW_MS,
     endContent: (
       <UndoDecisionButton
@@ -74,8 +67,8 @@ export function showDecisionReceipt(
 
 /**
  * Undo one decision, then show what the pod answered (`undoReceipt`) and
- * refresh the proposal and signal reads. The one Undo door: the receipt's
- * Undo button and any row that offers Undo later (Historique) call it.
+ * refresh the proposal and signal reads. The one Undo door, behind
+ * `UndoDecisionButton` (the receipt's Undo and Historique's).
  *
  *   approve → `proposals.revert({ proposalId, reopen: true })`: the change is
  *             taken back and the request waits for a decision again;
@@ -118,13 +111,10 @@ export function UndoDecisionButton({
   verb: DecisionVerb;
   onAnswered?: () => void;
 }) {
-  const { undo } = useUndoDecision();
-  const [busy, setBusy] = useState(false);
+  const { undo, pending } = useUndoDecision();
 
   const run = async () => {
-    setBusy(true);
     await undo(proposalId, verb);
-    setBusy(false);
     onAnswered?.();
   };
 
@@ -133,7 +123,7 @@ export function UndoDecisionButton({
       size="sm"
       variant="flat"
       radius="md"
-      isLoading={busy}
+      isLoading={pending}
       onPress={() => void run()}
     >
       {receiptT()("undo")}

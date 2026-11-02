@@ -26,6 +26,10 @@ import {
 } from "@synap/database";
 import type { FocusSession } from "@synap/database/schema";
 import { withParentSessionId } from "../services/focus-sessions/parent-lineage.js";
+import {
+  readLeanSession,
+  readSessionDeploys,
+} from "../services/focus-sessions/session-lean.js";
 import { sessionListConditions } from "../services/focus-sessions/session-list-conditions.js";
 import {
   resolveSessionSubject,
@@ -187,6 +191,10 @@ import {
   projectSessionRows,
   queryUserSessions,
 } from "../services/focus-sessions/session-list-rows.js";
+import {
+  attachSessionHolder,
+  type SessionHolderSection,
+} from "../services/focus-sessions/session-holder.js";
 import {
   buildWorkGraph,
   WORK_GRAPH_DEFAULT_WINDOW_HOURS,
@@ -474,6 +482,12 @@ type SessionListRow = FocusSession & { parentSessionId: string | null } & {
      * now" rule reads. `null` = the liveness read FAILED (never "quiet").
      */
     live?: SessionActivityLive | null;
+    /**
+     * Present with `nextMove: true` — who has it now, through the session
+     * read's own derivation (`attachSessionHolder`): `unavailable` when a fact
+     * it needs could not be read, never "nobody".
+     */
+    holder?: SessionHolderSection;
     interactions?: SessionInteractionsSection;
     /**
      * `owner` | `member` (decision C) — present on every row the door returns;
@@ -561,7 +575,9 @@ export const focusSessionsRouter = router({
          * from the same reads, so a state mark needs no second request — and
          * `live` (turn in flight + newest activity, `loadSessionLiveness`, the
          * SAME read the activity door uses), so the row's "working" mark obeys
-         * the one rule (D1, `isSessionWorkingNow`) the session page does.
+         * the one rule (D1, `isSessionWorkingNow`) the session page does —
+         * and `holder` (who has it now, `attachSessionHolder`, the session
+         * read's own derivation over that same `live`; sessions cockpit C5).
          */
         nextMove: z.boolean().optional(),
         /**
@@ -657,11 +673,14 @@ export const focusSessionsRouter = router({
       );
       const withParticipants = await projectSessionRows(sessions, ctx.userId);
       const withMove: SessionListRow[] = input.nextMove
-        ? await attachSessionLiveness(
-            await attachNextMove(withParticipants, {
-              userId: requireUserId(ctx.userId),
-              logContext: { door: "focusSessions.list" },
-            }),
+        ? await attachSessionHolder(
+            await attachSessionLiveness(
+              await attachNextMove(withParticipants, {
+                userId: requireUserId(ctx.userId),
+                logContext: { door: "focusSessions.list" },
+              }),
+              { userId: requireUserId(ctx.userId), roster: rosterReadFor(ctx) }
+            ),
             { userId: requireUserId(ctx.userId), roster: rosterReadFor(ctx) }
           )
         : withParticipants;
@@ -1660,6 +1679,63 @@ export const focusSessionsRouter = router({
             }
           : {}),
       });
+    }),
+
+  /**
+   * The LEAN read of one session (C8): what a wake needs (outcomes, next move,
+   * asks, work units, the room's last 3 + unread, own gates) with none of the
+   * owner's other deploys. Same projection as Hub `GET /focus-sessions/:id`
+   * `?detail=lean` and MCP `synap_get_session` `detail:'lean'`. A procedure of
+   * its own, not a `detail` input on `get`, so `get`'s output type stays one
+   * shape for its typed callers.
+   */
+  getLean: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const roster = rosterReadFor(ctx);
+      const row = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, input.id),
+          sessionReadableWhere({ userId, roster })
+        ),
+      });
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.id} not found`,
+        });
+      }
+      return readLeanSession(row, { userId, roster });
+    }),
+
+  /**
+   * The deploys a person approved on any of the owner's sessions, by commit
+   * (C8): the gate read that `getLean` leaves out. Same read as Hub
+   * `?detail=deploys` and MCP `detail:'deploys'`.
+   */
+  deploys: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        commitSha: z.string().min(1).max(64).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const row = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, input.id),
+          sessionReadableWhere({ userId, roster: rosterReadFor(ctx) })
+        ),
+      });
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.id} not found`,
+        });
+      }
+      return readSessionDeploys(row, { userId, commitSha: input.commitSha });
     }),
 
   /**

@@ -1151,13 +1151,6 @@ function ExpiredBody() {
   );
 }
 
-/** How the person signs in next time, said on the Done screen. */
-const SIGN_IN_WITH: Record<SignInWay, string> = {
-  passkey: "with your passkey",
-  password: "with this pod's password",
-  synap_cloud: "with Synap Cloud",
-};
-
 /**
  * Joined. Where the work is done leads (`joinedDoors`, decision 94cd8636):
  * "Open in Synap", the Synap app on this device (`pairExit`: it opens THIS
@@ -1214,6 +1207,13 @@ function DoneBody({
   useEffect(() => {
     heading.current?.focus();
   }, []);
+  // How the person signs in next time; the email is drawn in bold.
+  const [signInBefore, signInAfter = ""] = t("done.signInAs", {
+    app: synap ? "yes" : "no",
+    where: host ?? t("done.yourSynap"),
+    email,
+    way: way ?? "none",
+  }).split(email);
   return (
     <>
       <CheckCircle2 aria-hidden className="h-10 w-10 text-success" />
@@ -1226,9 +1226,9 @@ function DoneBody({
           {joinedHeadline(subject, host)}
         </h1>
         <p className="text-[13.5px] leading-relaxed text-foreground/65">
-          {synap ? "In the Synap app, sign" : "Sign"} in to {host ?? "this pod"}{" "}
-          as <span className="font-medium text-foreground/85">{email}</span>
-          {way ? ` ${SIGN_IN_WITH[way]}` : ""}.
+          {signInBefore}
+          <span className="font-medium text-foreground/85">{email}</span>
+          {signInAfter}
         </p>
       </div>
       {way === "synap_cloud" ? <LinkCloudStep /> : null}

@@ -29,7 +29,8 @@
  * Env: SYNAP_POD_URL, SYNAP_OBS_KEY (never printed or logged), SNAPSHOT_REPOS (slugs), SNAPSHOT_STATE (state
  *      file), SNAPSHOT_DEVBOX_STATUS (reader command), SNAPSHOT_POD_HEALTH_URL, SNAPSHOT_CP_HEALTH_URL,
  *      SNAPSHOT_IS_HEALTH_URL (env-only; the hub's build is on its private /health/details), SNAPSHOT_TZ (day for
- *      mergedToday, default Europe/Paris), SNAPSHOT_DRY=1.
+ *      mergedToday, default Europe/Paris), SNAPSHOT_DRY=1, SNAPSHOT_WORKSPACE_ID (the space the snapshots are
+ *      recorded in, so that space's apps read them; unset = pod-wide, read by the person and unpinned keys only).
  * A repo whose read fails is SKIPPED this cycle (logged), never posted as empty: an unreadable GitHub is not
  * an empty repo. A pod that refuses the key (401/403, no `event.create` grant) is a warning, exit 0.
  *
@@ -509,6 +510,20 @@ export function checksFromDevbox(status, dir, headSha) {
 // ── pure: assembly ───────────────────────────────────────────────────────────
 
 /**
+ * The session a PR's `Pod session:` line names — trusted only when the PR's
+ * head branch lives in the repo itself (`isCrossRepository === false`), i.e.
+ * someone with write access pushed it. A public repo takes PRs from forks,
+ * and session ids are visible in PR bodies: an outsider's fork PR naming a
+ * session must not aim the pod's signals at it. Unknown (the field absent) is
+ * not trusted.
+ */
+export function trustedPodSession(raw) {
+  return raw?.isCrossRepository === false
+    ? podSessionFromBody(raw.body ?? "")
+    : null;
+}
+
+/**
  * One open PR as `gh pr list --json` gives it -> the contract's PR. `mainFailing` = the failing check names of main's
  * newest decided commit; `devbox(headSha)` answers when the PR has no GitHub checks.
  */
@@ -537,7 +552,7 @@ export function buildPr(raw, repo, { mainFailing, devbox }) {
     mergeable: mergeableFrom(raw.mergeStateStatus),
     checks,
     ...(inherited !== undefined ? { redInheritedFromMain: inherited } : {}),
-    podSessionId: podSessionFromBody(body),
+    podSessionId: trustedPodSession(raw),
     ...(dependsOn.length ? { dependsOn } : {}),
     autoMerge: Boolean(raw.autoMergeRequest),
   };
@@ -583,7 +598,7 @@ export function mergedTodayFrom(rawMerged, startMs) {
       title: String(p.title ?? "").slice(0, 512),
       url: p.url,
       mergedAt: p.mergedAt,
-      podSessionId: podSessionFromBody(p.body ?? ""),
+      podSessionId: trustedPodSession(p),
     }));
 }
 
@@ -621,14 +636,20 @@ export function fingerprint(snapshot) {
   return createHash("sha1").update(JSON.stringify(rest)).digest("hex");
 }
 
-/** The observation `observations.append` takes: one per repo, subject = the repo. */
-export function snapshotObservation(snapshot) {
+/**
+ * The observation `observations.append` takes: one per repo, subject = the repo.
+ * `workspaceId` stamps it in that space: a key pinned to the space (a pod app)
+ * reads only the snapshots recorded there; without it the snapshot is the
+ * person's own, pod-wide, and no pinned key reads it.
+ */
+export function snapshotObservation(snapshot, workspaceId) {
   return {
     type: "dev.repo_snapshot",
     subjectId: snapshot.repo,
     subjectType: "repo_snapshot",
     occurredAt: snapshot.observedAt,
     data: { ...snapshot, source: SOURCE },
+    ...(workspaceId ? { workspaceId } : {}),
   };
 }
 
@@ -655,7 +676,7 @@ async function getJson(url, timeout = 15_000) {
 }
 
 const PR_FIELDS =
-  "number,title,url,headRefOid,headRefName,isDraft,author,updatedAt,mergeStateStatus,statusCheckRollup,autoMergeRequest,body";
+  "number,title,url,headRefOid,headRefName,isDraft,author,updatedAt,mergeStateStatus,statusCheckRollup,autoMergeRequest,body,isCrossRepository";
 
 const HISTORY_QUERY = `query($o:String!,$n:String!,$k:Int!){repository(owner:$o,name:$n){defaultBranchRef{name target{... on Commit{history(first:$k){nodes{oid committedDate associatedPullRequests(first:1){nodes{number}} statusCheckRollup{state contexts(first:60){nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}}}}}`;
 
@@ -878,7 +899,7 @@ export async function readRepoSnapshot(repo, { devbox, now, tz, lastLive }) {
       "--limit",
       "100",
       "--json",
-      "number,title,url,mergedAt,body",
+      "number,title,url,mergedAt,body,isCrossRepository",
     ]),
     readMainHistory(repo),
   ]);
@@ -995,6 +1016,7 @@ async function main() {
       ? process.env.SNAPSHOT_REPOS.split(/\s+/).filter(Boolean)
       : DEFAULT_REPOS;
   const tz = process.env.SNAPSHOT_TZ || "Europe/Paris";
+  const workspaceId = process.env.SNAPSHOT_WORKSPACE_ID || undefined;
   const heartbeatMs = Number(process.env.SNAPSHOT_HEARTBEAT_S || 300) * 1000;
   const state = dry ? {} : loadState();
   const devbox = await readDevboxStatus();
@@ -1024,13 +1046,15 @@ async function main() {
       continue;
     }
     if (dry) {
-      console.log(JSON.stringify(snapshotObservation(snapshot), null, 2));
+      console.log(
+        JSON.stringify(snapshotObservation(snapshot, workspaceId), null, 2)
+      );
       continue;
     }
     const fp = fingerprint(snapshot);
     const prev = state[repo];
     if (prev && prev.fp === fp && now - prev.postedAt < heartbeatMs) continue;
-    const obs = snapshotObservation(snapshot);
+    const obs = snapshotObservation(snapshot, workspaceId);
     let error;
     try {
       error = await postObservation(podUrl, key, obs);

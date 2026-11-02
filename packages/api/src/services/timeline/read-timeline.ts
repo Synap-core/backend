@@ -80,10 +80,10 @@ import {
   sessionDevFactWhere,
   sessionPullRequestRefs,
 } from "../focus-sessions/session-changes.js";
-import { UUID_RE } from "../focus-sessions/session-metadata.js";
 import { readTrackHistory } from "../tracks/track-history.js";
 import { readThingRoles } from "../status/status-roles.js";
 import type { TrackActor } from "../tracks/tracks-service.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 /** Rows read per source. Hitting it sets `truncated` — older rows exist. */
 export const TIMELINE_SOURCE_CAP = 500;
@@ -113,12 +113,12 @@ export function timelineSubjectOf(query: {
     };
   }
   if (query.goalId) {
-    return UUID_RE.test(query.goalId)
+    return isUuid(query.goalId)
       ? { ok: true, subject: { kind: "goal", id: query.goalId } }
       : { ok: false, error: "goalId must be a UUID." };
   }
   if (query.sessionId) {
-    return UUID_RE.test(query.sessionId)
+    return isUuid(query.sessionId)
       ? { ok: true, subject: { kind: "session", id: query.sessionId } }
       : { ok: false, error: "sessionId must be a UUID." };
   }

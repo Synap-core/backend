@@ -18,6 +18,13 @@ import {
   chartDataJsonSchema,
   type ChartCellKey,
 } from "./chart-data.js";
+import type { LensSectionEmptyAnswer } from "../lens/sections.js";
+import {
+  ATTENTION_CLASSES,
+  LENS_CAPS,
+  LENS_SECTION_EMPTY_ANSWERS,
+  LENS_SECTION_LABELS,
+} from "../lens/sections.js";
 
 // Data bindings (decision D2). Declare only what the cell's component renders
 // TODAY. Charts draw through `useChartSeries` (@synap-core/hooks), which reads
@@ -81,6 +88,8 @@ const NO_BINDING: RenderableDataBinding = {
 const greeting: WidgetCapabilityDef = {
   key: "greeting",
   package: "synap.bento-widgets",
+  // An app-surface widget: never placed in a document (generation contract rule 12).
+  placements: ["bento"],
   requiredConfig: [],
   aiHint:
     "Home hero row: time-of-day greeting and today's date. No config needed.",
@@ -153,6 +162,8 @@ const sectionHeader: WidgetCapabilityDef = {
 const workspaceInfo: WidgetCapabilityDef = {
   key: "workspace-info",
   package: "synap.bento-widgets",
+  // An app-surface widget: never placed in a document (generation contract rule 12).
+  placements: ["bento"],
   name: "Workspace Info",
   description: "Current workspace name, connection status, and member count",
   icon: "Database",
@@ -171,6 +182,8 @@ const workspaceInfo: WidgetCapabilityDef = {
 const homeTabs: WidgetCapabilityDef = {
   key: "home-tabs",
   package: "synap.bento-widgets",
+  // An app-surface widget: never placed in a document (generation contract rule 12).
+  placements: ["bento"],
   name: "Home Tabs",
   description: "Navigation tabs to switch between workspace and personal home",
   icon: "LayoutGrid",
@@ -1940,6 +1953,8 @@ const entityProgress: WidgetCapabilityDef = {
 const quickAccess: WidgetCapabilityDef = {
   key: "quick-access",
   package: "synap.core-widgets",
+  // An app-surface widget: never placed in a document (generation contract rule 12).
+  placements: ["bento"],
   requiredConfig: [],
   aiHint:
     "Pinned shortcuts. config.items[] of { kind: view|entity|url, \u2026 }.",
@@ -2179,6 +2194,8 @@ const channelFeed: WidgetCapabilityDef = {
 const aiChat: WidgetCapabilityDef = {
   key: "ai-chat",
   package: "synap.ai-chat",
+  // An app-surface widget: never placed in a document (generation contract rule 12).
+  placements: ["bento"],
   name: "AI Chat",
   description: "Embedded AI assistant chat panel",
   icon: "Bot",
@@ -3042,6 +3059,9 @@ const entityCountAlias: WidgetCapabilityDef = {
 const activeSessions: WidgetCapabilityDef = {
   key: "active-sessions",
   package: "synap.bento-widgets",
+  requiredConfig: [],
+  aiHint:
+    "The open focus sessions (work rooms) the reader can see. No config needed. Optional status (all | active | paused), maxItems, workspaceId to narrow to one space. For what needs the reader, use lens-section {section: blocking}.",
   name: "Active Sessions",
   description:
     "Shows active and recent focus sessions — goal-bound rooms where you work with agents",
@@ -3087,6 +3107,9 @@ const activeSessions: WidgetCapabilityDef = {
 const sessionGoalBar: WidgetCapabilityDef = {
   key: "session-goal-bar",
   package: "synap.bento-widgets",
+  requiredConfig: ["sessionId"],
+  aiHint:
+    "One session's aim, progress and participants as a banner: config.sessionId (a focus session id). For a session's status alone, use status-mark.",
   name: "Session Aim Bar",
   description:
     "Persistent banner showing the current session aim, progress, and participants",
@@ -3115,6 +3138,9 @@ const sessionGoalBar: WidgetCapabilityDef = {
 const agentRuns: WidgetCapabilityDef = {
   key: "agent-runs",
   package: "synap.bento-widgets",
+  requiredConfig: [],
+  aiHint:
+    "The latest agent runs (model, tokens, cost, outcome). No config needed. Optional maxItems, workspaceId to narrow to one space.",
   name: "Agent Runs",
   description:
     "Watch your agents work — a live feed of agent runs with model, tokens, cost, and outcome",
@@ -3143,6 +3169,9 @@ const agentRuns: WidgetCapabilityDef = {
 const agentSpend: WidgetCapabilityDef = {
   key: "agent-spend",
   package: "synap.bento-widgets",
+  requiredConfig: [],
+  aiHint:
+    "What agents cost over a trailing window. No config needed. Optional days (1-90, default 30), hideChart, workspaceId to narrow to one space.",
   name: "Agent Spend",
   description:
     "What your agents cost — total spend over a trailing window, per-day breakdown, and an honest count of runs whose price the provider never reported",
@@ -3171,6 +3200,143 @@ const agentSpend: WidgetCapabilityDef = {
       label: "Hide daily bars",
       type: "boolean",
       defaultValue: false,
+    },
+  ],
+};
+
+// ─── Work state (an agent places the pod's own work read) ────────────────────
+// The AI arranges, it never computes: each of these draws a read the pod
+// already makes (the lens page, the release fold, `statusOf`) with the
+// components that draw it elsewhere. None takes a scope: the host stamps it
+// from the document's stored scope.
+
+/**
+ * The settings words of a block's empty answers (ui-composition §2). No
+ * INVITE: a block has no action to offer (`LENS_SECTION_EMPTY_ANSWERS`).
+ */
+const EMPTY_ANSWER_LABELS = {
+  omit: "Hide the section",
+  explain: "Say why it is empty",
+  reassure: "Say all is clear",
+} as const satisfies Record<LensSectionEmptyAnswer, string>;
+
+const lensSectionDefaults = (
+  Object.keys(LENS_CAPS) as Array<keyof typeof LENS_CAPS>
+)
+  .map((cls) => `${cls} ${LENS_CAPS[cls]}`)
+  .join(", ");
+
+const lensSection: WidgetCapabilityDef = {
+  key: "lens-section",
+  package: "synap.bento-widgets",
+  requiredConfig: ["section"],
+  aiHint: `One section of the scope's work page: config.section. "blocking" is Needs you (there is no separate needs-you widget), "happening" what agents do now, "produced" what work made, "proposed" what the AI suggests, "happened" what changed. The scope is the document's, never a prop. Optional limit (1-10) and empty (${LENS_SECTION_EMPTY_ANSWERS.join(" | ")}).`,
+  name: "Work section",
+  description:
+    "One section of a work page (Needs you, Happening, Produced, Proposed, Happened) for the page's own scope, drawn as the work page draws it.",
+  icon: "LayoutList",
+  category: "productivity",
+  semanticSection: "track-monitor",
+  displayModes: ["compact", "medium", "full"],
+  defaultSize: { w: 6, h: 4 },
+  fallback: "{name}",
+  configSchema: [
+    {
+      key: "section",
+      label: "Section",
+      type: "select",
+      required: true,
+      description: 'Which section of the work page. "blocking" = Needs you.',
+      // The five attention classes only: the lens page read the cell draws
+      // (signals.list lens "page") carries these, and each has its own cap
+      // (LENS_CAPS). doneWhen, participants, structure and data come from
+      // other reads (a track's criteria and roster, the plan, the scope's
+      // data) and show only on their own page.
+      options: ATTENTION_CLASSES.map((value) => ({
+        value,
+        label: LENS_SECTION_LABELS[value],
+      })),
+    },
+    {
+      key: "limit",
+      label: "Rows shown",
+      type: "number",
+      description: `Rows at rest before "Show all". Absent = the section's own cap (${lensSectionDefaults}).`,
+      jsonSchema: {
+        type: "integer",
+        minimum: 1,
+        maximum: 10,
+        description: `Rows at rest before "Show all", 1-10. Absent = the section's own cap (${lensSectionDefaults}).`,
+      },
+      constraints: { min: 1, max: 10 },
+    },
+    {
+      key: "empty",
+      label: "When empty",
+      type: "select",
+      description:
+        "What the section shows with no rows. Absent = the section's own answer: Needs you says all is clear, every other section hides.",
+      options: LENS_SECTION_EMPTY_ANSWERS.map((value) => ({
+        value,
+        label: EMPTY_ANSWER_LABELS[value],
+      })),
+    },
+  ],
+};
+
+const workRelease: WidgetCapabilityDef = {
+  key: "work-release",
+  package: "synap.bento-widgets",
+  requiredConfig: [],
+  aiHint:
+    "Can each repo release, and what blocks it (pull requests, failing checks, a red main), from the pod's one release read. No config needed; optional repo (owner/name) narrows to one repo.",
+  name: "Release state",
+  description:
+    "Per repository: whether work can release, and the pull requests and checks that block it.",
+  icon: "Rocket",
+  category: "productivity",
+  semanticSection: "track-monitor",
+  displayModes: ["compact", "medium", "full"],
+  defaultSize: { w: 6, h: 4 },
+  fallback: "{name} — {props.repo}",
+  configSchema: [
+    {
+      key: "repo",
+      label: "Repository",
+      type: "string",
+      description:
+        "owner/name of one repository. Leave blank for every repository.",
+    },
+  ],
+};
+
+const statusMark: WidgetCapabilityDef = {
+  key: "status-mark",
+  package: "synap.bento-widgets",
+  requiredConfig: ["id"],
+  aiHint:
+    "Where one thing stands, as its status mark: config.id = a session, goal (track) or entity id. The pod's one status read decides the state; never write a status yourself.",
+  name: "Status mark",
+  description:
+    "Where one session, goal or thing stands, as the status mark the rest of Synap draws for it.",
+  icon: "CircleDot",
+  category: "productivity",
+  semanticSection: "track-monitor",
+  displayModes: ["compact"],
+  defaultSize: { w: 3, h: 1 },
+  fallback: "{name}",
+  configSchema: [
+    {
+      key: "id",
+      label: "Session, goal or thing",
+      type: "string",
+      required: true,
+      description: "The id of a focus session, a goal (track) or an entity.",
+      jsonSchema: {
+        type: "string",
+        format: "uuid",
+        description: "The id of a focus session, a goal (track) or an entity.",
+      },
     },
   ],
 };
@@ -3276,6 +3442,10 @@ export const WIDGET_DEFINITIONS: WidgetCapabilityDef[] = [
   sessionGoalBar,
   agentRuns,
   agentSpend,
+  // Work state
+  lensSection,
+  workRelease,
+  statusMark,
 ].map(withSnapshotFields);
 
 /** Fast lookup map: widgetKey → definition */

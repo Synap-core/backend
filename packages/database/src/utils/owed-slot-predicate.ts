@@ -18,7 +18,9 @@
  * The `jsonb_typeof` guard: `jsonb_array_elements` ERRORS on a non-array, and
  * `expected_outputs` is untyped JSONB a legacy row can hold anything in.
  *
- * THE RULE THIS MIRRORS is `deliverableOwedBy(slot) === "you"`
+ * THE RULE THIS MIRRORS is `deliverableOwedBy(slot) === "you"`, whose floor
+ * (`isDeliverableOutstanding`) counts a decision the person answered as
+ * delivered (`isDecidedByAnswer`, the last clause)
  * (`@synap-core/types/units`, `deliverable.ts`) — the one deliverable rule
  * every surface calls; the api's `isOwedSlot` calls it directly. A WHERE clause
  * cannot call TypeScript, so the SQL is a mirror held to the rule by a
@@ -33,6 +35,24 @@ import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { focusSessions } from "../schema/focus-sessions.js";
 
 /**
+ * NOT a decision the person answered (`isDecidedByAnswer`,
+ * `@synap-core/types/units`): delivered when the slot names a non-empty
+ * string `decisionId`, its answer is an object whose `askSnapshot.mode` is
+ * confirm / choose, and it is not a criterion's grade slot. The whole test
+ * sits in `coalesce(…, false)`: a missing field reads NULL, and a NULL here
+ * would drop the row instead of keeping it owed.
+ */
+const DECIDED_BY_ANSWER_CLAUSE = `NOT coalesce(${[
+  "jsonb_typeof(slot->'decisionId') = 'string'",
+  "slot->>'decisionId' <> ''",
+  "slot->>'kind' IS DISTINCT FROM 'criterion'",
+  "NOT coalesce(jsonb_typeof(slot->'criterionKey') = 'string' AND slot->>'criterionKey' <> '', false)",
+  "jsonb_typeof(slot->'answer') = 'object'",
+  "jsonb_typeof(slot->'answer'->'askSnapshot') = 'object'",
+  "slot->'answer'->'askSnapshot'->>'mode' IN ('confirm', 'choose')",
+].join(" AND ")}, false)`;
+
+/**
  * The clause SET, as data — a WHERE and an ORDER BY composing the same value
  * cannot drift apart, and a guard can assert the set rather than membership.
  */
@@ -44,6 +64,9 @@ export const OWED_SLOT_CLAUSES = [
   // renders a jsonb `true` as 'true'; only that lets go — absent, `false` or
   // a string "false" stay owed, exactly as `optional !== true` reads them.
   "slot->>'optional' IS DISTINCT FROM 'true'",
+  // A DECISION the person answered, whose `decision` the pod filed, is
+  // delivered, so owed by nobody (see the clause above).
+  DECIDED_BY_ANSWER_CLAUSE,
 ] as const;
 
 /** The clauses as ONE fragment, over a row aliased `slot`. */
@@ -101,4 +124,68 @@ export function sessionOwesHumanWhere(sessionId: AnyPgColumn | SQL): SQL {
     WHERE owing.id = ${sessionId}
       AND ${openOwingSessionSql("owing")}
   )`;
+}
+
+// ─── A session whose only open work is a pull request (plan d679e92c C6) ────
+
+/**
+ * An OUTSTANDING slot (`isDeliverableOutstanding`, `@synap-core/types/units`):
+ * not done, not retired, not optional — whoever owns it. THE owed clauses
+ * minus the owner, so the two can never spell "outstanding" differently.
+ */
+const OUTSTANDING_SLOT_SQL = drizzleSql.raw(
+  OWED_SLOT_CLAUSES.filter((c) => !c.includes("'owner'")).join("\n      AND ")
+);
+
+/**
+ * A pull request outcome as `rules/work-units` records it: `kind:
+ * 'pull_request'` and a `ref.url` that names a GitHub pull request. The url
+ * is what the hold resumes on (`pr:<owner/name>#<n>`), so a slot without one
+ * is ordinary work.
+ */
+export const PULL_REQUEST_URL_PATTERN =
+  "^https://github\\.com/[^/]+/[^/]+/pull/[0-9]+";
+
+/** SQL: the given `expected_outputs` value holds at least one outstanding slot. */
+export function outstandingSlotExistsIn(
+  expectedOutputs: AnyPgColumn | SQL
+): SQL {
+  return drizzleSql`EXISTS (
+    SELECT 1 FROM jsonb_array_elements(
+      CASE WHEN jsonb_typeof(${expectedOutputs}) = 'array'
+           THEN ${expectedOutputs}
+           ELSE '[]'::jsonb END
+    ) AS slot
+    WHERE ${OUTSTANDING_SLOT_SQL}
+  )`;
+}
+
+// Never NULL: a slot with no kind or no url must read "not a PR", or the
+// `NOT (…)` below is NULL and the slot silently drops out of NOT EXISTS.
+const PULL_REQUEST_SLOT_SQL = drizzleSql.raw(
+  `coalesce(slot->>'kind' = 'pull_request' AND (slot->'ref'->>'url') ~ '${PULL_REQUEST_URL_PATTERN}', false)`
+);
+
+/**
+ * SQL: this session's ONLY outstanding outcomes are pull requests — at least
+ * one is outstanding, and every outstanding one is a pull request. Such a
+ * session is not abandoned: it waits on a merge. The focus-session reaper
+ * holds it ("waiting on merge") instead of marking it stale.
+ */
+export function onlyOpenPullRequestsWhere(
+  expectedOutputs: AnyPgColumn | SQL = focusSessions.expectedOutputs
+): SQL {
+  const slots = drizzleSql`jsonb_array_elements(
+      CASE WHEN jsonb_typeof(${expectedOutputs}) = 'array'
+           THEN ${expectedOutputs}
+           ELSE '[]'::jsonb END
+    ) AS slot`;
+  return drizzleSql`(EXISTS (
+    SELECT 1 FROM ${slots}
+    WHERE ${OUTSTANDING_SLOT_SQL}
+  ) AND NOT EXISTS (
+    SELECT 1 FROM ${slots}
+    WHERE ${OUTSTANDING_SLOT_SQL}
+      AND NOT (${PULL_REQUEST_SLOT_SQL})
+  ))`;
 }

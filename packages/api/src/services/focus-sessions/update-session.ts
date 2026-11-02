@@ -27,6 +27,7 @@ import {
   LifecycleConflictError,
   workUnitActorOf,
   writeSessionPatch,
+  personTouchedSubjectIds,
 } from "@synap/database";
 import {
   lifecycleConflictOf,
@@ -40,6 +41,7 @@ import {
   type SessionCriterion,
 } from "@synap/playbooks";
 import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
+import { openLink } from "../../utils/deep-links.js";
 import { isHttpUrl } from "@synap/shared-utils";
 import {
   ASK_LIMITS,
@@ -1786,6 +1788,57 @@ export function sessionMoveRefusal(
   return decided.ok ? null : decided.message;
 }
 
+/**
+ * Is this session the acting agent's OWN (plan d679e92c C6, founder
+ * 2026-10-31)? An AGENT-opened session the agent is on, that no person ever
+ * wrote on. On it, the agent's criteria changes apply directly with a
+ * revertible line in the room, instead of a `CRITERIA_CHANGE` proposal: they
+ * were 15 of the 49 proposals waiting on the founder, all housekeeping. A
+ * person's session, or one a person wrote on, keeps the proposal: its criteria
+ * are the person's contract. Fail-closed: a failed read proposes.
+ */
+export async function isAgentsOwnSession(
+  session: { id: string; origin: string | null; agentIds: string[] | null },
+  agentUserId: string | null | undefined
+): Promise<boolean> {
+  if (!agentUserId || session.origin !== "agent") return false;
+  if (!(session.agentIds ?? []).includes(agentUserId)) return false;
+  try {
+    const touched = await personTouchedSubjectIds(db, "focus_session", [
+      session.id,
+    ]);
+    return touched.size === 0;
+  } catch (err) {
+    logger.warn(
+      { err, sessionId: session.id },
+      "own-session read failed; the criteria change will propose"
+    );
+    return false;
+  }
+}
+
+/** One criterion as the room line names it. */
+function criterionLine(c: SessionCriterion): string {
+  return `${c.key}: ${c.statement}`;
+}
+
+/**
+ * The room line an own-session criteria change leaves (C6): what it was, what
+ * it is, and the Undo. Pure: every word the room shows is here.
+ */
+export function ownCriteriaChangeLine(input: {
+  before: SessionCriterion[];
+  after: SessionCriterion[];
+  receiptLink: string | null;
+}): string {
+  const list = (cs: SessionCriterion[]) =>
+    cs.length === 0 ? "none" : cs.map(criterionLine).join("; ");
+  const undo = input.receiptLink
+    ? ` To put the previous criteria back, open ${input.receiptLink} and choose Undo.`
+    : "";
+  return `The agent changed this session's criteria (its own session, so the change applied directly). Before: ${list(input.before)}. Now: ${list(input.after)}.${undo}`;
+}
+
 export async function updateFocusSession(
   params: UpdateFocusSessionParams
 ): Promise<UpdateFocusSessionResult> {
@@ -1846,6 +1899,9 @@ export async function updateFocusSession(
   const criteriaChange =
     params.criteria !== undefined &&
     criteriaDiffer(existing.criteria, params.criteria);
+  // C6: on the agent's OWN session, a criteria change applies directly.
+  const ownSessionCriteria =
+    criteriaChange && (await isAgentsOwnSession(existing, agentUserId));
 
   // AUTHORITY FLOOR, BEFORE THE MEMBRANE. The merge enforces this too — it is
   // the one door and it throws — but reaching it via governance would mean an
@@ -2308,6 +2364,7 @@ export async function updateFocusSession(
         action: "update",
         source: "intelligence",
         ...(retiresHumanSlot ? { forcePropose: true } : {}),
+        ...(ownSessionCriteria ? { ownSessionCriteria: true } : {}),
         data: {
           id: sessionId,
           ...sessionGoalPayload(existing, params.goal),
@@ -2538,6 +2595,29 @@ export async function updateFocusSession(
     before: undoBefore,
     after: updated,
   });
+  // C6: the own-session criteria change says so in the room, with its Undo.
+  if (ownSessionCriteria && params.criteria) {
+    const before = Array.isArray(existing.criteria)
+      ? (existing.criteria as SessionCriterion[])
+      : [];
+    // Dynamic on purpose: binding-call imports `executeCapability`, whose graph
+    // reaches `propose-capability-enable` → `permission-check`. A static edge
+    // here put that cycle inside permission-check's own graph, so a test's
+    // permission-check mock no longer reached its importers (backend#611 CI).
+    const { postSessionNotice } =
+      await import("../agent-dispatch/binding-call.js");
+    await postSessionNotice(
+      sessionId,
+      ownCriteriaChangeLine({
+        before,
+        after: params.criteria,
+        receiptLink: receiptId && undoable ? openLink(receiptId) : null,
+      }),
+      `own-criteria-change:${receiptId ?? sessionId}:${updated?.updatedAt ? new Date(updated.updatedAt).toISOString() : ""}`
+    ).catch((err: unknown) =>
+      logger.warn({ err, sessionId }, "own-criteria room line not posted")
+    );
+  }
   // The tree, when its filing rode this write (a person's, or an agent's
   // filing granted with nothing else to decide): on the same receipt.
   if (

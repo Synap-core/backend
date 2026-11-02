@@ -12,7 +12,7 @@
  *
  * Width is CSS (no layout flash on first paint), the collapse choice included
  * (`lib/nav-collapsed.ts`); JS only decides whether the rail's tooltips are
- * live. Everyone sees the client places first (`navFor`, PA-G-06); an
+ * live. Everyone sees the client places first (`navFor`, audit a48761f2 PA-G-06); an
  * admin's "All tools" adds the operator groups after them, members see
  * their subset (D8). The role shapes the offer, never the data.
  */
@@ -276,7 +276,7 @@ export function SideNav() {
 }
 
 /**
- * The admin's "All tools" switch (PA-G-06): every operator group after the
+ * The admin's "All tools" switch (audit a48761f2 PA-G-06): every operator group after the
  * client places. A toggle button (`aria-pressed`), the rail's icon in the
  * 56px widths, its label and state beside it when wide.
  */

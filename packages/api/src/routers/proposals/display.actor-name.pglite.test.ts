@@ -14,8 +14,9 @@
  *
  * The two OTHER doors that name the asking agent — `proposals.groups` (the
  * cluster's source) and `proposals.source` (the provenance panel) — name the
- * filing key's computer the same way (FB1020 w2 plan FBD-3), driven through
- * the REAL router procedures.
+ * computer the same way (FB1020 w2 plan FBD-3), driven through the REAL router
+ * procedures. The order is THE attribution order (plan v2 S10): the computer
+ * the agent runs on, else the filing key's label as "last seen on".
  *
  * What this cannot see: the surfaces that render the name (pod-admin Review,
  * browser, relay) — they read `agentActorName` / `authorName` as served.
@@ -162,12 +163,18 @@ describe("enrichProposalsForDisplay — the asking agent's name", () => {
     expect(row.authorName).toBe("Orchestrator");
   });
 
-  it("B7: the filing KEY names the computer — one agent, two computers, two names", async () => {
+  it("B7: with no computer of its own, the filing KEY says where it was last seen — never 'on'", async () => {
     const mac = await enrichAs(NO_COMPUTER, KEY_MAC);
     const devbox = await enrichAs(NO_COMPUTER, KEY_DEVBOX);
-    expect(mac.agentActorName).toBe("Claude Code on MacBook");
-    expect(mac.authorName).toBe("Claude Code on MacBook");
-    expect(devbox.agentActorName).toBe("Claude Code on devbox");
+    expect(mac.agentActorName).toBe("Claude Code, last seen on MacBook");
+    expect(mac.authorName).toBe("Claude Code, last seen on MacBook");
+    expect(devbox.agentActorName).toBe("Claude Code, last seen on devbox");
+  });
+
+  it("S10: the computer it runs on outranks the filing key's label", async () => {
+    const row = await enrichAs(ON_COMPUTER, KEY_MAC);
+    expect(row.agentActorName).toBe("Claude Code on devbox");
+    expect(row.authorName).toBe("Claude Code on devbox");
   });
 
   it("B7: an unnamed key falls back to the agent's own computer, then its name", async () => {
@@ -210,7 +217,7 @@ describe("proposals.groups / proposals.source — the asking agent's computer (F
       targets: Array<{ kind: string; label: string }>;
     };
     expect(out.targets.find((t) => t.kind === "agent")?.label).toBe(
-      "Claude Code on MacBook"
+      "Claude Code, last seen on MacBook"
     );
   });
 
@@ -223,6 +230,6 @@ describe("proposals.groups / proposals.source — the asking agent's computer (F
     const labels = out.groups.flatMap((g) =>
       g.sources.map((s) => s.agentLabel)
     );
-    expect(labels).toContain("Claude Code on devbox");
+    expect(labels).toContain("Claude Code, last seen on devbox");
   });
 });

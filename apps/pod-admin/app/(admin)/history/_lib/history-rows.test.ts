@@ -64,9 +64,56 @@ describe("historyRow", () => {
       })
     );
     expect(row.title).toBe(
-      "Approved push of a524c103 to main in Synap-core/control-plane-api"
+      "Push of a524c103 to main in Synap-core/control-plane-api"
     );
     expect(row.title).not.toMatch(/Session|deploy/);
+  });
+
+  it("a rejected or withdrawn deploy approval never reads as approved", () => {
+    for (const status of ["rejected", "withdrawn", "failed"]) {
+      const row = historyRow(
+        proposal({
+          status,
+          proposalType: "dev.deploy_approval",
+          targetType: "focus_session",
+          data: {
+            repo: "Synap-core/control-plane-api",
+            branch: "main",
+            commitSha: "a524c103d1e2f3a4b5c6",
+            targetHost: "control-plane-api main",
+            deployCommand: "git push origin a524c103:main",
+            step: "push",
+          },
+        })
+      );
+      expect(row.title).not.toMatch(/approved/i);
+      expect(row.title).toBe(
+        "Push of a524c103 to main in Synap-core/control-plane-api"
+      );
+    }
+  });
+
+  it("a ship verb's run reads as the act, as a record, whatever its outcome", () => {
+    for (const status of ["approved", "rejected", "withdrawn"]) {
+      const row = historyRow(
+        proposal({
+          status,
+          proposalType: "capability.run",
+          targetType: "capability",
+          targetName: null,
+          data: {
+            verbId: "github_merge_pr",
+            parameters: {
+              repo: "Synap-core/app-bases",
+              pr: 12,
+              expectedHeadSha: "a524c103d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6",
+              base: "main",
+            },
+          },
+        })
+      );
+      expect(row.title).toBe("Merge of app-bases#12 into main at a524c103");
+    }
   });
 
   it("names who asked, who decided, when, and where", () => {

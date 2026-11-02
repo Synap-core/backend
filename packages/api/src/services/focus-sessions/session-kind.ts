@@ -49,10 +49,19 @@ import {
   automationRuns,
 } from "@synap/database";
 import type { SQL } from "@synap/database";
+import {
+  SESSION_KINDS,
+  type SessionKind,
+} from "@synap-core/types/focus-sessions";
 
-/** The three populations. `all` is a filter sentinel, never a value. */
-export const SESSION_KINDS = ["work", "run", "receipt"] as const;
-export type SessionKind = (typeof SESSION_KINDS)[number];
+/**
+ * The three populations — declared in `@synap-core/types/focus-sessions`
+ * (the apps read the same list), re-exported here so every backend importer is
+ * unchanged. Do NOT redeclare it: the predicate below is the only thing this
+ * file owns. `all` is a filter sentinel, never a value.
+ */
+export { SESSION_KINDS };
+export type { SessionKind };
 
 /** `focus_sessions.origin` values that mean "a machine executed this". */
 const RUN_ORIGINS = ["playbook", "automation"] as const;

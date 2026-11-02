@@ -30,7 +30,6 @@ import {
   type OfficialCatalogSignature,
 } from "@synap/database";
 import { cpCatalogCache } from "@synap/database/schema";
-import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
 import { createLogger } from "@synap-core/core";
 import {
   MARKETPLACE_INDEX_MAX_BYTES,
@@ -54,47 +53,12 @@ import {
   verifyKeysStatement,
   verifyOfficialIndex,
 } from "./marketplace-source-verify.js";
+import { CATALOG_TEST_ONLY_KEYS } from "./catalog-test-only-keys.js";
 
 const logger = createLogger({ module: "official-catalog-signature" });
 
-/**
- * The Control Plane's TEST-ONLY catalog keys. Each is derived from a public
- * label (control-plane-api `src/lib/catalog-signing/__fixtures__/test-keys.ts`),
- * so anyone can recompute its PRIVATE half: they sign the committed contract
- * fixtures and nothing else. Derived here the same way rather than copied, and
- * pinned against the fixtures' own `contract.json` by the tests, so the two
- * repos cannot drift apart silently.
- */
-const TEST_ONLY_KEY_LABELS = [
-  "root (current)",
-  "root (standby)",
-  "online catalog key",
-  "next online catalog key",
-] as const;
-
-/** PKCS#8 DER header for an ed25519 private key; the 32-byte seed follows. */
-const PKCS8_ED25519_PREFIX = Buffer.from(
-  "302e020100300506032b657004220420",
-  "hex"
-);
-
-function testOnlyPublicKey(label: string): string {
-  const seed = createHash("sha256")
-    .update(`synap-catalog-signing TEST ONLY — never trusted: ${label}`)
-    .digest();
-  const privateKey = createPrivateKey({
-    key: Buffer.concat([PKCS8_ED25519_PREFIX, seed]),
-    format: "der",
-    type: "pkcs8",
-  });
-  const { x } = createPublicKey(privateKey).export({ format: "jwk" });
-  return Buffer.from(x ?? "", "base64url").toString("base64");
-}
-
-/** The test-only public keys (raw ed25519, base64). Never a trust anchor. */
-export const CATALOG_TEST_ONLY_KEYS: ReadonlySet<string> = new Set(
-  TEST_ONLY_KEY_LABELS.map(testOnlyPublicKey)
-);
+/** The TEST-ONLY catalog keys (public labels): never a trust anchor. */
+export { CATALOG_TEST_ONLY_KEYS };
 
 /**
  * The root keys a release compiles in, checked when this module loads: none
@@ -152,7 +116,11 @@ export interface OfficialCatalogTrust {
   allowExpired: boolean;
   /** Operator keys that are not raw ed25519 keys (ignored, logged). */
   rejectedKeys: string[];
-  /** Operator keys refused in production as public-label test keys (ignored, logged). */
+  /**
+   * Operator keys that are public-label TEST-ONLY keys: never trusted, in any
+   * environment (left out of `keys`). The operator stays the anchor, and every
+   * catalog sync records the refusal and checks nothing until they are removed.
+   */
   refusedTestKeys: number;
 }
 
@@ -171,17 +139,18 @@ export function officialCatalogTrust(
     .filter(Boolean);
   const wellFormed = listed.filter((k) => ed25519PublicKey(k) !== null);
   const rejectedKeys = listed.filter((k) => ed25519PublicKey(k) === null);
-  // A test-only key's private half is public: in production it would let
-  // anyone sign the catalog this pod installs from. Tests and dev pods may
-  // still point at the CP's test-signed fixtures.
-  const refuseTestKeys = env.NODE_ENV === "production";
-  const operator = refuseTestKeys
-    ? wellFormed.filter((k) => !CATALOG_TEST_ONLY_KEYS.has(k))
-    : wellFormed;
+  // A test-only key's private half is public: it would let anyone sign the
+  // catalog this pod installs from. Refused whatever NODE_ENV says (a pod's
+  // NODE_ENV is not a security boundary); tests hand the contract fixtures'
+  // keys in through `deps.trust`, never through this env.
+  const operator = wellFormed.filter((k) => !CATALOG_TEST_ONLY_KEYS.has(k));
   const refusedTestKeys = wellFormed.length - operator.length;
   const enforce = envFlag(env.SYNAP_CATALOG_ENFORCE_SIGNATURE);
   const allowExpired = envFlag(env.SYNAP_CATALOG_ALLOW_EXPIRED);
-  if (operator.length > 0) {
+  // A refused key still makes the operator the anchor: an operator who set
+  // keys meant to check against them, so never a silent fall back to the
+  // roots or to "not signed yet".
+  if (wellFormed.length > 0) {
     return {
       anchors: "operator",
       keys: operator,
@@ -216,7 +185,7 @@ export function logOfficialCatalogTrust(trust: OfficialCatalogTrust): void {
   if (trust.refusedTestKeys > 0) {
     logger.error(
       { refused: trust.refusedTestKeys },
-      "SYNAP_CATALOG_PUBLIC_KEYS holds TEST-ONLY keys derived from public labels — refused in production, they are ignored"
+      TEST_ONLY_OPERATOR_KEY_MESSAGE
     );
   }
   if (trust.anchors === "operator") {
@@ -238,6 +207,10 @@ export function logOfficialCatalogTrust(trust: OfficialCatalogTrust): void {
     );
   }
 }
+
+/** What every sync records while `SYNAP_CATALOG_PUBLIC_KEYS` holds a TEST-ONLY key. */
+export const TEST_ONLY_OPERATOR_KEY_MESSAGE =
+  "SYNAP_CATALOG_PUBLIC_KEYS holds a TEST-ONLY key derived from a public label, so anyone can sign with it. It is never trusted: remove it. Until then Synap's catalog is not checked and counts as refused.";
 
 type SignedFile =
   | { ok: true; bytes: Uint8Array; signature: string | null }
@@ -318,6 +291,27 @@ export async function checkOfficialCatalogSignature(
   logOfficialCatalogTrust(trust);
   if (trust.anchors === "none") return null;
   const now = deps.now ?? new Date();
+  if (trust.refusedTestKeys > 0) {
+    // Loud at every sync, and nothing is fetched or verified: a pod set up
+    // with a key anyone can sign with is not a pod whose catalog is checked,
+    // even beside a real key. The digests already stored are left as they are.
+    logger.error({ enforce: trust.enforce }, TEST_ONLY_OPERATOR_KEY_MESSAGE);
+    const refused: OfficialCatalogSignature = {
+      state: "invalid",
+      lastCheckAt: now.toISOString(),
+      lastOkAt: previous?.lastOkAt ?? null,
+      validUntil: previous?.validUntil ?? null,
+      keysVersion: previous?.keysVersion ?? null,
+      keyFingerprint: previous?.keyFingerprint ?? null,
+      packageCount: previous?.packageCount ?? 0,
+      unverifiedRows: previous?.unverifiedRows ?? null,
+      keysSha256: previous?.keysSha256 ?? null,
+      indexSha256: previous?.indexSha256 ?? null,
+      message: TEST_ONLY_OPERATOR_KEY_MESSAGE,
+    };
+    await recordOfficialCatalogSignature(refused);
+    return refused;
+  }
   const fetchImpl: SourceFetch = deps.fetchImpl ?? fetch;
   const kept: OfficialCatalogSignature = {
     state: "ok",

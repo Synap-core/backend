@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  PROPOSE_ONLY_CAPABILITY_VERBS,
   deriveGovernanceGrantOptions,
   deriveGovernanceNeverOption,
   isNonWidenableGovernanceReason,
@@ -87,6 +88,23 @@ describe("deriveGovernanceGrantOptions — the outward floor (finding c173cc51)"
       );
     }
   });
+
+  it("a public post offers no 'this tool': the gate never lets a rule widen it", () => {
+    for (const verb of PROPOSE_ONLY_CAPABILITY_VERBS) {
+      for (const mode of ["agent-scoped", "operator-any"] as const) {
+        expect(
+          ids({ ...RUN, capabilityTarget: verb }, mode),
+          `${verb} ${mode}`
+        ).not.toContain("capability");
+      }
+    }
+  });
+
+  it("a run under a floor no rule widens offers no 'this tool'", () => {
+    expect(
+      ids({ ...RUN, governanceReason: "ADMIN" }, "operator-any")
+    ).not.toContain("capability");
+  });
 });
 
 describe("deriveGovernanceNeverOption — a request's 'Never' (decision G3)", () => {
@@ -97,8 +115,7 @@ describe("deriveGovernanceNeverOption — a request's 'Never' (decision G3)", ()
       rule: {
         principalKind: "agent",
         agentUserId: "agent-1",
-        scopeKind: "workspace",
-        workspaceId: BASE.workspaceId,
+        scopeKind: "pod",
         targetKind: "action",
         targetPattern: "profile.create",
         verdict: "deny",
@@ -147,13 +164,15 @@ describe("deriveGovernanceNeverOption — a request's 'Never' (decision G3)", ()
     ).toBeNull();
   });
 
-  it("a request with no space writes a pod-wide deny, still for one agent", () => {
-    const never = deriveGovernanceNeverOption({ ...BASE, workspaceId: null });
-    expect(never?.rule).toMatchObject({
-      scopeKind: "pod",
-      principalKind: "agent",
-      agentUserId: "agent-1",
-    });
-    expect(never?.rule.workspaceId).toBeUndefined();
+  it("is pod-wide whatever space the request was filed in, still for one agent", () => {
+    for (const workspaceId of [BASE.workspaceId, null]) {
+      const never = deriveGovernanceNeverOption({ ...BASE, workspaceId });
+      expect(never?.rule).toMatchObject({
+        scopeKind: "pod",
+        principalKind: "agent",
+        agentUserId: "agent-1",
+      });
+      expect(never?.rule).not.toHaveProperty("workspaceId");
+    }
   });
 });

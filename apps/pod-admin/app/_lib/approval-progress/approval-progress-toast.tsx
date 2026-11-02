@@ -22,10 +22,17 @@
 
 import { useEffect } from "react";
 import { Button, Progress, addToast, closeToast } from "@heroui/react";
+import { resolveActionLabel } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../lib/trpc";
 import { openIn } from "../../../lib/open-in";
 import { ExitLink } from "../../../lib/exit-link";
-import { readableError } from "../../../lib/format";
+import {
+  decisionFailure,
+  decisionReceipt,
+  readApproveAnswer,
+} from "../receipt/decision-receipt";
+import { showReceipt } from "../receipt/decision-receipt-toast";
+import { approvalProgressT } from "./copy";
 import {
   approvalProgressCopy,
   isApplying,
@@ -83,14 +90,14 @@ export function showApprovalProgressToast(proposalId: string): void {
 function copyFor(
   query: ReturnType<typeof useApprovalProgress>
 ): ApprovalProgressCopy | null {
-  if (query.isError) return progressUnavailable;
+  if (query.isError) return progressUnavailable();
   const run = query.data as ApprovalRun | null | undefined;
   return run ? approvalProgressCopy(run) : null;
 }
 
 function ApprovalProgressTitle({ proposalId }: { proposalId: string }) {
   const copy = copyFor(useApprovalProgress(proposalId));
-  return <span>{copy?.title ?? "Approving…"}</span>;
+  return <span>{copy?.title ?? approvalProgressT()("approving")}</span>;
 }
 
 function ApprovalProgressBody({ proposalId }: { proposalId: string }) {
@@ -159,7 +166,7 @@ export function ApprovalProgressLines({
           className="self-start"
           onPress={onRetry}
         >
-          Retry
+          {resolveActionLabel("retry")}
         </Button>
       )}
     </div>
@@ -181,7 +188,7 @@ function showApprovalOutcomeToast(run: ApprovalRun): void {
             {copy.detail}
           </span>
         )}
-        {door && <ExitLink exit={door} label="See what was created" />}
+        {door && <ExitLink exit={door} label={approvalProgressT()("door")} />}
         {copy.resumable && (
           <ResumeButton
             proposalId={run.proposalId}
@@ -212,15 +219,10 @@ function ResumeButton({
       if ((result as { queued?: boolean }).queued) {
         showApprovalProgressToast(proposalId);
       } else {
-        addToast({ title: "Proposal approved", color: "success" });
+        showReceipt(decisionReceipt(readApproveAnswer(result)));
       }
     },
-    onError: (e) =>
-      addToast({
-        title: "Could not resume",
-        description: readableError(e.message) ?? "Try again from the proposal.",
-        color: "danger",
-      }),
+    onError: (e) => showReceipt(decisionReceipt(decisionFailure("approve", e))),
   });
   return (
     <Button
@@ -232,7 +234,7 @@ function ResumeButton({
       isDisabled={approve.isSuccess}
       onPress={() => approve.mutate({ proposalId })}
     >
-      Resume
+      {resolveActionLabel("resume")}
     </Button>
   );
 }

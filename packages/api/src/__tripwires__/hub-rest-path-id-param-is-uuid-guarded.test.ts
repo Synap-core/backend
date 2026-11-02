@@ -42,11 +42,9 @@ import { fileURLToPath } from "node:url";
  *     schema is `z.string().uuid()` (the procedure 400s via
  *     `httpStatusForTrpcError` before any query runs) — the guard then lives
  *     in a DIFFERENT file this scan does not read.
- *   - a route with its own bespoke dual-format dispatch (e.g.
- *     `/channels/:channelId/context-card` accepts either the Synap uuid OR a
- *     Discord snowflake, and branches the query on an inline regex test
- *     before ever comparing to the uuid column) — safe by construction, just
- *     not spelled with one of the four guard idioms above.
+ *   - a route with its own bespoke dual-format dispatch spelled without one
+ *     of the four guard idioms above (`/channels/:channelId/context-card`
+ *     was one until it read `isUuid`, 2026-11-02).
  *   - non-JSON bodies, response schemas, and any id embedded below the path
  *     level (e.g. inside a JSON body).
  *   - a param genuinely NOT bound to a uuid column (`EXCLUDE_PARAMS`, each
@@ -107,9 +105,6 @@ const EXCLUDE_PARAMS = new Set([
  * not re-verified by this scan on every run.
  */
 const KNOWN_SAFE_ELSEWHERE = new Set<string>([
-  // channels.ts: dual uuid/snowflake dispatch, `isUuid` computed inline and
-  // the query branches on it — never compares a non-uuid to the uuid column.
-  "GET /channels/:channelId/context-card [channelId]",
   // automations.ts: all 5 delegate to hub-protocol/automations.ts tRPC
   // procedures whose input schema is `id: z.string().uuid()`.
   "GET /automations/:automationId [automationId]",

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DESIGN_DIAGNOSTIC_CODES,
   DIAGNOSTIC_CODES,
   EMBED_DIAGNOSTIC_CODES,
   GRAMMAR_WIRE_CODE,
@@ -7,10 +8,11 @@ import {
 } from "./diagnostics.js";
 
 describe("diagnostic code groups", () => {
-  it("DIAGNOSTIC_CODES is exactly EMBED + LAYOUT, in that order — never a third list", () => {
+  it("DIAGNOSTIC_CODES is exactly EMBED + LAYOUT + DESIGN, in that order — never a fourth list", () => {
     expect(DIAGNOSTIC_CODES).toEqual([
       ...EMBED_DIAGNOSTIC_CODES,
       ...LAYOUT_DIAGNOSTIC_CODES,
+      ...DESIGN_DIAGNOSTIC_CODES,
     ]);
   });
 

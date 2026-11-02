@@ -216,6 +216,7 @@ async function waitLoop<P>(
           sessionId: p.sessionId,
           ownerId: p.userId,
           agentUserId: p.agentUserId ?? null,
+          waitOpenedAt: new Date(startedAt),
         });
       }
       if (isHit(page)) {
@@ -481,6 +482,7 @@ export async function waitForConversationChanges(
           sessionId: runner,
           ownerId: p.userId,
           agentUserId: p.agentUserId ?? null,
+          waitOpenedAt: new Date(startedAt),
         });
       }
       return page;

@@ -101,6 +101,13 @@ export const apiKeys = pgTable(
     isActive: boolean("is_active").notNull().default(true),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
     usageCount: bigint("usage_count", { mode: "number" }).notNull().default(0),
+    // When a process that RUNS an agent last called with this key (0385): a
+    // request carrying `X-Synap-Runner: synap-worker/<version>`, stamped by
+    // the MCP door at most once a minute (`recordWorkerServed`). NULL = no
+    // runner ever sent it on this key: not measured, never "not running".
+    workerServedAt: timestamp("worker_served_at", { withTimezone: true }),
+    // The `<version>` that runner sent, as sent (bounded); NULL when none.
+    workerServedVersion: text("worker_served_version"),
 
     // Rotation
     rotatedFromId: uuid("rotated_from_id"), // Will add reference after table definition

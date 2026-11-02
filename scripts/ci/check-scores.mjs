@@ -86,6 +86,23 @@ const BOOKKEEPING =
 // install can fail), ranked after the checks: no preflight can run them sooner.
 export const SETUP_STEP =
   /› (Checkout|Mint|Setup|Get pnpm|Install|Lay out|Collect|Monorepo layout|Migrate|Build the|Start the|Reader App access|Run [\w.-]+\/[\w.-]+@)/;
+// A draft run's "Suites not run (draft)" hold marks the run as a draft's. On a
+// draft the generated-API-types step is EXPECTED red (it needs a built
+// workspace the Mac hooks do not have, plan d679e92c C2(a)): it stays visible
+// as `draftFailures`, and is not counted in f. The step still runs in ci.yml.
+const DRAFT_HOLD = /^Suites not run \(draft\)/;
+const DRAFT_EXPECTED_STEP = /Verify generated API types/;
+export const isDraftRun = (r) =>
+  r.jobs.some((j) =>
+    j.steps.some((s) => DRAFT_HOLD.test(s.name) && s.conclusion === "failure")
+  );
+// Only the api-types step: a draft's lint or typecheck red is a real red.
+const isExpectedDraftRed = (o) =>
+  !!o.draft &&
+  (DRAFT_EXPECTED_STEP.test(o.key) ||
+    (o.failedSteps?.length > 0 &&
+      o.failedSteps.every((n) => DRAFT_EXPECTED_STEP.test(n))));
+
 // Fewer runs than this and p is mostly the Laplace prior: listed, ranked last.
 const MIN_SAMPLE = 10;
 
@@ -254,6 +271,7 @@ export function observe(runs) {
   const units = [];
   const steps = [];
   for (const r of runs) {
+    const draft = isDraftRun(r);
     const byUnit = new Map();
     for (const job of r.jobs) {
       if (job.conclusion === "skipped" || job.conclusion === "cancelled")
@@ -266,6 +284,7 @@ export function observe(runs) {
         if (!s.started || !s.completed) continue;
         steps.push({
           run: r,
+          draft,
           key: `${stepOwner(job.name)} › ${s.name}`,
           unit: unitOf(job.name),
           failed: s.conclusion === "failure",
@@ -294,6 +313,7 @@ export function observe(runs) {
     for (const [unit, u] of byUnit)
       units.push({
         run: r,
+        draft,
         key: unit,
         failed: u.failed,
         failedSteps: u.failedSteps,
@@ -326,7 +346,9 @@ export function score(obs, redOnMain) {
   const pr = obs.filter((o) => isPr(o.run));
   const costWin = pr.slice(0, COST_WINDOW);
   const pWin = pr.slice(0, P_WINDOW);
-  const failures = pWin.filter((o) => o.failed);
+  const allFailures = pWin.filter((o) => o.failed);
+  const draftFailures = allFailures.filter(isExpectedDraftRed);
+  const failures = allFailures.filter((o) => !isExpectedDraftRed(o));
   const exonerated = failures.filter((o) => redOnMain(o));
   const f = failures.length - exonerated.length;
   const n = pWin.length;
@@ -336,6 +358,7 @@ export function score(obs, redOnMain) {
     n,
     f,
     rawFailures: failures.length,
+    draftFailures: draftFailures.length,
     exonerated: exonerated.length,
     p: Number(p.toFixed(4)),
     c_min: cMin === null ? null : Number(cMin.toFixed(2)),

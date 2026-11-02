@@ -175,6 +175,18 @@ describe("Hub PATCH — server-owned session metadata is never the caller's", ()
     expect(mergedMetadata()).toEqual({ note: "kept" });
   });
 
+  it("a forged starter is dropped: only the create doors stamp who started it", async () => {
+    // A caller setting it hides handed work from that agent's orient
+    // (`handedToYou`), or shows an agent its own session as handed.
+    await patch({
+      metadata: { startedByAgentId: "someone-else", note: "kept" },
+    });
+    expect((h.gated[0]!.data as Record<string, unknown>).metadata).toEqual({
+      note: "kept",
+    });
+    expect(mergedMetadata()).toEqual({ note: "kept" });
+  });
+
   it("the merge happens in SQL, over the row's current metadata", async () => {
     await patch({ metadata: { note: "kept" }, title: "Renamed" });
     const { sql } = new PgDialect().sqlToQuery(

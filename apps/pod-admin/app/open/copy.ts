@@ -17,7 +17,7 @@ export const en = {
 export const fr: Catalog<typeof en> = {
   "bounce.noWebPage": "Pas de page web",
   "bounce.inApp":
-    "Il n’a pas encore de page sur le web. Ouvrez-le dans l’application Synap.",
+    "Cet élément n’a pas encore de page sur le web. Ouvrez-le dans l’application Synap.",
 };
 
 /** `/open`'s translator, in the ambient catalog locale. */

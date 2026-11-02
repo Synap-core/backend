@@ -37,6 +37,19 @@ describe("search filter_by: caller strings cannot alter the filter", () => {
     );
   });
 
+  it("facetSlugs keeps entities carrying ANY of the roles, after the floor, and only on `entities`", () => {
+    expect(
+      build({
+        userId: USER,
+        collection: "entities",
+        facetSlugs: ["client", "partner"],
+      })
+    ).toBe(`(userId:=\`${USER}\`) && (facetSlugs:=(\`client\`|\`partner\`))`);
+    expect(
+      build({ userId: USER, collection: "documents", facetSlugs: ["client"] })
+    ).toBe(`(userId:=\`${USER}\`)`);
+  });
+
   it("libraryOnly narrows `documents` to Library items, after the floor, and only there", () => {
     expect(
       build({ userId: USER, collection: "documents", libraryOnly: true })
@@ -49,6 +62,7 @@ describe("search filter_by: caller strings cannot alter the filter", () => {
   it.each([
     ["tags", { tags: [HOSTILE] }],
     ["entityTypes", { collection: "entities", entityTypes: [HOSTILE] }],
+    ["facetSlugs", { collection: "entities", facetSlugs: [HOSTILE] }],
     ["documentTypes", { collection: "documents", documentTypes: [HOSTILE] }],
     ["viewTypes", { collection: "views", viewTypes: [HOSTILE] }],
     ["status", { status: [HOSTILE] }],

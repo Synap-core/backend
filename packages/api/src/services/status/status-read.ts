@@ -43,7 +43,6 @@ import {
   focusSessions,
   inArray,
   isLifecycleCategory,
-  isNull,
   links,
   listHolds,
   or,
@@ -98,9 +97,6 @@ import {
   resolveStatusLabel,
   resolveTrackStatusLabel,
 } from "@synap-core/types/vocabulary";
-import { AccessContext, scopedDb } from "../../access/index.js";
-import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
-import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { openLink } from "../../utils/deep-links.js";
 import { activityActorOf, loadActorRows } from "../activity/activity-actors.js";
 import { stuckAfterDaysOf, stuckForDays } from "../lifecycle/status-groups.js";
@@ -121,6 +117,11 @@ import {
 } from "./next-move.js";
 import { readThingRoles, type ThingRoleRow } from "./status-roles.js";
 import {
+  sessionStatusFloor,
+  statusAccess,
+  thingStatusFloor,
+} from "./status-floor.js";
+import {
   holdWaitingOnRef,
   lastTransitionAt,
   readWaitingOnFor,
@@ -128,10 +129,9 @@ import {
   sessionWaitingOnQuestion,
   type WaitingOnQuestion,
 } from "./status-facts.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "status-read" });
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Ids one orient call may ask about. */
 export const STATUS_OF_MAX = 10;
@@ -326,9 +326,11 @@ export async function readStatusOf(
   // The doors cap the list (`statusOfInput`); nothing is dropped here.
   const asked = [...new Set(rawIds)];
   // Every id column is a uuid: anything else is simply not a thing here.
-  const ids = asked.filter((id) => UUID.test(id));
+  const ids = asked.filter((id) => isUuid(id));
   if (ids.length === 0) return asked.map((id) => ({ id, type: "unknown" }));
-  const access = scopedDb(AccessContext.from({ userId }));
+  // THE statusOf floor (`status-floor.ts`), shared with the realtime status
+  // events: whatever this read answers `unknown` for, no event reaches.
+  const access = statusAccess(userId);
   const [things, goals, sessions, runs] = await Promise.all([
     db
       .select({
@@ -341,13 +343,7 @@ export async function readStatusOf(
         createdAt: entities.createdAt,
       })
       .from(entities)
-      .where(
-        and(
-          inArray(entities.id, ids),
-          isNull(entities.deletedAt),
-          entityReadVisibleWhere(userId)
-        )
-      ),
+      .where(and(inArray(entities.id, ids), thingStatusFloor(userId))),
     access.findMany<ProjectTrack>(projectTracks, {
       where: inArray(projectTracks.id, ids),
     }),
@@ -372,9 +368,7 @@ export async function readStatusOf(
         stageHistory: focusSessions.stageHistory,
       })
       .from(focusSessions)
-      .where(
-        and(inArray(focusSessions.id, ids), sessionReadableWhere({ userId }))
-      ),
+      .where(and(inArray(focusSessions.id, ids), sessionStatusFloor(userId))),
     access.findMany<typeof playbookRuns.$inferSelect>(playbookRuns, {
       where: inArray(playbookRuns.id, ids),
     }),
@@ -560,8 +554,7 @@ export async function readStatusOf(
           eq(relations.type, "works_at"),
           inArray(relations.sourceEntityId, thingIds),
           access.predicate(relations),
-          isNull(entities.deletedAt),
-          entityReadVisibleWhere(userId)
+          thingStatusFloor(userId)
         )
       )
       .orderBy(desc(relations.createdAt));
@@ -1162,15 +1155,14 @@ async function readServes(
           .where(
             and(
               inArray(focusSessions.id, sessionIds),
-              sessionReadableWhere({ userId })
+              sessionStatusFloor(userId)
             )
           )
       : Promise.resolve([]),
     trackIds.length
-      ? scopedDb(AccessContext.from({ userId })).findMany<ProjectTrack>(
-          projectTracks,
-          { where: inArray(projectTracks.id, trackIds) }
-        )
+      ? statusAccess(userId).findMany<ProjectTrack>(projectTracks, {
+          where: inArray(projectTracks.id, trackIds),
+        })
       : Promise.resolve([] as ProjectTrack[]),
   ]);
   const ends = new Map<string, Omit<StatusOfLinkEnd, "criterionKey">>();

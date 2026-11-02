@@ -127,6 +127,20 @@ vi.mock("../services/agent-identity-service.js", async (importOriginal) => ({
   getAgentFocusProjectId: mockFocusProject,
 }));
 
+// Sessions cockpit C3: the gate is THE write-attribution point, so the
+// writing process is stamped as the session's runner here. Spied, not run:
+// its own PGlite suite (`session-change-feed.pglite.test.ts`) pins the row.
+const { mockStampWritingRunner } = vi.hoisted(() => ({
+  mockStampWritingRunner: vi.fn().mockResolvedValue(true),
+}));
+vi.mock(
+  "../services/focus-sessions/session-runners.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    stampWritingRunner: mockStampWritingRunner,
+  })
+);
+
 import { checkPermissionOrPropose as strict } from "./permission-check.js";
 import {
   runWithDerivedSession,
@@ -259,5 +273,24 @@ describe("the gate keys a receipt by the write's project", () => {
     );
     expect(mockResolveSessionOnce).not.toHaveBeenCalled();
     expect(receiptRow()).toMatchObject({ sessionId: "receipt-p1" });
+  });
+});
+
+describe("the gate stamps the writing process as the session's runner (cockpit C3)", () => {
+  it("the session a write is FILED under — named, started or the receipt — is stamped, owner and agent named", async () => {
+    await runWithDerivedSession("started-1", () =>
+      gate({ ...AGENT, sessionId: "started-1", projectId: P2 })
+    );
+    expect(mockStampWritingRunner).toHaveBeenCalledWith({
+      sessionId: "started-1",
+      ownerId: AGENT.userId,
+      agentUserId: AGENT.agentUserId,
+    });
+    mockStampWritingRunner.mockClear();
+    // No session in hand: the receipt the gate chose is the one stamped.
+    await gate({ ...AGENT, projectId: P2 });
+    expect(mockStampWritingRunner).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "sess-for-project" })
+    );
   });
 });

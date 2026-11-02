@@ -78,20 +78,32 @@ describe("concept vocabulary — Template, Rule, Tools (W5)", () => {
     expect(resolveObjectNounPlural("playbooks")).toBe("Templates");
   });
 
-  it("an automation is a Rule — through every spelling that reaches it", () => {
-    expect(resolveObjectNoun("automation")).toBe("Rule");
-    expect(resolveObjectNounPlural("automation")).toBe("Rules");
+  it("an automation is an Automation — through every spelling that reaches it (D2)", () => {
+    expect(resolveObjectNoun("automation")).toBe("Automation");
+    expect(resolveObjectNounPlural("automation")).toBe("Automations");
+    expect(resolveObjectNounPlural("automations")).toBe("Automations");
     // CP publish vocabulary aliases to the same kind.
-    expect(resolveObjectNoun("workflow")).toBe("Rule");
+    expect(resolveObjectNoun("workflow")).toBe("Automation");
+  });
+
+  it("a skill rule is a Rule, and never the word of an automation (D2)", () => {
+    expect(resolveObjectNoun("rule")).toBe("Rule");
+    expect(resolveObjectNounPlural("rule")).toBe("Rules");
+    expect(resolveObjectNoun("rule")).not.toBe(resolveObjectNoun("automation"));
+    expect(resolveObjectNoun("rule", "fr")).toBe("Règle");
+    expect(resolveObjectNoun("automation", "fr")).toBe("Automatisation");
   });
 
   it("a governance rule is an Approval — never 'Trust rules', never 'Rules'", () => {
     expect(resolveObjectNounPlural("governance_rule")).toBe("Approvals");
     expect(resolveObjectNounPlural("governance_rules")).toBe("Approvals");
     expect(resolveObjectNoun("governance_rule")).toBe("Approval");
-    // The two words stay apart: Rules = automations.
+    // The three words stay apart: Approvals, Rules (skill rules), Automations.
     expect(resolveObjectNounPlural("governance_rule")).not.toBe(
       resolveObjectNounPlural("automation")
+    );
+    expect(resolveObjectNounPlural("governance_rule")).not.toBe(
+      resolveObjectNounPlural("rule")
     );
   });
 
@@ -129,7 +141,7 @@ describe("concept vocabulary — Template, Rule, Tools (W5)", () => {
 
   it("run chips say the user word", () => {
     expect(resolveProposalKindLabel("capability_run")).toBe("Run tool");
-    expect(resolveProposalKindLabel("automation_run")).toBe("Run rule");
+    expect(resolveProposalKindLabel("automation_run")).toBe("Run automation");
   });
 });
 
@@ -146,5 +158,85 @@ describe("concept vocabulary — Space (N1)", () => {
   it("the kind TOKEN is unchanged — only the word moved", () => {
     expect(normalizeObjectKind("workspaces")).toBe("workspace");
     expect(OBJECT_KINDS.workspace?.kind).toBe("workspace");
+  });
+});
+
+// ── D3 (founder, 2026-10-31, decision 985a59a8): one noun per object of making ──
+
+describe("concept vocabulary — nouns of making and connecting (D3)", () => {
+  it("a made UI block is a Card, never a Cell or a Widget (N1)", () => {
+    expect(resolveObjectNoun("cell")).toBe("Card");
+    expect(resolveObjectNounPlural("cell")).toBe("Cards");
+    expect(resolveObjectNoun("cell", "fr")).toBe("Carte");
+  });
+
+  it("a card bound to a kind's slot is a Display (N2)", () => {
+    expect(resolveObjectNoun("renderer")).toBe("Display");
+    expect(resolveObjectNounPlural("renderer")).toBe("Displays");
+    expect(resolveObjectNoun("renderer", "fr")).toBe("Affichage");
+  });
+
+  it("App is what you open in Synap; the outside software is a Connected app (N4)", () => {
+    expect(resolveObjectNoun("app")).toBe("App");
+    expect(resolveObjectNounPlural("app")).toBe("Apps");
+    expect(resolveObjectNoun("application")).toBe("Connected app");
+    expect(resolveObjectNounPlural("application")).toBe("Connected apps");
+    expect(resolveObjectNoun("application", "fr")).toBe("App connectée");
+    expect(resolveObjectNoun("app")).not.toBe(resolveObjectNoun("application"));
+  });
+
+  it("a space is a Space and never an App (N3)", () => {
+    expect(resolveObjectNoun("workspace")).toBe("Space");
+    expect(resolveObjectNoun("workspace")).not.toBe(resolveObjectNoun("app"));
+  });
+
+  it("Template is the family noun, qualified by scope, a space template included (N6)", () => {
+    expect(resolveObjectNoun("playbook")).toBe("Template");
+    expect(resolveTemplateNoun("space")).toBe("Space template");
+    expect(resolveTemplateNoun("space", { plural: true })).toBe(
+      "Space templates"
+    );
+    expect(resolveTemplateNoun("space", { locale: "fr" })).toBe(
+      "Modèle d’espace"
+    );
+    expect(resolveTemplateNoun("space", { plural: true, locale: "fr" })).toBe(
+      "Modèles d’espace"
+    );
+    // The two existing scopes keep their words.
+    expect(resolveTemplateNoun("session")).toBe("Work template");
+    expect(resolveTemplateNoun("project")).toBe("Goal template");
+  });
+
+  it("an account link is an Account, through every spelling (N8)", () => {
+    expect(resolveObjectNoun("connection")).toBe("Account");
+    expect(resolveObjectNounPlural("connection")).toBe("Accounts");
+    expect(resolveObjectNounPlural("connections")).toBe("Accounts");
+    expect(resolveObjectNoun("connection", "fr")).toBe("Compte");
+  });
+
+  it("a profile is a Kind (N10)", () => {
+    expect(resolveObjectNoun("profile")).toBe("Kind");
+    expect(resolveObjectNounPlural("profile")).toBe("Kinds");
+    expect(resolveObjectNounPlural("profiles")).toBe("Kinds");
+    expect(resolveObjectNoun("profile", "fr")).toBe("Type");
+  });
+
+  it("Room is the conversation only; the intake review is a Review (DP8)", () => {
+    expect(resolveObjectNoun("room")).toBe("Room");
+    expect(resolveObjectNoun("review")).toBe("Review");
+    expect(resolveObjectNounPlural("review")).toBe("Reviews");
+    expect(resolveObjectNoun("room")).not.toBe(resolveObjectNoun("review"));
+    // The English words humanize to themselves; French proves the rows exist.
+    expect(resolveObjectNoun("room", "fr")).toBe("Salon");
+    expect(resolveObjectNoun("review", "fr")).toBe("Revue");
+  });
+
+  it("Tool still names capabilities and skills only (N7)", () => {
+    for (const kind of ["skill", "capability", "tool"]) {
+      expect(resolveObjectNoun(kind), kind).toBe("Tool");
+    }
+    for (const kind of ["app", "application", "connection", "renderer"]) {
+      expect(resolveObjectNoun(kind), kind).not.toBe("Tool");
+    }
   });
 });

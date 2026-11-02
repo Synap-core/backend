@@ -81,6 +81,7 @@ const INVENTORIED_VERBS: Record<string, RequiredPermission> = {
   activate: "write", // automations.ts activate (agent activation, rung 2.09)
   section_update: "write", // services/session-document/upsert-section.ts
   session_narrative_update: "write", // services/session-document/upsert-section.ts
+  refresher_section_update: "write", // services/document-patch/apply-document-patch.ts (D4)
   declare_source: "write", // workspace source-edge declaration (Enterprise-OS Wave 0)
   configure_public_projection: "write", // workspace public-projection config door
   transition: "write", // services/lifecycle moveStatus door (entity.transition)

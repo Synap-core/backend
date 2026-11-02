@@ -76,3 +76,22 @@ export function undoMark(
     sentence: "Approving applies it now, and it cannot be undone from here.",
   };
 }
+
+/**
+ * Whether the review reads at a document's width: it draws a document's
+ * change, or a tool argument or record field that is prose, code or a text
+ * diff (each one's `wide`, set by its own model). A review of short values
+ * (a status move, an app asking for a key, a few names) stays at the
+ * receiver's default width. The page reads this as `READS_WIDE_ATTR`.
+ */
+export function reviewReadsWide(drawn: {
+  documentChanges: boolean;
+  toolArguments: readonly { wide: boolean }[];
+  records: readonly { fields: readonly { wide: boolean }[] }[];
+}): boolean {
+  return (
+    drawn.documentChanges ||
+    drawn.toolArguments.some((a) => a.wide) ||
+    drawn.records.some((r) => r.fields.some((f) => f.wide))
+  );
+}

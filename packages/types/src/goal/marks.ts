@@ -314,12 +314,13 @@ function devHoldResumes(
         : `resumes when ${name} merges`;
     case "main":
       return `resumes when ${name} is green`;
+    // A person reads the tests, never a devbox job's name (D-R4).
     case "job":
       return to === "passed"
-        ? `resumes when ${name} passes`
+        ? "resumes when the tests pass"
         : to === "failed"
-          ? `resumes when ${name} fails`
-          : `resumes when ${name} finishes`;
+          ? "resumes when the tests fail"
+          : "resumes when the tests finish";
   }
 }
 

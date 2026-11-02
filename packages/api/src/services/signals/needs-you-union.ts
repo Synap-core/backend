@@ -36,6 +36,7 @@ import type { RuleRunFacts } from "./rule-runs.js";
 import {
   buildObjectActionTitle,
   resolveObjectNoun,
+  resolveRunnerStateLabel,
 } from "@synap-core/types/vocabulary";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import {
@@ -84,7 +85,12 @@ import {
 } from "@synap-core/types/proposals/review-package";
 import type { ProposalClass } from "../proposals/proposal-class.js";
 import { needsYouFoldBy, needsYouRole } from "../../notifications/registry.js";
-import { waitKindOf, type WaitKind } from "@synap-core/types/units";
+import {
+  RUNNER_STATE_WAIT_KIND,
+  waitKindOf,
+  type LiveRunnerState,
+  type WaitKind,
+} from "@synap-core/types/units";
 
 /** What a signal points AT — an object-nav address the browser can dispatch. */
 export interface SignalTarget {
@@ -149,6 +155,15 @@ export type SignalKind =
    */
   | "session-review"
   /**
+   * One session whose agent waits on the person AT THE TERMINAL — a live
+   * runner says `needs_permission` (a permission dialog) or `needs_answer`
+   * (a question, a plan to accept) (0384; decision D-R1, the rule's
+   * `classifyRunnerWait`). ONE row per session, whatever its runners; the
+   * door is the session. Its runner word rides in `why`, its wait kind in
+   * `waitKind` (`approval` / `answer`, the one runner order).
+   */
+  | "session-permission"
+  /**
    * One capture that still owes the person something (founder, 2026-10-12):
    * an OPEN question, or suggestions nobody filed or refused. The door opens
    * the capture thread (the session's `room` view); `captureStatus` says which.
@@ -159,7 +174,9 @@ export type SignalKind =
    * `access-requests.ts`): a pending trusted issuer (`target.kind: "issuer"`)
    * or an app's pending connection request (`target.kind:
    * "connection-request"`); or the person's own pending KEY request
-   * (`target.kind: "key-request"`, read for its person). Who asks and from
+   * (`target.kind: "key-request"`, read for its person); or one of the
+   * person's own tools whose connections all need a sign-in again
+   * (`target.kind: "capability"`, `broken-connections.ts`). Who asks and from
    * where ride in `access`.
    */
   | "access-request"
@@ -194,6 +211,7 @@ export const SIGNAL_KINDS = [
   "owed-slot",
   "draft-asks",
   "session-review",
+  "session-permission",
   "capture",
   "access-request",
   "space-invite",
@@ -707,7 +725,8 @@ export const NOTIFICATION_TARGET_KIND: Readonly<Record<string, string>> = {
   agent: "run",
   proactive_message: "channel",
   ai_proactive: "channel",
-  // `handoff.continue` (notif-center `requestHandoff`) — sourceId is the session id.
+  // `handoff.continue` / `handoff.to_phone` (notif-center `handoff`) and the
+  // session notices — sourceId is the session id.
   session: "session",
   // `track.kpi_reached` (services/tracks) — sourceId is the track id.
   track: "track",
@@ -717,6 +736,12 @@ export const NOTIFICATION_TARGET_KIND: Readonly<Record<string, string>> = {
   // `library.resurface` naming a project — sourceId is the PROJECT id; the
   // clients open the Library lensed to it.
   library: "library",
+  // A handoff (`notifCenter.handoff`) names its object by its own kind, so
+  // every `HANDOFF_KINDS` member maps to itself; these three have no other
+  // producer (pinned by `notif-center.handoff.pglite.test.ts`).
+  document: "document",
+  project: "project",
+  playbook: "playbook",
 };
 
 /**
@@ -775,6 +800,24 @@ function reviewLaterSuffix(
   return cluster.reviewLater ? "@review-later" : "";
 }
 
+/**
+ * A cluster row's title, imperative (what approving it WILL do). A deploy
+ * approval's or a ship verb's label is already its whole heading, "Push
+ * a524c103 to main in Synap-core/control-plane-api" or "Merge app-bases#12
+ * into main at a524c103" (`describeDevDeployProposal`, `describeVerbRun`, the
+ * doors every surface titles them through; `labelIsHeading`). The generic
+ * sentence would wrap it as `Approve deploy Session "Push …"` or `Run Tool`.
+ */
+function clusterTitle(cluster: ProposalCluster): string {
+  if (cluster.labelIsHeading && cluster.targetLabel) return cluster.targetLabel;
+  return buildObjectActionTitle({
+    action: cluster.proposalType,
+    objectKind: cluster.targetType,
+    objectName: cluster.targetLabel,
+    mood: "imperative",
+  });
+}
+
 /** One cluster → one signal. Title via the vocabulary SSOT, imperative mood
  *  (the card describes what approving it WILL do, not what happened).
  *
@@ -808,12 +851,7 @@ export function signalFromCluster(
         : `cluster:${cluster.fingerprint}${reviewLaterSuffix(cluster)}`,
     kind: "proposal-cluster",
     waitKind: waitKindOf({ kind: "pending_proposal" }),
-    title: buildObjectActionTitle({
-      action: cluster.proposalType,
-      objectKind: cluster.targetType,
-      objectName: cluster.targetLabel,
-      mood: "imperative",
-    }),
+    title: clusterTitle(cluster),
     count: cluster.count,
     occurredAt: cluster.latestAt,
     target: sampleId ? { kind: "proposal", id: sampleId } : null,
@@ -909,6 +947,12 @@ export function signalFromNotification(
  * one type with the SAME rendered title say the same thing (needs-you
  * duplicate cause 2 — "Weekly digest ready" raised five times was five
  * rows). Two targetless rows whose titles differ stay apart: different news.
+ *
+ * Every `"session-pointer"` row of ONE session folds into one row, whatever
+ * its type: each points at the same live need (the session's open question,
+ * once no owed slot absorbs it), so the session counts once, as the registry
+ * role promises. Folded per type, a session with an open question also showed
+ * a "Needs your call" row about a criterion already graded.
  */
 export function foldNotifications(
   rows: readonly NotificationSignalInput[]
@@ -918,22 +962,45 @@ export function foldNotifications(
     { row: NotificationSignalInput; repeatCount: number }
   >();
   for (const r of rows) {
-    // A type whose registry `foldBy` is "groupKey" folds on the producer's
+    // A session's pointer rows fold on the session, whatever their type. A
+    // type whose registry `foldBy` is "groupKey" folds on the producer's
     // collapse key: one agent failing on nine runs is ONE row ×9.
     const key =
-      r.groupKey && needsYouFoldBy(r.type) === "groupKey"
-        ? `group\u0000${r.type}\u0000${r.groupKey}`
-        : r.sourceId
-          ? `${r.type ?? ""}\u0000${r.sourceType}\u0000${r.sourceId}`
-          : `untargeted\u0000${r.type ?? ""}\u0000${r.sourceType}\u0000${r.title}`;
+      r.sourceId && needsYouRole(r.type) === "session-pointer"
+        ? `pointer\u0000${r.sourceType}\u0000${r.sourceId}`
+        : r.groupKey && needsYouFoldBy(r.type) === "groupKey"
+          ? `group\u0000${r.type}\u0000${r.groupKey}`
+          : r.sourceId
+            ? `${r.type ?? ""}\u0000${r.sourceType}\u0000${r.sourceId}`
+            : `untargeted\u0000${r.type ?? ""}\u0000${r.sourceType}\u0000${r.title}`;
     const seen = folds.get(key);
     if (!seen) folds.set(key, { row: r, repeatCount: 1 });
     else {
       seen.repeatCount += 1;
-      if (r.createdAt.getTime() > seen.row.createdAt.getTime()) seen.row = r;
+      if (standsForFold(r, seen.row)) seen.row = r;
     }
   }
   return [...folds.values()];
+}
+
+/** The pointer type that names the session's need itself ("Needs you: …"). */
+const SESSION_NEEDS_YOU_TYPE = "session.needs_you";
+
+/**
+ * Whether `r` replaces `current` as the row a fold shows: the newest, except
+ * that a session's own `session.needs_you` row stands for its pointer fold.
+ * A pointer row still counting means the session has an open question and no
+ * owed slot, so a narrower pointer ("Needs your call: … mark it pass or fail")
+ * names a slot that is already met; the session's row names the live need.
+ */
+function standsForFold(
+  r: NotificationSignalInput,
+  current: NotificationSignalInput
+): boolean {
+  const lead = (x: NotificationSignalInput) =>
+    x.type === SESSION_NEEDS_YOU_TYPE ? 1 : 0;
+  if (lead(r) !== lead(current)) return lead(r) > lead(current);
+  return r.createdAt.getTime() > current.createdAt.getTime();
 }
 
 /**
@@ -1418,6 +1485,54 @@ export function signalFromReviewSession(
   };
 }
 
+/** One session waiting for the person at the terminal (`listSessionsWaitingForPermission`). */
+export interface PermissionSessionSignalInput {
+  id: string;
+  title: string | null;
+  goal: string | null;
+  /** Its most urgent live runner word: `needs_permission` or `needs_answer`. */
+  runnerState: LiveRunnerState;
+  /** When its longest-waiting live runner began to wait. */
+  since: Date;
+  projectId?: string | null;
+  /** The session's space (the per-space split reads it). */
+  workspaceId?: string | null;
+}
+
+/**
+ * One session waiting on the person at the terminal → one signal (decision
+ * D-R1). Its title is the session's own (`resolveSessionTitle`); its words,
+ * the runner state's (`resolveRunnerStateLabel`: "Waiting for your
+ * permission" / "Waiting for your answer"); its wait kind, the runner word's
+ * (`RUNNER_STATE_WAIT_KIND`); a door to the session, grouped with anything else
+ * the session owes. In the headline always: only the person can answer the
+ * dialog, and the agent stands still until they do.
+ */
+export function signalFromPermissionSession(
+  row: PermissionSessionSignalInput,
+  now: Date = new Date()
+): Signal {
+  const title = resolveSessionTitle(row);
+  return {
+    id: `permission:${row.id}`,
+    kind: "session-permission",
+    waitKind: RUNNER_STATE_WAIT_KIND[row.runnerState],
+    title,
+    count: 1,
+    occurredAt: row.since,
+    target: { kind: "session", id: row.id },
+    category: "ai",
+    why: resolveRunnerStateLabel(row.runnerState),
+    needsYouClass: "needs_you",
+    ...(row.goal ? { sessionGoal: row.goal } : {}),
+    ...(title ? { sessionTitle: title } : {}),
+    ...(row.projectId ? { sessionProjectId: row.projectId } : {}),
+    groupKey: sessionGroupKey(row.id),
+    ageBucket: ageBucketOf(row.since, now),
+    repeatCount: 1,
+  };
+}
+
 /** One unfinished capture, as `listUnfinishedCaptures` reads it. */
 export interface UnfinishedCaptureSignalInput {
   sessionId: string;
@@ -1496,17 +1611,32 @@ export interface PendingKeyRequestSignalInput {
   expiresAt: Date;
 }
 
+/**
+ * One of the person's tools whose connections ALL need a sign-in again, as
+ * `listBrokenConnections` reads it (`broken-connections.ts`).
+ */
+export interface BrokenConnectionSignalInput {
+  /** The capability (tool) id — the row's door. */
+  capabilityId: string;
+  /** The tool's name ("Gmail"); the connection's own label when unnamed. */
+  name: string;
+  /** When it broke: the newest auth failure, else the connection's last change. */
+  brokenAt: Date;
+}
+
 /** The access-request half of the union. Absent ⇒ none (not an admin, or a lens). */
 export interface AccessRequestsInput {
   issuers: readonly PendingIssuerSignalInput[];
   applications: readonly PendingAppRequestSignalInput[];
   /** The viewer's own key requests (absent = none read). */
   keys?: readonly PendingKeyRequestSignalInput[];
+  /** The viewer's own broken tool connections (absent = none read). */
+  connections?: readonly BrokenConnectionSignalInput[];
 }
 
 /**
  * The fields every access-request row shares. The title goes through the
- * vocabulary SSOT like a cluster's ("Connect App "Acme CRM"") — what
+ * vocabulary SSOT like a cluster's ("Connect "Acme CRM"") — what
  * approving it WILL do, imperative — and the class is `access` (who may act).
  */
 function accessRequestSignal(args: {
@@ -1524,7 +1654,10 @@ function accessRequestSignal(args: {
     kind: "access-request",
     title: buildObjectActionTitle({
       action: args.action ?? "connect",
-      objectKind: args.access.subject,
+      // An outside app's name IS its identity: no noun in front of it
+      // ('Connect "Acme CRM"', never 'Connect Connected app "Acme CRM"').
+      objectKind:
+        args.access.subject === "application" ? null : args.access.subject,
       objectName: args.access.name,
       mood: "imperative",
     }),
@@ -1613,7 +1746,34 @@ export function signalFromKeyRequest(
   });
 }
 
-/** Every access-request row, issuers, apps, then keys (the union orders them). */
+/**
+ * A broken tool connection → one row: "Reconnect Tool "Gmail"". Nothing to
+ * decide, one act owed (wait kind `access`, the person's ball), so it stays
+ * until the person signs in again — the pod clears `needs_reauth` on the next
+ * call that succeeds (`external-dispatch.ts`) — never when a bell row is read.
+ * Its door is the tool's page, where Reconnect lives; it has no lifetime.
+ */
+export function signalFromBrokenConnection(
+  row: BrokenConnectionSignalInput,
+  now: Date = new Date()
+): Signal {
+  return {
+    ...accessRequestSignal({
+      id: `access:connection:${row.capabilityId}`,
+      target: { kind: "capability", id: row.capabilityId },
+      access: { subject: "capability", name: row.name, from: "" },
+      occurredAt: row.brokenAt,
+      lifetimeHours: null,
+      now,
+      action: "reconnect",
+    }),
+    // A connection the person owns, not a permission decision.
+    category: "data",
+    waitKind: "access",
+  };
+}
+
+/** Every access-request row, issuers, apps, keys, then broken connections (the union orders them). */
 export function signalsFromAccessRequests(
   input: AccessRequestsInput | undefined,
   now: Date = new Date()
@@ -1623,6 +1783,7 @@ export function signalsFromAccessRequests(
     ...input.issuers.map((r) => signalFromPendingIssuer(r, now)),
     ...input.applications.map((r) => signalFromAppRequest(r, now)),
     ...(input.keys ?? []).map((r) => signalFromKeyRequest(r, now)),
+    ...(input.connections ?? []).map((r) => signalFromBrokenConnection(r, now)),
   ];
 }
 
@@ -1756,15 +1917,20 @@ export function owedSessionIdsOf(
  *     `system.issuer_pending_approval` announces the pending issuer the
  *     access-request half reads from its table, so the notification stays in
  *     the bell and the TABLE row is the ask (one item, one row);
- *   - its type is a `"session-pointer"` (`session.needs_you`) and the session
- *     has an owed slot. The slot row IS that need, so the pointer folds into
- *     it: one entry per session, counted once;
+ *   - its type is a `"session-pointer"` (`session.needs_you`,
+ *     `session.criterion_escalated`) and the session has an owed slot. The
+ *     slot row IS that need, so the pointer folds into it: one entry per
+ *     session, counted once;
  *   - its type is a `"session-pointer"` and the session has neither an owed
  *     slot nor an open question. Whatever it announced was met, so a row the
- *     person never opened must not keep the session in needs-you.
+ *     person never opened must not keep the session in needs-you;
+ *   - its type is `"from_system"` (`session.unblocked`): no real asker raised
+ *     it. It is not dropped: {@link partitionNotifications} puts it in the
+ *     `fromSystem` bucket, drawn and counted in the rule's `from_system` fold.
  *
  * A pointer row whose session has no owed slot but an open question stays, and
- * counts once. The question has no row of its own in the union.
+ * counts once: {@link foldNotifications} folds every pointer row of one session
+ * into one. The question has no row of its own in the union.
  *
  * WHY STATE, NOT MARK-READ. The row does not persist WHY it was written (a slot
  * or a question; the registry's six-hour window merges both into one row), and
@@ -1804,6 +1970,11 @@ export function partitionNotifications(
   suggestions: NotificationSignalInput[];
   /** SYSTEM HEALTH rows (registry role `"status"`) — the status banner. */
   status: NotificationSignalInput[];
+  /**
+   * Rows no real asker raised (registry role `"from_system"`): out of the
+   * headline, in the needs-you rule's `from_system` fold.
+   */
+  fromSystem: NotificationSignalInput[];
 } {
   const clusteredProposalIds = new Set<string>();
   for (const c of clusters) {
@@ -1812,18 +1983,20 @@ export function partitionNotifications(
   const needsYou: NotificationSignalInput[] = [];
   const suggestions: NotificationSignalInput[] = [];
   const status: NotificationSignalInput[] = [];
+  const fromSystem: NotificationSignalInput[] = [];
   for (const r of rows) {
     if (r.sourceType === "proposal") continue;
     if (r.sourceId && clusteredProposalIds.has(r.sourceId)) continue;
     const role = needsYouRole(r.type);
     if (role === "suggestion") suggestions.push(r);
     else if (role === "status") status.push(r);
+    else if (role === "from_system") fromSystem.push(r);
     else if (role === "item") needsYou.push(r);
     else if (role === "session-pointer" && pointerStillNeedsYou(r, live))
       needsYou.push(r);
     // "informational": in no bucket. It stays in the bell.
   }
-  return { needsYou, suggestions, status };
+  return { needsYou, suggestions, status, fromSystem };
 }
 
 /** A `"session-pointer"` row, decided from its session's live state. */
@@ -1900,10 +2073,11 @@ export function unionProposed(args: {
  * Every door that hands a slot to the person writes `session.needs_you`
  * (`notify-needs-you.ts`), and that row announced the SAME need the owed-slot
  * row already shows. So the fold is keyed on the registry's
- * `needsYou: "session-pointer"` role, never on `sourceId` alone:
- * `session.unblocked` (`sourceType: "system"`, `sourceId` = the session id) is
- * separate news, and it stays — in the session's block, through its
- * container. See {@link dedupeNotifications}.
+ * `needsYou: "session-pointer"` role, never on `sourceId` alone.
+ * `session.unblocked` (`sourceType: "system"`, `sourceId` = the session
+ * id) is separate news no one asked: registry role `"from_system"`, so it sits
+ * in the rule's `from_system` fold, stamped `needsYouClass`, never in the
+ * headline. See {@link dedupeNotifications}.
  *
  * ── ORDERING: NEWEST FIRST ACROSS EVERY KIND (W2 "calm", 2026-09-28) ─────────
  * One newest-first order across kinds, a session's rows kept together, and
@@ -1938,6 +2112,8 @@ export function unionNeedsYou(args: {
   draftAsks?: DraftAsksInput;
   /** Sessions awaiting the person's review — at every scope. Absent ⇒ none. */
   reviewSessions?: readonly ReviewSessionSignalInput[];
+  /** Sessions whose agent waits on the person's permission (D-R1). Absent ⇒ none. */
+  permissionSessions?: readonly PermissionSessionSignalInput[];
   /** Captures that owe an answer or a filing decision. Absent ⇒ none. */
   unfinishedCaptures?: readonly UnfinishedCaptureSignalInput[];
   /** Pending issuers + app connection requests (pod admins). Absent ⇒ none. */
@@ -1950,14 +2126,21 @@ export function unionNeedsYou(args: {
   now?: Date;
 }): Signal[] {
   const now = args.now ?? new Date();
-  const notifications = foldNotifications(
-    dedupeNotifications(args.notifications, args.clusters, liveNeedsOf(args))
+  const buckets = partitionNotifications(
+    args.notifications,
+    args.clusters,
+    liveNeedsOf(args)
   );
+  const notifications = foldNotifications(buckets.needsYou);
+  const fromSystem = foldNotifications(buckets.fromSystem);
   return orderNeedsYou(
     holdAsksWithTheirSession([
       ...args.owedSlots.map((r) => signalFromOwedSlot(r, now)),
       ...(args.reviewSessions ?? []).map((r) =>
         signalFromReviewSession(r, now)
+      ),
+      ...(args.permissionSessions ?? []).map((r) =>
+        signalFromPermissionSession(r, now)
       ),
       ...liveCaptureRows(args).map((r) => signalFromUnfinishedCapture(r, now)),
       ...signalsFromAccessRequests(args.accessRequests, now),
@@ -1978,6 +2161,16 @@ export function unionNeedsYou(args: {
           args.notificationContainers?.get(f.row.id)
         )
       ),
+      // No real asker: drawn in the rule's From the system fold.
+      ...fromSystem.map((f) => ({
+        ...signalFromNotification(
+          f.row,
+          now,
+          f.repeatCount,
+          args.notificationContainers?.get(f.row.id)
+        ),
+        ...outOfHeadline("from_system", true),
+      })),
     ]).map(withReviewPackage)
   );
 }
@@ -2261,6 +2454,13 @@ export function countNeedsYou(args: {
   reviewSessions?: number;
   /** The review scan hit its cap, so its count is a floor. */
   reviewTruncated?: boolean;
+  /**
+   * The SAME input `unionNeedsYou` takes (D-R1) — one row per session waiting
+   * on the person's permission. Absent ⇒ the scope does not count it (0).
+   */
+  permissionSessions?: readonly PermissionSessionSignalInput[];
+  /** The permission scan hit its cap, so its count is a floor. */
+  permissionTruncated?: boolean;
   /** Undecided drafts that ask something — the SAME input `unionNeedsYou` takes. */
   draftAsks?: DraftAsksInput;
   /** The draft-slot scan hit its cap, so `drafts` is a floor. */
@@ -2318,6 +2518,12 @@ export function countNeedsYou(args: {
   notifications: number;
   /** Sessions awaiting your review / close (every scope). */
   review: number;
+  /**
+   * Sessions whose agent waits on your permission (`session-permission` rows,
+   * D-R1). Always set by this pod; OPTIONAL on the wire first, so a hand-built
+   * count (a client's sample world, a mock) still type-checks.
+   */
+  permission?: number;
   /** Captures that owe an answer or a filing decision (`capture` rows). */
   captures: number;
   /**
@@ -2365,6 +2571,8 @@ export function countNeedsYou(args: {
   // Folded, like the list: the same news raised N times is ONE row there, so
   // it is one here — the badge must equal the number of rows it stands for.
   const notifications = foldNotifications(buckets.needsYou).length;
+  // No real asker: the From the system fold, the rows the list stamps.
+  const notificationsFromSystem = foldNotifications(buckets.fromSystem).length;
   // THE rows the list draws, classified and counted: the session grouping is
   // the list's own (`unionNeedsYou`, which holds an unclassed week-old ask in
   // its session's card), never re-derived here. A row the rule classed counts
@@ -2398,13 +2606,16 @@ export function countNeedsYou(args: {
   );
   const blocked = owedFolds.needsYou;
   const owedOut = owedRows.length - blocked;
-  const reviewLater = reviewLaterClusters + owedOut;
+  const reviewLater = reviewLaterClusters + owedOut + notificationsFromSystem;
   const clusterFolds: ClusterFoldCounts = args.clusterFolds ?? {
     working: 0,
     reviewLater: reviewLaterClusters,
     changesToReview: 0,
   };
   const review = args.reviewSessions ?? 0;
+  // The SAME rows the list renders: `signalFromPermissionSession` makes one
+  // row per session, so the count is the input's length.
+  const permission = args.permissionSessions?.length ?? 0;
   const captures = liveCaptureRows({
     unfinishedCaptures: args.unfinishedCaptures,
     owedSlots: args.owedSlots,
@@ -2421,7 +2632,7 @@ export function countNeedsYou(args: {
   // the notification half. Drafts are PROPOSED (2026-10-04) and never count
   // as drafts; a draft's ASKS are owed slots, in `blocked` (2026-10-22).
   const needsYou =
-    needsYouTotal({ owed: blocked, decisions, review }) +
+    needsYouTotal({ owed: blocked, decisions, review, permission }) +
     notifications +
     captures +
     requests +
@@ -2433,6 +2644,7 @@ export function countNeedsYou(args: {
     needsYou,
     working: owedFolds.working + clusterFolds.working,
     reviewLater: owedFolds.reviewLater + clusterFolds.reviewLater,
+    fromSystem: owedFolds.fromSystem + notificationsFromSystem,
     changesToReview: clusterFolds.changesToReview,
   };
   return {
@@ -2447,11 +2659,13 @@ export function countNeedsYou(args: {
       args.notificationsTruncated ||
       args.owedTruncated ||
       (args.reviewTruncated ?? false) ||
+      (args.permissionTruncated ?? false) ||
       (args.capturesTruncated ?? false) ||
       (args.accessRequestsTruncated ?? false) ||
       (args.spaceInvitesTruncated ?? false),
     blocked,
     review,
+    permission,
     captures,
     requests,
     invites,

@@ -40,6 +40,7 @@ import {
   sessionReadableWhere,
   type SessionReader,
 } from "../../access/session-visibility.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 export interface ProposalWaitsRow {
   id: string;
@@ -50,9 +51,6 @@ export interface ProposalWaitsRow {
 }
 
 const NOTHING_WAITS: ProposalWaits = { waits: false };
-
-const isUuid = (v: string) =>
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
 
 export async function resolveProposalWaits(
   rows: readonly ProposalWaitsRow[],

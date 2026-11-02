@@ -28,6 +28,10 @@ import { loadKeyToolAccess } from "./tool-access.js";
 import { ENTRY_REFLEX_PROSE } from "./entry-instructions.js";
 import { shadowUndeclaredArgs } from "./undeclared-args.js";
 import {
+  RUNNER_HEADER,
+  recordWorkerServed,
+} from "../../services/worker-served.js";
+import {
   MCP_CALL_REFUSED_CODE,
   resourceReadRefusal,
   toolCallRefusal,
@@ -320,6 +324,16 @@ export function createMCPServer(
     // fallback. This is the fix for the door granting every key read+write.
     const scopes = apiKeyScopes ??
       process.env.MCP_SCOPES?.split(",") ?? ["mcp.read", "mcp.write"];
+
+    // A process that RUNS an agent says so on its calls (`X-Synap-Runner`):
+    // stamped on the authenticating key only, off the request path.
+    if (toolAccessKeyId) {
+      const runner = extra.requestInfo?.headers[RUNNER_HEADER];
+      void recordWorkerServed(
+        toolAccessKeyId,
+        typeof runner === "string" ? runner : undefined
+      );
+    }
 
     const args = request.params.arguments ?? {};
     // Auto-inject the URL's scope (?workspaceId= / ?projectId=) into every tool

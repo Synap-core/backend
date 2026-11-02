@@ -98,7 +98,7 @@ describe("index.ts mounts the AI limit through the ONE wrapper", () => {
 
   it("uses trpcAiRateLimit(aiRateLimitMiddleware) on /trpc/*", () => {
     expect(src).toContain(
-      'app.use("/trpc/*", trpcAiRateLimit(aiRateLimitMiddleware))'
+      'app.use("/trpc/*", trpcRefusal(trpcAiRateLimit(aiRateLimitMiddleware)))'
     );
   });
 

@@ -87,7 +87,9 @@ describe("open helpers", () => {
   it("titles pages with the registry noun, not Pod Admin", () => {
     expect(openDocumentTitle(parseOpenParams("entity", UUID))).toBe("Entity");
     expect(openDocumentTitle(parseOpenParams("view", UUID))).toBe("View");
-    expect(openDocumentTitle(parseOpenParams("automation", UUID))).toBe("Rule");
+    expect(openDocumentTitle(parseOpenParams("automation", UUID))).toBe(
+      "Automation"
+    );
     expect(openDocumentTitle(parseOpenParams("nope", UUID))).toBe("Not found");
   });
 });

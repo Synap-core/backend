@@ -64,7 +64,7 @@ import { useDrainPages } from "../../../lib/use-drain-pages";
 
 const CATALOGS = { en, fr };
 
-const TITLE = "Rules";
+const TITLE = "Automations";
 const DESCRIPTION = "What runs on its own, and whether it worked.";
 /** 20 pages × 100 rows: past this the counts say they are partial. */
 const MAX_PAGES = 20;
@@ -325,7 +325,7 @@ function RulesInner() {
               </p>
             )}
             <ResponsiveTable
-              ariaLabel="Rules"
+              ariaLabel="Automations"
               rows={shown}
               rowKey={(rule) => rule.id}
               rowId={(rule) => rule.id}

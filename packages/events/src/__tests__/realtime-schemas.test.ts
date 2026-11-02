@@ -5,7 +5,11 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { EventSchemas, getSchemaForEvent } from "../realtime-schemas.js";
+import {
+  EventSchemas,
+  getSchemaForEvent,
+  validateEmitPayload,
+} from "../realtime-schemas.js";
 
 const VALID_PAYLOADS = {
   "openclaw:message:received": {
@@ -81,5 +85,71 @@ describe("getSchemaForEvent", () => {
   it("returns undefined for legacy events without locked schemas", () => {
     // notification:new is intentionally not schema-locked (still in flux)
     expect(getSchemaForEvent("notification:new")).toBeUndefined();
+  });
+});
+
+describe("status events — strict, so nothing beyond the move reaches a reader", () => {
+  const move = {
+    subjectType: "entity",
+    subjectId: "e1",
+    transitionId: "t1",
+    role: null,
+    from: "draft",
+    to: "sent",
+    category: "active",
+    at: "2026-10-31T09:00:00.000Z",
+  };
+  const signal = {
+    subjectType: "session",
+    subjectId: "s1",
+    signal: "stuck",
+    role: null,
+    beganAt: "2026-10-28T00:00:00.000Z",
+    raisedAt: "2026-10-31T09:00:00.000Z",
+  };
+
+  it("accepts a move and a signal", () => {
+    expect(validateEmitPayload("status:transition:completed", move)).toEqual({
+      ok: true,
+    });
+    expect(validateEmitPayload("status:signal:raised", signal)).toEqual({
+      ok: true,
+    });
+  });
+
+  it("refuses a hold, a reason or the mover on a move, and the words on a signal", () => {
+    for (const extra of [
+      { hold: { on: "person" } },
+      { reason: "why" },
+      { agentUserId: "a1" },
+    ]) {
+      expect(
+        validateEmitPayload("status:transition:completed", {
+          ...move,
+          ...extra,
+        }).ok
+      ).toBe(false);
+    }
+    expect(
+      validateEmitPayload("status:signal:raised", {
+        ...signal,
+        headline: "Deal with Acme is stuck",
+      }).ok
+    ).toBe(false);
+  });
+
+  it("refuses a subject type statusOf does not use, and an unknown signal", () => {
+    expect(
+      validateEmitPayload("status:transition:completed", {
+        ...move,
+        subjectType: "track",
+      }).ok
+    ).toBe(false);
+    expect(
+      validateEmitPayload("status:signal:raised", {
+        ...signal,
+        signal: "bored",
+      }).ok
+    ).toBe(false);
   });
 });

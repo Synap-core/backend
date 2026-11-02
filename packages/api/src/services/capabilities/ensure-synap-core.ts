@@ -689,7 +689,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       kind: "builtin",
       scope: "pod",
       description:
-        "Update a document via the governed documents.update path (owner-gated).",
+        "Edit a document through the document patch door: `content` replaces the body, `title` renames it, `ops` are the patch ops (upsert_section, replace_text, append, insert_embed…). A person's section and every embed are kept; governed like synap_update_document.",
       parameters: {
         type: "object",
         required: ["documentId"],
@@ -697,6 +697,9 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
           documentId: { type: "string" },
           content: { type: "string" },
           title: { type: "string" },
+          ops: { type: "array", items: { type: "object" } },
+          baseRevision: { type: "number" },
+          allowRemovingEmbeds: { type: "boolean" },
         },
       },
     },

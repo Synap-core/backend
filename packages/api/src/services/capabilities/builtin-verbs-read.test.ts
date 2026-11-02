@@ -112,6 +112,16 @@ vi.mock("../../utils/resolve-or-create-channel.js", () => ({
   ],
 }));
 
+// document.update goes through THE document patch door (Generative UI P0):
+// the seam is what the verb hands `applyDocumentPatch`.
+const patch = vi.hoisted(() => ({
+  apply: vi.fn(async (input: unknown) => ({ status: "applied", input })),
+}));
+vi.mock("../document-patch/apply-document-patch.js", () => ({
+  applyDocumentPatch: patch.apply,
+  loadPatchDocument: async () => ({ contentRevision: 7 }),
+}));
+
 import { BUILTIN_VERBS, READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
 
 const ENTITY_ID = "33333333-3333-4333-8333-333333333333";
@@ -290,5 +300,58 @@ describe("entity.query — honors the workspace floor", () => {
       { userId: "u1", workspaceId: null }
     );
     expect(h.withLens).toHaveBeenCalledWith(undefined);
+  });
+});
+
+describe("document.update — through the patch door, never the editor save", () => {
+  const DOC = "44444444-4444-4444-8444-444444444444";
+  beforeEach(() => patch.apply.mockClear());
+
+  it("an automation's run (no agent identity) is still a MACHINE writer, base pinned", async () => {
+    await BUILTIN_VERBS["document.update"]!(
+      { documentId: DOC, content: "New body", title: "Weekly" },
+      { userId: "u1", workspaceId: null, sessionId: "run-1" }
+    );
+    expect(patch.apply).toHaveBeenCalledWith({
+      userId: "u1",
+      agentUserId: null,
+      systemAuthor: "verb:document.update",
+      documentId: DOC,
+      baseRevision: 7,
+      ops: [
+        { op: "replace_all", content: "New body" },
+        { op: "set_title", title: "Weekly" },
+      ],
+      allowRemovingEmbeds: undefined,
+      provenanceSessionId: "run-1",
+    });
+  });
+
+  it("an agent's run carries its identity and passes its ops as sent", async () => {
+    const ops = [
+      { op: "upsert_section", id: "status", title: "Status", body: "x" },
+    ];
+    await BUILTIN_VERBS["document.update"]!(
+      { documentId: DOC, ops, baseRevision: 3 },
+      { userId: "u1", workspaceId: null, agentUserId: "agent-1" }
+    );
+    const input = patch.apply.mock.calls[0]![0] as Record<string, unknown>;
+    expect(input).toMatchObject({
+      agentUserId: "agent-1",
+      baseRevision: 3,
+      ops,
+      provenanceSessionId: null,
+    });
+    expect(input).not.toHaveProperty("systemAuthor");
+  });
+
+  it("refuses a call that changes nothing", async () => {
+    await expect(
+      BUILTIN_VERBS["document.update"]!(
+        { documentId: DOC },
+        { userId: "u1", workspaceId: null }
+      )
+    ).rejects.toThrow(/needs `content`, `title` or `ops`/);
+    expect(patch.apply).not.toHaveBeenCalled();
   });
 });

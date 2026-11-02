@@ -61,11 +61,21 @@ export interface NotificationNavigateHandler {
  * stores `def.actions` VERBATIM and the persisted row does not carry `data`, so
  * a templated id would reach the client as the literal `{{…}}` text. That was
  * already true of the `chat.mention` action this replaces.
+ *
+ * `kind` is OMITTED only by a type whose rows each point at a different KIND of
+ * object (the handoff types: any `HANDOFF_KINDS` member). It then means "this
+ * notification's own object" — the producer's `target`, else its
+ * `sourceType` — and `create()` writes it in (`materializeActions`), so a
+ * persisted row and the socket payload always carry a literal kind: no client
+ * ever reads a handler without one.
  */
 export interface NotificationNavigateObjectHandler {
   type: "navigate-object";
-  /** Object-nav kind — see `fallbackNavTarget` in object-nav.ts. */
-  kind: string;
+  /**
+   * Object-nav kind — see `fallbackNavTarget` in object-nav.ts. Omit ⇒ the
+   * row's own object, written in at create (see above).
+   */
+  kind?: string;
   /** Literal object id. Omit ⇒ the notification's own `sourceId`. */
   id?: string;
   /**
@@ -149,6 +159,10 @@ export interface NotificationDef {
    *   once when the session has an open room question, and counts ZERO when
    *   neither is true, because whatever it announced has been resolved. A
    *   pointer row's `sourceId` must be the session id.
+   * - `"from_system"` — no real asker raised it: news the pod wrote on nobody's
+   *   behalf (a blocker closed). Never a headline row: it sits in the needs-you
+   *   rule's `from_system` fold (`needsYouClass: "from_system"`), counted in
+   *   `count.folds.fromSystem`, never dropped.
    * - `"suggestion"` — something an AI offered on its own initiative (a nudge,
    *   an insight, a briefing). It NEVER counts toward needs-you. It goes to
    *   its own sibling bucket instead: `signals.list({ lens: "suggestions" })`
@@ -185,7 +199,12 @@ export interface NotificationDef {
 }
 
 export type NotificationNeedsYouRole =
-  "item" | "informational" | "session-pointer" | "suggestion" | "status";
+  | "item"
+  | "informational"
+  | "session-pointer"
+  | "from_system"
+  | "suggestion"
+  | "status";
 
 /**
  * The suppression window both session-attention types use: one notification per
@@ -993,6 +1012,27 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     needsYou: "suggestion",
   },
   {
+    // What agents delivered since the last digest (plan d679e92c C9), raised
+    // by the morning brief's own pass (`services/morning-brief/
+    // delivered-digest.ts`), only when something was delivered. One PASSIVE
+    // push a day under `delivered-digest`, outside the daily cap. News, never
+    // an ask: a suggestion like every `ai.proactive.*` type (founder D2,
+    // 2026-09-26), so it never counts in needs-you, and it goes stale on its own.
+    type: "ai.proactive.delivered_digest",
+    category: "ai",
+    label: "Delivered digest",
+    icon: "package",
+    priority: "low",
+    titleTemplate: "{{title}}",
+    bodyTemplate: "{{body}}",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    // One open digest per person-day (`delivered-digest:<YYYY-MM-DD>`).
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
+    needsYou: "suggestion",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
+  },
+  {
     type: "ai.proactive.weekly_digest",
     category: "ai",
     label: "Weekly Digest",
@@ -1470,6 +1510,9 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{blockerTitle}} closed — nothing else is blocking it.",
     defaultChannels: ["in_app"],
     ttl: 0,
+    // The pod writes it on nobody's behalf: no asker, so it is never a
+    // headline row (31 Oct: 7 of the founder's 92 rows were these).
+    needsYou: "from_system",
     actions: [
       {
         id: "view",
@@ -1511,62 +1554,72 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
   },
   {
     /**
-     * "Continue on desktop" — the person asked, from their phone, for their own
-     * desktop to pick up this run. Producer: `notifCenter.requestHandoff`, which
-     * owner-floors the session first. `sourceId` is the session id.
+     * "Continue on desktop" — the person asked, from another device, for their
+     * own desktop to pick up an object (decision D5, be431bee). Producer: the
+     * ONE handoff door, `notifCenter.handoff` (`to: "desktop"`; the older
+     * `requestHandoff` is a wrapper over it). `sourceType` is the object's
+     * kind (any `HANDOFF_KINDS` member), `sourceId` its id, and the action's
+     * kind and view are the row's own (`materializeActions`): a session sent
+     * to its room opens the room.
      *
-     * In-app ONLY, and capped there (`channelCeiling`): the request came FROM the
-     * phone, so pushing it back to the phone is noise, whatever a routing rule
-     * says. A running desktop receives it over the user room; a closed one finds
-     * it unread in the inbox later. Opening is a click — never automatic.
+     * In-app ONLY, and capped there (`channelCeiling`): the request came FROM
+     * the phone, so pushing it back to the phone is noise, whatever a routing
+     * rule says. A running desktop receives it over the user room; a closed
+     * one finds it unread in the inbox later. Opening is a click — never
+     * automatic.
      */
     type: "handoff.continue",
     category: "system",
     label: "Continue on desktop",
     icon: "monitor",
     priority: "normal",
-    titleTemplate: "Continue on desktop: {{goal}}",
+    titleTemplate: "Continue on desktop: {{title}}",
     // "another device", not "your phone": the door refuses agents, but any
     // human client (relay, CLI, a second desktop) can call it.
     bodyTemplate:
-      "Sent from another device. Open the room to pick up this run.",
+      "Sent from another device. Open it to pick up where you were.",
     defaultChannels: ["in_app"],
     channelCeiling: ["in_app"],
     ttl: 0,
     actions: [
       {
-        id: "open-room",
-        label: "Open room",
+        id: "open",
+        label: "Open",
         variant: "primary",
-        handler: { type: "navigate-object", kind: "session", view: "room" },
+        handler: { type: "navigate-object" },
       },
     ],
   },
   {
     /**
-     * "Continue on desktop" for a LIBRARY GROUP (relay's Library tab). The
-     * same ask as `handoff.continue` — in-app only, never pushed back to the
-     * phone — but its button and tap open the GROUP (`library_group`, the
-     * `library_groups` id in `sourceId`), not a session room. Producer:
-     * `notifCenter.requestHandoff` with `target.kind = "library_group"`.
+     * "Send to phone" — the person asked, from their desktop, for their phone
+     * to pick up an object (decision D5; where the verb shows: plan call 11,
+     * d28ab079). Producer: `notifCenter.handoff` with `to: "phone"`. Same
+     * pointer as `handoff.continue`: `sourceType` = the object's kind,
+     * `sourceId` its id, the tap opens relay's own route for it.
+     *
+     * In-app AND push: the phone is the device that was asked, so the push IS
+     * the delivery (a phone that gets no pushes finds it in its inbox). Its
+     * push category, `sent-by-you`, is cap-exempt: the person's own ask never
+     * spends the daily interruption budget (`@synap-core/types/push`).
      */
-    type: "handoff.continue_library",
+    type: "handoff.to_phone",
     category: "system",
-    label: "Continue on desktop",
-    icon: "monitor",
+    label: "Sent to your phone",
+    icon: "smartphone",
     priority: "normal",
-    titleTemplate: "Continue on desktop: {{groupName}}",
+    titleTemplate: "From your desktop: {{title}}",
     bodyTemplate:
-      "Sent from another device. Open the group to pick up where you were.",
-    defaultChannels: ["in_app"],
-    channelCeiling: ["in_app"],
+      "Sent from another device. Open it to pick up where you were.",
+    defaultChannels: ["in_app", "os"],
+    channelCeiling: ["in_app", "os"],
     ttl: 0,
     actions: [
       {
-        id: "open-group",
-        label: "Open group",
+        id: "open",
+        label: "Open",
         variant: "primary",
-        handler: { type: "navigate-object", kind: "library_group" },
+        handler: { type: "navigate-object" },
       },
     ],
   },
@@ -1605,6 +1658,12 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     ttl: 0,
     groupBy: "sessionId",
     dedupeWindowMs: SESSION_ATTENTION_DEDUPE_WINDOW_MS,
+    // The push is the interrupt; the live need is the criterion's owed slot.
+    // As an "item" the row kept the session in needs-you after the person
+    // graded it, and after the session closed, until someone read the bell
+    // (16 of 92 needs-you rows on 31 Oct 2026, every one already graded or
+    // still double-counted beside its slot).
+    needsYou: "session-pointer",
     actions: [
       {
         id: "view",

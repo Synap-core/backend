@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { receiverCardClass, receiverWidthClass } from "./receiver-shell";
+import {
+  READS_WIDE_ATTR,
+  receiverCardClass,
+  receiverWidthClass,
+} from "./receiver-shell";
 
 /**
  * `width` was live for one commit as an INERT prop: declared, defaulted,
@@ -19,6 +23,20 @@ describe("receiverWidthClass", () => {
 
   it("keeps the object-reading card wide", () => {
     expect(receiverWidthClass("md")).toBe("max-w-2xl");
+  });
+
+  it("auto reads at md, and at lg's two classes when the card holds the mark", () => {
+    const auto = receiverWidthClass("auto").split(" ");
+    const mark = `has-[[${READS_WIDE_ATTR}]]`;
+    expect(auto[0]).toBe(receiverWidthClass("md"));
+    // Every lg class, gated on the mark — the same attribute the content sets.
+    for (const cls of receiverWidthClass("lg").split(" ")) {
+      const [bp, utility] = cls.includes(":") ? cls.split(":") : ["", cls];
+      expect(auto).toContain(
+        bp ? `${bp}:${mark}:${utility}` : `${mark}:${utility}`
+      );
+    }
+    expect(auto).toHaveLength(3);
   });
 
   it("actually distinguishes the two — an inert prop returns one value", () => {

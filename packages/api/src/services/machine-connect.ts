@@ -53,6 +53,7 @@ import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import {
   applyAgentPosture,
   readAgentGovernance,
+  revokeAllHostSeedsOn,
 } from "@synap/database/agent-governance";
 import {
   AI_READ_PROPOSE_ROLE_ID,
@@ -60,6 +61,7 @@ import {
   aiDefaultCapabilities,
 } from "@synap-core/types/grants";
 import { MACHINE_AGENT_TYPE, agentDisplayName } from "@synap-core/types/agents";
+import type { ComputerBelongsTo } from "@synap-core/types/computers";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import { auditLog } from "../utils/audit-log.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
@@ -284,7 +286,13 @@ export interface DeviceRequestView {
   createdAt: Date;
   expiresAt: Date;
   /** The person's own computers with this hostname: reuse keeps agents, history, rules. */
-  reusableComputers: Array<{ id: string; name: string; createdAt: Date }>;
+  reusableComputers: Array<{
+    id: string;
+    name: string;
+    createdAt: Date;
+    /** Whose computer it is today (0388); the approval may change it. */
+    belongsTo: ComputerBelongsTo | null;
+  }>;
   /** Days the keys will last (computer override → pod default → 90). */
   keyTtlDays: number;
   /** The reach the computer gets — the preset's name, shown in Details. */
@@ -325,7 +333,12 @@ export async function getDeviceRequest(args: {
     });
   }
   const reusable = await db
-    .select({ id: users.id, name: users.name, createdAt: users.createdAt })
+    .select({
+      id: users.id,
+      name: users.name,
+      createdAt: users.createdAt,
+      belongsTo: users.computerBelongsTo,
+    })
     .from(users)
     .where(
       and(
@@ -357,6 +370,7 @@ export async function getDeviceRequest(args: {
       id: r.id,
       name: r.name ?? row.hostname,
       createdAt: r.createdAt,
+      belongsTo: r.belongsTo ?? null,
     })),
     keyTtlDays: await resolveMachineKeyTtlDays(null),
     accessName: AI_PRESET_NAME,
@@ -375,6 +389,11 @@ export interface DecideDeviceRequestInput {
   reuseComputerId?: string | null;
   /** Approve: the computer's display name (default: its hostname). */
   computerName?: string | null;
+  /**
+   * Approve: whose computer it is (0388). Omitted: a new computer is the
+   * person's own; a reused one keeps what it was.
+   */
+  belongsTo?: ComputerBelongsTo | null;
 }
 
 export async function decideDeviceRequest(
@@ -514,6 +533,7 @@ export async function decideDeviceRequest(
       approvedAgents: agents,
       machineUserId: input.reuseComputerId ?? null,
       machineName: input.computerName?.trim() || null,
+      computerBelongsTo: input.belongsTo ?? null,
     })
     .where(
       and(
@@ -539,6 +559,7 @@ export async function decideDeviceRequest(
       hostname: row.hostname,
       agents,
       reuseComputerId: input.reuseComputerId ?? null,
+      belongsTo: input.belongsTo ?? null,
       requesterIp: row.requesterIp,
     },
   });
@@ -761,7 +782,10 @@ async function postureFirst(agentUserId: string, by: string): Promise<void> {
 /**
  * The computer principal: the one the approver chose to reuse (its agents,
  * history and rules kept), else a new `machine` agent user. Posture is applied
- * BEFORE anything links to it (no key yet exists).
+ * BEFORE anything links to it (no key yet exists). Whose computer it is
+ * (0388): what the approver chose, else `person` for a new one; a reused one
+ * keeps its own unless the approver chose (`setMachineBelongsTo`, the one
+ * writer, which also takes back an agent's seeds when it stops being theirs).
  */
 export async function ensureMachineAgent(args: {
   approverId: string;
@@ -769,6 +793,7 @@ export async function ensureMachineAgent(args: {
   name: string;
   hostname: string;
   platform: string | null;
+  belongsTo?: ComputerBelongsTo | null;
 }): Promise<string> {
   let machineId = args.reuseId;
   if (machineId) {
@@ -801,6 +826,8 @@ export async function ensureMachineAgent(args: {
       },
     }));
   }
+  const belongsTo = args.belongsTo ?? (args.reuseId ? null : "person");
+  if (belongsTo) await setMachineBelongsTo(machineId, belongsTo);
   await postureFirst(machineId, args.approverId);
   return machineId;
 }
@@ -816,6 +843,7 @@ async function mintForApprovedRequest(
     name,
     hostname: row.hostname,
     platform: row.platform,
+    belongsTo: row.computerBelongsTo,
   });
   const [machine] = await db
     .select({ name: users.name })
@@ -921,6 +949,32 @@ async function mintForApprovedRequest(
     },
     agents,
   };
+}
+
+// ── Whose computer it is ────────────────────────────────────────────────────
+
+/**
+ * THE writer of `users.computer_belongs_to` (0388): the device approval and
+ * `machines.setBelongsTo` both come here. A computer that stops belonging to
+ * an agent loses every approval seeded on it for its agents
+ * (`revokeAllHostSeedsOn`, host-seed.ts): a person's own or a shared computer
+ * keeps its agents as guests. Returns the seeds taken back.
+ */
+export async function setMachineBelongsTo(
+  machineId: string,
+  belongsTo: ComputerBelongsTo
+): Promise<{ seedsRevoked: number }> {
+  return db.transaction(async (tx) => {
+    await tx
+      .update(users)
+      .set({ computerBelongsTo: belongsTo, updatedAt: new Date() })
+      .where(
+        and(eq(users.id, machineId), eq(users.agentType, MACHINE_AGENT_TYPE))
+      );
+    const seedsRevoked =
+      belongsTo === "agent" ? 0 : await revokeAllHostSeedsOn(tx, machineId);
+    return { seedsRevoked };
+  });
 }
 
 // ── Revoke a computer ───────────────────────────────────────────────────────

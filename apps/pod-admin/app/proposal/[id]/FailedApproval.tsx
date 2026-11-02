@@ -19,6 +19,7 @@
 import { addToast, Button } from "@heroui/react";
 import { TriangleAlert } from "lucide-react";
 import { trpc } from "../../../lib/trpc";
+import { proposalPageT } from "./copy";
 import {
   pickAct,
   repairRows,
@@ -36,6 +37,7 @@ function Row({
   busy: boolean;
   onRepair: (act: RepairAct) => void;
 }) {
+  const t = proposalPageT();
   const rest = row.choices.filter((c) => c !== row.suggested?.value);
   return (
     <li data-repair-field={row.key} className="flex flex-col gap-2">
@@ -59,7 +61,7 @@ function Row({
             isDisabled={busy}
             onPress={() => onRepair(row.suggested!.act)}
           >
-            Use “{row.suggested.value}” and approve
+            {t("repair.use", { value: row.suggested.value })}
           </Button>
         )}
         {rest.map((choice) => (
@@ -80,7 +82,7 @@ function Row({
             isDisabled={busy}
             onPress={() => onRepair(row.add!.act)}
           >
-            Add “{row.add.value}” as a choice and approve
+            {t("repair.add", { value: row.add.value })}
           </Button>
         )}
       </div>
@@ -102,6 +104,7 @@ export function FailedApproval({
   onDecided: () => void;
 }) {
   const utils = trpc.useUtils();
+  const t = proposalPageT();
   const options = trpc.proposals.repairOptions.useQuery({ proposalId });
   const failed = (title: string) => (e: { message: string }) => {
     void utils.proposals.invalidate();
@@ -115,15 +118,15 @@ export function FailedApproval({
   const approve = trpc.proposals.approve.useMutation({
     onSuccess: () => {
       void utils.proposals.invalidate();
-      addToast({ title: "Repaired and approved", color: "success" });
+      addToast({ title: t("repair.approved"), color: "success" });
       onDecided();
     },
-    onError: failed("Repaired, but couldn’t approve"),
+    onError: failed(t("repair.approveFailed")),
   });
   const repair = trpc.proposals.repair.useMutation({
     onSuccess: (result) =>
       approve.mutate({ proposalId, expectedRevision: result.revision }),
-    onError: failed("Couldn’t repair this proposal"),
+    onError: failed(t("repair.failed")),
   });
   const busy = repair.isPending || approve.isPending;
 
@@ -134,7 +137,7 @@ export function FailedApproval({
 
   return (
     <section
-      aria-label="Why approving failed"
+      aria-label={t("repair.label")}
       data-failed-approval=""
       className="flex flex-col gap-3 rounded-lg bg-warning/[0.06] px-4 py-3 ring-1 ring-inset ring-warning/25"
     >
@@ -143,21 +146,21 @@ export function FailedApproval({
           aria-hidden
           className="mt-0.5 h-4 w-4 shrink-0 text-warning"
         />
-        <span>{reason ?? "Approving this failed."}</span>
+        <span>{reason ?? t("repair.default")}</span>
       </p>
       {options.isError ? (
         <div className="flex items-center gap-2 text-[12px] text-foreground/65">
-          <span>Couldn’t load what can be fixed.</span>
+          <span>{t("repair.loadFailed")}</span>
           <Button
             size="sm"
             variant="light"
             onPress={() => void options.refetch()}
           >
-            Try again
+            {t("read.retry")}
           </Button>
         </div>
       ) : options.isLoading ? (
-        <p className="text-[12px] text-foreground/55">Checking what to fix…</p>
+        <p className="text-[12px] text-foreground/55">{t("repair.checking")}</p>
       ) : rows.length > 0 ? (
         <ul className="flex flex-col gap-3">
           {rows.map((row) => (
@@ -178,8 +181,7 @@ export function FailedApproval({
         </ul>
       ) : options.data?.missingKind ? (
         <p className="text-[12px] text-foreground/65">
-          The kind “{options.data.missingKind}” does not exist here. Create it,
-          or ask the AI to file this under a kind that exists.
+          {t("repair.missingKind", { kind: options.data.missingKind })}
         </p>
       ) : null}
     </section>

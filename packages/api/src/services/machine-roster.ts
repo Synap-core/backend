@@ -42,6 +42,7 @@ import {
   type AgentMetadata,
 } from "@synap/database/schema";
 import { MACHINE_AGENT_TYPE, agentDisplayName } from "@synap-core/types/agents";
+import type { ComputerBelongsTo } from "@synap-core/types/computers";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import {
   agentTypeName,
@@ -125,6 +126,8 @@ export interface MachineView {
   accessName: string | null;
   /** "Runs scripts" is on: the computer leases its person's box runs. */
   runsScripts: boolean;
+  /** Whose computer it is (0388). Null only on a row written before it. */
+  belongsTo: ComputerBelongsTo | null;
   agents: HostedAgentView[];
 }
 
@@ -263,6 +266,7 @@ async function loadMachineViews(
       meta: users.agentMetadata,
       createdAt: users.createdAt,
       createdByUserId: users.createdByUserId,
+      belongsTo: users.computerBelongsTo,
     })
     .from(users)
     .where(
@@ -341,6 +345,7 @@ async function loadMachineViews(
         maxKeyTtlDays: MACHINE_KEY_TTL_MAX_DAYS,
         accessName: labels.length > 0 ? [...new Set(labels)].join(", ") : null,
         runsScripts: meta.runsScripts === true,
+        belongsTo: m.belongsTo ?? null,
         agents: hosted
           .filter((a) => a.hostUserId === m.id)
           .map((a) => {

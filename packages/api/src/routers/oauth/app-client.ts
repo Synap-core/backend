@@ -23,7 +23,7 @@ import {
   workspaces,
 } from "@synap/database/schema";
 import { isAppPublicId } from "@synap-core/types/membrane";
-import { summarizeGrant } from "@synap-core/types/grants";
+import { EVERYWHERE_IN_POD, summarizeGrant } from "@synap-core/types/grants";
 import {
   GRANT_ACTIONS,
   parsePermission,
@@ -315,7 +315,7 @@ export interface AppSignInDescription {
    * was SHOWN.
    */
   fingerprint: string;
-  /** "<App> will act as you in: Sales, Content." */
+  /** "<App> will act as you in: Sales, Content." + its pod-wide reads: "Read Decisions, everywhere in your pod." */
   headline: string;
   spaces: AppSignInSpace[];
   /** "It cannot delete, manage keys, approve outside these spaces, or see anything outside what a member of these spaces sees." */
@@ -334,7 +334,8 @@ export async function describeAppSignIn(
   registeredBy: string,
   requests: readonly AppGrantRequest[]
 ): Promise<AppSignInDescription> {
-  // A sign-in is per space: a pod-wide pair never reaches one (`appSignInReach`).
+  // Spaces by name; a pod-wide read (the owner's own, `appSignInReach`) has no
+  // space and is said once, after them.
   const ids = [
     ...new Set(requests.flatMap((r) => (r.workspaceId ? [r.workspaceId] : []))),
   ];
@@ -356,6 +357,13 @@ export async function describeAppSignIn(
       can: summarizeGrant({ permissions, workspaceIds: [id] }).what,
     };
   });
+  const podWide = requests
+    .filter((r) => r.workspaceId === null)
+    .map((r) => r.permission);
+  const podWideCan =
+    podWide.length > 0
+      ? summarizeGrant({ permissions: podWide, workspaceIds: null }).what
+      : null;
   const all = requests.map((r) => r.permission);
   const canDelete = all.some((p) => patternGrants(p, "delete"));
   const canApprove = all.some((p) => patternGrants(p, "approve"));
@@ -363,15 +371,21 @@ export async function describeAppSignIn(
     ...(canDelete ? [] : ["delete"]),
     "manage keys",
     canApprove ? "approve outside these spaces" : "approve changes",
-    "see anything outside what a member of these spaces sees",
+    podWideCan
+      ? "see anything else outside what a member of these spaces sees"
+      : "see anything outside what a member of these spaces sees",
   ];
+  const acts =
+    spaces.length > 0
+      ? `${appName} will act as you in: ${spaces.map((s) => s.name).join(", ")}.`
+      : `${appName} will act as you.`;
   return {
     appName,
     registeredBy,
     fingerprint: appGrantFingerprint(requests),
-    headline: `${appName} will act as you in: ${spaces
-      .map((s) => s.name)
-      .join(", ")}.`,
+    headline: podWideCan
+      ? `${acts} ${podWideCan}, ${EVERYWHERE_IN_POD}.`
+      : acts,
     spaces,
     cannot: `It cannot ${orList(cannot)}.`,
     note: `What you do in ${appName} is saved as you, right away — not sent for review. You stay signed in for ${APP_PERSON_TOKEN_TTL_DAYS} days, and you can sign it out any time from Connected.`,

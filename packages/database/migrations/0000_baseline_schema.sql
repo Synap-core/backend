@@ -61,6 +61,14 @@ ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "host_user_id" text;
 -- 0329: agent pause (agent routing W1b).
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "agent_paused_at" timestamp with time zone;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "agent_paused_by" text;
+-- 0388: whose computer it is ('person' | 'agent' | 'shared'; NULL off computers).
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "computer_belongs_to" text;
+DO $$ BEGIN
+  ALTER TABLE "users" ADD CONSTRAINT "users_computer_belongs_to_check"
+    CHECK ("computer_belongs_to" IS NULL
+      OR "computer_belongs_to" IN ('person', 'agent', 'shared'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "kratos_identity_id" text;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "last_synced_at" timestamp with time zone;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
@@ -239,6 +247,7 @@ CREATE TABLE IF NOT EXISTS "device_auth_requests" (
   "approved_agents"       text[],
   "machine_user_id"       text REFERENCES "users"("id") ON DELETE SET NULL,
   "machine_name"          text,
+  "computer_belongs_to"   text,
   "minted_key_id"         uuid,
   "failed_code_attempts"  integer NOT NULL DEFAULT 0,
   "poll_interval_seconds" integer NOT NULL DEFAULT 5,
@@ -780,6 +789,8 @@ CREATE TABLE IF NOT EXISTS "documents" (
   "content_revision"         integer NOT NULL DEFAULT 1,
   "working_state_revision"   integer,
   "metadata"                 jsonb,
+  "scope"                    jsonb,
+  "refresh_automation_id"    uuid,
   "created_at"               timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"               timestamp with time zone NOT NULL DEFAULT now(),
   "deleted_at"               timestamp with time zone
@@ -801,6 +812,9 @@ ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "working_state_updated_at" time
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "content_revision" integer NOT NULL DEFAULT 1;
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "working_state_revision" integer;
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "metadata" jsonb;
+-- 0387: the living document's LensScope and its bound refresher (D4).
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "scope" jsonb;
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "refresh_automation_id" uuid;
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;
@@ -2413,10 +2427,18 @@ CREATE TABLE IF NOT EXISTS "agent_configs" (
   "disabled_tool_ids"  jsonb   NOT NULL DEFAULT '[]',
   "max_steps_override" integer,
   "model_override"     text,
+  -- Presets (0390): a row with a preset_key is a named preset of the agent
+  -- user_id, pod-wide (workspace_id NULL).
+  "preset_key"         text,
+  "preset_label"       text,
+  "provider_override"  text,
+  "skill_slugs"        jsonb   NOT NULL DEFAULT '[]',
   "created_at"         timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"         timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT "agent_configs_user_workspace_agent_unique"
-    UNIQUE ("user_id", "workspace_id", "agent_type")
+    UNIQUE ("user_id", "workspace_id", "agent_type"),
+  CONSTRAINT "agent_configs_preset_pod_wide"
+    CHECK ("preset_key" IS NULL OR "workspace_id" IS NULL)
 );
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
 ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "user_id" text;
@@ -2427,6 +2449,10 @@ ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "extra_tool_ids" jsonb DEFA
 ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "disabled_tool_ids" jsonb DEFAULT '[]';
 ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "max_steps_override" integer;
 ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "model_override" text;
+ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "preset_key" text;
+ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "preset_label" text;
+ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "provider_override" text;
+ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "skill_slugs" jsonb NOT NULL DEFAULT '[]';
 ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
@@ -2438,6 +2464,10 @@ CREATE INDEX IF NOT EXISTS "agent_configs_workspace_id_idx"
 
 CREATE INDEX IF NOT EXISTS "agent_configs_agent_type_idx"
   ON "agent_configs" ("agent_type");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "agent_configs_user_preset_unique"
+  ON "agent_configs" ("user_id", "preset_key")
+  WHERE "preset_key" IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_users_agent_template
   ON users ((agent_metadata->>'agentTemplate'))
@@ -2556,6 +2586,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS "automations_workspace_name_active_uq"
     lower(name)
   )
   WHERE status <> 'archived';
+
+-- 0387: a document's bound refresher unbinds itself when its automation is
+-- deleted — mirrors 0387_document_scope_refresher.sql (the columns sit in the
+-- documents section; the FK sits here, the first point where "automations"
+-- exists). Not at the file's tail: the migration tests of the tail blocks
+-- (0376, 0386) run "from their marker to the end" on an empty database.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'documents_refresh_automation_id_fkey'
+  ) THEN
+    ALTER TABLE "documents"
+      ADD CONSTRAINT "documents_refresh_automation_id_fkey"
+      FOREIGN KEY ("refresh_automation_id") REFERENCES "automations"("id")
+      ON DELETE SET NULL;
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS "automation_runs" (
   "id"              uuid  PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -2827,6 +2874,8 @@ ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "instance_id" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "instance_label" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "tool_profile" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "tool_groups" text[] NOT NULL DEFAULT '{}';
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "worker_served_at" timestamp with time zone;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "worker_served_version" text;
 DO $$ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'api_keys_tool_profile_check'
@@ -5322,7 +5371,7 @@ END $$;
 -- session × client conversation holding its change-feed wait). Telemetry,
 -- stamped by the wait at most once a minute; never on focus_sessions (0277's
 -- trigger would wake the waiter). Mirrors 0342_session_runners.sql + 0373 (process)
--- + 0384 (state).
+-- + 0384 (state) + 0389 (model, provider).
 CREATE TABLE IF NOT EXISTS "session_runners" (
   "session_id"      uuid        NOT NULL REFERENCES "focus_sessions"("id") ON DELETE CASCADE,
   "client_key"      text        NOT NULL,
@@ -5339,6 +5388,8 @@ CREATE TABLE IF NOT EXISTS "session_runners" (
   "state"              text,
   "state_since"        timestamptz,
   "state_reported_at"  timestamptz,
+  "model"              text,
+  "provider"           text,
   "first_seen_at"   timestamptz NOT NULL DEFAULT now(),
   "last_seen_at"    timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY ("session_id", "client_key", "process_key")

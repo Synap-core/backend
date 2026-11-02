@@ -33,6 +33,8 @@ import {
   SESSION_POST_REFS_MAX,
 } from "@synap-core/types/agents";
 import { PROPOSAL_REJECTION_REASONS } from "@synap-core/types/proposals";
+import { DENIED_BY_RULE_REASON } from "@synap/governance-policy";
+import { workClockIn } from "@synap-core/types/work-clock";
 import {
   SESSION_STATUSES,
   TERMINAL_SESSION_STATUSES,
@@ -591,6 +593,13 @@ const ROOM_QUESTION_ASK_JSON_SCHEMA = {
   description:
     "With kind 'question' + slotLabel: HOW the person answers — 'confirm' (yes/no), 'choose' (1-8 options, ≤1 recommended; an option may open ONE follow-up {prompt, 2-4 options} and carry a `caution`), 'form' (small flat form; never a secret), 'act' (a physical/world task only; they answer 'I did this'), 'provide' (connection {service} | file {accept} | secret {name}, via the vault). Prefer confirm/choose for any decision. Any mode may carry `risk` ('high' | 'medium' | 'low'). Omit for a free-text answer.",
 };
+
+/**
+ * A person's "Never" (0381), named in the capability tools' texts so an agent
+ * knows it before it meets one: the refusal's own sentence, never a second
+ * phrasing.
+ */
+const DENIED_BY_RULE_TOOL_NOTE = `A run refused with ${DENIED_BY_RULE_REASON} Only a pod admin can take that back, in pod admin Settings.`;
 
 /**
  * JSON Schema for `synap_run_capability`, DERIVED from the ONE
@@ -1578,6 +1587,16 @@ export const tools = {
               description:
                 "The declared output slot this fulfils: its key or its label. One that names no output of the session is said in the reply's `warnings`; the document is created either way.",
             },
+            scope: {
+              type: ["object", "null"],
+              description:
+                'A living document\'s scope: what its embedded cells read through. {kind:"pod"} | {kind:"workspace", workspaceId, projectId?} | {kind:"project", projectId} | {kind:"track", trackId} | {kind:"session", sessionId}. Never put a scope in a cell\'s props: the host stamps this one on every cell. Refused when it names something you cannot read.',
+            },
+            refreshAutomationId: {
+              type: ["string", "null"],
+              description:
+                "The automation bound to refresh this document (an id synap_list_automations returns). Its runs may rewrite this document's existing AI sections without review; every other edit is governed as usual.",
+            },
             /**
              * WHY this write, in the person's own words — shown verbatim to the
              * reviewer. Without it the proposal detail reads "No reason was
@@ -1601,7 +1620,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Edit a document with ops — a section, a passage, an addition — instead of rewriting it. Read it first with synap_get_document and pass its `revision` as `baseRevision`. Ops, applied in order: `upsert_section {id, title, body}` writes ONE `::::synap-section` block by id (replaces your own `ai` section, or appends a new one); `replace_text {old, new}` — `old` must match EXACTLY once, copy it from the document and include enough context (0 or 2+ matches is refused with the count); `append {body}`; `replace_all {content}` (whole body — needs baseRevision, always goes to review); `set_title {title}` renames the document (its one title — a human name, never an id), governed like the other ops. Refused: changing a section whose owner is `human` (by any op), and removing an embed unless `allow_removing_embeds: true`. Usually returns 'proposed' (the person reviews a per-section before/after); a governance rule may apply it directly. The response carries `preview` and `diagnostics` (embeds that will not render, each with a `fix` — advisory, never a refusal). A 'changed after you read it' error means re-read and redraft.",
+          "Edit a document with ops — a section, a passage, an addition — instead of rewriting it. Read it first with synap_get_document and pass its `revision` as `baseRevision`. Ops, applied in order: `upsert_section {id, title, body}` writes ONE `::::synap-section` block by id (replaces your own `ai` section, or appends a new one); `replace_text {old, new}` — `old` must match EXACTLY once, copy it from the document and include enough context (0 or 2+ matches is refused with the count); `append {body}`; `replace_all {content}` (whole body — needs baseRevision, always goes to review); `set_title {title}` renames the document (its one title — a human name, never an id), governed like the other ops; `insert_embed {directive, ref, props?, fallback?, sectionId?|after?}` adds an embed (synap-cell {cellKey} + props, synap-entity {id}, synap-view {viewId}) written for you — never hand-write directive text — at the end, at the end of section `sectionId`, or after the line holding `after`; `set_scope {scope}` sets the living document's scope (same shape as synap_create_document's, null clears it); `set_refresher {automationId}` binds the automation whose runs refresh its AI sections (null unbinds). Refused: changing a section whose owner is `human` (by any op), and removing an embed unless `allow_removing_embeds: true`. Usually returns 'proposed' (the person reviews a per-section before/after); a governance rule may apply it directly. The response carries `preview` and `diagnostics` (embeds that will not render, each with a `fix` — advisory, never a refusal). A 'changed after you read it' error means re-read and redraft.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1627,6 +1646,9 @@ export const tools = {
                       "append",
                       "replace_all",
                       "set_title",
+                      "insert_embed",
+                      "set_scope",
+                      "set_refresher",
                     ],
                   },
                   id: {
@@ -1659,6 +1681,46 @@ export const tools = {
                   content: {
                     type: "string",
                     description: "replace_all: the whole new body.",
+                  },
+                  directive: {
+                    type: "string",
+                    enum: ["synap-cell", "synap-entity", "synap-view"],
+                    description: "insert_embed: what to embed.",
+                  },
+                  ref: {
+                    type: "object",
+                    description:
+                      "insert_embed: the reference — {cellKey} (cell), {id} (entity), {viewId} (view).",
+                  },
+                  props: {
+                    type: "object",
+                    description:
+                      "insert_embed: a cell's props (synap_list_widgets shows each cell's).",
+                  },
+                  fallback: {
+                    type: "string",
+                    description:
+                      "insert_embed: one sentence saying what it shows (the phone and exports read it).",
+                  },
+                  sectionId: {
+                    type: "string",
+                    description:
+                      "insert_embed: add it at the end of this section.",
+                  },
+                  after: {
+                    type: "string",
+                    description:
+                      "insert_embed: add it after the line holding this exact text (must occur once).",
+                  },
+                  scope: {
+                    type: ["object", "null"],
+                    description:
+                      "set_scope: the scope object, or null to clear it.",
+                  },
+                  automationId: {
+                    type: ["string", "null"],
+                    description:
+                      "set_refresher: the automation's id, or null to unbind it.",
                   },
                 },
                 required: ["op"],
@@ -2175,7 +2237,9 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "The session BRIEFING — call first in every session. Leads with `startHere`: proposals you or your agents filed that await review (raise these first; the user's queue may hold more from others), open work sessions, the open goals they serve, each with where it stands (`openGoals`: file work into one with trackId), the most-used kinds, runnable actions, and the skill to load for concept depth. Then your identity, what is known about the user, projects (commitments, each spanning workspaces) and the workspaces (operational domains) that hold data. Pass scope:['projects'] and/or workspaceId to narrow — and PIN a `workspaceId` and orient also returns that space's `brief`: what it is FOR (purpose, persona), the kinds it HOLDS, its rules, its SKILLS (the agent know-how this space activates — each `{ slug, mode, when? }`; `mode:'always'` is in effect now, `'on-demand'` when the task matches its `when`), plus its playbooks and anchors. That is the one door to 'what is this space for, and what does it know' — an unpinned orient carries no brief. Light omits empty domains and the full type inventory; detail:'full' adds every workspace, descriptions, onboarding specs and per-workspace profiles. Every kind and role: synap_list_profiles.",
+          "The session BRIEFING — call first in every session. Leads with `startHere`: proposals you or your agents filed that await review (raise these first; the user's queue may hold more from others), open work sessions, the open goals they serve, each with where it stands (`openGoals`: file work into one with trackId), the most-used kinds, runnable actions, and the skill to load for concept depth. An agent key also gets `handedToYou`: the sessions the person handed to it (never one it started itself), then the ones that went stale in the last " +
+          workClockIn("stuck", "days") +
+          " days, marked `resume` with `quietSince` — continue that conversation, never start it fresh. Then your identity, what is known about the user, projects (commitments, each spanning workspaces) and the workspaces (operational domains) that hold data. Pass scope:['projects'] and/or workspaceId to narrow — and PIN a `workspaceId` and orient also returns that space's `brief`: what it is FOR (purpose, persona), the kinds it HOLDS, its rules, its SKILLS (the agent know-how this space activates — each `{ slug, mode, when? }`; `mode:'always'` is in effect now, `'on-demand'` when the task matches its `when`), plus its playbooks and anchors. That is the one door to 'what is this space for, and what does it know' — an unpinned orient carries no brief. Light omits empty domains and the full type inventory; detail:'full' adds every workspace, descriptions, onboarding specs and per-workspace profiles. Every kind and role: synap_list_profiles.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2878,7 +2942,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Re-find a focus session — read-only. `outcomes` is what it must yield and needs: `outcomes.outcomes[]` (key, label, verify, met + metBy, state, evidence) and `outcomes.inputs[]` (what the person must give, each pointing at the outcome it blocks); `status:'unavailable'` means the read failed, not empty. To CONTINUE a session, read `continuation` first: it is the continuation packet (userMustDecide = owed slots + pending proposals, aiCanDo = open agent deliverables, blockers, outputs, goal = the goal it serves with end state, criteria marks and KPI, siblings = the goal's (else project's) other sessions running in parallel / done before / next, workUnits = the PRs and branches it recorded (prState = open/merged/closed + checks + deployed, from the dev events the pod recorded; absent = none recorded), run manifest, rerun, lastCompletion, nextMove). A section with status 'unavailable' failed to load — it is NOT empty. Pass sessionId for a specific session. Omit sessionId only when you have exactly one open session (ambient). If multiple sessions are open, returns multiSession:true + openSessions[] — pass sessionId explicitly (ambient attach is disabled to prevent mis-attribution). Always yours: sessions are scoped to the calling user.",
+          "Re-find a focus session — read-only. `outcomes` is what it must yield and needs: `outcomes.outcomes[]` (key, label, verify, met + metBy, state, evidence) and `outcomes.inputs[]` (what the person must give, each pointing at the outcome it blocks); `status:'unavailable'` means the read failed, not empty. To CONTINUE a session, read `continuation` first: it is the continuation packet (userMustDecide = owed slots + pending proposals, aiCanDo = open agent deliverables, blockers, outputs, goal = the goal it serves with end state, criteria marks and KPI, siblings = the goal's (else project's) other sessions running in parallel / done before / next, workUnits = the PRs and branches it recorded (prState = open/merged/closed + checks + deployed, from the dev events the pod recorded; absent = none recorded), run manifest, rerun, lastCompletion, nextMove). A section with status 'unavailable' failed to load — it is NOT empty. Pass sessionId for a specific session. Omit sessionId only when you have exactly one open session (ambient). If multiple sessions are open, returns multiSession:true + openSessions[] — pass sessionId explicitly (ambient attach is disabled to prevent mis-attribution). Always yours: sessions are scoped to the calling user. `detail`: 'full' (default) is everything above, ~10k tokens; 'lean' (use it on a wake, ~2-3k tokens) is the outcomes (key, label, kind, met, state) and the inputs they wait on, `continuation.nextMove`, what is asked of the person (`userMustDecide`, `openRoomQuestions`), `workUnits`, `room` (the last 3 messages and the `unread` posts other sessions addressed to this one) and `gates` with only THIS session's deploys; 'deploys' reads the deploys a person approved on ANY of your sessions (`deploys[]`, newest first), optionally only those whose commit starts with `commitSha` — the answer to \"is commit X approved to ship?\" that lean leaves out.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2886,6 +2950,17 @@ export const tools = {
               type: "string",
               description:
                 "Optional focus session UUID. Omit only when exactly one session is open; if multiple are open you must pass sessionId.",
+            },
+            detail: {
+              type: "string",
+              enum: ["full", "lean", "deploys"],
+              description:
+                "How much to read. full (default) = the whole session. lean = outcomes, next move, asks, work units, room (last 3 + unread), own gates: a fraction of the size, for a wake. deploys = the deploys approved on any of your sessions, filtered by `commitSha`.",
+            },
+            commitSha: {
+              type: "string",
+              description:
+                "With detail:'deploys': only the deploys whose commit starts with this sha.",
             },
           },
           required: [],
@@ -3243,7 +3318,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Who can take the person's work, and on which COMPUTER — read-only. `computers[]` are theirs (match their words, e.g. 'my devbox', against these names first, then agent names/types; 2+ fit → ask). Each agent: `computer`, `canTakeYourWork` (else `whyNot`), `live`, `paused`, `lastSeenAt`, and `handOff` — what YOUR hand-off would do now: `direct`, `asks_you` (the person approves it first: give them the reply's review link), `blocked` (`handOffReason`); ready ones come first. Hand NEW work: `synap_start_session` with `agentIds:[agentUserId]`, a goal and 2-5 criteria; work in flight ('this session'): `synap_update_session` `addAgentId`. Then follow its room (`synap_get_thread_context` on the session's `channelId`; outcomes via `synap_get_session`) and report back. Paused or not live: say so, never hand off silently. How: `load_skill` `system/synap/hand-off`.",
+          "Who can take the person's work, and on which COMPUTER — read-only. `computers[]` are theirs (match their words, e.g. 'my devbox', against these names first, then agent names/types; 2+ fit → ask). Each agent: `computer`, `canTakeYourWork` (else `whyNot`), `live`, `paused`, `lastSeenAt`, `servedAt` (when a process running it last called; null = never measured), `nobodyRuns` (true = nothing on its computer runs it now; false = a runner served it in the live window; null = not measured, or not a pull agent on a computer), and `handOff` — what YOUR hand-off would do now: `direct`, `asks_you` (the person approves it first: give them the reply's review link), `blocked` (`handOffReason`); ready ones come first. Hand NEW work: `synap_start_session` with `agentIds:[agentUserId]`, a goal and 2-5 criteria; work in flight ('this session'): `synap_update_session` `addAgentId`. Then follow its room (`synap_get_thread_context` on the session's `channelId`; outcomes via `synap_get_session`) and report back. Paused, not live or `nobodyRuns: true`: say so, never hand off silently. How: `load_skill` `system/synap/hand-off`.",
         inputSchema: {
           type: "object",
           properties: {},
@@ -4596,6 +4671,129 @@ export const tools = {
         },
       },
       {
+        name: "synap_list_workers",
+        annotations: {
+          title: "List a goal's workers",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "How a GOAL runs: the workers enabled on it (a goal is a TRACK in tool names; say 'goal' to the person). A worker is a playbook's declared trigger (a schedule, something happening, a count) turned on for the goal; each run of its playbook is filed in the goal. Only the workers enabled ON this goal, never its project's others. Each row: ruleId (what synap_pause_worker and synap_run_worker take), playbookId, playbookName, activatorKey, trigger { kind: schedule|event|manual, words — 'Every Monday at 09:00 UTC', never a raw cron }, mode (propose = asks before each run, run = acts), state (running|paused), pendingApprovals, lastRunAt, nextRunAt (from the pod, schedule workers only), health { state: failing|off|waiting|healthy|paused|not_running, marks (last 10 runs, oldest first: done|failed|waiting|skipped|running), consecutiveFailures, offReason — why the pod turned it off }. No rows = the goal is worked until it is done, nothing runs it on its own. Find the goal with synap_list_tracks.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            trackId: {
+              type: "string",
+              description: "UUID of the goal (synap_list_tracks).",
+            },
+          },
+          required: ["trackId"],
+        },
+      },
+      {
+        name: "synap_enable_worker",
+        annotations: {
+          title: "Make a goal run",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Make a GOAL run on its own: enable one of a playbook's declared workers on the goal (a track). activatorKey names the trigger the playbook declares (synap_list_playbooks shows `activators`): 'schedule:<cron>' (e.g. 'schedule:0 9 * * *' = every day at 09:00 UTC; 'schedule:0 9 * * 1' = every Monday), 'enters_status:<status>' (when a thing enters that status), 'count:<status>' (when enough things are in it), 'created'. A playbook with NO subject declares no workers: give it your own clock, every day ('schedule:<m> <h> * * *') or every week on one day ('schedule:<m> <h> * * <0-6>'), and say with mode whether each run is asked first ('propose', the default) or just runs ('run'). Its runs are filed in the goal. A goal that should simply be worked until it is done needs NO worker. Refused when the same worker already runs for the goal's project or the whole space (the reply names the holder: pause it there first) and for a manual worker (run it with synap_run_worker or synap_run_playbook instead). Governed: status='proposed' is SUCCESS — say it awaits the person's review, do not retry. Otherwise status='enabled' with its ruleId.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            trackId: {
+              type: "string",
+              description: "UUID of the goal (synap_list_tracks).",
+            },
+            playbookId: {
+              type: "string",
+              description:
+                "UUID of the playbook whose worker to enable (synap_list_playbooks).",
+            },
+            activatorKey: {
+              type: "string",
+              description:
+                "The declared trigger's key: 'schedule:<cron>', 'enters_status:<status>', 'count:<status>' or 'created'; on a playbook with no subject, a daily or weekly 'schedule:<cron>' you choose.",
+            },
+            mode: {
+              type: "string",
+              enum: ["propose", "run"],
+              description:
+                "Only for a clock you chose on a playbook with no subject: 'propose' (default) files each run for the person to approve; 'run' runs it. A declared worker runs in the mode its playbook declares.",
+            },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
+            },
+          },
+          required: ["trackId", "playbookId", "activatorKey"],
+        },
+      },
+      {
+        name: "synap_pause_worker",
+        annotations: {
+          title: "Pause or resume a goal's worker",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Pause (paused: true) or resume (paused: false) ONE worker of a goal, by its ruleId (synap_list_workers). Pausing stops what fires it; runs already going finish. Resuming is refused when the same worker now runs elsewhere over the same things (the reply names the holder). A worker the pod turned off after failures in a row (health.state 'off') is fixed first, then resumed. Governed: status='proposed' is SUCCESS — say it awaits review, do not retry. Otherwise status='updated' with the new state.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            ruleId: {
+              type: "string",
+              description: "The worker's ruleId (synap_list_workers).",
+            },
+            paused: {
+              type: "boolean",
+              description: "true = pause it, false = resume it.",
+            },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
+            },
+          },
+          required: ["ruleId", "paused"],
+        },
+      },
+      {
+        name: "synap_run_worker",
+        annotations: {
+          title: "Run a goal's worker now",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Run ONE worker of a goal NOW, once, by its ruleId (synap_list_workers): its playbook runs, filed in the goal — the same door and governance as synap_run_playbook with that trackId. Its schedule or trigger is unchanged. Governed: status='proposed' is SUCCESS — say it awaits review, do not retry. Otherwise the run and its session.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            ruleId: {
+              type: "string",
+              description: "The worker's ruleId (synap_list_workers).",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why run it now, in the person's words — shown to the reviewer. One line.",
+            },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
+            },
+          },
+          required: ["ruleId"],
+        },
+      },
+      {
         name: "synap_set_track_participant",
         annotations: {
           title: "Set goal participant",
@@ -5664,7 +5862,8 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Discover what the user can actually DO. Returns a SECTIONED view: `integrations` (their connected services + tools, one per name, each with its `verbs` nested — e.g. google → gmail_send, gmail_search, calendar_list; the verb `id` is what you pass to synap_run_capability), `skills` (standalone runnable skills), and `commands`. Each integration shows `connection.connected` (needs connecting if false) and each verb shows `granted`/`effectiveExecMode` (an ungranted verb is PROPOSED for review when run, not refused). A verb carrying `blocked: "not_enabled"` is installed but switched off: synap_run_capability WILL refuse it, so do not run it first — hand the user its `enable.url` to turn it on. Core built-in tools (already available to you directly as MCP tools) and teaching docs are folded out of this actionable view BY DEFAULT and only COUNTED under `excluded` — pass kind:"builtin-tool" or kind:"teaching-doc" to list them here instead, or synap_load_skill("catalog") for every teaching doc grouped by topic. Pass `query` to search across integrations/verbs/skills (e.g. query:"send email").',
+          'Discover what the user can actually DO. Returns a SECTIONED view: `integrations` (their connected services + tools, one per name, each with its `verbs` nested — e.g. google → gmail_send, gmail_search, calendar_list; the verb `id` is what you pass to synap_run_capability), `skills` (standalone runnable skills), and `commands`. Each integration shows `connection.connected` (needs connecting if false) and each verb shows `granted`/`effectiveExecMode` (an ungranted verb is PROPOSED for review when run, not refused). A verb carrying `blocked: "not_enabled"` is installed but switched off: synap_run_capability WILL refuse it, so do not run it first — hand the user its `enable.url` to turn it on. Core built-in tools (already available to you directly as MCP tools) and teaching docs are folded out of this actionable view BY DEFAULT and only COUNTED under `excluded` — pass kind:"builtin-tool" or kind:"teaching-doc" to list them here instead, or synap_load_skill("catalog") for every teaching doc grouped by topic. Pass `query` to search across integrations/verbs/skills (e.g. query:"send email"). ' +
+          DENIED_BY_RULE_TOOL_NOTE,
         inputSchema: {
           type: "object",
           properties: {
@@ -5719,7 +5918,8 @@ export const tools = {
           openWorldHint: true,
         },
         description:
-          'Run a registered capability verb (discover via synap_list_capabilities) with dynamic inputs — e.g. send an email, search Gmail, create a calendar event. Pass verbId + parameters. A DRAFT (un-enabled) capability is refused — ask the user to enable it first. Governed like any write: an ungranted verb comes back as `{ kind: "proposed", proposalId, reviewUrl }` instead of running — that is SUCCESS, not an error. You MUST surface the `reviewUrl` as a clickable link in your reply (never just say \'proposed\' with no link) — e.g. "Queued that email send for your review: [Review proposal](<reviewUrl>)" — and continue the conversation without waiting for approval.',
+          'Run a registered capability verb (discover via synap_list_capabilities) with dynamic inputs — e.g. send an email, search Gmail, create a calendar event. Pass verbId + parameters. A DRAFT (un-enabled) capability is refused — ask the user to enable it first. Governed like any write: an ungranted verb comes back as `{ kind: "proposed", proposalId, reviewUrl }` instead of running — that is SUCCESS, not an error. You MUST surface the `reviewUrl` as a clickable link in your reply (never just say \'proposed\' with no link) — e.g. "Queued that email send for your review: [Review proposal](<reviewUrl>)" — and continue the conversation without waiting for approval. ' +
+          DENIED_BY_RULE_TOOL_NOTE,
         // DERIVED from the shared capability-execute contract, not hand-written
         // here — the same reasoning as the automation data contract and the
         // rule sentence above. A hand-written literal is how this tool came to
@@ -6116,7 +6316,7 @@ export const tools = {
             handToAgentId: {
               type: "string",
               description:
-                "Optional agent user id (synap_list_agents) to HAND the run to: that agent does the work and the playbook's own executor is not started. A person may name any of their agents; an agent may name only itself. An unknown, paused or foreign agent is refused by name — never replaced by the built-in AI.",
+                "Optional agent user id (synap_list_agents) to HAND the run to: that agent does the work and the playbook's own executor is not started. A person may name any of their agents; an agent may name only itself. An unknown, paused or foreign agent is refused by name — never replaced by the built-in AI. Omitted: the run goes to the agent the person ASSIGNED to this playbook, when there is one that can take it (the reply's `handedTo` and message name it); otherwise the playbook's own executor runs it.",
             },
           },
           required: [],

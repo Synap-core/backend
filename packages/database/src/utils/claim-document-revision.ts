@@ -51,6 +51,7 @@ import {
 } from "../repositories/document-repository.js";
 import type { EventRepository } from "../repositories/event-repository.js";
 import type { Document } from "../schema/documents.js";
+import type { LensScope } from "@synap-core/types/lens";
 
 type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -450,6 +451,10 @@ export interface CreateDocumentWithContentInput {
   extension?: string;
   language?: string;
   metadata?: Record<string, unknown>;
+  /** `documents.scope` (0387) — read and floored by the calling door. */
+  scope?: LensScope | null;
+  /** `documents.refresh_automation_id` (0387) — checked by the calling door. */
+  refreshAutomationId?: string | null;
   provenance: DocumentCreateProvenance;
   /**
    * A raw SOURCE kept byte for byte (an intake source: a re-structure replays
@@ -549,6 +554,8 @@ export async function createDocumentWithContent(
       size: stored.size,
       mimeType: input.mimeType,
       metadata: input.metadata,
+      scope: input.scope ?? null,
+      refreshAutomationId: input.refreshAutomationId ?? null,
       userId: input.ownerUserId,
       workspaceId: input.workspaceId ?? null,
       content,

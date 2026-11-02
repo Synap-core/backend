@@ -7,7 +7,8 @@
  *   - WHO is visible   `queryAgentUsers` (the `agentUsers.list` floor; app
  *                      agents are already excluded there);
  *   - last seen        `loadAgentPresence` (the newest key use, and the
- *                      computer label on that same key);
+ *                      computer label on that same key; `servedAt`, the
+ *                      newest call a process running the agent made);
  *   - reach + binding  `loadAgentDispatchSummaries` (THE reach rule, a broken
  *                      binding as `error`, never as "not bound");
  *   - may it take it   `namedVerdicts` — `route()`'s selector rung, batched,
@@ -43,10 +44,21 @@ import {
   agentProposalLimitLine,
   countPendingAgentProposals,
 } from "../../utils/permission-check.js";
-import { MACHINE_AGENT_TYPE, type AgentReach } from "@synap-core/types/agents";
+import {
+  MACHINE_AGENT_TYPE,
+  resolveAgentLaunch,
+  type AgentLaunchRef,
+  type AgentReach,
+} from "@synap-core/types/agents";
+import type { ComputerBelongsTo } from "@synap-core/types/computers";
 import { queryAgentUsers } from "../../routers/agent-users.js";
-import { loadAgentPresence } from "../agent-presence.js";
+import {
+  loadAgentPresence,
+  nobodyRunsOf,
+  PULL_LIVE_WINDOW_MS,
+} from "../agent-presence.js";
 import { machineName } from "../machine-roster.js";
+import { actorComputer } from "../actor-computer.js";
 import { loadAgentDispatchSummaries } from "./agent-binding.js";
 import {
   HAND_OFF_ACCEPT,
@@ -55,18 +67,18 @@ import {
   type RouteRefusal,
 } from "./route.js";
 
-/**
- * A pulling agent counts as LIVE when it called the pod within this window.
- * `synap worker` polls every 30s and key use is stamped at most once a minute
- * (`apiKeyService.recordKeyUse`); its back-off on failed reads caps at 10
- * minutes. 15 minutes covers a worker that is polling, slowly or not.
- */
-export const PULL_LIVE_WINDOW_MS = 15 * 60_000;
+export { PULL_LIVE_WINDOW_MS } from "../agent-presence.js";
 
 export interface HandoffComputer {
   /** The computer's own principal; `null` when it is only a key label. */
   agentUserId: string | null;
   name: string;
+  /**
+   * Whose computer it is (`users.computer_belongs_to`, 0388): `person`,
+   * `agent` or `shared`. `null` when the computer is only a key label (no
+   * principal holds the fact).
+   */
+  belongsTo: ComputerBelongsTo | null;
 }
 
 /** What a hand-off from the calling agent would do right now. */
@@ -89,6 +101,26 @@ export interface HandoffAgent {
   live: boolean;
   paused: boolean;
   lastSeenAt: string | null;
+  /**
+   * The newest call a process RUNNING this agent made (`X-Synap-Runner`,
+   * 0385); `null` = no runner ever said so. `live` does not read it yet.
+   */
+  servedAt: string | null;
+  /**
+   * A pull agent on a computer that nothing runs now: `true` = a runner served
+   * it, but not within `PULL_LIVE_WINDOW_MS`; `false` = served within it;
+   * `null` = not measured (no runner ever stamped any of its keys) or not
+   * applicable (a dispatch or pod agent, or a pull agent on no computer):
+   * `false` is never said of an agent nobody measured. A presence fact, never
+   * a route refusal.
+   */
+  nobodyRuns: boolean | null;
+  /**
+   * The command that opens this agent on its `computer`, rendered by the pod
+   * from its harness's launch template (`resolveAgentLaunch`); `null` when
+   * its harness has none. Never a command an agent wrote.
+   */
+  open: AgentLaunchRef | null;
   /** direct = lands on the roster now; asks_you = the person approves first. */
   handOff: HandOffPreview;
   /** Why it asks or is blocked (the resolver's or the route's words). */
@@ -152,12 +184,16 @@ export async function readAgentsForHandoff(
           name: users.name,
           agentMetadata: users.agentMetadata,
           createdByUserId: users.createdByUserId,
+          belongsTo: users.computerBelongsTo,
         })
         .from(users)
         .where(inArray(users.id, machineIds))
     : [];
   const machineNameOf = new Map(
     machineRows.map((m) => [m.id, machineName(m)] as const)
+  );
+  const belongsToOf = new Map(
+    machineRows.map((m) => [m.id, m.belongsTo ?? null] as const)
   );
 
   const [presence, dispatch, verdicts, gate] = await Promise.all([
@@ -195,12 +231,20 @@ export async function readAgentsForHandoff(
   const agents: HandoffAgent[] = agentRows.map((r) => {
     const seen = presence.get(r.id);
     const hostId = kindOf.get(r.id)?.hostUserId ?? null;
-    const computer: HandoffComputer | null =
-      hostId && machineNameOf.has(hostId)
-        ? { agentUserId: hostId, name: machineNameOf.get(hostId)! }
-        : seen?.hostLabel
-          ? { agentUserId: null, name: seen.hostLabel }
-          : null;
+    // THE attribution order: its host computer, else where its key was last seen.
+    const named = actorComputer({
+      hostName: hostId ? machineNameOf.get(hostId) : null,
+      keyLabel: seen?.hostLabel,
+    });
+    const computer: HandoffComputer | null = named
+      ? named.source === "host" && hostId
+        ? {
+            agentUserId: hostId,
+            name: named.name,
+            belongsTo: belongsToOf.get(hostId) ?? null,
+          }
+        : { agentUserId: null, name: named.name, belongsTo: null }
+      : null;
     const summary = dispatch.get(r.id);
     const reach = summary?.reach ?? "pull";
     const lastSeenAt = seen?.lastSeenAt ?? null;
@@ -211,6 +255,13 @@ export async function readAgentsForHandoff(
           ? !!lastSeenAt &&
             now.getTime() - Date.parse(lastSeenAt) <= PULL_LIVE_WINDOW_MS
           : true;
+    const servedAt = seen?.servedAt ?? null;
+    const nobodyRuns = nobodyRunsOf({
+      reach,
+      onComputer: !!computer,
+      servedAt,
+      now,
+    });
     const whyNot = verdicts.get(r.id)?.refusal ?? null;
     // An agent adding ITSELF is joining, not a hand-off: never gated.
     const preview: { handOff: HandOffPreview; handOffReason: string | null } =
@@ -235,6 +286,9 @@ export async function readAgentsForHandoff(
       live,
       paused: r.pausedAt != null,
       lastSeenAt,
+      servedAt,
+      nobodyRuns,
+      open: resolveAgentLaunch({ agentType: kindOf.get(r.id)?.agentType }),
       ...preview,
     };
   });
@@ -260,7 +314,12 @@ export async function readAgentsForHandoff(
   for (const m of machineRows) {
     if (m.createdByUserId !== userId) continue;
     const name = machineNameOf.get(m.id)!;
-    computers.set(`id:${m.id}`, { agentUserId: m.id, name, agents: 0 });
+    computers.set(`id:${m.id}`, {
+      agentUserId: m.id,
+      name,
+      belongsTo: m.belongsTo ?? null,
+      agents: 0,
+    });
     if (!byName.has(nameKey(name))) byName.set(nameKey(name), `id:${m.id}`);
   }
   for (const a of agents) {

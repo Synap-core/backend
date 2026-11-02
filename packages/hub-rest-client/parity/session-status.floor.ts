@@ -17,7 +17,9 @@ import type {
   SessionStatus,
   UPDATABLE_SESSION_STATUSES,
 } from "../../types/src/focus-sessions/statuses.js";
+import type { SessionKind } from "../../types/src/focus-sessions/kinds.js";
 import type {
+  FocusSessionKind,
   FocusSessionStatus,
   UpdatableFocusSessionStatus,
 } from "../src/types.js";
@@ -29,3 +31,5 @@ export const _updatable: Same<
   UpdatableFocusSessionStatus,
   (typeof UPDATABLE_SESSION_STATUSES)[number]
 > = true;
+/** The session kind lens (`SESSION_KINDS`) — same rule, same floor. */
+export const _sessionKind: Same<FocusSessionKind, SessionKind> = true;

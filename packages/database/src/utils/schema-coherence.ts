@@ -42,6 +42,7 @@ import { trackParticipants } from "../schema/track-participants.js";
 import { libraryGroups } from "../schema/library-groups.js";
 import { documentPassages } from "../schema/document-passages.js";
 import { statusWaitEpisode } from "../schema/status-wait-episode.js";
+import { agentConfigs } from "../schema/agent-configs.js";
 
 /**
  * A single column the runtime requires to exist.
@@ -167,6 +168,18 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "status_wait_episode",
     column: "ref_key",
     addedBy: "0386_status_wait_episode.sql",
+  },
+  // A living document's scope and refresher (0387). Every document read
+  // selects the row, so without them every document get and list 500s.
+  {
+    table: "documents",
+    column: "scope",
+    addedBy: "0387_document_scope_refresher.sql",
+  },
+  {
+    table: "documents",
+    column: "refresh_automation_id",
+    addedBy: "0387_document_scope_refresher.sql",
   },
   // notification_preferences — per-person push categories (0289). The
   // producer reads it on every os-channel notification; missing, the push
@@ -520,6 +533,18 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "api_keys",
     column: "tool_groups",
     addedBy: "0280_api_keys_tool_profile.sql",
+  },
+  // Served-by-a-runner stamp (0385): the presence read selects it for every
+  // agent roster, so without it agent lists 500.
+  {
+    table: "api_keys",
+    column: "worker_served_at",
+    addedBy: "0385_api_keys_worker_served.sql",
+  },
+  {
+    table: "api_keys",
+    column: "worker_served_version",
+    addedBy: "0385_api_keys_worker_served.sql",
   },
 
   // api_key_external_users — sub-token mappings (0018)
@@ -1210,6 +1235,18 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "agent_paused_by",
     addedBy: "0329_agent_assignment_and_pause.sql",
   },
+  // Whose computer it is (0388): the device approval writes it and the seeding
+  // of a person's auto rule onto an agent's box reads it.
+  {
+    table: "users",
+    column: "computer_belongs_to",
+    addedBy: "0388_computer_belongs_to.sql",
+  },
+  {
+    table: "device_auth_requests",
+    column: "computer_belongs_to",
+    addedBy: "0388_computer_belongs_to.sql",
+  },
   {
     table: "governance_rules",
     column: "principal_class",
@@ -1899,6 +1936,21 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "session_runners",
     column: "state_reported_at",
     addedBy: "0384_session_runners_state.sql",
+  },
+  // What a runner says it runs on (0389). Absence means every runner stamp
+  // fails (its insert names `model`, logged, never fatal) and the runner
+  // loader 42703s.
+  {
+    table: "session_runners",
+    column: "provider",
+    addedBy: "0389_session_runners_model.sql",
+  },
+  // Presets per agent (0390). Absence means every preset read and write
+  // 42703s (the preset door names `preset_key`).
+  {
+    table: "agent_configs",
+    column: "skill_slugs",
+    addedBy: "0390_agent_presets.sql",
   },
 
   // proposal_apply_runs — a large approval applied by the background job
@@ -2682,6 +2734,9 @@ const REQUIRED_INDEX_TABLES = [
   // episode per subject, facet, wait kind and ref"; the watcher's insert
   // relies on it (ON CONFLICT DO NOTHING) to keep an episode single.
   statusWaitEpisode,
+  // Presets (0390): the preset upsert conflicts on the partial unique index
+  // `agent_configs_user_preset_unique`, which IS "one preset per key per agent".
+  agentConfigs,
 ] as const;
 
 /** Every index declared in the drizzle schema but absent from the live DB. */

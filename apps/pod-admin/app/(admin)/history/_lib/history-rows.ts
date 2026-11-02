@@ -1,5 +1,5 @@
 /**
- * Historique's rows: one decided request, in the client's words (PA-D-17).
+ * Historique's rows: one decided request, in the client's words (audit abbc7a19 PA-D-17).
  * Pure; `history-list.tsx` only draws it.
  *
  * - The title says what HAPPENED (the vocabulary's past mood: "Created
@@ -16,6 +16,7 @@
 
 import { describeHeldWritesProposal } from "@synap-core/types/proposals/deferred-writes";
 import { describeDevDeployProposal } from "@synap-core/types/proposals/dev-deploy";
+import { describeVerbRunProposal } from "@synap-core/types/proposals/capability-run";
 import {
   buildObjectActionTitle,
   resolveObjectNoun,
@@ -106,7 +107,16 @@ function pastTitle(p: HistoryProposal): string {
     proposalType: p.proposalType,
     data: payload,
   });
-  if (deploy) return deploy.pastTitle;
+  // The act as a record ("Push of a524c103 to main in …"): the row's status
+  // mark says whether it was approved, rejected or withdrawn, so the title
+  // never claims "Approved" for a row that was not.
+  if (deploy) return deploy.recordTitle;
+  // A ship verb's run, as a record ("Merge of app-bases#12 into main at …").
+  const verbRun = describeVerbRunProposal({
+    proposalType: p.proposalType,
+    data: payload,
+  });
+  if (verbRun) return verbRun.recordTitle;
   return buildObjectActionTitle({
     action: String(p.proposalType ?? "change"),
     objectKind: String(p.targetType ?? ""),

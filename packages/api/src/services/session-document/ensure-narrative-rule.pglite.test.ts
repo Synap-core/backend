@@ -37,8 +37,13 @@ import {
   decideAgentPolicy,
   nonWidenableFloorFor,
 } from "@synap/governance-policy";
-import { ensureSessionNarrativeRule } from "./ensure-narrative-rule.js";
 import {
+  ensureDocumentRefresherRule,
+  ensureSessionNarrativeRule,
+} from "./ensure-narrative-rule.js";
+import {
+  REFRESHER_SECTION_ACTION,
+  REFRESHER_SECTION_EVENT_KEY,
   SECTION_UPDATE_ACTION,
   SESSION_NARRATIVE_ACTION,
   SESSION_NARRATIVE_EVENT_KEY,
@@ -153,6 +158,57 @@ describe("the rule through the real resolver + engine", () => {
     await ensureSessionNarrativeRule();
     expect(
       await verdictFor(SESSION_NARRATIVE_ACTION, { originTrust: "untrusted" })
+    ).toBe("propose");
+  });
+});
+
+describe("ensureDocumentRefresherRule (decision D4)", () => {
+  it("seeds exactly one pod-wide auto rule for the refresher key, idempotently, beside D10", async () => {
+    expect(await ensureDocumentRefresherRule()).toEqual({ inserted: true });
+    expect(await ensureDocumentRefresherRule()).toEqual({ inserted: false });
+    // D10 is its own row: seeding one never counts as seeding the other.
+    expect(await ensureSessionNarrativeRule()).toEqual({ inserted: true });
+    const { rows } = await q<Record<string, string>>(
+      `select target_pattern, verdict, created_by from governance_rules order by target_pattern`
+    );
+    expect(rows).toEqual([
+      {
+        target_pattern: REFRESHER_SECTION_EVENT_KEY,
+        verdict: "auto",
+        created_by: "system:document-refresher",
+      },
+      {
+        target_pattern: SESSION_NARRATIVE_EVENT_KEY,
+        verdict: "auto",
+        created_by: "system:session-document",
+      },
+    ]);
+  });
+
+  it("never resurrects a refresher rule a person revoked", async () => {
+    await ensureDocumentRefresherRule();
+    await q(`update governance_rules set revoked_at = now()`);
+    expect(await ensureDocumentRefresherRule()).toEqual({ inserted: false });
+  });
+
+  it("the refresher key is not floor-class, so the rule can resolve it", () => {
+    expect(
+      nonWidenableFloorFor(`document.${REFRESHER_SECTION_ACTION}`)
+    ).toBeNull();
+  });
+
+  it("without the rule the refresher key PROPOSES; with it it EXECUTES, and section_update still PROPOSES", async () => {
+    expect(await verdictFor(REFRESHER_SECTION_ACTION)).toBe("propose");
+    await ensureDocumentRefresherRule();
+    expect(await verdictFor(REFRESHER_SECTION_ACTION)).toBe("execute");
+    expect(await verdictFor(SECTION_UPDATE_ACTION)).toBe("propose");
+    expect(await verdictFor(SESSION_NARRATIVE_ACTION)).toBe("propose");
+  });
+
+  it("an untrusted origin still tightens the refresher key to a proposal", async () => {
+    await ensureDocumentRefresherRule();
+    expect(
+      await verdictFor(REFRESHER_SECTION_ACTION, { originTrust: "untrusted" })
     ).toBe("propose");
   });
 });

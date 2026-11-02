@@ -1,6 +1,6 @@
 /**
  * Historique's words, as catalogs (`@synap-core/types/i18n`): English is the
- * source and the type. Client words (decision G1): a request, never a
+ * source and the type. Client words (audit 110dd4ab G1): a request, never a
  * proposal. DRAFT French ("vous"), awaiting the founder's review.
  */
 import type { Catalog } from "@synap-core/types/i18n";
@@ -25,7 +25,7 @@ export const fr: Catalog<typeof en> = {
   description:
     "Ce qui a été décidé sur les demandes, du plus récent au plus ancien. Annulez ce qui peut encore l’être.",
   empty:
-    "Rien n’a encore été décidé. Les demandes approuvées ou refusées s’affichent ici.",
+    "Rien n’a encore été décidé. Les demandes approuvées ou rejetées s’affichent ici.",
   failed: "Impossible de charger l’historique.",
   "row.askedBy": "Demandé par {who}",
   "row.decidedBy": "Décidé par {who}",

@@ -407,15 +407,16 @@ const OBJECT_KIND_ROWS = {
     label: "Tool",
     labelPlural: "Tools",
   },
-  // The user word is "Rule" (concepts.md, founder D1): something that runs by
-  // itself, on a schedule or an event. NOT the governance "Approvals" rules.
+  // The user word is "Automation" (concepts.md, founder D2, 2026-10-31): something
+  // that runs by itself, on a schedule or an event. "Rule" is a skill rule (the
+  // `rule` noun, `OBJECT_NOUNS`), and NOT the governance "Approvals" rules.
   automation: {
     kind: "automation",
     category: "automation",
     icon: "Zap",
     color: ID(7),
-    label: "Rule",
-    labelPlural: "Rules",
+    label: "Automation",
+    labelPlural: "Automations",
     glyph: "⚡",
   },
   // The user word is "Template" (concepts.md). Scoped surfaces say WHICH
@@ -457,14 +458,15 @@ const OBJECT_KIND_ROWS = {
   },
   // An Application (App Connect v1) — an app that REACHES the pod with a grant.
   // NOT `category: "tool"`: a tool is what the pod USES (outbound); an
-  // application is what USES the pod (inbound). The user word is "App".
+  // application is what USES the pod (inbound). The user word is "Connected app"
+  // (founder D3, 2026-10-31): "App" is what you open IN Synap (`app` noun).
   application: {
     kind: "application",
     category: "application",
     icon: "SquareCode",
     color: ID(11),
-    label: "App",
-    labelPlural: "Apps",
+    label: "Connected app",
+    labelPlural: "Connected apps",
   },
   // A trusted issuer — an outside service whose signed identity tokens the pod
   // accepts (sign-in, provisioning). Inbound trust like an application, so it
@@ -873,6 +875,10 @@ export const OBJECT_KIND_ALIASES: Record<string, string> = {
   // the glossary renamed the kinds — and `playbooks` pluralized to "Playbookss".
   playbooks: "playbook",
   automations: "automation",
+  // Table names reach titles pluralized; the D3 nouns of a profile and a
+  // provider connection are no exception (`profiles`, `connections`).
+  profiles: "profile",
+  connections: "connection",
   // The `governance_rules` table reaches labels as a target type.
   governance_rules: "governance_rule",
   capabilities: "capability",
@@ -942,15 +948,24 @@ export const resolveObjectLabel = (
  * `"session"` (the playbook default) is
  * one sitting of work → "Work template". A missing scope reads as a work
  * template because the schema says so (`playbooks.scope`: "NULL reads as
- * session"), not as a guess about the row.
+ * session"), not as a guess about the row. `"space"` names a space template
+ * (the New space dialog's, a `workspace` package): "Template" stays the family
+ * noun and is qualified where two families meet (founder D3, N6).
  */
-export type TemplateScope = "session" | "project";
+export type TemplateScope = "session" | "project" | "space";
 
 export function resolveTemplateNoun(
   scope: TemplateScope | string | null | undefined,
   opts: { plural?: boolean; locale?: Locale } = {}
 ): string {
   const t = sentences(catalogLocaleOf(opts.locale));
+  if (scope === "space") {
+    return t(
+      opts.plural
+        ? "vocabulary.templateNoun.space.other"
+        : "vocabulary.templateNoun.space.one"
+    );
+  }
   if (scope === "project") {
     return t(
       opts.plural

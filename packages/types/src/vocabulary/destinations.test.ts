@@ -26,6 +26,9 @@ describe("destination words (2A)", () => {
       "Unfiled",
       "Getting started",
       "Plan and credits",
+      "Make",
+      "Apps",
+      "Get more",
     ]);
   });
 
@@ -39,6 +42,14 @@ describe("destination words (2A)", () => {
     expect(DESTINATION_LABELS.agents).toBe(resolveObjectNounPlural("agent"));
     // Work keeps the vocabulary's word (the manifest's name for `sessions`).
     expect(DESTINATION_LABELS.work).toBe(resolveObjectNoun("work"));
+  });
+
+  it("Make, Apps and Get more are destinations (D3: N5, N9, M1)", () => {
+    expect(resolveDestinationLabel("make")).toBe("Make");
+    expect(resolveDestinationLabel("get_more")).toBe("Get more");
+    expect(resolveDestinationLabel("get-more")).toBe("Get more");
+    // The launcher lists Apps: its word is the app noun's plural, never a second word.
+    expect(DESTINATION_LABELS.apps).toBe(resolveObjectNounPlural("app"));
   });
 
   it("the unfiled bucket is Unfiled, and the shared place word follows it", () => {

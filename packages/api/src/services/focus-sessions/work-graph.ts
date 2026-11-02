@@ -15,8 +15,8 @@
  *     widenings added there (`openOrSettledSince`, `ids`) rather than here.
  *   - WHAT a node carries: `projectSessionRows` (lineage, triage, kind,
  *     participants, verdict) + `attachNextMove` + `attachSessionLiveness` +
- *     `withViewerRole` — exactly what `focusSessions.list({ nextMove })`
- *     returns for the same row.
+ *     `attachSessionHolder` + `withViewerRole` — exactly what
+ *     `focusSessions.list({ nextMove })` returns for the same row.
  *   - WHICH edges: the list's attach helpers — `attachSessionEdges`
  *     (declared `blocked_by`), `attachSessionOutputDependencies` (derived
  *     waits on an output), `attachSessionInteractions` (derived `triggered` /
@@ -104,6 +104,10 @@ import {
   type WorkGraphPullRequest,
 } from "./work-graph-nodes.js";
 import { withViewerRole, type SessionViewerRole } from "./viewer-role.js";
+import {
+  attachSessionHolder,
+  type SessionHolderSection,
+} from "./session-holder.js";
 
 import {
   WORK_GRAPH_CEILING,
@@ -201,6 +205,11 @@ export type WorkGraphNode = Awaited<
   nextMove: ContinuationNextMove;
   unitFacts: SessionUnitCounts;
   live: SessionActivityLive | null;
+  /**
+   * Who has it now (`readSessionHolder`'s derivation, `attachSessionHolder`):
+   * `unavailable` when a fact it needs could not be read, never "nobody".
+   */
+  holder: SessionHolderSection;
   viewerRole: SessionViewerRole;
   inWindow: boolean;
 };
@@ -421,8 +430,15 @@ export async function buildWorkGraph(
   const withLive = await attachSessionLiveness<
     (typeof withMove)[number] & { live?: SessionActivityLive | null }
   >(withMove, { userId, roster });
-  const nodes: WorkGraphNode[] = withLive.map((n) =>
-    withViewerRole({ ...n, live: n.live ?? null }, userId)
+  // Who has it, through the session read's own derivation; the liveness just
+  // attached is reused, never read twice.
+  const withHolder = await attachSessionHolder(
+    withLive.map((n) => ({ ...n, live: n.live ?? null })),
+    // A bound key's PR facts stay in its workspace, as the PR nodes' do.
+    { userId, roster, lens: input.boundWorkspaceId }
+  );
+  const nodes: WorkGraphNode[] = withHolder.map((n) =>
+    withViewerRole(n, userId)
   );
 
   // Interactions are derived among the nodes (both ends on the read).

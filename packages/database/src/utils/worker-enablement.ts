@@ -19,6 +19,7 @@ import { links } from "../schema/links.js";
 import { automationRuns, automationStepRuns } from "../schema/automations.js";
 import { events } from "../schema/events.js";
 import { WORKER_TARGET_ROLE } from "@synap-core/types/workers";
+import { isUuid } from "@synap-core/types/property-render";
 
 /** `links.metadata.role` of a worker's `session --targets--> entity` edge. */
 export const WORKER_TARGET_LINK_ROLE = WORKER_TARGET_ROLE;
@@ -227,9 +228,6 @@ export async function countWorkerIrreversibleSendsToday(
   );
 }
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * The enablement (automation id) whose worker started this session, or null
  * when the session is not a worker's — or is not a session id at all.
@@ -237,7 +235,7 @@ const UUID_RE =
 export async function workerAutomationOfSession(
   sessionId: string
 ): Promise<string | null> {
-  if (!UUID_RE.test(sessionId)) return null;
+  if (!isUuid(sessionId)) return null;
   const [row] = await db
     .select({
       automationId: sql<

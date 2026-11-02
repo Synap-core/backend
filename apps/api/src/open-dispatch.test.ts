@@ -8,6 +8,7 @@ import {
   isOpenViewValue,
   isUnfurlBot,
   OPEN_CLIENT_MOBILE,
+  packageUpdateOpenTarget,
   podAdminBrowserUrl,
   podAdminResolveTarget,
   podAdminTarget,
@@ -671,5 +672,32 @@ describe("dispatchOpen — ?view= forwarding", () => {
         view: "room",
       })
     ).toEqual({ action: "redirect", url: `${ADMIN}/open/entity/${ID}` });
+  });
+});
+
+describe("packageUpdateOpenTarget — template updates' links", () => {
+  it("sends /open/update/<slug> to the same path on pod-admin", () => {
+    expect(packageUpdateOpenTarget("update", "facecam-edit", ADMIN)).toBe(
+      `${ADMIN}/open/update/facecam-edit`
+    );
+  });
+
+  it("sends /open/updates to the same path on pod-admin", () => {
+    expect(packageUpdateOpenTarget(undefined, "updates", ADMIN)).toBe(
+      `${ADMIN}/open/updates`
+    );
+  });
+
+  it("refuses an unsafe slug and leaves every other address alone", () => {
+    expect(packageUpdateOpenTarget("update", "a/b", ADMIN)).toBeNull();
+    expect(packageUpdateOpenTarget("update", "x".repeat(65), ADMIN)).toBeNull();
+    expect(packageUpdateOpenTarget("entity", ID, ADMIN)).toBeNull();
+    expect(packageUpdateOpenTarget(undefined, ID, ADMIN)).toBeNull();
+  });
+
+  it("is not an object kind", () => {
+    expect((TYPED_OPEN_KINDS as readonly string[]).includes("update")).toBe(
+      false
+    );
   });
 });

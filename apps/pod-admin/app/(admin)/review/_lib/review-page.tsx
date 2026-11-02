@@ -33,7 +33,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { TRPCClientError } from "@trpc/client";
-import { Alert, Button, Textarea, addToast } from "@heroui/react";
+import { Alert, Button, Textarea } from "@heroui/react";
 import { Check, ChevronRight, SlidersHorizontal, X } from "lucide-react";
 import { navHref } from "../../../../lib/console-nav";
 import { FATE_COPY } from "@synap-core/types/proposals/fate";
@@ -73,6 +73,7 @@ import {
   reviewRows,
   NEEDS_YOU_PAGE_LIMIT,
   reviewSessionOf,
+  rejectedRows,
   rowsInView,
   summarizeBatch,
   type ProposalFacts,
@@ -98,8 +99,10 @@ import { nextRowKey } from "./ask-detail";
 import { useT } from "../../../../lib/i18n/locale-provider";
 import { en, fr } from "./copy";
 import {
+  batchApproveReceipt,
   batchFailureReceipt,
   batchRejectReceipt,
+  failureReceipt,
 } from "../../../_lib/receipt/decision-receipt";
 import { showReceipt } from "../../../_lib/receipt/decision-receipt-toast";
 
@@ -274,23 +277,27 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
   async function approveRows(picked: ReviewRow[]) {
     const proposalIds = picked.flatMap((r) => r.batchIds ?? []);
     if (proposalIds.length === 0) return;
-    const res = await batchApprove.mutateAsync({ proposalIds });
+    let res: Awaited<ReturnType<typeof batchApprove.mutateAsync>>;
+    try {
+      res = await batchApprove.mutateAsync({ proposalIds });
+    } catch {
+      return; // `onError` said so.
+    }
     const outcome = summarizeBatch(picked, res.results);
     setFailures(outcome.failures);
-    addToast({
-      title:
-        outcome.failures.length === 0
-          ? `Approved ${outcome.approved} change${outcome.approved === 1 ? "" : "s"}`
-          : `Approved ${outcome.approved}, ${outcome.failures.length} failed`,
-      color: outcome.failures.length === 0 ? "success" : "warning",
-    });
+    showReceipt(
+      batchApproveReceipt({
+        approved: outcome.approved,
+        failed: outcome.failures.length,
+      })
+    );
     setSelected(new Set());
     refresh();
   }
 
   async function rejectRows(picked: ReviewRow[], reason: string) {
     const proposalIds = picked.flatMap((r) => r.batchIds ?? []);
-    let answer: { rejected: number };
+    let answer: { rejectedIds: string[] };
     try {
       answer = await batchReject.mutateAsync({
         proposalIds,
@@ -299,8 +306,14 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
     } catch {
       return; // `onError` said so; the modal stays up with the reason intact.
     }
-    // Counted from the pod's answer: a request decided meanwhile is skipped.
-    showReceipt(batchRejectReceipt(proposalIds.length, answer));
+    // Counted per row from the pod's answer, like batch approve: a request
+    // decided meanwhile is skipped.
+    showReceipt(
+      batchRejectReceipt(
+        picked.length,
+        rejectedRows(picked, answer.rejectedIds)
+      )
+    );
     setSelected(new Set());
     setFailures([]);
     setRejectOpen(false);
@@ -328,21 +341,24 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
         // The shared draft IS the door's input (AlwaysApproveMenu casts alike).
         alwaysRule as Parameters<typeof createRule.mutateAsync>[0]
       );
-      addToast({
-        title: `${alwaysFor.title ?? "This agent"} may take hand-offs`,
-        description:
-          "From now on they apply without asking. Revoke it in Settings › Review.",
-        color: "success",
+      showReceipt({
+        title: t("always.done", {
+          name: alwaysFor.title ?? t("always.thisAgent"),
+        }),
+        description: t("always.doneHint"),
+        tone: "success",
+        undo: false,
       });
       setAlwaysFor(null);
     } catch (err) {
       if (err instanceof TRPCClientError && redirectToLoginIfUnauthorized(err))
         return;
-      addToast({
-        title: "The rule was not created",
-        description: err instanceof Error ? err.message : undefined,
-        color: "danger",
-      });
+      showReceipt(
+        failureReceipt(
+          t("always.failed"),
+          err instanceof TRPCClientError ? err : {}
+        )
+      );
     }
   }
 
@@ -371,7 +387,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
 
   const activeKey = open ? detailKey(open.detail) : null;
 
-  // The layout step (B-4) is an OFFER, never a gate (PA-D-11, value before
+  // The layout step (B-4) is an OFFER, never a gate (audit abbc7a19 PA-D-11, value before
   // setup): the requests show at once in the default layout, and a person
   // who never chose sees one quiet line to choose another, or keep it.
   const offerLayout = showReviewOnboarding({
@@ -393,6 +409,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
           saving={reviewPrefs.isSaving}
           onChoose={(g) => {
             setPickerOpen(false);
+            // A failed save is said by the hook (`onError`).
             void reviewPrefs.save({ groupBy: g }).catch(() => {});
           }}
         />

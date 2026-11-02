@@ -33,6 +33,7 @@ import {
 } from "@synap/database";
 import { capabilityTemplateCache } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
+import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 
 const logger = createLogger({ module: "capability-template-sync" });
 
@@ -53,12 +54,7 @@ interface CPCapabilityTemplate {
 
 /** Resolve the Control Plane base URL (mirrors cp-template-client.ts `cpUrl`). */
 function cpUrl(): string | null {
-  const url = (
-    process.env.CONTROL_PLANE_URL ??
-    process.env.CP_URL ??
-    ""
-  ).replace(/\/$/, "");
-  return url || null;
+  return controlPlaneBaseUrl();
 }
 
 /**

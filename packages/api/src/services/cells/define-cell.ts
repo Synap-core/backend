@@ -228,7 +228,7 @@ export class AgentCellRequiresProposalError extends Error {
 
 export async function defineCell(
   input: DefineCellInput
-): Promise<{ typeKey: string; changeType: "created" | "updated" }> {
+): Promise<{ id: string; typeKey: string; changeType: "created" | "updated" }> {
   // D1 floor: an agent never defines a cell directly, whichever door it came
   // through (hub /cells/install and an unattributed /cells/define had no gate).
   // The governed doors propose before reaching here; an approved proposal is
@@ -473,6 +473,7 @@ export async function defineCell(
   };
 
   let changeType: "created" | "updated" = "created";
+  let id: string;
 
   if (workspaceId) {
     // Workspace-scoped: unique constraint on (typeKey, workspaceId) works normally.
@@ -502,8 +503,10 @@ export async function defineCell(
         createdAt: widgetDefinitions.createdAt,
       });
     const row = result[0];
+    if (!row)
+      throw new Error(`defineCell: upsert of "${typeKey}" returned no row`);
+    id = row.id;
     if (
-      row &&
       row.updatedAt &&
       row.createdAt &&
       row.updatedAt.getTime() !== row.createdAt.getTime()
@@ -536,10 +539,17 @@ export async function defineCell(
         )
       )
       .returning({ id: widgetDefinitions.id });
-    if (updated.length === 0) {
-      await db.insert(widgetDefinitions).values(values);
-    } else {
+    if (updated[0]) {
+      id = updated[0].id;
       changeType = "updated";
+    } else {
+      const [inserted] = await db
+        .insert(widgetDefinitions)
+        .values(values)
+        .returning({ id: widgetDefinitions.id });
+      if (!inserted)
+        throw new Error(`defineCell: insert of "${typeKey}" returned no row`);
+      id = inserted.id;
     }
   }
 
@@ -558,5 +568,5 @@ export async function defineCell(
     },
   });
 
-  return { typeKey, changeType };
+  return { id, typeKey, changeType };
 }

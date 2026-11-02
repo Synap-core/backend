@@ -619,3 +619,65 @@ describe("joinSessionOutputs — a declared `ref` never forks the card", () => {
     expect(outputs[0]!.expected).toEqual(declared);
   });
 });
+
+/**
+ * (2b) DECISION LINEAGE: a slot the person DECIDED by answering names the
+ * decision its answer filed (`decisionId`); that produced entity is its
+ * evidence and the slot leaves `pendingExpected`. Rivals ruled out: "kind
+ * fallback finds it" (a `decision` slot never matches an `entity` output by
+ * kind, so the 2 Nov session read `evidence: []`), and "any decisionId is
+ * lineage" (an ask the reactor opened FOR a decision would vanish from the
+ * room's ask cards before the person answered).
+ */
+describe("joinSessionOutputs — decision lineage", () => {
+  const DECISION = "55555555-5555-4555-8555-555555555555";
+  const OTHER_DECISION = "66666666-6666-4666-8666-666666666666";
+  const answer = {
+    text: "Graph node",
+    messageId: null,
+    answeredBy: "u1",
+    answeredAt: "2026-11-02T02:04:59.349Z",
+    askSnapshot: { mode: "choose", chosenKey: "Graph node" },
+  } as unknown as ExpectedOutput["answer"];
+  const produced: JoinProducedRow[] = [
+    { toType: "entity", toId: OTHER_DECISION, createdAt: t(1) },
+    { toType: "entity", toId: DECISION, createdAt: t(2) },
+  ];
+
+  it("a decided slot is joined to the decision its answer filed, by id", () => {
+    const slot: ExpectedOutput = {
+      key: "d4-tasks",
+      kind: "decision",
+      label: "Tasks model",
+      decisionId: DECISION,
+      answer,
+    };
+    const { outputs, pendingExpected } = joinSessionOutputs({
+      ...empty,
+      produced,
+      expectedOutputs: [slot],
+    });
+    expect(pendingExpected).toEqual([]);
+    const joined = outputs.find((o) => o.expected);
+    expect(joined?.id).toBe(`entity:${DECISION}`);
+    expect(joined?.expected).toMatchObject({ key: "d4-tasks" });
+    expect(joined?.source).toContain("expected");
+  });
+
+  it("an OPEN ask on a decision (no answer yet) stays pending", () => {
+    const slot: ExpectedOutput = {
+      key: "d4-tasks",
+      kind: "decision",
+      label: "Tasks model",
+      owner: "human",
+      decisionId: DECISION,
+    };
+    const { outputs, pendingExpected } = joinSessionOutputs({
+      ...empty,
+      produced,
+      expectedOutputs: [slot],
+    });
+    expect(pendingExpected.map((e) => e.key)).toEqual(["d4-tasks"]);
+    expect(outputs.some((o) => o.expected)).toBe(false);
+  });
+});

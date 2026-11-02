@@ -54,8 +54,8 @@ import type { GovernanceRung, MatrixMark } from "../agent-matrix/index.js";
 import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
-import type { StuckCause } from "../units/stuck.js";
 import type { WaitKind } from "../units/wait-kind.js";
+import type { RunnerState } from "../units/runner-state.js";
 import type {
   PackageFieldState,
   PackageUpdateNeeds,
@@ -76,6 +76,8 @@ import type {
  * here so `@synap-core/types/vocabulary` is the ONE door for domain vocabulary —
  * nouns (kinds), verbs (actions) and statuses alike.
  */
+import { GOAL_FIELD_LABELS } from "./goal-fields.js";
+export { GOAL_FIELD_LABELS } from "./goal-fields.js";
 export * from "./object-kinds.js";
 
 /** AI tool name → label, in three moods (`resolveToolLabel`). */
@@ -417,6 +419,25 @@ const ACTION_VERB_ROWS = {
     imperative: "Keep it running",
     past: "Kept it running",
   },
+  // The ONE desktop door to a Claude Code session's terminal (sessions
+  // cockpit C7): it focuses, attaches or reopens it, so a dialog that waits
+  // there (`needs_permission`, `needs_answer`) is one click away. Its own
+  // dotted key, so bare `open` keeps its readers.
+  "terminal.open": {
+    imperative: "Open terminal",
+    past: "Opened terminal",
+  },
+  // The SESSION verbs that bare tokens would misread (`SESSION_VERBS`,
+  // `@synap-core/types/focus-sessions`): Stop ends a session `cancelled`
+  // through the one close door; Wait on / Stop waiting on add and drop a
+  // `blocked_by` edge. Dotted keys, so a bare `stop` or `release` elsewhere
+  // keeps its own reading (pause, resume and rerun share their bare rows).
+  "session.stop": { imperative: "Stop", past: "Stopped" },
+  "session.wait_on": { imperative: "Wait on", past: "Waited on" },
+  "session.release": {
+    imperative: "Stop waiting on",
+    past: "Stopped waiting on",
+  },
   // The owner's two answers to a delegate's counter-offer — both re-ask the
   // delegate through the participants door (`op: "add"`): with the
   // counter-offer as the commitment, or with the original one.
@@ -515,6 +536,11 @@ const ACTION_VERB_ROWS = {
   session_narrative_update: {
     imperative: "Update narrative",
     past: "Updated narrative",
+  },
+  // D4: a living document's bound refresher rewriting its own AI sections.
+  refresher_section_update: {
+    imperative: "Refresh section",
+    past: "Refreshed section",
   },
   ai_edit: { imperative: "Edit", past: "Edited" },
   // `user_edit` is a PERSON's suggested change to a document, reviewed like
@@ -671,6 +697,7 @@ export const PIN_LIST_CAP = 50;
 export const ACTION_OBJECT_PREPOSITIONS: Readonly<Record<string, string>> = {
   section_update: "in",
   session_narrative_update: "of",
+  refresher_section_update: "in",
   widen_scopes: "for",
 } satisfies Readonly<Record<string, TitlePreposition>>;
 
@@ -907,6 +934,29 @@ const OBJECT_NOUN_ROWS = {
   // `resolveObjectNoun("verb")` answers, never `TOOL_KIND_LABELS`, which names
   // the capability ("Capability") a verb belongs to.
   verb: "Action",
+  // The D3 nouns of making and connecting (founder, 2026-10-31, decision
+  // 985a59a8, plan appendix dd15a7b0 M5). None is a registry kind: each names
+  // an object the registry has no row for, so each is a backend-only noun.
+  // A skill rule, the standing instruction a person writes for agents (D2).
+  // "Automation" is the `automation` kind; the two never share a word.
+  rule: "Rule",
+  // Something you open IN Synap (a built-in surface, a space's own front end:
+  // CRM, Calendar). The outside software holding a grant is the `application`
+  // kind, "Connected app" (N4).
+  app: "App",
+  // A person's link to an outside service (a provider connection): "Account"
+  // (N8), never Connection, Connector or Integration.
+  connection: "Account",
+  // A `profile` of kind `kind` is a "Kind" (N10): Data types, Schema, Profiles
+  // and Structure all retire.
+  profile: "Kind",
+  // A card bound to a kind's slot (a renderer binding) is a "Display" (N2).
+  // Renderer stays an engine word.
+  renderer: "Display",
+  // "Room" is the conversation only; the intake review is a "Review" (DP8,
+  // plan appendix e7308ad5).
+  room: "Room",
+  review: "Review",
 } satisfies Readonly<Record<string, string>>;
 
 export const OBJECT_NOUNS: Readonly<Record<string, string>> = OBJECT_NOUN_ROWS;
@@ -938,6 +988,13 @@ export const OBJECT_NOUN_PLURALS: Readonly<
   "ui-design": "UI designs",
   okr: "OKRs",
   verb: "Actions",
+  rule: "Rules",
+  app: "Apps",
+  connection: "Accounts",
+  profile: "Kinds",
+  renderer: "Displays",
+  room: "Rooms",
+  review: "Reviews",
 };
 
 // A backend-only noun never shares a slug with a registry kind: both live in
@@ -1415,9 +1472,9 @@ export const PROPOSAL_KIND_LABELS: Readonly<Record<string, string>> = {
   // handled.
   governance_structure_guideline: "Extraction guideline",
   governance_work_guideline: "Work guideline",
-  // "Tool" / "Rule" are the user words (concepts.md, founder D1/D2).
+  // "Tool" / "Automation" are the user words (concepts.md, founder D2, D3).
   capability_run: "Run tool",
-  automation_run: "Run rule",
+  automation_run: "Run automation",
   // Server-side dev-loop HUMAN GATES. The chip is the first thing a reviewer
   // reads, and the two gates ask genuinely different questions — one is about
   // work not yet done, one is about shipping work already verified — so they
@@ -1787,21 +1844,6 @@ export function resolvePullRequestStateLabel(state: PullRequestState): string {
 }
 
 /**
- * Why a chain of work stands still (`StuckCause`, `@synap-core/types/units`
- * `deriveStuckChains`) — the heading of each group in a "What's stuck"
- * reading. Keyed by every cause, so a new one cannot render a raw token.
- */
-export const STUCK_CAUSE_LABELS: Readonly<Record<StuckCause, string>> = {
-  needs_you: "Waiting on you",
-  blocker_dropped: "Blocker dropped",
-  gone_quiet: "Gone quiet",
-};
-
-export function resolveStuckCauseLabel(cause: StuckCause): string {
-  return STUCK_CAUSE_LABELS[cause];
-}
-
-/**
  * CONNECTION STATE marks (`@synap-core/types/membrane` `ConnectionState`) —
  * the words on the Connected page's state chip. Their own table, not rows in
  * {@link STATUS_LABELS}, because three of the tokens already mean something
@@ -1886,6 +1928,49 @@ export function resolveAccountTrustLabel(
     (ACCOUNT_TRUST_LABELS as Readonly<Record<string, string>>)[
       state.toLowerCase()
     ] ?? humanizeToken(state)
+  );
+}
+
+/**
+ * Whose computer it is (`users.computer_belongs_to`, 0388), as a mark. Keyed
+ * by every `ComputerBelongsTo` (`@synap-core/types/computers`). Not "Yours":
+ * the pod admin's list shows other people's computers too.
+ */
+export const COMPUTER_BELONGS_TO_LABELS = {
+  person: "Personal",
+  agent: "An agent's",
+  shared: "Shared",
+} as const;
+
+/** The mark word for whose computer it is. Unknown values humanize. */
+export function resolveComputerBelongsToLabel(
+  value: string | null | undefined
+): string {
+  if (!value) return "";
+  return (
+    (COMPUTER_BELONGS_TO_LABELS as Readonly<Record<string, string>>)[
+      value.toLowerCase()
+    ] ?? humanizeToken(value)
+  );
+}
+
+/**
+ * Where a run ran (`RunWhere.kind`, `@synap-core/types/computers`), with no
+ * computer name. A named computer reads "On <name>" (`runWhereLine`).
+ */
+export const RUN_WHERE_LABELS = {
+  pod: "In the pod",
+  computer: "On a computer",
+  outside: "Outside the pod",
+} as const;
+
+/** The words for where a run ran. Unknown kinds humanize. */
+export function resolveRunWhereLabel(kind: string | null | undefined): string {
+  if (!kind) return "";
+  return (
+    (RUN_WHERE_LABELS as Readonly<Record<string, string>>)[
+      kind.toLowerCase()
+    ] ?? humanizeToken(kind)
   );
 }
 
@@ -2141,7 +2226,8 @@ export const WAITING_ON_REASON_LABELS = {
   approval: "Approval",
   access: "Access",
   another_work: "Other work",
-  outside_world: "Outside world",
+  // Merged into `external` (D-R4): nothing produces it; an old value reads the same.
+  outside_world: "Outside party",
   external: "Outside party",
   date: "A date",
 } as const satisfies Readonly<Record<string, string>>;
@@ -2166,7 +2252,8 @@ export const WAIT_KIND_LABELS = {
   agent_work: "Agent at work",
   agent_stopped: "Agent stopped",
   ci: "CI",
-  devbox_job: "Devbox job",
+  // A person reads "tests running", never a job's name (D-R4).
+  devbox_job: "Tests running",
   merge_queue: "Merge queue",
   red_main: "Red main",
   deploy: "Deploy",
@@ -2174,6 +2261,24 @@ export const WAIT_KIND_LABELS = {
   date: "A date",
   nobody: "Nobody",
 } as const satisfies Readonly<Record<WaitKind, string>>;
+
+/**
+ * What a session's runner says it is doing (0384, `RUNNER_STATES`), in a
+ * person's words: the mark a session page and a needs-you row wear (decision
+ * D-R1). Keyed by EVERY state: a word with no label stops the build.
+ */
+export const RUNNER_STATE_LABELS = {
+  busy: "Working",
+  idle: "Idle",
+  needs_permission: "Waiting for your permission",
+  needs_answer: "Waiting for your answer",
+  ended: "Ended",
+} as const satisfies Readonly<Record<RunnerState, string>>;
+
+/** The words for a runner state; unknown values humanize, never leak. */
+export function resolveRunnerStateLabel(v: string | null | undefined) {
+  return resolveFrom(RUNNER_STATE_LABELS, v);
+}
 
 /** The words for a wait kind; unknown values humanize, never leak. */
 export function resolveWaitKindLabel(v: string | null | undefined) {
@@ -2223,6 +2328,48 @@ export function resolveWaitingOnReasonLabel(v: string | null | undefined) {
 }
 
 /**
+ * The goal attention groups' words (`GOAL_ATTENTION_GROUPS`,
+ * `@synap-core/types/goal`): a Goals filter, a Relay tab group. Keyed by
+ * every group: a group added without its words stops the build.
+ */
+export const GOAL_ATTENTION_GROUP_LABELS = {
+  needs_you: "Needs you",
+  failing: "Failing",
+  running: "Repeating",
+  until_done: "Until done",
+  off: "Off",
+} as const satisfies Readonly<
+  Record<"needs_you" | "failing" | "running" | "until_done" | "off", string>
+>;
+
+/** The words for a goal attention group; unknown values humanize, never leak. */
+export function resolveGoalAttentionGroupLabel(v: string | null | undefined) {
+  return resolveFrom(GOAL_ATTENTION_GROUP_LABELS, v);
+}
+
+/**
+ * A counted clause of the goals summary ("2 need you", "1 runs on its own")
+ * and of a goal's needs-you reason ("2 runs to approve"): the verb agrees
+ * with the count, so each clause has its one and other forms.
+ */
+const GOAL_ATTENTION_COUNT_WORDS = {
+  needs_you: { one: "needs you", other: "need you" },
+  failing: { one: "failing", other: "failing" },
+  running: { one: "runs on its own", other: "run on their own" },
+  until_done: { one: "until done", other: "until done" },
+  off: { one: "off", other: "off" },
+  run_approvals: { one: "run to approve", other: "runs to approve" },
+} as const satisfies Readonly<Record<string, { one: string; other: string }>>;
+
+export function goalAttentionCountWords(
+  clause: keyof typeof GOAL_ATTENTION_COUNT_WORDS,
+  n: number
+): string {
+  const w = GOAL_ATTENTION_COUNT_WORDS[clause];
+  return `${n} ${n === 1 ? w.one : w.other}`;
+}
+
+/**
  * A plain move of a goal between two statuses names where it goes — "Move to
  * agreed" — because three bare "Move" items say nothing (code-core F8). The
  * one door for that label; a close, a drop or a pause keep their own verb
@@ -2239,23 +2386,6 @@ export function resolveTrackMoveLabel(
       })
     : "";
 }
-
-/**
- * A GOAL'S FIELDS as a person reads them — on the New goal forms, the goal
- * page, the CLI (slop.md must-fix, 2026-10-24). Keyed by the stored field
- * (`project_tracks`, 0345). The end state is "What done looks like": "Success
- * looks like" stays the space brief's interview field
- * ({@link SPACE_BRIEF_FIELD_LABELS}), so no two fields share a name.
- * "Done when" is the goal page's criteria section, spelled once
- * (`LENS_SECTION_LABELS.doneWhen` reads it from here).
- */
-export const GOAL_FIELD_LABELS = {
-  endState: "What done looks like",
-  criteria: "Done when",
-  workKind: "Kind of work",
-  uncertainty: "How well the way is known",
-  dropConditions: "Drop it if",
-} as const satisfies Readonly<Record<string, string>>;
 
 /** The label for a goal field; an unknown key humanizes rather than leaks. */
 export function resolveGoalFieldLabel(field: string | null | undefined) {

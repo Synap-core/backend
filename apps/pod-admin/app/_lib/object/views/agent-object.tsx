@@ -335,7 +335,7 @@ function AgentTrustDoorLine() {
   return door.kind === "link" ? (
     <Link
       href={door.href}
-      className="self-start text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
+      className="inline-flex min-h-6 items-center self-start text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
     >
       {door.label}
     </Link>

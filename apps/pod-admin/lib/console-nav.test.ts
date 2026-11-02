@@ -159,7 +159,7 @@ describe("Pod group", () => {
       ["updates", "admin"],
       ["audit", "admin"],
     ]);
-    expect(navLabel("updates")).toBe("Updates");
+    expect(navLabel("updates")).toBe("Pod updates");
     expect(activeNavId("/updates")).toBe("updates");
   });
 });

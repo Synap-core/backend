@@ -2032,7 +2032,9 @@
               { "type": "string" },
               { "type": "string", "format": "date-time" }
             ]
-          }
+          },
+          "scope": { "type": ["object", "null"], "additionalProperties": {} },
+          "refreshAutomationId": { "type": ["string", "null"] }
         },
         "required": ["id", "userId", "title"],
         "additionalProperties": {}
@@ -2056,7 +2058,9 @@
           "expectedLabel": { "type": "string" },
           "url": { "type": "string" },
           "entityId": { "type": "string" },
-          "idempotencyKey": { "type": "string" }
+          "idempotencyKey": { "type": "string" },
+          "scope": { "type": ["object", "null"], "additionalProperties": {} },
+          "refreshAutomationId": { "type": ["string", "null"] }
         },
         "required": ["userId", "title"]
       },
@@ -2150,6 +2154,59 @@
                     }
                   },
                   "required": ["op", "title"]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "op": { "type": "string", "enum": ["insert_embed"] },
+                    "directive": {
+                      "type": "string",
+                      "enum": ["synap-entity", "synap-view", "synap-cell"]
+                    },
+                    "ref": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string",
+                        "maxLength": 500
+                      }
+                    },
+                    "props": { "type": "object", "additionalProperties": {} },
+                    "fallback": { "type": "string", "maxLength": 10000 },
+                    "sectionId": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                    },
+                    "after": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 10000
+                    }
+                  },
+                  "required": ["op", "directive", "ref"]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "op": { "type": "string", "enum": ["set_scope"] },
+                    "scope": {
+                      "anyOf": [
+                        { "type": "object", "additionalProperties": {} },
+                        { "type": "null" }
+                      ]
+                    }
+                  },
+                  "required": ["op", "scope"]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "op": { "type": "string", "enum": ["set_refresher"] },
+                    "automationId": {
+                      "type": ["string", "null"],
+                      "format": "uuid"
+                    }
+                  },
+                  "required": ["op", "automationId"]
                 }
               ]
             },
@@ -5515,12 +5572,22 @@
             "properties": {
               "snapshots": {
                 "type": "string",
-                "enum": ["ok", "stale", "missing"]
+                "enum": ["ok", "stale", "missing", "withheld"]
               },
-              "sessions": { "type": "string", "enum": ["ok", "unavailable"] },
-              "holders": { "type": "string", "enum": ["ok", "unavailable"] }
+              "sessions": {
+                "type": "string",
+                "enum": ["ok", "unavailable", "withheld"]
+              },
+              "holders": {
+                "type": "string",
+                "enum": ["ok", "unavailable", "withheld"]
+              },
+              "pullRequests": {
+                "type": "string",
+                "enum": ["ok", "unavailable", "withheld"]
+              }
             },
-            "required": ["snapshots", "sessions", "holders"]
+            "required": ["snapshots", "sessions", "holders", "pullRequests"]
           },
           "repos": {
             "type": "array",
@@ -5578,6 +5645,24 @@
               ],
               "additionalProperties": {}
             }
+          },
+          "narrowed": {
+            "type": "object",
+            "properties": {
+              "snapshotSpaces": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "withheld": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": ["snapshots", "sessions", "holders", "pullRequests"]
+                }
+              },
+              "reason": { "type": "string" }
+            },
+            "required": ["snapshotSpaces", "withheld", "reason"]
           }
         },
         "required": ["generatedAt", "sources", "repos", "prs", "blockers"]
@@ -13198,7 +13283,7 @@
                             },
                             "executionMode": {
                               "type": "string",
-                              "enum": ["sync", "async"]
+                              "enum": ["sync", "async", "box"]
                             },
                             "timeoutSeconds": {
                               "type": "number",
@@ -38923,7 +39008,7 @@
       "get": {
         "tags": ["FocusSessions"],
         "summary": "Work › Ship: can I release, and what blocks it",
-        "description": "The release read (`services/dev-loop/work-release.ts`): the newest `dev.repo_snapshot` per repo (posted by the devbox producer), each PR's stage on the road to main (working, checks, ready, on_main), its check verdict (own red vs red inherited from main), its fold (draft, negctl, dependabot, stale), the session holding it and whether that session is working now, and the blockers ranked by how much waits behind them transitively. `sources` says which read was stale, missing or failed: a failed read is `unavailable`, never an empty list. A workspace-bound key reads its own workspace's facts.",
+        "description": "The release read (`services/dev-loop/work-release.ts`): the newest `dev.repo_snapshot` per repo (posted by the devbox producer), each PR's stage on the road to main (working, checks, ready, on_main), its check verdict (own red vs red inherited from main), its fold (draft, negctl, dependabot, stale), the session holding it and whether that session is working now, and the blockers ranked by how much waits behind them transitively. `sources` says which read was stale, missing or failed: a failed read is `unavailable`, never an empty list. A workspace-bound key reads its own workspace's facts. A key pinned to spaces (a pod app) reads the snapshots recorded in those spaces when it reads `dev` events (`event.dev.read` or `event.read`), the sessions its `session` grant reaches, never the holders, and the recorded PR facts only when it reads dev events in every space: each part it does not reach is `withheld` in `sources`, and `narrowed` says what was read.",
         "security": [{ "bearerAuth": [] }],
         "responses": {
           "200": {

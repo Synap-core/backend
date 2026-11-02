@@ -52,6 +52,10 @@ import {
 } from "../../services/document-patch/apply-document-patch.js";
 import { DocumentPatchOpsSchema } from "../../services/document-patch/patch-ops.js";
 import {
+  podDocumentScopeFloor,
+  resolveDocumentScopeFields,
+} from "../../services/document-scope/document-scope.js";
+import {
   DOCUMENT_READ_FORMATS,
   currentDiagnostics,
   projectAgentDocument,
@@ -113,6 +117,14 @@ export const documentsRouter = router({
          * contract as `entities.create.proposedEntityId`.
          */
         proposedDocumentId: z.string().uuid().optional(),
+        /**
+         * The living document's `LensScope` (0387, contract 3): pod,
+         * workspace (+ projectId), project, track or session. Floored on
+         * what the principal can read (`resolveDocumentScope`).
+         */
+        scope: z.record(z.string(), z.unknown()).nullable().optional(),
+        /** The automation bound to refresh it (0387, decision D4). */
+        refreshAutomationId: z.string().uuid().nullable().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -163,6 +175,12 @@ export const documentsRouter = router({
       const actingAgent = await actingAgentUserId(ctx, input.agentUserId);
       const agentUserId = actingAgent ?? userId;
       const correlationId = randomUUID();
+      // Scope + refresher: read and floored (as the principal) BEFORE the
+      // gate, so a proposal never carries a scope its author could not read.
+      const scoped = await resolveDocumentScopeFields(
+        input,
+        podDocumentScopeFloor(userId)
+      );
 
       // ── ACK INTEGRITY (C1) — content-hash idempotency ─────────────────────────
       // The auto-approved path writes a real `documents` row with no proposal to
@@ -257,6 +275,9 @@ export const documentsRouter = router({
           // Stamped so an approved proposal's document carries the same key (kept
           // stable across retries → the SSOT agent hash-dedup collapses replays).
           idempotencyKey,
+          // The living document's scope / refresher, as read above; the
+          // approval re-reads them through the floor.
+          ...scoped,
         },
       });
 
@@ -337,6 +358,7 @@ export const documentsRouter = router({
             size: 0,
             mimeType: null,
             metadata: { external: true, idempotencyKey },
+            ...scoped,
             userId,
             workspaceId: input.workspaceId ?? null,
             createdByKind: "ai_agent",
@@ -398,6 +420,7 @@ export const documentsRouter = router({
         content: input.content || "",
         mimeType: "text/markdown",
         metadata: { idempotencyKey },
+        ...scoped,
         provenance: {
           createdByKind: "ai_agent",
           createdByUserId: userId,

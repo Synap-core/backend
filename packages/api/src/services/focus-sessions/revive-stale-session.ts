@@ -32,12 +32,9 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { isTerminalSessionStatus } from "./session-statuses.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "focus-sessions/revive-stale-session" });
-
-/** The Postgres uuid shape — a malformed handle is never sent to the column. */
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * The session a gated write is ATTRIBUTED to, for revival — or undefined.
@@ -68,7 +65,8 @@ export function sessionToReviveForWrite(write: {
     (aboutSession && typeof write.data?.id === "string"
       ? write.data.id
       : undefined);
-  return candidate && UUID_RE.test(candidate) ? candidate : undefined;
+  // A malformed handle is never sent to the uuid column.
+  return candidate && isUuid(candidate) ? candidate : undefined;
 }
 
 /**

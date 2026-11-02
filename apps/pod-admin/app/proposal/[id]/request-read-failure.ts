@@ -5,8 +5,9 @@
  * withdrawn, or you may not have access", with no way to try again: a pod that
  * did not answer read as a request that was gone.
  *
- * The titles come from the shared object door (`loadFailure`, the words every
- * `/open` page uses); the sentences are this page's, in its catalog. Only a
+ * The shape comes from the shared object door (`loadFailure`, what every
+ * `/open` page uses); the titles and sentences are this page's, in its
+ * catalog, so a French reader's first screen is French throughout. Only a
  * read that FAILED offers Try again: a missing request or a refusal answers
  * the same on every retry.
  */
@@ -44,8 +45,22 @@ export function requestReadFailure(
     notFound: t("read.notFound"),
     forbidden: t("read.forbidden"),
     failed: t("read.failed"),
+    titles: {
+      notFound: t("read.notFound.title"),
+      forbidden: t("read.forbidden.title"),
+      failed: t("read.failed.title"),
+    },
   };
   if (!error) return { ...notFound("Request", wording), retry: false };
+  // Shown for a beat before the page bounces to sign in.
+  if (error.data?.code === "UNAUTHORIZED") {
+    return {
+      title: t("read.signIn.title"),
+      message: t("read.signIn"),
+      chip: t("read.signIn.title"),
+      retry: false,
+    };
+  }
   const failure = loadFailure(error, "Request", wording)!;
   return {
     ...failure,

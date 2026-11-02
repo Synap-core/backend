@@ -52,7 +52,12 @@ vi.mock("../playbook-lifecycle.js", async (importOriginal) => {
 });
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { focusSessions, playbookRuns } from "@synap/database/schema";
+import {
+  focusSessions,
+  playbookRuns,
+  links,
+  users,
+} from "@synap/database/schema";
 import { runPlaybook } from "../run-playbook.js";
 import { AI_DISPATCH_GUARDRAILS } from "@synap-core/types/automations";
 
@@ -109,7 +114,9 @@ const outcome = () =>
   );
 
 beforeAll(async () => {
-  for (const t of [focusSessions, playbookRuns]) {
+  // `links` + `users`: a run that names nobody asks THE route for the
+  // playbook's assigned agent (`resolveRunHandOff`); none here.
+  for (const t of [focusSessions, playbookRuns, links, users]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
 }, 120_000);

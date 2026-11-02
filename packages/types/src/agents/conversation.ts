@@ -12,14 +12,21 @@
  * this returns null for it rather than a command that resumes nothing.
  *
  * ONE derivation for every surface (browser, relay). Pure.
+ *
+ * Its sibling, {@link resolveAgentLaunch}, is the door to a NEW conversation:
+ * the command a person runs on the agent's computer to open it.
  */
+
+import { AGENT_HARNESSES } from "./harnesses.js";
+import { parseReportedModel } from "./model-providers.js";
 
 const CONVERSATION_SEP = "|conv:";
 
-/** Harnesses whose conversation id we can turn into a reopen door. */
-export const AGENT_CONVERSATION_HARNESSES = ["claude-code"] as const;
-export type AgentConversationHarness =
-  (typeof AGENT_CONVERSATION_HARNESSES)[number];
+/** Harnesses whose conversation id we can turn into a reopen door (the registry's `reopen`). */
+export type AgentConversationHarness = Extract<
+  (typeof AGENT_HARNESSES)[number],
+  { reopen: unknown }
+>["slug"];
 
 export interface AgentConversationRef {
   harness: AgentConversationHarness;
@@ -33,9 +40,6 @@ export interface AgentConversationRef {
    */
   resumeCommand: string;
 }
-
-const CLAUDE_CODE_ID =
-  /^claude-code:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
 /** The conversation half of a client key, or null (key scope / none). */
 export function conversationOfClientKey(
@@ -59,17 +63,71 @@ export function resolveAgentConversation(
 ): AgentConversationRef | null {
   const clientKey =
     typeof metadata?.clientKey === "string" ? metadata.clientKey : null;
-  const match = CLAUDE_CODE_ID.exec(conversationOfClientKey(clientKey) ?? "");
-  if (!match) return null;
-  const conversationId = match[1]!.toLowerCase();
+  const half = conversationOfClientKey(clientKey) ?? "";
+  const at = half.indexOf(":");
+  const slug = at === -1 ? "" : half.slice(0, at);
+  const harness = AGENT_HARNESSES.find((h) => h.slug === slug && "reopen" in h);
+  if (!harness || !("reopen" in harness)) return null;
+  const id = half.slice(at + 1);
+  if (!harness.reopen.idPattern.test(id)) return null;
+  const conversationId = id.toLowerCase();
   const cwd =
     typeof metadata?.conversationCwd === "string" && metadata.conversationCwd
       ? metadata.conversationCwd
       : null;
   return {
-    harness: "claude-code",
+    harness: harness.slug as AgentConversationHarness,
     conversationId,
     cwd,
-    resumeCommand: `claude --resume ${conversationId}`,
+    resumeCommand: harness.reopen.command(conversationId),
+  };
+}
+
+/** Harnesses a person can start with a command (the registry's `launch`). */
+export type AgentLaunchHarness = Extract<
+  (typeof AGENT_HARNESSES)[number],
+  { launch: unknown }
+>["slug"];
+
+export interface AgentLaunchRef {
+  harness: AgentLaunchHarness;
+  /**
+   * The shell command that opens a new conversation, on the agent's computer.
+   * Rendered by the pod from the registry's template and validated values
+   * only, so it is safe to show and copy as-is.
+   */
+  command: string;
+}
+
+/** A value the shell takes as one plain word; anything else is quoted. */
+const PLAIN_WORD = /^[A-Za-z0-9._:/@=-]+$/;
+
+function shellWord(value: string): string {
+  return PLAIN_WORD.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * The command that opens an agent, or null when its harness has no launch
+ * template, or when the model asked for is not a model id: a door that would
+ * start ANOTHER model is worse than none. `model` is a default (a preset's),
+ * never a fact about a run.
+ */
+export function resolveAgentLaunch(input: {
+  agentType: string | null | undefined;
+  model?: string | null;
+}): AgentLaunchRef | null {
+  const harness = AGENT_HARNESSES.find(
+    (h) => h.slug === input.agentType && "launch" in h
+  );
+  if (!harness || !("launch" in harness)) return null;
+  const words: string[] = [harness.launch.program];
+  if (input.model != null && input.model !== "") {
+    const model = parseReportedModel(input.model);
+    if (!model || !harness.launch.modelFlag) return null;
+    words.push(harness.launch.modelFlag, shellWord(model));
+  }
+  return {
+    harness: harness.slug as AgentLaunchHarness,
+    command: words.join(" "),
   };
 }

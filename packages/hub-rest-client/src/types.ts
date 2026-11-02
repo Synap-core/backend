@@ -1329,9 +1329,9 @@ export type FocusSessionStatus =
 export type UpdatableFocusSessionStatus = Exclude<FocusSessionStatus, "stale">;
 
 /**
- * A session's population lens, duplicated from `SESSION_KINDS`
- * (`@synap/api/services/focus-sessions/session-kind.ts`) — projected, never
- * stored.
+ * A session's population lens, mirrored from `SESSION_KINDS`
+ * (`@synap-core/types/focus-sessions`) — projected, never stored. Pinned EQUAL
+ * by `parity/session-status.floor.ts`.
  */
 export type FocusSessionKind = "work" | "run" | "receipt";
 
@@ -1503,6 +1503,12 @@ export interface GetFocusSessionOptions {
 export interface HubFocusSessionWithContinuation extends HubFocusSession {
   rerun: unknown;
   continuation: unknown;
+  /**
+   * Who has the session (`session-holder.ts`): `{status: "ok", holder}` or
+   * `{status: "unavailable", reason}`. Also served beside a withheld packet
+   * to a key that reads the person's agents. Absent on an older pod.
+   */
+  holder?: unknown;
   criteria?: unknown;
   verdict?: unknown;
   evaluations?: unknown;

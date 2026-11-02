@@ -29,7 +29,7 @@ import {
 } from "@synap/database";
 import { profiles } from "@synap/database/schema";
 import type { PlaybookRunStatus } from "@synap/database/schema";
-import type { SQL } from "drizzle-orm";
+import type { AnyColumn, SQL } from "drizzle-orm";
 import {
   findLifecycleOption,
   parseHoldDevRef,
@@ -57,6 +57,7 @@ import type { OpenBlocker } from "@synap-core/types/connections";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import {
   buildObjectActionTitle,
+  resolveWaitKindLabel,
   resolveWaitingOnReasonLabel,
 } from "@synap-core/types/vocabulary";
 import type { ExpectedOutput } from "@synap/playbooks";
@@ -66,10 +67,12 @@ import {
 } from "../../access/session-visibility.js";
 import { grantReadPredicate } from "../../access/grant-read.js";
 import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
+import type { EventReader } from "../../access/event-visibility.js";
 import { OPEN_SESSION_STATUSES } from "../focus-sessions/session-statuses.js";
 import type { SessionSubject } from "../focus-sessions/session-subject-where.js";
 import { extractProposalName } from "../proposals/fingerprint.js";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 /** Counts per lifecycle category; a category with none is left out. */
 export type CategoryCounts = Partial<Record<LifecycleCategory, number>>;
@@ -138,6 +141,28 @@ export async function lastTransitionAt(
     out.set(`${r.subjectType}:${r.subjectId}`, new Date(r.at));
   }
   return out;
+}
+
+/**
+ * SQL predicate: the subject made a status move in the last `days` days — a
+ * transition event of its type on the same log `lastTransitionAt` reads, on
+ * the (subject_type, subject_id, timestamp) index. Any move in the window
+ * counts; for a subject whose status is NOW `stale`, its latest move is the one
+ * INTO `stale`, so for it this reads "went stale inside the window".
+ */
+export async function movedWithinDaysSql(
+  subjectType: TransitionSubjectType,
+  subjectId: AnyColumn | SQL,
+  days: number
+): Promise<SQL> {
+  const { TRANSITION_EVENT_TYPES } = await import("@synap/events");
+  return drizzleSql`EXISTS (
+    SELECT 1 FROM events mw_e
+    WHERE mw_e.subject_type = ${subjectType}
+      AND mw_e.subject_id = ${subjectId}::text
+      AND mw_e.type = ${TRANSITION_EVENT_TYPES[subjectType]}
+      AND mw_e.timestamp >= now() - (${days}::int * interval '1 day')
+  )`;
 }
 
 /**
@@ -234,7 +259,15 @@ export function sessionWaitingOnQuestion(sessionId: string): WaitingOnQuestion {
  * Who reads the waiting-on: THE session read rule (`sessionReadableWhere`;
  * `roster` is the door's, `rosterReadFor`, default owner-only).
  */
-export type WaitingOnReader = Pick<SessionReader, "userId" | "roster">;
+export type WaitingOnReader = Pick<SessionReader, "userId" | "roster"> & {
+  /**
+   * The event lens (`EventReader.lens`): the PR facts (events) are read under
+   * it, as the work graph (`readGraphPullRequests`) and the packet's own work
+   * units (`withPullRequestStates`) read theirs — a bound key's PR facts stay
+   * in its workspace. Absent = every event the reader may see.
+   */
+  lens?: EventReader["lens"];
+};
 
 /**
  * What a set of things WAITS ON, in the goal's own vocabulary (R4,
@@ -244,9 +277,9 @@ export type WaitingOnReader = Pick<SessionReader, "userId" | "roster">;
 export async function readWaitingOn(
   input: WaitingOnReader & WaitingOnQuestion
 ): Promise<WaitingOnMark[]> {
-  const { userId, roster, ...question } = input;
+  const { userId, roster, lens, ...question } = input;
   const out = await readWaitingOnFor(
-    { userId, roster },
+    { userId, roster, ...(lens !== undefined ? { lens } : {}) },
     new Map([["all", question]])
   );
   return out.get("all") ?? [];
@@ -561,8 +594,6 @@ export const WAITING_READ_CAP = 100;
 const holdKey = (h: HoldSubjectRef) =>
   `${h.subjectType}:${h.subjectId}:${h.facetId ?? ""}`;
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** `person:<uuid>`-style refs a mover writes: the id, never shown as words. */
 const TYPED_ID =
   /^[a-z_]+:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
@@ -587,8 +618,8 @@ function unnamed(source: WaitingOnSource): WaitingOnSource {
  * date, else its reason's words. A `<kind>:<uuid>` ref is an id, never shown.
  * With `readable`, a session it resumes on is named only when the reader may
  * read it. A hold on a DEV FACT names that fact, in the hold line's words
- * (`holdDevRefNamed`): `backend#539` with its GitHub page, `backend main`,
- * `job kit-h`.
+ * (`holdDevRefNamed`): `backend#539` with its GitHub page, `backend main`;
+ * a devbox job as "Tests running" (D-R4).
  */
 export function holdWaitingOnRef(
   hold: RecordedHold,
@@ -597,6 +628,15 @@ export function holdWaitingOnRef(
   const until = hold.until;
   const dev = until && "moves" in until ? holdDevRefNamed(until.moves) : null;
   if (dev) {
+    // A devbox job reaches a person as "Tests running", never its raw name
+    // (decision D-R4); the session's own jobs list is where it opens.
+    if (dev.ref.kind === "job") {
+      return {
+        kind: "thing",
+        label: resolveWaitKindLabel("devbox_job"),
+        waitKind: "devbox_job",
+      };
+    }
     return dev.url
       ? { kind: "pull_request", url: dev.url, label: dev.label }
       : { kind: "thing", label: dev.label };
@@ -637,7 +677,7 @@ async function readableSessionIds(
   reader: WaitingOnReader,
   sessionIds: readonly string[]
 ): Promise<Set<string>> {
-  const ids = [...new Set(sessionIds)].filter((id) => UUID.test(id));
+  const ids = [...new Set(sessionIds)].filter((id) => isUuid(id));
   if (ids.length === 0) return new Set();
   const rows = await db
     .select({ id: focusSessions.id })
@@ -735,7 +775,11 @@ async function readOpenWorkUnits(
   if (open.length === 0) return out;
   const states = await readPullRequestStates(
     open.map((o) => o.ref),
-    { userId: reader.userId, roster: reader.roster ?? false }
+    {
+      userId: reader.userId,
+      roster: reader.roster ?? false,
+      ...(reader.lens !== undefined ? { lens: reader.lens } : {}),
+    }
   );
   for (const o of open) {
     const facts = states.get(pullRequestKey(o.ref));
@@ -761,7 +805,7 @@ async function readStepWaits(
   entityIds: readonly string[]
 ): Promise<Map<string, WaitingOnSource>> {
   const out = new Map<string, WaitingOnSource>();
-  const ids = [...new Set(entityIds)].filter((id) => UUID.test(id));
+  const ids = [...new Set(entityIds)].filter((id) => isUuid(id));
   if (ids.length === 0) return out;
   const rows = await db
     .select({
@@ -814,7 +858,7 @@ async function readStepWaits(
       source,
       reason,
       refId:
-        typeof value === "string" && UUID.test(value) && value !== r.id
+        typeof value === "string" && isUuid(value) && value !== r.id
           ? value
           : null,
     });

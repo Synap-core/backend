@@ -453,6 +453,23 @@ describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () =>
       "blocking"
     );
   });
+  it("a broken tool connection is an act owed, not a decision: Reconnect, its tool the door", () => {
+    const { recent } = needsYouRows([
+      sig({
+        id: "access:connection:cap-1",
+        kind: "access-request",
+        title: 'Reconnect Tool "Gmail"',
+        category: "data",
+        target: { kind: "capability", id: "cap-1" },
+        access: { subject: "capability", name: "Gmail", from: "" },
+      }),
+    ]);
+    const row = lensRowOfNeedsYou(recent[0]!, "blocking");
+    expect(row.objectKind).toBe("capability");
+    expect(row.verb).toEqual({ action: "reconnect", label: "Reconnect" });
+    expect(row.door).toEqual({ kind: "capability", id: "cap-1" });
+    expect(row.state).toEqual({ owedFromYou: 1 });
+  });
   it("an invite to another space is a decision: Accept on the row, its role the chip, no door before Accept", () => {
     const { recent } = needsYouRows([
       sig({

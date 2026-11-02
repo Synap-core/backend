@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import { diesWithSession } from "./expire-lapsed-proposals.js";
+import { CAPABILITY_RUN_PROPOSAL_TYPE as TYPES_RUN_TYPE } from "@synap-core/types/proposals/capability-run";
 import {
   classifyProposal,
   proposalLifetimeHours,
@@ -448,5 +449,12 @@ describe("classifyProposal — a capability run that acts on a durable object", 
     expect(
       diesWithSession("capability.run", "capability", "messaging.send")
     ).toBe(true);
+  });
+});
+
+describe("the capability run proposal type has one value", () => {
+  it("the types door's copy (read by every title) equals the pod's", () => {
+    // proposal-class.ts imports nothing on purpose; this pins the two equal.
+    expect(TYPES_RUN_TYPE).toBe(CAPABILITY_RUN_PROPOSAL_TYPE);
   });
 });

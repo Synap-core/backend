@@ -589,3 +589,157 @@ describe("an OPTIONAL slot never holds a gate (rules out 'every slot is required
     expect(unmetRequiredOutcomes(v.outcomes)).toEqual(["acceptance-note"]);
   });
 });
+
+/**
+ * A DECISION the person answered, whose decision the pod filed, IS met (rule
+ * 6b, founder 2 Nov 2026). The first fixture is a slot exactly as the pod
+ * stored it on session 2c9791ac (answered before the rule existed, then
+ * claimed by the agent as a workaround): it must read met with no backfill.
+ * Rivals ruled out: "only `done` is met" (the 2 Nov reading: 2 of 6),
+ * "a claim on an answered decision waits for review", "a decisionId alone is
+ * the proof" (an ask the reactor opened for a decision, still unanswered),
+ * "any answer is the proof" (its filing failed: no decisionId), "a re-asked
+ * slot keeps its old proof", "a criterion grade is a decision".
+ */
+describe("an answered decision is met by its answer (rule 6b)", () => {
+  const CHOSEN = {
+    text: "Graph node of an owed outcome",
+    value: { type: "chip", chip: { label: "Graph node of an owed outcome" } },
+    question: "248 of 314 tasks are todo and nothing closes them",
+    answeredAt: T0,
+    answeredBy: "u1",
+    askSnapshot: {
+      why: "248 of 314 tasks are todo and nothing closes them",
+      mode: "choose",
+      options: [{ label: "Graph node of an owed outcome", recommended: true }],
+      chosenKey: "Graph node of an owed outcome",
+      recommendedKey: "Graph node of an owed outcome",
+      followedRecommendation: true,
+    },
+  };
+  const STORED_2C9791AC = {
+    key: "d4-tasks",
+    kind: "decision",
+    label: "Tasks model",
+    answer: CHOSEN,
+    decisionId: "15a36421-6303-4fa3-8021-f1394bd81721",
+    claimedDone: true,
+  };
+  const project = (slots: unknown[], terminal = true) =>
+    projectSessionOutcomes({
+      expectedOutputs: slots,
+      produced: [
+        {
+          id: "entity:15a36421-6303-4fa3-8021-f1394bd81721",
+          expected: { key: "d4-tasks", label: "Tasks model" },
+        },
+      ],
+      sessionTerminal: terminal,
+    });
+
+  it("the stored 2c9791ac slot reads met by the answer, done, the person's, with its decision as evidence", () => {
+    const view = project([STORED_2C9791AC]);
+    const [o] = view.outcomes;
+    expect(o).toMatchObject({
+      key: "d4-tasks",
+      met: true,
+      metBy: "answer",
+      owner: "human",
+      verify: "human",
+      retired: false,
+    });
+    expect(o!.state.state).toBe("done");
+    expect(o!.evidence.map((e) => e.id)).toEqual([
+      "entity:15a36421-6303-4fa3-8021-f1394bd81721",
+    ]);
+    expect(view.counts).toEqual({ met: 1, total: 1 });
+    expect(unmetRequiredOutcomes(view.outcomes)).toEqual([]);
+    // Still a receipt on the input side: answered, not open.
+    expect(view.inputs[0]).toMatchObject({ answered: true, open: false });
+  });
+
+  it("without the agent's claim too (the answer alone is the proof)", () => {
+    const { claimedDone: _c, ...unclaimed } = STORED_2C9791AC;
+    const [o] = project([unclaimed], false).outcomes;
+    expect(o).toMatchObject({ met: true, metBy: "answer" });
+    expect(o!.state.state).toBe("done");
+  });
+
+  it("a confirm answered Yes or No is met the same way", () => {
+    const [o] = project([
+      {
+        ...STORED_2C9791AC,
+        answer: {
+          ...CHOSEN,
+          askSnapshot: { mode: "confirm", chosenKey: "no" },
+        },
+      },
+    ]).outcomes;
+    expect(o).toMatchObject({ met: true, metBy: "answer" });
+  });
+
+  const unmet: Array<[string, Record<string, unknown>]> = [
+    [
+      "an open ask on a decision (decisionId, no answer)",
+      {
+        kind: "decision",
+        label: "Tasks model",
+        decisionId: "d-1",
+        owner: "human",
+        blockedReason: "decision",
+        ask: { mode: "choose", options: [{ label: "A" }] },
+      },
+    ],
+    [
+      "an answer whose decision was never filed (no decisionId)",
+      {
+        kind: "decision",
+        label: "Tasks model",
+        answer: CHOSEN,
+      },
+    ],
+    [
+      "a re-asked slot (old answer archived)",
+      {
+        kind: "decision",
+        label: "Tasks model",
+        decisionId: "d-1",
+        owner: "human",
+        answerHistory: [CHOSEN],
+      },
+    ],
+    [
+      "a form answer (files no decision)",
+      {
+        kind: "decision",
+        label: "Tasks model",
+        decisionId: "d-1",
+        answer: { ...CHOSEN, askSnapshot: { mode: "form" } },
+      },
+    ],
+  ];
+  it.each(unmet)("%s is not met", (_name, slot) => {
+    const [o] = project([slot], false).outcomes;
+    expect(o).toMatchObject({ met: false, metBy: null });
+    expect(unmetRequiredOutcomes([o!])).toEqual([o!.key]);
+  });
+
+  it("a criterion grade is never a decision's proof (an input, not an outcome)", () => {
+    const view = project([
+      {
+        kind: CRITERION_SLOT_KIND,
+        label: "Grade: tests pass",
+        criterionKey: "tests-pass",
+        owner: "human",
+        decisionId: "d-1",
+        answer: CHOSEN,
+      },
+    ]);
+    expect(view.outcomes).toEqual([]);
+  });
+
+  it("a retired decision stays retired (rule 5 before 6b)", () => {
+    const [o] = project([{ ...STORED_2C9791AC, retiredAt: T1 }]).outcomes;
+    expect(o).toMatchObject({ met: false, retired: true });
+  });
+});

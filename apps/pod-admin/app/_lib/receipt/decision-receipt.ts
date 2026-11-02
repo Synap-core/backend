@@ -12,7 +12,9 @@
  *     reads as a sentence (`readableError`); never a raw exception.
  *   - "Approved" is said only when the answer says it applied: a no-op
  *     (`effect.applied: "none"`) or an approve of an already-approved request
- *     says nothing changed, and `success: false` is a failure.
+ *     says nothing changed, a partial application (`refusals`,
+ *     `relationsFailed`) says not all of it landed, and `success: false` is a
+ *     failure.
  *   - Undo is offered only for an applied decision the pod can take back: an
  *     approve whose request the pod marked `revertable`, or any reject
  *     (`proposals.reopen` puts it back). An Undo with nothing behind it would
@@ -29,14 +31,23 @@ export type DecisionVerb = "approve" | "reject";
 
 export type DecisionOutcome =
   | { state: "applied"; verb: DecisionVerb }
+  | { state: "partial"; verb: "approve"; left: number; detail?: string }
   | { state: "no_effect"; verb: DecisionVerb; already: boolean }
   | { state: "failed"; verb: DecisionVerb; detail?: string };
 
-/** The part of `proposals.approve`'s answer a receipt reads. */
+/**
+ * The part of `proposals.approve`'s answer a receipt reads
+ * (`ProposalExecutorResult`). `entitiesSkipped` is not read: those records
+ * were left out because the reviewer chose the existing ones.
+ */
 export interface ApproveAnswer {
   success?: boolean;
   alreadyApproved?: boolean;
   effect?: { applied: string } | null;
+  /** Parts the pod declined to apply, each a sentence for the reviewer. */
+  refusals?: readonly string[];
+  /** Links of a composite that did not land. */
+  relationsFailed?: readonly unknown[];
 }
 
 /** `proposals.approve`'s answer, as the person should hear it. */
@@ -47,6 +58,14 @@ export function readApproveAnswer(answer: ApproveAnswer): DecisionOutcome {
   }
   if (answer.effect?.applied === "none") {
     return { state: "no_effect", verb: "approve", already: false };
+  }
+  const refusals = answer.refusals ?? [];
+  const left = refusals.length + (answer.relationsFailed?.length ?? 0);
+  if (left > 0) {
+    const detail = refusals.length > 0 ? readableError(refusals[0]) : undefined;
+    return detail
+      ? { state: "partial", verb: "approve", left, detail }
+      : { state: "partial", verb: "approve", left };
   }
   return { state: "applied", verb: "approve" };
 }
@@ -120,6 +139,14 @@ export function decisionReceipt(
             undo,
           };
     }
+    case "partial":
+      return {
+        title: t("approve.partial"),
+        description:
+          outcome.detail ?? t("approve.partialHint", { n: outcome.left }),
+        tone: "default",
+        undo: revertable === true,
+      };
     case "no_effect":
       return {
         title: outcome.already ? t("approve.already") : t("approve.noEffect"),
@@ -184,15 +211,46 @@ export function undoFailureReceipt(err: DecisionError): Receipt {
 }
 
 /**
- * A batch reject's receipt, counted from the pod's answer (`rejected`), not
- * from the rows picked: a request decided meanwhile is not counted.
+ * A batch approve's receipt, counted per ROW like the page shows them
+ * (`summarizeBatch`): a row is approved when every request in it landed. The
+ * rows that did not are listed on the page with the pod's reason.
  */
-export function batchRejectReceipt(
-  picked: number,
-  answer: { rejected: number }
-): Receipt {
+export function batchApproveReceipt(outcome: {
+  approved: number;
+  failed: number;
+}): Receipt {
   const t = receiptT();
-  const rejected = Math.max(0, Math.min(answer.rejected, picked));
+  const { approved, failed } = outcome;
+  if (approved === 0) {
+    return {
+      title: t("batchApprove.none"),
+      description: t("batchApprove.failedHint", { n: failed }),
+      tone: "danger",
+      undo: false,
+    };
+  }
+  if (failed === 0) {
+    return {
+      title: t("batchApprove.all", { n: approved }),
+      tone: "success",
+      undo: false,
+    };
+  }
+  return {
+    title: t("batchApprove.some", { approved, picked: approved + failed }),
+    description: t("batchApprove.failedHint", { n: failed }),
+    tone: "default",
+    undo: false,
+  };
+}
+
+/**
+ * A batch reject's receipt, counted per ROW from the pod's answer
+ * (`rejectedRows` over `rejectedIds`), not from the rows picked: a request
+ * decided meanwhile is not counted.
+ */
+export function batchRejectReceipt(picked: number, rejected: number): Receipt {
+  const t = receiptT();
   const left = picked - rejected;
   if (rejected === 0) {
     return {
@@ -213,6 +271,20 @@ export function batchRejectReceipt(
     title: t("batchReject.some", { rejected, picked }),
     description: t("batchReject.notRejectedHint", { n: left }),
     tone: "default",
+    undo: false,
+  };
+}
+
+/**
+ * Any other write of the decision pages that threw ("Keep this layout", an
+ * "always" rule): the page's title, the pod's typed sentence or "Nothing
+ * changed. Try again.", and it stays until closed.
+ */
+export function failureReceipt(title: string, err: DecisionError): Receipt {
+  return {
+    title,
+    description: typedDetail(err) ?? receiptT()("failed.hint"),
+    tone: "danger",
     undo: false,
   };
 }

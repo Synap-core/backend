@@ -29,6 +29,7 @@ import {
 } from "../../../services/messaging/room-post-kind.js";
 import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
+import { newSessionClientKey } from "../../../services/focus-sessions/session-client-binding.js";
 import { refuseUndeclaredArgs } from "../undeclared-args.js";
 import {
   waitForConversationChanges,
@@ -38,6 +39,12 @@ import {
 import { namedConversationOf } from "../../../services/focus-sessions/conversation-changes.js";
 import { getRequestClientKey } from "@synap/database";
 import { parseSessionChangeKinds } from "../../../services/focus-sessions/session-changes.js";
+import {
+  parseSessionReadDetail,
+  readLeanSession,
+  readSessionDeploys,
+  SESSION_READ_DETAIL_ERROR,
+} from "../../../services/focus-sessions/session-lean.js";
 import {
   describeRelayRefusal,
   relaySessionAnswer,
@@ -65,9 +72,8 @@ import {
   SESSIONS_PAGE_MAX,
 } from "./shared.js";
 import { moveHoldToolArgs } from "../../../services/lifecycle/hold-input.js";
+import { isUuid } from "@synap-core/types/property-render";
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** One line, not a transcript — mirrors the tool schema's `maxLength`. */
 const SUSPENDED_INTENT_MAX = 400;
 
@@ -188,7 +194,7 @@ function parseBlockerEdits(
     if (
       !Array.isArray(raw) ||
       raw.length > BLOCKER_IDS_MAX ||
-      !raw.every((id) => typeof id === "string" && UUID_RE.test(id))
+      !raw.every((id) => typeof id === "string" && isUuid(id))
     ) {
       return {
         error: `${key} must be an array of at most ${BLOCKER_IDS_MAX} session UUIDs — NOTHING WAS CHANGED.`,
@@ -287,10 +293,12 @@ function readParamsArg(raw: unknown): Record<string, unknown> | undefined {
 function readTemplateIdArg(raw: unknown): string | null | undefined {
   if (raw === null || raw === "null") return null;
   if (typeof raw !== "string" || raw.trim() === "") return undefined;
-  if (UUID_RE.test(raw)) return raw;
+  // Read before the guard: its false branch narrows a string to `never`.
+  const shown = raw.slice(0, 80);
+  if (isUuid(raw)) return raw;
   throw Object.assign(
     new Error(
-      `templateId must be a playbook UUID (list_playbooks lists the ones you can start from), or null to start without one — got "${raw.slice(0, 80)}".`
+      `templateId must be a playbook UUID (list_playbooks lists the ones you can start from), or null to start without one — got "${shown}".`
     ),
     { code: "BAD_REQUEST" }
   );
@@ -320,7 +328,7 @@ export const sessionHandlers: McpHandlerMap = {
       typeof args.sessionId === "string" ? args.sessionId.trim() : "";
     // A conversation wait may name its bound session (its runner row); it
     // needs none.
-    if (!UUID_RE.test(sessionId) && !(isConversation && sessionId === "")) {
+    if (!isUuid(sessionId) && !(isConversation && sessionId === "")) {
       return ok({ error: `Focus session ${sessionId || "(none)"} not found` });
     }
     let since: Date | null = null;
@@ -445,7 +453,7 @@ export const sessionHandlers: McpHandlerMap = {
     }
     const sessionId =
       typeof args.sessionId === "string" ? args.sessionId.trim() : "";
-    if (!UUID_RE.test(sessionId)) {
+    if (!isUuid(sessionId)) {
       return ok({ error: `Focus session ${sessionId || "(none)"} not found` });
     }
     // The ONE relay schema, as on the Hub door — never a hand check.
@@ -502,8 +510,7 @@ export const sessionHandlers: McpHandlerMap = {
     if (
       parentSessionIdArg !== undefined &&
       parentSessionIdArg !== null &&
-      (typeof parentSessionIdArg !== "string" ||
-        !UUID_RE.test(parentSessionIdArg))
+      (typeof parentSessionIdArg !== "string" || !isUuid(parentSessionIdArg))
     ) {
       return ok({
         error:
@@ -527,7 +534,7 @@ export const sessionHandlers: McpHandlerMap = {
       blockedByArg !== null &&
       (!Array.isArray(blockedByArg) ||
         blockedByArg.length > 20 ||
-        !blockedByArg.every((id) => typeof id === "string" && UUID_RE.test(id)))
+        !blockedByArg.every((id) => typeof id === "string" && isUuid(id)))
     ) {
       return ok({
         error:
@@ -632,8 +639,18 @@ export const sessionHandlers: McpHandlerMap = {
         // service, with the same pure function the run funnel uses.
         params: readParamsArg(args.params),
         // Binds the session to THIS client and adopts the session the gate
-        // auto-opened for it, if any (never a duplicate).
-        clientKey: requestClientKey(agentUserId) ?? null,
+        // auto-opened for it, if any (never a duplicate) — unless it is
+        // started for another agent or a teammate (C7, `session-client-binding.ts`).
+        clientKey: await newSessionClientKey({
+          clientKey: requestClientKey(agentUserId),
+          agentUserId,
+          userId,
+          agentIds: Array.isArray(args.agentIds)
+            ? (args.agentIds as string[])
+            : null,
+          parentSessionId: args.parentSessionId as string | undefined,
+          suspendedIntent: args.suspendedIntent as string | undefined,
+        }),
         // An agent's NEW session declares what done means (F11, NO_CRITERIA).
         requireCriteria: !!agentUserId,
         // Validated by the service with the shared criteria schema.
@@ -858,7 +875,7 @@ export const sessionHandlers: McpHandlerMap = {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const sessionId = typeof args.sessionId === "string" ? args.sessionId : "";
-    if (!UUID_RE.test(sessionId)) {
+    if (!isUuid(sessionId)) {
       return ok({ error: "sessionId must be a focus session UUID." });
     }
     const [session] = await db
@@ -874,7 +891,7 @@ export const sessionHandlers: McpHandlerMap = {
     const asked = [
       ...(Array.isArray(args.proposalIds) ? args.proposalIds : []),
       ...(args.proposalId !== undefined ? [args.proposalId] : []),
-    ].filter((id): id is string => typeof id === "string" && UUID_RE.test(id));
+    ].filter((id): id is string => typeof id === "string" && isUuid(id));
     const { proposals } = await import("@synap/database");
     const { ProposalStatus } = await import("@synap/database/schema");
     const { openLink } = await import("../../../utils/deep-links.js");
@@ -920,7 +937,7 @@ export const sessionHandlers: McpHandlerMap = {
     const dryRun = args.dryRun === true;
     requireScope(apiKeyScopes, dryRun ? "mcp.read" : "mcp.write", toolName);
     const sessionId = typeof args.sessionId === "string" ? args.sessionId : "";
-    if (!UUID_RE.test(sessionId)) {
+    if (!isUuid(sessionId)) {
       return ok({ error: "sessionId must be a focus session UUID." });
     }
     if (args.mode !== "replace" && args.mode !== "add") {
@@ -928,7 +945,7 @@ export const sessionHandlers: McpHandlerMap = {
     }
     const ids = Array.isArray(args.sourceDocumentIds)
       ? args.sourceDocumentIds.filter(
-          (id): id is string => typeof id === "string" && UUID_RE.test(id)
+          (id): id is string => typeof id === "string" && isUuid(id)
         )
       : [];
     const reasoning =
@@ -988,7 +1005,7 @@ export const sessionHandlers: McpHandlerMap = {
     // `eq(focusSessions.id, wantedId)` — postgres throws invalid-uuid-syntax
     // there, which surfaces as a tool-call error rather than "not found".
     // Same as Hub REST GET /focus-sessions/:id.
-    if (!UUID_RE.test(wantedId)) {
+    if (!isUuid(wantedId)) {
       return ok({ error: `Focus session ${wantedId} not found` });
     }
     const [session] = await db
@@ -1000,6 +1017,32 @@ export const sessionHandlers: McpHandlerMap = {
       .limit(1);
     if (!session) {
       return ok({ error: `Focus session ${wantedId} not found` });
+    }
+    // `detail` (C8): `full` (default, as ever) · `lean` (what a wake needs, no
+    // other session's deploys) · `deploys` (the owner's deploys, by commit).
+    // MCP schemas are ADVISORY, so an off-enum value is answered in words.
+    const detail = parseSessionReadDetail(args.detail);
+    if (detail === null) {
+      return ok({ error: SESSION_READ_DETAIL_ERROR(args.detail) });
+    }
+    if (detail === "deploys") {
+      return ok(
+        await readSessionDeploys(session, {
+          userId,
+          commitSha:
+            typeof args.commitSha === "string" && args.commitSha.trim() !== ""
+              ? args.commitSha.trim()
+              : undefined,
+        })
+      );
+    }
+    if (detail === "lean") {
+      const lean = await readLeanSession(session, { userId });
+      return ok({
+        session: await withParentSessionId(session),
+        ...lean,
+        ...(ambient?.sessionId ? { inferred: true, via: ambient.source } : {}),
+      });
     }
     // Detour lineage, DERIVED from the `spawned_from` edge — never a column, so
     // there is exactly one store for "what was this forked from". ONE
@@ -1070,7 +1113,7 @@ export const sessionHandlers: McpHandlerMap = {
     const subjectEntityId = idArg(args.subjectEntityId);
     // The subject predicate compares as text, so a malformed id would match
     // nothing instead of failing: say so.
-    if (subjectEntityId && !UUID_RE.test(subjectEntityId)) {
+    if (subjectEntityId && !isUuid(subjectEntityId)) {
       return ok({
         error: `subjectEntityId is not a valid id: ${subjectEntityId}`,
       });
@@ -1219,7 +1262,7 @@ export const sessionHandlers: McpHandlerMap = {
       ["trackId", trackIdArg],
       ["rootSessionId", rootArg],
     ] as const) {
-      if (value && !UUID_RE.test(value)) {
+      if (value && !isUuid(value)) {
         return ok({ error: `${name} is not a valid id: ${value}` });
       }
     }

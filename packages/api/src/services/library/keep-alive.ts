@@ -43,6 +43,7 @@ import { isArchivedOn, waitingInGroupSql } from "./read-model.js";
 import { db as defaultDb, podSettings, drizzleSql } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { NotificationService } from "../../notifications/NotificationService.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "library/keep-alive" });
 
@@ -143,9 +144,6 @@ export async function archiveUnseenLibraryItems(args: {
   return rowsOf<{ id: string }>(result).length;
 }
 
-const DOCUMENT_UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** Items purged in one pass at most (the next pass continues). */
 const PURGE_BATCH_MAX = 500;
 
@@ -214,7 +212,7 @@ export async function purgeDeletedLibraryItems(args: {
         readLibraryItemMedia(d.metadata)
           .media.map((m) => m.documentId)
           // A malformed id names no document; never let it fail the cast.
-          .filter((id) => DOCUMENT_UUID.test(id))
+          .filter((id) => isUuid(id))
       )) {
         if (await libraryOwnsMediaCopy(database, d, documentId)) {
           await removeDocument(documentId);

@@ -3,7 +3,7 @@
 /**
  * Historique's list: the requests already decided that this viewer may see
  * (`proposals.list`, the viewer's own floor), newest first. Grown from
- * Review › History (decision G2), which now draws this same list.
+ * Review › History (audit 110dd4ab G2), which now draws this same list.
  *
  * Bounded (ui-composition §4): the first rows, then "Show all" for what the
  * read holds, then older decisions page by page (the pod's cursor). Loading,

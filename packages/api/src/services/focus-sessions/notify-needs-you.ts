@@ -38,6 +38,7 @@ import {
   eq,
   and,
   ne,
+  inArray,
   drizzleSql,
   focusSessionWaitsOnPersonWhere,
 } from "@synap/database";
@@ -57,6 +58,7 @@ import {
 } from "@synap-core/types/push";
 import { createLogger } from "@synap-core/core";
 import { NotificationService } from "../../notifications/NotificationService.js";
+import { NOTIFICATION_REGISTRY } from "../../notifications/registry.js";
 import { isOwedSlot } from "./owed-outputs.js";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 
@@ -305,8 +307,17 @@ export async function notifySessionNeedsYou(p: {
 }
 
 /**
- * The session's `session.needs_you` rows leave the bell once it no longer
- * waits on the person (no owed slot, no open question). Called by the close
+ * Every type whose rows point at a session's live need (`needsYou:
+ * "session-pointer"`: `session.needs_you`, `session.criterion_escalated`).
+ * Read from the registry, so a new pointer type is settled without a list here.
+ */
+const SESSION_POINTER_TYPES = NOTIFICATION_REGISTRY.filter(
+  (d) => d.needsYou === "session-pointer"
+).map((d) => d.type);
+
+/**
+ * The session's pointer rows ({@link SESSION_POINTER_TYPES}) leave the bell
+ * once it no longer waits on the person (no owed slot, no open question). Called by the close
  * door, after it stamped what the end of a session settles: the needs-you
  * read already drops such a row by reading the session's state
  * (`dedupeNotifications`), so this only stops the bell keeping it unread
@@ -320,7 +331,7 @@ export async function settleSessionNeedsYou(sessionId: string): Promise<void> {
       .set({ status: "actioned", readAt: new Date() })
       .where(
         and(
-          eq(notifications.type, SESSION_NEEDS_YOU_NOTIFICATION_TYPE),
+          inArray(notifications.type, SESSION_POINTER_TYPES),
           eq(notifications.sourceType, "session"),
           eq(notifications.sourceId, sessionId),
           ne(notifications.status, "actioned"),

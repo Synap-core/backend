@@ -2,7 +2,10 @@
  * workers — stage workers enabled on a lifecycle (work model L4).
  *
  *   workers.list      — the enabled workers (space-wide + per project) for a
- *                       kind/role, a project or a track: state, scope, backlog.
+ *                       kind/role or a project, or the workers enabled ON a
+ *                       goal (`trackId`, strict): state, scope, backlog, and
+ *                       each one's trigger words, last / next run and run
+ *                       health (`GoalWorkerView`).
  *   workers.enable    — enable a declared worker for a project or a track
  *                       (WORKBENCH act; refused on overlap, naming the holder).
  *   workers.setPaused — pause / resume one enablement (supervise act).
@@ -16,11 +19,20 @@ import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { WORKER_SCOPES, WORKER_SIZES } from "@synap-core/types/workers";
 import {
+  RUN_HEALTH_STATES,
+  RUN_MARKS,
+  WORKER_TRIGGER_KINDS,
+} from "@synap-core/types/workers/health";
+import {
   WorkerScopeOverlapError,
   enableWorker,
-  listEnabledWorkers,
+  listWorkerViews,
   setWorkerPaused,
 } from "../services/playbooks/workers.js";
+import {
+  workerModeSchema,
+  workerScheduleSchema,
+} from "../schemas/worker-enable.js";
 
 const activatorWire = z.object({
   on: z.enum(["created", "enters_status", "count", "schedule", "manual"]),
@@ -50,6 +62,23 @@ const enabledWorkerWire = z.object({
   automationId: z.string().nullable(),
   pendingApprovals: z.number(),
   maxPendingApprovals: z.number(),
+  /** What wakes it, in its kind and in words (never a raw cron). */
+  trigger: z.object({
+    kind: z.enum(WORKER_TRIGGER_KINDS),
+    words: z.string().nullable(),
+  }),
+  /** ISO; null = never ran. */
+  lastRunAt: z.string().nullable(),
+  /** ISO, the pod's next scheduled run; null = not on a clock, or off. */
+  nextRunAt: z.string().nullable(),
+  health: z.object({
+    state: z.enum(RUN_HEALTH_STATES),
+    marks: z.array(
+      z.object({ runId: z.string(), mark: z.enum(RUN_MARKS), at: z.string() })
+    ),
+    consecutiveFailures: z.number(),
+    offReason: z.string().nullable(),
+  }),
 });
 
 export type EnabledWorkerWire = z.infer<typeof enabledWorkerWire>;
@@ -67,7 +96,7 @@ export const workersRouter = router({
     )
     .output(z.array(enabledWorkerWire))
     .query(async ({ ctx, input }) =>
-      listEnabledWorkers({ userId: requireUserId(ctx.userId), ...input })
+      listWorkerViews({ userId: requireUserId(ctx.userId), ...input })
     ),
 
   enable: protectedProcedure
@@ -76,12 +105,22 @@ export const workersRouter = router({
         .object({
           playbookId: z.string().uuid(),
           /** The declared activator's key (`activatorKey`). */
-          activatorKey: z.string().min(1),
+          activatorKey: z.string().min(1).optional(),
+          /**
+           * Or the "How often?" clock (`howOftenEnable`): a declared schedule,
+           * or, on a playbook with no subject, the person's own.
+           */
+          schedule: workerScheduleSchema.optional(),
+          /** A chosen clock's mode (default `propose`). */
+          mode: workerModeSchema.optional(),
           projectId: z.string().uuid().optional(),
           trackId: z.string().uuid().optional(),
         })
         .refine((i) => !!i.projectId || !!i.trackId, {
           message: "Enable a worker for a project or a goal.",
+        })
+        .refine((i) => !i.activatorKey !== !i.schedule, {
+          message: "Name the worker: its activatorKey or a schedule.",
         })
     )
     .output(

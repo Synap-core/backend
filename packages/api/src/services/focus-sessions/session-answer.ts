@@ -157,6 +157,7 @@ import {
   FOCUS_SESSION_RELAY_CORRECTED_EVENT_TYPE,
   FOCUS_SESSION_QUESTION_WITHDRAWN_EVENT_TYPE,
 } from "./lifecycle-events.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "session-answer" });
 
@@ -330,7 +331,7 @@ async function findRoomQuestion(
   channelId: string,
   messageId: string
 ): Promise<(OpenQuestion & { meta: RoomPostMeta }) | null> {
-  if (!UUID_SHAPE.test(messageId)) return null;
+  if (!isUuid(messageId)) return null;
   const [row] = await db
     .select({
       id: messages.id,
@@ -849,8 +850,6 @@ export type AnswerSessionSlotResult =
  * (`summarizeAnswer`) — what the room post says and what every text-only
  * reader (CLI, continuation packet) reads.
  */
-const UUID_SHAPE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * The grant request an ANSWER is, for the key half of both answer doors (tRPC
@@ -873,7 +872,7 @@ export async function answerGrantWrite(sessionId: string): Promise<{
     getRequestGrant()?.scopes.some((s) => s.workspaceIds || s.projectIds) ??
     false;
   const [row] =
-    placed && UUID_SHAPE.test(sessionId)
+    placed && isUuid(sessionId)
       ? await db
           .select({
             workspaceId: focusSessions.workspaceId,
@@ -1549,6 +1548,35 @@ export const RelaySessionAnswerInputSchema = z.object({
   note: z.string().max(ASK_LIMITS.promptMaxChars).optional(),
 });
 
+/** What a `not_open` relay refusal says about the answer already there. */
+export interface RelayAnsweredState {
+  at: string;
+  /** `true`: an agent relayed it and the person has not confirmed it. */
+  relayed: boolean;
+}
+
+/** The answer a slot or question already carries, as a refusal names it. */
+function answeredState(
+  answer:
+    | { answeredAt?: string; via?: string; confirmedAt?: string }
+    | null
+    | undefined
+): RelayAnsweredState | undefined {
+  if (!answer?.answeredAt) return undefined;
+  return {
+    at: answer.answeredAt,
+    relayed: answer.via === "relayed" && !answer.confirmedAt,
+  };
+}
+
+/** `not_open`, naming the answer that closed it when there is one. */
+function notOpen(
+  answer?: Parameters<typeof answeredState>[0]
+): Extract<RelaySessionAnswerResult, { status: "not_open" }> {
+  const answered = answeredState(answer);
+  return answered ? { status: "not_open", answered } : { status: "not_open" };
+}
+
 export type RelaySessionAnswerResult =
   | Exclude<
       AnswerSessionSlotResult,
@@ -1558,8 +1586,12 @@ export type RelaySessionAnswerResult =
   | { status: "address_required" }
   /** `messageId` names no agent question of this session's room. */
   | { status: "no_such_question" }
-  /** The question / slot is answered, closed, or already awaits a tap. */
-  | { status: "not_open" }
+  /**
+   * The question / slot is answered, closed, or already awaits a tap.
+   * `answered`: when it carries an answer, when and how it was given, so the
+   * refusal names the real state instead of a list of possibilities.
+   */
+  | { status: "not_open"; answered?: RelayAnsweredState }
   /** `slotLabel` disagrees with the slot the question names. */
   | { status: "label_mismatch" }
   /** The relaying agent did not ask it (and is not on the session). */
@@ -1867,7 +1899,7 @@ export async function relaySessionAnswer(p: {
       : null;
     if (!found) return { status: "no_such_question" };
     if (found.meta.answer || found.meta.closed || found.meta.pendingRelay) {
-      return { status: "not_open" };
+      return notOpen(found.meta.answer);
     }
     if (
       wantedLabel &&
@@ -1886,7 +1918,16 @@ export async function relaySessionAnswer(p: {
   if (chosen && "refused" in chosen) return { status: chosen.refused };
   const slot = chosen ? outputs[chosen.index]! : null;
 
-  // 2. Whose it is: the asker's.
+  // 2. Still the person's? A slot with no room question that is no longer
+  // owed (the person answered it, or it was never theirs) has nothing left to
+  // relay — and its hand-back dropped `askedBy` with the ask, so the identity
+  // check below would fall to the roster and tell the asker "not yours" for
+  // what is really "already answered".
+  if (!question && slot && slot.owner !== "human") {
+    return notOpen(slot.answer);
+  }
+
+  // 3. Whose it is: the asker's.
   const mine = question
     ? question.agentUserId === p.agentUserId
     : slot?.askedBy
@@ -1900,7 +1941,7 @@ export async function relaySessionAnswer(p: {
     return withdrawRelayedQuestion({ ...p, now, question, slot, facts });
   }
 
-  // 3. ANSWERED — the person's words first.
+  // 4. ANSWERED — the person's words first.
   const quote = p.quote?.trim().slice(0, ASK_LIMITS.answerTextMaxChars);
   if (!quote) return { status: "quote_required" };
   // Capped like the wire schema caps it: the stamp rides on the slot, and the
@@ -1940,7 +1981,7 @@ export async function relaySessionAnswer(p: {
     };
   }
 
-  if (!isOpenAsk(slot)) return { status: "not_open" };
+  if (!isOpenAsk(slot)) return notOpen(slot.answer);
   const ask = effectiveSlotAsk(slot);
   const resolved = resolveAnswer(ask, p.value, p.text?.trim() || quote);
   if ("refused" in resolved) return resolved.refused;
@@ -2487,12 +2528,19 @@ export function describeRelayRefusal(
         message:
           "No agent question with that `messageId` in this session's room.",
       };
-    case "not_open":
+    case "not_open": {
+      // Two shapes answer `not_open`: the relay's own (`answered` when it
+      // knows the answer) and the slot answer's (AnswerSessionSlotResult).
+      const answered = "answered" in result ? result.answered : undefined;
       return {
         code: "CONFLICT",
-        message:
-          "That question is no longer open: it was answered, withdrawn, closed, or already waits for the person's tap.",
+        message: !answered
+          ? "That question is no longer open: it was answered, withdrawn, closed, or already waits for the person's tap."
+          : answered.relayed
+            ? `That question is no longer open: an agent already relayed its answer at ${answered.at}. Read it with synap_get_session.`
+            : `That question is no longer open: the person already answered it at ${answered.at}, and a relay never overwrites their answer. Read it with synap_get_session.`,
       };
+    }
     case "label_mismatch":
       return {
         code: "BAD_REQUEST",

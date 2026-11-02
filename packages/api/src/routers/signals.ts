@@ -112,6 +112,8 @@ import {
   type NotificationContainer,
   type NotificationSignalInput,
   type OwedSlotSignalInput,
+  type PermissionSessionSignalInput,
+  type BrokenConnectionSignalInput,
   type PendingAppRequestSignalInput,
   type PendingKeyRequestSignalInput,
   type PendingIssuerSignalInput,
@@ -126,9 +128,11 @@ import {
   listPendingIssuers,
   podAdminCheck,
 } from "../services/signals/access-requests.js";
+import { listBrokenConnections } from "../services/signals/broken-connections.js";
 import { listOpenSpaceInvites } from "../services/signals/space-invites.js";
 import { listConvertibleGoals } from "../services/signals/convertible-goals.js";
 import { listSessionsAwaitingReview } from "../services/projects/project-needs-you.js";
+import { listSessionsWaitingForPermission } from "../services/signals/permission-sessions.js";
 import { sessionsWithOpenQuestion } from "../services/signals/open-question-sessions.js";
 import {
   inContainerLens,
@@ -297,10 +301,12 @@ export type SignalSubRead =
   | "owed"
   | "drafts"
   | "review"
+  | "permission"
   | "captures"
   | "issuers"
   | "app-requests"
   | "key-requests"
+  | "broken-connections"
   | "invites"
   | "convertible-goals"
   | "liveness"
@@ -445,10 +451,12 @@ async function readAttention(
     owed,
     drafts,
     review,
+    permission,
     captures,
     issuers,
     appRequests,
     keyRequestRows,
+    brokenConnections,
     spaceInvites,
     convertibleGoals,
   ] = await Promise.all([
@@ -544,6 +552,23 @@ async function readAttention(
           })
         : { sessions: [], truncated: false }
     ),
+    // The PERMISSION half (decision D-R1): a session whose live runner waits
+    // on the person's permission dialog — one row per session, same lenses.
+    settle(
+      "permission",
+      { sessions: [] as PermissionSessionSignalInput[], truncated: false },
+      async () =>
+        follows
+          ? await listSessionsWaitingForPermission({
+              userId,
+              workspaceId: input.workspaceId,
+              projectId: input.projectId,
+              trackId: input.trackId,
+              sessionId: input.sessionId,
+              ...(things ? { subject: things.subject } : {}),
+            })
+          : { sessions: [], truncated: false }
+    ),
     settle(
       "captures",
       { captures: [] as UnfinishedCapture[], truncated: false },
@@ -574,6 +599,17 @@ async function readAttention(
       async () =>
         readsAccess
           ? await listPendingKeyRequests({ personUserId: userId })
+          : { rows: [], truncated: false }
+    ),
+    // The person's own tools that need a sign-in again: the pod's connection
+    // health (`secrets.connection_state`), read for its owner on the same
+    // floor-only rule as the other access asks.
+    settle(
+      "broken-connections",
+      { rows: [] as BrokenConnectionSignalInput[], truncated: false },
+      async () =>
+        readsAccess
+          ? await listBrokenConnections({ userId })
           : { rows: [], truncated: false }
     ),
     settle(
@@ -612,7 +648,7 @@ async function readAttention(
     inContainerLens(containers.value.get(r.id), container ?? {})
   );
 
-  // The live state of the `session.needs_you` pointer rows.
+  // The live state of the session-pointer rows (registry `needsYou`).
   const pointerIds = notifications.flatMap((r) =>
     needsYouRole(r.type) === "session-pointer" && r.sourceId ? [r.sourceId] : []
   );
@@ -642,16 +678,19 @@ async function readAttention(
     draftAsks,
     draftAsksTruncated: draftAsks.slots.length >= OWED_SCAN_LIMIT,
     review: review.value,
+    permission: permission.value,
     captures: captures.value,
     accessRequests: {
       issuers: issuers.value.rows,
       applications: appRequests.value.rows,
       keys: keyRequestRows.value.rows,
+      connections: brokenConnections.value.rows,
     },
     accessRequestsTruncated:
       issuers.value.truncated ||
       appRequests.value.truncated ||
-      keyRequestRows.value.truncated,
+      keyRequestRows.value.truncated ||
+      brokenConnections.value.truncated,
     spaceInvites: spaceInvites.value.rows,
     spaceInvitesTruncated: spaceInvites.value.truncated,
     convertibleGoals: convertibleGoals.value,
@@ -667,10 +706,12 @@ async function readAttention(
         notifs,
         owed,
         review,
+        permission,
         captures,
         issuers,
         appRequests,
         keyRequestRows,
+        brokenConnections,
         spaceInvites,
         convertibleGoals,
         containers,
@@ -697,6 +738,7 @@ function blockingSignals(a: Attention): Signal[] {
     measuredOwedSessionIds: a.measuredOwedSessionIds,
     draftAsks: a.draftAsks,
     reviewSessions: a.review.sessions,
+    permissionSessions: a.permission.sessions,
     unfinishedCaptures: a.captures.captures,
     accessRequests: a.accessRequests,
     spaceInvites: a.spaceInvites,
@@ -730,6 +772,8 @@ function countOf(a: Attention) {
     // Counted as ROWS — the very rows `list` emits as `session-review`.
     reviewSessions: a.review.sessions.length,
     reviewTruncated: a.review.truncated,
+    permissionSessions: a.permission.sessions,
+    permissionTruncated: a.permission.truncated,
     draftAsks: a.draftAsks,
     draftAsksTruncated: a.draftAsksTruncated,
     unfinishedCaptures: a.captures.captures,
@@ -1496,6 +1540,12 @@ function narrowAttention(
       ),
       truncated: false,
     },
+    permission: {
+      sessions: a.permission.sessions.filter(
+        (r) => inSpace(r.workspaceId) && onKind(r.id)
+      ),
+      truncated: false,
+    },
     captures:
       scope.workspaceId === null && !scope.kindClusters
         ? a.captures
@@ -1506,7 +1556,12 @@ function narrowAttention(
     ...(scope.workspaceId === null && !scope.kindClusters
       ? {}
       : {
-          accessRequests: { issuers: [], applications: [], keys: [] },
+          accessRequests: {
+            issuers: [],
+            applications: [],
+            keys: [],
+            connections: [],
+          },
           accessRequestsTruncated: false,
           spaceInvites: [],
           spaceInvitesTruncated: false,
@@ -1523,6 +1578,7 @@ function attentionIsComplete(a: Attention): boolean {
     !a.notificationsTruncated &&
     !a.owedTruncated &&
     !a.review.truncated &&
+    !a.permission.truncated &&
     a.failures.blocking.length === 0 &&
     a.failures.proposed.length === 0
   );
@@ -1642,6 +1698,7 @@ export async function countNeedsYouByScope(
     ...new Set([
       ...floor.owed.map((o) => o.sessionId),
       ...floor.review.sessions.map((r) => r.id),
+      ...floor.permission.sessions.map((r) => r.id),
     ]),
   ];
   const slugs = [...new Set(input.spaces.flatMap((s) => s.profileSlugs))];

@@ -196,7 +196,11 @@ describe("document.stamp_diagnostics: freeze_failed lands ON the report", () => 
 
 // ─── A stamp from an older checker is stale (founder pod, doc 6aa8d140) ──────
 
-/** A chart drawn from its snapshot: no profileSlug, and none needed (a3f283f2d). */
+/**
+ * A chart drawn from its snapshot: no profileSlug, and none needed (a3f283f2d).
+ * It carries its finding sentence (design rule 10, `chart_no_finding`), so the
+ * current checker finds nothing in it.
+ */
 const SNAPSHOT_DOC = [
   "# Tokens",
   "",
@@ -204,6 +208,7 @@ const SNAPSHOT_DOC = [
   "```json",
   '{"label":"Tokens","data":[{"label":"before","value":84895},{"label":"after","value":56364}],"capturedAt":"2026-10-22T05:00:00Z"}',
   "```",
+  "The cut saved a third of the tokens.",
   ":::",
 ].join("\n");
 /** The verdict the checker before a3f283f2d stamped on it. */

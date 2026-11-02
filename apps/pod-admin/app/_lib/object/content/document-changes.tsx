@@ -35,7 +35,7 @@ const BLOCK_CONTEXT = 1;
 /** Unchanged lines kept on each side of a change in the Lines reading. */
 const LINE_CONTEXT = 3;
 
-type Reading = "changes" | "side" | "lines";
+export type Reading = "changes" | "side" | "lines";
 
 const ADD_TONE = "border-l-2 border-status-healthy bg-status-healthy/[0.06]";
 const DEL_TONE = "border-l-2 border-status-down bg-status-down/[0.05]";
@@ -403,12 +403,17 @@ export function TextDiff({
   change,
   title,
   code = false,
+  defaultReading = "changes",
 }: {
   change: TextChange;
   title?: string | null;
   code?: boolean;
+  /** The reading it opens in (a template update's "Side by side" tab). */
+  defaultReading?: Reading;
 }) {
-  const [reading, setReading] = useState<Reading>(code ? "lines" : "changes");
+  const [reading, setReading] = useState<Reading>(
+    code ? "lines" : defaultReading
+  );
   const rows = useMemo(
     () => lineDiff(change.before, change.after),
     [change.before, change.after]

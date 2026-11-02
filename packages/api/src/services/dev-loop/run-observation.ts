@@ -16,6 +16,13 @@
  * would see "no grant" (a legacy key) and a key allowed only `event.create`
  * could complete any outcome it names a PR of.
  *
+ * THE POD'S OWN ACT (plan d679e92c C11(a)): inside the sweep, the slot that IS
+ * the merged PR, on the session the PR body's `Pod session:` line names, is
+ * closed by the pod through the done door (`satisfyPullRequestByMerge`), which
+ * reads no grant: the fact is checked against the slot's own `ref`. The key
+ * keeps `event.create` only, and still cannot complete anything else: every
+ * other session or slot goes through the governed door and its grant.
+ *
  * A `failed` outcome (a transient error) THROWS once every session was tried,
  * so pg-boss retries the job: the sweep is idempotent (a settled slot is
  * skipped), and no producer replays a fact it already delivered.

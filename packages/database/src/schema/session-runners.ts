@@ -17,8 +17,11 @@
  * that stamped it — a loop.
  *
  * Since 0384 a row also carries what the runner SAYS it is doing (`state`:
- * busy / idle / needs_permission / ended), reported by any harness adapter on
+ * busy / idle / needs_permission / needs_answer / ended), reported by any harness adapter on
  * any key-auth call (`X-Synap-Runner-State`).
+ *
+ * Since 0389 it also carries the model and provider the runner says it runs
+ * on (`X-Synap-Model` / `X-Synap-Model-Provider`): facts, not identity.
  *
  * Read floor = the session's (`sessionRunnerReadableWhere`,
  * `access/registry.ts`). `user_id` is the session owner, copied as the
@@ -81,7 +84,8 @@ export const sessionRunners = pgTable(
     }),
     /**
      * What the runner last said it is doing (0384): `busy`, `idle`,
-     * `needs_permission` or `ended` (`RUNNER_STATES`, `X-Synap-Runner-State`).
+     * `needs_permission`, `needs_answer` or `ended` (`RUNNER_STATES`,
+     * `X-Synap-Runner-State`). Text, so a new word needs no migration.
      * NULL for a client that names none.
      */
     state: text("state"),
@@ -95,6 +99,18 @@ export const sessionRunners = pgTable(
       mode: "date",
       withTimezone: true,
     }),
+    /**
+     * The model the runner says it runs on (0389, `X-Synap-Model`), as its
+     * client names it. NULL = its client names none (unknown). Claimed, not
+     * attested; never part of the agent's identity (decision 5e7c77dc).
+     */
+    model: text("model"),
+    /**
+     * The provider serving that model (0389, `X-Synap-Model-Provider`): a slug
+     * of `MODEL_PROVIDERS` (`@synap-core/types/agents`), `other` for an
+     * unlisted one. NULL = unknown, never "anthropic". Never a URL.
+     */
+    provider: text("provider"),
     firstSeenAt: timestamp("first_seen_at", {
       mode: "date",
       withTimezone: true,

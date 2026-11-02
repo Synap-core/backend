@@ -73,7 +73,7 @@ export function Providers({ children }: { children: ReactNode }) {
     >
       {/* Every field's label sits above it, never inside: what you type
           has the whole field, and a long label cannot overlap it. */}
-      <HeroUIProvider labelPlacement="outside-top">
+      <HeroUIProvider labelPlacement="outside-top" reducedMotion="user">
         <trpc.Provider client={trpcClient} queryClient={queryClient}>
           <QueryClientProvider client={queryClient}>
             {/* Inside the tRPC + query providers: a toast's content may read

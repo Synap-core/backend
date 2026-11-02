@@ -996,6 +996,9 @@ const captureHandler: McpToolHandler = async (
       scope: globalScope,
       writeReceipt: globalReceipt,
       knowledgeKey: record,
+      // No `link`: no page opens a runbook row (see `primaryObjectId`).
+      readBack:
+        "No page opens this runbook; read it back with synap_ask (procedural recall).",
     });
   }
   // Domain text capture — workspace optional. Structure + execute place via

@@ -60,6 +60,7 @@ import type { Channel } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 
 import { AgentRepository } from "@synap/database";
+import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "channels" });
 
@@ -375,9 +376,7 @@ export function invalidateMcpCache(workspaceId?: string | null): void {
  */
 export async function resolveAgentId(agentId?: string): Promise<string> {
   // Validate the provided UUID format
-  const UUID_RE =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (agentId && !UUID_RE.test(agentId)) {
+  if (agentId && !isUuid(agentId)) {
     logger.warn(
       { agentId },
       "Invalid agentId UUID format, falling back to orchestrator"

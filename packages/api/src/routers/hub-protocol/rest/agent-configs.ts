@@ -10,7 +10,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
-import { db, agentConfigs, eq, and } from "@synap/database";
+import { db, agentConfigs, eq, and, isNull } from "@synap/database";
 
 import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -127,7 +127,13 @@ export function registerAgentConfigsRoutes(app: HubHono): void {
       }
 
       // ── Query ─────────────────────────────────────────────────────────────
-      const conditions = [eq(agentConfigs.userId, targetUserId)];
+      // A preset (0390, `preset_key` set) is not a config override: it has
+      // its own door (GET /agent-users/:id/presets), and an orchestrator
+      // reading "this personality's overrides" must never take one for them.
+      const conditions = [
+        eq(agentConfigs.userId, targetUserId),
+        isNull(agentConfigs.presetKey),
+      ];
       if (workspaceId) {
         conditions.push(eq(agentConfigs.workspaceId, workspaceId));
       }

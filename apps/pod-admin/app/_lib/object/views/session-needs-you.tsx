@@ -76,6 +76,9 @@ const PROPOSALS_LIMIT = 100;
 /** Proposals listed before "Show all". */
 const PROPOSALS_SHOWN = 5;
 
+/** Where a row pod admin cannot act on is acted on (decision 94cd8636). */
+const ACT_ELSEWHERE = "Act on it in Relay or the Synap app.";
+
 const DOOR =
   "rounded-sm text-[12.5px] text-foreground/70 underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
 const BOX =
@@ -352,7 +355,10 @@ function CriterionVerdictButtons({
 /**
  * Something owed that is not answered here (a criterion to grade, a run to
  * look at): what it is, what it waits on, and its door. A door back to this
- * very session would lead nowhere new, so that one opens it in the app.
+ * very session would lead nowhere new: pod admin runs the pod and cannot act
+ * on it (decision 94cd8636), so the row says where the work is done, Relay or
+ * the Synap app, beside the door into the app (founder, 2026-11-01, decision
+ * 869b2cd6: keep the panel, explain the rows it cannot act on).
  */
 function OwedRow({ row, sessionId }: { row: ReviewRow; sessionId: string }) {
   const Icon = kindIcon(row.nounKind);
@@ -377,7 +383,15 @@ function OwedRow({ row, sessionId }: { row: ReviewRow; sessionId: string }) {
         )}
         {door &&
           (here ? (
-            <OpenInAppLink type="session" id={sessionId} />
+            <div
+              data-acted-elsewhere=""
+              className="flex flex-wrap items-baseline gap-x-2 gap-y-1"
+            >
+              <span className="text-[12px] text-foreground/65">
+                {ACT_ELSEWHERE}
+              </span>
+              <OpenInAppLink type="session" id={sessionId} />
+            </div>
           ) : (
             <ExitLink exit={exitOf({ kind: "open", door })} label="Open" />
           ))}

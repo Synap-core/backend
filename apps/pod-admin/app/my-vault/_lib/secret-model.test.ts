@@ -5,7 +5,7 @@ import { SECRET_CATALOGS } from "./copy";
 import {
   activityLine,
   grantState,
-  granteeName,
+  granteeWords,
   listRowFor,
   secretStatus,
   splitGrants,
@@ -64,10 +64,53 @@ describe("splitGrants", () => {
   });
 });
 
-describe("granteeName", () => {
-  it("uses the pod's label, else a short id, never the whole uuid", () => {
-    expect(granteeName(grant({ granteeLabel: "Scout" }))).toBe("Scout");
-    expect(granteeName(grant())).toBe("111111…5555");
+describe("granteeWords", () => {
+  const ID = "11111111-2222-3333-4444-555555555555";
+  const WS = "808939d1-86b3-4c52-a153-ae06ece2c54e";
+  it("names an agent and a person from the owner's grants list", () => {
+    const g = grant();
+    expect(
+      granteeWords(
+        g,
+        {
+          grants: [
+            { grantId: "g1", granteeLabel: "Scout", granteeType: "agent" },
+          ],
+        },
+        t
+      )
+    ).toBe("Scout (agent)");
+    expect(
+      granteeWords(
+        g,
+        {
+          grants: [{ grantId: "g1", granteeLabel: "Lea", granteeType: "user" }],
+        },
+        t
+      )
+    ).toBe("Lea");
+  });
+  it("a label that is only the raw id is not a name", () => {
+    expect(
+      granteeWords(
+        grant(),
+        { grants: [{ grantId: "g1", granteeLabel: ID, granteeType: "agent" }] },
+        t
+      )
+    ).toBe("An agent (111111…5555)");
+  });
+  it("when the read failed, says the kind of holder it can and a short id, never 'Unknown'", () => {
+    const words = granteeWords(grant(), {}, t);
+    expect(words).toBe("An agent or a person (111111…5555)");
+    expect(words).not.toMatch(/unknown/i);
+    expect(words).not.toContain(ID);
+  });
+  it("a space-wide grant is named from the viewer's spaces, else by short id", () => {
+    const g = grant({ grantedTo: "", workspaceId: WS });
+    expect(granteeWords(g, { spaces: [{ id: WS, name: "Builder" }] }, t)).toBe(
+      "Space Builder"
+    );
+    expect(granteeWords(g, {}, t)).toBe("A space (808939…c54e)");
   });
 });
 

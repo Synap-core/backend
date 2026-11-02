@@ -36,8 +36,9 @@ describe("tripwire: setup/agent surface allowlist + human named-agent create", (
   });
 
   it("still defines SURFACE_AGENT_TYPES for CLI surface installs", () => {
-    expect(src).toMatch(/const SURFACE_AGENT_TYPES\s*=/);
-    expect(src).toMatch(/"claude-code"/);
+    expect(src).toMatch(
+      /const SURFACE_AGENT_TYPES\s*=\s*SURFACE_HARNESS_SLUGS/
+    );
   });
 
   it("attributes createdByUserId from resolved human (creator×type, not pod-wide)", () => {

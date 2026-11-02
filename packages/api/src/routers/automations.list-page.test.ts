@@ -35,6 +35,29 @@ vi.mock("../access/index.js", () => ({
   scopedDb,
 }));
 
+// Proven against real SQL in `workers.pglite.test.ts`; here each row gets
+// what the page-wide read answers for it.
+const HEALTH = {
+  state: "healthy",
+  marks: [],
+  consecutiveFailures: 0,
+  offReason: null,
+};
+vi.mock("../services/playbooks/workers.js", () => ({
+  automationGoalsAndHealth: vi.fn(
+    async ({ automations }: { automations: { id: string }[] }) =>
+      new Map(
+        automations.map((a, i) => [
+          a.id,
+          {
+            goal: i === 0 ? { id: "goal-1", name: "Ship" } : null,
+            health: HEALTH,
+          },
+        ])
+      )
+  ),
+}));
+
 import { automationsRouter } from "./automations.js";
 import { decodeDefinitionCursor } from "../utils/keyset-cursor.js";
 
@@ -90,7 +113,14 @@ describe("automations.listPage", () => {
     } as never);
     const page = await caller.listPage({ workspaceId: WORKSPACE, limit: 2 });
 
-    expect(page.automations).toEqual(rows.slice(0, 2));
+    expect(page.automations).toEqual([
+      {
+        ...rows[0],
+        servesGoal: { id: "goal-1", name: "Ship" },
+        runHealth: HEALTH,
+      },
+      { ...rows[1], servesGoal: null, runHealth: HEALTH },
+    ]);
     expect(decodeDefinitionCursor(page.nextCursor!)).toEqual({
       at: AT.toISOString(),
       id: rows[1]!.id,

@@ -90,7 +90,10 @@ export {
   ensureCaptureAgent,
   getCaptureAgentUserId,
 } from "./services/capture-agent/ensure-capture-agent.js";
-export { ensureSessionNarrativeRule } from "./services/session-document/ensure-narrative-rule.js";
+export {
+  ensureSessionNarrativeRule,
+  ensureDocumentRefresherRule,
+} from "./services/session-document/ensure-narrative-rule.js";
 export {
   createCapabilityFromDefinition,
   loadCapabilityTemplate,
@@ -506,6 +509,15 @@ export {
   type CompleteFocusSessionParams,
   type CompleteFocusSessionResult,
 } from "./services/focus-sessions/complete-session.js";
+// Exported for @synap/jobs' `registerSessionLifecycleSweeper` IoC slot (plan
+// d679e92c C6): the hourly reaper closes met work, holds work waiting on a
+// merge, cancels work stale for a week and closes ended runs through the
+// rules that live here (session kind, the next-move rule, the close door).
+export {
+  sweepSessionLifecycle,
+  runSessionWhere,
+  type SessionLifecycleSweepResult,
+} from "./services/focus-sessions/session-lifecycle-sweep.js";
 // Exported for @synap/jobs' `registerStoppedSessionStaler` IoC slot, the same
 // inversion: the reaper stales a session that stopped on its own asks
 // (decision E1) through the ONE door that retires those asks.

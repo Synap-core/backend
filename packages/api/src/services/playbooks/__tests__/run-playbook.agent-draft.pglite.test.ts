@@ -122,6 +122,8 @@ import {
   playbookRuns,
   playbookEnrollments,
   entities,
+  links,
+  users,
 } from "@synap/database";
 import { runPlaybook, startHeldRun } from "../run-playbook.js";
 import { acceptFromTriage } from "../../focus-sessions/triage.js";
@@ -178,6 +180,10 @@ beforeAll(async () => {
     playbookRuns,
     playbookEnrollments,
     entities,
+    // A run that names nobody asks THE route for the playbook's assigned
+    // agent (`resolveRunHandOff`): no assignment here, so nothing changes.
+    links,
+    users,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }

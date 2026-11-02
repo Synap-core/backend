@@ -59,6 +59,15 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
+// The goal's workers: the reader is proven against real SQL in
+// `workers.pglite.test.ts`; here a goal has none unless a test says so.
+const workersOf = vi.hoisted(() => ({
+  list: [] as Array<{ playbookId: string; state: "running" | "paused" }>,
+}));
+vi.mock("../../playbooks/workers.js", () => ({
+  listEnabledWorkers: vi.fn(async () => workersOf.list),
+}));
+
 vi.mock("../../../utils/permission-check.js", () => ({
   checkPermissionOrPropose: async (opts: Record<string, unknown>) => {
     h.permCalls.push(opts);
@@ -685,6 +694,29 @@ describe("the run names WHO works it and HOW (plan v5 T2)", () => {
     // The start door always gates `templateId`: null (never missing) when
     // the run names no playbook.
     expect(lastData().templateId).toBeNull();
+  });
+
+  it("a goal with no method runs its PRIMARY worker's playbook (R11): a running one first", async () => {
+    // Rules out: a method-less goal (the goals-that-run model) proposing runs
+    // that name no playbook while it has a worker, and a paused worker's
+    // playbook winning over a running one.
+    const running = randomUUID();
+    await q(
+      `insert into playbooks (id, workspace_id, name, goal_template, status, executor, stages, params, expected_outputs, criteria, created_by)
+       values ($1, null, 'Daily check', 'Check', 'active', 'is-agent', '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, $2)`,
+      [running, OWNER]
+    );
+    const id = await goal({ name: "Runs by its workers" });
+    workersOf.list = [
+      { playbookId: "00000000-0000-4000-8000-000000000001", state: "paused" },
+      { playbookId: running, state: "running" },
+    ];
+    try {
+      expect((await runGoalLoop(id)).status).toBe("proposed");
+      expect(lastData().templateId).toBe(running);
+    } finally {
+      workersOf.list = [];
+    }
   });
 
   it("a goal with no method proposes a run with no playbook", async () => {

@@ -12,7 +12,7 @@ import {
 } from "@synap-core/types/presentation";
 import type { inferRouterInputs } from "@trpc/server";
 import { shortDescription } from "../_lib/object/object-summaries";
-import { BOUNCE_TYPES, HOST_TYPES } from "./open-params";
+import { BOUNCE_TYPES, HOST_TYPES, isSafeOpenId } from "./open-params";
 import { openT } from "./copy";
 
 /**
@@ -179,6 +179,29 @@ export function openPathForResolved(resolved: ResolvedOpen): string | null {
   const params = openAddressParams(resolved.type, resolved.params);
   const query = params ? `?${new URLSearchParams(params)}` : "";
   return `/open/${resolved.type}/${id}${query}`;
+}
+
+/**
+ * Template updates' links: `/open/update/<slug>` (one update's Review page)
+ * and `/open/updates` (Marketplace › Updates), the links `synap market
+ * update` and `synap_template_health` print. Not object kinds: a package is
+ * addressed by its slug, and neither link is in `TYPED_OPEN_KINDS` (the
+ * pod's `/open` route forwards them as they are, `open-dispatch.ts`).
+ * Returns the console page, or null when the address is not one of these
+ * (or its slug is not a safe token).
+ */
+export function packageUpdateOpenPath(
+  segments: readonly string[]
+): string | null {
+  const [first, slug, ...rest] = segments.map((s) => s.trim());
+  if (rest.length > 0) return null;
+  if (first === "updates" && slug === undefined) {
+    return "/marketplace?tab=updates";
+  }
+  if (first === "update" && slug !== undefined && isSafeOpenId(slug)) {
+    return `/marketplace/updates/${encodeURIComponent(slug)}`;
+  }
+  return null;
 }
 
 /** The property an entity's summary line is read from, first match wins. */

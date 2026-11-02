@@ -29,6 +29,7 @@ import {
   openRedirect,
   parseOpenParams,
 } from "../../open-params";
+import { packageUpdateOpenPath } from "../../open-model";
 
 export const dynamic = "force-dynamic";
 
@@ -64,6 +65,9 @@ export default async function OpenPage({
 }: OpenPageProps) {
   const { type, id } = await params;
   const { flowType } = await searchParams;
+  // `/open/update/<slug>`: one template update's Review page.
+  const update = packageUpdateOpenPath([type, id]);
+  if (update) redirect(update);
   const parsed = parseOpenParams(type, id);
   const h = await headers();
   // A role question only a space's page needs: it is pod-admin only, so a

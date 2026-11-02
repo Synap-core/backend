@@ -23,6 +23,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { CommandLine } from "../../_lib/command-line";
 import { formatRelative, formatTimestamp } from "../../../lib/format";
+import { navLabel } from "../../../lib/console-nav";
 import { PageHeader, PageShell } from "../components/page-header";
 import {
   ResourceRowEmpty,
@@ -53,7 +54,7 @@ export default function UpdatesPage() {
   return (
     <PageShell>
       <PageHeader
-        title="Updates"
+        title={navLabel("updates")}
         description="Which version your pod runs and how it updates."
       />
       {q.isLoading ? (

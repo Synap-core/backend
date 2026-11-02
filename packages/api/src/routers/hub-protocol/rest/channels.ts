@@ -66,6 +66,7 @@ import {
   proposeChannelBind,
   derivePodWideBindWorkspace,
 } from "../../../utils/propose-channel-bind.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 /**
  * Shared gate for Discord channel write operations (rename, pin).
@@ -1124,10 +1125,6 @@ export function registerChannelsRoutes(app: HubHono): void {
     // browser clients pass the UUID. A snowflake is all-digits, never a UUID, and
     // comparing it to the uuid `id` column would raise a Postgres cast error, so
     // dispatch on shape.
-    const isUuid =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-        channelParam
-      );
     const channelId = channelParam;
     try {
       const [channel] = await db
@@ -1143,7 +1140,7 @@ export function registerChannelsRoutes(app: HubHono): void {
         .from(channelsTable)
         .where(
           and(
-            isUuid
+            isUuid(channelParam)
               ? eq(channelsTable.id, channelParam)
               : eq(channelsTable.externalId, channelParam),
             channelVisibilityWhere(userId)

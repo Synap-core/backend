@@ -21,7 +21,7 @@ describe("the shell's catalogs", () => {
     }
   });
 
-  it("says the client's words in French (decision G1)", () => {
+  it("says the client's words in French (audit 110dd4ab G1)", () => {
     const t = createT("fr", { en, fr });
     expect(
       ["home", "review", "history", "members", "settings"].map((id) =>

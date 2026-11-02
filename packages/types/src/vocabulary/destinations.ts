@@ -38,6 +38,9 @@ export const DESTINATIONS = [
   "unfiled",
   "getting_started",
   "credits",
+  "make",
+  "apps",
+  "get_more",
 ] as const;
 export type Destination = (typeof DESTINATIONS)[number];
 
@@ -58,6 +61,16 @@ export const DESTINATION_LABELS: Readonly<Record<Destination, string>> = {
   // The pod's plan and its AI credits: ONE place (wave PN), the Settings
   // section every paying CTA opens (desktop `billing`, relay `/credits`).
   credits: "Plan and credits",
+  // Where you make things: a view, a card, a space, an automation (founder D3,
+  // 2026-10-31, plan call M1: "Make" pairs with "Work").
+  make: "Make",
+  // What you open in Synap (founder D3 N5): the launcher that was "My pod".
+  // Spelled here because the `app` noun lives in `./index`, which is still
+  // evaluating when this table is built; `destinations.test.ts` pins it equal
+  // to `resolveObjectNounPlural("app")`.
+  apps: "Apps",
+  // The store (founder D3 N9): one word for Marketplace, Get more tools.
+  get_more: "Get more",
 };
 
 /** The word for a destination. Unknown values humanize, never leak. */

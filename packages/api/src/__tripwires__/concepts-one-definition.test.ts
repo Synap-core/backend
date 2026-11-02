@@ -40,6 +40,7 @@ import {
   resolveDestinationLabel,
   resolveNeedsYouBucketLabel,
   resolveObjectLabel,
+  resolveObjectNoun,
   resolveObjectNounPlural,
   resolveTemplateNoun,
 } from "@synap-core/types/vocabulary";
@@ -61,7 +62,23 @@ const ALIGNED: Record<string, string> = {
   Goal: "track",
   Step: "stage",
   Pack: "pack",
-  Rule: "automation",
+  // D2 (founder, 2026-10-31): an automation is an Automation; "Rule" is a skill rule.
+  Automation: "automation",
+  // D3 (founder, 2026-10-31): the made UI block is a Card, a saved arrangement a View.
+  Card: "cell",
+  View: "view",
+  "Connected app": "application",
+};
+/**
+ * The word is the vocabulary's backend-only NOUN for a token no registry kind
+ * carries (`resolveObjectNoun`): D2 and D3 of 2026-10-31.
+ */
+const NOUN: Record<string, string> = {
+  Rule: "rule",
+  Display: "renderer",
+  App: "app",
+  Account: "connection",
+  Kind: "profile",
 };
 /**
  * The glossary word is the registry's PLURAL label — "Tools" is one word for
@@ -81,6 +98,8 @@ const DESTINATION: Record<string, string> = {
   Agents: "agents",
   Unfiled: "unfiled",
   "Getting started": "getting_started",
+  Make: "make",
+  "Get more": "get_more",
 };
 /** One of the Inbox's filters (founder 3A): the word IS `resolveNeedsYouBucketLabel(bucket)`. */
 const INBOX_FILTER: Record<string, "question" | "routine" | "broken"> = {
@@ -124,6 +143,7 @@ describe("tripwire: concepts.md is classified against the vocabulary", () => {
   it("every heading is classified (a new concept fails until it is)", () => {
     const classified = new Set([
       ...Object.keys(ALIGNED),
+      ...Object.keys(NOUN),
       ...Object.keys(ALIGNED_PLURAL),
       ...Object.keys(DESTINATION),
       ...Object.keys(INBOX_FILTER),
@@ -137,6 +157,12 @@ describe("tripwire: concepts.md is classified against the vocabulary", () => {
   it("aligned words ARE the vocabulary label", () => {
     for (const [word, kind] of Object.entries(ALIGNED)) {
       expect(resolveObjectLabel(kind), `${word} ↔ ${kind}`).toBe(word);
+    }
+  });
+
+  it("noun words ARE the vocabulary's noun", () => {
+    for (const [word, kind] of Object.entries(NOUN)) {
+      expect(resolveObjectNoun(kind), `${word} ↔ ${kind}`).toBe(word);
     }
   });
 

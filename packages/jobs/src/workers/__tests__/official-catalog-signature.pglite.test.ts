@@ -63,6 +63,7 @@ import {
   checkOfficialCatalogSignature,
   officialCatalogTrust,
   reportUnverifiedOfficialRows,
+  TEST_ONLY_OPERATOR_KEY_MESSAGE,
   type OfficialCatalogTrust,
 } from "../official-catalog-signature.js";
 import {
@@ -549,20 +550,29 @@ describe("the Control Plane's TEST-signed fixtures, end to end on PGlite", () =>
     ).toThrow(/\[1\] is a TEST-ONLY key/);
   });
 
-  it("refuses test-only operator keys in production, and keeps them for tests and dev pods", () => {
+  it("refuses test-only operator keys in every environment, and keeps the operator as the anchor", () => {
     const listed = { SYNAP_CATALOG_PUBLIC_KEYS: contractKeys().join(",") };
-    const prod = officialCatalogTrust({ ...listed, NODE_ENV: "production" }, [
-      ROOT.publicKey,
-    ]);
-    expect(prod).toMatchObject({
-      anchors: "roots",
-      keys: [ROOT.publicKey],
-      refusedTestKeys: 3,
-    });
+    // NODE_ENV is not a security boundary: test, development, unset and
+    // production all refuse them. Never a fall back to the roots or to none.
+    for (const NODE_ENV of ["production", "test", "development", undefined]) {
+      const only = officialCatalogTrust({ ...listed, NODE_ENV }, [
+        ROOT.publicKey,
+      ]);
+      expect(only).toMatchObject({
+        anchors: "operator",
+        keys: [],
+        refusedTestKeys: 3,
+      });
+      expect(officialCatalogTrust({ ...listed, NODE_ENV }, [])).toMatchObject({
+        anchors: "operator",
+        keys: [],
+        refusedTestKeys: 3,
+      });
+    }
     const mixed = officialCatalogTrust(
       {
         SYNAP_CATALOG_PUBLIC_KEYS: `${contract.rootKeys[0]},${CATALOG.publicKey}`,
-        NODE_ENV: "production",
+        NODE_ENV: "test",
       },
       []
     );
@@ -571,12 +581,50 @@ describe("the Control Plane's TEST-signed fixtures, end to end on PGlite", () =>
       keys: [CATALOG.publicKey],
       refusedTestKeys: 1,
     });
-    const dev = officialCatalogTrust({ ...listed, NODE_ENV: "test" }, []);
-    expect(dev).toMatchObject({
-      anchors: "operator",
-      keys: contractKeys(),
-      refusedTestKeys: 0,
+  });
+
+  it("records the refusal at every sync while a test-only key is listed, and fetches nothing", async () => {
+    // Beside a real key that signs a valid index: a key anyone can sign with
+    // still means this pod's catalog is not checked.
+    const trust = officialCatalogTrust(
+      {
+        SYNAP_CATALOG_PUBLIC_KEYS: `${CATALOG.publicKey},${contractKeys()[2]}`,
+        NODE_ENV: "test",
+      },
+      []
+    );
+    const { fetchImpl, calls } = served({
+      "/api/marketplace/synap-index.json": indexFile(),
     });
+    const first = await checkOfficialCatalogSignature(BASE, null, {
+      fetchImpl,
+      now: NOW,
+      trust,
+    });
+    expect(first).toMatchObject({
+      state: "invalid",
+      message: TEST_ONLY_OPERATOR_KEY_MESSAGE,
+      lastCheckAt: NOW.toISOString(),
+    });
+    expect((await readMarketplaceSources()).officialSignature?.state).toBe(
+      "invalid"
+    );
+    const later = new Date(NOW.getTime() + DAY);
+    const second = await checkOfficialCatalogSignature(BASE, first, {
+      fetchImpl,
+      now: later,
+      trust,
+    });
+    expect(second).toMatchObject({
+      state: "invalid",
+      message: TEST_ONLY_OPERATOR_KEY_MESSAGE,
+      lastCheckAt: later.toISOString(),
+    });
+    expect(
+      (await readMarketplaceSources()).officialSignature?.lastCheckAt
+    ).toBe(later.toISOString());
+    expect(calls).toEqual([]);
+    expect(await digests()).toEqual([]);
   });
 
   it("verifies the CP's exact bytes under its (test) roots, and every row its doors serve is vouched for", async () => {

@@ -167,7 +167,7 @@ export const SkillDefSchema = z.object({
   // Shape-checked by the applier (`inputMapProblems`), which names every
   // problem at once — a Zod shape here would report only the first.
   inputMap: z.record(z.string(), z.unknown()).optional(),
-  executionMode: z.enum(["sync", "async"]).optional(),
+  executionMode: z.enum(["sync", "async", "box"]).optional(),
   timeoutSeconds: z.number().min(1).max(300).optional(),
   requires: z.array(z.string()).optional(),
 });

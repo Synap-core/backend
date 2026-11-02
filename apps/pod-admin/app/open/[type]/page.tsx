@@ -16,6 +16,8 @@
 
 import type { Metadata } from "next";
 import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { packageUpdateOpenPath } from "../open-model";
 import { ReceiverIdentityProvider } from "../../_lib/receiver-shell";
 import { ResolveOpen } from "./resolve-open";
 
@@ -29,6 +31,9 @@ export default async function OpenBareIdPage({
   params: Promise<{ type: string }>;
 }) {
   const { type: id } = await params;
+  // `/open/updates` is a keyword, not an id: Marketplace › Updates.
+  const updates = packageUpdateOpenPath([id]);
+  if (updates) redirect(updates);
   const h = await headers();
   return (
     <ReceiverIdentityProvider

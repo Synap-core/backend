@@ -37,7 +37,9 @@ import {
   automationRuns,
   drizzleSql,
 } from "@synap/database";
+import { GOAL_WORKER_FAILURE_LIMIT } from "@synap-core/types/workers/health";
 import { logger } from "./automation-executor-logger.js";
+import { runFilingOfFlow } from "../utils/run-filing.js";
 
 /**
  * How many failures with ZERO successes before the automation turns itself off.
@@ -292,6 +294,109 @@ export async function tripBrokeAfterWorkingBreaker(input: {
     logger.warn(
       { err, automationId: input.automationId },
       "worked-then-broke breaker read/write failed — automation left active"
+    );
+    return false;
+  }
+}
+
+// ── The goal worker breaker (goals that run, decision 7) ────────────────────
+
+/**
+ * Pure predicate. A worker that runs for a GOAL (its `playbook_run` node is
+ * filed in one, `runFilingOfFlow`) is turned off after
+ * {@link GOAL_WORKER_FAILURE_LIMIT} settled runs in a row failed — sooner
+ * than any other rule ({@link CONSECUTIVE_FAILURE_LIMIT}), whether or not it
+ * ever worked: a goal runs on its own, and three failures nobody sees is the
+ * silence the goal exists to end. The streak is the worked-then-broke
+ * breaker's ({@link STREAK_STATUSES}, budget stops left out); fewer settled
+ * runs than the limit never trips.
+ */
+export function shouldTripGoalWorker(input: {
+  status: string;
+  /** Settled statuses ({@link STREAK_STATUSES}), newest first. */
+  recentSettled: readonly string[];
+}): boolean {
+  if (input.status !== "active") return false;
+  const window = input.recentSettled.slice(0, GOAL_WORKER_FAILURE_LIMIT);
+  return (
+    window.length >= GOAL_WORKER_FAILURE_LIMIT &&
+    window.every((s) => s === "failed")
+  );
+}
+
+/** The sentence the user reads when a goal's worker is turned off. */
+export function goalWorkerOffMessage(reason: string | null): string {
+  return turnedOffMessage(
+    `${GOAL_WORKER_FAILURE_LIMIT} failed runs in a row (it runs for a goal)`,
+    reason
+  );
+}
+
+/**
+ * Trip the goal worker breaker: same `status = 'error'` + sentence as the
+ * other two (one mechanism, one `automation.broken` notification), read only
+ * after a failure. Reads the automation's flow (is it a goal's worker?) and at
+ * most {@link GOAL_WORKER_FAILURE_LIMIT} ledger rows. Non-throwing.
+ */
+export async function tripGoalWorkerBreaker(input: {
+  automationId: string;
+  status: string;
+  reason: string | null;
+}): Promise<boolean> {
+  if (input.status !== "active") return false;
+  try {
+    const [row] = await db
+      .select({ flow: automations.flowDefinition })
+      .from(automations)
+      .where(eq(automations.id, input.automationId))
+      .limit(1);
+    const flow = row?.flow as
+      { nodes?: Array<{ type?: string; data?: unknown }> } | null | undefined;
+    if (!runFilingOfFlow({ nodes: flow?.nodes ?? [] }).trackId) return false;
+    const recent = await db
+      .select({ status: automationRuns.status })
+      .from(automationRuns)
+      .where(
+        and(
+          eq(automationRuns.automationId, input.automationId),
+          inArray(automationRuns.status, [...STREAK_STATUSES]),
+          drizzleSql`${automationRuns.stopReason} IS DISTINCT FROM 'budget'`
+        )
+      )
+      .orderBy(desc(automationRuns.startedAt), desc(automationRuns.id))
+      .limit(GOAL_WORKER_FAILURE_LIMIT);
+    if (
+      !shouldTripGoalWorker({
+        status: input.status,
+        recentSettled: recent.map((r) => r.status),
+      })
+    ) {
+      return false;
+    }
+    const flipped = await db
+      .update(automations)
+      .set({
+        status: "error",
+        errorMessage: goalWorkerOffMessage(input.reason),
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(automations.id, input.automationId),
+          eq(automations.status, "active")
+        )
+      )
+      .returning({ id: automations.id });
+    if (flipped.length === 0) return false;
+    logger.error(
+      { automationId: input.automationId, limit: GOAL_WORKER_FAILURE_LIMIT },
+      "Automation turned off by the goal worker breaker (consecutive failures)"
+    );
+    return true;
+  } catch (err) {
+    logger.warn(
+      { err, automationId: input.automationId },
+      "goal worker breaker read/write failed — automation left active"
     );
     return false;
   }

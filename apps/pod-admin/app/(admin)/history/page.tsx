@@ -1,6 +1,6 @@
 /**
  * /history — Historique: what was decided on the requests, with each
- * decision's receipt and Undo where it can still be undone (decision G2:
+ * decision's receipt and Undo where it can still be undone (audit 110dd4ab G2:
  * "what happened" grows from Review › History; `/audit` stays the
  * operator's). A member page (route-policy `MEMBER_CONSOLE_PATHS`): the read
  * is floored on the viewer and Undo re-checks the reviewer's authority.

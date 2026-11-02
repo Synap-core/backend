@@ -54,6 +54,7 @@ import {
 import {
   tripNeverWorkedBreaker,
   tripBrokeAfterWorkingBreaker,
+  tripGoalWorkerBreaker,
 } from "../workers/automation-breaker.js";
 import { logger } from "../workers/automation-executor-logger.js";
 
@@ -329,6 +330,7 @@ async function tripBreakers(
     successCount: stats.successCount ?? 0,
     reason,
   });
+  await tripGoalWorkerBreaker({ automationId, status: stats.status, reason });
 }
 
 function reportError(

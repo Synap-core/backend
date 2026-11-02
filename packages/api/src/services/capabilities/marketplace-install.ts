@@ -156,6 +156,7 @@ import {
 } from "../webhooks/provision-inbound-webhook.js";
 import { requireUserId } from "../../utils/user-scoped.js";
 import { capabilityElementOf, skillElementOf } from "./package-element.js";
+import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 
 const logger = createLogger({ module: "marketplace-install" });
 
@@ -321,12 +322,7 @@ async function resolveDefinition(
  * pod has no Control Plane configured (self-hosted).
  */
 function cpBaseUrl(): string | null {
-  const url = (
-    process.env.CONTROL_PLANE_URL ??
-    process.env.CP_URL ??
-    ""
-  ).replace(/\/$/, "");
-  return url || null;
+  return controlPlaneBaseUrl();
 }
 
 /**

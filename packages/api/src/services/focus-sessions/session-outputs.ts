@@ -48,13 +48,13 @@ import { normalizeObjectKind } from "@synap-core/types/vocabulary";
 import { effectiveSlotAsk } from "@synap-core/types/ask";
 import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
 import {
+  isDecidedByAnswer,
   projectSessionOutcomes,
   type SessionInput,
   type SessionOutcome,
 } from "@synap-core/types/units";
 import { readCriteria, type ExpectedOutput } from "@synap/playbooks";
 import { createLogger } from "@synap-core/core";
-import { UUID_RE } from "./session-metadata.js";
 import { deriveSlotKeys } from "./slot-keys.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
@@ -62,6 +62,7 @@ import {
   resolveEntityProfileRefs,
   type EntityProfileRef,
 } from "../profiles/entity-profile-refs.js";
+import { isUuid } from "@synap-core/types/property-render";
 
 /**
  * One thing a session produced. `id` is the STABLE join coordinate
@@ -257,6 +258,12 @@ function coordinate(kind: string, refId: string): string {
  *   2. PROPOSAL LINEAGE — an expected output's `satisfiedByProposalId` resolves
  *      through the proposal's `targetType:targetId` onto a produced coordinate.
  *      This is evidence, so it wins over any kind guess.
+ *   2b. DECISION LINEAGE — a slot the person DECIDED by answering
+ *      (`isDecidedByAnswer`, `@synap-core/types/units`) names the `decision`
+ *      entity its answer filed (`decisionId`); that entity, produced in this
+ *      session, is the slot's evidence. Only a decided slot: an ask still open
+ *      on a decision (the decision-ask reactor stamps `decisionId` before any
+ *      answer) stays pending, so its card is never hidden.
  *   3. DECLARED SLOT — an artifact recorded with `props.expectedKey` (A2, the
  *      slot's stable key — tried first) or `props.expectedLabel` names the
  *      slot its producer MEANT. A person attaching an existing object to a
@@ -406,6 +413,11 @@ export function joinSessionOutputs(
       ) {
         target = candidate;
       }
+    }
+    // (2b) Decision lineage — the decision the person's answer filed.
+    if (!target && !proposal && e.decisionId && isDecidedByAnswer(e)) {
+      const candidate = byId.get(coordinate("entity", e.decisionId));
+      if (candidate && !claimed.has(candidate.id)) target = candidate;
     }
     // (3) Declared slot — an explicit claim from the producer, by KEY first
     // and then by label. Allowed even when a proposal exists but did not
@@ -776,7 +788,7 @@ async function resolveTitles(
   const byKind = new Map<string, Set<string>>();
   for (const r of refs) {
     const kind = normalizeObjectKind(r.kind);
-    if (!UUID_RE.test(r.refId)) continue;
+    if (!isUuid(r.refId)) continue;
     const set = byKind.get(kind) ?? new Set<string>();
     set.add(r.refId);
     byKind.set(kind, set);

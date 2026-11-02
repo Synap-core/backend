@@ -18,7 +18,15 @@
  */
 
 import { z } from "zod";
-import { LIBRARY_ITEM_UPDATES, type EventName } from "@synap-core/types/events";
+import {
+  LIBRARY_ITEM_UPDATES,
+  STATUS_EVENT_SUBJECT_TYPES,
+  type EventName,
+} from "@synap-core/types/events";
+import {
+  LIFECYCLE_CATEGORIES,
+  STATUS_SIGNALS,
+} from "@synap-core/types/lifecycle";
 
 // ============================================================================
 // Pass-through schema for legacy events without a dedicated shape
@@ -74,6 +82,32 @@ const libraryItemUpdatedSchema = z.object({
   itemId: z.string().min(1),
   groupIds: z.array(z.string().min(1)).optional(),
   what: z.enum(LIBRARY_ITEM_UPDATES),
+});
+
+/**
+ * The status events (`StatusTransitionEvent`, `StatusSignalRaisedEvent`) are
+ * STRICT: a key beyond these (a hold, a reason, the mover, the watcher's
+ * words) is refused here, at the realtime server's own check, so a later
+ * emitter cannot widen what reaches each reader.
+ */
+const statusTransitionSchema = z.strictObject({
+  subjectType: z.enum(STATUS_EVENT_SUBJECT_TYPES),
+  subjectId: z.string().min(1),
+  transitionId: z.string().min(1),
+  role: z.string().min(1).nullable(),
+  from: z.string().nullable(),
+  to: z.string().min(1),
+  category: z.enum(LIFECYCLE_CATEGORIES),
+  at: z.string().min(1),
+});
+
+const statusSignalRaisedSchema = z.strictObject({
+  subjectType: z.enum(STATUS_EVENT_SUBJECT_TYPES),
+  subjectId: z.string().min(1),
+  signal: z.enum(STATUS_SIGNALS),
+  role: z.string().min(1).nullable(),
+  beganAt: z.string().min(1),
+  raisedAt: z.string().min(1),
 });
 
 const uiFocusSurfaceSchema = z.object({
@@ -168,6 +202,8 @@ export const EventSchemas: Partial<Record<EventName, z.ZodType>> = {
   "synap:reply:routed": synapReplyRoutedSchema,
   "import:file:progress": importFileProgressSchema,
   "library:item:updated": libraryItemUpdatedSchema,
+  "status:transition:completed": statusTransitionSchema,
+  "status:signal:raised": statusSignalRaisedSchema,
   "ui:focus": uiFocusSchema,
 
   // Legacy (locked-down)

@@ -24,7 +24,7 @@
  *   - scopeKind "workspace" -> editor/admin/owner membership in that workspace
  *   - principalKind "agent" -> caller must own the agent (users.createdByUserId)
  *                              or be pod-admin; otherwise FORBIDDEN
- * `verdict: "deny"` (0381, founder decision G3) is a person's stored "Never":
+ * `verdict: "deny"` (0381, a founder decision) is a person's stored "Never":
  * the resolver refuses the matching write with `DENIED_BY_RULE`. Refusing more
  * is always safe, so a deny may be as broad as the caller may manage; the
  * request's "Never" option writes the narrow one (this agent × this act).
@@ -58,6 +58,11 @@ import {
   proposals,
   secrets,
 } from "@synap/database/schema";
+import {
+  mayCarryHostSeed,
+  revokeHostSeeds,
+  seedHostRules,
+} from "@synap/database/agent-governance";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import {
   NEXT_RUNG_BATCH_MAX,
@@ -416,6 +421,15 @@ export const governanceRulesRouter = router({
    * always pin an auto-approve to review), but a `verdict:"auto"` draft's count
    * is an UPPER BOUND — a floored review row is counted as a flip though a floor
    * would still hold it. The `scope` string states this.
+   *
+   * A `verdict:"deny"` draft (a "Never") refuses every matched act at the door,
+   * above every floor, so nothing is filed for review and nothing runs. A
+   * matched proposal flips unless it already ended refused, i.e. a person
+   * rejected it (`rejected`): every other status ran, waits, or was put in
+   * front of a person, which a deny would have stopped. Exact over the window,
+   * with one caveat: a `withdrawn`, `expired` or `approval_failed` row never
+   * ran either, but it is counted, since a deny would still have changed it
+   * from "filed for review" to "refused".
    */
   retroImpact: protectedProcedure
     .input(
@@ -427,7 +441,7 @@ export const governanceRulesRouter = router({
         targetKind: z.enum(["action", "profile", "capability", "connection"]),
         targetPattern: z.string().min(1),
         targetProfile: z.string().min(1).optional(),
-        verdict: z.enum(["auto", "propose"]),
+        verdict: z.enum(["auto", "propose", "deny"]),
         /** Cap the scan window (defaults to, and is clamped to, 500). */
         window: z.number().int().min(1).max(500).optional(),
       })
@@ -479,7 +493,9 @@ export const governanceRulesRouter = router({
         targetKind: input.targetKind,
         targetPattern: input.targetPattern,
         targetProfile: input.targetProfile,
-        verdict: input.verdict,
+        // The matcher reads only the principal, scope and target, never the
+        // verdict; its draft type does not name "deny" yet.
+        verdict: input.verdict === "deny" ? "propose" : input.verdict,
       };
 
       let matched = 0;
@@ -500,6 +516,10 @@ export const governanceRulesRouter = router({
           continue;
         }
         matched++;
+        if (input.verdict === "deny") {
+          if (row.status !== ProposalStatus.REJECTED) wouldFlip++;
+          continue;
+        }
         const currentOutcome =
           row.status === ProposalStatus.AUTO_APPROVED ? "auto" : "propose";
         if (currentOutcome !== input.verdict) wouldFlip++;
@@ -514,7 +534,9 @@ export const governanceRulesRouter = router({
           `(newest first, capped at ${SCAN_LIMIT}) — not lifetime. ` +
           (input.verdict === "auto"
             ? "wouldFlip is an UPPER BOUND: floors (destructive/admin/scope) are not re-evaluated, so a floored review row is still counted."
-            : "wouldFlip is exact: a rule can always pin an auto-approve to review."),
+            : input.verdict === "deny"
+              ? "wouldFlip counts every matched proposal a person did not reject: a deny refuses the act at the door, above every floor."
+              : "wouldFlip is exact: a rule can always pin an auto-approve to review."),
       };
     }),
 
@@ -699,6 +721,9 @@ export const governanceRulesRouter = router({
           expiresAt: input.expiresAt ?? null,
         })
         .returning();
+      // The same rule for the agent's box, when the box is the agent's
+      // (host-seed.ts). A seed that fails leaves the box asking: stricter.
+      if (rule) await seedHostRules(db, [rule]);
 
       return { rule };
     }),
@@ -854,11 +879,23 @@ export const governanceRulesRouter = router({
         await assertOwnsConnection(ctx.userId, existing.targetPattern);
       }
 
-      const [rule] = await db
-        .update(governanceRules)
-        .set({ revokedAt: new Date() })
-        .where(eq(governanceRules.id, input.id))
-        .returning();
+      const revoke = (handle: Pick<typeof db, "update">) =>
+        handle
+          .update(governanceRules)
+          .set({ revokedAt: new Date() })
+          .where(eq(governanceRules.id, input.id))
+          .returning();
+      // An agent's approval seeded on its box goes with it (host-seed.ts), in
+      // the same transaction: a rule revoked while its seed stays would leave
+      // the box allowed, and a retry stops at `revokedAt` above. A rule that
+      // cannot carry a seed is revoked alone.
+      const [rule] = mayCarryHostSeed(existing)
+        ? await db.transaction(async (tx) => {
+            const rows = await revoke(tx);
+            await revokeHostSeeds(tx, [input.id]);
+            return rows;
+          })
+        : await revoke(db);
 
       return { rule };
     }),

@@ -4,7 +4,9 @@
  * The same read as tRPC `workRelease.get` and MCP `synap_get_work_release`
  * (`services/dev-loop/work-release.ts`, folded by `foldWorkRelease`). An agent
  * door: the sessions are read owner-only (`rosterReadFor`), and a
- * workspace-bound key reads only the facts of its own workspace.
+ * workspace-bound key reads only the facts of its own workspace. A key pinned
+ * to spaces (a pod app) gets the read narrowed to its grant
+ * (`workReleaseReach`): the parts it does not reach say `withheld`.
  */
 
 import { z } from "@hono/zod-openapi";
@@ -20,6 +22,26 @@ import {
   type HubHono,
 } from "./_shared.js";
 import { readWorkRelease } from "../../../services/dev-loop/work-release.js";
+import {
+  WORK_RELEASE_SOURCE_STATES,
+  type WorkReleasePart,
+} from "@synap-core/types/work-release";
+
+/**
+ * One wire state per part of the read, derived from
+ * `WORK_RELEASE_SOURCE_STATES`: `satisfies` stops the build when a part is
+ * added there and not here (the PR-fact part was missing from this schema).
+ */
+const SourcesWireShape = {
+  snapshots: z.enum(WORK_RELEASE_SOURCE_STATES.snapshots),
+  sessions: z.enum(WORK_RELEASE_SOURCE_STATES.sessions),
+  holders: z.enum(WORK_RELEASE_SOURCE_STATES.holders),
+  pullRequests: z.enum(WORK_RELEASE_SOURCE_STATES.pullRequests),
+} satisfies Record<WorkReleasePart, z.ZodTypeAny>;
+const WORK_RELEASE_PARTS = Object.keys(SourcesWireShape) as [
+  WorkReleasePart,
+  ...WorkReleasePart[],
+];
 
 const BlockRefWireSchema = z.union([
   z.object({
@@ -34,11 +56,7 @@ const BlockRefWireSchema = z.union([
 const WorkReleaseWireSchema = z
   .object({
     generatedAt: z.string(),
-    sources: z.object({
-      snapshots: z.enum(["ok", "stale", "missing"]),
-      sessions: z.enum(["ok", "unavailable"]),
-      holders: z.enum(["ok", "unavailable"]),
-    }),
+    sources: z.object(SourcesWireShape),
     /** Per repo: main health, what is live, when it was observed. */
     repos: z.array(z.object({}).passthrough()),
     /** Per PR: stage, verdict, fold, session, holder, blockedBy. */
@@ -54,6 +72,14 @@ const WorkReleaseWireSchema = z
         })
         .passthrough()
     ),
+    /** Present only when the key's grant narrowed the read. */
+    narrowed: z
+      .object({
+        snapshotSpaces: z.array(z.string()),
+        withheld: z.array(z.enum(WORK_RELEASE_PARTS)),
+        reason: z.string(),
+      })
+      .optional(),
   })
   .openapi("WorkRelease");
 
@@ -72,7 +98,14 @@ export function registerWorkReleaseRoutes(app: HubHono): void {
       "whether that session is working now, and the blockers ranked by how " +
       "much waits behind them transitively. `sources` says which read was " +
       "stale, missing or failed: a failed read is `unavailable`, never an " +
-      "empty list. A workspace-bound key reads its own workspace's facts.",
+      "empty list. A workspace-bound key reads its own workspace's facts. " +
+      "A key pinned to spaces (a pod app) reads the snapshots recorded in " +
+      "those spaces when it reads `dev` events (`event.dev.read` or " +
+      "`event.read`), the sessions its `session` grant reaches, never the " +
+      "holders, and the recorded PR facts only when it reads dev events " +
+      "in every space: each " +
+      "part it does not reach is `withheld` in `sources`, and `narrowed` " +
+      "says what was read.",
     responses: {
       200: { description: "Work release", schema: WorkReleaseWireSchema },
       403: { description: "Forbidden", schema: ErrorSchema },

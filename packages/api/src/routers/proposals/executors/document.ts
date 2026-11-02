@@ -5,6 +5,10 @@ import { reportApproved, storedProposalFields } from "./shared.js";
 import { materializeApprovedDocument } from "../../../services/proposals/materialize-approved-document.js";
 import { DOCUMENT_PATCH_PROPOSAL_TYPES } from "@synap-core/types/proposals/intent";
 import { applyApprovedDocumentPatch } from "../../../services/document-patch/apply-document-patch.js";
+import {
+  podDocumentScopeFloor,
+  resolveDocumentScopeFields,
+} from "../../../services/document-scope/document-scope.js";
 
 /** Register the document/* approve executors. */
 export function registerDocumentExecutors(): void {
@@ -25,6 +29,17 @@ export function registerDocumentExecutors(): void {
       // document door (DocumentRepository.create), which emits
       // `document.create.completed`. Provenance stamped from the proposal.
       const docUserId = (data.userId as string) || userId;
+      // A scope / refresher the proposal carries, re-read through the floor
+      // as the owner: what it named may be gone or hidden since filing.
+      const fields = await resolveDocumentScopeFields(
+        {
+          ...(data.scope !== undefined ? { scope: data.scope } : {}),
+          ...(data.refreshAutomationId !== undefined
+            ? { refreshAutomationId: data.refreshAutomationId }
+            : {}),
+        },
+        podDocumentScopeFloor(docUserId)
+      );
       await materializeApprovedDocument({
         documentId,
         title: (data.title as string) || "Untitled",
@@ -34,6 +49,7 @@ export function registerDocumentExecutors(): void {
         userId: docUserId,
         workspaceId: proposal.workspaceId,
         sourceProposalId: input.proposalId,
+        fields,
       });
 
       await transitionProposal(db, {
@@ -59,7 +75,7 @@ export function registerDocumentExecutors(): void {
     },
   });
 
-  // ── document / update · section_update · session_narrative_update · user_edit ─
+  // ── document / update · section_update · session_narrative_update · refresher_section_update · user_edit ─
   // The approval half of the document patch door (`applyDocumentPatch`). Re-
   // renders the proposal's ops against the document AS IT IS NOW: a base move,
   // a section a person now owns, an embed the ops would drop, or a malformed
