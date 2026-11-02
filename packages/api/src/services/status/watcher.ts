@@ -104,6 +104,7 @@ import {
   repoStuckFolds,
   type CulpritFact,
   type DevSignalCandidate,
+  type MainRedOwner,
 } from "./dev-signals.js";
 import { syncWaitEpisodesTick } from "./wait-episodes.js";
 import {
@@ -441,7 +442,8 @@ async function holdCandidates(now: Date): Promise<SignalCandidate[]> {
 /**
  * Dev work standing still (`dev-signals.ts`): the newest snapshot of each
  * repo, the active `main red: …` sessions that own a red main (started at or
- * after it turned red, CI's rule), the `dev.pr_merged` fact of a culprit the
+ * after it turned red, CI's rule; only those the snapshot's poster may read),
+ * the `dev.pr_merged` fact of a culprit the
  * snapshot does not name, then each signal on its session — only a session
  * the snapshot's poster may read (a fact names only work its producer can
  * see), and never a paused one. `unrouted` counts a red main whose culprit
@@ -467,15 +469,29 @@ async function devCandidates(
     )
     .orderBy(repoOf, desc(events.timestamp));
   if (rows.length === 0) return [];
-  const owners = await db
-    .select({ title: focusSessions.title, startedAt: focusSessions.startedAt })
-    .from(focusSessions)
-    .where(
-      and(
-        ilike(focusSessions.title, "main red:%"),
-        eq(focusSessions.status, "active")
-      )
-    );
+  // The owners a snapshot's poster may READ (owner or roster), as its
+  // sessions and culprit facts are read: another person's `main red: …`
+  // session never silences this poster's red main. One read per poster.
+  const ownersByPoster = new Map<string, MainRedOwner[]>();
+  const ownersOf = async (poster: string): Promise<MainRedOwner[]> => {
+    const known = ownersByPoster.get(poster);
+    if (known) return known;
+    const read = await db
+      .select({
+        title: focusSessions.title,
+        startedAt: focusSessions.startedAt,
+      })
+      .from(focusSessions)
+      .where(
+        and(
+          ilike(focusSessions.title, "main red:%"),
+          eq(focusSessions.status, "active"),
+          sessionReadableWhere({ userId: poster, roster: true })
+        )
+      );
+    ownersByPoster.set(poster, read);
+    return read;
+  };
 
   const snapshots: Array<{ poster: string; fact: RepoSnapshotFact }> = [];
   for (const row of rows) {
@@ -496,7 +512,7 @@ async function devCandidates(
     const repo = fact.repo.toLowerCase();
     for (const d of devSignalsOf(fact, {
       now,
-      owners,
+      owners: await ownersOf(poster),
       culprits: culprits.get(`${poster}\u0000${repo}`),
     })) {
       if (!d.sessionId) {

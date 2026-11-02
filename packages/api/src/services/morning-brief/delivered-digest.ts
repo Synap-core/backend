@@ -70,8 +70,10 @@ import {
   resolveObjectNoun,
   resolveObjectNounPlural,
 } from "@synap-core/types/vocabulary";
+import { DEFAULT_LOCALE, type Locale } from "@synap-core/types/i18n";
 import { sessionKindWhere } from "../focus-sessions/session-kind.js";
 import { capWords } from "../status/dev-signals.js";
+import { deliveredDigestT } from "./delivered-digest-copy.js";
 
 type Database = typeof defaultDb;
 
@@ -106,33 +108,32 @@ export interface DeliveredFacts {
 
 // ── Pure: what the digest says ──────────────────────────────────────────────
 
-function plural(n: number, one: string, many: string): string {
-  return n === 1 ? `1 ${one}` : `${n} ${many}`;
-}
-
-/** The digest in plain words; `null` when nothing was delivered. */
+/**
+ * The digest in plain words; `null` when nothing was delivered. Each count is
+ * a plural message (`delivered-digest-copy.ts`), in `locale` (English by
+ * default: the digest reads no recipient locale yet).
+ */
 export function composeDeliveredDigest(
-  f: DeliveredFacts
+  f: DeliveredFacts,
+  locale: Locale = DEFAULT_LOCALE
 ): { title: string; body: string } | null {
+  const t = deliveredDigestT(locale);
   const plus = f.floor ? "+" : "";
   const parts: string[] = [];
   if (f.prsMerged > 0)
-    parts.push(
-      `${plural(f.prsMerged, "pull request", "pull requests")}${plus} merged`
-    );
+    parts.push(t("digest.prsMerged", { n: f.prsMerged, plus }));
   if (f.commitsLanded > 0)
-    parts.push(`${plural(f.commitsLanded, "commit", "commits")}${plus} landed`);
+    parts.push(t("digest.commitsLanded", { n: f.commitsLanded, plus }));
   if (f.outcomesMet > 0)
-    parts.push(
-      `${plural(f.outcomesMet, "outcome", "outcomes")}${plus} delivered`
-    );
+    parts.push(t("digest.outcomesMet", { n: f.outcomesMet, plus }));
   if (f.sessionsClosed > 0)
     parts.push(
-      `${plural(
-        f.sessionsClosed,
-        nounInSentence(resolveObjectNoun("session")),
-        nounInSentence(resolveObjectNounPlural("session"))
-      )}${plus} closed`
+      t("digest.sessionsClosed", {
+        n: f.sessionsClosed,
+        noun: nounInSentence(resolveObjectNoun("session", locale)),
+        nouns: nounInSentence(resolveObjectNounPlural("session", locale)),
+        plus,
+      })
     );
   if (parts.length === 0) return null;
   const lines = [`${parts.join(", ")}.`];

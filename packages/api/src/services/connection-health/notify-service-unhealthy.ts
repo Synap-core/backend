@@ -38,8 +38,6 @@ export interface NotifyIntelligenceServiceUnhealthyInput {
   serviceName: string;
   /** The verdict the worker computed: "degraded" | "unhealthy". */
   healthStatus: string;
-  /** Existing `metadata` on the IS row (carries the watermark). */
-  metadata: Record<string, unknown> | null | undefined;
   /** Whatever detail the /health payload gave us. May be absent. */
   detail?: string;
 }
@@ -91,7 +89,6 @@ export async function notifyIntelligenceServiceUnhealthy(
       workspaceId: discordTool?.workspaceId ?? null,
       watermarkToolId: input.serviceRowId,
       watermarkTable: "intelligence_services",
-      watermarkMetadata: input.metadata,
       discordTeamChannelId: noticeChannelId,
       errorMessage: detail,
       notificationType: "system.intelligence_degraded",

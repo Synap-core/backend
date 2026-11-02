@@ -6,6 +6,7 @@ import {
   needsYouTotal,
   sessionNeedsYou,
   tallyNeedsYou,
+  waitsOnYouAtTerminal,
   type NeedsYouFacts,
 } from "./needs-you.js";
 import { projectAggregateInput } from "./session.js";
@@ -77,6 +78,7 @@ describe("tallyNeedsYou — the parts and the one sum", () => {
       owed: 2,
       decisions: 3,
       review: 1,
+      permission: 0,
       sessions: 3,
       total: 6,
       unreadable: false,
@@ -181,5 +183,88 @@ describe("needsYouItems — the per-row number a person glyph carries", () => {
     expect(needsYouItems(null)).toBeNull();
     // `undefined` = not read: no claim, so it adds nothing.
     expect(needsYouItems({ owedFromYou: 1 })).toBe(1);
+  });
+});
+
+describe("the terminal wait — an agent stopped on the person (D-R1, review M1)", () => {
+  const waiting = { status: "active", runnerState: "needs_permission" };
+
+  it("a permission dialog or a question at the terminal needs you; work, rest and an ended session do not", () => {
+    expect(needsYouReason({ ...calm, runnerWait: waiting })).toBe("permission");
+    expect(
+      needsYouReason({
+        ...calm,
+        runnerWait: { status: "active", runnerState: "needs_answer" },
+      })
+    ).toBe("permission");
+    for (const runnerState of ["busy", "idle", "ended", null]) {
+      expect(
+        needsYouReason({
+          ...calm,
+          runnerWait: { status: "active", runnerState },
+        })
+      ).toBeNull();
+    }
+    // Rules out a rule that reads the runner word and not the session.
+    expect(
+      needsYouReason({
+        ...calm,
+        runnerWait: { status: "closed", runnerState: "needs_permission" },
+      })
+    ).toBeNull();
+  });
+
+  it("an agent's own draft still needs you for its dialog (one item), never for anything else", () => {
+    const draft: NeedsYouFacts = {
+      owedFromYou: 3,
+      pendingDecisions: 2,
+      awaitingReview: true,
+      draft: true,
+      runnerWait: waiting,
+    };
+    expect(needsYouReason(draft)).toBe("permission");
+    expect(needsYouItems(draft)).toBe(1);
+  });
+
+  it("ONE item beside what the session owes, as the pod's union counts it, and the other reasons first", () => {
+    const owing: NeedsYouFacts = {
+      owedFromYou: 2,
+      pendingDecisions: 0,
+      runnerWait: waiting,
+    };
+    expect(needsYouReason(owing)).toBe("owed");
+    expect(needsYouItems(owing)).toBe(3);
+    // Review stays review: the review scan (`needsYouReason === "review"`)
+    // keeps a finished session whose agent also waits.
+    const finished: NeedsYouFacts = {
+      ...calm,
+      awaitingReview: true,
+      runnerWait: waiting,
+    };
+    expect(needsYouReason(finished)).toBe("review");
+    expect(needsYouItems(finished)).toBe(2);
+  });
+
+  it("the row and its tally agree, a draft's dialog included", () => {
+    const rows: NeedsYouFacts[] = [
+      { ...calm, runnerWait: waiting },
+      { owedFromYou: 1, pendingDecisions: 0, runnerWait: waiting },
+      { ...calm, draft: true, runnerWait: waiting },
+      { ...calm, runnerWait: { status: "active", runnerState: "busy" } },
+    ];
+    const tally = tallyNeedsYou(rows);
+    expect(tally).toMatchObject({ owed: 1, permission: 3, sessions: 3 });
+    expect(tally.total).toBe(
+      rows.reduce((n, row) => n + (needsYouItems(row) ?? 0), 0)
+    );
+  });
+
+  it("a FAILED runner read is unknown, never 'nothing waits'; an unread one is no claim", () => {
+    expect(needsYouItems({ ...calm, runnerWait: null })).toBeNull();
+    expect(tallyNeedsYou([{ ...calm, runnerWait: null }]).unreadable).toBe(
+      true
+    );
+    expect(needsYouItems({ ...calm })).toBe(0);
+    expect(waitsOnYouAtTerminal(undefined)).toBe(false);
   });
 });

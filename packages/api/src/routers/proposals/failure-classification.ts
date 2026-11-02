@@ -50,6 +50,11 @@ import {
 import { redactForStorage } from "../../utils/redact-secrets.js";
 import { isSetupRequiredLike } from "../../services/proposals/setup-required-error.js";
 import {
+  kindMissingSentence,
+  readKindMissing,
+  type KindMissingDetail,
+} from "../../utils/kind-missing.js";
+import {
   nounInSentence,
   resolveObjectNoun,
   resolveObjectNounPlural,
@@ -77,6 +82,12 @@ export interface ProposalFailureMeta {
    * by the gate that produced them (at most 5).
    */
   existing?: ExistingRecordRef[];
+  /**
+   * `kind_missing`: the kind the write named, the space it was looked up in,
+   * and the other spaces the proposal's user can see where it exists
+   * (`utils/kind-missing.ts`). Names and ids only, never raw error text.
+   */
+  kindMissing?: KindMissingDetail;
 }
 
 /** A record that already exists — a door, never a sentence. */
@@ -362,6 +373,12 @@ export function classifyThrownFailure(err: unknown): ProposalFailureMeta {
   const zodClass: FailureErrorClass | undefined =
     zodIssuesOf(err) !== undefined ? "validation" : undefined;
 
+  // The typed missing-kind refusal (`utils/kind-missing.ts`) — read from the
+  // structured cause, never from the "Profile not found" text. It outranks
+  // the tRPC code: the same NOT_FOUND would otherwise read `target_missing`
+  // ("what it points at no longer exists"), which is false for a kind.
+  const kindMissing = readKindMissing(err);
+
   // Precedence: an explicit declaration (1, 2) beats an inferred one; the
   // REGEX outranks the tRPC code because `missing_field` is strictly sharper
   // than the `validation` a BAD_REQUEST would otherwise yield, and it carries
@@ -370,6 +387,7 @@ export function classifyThrownFailure(err: unknown): ProposalFailureMeta {
     attached?.errorClass ??
     duckClass ??
     (regexMissing.length > 0 ? "missing_field" : undefined) ??
+    (kindMissing ? "kind_missing" : undefined) ??
     trpcClass ??
     zodClass ??
     "unknown";
@@ -387,6 +405,9 @@ export function classifyThrownFailure(err: unknown): ProposalFailureMeta {
     ...(providerRef !== undefined ? { providerRef } : {}),
     ...(missingFields !== undefined ? { missingFields } : {}),
     ...(existing !== undefined ? { existing } : {}),
+    ...(kindMissing !== undefined && errorClass === "kind_missing"
+      ? { kindMissing }
+      : {}),
     ...(detail ? { detail } : {}),
   };
 }
@@ -446,6 +467,11 @@ function rawFailureSentence(err: unknown, meta: ProposalFailureMeta): string {
     const name = first.title ? `"${first.title}"` : "It";
     return `Couldn't create — ${name} already exists. Open the existing ${noun} instead.`;
   }
+  // A missing kind names the kind, the space and where it exists — the tRPC
+  // message ("Profile not found: trend") says none of that to a person.
+  if (meta.errorClass === "kind_missing" && meta.kindMissing) {
+    return kindMissingSentence(meta.kindMissing);
+  }
   if (err instanceof TRPCError) return err.message;
 
   // A DUCK-TYPED setup-required failure declares its own message and declares
@@ -487,6 +513,8 @@ function rawFailureSentence(err: unknown, meta: ProposalFailureMeta): string {
       return "Couldn't apply — it needs a permission you don't have yet.";
     case "target_missing":
       return "Couldn't apply — what it points at no longer exists.";
+    case "kind_missing":
+      return "Couldn't apply — the kind it names isn't available in this space.";
     case "provider":
       return "Couldn't apply — the other service refused it.";
     default:
@@ -510,6 +538,7 @@ export const CLASS_TRPC_CODE: Record<FailureErrorClass, TRPCError["code"]> = {
   transient: "TIMEOUT",
   permission: "FORBIDDEN",
   target_missing: "NOT_FOUND",
+  kind_missing: "NOT_FOUND",
   provider: "BAD_GATEWAY",
   unknown: "INTERNAL_SERVER_ERROR",
 };
@@ -584,6 +613,9 @@ export function failureRecord(
       ? { missingFields: meta.missingFields }
       : {}),
     ...(meta.existing !== undefined ? { existing: meta.existing } : {}),
+    ...(meta.kindMissing !== undefined
+      ? { kindMissing: meta.kindMissing }
+      : {}),
     ...(meta.detail !== undefined ? { detail: meta.detail } : {}),
   };
 }

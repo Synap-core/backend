@@ -287,7 +287,6 @@ class KindRun {
         userId: this.ctx.owner,
         workspaceId: this.ctx.workspaceId,
         watermarkToolId: this.ctx.toolId,
-        watermarkMetadata: this.ctx.toolMetadata,
         discordTeamChannelId: resolveNoticeChannelId(
           this.ctx.toolMetadata,
           (this.ctx.toolMetadata.sync as ProviderSyncConfig | undefined)

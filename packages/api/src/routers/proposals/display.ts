@@ -611,6 +611,9 @@ export async function enrichProposalsForDisplay(
           isLikelyUUID(op.existingEntityId)
         ) {
           existingRoleEntityIds.push(op.existingEntityId);
+          // Its real title, for an op whose own title is only its ref
+          // ("p1"): same batched, name-floored entity join.
+          relationEndpointIds.push(op.existingEntityId);
         }
       }
     }
@@ -2404,7 +2407,18 @@ export function buildProposalGraph(
     renderedOpIndexes.add(index);
     const entityOp = op as CompositeCreateEntityOp;
     const ref = entityOp.ref ?? opRef(index);
-    const title = entityOp.title ?? "Untitled";
+    // An op that LINKS an existing record may carry no title, or only its ref
+    // ("p1"): the review then named the record "p1". Its real title comes
+    // from the batched entity join (viewer-floored); absent, the op's own.
+    const ownTitle = entityOp.title?.trim();
+    const titleIsOnlyRef =
+      !ownTitle || ownTitle === entityOp.ref || ownTitle === opRef(index);
+    const title =
+      (entityOp.existingEntityId && titleIsOnlyRef
+        ? resolveEntityTitle?.(entityOp.existingEntityId)
+        : undefined) ??
+      entityOp.title ??
+      "Untitled";
     refToTitle.set(ref, title);
     // Positional ref always resolves too (a relation may reference $opN even
     // when the op carries its own ref).

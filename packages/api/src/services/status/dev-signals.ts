@@ -11,7 +11,8 @@
  *                      inherits from main (`redInheritedFromMain`) — and
  *                      nothing changed it for the first rung;
  *   main_red_unowned   main is red, nobody owns the fix (no ACTIVE session
- *                      titled `main red: <repo> …` started at or after main
+ *                      the snapshot's poster may read, titled
+ *                      `main red: <repo> …`, started at or after main
  *                      turned red — CI's own owner rule, `culprit-finder.mjs`
  *                      `revertDecision` — and no fix PR named in
  *                      `main.fixedBy`), for the first rung. Told to the
@@ -50,7 +51,7 @@
  * (`watcher.ts`, `agentOnly`). D-R2: once one repo has
  * {@link REPO_STUCK_AT} or more PRs escalated at once, the person reads ONE
  * signal for the repo ("backend: 5 PRs are stuck"), not one per PR
- * ({@link foldRepoStuck}).
+ * ({@link repoStuckFolds}).
  *
  * PURE: the watcher reads the snapshots and the owning sessions
  * (`watcher.ts`, `devCandidates`), this file decides what they say.
@@ -200,7 +201,10 @@ export function devSignalsOf(
   snapshot: RepoSnapshotFact,
   opts: {
     now: Date;
-    /** The ACTIVE `main red: …` sessions ({@link ownsMainRed}). */
+    /**
+     * The ACTIVE `main red: …` sessions the snapshot's poster may read
+     * ({@link ownsMainRed}): another person's never silences this red.
+     */
     owners: readonly MainRedOwner[];
     /**
      * The culprit PR's `dev.pr_merged` fact, by PR number, for a culprit the

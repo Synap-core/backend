@@ -33,7 +33,6 @@ const baseInput = {
   serviceId: "synap-is",
   serviceName: "Synap Intelligence",
   healthStatus: "degraded",
-  metadata: { connectionHealth: {} },
 };
 
 beforeEach(() => {

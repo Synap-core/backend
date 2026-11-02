@@ -75,6 +75,7 @@ import {
   relations,
   messages,
   events,
+  sessionRunners,
 } from "@synap/database";
 import { sessionNeedsYou, tallyNeedsYou } from "@synap-core/types/units";
 import { AccessContext } from "../../access/index.js";
@@ -229,6 +230,8 @@ beforeAll(async () => {
     // The needs-you rule's agent-evidence clock (`unitFacts`) reads these.
     messages,
     events,
+    // …and its terminal-wait input (`unitFacts.runnerWait`).
+    sessionRunners,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }

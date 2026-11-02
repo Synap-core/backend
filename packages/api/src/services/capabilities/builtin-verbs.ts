@@ -2768,7 +2768,6 @@ const connectorHealthCheckHandler: BuiltinVerbHandler = async (params, ctx) => {
     userId: discordTool.createdBy,
     workspaceId: discordTool.workspaceId ?? null,
     watermarkToolId: discordTool.id,
-    watermarkMetadata: metadata,
     discordTeamChannelId: resolveNoticeChannelId(metadata, undefined),
     errorMessage: capErr,
   });

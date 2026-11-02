@@ -244,7 +244,6 @@ export async function runMailFeed(): Promise<RunMailFeedResult> {
       userId: owner,
       workspaceId,
       watermarkToolId: discordTool.id,
-      watermarkMetadata: metadata,
       // System notice → the configured feedback/notices channel, not the mail feed.
       discordTeamChannelId: resolveNoticeChannelId(
         metadata,

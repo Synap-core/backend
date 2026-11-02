@@ -739,6 +739,7 @@ describe("the status watcher, on dev work standing still", () => {
   const S_PAUSED = randomUUID();
   const S_QUIET = randomUUID();
   const S_OLD_CULPRIT = randomUUID();
+  const S_FOREIGN_OWNER = randomUUID();
   const S_R = [randomUUID(), randomUUID(), randomUUID()];
   const BE = "Synap-core/backend";
   const CLI = "Synap-core/synap-cli";
@@ -836,6 +837,15 @@ describe("the status watcher, on dev work standing still", () => {
       ME,
       "active",
       before(WORK_CLOCK.quiet + 3 * HOUR)
+    );
+    // Another person's open owner of app-bases' red, started after it: the
+    // poster may not read it, so it owns nothing for the poster's red main.
+    await session(
+      S_FOREIGN_OWNER,
+      "main red: app-bases tsc @ffffffff",
+      GOAL_OWNER,
+      "active",
+      before(HOUR)
     );
     // Held on purpose: never told.
     await session(S_PAUSED, "Held work", ME, "paused");
@@ -946,7 +956,8 @@ describe("the status watcher, on dev work standing still", () => {
         ["pr_red_idle", S_RED, false],
         // synap-cli: an older `main red:` session does not own this red.
         ["main_red_unowned", S_CULPRIT, false],
-        // app-bases: its culprit found through the dev.pr_merged fact.
+        // app-bases: its culprit found through the dev.pr_merged fact, and
+        // another person's `main red: app-bases` session does not own it.
         ["main_red_unowned", S_OLD_CULPRIT, false],
         ["pr_green_unmerged", S_ESCALATED, true],
         ...S_R.map((id) => ["pr_green_unmerged", id, true]),

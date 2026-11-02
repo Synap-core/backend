@@ -513,3 +513,61 @@ describe("classifyThrownFailure — a handler's Zod parse error", () => {
     expect(classifyThrownFailure(hopped).errorClass).toBe("validation");
   });
 });
+
+/**
+ * A missing KIND is not a missing target (live 2026-10-22, proposal e8fc00d6:
+ * `trend` existed in Ecosystem, the capture filed it into Foundation, and the
+ * row read `target_missing` — "what it points at no longer exists").
+ *
+ * Driven from the REAL producer (`kindMissingError`, what `entities.create`
+ * throws) through a REAL tRPC caller hop (tRPC copies a plain-object cause
+ * onto an UnknownCauseError), so a renamed code or field fails here.
+ */
+describe("classifyThrownFailure — a kind missing in its space", () => {
+  it("reads kind_missing with where the kind exists, and says it in words", async () => {
+    const { kindMissingError } = await import("../../utils/kind-missing.js");
+    const { initTRPC } = await import("@trpc/server");
+    const t = initTRPC.create();
+    const router = t.router({
+      create: t.procedure.mutation(() => {
+        throw kindMissingError({
+          profileSlug: "trend",
+          kindName: "Trend",
+          workspaceId: "ws-foundation",
+          workspaceName: "Foundation",
+          foundIn: [{ workspaceId: "ws-eco", name: "Ecosystem" }],
+        });
+      }),
+    });
+    const err = await router
+      .createCaller({})
+      .create()
+      .catch((e: unknown) => e);
+    // The text every older reader shows is unchanged…
+    expect((err as Error).message).toBe("Profile not found: trend");
+    const meta = classifyThrownFailure(err);
+    // …but the class is the true one, outranking the NOT_FOUND code.
+    expect(meta.errorClass).toBe("kind_missing");
+    expect(meta.kindMissing).toEqual({
+      profileSlug: "trend",
+      kindName: "Trend",
+      workspaceId: "ws-foundation",
+      workspaceName: "Foundation",
+      foundIn: [{ workspaceId: "ws-eco", name: "Ecosystem" }],
+    });
+    expect(safeFailureSentence(err, meta)).toBe(
+      `Couldn't file it — the kind "Trend" isn't available in Foundation. It exists in Ecosystem.`
+    );
+    // The person-facing record carries it (projected, not agent-only).
+    expect(failureRecord(meta).kindMissing).toEqual(meta.kindMissing);
+  });
+
+  it("CONTROL: a plain NOT_FOUND with the same text stays target_missing", () => {
+    const meta = classifyThrownFailure(
+      new TRPCError({ code: "NOT_FOUND", message: "Profile not found: trend" })
+    );
+    // The class comes from the typed cause, never from the message.
+    expect(meta.errorClass).toBe("target_missing");
+    expect(meta.kindMissing).toBeUndefined();
+  });
+});

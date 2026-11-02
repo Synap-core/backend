@@ -37,6 +37,218 @@ declare const STATUS_SIGNALS: readonly [
 	"main_red_unowned"
 ];
 export type StatusSignal = (typeof STATUS_SIGNALS)[number];
+/**
+ * Why a handed-over secret came with no read for the agent.
+ *   `agent_unknown`  — the pod cannot tell which agent asked.
+ *   `not_grantable`  — a legacy client-encrypted secret the pod cannot read.
+ *   `key_not_allowed` — the key that answered may not grant vault access.
+ *   `agent_changed`  — the agent asking now is not the one the person was
+ *                      shown (`expectedGranteeId` on the answer).
+ */
+export type ProvideSecretGrantRefusal = "agent_changed" | "agent_unknown" | "key_not_allowed" | "not_grantable";
+/** What a secret answer did about the asking agent's access to it. */
+export type ProvideSecretGrant = {
+	agentName: string;
+	agentUserId: string;
+	/** ISO; `null` when an existing grant with no end already covered it. */
+	expiresAt: string | null;
+	status: "granted";
+} | {
+	reason: ProvideSecretGrantRefusal;
+	status: "refused";
+}
+/** The read could not be written; the hand-over stands. */
+ | {
+	status: "failed";
+};
+/**
+ * What `provideOptions` says a secret hand-over WILL do, before the person
+ * presses: the agent it will grant a read to, or why none will be granted.
+ */
+export type ProvideSecretGrantOffer = {
+	agentName: string;
+	/** Sent back on the answer as `expectedGranteeId`. */
+	agentUserId: string;
+	minutes: number;
+	status: "will_grant";
+} | {
+	reason: ProvideSecretGrantRefusal;
+	status: "no_grant";
+};
+/** Why a new connection can't be started from this pod. */
+export type ProvideConnectUnavailableReason = "no_broker" | "not_offered" | "unreadable";
+declare const SECRET_TYPES: readonly [
+	"password",
+	"api_key",
+	"credential",
+	"note",
+	"card",
+	"identity",
+	"ssh_key",
+	"certificate",
+	"env_variable",
+	"database",
+	"oauth"
+];
+export type SecretType = (typeof SECRET_TYPES)[number];
+/** Kind of thing that consumes/uses a secret. */
+export type SecretConsumerType = "automation" | "capability" | "connection" | "entity" | "tool" | "url";
+/**
+ * One "this secret is used by X" record — surfaced in the Connections face.
+ * Backed by the `secret_usages` join (falls back to `capability_id`/context).
+ */
+export interface SecretUsage {
+	id: string;
+	secretId: string;
+	consumerType: SecretConsumerType;
+	consumerId: string;
+	consumerLabel: string;
+	contextType?: string | null;
+	contextId?: string | null;
+	workspaceId?: string | null;
+}
+/**
+ * A single grant of access to a secret (which agent/workspace can use it) —
+ * surfaced in the Access face. Backed by `vault_grants`. This is the ONE
+ * canonical shape: `listGrants`, `listAllGrants`, and `getDetailBundle.grants`
+ * all return it. `secretName`/`secretType`/`granteeLabel`/`granteeType` are
+ * only populated by `listAllGrants` (which spans multiple secrets and resolves
+ * grantee identity); they are `null` from the per-secret endpoints.
+ */
+export interface SecretGrantView {
+	grantId: string;
+	grantedTo: string;
+	scope: string;
+	expiresAt?: string | null;
+	/** Uses remaining: null = unlimited; clamped at 0 when exhausted. */
+	usesRemaining?: number | null;
+	workspaceId?: string | null;
+	revokedAt?: string | null;
+	/** True when not revoked, not expired, and uses remain. */
+	active: boolean;
+	/** Populated by `listAllGrants` only; null elsewhere. */
+	secretName?: string | null;
+	secretType?: SecretType | null;
+	granteeLabel?: string | null;
+	granteeType?: "agent" | "user" | "workspace" | null;
+}
+/**
+ * A single audit event for a secret (created/revealed/copied/updated/shared) —
+ * surfaced in the Activity face. Backed by `secret_audit_log`.
+ */
+export interface SecretActivityEvent {
+	id: string;
+	action: string;
+	actorType: "agent" | "user";
+	actorLabel?: string | null;
+	createdAt: string;
+}
+/**
+ * The full four-faces bundle for a secret detail view — identity metadata plus
+ * where it is used, who can access it, and its recent activity. Fetched in one
+ * call to reduce detail round-trips.
+ */
+export interface SecretDetailBundle {
+	id: string;
+	name: string;
+	type: SecretType;
+	category?: string | null;
+	url?: string | null;
+	description?: string | null;
+	isFavorite: boolean;
+	createdAt: string;
+	updatedAt: string;
+	usages: SecretUsage[];
+	grants: SecretGrantView[];
+	recentActivity: SecretActivityEvent[];
+}
+declare const AskCauseSchema: z.ZodObject<{
+	at: z.ZodOptional<z.ZodString>;
+	kind: z.ZodEnum<{
+		criterion: "criterion";
+		decision: "decision";
+		external_approval: "external_approval";
+		gate: "gate";
+		param: "param";
+		run: "run";
+	}>;
+	ref: z.ZodOptional<z.ZodObject<{
+		id: z.ZodString;
+		kind: z.ZodString;
+	}, z.core.$strip>>;
+}, z.core.$strip>;
+export type AskCause = z.infer<typeof AskCauseSchema>;
+/**
+ *   `expires`          — an ephemeral ask with a lifetime: lapses at
+ *                        `expiresAt`. `orSessionEnd` when it is bound to a
+ *                        session too: closing the session retires it as well,
+ *                        so it goes at the EARLIER of the two.
+ *   `dies_with_session` — a session-bound draft: retired when its session ends.
+ *   `review_later`     — objectWork untouched for 7 days: out of the headline
+ *                        count, kept in the Review later pile `since` then.
+ *   `until_decided`    — waits for a decision, with no deadline.
+ */
+export type ProposalFate = {
+	expiresAt: string;
+	kind: "expires";
+	orSessionEnd: boolean;
+} | {
+	kind: "dies_with_session";
+} | {
+	kind: "until_decided";
+} | {
+	kind: "review_later";
+	since: string;
+};
+declare const PROPOSAL_WAIT_REASONS: readonly [
+	"gate",
+	"owed_slot",
+	"parked_run"
+];
+export type ProposalWaitReason = (typeof PROPOSAL_WAIT_REASONS)[number];
+export interface ProposalWaits {
+	waits: boolean;
+	/** Present only when `waits`. */
+	reason?: ProposalWaitReason;
+}
+declare const NEEDS_YOU_SLOT_CLASSES: readonly [
+	"needs_you",
+	"from_system",
+	"stopped",
+	"working",
+	"review_later"
+];
+export type NeedsYouSlotClass = (typeof NEEDS_YOU_SLOT_CLASSES)[number];
+declare const NEEDS_YOU_PROPOSAL_CLASSES: readonly [
+	"needs_you",
+	"working",
+	"review_later",
+	"changes_to_review"
+];
+export type NeedsYouProposalClass = (typeof NEEDS_YOU_PROPOSAL_CLASSES)[number];
+/** Every class a row can carry — one vocabulary across slots and proposals. */
+export type NeedsYouClass = NeedsYouSlotClass | NeedsYouProposalClass;
+declare const NEEDS_YOU_FOLDS: readonly [
+	"working",
+	"stopped",
+	"review_later",
+	"from_system",
+	"changes_to_review"
+];
+export type NeedsYouFold = (typeof NEEDS_YOU_FOLDS)[number];
+/** The headline and every fold, counted over the SAME rows a list draws. */
+export interface NeedsYouFoldCounts {
+	/** The headline: rows that really need the person. */
+	needsYou: number;
+	working: number;
+	/** Stopped rows… */
+	stopped: number;
+	/** …on this many sessions (Stopped draws one row per session). */
+	stoppedSessions: number;
+	reviewLater: number;
+	fromSystem: number;
+	changesToReview: number;
+}
 declare const TRACK_STATUSES: readonly [
 	"proposed",
 	"agreed",
@@ -746,218 +958,6 @@ export interface KeyDraft {
 	readonly uses: readonly string[];
 	/** What it may touch, where, and for how long. */
 	readonly grant: GrantDraft;
-}
-/**
- * Why a handed-over secret came with no read for the agent.
- *   `agent_unknown`  — the pod cannot tell which agent asked.
- *   `not_grantable`  — a legacy client-encrypted secret the pod cannot read.
- *   `key_not_allowed` — the key that answered may not grant vault access.
- *   `agent_changed`  — the agent asking now is not the one the person was
- *                      shown (`expectedGranteeId` on the answer).
- */
-export type ProvideSecretGrantRefusal = "agent_changed" | "agent_unknown" | "key_not_allowed" | "not_grantable";
-/** What a secret answer did about the asking agent's access to it. */
-export type ProvideSecretGrant = {
-	agentName: string;
-	agentUserId: string;
-	/** ISO; `null` when an existing grant with no end already covered it. */
-	expiresAt: string | null;
-	status: "granted";
-} | {
-	reason: ProvideSecretGrantRefusal;
-	status: "refused";
-}
-/** The read could not be written; the hand-over stands. */
- | {
-	status: "failed";
-};
-/**
- * What `provideOptions` says a secret hand-over WILL do, before the person
- * presses: the agent it will grant a read to, or why none will be granted.
- */
-export type ProvideSecretGrantOffer = {
-	agentName: string;
-	/** Sent back on the answer as `expectedGranteeId`. */
-	agentUserId: string;
-	minutes: number;
-	status: "will_grant";
-} | {
-	reason: ProvideSecretGrantRefusal;
-	status: "no_grant";
-};
-/** Why a new connection can't be started from this pod. */
-export type ProvideConnectUnavailableReason = "no_broker" | "not_offered" | "unreadable";
-declare const SECRET_TYPES: readonly [
-	"password",
-	"api_key",
-	"credential",
-	"note",
-	"card",
-	"identity",
-	"ssh_key",
-	"certificate",
-	"env_variable",
-	"database",
-	"oauth"
-];
-export type SecretType = (typeof SECRET_TYPES)[number];
-/** Kind of thing that consumes/uses a secret. */
-export type SecretConsumerType = "automation" | "capability" | "connection" | "entity" | "tool" | "url";
-/**
- * One "this secret is used by X" record — surfaced in the Connections face.
- * Backed by the `secret_usages` join (falls back to `capability_id`/context).
- */
-export interface SecretUsage {
-	id: string;
-	secretId: string;
-	consumerType: SecretConsumerType;
-	consumerId: string;
-	consumerLabel: string;
-	contextType?: string | null;
-	contextId?: string | null;
-	workspaceId?: string | null;
-}
-/**
- * A single grant of access to a secret (which agent/workspace can use it) —
- * surfaced in the Access face. Backed by `vault_grants`. This is the ONE
- * canonical shape: `listGrants`, `listAllGrants`, and `getDetailBundle.grants`
- * all return it. `secretName`/`secretType`/`granteeLabel`/`granteeType` are
- * only populated by `listAllGrants` (which spans multiple secrets and resolves
- * grantee identity); they are `null` from the per-secret endpoints.
- */
-export interface SecretGrantView {
-	grantId: string;
-	grantedTo: string;
-	scope: string;
-	expiresAt?: string | null;
-	/** Uses remaining: null = unlimited; clamped at 0 when exhausted. */
-	usesRemaining?: number | null;
-	workspaceId?: string | null;
-	revokedAt?: string | null;
-	/** True when not revoked, not expired, and uses remain. */
-	active: boolean;
-	/** Populated by `listAllGrants` only; null elsewhere. */
-	secretName?: string | null;
-	secretType?: SecretType | null;
-	granteeLabel?: string | null;
-	granteeType?: "agent" | "user" | "workspace" | null;
-}
-/**
- * A single audit event for a secret (created/revealed/copied/updated/shared) —
- * surfaced in the Activity face. Backed by `secret_audit_log`.
- */
-export interface SecretActivityEvent {
-	id: string;
-	action: string;
-	actorType: "agent" | "user";
-	actorLabel?: string | null;
-	createdAt: string;
-}
-/**
- * The full four-faces bundle for a secret detail view — identity metadata plus
- * where it is used, who can access it, and its recent activity. Fetched in one
- * call to reduce detail round-trips.
- */
-export interface SecretDetailBundle {
-	id: string;
-	name: string;
-	type: SecretType;
-	category?: string | null;
-	url?: string | null;
-	description?: string | null;
-	isFavorite: boolean;
-	createdAt: string;
-	updatedAt: string;
-	usages: SecretUsage[];
-	grants: SecretGrantView[];
-	recentActivity: SecretActivityEvent[];
-}
-declare const AskCauseSchema: z.ZodObject<{
-	at: z.ZodOptional<z.ZodString>;
-	kind: z.ZodEnum<{
-		criterion: "criterion";
-		decision: "decision";
-		external_approval: "external_approval";
-		gate: "gate";
-		param: "param";
-		run: "run";
-	}>;
-	ref: z.ZodOptional<z.ZodObject<{
-		id: z.ZodString;
-		kind: z.ZodString;
-	}, z.core.$strip>>;
-}, z.core.$strip>;
-export type AskCause = z.infer<typeof AskCauseSchema>;
-/**
- *   `expires`          — an ephemeral ask with a lifetime: lapses at
- *                        `expiresAt`. `orSessionEnd` when it is bound to a
- *                        session too: closing the session retires it as well,
- *                        so it goes at the EARLIER of the two.
- *   `dies_with_session` — a session-bound draft: retired when its session ends.
- *   `review_later`     — objectWork untouched for 7 days: out of the headline
- *                        count, kept in the Review later pile `since` then.
- *   `until_decided`    — waits for a decision, with no deadline.
- */
-export type ProposalFate = {
-	expiresAt: string;
-	kind: "expires";
-	orSessionEnd: boolean;
-} | {
-	kind: "dies_with_session";
-} | {
-	kind: "until_decided";
-} | {
-	kind: "review_later";
-	since: string;
-};
-declare const PROPOSAL_WAIT_REASONS: readonly [
-	"gate",
-	"owed_slot",
-	"parked_run"
-];
-export type ProposalWaitReason = (typeof PROPOSAL_WAIT_REASONS)[number];
-export interface ProposalWaits {
-	waits: boolean;
-	/** Present only when `waits`. */
-	reason?: ProposalWaitReason;
-}
-declare const NEEDS_YOU_SLOT_CLASSES: readonly [
-	"needs_you",
-	"from_system",
-	"stopped",
-	"working",
-	"review_later"
-];
-export type NeedsYouSlotClass = (typeof NEEDS_YOU_SLOT_CLASSES)[number];
-declare const NEEDS_YOU_PROPOSAL_CLASSES: readonly [
-	"needs_you",
-	"working",
-	"review_later",
-	"changes_to_review"
-];
-export type NeedsYouProposalClass = (typeof NEEDS_YOU_PROPOSAL_CLASSES)[number];
-/** Every class a row can carry — one vocabulary across slots and proposals. */
-export type NeedsYouClass = NeedsYouSlotClass | NeedsYouProposalClass;
-declare const NEEDS_YOU_FOLDS: readonly [
-	"working",
-	"stopped",
-	"review_later",
-	"from_system",
-	"changes_to_review"
-];
-export type NeedsYouFold = (typeof NEEDS_YOU_FOLDS)[number];
-/** The headline and every fold, counted over the SAME rows a list draws. */
-export interface NeedsYouFoldCounts {
-	/** The headline: rows that really need the person. */
-	needsYou: number;
-	working: number;
-	/** Stopped rows… */
-	stopped: number;
-	/** …on this many sessions (Stopped draws one row per session). */
-	stoppedSessions: number;
-	reviewLater: number;
-	fromSystem: number;
-	changesToReview: number;
 }
 /**
  * WHO is asking for access, on an `access-request` row — a pod-level request
@@ -15068,6 +15068,7 @@ declare const FAILURE_ERROR_CLASSES: readonly [
 	"missing_field",
 	"validation",
 	"conflict",
+	"kind_missing",
 	"unknown"
 ];
 export type FailureErrorClass = (typeof FAILURE_ERROR_CLASSES)[number];
@@ -15321,6 +15322,41 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
 	 * (`<sourceRef>-><targetRef>:<type>`), which survives chunking and retries.
 	 */
 	byOp?: Record<string, MaterializedOpRecord>;
+	/**
+	 * How many ops a run that STOPPED part-way was given (a non-plan graph
+	 * whose op threw). Only such a run stamps it and the three fields below,
+	 * together with what DID land (the fields above, the shape a complete run
+	 * stamps), so "N of M filed" is derived from the record, never from the
+	 * status (which stays `approval_failed`). A later stamp without it (a
+	 * complete run) drops all four.
+	 */
+	opCount?: number;
+	/** The op that threw: what it was and why, in the person's words. */
+	failedOp?: MaterializedFailedOp;
+	/** Ops the run never reached, because it stopped at `failedOp`. */
+	notRun?: MaterializedOpRef[];
+	/** Ops that ran and were left out without stopping the run (a relation that did not resolve, a twin left out). */
+	skipped?: MaterializedSkippedOp[];
+}
+/** One op of a run, addressed the way `byOp` keys it. */
+export interface MaterializedOpRef {
+	/** The `byOp` key (its `ref`, `opRef(n)` for a ref-less entity, the edge for a relation). */
+	key: string;
+	/** Its index in the ops the run was given. */
+	opIndex: number;
+	op: string;
+	/** Its title or name as the op carried it, when it has one. */
+	title?: string;
+}
+export interface MaterializedFailedOp extends MaterializedOpRef {
+	/** The SAFE, classified sentence (the row's `rejectionReason`). */
+	reason: string;
+	/** `data.failure.errorClass` of the same failure. */
+	errorClass: string;
+}
+export interface MaterializedSkippedOp extends MaterializedOpRef {
+	/** Why it was left out — redacted at write. */
+	reason: string;
 }
 declare const ROW_PATCH_KINDS: readonly [
 	"skill",
@@ -21872,6 +21908,17 @@ export interface SessionUnitCounts {
 	awaitingReview: boolean;
 	/** An agent/automation draft still in triage (`projectTriage(row).pending`). */
 	draft: boolean;
+	/**
+	 * The session's status and its LIVE runners' folded word
+	 * (`loadSessionRunnersFor` → `foldRunnerState`): THE rule's terminal-wait
+	 * input (`waitsOnYouAtTerminal`). `null` = the runner read FAILED. Always
+	 * set by `attachPathSections`; absent on a member row (`withViewerRole`):
+	 * the dialog is the owner's to answer. Structurally a `NeedsYouRunnerFacts`.
+	 */
+	runnerWait?: {
+		runnerState: string | null;
+		status: string;
+	} | null;
 }
 export type SessionInteractionType = "triggered" | "updated";
 export interface SessionInteraction {
@@ -32439,7 +32486,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				error?: string | undefined;
 				failure?: {
 					enableProposalId?: string | undefined;
-					errorClass: "auth" | "conflict" | "missing_field" | "no_connection" | "permission" | "provider" | "target_missing" | "transient" | "unknown" | "validation";
+					errorClass: "auth" | "conflict" | "kind_missing" | "missing_field" | "no_connection" | "permission" | "provider" | "target_missing" | "transient" | "unknown" | "validation";
 					next?: {
 						hint: string;
 						kind: "add" | "connect" | "enable" | "none" | "run";
@@ -46698,6 +46745,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					entityDocumentIds?: string[];
 					entityIds?: string[];
 					facetIds?: string[];
+					failedOp?: MaterializedFailedOp;
 					linkIds?: string[];
 					merge?: {
 						deletedRelationIds?: string[];
@@ -46717,6 +46765,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						winnerFacetIds?: string[];
 						winnerId: string;
 					};
+					notRun?: MaterializedOpRef[];
+					opCount?: number;
 					playbookIds?: string[];
 					projectIds?: string[];
 					projectSubjectIds?: Record<string, string>;
@@ -46726,6 +46776,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					ruleIds?: string[];
 					sessionIds?: string[];
 					skillIds?: string[];
+					skipped?: MaterializedSkippedOp[];
 					stampedAt?: string;
 					viewIds?: string[];
 				};

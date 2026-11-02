@@ -75,6 +75,18 @@ async function verify() {
     process.exit(1);
   }
 
+  // The grammar LEAF (`@synap-core/types/grants/grammar`): the SDK vendors it.
+  const leaf = await import("../dist/grants/grammar.data.js");
+  const missingLeaf = ["parsePermission", "patternMatches", "permits"].filter(
+    (name) => typeof leaf[name] !== "function"
+  );
+  if (missingLeaf.length > 0) {
+    console.error(
+      `Missing runtime exports from dist/grants/grammar.data.js: ${missingLeaf.join(", ")}`
+    );
+    process.exit(1);
+  }
+
   // Every `exports` SUB-PATH must point at a file that exists.
   //
   // The checks above prove named functions survive bundling in two barrels.

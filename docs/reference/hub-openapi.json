@@ -4871,6 +4871,7 @@
                         "missing_field",
                         "validation",
                         "conflict",
+                        "kind_missing",
                         "unknown"
                       ]
                     },
@@ -36262,14 +36263,14 @@
     "/brand/kit": {
       "get": {
         "tags": ["Brand"],
-        "summary": "The caller's brand kit (json, css or frame-md)",
+        "summary": "The caller's brand kit (json, css, frame-md or od-design-system)",
         "description": "Resolves the Brand space (the given workspace or the brand source it declares, else the pod's brand provider) and the brand identity in it — the project's brand, else the brand flagged default, else the only brand — and returns that brand's kit with a deterministic content `hash`. 404 with a typed `reason` and a human `message` when there is no brand; a failed read is a 5xx, never an empty kit.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "enum": ["json", "css", "frame-md"],
+              "enum": ["json", "css", "frame-md", "od-design-system"],
               "default": "json"
             },
             "required": false,
@@ -36299,7 +36300,7 @@
                   "properties": {
                     "format": {
                       "type": "string",
-                      "enum": ["json", "css", "frame-md"]
+                      "enum": ["json", "css", "frame-md", "od-design-system"]
                     },
                     "content": { "type": "string" },
                     "hash": { "type": "string" },

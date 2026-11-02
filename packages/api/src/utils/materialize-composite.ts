@@ -873,6 +873,36 @@ class PlanStepAbort extends Error {
   }
 }
 
+/**
+ * What a NON-plan materialization had done when it threw. Outside a plan a
+ * throw keeps its historic meaning (it propagates, and whatever landed before
+ * it stays), so the caller that records the failure needs to know WHAT stayed:
+ * live 2026-10-22 (proposal e8fc00d6), a capture graph's fifth entity named a
+ * kind missing in its space, four entities landed carrying the receipt's id,
+ * and the receipt read "nothing was created".
+ *
+ * Carried on the thrown error through a side table (never a new error type:
+ * callers test `instanceof TRPCError` and read `.cause`), read with
+ * {@link readPartialMaterialization}.
+ */
+export interface PartialMaterialization {
+  /** The ops this call was given (indexes below refer to this array). */
+  operations: CompositeProposalOperation[];
+  /** Everything that had applied when it threw. */
+  result: MaterializeResult;
+  /** The op being applied when it threw; -1 when none had started. */
+  failedOpIndex: number;
+}
+
+const PARTIAL_BY_ERROR = new WeakMap<object, PartialMaterialization>();
+
+/** The partial result a materializer throw carried, when it carried one. */
+export function readPartialMaterialization(
+  err: unknown
+): PartialMaterialization | undefined {
+  return err && typeof err === "object" ? PARTIAL_BY_ERROR.get(err) : undefined;
+}
+
 /** The ids a partial result names — what compensation must account for. */
 function appliedRowsOf(
   result: MaterializeResult
@@ -2051,7 +2081,17 @@ export async function materializeCompositeGraph(
     // Outside a plan a throw keeps its historic meaning: it propagates, and
     // whatever landed before it stays (the per-op resilience above is what
     // limits that). Inside a plan, nothing is allowed to half-land.
-    if (!planMode || !planCallers) throw err;
+    if (!planMode || !planCallers) {
+      // Say what stayed, so the receipt records it (`PartialMaterialization`).
+      if (!planMode && err && typeof err === "object") {
+        PARTIAL_BY_ERROR.set(err, {
+          operations,
+          result: buildResult(),
+          failedOpIndex: currentOpIndex,
+        });
+      }
+      throw err;
+    }
     const failedOp = operations[currentOpIndex];
     const failedRef = (failedOp as { ref?: unknown } | undefined)?.ref;
     const failure: PlanStepFailure =
