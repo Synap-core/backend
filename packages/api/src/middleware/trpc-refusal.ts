@@ -39,10 +39,12 @@ import { TRPC_ERROR_CODES_BY_KEY } from "@trpc/server/rpc";
 /**
  * The most procedures one batched `/trpc` request may name. Without it an
  * unauthenticated `/trpc/a,a,a…?batch=1` URL of 16 KB was answered with ~8k
- * error shapes. Pass it to every `fetchRequestHandler`, and as `maxItems` to a
- * client's `httpBatchLink`: tRPC refuses a bigger batch whole (400).
+ * error shapes. Pass it to every `fetchRequestHandler`, and as `maxItems` (or
+ * less) to a client's `httpBatchLink`: tRPC refuses a bigger batch whole
+ * (400), every call of it. 200 is above any real client's batch (a GET batch
+ * that size already meets URL-length limits).
  */
-export const TRPC_MAX_BATCH_SIZE = 50;
+export const TRPC_MAX_BATCH_SIZE = 200;
 
 const trimSlashes = (p: string): string =>
   p.replace(/^\//, "").replace(/\/$/, "");

@@ -11,6 +11,7 @@
 import { createTRPCProxyClient, httpBatchLink } from "@trpc/client";
 import superjson from "superjson";
 import type { AppRouter } from "@synap/api";
+import { TRPC_MAX_BATCH_SIZE } from "@synap/api/trpc-refusal";
 import { createLogger } from "@synap-core/core";
 import { EventEmitter } from "events";
 import type { TestUser } from "./setup.js";
@@ -134,6 +135,8 @@ export function createTestClient(
     links: [
       httpBatchLink({
         url: `${apiUrl}/trpc`,
+        // The pod refuses a bigger batch whole (400).
+        maxItems: TRPC_MAX_BATCH_SIZE,
         // The server speaks superjson (packages/api/src/init-trpc.ts); without
         // it every input arrived as undefined and every output untranslated.
         transformer: superjson,

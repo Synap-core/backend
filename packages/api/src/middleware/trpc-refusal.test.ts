@@ -231,61 +231,66 @@ async function rejection(p: Promise<unknown>) {
 let burst = 0;
 const LINKS = ["batch", "single"] as const;
 
-describe.each(LINKS)("every refusal in front of /trpc is a tRPC error (%s link)", (link) => {
-  it("the edge CORS 403 → FORBIDDEN, with the refusal's words", async () => {
-    const before = reached;
-    const { client } = makeApp();
-    const err = await rejection(
-      client({ origin: FOREIGN }, link).workspaces.list.query()
-    );
-    expect(err.data?.code).toBe("FORBIDDEN");
-    expect(err.data?.httpStatus).toBe(403);
-    expect(err.message).toBe("This browser origin is not approved for this Pod");
-    expect((err.meta?.response as Response).status).toBe(403);
-    expect(reached).toBe(before);
-  });
+describe.each(LINKS)(
+  "every refusal in front of /trpc is a tRPC error (%s link)",
+  (link) => {
+    it("the edge CORS 403 → FORBIDDEN, with the refusal's words", async () => {
+      const before = reached;
+      const { client } = makeApp();
+      const err = await rejection(
+        client({ origin: FOREIGN }, link).workspaces.list.query()
+      );
+      expect(err.data?.code).toBe("FORBIDDEN");
+      expect(err.data?.httpStatus).toBe(403);
+      expect(err.message).toBe(
+        "This browser origin is not approved for this Pod"
+      );
+      expect((err.meta?.response as Response).status).toBe(403);
+      expect(reached).toBe(before);
+    });
 
-  it("the size limit's 413 → PAYLOAD_TOO_LARGE", async () => {
-    const before = reached;
-    const { client } = makeApp();
-    const err = await rejection(
-      client(MOCK_SESSION, link).entities.create.mutate({
-        text: "x".repeat(BODY_LIMIT * 2),
-      })
-    );
-    expect(err.data?.code).toBe("PAYLOAD_TOO_LARGE");
-    expect(err.data?.httpStatus).toBe(413);
-    expect(err.message).toBe("Request body must be less than 1KB");
-    expect(reached).toBe(before);
-  });
+    it("the size limit's 413 → PAYLOAD_TOO_LARGE", async () => {
+      const before = reached;
+      const { client } = makeApp();
+      const err = await rejection(
+        client(MOCK_SESSION, link).entities.create.mutate({
+          text: "x".repeat(BODY_LIMIT * 2),
+        })
+      );
+      expect(err.data?.code).toBe("PAYLOAD_TOO_LARGE");
+      expect(err.data?.httpStatus).toBe(413);
+      expect(err.message).toBe("Request body must be less than 1KB");
+      expect(reached).toBe(before);
+    });
 
-  it("the edge rate limit's 429 → TOO_MANY_REQUESTS, Retry-After and RateLimit kept", async () => {
-    const { client } = makeApp();
-    const c = client({ authorization: `Bearer burst-${(burst += 1)}` }, link);
-    await rejection(c.workspaces.list.query()); // the one call: the gate's 401
-    const err = await rejection(c.workspaces.list.query());
-    expect(err.data?.code).toBe("TOO_MANY_REQUESTS");
-    expect(err.data?.httpStatus).toBe(429);
-    expect(err.message).toBe("Rate limit exceeded. Please try again later.");
-    const res = err.meta?.response as Response;
-    expect(res.status).toBe(429);
-    expect(res.headers.get("retry-after")).toBe("900");
-    expect(res.headers.get("ratelimit")).toBe(
-      "limit=1, remaining=0, reset=900"
-    );
-  });
+    it("the edge rate limit's 429 → TOO_MANY_REQUESTS, Retry-After and RateLimit kept", async () => {
+      const { client } = makeApp();
+      const c = client({ authorization: `Bearer burst-${(burst += 1)}` }, link);
+      await rejection(c.workspaces.list.query()); // the one call: the gate's 401
+      const err = await rejection(c.workspaces.list.query());
+      expect(err.data?.code).toBe("TOO_MANY_REQUESTS");
+      expect(err.data?.httpStatus).toBe(429);
+      expect(err.message).toBe("Rate limit exceeded. Please try again later.");
+      const res = err.meta?.response as Response;
+      expect(res.status).toBe(429);
+      expect(res.headers.get("retry-after")).toBe("900");
+      expect(res.headers.get("ratelimit")).toBe(
+        "limit=1, remaining=0, reset=900"
+      );
+    });
 
-  it("the session gate's 401 → UNAUTHORIZED, the gate's message", async () => {
-    const before = reached;
-    const { client } = makeApp();
-    const err = await rejection(client({}, link).workspaces.list.query());
-    expect(err.data?.code).toBe("UNAUTHORIZED");
-    expect(err.data?.httpStatus).toBe(401);
-    expect(err.data?.path).toBe("workspaces.list");
-    expect(err.message).toBe("No session cookie or token");
-    expect(reached).toBe(before);
-  });
-});
+    it("the session gate's 401 → UNAUTHORIZED, the gate's message", async () => {
+      const before = reached;
+      const { client } = makeApp();
+      const err = await rejection(client({}, link).workspaces.list.query());
+      expect(err.data?.code).toBe("UNAUTHORIZED");
+      expect(err.data?.httpStatus).toBe(401);
+      expect(err.data?.path).toBe("workspaces.list");
+      expect(err.message).toBe("No session cookie or token");
+      expect(reached).toBe(before);
+    });
+  }
+);
 
 describe("a refused /trpc call is a tRPC error", () => {
   it("a batch of two → two UNAUTHORIZED errors in one 401 response", async () => {
@@ -367,9 +372,7 @@ describe("a refused /trpc call is a tRPC error", () => {
     expect(res401.headers.get("www-authenticate")).toBe(
       'Bearer error="invalid_token"'
     );
-    expect(res401.headers.get("access-control-allow-origin")).toBe(
-      FIRST_PARTY
-    );
+    expect(res401.headers.get("access-control-allow-origin")).toBe(FIRST_PARTY);
     // tRPC's own `vary` and the refusal's are both kept.
     expect(res401.headers.get("vary")).toBe("trpc-accept, accept, Origin");
     expect(((await res401.json()) as any).error.json.message).toBe(
@@ -431,10 +434,9 @@ describe("batch size (TRPC_MAX_BATCH_SIZE)", () => {
 
   it("a signed-in batch over the limit is refused by the adapter too", async () => {
     const before = reached;
-    const res = await makeApp().app.request(
-      batchUrl(TRPC_MAX_BATCH_SIZE + 1),
-      { headers: MOCK_SESSION }
-    );
+    const res = await makeApp().app.request(batchUrl(TRPC_MAX_BATCH_SIZE + 1), {
+      headers: MOCK_SESSION,
+    });
     expect(res.status).toBe(400);
     expect(reached).toBe(before);
   });
