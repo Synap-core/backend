@@ -14,8 +14,10 @@ import {
   applyAgentPosture,
   resolveAgentGovernanceDecision,
   revokeAllHostSeedsOn,
+  seedHostRules,
   syncAutoApproveRules,
 } from "./resolve-agent-governance-decision.js";
+import { DEFAULT_AUTO_APPROVE } from "@synap/governance-policy";
 
 let pg: PGlite;
 
@@ -224,6 +226,38 @@ describe("host seed — an approval for an agent covers its box when the box is 
       actions: ["relation.update"],
       createdBy: HUMAN,
     });
+    expect((await seedsOn(BOX)).map((s) => s.target_pattern)).toEqual([ACTION]);
+  });
+
+  it("an action the code floor already covers is never seeded (the floor is rung 8, not rows)", async () => {
+    const floorAction = DEFAULT_AUTO_APPROVE.find((p) => !p.includes("*"));
+    expect(floorAction, "the floor has a concrete action").toBeTruthy();
+    // A rule a person typed in the Rules editor is not diffed against the
+    // floor (routers/governance-rules.ts create); its seed on the box is.
+    const { rows } = await pg.query<{
+      id: string;
+      target_pattern: string;
+    }>(
+      `INSERT INTO governance_rules
+         (principal_kind, agent_user_id, scope_kind, target_kind, target_pattern, verdict, created_by)
+       VALUES ('agent', $1, 'pod', 'action', $2, 'auto', $4),
+              ('agent', $1, 'pod', 'action', $3, 'auto', $4)
+       RETURNING id, target_pattern`,
+      [AGENT, floorAction, ACTION, `user:${HUMAN}`]
+    );
+    const written = rows.map((r) => ({
+      id: r.id,
+      principalKind: "agent" as const,
+      agentUserId: AGENT,
+      scopeKind: "pod" as const,
+      workspaceId: null,
+      targetKind: "action" as const,
+      targetPattern: r.target_pattern,
+      targetProfile: null,
+      verdict: "auto" as const,
+      expiresAt: null,
+    }));
+    expect(await seedHostRules(db, written)).toHaveLength(1);
     expect((await seedsOn(BOX)).map((s) => s.target_pattern)).toEqual([ACTION]);
   });
 

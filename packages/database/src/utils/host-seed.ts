@@ -20,7 +20,12 @@
  *     'agent'`, 0388) AND has the same owner as the agent — a person's own or
  *     a shared computer stays strict (its agents are guests);
  *   - the seed is the same rule (scope, space, target, profile, expiry), so
- *     the computer may do exactly what the agent may do, nothing wider.
+ *     the computer may do exactly what the agent may do, nothing wider;
+ *   - an action the code floor already covers (`DEFAULT_AUTO_APPROVE`, rung 8)
+ *     is never seeded: like every seeder, the seed goes through
+ *     `filterUncoveredActions` (floor-covered-actions.ts, Governance
+ *     Convergence Plan D2: the floor is a rung, not rows). Only an `action`
+ *     target is diffed; a capability or profile target has no floor to restate.
  *
  * Each seed names the agent rule it copies in `created_by`
  * (`system:host-seed:<agent rule id>`), so revoking that rule revokes its
@@ -41,6 +46,7 @@ import {
   type NewGovernanceRule,
 } from "../schema/governance-rules.js";
 import { MACHINE_CREATED_BY_PREFIX } from "./governance-rule-provenance.js";
+import { filterUncoveredActions } from "./floor-covered-actions.js";
 
 type DbHandle = typeof import("../client-pg.js").db;
 /** A handle or an open transaction: both run the same reads and writes. */
@@ -134,7 +140,19 @@ export async function seedHostRules(
   db: DbOrTx,
   rules: readonly SeedableRule[]
 ): Promise<string[]> {
-  const seedable = rules.filter(mayCarryHostSeed);
+  const carriers = rules.filter(mayCarryHostSeed);
+  // The floor is rung 8, not rows: an action pattern it already covers is
+  // never written for the box (header).
+  const uncovered = new Set(
+    filterUncoveredActions(
+      carriers
+        .filter((r) => r.targetKind === "action")
+        .map((r) => r.targetPattern)
+    )
+  );
+  const seedable = carriers.filter(
+    (r) => r.targetKind !== "action" || uncovered.has(r.targetPattern)
+  );
   if (seedable.length === 0) return [];
   const hostOf = new Map<string, string | null>();
   const values: NewGovernanceRule[] = [];

@@ -28,17 +28,27 @@ interface InsertedRow {
 
 /**
  * Minimal fake matching the shapes `syncAutoApproveRules` actually calls:
- * `db.transaction(cb)` → `tx.update().set().where()` then `tx.insert().values()`.
+ * `db.transaction(cb)` → `tx.update().set().where().returning()` (the rows it
+ * replaced, none here), then `tx.insert().values().returning()` (the rows as
+ * written, whose host seeds it then looks for: `tx.select().from().where()`
+ * finds the agent with no computer, so no seed is written).
  */
 function fakeDb() {
   const inserted: InsertedRow[] = [];
   const tx = {
-    update: () => ({ set: () => ({ where: async () => undefined }) }),
+    update: () => ({
+      set: () => ({ where: () => ({ returning: async () => [] }) }),
+    }),
     insert: () => ({
-      values: async (rows: InsertedRow[]) => {
+      values: (rows: InsertedRow[]) => {
         inserted.push(...rows);
+        return {
+          returning: async () =>
+            rows.map((r, i) => ({ id: `rule-${i}`, ...r })),
+        };
       },
     }),
+    select: () => ({ from: () => ({ where: async () => [] }) }),
   };
   return {
     inserted,
