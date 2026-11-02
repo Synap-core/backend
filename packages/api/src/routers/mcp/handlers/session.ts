@@ -293,10 +293,12 @@ function readParamsArg(raw: unknown): Record<string, unknown> | undefined {
 function readTemplateIdArg(raw: unknown): string | null | undefined {
   if (raw === null || raw === "null") return null;
   if (typeof raw !== "string" || raw.trim() === "") return undefined;
+  // Read before the guard: its false branch narrows a string to `never`.
+  const shown = raw.slice(0, 80);
   if (isUuid(raw)) return raw;
   throw Object.assign(
     new Error(
-      `templateId must be a playbook UUID (list_playbooks lists the ones you can start from), or null to start without one — got "${raw.slice(0, 80)}".`
+      `templateId must be a playbook UUID (list_playbooks lists the ones you can start from), or null to start without one — got "${shown}".`
     ),
     { code: "BAD_REQUEST" }
   );
