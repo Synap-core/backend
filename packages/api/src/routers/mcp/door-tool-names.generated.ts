@@ -81,7 +81,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_declare_lifecycle: {
     "pod-mcp": "synap_declare_lifecycle",
-    "cp-connector": null,
+    "cp-connector": "pod__declare_lifecycle",
   },
   synap_declare_workspace_source: {
     "pod-mcp": "synap_declare_workspace_source",
