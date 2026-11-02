@@ -95,6 +95,7 @@ import {
 } from "@synap-core/types/run-activity";
 import { humanizeToken } from "@synap-core/types/vocabulary";
 import { loadSessionActivity } from "./session-activity.js";
+import { withRunWhere } from "./run-where.js";
 import { isQueuedBoxRunResult } from "../box-runs/box-runs.js";
 import {
   listBoxRunsForFeed,
@@ -1426,7 +1427,7 @@ export async function listRuns(input: ListRunsInput): Promise<UnifiedRun[]> {
   const perFlow = Math.min(input.limit ?? 25, 100);
   const unique = await collectRuns(input, input.scope ?? {}, perFlow);
   unique.sort(byStartedAtDesc);
-  return unique.slice(0, perFlow);
+  return withRunWhere(unique.slice(0, perFlow));
 }
 
 /**
@@ -1595,7 +1596,7 @@ export async function listRunsPage(
     last.startedAt instanceof Date &&
     !Number.isNaN(last.startedAt.getTime());
   return {
-    runs,
+    runs: await withRunWhere(runs),
     nextCursor:
       after.length > limit && last && anchored
         ? encodeRunCursor({
@@ -1998,7 +1999,17 @@ export interface GetRunInput {
  * steps, capture decision/trace events. Playbook/session runs carry a channelId
  * — their message-level story is the channel, opened by the UI (not duplicated).
  */
+/** One run's detail, with where it ran (`run-where.ts`) on its run. */
 export async function getRun(
+  input: GetRunInput
+): Promise<UnifiedRunDetail | null> {
+  const detail = await getRunDetail(input);
+  if (!detail) return null;
+  const [run] = await withRunWhere([detail.run]);
+  return { ...detail, run: run! } as UnifiedRunDetail;
+}
+
+async function getRunDetail(
   input: GetRunInput
 ): Promise<UnifiedRunDetail | null> {
   const { userId, flowType, id, roster = false } = input;

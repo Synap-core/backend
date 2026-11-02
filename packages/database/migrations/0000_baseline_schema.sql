@@ -61,6 +61,14 @@ ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "host_user_id" text;
 -- 0329: agent pause (agent routing W1b).
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "agent_paused_at" timestamp with time zone;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "agent_paused_by" text;
+-- 0388: whose computer it is ('person' | 'agent' | 'shared'; NULL off computers).
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "computer_belongs_to" text;
+DO $$ BEGIN
+  ALTER TABLE "users" ADD CONSTRAINT "users_computer_belongs_to_check"
+    CHECK ("computer_belongs_to" IS NULL
+      OR "computer_belongs_to" IN ('person', 'agent', 'shared'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "kratos_identity_id" text;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "last_synced_at" timestamp with time zone;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
@@ -239,6 +247,7 @@ CREATE TABLE IF NOT EXISTS "device_auth_requests" (
   "approved_agents"       text[],
   "machine_user_id"       text REFERENCES "users"("id") ON DELETE SET NULL,
   "machine_name"          text,
+  "computer_belongs_to"   text,
   "minted_key_id"         uuid,
   "failed_code_attempts"  integer NOT NULL DEFAULT 0,
   "poll_interval_seconds" integer NOT NULL DEFAULT 5,

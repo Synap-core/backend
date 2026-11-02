@@ -19,9 +19,11 @@ import {
   days,
   isLiveKey,
   seenLine,
+  type ComputerBelongsTo,
   type ComputerKeyLike as SharedComputerKeyLike,
   type ComputerKeyState,
 } from "@synap-core/types/computers";
+import { resolveComputerBelongsToLabel } from "@synap-core/types/vocabulary";
 import type { SubjectEventLike } from "../../../_lib/object/subject-activity";
 import type { StatusKind } from "../../components/status-pill";
 
@@ -68,6 +70,8 @@ export interface ComputerLike {
   accessName: string | null;
   /** "Runs scripts" is on: it leases its person's box runs. */
   runsScripts?: boolean;
+  /** Whose computer it is (0388): the person's own, an agent's, or shared. */
+  belongsTo?: ComputerBelongsTo | null;
   agents: ComputerAgentLike[];
   owner?: { id: string; name: string } | null;
 }
@@ -208,6 +212,17 @@ export function ownerWords(
   if (c.owner === undefined) return "you";
   if (!c.owner) return null;
   return viewerId && c.owner.id === viewerId ? "you" : c.owner.name;
+}
+
+/**
+ * Whose computer it is, as its mark: "Personal", "An agent's", "Shared" —
+ * the vocabulary's words. Null when the pod did not say (a row from before
+ * 0388): no mark, never a guess.
+ */
+export function belongsToMark(
+  c: Pick<ComputerLike, "belongsTo">
+): string | null {
+  return c.belongsTo ? resolveComputerBelongsToLabel(c.belongsTo) : null;
 }
 
 /**

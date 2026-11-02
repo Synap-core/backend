@@ -18,7 +18,10 @@
  * and Node alike.
  */
 import { AGENT_CONNECT_COMMAND } from "../agents/index.js";
-import { resolveStatusLabel } from "../vocabulary/index.js";
+import {
+  resolveRunWhereLabel,
+  resolveStatusLabel,
+} from "../vocabulary/index.js";
 
 /** A key's state as `machines.list` derives it (`MachineKeyState`). */
 export type ComputerKeyState =
@@ -157,3 +160,58 @@ export const RECONNECT_COMMAND = AGENT_CONNECT_COMMAND.replace(
   / init$/,
   " pods reconnect"
 );
+
+// ─── Whose computer it is (0388, computers plan v2 §4 K3) ────────────────────
+
+/**
+ * Whose computer it is — `users.computer_belongs_to`, stored once, on the
+ * computer (`machine` agent user) only. `person`: the person's own, agents on
+ * it are guests (the default). `agent`: a box an agent owns; a person's auto
+ * rule for an agent on it is also written for the computer (decision
+ * c83e0661). `shared`: many work on it (cloud, the pod's own). Words:
+ * `resolveComputerBelongsToLabel` (vocabulary).
+ */
+export const COMPUTER_BELONGS_TO = ["person", "agent", "shared"] as const;
+export type ComputerBelongsTo = (typeof COMPUTER_BELONGS_TO)[number];
+
+export function isComputerBelongsTo(v: unknown): v is ComputerBelongsTo {
+  return (
+    typeof v === "string" &&
+    (COMPUTER_BELONGS_TO as readonly string[]).includes(v)
+  );
+}
+
+// ─── Where a run ran (read-time, computers plan v2 §0.5) ─────────────────────
+
+/**
+ * Where a run ran, DERIVED at read time from what already exists (a box run's
+ * lease, a session's runner row, an agent's computer, an agent's reach), never
+ * stored beside `executor`. Where CODE runs stays `skills.execution_mode`.
+ *   - `pod`: the pod itself ran it (automations, captures, chat, a sync skill,
+ *     an agent the pod runs);
+ *   - `computer`: a computer ran it — `computer` names it;
+ *   - `outside`: an agent outside the pod with no computer of record.
+ * `null` on the run = nothing records where (a box run still queued, a session
+ * nobody worked yet): unknown, never "the pod".
+ */
+export type RunWhereKind = "pod" | "computer" | "outside";
+
+export interface RunWhere {
+  kind: RunWhereKind;
+  /** Set when `kind` is `computer`. */
+  computer: {
+    id: string;
+    name: string;
+    belongsTo: ComputerBelongsTo | null;
+  } | null;
+}
+
+/** "On devbox" · "In the pod" · "Outside the pod"; null when unknown. */
+export function runWhereLine(
+  where: RunWhere | null | undefined
+): string | null {
+  if (!where) return null;
+  if (where.kind === "computer" && where.computer?.name.trim())
+    return `On ${where.computer.name.trim()}`;
+  return resolveRunWhereLabel(where.kind);
+}

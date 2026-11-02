@@ -58,6 +58,7 @@ import {
   apps,
 } from "@synap/database/schema";
 import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
+import { COMPUTER_BELONGS_TO } from "@synap-core/types/computers";
 import {
   checkPermissionOrPropose,
   proposedMessageFor,
@@ -915,6 +916,8 @@ export const apiKeysRouter = router({
         agents: z.array(z.string().min(1).max(64)).max(8).optional(),
         reuseComputerId: z.string().min(1).nullish(),
         computerName: z.string().trim().min(1).max(80).nullish(),
+        /** Whose computer it is (0388); omitted = person's own (new) / unchanged (reused). */
+        belongsTo: z.enum(COMPUTER_BELONGS_TO).nullish(),
       })
     )
     .mutation(async ({ ctx, input }) => {

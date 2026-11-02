@@ -10,7 +10,10 @@
  *   - adminList: every computer with its owner, for a pod admin only;
  *   - rename / setKeyTtl / revoke: a stranger gets NOT_FOUND; a key (no
  *     session) is refused; revoke stops the computer's AND its agents' keys;
- *   - setKeyTtl drives the lifetime the next key gets (`resolveMachineKeyTtlDays`).
+ *   - setKeyTtl drives the lifetime the next key gets (`resolveMachineKeyTtlDays`);
+ *   - whose computer it is (0388): set at the device approval (default the
+ *     person's own), changed by `setBelongsTo` (owner, signed in); leaving
+ *     "an agent's" takes back every approval seeded on it.
  */
 import { describe, it, expect, beforeAll, vi } from "vitest";
 
@@ -115,7 +118,11 @@ const caller = (userId: string, signedIn = true) =>
   } as never);
 
 /** Connect a computer for HUMAN through the real device flow. */
-async function connectComputer(hostname: string, agents = ["claude-code"]) {
+async function connectComputer(
+  hostname: string,
+  agents = ["claude-code"],
+  belongsTo?: "person" | "agent" | "shared"
+) {
   const res = await createDeviceRequest({
     clientName: "synap-cli",
     hostname,
@@ -134,6 +141,7 @@ async function connectComputer(hostname: string, agents = ["claude-code"]) {
     userCode: res.user_code,
     personId: HUMAN,
     decision: "approve",
+    ...(belongsTo ? { belongsTo } : {}),
   });
   await q(`update device_auth_requests set last_polled_at = null`);
   const got = await collectDeviceToken({ deviceCode: res.device_code });
@@ -170,6 +178,8 @@ describe("machines.list", () => {
       keyTtlDays: null,
       effectiveKeyTtlDays: 90,
       accessName: "AI — read & propose",
+      // A new computer is the person's own unless the approver says so (0388).
+      belongsTo: "person",
     });
     expect(c!.key?.state).toBe("active");
     expect(c!.agents.map((a) => a.displayName)).toEqual([
@@ -321,6 +331,70 @@ describe("machines.revoke", () => {
     expect(c!.key?.state).toBe("revoked");
     expect(c!.accessName).toBeNull();
     expect(c!.agents.map((a) => a.key?.state)).toEqual(["revoked"]);
+  });
+});
+
+describe("machines.setBelongsTo", () => {
+  const seedRow = async (machineId: string) =>
+    q(
+      `insert into governance_rules (id, principal_kind, agent_user_id, scope_kind, target_kind, target_pattern, verdict, created_by)
+       values (gen_random_uuid(), 'agent', $1, 'pod', 'action', 'channel.create', 'auto', 'system:host-seed:' || gen_random_uuid())`,
+      [machineId]
+    );
+  const liveSeeds = async (machineId: string) =>
+    (
+      await q<{ n: number }>(
+        `select count(*)::int as n from governance_rules
+         where agent_user_id = $1 and created_by like 'system:host-seed:%' and revoked_at is null`,
+        [machineId]
+      )
+    )[0]!.n;
+
+  it("the device approval sets it, and the owner changes it", async () => {
+    const box = (await connectComputer("agent-box", ["claude-code"], "agent"))
+      .computer.id;
+    const read = async () =>
+      (await caller(HUMAN).list()).find((c) => c.id === box)!.belongsTo;
+    expect(await read()).toBe("agent");
+    await expect(
+      caller(HUMAN).setBelongsTo({ machineId: box, belongsTo: "shared" })
+    ).resolves.toMatchObject({ status: "updated", belongsTo: "shared" });
+    expect(await read()).toBe("shared");
+  });
+
+  it("leaving an agent's takes back every approval seeded on it; staying keeps them", async () => {
+    const box = (await connectComputer("seeded-box", ["claude-code"], "agent"))
+      .computer.id;
+    await seedRow(box);
+    await caller(HUMAN).setBelongsTo({ machineId: box, belongsTo: "agent" });
+    expect(await liveSeeds(box)).toBe(1);
+    const res = await caller(HUMAN).setBelongsTo({
+      machineId: box,
+      belongsTo: "person",
+    });
+    expect(res).toMatchObject({ seedsRevoked: 1 });
+    expect(await liveSeeds(box)).toBe(0);
+  });
+
+  it("a stranger gets NOT_FOUND, a key is refused, an unknown value is refused", async () => {
+    await expect(
+      caller(STRANGER).setBelongsTo({
+        machineId: computerId,
+        belongsTo: "agent",
+      })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      caller(HUMAN, false).setBelongsTo({
+        machineId: computerId,
+        belongsTo: "agent",
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      caller(HUMAN).setBelongsTo({
+        machineId: computerId,
+        belongsTo: "own" as never,
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 });
 

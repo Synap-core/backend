@@ -166,6 +166,14 @@ beforeAll(async () => {
     `update users set agent_paused_at = now(), agent_paused_by = $2 where id = $1`,
     [PAUSED, OWNER]
   );
+  // Whose computer it is (0388): the owner's devbox is an agent's box, the
+  // teammate's is their own.
+  await q(`update users set computer_belongs_to = 'agent' where id = $1`, [
+    DEVBOX,
+  ]);
+  await q(`update users set computer_belongs_to = 'person' where id = $1`, [
+    THEIR_DEVBOX,
+  ]);
   await q(
     `insert into apps (id, owner_user_id, name, agent_user_id) values ($1, $2, 'Raycast', $3)`,
     [randomUUID(), OWNER, APP_AGENT]
@@ -284,13 +292,16 @@ describe("readAgentsForHandoff — which computer", () => {
     expect(row(ON_DEVBOX).computer).toEqual({
       agentUserId: DEVBOX,
       name: "devbox",
+      belongsTo: "agent",
     });
   });
 
   it("an agent with no machine falls back to its last-seen key's label", () => {
+    // A key label is no computer of record: nobody holds whose it is.
     expect(row(ON_LABEL).computer).toEqual({
       agentUserId: null,
       name: "MacBook-Pro",
+      belongsTo: null,
     });
   });
 
@@ -318,12 +329,14 @@ describe("readAgentsForHandoff — which computer", () => {
     expect(byName.devbox).toEqual({
       agentUserId: DEVBOX,
       name: "devbox",
+      belongsTo: "agent",
       agents: 2,
     });
     // ON_LABEL + PAUSED both last seen on "MacBook-Pro".
     expect(byName["MacBook-Pro"]).toEqual({
       agentUserId: null,
       name: "MacBook-Pro",
+      belongsTo: null,
       agents: 2,
     });
     // The teammate's devbox and laptop never answer "my devbox".
@@ -338,8 +351,8 @@ describe("readAgentsForHandoff — which computer", () => {
     const b = await readAgentsForHandoff(OWNER_B, { now: NOW });
     expect(b.computers).toEqual(
       expect.arrayContaining([
-        { agentUserId: LAPTOP_1, name: "laptop", agents: 0 },
-        { agentUserId: LAPTOP_2, name: "laptop", agents: 0 },
+        { agentUserId: LAPTOP_1, name: "laptop", belongsTo: null, agents: 0 },
+        { agentUserId: LAPTOP_2, name: "laptop", belongsTo: null, agents: 0 },
       ])
     );
     // OWNER's agents are visible pod-wide, but their keys act for OWNER.
@@ -350,6 +363,7 @@ describe("readAgentsForHandoff — which computer", () => {
     expect(row(THEIRS_ON_DEVBOX).computer).toEqual({
       agentUserId: THEIR_DEVBOX,
       name: "devbox",
+      belongsTo: "person",
     });
   });
 });

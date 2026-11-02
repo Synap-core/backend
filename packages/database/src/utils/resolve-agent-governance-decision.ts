@@ -8,6 +8,7 @@ import {
   isNull,
   like,
   ne,
+  notLike,
   or,
   sql,
 } from "drizzle-orm";
@@ -54,6 +55,14 @@ import {
   resolveMostSpecificPosture,
 } from "./config-settings.js";
 import { getHeldWritesApprovedBy } from "./request-write-context.js";
+import {
+  HOST_SEED_CREATED_BY_PREFIX,
+  revokeHostSeeds,
+  seedHostRules,
+} from "./host-seed.js";
+
+// The host seed travels with the agent-governance door its writers import.
+export * from "./host-seed.js";
 
 /**
  * Shared agent-governance orchestration — the SINGLE SOURCE OF TRUTH for the
@@ -797,7 +806,7 @@ export async function syncAutoApproveRules(
   // wrong verdict. A single transaction closes that window. REPLACE semantics
   // and the diff-only filtering above are unchanged.
   await db.transaction(async (tx) => {
-    await tx
+    const replaced = await tx
       .update(governanceRules)
       .set({ revokedAt: new Date() })
       .where(
@@ -811,30 +820,42 @@ export async function syncAutoApproveRules(
           // A person's "never" is not a mirrored allow: an allow-list PATCH
           // never takes it back (as `applyAgentPosture`).
           ne(governanceRules.verdict, "deny"),
+          // A host seed is an agent's approval on its box, not this
+          // principal's own list (host-seed.ts).
+          notLike(governanceRules.createdBy, `${HOST_SEED_CREATED_BY_PREFIX}%`),
           principalCondition,
           scopeCondition
         )
-      );
+      )
+      .returning({ id: governanceRules.id });
+    await revokeHostSeeds(
+      tx,
+      replaced.map((r) => r.id)
+    );
 
     // Empty list legitimately clears the mirrored rules (revoke-only) — the
     // transaction still commits the revoke above.
     if (uniqueActions.length === 0) return;
 
-    await tx.insert(governanceRules).values(
-      uniqueActions.map((targetPattern) => ({
-        principalKind,
-        scopeKind,
-        ...(principalKind === "agent" && agentUserId ? { agentUserId } : {}),
-        ...(scopeKind === "workspace" && workspaceId ? { workspaceId } : {}),
-        targetKind: "action" as const,
-        targetPattern,
-        verdict: "auto" as const,
-        // PROVENANCE (not enforcement): stamp the mirror's own namespace, here
-        // rather than at the call sites, so a future third caller cannot
-        // reintroduce the bare-user-id ambiguity by forgetting to.
-        createdBy: settingsMirrorCreatedBy(createdBy),
-      }))
-    );
+    const written = await tx
+      .insert(governanceRules)
+      .values(
+        uniqueActions.map((targetPattern) => ({
+          principalKind,
+          scopeKind,
+          ...(principalKind === "agent" && agentUserId ? { agentUserId } : {}),
+          ...(scopeKind === "workspace" && workspaceId ? { workspaceId } : {}),
+          targetKind: "action" as const,
+          targetPattern,
+          verdict: "auto" as const,
+          // PROVENANCE (not enforcement): stamp the mirror's own namespace, here
+          // rather than at the call sites, so a future third caller cannot
+          // reintroduce the bare-user-id ambiguity by forgetting to.
+          createdBy: settingsMirrorCreatedBy(createdBy),
+        }))
+      )
+      .returning();
+    await seedHostRules(tx, written);
   });
 }
 
@@ -914,7 +935,7 @@ export async function applyAgentPosture(input: {
   });
 
   await db.transaction(async (tx) => {
-    await tx
+    const replaced = await tx
       .update(governanceRules)
       .set({ revokedAt: new Date() })
       .where(
@@ -927,9 +948,17 @@ export async function applyAgentPosture(input: {
           eq(governanceRules.scopeKind, "pod"),
           // A posture never writes a "Never" (0381), so it never takes one
           // back: a person's deny outlives every posture change.
-          ne(governanceRules.verdict, "deny")
+          ne(governanceRules.verdict, "deny"),
+          // A computer's posture never takes back an agent's approval seeded
+          // on it (host-seed.ts).
+          notLike(governanceRules.createdBy, `${HOST_SEED_CREATED_BY_PREFIX}%`)
         )
-      );
+      )
+      .returning({ id: governanceRules.id });
+    await revokeHostSeeds(
+      tx,
+      replaced.map((r) => r.id)
+    );
     const rows = [
       ...autos.map((p) => ({ targetPattern: p, verdict: "auto" as const })),
       ...proposes.map((p) => ({
@@ -938,17 +967,21 @@ export async function applyAgentPosture(input: {
       })),
     ];
     if (rows.length > 0) {
-      await tx.insert(governanceRules).values(
-        rows.map((r) => ({
-          principalKind: "agent" as const,
-          agentUserId,
-          scopeKind: "pod" as const,
-          targetKind: "action" as const,
-          targetPattern: r.targetPattern,
-          verdict: r.verdict,
-          createdBy: settingsMirrorCreatedBy(createdBy),
-        }))
-      );
+      const written = await tx
+        .insert(governanceRules)
+        .values(
+          rows.map((r) => ({
+            principalKind: "agent" as const,
+            agentUserId,
+            scopeKind: "pod" as const,
+            targetKind: "action" as const,
+            targetPattern: r.targetPattern,
+            verdict: r.verdict,
+            createdBy: settingsMirrorCreatedBy(createdBy),
+          }))
+        )
+        .returning();
+      await seedHostRules(tx, written);
     }
     await tx
       .update(users)
@@ -1002,23 +1035,32 @@ async function applyAgentSpacePosture(input: {
       ]
     : [];
   await db.transaction(async (tx) => {
-    await tx
+    const replaced = await tx
       .update(governanceRules)
       .set({ revokedAt: new Date() })
-      .where(spacePostureRowsWhere(agentUserId, workspaceId));
+      .where(spacePostureRowsWhere(agentUserId, workspaceId))
+      .returning({ id: governanceRules.id });
+    await revokeHostSeeds(
+      tx,
+      replaced.map((r) => r.id)
+    );
     if (rows.length > 0) {
-      await tx.insert(governanceRules).values(
-        rows.map((r) => ({
-          principalKind: "agent" as const,
-          agentUserId,
-          scopeKind: "workspace" as const,
-          workspaceId,
-          targetKind: "action" as const,
-          targetPattern: r.targetPattern,
-          verdict: r.verdict,
-          createdBy: settingsMirrorCreatedBy(createdBy),
-        }))
-      );
+      const written = await tx
+        .insert(governanceRules)
+        .values(
+          rows.map((r) => ({
+            principalKind: "agent" as const,
+            agentUserId,
+            scopeKind: "workspace" as const,
+            workspaceId,
+            targetKind: "action" as const,
+            targetPattern: r.targetPattern,
+            verdict: r.verdict,
+            createdBy: settingsMirrorCreatedBy(createdBy),
+          }))
+        )
+        .returning();
+      await seedHostRules(tx, written);
     }
   });
   return {

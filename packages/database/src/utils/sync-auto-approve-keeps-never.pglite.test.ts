@@ -41,6 +41,8 @@ beforeAll(async () => {
       expires_at timestamptz,
       revoked_reason text
     );
+    -- The mirror reads an agent's computer (host seed, 0388): no host here.
+    CREATE TABLE users (id text PRIMARY KEY, host_user_id text);
   `);
   db = drizzle(pg);
 }, 120_000);

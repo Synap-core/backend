@@ -24,6 +24,7 @@ import type {
   RunPathTaken,
 } from "@synap/database";
 import type { SessionActivityWire } from "@synap-core/types/run-activity";
+import type { RunWhere } from "@synap-core/types/computers";
 import type {
   BoxRunEvidence,
   BoxRunRow,
@@ -112,6 +113,14 @@ export interface UnifiedRun {
   stepsFailed: number | null;
   /** The definition version this run executed (from definitionSnapshot); null if unsnapshotted. */
   definitionVersion: number | null;
+  /**
+   * Where it ran — the pod, a named computer, or outside — DERIVED at read
+   * time from what records it (a box run's lease, a session's runner row, an
+   * agent's computer and reach: `run-where.ts`), never stored. `null` =
+   * nothing records where (a box run still queued, a session nobody worked);
+   * ABSENT = the where read failed, so it is not known whether anything does.
+   */
+  where?: RunWhere | null;
 }
 
 /**
