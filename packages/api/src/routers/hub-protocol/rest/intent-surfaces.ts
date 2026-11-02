@@ -44,7 +44,7 @@ import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { lifecycleRouter } from "../../lifecycle.js";
 import { signalsRouter } from "../../signals.js";
-import { LENS_PAGE_READ_CAPS } from "@synap-core/types/lens";
+import { lensPageListInput } from "../../../services/signals/lens-page-read.js";
 import type { Context } from "../../../types/context.js";
 
 const lensQuery = {
@@ -471,16 +471,8 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
     readDoor(
       "attention.lens-page",
       lensPageQuery,
-      (ctx, q) =>
-        signalsRouter.createCaller(ctx).list({
-          lens: "page",
-          ...(q.workspaceId ? { workspaceId: q.workspaceId } : {}),
-          ...(q.projectId ? { projectId: q.projectId } : {}),
-          ...(q.trackId ? { trackId: q.trackId } : {}),
-          ...(q.sessionId ? { sessionId: q.sessionId } : {}),
-          caps: { ...LENS_PAGE_READ_CAPS },
-          ...(q.since ? { since: q.since } : {}),
-        }),
+      // The ONE lens page input, shared with the `lens.page` verb.
+      (ctx, q) => signalsRouter.createCaller(ctx).list(lensPageListInput(q)),
       // A frame's or pod app's key is a bound key: its page is its space's,
       // never the pod's (the scope axes AND with the workspace).
       { confineWorkspace: true }

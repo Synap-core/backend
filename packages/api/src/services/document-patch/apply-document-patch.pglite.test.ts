@@ -895,9 +895,20 @@ describe("applyDocumentPatch — set_scope / set_refresher", () => {
 
 describe("applyDocumentPatch — the bound refresher (decision D4)", () => {
   const AUTOMATION = "66666666-6666-4666-8666-666666666666";
-  const aiSection = (id: string, body: string) =>
+  const OTHER_AUTOMATION = "77777777-7777-4777-8777-777777777777";
+  /** Another agent key of the same person (USER). */
+  const OTHER_AGENT = "agent-2";
+  /**
+   * An AI section; `refresher` = the automation whose run wrote it (the D4
+   * stamp the patch door writes), null = an AI section no refresher wrote.
+   */
+  const aiSection = (
+    id: string,
+    body: string,
+    refresher: string | null = AUTOMATION
+  ) =>
     [
-      `::::synap-section{id="${id}" owner="ai"}`,
+      `::::synap-section{id="${id}" owner="ai"${refresher ? ` refresher="${refresher}"` : ""}}`,
       `## ${id}`,
       "",
       body,
@@ -907,24 +918,41 @@ describe("applyDocumentPatch — the bound refresher (decision D4)", () => {
     "\n"
   );
 
-  async function livingDocument(bound: string | null = AUTOMATION) {
-    const id = await newDocument(LIVING);
+  async function livingDocument(
+    bound: string | null = AUTOMATION,
+    content: string = LIVING
+  ) {
+    const id = await newDocument(content);
     await q(`update documents set refresh_automation_id = $1 where id = $2`, [
       bound,
       id,
     ]);
     return id;
   }
+  /**
+   * A run session of the refresher, as `openRunSession` writes it: the
+   * automation on the metadata and the agent the run writes as
+   * (`startedByAgentId`); `agent: null` = a run with no agent of its own.
+   */
   async function runSession(
-    opts: { automationId?: string; closed?: boolean; userId?: string } = {}
+    opts: {
+      automationId?: string;
+      closed?: boolean;
+      userId?: string;
+      agent?: string | null;
+    } = {}
   ) {
     const id = randomUUID();
+    const agent = opts.agent === undefined ? AGENT : opts.agent;
     await q(
       `insert into focus_sessions (id, user_id, status, metadata, closed_at) values ($1, $2, 'active', $3, $4)`,
       [
         id,
         opts.userId ?? USER,
-        JSON.stringify({ automationId: opts.automationId ?? AUTOMATION }),
+        JSON.stringify({
+          automationId: opts.automationId ?? AUTOMATION,
+          ...(agent ? { startedByAgentId: agent } : {}),
+        }),
         opts.closed ? new Date().toISOString() : null,
       ]
     );
@@ -940,15 +968,26 @@ describe("applyDocumentPatch — the bound refresher (decision D4)", () => {
         title: "status",
         body: "One PR left.",
       },
-    ]
+    ],
+    agentUserId: string = AGENT
   ) =>
     applyDocumentPatch({
       userId: USER,
-      agentUserId: AGENT,
+      agentUserId,
       documentId,
       provenanceSessionId: sessionId,
       ops: ops as never,
     });
+  /** The `refresher` stamp on section `id` as stored, or null. */
+  async function stampOf(documentId: string, id: string) {
+    const { content } = await row(documentId);
+    const open = content
+      .split("\n")
+      .find(
+        (l) => l.startsWith("::::synap-section{") && l.includes(`id="${id}"`)
+      );
+    return open?.match(/refresher="([^"]*)"/)?.[1] ?? null;
+  }
 
   it("its run rewriting an existing AI section files under refresher_section_update", async () => {
     const id = await livingDocument();
@@ -1000,10 +1039,7 @@ describe("applyDocumentPatch — the bound refresher (decision D4)", () => {
 
   it("a run of ANOTHER automation, a closed run, someone else's run or no session: section_update", async () => {
     const id = await livingDocument();
-    await refresh(
-      id,
-      await runSession({ automationId: "77777777-7777-4777-8777-777777777777" })
-    );
+    await refresh(id, await runSession({ automationId: OTHER_AUTOMATION }));
     await refresh(id, await runSession({ closed: true }));
     await refresh(id, await runSession({ userId: "someone-else" }));
     await refresh(id, null);
@@ -1059,5 +1095,132 @@ describe("applyDocumentPatch — the bound refresher (decision D4)", () => {
     );
     await refresh(id, sessionId);
     expect(h.gate.map((g) => g.action)).toEqual(["refresher_section_update"]);
+  });
+
+  // ── The run's own agent, and only the refresher's own sections (founder, 2 Nov) ──
+
+  it("another agent key of the same person sending the run's session id: section_update", async () => {
+    const id = await livingDocument();
+    const run = await runSession();
+    await refresh(id, run, undefined, OTHER_AGENT);
+    expect(h.gate.map((g) => g.action)).toEqual(["section_update"]);
+    // …and it stamps nothing: its section_update carries no refresher stamp.
+    h.agentAutoApply = true;
+    await refresh(id, run, undefined, OTHER_AGENT);
+    expect(await stampOf(id, "status")).toBeNull();
+  });
+
+  it("a run with no agent of its own (a person's automation) qualifies no agent: section_update", async () => {
+    const id = await livingDocument();
+    await refresh(id, await runSession({ agent: null }));
+    expect(h.gate.map((g) => g.action)).toEqual(["section_update"]);
+  });
+
+  it("an AI section another agent wrote (no refresher stamp): section_update", async () => {
+    const id = await livingDocument(
+      AUTOMATION,
+      [BODY, aiSection("status", "Two PRs in review.", null), ""].join("\n")
+    );
+    await refresh(id, await runSession());
+    expect(h.gate.map((g) => g.action)).toEqual(["section_update"]);
+  });
+
+  it("an AI section ANOTHER refresher wrote: section_update", async () => {
+    const id = await livingDocument(
+      AUTOMATION,
+      [
+        BODY,
+        aiSection("status", "Two PRs in review.", OTHER_AUTOMATION),
+        "",
+      ].join("\n")
+    );
+    await refresh(id, await runSession());
+    expect(h.gate.map((g) => g.action)).toEqual(["section_update"]);
+  });
+
+  it("a new section is reviewed ONCE: the approval writes the stamp, and the next run rewrites it under refresher_section_update", async () => {
+    const id = await livingDocument();
+    const run = await runSession();
+    const res = await refresh(id, run, [
+      { op: "upsert_section", id: "fresh", title: "fresh", body: "New." },
+    ]);
+    expect(res.status).toBe("proposed");
+    expect(h.gate.map((g) => g.action)).toEqual(["section_update"]);
+    // What the reviewer is shown is what lands: the stamped section.
+    if (res.status !== "proposed") throw new Error("expected a proposal");
+    expect(res.preview.find((p) => p.sectionId === "fresh")?.after).toContain(
+      `refresher="${AUTOMATION}"`
+    );
+    // A person approves it (the proposal row names the run session it was
+    // filed in); the run has closed by then.
+    await q(`update focus_sessions set closed_at = now() where id = $1`, [run]);
+    await applyApprovedDocumentPatch(
+      {
+        targetId: id,
+        agentUserId: AGENT,
+        sessionId: run,
+        data: h.gate[0]!.data,
+      },
+      USER
+    );
+    expect(await stampOf(id, "fresh")).toBe(AUTOMATION);
+    // The next run of the same refresher rewrites it without a proposal key.
+    await refresh(id, await runSession(), [
+      { op: "upsert_section", id: "fresh", title: "fresh", body: "Newer." },
+    ]);
+    expect(h.gate.map((g) => g.action)).toEqual([
+      "section_update",
+      "refresher_section_update",
+    ]);
+  });
+
+  it("an approval of a proposal NOT filed in the refresher's run never stamps", async () => {
+    const id = await livingDocument();
+    // Another agent proposes a section in its own (non-run) session.
+    const notARun = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, status, metadata) values ($1, $2, 'active', $3)`,
+      [notARun, USER, JSON.stringify({ startedByAgentId: OTHER_AGENT })]
+    );
+    await refresh(
+      id,
+      notARun,
+      [{ op: "upsert_section", id: "theirs", title: "theirs", body: "Mine." }],
+      OTHER_AGENT
+    );
+    // Even an approval row that claims the refresher's run for ANOTHER agent.
+    const run = await runSession();
+    await applyApprovedDocumentPatch(
+      {
+        targetId: id,
+        agentUserId: OTHER_AGENT,
+        sessionId: run,
+        data: h.gate[0]!.data,
+      },
+      USER
+    );
+    expect(await stampOf(id, "theirs")).toBeNull();
+    await refresh(id, await runSession(), [
+      { op: "upsert_section", id: "theirs", title: "theirs", body: "Ours." },
+    ]);
+    expect(h.gate.map((g) => g.action)).toEqual([
+      "section_update",
+      "section_update",
+    ]);
+  });
+
+  it("another agent's rewrite of a refresher section drops the stamp: the refresher must be reviewed again", async () => {
+    const id = await livingDocument();
+    h.agentAutoApply = true;
+    await refresh(
+      id,
+      null,
+      [{ op: "upsert_section", id: "status", title: "status", body: "Mine." }],
+      OTHER_AGENT
+    );
+    expect(await stampOf(id, "status")).toBeNull();
+    h.gate = [];
+    await refresh(id, await runSession());
+    expect(h.gate.map((g) => g.action)).toEqual(["section_update"]);
   });
 });

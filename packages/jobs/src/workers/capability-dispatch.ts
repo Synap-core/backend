@@ -49,6 +49,13 @@ export type CapabilityExecutorInput = {
     contextObjectId?: string;
   } | null;
   suppressProposal?: boolean;
+  /**
+   * The automation run this step belongs to: its session and the agent the
+   * run records for its writes (`openRunSession`'s `startedByAgentId`, null for
+   * a person's automation). Handed to builtin verbs only (`document.update`
+   * writes as that agent in that session, decision D4); never the gate.
+   */
+  automationRun?: { sessionId: string; agentUserId: string | null } | null;
 };
 
 type CapabilityExecutor = (

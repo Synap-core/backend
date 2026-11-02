@@ -138,6 +138,28 @@ export interface PatchWriter {
   author: string;
   /** Stamped as `sessionState` on a section written into a session document. */
   sessionState?: string;
+  /**
+   * The automation id of the document's bound refresher, when THIS writer is
+   * that refresher's own run (decision D4, the writer half). Stamped as
+   * {@link REFRESHER_SECTION_ATTRIBUTE} on every section the patch writes, so a
+   * later run of the same refresher can tell its own sections from another
+   * agent's. Any other writer's upsert rewrites the attributes without it.
+   */
+  refresher?: string;
+}
+
+/**
+ * The section attribute naming the refresher automation that wrote the
+ * section (D4, the ops half). Written only by the patch door, for a writer the
+ * door resolved as the document's bound refresher run; never taken from an op.
+ */
+export const REFRESHER_SECTION_ATTRIBUTE = "refresher";
+
+/** An `owner="ai"` section of the document as read, and the refresher that wrote it. */
+export interface AiSectionBefore {
+  id: string;
+  /** {@link REFRESHER_SECTION_ATTRIBUTE}, or null when no refresher run wrote it. */
+  refresher: string | null;
 }
 
 /** One affected region, before and after — what the reviewer is shown. */
@@ -156,11 +178,12 @@ export interface RenderedPatch {
   /** Section ids an `upsert_section` op replaced in place (vs appended). */
   replacedSections: string[];
   /**
-   * Ids of the `owner="ai"` sections of the document AS READ, before any op
-   * applied. Ops apply in order, so `replacedSections` also holds a section an
-   * earlier op of the same patch created; this is the pre-patch truth (D4).
+   * The `owner="ai"` sections of the document AS READ, before any op applied,
+   * each with the refresher stamp it carried. Ops apply in order, so
+   * `replacedSections` also holds a section an earlier op of the same patch
+   * created; this is the pre-patch truth (D4).
    */
-  aiSectionsBefore: string[];
+  aiSectionsBefore: AiSectionBefore[];
 }
 
 // ─── Section extents ─────────────────────────────────────────────────────────
@@ -298,6 +321,9 @@ function applyOp(
             writtenAt: now,
             ...(writer.sessionState
               ? { sessionState: writer.sessionState }
+              : {}),
+            ...(writer.refresher
+              ? { [REFRESHER_SECTION_ATTRIBUTE]: writer.refresher }
               : {}),
             ...(op.status ? { status: op.status } : {}),
           },
@@ -571,7 +597,10 @@ export function renderDocumentPatch(
     replacedSections,
     aiSectionsBefore: before.sections
       .filter((s) => sectionOwner(s) === "ai")
-      .map((s) => s.id),
+      .map((s) => ({
+        id: s.id,
+        refresher: s.attributes[REFRESHER_SECTION_ATTRIBUTE] ?? null,
+      })),
   };
 }
 

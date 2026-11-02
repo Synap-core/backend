@@ -180,6 +180,7 @@ export const SERVER_DERIVED_PARAMS = [
   "toolId",
   "requestEnableForOwner",
   "intentRequest",
+  "automationRun",
 ] as const;
 
 /**

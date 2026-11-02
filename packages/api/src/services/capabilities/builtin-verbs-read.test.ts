@@ -198,6 +198,10 @@ describe("W6 read/resolve verbs — registry", () => {
       "governance.recommend_tighten",
       "governance.recommend_tighten_posture",
       "graph.relations",
+      // lens.page — the lens page read (signals.list under the caller's floor),
+      // a refresher's grounding read; writes nothing, so it must auto-run in
+      // the refresher flow.
+      "lens.page",
       "market.search",
       // message.interpret files a human-governed PENDING proposal and never a
       // direct graph write (no agentUserId is threaded, so submitCaptureGraph
@@ -343,6 +347,43 @@ describe("document.update — through the patch door, never the editor save", ()
       provenanceSessionId: null,
     });
     expect(input).not.toHaveProperty("systemAuthor");
+  });
+
+  it("an automation run writes as the run's agent, in the run's session (D4)", async () => {
+    const ops = [
+      { op: "upsert_section", id: "status", title: "Status", body: "x" },
+    ];
+    await BUILTIN_VERBS["document.update"]!(
+      { documentId: DOC, ops },
+      {
+        userId: "agent-owner",
+        workspaceId: null,
+        automationRun: { sessionId: "run-1", agentUserId: "agent-owner" },
+      }
+    );
+    const input = patch.apply.mock.calls[0]![0] as Record<string, unknown>;
+    expect(input).toMatchObject({
+      agentUserId: "agent-owner",
+      provenanceSessionId: "run-1",
+    });
+    expect(input).not.toHaveProperty("systemAuthor");
+  });
+
+  it("a calling agent's own identity and session win over the run's", async () => {
+    await BUILTIN_VERBS["document.update"]!(
+      { documentId: DOC, content: "x", baseRevision: 1 },
+      {
+        userId: "u1",
+        workspaceId: null,
+        agentUserId: "agent-1",
+        sessionId: "own-session",
+        automationRun: { sessionId: "run-1", agentUserId: "agent-owner" },
+      }
+    );
+    expect(patch.apply.mock.calls[0]![0]).toMatchObject({
+      agentUserId: "agent-1",
+      provenanceSessionId: "own-session",
+    });
   });
 
   it("refuses a call that changes nothing", async () => {
