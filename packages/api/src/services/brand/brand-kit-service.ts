@@ -45,6 +45,7 @@ import {
   BRAND_KIT_PROFILE_SLUGS,
   brandKitFromEntities,
   exportBrandKit,
+  odTokensFromEntities,
   pickBrandIdentity,
   pickBrandWorkspace,
   type BrandCandidateWorkspace,
@@ -219,5 +220,11 @@ export function exportResolvedBrandKit(
   kitSource: BrandKitSourceEntity[],
   format: BrandKitFormat
 ): BrandKitExport {
-  return exportBrandKit(brandKitFromEntities(kitSource), format);
+  const tokens =
+    format === "od-design-system" ? odTokensFromEntities(kitSource) : undefined;
+  return exportBrandKit(
+    brandKitFromEntities(kitSource),
+    format,
+    tokens ? { tokens } : {}
+  );
 }

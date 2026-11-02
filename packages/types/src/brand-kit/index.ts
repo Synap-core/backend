@@ -49,13 +49,20 @@
  */
 
 export * from "./resolve.js";
+export * from "./open-design.js";
+import {
+  renderOdDesignSystem,
+  odTokensFromEntities,
+  type OdDesignSystemOptions,
+} from "./open-design.js";
 
-export type BrandKitFormat = "json" | "css" | "frame-md";
+export type BrandKitFormat = "json" | "css" | "frame-md" | "od-design-system";
 
 export const BRAND_KIT_FORMATS: readonly BrandKitFormat[] = [
   "json",
   "css",
   "frame-md",
+  "od-design-system",
 ];
 
 /** The Brand Library kinds a kit reads. */
@@ -66,6 +73,8 @@ export const BRAND_KIT_PROFILE_SLUGS = [
   "brand-asset",
   "brand-voice-guide",
   "brand-rule",
+  // Read only by `od-design-system` (structure tokens); never part of the kit input or its hash.
+  "brand-token-set",
 ] as const;
 
 export interface BrandKitInput {
@@ -506,7 +515,8 @@ function renderFrameMd(kit: BrandKitInput): string {
  */
 export function exportBrandKit(
   input: BrandKitInput,
-  format: BrandKitFormat
+  format: BrandKitFormat,
+  options: OdDesignSystemOptions = {}
 ): BrandKitExport {
   const kit = canonicalBrandKit(input);
   const hash = cyrb53(canonicalJson(kit));
@@ -520,6 +530,9 @@ export function exportBrandKit(
       break;
     case "frame-md":
       content = renderFrameMd(kit);
+      break;
+    case "od-design-system":
+      content = renderOdDesignSystem(kit, options);
       break;
     default: {
       const never: never = format;

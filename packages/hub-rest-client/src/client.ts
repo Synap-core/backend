@@ -1085,11 +1085,11 @@ export class HubRestClient {
    * other failure throws too — never an empty kit.
    */
   async getBrandKit(options?: {
-    format?: "json" | "css" | "frame-md";
+    format?: "json" | "css" | "frame-md" | "od-design-system";
     projectId?: string;
     workspaceId?: string;
   }): Promise<{
-    format: "json" | "css" | "frame-md";
+    format: "json" | "css" | "frame-md" | "od-design-system";
     content: string;
     hash: string;
     brandWorkspaceId: string;

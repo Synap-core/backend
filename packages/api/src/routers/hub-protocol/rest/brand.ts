@@ -70,7 +70,7 @@ export function registerBrandRoutes(app: HubHono): void {
     method: "get",
     path: "/brand/kit",
     tags: ["Brand"],
-    summary: "The caller's brand kit (json, css or frame-md)",
+    summary: "The caller's brand kit (json, css, frame-md or od-design-system)",
     description:
       "Resolves the Brand space (the given workspace or the brand source it " +
       "declares, else the pod's brand provider) and the brand identity in it — " +
