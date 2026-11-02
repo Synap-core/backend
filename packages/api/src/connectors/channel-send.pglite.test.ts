@@ -8,8 +8,9 @@
  * send relies on). Stubbed: the provider connector (a fake Unipile), the
  * side-effect fan-out (captured), the proposal insert's notification fan-out
  * (the row itself is real), the audit append, the person-readable read
- * (`readableRecipient`, the access layer's own tests cover it) and lane C's
- * `openPersonChannel` (a faithful stand-in until lane C lands).
+ * (`readableRecipient`, the access layer's own tests cover it). Lane C's
+ * `openPersonChannel` is the real one (its history-import enqueue is the
+ * stubbed queue).
  *
  * Rows rule out:
  *   - an app's send filing a generic capability run instead of the proposed
@@ -88,6 +89,7 @@ vi.mock("@synap/events", async (importOriginal) => ({
   emitSideEffects: async (payload: Record<string, unknown>) => {
     h.events.push(payload);
   },
+  getBoss: () => ({ send: async () => null }),
 }));
 vi.mock("../utils/domain-mutation.js", () => ({
   recordDomainMutation: async () => ({ id: "evt" }),
@@ -134,51 +136,6 @@ vi.mock(
     assertApprovalTargetResolves: async () => null,
   })
 );
-// Lane C's door (services/connectors/inbound-recorder.ts), its contract:
-// the person's channel on (user, tool, account), else a PENDING one.
-vi.mock(
-  "../services/connectors/inbound-recorder.js",
-  async (importOriginal) => ({
-    ...(await importOriginal<Record<string, unknown>>()),
-    openPersonChannel: async (args: {
-      userId: string;
-      entityId: string;
-      provider: string;
-      accountId?: string | null;
-    }) => {
-      const found = await h.client!.query<{
-        id: string;
-        external_id: string | null;
-      }>(
-        `select id, external_id from channels where user_id=$1 and channel_type='external'
-         and external_source=$2 and context_object_type='entity' and context_object_id=$3
-         and status='active' and coalesce(metadata->>'accountId','')=$4
-       order by (external_id is not null) desc limit 1`,
-        [args.userId, args.provider, args.entityId, args.accountId ?? ""]
-      );
-      if (found.rows[0])
-        return {
-          channelId: found.rows[0].id,
-          externalId: found.rows[0].external_id,
-          created: false,
-        };
-      const id = randomUUID();
-      await h.client!.query(
-        `insert into channels (id, user_id, channel_type, scope, status, title, context_object_type, context_object_id, external_source, metadata, created_at, updated_at)
-       values ($1,$2,'external','pod','active','Marie Dupont','entity',$3,$4,$5,now(),now())`,
-        [
-          id,
-          args.userId,
-          args.entityId,
-          args.provider,
-          JSON.stringify(args.accountId ? { accountId: args.accountId } : {}),
-        ]
-      );
-      return { channelId: id, externalId: null, created: true };
-    },
-  })
-);
-
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import {
@@ -282,17 +239,17 @@ async function proposalsOn(channelId: string) {
 
 beforeAll(async () => {
   await h.init();
-  for (const t of Object.values(schema)) {
-    try {
-      getTableConfig(t as PgTable);
-    } catch {
-      continue;
-    }
-    await h.client!.exec(ddlFor(t as PgTable));
-  }
+  const tables = (Object.values(schema) as unknown[]).filter(
+    (v): v is PgTable =>
+      !!v && typeof v === "object" && Symbol.for("drizzle:IsDrizzleTable") in v
+  );
+  const byName = new Map(tables.map((t) => [getTableConfig(t).name, t]));
+  for (const t of byName.values()) await h.client!.exec(ddlFor(t));
   await h.client!.exec(
     `create unique index channels_ext_uniq on channels (external_source, external_id) where external_id is not null;
-     create unique index messages_channel_ext_msg_uniq on messages (channel_id, external_message_id) where external_message_id is not null;`
+     create unique index messages_channel_ext_msg_uniq on messages (channel_id, external_message_id) where external_message_id is not null;
+     create unique index channels_external_pending_uniq on channels (user_id, external_source, context_object_id, coalesce(metadata->>'accountId', ''))
+       where channel_type = 'external' and external_id is null and status = 'active';`
   );
   await q(
     `insert into entities (id, user_id, type, title, properties, created_at, updated_at) values ($1,$2,'person','Marie Dupont',$3,now(),now())`,
