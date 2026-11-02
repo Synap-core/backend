@@ -475,7 +475,7 @@ describe("the /proposal page — the next waiting proposal", () => {
     const html = page();
     expect(html).toContain(`data-review-next="${NEXT_ID}"`);
     expect(html).toContain(`href="/proposal/${NEXT_ID}"`);
-    expect(text(html)).toMatch(/Next: Create Linus/);
+    expect(text(html)).toMatch(/Next in your queue\s+Create Linus/);
   });
 
   it("nothing else at all: said calmly, in Review's own words", () => {

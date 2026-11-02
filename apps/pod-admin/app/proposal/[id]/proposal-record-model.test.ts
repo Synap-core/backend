@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  documentReading,
   graphRecords,
   isMachineKey,
   proposedEntityMedia,
@@ -742,5 +743,64 @@ describe("proposedRecord — a link reads as what it joins", () => {
       ["Relation", "add", undefined],
       ["To", "add", undefined],
     ]);
+  });
+});
+
+describe("proposedRecord — a document create reads as a document", () => {
+  const body = `# Plan\n\n${"A sentence of the plan. ".repeat(250)}\n\nTHE END`;
+  const changes = [
+    {
+      path: "title",
+      label: "Title",
+      operation: "create" as const,
+      after: "Plan",
+    },
+    {
+      path: "content",
+      label: "Content",
+      operation: "create" as const,
+      after: body,
+    },
+  ];
+
+  it("keeps the whole body (no clip, no field) beside the title and kind", () => {
+    expect(body.length).toBeGreaterThan(5000);
+    const record = proposedRecord({
+      changes,
+      action: "create",
+      kind: "document",
+    });
+    expect(record?.title).toBe("Plan");
+    expect(record?.body).toBe(body);
+    expect(record?.fields.map((f) => f.key)).not.toContain("content");
+  });
+
+  it("documentReading: a preview of whole blocks, then the whole body", () => {
+    const r = documentReading(body);
+    expect(r.hasMore).toBe(true);
+    expect(r.preview.text.length).toBeLessThan(700);
+    expect(r.preview.text.startsWith("# Plan")).toBe(true);
+    expect(r.full.text).toContain("THE END");
+    expect(r.full.truncated).toBe(false);
+    expect(documentReading("# Short\n\nBody.").hasMore).toBe(false);
+  });
+
+  it("another kind's long text is cut with its whole kept for Show all", () => {
+    const long = "word ".repeat(400).trim();
+    const record = proposedRecord({
+      changes: [
+        {
+          path: "properties.notes",
+          label: "Notes",
+          operation: "create",
+          after: long,
+        },
+      ],
+      action: "create",
+      kind: "note",
+    });
+    const value = record?.fields[0]?.after;
+    expect(value).toMatchObject({ kind: "text", full: long });
+    expect(value && "text" in value && value.text.endsWith("…")).toBe(true);
   });
 });

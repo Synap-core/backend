@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { GOVERNANCE_POLICY_SENTENCES } from "@synap-core/types/proposals";
-import { reasonMark, reviewReadsWide, undoMark } from "./proposal-review-model";
+import {
+  createdObject,
+  reasonMark,
+  reviewReadsWide,
+  undoMark,
+} from "./proposal-review-model";
 import { initials } from "../../_lib/object/provenance-chips";
 
 describe("reasonMark — WHY it waits, as one mark, only when it is particular", () => {
@@ -84,5 +89,35 @@ describe("reviewReadsWide — a review that shows text reads at a document's wid
         records: [short, { fields: [{ wide: false }, { wide: true }] }],
       })
     ).toBe(true);
+  });
+});
+
+describe("createdObject — what an approved create made, openable", () => {
+  const ID = "7d4f6c0e-6a1b-4a8e-9a53-3f2b1c0d9e11";
+  const base = {
+    status: "approved",
+    action: "create",
+    targetType: "document",
+    targetId: ID,
+    title: " Plan ",
+    graph: false,
+  };
+
+  it("names the document by the proposal's own target, approved or auto-approved", () => {
+    expect(createdObject(base)).toEqual({
+      kind: "document",
+      id: ID,
+      title: "Plan",
+    });
+    expect(createdObject({ ...base, status: "auto_approved" })?.id).toBe(ID);
+  });
+
+  it("names nothing while pending, rejected, an edit, a graph or an unhosted kind", () => {
+    expect(createdObject({ ...base, status: "pending" })).toBeNull();
+    expect(createdObject({ ...base, status: "rejected" })).toBeNull();
+    expect(createdObject({ ...base, action: "update" })).toBeNull();
+    expect(createdObject({ ...base, graph: true })).toBeNull();
+    expect(createdObject({ ...base, targetType: "workspace" })).toBeNull();
+    expect(createdObject({ ...base, targetId: "not-an-id" })).toBeNull();
   });
 });

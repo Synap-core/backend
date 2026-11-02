@@ -51,6 +51,10 @@ import {
   textChanges,
   type TextChange,
 } from "../../_lib/object/content/document-changes-model";
+import {
+  prepareContent,
+  type PreparedContent,
+} from "../../_lib/object/content/markdown-model";
 import type { ProposalChangeInput } from "./proposal-review-model";
 
 /** An object the pod resolved from an id in the payload (`objectRefs`). */
@@ -62,7 +66,13 @@ export interface ResolvedRef {
 
 /** One value, said the way its type reads. */
 export type RecordValue =
-  | { kind: "text"; text: string; long: boolean }
+  | {
+      kind: "text";
+      text: string;
+      long: boolean;
+      /** The whole text when `text` is cut (`clip`): the card's "Show all". */
+      full?: string;
+    }
   | { kind: "status"; label: string; raw: string }
   | { kind: "link"; href: string; text: string }
   | { kind: "ref"; objectKind: string; id: string; name: string }
@@ -96,6 +106,12 @@ export interface ProposedRecord {
   kind: string | null;
   op: "create" | "update" | "delete";
   fields: RecordField[];
+  /**
+   * A document create's markdown body, whole. It is the document the reviewer
+   * approves, so it is read as a document (`ProposedDocumentBody`), never as a
+   * clipped field.
+   */
+  body?: string;
 }
 
 /** How many fields a card shows before "Show all N fields". */
@@ -208,11 +224,15 @@ export function isMachineKey(key: string): boolean {
 }
 
 function textValue(text: string): RecordValue {
-  const clipped = clip(text.trim());
+  const whole = text.trim();
+  const clipped = clip(whole);
   return {
     kind: "text",
     text: clipped,
     long: clipped.length > WIDE_TEXT_CHARS || clipped.includes("\n"),
+    // A cut text keeps its whole, so the card can say "Show all": the
+    // reviewer is never asked to approve text they cannot read.
+    ...(clipped !== whole ? { full: whole } : {}),
   };
 }
 
@@ -505,6 +525,7 @@ export function proposedRecord(input: RecordInput): ProposedRecord | null {
   let title = op === "create" ? null : input.targetName?.trim() || null;
   let kind = input.kind ?? null;
   const fields: RecordField[] = [];
+  let body: string | undefined;
 
   for (const change of input.changes) {
     const isProperty = change.path.startsWith("properties.");
@@ -523,6 +544,18 @@ export function proposedRecord(input: RecordInput): ProposedRecord | null {
       if (typeof change.after === "string" && change.after.trim()) {
         kind = change.after.trim();
       }
+      continue;
+    }
+
+    // A document create's body: the document itself, read whole as markdown.
+    if (
+      op === "create" &&
+      kind === "document" &&
+      change.path === "content" &&
+      typeof change.after === "string" &&
+      change.after.trim() !== ""
+    ) {
+      body = change.after;
       continue;
     }
 
@@ -591,13 +624,22 @@ export function proposedRecord(input: RecordInput): ProposedRecord | null {
     });
   }
 
-  if (!title && !kind && fields.length === 0) return null;
+  if (!title && !kind && fields.length === 0 && body === undefined) {
+    return null;
+  }
   const rank = (f: RecordField) => {
     const i = MUST_READ_KEYS.indexOf(f.key);
     return i < 0 ? MUST_READ_KEYS.length : i;
   };
   fields.sort((a, b) => rank(a) - rank(b)); // stable: the rest keep their order
-  return { ref: input.ref ?? "single", title, kind, op, fields };
+  return {
+    ref: input.ref ?? "single",
+    title,
+    kind,
+    op,
+    fields,
+    ...(body !== undefined ? { body } : {}),
+  };
 }
 
 /** The slice of a capture graph's stored operations this reads. */
@@ -674,4 +716,29 @@ export function graphRecords(
     if (record) out.push(record);
   });
   return out;
+}
+
+/** The first part of a proposed document drawn before "Read the whole document". */
+export const DOCUMENT_PREVIEW_CHARS = 600;
+
+/**
+ * A proposed document's body, read two ways: a preview (whole blocks that fit
+ * `DOCUMENT_PREVIEW_CHARS`, markdown) and the whole body. `hasMore` is whether
+ * the preview left something out, so a short document shows no extra control.
+ * `full.truncated` is only true past the console's drawing cap, which is said.
+ */
+export function documentReading(content: string): {
+  preview: PreparedContent;
+  full: PreparedContent;
+  hasMore: boolean;
+} {
+  const source = content.trim();
+  const preview = prepareContent(source, "markdown", {
+    maxChars: DOCUMENT_PREVIEW_CHARS,
+  });
+  return {
+    preview,
+    full: prepareContent(source, "markdown"),
+    hasMore: preview.truncated,
+  };
 }
