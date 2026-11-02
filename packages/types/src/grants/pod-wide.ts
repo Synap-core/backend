@@ -7,6 +7,9 @@
  * that treats a part with no space as "not limited to spaces" (the holder's
  * sentence, template reach, facet reach, capture routing, a role write) must
  * skip such a part, through `isPodWideReadScope`.
+ *
+ * Since access model B (2 Nov 2026) the rule is applied ONCE, by `parsePlace`
+ * (`./reach.ts`): an app's scope that passes it is the place `{kind: "pod"}`.
  */
 
 /**
@@ -44,8 +47,10 @@ export function isPodWideReadScope(scope: {
   );
 }
 
-/** Where a pod-wide read applies, after its verb ("reads decisions everywhere in your pod"). */
-export const EVERYWHERE_IN_POD = "everywhere in your pod";
-
-/** The same place as a heading, where a space's name would go. */
-export const POD_WIDE_HEADING = "Everywhere in your pod";
+// The words for the place moved to the vocabulary door (`resolvePlaceLabel`,
+// `../vocabulary/place-words.ts`); re-exported here so consumers that import
+// them from the grants keep compiling.
+export {
+  EVERYWHERE_IN_POD,
+  POD_WIDE_HEADING,
+} from "../vocabulary/place-words.js";

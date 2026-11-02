@@ -98,6 +98,9 @@ export * from "./review-words.js";
 /** The activity log's families (`dev`, `ci`) as a key grants them. */
 export * from "./event-family-words.js";
 
+/** Where a grant reaches: "Everywhere in your pod", "Sales and Finance" (`resolvePlaceLabel`). */
+export * from "./place-words.js";
+
 /**
  * Words a sentence-cased token must still spell the way people write them —
  * the casing of a NAME (a product, a format), not of a sentence. Deliberately
