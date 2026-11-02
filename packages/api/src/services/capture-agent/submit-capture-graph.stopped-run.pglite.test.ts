@@ -55,7 +55,8 @@ vi.mock("@synap/database", async (importOriginal) => {
     },
   };
 });
-vi.mock("../../utils/permission-check.js", () => ({
+vi.mock("../../utils/permission-check.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/permission-check.js")>()),
   checkPermissionOrPropose: vi.fn(async () => ({ allowed: true })),
   previewPermissionDecision: vi.fn(async () => ({ decision: "allow" })),
   proposedMessageFor: vi.fn(() => "proposed"),

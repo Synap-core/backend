@@ -4843,6 +4843,7 @@
                         "missing_field",
                         "validation",
                         "conflict",
+                        "kind_missing",
                         "unknown"
                       ]
                     },

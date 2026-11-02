@@ -13,7 +13,7 @@
  * the refusal it is describing.
  */
 
-import { and, db, eq, inArray, ne, sql } from "@synap/database";
+import { and, asc, db, eq, inArray, ne } from "@synap/database";
 import {
   PROFILE_ORIGIN_PROBE,
   ProfileScope,
@@ -78,7 +78,7 @@ export async function describeMissingKind(args: {
                 inArray(profiles.workspaceId, elsewhere)
               )
             )
-            .orderBy(sql`${workspaces.name} asc`)
+            .orderBy(asc(workspaces.name))
             .limit(KIND_ELSEWHERE_MAX * 2);
     const foundIn: KindMissingDetail["foundIn"] = [];
     for (const r of rows) {
