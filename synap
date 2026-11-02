@@ -1140,7 +1140,7 @@ generate_kratos_config() {
 version: v1.3.1
 # DSN should match docker-compose environment variable
 # Uses postgres service name, kratos database
-dsn: postgres://synap:\${POSTGRES_PASSWORD}@postgres:5432/kratos?sslmode=disable
+dsn: postgres://synap:\${POSTGRES_PASSWORD}@postgres:5432/kratos?sslmode=disable&max_conns=10&max_idle_conns=5
 serve:
   public:
     base_url: ${kratos_public_base_url}

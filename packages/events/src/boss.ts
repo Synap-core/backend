@@ -28,6 +28,17 @@ function setGlobal(boss: PgBoss | null): void {
   (globalThis as Record<string, unknown>)[GLOBAL_KEY] = boss;
 }
 
+// pg-boss's OWN pool (a `pg.Pool`, separate from the Drizzle pool in
+// @synap/database client-pg.ts). Unset, pg-pool caps it at 10; it is named
+// here so the pod's Postgres connection budget (client-pg.ts) can count it,
+// and so the update canary can run with a smaller one (docker-compose.yml).
+const DEFAULT_PGBOSS_POOL_SIZE = 10;
+
+export function pgBossPoolSize(raw = process.env.PGBOSS_POOL_SIZE): number {
+  const n = parseInt(raw || "", 10);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_PGBOSS_POOL_SIZE;
+}
+
 function createBoss(): PgBoss {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
@@ -36,6 +47,8 @@ function createBoss(): PgBoss {
 
   return new PgBoss({
     connectionString,
+    // pg-boss 10 hands its config to `new pg.Pool(config)` (src/db.js).
+    max: pgBossPoolSize(),
     schema: "pgboss",
     // Monitoring interval for job polling (2 seconds for responsiveness)
     monitorStateIntervalSeconds: 30,

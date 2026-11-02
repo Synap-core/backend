@@ -21,16 +21,32 @@ const DATABASE_URL =
   process.env.DATABASE_URL ||
   "postgresql://postgres:synap_dev_password@localhost:5432/synap";
 
-// Connection pool size.
+// Connection pool size: the cap of THIS process's postgres.js/Drizzle pool.
 //
-// Default raised from 10 → 50 for launch. The previous default of 10 starved
-// the API under load: the API process serves all tRPC/HTTP requests AND shares
-// the box with ~40 pg-boss workers. pg-boss maintains its OWN pool (configured
-// where the boss is started, not here), so this value sizes ONLY the API/Drizzle
-// client. 50 is safe against Postgres' default `max_connections = 100`: it
-// leaves ~50 connections for pg-boss + admin/superuser-reserved slots. If you
-// raise DB_POOL_SIZE, also raise Postgres `max_connections` (or front the DB
-// with PgBouncer) so API + pg-boss + admin stay under it.
+// Default raised from 10 → 50 for launch: 10 starved the API under load (it
+// serves every tRPC/HTTP request beside ~40 pg-boss workers). But every
+// process that imports this module gets its own pool with this cap, and they
+// all share ONE Postgres. On a pod (deploy/docker-compose.yml) the consumers:
+//
+//   backend          DB_POOL_SIZE (50) + 1 dedicated LISTEN connection
+//                    + pg-boss's own pool, PGBOSS_POOL_SIZE (10, events/boss.ts)
+//   backend-canary   CANARY_DB_POOL_SIZE (10) + 1 + CANARY_PGBOSS_POOL_SIZE (5),
+//                    only while `synap update` validates an image
+//   realtime         REALTIME_DB_POOL_SIZE (10): socket auth, room grants,
+//                    Yjs document load/save
+//   backend-migrate  5 (one-shot, sequential scripts)
+//   kratos, kratos-migrate   max_conns=10 each in their DSN (unset, Ory
+//                    takes 2 x CPUs)
+//   postgres-backup, admin psql   a handful
+//
+// Postgres `max_connections` is POSTGRES_MAX_CONNECTIONS (200). Before
+// 2026-11-02 the canary, realtime and backend-migrate each took this default
+// of 50 and the caps summed past Postgres' default 100: Kratos lost at login
+// (`FATAL: sorry, too many clients already`). Every pod service connects as
+// the superuser `synap`, so the superuser-reserved slots are no headroom.
+// The compose file sets every cap explicitly, so this default does not reach a
+// pod. Raise a cap there and you raise POSTGRES_MAX_CONNECTIONS with it, or
+// src/__tests__/pg-connection-budget.tripwire.test.ts goes red.
 const DB_POOL_SIZE = parseInt(process.env.DB_POOL_SIZE || "50", 10);
 
 // Idle connection timeout (seconds).
