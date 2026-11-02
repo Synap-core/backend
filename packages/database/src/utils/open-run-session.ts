@@ -29,6 +29,13 @@ export interface OpenRunSessionInput {
    *  an existing active session on the channel is REUSED (see below). */
   channelId?: string | null;
   projectId?: string | null;
+  /**
+   * The GOAL (`project_tracks.id`) this run works for — a worker enabled on a
+   * goal files its runs there (goals that run, R3). Pass it with the goal's
+   * `projectId`: the caller holds both from the same governed rule (the
+   * `playbook_run` node's filing). Written only on CREATE, like the project.
+   */
+  trackId?: string | null;
   subjectEntityId?: string | null;
   /** The agent authoring the run — recorded on the session's agent roster. */
   agentUserId?: string | null;
@@ -199,6 +206,14 @@ export async function openRunSession(
         workspaceId: input.workspaceId ?? null,
         channelId,
         projectId: placement.projectId,
+        // A goal only with ITS project: a placement that did not keep the
+        // caller's project never carries a goal of another one.
+        trackId:
+          input.trackId &&
+          input.projectId &&
+          placement.projectId === input.projectId
+            ? input.trackId
+            : null,
         subjectEntityId: input.subjectEntityId ?? null,
         // The template that spawned this session — the automation itself.
         templateId: input.automationId ?? null,

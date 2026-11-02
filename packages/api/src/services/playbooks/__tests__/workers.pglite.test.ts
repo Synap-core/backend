@@ -9,7 +9,10 @@
  *  - re-enabling an enablement a person disabled turns the SAME rule back on;
  *  - FB2 item 4: the race settles on the SMALLEST live id, a step-back that
  *    did not apply is never reported as a refusal, and RESUME and the
- *    approval of an agent's enable/resume run the same overlap check.
+ *    approval of an agent's enable/resume run the same overlap check;
+ *  - goals that run R1: `listEnabledWorkers({ trackId })` returns only the
+ *    workers enabled ON that goal (two goals of one project), and
+ *    `listWorkerViews` reads each one's runs into its health and next run.
  *
  * Mocked, each proven elsewhere: the rule door (a stateful fake that writes
  * the rule row exactly as `createRuleGoverned` stamps it — so the overlap
@@ -112,10 +115,24 @@ vi.mock("../playbook-activators.js", async (importOriginal) => ({
     outcomes: [],
   })),
 }));
+// The goals' names go through the project_tracks floor (`scopedDb`), proven
+// in the access suites; here the floor lets the caller see both goals.
+vi.mock("../../../access/index.js", () => ({
+  AccessContext: { from: (a: unknown) => a },
+  scopedDb: () => ({
+    findMany: async () => [
+      { id: "99999999-9999-4999-8999-999999999991", name: "Ship weekly" },
+      { id: "99999999-9999-4999-8999-999999999992", name: "Keep docs fresh" },
+    ],
+  }),
+}));
 vi.mock("../../projects/load-visible-project.js", () => ({
   loadVisibleProject: vi.fn(async (_db: unknown, id: string) => ({ id })),
 }));
 vi.mock("../../tracks/tracks-service.js", () => ({
+  getTrack: vi.fn(async (id: string) =>
+    TRACK_PROJECT[id] ? { id, projectId: TRACK_PROJECT[id] } : null
+  ),
   resolveTrackFiling: vi.fn(async (p: { trackId: string }) => ({
     projectId: TRACK_PROJECT[p.trackId],
     trackId: p.trackId,
@@ -136,6 +153,7 @@ import {
   users,
   links,
   automations,
+  automationRuns,
   proposals,
   focusSessions,
   playbookAutomations,
@@ -145,6 +163,10 @@ import {
   assertNoWorkerOverlap,
   enableWorker,
   listEnabledWorkers,
+  automationGoalsAndHealth,
+  goalRunsOf,
+  listWorkerViews,
+  playbookGoalsAndHealth,
   setWorkerPaused,
 } from "../workers.js";
 import { updateRuleGoverned } from "../../rules/update.js";
@@ -201,6 +223,7 @@ beforeAll(async () => {
     users,
     links,
     automations,
+    automationRuns,
     proposals,
     focusSessions,
     playbookAutomations,
@@ -236,7 +259,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await h.client!.exec(
-    "delete from skills; delete from links; delete from automations; delete from proposals; delete from focus_sessions;"
+    "delete from skills; delete from links; delete from automations; delete from automation_runs; delete from proposals; delete from focus_sessions;"
   );
   vi.mocked(updateRuleGoverned).mockClear();
 });
@@ -683,5 +706,396 @@ describe("convergeActivatorsAtBoot — D4: once per compile version", () => {
     await q(`delete from playbooks where id = any($1::uuid[])`, [
       [behind, current, paused],
     ]);
+  });
+});
+
+// ── goals that run: a goal's workers, and how they are doing ───────────────
+
+/** A project enablement row, written as the rule door stamps it. */
+const workerRule = (o: { activatorKey: string; trackId?: string }) =>
+  insertRule({
+    intent: "worker",
+    scope: { kind: "workspace", workspaceId: WS, projectId: P1 },
+    seed: {
+      template: `playbook-worker:${PB}`,
+      key: `${o.activatorKey}@project:${P1}${o.trackId ? `@track:${o.trackId}` : ""}`,
+      hash: "h",
+    },
+  });
+
+async function automationFor(
+  ruleId: string,
+  o: { status?: string; error?: string; nextRunAt?: string } = {}
+): Promise<string> {
+  const id = randomUUID();
+  await q(
+    `insert into automations (id, created_by, name, trigger_type, status, error_message, next_run_at)
+     values ($1, $2, 'worker', 'event', $3, $4, $5)`,
+    [id, USER, o.status ?? "active", o.error ?? null, o.nextRunAt ?? null]
+  );
+  await q(
+    `insert into links (id, created_by, from_type, from_id, to_type, to_id, link_type, created_at)
+     values (gen_random_uuid(), $1, 'skill', $2, 'automation', $3, 'activates', now())`,
+    [USER, ruleId, id]
+  );
+  return id;
+}
+
+const runAt = (automationId: string, status: string, minute: number) =>
+  q(
+    `insert into automation_runs (id, automation_id, status, started_at)
+     values (gen_random_uuid(), $1, $2, $3)`,
+    [
+      automationId,
+      status,
+      `2026-11-01T09:${String(minute).padStart(2, "0")}:00Z`,
+    ]
+  );
+
+describe("listEnabledWorkers — a goal reads only ITS workers (R1)", () => {
+  it("two goals of one project never see each other's workers, nor the project's", async () => {
+    const mine = await workerRule({ activatorKey: KEY, trackId: T1 });
+    const theirs = await workerRule({
+      activatorKey: "schedule:0 9 * * *",
+      trackId: T2,
+    });
+    const projectWide = await workerRule({ activatorKey: "count:review:3" });
+    const forT1 = await listEnabledWorkers({ userId: USER, trackId: T1 });
+    expect(forT1.map((w) => w.ruleId)).toEqual([mine]);
+    const forT2 = await listEnabledWorkers({ userId: USER, trackId: T2 });
+    expect(forT2.map((w) => w.ruleId)).toEqual([theirs]);
+    // The project still reads all three: the strict filter is the goal's only.
+    const forP1 = await listEnabledWorkers({ userId: USER, projectId: P1 });
+    expect(forP1.map((w) => w.ruleId).sort()).toEqual(
+      [mine, theirs, projectWide].sort()
+    );
+  });
+});
+
+describe("listWorkerViews — trigger words, runs and health from the pod", () => {
+  it("failures since the last success read failing, oldest → newest marks", async () => {
+    const rule = await workerRule({ activatorKey: KEY, trackId: T1 });
+    const auto = await automationFor(rule);
+    await runAt(auto, "completed", 1);
+    await runAt(auto, "failed", 2);
+    await runAt(auto, "skipped", 3);
+    await runAt(auto, "failed", 4);
+    const [w] = await listWorkerViews({ userId: USER, trackId: T1 });
+    expect(w).toMatchObject({
+      ruleId: rule,
+      automationId: auto,
+      trigger: { kind: "event" },
+      lastRunAt: "2026-11-01T09:04:00.000Z",
+      nextRunAt: null,
+      health: { state: "failing", consecutiveFailures: 2, offReason: null },
+    });
+    expect(w!.trigger.words).toBeTruthy();
+    expect(w!.health.marks.map((m) => m.mark)).toEqual([
+      "done",
+      "failed",
+      "skipped",
+      "failed",
+    ]);
+  });
+
+  it("an automation the breaker turned off reads off, with its sentence; a paused one reads paused", async () => {
+    const rule = await workerRule({ activatorKey: KEY, trackId: T1 });
+    await automationFor(rule, {
+      status: "error",
+      error: "Turned off automatically after 3 failed runs in a row.",
+    });
+    const [off] = await listWorkerViews({ userId: USER, trackId: T1 });
+    expect(off).toMatchObject({
+      automationId: null,
+      health: {
+        state: "off",
+        offReason: "Turned off automatically after 3 failed runs in a row.",
+      },
+    });
+    await q(
+      `update skills set metadata = jsonb_set(metadata, '{rule,draft}', 'true') where id = $1`,
+      [rule]
+    );
+    const [paused] = await listWorkerViews({ userId: USER, trackId: T1 });
+    expect(paused).toMatchObject({
+      state: "paused",
+      health: { state: "paused" },
+    });
+  });
+
+  it("a schedule worker carries the pod's next run, said in words, never a raw cron", async () => {
+    const PB2 = "66666666-6666-4666-8666-666666666667";
+    await q(
+      `insert into playbooks (id, name, status, workspace_id, created_by, goal_template, subject_profile)
+       values ($1, 'Daily check', 'active', $2, $3, 'g', $4::jsonb)`,
+      [
+        PB2,
+        WS,
+        USER,
+        JSON.stringify({
+          profileSlug: "deal",
+          activators: [{ on: "schedule", cron: "0 9 * * *", mode: "propose" }],
+        }),
+      ]
+    );
+    try {
+      const rule = await insertRule({
+        intent: "worker",
+        scope: { kind: "workspace", workspaceId: WS, projectId: P1 },
+        seed: {
+          template: `playbook-worker:${PB2}`,
+          key: `schedule:0 9 * * *@project:${P1}@track:${T1}`,
+          hash: "h",
+        },
+      });
+      await automationFor(rule, { nextRunAt: "2026-11-02T09:00:00Z" });
+      const [w] = await listWorkerViews({ userId: USER, trackId: T1 });
+      expect(w).toMatchObject({
+        playbookId: PB2,
+        trigger: { kind: "schedule" },
+        nextRunAt: "2026-11-02T09:00:00.000Z",
+        lastRunAt: null,
+        health: { state: "healthy", marks: [] },
+      });
+      expect(w!.trigger.words).not.toContain("*");
+    } finally {
+      await q(`delete from playbooks where id = $1`, [PB2]);
+    }
+  });
+});
+
+describe("goalRunsOf — a page of goals, its runs in fixed reads", () => {
+  it("each goal gets ITS workers' rollup; a goal with none gets the empty one", async () => {
+    const rule = await workerRule({ activatorKey: KEY, trackId: T1 });
+    const auto = await automationFor(rule);
+    h.pending.set(auto, 2);
+    await runAt(auto, "completed", 5);
+    h.bulkCalls.length = 0;
+    const runs = await goalRunsOf({ userId: USER, trackIds: [T1, T2] });
+    expect(runs.get(T1)).toMatchObject({
+      workerCount: 1,
+      runningCount: 1,
+      pendingApprovals: 2,
+      health: "waiting",
+      lastRunAt: "2026-11-01T09:05:00.000Z",
+    });
+    expect(runs.get(T2)).toMatchObject({
+      workerCount: 0,
+      runningCount: 0,
+      rhythm: null,
+      health: "not_running",
+      marks: [],
+    });
+    // One approvals read for the whole page, not one per goal.
+    expect(h.bulkCalls).toHaveLength(1);
+    h.pending.clear();
+  });
+});
+
+describe("pod admin rows — the goal an automation or a playbook serves", () => {
+  it("an automation activated by a goal's worker names that goal; another names none; both get a health", async () => {
+    const rule = await workerRule({ activatorKey: KEY, trackId: T1 });
+    const served = await automationFor(rule);
+    await runAt(served, "failed", 6);
+    const loose = randomUUID();
+    const page = await automationGoalsAndHealth({
+      userId: USER,
+      automations: [
+        { id: served, status: "active", errorMessage: null },
+        { id: loose, status: "paused", errorMessage: null },
+      ],
+    });
+    expect(page.get(served)).toMatchObject({
+      goal: { id: T1, name: "Ship weekly" },
+      health: { state: "failing", consecutiveFailures: 1 },
+    });
+    expect(page.get(loose)).toMatchObject({
+      goal: null,
+      health: { state: "paused" },
+    });
+  });
+
+  it("a playbook names the goals its workers serve and its worst worker's health", async () => {
+    const rule = await workerRule({ activatorKey: KEY, trackId: T1 });
+    await automationFor(rule, { status: "error", error: "Turned off." });
+    const page = await playbookGoalsAndHealth({
+      userId: USER,
+      playbookIds: [PB, "66666666-6666-4666-8666-666666666668"],
+    });
+    expect(page.get(PB)).toMatchObject({
+      goals: [{ id: T1, name: "Ship weekly" }],
+      health: { state: "off", offReason: "Turned off." },
+    });
+    expect(page.get("66666666-6666-4666-8666-666666666668")).toEqual({
+      goals: [],
+      health: null,
+    });
+  });
+});
+
+// Goals that run: the "How often?" clock on enable (`howOftenEnable`, the one
+// derivation). A declared schedule is that declared worker; on a playbook with
+// no subject (it declares none) the person's clock compiles through the same
+// governed rule door, in the mode they chose (default propose).
+describe("enableWorker — a 'How often?' clock", () => {
+  const PB_SCHED = "66666666-6666-4666-8666-666666666668";
+  const PB_FREE = "66666666-6666-4666-8666-666666666669";
+  beforeAll(async () => {
+    await q(
+      `insert into playbooks (id, name, status, workspace_id, created_by, goal_template, subject_profile)
+       values ($1, 'Weekly deals', 'active', $3, $4, 'g', $5::jsonb),
+              ($2, 'Weekly newsletter', 'active', $3, $4, 'g', null)`,
+      [
+        PB_SCHED,
+        PB_FREE,
+        WS,
+        USER,
+        JSON.stringify({
+          profileSlug: "deal",
+          activators: [{ on: "schedule", cron: "0  9 * * 1", mode: "run" }],
+        }),
+      ]
+    );
+  });
+  const created = () =>
+    vi.mocked(createRuleGoverned).mock.calls.at(-1)![0] as unknown as {
+      agentUserId?: string;
+      seed: { key: string };
+      sentence: {
+        trigger: { triggerType: string };
+        actions: Array<{ config: Record<string, unknown> }>;
+      };
+    };
+
+  it("a clock the playbook declares enables THAT declared worker", async () => {
+    const res = await enableWorker({
+      userId: USER,
+      playbookId: PB_SCHED,
+      schedule: { kind: "weekly", day: 1, time: "09:00" },
+      trackId: T1,
+    });
+    expect(res).toMatchObject({ status: "enabled" });
+    const call = created();
+    expect(call.seed.key).toBe(`schedule:0 9 * * 1@project:${P1}@track:${T1}`);
+    // The declared worker's compile: its worker spec, over its subject kind.
+    expect(call.sentence.actions[0]!.config.__worker).toMatchObject({
+      key: "schedule:0 9 * * 1",
+      profileSlug: "deal",
+    });
+    // A clock it does not declare is refused, naming what it declares.
+    await expect(
+      enableWorker({
+        userId: USER,
+        playbookId: PB_SCHED,
+        schedule: { kind: "daily", time: "09:00" },
+        trackId: T2,
+      })
+    ).rejects.toThrow(
+      /declares no worker on that schedule.*schedule:0 9 \* \* 1/
+    );
+  });
+
+  it("on a playbook with no subject, the person's clock compiles: one run per tick, filed in the goal, asked first by default", async () => {
+    const res = await enableWorker({
+      userId: USER,
+      agentUserId: "agent-1",
+      playbookId: PB_FREE,
+      schedule: { kind: "daily", time: "07:30" },
+      trackId: T1,
+    });
+    expect(res).toMatchObject({ status: "enabled" });
+    const call = created();
+    // Through the one rule door, as the agent (whose write it proposes).
+    expect(call.agentUserId).toBe("agent-1");
+    expect(call.seed.key).toBe(`schedule:30 7 * * *@project:${P1}@track:${T1}`);
+    expect(call.sentence.trigger.triggerType).toBe("cron");
+    const node = call.sentence.actions[0]!.config;
+    expect(node).toMatchObject({ __mode: "propose" });
+    expect(node).not.toHaveProperty("__worker");
+    expect(Object.values(node)).toEqual(
+      expect.arrayContaining([PB_FREE, P1, T1])
+    );
+    const [w] = await listEnabledWorkers({ userId: USER, trackId: T1 });
+    expect(w).toMatchObject({
+      playbookId: PB_FREE,
+      activatorKey: "schedule:30 7 * * *",
+      activator: { on: "schedule", cron: "30 7 * * *", mode: "propose" },
+      profileSlug: null,
+      mode: "propose",
+      size: "per_moment",
+    });
+  });
+
+  it("a chosen clock may just run; its mode is read back off its rule", async () => {
+    await enableWorker({
+      userId: USER,
+      playbookId: PB_FREE,
+      schedule: { kind: "weekly", day: 5, time: "17:00" },
+      mode: "run",
+      trackId: T2,
+    });
+    expect(created().sentence.actions[0]!.config).not.toHaveProperty("__mode");
+    const [w] = await listEnabledWorkers({ userId: USER, trackId: T2 });
+    expect(w).toMatchObject({
+      mode: "run",
+      activatorKey: "schedule:0 17 * * 5",
+    });
+  });
+
+  it("an event, an hourly clock or a bad time is never a chosen worker", async () => {
+    const free = (o: Record<string, unknown>) =>
+      enableWorker({ userId: USER, playbookId: PB_FREE, trackId: T1, ...o });
+    await expect(free({ activatorKey: "created" })).rejects.toThrow(
+      /declares no worker/
+    );
+    await expect(free({ activatorKey: "schedule:0 * * * *" })).rejects.toThrow(
+      /declares no worker/
+    );
+    await expect(
+      free({ schedule: { kind: "daily", time: "24:00" } })
+    ).rejects.toThrow(/not a time/);
+    await expect(
+      free({
+        activatorKey: "schedule:0 9 * * *",
+        schedule: { kind: "daily", time: "09:00" },
+      })
+    ).rejects.toThrow(/activatorKey, or a schedule/);
+    const { rows } = await q(`select count(*)::int as n from skills`);
+    expect((rows[0] as { n: number }).n).toBe(0);
+  });
+
+  it("the activator pass keeps a live chosen clock, and retires it once the playbook is archived", async () => {
+    const res = (await enableWorker({
+      userId: USER,
+      playbookId: PB_FREE,
+      schedule: { kind: "daily", time: "07:30" },
+      mode: "run",
+      trackId: T1,
+    })) as { ruleId: string };
+    const real = await vi.importActual<
+      typeof import("../playbook-activators.js")
+    >("../playbook-activators.js");
+    vi.mocked(updateRuleGoverned).mockClear();
+    const pass = await real.applyPlaybookActivators({
+      playbookId: PB_FREE,
+      userId: USER,
+    });
+    expect(pass.outcomes).toEqual([
+      expect.objectContaining({ ruleId: res.ruleId, status: "unchanged" }),
+    ]);
+    expect(updateRuleGoverned).not.toHaveBeenCalled();
+    await q(`update playbooks set status = 'archived' where id = $1`, [
+      PB_FREE,
+    ]);
+    try {
+      await real.applyPlaybookActivators({ playbookId: PB_FREE, userId: USER });
+      expect(updateRuleGoverned).toHaveBeenCalledWith(
+        expect.objectContaining({ ruleId: res.ruleId, draft: true })
+      );
+    } finally {
+      await q(`update playbooks set status = 'active' where id = $1`, [
+        PB_FREE,
+      ]);
+    }
   });
 });

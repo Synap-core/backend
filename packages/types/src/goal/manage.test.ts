@@ -70,12 +70,11 @@ const goal = (over: Partial<GoalLike> = {}): GoalLike => ({
 const me = { userId: OWNER, kind: "person" as const };
 
 describe("goalManageDoors", () => {
-  it("the owner gets Edit, Add someone, Confirm kind (while unconfirmed) and Repeat runs (with criteria)", () => {
+  it("the owner gets Edit, Add someone and Confirm kind (while unconfirmed); repeating is the goal's workers, never a door", () => {
     expect(goalManageDoors(goal(), me).map((d) => d.key)).toEqual([
       "edit",
       "add_someone",
       "confirm_kind",
-      "repeat_runs",
     ]);
     expect(
       goalManageDoors(goal({ kindConfirmedBy: OWNER, criteria: [] }), me).map(

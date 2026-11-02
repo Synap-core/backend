@@ -53,6 +53,7 @@ import {
   registerProfilesRoutes,
   registerProjectsRoutes,
   registerTracksRoutes,
+  registerWorkersRoutes,
   registerTrackParticipantsRoutes,
   registerSharesRoutes,
   registerFormsRoutes,
@@ -312,6 +313,7 @@ registerViewsRoutes(app); // /views*
 registerProfilesRoutes(app); // /profiles*, /property-defs*
 registerProjectsRoutes(app); // /projects*
 registerTracksRoutes(app); // /tracks*
+registerWorkersRoutes(app); // /workers* (a goal's workers: list, enable, pause, run)
 registerTrackParticipantsRoutes(app); // /tracks/:id/participants* (W3)
 registerSharesRoutes(app); // /shares* (Sites W2 S3 owner share doors)
 registerFormsRoutes(app); // /forms* (Sites W4 owner public-form doors)

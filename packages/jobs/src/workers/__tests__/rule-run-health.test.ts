@@ -4,16 +4,21 @@
  *  1. A rule that WORKED and then broke turns itself off (the never-worked
  *     breaker's documented gap). The streak counts settled runs only —
  *     a skip or a policy block neither breaks nor heals it.
+ *  1b. A GOAL's worker turns itself off sooner: 3 failures in a row
+ *     (goals that run, decision 7), whether or not it ever worked.
  *  2. A run whose last act was a dedup skip (a propose-mode THEN that found its
  *     pending proposal) reads `skipped` with the reason token, the way a
  *     daily-cap skip already does — never a `completed` that claims work.
  */
 import { describe, it, expect } from "vitest";
 import { AUTOMATION_SKIP_REASONS } from "@synap-core/types/automations";
+import { GOAL_WORKER_FAILURE_LIMIT } from "@synap-core/types/workers/health";
 import {
   CONSECUTIVE_FAILURE_LIMIT,
   brokeAfterWorkingMessage,
+  goalWorkerOffMessage,
   shouldTripBrokeAfterWorking,
+  shouldTripGoalWorker,
 } from "../automation-breaker.js";
 import {
   buildRunTerminalUpdate,
@@ -123,5 +128,50 @@ describe("a dedup skip is a skipped run", () => {
     ).toBeNull();
     expect(runSkipReasonOf(null)).toBeNull();
     expect(runSkipReasonOf({ lastStepOutput: "a scalar" })).toBeNull();
+  });
+});
+
+describe("goal worker breaker (goals that run, decision 7)", () => {
+  it("turns a goal's worker off after 3 settled failures in a row, worked before or not", () => {
+    expect(GOAL_WORKER_FAILURE_LIMIT).toBe(3);
+    expect(
+      shouldTripGoalWorker({
+        status: "active",
+        recentSettled: ["failed", "failed", "failed"],
+      })
+    ).toBe(true);
+    expect(
+      shouldTripGoalWorker({
+        status: "active",
+        recentSettled: ["failed", "failed", "failed", "completed"],
+      })
+    ).toBe(true);
+  });
+
+  it("a success inside the window, too few runs, or an inactive rule never trips", () => {
+    expect(
+      shouldTripGoalWorker({
+        status: "active",
+        recentSettled: ["failed", "completed", "failed"],
+      })
+    ).toBe(false);
+    expect(
+      shouldTripGoalWorker({
+        status: "active",
+        recentSettled: ["failed", "failed"],
+      })
+    ).toBe(false);
+    expect(
+      shouldTripGoalWorker({
+        status: "error",
+        recentSettled: ["failed", "failed", "failed"],
+      })
+    ).toBe(false);
+  });
+
+  it("its sentence says how many and why sooner, in the breakers' one shape", () => {
+    expect(goalWorkerOffMessage("Timed out")).toBe(
+      "Turned off automatically after 3 failed runs in a row (it runs for a goal). Last failure: Timed out Fix it, then resume the rule."
+    );
   });
 });

@@ -2275,6 +2275,48 @@ export function resolveWaitingOnReasonLabel(v: string | null | undefined) {
 }
 
 /**
+ * The goal attention groups' words (`GOAL_ATTENTION_GROUPS`,
+ * `@synap-core/types/goal`): a Goals filter, a Relay tab group. Keyed by
+ * every group: a group added without its words stops the build.
+ */
+export const GOAL_ATTENTION_GROUP_LABELS = {
+  needs_you: "Needs you",
+  failing: "Failing",
+  running: "Repeating",
+  until_done: "Until done",
+  off: "Off",
+} as const satisfies Readonly<
+  Record<"needs_you" | "failing" | "running" | "until_done" | "off", string>
+>;
+
+/** The words for a goal attention group; unknown values humanize, never leak. */
+export function resolveGoalAttentionGroupLabel(v: string | null | undefined) {
+  return resolveFrom(GOAL_ATTENTION_GROUP_LABELS, v);
+}
+
+/**
+ * A counted clause of the goals summary ("2 need you", "1 runs on its own")
+ * and of a goal's needs-you reason ("2 runs to approve"): the verb agrees
+ * with the count, so each clause has its one and other forms.
+ */
+const GOAL_ATTENTION_COUNT_WORDS = {
+  needs_you: { one: "needs you", other: "need you" },
+  failing: { one: "failing", other: "failing" },
+  running: { one: "runs on its own", other: "run on their own" },
+  until_done: { one: "until done", other: "until done" },
+  off: { one: "off", other: "off" },
+  run_approvals: { one: "run to approve", other: "runs to approve" },
+} as const satisfies Readonly<Record<string, { one: string; other: string }>>;
+
+export function goalAttentionCountWords(
+  clause: keyof typeof GOAL_ATTENTION_COUNT_WORDS,
+  n: number
+): string {
+  const w = GOAL_ATTENTION_COUNT_WORDS[clause];
+  return `${n} ${n === 1 ? w.one : w.other}`;
+}
+
+/**
  * A plain move of a goal between two statuses names where it goes — "Move to
  * agreed" — because three bare "Move" items say nothing (code-core F8). The
  * one door for that label; a close, a drop or a pause keep their own verb

@@ -81,6 +81,7 @@ import { RUN_NOT_DELAY_SUSPENDED } from "./automation-run-reaper.js";
 import {
   tripNeverWorkedBreaker,
   tripBrokeAfterWorkingBreaker,
+  tripGoalWorkerBreaker,
 } from "./automation-breaker.js";
 import {
   beginAiUsageCapture,
@@ -135,6 +136,7 @@ import {
   executeProposalsQueryStep,
 } from "./steps/ledger-query.js";
 import { executePlaybookRun } from "./steps/playbook-run.js";
+import { runFilingOfFlow } from "../utils/run-filing.js";
 import {
   AI_DISPATCH_GUARDRAILS,
   AUTOMATION_SKIP_REASONS,
@@ -501,6 +503,9 @@ async function executeAutomationFlow(params: {
       automationId,
       automationRunId: runId,
       channelId: boundChannelId,
+      // A worker enabled on a goal files its run in that goal (R3), the
+      // same goal its playbook_run node files the playbook sessions in.
+      ...runFilingOfFlow(flow),
       agentUserId: ownerUser?.userType === "agent" ? ownerId : undefined,
     });
     runSessionId = opened.sessionId;
@@ -2144,6 +2149,12 @@ async function executeAutomationFlow(params: {
           automationId,
           status: statsAfter.status,
           successCount: statsAfter.successCount,
+          reason: firstFailureMessage,
+        });
+        // A goal's worker stops sooner: 3 failures in a row (decision 7).
+        await tripGoalWorkerBreaker({
+          automationId,
+          status: statsAfter.status,
           reason: firstFailureMessage,
         });
       }

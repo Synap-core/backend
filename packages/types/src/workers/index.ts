@@ -110,6 +110,25 @@ export function effectiveWorkerSize(
   return a.size ?? DEFAULT_WORKER_SIZE;
 }
 
+/**
+ * The stable identity of an activator within one playbook: what
+ * `workers.enable` / `synap_enable_worker` take as `activatorKey`. size, mode
+ * and maxPendingApprovals stay OUT of the key: changing them moves the decl
+ * hash, and the convergence UPDATES the same rule in place. The pod's
+ * `activatorKey` (`schemas/playbook-process.ts`) is this function.
+ */
+export function workerActivatorKey(a: {
+  on: string;
+  status?: string | null;
+  cron?: string | null;
+}): string {
+  if (a.on === "enters_status") return `enters_status:${a.status ?? ""}`;
+  if (a.on === "count") return `count:${a.status ?? ""}`;
+  if (a.on === "schedule")
+    return `schedule:${(a.cron ?? "").trim().split(/\s+/).join(" ")}`;
+  return a.on;
+}
+
 // ── Enablement scope ────────────────────────────────────────────────────────
 
 /**

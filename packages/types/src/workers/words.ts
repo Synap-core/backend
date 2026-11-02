@@ -12,7 +12,9 @@
  *   workerSentence(w)      → { when, then } — "…, propose running Produce Content"
  *   workerUnitInput(w)     → the shared unit-state input (one mark rule)
  *   playbookTriggerFact()  → what STARTS a playbook, for its header
+ *   goalRhythmWords(ws)    → a goal's rhythm, from its running workers
  */
+import { cronWords } from "../automations/cron-recurrence.js";
 import { withArticle } from "../automations/stored-rule-words.js";
 import type { UnitStateInput } from "../units/state.js";
 import {
@@ -42,6 +44,9 @@ export interface SentenceWorker extends TriggerWorker {
   pendingApprovals?: number;
 }
 
+/** A schedule `cronWords` cannot phrase — the same words the Rules page says. */
+const CUSTOM_SCHEDULE = "On a custom schedule";
+
 /** WHEN the worker fires, in words — null when the activator cannot be said. */
 export function workerWhen(w: TriggerWorker): string | null {
   const a = w.activator;
@@ -58,7 +63,9 @@ export function workerWhen(w: TriggerWorker): string | null {
         ? `When ${a.min} ${resolveObjectNounPlural(w.profileSlug ?? "thing").toLowerCase()} are in ${status}`
         : null;
     case "schedule":
-      return a.cron ? `On schedule ${a.cron}` : null;
+      // Through `cronWords`, never the raw expression (D3): an expression it
+      // cannot phrase says so in words instead of leaking `*/15 * * * *`.
+      return a.cron ? (cronWords(a.cron) ?? CUSTOM_SCHEDULE) : null;
     default:
       return null;
   }
@@ -130,8 +137,34 @@ export function playbookTriggerFact(input: {
   if (schedule) {
     return {
       state: "known",
-      text: `${schedule.cron}${schedule.enabled ? "" : " (disabled)"}`,
+      text: `${cronWords(schedule.cron) ?? CUSTOM_SCHEDULE}${schedule.enabled ? "" : " (disabled)"}`,
     };
   }
   return { state: "known", text: "Manual / on demand" };
+}
+
+/**
+ * A GOAL's rhythm in words, derived from its running workers — never a
+ * schedule field on the goal (goals that run, decision 1): "Every Monday at
+ * 09:00 UTC · when an issue is created". Paused workers and workers whose
+ * trigger cannot be said are left out; the same words twice are said once.
+ * Null when nothing wakes the goal.
+ */
+export function goalRhythmWords(
+  workers: readonly TriggerWorker[]
+): string | null {
+  const seen = new Set<string>();
+  const parts: string[] = [];
+  for (const w of workers) {
+    if (w.state !== "running") continue;
+    const when = workerWhen(w);
+    if (!when) continue;
+    const key = when.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    parts.push(
+      parts.length === 0 ? when : when.charAt(0).toLowerCase() + when.slice(1)
+    );
+  }
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
