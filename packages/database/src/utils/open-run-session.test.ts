@@ -257,3 +257,34 @@ describe("openRunSession title", () => {
     expect(insertValuesMock).not.toHaveBeenCalled();
   });
 });
+
+describe("openRunSession — a goal's worker files its run in the goal (R3)", () => {
+  it("writes the goal with its project", async () => {
+    findFirstMock.mockResolvedValue(undefined);
+    await openRunSession({
+      userId: "u1",
+      goal: "Daily check",
+      source: "automation",
+      projectId: "proj-1",
+      trackId: "goal-1",
+    });
+    expect(insertValuesMock.mock.calls[0]![0]).toMatchObject({
+      projectId: "proj-1",
+      trackId: "goal-1",
+    });
+  });
+
+  it("never writes a goal without its project", async () => {
+    findFirstMock.mockResolvedValue(undefined);
+    await openRunSession({
+      userId: "u1",
+      goal: "Daily check",
+      source: "automation",
+      trackId: "goal-1",
+    });
+    expect(insertValuesMock.mock.calls[0]![0]).toMatchObject({
+      projectId: null,
+      trackId: null,
+    });
+  });
+});

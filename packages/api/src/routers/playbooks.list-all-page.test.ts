@@ -62,6 +62,20 @@ vi.mock("../access/index.js", () => ({
   scopedDb: mockScopedDb,
 }));
 
+vi.mock("../services/playbooks/workers.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  // Proven against real SQL in `workers.pglite.test.ts`.
+  playbookGoalsAndHealth: vi.fn(
+    async ({ playbookIds }: { playbookIds: string[] }) =>
+      new Map(
+        playbookIds.map((id) => [
+          id,
+          { goals: [{ id: "goal-1", name: "Ship" }], health: null },
+        ])
+      )
+  ),
+}));
+
 import { playbooksRouter } from "./playbooks.js";
 
 /** Chainable select() builder whose terminal .limit resolves to `rows`. */
@@ -127,6 +141,8 @@ describe("playbooks.listAllPage", () => {
         id: "pb-1",
         name: "Pod-wide playbook",
         createdAt: new Date("2026-01-01T00:00:00Z"),
+        servesGoals: [{ id: "goal-1", name: "Ship" }],
+        runHealth: null,
       },
     ]);
     expect(result.nextCursor).toBeNull();

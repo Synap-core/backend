@@ -381,6 +381,18 @@
       "types": "./dist/workers/words.d.ts",
       "import": "./dist/workers/words.js"
     },
+    "./workers/health": {
+      "types": "./dist/workers/health.d.ts",
+      "import": "./dist/workers/health.js"
+    },
+    "./workers/goal": {
+      "types": "./dist/workers/goal.d.ts",
+      "import": "./dist/workers/goal.js"
+    },
+    "./workers/how-often": {
+      "types": "./dist/workers/how-often.d.ts",
+      "import": "./dist/workers/how-often.js"
+    },
     "./targets": {
       "types": "./dist/targets/index.d.ts",
       "import": "./dist/targets/index.js"

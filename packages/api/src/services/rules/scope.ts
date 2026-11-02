@@ -16,6 +16,17 @@
  * not create a project-limited rule the runtime cannot limit; it offers to
  * remove the limit instead), so the two doors agree.
  *
+ * ── One exception: a clock that only files into the project ──────────────
+ * A schedule fires no event to limit, but a worker enabled on a goal (goals
+ * that run, `workers.enable` with an `on: schedule` activator) carries the
+ * project to say where its runs LAND, not which events it hears. When EVERY
+ * node of the compiled THEN is a `playbook_run` filed in that same project
+ * (`data.projectId`, the sentence grammar's `__projectId`; the flow's own
+ * `trigger` node is the WHEN, not an action), the project scope
+ * holds by construction: there is one tick, and all it produces is filed in
+ * the project. Such a rule is accepted, with its trigger unchanged. Any other
+ * project-scoped schedule is refused exactly as before.
+ *
  * A prose-only rule (no sentence) and a DRAFT compile nothing, so they carry the
  * project as the skill row's lens only; the refusal happens at activation,
  * which recompiles through `update.ts`.
@@ -55,6 +66,34 @@ export type RuleProjectScopeBinding =
     }
   | { ok: false; failure: RuleCompileFailure };
 
+/** The compiled THEN, as far as the scope reads it. */
+export interface CompiledFlow {
+  nodes: ReadonlyArray<{ type?: string; data?: unknown }>;
+}
+
+/**
+ * A schedule whose every action runs a playbook filed in `projectId` (see the
+ * header): the one project-scoped clock the door accepts.
+ */
+export function isClockFiledInProject(
+  compiled: { trigger: CompiledTrigger; flow?: CompiledFlow },
+  projectId: string
+): boolean {
+  if (compiled.trigger.triggerType !== "cron") return false;
+  // The flow's own `trigger` node is the WHEN, not an action.
+  const nodes = (compiled.flow?.nodes ?? []).filter(
+    (n) => n.type !== "trigger"
+  );
+  return (
+    nodes.length > 0 &&
+    nodes.every(
+      (n) =>
+        n.type === "playbook_run" &&
+        (n.data as { projectId?: unknown } | undefined)?.projectId === projectId
+    )
+  );
+}
+
 /** Whether the matcher can limit a trigger of this shape to a project. */
 export function isProjectScopeEnforceable(trigger: CompiledTrigger): boolean {
   const pattern = trigger.triggerConfig.eventPattern;
@@ -69,12 +108,22 @@ export function isProjectScopeEnforceable(trigger: CompiledTrigger): boolean {
  * The ONE step both rule doors run after compiling: rebind the compiled trigger
  * with the project lens, or refuse by clause. Pure; never mutates `compiled`.
  */
-export function applyRuleProjectScope<T extends { trigger: CompiledTrigger }>(
+export function applyRuleProjectScope<
+  T extends { trigger: CompiledTrigger; flow?: CompiledFlow },
+>(
   compiled: T,
   projectId: string | undefined
 ):
   | { ok: true; compiled: T; scopeNote?: string }
   | { ok: false; failure: RuleCompileFailure } {
+  if (projectId && isClockFiledInProject(compiled, projectId)) {
+    const noun = resolveObjectNoun("project").toLowerCase();
+    return {
+      ok: true,
+      compiled,
+      scopeNote: `This rule runs on its schedule; every run is filed in ${noun} ${projectId}.`,
+    };
+  }
   const bound = bindRuleProjectScope(compiled.trigger, projectId);
   if (!bound.ok) return bound;
   return {

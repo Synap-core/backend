@@ -43,6 +43,7 @@
  * the week.
  */
 
+import { listEnabledWorkers } from "../playbooks/workers.js";
 import { createLogger } from "@synap-core/core";
 import {
   db,
@@ -281,7 +282,7 @@ async function methodPlaybookFor(
   track: Pick<ProjectTrack, "id" | "playbookId">,
   owner: string
 ): Promise<string | null> {
-  if (!track.playbookId) return null;
+  if (!track.playbookId) return primaryWorkerPlaybookOf(track.id, owner);
   const visible = await scopedDb(
     AccessContext.agent({ userId: owner })
   ).findFirst<typeof playbooks.$inferSelect>(playbooks, {
@@ -293,6 +294,31 @@ async function methodPlaybookFor(
     "goal loop: the goal's playbook is not visible to the person asked — proposing the run without it"
   );
   return null;
+}
+
+/**
+ * A goal with no method of its own (the goals-that-run model: a goal holds
+ * WORKERS, never a `playbookId`) proposes its next run with its PRIMARY
+ * worker's playbook (R11): a running worker before a paused one, then the
+ * lowest playbook id, so the pick never changes between ticks. Read through
+ * the ONE workers reader, as the person the run is proposed for (it sees only
+ * playbooks they can see). No worker → no playbook, as before.
+ */
+export async function primaryWorkerPlaybookOf(
+  goalId: string,
+  owner: string
+): Promise<string | null> {
+  // `trackIds`: the loop already read the goal itself (it runs as the pod).
+  const workers = await listEnabledWorkers({
+    userId: owner,
+    trackIds: [goalId],
+  });
+  const [primary] = [...workers].sort(
+    (a, b) =>
+      Number(a.state !== "running") - Number(b.state !== "running") ||
+      a.playbookId.localeCompare(b.playbookId)
+  );
+  return primary?.playbookId ?? null;
 }
 
 /**
