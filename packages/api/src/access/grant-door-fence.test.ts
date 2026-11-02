@@ -15,6 +15,7 @@ import {
 } from "@synap-core/types/grants";
 import {
   GRANT_DOOR_UNSUPPORTED,
+  hubRouteClass,
   GRANT_OWNER_WIDE_UNSUPPORTED,
   GRANT_WRITE_DOOR_UNSUPPORTED,
   isFencedGrant,
@@ -71,25 +72,28 @@ const AI = key({
     .grant.permissions,
 });
 const DOC_ONLY = key({ permissions: ["document.read"] });
+/** A uuid: every id a declared door names is one. */
+const U = "3f2a1b4c-5d6e-4f70-8192-a3b4c5d6e7f8";
 
 describe("restDoorAllowed", () => {
   it.each([
-    ["GET", "/entities/abc", true],
-    ["GET", "/users/u1/entities", true],
-    ["GET", "/documents/d1/raw", true],
+    ["GET", `/entities/${U}`, true],
+    ["GET", `/users/${U}/entities`, true],
+    ["GET", "/users/me/entities", true],
+    ["GET", `/documents/${U}/raw`, true],
     ["GET", "/brand/kit", true],
-    ["GET", "/threads/t1/messages", true],
+    ["GET", `/threads/${U}/messages`, true],
     ["GET", "/focus-sessions", true],
     ["GET", "/focus-sessions/owed", true], // seamed: sessionReadableWhere
     ["GET", "/focus-sessions/s1", false], // not a uuid: no declaration admits it
-    ["GET", "/projects/p1", true],
+    ["GET", `/projects/${U}`, true],
     // Seamed (`scopedDb` on playbooks, grant-clipped method count): a scoped
     // key finds the process it may run. A uuid id only.
     ["GET", "/playbooks", true],
     ["GET", "/playbooks/11111111-1111-4111-8111-111111111111", true],
     ["GET", "/playbooks/promote-from-session", false],
     ["POST", "/playbooks/11111111-1111-4111-8111-111111111111/run", true], // a write — bounded by the gate
-    ["GET", "/projects/p1/path", false], // userVisibleWhere sessions — not migrated
+    ["GET", `/projects/${U}/path`, false], // userVisibleWhere sessions — not migrated
     ["GET", "/search", false],
     // The list door: seamed; its ?q= (Typesense) branch is refused by the
     // route itself for a limited key (entities.scoped-key-list.pglite.test.ts).
@@ -102,8 +106,8 @@ describe("restDoorAllowed", () => {
     ["POST", "/entities", true], // a write — bounded by the gate
     // Seamed: the standing read floors its answer by the grant (fence1).
     ["POST", "/workspaces/ensure-template", true],
-    ["PATCH", "/entities/abc", true],
-    ["DELETE", "/entities/abc", true],
+    ["PATCH", `/entities/${U}`, true],
+    ["DELETE", `/entities/${U}`, true],
   ] as const)("%s %s → %s", (method, path, ok) => {
     expect(restDoorAllowed(method, path, DOC_ONLY)).toBe(ok);
   });
@@ -196,6 +200,96 @@ describe("declared session read doors (a scoped agent key reads its session)", (
   });
 });
 
+describe("ids are uuids: a static sibling is never admitted (R1)", () => {
+  // Every door that names an id, with the static word a future sibling route
+  // could take. Before R1 these were `[^/]+`, so `/projects/summary` would
+  // have been read as a seamed project.
+  const DOORS = [
+    "/entities/:id",
+    "/entities/:id/connections",
+    "/entities/:id/facets",
+    "/documents/:id",
+    "/documents/:id/raw",
+    "/files/:id/url",
+    "/projects/:id",
+    "/projects/:id/outputs",
+    "/projects/:id/digest",
+    "/tracks/:id",
+    "/commands/:id",
+    "/threads/:id/messages",
+    "/threads/:id/branches",
+    "/playbooks/:id",
+    "/users/:id/entities",
+  ];
+  it.each(DOORS)("GET %s admits a uuid, not a static word", (door) => {
+    expect(restDoorAllowed("GET", door.replace(":id", U), DOC_ONLY)).toBe(true);
+    expect(restDoorAllowed("GET", `${door.replace(":id", U)}/`, DOC_ONLY)).toBe(
+      true
+    );
+    for (const word of ["summary", "search", "abc", `${U}x`]) {
+      expect(
+        restDoorAllowed("GET", door.replace(":id", word), DOC_ONLY),
+        door.replace(":id", word)
+      ).toBe(false);
+    }
+  });
+  it("a POST read names a uuid too", () => {
+    expect(restDoorAllowed("POST", `/files/${U}/transcribe`, DOC_ONLY)).toBe(
+      true
+    );
+    // Not a declared read, so (today) a write the gate bounds: the fence lets
+    // it through and the route answers 400 for a non-uuid id.
+    expect(hubRouteClass("POST", "/files/summary/transcribe")).toBe("write");
+    expect(hubRouteClass("POST", `/files/${U}/transcribe`)).toBe("read");
+  });
+});
+
+describe("POST reads declared in R1 (were open as writes)", () => {
+  const COMPUTER = key({ permissions: aiDefaultCapabilities() });
+  const PINNED = key({
+    permissions: aiDefaultCapabilities(),
+    workspaceIds: ["w1"],
+  });
+  const APP = key({
+    permissions: ["entity.read", "entity.create", "session.read"],
+    workspaceIds: ["w1"],
+  });
+  it.each([
+    "/entities/recall",
+    "/identity/resolve",
+    "/routing/resolve",
+    "/rules/classify",
+    "/capture/cluster-tabs",
+  ])("POST %s is a seamed read: every scoped key passes", (path) => {
+    expect(hubRouteClass("POST", path)).toBe("read");
+    for (const grant of [DOC_ONLY, PINNED, APP]) {
+      expect(restDoorAllowed("POST", path, grant)).toBe(true);
+    }
+  });
+  it("POST /packages/preflight reads what GET /workspaces reads (finding 634bbbfc)", () => {
+    expect(hubRouteClass("POST", "/packages/preflight")).toBe("read");
+    expect(restDoorAllowed("POST", "/packages/preflight", COMPUTER)).toBe(true);
+    for (const grant of [PINNED, APP, DOC_ONLY, key({ permissions: [] })]) {
+      expect(restDoorAllowed("POST", "/packages/preflight", grant)).toBe(false);
+    }
+  });
+  it("POST /focus-sessions/:id/recall needs every subject recall reads, unnarrowed", () => {
+    const path = `/focus-sessions/${U}/recall`;
+    expect(hubRouteClass("POST", path)).toBe("read");
+    expect(restDoorAllowed("POST", path, AI)).toBe(true);
+    for (const grant of [PINNED, APP, DOC_ONLY]) {
+      expect(restDoorAllowed("POST", path, grant)).toBe(false);
+    }
+  });
+  it("POST /skills/:id/dry-run is refused to every fenced key", () => {
+    const path = `/skills/${U}/dry-run`;
+    expect(hubRouteClass("POST", path)).toBe("read");
+    for (const grant of [AI, COMPUTER, PINNED, APP]) {
+      expect(restDoorAllowed("POST", path, grant)).toBe(false);
+    }
+  });
+});
+
 describe("self-introspection doors", () => {
   // A computer / agent key from the device flow carries the AI preset; it must
   // still learn who it is (2026-10-11: Claude Code's installer got 403 here).
@@ -214,11 +308,36 @@ describe("self-introspection doors", () => {
 });
 
 describe("mcpToolAllowed", () => {
-  it("read tools only when seamed; write tools always", () => {
+  it("read tools only when seamed; classified write tools always", () => {
     expect(mcpToolAllowed("synap_get_entities", true, DOC_ONLY)).toBe(true);
     expect(mcpToolAllowed("synap_ask", true, DOC_ONLY)).toBe(false);
     expect(mcpToolAllowed("synap_create_entity", false, DOC_ONLY)).toBe(true);
     expect(mcpToolAllowed("synap_not_classified", true, AI)).toBe(false);
+  });
+  it("an unclassified non-read tool is refused (closed by default, R1)", () => {
+    expect(mcpToolAllowed("synap_not_classified", false, AI)).toBe(false);
+    expect(mcpToolAllowed("synap_not_classified", undefined, AI)).toBe(false);
+  });
+  it("a write tool that returns rows passes its read door", () => {
+    const PINNED_AI = key({
+      permissions: GRANT_PRESETS.find((r) => r.id === AI_READ_PROPOSE_ROLE_ID)!
+        .grant.permissions,
+      workspaceIds: ["w1"],
+    });
+    // The same rule as its REST twin GET /focus-sessions/:id/answers/wait.
+    const S = "11111111-1111-4111-8111-111111111111";
+    for (const grant of [AI, PINNED_AI, DOC_ONLY]) {
+      expect(mcpToolAllowed("synap_wait_for_answer", false, grant)).toBe(
+        restDoorAllowed("GET", `/focus-sessions/${S}/answers/wait`, grant)
+      );
+    }
+    expect(mcpToolAllowed("synap_wait_for_answer", false, AI)).toBe(true);
+    expect(mcpToolAllowed("synap_wait_for_answer", false, PINNED_AI)).toBe(
+      false
+    );
+    expect(mcpToolAllowed("synap_get_channel", false, AI)).toBe(true);
+    expect(mcpToolAllowed("synap_get_channel", false, PINNED_AI)).toBe(false);
+    expect(mcpToolAllowed("synap_get_channel", false, DOC_ONLY)).toBe(false);
   });
   it.each([
     "synap_ask",
