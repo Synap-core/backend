@@ -41,6 +41,10 @@ PATCH /api/hub/entities/ent_deal_acme
 // then attach_facet { entityId: "ent_company_acme", facetSlug: "client", properties: { "clientStatus": "active" } }
 ```
 
+**AI behavior — talking to a lead or client:**
+
+The conversation with a person is their CHANNEL (`load_skill system/synap/channels`). Read it with `synap_get_channel` `{mode: "person", entityId}`. To write to them, file `synap_run_capability` `messaging.send` `{to: <person id>, text}`: it lands as a proposed message in their channel, which the person approves. Never record a message as an outreach touch, a note or a task. A reply moves the lead to `engaged` through an automation, not by hand.
+
 **AI behavior — campaign membership:**
 
 When the user describes campaign members (segment for outreach, tracking, or automation), use polymorphic `member_of` relations. Members can be persons, companies, or deals:

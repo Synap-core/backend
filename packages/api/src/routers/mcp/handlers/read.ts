@@ -49,6 +49,11 @@ import {
   type EffectiveRelationType,
 } from "../../../utils/relation-types.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
+import { isUuid } from "@synap-core/types/property-render";
+import {
+  listPersonChannels,
+  listProposedMessages,
+} from "../../../services/channels/person-channels.js";
 import { EXPOSURE_RELATION_TYPES } from "../../../utils/project-scope.js";
 import {
   resolveByName,
@@ -1039,9 +1044,42 @@ export const readHandlers: McpHandlerMap = {
     // point (a caller asking for a context channel wants one to exist), and a
     // near-identical sibling tool is exactly the overlap that degrades tool
     // selection.
-    requireScope(apiKeyScopes, "mcp.write", toolName);
     const mode = args.mode as string;
+    if (mode === "person") {
+      // A READ: the person's channels and each one's pending proposed
+      // messages, through the caller's floor and key grant
+      // (services/channels/person-channels.ts) — the same read as Hub
+      // GET /entities/:id/channels + /channels/:id/proposed-messages.
+      requireScope(apiKeyScopes, "mcp.read", toolName);
+      const entityId = args.entityId;
+      if (typeof entityId !== "string" || !isUuid(entityId)) {
+        return ok({
+          error:
+            "entityId (the record's full UUID) is required for mode 'person'",
+        });
+      }
+      const result = await listPersonChannels({ userId, entityId });
+      if (result.status === "not_found") {
+        return ok({ error: `No record you can read with id '${entityId}'` });
+      }
+      const channels = [];
+      for (const ch of result.channels) {
+        const proposed = await listProposedMessages({
+          userId,
+          channelId: ch.id,
+        });
+        channels.push({
+          ...ch,
+          proposedMessages: proposed.status === "ok" ? proposed.proposed : [],
+        });
+      }
+      return ok({ entityId, channels });
+    }
+    requireScope(apiKeyScopes, "mcp.write", toolName);
     const wsId = args.workspaceId as string;
+    if (!wsId) {
+      return ok({ error: `workspaceId is required for mode '${mode}'` });
+    }
     if (mode === "personal") {
       const result = await caller.channels.ensurePersonal({
         userId,

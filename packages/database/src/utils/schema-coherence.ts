@@ -389,6 +389,23 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "resolved_by",
     addedBy: "0279_object_rooms_and_comment_resolve.sql",
   },
+  // A channel with a person (0393): every external message read and write
+  // names these; missing, the channel doors and inbound recording throw.
+  {
+    table: "messages",
+    column: "direction",
+    addedBy: "0393_channel_messages_direction_status.sql",
+  },
+  {
+    table: "messages",
+    column: "delivery_status",
+    addedBy: "0393_channel_messages_direction_status.sql",
+  },
+  {
+    table: "messages",
+    column: "external_message_id",
+    addedBy: "0393_channel_messages_direction_status.sql",
+  },
 
   // entities
   {

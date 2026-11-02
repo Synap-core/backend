@@ -2,7 +2,7 @@
  * Hub Protocol REST — channels (resolve channel by context, personal channel, AI trigger)
  */
 
-import { z } from "@hono/zod-openapi";
+import { createRoute, z } from "@hono/zod-openapi";
 import {
   db,
   agents,
@@ -40,6 +40,7 @@ import {
 // Note: channelsTable.externalId is the canonical dedup field — same as externalChannelId at insert time.
 
 import { resolveOrCreateExternalChannel } from "../../../services/connectors/inbound-recorder.js";
+import { listProposedMessages } from "../../../services/channels/person-channels.js";
 import { sessionContextStampRefusal } from "../../../services/focus-sessions/session-context-stamp.js";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
 import { sessionReadableWhere } from "../../../access/session-visibility.js";
@@ -48,6 +49,7 @@ import {
   ChannelByContextRequestSchema,
   ChannelByContextResponseSchema,
   PersonalChannelQuerySchema,
+  ProposedMessagesResponseSchema,
   TriggerAiRequestSchema,
   WireChannelSchema,
 } from "./_codecs/channel.js";
@@ -60,6 +62,7 @@ import {
   type HubHono,
   httpStatusForTrpcError,
   readJsonBody,
+  uuidPathParam,
 } from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import {
@@ -1100,6 +1103,70 @@ export function registerChannelsRoutes(app: HubHono): void {
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  // ── GET /channels/:channelId/proposed-messages ───────────────────────────
+  // A channel's PROPOSED messages: the pending `messaging.external.send`
+  // proposals filed for it (`data.channelId`, founder decision 1: one record,
+  // shown inline in its channel). The channel is read under the caller's
+  // floor + the key's grant (404 when it cannot), the proposals under the
+  // proposal floor + grant. On the fence as `NARROWED("proposal")`.
+  const proposedMessagesRoute = createRoute({
+    method: "get",
+    path: "/channels/{channelId}/proposed-messages",
+    tags: ["Channels"],
+    summary: "List a channel's proposed messages",
+    description:
+      "The messages waiting for the person's approval before they go out in " +
+      "this channel, oldest first: each is a pending `messaging.external.send` " +
+      "proposal (its id, text, who drafted it and where to review it). 404 " +
+      "when the caller cannot read the channel.",
+    request: { params: z.object({ channelId: uuidPathParam }) },
+    responses: {
+      200: {
+        description: "Proposed messages",
+        content: {
+          "application/json": { schema: ProposedMessagesResponseSchema },
+        },
+      },
+      403: {
+        description: "Forbidden",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      404: {
+        description: "No channel the caller can read",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(proposedMessagesRoute, async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const userId = c.get("userId") as string | undefined;
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const { channelId } = c.req.valid("param");
+    try {
+      const result = await listProposedMessages({ userId, channelId });
+      if (result.status === "not_found") {
+        return c.json({ error: "Channel not found or access denied" }, 404);
+      }
+      return c.json({ proposed: result.proposed }, 200);
+    } catch (err) {
+      logger.error({ err, channelId }, "GET /channels/:id/proposed-messages");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err) as never
       );
     }
   });

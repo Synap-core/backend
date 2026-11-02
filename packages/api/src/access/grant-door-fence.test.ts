@@ -743,3 +743,46 @@ describe("webhooks for a scoped key (S2/D7)", () => {
     ).toBe(false);
   });
 });
+
+// Channels wave (lane A): a person's channels and a channel's proposed
+// messages are NARROWED doors — admitted for the subject an app asks for,
+// pinned to its spaces or not; the route narrows its own answer.
+describe("a person's channel doors", () => {
+  const E = "11111111-1111-4111-8111-111111111111";
+  const PINNED_CHANNEL = key({
+    permissions: ["entity.*.read", "channel.read"],
+    workspaceIds: ["w1"],
+  });
+  const PINNED_PROPOSAL = key({
+    permissions: ["proposal.read"],
+    workspaceIds: ["w1"],
+  });
+  it("GET /entities/:id/channels: admitted with channel.read, refused without", () => {
+    expect(
+      restDoorAllowed("GET", `/entities/${E}/channels`, PINNED_CHANNEL)
+    ).toBe(true);
+    expect(restDoorAllowed("GET", `/entities/${E}/channels`, DOC_ONLY)).toBe(
+      false
+    );
+    expect(
+      restDoorAllowed("GET", `/entities/${E}/channels`, PINNED_PROPOSAL)
+    ).toBe(false);
+  });
+  it("GET /channels/:id/proposed-messages: admitted with proposal.read, refused without", () => {
+    expect(
+      restDoorAllowed(
+        "GET",
+        `/channels/${E}/proposed-messages`,
+        PINNED_PROPOSAL
+      )
+    ).toBe(true);
+    expect(
+      restDoorAllowed("GET", `/channels/${E}/proposed-messages`, DOC_ONLY)
+    ).toBe(false);
+  });
+  it("only a uuid id is admitted", () => {
+    expect(
+      restDoorAllowed("GET", "/entities/not-a-uuid/channels", PINNED_CHANNEL)
+    ).toBe(false);
+  });
+});

@@ -45,6 +45,17 @@ export const MessageSchema = z
     sessionId: z.string().nullable().optional(),
     authorType: z.string().nullable().optional(),
     metadata: z.record(z.string(), z.unknown()).nullable().optional(),
+    /** A channel with a person (0393): which way it went; null = in-pod chat. */
+    direction: z.enum(["inbound", "outbound"]).nullable().optional(),
+    /** An outbound message's delivery: sent → delivered → read, or failed. */
+    deliveryStatus: z
+      .enum(["sent", "delivered", "read", "failed"])
+      .nullable()
+      .optional(),
+    /** The outside tool it came from or went to (linkedin, email, …). */
+    externalSource: z.string().nullable().optional(),
+    /** The tool's own id for this message. */
+    externalMessageId: z.string().nullable().optional(),
   })
   .openapi("Message");
 

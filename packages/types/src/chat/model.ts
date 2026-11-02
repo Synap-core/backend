@@ -67,6 +67,19 @@ export type MessageCategory =
 /** How an AI teammate came to author a message in a multiplayer room. */
 export type RoutedSource = "orchestrator" | "mention" | "direct";
 
+/**
+ * Which way a message in a channel with a person went (0393). `null` on the
+ * row = in-pod chat, no outside party.
+ */
+export type MessageDirection = "inbound" | "outbound";
+
+/**
+ * How far an OUTBOUND message got (0393), forward only: sent → delivered →
+ * read; `failed` when the provider refused it. Never "proposed": a proposed
+ * message is a `messaging.external.send` proposal, not a row.
+ */
+export type MessageDeliveryStatus = "sent" | "delivered" | "read" | "failed";
+
 // ── Channel context items ───────────────────────────────────────────────────
 
 /** The type of object tracked in a context item. */
@@ -145,6 +158,12 @@ export interface MessageRow {
   deletedAt: Date | null;
   editedAt: Date | null;
   ephemeral: boolean;
+  /** A channel with a person: which way it went (null = in-pod chat). */
+  direction: MessageDirection | null;
+  /** An outbound message's delivery (null for inbound and in-pod chat). */
+  deliveryStatus: MessageDeliveryStatus | null;
+  /** The provider's id for this message (one row per id per channel). */
+  externalMessageId: string | null;
   resolvedAt: Date | null;
   resolvedBy: string | null;
 }
