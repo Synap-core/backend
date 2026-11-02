@@ -34,7 +34,7 @@
  * purpose (e.g. a facet change's parent-entity refresh, document re-indexing).
  */
 
-import { auditLog } from "./audit-log.js";
+import { auditLog, type AuditLogOpts } from "./audit-log.js";
 import { emitSideEffects, type SideEffectPayload } from "@synap/events";
 import { isConnectionSyncProposal, type EventRecord } from "@synap/database";
 import { createLogger } from "@synap-core/core";
@@ -125,7 +125,8 @@ export interface DomainMutationOpts {
    */
   proposalId?: string | null;
   correlationId?: string;
-  source?: string;
+  /** `events.source`, one of `EVENT_SOURCES`: see `AuditLogOpts.source`. */
+  source?: AuditLogOpts["source"];
   /**
    * Focus session that produced this mutation. Reaches the automation matcher
    * (+ the F2 chain floor) AND — since 0241 — the `events.session_id` column, so

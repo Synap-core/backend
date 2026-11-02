@@ -870,7 +870,9 @@ export class ImportOrchestrator {
         targetId,
         proposalType: "capture.graph",
         action: "create",
-        source: "import",
+        // `events.source` is the door (`EVENT_SOURCES`); the import format
+        // rides in the proposal data.
+        source: "api",
         // The title names what approving it creates; the quality line is the
         // body (`data.quality`), never the title (live 0728053b, 2026-10-22).
         summary,
@@ -1645,7 +1647,9 @@ export class ImportOrchestrator {
         targetId: batchId,
         proposalType: "capture.graph",
         action: "create",
-        source: "import",
+        // `events.source` is the door (`EVENT_SOURCES`); the import format
+        // rides in the proposal data.
+        source: "api",
         // The title names what approving it creates; the quality line is the
         // body (`data.quality`), never the title (live 0728053b, 2026-10-22).
         summary,

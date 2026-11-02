@@ -6,7 +6,7 @@ import {
   callingKeyAttribution,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
-import { auditLog } from "./audit-log.js";
+import { auditLog, type AuditLogOpts } from "./audit-log.js";
 import { createPendingProposal } from "./permission-check.js";
 
 export interface CreateEventBackedProposalInput {
@@ -17,7 +17,7 @@ export interface CreateEventBackedProposalInput {
   proposalType: string;
   data: Record<string, unknown>;
   action?: string;
-  source?: string;
+  source?: AuditLogOpts["source"];
   summary?: string;
   agentUserId?: string | null;
   createdBy?: string | null;

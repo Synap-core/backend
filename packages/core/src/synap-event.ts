@@ -19,6 +19,34 @@ import { ValidationError } from "./errors.js";
 // ============================================================================
 
 /**
+ * `events.source`: WHICH pod door produced the event. The ONE vocabulary:
+ * `SynapEventSchema` validates against it on every `EventRepository.append`,
+ * so a value outside it is a ZodError and the row is never written.
+ *
+ * - `external-dispatch`: the outbound door (`recordExternalAction`,
+ *   `packages/api/src/connectors/external-dispatch.ts`), the counterpart of
+ *   `sync` (inbound). Every send that reached an external system leaves one
+ *   such row; the worker send ceiling (`countWorkerIrreversibleSentToday`) and
+ *   `diagnose(correlationId)` read by it. Until 2 Nov 2026 it was missing here,
+ *   so every one of those rows failed to append (since 31 Jul 2026).
+ *
+ * Who the actor was is NOT a source: agent identity is `agentUserId`, the app
+ * is `appId`. Callers type their `source` as `SynapEventSource`, so a value
+ * outside this list fails the build, not the append.
+ */
+export const EVENT_SOURCES = [
+  "api",
+  "automation",
+  "sync",
+  "migration",
+  "system",
+  "intelligence",
+  "external-dispatch",
+] as const;
+
+export type SynapEventSource = (typeof EVENT_SOURCES)[number];
+
+/**
  * SynapEvent v1 Schema
  *
  * The immutable contract that all events must satisfy.
@@ -45,9 +73,7 @@ export const SynapEventSchema = z.object({
 
   // Ownership
   userId: z.string().min(1), // Required for multi-tenant isolation
-  source: z
-    .enum(["api", "automation", "sync", "migration", "system", "intelligence"])
-    .default("api"),
+  source: z.enum(EVENT_SOURCES).default("api"),
   timestamp: z.date().default(() => new Date()),
 
   // Tracing

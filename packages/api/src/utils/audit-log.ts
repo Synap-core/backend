@@ -15,6 +15,7 @@ import {
 import { isOwnSessionBookkeeping } from "@synap/database/agent-governance";
 import type { EventRecord } from "@synap/database";
 import { createUnifiedEvent } from "@synap/jobs";
+import type { SynapEventSource } from "@synap-core/core";
 import type { SubjectType, EventAction, EventPhase } from "@synap/jobs";
 
 export interface AuditLogOpts {
@@ -70,7 +71,14 @@ export interface AuditLogOpts {
    */
   meter?: { provider: string; costUsd: number | null; latencyMs: number };
   data?: Record<string, unknown>;
-  source?: string;
+  /**
+   * `events.source`: which pod door produced the event, one of `EVENT_SOURCES`
+   * (@synap-core/core). Typed, never `string`: `EventRepository.append`
+   * rejects any other value, and a best-effort append swallows that rejection,
+   * so a wrong source here is an audit row that silently never lands (every
+   * external send from 31 Jul to 2 Nov 2026). Default `"api"`.
+   */
+  source?: SynapEventSource;
   correlationId?: string;
   /**
    * When true, a failed append RE-THROWS instead of being swallowed. Use ONLY
@@ -132,15 +140,7 @@ export async function auditLog(
         userId: opts.userId,
       },
       userId: opts.userId,
-      source: (opts.source || "api") as
-        | "api"
-        | "automation"
-        | "sync"
-        | "migration"
-        | "system"
-        | "intelligence"
-        | "iot"
-        | "enterprise",
+      source: opts.source ?? "api",
       correlationId: opts.correlationId,
     });
 
@@ -177,9 +177,7 @@ export async function auditLog(
             latencyMs: opts.meter.latencyMs,
           }
         : {}),
-      // Column is `text` — widen to string for compat between UnifiedEvent and EventRecord source unions
-      source: event.source as
-        "api" | "automation" | "sync" | "migration" | "system" | "intelligence",
+      source: event.source,
       timestamp: event.timestamp,
       correlationId: event.correlationId,
     });
