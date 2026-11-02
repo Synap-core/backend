@@ -2528,15 +2528,19 @@ export function describeRelayRefusal(
         message:
           "No agent question with that `messageId` in this session's room.",
       };
-    case "not_open":
+    case "not_open": {
+      // Two shapes answer `not_open`: the relay's own (`answered` when it
+      // knows the answer) and the slot answer's (AnswerSessionSlotResult).
+      const answered = "answered" in result ? result.answered : undefined;
       return {
         code: "CONFLICT",
-        message: !result.answered
+        message: !answered
           ? "That question is no longer open: it was answered, withdrawn, closed, or already waits for the person's tap."
-          : result.answered.relayed
-            ? `That question is no longer open: an agent already relayed its answer at ${result.answered.at}. Read it with synap_get_session.`
-            : `That question is no longer open: the person already answered it at ${result.answered.at}, and a relay never overwrites their answer. Read it with synap_get_session.`,
+          : answered.relayed
+            ? `That question is no longer open: an agent already relayed its answer at ${answered.at}. Read it with synap_get_session.`
+            : `That question is no longer open: the person already answered it at ${answered.at}, and a relay never overwrites their answer. Read it with synap_get_session.`,
       };
+    }
     case "label_mismatch":
       return {
         code: "BAD_REQUEST",
