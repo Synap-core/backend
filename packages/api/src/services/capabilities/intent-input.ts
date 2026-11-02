@@ -255,12 +255,35 @@ function accountVerbProblems(
 /** The parts of a definition skill the install check reads. */
 export interface DefinitionSkillForMap {
   name: string;
+  kind?: unknown;
   intent?: unknown;
   inputMap?: unknown;
   parameters?: unknown;
   requires?: readonly string[];
   metadata?: Record<string, unknown>;
   providerSpec?: { responseShape?: { item?: Record<string, string> } };
+}
+
+/**
+ * Do the verb and its account source reach the same tool? Two verbs that
+ * require a common tool do. So do two BUILTIN verbs of one definition that
+ * require none: they run in the pod itself (Synap Core's `messaging.send`
+ * lists its accounts with `messaging.accounts`), so there is no other tool
+ * an account could come from.
+ */
+function sameToolOf(
+  skill: DefinitionSkillForMap,
+  source: DefinitionSkillForMap
+): boolean {
+  const a = skill.requires ?? [];
+  const b = source.requires ?? [];
+  if (a.some((t) => b.includes(t))) return true;
+  return (
+    a.length === 0 &&
+    b.length === 0 &&
+    skill.kind === "builtin" &&
+    source.kind === "builtin"
+  );
 }
 
 /**
@@ -288,9 +311,7 @@ export function definitionInputMapProblems(
     accountVerb: source
       ? {
           readOnly: source.metadata?.readOnly === true,
-          sameTool: (source.requires ?? []).some((t) =>
-            (skill.requires ?? []).includes(t)
-          ),
+          sameTool: sameToolOf(skill, source),
           fields: item ? Object.keys(item) : null,
         }
       : null,

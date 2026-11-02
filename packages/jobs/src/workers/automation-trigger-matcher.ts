@@ -350,6 +350,17 @@ export const MESSAGE_ALIAS_EVENT_TYPES = [
 ] as const;
 
 /**
+ * The physical event the `message.sent` alias also covers (channels wave,
+ * lane D): a message the person sent to someone outside the pod, through
+ * their channel (`external_message.sent`, emitted by the send door, and by
+ * the inbound recorder for a message sent from the person's own devices).
+ * The literal `message.sent` log rows still match as before.
+ */
+export const MESSAGE_SENT_ALIAS_EVENT_TYPES = [
+  "external_message.sent.completed",
+] as const;
+
+/**
  * The synthetic aliases an automation can use to fire for BOTH physical message
  * events without binding to one transport. `message.received` is the documented
  * form; `message.*` / `message.received.*` are accepted for grammar symmetry
@@ -358,15 +369,17 @@ export const MESSAGE_ALIAS_EVENT_TYPES = [
  * automations are untouched.
  */
 function matchesMessageAlias(eventType: string, pattern: string): boolean {
-  // `message.sent` / `message.sent.*` match ONLY the literal `message.sent`
-  // event rows (via matchPattern's exact/generic walk) — they must NOT bridge to
-  // the physical types here. The physical set (MESSAGE_ALIAS_EVENT_TYPES) is the
-  // RECEIVED/created pair, so bridging `message.sent` would fire a "sent" trigger
-  // on an INBOUND `external_message.received.completed` — semantically wrong. The
-  // `message.received` / `message.*` aliases keep their historical "any physical
-  // message event" bridge unchanged.
+  // `message.sent` / `message.sent.*` match the literal `message.sent` event
+  // rows (via matchPattern's exact/generic walk) and the OUTBOUND physical
+  // event `external_message.sent.completed` — never the RECEIVED/created pair
+  // (MESSAGE_ALIAS_EVENT_TYPES): a "sent" trigger must not fire on an INBOUND
+  // `external_message.received.completed`. The `message.received` /
+  // `message.*` aliases keep their historical "any physical message event"
+  // bridge unchanged.
   if (pattern === "message.sent" || pattern === "message.sent.*") {
-    return false;
+    return (MESSAGE_SENT_ALIAS_EVENT_TYPES as readonly string[]).includes(
+      eventType
+    );
   }
   if (!(MESSAGE_ALIAS_PATTERNS as readonly string[]).includes(pattern)) {
     return false;

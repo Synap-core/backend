@@ -11,7 +11,12 @@
  *     dated record (a note carrying an explicit `date`) and the other end;
  *   - sent outreach: an `outreach-touch` whose status says it went out →
  *     its `sent_to` person, dated by `sentDate`, else by its move to `sent`;
- *     a move to `replied` is a later interaction of its own.
+ *     a move to `replied` is a later interaction of its own;
+ *   - a message the person SENT in a channel with someone (channels wave,
+ *     lane D): an `outbound` row of an EXTERNAL channel bound to the record
+ *     (`contextObjectType` entity), dated by the message. The channel is the
+ *     conversation; the outreach-touch kind is retired (its sent touches still
+ *     count until the last ones are moved).
  * Never: mentions, edits, drafts, a bounced touch, an undated record (an
  * imported note's `createdAt` is the import day, not the day you talked), a
  * meeting that has not happened yet (the sweep counts it once it has).
@@ -33,6 +38,8 @@ import type * as schema from "../../schema/index.js";
 import { entities } from "../../schema/entities.js";
 import { events } from "../../schema/events.js";
 import { relations } from "../../schema/relations.js";
+import { channels } from "../../schema/channels.js";
+import { messages, MessageDirection } from "../../schema/messages.js";
 import {
   LAST_INTERACTION_PROPERTY,
   noteInteraction,
@@ -72,6 +79,8 @@ export type EvidenceScope =
   | { relationIds: readonly string[] }
   /** The `sent_to` edges of these touches (the reactor on a touch's move). */
   | { touchIds: readonly string[] }
+  /** These channel messages (the send door, once a message went out). */
+  | { messageIds: readonly string[] }
   /** Edges whose record date falls on or after this day (the daily sweep). */
   | { recordDatesFrom: Date }
   /** Every interaction edge in the pod (the operator recompute). */
@@ -107,10 +116,60 @@ function latestPast(dates: (Date | null)[], now: Date): Date | null {
 /** `YYYY-MM-DD`, comparable as text with an ISO date property's prefix. */
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
 
+/**
+ * The outbound messages of channels bound to a record: who the person wrote
+ * to, and when. Read for the send door's own messages, the daily sweep's
+ * window and the operator recompute; never for an edge or a touch.
+ */
+async function collectOutboundMessageEvidence(
+  db: Db,
+  scope: EvidenceScope,
+  now: Date
+): Promise<InteractionEvidence[]> {
+  if ("relationIds" in scope || "touchIds" in scope) return [];
+  const where: SQL[] = [
+    eq(messages.direction, MessageDirection.OUTBOUND),
+    sql`${messages.deletedAt} IS NULL`,
+    eq(channels.channelType, "external"),
+    eq(channels.contextObjectType, "entity"),
+    isNotNull(channels.contextObjectId),
+    sql`${entities.deletedAt} IS NULL`,
+  ];
+  if ("messageIds" in scope) {
+    if (scope.messageIds.length === 0) return [];
+    where.push(inArray(messages.id, [...scope.messageIds]));
+  } else if ("recordDatesFrom" in scope) {
+    where.push(sql`${messages.timestamp} >= ${scope.recordDatesFrom}`);
+  }
+  const rows = await db
+    .select({ entityId: entities.id, at: messages.timestamp })
+    .from(messages)
+    .innerJoin(channels, eq(channels.id, messages.channelId))
+    .innerJoin(entities, sql`${entities.id} = ${channels.contextObjectId}`)
+    .where(and(...where));
+  const out: InteractionEvidence[] = [];
+  for (const r of rows) {
+    const at = r.at instanceof Date ? r.at : parseDate(r.at as unknown);
+    if (at && at.getTime() <= now.getTime())
+      out.push({ entityId: r.entityId, at, source: "outreach" });
+  }
+  return out;
+}
+
 export async function collectInteractionEvidence(
   db: Db,
   scope: EvidenceScope,
   now: Date = new Date()
+): Promise<InteractionEvidence[]> {
+  const sent = await collectOutboundMessageEvidence(db, scope, now);
+  if ("messageIds" in scope) return sent;
+  return [...sent, ...(await collectEdgeEvidence(db, scope, now))];
+}
+
+async function collectEdgeEvidence(
+  db: Db,
+  scope: Exclude<EvidenceScope, { messageIds: readonly string[] }>,
+  now: Date
 ): Promise<InteractionEvidence[]> {
   const s = alias(entities, "s");
   const t = alias(entities, "t");
