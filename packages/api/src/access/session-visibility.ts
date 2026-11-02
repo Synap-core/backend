@@ -223,6 +223,46 @@ export function sessionReadableWhere(reader: SessionReader): SQL {
 }
 
 /**
+ * The session rule for DECIDING a proposal filed in (or about) a session, and
+ * for the redaction that must agree with it: {@link sessionReadableWhere}, OR
+ * (human door only) the session is owned by an AGENT principal that `reader`
+ * created (`users.user_type = 'agent'` AND `users.created_by_user_id = me`),
+ * floored on the session's workspace exactly like the roster branch.
+ *
+ * Why: an agent's writes are filed in sessions the pod mints for it (receipt /
+ * derived sessions, `resolveOrCreateAgentProposalSession`), and when the write's
+ * principal is the agent itself that session is owned by the AGENT. Its human
+ * is then neither owner nor roster, so the session rung refused every proposal
+ * the agent filed there: "Only people in this session can approve this
+ * proposal" (live: proposal 1e193849, 2026-11-02). The 2026-10-27 fix exempted
+ * only held-writes packs; this covers the ordinary proposals beside them. The
+ * person who owns the agent can already decide its work through the ladder's
+ * owner rung (`agentCreatedByUserId`); this keeps the session rung from
+ * refusing them first.
+ *
+ * NOT the general read rule: the ~50 session read doors (lists, inboxes,
+ * status) keep {@link sessionReadableWhere}, so agent sessions do not start
+ * appearing in a person's session lists. Widening those is a separate call.
+ * Agent doors (`roster: false`) get no new branch — owner-only, as before.
+ * The key grant (W1) narrows the new branch too.
+ */
+export function sessionDecidableWhere(reader: SessionReader): SQL {
+  const readable = sessionReadableWhere(reader);
+  if (!reader.roster) return readable;
+  const { userId, lens } = reader;
+  const ownAgents = qb
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.userType, "agent"), eq(users.createdByUserId, userId)));
+  const ownedByOwnAgent = and(
+    inArray(focusSessions.userId, ownAgents),
+    workspaceLensWhere(focusSessions.workspaceId, userId, lens)
+  )!;
+  const grant = grantReadPredicate(focusSessions);
+  return or(readable, grant ? and(ownedByOwnAgent, grant)! : ownedByOwnAgent)!;
+}
+
+/**
  * Does a request context honour the roster branch? A HUMAN door does; an agent
  * key (`agentUserId` set) does not (v1) — nor does any Hub Protocol caller
  * (`isHubProtocol`, set only by the agent-key auth middleware), which
