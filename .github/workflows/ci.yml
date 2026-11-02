@@ -394,7 +394,7 @@ jobs:
           FIX: gh run download ${{ github.run_id }} -R ${{ github.repository }} -n generated-api-types -D /tmp/api-types-${{ github.run_id }} && mv /tmp/api-types-${{ github.run_id }}/generated.d.ts packages/api-types/src/generated.d.ts
           TESTED: ${{ github.sha }}
         run: |
-          echo "::error title=API types out of date::Apply the file this run generated, commit it, push once: ${FIX}"
+          echo "::error title=API types out of date::Apply the file this run generated, commit it, push once: ${FIX} (or, with a built tree, pnpm regen)"
           {
             echo "### API types out of date"
             echo ""
@@ -803,8 +803,8 @@ jobs:
   # too), except a same-tree merge-queue entry: the OpenAPI spec and the tool list are read from the
   # imported API, which depends on most of packages/. Until 2026-10-28 it was
   # its own workflow (reference-docs.yml); it moved here to wait for Preflight.
-  # Fix when red: build the workspace dependencies (step below), then
-  #   pnpm docs:reference
+  # Fix when red: download the artifact `reference-docs` this run uploads
+  # (the failed run prints the command), or with a built tree `pnpm regen`,
   # and commit docs/reference/.
   reference-docs:
     name: Reference docs are current
@@ -871,8 +871,49 @@ jobs:
         run: pnpm -r --filter "@synap/api^..." run build
 
       - name: Check docs/reference is up to date
+        id: docs-check
         if: ${{ env.RUN_WORK == 'true' }}
         run: pnpm docs:reference:check
+
+      # Same hand-back as the API types above: a PR author with no built tree
+      # gets the regenerated files from this run, not a second CI round. CI
+      # never commits to a branch.
+      - name: Regenerate docs/reference (on a red)
+        id: docs-drift
+        if: failure() && steps.docs-check.outcome == 'failure'
+        run: |
+          if pnpm docs:reference && [ -n "$(git status --porcelain -- docs/reference)" ]; then
+            echo "drift=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "The generator produced no change (or failed): nothing to hand back (read the step above)."
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload the regenerated reference docs
+        if: failure() && steps.docs-drift.outputs.drift == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reference-docs
+          path: docs/reference/
+          retention-days: 7
+      - name: How to apply the regenerated reference docs
+        if: failure() && steps.docs-drift.outputs.drift == 'true'
+        env:
+          FIX: gh run download ${{ github.run_id }} -R ${{ github.repository }} -n reference-docs -D docs/reference
+          TESTED: ${{ github.sha }}
+        run: |
+          echo "::error title=Reference docs out of date::Apply the files this run generated, commit them, push once: ${FIX} (or, with a built tree, pnpm regen)"
+          {
+            echo "### Reference docs out of date"
+            echo ""
+            echo "This run regenerated \`docs/reference/\` for the tree it tested (\`${TESTED}\`). From your branch, with no build:"
+            echo ""
+            echo "\`\`\`"
+            echo "${FIX}"
+            echo "git add docs/reference && git commit -m 'docs: regenerate reference'"
+            echo "\`\`\`"
+            echo ""
+            echo "With a built tree: \`pnpm regen\` (builds the API's dependencies, regenerates the API types and docs/reference)."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # A negctl/* branch exists to watch a test go RED with its fix reverted. It
   # runs only its own test files (changed in the branch, or beside a changed

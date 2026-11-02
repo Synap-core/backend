@@ -463,3 +463,79 @@ describe("one layout, one resolver", () => {
     expect(H.CHECK_NAME).toBe("Dependencies merged");
   });
 });
+
+describe("sibling fetch retries a transient failure, only", () => {
+  const ARGS = ["-C", "d", "fetch", "-q", "--depth", "1", "origin", "main"];
+  const transient = () =>
+    new Error(
+      "git fetch failed: error: RPC failed; HTTP 404\nfatal: expected 'packfile'"
+    );
+  /** A fake git that throws the given errors in order, then answers "ok". */
+  const fakeGit = (errors: Error[]) => {
+    const calls: string[][] = [];
+    const run = (args: string[]) => {
+      calls.push(args);
+      const e = errors.shift();
+      if (e) throw e;
+      return "ok";
+    };
+    return { run, calls };
+  };
+  const opts = (run: (a: string[]) => string) => {
+    const slept: number[] = [];
+    const logs: string[] = [];
+    return {
+      slept,
+      logs,
+      o: {
+        run,
+        sleep: (ms: number) => slept.push(ms),
+        log: (m: string) => logs.push(m),
+      },
+    };
+  };
+
+  it("fails twice transiently, then succeeds, and logs each retry", () => {
+    const g = fakeGit([transient(), new Error("Connection reset by peer")]);
+    const { o, slept, logs } = opts(g.run);
+    expect(L.gitNetwork(ARGS, o)).toBe("ok");
+    expect(g.calls).toHaveLength(3);
+    expect(slept).toEqual([2000, 5000]);
+    expect(logs).toHaveLength(2);
+    expect(logs[0]).toContain("attempt 1/3");
+  });
+
+  it("a non-transient error throws at once, with no retry", () => {
+    const g = fakeGit([new Error("fatal: couldn't find remote ref nope")]);
+    const { o, slept } = opts(g.run);
+    expect(() => L.gitNetwork(ARGS, o)).toThrow(/couldn't find remote ref/);
+    expect(g.calls).toHaveLength(1);
+    expect(slept).toEqual([]);
+  });
+
+  it("three transient failures throw, naming the attempts", () => {
+    const g = fakeGit([transient(), transient(), transient()]);
+    const { o } = opts(g.run);
+    expect(() => L.gitNetwork(ARGS, o)).toThrow(/gave up after 3 attempts/);
+    expect(g.calls).toHaveLength(3);
+  });
+
+  it("knows the transient signatures, and not an auth failure", () => {
+    for (const m of [
+      "RPC failed; HTTP 404",
+      "The requested URL returned error: HTTP 503",
+      "expected 'packfile'",
+      "Could not resolve host: github.com",
+      "Connection reset by peer",
+      "Operation timed out",
+    ])
+      expect(L.isTransientGitError(m), m).toBe(true);
+    expect(L.isTransientGitError("fatal: Authentication failed")).toBe(false);
+  });
+
+  it("materialize fetches through the retry, not a bare git()", () => {
+    const src = read("scripts/layout/layout.mjs");
+    expect(src).toMatch(/gitNetwork\(\[\s*\.\.\.auth,[\s\S]*?"fetch"/);
+    expect(src).not.toMatch(/\n\s+git\(\[\.\.\.auth/);
+  });
+});
