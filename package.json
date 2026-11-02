@@ -34,6 +34,7 @@
     "postinstall": "husky || true",
     "lint:staged": "lint-staged",
     "smoke:firewall": "node smoke/verify-firewall.mjs",
+    "regen": "pnpm -r --filter \"@synap/api...\" run build && pnpm docs:reference",
     "docs:reference": "tsx scripts/docs/gen-reference.ts",
     "docs:reference:check": "tsx scripts/docs/gen-reference.ts --check"
   },

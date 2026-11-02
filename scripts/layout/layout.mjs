@@ -406,6 +406,59 @@ function git(args, opts = {}) {
   return (r.stdout || "").trim();
 }
 
+/** Signatures of a network failure worth another try (a remote hiccup, not a bad ref or auth). */
+const TRANSIENT_GIT = [
+  /RPC failed/i,
+  /HTTP [45]\d\d/i,
+  /expected 'packfile'/i,
+  /Could not resolve host/i,
+  /Connection reset/i,
+  /timed out/i,
+];
+
+export function isTransientGitError(message) {
+  return TRANSIENT_GIT.some((re) => re.test(String(message)));
+}
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * A git network operation (fetch/clone): up to `delays.length + 1` attempts,
+ * retrying ONLY a transient failure (isTransientGitError); anything else
+ * throws at once. Each retry is logged. 2 Nov: one `fetch` answered HTTP 404
+ * and turned a main run red with no tree change.
+ */
+export function gitNetwork(
+  args,
+  {
+    run = git,
+    sleep = sleepSync,
+    delays = [2000, 5000],
+    log = (m) => console.error(m),
+  } = {}
+) {
+  const attempts = delays.length + 1;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return run(args);
+    } catch (e) {
+      if (!isTransientGitError(e.message)) throw e;
+      if (attempt >= attempts) {
+        throw new Error(
+          `${e.message} (transient, gave up after ${attempt} attempts)`
+        );
+      }
+      const wait = delays[attempt - 1];
+      log(
+        `layout: transient git failure (attempt ${attempt}/${attempts}), retrying in ${wait} ms: ${e.message.split("\n")[0]}`
+      );
+      sleep(wait);
+    }
+  }
+}
+
 /**
  * Lay a layout's siblings out under `root`: R/<dir> for each sibling, a shallow
  * checkout at refs.get(dir) ?? default branch. An existing R/<dir> is kept as it
@@ -454,7 +507,17 @@ export function materialize({
       "origin",
       `https://github.com/${layout.owner}/${repo.slug}.git`,
     ]);
-    git([...auth, "-C", dest, "fetch", "-q", "--depth", "1", "origin", ref]);
+    gitNetwork([
+      ...auth,
+      "-C",
+      dest,
+      "fetch",
+      "-q",
+      "--depth",
+      "1",
+      "origin",
+      ref,
+    ]);
     git(["-C", dest, "checkout", "-q", "FETCH_HEAD"]);
     const sha = git(["-C", dest, "rev-parse", "HEAD"]);
     lines.push(
