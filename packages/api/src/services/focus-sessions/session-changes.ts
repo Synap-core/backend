@@ -83,6 +83,15 @@
  *                          person reads, `escalated` = its second raise. `at`
  *                          = when it was raised.
  *
+ * WAKE VERDICT (plan 07f8a997 W1): every event carries `wake`, THE wake rule
+ * (`isWakeWorthy`, `@synap-core/types/focus-sessions`) applied for the
+ * reader. True: the answer (unless the reading agent relayed it), the owner's
+ * words, a `session_message` the post door marked `wake`, a decided proposal
+ * (unless the reading agent decided it), a PR merged or closed, checks that
+ * finished, a blocker that ended, a signal, and a `status_moved` that is a
+ * pause the pod resumed (actor system, from `paused` to a live status: a
+ * hold's `until` met). False: `stage_moved`, `hold_set`, any other move.
+ *
  * CURSOR: `since` is EXCLUSIVE over each event's `at` (millisecond ISO — the
  * database's microseconds are truncated BEFORE the comparison, or a row would
  * be strictly newer than its own cursor forever). Events are ordered by `at`,
@@ -137,7 +146,12 @@ import {
   type PullRequestRef,
 } from "@synap-core/types";
 import { DEPENDENCY_LINK_TYPE } from "@synap-core/types/connections";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  SESSION_CHANGE_KINDS,
+  isWakeWorthy,
+  resolveSessionTitle,
+  type SessionChangeKind,
+} from "@synap-core/types/focus-sessions";
 import type {
   LifecycleCategory,
   RecordedHold,
@@ -164,21 +178,10 @@ import {
   unreadSessionPostWhere,
 } from "./session-inbox.js";
 
-export const SESSION_CHANGE_KINDS = [
-  "answer",
-  "proposal_decided",
-  "stage_moved",
-  "owner_message",
-  "session_message",
-  "pr_merged",
-  "pr_closed",
-  "checks_finished",
-  "status_moved",
-  "hold_set",
-  "blocker_ended",
-  "signal_raised",
-] as const;
-export type SessionChangeKind = (typeof SESSION_CHANGE_KINDS)[number];
+// The kinds and the ONE wake rule live in `@synap-core/types` (plan 07f8a997
+// W1): the CLI, synap-bridge and the apps read the same list.
+export { SESSION_CHANGE_KINDS };
+export type { SessionChangeKind };
 
 /**
  * The `events` argument both doors accept — an array (MCP) or a comma list
@@ -234,7 +237,8 @@ interface EventBase {
   at: string;
 }
 
-export type SessionChangeEvent =
+/** An event as each kind's read builds it, before the pod's `wake` verdict. */
+type SessionChangeEventBody =
   | (EventBase & {
       kind: "answer";
       untrusted: true;
@@ -355,6 +359,15 @@ export type SessionChangeEvent =
         url: string | null;
       };
     });
+
+/**
+ * A feed event as the pod serves it. `wake` = THE wake rule's verdict for the
+ * reader (`isWakeWorthy`, `@synap-core/types/focus-sessions`): true when the
+ * event should start the reading agent's turn, false when it is news to show
+ * only. Every kind carries it; a client rings on `wake === true` and keeps no
+ * list of its own.
+ */
+export type SessionChangeEvent = SessionChangeEventBody & { wake: boolean };
 
 export interface SessionChangesPage {
   sessionId: string;
@@ -485,6 +498,12 @@ export async function listSessionChanges(p: {
   /** The stage the caller last saw; `undefined` = no stage comparison. */
   knownStage?: string | null;
   limit?: number;
+  /**
+   * The agent user of the key that reads (null: a person). The `wake` verdict
+   * never rings an agent with what it caused itself (an answer it relayed, a
+   * proposal it decided).
+   */
+  viewerAgentUserId?: string | null;
 }): Promise<SessionChangesPage | null> {
   const limit = Math.max(
     1,
@@ -515,7 +534,7 @@ export async function listSessionChanges(p: {
   if (!session) return null;
   const ownerId = session.userId;
 
-  const cursored: SessionChangeEvent[] = [];
+  const cursored: SessionChangeEventBody[] = [];
   let sourceHasMore = false;
 
   // STAGE MOVES from the ledger (0382): cursored like every other kind, one
@@ -1020,7 +1039,7 @@ export async function listSessionChanges(p: {
 
   cursored.sort(byAtThenId);
   const page = cursored.slice(0, limit);
-  const events: SessionChangeEvent[] = [...page];
+  const events: SessionChangeEventBody[] = [...page];
 
   const currentStage = session.currentStage ?? null;
   if (
@@ -1052,10 +1071,12 @@ export async function listSessionChanges(p: {
         ? floor
         : lastAt;
 
+  const viewer = { agentUserId: p.viewerAgentUserId ?? null };
   return {
     sessionId: session.id,
     since,
-    events,
+    // THE wake rule, stamped once here for every door that serves the feed.
+    events: events.map((e) => ({ ...e, wake: isWakeWorthy(e, viewer) })),
     nextSince,
     hasMore,
     state: { currentStage, status: session.status },

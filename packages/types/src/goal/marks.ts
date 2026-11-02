@@ -39,6 +39,7 @@ import {
   holdDevRefLabel,
   parseHoldDevRef,
   parseHoldMovesRef,
+  parseHoldWaitRef,
   type LifecycleCategory,
   type RecordedHold,
 } from "../lifecycle/index.js";
@@ -347,8 +348,16 @@ export function holdLine(
     if (when) parts.push(`resumes ${when}`);
   } else if (until && "moves" in until) {
     const dev = devHoldResumes(until.moves, until.to);
+    const wait = dev ? null : parseHoldWaitRef(until.moves);
     if (dev) parts.push(dev);
-    else {
+    else if (wait) {
+      // A wait on the person (plan 07f8a997 W1): their answer or decision.
+      parts.push(
+        wait.kind === "answer"
+          ? "resumes when you answer"
+          : `resumes when the ${nounInSentence(resolveObjectNoun("proposal"))} is decided`
+      );
+    } else {
       const subject = parseHoldMovesRef(until.moves);
       const noun = nounInSentence(
         resolveObjectNoun(

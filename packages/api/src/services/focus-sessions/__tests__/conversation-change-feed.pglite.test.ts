@@ -587,6 +587,10 @@ describe("the conversation change feed", () => {
     expect(
       res.events!.map((e) => e.session!.id).filter((id) => ours.has(id))
     ).toEqual([stamped.sessionId]);
+    // Finished checks are a doorbell (plan 07f8a997 W1).
+    expect(
+      res.events!.find((e) => e.session!.id === stamped.sessionId)!.wake
+    ).toBe(true);
   });
 
   it("status_moved / hold_set / blocker_ended: a pause with its hold, and the end of a session it waits on", async () => {
@@ -749,5 +753,227 @@ describe("the conversation change feed", () => {
     expect(res.status).toBe("changed");
     expect(res.events!.map((e) => e.session!.id)).toEqual([other.sessionId]);
     expect(Date.now() - started).toBeLessThan(4_000);
+  });
+});
+
+// ── Plan 07f8a997 W1 (A): the pod says which news wakes, on every event ──
+describe("the wake verdict on every event", () => {
+  /** Every event of one session in a page, as [kind, wake] pairs. */
+  const verdicts = (res: Json, sessionId: string) =>
+    res
+      .events!.filter((e) => e.session!.id === sessionId)
+      .map((e) => [e.kind, e.wake]);
+
+  it("each kind carries THE rule's verdict: news that should start a turn says wake, the rest does not", async () => {
+    const waiter = await session({
+      title: "Waits on everything",
+      outputs: [
+        {
+          key: "pr-backend-9301",
+          kind: "pull_request",
+          label: "backend#9301",
+          ref: { url: "https://github.com/Synap-core/backend/pull/9301" },
+        },
+      ],
+    });
+    const blocker = await session({ title: "Lands first" });
+    await q(
+      `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata, created_at)
+       values (gen_random_uuid(), 'session', $1, 'session', $2, 'blocked_by', '{}'::jsonb, now())`,
+      [waiter.sessionId, blocker.sessionId]
+    );
+    const cursor = new Date(Date.now() - 1).toISOString();
+    // A pause with a hold (the agent's own sleep): hold_set, not news.
+    await setSessionStatus(db, {
+      sessionId: waiter.sessionId,
+      from: "active",
+      to: "paused",
+      actor: { kind: "human", userId: OWNER },
+      hold: { on: "thing", until: { moves: "pr:Synap-core/backend#9301" } },
+    });
+    // The hold's resume: the SYSTEM moves it back from paused (hold-resume).
+    await setSessionStatus(db, {
+      sessionId: waiter.sessionId,
+      from: "paused",
+      to: "active",
+      actor: { kind: "system" },
+      reason: "What it waited on (pr:synap-core/backend#9301) moved to merged.",
+    });
+    // The blocker delivered; a PR merged; a proposal decided by the person.
+    await setSessionStatus(db, {
+      sessionId: blocker.sessionId,
+      from: "active",
+      to: "closed",
+      actor: { kind: "human", userId: OWNER },
+    });
+    await prFact({
+      type: "dev.pr_merged",
+      number: 9301,
+      ingestedAt: new Date(Date.now() + 1000).toISOString(),
+    });
+    await prFact({
+      type: "dev.pr_closed",
+      number: 9302,
+      sessionId: waiter.sessionId,
+      ingestedAt: new Date(Date.now() + 1000).toISOString(),
+    });
+    await decide(waiter.sessionId);
+    // The person types in the room; the pod raises a Needs-a-look.
+    await q(
+      `insert into messages (id, channel_id, role, author_type, user_id, content, hash, timestamp)
+       values (gen_random_uuid(), $1, 'user', 'human', $2, 'Carry on', 'h', now())`,
+      [waiter.channelId, OWNER]
+    );
+    await q(
+      `insert into events (id, timestamp, type, subject_id, subject_type, data, user_id)
+       values (gen_random_uuid(), now(), 'focus_session.signal.completed', $1, 'focus_session', $2::jsonb, $3)`,
+      [
+        waiter.sessionId,
+        JSON.stringify({ signal: "pause_review_due", headline: "Look again" }),
+        OWNER,
+      ]
+    );
+
+    const res = await wait({
+      events: [
+        "status_moved",
+        "hold_set",
+        "blocker_ended",
+        "pr_merged",
+        "pr_closed",
+        "proposal_decided",
+        "owner_message",
+        "signal_raised",
+      ],
+      since: cursor,
+    });
+    expect(res.status).toBe("changed");
+    const got = verdicts(res, waiter.sessionId);
+    expect(got).toEqual(
+      expect.arrayContaining([
+        ["hold_set", false],
+        ["status_moved", true],
+        ["blocker_ended", true],
+        ["pr_merged", true],
+        ["pr_closed", true],
+        ["proposal_decided", true],
+        ["owner_message", true],
+        ["signal_raised", true],
+      ])
+    );
+    expect(got).toHaveLength(8);
+    // The blocker's own close is a person's move of another session: no wake.
+    expect(verdicts(res, blocker.sessionId)).toEqual([["status_moved", false]]);
+    // Every event carries a boolean verdict, whatever its kind.
+    for (const e of res.events!) expect(typeof e.wake).toBe("boolean");
+  });
+
+  it("a status move is news only when the pod resumed a pause: the agent's, the person's, a pause or the reaper's never ring", async () => {
+    const s = await session({ title: "Moves" });
+    const cursor = new Date(Date.now() - 1).toISOString();
+    const move = (
+      from: "active" | "paused",
+      to: "active" | "paused" | "stale",
+      actor: { kind: "human" | "agent" | "system"; userId?: string }
+    ) =>
+      setSessionStatus(db, {
+        sessionId: s.sessionId,
+        from,
+        to,
+        actor: actor as never,
+        hold: to === "active" ? undefined : { on: "nobody" },
+      });
+    await move("active", "paused", { kind: "agent", userId: AGENT });
+    await move("paused", "active", { kind: "agent", userId: AGENT });
+    await move("active", "paused", { kind: "human", userId: OWNER });
+    await move("paused", "active", { kind: "human", userId: OWNER });
+    await move("active", "paused", { kind: "system" });
+    await move("paused", "stale", { kind: "system" });
+    const res = await wait({ events: ["status_moved"], since: cursor });
+    expect(verdicts(res, s.sessionId)).toEqual([
+      ["status_moved", false],
+      ["status_moved", false],
+      ["status_moved", false],
+      ["status_moved", false],
+      ["status_moved", false],
+      ["status_moved", false],
+    ]);
+  });
+
+  it("what the reading agent caused itself never rings: an answer it relayed, a proposal it decided", async () => {
+    const at = new Date(Date.now() + 500).toISOString();
+    const later = new Date(Date.now() + 600).toISOString();
+    const slot = (label: string, answer: Record<string, unknown>) => ({
+      key: label.toLowerCase().replace(/\W+/g, "-"),
+      kind: "decision",
+      label,
+      owner: "human",
+      status: "done",
+      answer: { messageId: null, answeredBy: OWNER, text: "Yes", ...answer },
+    });
+    const s = await session({
+      title: "Relays",
+      outputs: [
+        // The agent carried the person's chat words: it has them already.
+        slot("Relayed by me", {
+          answeredAt: at,
+          via: "relayed",
+          relayedBy: AGENT,
+          quote: "Yes",
+        }),
+        // Another agent relayed them: news to this one.
+        slot("Relayed by another", {
+          answeredAt: at,
+          via: "relayed",
+          relayedBy: STRANGER,
+          quote: "Yes",
+        }),
+        // The person tapped Confirm on a relay: the tap is news.
+        slot("Confirmed by a tap", {
+          answeredAt: later,
+          via: "tap",
+          relayedBy: AGENT,
+          confirmedAt: later,
+        }),
+        // The person answered in Synap or Relay.
+        slot("Tapped", { answeredAt: later }),
+      ],
+    });
+    const cursor = new Date(Date.now() - 1).toISOString();
+    await q(
+      `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, data, status, session_id, reviewed_by, reviewed_at, created_at, updated_at)
+       values (gen_random_uuid(), null, 'automation', 'a2', 'create', '{"targetName":"Mine"}'::jsonb, 'rejected', $1, $2, now(), now(), now())`,
+      [s.sessionId, AGENT]
+    );
+    const res = await wait({
+      events: ["answer", "proposal_decided"],
+      since: cursor,
+    });
+    const got = res
+      .events!.filter((e) => e.session!.id === s.sessionId)
+      .map((e) => [
+        e.kind === "answer"
+          ? (e.answer as { slot: { label: string } }).slot.label
+          : e.kind,
+        e.wake,
+      ]);
+    expect(got).toEqual(
+      expect.arrayContaining([
+        ["Relayed by me", false],
+        ["Relayed by another", true],
+        ["Confirmed by a tap", true],
+        ["Tapped", true],
+        ["proposal_decided", false],
+      ])
+    );
+    expect(got).toHaveLength(5);
+    const relayed = res.events!.find(
+      (e) =>
+        e.kind === "answer" &&
+        (e.answer as { slot: { label: string } }).slot.label === "Relayed by me"
+    )!;
+    expect((relayed.answer as { relayedBy: string | null }).relayedBy).toBe(
+      AGENT
+    );
   });
 });

@@ -56,7 +56,11 @@ import {
 } from "@synap-core/types/lifecycle";
 import { insertTransitionOutbox } from "./transition-outbox.js";
 import { transitionStamp } from "./transition-stamp.js";
-import { listHolds } from "./holds.js";
+import {
+  HoldRefusedError,
+  assertHoldWaitRefOwned,
+  listHolds,
+} from "./holds.js";
 
 type Db = PostgresJsDatabase<typeof schema>;
 /** The CAS runs inside the move's transaction. */
@@ -386,7 +390,7 @@ export async function applyStatusMove(
     const holdFor = async (from: string | null) => {
       const fromCategory =
         findLifecycleOption(target.lifecycle, from)?.category ?? null;
-      return decideMoveHold({
+      const decided = decideMoveHold({
         from,
         fromCategory,
         toCategory: option.category,
@@ -410,6 +414,15 @@ export async function applyStatusMove(
         since: new Date(stamp.occurredAt),
         now: new Date(stamp.recordedAt),
       });
+      if (!decided.ok || !input.hold) return decided;
+      // A wait on an answer or a proposal names the mover's own work.
+      try {
+        await assertHoldWaitRefOwned(tx, input.hold, actor.userId);
+      } catch (err) {
+        if (!(err instanceof HoldRefusedError)) throw err;
+        return { ok: false as const, code: err.code, message: err.message };
+      }
+      return decided;
     };
     let current = target.current;
     const expressed = input.expectedFrom !== undefined;

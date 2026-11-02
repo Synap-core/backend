@@ -486,6 +486,7 @@ export {
 } from "./services/lifecycle/work-unit-transition.js";
 export {
   HoldRefusedError,
+  assertHoldWaitRefOwned,
   listHolds,
   type CurrentHold,
   type HoldFilter,
