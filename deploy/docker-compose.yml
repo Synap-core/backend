@@ -15,7 +15,7 @@ x-backend-env: &backend-env
   DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
   # Postgres connection budget: every service's pool cap must sum under the
   # postgres service's max_connections (packages/database/src/client-pg.ts
-  # lists the consumers; pg-connection-budget.tripwire.test.ts sums them).
+  # lists the consumers; deploy/__tests__/pg-connection-budget.test.sh sums them).
   # DB_POOL_SIZE caps the Drizzle pool, PGBOSS_POOL_SIZE pg-boss's own pool.
   DB_POOL_SIZE: ${DB_POOL_SIZE:-50}
   PGBOSS_POOL_SIZE: ${PGBOSS_POOL_SIZE:-10}

@@ -46,7 +46,7 @@ const DATABASE_URL =
 // the superuser `synap`, so the superuser-reserved slots are no headroom.
 // The compose file sets every cap explicitly, so this default does not reach a
 // pod. Raise a cap there and you raise POSTGRES_MAX_CONNECTIONS with it, or
-// src/__tests__/pg-connection-budget.tripwire.test.ts goes red.
+// deploy/__tests__/pg-connection-budget.test.sh goes red.
 const DB_POOL_SIZE = parseInt(process.env.DB_POOL_SIZE || "50", 10);
 
 // Idle connection timeout (seconds).
