@@ -10436,29 +10436,54 @@ export type BlockRef = {
 declare const WORK_RELEASE_SOURCE_STATES: {
 	readonly holders: readonly [
 		"ok",
-		"unavailable"
+		"unavailable",
+		"withheld"
 	];
 	readonly pullRequests: readonly [
 		"ok",
-		"unavailable"
+		"unavailable",
+		"withheld"
 	];
 	readonly sessions: readonly [
 		"ok",
-		"unavailable"
+		"unavailable",
+		"withheld"
 	];
 	readonly snapshots: readonly [
 		"ok",
 		"stale",
-		"missing"
+		"missing",
+		"withheld"
 	];
 };
+/** A part of the read; the parts a key's grant does not reach are withheld. */
+export type WorkReleasePart = keyof typeof WORK_RELEASE_SOURCE_STATES;
 export interface WorkReleaseSources {
-	/** `stale` = the newest snapshot is older than {@link SNAPSHOT_STALE_MS}. */
+	/**
+	 * `stale` = the newest snapshot is older than {@link SNAPSHOT_STALE_MS};
+	 * `withheld` = the caller's grant reads no snapshot.
+	 */
 	snapshots: (typeof WORK_RELEASE_SOURCE_STATES.snapshots)[number];
 	sessions: (typeof WORK_RELEASE_SOURCE_STATES.sessions)[number];
 	holders: (typeof WORK_RELEASE_SOURCE_STATES.holders)[number];
-	/** The recorded PR facts; `unavailable` = the rows are the snapshot's alone. */
+	/**
+	 * The recorded PR facts; `unavailable` = the rows are the snapshot's alone;
+	 * `withheld` = the caller's grant does not read every dev event, so the
+	 * rows are the snapshot's alone too.
+	 */
 	pullRequests: (typeof WORK_RELEASE_SOURCE_STATES.pullRequests)[number];
+}
+/**
+ * What a read narrowed by the caller's grant covered (an app whose key is
+ * pinned to spaces). Absent when nothing was narrowed.
+ */
+export interface WorkReleaseNarrowing {
+	/** The spaces whose snapshots were read; empty when none was. */
+	snapshotSpaces: string[];
+	/** The parts the grant does not reach, as in `sources`. */
+	withheld: WorkReleasePart[];
+	/** One plain sentence: what was read and what was not, and why. */
+	reason: string;
 }
 export interface WorkReleaseRepo {
 	/** `owner/name`, as the producer spelled it. */
@@ -10515,6 +10540,8 @@ export interface WorkReleaseRead {
 	prs: WorkReleasePr[];
 	/** The blocker with the most waiting behind it, transitively, first. */
 	blockers: WorkReleaseBlocker[];
+	/** Present only when the caller's grant narrowed the read. */
+	narrowed?: WorkReleaseNarrowing;
 }
 /** A thing that can be held: an entity (kind lifecycle, or a role's facet), a goal, a session. */
 export interface HoldSubjectRef {

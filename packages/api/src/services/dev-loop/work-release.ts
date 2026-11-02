@@ -33,6 +33,12 @@
  *     merge or a red the pod heard of seconds ago is not drawn as the
  *     snapshot of minutes ago. A failed read is `null` →
  *     `sources.pullRequests: "unavailable"` and the rows are the snapshot's.
+ *
+ * NARROWED for a key that does not read every subject unbounded (a pod app,
+ * pinned to its spaces): `workReleaseReach` (access/grant-door-fence.ts) says
+ * which snapshots and whether the sessions it reads; a part it does not reach
+ * reads `withheld` in `sources`, and `narrowed` says what was covered. The
+ * grant is the request's (`getRequestGrant`), so every door narrows the same.
  */
 
 import {
@@ -43,6 +49,7 @@ import {
   eq,
   events,
   focusSessions,
+  getRequestGrant,
   gte,
   inArray,
   or,
@@ -57,6 +64,7 @@ import {
   repoSnapshotEventSchema,
   type RepoSnapshotFact,
   type WorkReleaseHolderInput,
+  type WorkReleaseNarrowing,
   type WorkReleaseRead,
   type WorkReleaseSessionInput,
 } from "@synap-core/types/work-release";
@@ -65,6 +73,10 @@ import {
   eventVisibleWhere,
   type EventReader,
 } from "../../access/event-visibility.js";
+import {
+  workReleaseReach,
+  type WorkReleaseReach,
+} from "../../access/grant-door-fence.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { loadSessionLiveness } from "../runs/session-liveness.js";
 import { readPullRequestStates } from "./pr-state.js";
@@ -82,12 +94,18 @@ export interface WorkReleaseReader extends EventReader {
 
 const repoOf = drizzleSql`lower(${events.data}->>'repo')`;
 
-/** The newest valid snapshot per repo the reader may see. Throws on a failed read. */
+/**
+ * The newest valid snapshot per repo the reader may see, in `spaces` when a
+ * key's grant narrows it (the event's own space column: a pod-wide snapshot is
+ * in none). Throws on a failed read.
+ */
 export async function readRepoSnapshots(
   reader: EventReader,
   now: Date,
-  database: typeof db = db
+  database: typeof db = db,
+  spaces: "all" | readonly string[] = "all"
 ): Promise<RepoSnapshotFact[]> {
+  if (spaces !== "all" && spaces.length === 0) return [];
   const rows = await database
     .selectDistinctOn([repoOf], { data: events.data, id: events.id })
     .from(events)
@@ -95,7 +113,8 @@ export async function readRepoSnapshots(
       and(
         eq(events.type, REPO_SNAPSHOT_EVENT_TYPE),
         gte(events.timestamp, new Date(now.getTime() - SNAPSHOT_LOOKBACK_MS)),
-        eventVisibleWhere(reader)
+        eventVisibleWhere(reader),
+        spaces === "all" ? undefined : inArray(events.workspaceId, [...spaces])
       )
     )
     .orderBy(repoOf, desc(events.timestamp));
@@ -231,16 +250,53 @@ function snapshotPullRequests(
   return out;
 }
 
+/** What a narrowed read covered, in the pod's words. */
+function narrowingOf(reach: WorkReleaseReach): WorkReleaseNarrowing {
+  const withheld = [...reach.withheld];
+  const spaces =
+    reach.snapshotSpaces === "all" ? [] : [...reach.snapshotSpaces];
+  const read =
+    reach.snapshotSpaces === "all"
+      ? "every repo snapshot"
+      : spaces.length > 0
+        ? "the repo snapshots recorded in the spaces this key may read"
+        : "no repo snapshot (the key does not read dev events)";
+  const sessions = withheld.includes("sessions")
+    ? "no session (the key does not read sessions)"
+    : "the sessions this key may read";
+  return {
+    snapshotSpaces: spaces,
+    withheld,
+    reason:
+      `This key reads ${read} and ${sessions}. Who holds each pull ` +
+      "request and whether they are working on it now are withheld: they " +
+      "are measured from activity this key cannot all see." +
+      (withheld.includes("pullRequests")
+        ? " Each pull request reads as its repo snapshot says: the facts the " +
+          "pod recorded about it come from spaces this key cannot all read."
+        : ""),
+  };
+}
+
 export async function readWorkRelease(
   reader: WorkReleaseReader,
   database: typeof db = db
 ): Promise<WorkReleaseRead> {
   const now = reader.now ?? new Date();
-  const snapshots = await readRepoSnapshots(reader, now, database);
+  const reach = workReleaseReach(getRequestGrant());
+  const withheld = new Set(reach.withheld);
+  const snapshots = await readRepoSnapshots(
+    reader,
+    now,
+    database,
+    reach.snapshotSpaces
+  );
 
   let sessionRows: SessionRow[] | null;
   try {
-    sessionRows = await readPrSessions(reader, snapshots, database);
+    sessionRows = withheld.has("sessions")
+      ? []
+      : await readPrSessions(reader, snapshots, database);
   } catch (err) {
     logger.error({ err }, "work-release: the sessions read failed");
     sessionRows = null;
@@ -253,7 +309,9 @@ export async function readWorkRelease(
     })) ?? null;
 
   let holders: WorkReleaseHolderInput[] | null = null;
-  if (sessionRows) {
+  if (withheld.has("holders")) {
+    holders = [];
+  } else if (sessionRows) {
     try {
       holders = await readHolders(reader, sessionRows, now, database);
     } catch (err) {
@@ -261,17 +319,25 @@ export async function readWorkRelease(
     }
   }
 
-  let pullRequests: Awaited<ReturnType<typeof readPullRequestStates>> | null;
-  try {
-    pullRequests = await readPullRequestStates(
-      snapshotPullRequests(snapshots),
-      reader,
-      database
-    );
-  } catch (err) {
-    logger.error({ err }, "work-release: the PR facts read failed");
-    pullRequests = null;
+  let pullRequests: Awaited<ReturnType<typeof readPullRequestStates>> | null =
+    new Map();
+  if (!withheld.has("pullRequests")) {
+    try {
+      pullRequests = await readPullRequestStates(
+        snapshotPullRequests(snapshots),
+        reader,
+        database
+      );
+    } catch (err) {
+      logger.error({ err }, "work-release: the PR facts read failed");
+      pullRequests = null;
+    }
   }
 
-  return foldWorkRelease(snapshots, sessions, holders, { now, pullRequests });
+  const read = foldWorkRelease(snapshots, sessions, holders, {
+    now,
+    pullRequests,
+    withheld: reach.withheld,
+  });
+  return reach.full ? read : { ...read, narrowed: narrowingOf(reach) };
 }

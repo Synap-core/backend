@@ -43,6 +43,10 @@
  * EMPTY ≠ FAILED: a sessions, holders or PR facts read that FAILED is passed
  * as `null` and reads `unavailable` in `sources`; an empty list is a real
  * "none".
+ *
+ * WITHHELD ≠ EMPTY: a key whose grant does not reach a part (an app pinned to
+ * a space) gets that part `withheld` in `sources`, and the read says what it
+ * covered in `narrowed` — never an empty section that reads as "none".
  */
 
 import {
@@ -105,19 +109,42 @@ export type BlockRef =
   { kind: "pr"; repo: string; number: number } | { kind: "main"; repo: string };
 
 export const WORK_RELEASE_SOURCE_STATES = {
-  snapshots: ["ok", "stale", "missing"],
-  sessions: ["ok", "unavailable"],
-  holders: ["ok", "unavailable"],
-  pullRequests: ["ok", "unavailable"],
+  snapshots: ["ok", "stale", "missing", "withheld"],
+  sessions: ["ok", "unavailable", "withheld"],
+  holders: ["ok", "unavailable", "withheld"],
+  pullRequests: ["ok", "unavailable", "withheld"],
 } as const;
 
+/** A part of the read; the parts a key's grant does not reach are withheld. */
+export type WorkReleasePart = keyof typeof WORK_RELEASE_SOURCE_STATES;
+
 export interface WorkReleaseSources {
-  /** `stale` = the newest snapshot is older than {@link SNAPSHOT_STALE_MS}. */
+  /**
+   * `stale` = the newest snapshot is older than {@link SNAPSHOT_STALE_MS};
+   * `withheld` = the caller's grant reads no snapshot.
+   */
   snapshots: (typeof WORK_RELEASE_SOURCE_STATES.snapshots)[number];
   sessions: (typeof WORK_RELEASE_SOURCE_STATES.sessions)[number];
   holders: (typeof WORK_RELEASE_SOURCE_STATES.holders)[number];
-  /** The recorded PR facts; `unavailable` = the rows are the snapshot's alone. */
+  /**
+   * The recorded PR facts; `unavailable` = the rows are the snapshot's alone;
+   * `withheld` = the caller's grant does not read every dev event, so the
+   * rows are the snapshot's alone too.
+   */
   pullRequests: (typeof WORK_RELEASE_SOURCE_STATES.pullRequests)[number];
+}
+
+/**
+ * What a read narrowed by the caller's grant covered (an app whose key is
+ * pinned to spaces). Absent when nothing was narrowed.
+ */
+export interface WorkReleaseNarrowing {
+  /** The spaces whose snapshots were read; empty when none was. */
+  snapshotSpaces: string[];
+  /** The parts the grant does not reach, as in `sources`. */
+  withheld: WorkReleasePart[];
+  /** One plain sentence: what was read and what was not, and why. */
+  reason: string;
 }
 
 export interface WorkReleaseRepo {
@@ -179,6 +206,8 @@ export interface WorkReleaseRead {
   prs: WorkReleasePr[];
   /** The blocker with the most waiting behind it, transitively, first. */
   blockers: WorkReleaseBlocker[];
+  /** Present only when the caller's grant narrowed the read. */
+  narrowed?: WorkReleaseNarrowing;
 }
 
 // ── The fold's inputs (besides the snapshots) ──────────────────────────────
@@ -206,6 +235,11 @@ export interface FoldWorkReleaseOptions {
    * `pullRequestKey`); `null` when that read FAILED. Absent = none recorded.
    */
   pullRequests?: ReadonlyMap<string, PullRequestStateFacts> | null;
+  /**
+   * The parts the caller's grant does not reach: each reads `withheld` in
+   * `sources`, whatever its input (pass an empty list for it).
+   */
+  withheld?: readonly WorkReleasePart[];
 }
 
 /** A recorded fact that ends a PR, as the board reads it. */
@@ -386,16 +420,30 @@ export function foldWorkRelease(
     (max, s) => Math.max(max, Date.parse(s.observedAt)),
     Number.NEGATIVE_INFINITY
   );
+  const withheld = new Set(options.withheld ?? []);
   const sources: WorkReleaseSources = {
-    snapshots:
-      latest.length === 0
+    snapshots: withheld.has("snapshots")
+      ? "withheld"
+      : latest.length === 0
         ? "missing"
         : now - newestAt > SNAPSHOT_STALE_MS
           ? "stale"
           : "ok",
-    sessions: sessions === null ? "unavailable" : "ok",
-    holders: holders === null ? "unavailable" : "ok",
-    pullRequests: options.pullRequests === null ? "unavailable" : "ok",
+    sessions: withheld.has("sessions")
+      ? "withheld"
+      : sessions === null
+        ? "unavailable"
+        : "ok",
+    holders: withheld.has("holders")
+      ? "withheld"
+      : holders === null
+        ? "unavailable"
+        : "ok",
+    pullRequests: withheld.has("pullRequests")
+      ? "withheld"
+      : options.pullRequests === null
+        ? "unavailable"
+        : "ok",
   };
   const facts = options.pullRequests ?? new Map();
   const factsOf = (ref: PullRequestRef) => facts.get(pullRequestKey(ref));
