@@ -7,7 +7,13 @@
  */
 
 import { z } from "zod";
-import { type HubHono, hasScope, httpStatusForTrpcError } from "./_shared.js";
+import {
+  type HubHono,
+  hasScope,
+  httpStatusForTrpcError,
+  readJsonBody,
+} from "./_shared.js";
+import { hubValidationHook } from "./_validation-hook.js";
 import { jsonGoverned } from "../proposal-response.js";
 import {
   ComposeBaseUnavailableError,
@@ -510,6 +516,36 @@ async function updateDataChanges(
   return pendingTemplateDataChanges(sql, profileSlugs);
 }
 
+/**
+ * Read and validate a package body for `/packages/preflight` and
+ * `/packages/apply`. A body that does not fit `PackageApplySchema` is the
+ * caller's fault: it gets the Hub's validation 400 (`{ error, fieldErrors }`,
+ * naming each failing field, e.g. `playbooks.0.stages.2.goal`), never a 500.
+ * A bare `.parse` threw a ZodError the app's error handler turned into an
+ * opaque 500 (incident 2026-11-02: `synap market update` on Content OS, whose
+ * Produce Content "draft" stage goal was 5,225 characters against the stage
+ * schema's 5,000).
+ */
+async function readPackageBody(c: Parameters<typeof readJsonBody>[0]): Promise<
+  | {
+      ok: true;
+      raw: Record<string, unknown>;
+      body: z.infer<typeof PackageApplySchema>;
+    }
+  | { ok: false; res: Response }
+> {
+  const read = await readJsonBody(c);
+  if (!read.ok) return read;
+  const parsed = PackageApplySchema.safeParse(read.body);
+  if (!parsed.success)
+    return { ok: false, res: hubValidationHook(parsed, c) as Response };
+  return {
+    ok: true,
+    raw: read.body as Record<string, unknown>,
+    body: parsed.data,
+  };
+}
+
 /** The wire shape of the 409 a refused apply answers. */
 function dataChangesNeedConsentBody(
   pending: TemplateDataChange[],
@@ -573,8 +609,9 @@ export function registerPackagesRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
     const userId = c.get("userId");
-    const raw = (await c.req.json()) as Record<string, unknown>;
-    const body = PackageApplySchema.parse(raw);
+    const read = await readPackageBody(c);
+    if (!read.ok) return read.res;
+    const { raw, body } = read;
     const composeTarget = await resolvePreflightComposeTarget({
       definition: body,
       userId,
@@ -629,8 +666,9 @@ export function registerPackagesRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const userId = c.get("userId");
-    const raw = (await c.req.json()) as Record<string, unknown>;
-    const body = PackageApplySchema.parse(raw);
+    const read = await readPackageBody(c);
+    if (!read.ok) return read.res;
+    const { raw, body } = read;
     // The pod never trusts a caller's version LABEL: a caller that asks for a
     // stamp gets the version of the definition it actually sent (the CP's own
     // rule, over the RAW body — zod would strip fields the CP hashed). Set on
