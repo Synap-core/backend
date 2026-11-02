@@ -372,6 +372,10 @@ export interface UnitStateView {
 declare const AGENT_HARNESSES: readonly [
 	{
 		readonly label: "Claude Code";
+		readonly launch: {
+			readonly modelFlag: "--model";
+			readonly program: "claude";
+		};
 		readonly reopen: {
 			readonly command: (id: string) => string;
 			readonly idPattern: RegExp;
@@ -396,6 +400,10 @@ declare const AGENT_HARNESSES: readonly [
 	},
 	{
 		readonly label: "Codex";
+		readonly launch: {
+			readonly modelFlag: "--model";
+			readonly program: "codex";
+		};
 		readonly slug: "codex";
 		readonly surface: true;
 	},
@@ -24785,7 +24793,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					maxStepsOverride: number | null;
 					modelOverride: string | null;
+					presetKey: string | null;
+					presetLabel: string | null;
 					promptAppend: string | null;
+					providerOverride: string | null;
+					skillSlugs: string[];
 					updatedAt: Date;
 					userId: string;
 					workspaceId: string | null;
@@ -24804,7 +24816,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					maxStepsOverride: number | null;
 					modelOverride: string | null;
+					presetKey: string | null;
+					presetLabel: string | null;
 					promptAppend: string | null;
+					providerOverride: string | null;
+					skillSlugs: string[];
 					updatedAt: Date;
 					userId: string;
 					workspaceId: string | null;
@@ -24831,7 +24847,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					maxStepsOverride: number | null;
 					modelOverride: string | null;
+					presetKey: string | null;
+					presetLabel: string | null;
 					promptAppend: string | null;
+					providerOverride: string | null;
+					skillSlugs: string[];
 					updatedAt: Date;
 					userId: string;
 					workspaceId: string | null;
