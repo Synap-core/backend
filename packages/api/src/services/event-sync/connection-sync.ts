@@ -283,7 +283,7 @@ class KindRun {
       await notifyConnectorUnhealthy({
         connectorKey: this.ctx.provider,
         connectorName: humanizeToken(this.ctx.provider),
-        reconnectHint: "Reconnect it in the app (Settings → Connections).",
+        reconnectHint: "Sign in again in the app (Settings → Connections).",
         userId: this.ctx.owner,
         workspaceId: this.ctx.workspaceId,
         watermarkToolId: this.ctx.toolId,
