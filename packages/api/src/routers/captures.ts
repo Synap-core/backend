@@ -50,7 +50,6 @@ import {
   and,
   or,
   eq,
-  lt,
   desc,
   isNull,
   inArray,
@@ -66,6 +65,12 @@ import {
 import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { AccessContext, scopedDb } from "../access/index.js";
+import {
+  decodeInstantCursor,
+  encodeInstantCursor,
+  INSTANT_CURSOR_FORMAT,
+  type InstantCursor,
+} from "../utils/keyset-cursor.js";
 import {
   deriveCaptureRoomState,
   type CaptureRoomState,
@@ -175,24 +180,24 @@ const SOURCE_COLUMNS = {
 } as const;
 
 // ── cursor ──────────────────────────────────────────────────────────────────
+//
+// The keyset is (created_at, id) at MICROSECOND precision: `created_at` is a
+// `defaultNow()` timestamptz, and a JS `Date` keeps milliseconds only, so a
+// Date cursor skipped every row of the page boundary's millisecond that sorts
+// after it. The cursor carries the instant as SQL formats it (`cursorAt`).
 
-function encodeCursor(row: { createdAt: Date; id: string }): string {
-  return Buffer.from(
-    JSON.stringify({ c: row.createdAt.toISOString(), i: row.id })
-  ).toString("base64url");
-}
+/** A listed row: the source columns plus its µs instant for the cursor. */
+type ListRow = SourceRow & { cursorAt: string };
 
-function decodeCursor(cursor: string): { createdAt: Date; id: string } {
-  try {
-    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString());
-    const createdAt = new Date(parsed.c);
-    if (typeof parsed.i !== "string" || Number.isNaN(createdAt.getTime())) {
-      throw new Error("malformed");
-    }
-    return { createdAt, id: parsed.i };
-  } catch {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid cursor" });
-  }
+const LIST_EXTRAS = {
+  cursorAt:
+    drizzleSql<string>`to_char(${documents.createdAt} at time zone 'UTC', ${INSTANT_CURSOR_FORMAT})`.as(
+      "cursor_at"
+    ),
+};
+
+function cursorOf(row: ListRow): InstantCursor {
+  return { at: row.cursorAt, id: row.id };
 }
 
 // ── reads ───────────────────────────────────────────────────────────────────
@@ -403,7 +408,9 @@ export const capturesRouter = router({
         const userId = requireUserId(ctx.userId);
         const access = AccessContext.from(ctx);
         const items: CaptureItem[] = [];
-        let after = input.cursor ? decodeCursor(input.cursor) : null;
+        let after: InstantCursor | null = input.cursor
+          ? decodeInstantCursor(input.cursor)
+          : null;
 
         for (
           let page = 0;
@@ -411,21 +418,16 @@ export const capturesRouter = router({
           page++
         ) {
           const want = input.limit - items.length;
-          const rows = await scopedDb(access).findMany<SourceRow>(documents, {
+          const rows = await scopedDb(access).findMany<ListRow>(documents, {
             where: and(
               ownCapturesWhere(userId),
               listedKindWhere(),
               after
-                ? or(
-                    lt(documents.createdAt, after.createdAt),
-                    and(
-                      eq(documents.createdAt, after.createdAt),
-                      lt(documents.id, after.id)
-                    )
-                  )
+                ? drizzleSql`(${documents.createdAt}, ${documents.id}) < (${after.at}::timestamptz, ${after.id}::uuid)`
                 : undefined
             ),
             columns: SOURCE_COLUMNS,
+            extras: LIST_EXTRAS,
             orderBy: [desc(documents.createdAt), desc(documents.id)],
             // Unfiltered: one extra row says whether a next page exists.
             // Filtered: scan a full page, since rows are dropped after derivation.
@@ -443,14 +445,19 @@ export const capturesRouter = router({
             if (items.length === input.limit) {
               const last = scanned[i]!;
               const more = i < scanned.length - 1 || hasMore;
-              return { items, nextCursor: more ? encodeCursor(last) : null };
+              return {
+                items,
+                nextCursor: more ? encodeInstantCursor(cursorOf(last)) : null,
+              };
             }
           }
           if (!hasMore) return { items, nextCursor: null };
-          after = scanned[scanned.length - 1]!;
-          if (!input.status) return { items, nextCursor: encodeCursor(after) };
+          after = cursorOf(scanned[scanned.length - 1]!);
+          if (!input.status) {
+            return { items, nextCursor: encodeInstantCursor(after) };
+          }
         }
-        return { items, nextCursor: after ? encodeCursor(after) : null };
+        return { items, nextCursor: after ? encodeInstantCursor(after) : null };
       }
     ),
 
