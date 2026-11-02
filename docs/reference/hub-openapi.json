@@ -1169,6 +1169,14 @@
               { "type": "null" }
             ],
             "description": "When we last spoke to them (a meeting that happened, sent outreach, a dated conversation); null = never. Present on rows read from the pod's entity table."
+          },
+          "status": {
+            "type": ["string", "null"],
+            "description": "The kind's declared lifecycle option the entity is in; null = the kind declares no lifecycle. Present on rows read from the pod's entity table."
+          },
+          "statusCategory": {
+            "type": ["string", "null"],
+            "description": "The category of `status`: one of open, active, paused, done, lost; null = no lifecycle. Present on rows read from the pod's entity table."
           }
         },
         "required": ["id", "profileSlug", "type", "properties", "userId"]

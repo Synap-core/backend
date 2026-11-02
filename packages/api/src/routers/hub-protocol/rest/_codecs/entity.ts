@@ -43,6 +43,20 @@ export const WireEntitySchema = z
       .describe(
         "When we last spoke to them (a meeting that happened, sent outreach, a dated conversation); null = never. Present on rows read from the pod's entity table."
       ),
+    status: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        "The kind's declared lifecycle option the entity is in; null = the kind declares no lifecycle. Present on rows read from the pod's entity table."
+      ),
+    statusCategory: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        "The category of `status`: one of open, active, paused, done, lost; null = no lifecycle. Present on rows read from the pod's entity table."
+      ),
   })
   .openapi("Entity");
 export type WireEntity = z.infer<typeof WireEntitySchema>;
@@ -537,6 +551,18 @@ export function entityToWire(entity: unknown): WireEntity {
       ? {
           lastInteractionAt:
             (row.lastInteractionAt as string | Date | null | undefined) ?? null,
+        }
+      : {}),
+    // The lifecycle pair (0319): a DB row carries it (null = no lifecycle); a
+    // search document does not, and must not read as "no lifecycle".
+    ...("status" in row
+      ? { status: (row.status as string | null | undefined) ?? null }
+      : {}),
+    ...("statusCategory" in row || "status_category" in row
+      ? {
+          statusCategory:
+            ((row.statusCategory ?? row.status_category) as
+              string | null | undefined) ?? null,
         }
       : {}),
   };
