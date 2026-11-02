@@ -123,7 +123,22 @@ export interface CreateLoginFlowResult {
   flow?: KratosFlow;
   /** Set when Kratos detects an existing session and refuses to create a flow. */
   existingSession?: KratosSession;
+  /**
+   * Kratos refused a flow because of a session, yet this browser's own
+   * whoami would not confirm it (even after one retry). Says why, so the
+   * caller words it calmly instead of throwing a dead end.
+   */
+  unconfirmed?: WhoamiFailure;
 }
+
+/** Why the browser's whoami did not hand back a session. */
+export type WhoamiFailure =
+  | { kind: "rate_limited"; retryAfterSeconds?: number }
+  | { kind: "unavailable" }
+  | { kind: "signed_out" };
+
+export type WhoamiProbe =
+  { ok: true; session: KratosSession } | { ok: false; failure: WhoamiFailure };
 
 export interface SubmitLoginFlowResult {
   /** Validation failed — re-render with the returned flow's messages. */
@@ -174,6 +189,39 @@ export async function whoami(): Promise<KratosSession | null> {
   }
 }
 
+/** Browser whoami, with the failure classified (429 / 5xx+network / 401,403). */
+export async function probeWhoami(): Promise<WhoamiProbe> {
+  try {
+    const res = await fetch(`${kratosPublic()}/sessions/whoami`, {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, failure: { kind: "signed_out" } };
+    }
+    if (res.status === 429) {
+      const secs = Number(res.headers.get("Retry-After"));
+      return {
+        ok: false,
+        failure: {
+          kind: "rate_limited",
+          ...(Number.isFinite(secs) && secs > 0
+            ? { retryAfterSeconds: Math.ceil(secs) }
+            : {}),
+        },
+      };
+    }
+    if (!res.ok) return { ok: false, failure: { kind: "unavailable" } };
+    const session = (await res.json()) as KratosSession;
+    if (session.active === false) {
+      return { ok: false, failure: { kind: "signed_out" } };
+    }
+    return { ok: true, session };
+  } catch {
+    return { ok: false, failure: { kind: "unavailable" } };
+  }
+}
+
 /**
  * Ask Kratos, from the browser, whether this browser's session is alive —
  * `unknown` when Kratos did not answer (network, 5xx, 429), so a caller never
@@ -182,18 +230,9 @@ export async function whoami(): Promise<KratosSession | null> {
 export async function browserSessionState(): Promise<
   "active" | "none" | "unknown"
 > {
-  try {
-    const res = await fetch(`${kratosPublic()}/sessions/whoami`, {
-      credentials: "include",
-      headers: { Accept: "application/json" },
-    });
-    if (res.status === 401 || res.status === 403) return "none";
-    if (!res.ok) return "unknown";
-    const body = (await res.json()) as Partial<KratosSession>;
-    return body.active === false ? "none" : "active";
-  } catch {
-    return "unknown";
-  }
+  const probe = await probeWhoami();
+  if (probe.ok) return "active";
+  return probe.failure.kind === "signed_out" ? "none" : "unknown";
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +241,7 @@ export async function browserSessionState(): Promise<
 
 export async function createLoginFlow(
   returnTo?: string,
-  opts: { refresh?: boolean } = {}
+  opts: { refresh?: boolean; retryDelayMs?: number; _retried?: boolean } = {}
 ): Promise<CreateLoginFlowResult> {
   // `return_to` brings the browser back here after a federated (oidc) round-trip
   // through the Control Plane. It must be an allowed Kratos return URL — the
@@ -238,11 +277,20 @@ export async function createLoginFlow(
   const refusal = loginFlowRefusal(res.status, body);
   if (refusal.kind === "error") throw new Error(refusal.message);
   // The invite flow checks the signed-in email, so hand back the session.
-  const session = await whoami();
-  if (session) return { existingSession: session };
-  throw new Error(
-    "You're already signed in, but the pod couldn't confirm it just now. Reload this page."
-  );
+  // Kratos' refusal can outrun whoami for a moment, so ask once more after a
+  // short pause before giving up.
+  let probe = await probeWhoami();
+  if (!probe.ok && probe.failure.kind !== "signed_out") {
+    await new Promise((r) => setTimeout(r, opts.retryDelayMs ?? 1000));
+    probe = await probeWhoami();
+  }
+  if (probe.ok) return { existingSession: probe.session };
+  if (probe.failure.kind === "signed_out" && !opts._retried) {
+    // Refusal and whoami disagree: the refusal was stale. Ask for the flow
+    // again so the person just gets the sign-in form.
+    return createLoginFlow(returnTo, { ...opts, _retried: true });
+  }
+  return { unconfirmed: probe.failure };
 }
 
 /**
@@ -296,6 +344,32 @@ export const COOKIE_SCOPE_COPY = {
   title: "You're signed in, but this page can't tell yet.",
   body: "Reload the page. If you land here again, this pod's sign-in isn't shared with the address you opened it at — open the console from the pod's own address, or ask whoever runs the pod.",
 } as const;
+
+/**
+ * What /login says when Kratos refused a flow for a session that whoami would
+ * not confirm. Calm notes with one act each; never the raw status.
+ */
+export function unconfirmedSessionCopy(failure: WhoamiFailure): {
+  title: string;
+  body: string;
+  actionLabel: string;
+} {
+  if (failure.kind === "rate_limited") {
+    const wait = failure.retryAfterSeconds;
+    return {
+      title: "You're signed in. The pod asked for a short pause.",
+      body: wait
+        ? `Wait ${wait} s, then continue. Nothing was signed out.`
+        : "Wait a few seconds, then continue. Nothing was signed out.",
+      actionLabel: "Continue",
+    };
+  }
+  return {
+    title: "Your pod didn't answer just now",
+    body: "The pod is busy or restarting, so the console couldn't check your sign-in. Nothing was signed out. Try again in a few seconds.",
+    actionLabel: "Try again",
+  };
+}
 
 /** Every self-service flow kind a `?flow=` id can belong to. */
 export type AnySelfServiceFlowKind =
