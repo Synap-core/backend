@@ -23,6 +23,7 @@ import { GRANT_ACTIONS, parsePermission } from "./grammar.js";
 import {
   GRANT_SUBJECT_CATALOG,
   grantActionLabel,
+  grantPlainAction,
   grantQualifierLabel,
   grantSubjectLabel,
   isKindQualifiedGrantSubject,
@@ -371,6 +372,46 @@ export function summarizeGrant(
     expired,
     sentence: [what, ...where, when].join(" · "),
   };
+}
+
+/**
+ * What a grant may do, ONE LINE PER THING, in people's words: for a page that
+ * lists an explicit ask (a key a computer requested by permissions, 2 Nov
+ * 2026) instead of one sentence. The summary's rows first ("Read, create and
+ * update Companies", "Approve Proposals"), then each pattern the catalog has
+ * no row for, worded through the same doors ("Create Roles" for
+ * `facet.create`), never shown verbatim. `*` is the one full-access sentence.
+ */
+export function grantLines(
+  draft: GrantDraft,
+  opts: SummarizeGrantOptions = {}
+): string[] {
+  const s = summarizeGrant(draft, opts);
+  if (s.full) return [GRANT_FULL_ACCESS_SENTENCE];
+  const lines: string[] = [];
+  for (const r of s.rows) {
+    if (r.all) lines.push(`${r.everything} ${r.label}`);
+    else if (r.actions.length > 0)
+      lines.push(`${actionList(r.actions)} ${r.label}`);
+    for (const g of r.gates) lines.push(`${grantActionLabel(g)} ${r.label}`);
+  }
+  for (const p of s.other) {
+    const segs = parsePermission(p);
+    const subject = segs[0]!;
+    const qualified = isQualifiedGrantSubject(subject);
+    const kind = qualified ? segs[1] : undefined;
+    const action = segs[qualified ? 2 : 1];
+    const noun =
+      kind && kind !== "*"
+        ? grantQualifierLabel(subject, kind, opts.kindNames?.[kind])
+        : grantSubjectLabel(subject);
+    const verb =
+      action === undefined || action === "*"
+        ? actionList(GRANT_ACTIONS)
+        : grantActionLabel(grantPlainAction(subject, action) ?? action);
+    lines.push(`${verb} ${noun}`);
+  }
+  return lines;
 }
 
 /**
