@@ -28,7 +28,11 @@ import {
   type WorkUnitActor,
 } from "../services/lifecycle/work-unit-transition.js";
 import { getActingAgentUserId } from "../utils/request-write-context.js";
-import { HoldRefusedError, listHolds } from "../services/lifecycle/holds.js";
+import {
+  HoldRefusedError,
+  assertHoldWaitRefOwned,
+  listHolds,
+} from "../services/lifecycle/holds.js";
 import { decideMoveHold, type Hold } from "@synap-core/types/lifecycle";
 import type {
   ProjectTrack,
@@ -329,6 +333,8 @@ export class TrackRepository extends BaseRepository<
         since: params.occurredAt ?? new Date(),
       });
       if (!decided.ok) throw new HoldRefusedError(decided);
+      // A wait on an answer or a proposal names the goal owner's own work.
+      if (params.hold) await assertHoldWaitRefOwned(tx, params.hold, userId);
       const [flipped] = await tx
         .update(projectTracks)
         .set({

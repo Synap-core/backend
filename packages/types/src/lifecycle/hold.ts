@@ -71,7 +71,7 @@ export interface RecordedHold extends Hold {
  * shape, so the agent can fix the call in one try.
  */
 export const HOLD_REQUIRED_MESSAGE =
-  'A pause must say what it waits on: pass `hold` with the move, e.g. { "on": "person" | "agent" | "external" | "thing" | "decision" | "date" | "nobody", "ref": "<who or what>", "reason": "<why>", "until": { "date": "<ISO date>" } or { "moves": "<entity|track|focus_session>:<id>", "to": "<status>" } or { "moves": "pr:<owner/name>#<n>" | "main:<owner/name>" | "job:<devbox job name>" } }. An agent cannot pause without one. Retry the same move with `hold` added.';
+  'A pause must say what it waits on: pass `hold` with the move, e.g. { "on": "person" | "agent" | "external" | "thing" | "decision" | "date" | "nobody", "ref": "<who or what>", "reason": "<why>", "until": { "date": "<ISO date>" } or { "moves": "<entity|track|focus_session>:<id>", "to": "<status>" } or { "moves": "pr:<owner/name>#<n>" | "main:<owner/name>" | "job:<devbox job name>" } or { "moves": "answer:<session id>/<slot key or label>" | "proposal:<proposal id>" } }. An agent cannot pause without one. Retry the same move with `hold` added.';
 
 /**
  * The dev-fact forms of `until.moves`, in one line: what an agent reads in a
@@ -83,6 +83,18 @@ export const HOLD_REQUIRED_MESSAGE =
  */
 export const HOLD_DEV_MOVES_HELP =
   "'pr:<owner/name>#<n>' resumes when that pull request merges (to: 'closed' = when it is closed without merging); 'main:<owner/name>' when that repo's main is green again; 'job:<devbox job name>' when that devbox job finishes (to: 'passed' | 'failed' = only that verdict)";
+
+/**
+ * The wait forms of `until.moves` (plan 07f8a997 "Agents wait on anything",
+ * W1 part C), in one line: what an agent reads in a tool's text and in a
+ * refusal. The slot or the proposal must be on a session the hold's owner owns.
+ */
+export const HOLD_WAIT_MOVES_HELP =
+  "'answer:<session id>/<slot key or label>' resumes when the person answers that slot (of a session you own); 'proposal:<proposal id>' when that proposal (filed under a session you own) is no longer pending";
+
+/** The refusal of a wait on a slot or a proposal that is not the waiter's own. */
+export const HOLD_WAIT_NOT_YOURS_MESSAGE =
+  "hold.until.moves names a slot or a proposal that is not on a session you own (or no such slot is declared there): an answer or a proposal can be waited on only on your own sessions. Check the session id and the slot's key or label.";
 
 /** An agent's `on: "unspecified"`: the default a person gets, never an agent's answer. */
 export const HOLD_UNSPECIFIED_BY_AGENT_MESSAGE =
@@ -210,6 +222,66 @@ export function holdDevRefLabel(ref: HoldDevRef): string {
 
 const repoName = (repo: string) => repo.split("/").pop() ?? repo;
 
+/**
+ * A WAIT a hold can name (plan 07f8a997 W1 part C) — neither a transition
+ * subject nor a dev fact, but a thing the person does:
+ *  - `answer:<session id>/<slot>`: the person answered that slot (its key or
+ *    its label) of that session;
+ *  - `proposal:<proposal id>`: that proposal left `pending` (decided).
+ * Both are the hold OWNER's own: the session (the proposal's session) must be
+ * theirs, checked when the hold is set (`assertHoldWaitRefOwned`,
+ * @synap/database) and again when it is evaluated (the hold-resume worker).
+ */
+export type HoldWaitRef =
+  | { kind: "answer"; sessionId: string; slot: string }
+  | { kind: "proposal"; proposalId: string };
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Bound on a slot named by a wait (matches the slot doors' label bound). */
+export const HOLD_WAIT_SLOT_MAX = 500;
+
+/** `answer:<session id>/<slot>` / `proposal:<id>` → its parts, else null. */
+export function parseHoldWaitRef(ref: string): HoldWaitRef | null {
+  const i = ref.indexOf(":");
+  if (i <= 0) return null;
+  const kind = ref.slice(0, i);
+  const rest = ref.slice(i + 1).trim();
+  if (kind === "answer") {
+    const slash = rest.indexOf("/");
+    const sessionId = rest.slice(0, slash);
+    const slot = rest.slice(slash + 1).trim();
+    return slash > 0 &&
+      UUID_RE.test(sessionId) &&
+      slot.length > 0 &&
+      slot.length <= HOLD_WAIT_SLOT_MAX
+      ? { kind, sessionId: sessionId.toLowerCase(), slot }
+      : null;
+  }
+  if (kind === "proposal") {
+    return UUID_RE.test(rest) ? { kind, proposalId: rest.toLowerCase() } : null;
+  }
+  return null;
+}
+
+/** The ONE spelling of a wait ref, as `until.moves` stores it (ids lowercased). */
+export function holdWaitMovesRef(ref: HoldWaitRef): string {
+  return ref.kind === "answer"
+    ? `answer:${ref.sessionId}/${ref.slot}`
+    : `proposal:${ref.proposalId}`;
+}
+
+/** Does a declared slot answer to the name a wait gave (its key or its label, any case)? */
+export function holdWaitSlotMatches(
+  slot: { key?: unknown; label?: unknown } | null | undefined,
+  name: string
+): boolean {
+  const want = name.trim().toLowerCase();
+  const said = (v: unknown) =>
+    typeof v === "string" && v.trim().toLowerCase() === want;
+  return Boolean(slot) && (said(slot!.key) || said(slot!.label));
+}
+
 /** `entity:<id>` → its parts, or null when it names no transition subject. */
 export function parseHoldMovesRef(
   ref: string
@@ -258,7 +330,12 @@ export function holdProblem(
     }
   } else if (until && "moves" in until) {
     const dev = parseHoldDevRef(until.moves);
-    if (dev) {
+    const wait = dev ? null : parseHoldWaitRef(until.moves);
+    if (wait) {
+      if (until.to != null) {
+        return `hold.until.to does not apply to "${wait.kind}:": remove it.`;
+      }
+    } else if (dev) {
       const accepted: readonly string[] = HOLD_DEV_TO[dev.kind];
       if (until.to != null && !accepted.includes(until.to)) {
         return accepted.length
@@ -266,7 +343,7 @@ export function holdProblem(
           : `hold.until.to does not apply to "${dev.kind}:": remove it.`;
       }
     } else if (!parseHoldMovesRef(until.moves)) {
-      return `hold.until.moves must be "<${MOVES_SUBJECTS.join("|")}>:<id>", or a dev fact: ${HOLD_DEV_MOVES_HELP}.`;
+      return `hold.until.moves must be "<${MOVES_SUBJECTS.join("|")}>:<id>", a dev fact: ${HOLD_DEV_MOVES_HELP}, or a wait: ${HOLD_WAIT_MOVES_HELP}.`;
     }
   }
   const review = isoTime(hold.reviewBy);
@@ -317,8 +394,11 @@ export function recordHold(
 function canonicalMoves(
   until: Exclude<HoldUntil, { date: string }> | null | undefined
 ): HoldUntil | null | undefined {
-  const dev = until ? parseHoldDevRef(until.moves) : null;
-  return until && dev ? { ...until, moves: holdDevMovesRef(dev) } : until;
+  if (!until) return until;
+  const dev = parseHoldDevRef(until.moves);
+  if (dev) return { ...until, moves: holdDevMovesRef(dev) };
+  const wait = parseHoldWaitRef(until.moves);
+  return wait ? { ...until, moves: holdWaitMovesRef(wait) } : until;
 }
 
 /** The hold a person's or the system's pause gets when it gives none. */

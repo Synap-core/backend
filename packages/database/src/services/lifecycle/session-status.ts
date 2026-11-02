@@ -45,7 +45,11 @@ import {
   type FocusSession,
 } from "../../schema/focus-sessions.js";
 import { insertTransitionOutbox } from "./transition-outbox.js";
-import { HoldRefusedError, listHolds } from "./holds.js";
+import {
+  HoldRefusedError,
+  assertHoldWaitRefOwned,
+  listHolds,
+} from "./holds.js";
 import { LifecycleConflictError } from "./apply-status-move.js";
 import {
   buildWorkUnitTransition,
@@ -113,7 +117,11 @@ export async function setSessionStatus(
   // union of two generic signatures.
   return (db as Db).transaction(async (tx) => {
     const locked = await tx
-      .select({ id: focusSessions.id, status: focusSessions.status })
+      .select({
+        id: focusSessions.id,
+        status: focusSessions.status,
+        userId: focusSessions.userId,
+      })
       .from(focusSessions)
       .where(
         and(
@@ -160,6 +168,8 @@ export async function setSessionStatus(
         since,
       });
       if (!decided.ok) throw new HoldRefusedError(decided);
+      // A wait on an answer or a proposal names the session owner's own work.
+      if (input.hold) await assertHoldWaitRefOwned(tx, input.hold, r.userId);
       holds.set(r.id, decided.hold);
     }
 

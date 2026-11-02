@@ -43,6 +43,7 @@ import {
   drizzleSql,
 } from "@synap/database";
 import type { ExpectedOutput, SlotAnswerValue } from "@synap/playbooks";
+import { answerVia, type AnswerProvenance } from "@synap-core/types/ask";
 import {
   ROOM_POST_META_KEY,
   readRoomPostMeta,
@@ -65,6 +66,14 @@ export interface SessionAnswerItem {
   value: SlotAnswerValue | null;
   answeredAt: string;
   answeredBy: string;
+  /**
+   * The AGENT whose relay recorded this answer (`synap_relay_answer`: `via`
+   * `relayed`, its `relayedBy`); null when the person answered in Synap or
+   * Relay, or tapped Confirm on a relayed answer (that tap is news to the
+   * agent). That agent already has the words: the change feed's `wake` never
+   * rings it with them (finding bd970b41).
+   */
+  relayedBy: string | null;
   /** The room message carrying the answer; `null` when the session has no room. */
   messageId: string | null;
   /** The slot the answer was recorded on, when it was about one. */
@@ -90,6 +99,11 @@ export interface SessionAnswersPage {
    */
   nextSince: string | null;
   hasMore: boolean;
+}
+
+/** The agent whose relay alone recorded the answer, else null (see `relayedBy`). */
+function relayedByAgent(a: AnswerProvenance): string | null {
+  return answerVia(a) === "relayed" ? (a.relayedBy ?? null) : null;
 }
 
 export async function listSessionAnswers(p: {
@@ -162,6 +176,7 @@ export async function listSessionAnswers(p: {
       value: a.value ?? null,
       answeredAt: a.answeredAt,
       answeredBy: a.answeredBy,
+      relayedBy: relayedByAgent(a),
       messageId: a.messageId,
       slot: {
         label: slot.label,
@@ -218,6 +233,7 @@ export async function listSessionAnswers(p: {
         value: null,
         answeredAt: a.answeredAt,
         answeredBy: a.answeredBy,
+        relayedBy: relayedByAgent(a),
         messageId: a.messageId,
         slot: null,
         question,

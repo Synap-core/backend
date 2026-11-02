@@ -63,6 +63,7 @@ import { logEvent } from "../../lib/event-helpers.js";
 import { findSlotIndex } from "./slot-keys.js";
 import { stampUnblocked } from "./block-output.js";
 import { acceptDraftOnEngagement } from "./accept-on-engagement.js";
+import { sendWaitHoldCheck } from "../lifecycle/wait-hold-check.js";
 import { paramValueFromAnswer } from "./param-slots.js";
 import { RUN_PARAMS_METADATA_KEY } from "../playbooks/playbook-lifecycle.js";
 import {
@@ -402,6 +403,12 @@ export async function answerExpectedOutput(
       sessionId: result.session.id,
       userId: params.userId,
     });
+    // A pause may wait on this answer (`until.moves: answer:<session>/<slot>`):
+    // it resumes now, not at the hourly sweep (plan 07f8a997 W1).
+    await sendWaitHoldCheck(
+      { sessionId: result.session.id },
+      `answer:${result.session.id}:${result.answer.answeredAt}`
+    );
     // Every answered confirm/choose IS a decision — filed (or, for a slot
     // opened for one, updated) as the person's own act. After commit, never
     // inside it: a failed filing must not lose the answer, and it is

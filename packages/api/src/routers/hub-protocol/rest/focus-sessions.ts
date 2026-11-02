@@ -146,7 +146,10 @@ import {
   waitForSessionAnswers,
   waitForSessionChanges,
 } from "../../../services/focus-sessions/wait-for-answers.js";
-import { parseSessionChangeKinds } from "../../../services/focus-sessions/session-changes.js";
+import {
+  SESSION_CHANGE_KINDS,
+  parseSessionChangeKinds,
+} from "../../../services/focus-sessions/session-changes.js";
 import { stampAnswersPickedUp } from "../../../services/focus-sessions/answer-pickup.js";
 import {
   guidanceForBlockedSlots,
@@ -1309,9 +1312,14 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "slot answers not yet picked up, and room answers newer than the call. " +
       "An agent key's read stamps the slot answer's `answerPickedUpAt` receipt " +
       "(`stamp=false`: a peek that never does). With `events` (a comma list of " +
-      "answer, proposal_decided, stage_moved, owner_message, or `all`) it is the " +
+      `${SESSION_CHANGE_KINDS.join(", ")}, or \`all\`) it is the ` +
       "session CHANGE FEED: `status: 'changed'` with typed `events[]` and `state` " +
-      "(pass `state.currentStage` back as `knownStage`).",
+      "(pass `state.currentStage` back as `knownStage`). Every event carries " +
+      "`wake` (boolean): the pod's one rule for whether it should start the " +
+      "reading agent's next turn (an answer, the owner's words, a decided " +
+      "proposal, a merged or closed PR, finished checks, an ended blocker, a " +
+      "signal, a pause the pod resumed); never for what the reading agent " +
+      "caused itself (an answer it relayed, a proposal it decided).",
     request: {
       params: z.object({ id: z.string().uuid() }),
       query: SessionAnswersWaitQuerySchema,

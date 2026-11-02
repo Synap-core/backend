@@ -8,6 +8,7 @@
  * before the privileged `governance_rules` insert (see the comment inline).
  */
 
+import { sendWaitHoldCheck } from "../../services/lifecycle/wait-hold-check.js";
 import { TRPCError } from "@trpc/server";
 import { twinsShownOnCard } from "../../services/duplicates/find-duplicate-candidates.js";
 import {
@@ -250,6 +251,9 @@ export function emitProposalReviewed(
   markProposalNotificationsActioned([proposalId]);
   // Notify the originating channel so waiting agents can continue (fire-and-forget)
   enqueueProposalReviewedNotify(proposalId, status);
+  // A pause may wait on this decision (`until.moves: proposal:<id>`): it
+  // resumes now, not at the hourly sweep (plan 07f8a997 W1).
+  void sendWaitHoldCheck({ proposalId }, `proposal:${proposalId}:${status}`);
 }
 
 /**

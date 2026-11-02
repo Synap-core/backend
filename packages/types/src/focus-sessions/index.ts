@@ -9,3 +9,4 @@ export * from "./recall.js";
 export * from "./scorecard.js";
 export * from "./kinds.js";
 export * from "./verbs.js";
+export * from "./change-feed.js";

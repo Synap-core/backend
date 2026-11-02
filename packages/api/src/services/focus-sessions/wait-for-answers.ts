@@ -343,6 +343,7 @@ export async function waitForSessionChanges(
         since: p.since ?? null,
         limit: p.limit,
         knownStage,
+        viewerAgentUserId: p.agentUserId ?? null,
         // No cursor = UNREAD answers + everything newer than the wait's start.
         ...(p.since
           ? {}
@@ -462,6 +463,7 @@ export async function waitForConversationChanges(
         kinds: p.kinds,
         since: p.since ?? null,
         limit: p.limit,
+        viewerAgentUserId: p.agentUserId ?? null,
         ...(p.since
           ? {}
           : {

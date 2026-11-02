@@ -14,6 +14,15 @@
  *     every dev hold (a fact recorded while the queue was down, or before
  *     the pause). Either way the ONE rule decides (`holdDevRefMet`,
  *     `@synap-core/types`) over the facts the hold's owner recorded.
+ *   - `until.moves` naming a WAIT (`answer:<session>/<slot>`,
+ *     `proposal:<id>`, plan 07f8a997 W1 part C): the answer door
+ *     (`answerExpectedOutput`) and the review door (`emitProposalReviewed`)
+ *     send this queue `waits` when one lands, the reactor below sends it when
+ *     a pause that names a wait is recorded (the Inngest trap: an answer given
+ *     BEFORE the wait began must still resume it, at once), and the hourly
+ *     sweep re-checks every wait hold. Met = the slot of a session the hold's
+ *     OWNER owns carries an answer, or the proposal (filed under a session the
+ *     owner owns) is no longer pending (`waitHoldsMet`).
  *
  * A passed `reviewBy` is NOT a move: it is a signal the watcher reads
  * (`CurrentHold.reviewDue`). The holds are read with the one helper
@@ -35,9 +44,11 @@ import {
   drizzleSql,
   eq,
   events,
+  focusSessions,
   gt,
   inArray,
   listHolds,
+  proposals,
   resolveStatusMoveTarget,
   setSessionStatus,
   sql,
@@ -53,9 +64,12 @@ import { createLogger } from "@synap-core/core";
 import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
 import type { SessionStatus } from "@synap-core/types/focus-sessions";
 import {
+  holdWaitSlotMatches,
   holdWokenBy,
   parseHoldDevRef,
+  parseHoldWaitRef,
   type HoldDevRef,
+  type HoldWaitRef,
 } from "@synap-core/types/lifecycle";
 import {
   DEV_LOOP_EVENT_TYPES,
@@ -85,6 +99,12 @@ export interface HoldResumeJobData {
   };
   /** A dev ref in its stored spelling (`holdDevMovesRef`): `pr:owner/name#12`. */
   devFact?: string;
+  /**
+   * An answer or a proposal decision landed, or a pause that waits on one was
+   * recorded: re-check the wait holds (`answer:` / `proposal:`). Narrowed to
+   * the ones naming that session's slots or that proposal when given.
+   */
+  waits?: { sessionId?: string; proposalId?: string };
 }
 
 /**
@@ -259,6 +279,100 @@ async function devHoldsMet(
   );
 }
 
+/** Does a wait hold name this trigger's session or proposal (none named: every one)? */
+function waitNamed(
+  ref: HoldWaitRef,
+  on: NonNullable<HoldResumeJobData["waits"]>
+): boolean {
+  if (!on.sessionId && !on.proposalId) return true;
+  return ref.kind === "answer"
+    ? ref.sessionId === on.sessionId?.toLowerCase()
+    : ref.proposalId === on.proposalId?.toLowerCase();
+}
+
+/**
+ * The wait holds that are met — ONE read per kind for every hold at once.
+ * The OWNER floor, as for dev facts: a hold acts, so only the hold owner's own
+ * session's answer, or a proposal filed under a session the owner owns, may
+ * resume it (the door refused any other when the hold was set; this read
+ * would not see it either).
+ */
+async function waitHoldsMet(
+  held: readonly CurrentHold[],
+  on: NonNullable<HoldResumeJobData["waits"]> = {}
+): Promise<Array<{ h: CurrentHold; moves: string }>> {
+  const waits = held.flatMap((h) => {
+    const until = h.hold.until;
+    if (!until || !("moves" in until)) return [];
+    const ref = parseHoldWaitRef(until.moves);
+    return ref && waitNamed(ref, on) ? [{ h, ref, moves: until.moves }] : [];
+  });
+  if (waits.length === 0) return [];
+  const sessionIds = [
+    ...new Set(
+      waits.flatMap(({ ref }) => (ref.kind === "answer" ? [ref.sessionId] : []))
+    ),
+  ];
+  const proposalIds = [
+    ...new Set(
+      waits.flatMap(({ ref }) =>
+        ref.kind === "proposal" ? [ref.proposalId] : []
+      )
+    ),
+  ];
+  const [sessionRows, proposalRows] = await Promise.all([
+    sessionIds.length
+      ? db
+          .select({
+            id: focusSessions.id,
+            userId: focusSessions.userId,
+            expectedOutputs: focusSessions.expectedOutputs,
+          })
+          .from(focusSessions)
+          .where(inArray(focusSessions.id, sessionIds))
+      : Promise.resolve([]),
+    proposalIds.length
+      ? db
+          .select({
+            id: proposals.id,
+            status: proposals.status,
+            ownerId: focusSessions.userId,
+          })
+          .from(proposals)
+          .innerJoin(focusSessions, eq(focusSessions.id, proposals.sessionId))
+          .where(inArray(proposals.id, proposalIds))
+      : Promise.resolve([]),
+  ]);
+  const sessions = new Map(sessionRows.map((r) => [r.id, r]));
+  const decided = new Map(proposalRows.map((r) => [r.id, r]));
+  return waits.flatMap(({ h, ref, moves }) => {
+    if (ref.kind === "answer") {
+      const s = sessions.get(ref.sessionId);
+      if (!s || s.userId !== h.userId) return [];
+      const slots = Array.isArray(s.expectedOutputs)
+        ? (s.expectedOutputs as Array<{
+            key?: unknown;
+            label?: unknown;
+            answer?: { answeredAt?: unknown; answeredBy?: unknown } | null;
+          }>)
+        : [];
+      // Answered by the session's OWNER (the stamp's own author, as the
+      // change feed reads it): a relayed answer is the person's words too.
+      const met = slots.some(
+        (slot) =>
+          holdWaitSlotMatches(slot, ref.slot) &&
+          typeof slot.answer?.answeredAt === "string" &&
+          slot.answer.answeredBy === s.userId
+      );
+      return met ? [{ h, moves }] : [];
+    }
+    const p = decided.get(ref.proposalId);
+    return p && p.ownerId === h.userId && p.status !== "pending"
+      ? [{ h, moves }]
+      : [];
+  });
+}
+
 export async function handleHoldResume(
   data: HoldResumeJobData = {},
   now: Date = new Date()
@@ -273,6 +387,13 @@ export async function handleHoldResume(
         h,
         reason: `What it waited on (${moved.subjectType}:${moved.subjectId}) moved to ${moved.to}.`,
       }));
+  } else if (data.waits) {
+    held = (
+      await waitHoldsMet(
+        await listHolds(db, { awaitingWaitRefs: true }, now),
+        data.waits
+      )
+    ).map(({ h, moves }) => ({ h, reason: waitReason(moves) }));
   } else if (data.devFact) {
     const i = data.devFact.indexOf(":");
     held = devFact
@@ -292,10 +413,19 @@ export async function handleHoldResume(
         ).map(({ h, moves }) => ({ h, reason: devFactReason(moves) }))
       : [];
   } else {
-    const [dated, dev] = await Promise.allSettled([
+    const [dated, dev, waits] = await Promise.allSettled([
       listHolds(db, { resumeDueBy: now }, now),
       listHolds(db, { awaitingDevFacts: true }, now).then(devHoldsMet),
+      listHolds(db, { awaitingWaitRefs: true }, now).then((held) =>
+        waitHoldsMet(held)
+      ),
     ]);
+    if (waits.status === "rejected") {
+      logger.warn(
+        { err: waits.reason },
+        "wait hold read failed — retried on the next tick"
+      );
+    }
     // The date holds never wait on the dev half: a failed dev-fact read is
     // logged and retried on the next tick, and the due dates still resume.
     if (dev.status === "rejected") {
@@ -314,9 +444,12 @@ export async function handleHoldResume(
         h,
         reason: devFactReason(moves),
       })),
+      ...(waits.status === "fulfilled" ? waits.value : []).map(
+        ({ h, moves }) => ({ h, reason: waitReason(moves) })
+      ),
     ];
   }
-  const woken = Boolean(moved || data.devFact);
+  const woken = Boolean(moved || data.devFact || data.waits);
   let resumed = 0;
   let failure: unknown = null;
   for (const { h, reason } of held) {
@@ -341,7 +474,13 @@ export async function handleHoldResume(
       {
         resumed,
         skipped: held.length - resumed,
-        by: moved ? "move" : data.devFact ? "dev_fact" : "sweep",
+        by: moved
+          ? "move"
+          : data.devFact
+            ? "dev_fact"
+            : data.waits
+              ? "wait"
+              : "sweep",
       },
       "Resumed held things"
     );
@@ -351,6 +490,12 @@ export async function handleHoldResume(
 
 function devFactReason(moves: string): string {
   return `What it waited on (${moves}) is in.`;
+}
+
+function waitReason(moves: string): string {
+  return moves.startsWith("answer:")
+    ? `The person answered what it waited on (${moves}).`
+    : `What it waited on (${moves}) was decided.`;
 }
 
 /** Move one held thing back to the status its pause began from; false when it did not move. */
@@ -481,6 +626,27 @@ export const holdResumeReactor: Reactor = {
   async handler(payload, { boss }) {
     const d = payload.data ?? {};
     if (typeof d.to !== "string" || typeof d.category !== "string") return;
+    // A pause that waits on an answer or a proposal: checked NOW, so one that
+    // landed before the wait began resumes it at once (the Inngest trap).
+    const until = (d.hold as { until?: unknown } | null | undefined)?.until;
+    const waitsOn =
+      until && typeof until === "object" && "moves" in until
+        ? parseHoldWaitRef(String((until as { moves: unknown }).moves))
+        : null;
+    if (d.category === "paused" && waitsOn) {
+      await boss.send(
+        HOLD_RESUME_QUEUE,
+        {
+          waits:
+            waitsOn.kind === "answer"
+              ? { sessionId: waitsOn.sessionId }
+              : { proposalId: waitsOn.proposalId },
+        } satisfies HoldResumeJobData,
+        payload.eventId
+          ? { singletonKey: `hold-resume:wait:${payload.eventId}` }
+          : {}
+      );
+    }
     await boss.send(
       HOLD_RESUME_QUEUE,
       {

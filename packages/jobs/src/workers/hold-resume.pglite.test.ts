@@ -53,9 +53,20 @@ import {
   lifecycleTransitionOutbox,
   projectTracks,
   projects,
+  proposals,
 } from "@synap/database/schema";
-import { db, setSessionStatus, TrackRepository } from "@synap/database";
-import { handleHoldResume, registerHoldResumeFollowUp } from "./hold-resume.js";
+import {
+  db,
+  HoldRefusedError,
+  setSessionStatus,
+  TrackRepository,
+} from "@synap/database";
+import {
+  HOLD_RESUME_QUEUE,
+  handleHoldResume,
+  holdResumeReactor,
+  registerHoldResumeFollowUp,
+} from "./hold-resume.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -114,6 +125,7 @@ beforeAll(async () => {
     lifecycleTransitionOutbox,
     projects,
     projectTracks,
+    proposals,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -371,5 +383,144 @@ describe("a dev fact (until.moves = pr: / main: / job:)", () => {
     expect((await handleHoldResume({}, new Date())).resumed).toBe(2);
     expect(await statusOf("focus_sessions", onJob)).toBe("active");
     expect(await statusOf("focus_sessions", onMain)).toBe("active");
+  });
+});
+
+// Plan 07f8a997 "Agents wait on anything", W1 part C: an agent asks, pauses
+// with `until: answer:<session>/<slot>` or `proposal:<id>`, and sleeps.
+describe("a wait on the person (until.moves = answer: / proposal:)", () => {
+  const SLOT = {
+    key: "host",
+    label: "Founder picks a host",
+    kind: "decision",
+    owner: "human",
+  };
+  async function withSlot(user = "u1", answer?: Record<string, unknown>) {
+    const id = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, goal, status, expected_outputs, updated_at)
+       values ($1, $2, 'g', 'active', $3::jsonb, now())`,
+      [id, user, JSON.stringify([{ ...SLOT, ...(answer ? { answer } : {}) }])]
+    );
+    return id;
+  }
+  const answered = (by = "u1") => ({
+    text: "Hetzner",
+    messageId: null,
+    answeredBy: by,
+    answeredAt: new Date().toISOString(),
+  });
+  const answer = (id: string, by: string) =>
+    q(`update focus_sessions set expected_outputs = $2::jsonb where id = $1`, [
+      id,
+      JSON.stringify([{ ...SLOT, answer: answered(by) }]),
+    ]);
+  async function pauseOn(id: string, moves: string) {
+    await setSessionStatus(db, {
+      sessionId: id,
+      from: "active",
+      to: "paused",
+      actor: { kind: "agent", userId: "u1", agentUserId: "a1" },
+      hold: { on: "person", until: { moves } },
+    });
+  }
+  async function proposal(sessionId: string, status = "pending") {
+    const id = randomUUID();
+    await q(
+      `insert into proposals (id, target_type, proposal_type, data, status, session_id, created_at, updated_at)
+       values ($1, 'entity', 'create', '{}'::jsonb, $2, $3, now(), now())`,
+      [id, status, sessionId]
+    );
+    return id;
+  }
+
+  it("the answer's trigger resumes the session once its OWNER's answer is on the slot, by key or label", async () => {
+    const waiter = await withSlot();
+    await pauseOn(waiter, `answer:${waiter}/Founder picks a host`);
+    const waits = { sessionId: waiter };
+    expect((await handleHoldResume({ waits })).resumed).toBe(0);
+    // Words on the slot from someone who is not the session's owner: not an answer.
+    await answer(waiter, "u2");
+    expect((await handleHoldResume({ waits })).resumed).toBe(0);
+    expect(await statusOf("focus_sessions", waiter)).toBe("paused");
+    await answer(waiter, "u1");
+    // Another session's trigger does not touch it.
+    expect(
+      (await handleHoldResume({ waits: { sessionId: randomUUID() } })).resumed
+    ).toBe(0);
+    expect((await handleHoldResume({ waits })).resumed).toBe(1);
+    expect(await statusOf("focus_sessions", waiter)).toBe("active");
+    expect(await lastOwed(waiter)).toMatchObject({
+      from: "paused",
+      to: "active",
+      actorKind: "system",
+      reason: `The person answered what it waited on (answer:${waiter}/Founder picks a host).`,
+    });
+  });
+
+  it("an answer given BEFORE the pause resumes it at once: the pause's own transition asks for the check (the Inngest trap)", async () => {
+    const waiter = await withSlot("u1", answered());
+    await pauseOn(waiter, `answer:${waiter}/host`);
+    // The reactor sees the pause's transition: it sends the wait check.
+    const sent: Array<{ queue: string; data: unknown }> = [];
+    const boss = {
+      send: async (queue: string, data: unknown) =>
+        void sent.push({ queue, data }),
+    };
+    await holdResumeReactor.handler(
+      {
+        subjectType: "focus_session",
+        subjectId: waiter,
+        action: "transition",
+        eventId: "e1",
+        data: await lastOwed(waiter),
+      } as never,
+      { boss } as never
+    );
+    expect(sent).toContainEqual({
+      queue: HOLD_RESUME_QUEUE,
+      data: { waits: { sessionId: waiter } },
+    });
+    expect(
+      (await handleHoldResume({ waits: { sessionId: waiter } })).resumed
+    ).toBe(1);
+    expect(await statusOf("focus_sessions", waiter)).toBe("active");
+  });
+
+  it("a proposal wait resumes once the proposal is no longer pending; the hourly sweep finds it too", async () => {
+    const waiter = await session();
+    const pid = await proposal(waiter);
+    await pauseOn(waiter, `proposal:${pid}`);
+    expect(
+      (await handleHoldResume({ waits: { proposalId: pid } })).resumed
+    ).toBe(0);
+    await q(`update proposals set status = 'rejected' where id = $1`, [pid]);
+    // The sweep (no data) re-checks every wait hold.
+    expect((await handleHoldResume({}, AFTER)).resumed).toBeGreaterThanOrEqual(
+      1
+    );
+    expect(await statusOf("focus_sessions", waiter)).toBe("active");
+    expect((await lastOwed(waiter)).reason).toBe(
+      `What it waited on (proposal:${pid}) was decided.`
+    );
+  });
+
+  it("a wait on someone else's session, an undeclared slot or someone else's proposal is refused when it is set", async () => {
+    const waiter = await session();
+    const theirs = await withSlot("u2");
+    const mine = await withSlot("u1");
+    const theirProposal = await proposal(theirs);
+    for (const moves of [
+      `answer:${theirs}/host`,
+      `answer:${mine}/no such slot`,
+      `answer:${randomUUID()}/host`,
+      `proposal:${theirProposal}`,
+      `proposal:${randomUUID()}`,
+    ]) {
+      await expect(pauseOn(waiter, moves), moves).rejects.toBeInstanceOf(
+        HoldRefusedError
+      );
+      expect(await statusOf("focus_sessions", waiter)).toBe("active");
+    }
   });
 });
