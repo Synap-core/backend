@@ -5,6 +5,10 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  WORK_RELEASE_SOURCE_STATES,
+  type WorkReleasePart,
+} from "@synap-core/types/work-release";
+import {
   AI_READ_PROPOSE_ROLE_ID,
   aiDefaultCapabilities,
   GRANT_PRESETS,
@@ -645,6 +649,22 @@ describe("the release door (finding 4d14ce47): an app reads Ship, narrowed", () 
         )
       )
     ).toEqual({ full: false, snapshotSpaces: "all", withheld: ["holders"] });
+  });
+
+  it("default-closed: every part of the read a pinned key does not reach is withheld", () => {
+    const parts = Object.keys(WORK_RELEASE_SOURCE_STATES);
+    expect(parts.length).toBeGreaterThanOrEqual(4); // non-vacuity
+    // A key reaching nothing of the read: every part, derived from the keys.
+    expect([...workReleaseReach(app("channel.read")).withheld].sort()).toEqual(
+      [...parts].sort()
+    );
+    // Whatever a pinned key reads, no part is both read and withheld, and
+    // every part outside `withheld` is one the grant demonstrably reaches.
+    const reached = workReleaseReach(app("event.dev.read", "session.read"));
+    const open = parts.filter(
+      (p) => !reached.withheld.includes(p as WorkReleasePart)
+    );
+    expect(open.sort()).toEqual(["sessions", "snapshots"]);
   });
 
   it("CONTROL: a person, a full key, or one reading every subject unbounded keeps the whole read", () => {
