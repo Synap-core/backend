@@ -17,8 +17,10 @@
  * is open forever: 14 days, 7 for runs and pipelines (plan Q2.2). A passed
  * `reviewBy` is NOT a move; it is a signal for the watcher.
  *
- * Pure: no imports at run time (relay and the browser read this module).
+ * Pure (relay and the browser read this module): its one run-time import is
+ * the ONE UUID check (`isUuid`), for the wait refs' ids.
  */
+import { isUuid } from "../property-render/structured-value.js";
 import type { TransitionSubjectType } from "./index.js";
 
 /** What a paused thing waits on. */
@@ -236,8 +238,6 @@ export type HoldWaitRef =
   | { kind: "answer"; sessionId: string; slot: string }
   | { kind: "proposal"; proposalId: string };
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Bound on a slot named by a wait (matches the slot doors' label bound). */
 export const HOLD_WAIT_SLOT_MAX = 500;
 
@@ -252,14 +252,14 @@ export function parseHoldWaitRef(ref: string): HoldWaitRef | null {
     const sessionId = rest.slice(0, slash);
     const slot = rest.slice(slash + 1).trim();
     return slash > 0 &&
-      UUID_RE.test(sessionId) &&
+      isUuid(sessionId) &&
       slot.length > 0 &&
       slot.length <= HOLD_WAIT_SLOT_MAX
       ? { kind, sessionId: sessionId.toLowerCase(), slot }
       : null;
   }
   if (kind === "proposal") {
-    return UUID_RE.test(rest) ? { kind, proposalId: rest.toLowerCase() } : null;
+    return isUuid(rest) ? { kind, proposalId: rest.toLowerCase() } : null;
   }
   return null;
 }
