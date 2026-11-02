@@ -39,6 +39,7 @@ import { canWrite, userPrincipal } from "../../../access/door.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { uuidQueryParam } from "./_codecs/_openapi.js";
+import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 
 // deps validation now lives INSIDE the defineCell door (security review
 // 2026-07-12: marketplace-install called defineCell without it — enforcing at
@@ -52,10 +53,7 @@ const InstallBodySchema = z.object({
 });
 
 function getCpUrl(): string {
-  return (process.env.CONTROL_PLANE_URL ?? process.env.CP_URL ?? "").replace(
-    /\/$/,
-    ""
-  );
+  return controlPlaneBaseUrl() ?? "";
 }
 
 export function registerCellsRoutes(app: HubHono): void {

@@ -36,6 +36,7 @@ import type {
   StartValues,
 } from "@synap-core/types/onboarding/start";
 import { loadAgentPresence } from "./agent-presence.js";
+import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 
 const logger = createLogger({ module: "onboarding-start" });
 
@@ -188,7 +189,7 @@ export async function readCloudAnswers(
   }
   if (!link) return { status: "not-linked" };
 
-  const cpUrl = (link.url ?? process.env.CONTROL_PLANE_URL ?? "")
+  const cpUrl = (link.url ?? controlPlaneBaseUrl() ?? "")
     .trim()
     .replace(/\/+$/, "");
   if (!cpUrl) return { status: "not-linked" };

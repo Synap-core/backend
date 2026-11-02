@@ -29,6 +29,7 @@ import {
   admitPrivateCapability,
   assertOfficialDefinition,
 } from "./official-catalog-trust.js";
+import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 
 export interface CPCapabilityTemplate {
   key: string;
@@ -50,12 +51,7 @@ interface OwnedCapabilityTemplate extends CPCapabilityTemplate {
 
 /** Resolve the Control Plane base URL (mirrors cells.ts `getCpUrl`). */
 function cpUrl(): string | null {
-  const url = (
-    process.env.CONTROL_PLANE_URL ??
-    process.env.CP_URL ??
-    ""
-  ).replace(/\/$/, "");
-  return url || null;
+  return controlPlaneBaseUrl();
 }
 
 /**

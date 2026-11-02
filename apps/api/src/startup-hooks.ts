@@ -57,6 +57,7 @@ import {
   createStartupTracker,
   type StartupHooksState,
 } from "./status/startup-state.js";
+import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 const logger = createLogger({ module: "startup-hooks" });
 
 /**
@@ -269,7 +270,7 @@ async function readAutoAcceptCpScopes(): Promise<boolean> {
 }
 
 async function seedControlPlaneIssuer(): Promise<void> {
-  const controlPlaneUrl = process.env.CONTROL_PLANE_URL?.trim();
+  const controlPlaneUrl = controlPlaneBaseUrl();
   if (!controlPlaneUrl) return; // self-hosted without a CP — nothing to trust
 
   try {

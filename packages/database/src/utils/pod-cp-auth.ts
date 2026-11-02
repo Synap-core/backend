@@ -36,6 +36,7 @@ import {
   readCpRelayCredential,
   type CpRelayCredentialDeps,
 } from "./cp-relay-credential.js";
+import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 
 export type PodCpPurpose =
   | "invites"
@@ -132,7 +133,7 @@ export function readPodEnrollment(): PodEnrollment | null {
 }
 
 function controlPlaneOrigin(controlPlaneUrl: string | undefined): string {
-  const raw = controlPlaneUrl ?? process.env.CONTROL_PLANE_URL ?? "";
+  const raw = controlPlaneUrl ?? controlPlaneBaseUrl() ?? "";
   try {
     return new URL(raw).origin;
   } catch {

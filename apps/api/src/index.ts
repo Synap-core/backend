@@ -1665,7 +1665,7 @@ void (async () => {
 // the transport-derived origin. It does NOT mutate the trusted-issuer registry.
 // Skipped when CONTROL_PLANE_URL is unset (self-hosted without a CP).
 void (async () => {
-  const controlPlaneUrl = process.env.CONTROL_PLANE_URL?.trim();
+  const controlPlaneUrl = controlPlaneBaseUrl();
   if (!controlPlaneUrl) return; // self-hosted without a CP — nothing to probe
 
   const transportIssuer = normalizeIssuerUrl(controlPlaneUrl);
@@ -2275,6 +2275,7 @@ import {
   startupHooksState,
   validateCriticalSecrets,
 } from "./startup-hooks.js";
+import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 runStartupHooks().catch((err) => {
   apiLogger.error({ err }, "Startup hooks failed (non-fatal)");
 });
