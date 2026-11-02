@@ -194,6 +194,35 @@ describe("deliverables and criteria", () => {
     expect(deliverableRows(null)).toEqual([]);
   });
 
+  it("counts a confirm / choose the person answered, whose decision was filed, as delivered", () => {
+    const answer = (mode: string) => ({
+      text: "Yes",
+      messageId: null,
+      answeredBy: "u1",
+      answeredAt: "2026-11-02T10:00:00.000Z",
+      askSnapshot: { mode },
+    });
+    expect(
+      deliverableRows([
+        {
+          key: "pick",
+          label: "Pick",
+          decisionId: "d1",
+          answer: answer("choose"),
+        },
+        // A form answer files no decision: still owed.
+        {
+          key: "form",
+          label: "Form",
+          decisionId: "d2",
+          answer: answer("form"),
+        },
+        // No filed decision: still owed.
+        { key: "ok", label: "Ok", answer: answer("confirm") },
+      ]).map((r) => r.done)
+    ).toEqual([true, false, false]);
+  });
+
   it("pairs each criterion with its current verdict", () => {
     expect(
       criterionRows(

@@ -54,7 +54,12 @@ import {
   resolveGovernanceRule,
   resolveOriginTrust,
   resolvePendingProposalCap,
+  isOwnSessionBookkeeping,
 } from "@synap/database/agent-governance";
+import {
+  isSessionUpdateReceipt,
+  recordSessionBookkeepingReceipt,
+} from "./session-bookkeeping-receipt.js";
 import {
   users,
   workspaces,
@@ -1184,6 +1189,17 @@ export interface PermissionCheckBaseOpts {
    * close write for completeFocusSession should set this flag.
    */
   ignoreSessionForcePropose?: boolean;
+  /**
+   * `"activity"`: when this session update is AUTO-APPROVED, its receipt is an
+   * event on the session's spine, not an AUTO_APPROVED `proposals` row
+   * (`session-bookkeeping-receipt.ts`, plan 527996fa 0.7). Honoured only for
+   * `focus_session` `update` (`isSessionUpdateReceipt`), and on the agent path
+   * only when the write is the agent's own session bookkeeping
+   * (`isOwnSessionBookkeeping`, proven from the session row). A door asks for
+   * it when nothing reads the row: no Undo is stamped on it. A PROPOSED update
+   * is a decision and is filed as a pending row whatever this says.
+   */
+  sessionReceipt?: "activity";
 }
 
 /**
@@ -2310,6 +2326,45 @@ async function evaluatePermission(
         // DRY RUN: the verdict is "execute"; skip the AUTO_APPROVED receipt
         // INSERT (the only side effect on this branch) and report it.
         if (dryRun) return { granted: true };
+        // A session's OWN bookkeeping, auto-approved: the receipt is an event
+        // on its spine, not a proposals row (0.7). Asked for by the door; proven
+        // here from the session row, never from the caller.
+        const bookkeepingSessionId =
+          typeof data?.id === "string" ? data.id : undefined;
+        if (
+          opts.sessionReceipt === "activity" &&
+          !lifecycleCloseEscape &&
+          isSessionUpdateReceipt(subjectType, action) &&
+          bookkeepingSessionId &&
+          (await isOwnSessionBookkeeping(db, {
+            userId,
+            agentUserId,
+            subjectType,
+            action,
+            subjectId: bookkeepingSessionId,
+          }))
+        ) {
+          await recordSessionBookkeepingReceipt({
+            sessionId: bookkeepingSessionId,
+            userId,
+            agentUserId: agentUserId ?? null,
+            workspaceId: filedWorkspaceId,
+            data: data ?? {},
+            autoApproved: {
+              matchedPattern: findMatchingPattern(
+                `${subjectType}.${action}`,
+                (gov.decision === "execute"
+                  ? gov.explicitAutoApproveFor
+                  : undefined) ?? DEFAULT_AUTO_APPROVE
+              ),
+              ...(gov.decision === "execute" && gov.governanceRuleId
+                ? { governanceRuleId: gov.governanceRuleId }
+                : {}),
+              approvedBy: "system:auto_approve",
+            },
+          });
+          return { granted: true };
+        }
         // Auto-approved (or lifecycle close escape). Record the RECEIPT row, then grant.
         //
         // AWAITED, not fire-and-forget: a receipt that races the response is not
@@ -2657,6 +2712,36 @@ async function evaluatePermission(
         // DRY RUN: the verdict is "execute"; skip the receipt INSERT (the only
         // side effect on this branch) and report it.
         if (dryRun) return { granted: true };
+
+        // A session update the door marked as bookkeeping: its receipt is an
+        // event on the session's spine, not a proposals row (0.7). There is
+        // no agent row to prove ownership from; the key's own session floor
+        // already ran at the door, and the event is marked AI-sourced.
+        if (
+          opts.sessionReceipt === "activity" &&
+          isSessionUpdateReceipt(subjectType, action) &&
+          typeof data?.id === "string"
+        ) {
+          await recordSessionBookkeepingReceipt({
+            sessionId: data.id,
+            userId,
+            agentUserId: null,
+            workspaceId: filedWorkspaceId,
+            data,
+            autoApproved: {
+              principal: "anonymous",
+              matchedPattern: findMatchingPattern(
+                eventKey,
+                DEFAULT_AUTO_APPROVE
+              ),
+              ...(gov.verdict === "execute" && gov.governanceRuleId
+                ? { governanceRuleId: gov.governanceRuleId }
+                : {}),
+              approvedBy: "system:auto_approve",
+            },
+          });
+          return { granted: true };
+        }
 
         // COUNTABILITY — the anonymous auto-execute used to be a bare
         // `return { granted: true }`: no proposal row, no session, no

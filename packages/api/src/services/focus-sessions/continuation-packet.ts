@@ -124,6 +124,7 @@ import {
 import {
   deriveTrackStages,
   filedStageKey,
+  isDecidedByAnswer,
   isDeliverableDelivered,
   type GoalCriterionMark,
   type LiveRunnerState,
@@ -1600,8 +1601,9 @@ function workUnitUrl(slot: ExpectedOutput): string | null {
 /**
  * {@link ContinuationPacket.workUnits} — pure over the row's declared slots:
  * a slot of a work-unit kind, or one whose `ref.url` is a GitHub PR, branch or
- * commit. Its state is the outcome's own (`status`, `claimedDone`,
- * `retiredAt`), never a guess about the PR.
+ * commit. Its state is the outcome's own (delivered per
+ * `isDeliverableDelivered`, `claimedDone`, `retiredAt`), never a guess about
+ * the PR.
  */
 export function workUnitsSection(
   all: ExpectedOutput[],
@@ -1624,7 +1626,7 @@ export function workUnitsSection(
         state:
           slot.retiredAt != null
             ? "retired"
-            : slot.status === "done"
+            : isDeliverableDelivered(slot)
               ? "met"
               : slot.claimedDone === true
                 ? "claimed"
@@ -2024,9 +2026,24 @@ const APPLIED_PROPOSAL_STATUSES = [
   ProposalStatus.AUTO_APPROVED,
 ];
 
-/** A slot the one `done` door stamped — by approval or by the owner's attestation. */
+/**
+ * A delivered slot: stamped by the one `done` door (approval or the owner's
+ * attestation), or a decision the person's answer filed
+ * (`isDeliverableDelivered`, founder 2 Nov 2026: "an answer that filed its
+ * decision IS the proof") — the same rule the outcome projection reads.
+ */
 const isDoneSlot = (s: ExpectedOutput): boolean =>
-  s.retiredAt == null && (s.status === "done" || s.attestedBy != null);
+  s.retiredAt == null && (isDeliverableDelivered(s) || s.attestedBy != null);
+
+/**
+ * When a done slot was delivered: the owner's attestation, else the answer
+ * that decided it. `null` when the pod recorded no time (never guessed).
+ */
+function slotDeliveredAt(s: ExpectedOutput): string | null {
+  if (s.attestedAt) return s.attestedAt;
+  if (isDecidedByAnswer(s) && s.answer?.answeredAt) return s.answer.answeredAt;
+  return null;
+}
 
 /**
  * Applied proposals of this session, newest first, EXCLUDING:
@@ -2144,7 +2161,7 @@ export function deriveAlreadyDone(input: {
       source: "deliverable" as const,
       kind: s.kind,
       title: s.label,
-      at: s.attestedAt ?? null,
+      at: slotDeliveredAt(s),
       sourceId: s.satisfiedByProposalId ?? null,
     })),
     ...input.appliedProposals.items,

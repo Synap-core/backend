@@ -2389,6 +2389,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         action: "update",
         source: "intelligence",
         reasoning: patch.reasoning,
+        // This door stamps no Undo on its receipt, so nothing reads the row:
+        // an auto-approved update's receipt is an event on the session's spine
+        // (`session-bookkeeping-receipt.ts`, plan 527996fa 0.7).
+        sessionReceipt: "activity",
         data: {
           id,
           ...sessionGoalPayload(existing, patch.goal),

@@ -2354,6 +2354,16 @@ export async function updateFocusSession(
         : [],
       params.retireOutput
     );
+  // Decided BEFORE the gate: an update an Undo can restore keeps its
+  // proposals receipt (the row patch is stamped on it below); any other
+  // auto-approved update is bookkeeping, whose receipt goes to the session's
+  // event spine (`session-bookkeeping-receipt.ts`, plan 527996fa 0.7).
+  // An UNCHANGED criteria list (an MCP `outcomes` attach re-sends it) changes
+  // nothing and is not written, so it must not cost the write its Undo.
+  const undoable = isUndoableSessionPatch(
+    criteriaChange ? params : { ...params, criteria: undefined },
+    { trackFilingWithoutUses }
+  );
   const perm = filingAlone
     ? ({ granted: true, autoApprovedProposalId: filingReceiptId } as const)
     : await checkPermissionOrPropose({
@@ -2363,6 +2373,7 @@ export async function updateFocusSession(
         subjectType: "focus_session",
         action: "update",
         source: "intelligence",
+        ...(undoable ? {} : { sessionReceipt: "activity" as const }),
         ...(retiresHumanSlot ? { forcePropose: true } : {}),
         ...(ownSessionCriteria ? { ownSessionCriteria: true } : {}),
         data: {
@@ -2521,15 +2532,10 @@ export async function updateFocusSession(
 
   // UNDO RECORD for an AUTO-APPROVED write: its receipt was minted by the gate
   // above, so the before-state is only knowable here. Stamped only when every
-  // change is one undo can restore (`session-undo.ts`); otherwise the receipt
-  // stays unstamped and revert says it cannot be undone.
+  // change is one undo can restore (`undoable`, decided before the gate);
+  // otherwise the receipt is an event on the session's spine and revert says
+  // the update cannot be undone.
   const receiptId = "granted" in perm ? perm.autoApprovedProposalId : undefined;
-  // An UNCHANGED criteria list (an MCP `outcomes` attach re-sends it) changes
-  // nothing and is not written, so it must not cost the write its Undo.
-  const undoable = isUndoableSessionPatch(
-    criteriaChange ? params : { ...params, criteria: undefined },
-    { trackFilingWithoutUses }
-  );
   const undoBefore =
     receiptId && undoable ? await readSessionUndoSnapshot(db, sessionId) : null;
 
