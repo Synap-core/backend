@@ -125,6 +125,8 @@ import {
   deriveTrackStages,
   filedStageKey,
   type GoalCriterionMark,
+  type LiveRunnerState,
+  type RunnerState,
   type TrackKpi,
   type WaitKind,
   type WaitingOnMark,
@@ -287,11 +289,13 @@ export interface PacketRunnerItem {
     lastSeenAt: string;
   }>;
   /**
-   * What the runner says it is doing (0384, `X-Synap-Runner-State`): `busy`,
-   * `idle`, `needs_permission`, or `ended` (it said so, or left the live
-   * window). `null` while live = its client names no state: unknown, not idle.
+   * What the runner says it is doing (0384, `X-Synap-Runner-State`; the words
+   * are `RUNNER_STATES`, @synap-core/types/units): `busy`, `idle`,
+   * `needs_permission`, `needs_answer`, or `ended` (it said so, or left the
+   * live window). `null` while live = its client names no state: unknown, not
+   * idle.
    */
-  state: "busy" | "idle" | "needs_permission" | "ended" | null;
+  state: RunnerState | null;
   /** When it entered that state; for a runner gone quiet, when it was last seen. */
   stateSince?: string;
   /**
@@ -871,7 +875,8 @@ export interface ContinuationPacket {
         windowMs: number;
         /**
          * What the LIVE runners SAY they are doing (0384), folded by
-         * `foldRunnerState`: `needs_permission` over `busy` over `idle`;
+         * `foldRunnerState` in the one runner order (`RUNNER_STATE_ORDER`):
+         * `needs_permission` over `needs_answer` over `busy` over `idle`;
          * `state: null` = no live runner named one. The harness's own word,
          * beside the pod-activity `state` above and never folded into it. A
          * failed runners read is `unavailable` (see `runners`), never null.
@@ -879,7 +884,7 @@ export interface ContinuationPacket {
         runner:
           | {
               status: "ok";
-              state: "busy" | "idle" | "needs_permission" | null;
+              state: LiveRunnerState | null;
               since: string | null;
             }
           | { status: "unavailable"; reason: string };

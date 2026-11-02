@@ -108,6 +108,8 @@ async function runner(
 
 let waiting = "";
 let twice = "";
+let asking = "";
+let both = "";
 
 beforeAll(async () => {
   for (const t of h.tables) {
@@ -131,6 +133,14 @@ beforeAll(async () => {
   await runner(closed, "needs_permission");
   const theirs = await session("Someone else's", OTHER);
   await runner(theirs, "needs_permission");
+  // Cockpit C4: a question at the terminal waits on the person too.
+  asking = await session("Asks a question");
+  await runner(asking, "needs_answer");
+  await runner(asking, "busy");
+  // Both terminal waits: ONE row, the more urgent word.
+  both = await session("Asks and needs a permission");
+  await runner(both, "needs_answer");
+  await runner(both, "needs_permission");
 });
 
 describe("sessions waiting for your permission (D-R1)", () => {
@@ -140,10 +150,36 @@ describe("sessions waiting for your permission (D-R1)", () => {
     });
     expect(truncated).toBe(false);
     expect(sessions.map((s) => s.title).sort()).toEqual([
+      "Asks a question",
+      "Asks and needs a permission",
       "Run the migration",
       "Two copies wait",
     ]);
     expect(sessions.every((s) => s.since instanceof Date)).toBe(true);
+  });
+
+  it("needs_answer counts too (the named default extending D-R1), in its own words; both words fold to the more urgent", async () => {
+    const { sessions } = await listSessionsWaitingForPermission({
+      userId: ME,
+    });
+    const word = (id: string) => sessions.find((s) => s.id === id)?.runnerState;
+    expect(word(asking)).toBe("needs_answer");
+    expect(word(both)).toBe("needs_permission");
+    expect(word(waiting)).toBe("needs_permission");
+    const rows = unionNeedsYou({
+      clusters: [],
+      notifications: [],
+      owedSlots: [],
+      permissionSessions: sessions.filter((s) => s.id === asking),
+    });
+    expect(rows).toEqual([
+      expect.objectContaining({
+        kind: "session-permission",
+        waitKind: "answer",
+        why: "Waiting for your answer",
+        needsYouClass: "needs_you",
+      }),
+    ]);
   });
 
   it("is counted through the same rows the list draws, in the headline", async () => {
@@ -169,8 +205,10 @@ describe("sessions waiting for your permission (D-R1)", () => {
     expect(rows.map((r) => r.kind)).toEqual([
       "session-permission",
       "session-permission",
+      "session-permission",
+      "session-permission",
     ]);
-    expect(count.permission).toBe(2);
+    expect(count.permission).toBe(4);
     expect(count.needsYou).toBe(rows.length);
     expect(count.folds.needsYou).toBe(count.needsYou);
   });

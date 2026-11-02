@@ -333,6 +333,56 @@ describe("the conversation change feed", () => {
     expect(again.status).toBe("timeout");
   });
 
+  it("a lane the conversation WORKS (a live runner of it) is in the set: a person's room post to it reaches the conversation", async () => {
+    // Sessions cockpit C3: a teammate lane's session is started under no
+    // client key of this conversation; the conversation holds a live runner
+    // on it (its writes stamp one). A runner of another conversation, one
+    // that said `ended`, or one past the live window brings nothing in.
+    const runner = (
+      sessionId: string,
+      o: { conv?: string; state?: string | null; seenAgo?: string } = {}
+    ) =>
+      q(
+        `insert into session_runners (session_id, client_key, user_id, agent_user_id, api_key_id, harness, conversation_id, process_key, state, state_since, state_reported_at, first_seen_at, last_seen_at)
+         values ($1, $2, $3, $4, $5, 'claude-code', $6, 'mac-a:4242:1761600000000', $7, now(), now(), now(), now() - $8::interval)`,
+        [
+          sessionId,
+          `key:${OTHER_KEY_ID}|conv:claude-code:${o.conv ?? CC_ID}`,
+          OWNER,
+          AGENT,
+          OTHER_KEY_ID,
+          o.conv ?? CC_ID,
+          o.state ?? "busy",
+          o.seenAgo ?? "5 seconds",
+        ]
+      );
+    const lane = await session({ clientKey: null, title: "Teammate lane" });
+    const otherConvLane = await session({ clientKey: null });
+    const endedLane = await session({ clientKey: null });
+    const staleLane = await session({ clientKey: null });
+    await runner(lane.sessionId);
+    await runner(otherConvLane.sessionId, { conv: OTHER_CC_ID });
+    await runner(endedLane.sessionId, { state: "ended" });
+    await runner(staleLane.sessionId, { seenAgo: "10 minutes" });
+    const typed = randomUUID();
+    await q(
+      `insert into messages (id, channel_id, role, author_type, user_id, content, hash, timestamp)
+       values ($1, $2, 'user', 'human', $3, 'Use the EU account', 'h', now())`,
+      [typed, lane.channelId, OWNER]
+    );
+
+    const res = await wait({ events: ["owner_message"], since: BEFORE });
+    const listed = res.sessions!.map((s) => s.id);
+    expect(listed).toContain(lane.sessionId);
+    expect(listed).not.toContain(otherConvLane.sessionId);
+    expect(listed).not.toContain(endedLane.sessionId);
+    expect(listed).not.toContain(staleLane.sessionId);
+    expect(res.status).toBe("changed");
+    expect(
+      res.events!.map((e) => [e.kind, e.id, e.session!.id])
+    ).toContainEqual(["owner_message", typed, lane.sessionId]);
+  });
+
   it("a session closed long ago is not watched; one closed today is", async () => {
     const today = await session({ status: "closed" });
     const old = await session({ status: "closed" });

@@ -600,11 +600,21 @@ describe("classifyRunnerWait (decision D-R1)", () => {
     expect(
       classifyRunnerWait({ status: "paused", runnerState: "needs_permission" })
     ).toBe("needs_you");
-    for (const runnerState of ["busy", "idle", "ended", null]) {
+    for (const runnerState of ["busy", "idle", "ended", null, "asleep"]) {
       expect(classifyRunnerWait({ status: "active", runnerState })).toBeNull();
     }
     expect(
       classifyRunnerWait({ status: "closed", runnerState: "needs_permission" })
+    ).toBeNull();
+  });
+
+  it("a question at the terminal (needs_answer) is one too — the named default extending D-R1", async () => {
+    const { classifyRunnerWait } = await import("./rule.js");
+    expect(
+      classifyRunnerWait({ status: "active", runnerState: "needs_answer" })
+    ).toBe("needs_you");
+    expect(
+      classifyRunnerWait({ status: "cancelled", runnerState: "needs_answer" })
     ).toBeNull();
   });
 });

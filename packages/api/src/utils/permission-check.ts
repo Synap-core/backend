@@ -127,6 +127,7 @@ import {
   slotKeyAt,
 } from "../services/focus-sessions/slot-keys.js";
 import { reviveSessionForWrite } from "../services/focus-sessions/revive-stale-session.js";
+import { stampWritingRunner } from "../services/focus-sessions/session-runners.js";
 import { normalizeExpectedLabel } from "../services/focus-sessions/expected-label.js";
 import { logEvent } from "../lib/event-helpers.js";
 import { AGENT_WRITE_EVENT_KIND } from "../lib/run-event-kinds.js";
@@ -2172,6 +2173,20 @@ async function evaluatePermission(
       // no-op outside an MCP call; never for a dry run or a session's own update.
       if (!dryRun && !subjectType.startsWith("focus_session")) {
         recordWriteSessionFiling(governedSessionId, receiptProjectKey);
+      }
+
+      // WHO WORKS IT NOW (sessions cockpit C3): the OS process that wrote holds
+      // this session as a runner, so a lane that writes to its own session
+      // reads as worked even while its lead holds the wait. THE write-
+      // attribution point every AI write door shares (reads never come here).
+      // Off the request path, never thrown; stamps only when the request named
+      // its process and conversation, at most once a minute per row.
+      if (!dryRun) {
+        void stampWritingRunner({
+          sessionId: governedSessionId,
+          ownerId: userId,
+          agentUserId,
+        });
       }
 
       // Re-stamp the frozen envelope ONLY when the hoist actually resolved a

@@ -268,15 +268,17 @@ describe("the calling process (0373)", () => {
 });
 
 describe("the runner state (0384)", () => {
-  it("knows exactly busy, idle, needs_permission and ended, case and spaces folded; anything else is none", () => {
+  it("knows exactly busy, idle, needs_permission, needs_answer and ended, case and spaces folded; anything else is none", () => {
     expect([...RUNNER_STATES]).toEqual([
       "busy",
       "idle",
       "needs_permission",
+      "needs_answer",
       "ended",
     ]);
     for (const s of RUNNER_STATES) expect(parseRunnerState(s)).toBe(s);
     expect(parseRunnerState(" Needs_Permission ")).toBe("needs_permission");
+    expect(parseRunnerState("NEEDS_ANSWER")).toBe("needs_answer");
     for (const bad of [
       undefined,
       null,
