@@ -9,6 +9,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  RECOMMENDED_AGENT_WRITE_MODE,
+  type AgentWriteMode,
+} from "@synap-core/types/agents";
 import { ReceiverShell } from "../_lib/receiver-shell";
 import { formatRelative } from "../../lib/format";
 import {
@@ -111,6 +115,9 @@ export function DeviceFlow({
   const [reuseId, setReuseId] = useState<string | null>(null);
   const [computerName, setComputerName] = useState("");
   const [agents, setAgents] = useState<string[]>([]);
+  const [agentWriteMode, setAgentWriteMode] = useState<AgentWriteMode>(
+    RECOMMENDED_AGENT_WRITE_MODE
+  );
   const [busy, setBusy] = useState<"approve" | "deny" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -153,6 +160,7 @@ export function DeviceFlow({
               agents,
               reuseComputerId: reuseId,
               computerName,
+              agentWriteMode,
             });
       setBusy(kind);
       setError(null);
@@ -164,7 +172,7 @@ export function DeviceFlow({
       }
       setRead(decidedRead(read.request, kind));
     },
-    [read, code, agents, reuseId, computerName]
+    [read, code, agents, reuseId, computerName, agentWriteMode]
   );
 
   const stage = deviceStage(code, read);
@@ -195,6 +203,8 @@ export function DeviceFlow({
           onComputerName={setComputerName}
           agents={agents}
           onAgents={setAgents}
+          agentWriteMode={agentWriteMode}
+          onAgentWriteMode={setAgentWriteMode}
           busy={busy}
           error={error}
           onApprove={() => void decide("approve")}

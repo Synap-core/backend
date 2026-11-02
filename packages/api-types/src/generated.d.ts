@@ -15923,6 +15923,16 @@ export interface DeviceRequestView {
 	expiresAt: Date;
 	/** The person's own computers with this hostname: reuse keeps agents, history, rules. */
 	reusableComputers: Array<{
+		/**
+		 * The agents it hosts (`users.host_user_id`), kept by a reconnect, each
+		 * with the newest `last_used_at` over its keys: what the person checks
+		 * before a reconnect replaces those keys.
+		 */
+		agents: Array<{
+			id: string;
+			lastSeenAt: Date | null;
+			name: string;
+		}>;
 		/** Whose computer it is today (0388); the approval may change it. */
 		belongsTo: ComputerBelongsTo | null;
 		createdAt: Date;
@@ -25996,6 +26006,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		decideDeviceRequest: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				agentWriteMode?: "ask-first" | "create-with-undo" | "pod-default" | null | undefined;
 				agents?: string[] | undefined;
 				belongsTo?: "agent" | "person" | "shared" | null | undefined;
 				computerName?: string | null | undefined;

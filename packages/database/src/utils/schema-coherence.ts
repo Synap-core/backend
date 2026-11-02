@@ -1247,6 +1247,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "computer_belongs_to",
     addedBy: "0388_computer_belongs_to.sql",
   },
+  // How the approved agents' writes land (0394): the device approval writes
+  // it, the key collection applies it to each agent before its key exists.
+  {
+    table: "device_auth_requests",
+    column: "agent_write_mode",
+    addedBy: "0394_device_agent_write_mode.sql",
+  },
   {
     table: "governance_rules",
     column: "principal_class",

@@ -248,6 +248,7 @@ CREATE TABLE IF NOT EXISTS "device_auth_requests" (
   "machine_user_id"       text REFERENCES "users"("id") ON DELETE SET NULL,
   "machine_name"          text,
   "computer_belongs_to"   text,
+  "agent_write_mode"      text,
   "minted_key_id"         uuid,
   "failed_code_attempts"  integer NOT NULL DEFAULT 0,
   "poll_interval_seconds" integer NOT NULL DEFAULT 5,

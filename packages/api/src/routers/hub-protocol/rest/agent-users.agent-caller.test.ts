@@ -104,8 +104,10 @@ import { registerAgentUsersRoutes } from "./agent-users.js";
 import { createNamedAgent } from "../../../services/agent-identity-service.js";
 import {
   applyAgentPosture,
+  readAgentGovernance,
   syncAutoApproveRules,
 } from "@synap/database/agent-governance";
+import { AGENT_WRITE_MODE_CHOICES } from "@synap-core/types/agents";
 import type { HubHono, HubVariables } from "./_shared.js";
 
 const SIBLING = "33333333-3333-4333-8333-333333333333";
@@ -231,5 +233,39 @@ describe("PATCH /agent-users/:id/governance", () => {
     });
     expect(res.status).toBe(200);
     expect(vi.mocked(syncAutoApproveRules)).toHaveBeenCalled();
+  });
+});
+
+describe("GET /agent-users/:id/governance", () => {
+  it("hands a person the pod's ONE write-mode list, each with the posture to PATCH", async () => {
+    vi.mocked(readAgentGovernance).mockResolvedValueOnce({
+      posture: "ask-first",
+      configured: true,
+    } as never);
+    const res = await buildApp(false).request(
+      `/agent-users/${AGENT}/governance`
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      posture: string;
+      writeModeChoices: Array<{
+        mode: string;
+        label: string;
+        line: string;
+        recommended: boolean;
+        posture: string | null;
+      }>;
+    };
+    expect(body.posture).toBe("ask-first");
+    expect(body.writeModeChoices.map((c) => c.mode)).toEqual(
+      AGENT_WRITE_MODE_CHOICES.map((c) => c.mode)
+    );
+    expect(
+      body.writeModeChoices.map((c) => [c.mode, c.posture, c.recommended])
+    ).toEqual([
+      ["pod-default", null, true],
+      ["create-with-undo", "create-with-undo", false],
+      ["ask-first", "ask-first", false],
+    ]);
   });
 });
