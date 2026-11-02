@@ -24,6 +24,7 @@ import {
   isNull,
   isNotNull,
   lte,
+  focusSessions,
 } from "@synap/database";
 import { NotificationStatus } from "@synap/database";
 import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
@@ -44,7 +45,11 @@ import {
   effectivePushCategories,
   type PushPrefs,
 } from "@synap-core/types/push";
-import { readPushPrefs, writePushPrefs } from "../notifications/push-prefs.js";
+import {
+  readPushPrefs,
+  writePushPrefs,
+  writeSessionMute,
+} from "../notifications/push-prefs.js";
 import {
   listPushDevices,
   registerPushDevice,
@@ -52,7 +57,10 @@ import {
   unregisterPushDevice,
 } from "../notifications/push-devices.js";
 import { containerNotificationWhere } from "../services/signals/lens-containers.js";
-import { rosterReadFor } from "../access/session-visibility.js";
+import {
+  rosterReadFor,
+  sessionReadableWhere,
+} from "../access/session-visibility.js";
 
 /** What a phone's push settings render — every category, effective state. */
 function pushPrefsView(prefs: PushPrefs) {
@@ -557,6 +565,49 @@ export const notifCenterRouter = router({
       });
       const prefs = await writePushPrefs(requireUserId(ctx.userId), input);
       return pushPrefsView(prefs);
+    }),
+
+  /**
+   * Mute or unmute ONE session's pushes (plan d679e92c C9). Muted, nothing
+   * about that session rings the person's phone (devbox jobs, dev signals,
+   * room activity, its asks); nothing is hidden either: its rows still land in
+   * the bell and an owed ask stays in needs-you. Person-only, like the push
+   * categories. A session the person may not read is NOT_FOUND (missing and
+   * not-yours are the same answer). The session read carries the state back
+   * as `continuation.muted`.
+   */
+  setSessionMute: protectedProcedure
+    .input(z.object({ sessionId: z.string().uuid(), muted: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the person can mute a session's notifications.",
+        });
+      }
+      await assertKeyMayWrite({
+        subjectType: "preference",
+        action: "update",
+      });
+      const userId = requireUserId(ctx.userId);
+      const [session] = await db
+        .select({ id: focusSessions.id })
+        .from(focusSessions)
+        .where(
+          and(
+            eq(focusSessions.id, input.sessionId),
+            sessionReadableWhere({ userId, roster: rosterReadFor(ctx) })
+          )
+        )
+        .limit(1);
+      if (!session) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+      const muted = await writeSessionMute(userId, session.id, input.muted);
+      return { sessionId: session.id, muted };
     }),
 
   // ── Push devices ────────────────────────────────────────────────────────

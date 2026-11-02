@@ -18,6 +18,8 @@ export interface UnifiedSearchOptions {
   limit?: number;
   page?: number;
   entityTypes?: string[];
+  /** `entities` only: keep entities carrying ANY of these roles (facet slugs). */
+  facetSlugs?: string[];
   documentTypes?: string[];
   viewTypes?: string[];
   tags?: string[];
@@ -269,6 +271,8 @@ export class SearchService {
       limit?: number;
       page?: number;
       entityTypes?: string[];
+      /** `entities` only: keep entities carrying ANY of these roles (facet slugs). */
+      facetSlugs?: string[];
       documentTypes?: string[];
       viewTypes?: string[];
       tags?: string[];
@@ -424,6 +428,7 @@ export class SearchService {
     collection?: string;
     visibleWorkspaceIds?: string[];
     entityTypes?: string[];
+    facetSlugs?: string[];
     documentTypes?: string[];
     viewTypes?: string[];
     tags?: string[];
@@ -451,6 +456,12 @@ export class SearchService {
 
     if (collection === "entities" && options.entityTypes?.length) {
       filters.push(`entityType:=${anyOf(options.entityTypes, "entityTypes")}`);
+    }
+
+    // A role is a facet slug: `facetSlugs` is an array field, so `:=` matches
+    // when ANY of the entity's roles is one of these.
+    if (collection === "entities" && options.facetSlugs?.length) {
+      filters.push(`facetSlugs:=${anyOf(options.facetSlugs, "facetSlugs")}`);
     }
 
     if (collection === "documents" && options.documentTypes?.length) {

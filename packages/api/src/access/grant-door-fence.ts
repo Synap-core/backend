@@ -322,6 +322,27 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // they can see (`readAgentAssignment`), the read half of
   // PUT /agent-users/:id/assignment. Same subject, same PERSON door.
   [/^\/agent-users\/assignments\/?$/, PERSON("agent")],
+  // The person's spaces with their template health (`synap market update`,
+  // `market installed`, `orient`): the spaces the person can open, each one's
+  // live entity count and the pod-wide count (entities, through
+  // `readWorkspaceEntityStats`), the projects using it
+  // (`listProjectsUsingWorkspaces`) and where its last template apply stands,
+  // with the proposals it waits on (`templateStepsByWorkspace`). The same
+  // rule as MCP `synap_list_workspaces`, plus `proposal` for the steps. A
+  // space carries no grant subject of its own, so the route cannot narrow
+  // its list to a pin: a key pinned to a space, project or object stays
+  // refused (finding de33a075: a computer's key, unpinned, was refused).
+  [/^\/workspaces\/?$/, READS("entity", "project", "proposal")],
+  // What is installed, every kind (`installed.ts`): the spaces' template
+  // state and steps (proposals), capabilities (subject `tool`, as MCP
+  // `synap_list_capabilities`), views, skills, automations and cells
+  // (`widget`), in the person's spaces and pod-wide. `?drift=true` adds the
+  // write-free reconcile preview, which reads the same views, skills and
+  // automations.
+  [
+    /^\/installed\/?$/,
+    READS("proposal", "tool", "view", "skill", "automation", "widget"),
+  ],
   // The session row, narrowed by the route (`sessionPacketReadable`): the
   // packet is added only for a key that reads all of it.
   [

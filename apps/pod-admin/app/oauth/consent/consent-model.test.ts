@@ -16,6 +16,7 @@ import {
   readsSpaceRecords,
   reasonOf,
   SPACE_REACH_NOTE,
+  spaceReachNote,
   sectionCheckboxLabel,
   sectionState,
   spaceCheckboxLabel,
@@ -212,6 +213,14 @@ describe("the reach line under the space choice", () => {
       "It sees what a member of these spaces sees: what is stored there, plus the people, companies and other records of your pod that have a role there or were filed there. Nothing else in your pod."
     );
     expect(SPACE_REACH_NOTE).not.toContain("\u2014");
+  });
+
+  it("with pod-wide reads on offer, names their section instead of 'nothing else'", () => {
+    expect(spaceReachNote(false)).toBe(SPACE_REACH_NOTE);
+    const withPod = spaceReachNote(true);
+    expect(withPod).not.toContain("Nothing else in your pod");
+    expect(withPod).toContain("Everywhere in your pod");
+    expect(withPod).not.toContain("\u2014");
   });
 });
 

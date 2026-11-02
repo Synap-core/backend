@@ -185,6 +185,7 @@ const NOT_READERS: Record<string, string> = {
   DIAGNOSTIC_CODES: "data",
   EMBED_DIAGNOSTIC_CODES: "data",
   LAYOUT_DIAGNOSTIC_CODES: "data",
+  DESIGN_DIAGNOSTIC_CODES: "data",
   GRAMMAR_WIRE_CODE: "data",
   collectDiagnostics: "diagnostics, no prose output",
   blame: "line diff over history, no parse",

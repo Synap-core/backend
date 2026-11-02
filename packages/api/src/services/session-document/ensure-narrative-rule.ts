@@ -28,21 +28,50 @@ import {
   filterUncoveredActions,
 } from "@synap/database";
 import {
+  REFRESHER_RULE_CREATED_BY,
+  REFRESHER_SECTION_EVENT_KEY,
   SESSION_NARRATIVE_EVENT_KEY,
   SESSION_NARRATIVE_RULE_CREATED_BY,
 } from "./governance-keys.js";
 
-const LOCK_KEY = "synap:session-narrative-rule";
-
 export async function ensureSessionNarrativeRule(): Promise<{
   inserted: boolean;
 }> {
-  const [pattern] = filterUncoveredActions([SESSION_NARRATIVE_EVENT_KEY]);
+  return seedAutoRule(
+    SESSION_NARRATIVE_EVENT_KEY,
+    SESSION_NARRATIVE_RULE_CREATED_BY,
+    "synap:session-narrative-rule"
+  );
+}
+
+/**
+ * Seed the D4 rule: `document.refresher_section_update` → auto, for any
+ * principal, pod-wide. The patch door files under that key ONLY for a
+ * document's bound refresher rewriting its own existing AI sections
+ * (governance-keys.ts), so the rule widens nothing else. Same contract as D10:
+ * a person can revoke or tighten it, and a revoked row is never resurrected.
+ */
+export async function ensureDocumentRefresherRule(): Promise<{
+  inserted: boolean;
+}> {
+  return seedAutoRule(
+    REFRESHER_SECTION_EVENT_KEY,
+    REFRESHER_RULE_CREATED_BY,
+    "synap:document-refresher-rule"
+  );
+}
+
+async function seedAutoRule(
+  eventKey: string,
+  createdBy: string,
+  lockKey: string
+): Promise<{ inserted: boolean }> {
+  const [pattern] = filterUncoveredActions([eventKey]);
   if (!pattern) return { inserted: false };
 
   return db.transaction(async (tx) => {
     await tx.execute(
-      drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${LOCK_KEY}))`
+      drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`
     );
     const [existing] = await tx
       .select({ id: governanceRules.id })
@@ -64,7 +93,7 @@ export async function ensureSessionNarrativeRule(): Promise<{
       targetKind: "action",
       targetPattern: pattern,
       verdict: "auto",
-      createdBy: SESSION_NARRATIVE_RULE_CREATED_BY,
+      createdBy,
     });
     return { inserted: true };
   });

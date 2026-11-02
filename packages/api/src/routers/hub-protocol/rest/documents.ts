@@ -132,6 +132,10 @@ export function registerDocumentsRoutes(app: HubHono): void {
       /** Replace the entity's existing body on purpose (otherwise 409). */
       replaceBody?: boolean;
       idempotencyKey?: string;
+      /** The living document's `LensScope` (0387), or null. */
+      scope?: Record<string, unknown> | null;
+      /** The automation bound to refresh it (0387, D4), or null. */
+      refreshAutomationId?: string | null;
     };
     try {
       const acting = await resolveActingContext(c, {
@@ -180,6 +184,10 @@ export function registerDocumentsRoutes(app: HubHono): void {
         ...(body.expectedLabel ? { expectedLabel: body.expectedLabel } : {}),
         ...(body.url ? { url: body.url } : {}),
         ...(body.idempotencyKey ? { idempotencyKey: body.idempotencyKey } : {}),
+        ...(body.scope !== undefined ? { scope: body.scope } : {}),
+        ...(body.refreshAutomationId !== undefined
+          ? { refreshAutomationId: body.refreshAutomationId }
+          : {}),
       });
       if (!body.entityId) return jsonGoverned(c, result);
       return jsonGoverned(

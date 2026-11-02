@@ -90,7 +90,10 @@ export {
   ensureCaptureAgent,
   getCaptureAgentUserId,
 } from "./services/capture-agent/ensure-capture-agent.js";
-export { ensureSessionNarrativeRule } from "./services/session-document/ensure-narrative-rule.js";
+export {
+  ensureSessionNarrativeRule,
+  ensureDocumentRefresherRule,
+} from "./services/session-document/ensure-narrative-rule.js";
 export {
   createCapabilityFromDefinition,
   loadCapabilityTemplate,

@@ -154,6 +154,12 @@ import {
 } from "./session-kind.js";
 import { createLogger } from "@synap-core/core";
 import {
+  readSessionDevboxJobs,
+  readSessionMuted,
+  type PacketDevboxJobsSection,
+  type PacketMuted,
+} from "./session-notify.js";
+import {
   sessionReadableWhere,
   type SessionReader,
 } from "../../access/session-visibility.js";
@@ -877,6 +883,21 @@ export interface ContinuationPacket {
    * prefix-matching X.
    */
   gates: PacketGatesSection;
+  /**
+   * DEVBOX JOBS — the devbox gate jobs run for this session (its `ci.finished`
+   * facts of workflow `devbox <name>`), one per job name, its newest run,
+   * newest first, at most 5 (`total` exact over the newest 100 runs). NOT the
+   * stage gates above. A failed read is `unavailable`, never "no jobs".
+   * Optional: an older pod does not send it (`session-notify.ts`).
+   */
+  devboxJobs?: PacketDevboxJobsSection;
+  /**
+   * Has the READER muted this session's pushes (tRPC
+   * `notifCenter.setSessionMute`)? Muted holds back every push about the
+   * session; nothing is hidden. A failed read is `unavailable`, never "not
+   * muted". Optional: an older pod does not send it (`session-notify.ts`).
+   */
+  muted?: PacketMuted;
   /**
    * WHO IS ATTACHED — the client conversations holding this session's
    * change-feed wait, most recently seen first (`session-runners.ts`). An
@@ -2747,6 +2768,28 @@ export async function projectContinuationPacket(
     ? getTrack(row.trackId, { userId: reader.userId })
     : Promise.resolve(null);
   trackRead.catch(() => undefined);
+  // The person's notification facts (`session-notify.ts`), read beside the
+  // sections below; each failure is its own `unavailable`.
+  const notifyReads = Promise.all([
+    readSessionDevboxJobs(database, reader, row)
+      .then((r): PacketDevboxJobsSection => ({ status: "ok", ...r }))
+      .catch(
+        unavailable(
+          row.id,
+          "devboxJobs",
+          "This session's devbox jobs could not be read."
+        )
+      ),
+    readSessionMuted(database, ctx.userId, row.id)
+      .then((muted): PacketMuted => ({ status: "ok", muted }))
+      .catch(
+        unavailable(
+          row.id,
+          "muted",
+          "Whether you muted this session could not be read."
+        )
+      ),
+  ]);
 
   const [
     project,
@@ -3115,6 +3158,7 @@ export async function projectContinuationPacket(
       );
 
   const manifest = readSessionRunManifest(row.metadata);
+  const [devboxJobs, muted] = await notifyReads;
 
   return {
     version: 1,
@@ -3173,6 +3217,8 @@ export async function projectContinuationPacket(
     room,
     live,
     gates,
+    devboxJobs,
+    muted,
     runners,
     inbox,
     nextMove: deriveNextMove({

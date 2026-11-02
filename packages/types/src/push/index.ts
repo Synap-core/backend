@@ -37,6 +37,7 @@ import {
   type AskAnswerValue,
 } from "../ask/index.js";
 import { humanizeToken } from "../vocabulary/index.js";
+import { isUuid } from "../property-render/structured-value.js";
 
 // ─── Categories ─────────────────────────────────────────────────────────────
 
@@ -47,6 +48,7 @@ export const PUSH_CATEGORIES = [
   "late-or-stuck",
   "mention",
   "morning-brief",
+  "delivered-digest",
   "sent-by-you",
   "system",
 ] as const;
@@ -84,6 +86,13 @@ export interface PushCategoryPolicy {
  * chosen time) joined with its producer (`api/src/services/morning-brief/`,
  * W0 of the status-flow plan, 2026-10-29). Passive: it lands silently in the
  * notification list and never breaks through, so it costs no interruption.
+ *
+ * `delivered-digest` ("what agents delivered since your last digest", plan
+ * d679e92c C9, wave 065982de W3-notify) is raised by the same daily pass as
+ * the brief, at most once a day and only when something was delivered.
+ * Passive, and OUTSIDE the interruption budget
+ * ({@link PUSH_CAP_EXEMPT_CATEGORIES}): it is news the person asked for by
+ * keeping it on, never an agent waiting on them.
  */
 export const PUSH_CATEGORY_POLICY: Readonly<
   Record<PushCategory, PushCategoryPolicy>
@@ -116,6 +125,11 @@ export const PUSH_CATEGORY_POLICY: Readonly<
     interruptionLevel: "active",
   },
   "morning-brief": {
+    defaultOn: true,
+    level: "passive",
+    interruptionLevel: "passive",
+  },
+  "delivered-digest": {
     defaultOn: true,
     level: "passive",
     interruptionLevel: "passive",
@@ -171,6 +185,10 @@ export const PUSH_CATEGORY_LABELS: Readonly<
   "morning-brief": {
     name: "Your morning brief",
     hint: "One quiet summary a day of what waits on you",
+  },
+  "delivered-digest": {
+    name: "What got delivered",
+    hint: "One quiet summary a day of what agents finished for you",
   },
   "sent-by-you": {
     name: "What you send to this phone",
@@ -260,6 +278,9 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
   "workspace.invite": "mention",
   // The once-a-day summary of what waits on you (passive, never rings).
   "ai.proactive.morning_briefing": "morning-brief",
+  // What agents delivered since the last digest (passive, at most once a day,
+  // outside the daily cap).
+  "ai.proactive.delivered_digest": "delivered-digest",
   // The person sent it from their desktop ("Send to phone", decision D5).
   "handoff.to_phone": "sent-by-you",
   // Health — the Settings mark carries it; a push only if opted in.
@@ -285,11 +306,14 @@ export const PUSH_DAILY_CAP = 3;
  * Categories the cap never holds back and never counts: "something you own
  * broke" (incidents and failures, plan Q5.2) always reaches the phone, and
  * so does what the person sent to it themselves (`sent-by-you`): the budget
- * limits how often the POD interrupts, never the person's own ask.
+ * limits how often the POD interrupts, never the person's own ask. The
+ * delivered digest is its own class (plan d679e92c C9): passive, at most one a
+ * day by its producer, so it neither spends nor is held back by the budget.
  */
 export const PUSH_CAP_EXEMPT_CATEGORIES: readonly PushCategory[] = [
   "work-broke",
   "sent-by-you",
+  "delivered-digest",
 ];
 
 /** The notification types whose push the cap never counts (derived, never listed). */
@@ -331,6 +355,35 @@ export function classifyPush(
  */
 export interface PushPrefs {
   categories?: Partial<Record<PushCategory, boolean>>;
+  /**
+   * Sessions whose pushes the person muted (plan d679e92c C9): every push
+   * ABOUT one of them is held back — devbox jobs, dev signals, room activity,
+   * and its asks too. Nothing is hidden: the row still lands in the bell and
+   * an owed ask stays in needs-you; only the phone stops ringing
+   * ({@link isSessionPushMuted}). Absent = none muted.
+   */
+  mutedSessions?: string[];
+}
+
+/** At most this many muted sessions are kept (the oldest mute drops first). */
+export const PUSH_MUTED_SESSIONS_MAX = 200;
+
+/**
+ * Categories a session mute never holds back: what the person sent to their
+ * phone themselves is their own ask, not the session's noise.
+ */
+export const PUSH_MUTE_EXEMPT_CATEGORIES: readonly PushCategory[] = [
+  "sent-by-you",
+];
+
+/** Has the person muted this session's pushes? */
+export function isSessionPushMuted(
+  prefs: PushPrefs | null | undefined,
+  sessionId: string | null | undefined
+): boolean {
+  if (!sessionId) return false;
+  const id = sessionId.toLowerCase();
+  return (prefs?.mutedSessions ?? []).includes(id);
 }
 
 /**
@@ -349,6 +402,18 @@ export function normalizePushPrefs(raw: unknown): PushPrefs {
       if (isPushCategory(k) && typeof v === "boolean") kept[k] = v;
     }
     if (Object.keys(kept).length > 0) out.categories = kept;
+  }
+  const muted = r.mutedSessions;
+  if (Array.isArray(muted)) {
+    const ids = [
+      ...new Set(
+        muted
+          .filter((v): v is string => typeof v === "string")
+          .filter((v) => isUuid(v))
+          .map((v) => v.toLowerCase())
+      ),
+    ].slice(-PUSH_MUTED_SESSIONS_MAX);
+    if (ids.length > 0) out.mutedSessions = ids;
   }
   return out;
 }

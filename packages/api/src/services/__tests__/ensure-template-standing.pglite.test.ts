@@ -299,7 +299,18 @@ describe("readTemplateStanding — the caller's floor (fence1)", () => {
 
   it.each([
     ["a key granted ON the holding space", () => pinned([WS_A, WS_CRM])],
-    ["a key unpinned to spaces", () => pinned(null)],
+    [
+      "a key unpinned to spaces",
+      (): KeyGrant => ({
+        scopes: [
+          {
+            permissions: ["entity.post.read", "entity.post.create"],
+            workspaceIds: null,
+          },
+        ],
+        clientId: null,
+      }),
+    ],
     [
       "a full-access key",
       (): KeyGrant => ({
@@ -313,6 +324,37 @@ describe("readTemplateStanding — the caller's floor (fence1)", () => {
     );
     expect(res).toMatchObject({ status: "installed", workspaceId: WS_CRM });
   });
+
+  // Rules out: a pod-wide read (decision e1b59d38 "B") read as "every space".
+  // The app below reads decisions everywhere and posts in space A only; the
+  // holder sits in a space it was never given, so it must not be named.
+  it.each([
+    [
+      "beside a space it was given",
+      [
+        { permissions: ["entity.post.read"], workspaceIds: [WS_A] },
+        { permissions: ["entity.decision.read"], workspaceIds: null },
+      ],
+    ],
+    [
+      "alone",
+      [
+        {
+          permissions: ["entity.decision.read", "entity.post.read"],
+          workspaceIds: null,
+        },
+      ],
+    ],
+  ])(
+    "an app's pod-wide read %s reaches no other space: the holder is not named",
+    async (_label, scopes) => {
+      const res = await asKey({ scopes, clientId: "app_test" }, () =>
+        readTemplateStanding("crm", "user-1")
+      );
+      expect(res).toEqual({ ...ABSENT, heldOutOfSight: true });
+      expect(JSON.stringify(res)).not.toContain(WS_CRM);
+    }
+  );
 
   it("the person's floor: a holder they can't read is answered as absent, even with no key", async () => {
     h.unreadable.add(WS_CRM);

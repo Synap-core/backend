@@ -369,73 +369,6 @@ export interface UnitStateView {
 	glyph: UnitGlyph;
 	rail: UnitRail;
 }
-declare const AGENT_HARNESSES: readonly [
-	{
-		readonly label: "Claude Code";
-		readonly reopen: {
-			readonly command: (id: string) => string;
-			readonly idPattern: RegExp;
-		};
-		readonly slug: "claude-code";
-		readonly surface: true;
-	},
-	{
-		readonly label: "Claude Desktop";
-		readonly slug: "claude-desktop";
-		readonly surface: true;
-	},
-	{
-		readonly label: "Cursor";
-		readonly slug: "cursor";
-		readonly surface: true;
-	},
-	{
-		readonly label: "Raycast";
-		readonly slug: "raycast";
-		readonly surface: true;
-	},
-	{
-		readonly label: "Codex";
-		readonly slug: "codex";
-		readonly surface: true;
-	},
-	{
-		readonly label: "Open WebUI";
-		readonly slug: "openwebui";
-		readonly surface: true;
-	},
-	{
-		readonly label: "Discord";
-		readonly slug: "discord";
-		readonly surface: true;
-	},
-	{
-		readonly label: "Proton";
-		readonly slug: "proton";
-		readonly surface: true;
-	},
-	{
-		readonly label: "Generic";
-		readonly slug: "generic";
-		readonly surface: true;
-	}
-];
-/** Harnesses whose conversation id we can turn into a reopen door (the registry's `reopen`). */
-export type AgentConversationHarness = Extract<(typeof AGENT_HARNESSES)[number], {
-	reopen: unknown;
-}>["slug"];
-export interface AgentConversationRef {
-	harness: AgentConversationHarness;
-	/** The harness's own conversation id (Claude Code: the session UUID). */
-	conversationId: string;
-	/** Where it ran, when its client said so. Display only. */
-	cwd: string | null;
-	/**
-	 * The shell command that reopens it, on the computer it ran on. Built only
-	 * from a validated id, so it is safe to show and copy as-is.
-	 */
-	resumeCommand: string;
-}
 declare const SESSION_POST_INTENTS: readonly [
 	"blocked_on_you",
 	"handoff",
@@ -482,15 +415,6 @@ declare const AGENT_BINDING_ERROR_CODES: readonly [
 	"malformed"
 ];
 export type AgentBindingErrorCode = (typeof AGENT_BINDING_ERROR_CODES)[number];
-declare const EXTERNAL_AGENT_STATUSES: readonly [
-	"pending_start",
-	"running",
-	"needs_input",
-	"done",
-	"failed",
-	"cancelled"
-];
-export type ExternalAgentStatus = (typeof EXTERNAL_AGENT_STATUSES)[number];
 declare const AGENT_POSTURE_NAMES: readonly [
 	"ask-first",
 	"create-with-undo"
@@ -597,6 +521,1386 @@ export interface AgentMetadata {
  * is for the NEW provenance columns only.
  */
 export type ProvenanceKind = "ai_agent" | "human" | "system";
+/** One counted day. `date` is the viewer's calendar day, `YYYY-MM-DD`. */
+export interface ActivityDay {
+	date: string;
+	count: number;
+}
+/** `activity.daily`'s answer. Sparse: a day with no act is absent. */
+export interface ActivityDaily {
+	/** First day of the window (inclusive), `YYYY-MM-DD` in `tz`. */
+	from: string;
+	/** Last day of the window (inclusive) — the viewer's today. */
+	to: string;
+	tz: string;
+	days: ActivityDay[];
+}
+/**
+ * A track and a session know their containers when the page knows them —
+ * that is what lets {@link visibleSource} hide a source the scope sits INSIDE
+ * (the session's own project on a session page). Absent ⇒ unknown, which only
+ * ever SHOWS a source (a redundant door is cheaper than a missing one).
+ */
+export type LensScope = {
+	kind: "pod";
+} | {
+	kind: "workspace";
+	/**
+	 * The project FILTERING this space (BRIEF-lens-model: inside a space the
+	 * selected project is a filter — "this space × this project"). The read
+	 * ANDs it onto the workspace (`signals.list` composes the two). Absent ⇒
+	 * the whole space. Not in the address token: a Show-all door carries
+	 * the space; the project rides on the surface lens.
+	 */
+	projectId?: string | null;
+	workspaceId: string;
+} | {
+	kind: "project";
+	projectId: string;
+} | {
+	kind: "track";
+	projectId?: string | null;
+	trackId: string;
+} | {
+	kind: "session";
+	projectId?: string | null;
+	sessionId: string;
+	trackId?: string | null;
+}
+/**
+ * An INTENT surface — one kind's (or role's) things: "Posts", "Leads"
+ * (surfaces plan). The kind is the scope; a container (a space, a project,
+ * a track) narrows it, and it travels in the address with it (an intent
+ * surface's "All sessions →" stays the project's posts).
+ */
+ | {
+	kind: "pipeline";
+	profileSlug: string;
+	projectId?: string | null;
+	trackId?: string | null;
+	workspaceId?: string | null;
+};
+declare const GOAL_CONVERTIBLE_KINDS: readonly [
+	"goal",
+	"objective",
+	"okr"
+];
+export type GoalConvertibleKind = (typeof GOAL_CONVERTIBLE_KINDS)[number];
+/**
+ * Why a handed-over secret came with no read for the agent.
+ *   `agent_unknown`  — the pod cannot tell which agent asked.
+ *   `not_grantable`  — a legacy client-encrypted secret the pod cannot read.
+ *   `key_not_allowed` — the key that answered may not grant vault access.
+ *   `agent_changed`  — the agent asking now is not the one the person was
+ *                      shown (`expectedGranteeId` on the answer).
+ */
+export type ProvideSecretGrantRefusal = "agent_changed" | "agent_unknown" | "key_not_allowed" | "not_grantable";
+/** What a secret answer did about the asking agent's access to it. */
+export type ProvideSecretGrant = {
+	agentName: string;
+	agentUserId: string;
+	/** ISO; `null` when an existing grant with no end already covered it. */
+	expiresAt: string | null;
+	status: "granted";
+} | {
+	reason: ProvideSecretGrantRefusal;
+	status: "refused";
+}
+/** The read could not be written; the hand-over stands. */
+ | {
+	status: "failed";
+};
+/**
+ * What `provideOptions` says a secret hand-over WILL do, before the person
+ * presses: the agent it will grant a read to, or why none will be granted.
+ */
+export type ProvideSecretGrantOffer = {
+	agentName: string;
+	/** Sent back on the answer as `expectedGranteeId`. */
+	agentUserId: string;
+	minutes: number;
+	status: "will_grant";
+} | {
+	reason: ProvideSecretGrantRefusal;
+	status: "no_grant";
+};
+/** Why a new connection can't be started from this pod. */
+export type ProvideConnectUnavailableReason = "no_broker" | "not_offered" | "unreadable";
+declare const SECRET_TYPES: readonly [
+	"password",
+	"api_key",
+	"credential",
+	"note",
+	"card",
+	"identity",
+	"ssh_key",
+	"certificate",
+	"env_variable",
+	"database",
+	"oauth"
+];
+export type SecretType = (typeof SECRET_TYPES)[number];
+/** Kind of thing that consumes/uses a secret. */
+export type SecretConsumerType = "automation" | "capability" | "connection" | "entity" | "tool" | "url";
+/**
+ * One "this secret is used by X" record — surfaced in the Connections face.
+ * Backed by the `secret_usages` join (falls back to `capability_id`/context).
+ */
+export interface SecretUsage {
+	id: string;
+	secretId: string;
+	consumerType: SecretConsumerType;
+	consumerId: string;
+	consumerLabel: string;
+	contextType?: string | null;
+	contextId?: string | null;
+	workspaceId?: string | null;
+}
+/**
+ * A single grant of access to a secret (which agent/workspace can use it) —
+ * surfaced in the Access face. Backed by `vault_grants`. This is the ONE
+ * canonical shape: `listGrants`, `listAllGrants`, and `getDetailBundle.grants`
+ * all return it. `secretName`/`secretType`/`granteeLabel`/`granteeType` are
+ * only populated by `listAllGrants` (which spans multiple secrets and resolves
+ * grantee identity); they are `null` from the per-secret endpoints.
+ */
+export interface SecretGrantView {
+	grantId: string;
+	grantedTo: string;
+	scope: string;
+	expiresAt?: string | null;
+	/** Uses remaining: null = unlimited; clamped at 0 when exhausted. */
+	usesRemaining?: number | null;
+	workspaceId?: string | null;
+	revokedAt?: string | null;
+	/** True when not revoked, not expired, and uses remain. */
+	active: boolean;
+	/** Populated by `listAllGrants` only; null elsewhere. */
+	secretName?: string | null;
+	secretType?: SecretType | null;
+	granteeLabel?: string | null;
+	granteeType?: "agent" | "user" | "workspace" | null;
+}
+/**
+ * A single audit event for a secret (created/revealed/copied/updated/shared) —
+ * surfaced in the Activity face. Backed by `secret_audit_log`.
+ */
+export interface SecretActivityEvent {
+	id: string;
+	action: string;
+	actorType: "agent" | "user";
+	actorLabel?: string | null;
+	createdAt: string;
+}
+/**
+ * The full four-faces bundle for a secret detail view — identity metadata plus
+ * where it is used, who can access it, and its recent activity. Fetched in one
+ * call to reduce detail round-trips.
+ */
+export interface SecretDetailBundle {
+	id: string;
+	name: string;
+	type: SecretType;
+	category?: string | null;
+	url?: string | null;
+	description?: string | null;
+	isFavorite: boolean;
+	createdAt: string;
+	updatedAt: string;
+	usages: SecretUsage[];
+	grants: SecretGrantView[];
+	recentActivity: SecretActivityEvent[];
+}
+declare const AskCauseSchema: z.ZodObject<{
+	at: z.ZodOptional<z.ZodString>;
+	kind: z.ZodEnum<{
+		criterion: "criterion";
+		decision: "decision";
+		external_approval: "external_approval";
+		gate: "gate";
+		param: "param";
+		run: "run";
+	}>;
+	ref: z.ZodOptional<z.ZodObject<{
+		id: z.ZodString;
+		kind: z.ZodString;
+	}, z.core.$strip>>;
+}, z.core.$strip>;
+export type AskCause = z.infer<typeof AskCauseSchema>;
+/**
+ *   `expires`          — an ephemeral ask with a lifetime: lapses at
+ *                        `expiresAt`. `orSessionEnd` when it is bound to a
+ *                        session too: closing the session retires it as well,
+ *                        so it goes at the EARLIER of the two.
+ *   `dies_with_session` — a session-bound draft: retired when its session ends.
+ *   `review_later`     — objectWork untouched for 7 days: out of the headline
+ *                        count, kept in the Review later pile `since` then.
+ *   `until_decided`    — waits for a decision, with no deadline.
+ */
+export type ProposalFate = {
+	expiresAt: string;
+	kind: "expires";
+	orSessionEnd: boolean;
+} | {
+	kind: "dies_with_session";
+} | {
+	kind: "until_decided";
+} | {
+	kind: "review_later";
+	since: string;
+};
+declare const PROPOSAL_WAIT_REASONS: readonly [
+	"gate",
+	"owed_slot",
+	"parked_run"
+];
+export type ProposalWaitReason = (typeof PROPOSAL_WAIT_REASONS)[number];
+export interface ProposalWaits {
+	waits: boolean;
+	/** Present only when `waits`. */
+	reason?: ProposalWaitReason;
+}
+declare const NEEDS_YOU_SLOT_CLASSES: readonly [
+	"needs_you",
+	"from_system",
+	"stopped",
+	"working",
+	"review_later"
+];
+export type NeedsYouSlotClass = (typeof NEEDS_YOU_SLOT_CLASSES)[number];
+declare const NEEDS_YOU_PROPOSAL_CLASSES: readonly [
+	"needs_you",
+	"working",
+	"review_later",
+	"changes_to_review"
+];
+export type NeedsYouProposalClass = (typeof NEEDS_YOU_PROPOSAL_CLASSES)[number];
+/** Every class a row can carry — one vocabulary across slots and proposals. */
+export type NeedsYouClass = NeedsYouSlotClass | NeedsYouProposalClass;
+declare const NEEDS_YOU_FOLDS: readonly [
+	"working",
+	"stopped",
+	"review_later",
+	"from_system",
+	"changes_to_review"
+];
+export type NeedsYouFold = (typeof NEEDS_YOU_FOLDS)[number];
+/** The headline and every fold, counted over the SAME rows a list draws. */
+export interface NeedsYouFoldCounts {
+	/** The headline: rows that really need the person. */
+	needsYou: number;
+	working: number;
+	/** Stopped rows… */
+	stopped: number;
+	/** …on this many sessions (Stopped draws one row per session). */
+	stoppedSessions: number;
+	reviewLater: number;
+	fromSystem: number;
+	changesToReview: number;
+}
+/**
+ * WHO is asking for access, on an `access-request` row — a pod-level request
+ * that is not a proposal: an external service asking to be a TRUSTED ISSUER
+ * (it would sign identity tokens this pod accepts), or an APPLICATION asking
+ * that its browser origin may call this pod. Pod admins only; the pod reads
+ * them from their own tables (`trusted_issuers`, application connection
+ * requests), so they need no notification to exist.
+ *
+ * Carried on the row because they are two of the trust signals a reviewer
+ * decides on — the asker's name and where it asks from — and a tray must be
+ * able to say them without a second read.
+ */
+export interface NeedsYouAccessRequest {
+	/**
+	 * What would be granted: issuer trust, an application's browser origin, or
+	 * an API key one of the person's computers asked them for (`api_key`, read
+	 * for its person, not only for admins; decision 68d37853, answer 25).
+	 * `capability`: one of the person's OWN tool connections broke (every
+	 * connection of that tool needs a sign-in again, `secrets.connection_state
+	 * = 'needs_reauth'`); the ask is to reconnect it, read for its person.
+	 */
+	subject: "api_key" | "application" | "capability" | "issuer";
+	/** The asker's display name (the issuer's host, the app's name; a key's requested name; the broken tool's name). */
+	name: string;
+	/** Where it asks from: the issuer URL, the app's requested origin, the computer asking for a key; "" for a broken connection. */
+	from: string;
+}
+/**
+ * An invite to ANOTHER space of this pod, addressed to the viewer's email, on
+ * a `space-invite` row (founder, wave PQ 2026-10-22): joined IN the app, with
+ * Accept on the row and Decline beside it. Read from the pod's own `invites`
+ * table for this person only, so it needs no notification to exist.
+ *
+ * `token` is what `workspaces.acceptInvite` takes (the same value
+ * `workspaces.listMyInvites` already hands this person); `id` is what
+ * `workspaces.rejectInvite` takes.
+ */
+export interface NeedsYouInvite {
+	id: string;
+	token: string;
+	/** The role the invite grants (`editor`, `viewer`, …). */
+	role: string;
+	/** `workspace` = one space; `pod` = every space of the pod. */
+	scope: "pod" | "workspace";
+	/** The space's name; null for a pod-wide invite or an unnamed space. */
+	spaceName: string | null;
+}
+/**
+ * One entity of a retired goal kind (Life OS `goal`, Enterprise `objective`,
+ * Project Management `okr`) that was never made a goal, on the
+ * `convertible-goals` card (founder decision D-3, 2026-10-26).
+ */
+export interface NeedsYouConvertibleGoal {
+	entityId: string;
+	/** The entity's title; null when it has none (the host names its kind). */
+	title: string | null;
+	kind: GoalConvertibleKind;
+	/** The space it lives in; null for a pod-wide entity or an unnamed space. */
+	spaceName: string | null;
+	/**
+	 * The projects it is filed in that the viewer can see (`belongs_to_project`)
+	 * — where its goal lands by default, as "Make it a goal" does.
+	 */
+	projectIds: string[];
+}
+/**
+ * The pod's ONE "Make them goals" card (founder decision D-3, 2026-10-26): the
+ * entities of a retired goal kind the viewer can read that were never made a
+ * goal (no `promoted_to` edge to a track). The person reviews them and makes
+ * them goals, each through the one convert door; nothing converts on its own.
+ */
+export interface NeedsYouConvertibleGoals {
+	/** Newest first, at most the pod's scan cap. */
+	entities: NeedsYouConvertibleGoal[];
+	/** The scan hit its cap: there are more than `entities.length`. */
+	truncated: boolean;
+}
+/**
+ * CONNECTION EVENT LINES — the ONE rule that turns a connection's lifecycle
+ * event into a human line.
+ *
+ * `parseRecordChange` reads the CRUD half of the events log ("Created person").
+ * Everything a connection does that is NOT a record change — a key revoked or
+ * replaced, an app asking for access, a sync, a sign-in that expired, a
+ * messaging account connected, a message arriving, a webhook delivery, a
+ * session or track moving — is read HERE, so no surface hand-writes those
+ * words. Every word goes through the vocabulary (`resolveActionLabel` past
+ * mood, `resolveObjectNoun`, `resolveConnectionStateLabel`) and the service
+ * names through `resolveServiceName`; this module only arranges them.
+ *
+ * Input is the event's `type` (`${subjectType}.${action}.completed`, or the
+ * two-segment connector form) and, when the reader has it, its `data`. Every
+ * line reads without `data` too (a surface that only holds the type still
+ * gets words); `data` adds the name and the detail.
+ *
+ * Null = not a connection lifecycle event (a record change, an unknown
+ * family, a governance phase, or an in-flight sync tick that is not a fact).
+ */
+/** One lifecycle event, as a line. */
+export interface ConnectionEventLine {
+	/** Vocabulary action token (`revoke`, `sync`, `receive`, …). */
+	action: string;
+	/** Vocabulary object kind (`apiKey`, `app`, `messaging_account`, …). */
+	objectKind: string;
+	/**
+	 * The thing's own name when the event carries one — a key's name, the
+	 * service ("WhatsApp"), the sender, the stage. Already words.
+	 */
+	name: string | null;
+	/** A short trailing fact ("42 new"), or a message preview. Already words. */
+	detail: string | null;
+	/** The act failed (a failed sync or delivery, an expired sign-in). */
+	failed: boolean;
+	/** The whole line, composed: "Synced Gmail · 42 new". */
+	text: string;
+}
+declare const ACTIVITY_OUTCOMES: readonly [
+	"succeeded",
+	"failed",
+	"proposed",
+	"rejected",
+	"reverted",
+	"waiting",
+	"running",
+	"stopped"
+];
+export type ActivityOutcome = (typeof ACTIVITY_OUTCOMES)[number];
+/**
+ * WHO acted. An agent is named when the pod could name it (`id: null` = an
+ * agent that recorded no attributable identity, never a guess). `system` is a
+ * rule acting on its own (an automation run): `id`/`name` name the rule.
+ */
+export type ActivityActor = {
+	id: string | null;
+	kind: "agent";
+	name: string | null;
+} | {
+	id: string;
+	isViewer: boolean;
+	kind: "human";
+	name: string | null;
+} | {
+	id: string | null;
+	kind: "system";
+	name: string | null;
+};
+declare const ACTIVITY_SOURCES: readonly [
+	"proposal",
+	"decision",
+	"run",
+	"session"
+];
+export type ActivitySource = (typeof ACTIVITY_SOURCES)[number];
+/**
+ * The DOOR a row opens — through the route table (`objectNavTarget(kind, id)`).
+ * An applied proposal opens the object it made or changed; one that did not
+ * apply opens itself (`kind: "proposal"`), because its object may not exist.
+ * A run opens the run (`kind: "run"`, with its `flowType`), a session itself.
+ */
+export interface ActivityObjectRef {
+	/** Normalized object kind (`entity`, `document`, `proposal`, `run`, …). */
+	kind: string;
+	id: string;
+	/** What the object is called, when known. */
+	name: string | null;
+	/** An entity's profile slug, for its noun ("Person"), when known. */
+	profileSlug?: string | null;
+	/** A run's ledger (`automation` | `playbook`), for the run route. */
+	flowType?: string | null;
+}
+export interface ActivityRow {
+	/** Stable key, unique across sources: `<source>:<id>`. */
+	id: string;
+	source: ActivitySource;
+	/** When the act happened (ISO). The list is ordered by it, newest first. */
+	occurredAt: string;
+	actor: ActivityActor;
+	/** The vocabulary ACTION token (`create`, `approve`, `run`, `start`, …). */
+	action: string;
+	/** `resolveActionLabel(action, "past")` — "Created", "Approved", "Ran". */
+	verb: string;
+	/**
+	 * The headline. A proposal / decision row carries the proposal's own display
+	 * title (the pod's `proposalDisplaySummary` — the name every proposal door
+	 * leads with); a run its flow's name; a session its title.
+	 */
+	title: string;
+	object: ActivityObjectRef;
+	/** The proposal behind a proposal / decision row. */
+	proposalId: string | null;
+	project: {
+		id: string;
+		name: string | null;
+	} | null;
+	/**
+	 * The session it happened in — the provenance door. `null` when there is
+	 * none, or when the viewer may not read that session (decision D1).
+	 */
+	session: {
+		id: string;
+		title: string;
+	} | null;
+	outcome: ActivityOutcome;
+	/**
+	 * The Undo door — `proposals.revert(proposalId)` — on exactly ONE row per
+	 * revertable proposal: the decision row when a person approved it, the
+	 * proposal row when a rule auto-approved it. Undo reverts the WHOLE
+	 * proposal, so `changeCount` says how far it reaches (`null` = unknown).
+	 */
+	undo: {
+		changeCount: number | null;
+		proposalId: string;
+	} | null;
+	/** A failed run's own error line, when it recorded one. */
+	error: string | null;
+}
+export interface ActivityPage {
+	items: ActivityRow[];
+	/** Pass back as `cursor` for the next (older) page; `null` = no more. */
+	nextCursor: string | null;
+}
+/** An object-nav address (the `Signal.target` shape). The host routes it. */
+export interface LensDoor {
+	kind: string;
+	id: string;
+	/** Optional view reading (`room`), from `OBJECT_NAV_VIEWS`. */
+	view?: string;
+}
+declare const EVALUATION_VERDICTS: readonly [
+	"pass",
+	"fail",
+	"unmeasured"
+];
+export type EvaluationVerdict = (typeof EVALUATION_VERDICTS)[number];
+declare const EVALUATOR_KINDS: readonly [
+	"evidence",
+	"capability",
+	"judge",
+	"human"
+];
+export type EvaluatorKind = (typeof EVALUATOR_KINDS)[number];
+export interface SessionVerdict {
+	total: number;
+	passed: number;
+	failed: number;
+	unmeasured: number;
+	/** Required criteria whose current verdict is not `pass`. */
+	requiredUnmet: number;
+	/**
+	 * none       — the session declares no criteria.
+	 * passing    — every required criterion passes.
+	 * failing    — at least one required criterion's current verdict is `fail`.
+	 * incomplete — no required criterion failed, but some are not yet measured.
+	 */
+	state: "failing" | "incomplete" | "none" | "passing";
+}
+declare const CI_FINISHED_STATUSES: readonly [
+	"success",
+	"failure",
+	"cancelled",
+	"skipped",
+	"neutral",
+	"timed_out"
+];
+export type CiFinishedStatus = (typeof CI_FINISHED_STATUSES)[number];
+declare const repoSnapshotEventSchema: z.ZodObject<{
+	live: z.ZodOptional<z.ZodNullable<z.ZodObject<{
+		behindBy: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
+		kind: z.ZodEnum<{
+			desktop: "desktop";
+			image: "image";
+			npm: "npm";
+			pod: "pod";
+			site: "site";
+		}>;
+		label: z.ZodString;
+		sha: z.ZodNullable<z.ZodString>;
+	}, z.core.$strip>>>;
+	main: z.ZodObject<{
+		fixedBy: z.ZodOptional<z.ZodNullable<z.ZodObject<{
+			number: z.ZodNumber;
+			repo: z.ZodString;
+		}, z.core.$strip>>>;
+		health: z.ZodEnum<{
+			infra: "infra";
+			ok: "ok";
+			red: "red";
+			unmeasured: "unmeasured";
+		}>;
+		reason: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+		redSince: z.ZodOptional<z.ZodNullable<z.ZodObject<{
+			at: z.ZodOptional<z.ZodString>;
+			prNumber: z.ZodOptional<z.ZodNumber>;
+			sha: z.ZodString;
+		}, z.core.$strip>>>;
+		sha: z.ZodNullable<z.ZodString>;
+		source: z.ZodEnum<{
+			"devbox-baseline": "devbox-baseline";
+			"github-checks": "github-checks";
+			none: "none";
+		}>;
+	}, z.core.$strip>;
+	mergedToday: z.ZodArray<z.ZodObject<{
+		mergedAt: z.ZodString;
+		number: z.ZodNumber;
+		podSessionId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+		title: z.ZodString;
+		url: z.ZodString;
+	}, z.core.$strip>>;
+	observedAt: z.ZodString;
+	prs: z.ZodArray<z.ZodObject<{
+		author: z.ZodString;
+		autoMerge: z.ZodBoolean;
+		branch: z.ZodOptional<z.ZodString>;
+		checks: z.ZodEnum<{
+			green: "green";
+			infra: "infra";
+			none: "none";
+			queued: "queued";
+			red: "red";
+			running: "running";
+		}>;
+		dependsOn: z.ZodOptional<z.ZodArray<z.ZodObject<{
+			number: z.ZodNumber;
+			repo: z.ZodString;
+		}, z.core.$strip>>>;
+		draft: z.ZodBoolean;
+		headSha: z.ZodString;
+		mergeable: z.ZodEnum<{
+			blocked: "blocked";
+			clean: "clean";
+			dirty: "dirty";
+			unknown: "unknown";
+		}>;
+		number: z.ZodNumber;
+		podSessionId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+		redInheritedFromMain: z.ZodOptional<z.ZodBoolean>;
+		title: z.ZodString;
+		updatedAt: z.ZodString;
+		url: z.ZodString;
+	}, z.core.$strip>>;
+	repo: z.ZodString;
+	visibility: z.ZodEnum<{
+		private: "private";
+		public: "public";
+	}>;
+}, z.core.$strip>;
+export type RepoSnapshotFact = z.infer<typeof repoSnapshotEventSchema>;
+declare const PULL_REQUEST_STATES: readonly [
+	"open",
+	"merged",
+	"closed"
+];
+export type PullRequestState = (typeof PULL_REQUEST_STATES)[number];
+declare const PULL_REQUEST_CHECKS: readonly [
+	"passed",
+	"failed"
+];
+export type PullRequestChecks = (typeof PULL_REQUEST_CHECKS)[number];
+/** What the recorded facts say about one PR. */
+export interface PullRequestStateFacts {
+	state: PullRequestState;
+	/** The newest CI result on the PR's newest run sha; absent when none settles it. */
+	checks?: PullRequestChecks;
+	/** The sha `checks` is about — compare it with a newer head before trusting it. */
+	checksOn?: string;
+	/**
+	 * A check on `checksOn` is running: a `ci.started` with no later
+	 * `ci.finished` of its workflow on that sha. `checks` then holds a failure
+	 * already settled, never `passed`. Never `false`.
+	 */
+	checksRunning?: true;
+	/**
+	 * The PR is in its repository's merge queue: open, with a
+	 * `dev.merge_queued` at or after the fact that (re)opened it. Never `false`.
+	 */
+	queued?: true;
+	/**
+	 * A merge into the repository's default branch (the producer said so). Only
+	 * on `merged`; absent when the fact did not say (a stacked PR merged into
+	 * its parent branch is not on main).
+	 */
+	intoDefault?: boolean;
+	/**
+	 * A deploy contains the merge (built from a later commit of the repo, or
+	 * from the merge commit). Never `false`: see the file header.
+	 */
+	deployed?: true;
+	/** When the fact that set `state` happened (ISO). */
+	at: string;
+}
+declare const TRACK_WORK_KINDS: readonly [
+	"project",
+	"flow",
+	"operation",
+	"investigation",
+	"incident",
+	"commission",
+	"pathway"
+];
+export type TrackWorkKind = (typeof TRACK_WORK_KINDS)[number];
+declare const TRACK_UNCERTAINTY_LEVELS: readonly [
+	"clear",
+	"complicated",
+	"complex",
+	"chaotic",
+	"unknown"
+];
+export type TrackUncertainty = (typeof TRACK_UNCERTAINTY_LEVELS)[number];
+declare const CRITERION_CHECK_MEANINGS: readonly [
+	"measured",
+	"judged",
+	"handed_over",
+	"learning",
+	"decided_outside",
+	"certified"
+];
+export type CriterionCheckMeaning = (typeof CRITERION_CHECK_MEANINGS)[number];
+declare const CRITERION_ABOUT: readonly [
+	"result",
+	"method"
+];
+export type CriterionAbout = (typeof CRITERION_ABOUT)[number];
+declare const GOAL_ACCEPTANCE_DECISIONS: readonly [
+	"accepted",
+	"changes_asked",
+	"rejected"
+];
+export type GoalAcceptanceDecision = (typeof GOAL_ACCEPTANCE_DECISIONS)[number];
+declare const GOAL_ACCEPTANCE_STATES: readonly [
+	"waiting",
+	"accepted",
+	"changes_asked",
+	"rejected"
+];
+export type GoalAcceptanceState = (typeof GOAL_ACCEPTANCE_STATES)[number];
+/** The stored record of a judge's decision on one goal criterion. */
+export interface GoalCriterionAcceptance {
+	decision: GoalAcceptanceDecision;
+	/** The person who decided. */
+	by: string;
+	/** ISO-8601. */
+	at: string;
+	/** Why, in words — what to change, or why it was rejected. */
+	note?: string;
+}
+declare const GOAL_CRITERION_MARKS: readonly [
+	"met",
+	"claimed",
+	"under_way",
+	"not_met",
+	"not_started"
+];
+export type GoalCriterionMark = (typeof GOAL_CRITERION_MARKS)[number];
+/**
+ * A claim as every goal read returns it (`GoalCriterionView.claim`): who
+ * claimed, in which run, and what backs it — names resolved by the pod,
+ * never looked up by a page (`null` = not known, never an id).
+ */
+export interface GoalCriterionClaim {
+	by: string | null;
+	byName: string | null;
+	sessionId: string;
+	sessionTitle: string | null;
+	/** The evaluation's evidence (links, files, numbers) — `null` when none. */
+	evidence: Record<string, unknown> | null;
+	note: string | null;
+	/** ISO-8601. */
+	at: string;
+}
+/**
+ * One goal criterion as every track read returns it (`TrackView.criteria`):
+ * the stored criterion (the session criterion shape), the judge's stored
+ * decision, and the derived state. `mark` is `null` only on a view that could
+ * not read the goal's runs (a write's fallback) — never a guessed
+ * `not_started`.
+ */
+export interface GoalCriterionView {
+	key: string;
+	statement: string;
+	required?: boolean;
+	check: {
+		capability?: string;
+		evidenceKey?: string;
+		hint?: string;
+		kind: EvaluatorKind;
+	};
+	stageKey?: string;
+	checkKind?: CriterionCheckMeaning;
+	about?: CriterionAbout;
+	/** The judge's stored decision — `null` until one is made. */
+	acceptance: GoalCriterionAcceptance | null;
+	mark: GoalCriterionMark | null;
+	acceptanceState: GoalAcceptanceState | null;
+	meaning: CriterionCheckMeaning;
+	currentValue: string | null;
+	/**
+	 * Who claimed it, in which run, what backs it — the current passing
+	 * evaluation (`null` when none: never claimed, or accepted from an outside
+	 * decision with no run). `undefined` never: a write's fallback reads `null`.
+	 */
+	claim: GoalCriterionClaim | null;
+	/**
+	 * D-6 (founder, 2026-10-26): what backs a criterion — its claim's run title,
+	 * evidence and note, and its `currentValue` — is shown only to the goal's
+	 * OWNER, its JUDGE and whoever may read that run. `true` = there is such
+	 * content and this reader is none of them: those fields read `null`
+	 * ("Evidence visible to the owner and judge"), never an empty claim.
+	 * `false` = nothing withheld. The pod sets it on every derived read; it is
+	 * absent only on a write's fallback view, which read no goal facts
+	 * (`mark: null`).
+	 */
+	evidenceWithheld?: boolean;
+	/**
+	 * WHO WORKS IT: the open sessions that serve this criterion
+	 * (`session --serves--> goal` with `metadata.criterionKey`), only those the
+	 * reader may read, oldest first. Empty = nobody on it. Absent on a write's
+	 * fallback view, which read no goal facts.
+	 */
+	servedBy?: GoalCriterionServer[];
+}
+/** One session serving a criterion, as the goal page names it. */
+export interface GoalCriterionServer {
+	sessionId: string;
+	title: string;
+	status: string;
+}
+declare const OPERATION_PERIOD_MARKS: readonly [
+	"met",
+	"not_met",
+	"unmeasured"
+];
+export type OperationPeriodMark = (typeof OPERATION_PERIOD_MARKS)[number];
+export interface OperationPeriodReading {
+	/** ISO-8601, inclusive. */
+	from: string;
+	/** ISO-8601, exclusive. */
+	to: string;
+	mark: OperationPeriodMark;
+}
+declare const WAITING_ON_REASONS: readonly [
+	"input",
+	"approval",
+	"access",
+	"another_work",
+	"outside_world",
+	"external",
+	"date"
+];
+export type WaitingOnReason = (typeof WAITING_ON_REASONS)[number];
+/**
+ * WHAT is waited on: the session, PR, person, decision, proposal, owed slot
+ * or thing behind a mark. `label` is words a surface can show; `id` (a pod
+ * id) and `url` (an outside page) are doors when present. A slot's `id` is
+ * the session that declares it.
+ */
+export interface WaitingOnRef {
+	kind: "decision" | "person" | "proposal" | "pull_request" | "session" | "slot" | "thing";
+	id?: string;
+	url?: string;
+	label: string;
+	/**
+	 * What kind of wait it is (`WAIT_KINDS`, `./wait-kind.ts`), from the
+	 * source that named this ref ({@link waitKindOf}). Absent from an older
+	 * pod; a reader must work without it.
+	 */
+	waitKind?: WaitKind;
+}
+export interface WaitingOnMark {
+	reason: WaitingOnReason;
+	count: number;
+	/**
+	 * What is waited on, at most {@link WAITING_ON_REFS_MAX}, in source order.
+	 * Absent when no source named one; a reader must work without it.
+	 */
+	refs?: WaitingOnRef[];
+}
+declare enum AgentType {
+	DEFAULT = "default",
+	META = "meta",
+	PROMPTING = "prompting",
+	KNOWLEDGE_SEARCH = "knowledge-search",
+	CODE = "code",
+	WRITING = "writing",
+	ACTION = "action",
+	ONBOARDING = "onboarding",
+	WORKSPACE_CREATION = "workspace-creation"
+}
+/**
+ * Agent type as string literal union (for flexibility)
+ */
+export type AgentTypeString = `${AgentType}` | (string & {});
+declare enum AIStepType {
+	THINKING = "thinking",
+	TOOL_CALL = "tool_call",
+	TOOL_RESULT = "tool_result",
+	DECISION = "decision",
+	ERROR = "error"
+}
+/**
+ * AI step - shows what the AI is doing
+ *
+ * Represents any step in the AI's reasoning/execution process:
+ * - thinking: General analysis and reasoning
+ * - tool_call: When AI calls a tool
+ * - tool_result: Result from tool execution
+ * - decision: AI making a decision
+ * - error: Error during processing
+ */
+export interface AIStep {
+	id: string;
+	type: AIStepType | string;
+	content: string;
+	toolName?: string;
+	toolInput?: unknown;
+	toolOutput?: unknown;
+	timestamp: string;
+	duration?: number;
+	error?: string;
+	title?: string;
+	description?: string;
+	status?: "complete" | "error" | "pending" | "running";
+}
+/**
+ * Branch decision from meta-agent
+ */
+export interface BranchDecision {
+	shouldBranch: boolean;
+	reason: string;
+	suggestedAgentType?: AgentTypeString;
+	suggestedTitle?: string;
+	suggestedPurpose?: string;
+}
+/** A named container a pick belongs to — drawn as a DOOR chip. */
+export interface NextMoveContainer {
+	id: string;
+	name: string;
+}
+/**
+ * One start-tier candidate as the pod sends it (`signals.list({ lens:
+ * "page", picks: true })` → `page.picks.rows`, already ranked). Every field
+ * is read from stored data; none is estimated.
+ */
+export interface NextMoveWire {
+	/** Stable identity — `${door.kind}:${door.id}`; what a skip hides. */
+	key: string;
+	/** Object kind for the noun + icon (`task`, `session`). */
+	objectKind: string;
+	title: string;
+	door: LensDoor;
+	/** The verb that starts it: `start` (never begun) or `resume`. */
+	action: "resume" | "start";
+	/** Facts the score and the reason chips read. */
+	unblocks: number;
+	waitingSince: string | null;
+	project: NextMoveContainer | null;
+	track: NextMoveContainer | null;
+	draftReady: boolean;
+}
+/** The page's start tier — present only when the read asked for it. */
+export interface LensPagePicks {
+	/** Ranked (`rankNextMoves`), skips already removed, capped. */
+	rows: NextMoveWire[];
+	/** More candidates exist than were scanned or sent. */
+	truncated: boolean;
+	/** Halves that FAILED. Non-empty ⇒ never "nothing to do". */
+	unreadable: string[];
+}
+/** The loop as stored on the goal (`project_tracks.loop`, 0350). */
+export interface GoalLoopSettings {
+	on: boolean;
+	/** Proposals per rolling week, 1 to {@link GOAL_LOOP_MAX_PER_WEEK}. */
+	perWeek: number;
+	/**
+	 * When a person last switched it on (ISO-8601) — failures before it no
+	 * longer count: switching the loop on again is "try again".
+	 */
+	onAt: string | null;
+	/** Who set it last: the person (the approver, for an agent's proposal). */
+	by: string | null;
+}
+/** Doors the event names — each opens that object's own page. */
+export interface TrackHistoryRefs {
+	sessionId?: string;
+	proposalId?: string;
+}
+export interface TrackHistoryEventBase {
+	/** Stable across reads — a client may key rows by it. */
+	id: string;
+	/** ISO-8601. */
+	at: string;
+	/** Who acted, named by the pod. A check is `system` with no name. */
+	actor: ActivityActor;
+	/**
+	 * The step the event belongs to — what it is grouped under. A move and its
+	 * check belong to the step ENTERED; a session or decision to the step it was
+	 * filed at; a status move to the step the track stood on. `null` = no step
+	 * (a stageless method, or a session filed at none).
+	 */
+	stageKey: string | null;
+	refs: TrackHistoryRefs;
+}
+export type TrackHistoryEvent = TrackHistoryEventBase & ({
+	kind: "track_started";
+} | {
+	/** The step left — `null` when the track entered its first step. */
+	fromStage: string | null;
+	kind: "step_moved";
+} | {
+	kind: "session_started";
+	title: string;
+} | {
+	kind: "session_closed";
+	/** The session's settled status (`closed`, `cancelled`, `failed`, …). */
+	sessionStatus: string;
+	title: string;
+	/** Its contract, graded (`computeSessionVerdict`). */
+	verdict: SessionVerdict["state"];
+} | {
+	/** A decision still PENDING — an open ask of a person. */
+	kind: "decision_asked";
+	title: string | null;
+} | {
+	/** `approved` | `rejected` | `reverted` | `approval_failed`. */
+	decision: string;
+	kind: "decision_answered";
+	/** The reviewer's note, when one was left. */
+	note: string | null;
+	title: string | null;
+} | {
+	fromStage: string;
+	/** The entered step's `check` gate measured the step LEFT: met. */
+	kind: "check_passed";
+} | {
+	/** Required criteria / outcomes not met (`CHECK_GATE_UNEVALUATED` = not measured). */
+	failing: string[];
+	fromStage: string;
+	/** …and it was NOT met — the track holds (`Paused · by a check`). */
+	kind: "check_held";
+	reason: string | null;
+} | {
+	kind: "paused";
+} | {
+	kind: "resumed";
+} | {
+	fromStatus: string;
+	/** Any other status move (complete, reopen, archive). */
+	kind: "status_changed";
+	toStatus: string;
+});
+/** The `tracks.history` read. Newest first. */
+export interface TrackHistoryWire {
+	trackId: string;
+	events: TrackHistoryEvent[];
+	/** A source hit its scan cap — older events exist and are not listed. */
+	truncated: boolean;
+}
+/** Doors the event names — each opens that object's own page. */
+export interface DevTimelineRefs {
+	sessionId?: string;
+	proposalId?: string;
+	/** A pull request or a CI run's page. */
+	url?: string;
+}
+export interface DevTimelineEventBase {
+	/** Stable across reads — a client may key rows by it. */
+	id: string;
+	/** When it happened (ISO-8601). */
+	at: string;
+	/** When the pod recorded it, only when later than `at` by 1 s or more. */
+	recordedAt?: string;
+	/** Who acted, named by the pod. A producer's fact is `system`. */
+	actor: ActivityActor;
+	refs: DevTimelineRefs;
+}
+export type DevTimelineEvent = DevTimelineEventBase & ({
+	kind: "session_started";
+	title: string;
+} | {
+	category: LifecycleCategory;
+	from: string | null;
+	/** What a pause waits on and how it resumes; null for any other move. */
+	hold: RecordedHold | null;
+	kind: "status_moved";
+	reason: string | null;
+	/** A thing's ROLE moved (its slug); absent for its own status. */
+	role?: string;
+	to: string;
+} | {
+	/** A merge into the default branch; null when the fact did not say. */
+	intoDefault: boolean | null;
+	kind: "pr_closed" | "pr_merged" | "pr_opened";
+	pr: {
+		number: number;
+		repo: string;
+		title: string | null;
+		url: string;
+	};
+} | {
+	checks: {
+		/** The devbox job (a `devbox <name>` run); null for a CI workflow. */
+		job: string | null;
+		pr: number | null;
+		repo: string;
+		/** null: the run settled nothing (cancelled, skipped, neutral). */
+		result: PullRequestChecks | null;
+		sha: string;
+		status: CiFinishedStatus;
+		workflow: string | null;
+	};
+	kind: "checks_finished";
+} | {
+	kind: "decision_asked";
+	title: string | null;
+} | {
+	/** `approved` | `rejected` | `reverted` | `approval_failed`. */
+	decision: string;
+	kind: "decision_answered";
+	note: string | null;
+	title: string | null;
+});
+declare const TRACK_PARTICIPANT_ROLES: readonly [
+	"owner",
+	"judge",
+	"delegate",
+	"integrator"
+];
+export type TrackParticipantRole = (typeof TRACK_PARTICIPANT_ROLES)[number];
+declare const TRACK_PRINCIPAL_KINDS: readonly [
+	"person",
+	"agent"
+];
+export type TrackPrincipalKind = (typeof TRACK_PRINCIPAL_KINDS)[number];
+declare const TRACK_COMMITMENT_STATES: readonly [
+	"proposed",
+	"accepted",
+	"countered",
+	"declined",
+	"reported_impossible",
+	"done"
+];
+export type TrackCommitmentState = (typeof TRACK_COMMITMENT_STATES)[number];
+/** One participant as every read returns it (`TrackView.participants`). */
+export interface TrackParticipant {
+	id: string;
+	principalKind: TrackPrincipalKind;
+	/** A user id: the person's, or the agent's own user row. */
+	principalId: string;
+	/**
+	 * The name a person reads — resolved by the pod (the session roster's and
+	 * the proposals' `actorDisplayName`: "Claude Code on devbox" for an agent on
+	 * a computer), never looked up by a page. `null` = unknown, never invented.
+	 */
+	displayName: string | null;
+	role: TrackParticipantRole;
+	/** What the delegate commits to — `null` for owner and judge. */
+	commitment: string | null;
+	/** `null` for every role but delegate. */
+	commitmentState: TrackCommitmentState | null;
+	/** The delegate's counter-offer, in words (state `countered`). */
+	counterText: string | null;
+	/** Why it cannot be done (state `reported_impossible`). */
+	reportedReason: string | null;
+	/** ISO-8601 — when it was reported impossible. */
+	reportedAt: string | null;
+	/** ISO-8601 — when the owner or judge acknowledged the report. */
+	acknowledgedAt: string | null;
+	/** Who made the last decision on this row (added it, or answered it). */
+	decidedBy: string;
+	/** ISO-8601. */
+	decidedAt: string;
+	/** ISO-8601 — when the participant was added. */
+	createdAt: string;
+	/**
+	 * ISO-8601 — a delegate with an OPEN commitment: the last time they did
+	 * anything on this goal (answered the commitment, or a session of the goal
+	 * they work in moved), else when they were added. `null` for every other
+	 * row. Words: `trackSilenceLabel` ("Silent 6 h").
+	 */
+	silentSince: string | null;
+}
+/** A session's deliverables, counted — the progress rail and the owed badge. */
+export interface DeliverableCounts {
+	/** Stamped done. */
+	done: number;
+	/** Done + still owed. A RETIRED slot is in neither: it was let go, not delivered. */
+	total: number;
+	/** Still owed, and the person's (`deliverableOwedBy === "you"`). */
+	owedByYou: number;
+}
+/**
+ * One produced item (`SessionOutput` from the pod's three-ledger join).
+ * `expected` is the slot the join matched it to, if any — key and/or label.
+ */
+export interface ProducedItemLike {
+	id: string;
+	expected?: {
+		key?: string | null;
+		label?: string | null;
+	} | null;
+}
+/** How an outcome gets checked — the trust ladder, cheapest first. */
+export type OutcomeVerify = EvaluatorKind;
+/**
+ * WHICH door met an outcome: an approved proposal, the person's attestation,
+ * the pod's evidence verdict, a criterion's `pass` verdict — or `unverified`,
+ * a `done` with no receipt at all (the pre-A3 agent self-mark).
+ */
+export type OutcomeMetBy = "approval" | "attestation" | "evidence" | "unverified" | "verdict";
+/** The CURRENT verdict behind a criterion outcome. */
+export interface OutcomeVerdict {
+	verdict: EvaluationVerdict;
+	evaluatorKind: EvaluatorKind;
+	at: string;
+}
+export interface SessionOutcome<P extends ProducedItemLike = ProducedItemLike> {
+	/** Stable identity: the slot's key, or the criterion's key. */
+	key: string;
+	/** What it is, in words. */
+	label: string;
+	/** Slot kind (`report`, `document`, …), or `"fact"` for a criterion. */
+	kind: string;
+	/** Which store(s) declared it. */
+	source: "criterion" | "slot" | "slot+criterion";
+	/** Who yields it. */
+	owner: "agent" | "human";
+	verify: OutcomeVerify;
+	/** Absent on the criterion = true; a declared slot unless `optional`. */
+	required: boolean;
+	/** Delivered (slot stamped done) or proven (current verdict `pass`). */
+	met: boolean;
+	/** Which door met it; `null` while not met. */
+	metBy: OutcomeMetBy | null;
+	/** Let go when its session was cancelled — neither met nor owed. */
+	retired: boolean;
+	/** THE mark (tone + glyph), from the one derivation. */
+	state: UnitStateView;
+	/** Criterion outcomes only: the current verdict, or null if never checked. */
+	verdict: OutcomeVerdict | null;
+	/** Produced items joined to it (key first, then label). */
+	evidence: P[];
+	stageKey?: string;
+	/** The stored slot's label — what the label-matching slot doors address. */
+	slotLabel?: string;
+	/** Criterion check detail, when it names one. */
+	capability?: string;
+	evidenceKey?: string;
+}
+/** What an input asks the person for. */
+export type SessionInputNeed = 
+/** A playbook param value (`PARAM_SLOT_KIND`). */
+"param"
+/** A pass/fail grade on an escalated criterion (`CRITERION_SLOT_KIND`). */
+ | "grade"
+/** A blocker class (`BLOCKED_REASONS`: decision, credential, …). */
+ | (string & {});
+export interface SessionInput {
+	/** The slot's key. */
+	key: string;
+	label: string;
+	need: SessionInputNeed;
+	/** Still waiting on the person. */
+	open: boolean;
+	/** The person answered it (the agent has it now). */
+	answered: boolean;
+	state: UnitStateView;
+	/** The outcome this blocks — null when it names none it can be traced to. */
+	blocksOutcomeKey: string | null;
+	blockedReason?: string;
+	why?: string;
+	owedSince?: string;
+	/** Opaque: the typed ask, for the surface's ask renderer. */
+	ask?: unknown;
+	paramName?: string;
+	criterionKey?: string;
+	/** The stored slot's label — what the label-matching answer doors address. */
+	slotLabel: string;
+}
+/**
+ * A stage a SESSION entered, read from its stage ledger
+ * (`focus_sessions.stage_history`, 0382; the shape of a goal's `step_moved`).
+ * Only `include: ["history"]` carries it; the timeline does not.
+ */
+export interface StatusOfStageEntered {
+	/** Stable across reads — a client may key rows by it. */
+	id: string;
+	kind: "stage_entered";
+	/** When it entered the stage (ISO-8601). */
+	at: string;
+	/** Who moved it, named by the pod: the agent when one drove it. */
+	actor: ActivityActor;
+	refs: {
+		sessionId: string;
+	};
+	/** The stage entered. */
+	stageKey: string;
+	/** The stage left; `null` when the session stood on none. */
+	fromStage: string | null;
+	/** Which writer recorded it: the stage door, or a re-applied approval. */
+	via: "advance" | "approval";
+}
+/** One entry of `include: ["history"]`. */
+export type StatusOfHistoryEvent = DevTimelineEvent | TrackHistoryEvent | StatusOfStageEntered;
+/** One role a thing wears, with the role's own status (stored on the facet). */
+export interface StatusOfRole {
+	facetId: string;
+	/** The role's slug (`lead`, `client`). */
+	role: string;
+	/** The role's display name. */
+	roleName: string;
+	status: string | null;
+	label: string | null;
+	category: LifecycleCategory | null;
+	tone: UnitTone | null;
+	/** Its CURRENT hold, when the role stands in a paused status under one. */
+	hold?: RecordedHold;
+}
+/**
+ * The account a thing works at (`works_at`), when the reader may read it: its
+ * own status and the roles it wears. A person's stage is read off its account.
+ */
+export interface StatusOfAccount {
+	id: string;
+	name: string | null;
+	status: string | null;
+	label: string | null;
+	category: LifecycleCategory | null;
+	tone: UnitTone | null;
+	roles: StatusOfRole[];
+	link: string;
+}
+/**
+ * `include: ["history"]`: THE timeline, kept to its status events, with a
+ * session's stage ledger merged in by time.
+ */
+export interface StatusOfHistory {
+	/**
+	 * Newest first: a goal's are `TrackHistoryEvent`s, a session's
+	 * `status_moved` and `stage_entered`, a thing's `status_moved`.
+	 */
+	events: StatusOfHistoryEvent[];
+	/** Older events exist and are not listed. */
+	truncated: boolean;
+}
+/** One end of a `serves` edge, as the reader may see it. */
+export interface StatusOfLinkEnd {
+	type: "goal" | "session";
+	id: string;
+	name: string | null;
+	status: string | null;
+	category: LifecycleCategory | null;
+	tone: UnitTone | null;
+	/** The goal criterion a session serves, when the edge names one. */
+	criterionKey?: string;
+}
+/** `include: ["links"]` on a goal or a session: its `serves` edges. */
+export interface StatusOfLinks {
+	/** What it serves (a goal it is done for). */
+	serves: StatusOfLinkEnd[];
+	/** What serves it (its sessions and sub-goals). */
+	servedBy: StatusOfLinkEnd[];
+}
+/** Waits counted per wait kind; a kind with none is left out. */
+export type WaitKindCounts = Partial<Record<WaitKind, number>>;
+/** The numbers a goal's bars are drawn from, for one node of its tree. */
+export interface StatusOfRollupCounts {
+	/** Its work sessions per category, each session once. */
+	byCategory: Partial<Record<LifecycleCategory, number>>;
+	/** Sessions the reaper found quiet (`stale`): nobody is moving them. */
+	stuck: number;
+	/** What its goals and open sessions wait on, per wait kind (the chips). */
+	waits: WaitKindCounts;
+}
+/** A sub-goal (`track --serves--> goal`), rolled up over its own subtree. */
+export interface StatusOfRollupChild extends StatusOfRollupCounts {
+	id: string;
+	name: string | null;
+	status: string | null;
+	category: LifecycleCategory | null;
+	tone: UnitTone | null;
+}
+/**
+ * `include: ["rollup"]` on a goal: the goal and every goal that serves it,
+ * down the tree. A node reached twice counts once; a loop of `serves` edges
+ * (the door refuses them; an old row may hold one) is walked once and named.
+ */
+export interface StatusOfRollup extends StatusOfRollupCounts {
+	/** Goals in the tree the reader may see, this one included. */
+	goals: number;
+	/** Work sessions counted, filed in or serving a goal of the tree. */
+	sessions: number;
+	/** Its direct sub-goals, each over its own subtree. */
+	children: StatusOfRollupChild[];
+	/** The walk met a loop of `serves` edges and cut it. */
+	cycle?: true;
+}
+/** `include: ["signals"]`: a status signal whose episode is still open. */
+export interface StatusOfSignal {
+	signal: StatusSignal;
+	/** The role whose lifecycle raised it; null for the thing's own. */
+	role: string | null;
+	raisedAt: string;
+}
 /**
  * The kind of object on one end of a relation edge.
  *
@@ -3716,6 +5020,32 @@ export interface CatalogSyncStamp {
 	 */
 	retirementsUnreported?: true;
 }
+export interface GrantDraft {
+	/** Permission patterns, `<subject>[.<kind>].<action>`. */
+	readonly permissions: readonly string[];
+	/** null/undefined/[] = any workspace the person can reach. */
+	readonly workspaceIds?: readonly string[] | null;
+	/** null/undefined/[] = no project narrowing. */
+	readonly projectIds?: readonly string[] | null;
+	/** null/undefined/[] = no object pinning. */
+	readonly entityIds?: readonly string[] | null;
+	/** undefined → DEFAULT_KEY_TTL_DAYS; a number → that many days; null → never. */
+	readonly expiresInDays?: number | null;
+	/** What the person calls it ("Portfolio site"); a stored grant may have none. */
+	readonly label?: string | null;
+}
+export interface KeyDraft {
+	/** What the person calls it. Required. */
+	readonly name: string;
+	/** "Where will you keep it?" — stored with the key. */
+	readonly note?: string;
+	/** The template it started from (a built-in id or a stored role's id). */
+	readonly templateId?: string | null;
+	/** Where it is used (`KEY_USES` ids): this decides its scopes. */
+	readonly uses: readonly string[];
+	/** What it may touch, where, and for how long. */
+	readonly grant: GrantDraft;
+}
 /**
  * Apps — a developer's application identity (App Connect v1, 2026-10-06).
  *
@@ -6420,915 +7750,6 @@ export interface PlaybookRunExternalAgent {
 	};
 	startedAt: string;
 }
-declare const EVALUATION_VERDICTS: readonly [
-	"pass",
-	"fail",
-	"unmeasured"
-];
-export type EvaluationVerdict = (typeof EVALUATION_VERDICTS)[number];
-declare const EVALUATOR_KINDS: readonly [
-	"evidence",
-	"capability",
-	"judge",
-	"human"
-];
-export type EvaluatorKind = (typeof EVALUATOR_KINDS)[number];
-export interface SessionVerdict {
-	total: number;
-	passed: number;
-	failed: number;
-	unmeasured: number;
-	/** Required criteria whose current verdict is not `pass`. */
-	requiredUnmet: number;
-	/**
-	 * none       — the session declares no criteria.
-	 * passing    — every required criterion passes.
-	 * failing    — at least one required criterion's current verdict is `fail`.
-	 * incomplete — no required criterion failed, but some are not yet measured.
-	 */
-	state: "failing" | "incomplete" | "none" | "passing";
-}
-declare const CI_FINISHED_STATUSES: readonly [
-	"success",
-	"failure",
-	"cancelled",
-	"skipped",
-	"neutral",
-	"timed_out"
-];
-export type CiFinishedStatus = (typeof CI_FINISHED_STATUSES)[number];
-declare const repoSnapshotEventSchema: z.ZodObject<{
-	live: z.ZodOptional<z.ZodNullable<z.ZodObject<{
-		behindBy: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
-		kind: z.ZodEnum<{
-			desktop: "desktop";
-			image: "image";
-			npm: "npm";
-			pod: "pod";
-			site: "site";
-		}>;
-		label: z.ZodString;
-		sha: z.ZodNullable<z.ZodString>;
-	}, z.core.$strip>>>;
-	main: z.ZodObject<{
-		fixedBy: z.ZodOptional<z.ZodNullable<z.ZodObject<{
-			number: z.ZodNumber;
-			repo: z.ZodString;
-		}, z.core.$strip>>>;
-		health: z.ZodEnum<{
-			infra: "infra";
-			ok: "ok";
-			red: "red";
-			unmeasured: "unmeasured";
-		}>;
-		reason: z.ZodOptional<z.ZodNullable<z.ZodString>>;
-		redSince: z.ZodOptional<z.ZodNullable<z.ZodObject<{
-			at: z.ZodOptional<z.ZodString>;
-			prNumber: z.ZodOptional<z.ZodNumber>;
-			sha: z.ZodString;
-		}, z.core.$strip>>>;
-		sha: z.ZodNullable<z.ZodString>;
-		source: z.ZodEnum<{
-			"devbox-baseline": "devbox-baseline";
-			"github-checks": "github-checks";
-			none: "none";
-		}>;
-	}, z.core.$strip>;
-	mergedToday: z.ZodArray<z.ZodObject<{
-		mergedAt: z.ZodString;
-		number: z.ZodNumber;
-		podSessionId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
-		title: z.ZodString;
-		url: z.ZodString;
-	}, z.core.$strip>>;
-	observedAt: z.ZodString;
-	prs: z.ZodArray<z.ZodObject<{
-		author: z.ZodString;
-		autoMerge: z.ZodBoolean;
-		branch: z.ZodOptional<z.ZodString>;
-		checks: z.ZodEnum<{
-			green: "green";
-			infra: "infra";
-			none: "none";
-			queued: "queued";
-			red: "red";
-			running: "running";
-		}>;
-		dependsOn: z.ZodOptional<z.ZodArray<z.ZodObject<{
-			number: z.ZodNumber;
-			repo: z.ZodString;
-		}, z.core.$strip>>>;
-		draft: z.ZodBoolean;
-		headSha: z.ZodString;
-		mergeable: z.ZodEnum<{
-			blocked: "blocked";
-			clean: "clean";
-			dirty: "dirty";
-			unknown: "unknown";
-		}>;
-		number: z.ZodNumber;
-		podSessionId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
-		redInheritedFromMain: z.ZodOptional<z.ZodBoolean>;
-		title: z.ZodString;
-		updatedAt: z.ZodString;
-		url: z.ZodString;
-	}, z.core.$strip>>;
-	repo: z.ZodString;
-	visibility: z.ZodEnum<{
-		private: "private";
-		public: "public";
-	}>;
-}, z.core.$strip>;
-export type RepoSnapshotFact = z.infer<typeof repoSnapshotEventSchema>;
-declare const PULL_REQUEST_STATES: readonly [
-	"open",
-	"merged",
-	"closed"
-];
-export type PullRequestState = (typeof PULL_REQUEST_STATES)[number];
-declare const PULL_REQUEST_CHECKS: readonly [
-	"passed",
-	"failed"
-];
-export type PullRequestChecks = (typeof PULL_REQUEST_CHECKS)[number];
-/** What the recorded facts say about one PR. */
-export interface PullRequestStateFacts {
-	state: PullRequestState;
-	/** The newest CI result on the PR's newest run sha; absent when none settles it. */
-	checks?: PullRequestChecks;
-	/** The sha `checks` is about — compare it with a newer head before trusting it. */
-	checksOn?: string;
-	/**
-	 * A check on `checksOn` is running: a `ci.started` with no later
-	 * `ci.finished` of its workflow on that sha. `checks` then holds a failure
-	 * already settled, never `passed`. Never `false`.
-	 */
-	checksRunning?: true;
-	/**
-	 * The PR is in its repository's merge queue: open, with a
-	 * `dev.merge_queued` at or after the fact that (re)opened it. Never `false`.
-	 */
-	queued?: true;
-	/**
-	 * A merge into the repository's default branch (the producer said so). Only
-	 * on `merged`; absent when the fact did not say (a stacked PR merged into
-	 * its parent branch is not on main).
-	 */
-	intoDefault?: boolean;
-	/**
-	 * A deploy contains the merge (built from a later commit of the repo, or
-	 * from the merge commit). Never `false`: see the file header.
-	 */
-	deployed?: true;
-	/** When the fact that set `state` happened (ISO). */
-	at: string;
-}
-declare const TRACK_WORK_KINDS: readonly [
-	"project",
-	"flow",
-	"operation",
-	"investigation",
-	"incident",
-	"commission",
-	"pathway"
-];
-export type TrackWorkKind = (typeof TRACK_WORK_KINDS)[number];
-declare const TRACK_UNCERTAINTY_LEVELS: readonly [
-	"clear",
-	"complicated",
-	"complex",
-	"chaotic",
-	"unknown"
-];
-export type TrackUncertainty = (typeof TRACK_UNCERTAINTY_LEVELS)[number];
-declare const CRITERION_CHECK_MEANINGS: readonly [
-	"measured",
-	"judged",
-	"handed_over",
-	"learning",
-	"decided_outside",
-	"certified"
-];
-export type CriterionCheckMeaning = (typeof CRITERION_CHECK_MEANINGS)[number];
-declare const CRITERION_ABOUT: readonly [
-	"result",
-	"method"
-];
-export type CriterionAbout = (typeof CRITERION_ABOUT)[number];
-declare const GOAL_ACCEPTANCE_DECISIONS: readonly [
-	"accepted",
-	"changes_asked",
-	"rejected"
-];
-export type GoalAcceptanceDecision = (typeof GOAL_ACCEPTANCE_DECISIONS)[number];
-declare const GOAL_ACCEPTANCE_STATES: readonly [
-	"waiting",
-	"accepted",
-	"changes_asked",
-	"rejected"
-];
-export type GoalAcceptanceState = (typeof GOAL_ACCEPTANCE_STATES)[number];
-/** The stored record of a judge's decision on one goal criterion. */
-export interface GoalCriterionAcceptance {
-	decision: GoalAcceptanceDecision;
-	/** The person who decided. */
-	by: string;
-	/** ISO-8601. */
-	at: string;
-	/** Why, in words — what to change, or why it was rejected. */
-	note?: string;
-}
-declare const GOAL_CRITERION_MARKS: readonly [
-	"met",
-	"claimed",
-	"under_way",
-	"not_met",
-	"not_started"
-];
-export type GoalCriterionMark = (typeof GOAL_CRITERION_MARKS)[number];
-/**
- * A claim as every goal read returns it (`GoalCriterionView.claim`): who
- * claimed, in which run, and what backs it — names resolved by the pod,
- * never looked up by a page (`null` = not known, never an id).
- */
-export interface GoalCriterionClaim {
-	by: string | null;
-	byName: string | null;
-	sessionId: string;
-	sessionTitle: string | null;
-	/** The evaluation's evidence (links, files, numbers) — `null` when none. */
-	evidence: Record<string, unknown> | null;
-	note: string | null;
-	/** ISO-8601. */
-	at: string;
-}
-/**
- * One goal criterion as every track read returns it (`TrackView.criteria`):
- * the stored criterion (the session criterion shape), the judge's stored
- * decision, and the derived state. `mark` is `null` only on a view that could
- * not read the goal's runs (a write's fallback) — never a guessed
- * `not_started`.
- */
-export interface GoalCriterionView {
-	key: string;
-	statement: string;
-	required?: boolean;
-	check: {
-		capability?: string;
-		evidenceKey?: string;
-		hint?: string;
-		kind: EvaluatorKind;
-	};
-	stageKey?: string;
-	checkKind?: CriterionCheckMeaning;
-	about?: CriterionAbout;
-	/** The judge's stored decision — `null` until one is made. */
-	acceptance: GoalCriterionAcceptance | null;
-	mark: GoalCriterionMark | null;
-	acceptanceState: GoalAcceptanceState | null;
-	meaning: CriterionCheckMeaning;
-	currentValue: string | null;
-	/**
-	 * Who claimed it, in which run, what backs it — the current passing
-	 * evaluation (`null` when none: never claimed, or accepted from an outside
-	 * decision with no run). `undefined` never: a write's fallback reads `null`.
-	 */
-	claim: GoalCriterionClaim | null;
-	/**
-	 * D-6 (founder, 2026-10-26): what backs a criterion — its claim's run title,
-	 * evidence and note, and its `currentValue` — is shown only to the goal's
-	 * OWNER, its JUDGE and whoever may read that run. `true` = there is such
-	 * content and this reader is none of them: those fields read `null`
-	 * ("Evidence visible to the owner and judge"), never an empty claim.
-	 * `false` = nothing withheld. The pod sets it on every derived read; it is
-	 * absent only on a write's fallback view, which read no goal facts
-	 * (`mark: null`).
-	 */
-	evidenceWithheld?: boolean;
-	/**
-	 * WHO WORKS IT: the open sessions that serve this criterion
-	 * (`session --serves--> goal` with `metadata.criterionKey`), only those the
-	 * reader may read, oldest first. Empty = nobody on it. Absent on a write's
-	 * fallback view, which read no goal facts.
-	 */
-	servedBy?: GoalCriterionServer[];
-}
-/** One session serving a criterion, as the goal page names it. */
-export interface GoalCriterionServer {
-	sessionId: string;
-	title: string;
-	status: string;
-}
-declare const OPERATION_PERIOD_MARKS: readonly [
-	"met",
-	"not_met",
-	"unmeasured"
-];
-export type OperationPeriodMark = (typeof OPERATION_PERIOD_MARKS)[number];
-export interface OperationPeriodReading {
-	/** ISO-8601, inclusive. */
-	from: string;
-	/** ISO-8601, exclusive. */
-	to: string;
-	mark: OperationPeriodMark;
-}
-declare const WAITING_ON_REASONS: readonly [
-	"input",
-	"approval",
-	"access",
-	"another_work",
-	"outside_world",
-	"external",
-	"date"
-];
-export type WaitingOnReason = (typeof WAITING_ON_REASONS)[number];
-/**
- * WHAT is waited on: the session, PR, person, decision, proposal, owed slot
- * or thing behind a mark. `label` is words a surface can show; `id` (a pod
- * id) and `url` (an outside page) are doors when present. A slot's `id` is
- * the session that declares it.
- */
-export interface WaitingOnRef {
-	kind: "decision" | "person" | "proposal" | "pull_request" | "session" | "slot" | "thing";
-	id?: string;
-	url?: string;
-	label: string;
-	/**
-	 * What kind of wait it is (`WAIT_KINDS`, `./wait-kind.ts`), from the
-	 * source that named this ref ({@link waitKindOf}). Absent from an older
-	 * pod; a reader must work without it.
-	 */
-	waitKind?: WaitKind;
-}
-export interface WaitingOnMark {
-	reason: WaitingOnReason;
-	count: number;
-	/**
-	 * What is waited on, at most {@link WAITING_ON_REFS_MAX}, in source order.
-	 * Absent when no source named one; a reader must work without it.
-	 */
-	refs?: WaitingOnRef[];
-}
-/** The loop as stored on the goal (`project_tracks.loop`, 0350). */
-export interface GoalLoopSettings {
-	on: boolean;
-	/** Proposals per rolling week, 1 to {@link GOAL_LOOP_MAX_PER_WEEK}. */
-	perWeek: number;
-	/**
-	 * When a person last switched it on (ISO-8601) — failures before it no
-	 * longer count: switching the loop on again is "try again".
-	 */
-	onAt: string | null;
-	/** Who set it last: the person (the approver, for an agent's proposal). */
-	by: string | null;
-}
-declare const GOAL_CONVERTIBLE_KINDS: readonly [
-	"goal",
-	"objective",
-	"okr"
-];
-export type GoalConvertibleKind = (typeof GOAL_CONVERTIBLE_KINDS)[number];
-/** One counted day. `date` is the viewer's calendar day, `YYYY-MM-DD`. */
-export interface ActivityDay {
-	date: string;
-	count: number;
-}
-/** `activity.daily`'s answer. Sparse: a day with no act is absent. */
-export interface ActivityDaily {
-	/** First day of the window (inclusive), `YYYY-MM-DD` in `tz`. */
-	from: string;
-	/** Last day of the window (inclusive) — the viewer's today. */
-	to: string;
-	tz: string;
-	days: ActivityDay[];
-}
-declare const ACTIVITY_OUTCOMES: readonly [
-	"succeeded",
-	"failed",
-	"proposed",
-	"rejected",
-	"reverted",
-	"waiting",
-	"running",
-	"stopped"
-];
-export type ActivityOutcome = (typeof ACTIVITY_OUTCOMES)[number];
-/**
- * WHO acted. An agent is named when the pod could name it (`id: null` = an
- * agent that recorded no attributable identity, never a guess). `system` is a
- * rule acting on its own (an automation run): `id`/`name` name the rule.
- */
-export type ActivityActor = {
-	id: string | null;
-	kind: "agent";
-	name: string | null;
-} | {
-	id: string;
-	isViewer: boolean;
-	kind: "human";
-	name: string | null;
-} | {
-	id: string | null;
-	kind: "system";
-	name: string | null;
-};
-declare const ACTIVITY_SOURCES: readonly [
-	"proposal",
-	"decision",
-	"run",
-	"session"
-];
-export type ActivitySource = (typeof ACTIVITY_SOURCES)[number];
-/**
- * The DOOR a row opens — through the route table (`objectNavTarget(kind, id)`).
- * An applied proposal opens the object it made or changed; one that did not
- * apply opens itself (`kind: "proposal"`), because its object may not exist.
- * A run opens the run (`kind: "run"`, with its `flowType`), a session itself.
- */
-export interface ActivityObjectRef {
-	/** Normalized object kind (`entity`, `document`, `proposal`, `run`, …). */
-	kind: string;
-	id: string;
-	/** What the object is called, when known. */
-	name: string | null;
-	/** An entity's profile slug, for its noun ("Person"), when known. */
-	profileSlug?: string | null;
-	/** A run's ledger (`automation` | `playbook`), for the run route. */
-	flowType?: string | null;
-}
-export interface ActivityRow {
-	/** Stable key, unique across sources: `<source>:<id>`. */
-	id: string;
-	source: ActivitySource;
-	/** When the act happened (ISO). The list is ordered by it, newest first. */
-	occurredAt: string;
-	actor: ActivityActor;
-	/** The vocabulary ACTION token (`create`, `approve`, `run`, `start`, …). */
-	action: string;
-	/** `resolveActionLabel(action, "past")` — "Created", "Approved", "Ran". */
-	verb: string;
-	/**
-	 * The headline. A proposal / decision row carries the proposal's own display
-	 * title (the pod's `proposalDisplaySummary` — the name every proposal door
-	 * leads with); a run its flow's name; a session its title.
-	 */
-	title: string;
-	object: ActivityObjectRef;
-	/** The proposal behind a proposal / decision row. */
-	proposalId: string | null;
-	project: {
-		id: string;
-		name: string | null;
-	} | null;
-	/**
-	 * The session it happened in — the provenance door. `null` when there is
-	 * none, or when the viewer may not read that session (decision D1).
-	 */
-	session: {
-		id: string;
-		title: string;
-	} | null;
-	outcome: ActivityOutcome;
-	/**
-	 * The Undo door — `proposals.revert(proposalId)` — on exactly ONE row per
-	 * revertable proposal: the decision row when a person approved it, the
-	 * proposal row when a rule auto-approved it. Undo reverts the WHOLE
-	 * proposal, so `changeCount` says how far it reaches (`null` = unknown).
-	 */
-	undo: {
-		changeCount: number | null;
-		proposalId: string;
-	} | null;
-	/** A failed run's own error line, when it recorded one. */
-	error: string | null;
-}
-export interface ActivityPage {
-	items: ActivityRow[];
-	/** Pass back as `cursor` for the next (older) page; `null` = no more. */
-	nextCursor: string | null;
-}
-/** Doors the event names — each opens that object's own page. */
-export interface TrackHistoryRefs {
-	sessionId?: string;
-	proposalId?: string;
-}
-export interface TrackHistoryEventBase {
-	/** Stable across reads — a client may key rows by it. */
-	id: string;
-	/** ISO-8601. */
-	at: string;
-	/** Who acted, named by the pod. A check is `system` with no name. */
-	actor: ActivityActor;
-	/**
-	 * The step the event belongs to — what it is grouped under. A move and its
-	 * check belong to the step ENTERED; a session or decision to the step it was
-	 * filed at; a status move to the step the track stood on. `null` = no step
-	 * (a stageless method, or a session filed at none).
-	 */
-	stageKey: string | null;
-	refs: TrackHistoryRefs;
-}
-export type TrackHistoryEvent = TrackHistoryEventBase & ({
-	kind: "track_started";
-} | {
-	/** The step left — `null` when the track entered its first step. */
-	fromStage: string | null;
-	kind: "step_moved";
-} | {
-	kind: "session_started";
-	title: string;
-} | {
-	kind: "session_closed";
-	/** The session's settled status (`closed`, `cancelled`, `failed`, …). */
-	sessionStatus: string;
-	title: string;
-	/** Its contract, graded (`computeSessionVerdict`). */
-	verdict: SessionVerdict["state"];
-} | {
-	/** A decision still PENDING — an open ask of a person. */
-	kind: "decision_asked";
-	title: string | null;
-} | {
-	/** `approved` | `rejected` | `reverted` | `approval_failed`. */
-	decision: string;
-	kind: "decision_answered";
-	/** The reviewer's note, when one was left. */
-	note: string | null;
-	title: string | null;
-} | {
-	fromStage: string;
-	/** The entered step's `check` gate measured the step LEFT: met. */
-	kind: "check_passed";
-} | {
-	/** Required criteria / outcomes not met (`CHECK_GATE_UNEVALUATED` = not measured). */
-	failing: string[];
-	fromStage: string;
-	/** …and it was NOT met — the track holds (`Paused · by a check`). */
-	kind: "check_held";
-	reason: string | null;
-} | {
-	kind: "paused";
-} | {
-	kind: "resumed";
-} | {
-	fromStatus: string;
-	/** Any other status move (complete, reopen, archive). */
-	kind: "status_changed";
-	toStatus: string;
-});
-/** The `tracks.history` read. Newest first. */
-export interface TrackHistoryWire {
-	trackId: string;
-	events: TrackHistoryEvent[];
-	/** A source hit its scan cap — older events exist and are not listed. */
-	truncated: boolean;
-}
-/** Doors the event names — each opens that object's own page. */
-export interface DevTimelineRefs {
-	sessionId?: string;
-	proposalId?: string;
-	/** A pull request or a CI run's page. */
-	url?: string;
-}
-export interface DevTimelineEventBase {
-	/** Stable across reads — a client may key rows by it. */
-	id: string;
-	/** When it happened (ISO-8601). */
-	at: string;
-	/** When the pod recorded it, only when later than `at` by 1 s or more. */
-	recordedAt?: string;
-	/** Who acted, named by the pod. A producer's fact is `system`. */
-	actor: ActivityActor;
-	refs: DevTimelineRefs;
-}
-export type DevTimelineEvent = DevTimelineEventBase & ({
-	kind: "session_started";
-	title: string;
-} | {
-	category: LifecycleCategory;
-	from: string | null;
-	/** What a pause waits on and how it resumes; null for any other move. */
-	hold: RecordedHold | null;
-	kind: "status_moved";
-	reason: string | null;
-	/** A thing's ROLE moved (its slug); absent for its own status. */
-	role?: string;
-	to: string;
-} | {
-	/** A merge into the default branch; null when the fact did not say. */
-	intoDefault: boolean | null;
-	kind: "pr_closed" | "pr_merged" | "pr_opened";
-	pr: {
-		number: number;
-		repo: string;
-		title: string | null;
-		url: string;
-	};
-} | {
-	checks: {
-		/** The devbox job (a `devbox <name>` run); null for a CI workflow. */
-		job: string | null;
-		pr: number | null;
-		repo: string;
-		/** null: the run settled nothing (cancelled, skipped, neutral). */
-		result: PullRequestChecks | null;
-		sha: string;
-		status: CiFinishedStatus;
-		workflow: string | null;
-	};
-	kind: "checks_finished";
-} | {
-	kind: "decision_asked";
-	title: string | null;
-} | {
-	/** `approved` | `rejected` | `reverted` | `approval_failed`. */
-	decision: string;
-	kind: "decision_answered";
-	note: string | null;
-	title: string | null;
-});
-declare const TRACK_PARTICIPANT_ROLES: readonly [
-	"owner",
-	"judge",
-	"delegate",
-	"integrator"
-];
-export type TrackParticipantRole = (typeof TRACK_PARTICIPANT_ROLES)[number];
-declare const TRACK_PRINCIPAL_KINDS: readonly [
-	"person",
-	"agent"
-];
-export type TrackPrincipalKind = (typeof TRACK_PRINCIPAL_KINDS)[number];
-declare const TRACK_COMMITMENT_STATES: readonly [
-	"proposed",
-	"accepted",
-	"countered",
-	"declined",
-	"reported_impossible",
-	"done"
-];
-export type TrackCommitmentState = (typeof TRACK_COMMITMENT_STATES)[number];
-/** One participant as every read returns it (`TrackView.participants`). */
-export interface TrackParticipant {
-	id: string;
-	principalKind: TrackPrincipalKind;
-	/** A user id: the person's, or the agent's own user row. */
-	principalId: string;
-	/**
-	 * The name a person reads — resolved by the pod (the session roster's and
-	 * the proposals' `actorDisplayName`: "Claude Code on devbox" for an agent on
-	 * a computer), never looked up by a page. `null` = unknown, never invented.
-	 */
-	displayName: string | null;
-	role: TrackParticipantRole;
-	/** What the delegate commits to — `null` for owner and judge. */
-	commitment: string | null;
-	/** `null` for every role but delegate. */
-	commitmentState: TrackCommitmentState | null;
-	/** The delegate's counter-offer, in words (state `countered`). */
-	counterText: string | null;
-	/** Why it cannot be done (state `reported_impossible`). */
-	reportedReason: string | null;
-	/** ISO-8601 — when it was reported impossible. */
-	reportedAt: string | null;
-	/** ISO-8601 — when the owner or judge acknowledged the report. */
-	acknowledgedAt: string | null;
-	/** Who made the last decision on this row (added it, or answered it). */
-	decidedBy: string;
-	/** ISO-8601. */
-	decidedAt: string;
-	/** ISO-8601 — when the participant was added. */
-	createdAt: string;
-	/**
-	 * ISO-8601 — a delegate with an OPEN commitment: the last time they did
-	 * anything on this goal (answered the commitment, or a session of the goal
-	 * they work in moved), else when they were added. `null` for every other
-	 * row. Words: `trackSilenceLabel` ("Silent 6 h").
-	 */
-	silentSince: string | null;
-}
-/** A session's deliverables, counted — the progress rail and the owed badge. */
-export interface DeliverableCounts {
-	/** Stamped done. */
-	done: number;
-	/** Done + still owed. A RETIRED slot is in neither: it was let go, not delivered. */
-	total: number;
-	/** Still owed, and the person's (`deliverableOwedBy === "you"`). */
-	owedByYou: number;
-}
-/**
- * One produced item (`SessionOutput` from the pod's three-ledger join).
- * `expected` is the slot the join matched it to, if any — key and/or label.
- */
-export interface ProducedItemLike {
-	id: string;
-	expected?: {
-		key?: string | null;
-		label?: string | null;
-	} | null;
-}
-/** How an outcome gets checked — the trust ladder, cheapest first. */
-export type OutcomeVerify = EvaluatorKind;
-/**
- * WHICH door met an outcome: an approved proposal, the person's attestation,
- * the pod's evidence verdict, a criterion's `pass` verdict — or `unverified`,
- * a `done` with no receipt at all (the pre-A3 agent self-mark).
- */
-export type OutcomeMetBy = "approval" | "attestation" | "evidence" | "unverified" | "verdict";
-/** The CURRENT verdict behind a criterion outcome. */
-export interface OutcomeVerdict {
-	verdict: EvaluationVerdict;
-	evaluatorKind: EvaluatorKind;
-	at: string;
-}
-export interface SessionOutcome<P extends ProducedItemLike = ProducedItemLike> {
-	/** Stable identity: the slot's key, or the criterion's key. */
-	key: string;
-	/** What it is, in words. */
-	label: string;
-	/** Slot kind (`report`, `document`, …), or `"fact"` for a criterion. */
-	kind: string;
-	/** Which store(s) declared it. */
-	source: "criterion" | "slot" | "slot+criterion";
-	/** Who yields it. */
-	owner: "agent" | "human";
-	verify: OutcomeVerify;
-	/** Absent on the criterion = true; a declared slot unless `optional`. */
-	required: boolean;
-	/** Delivered (slot stamped done) or proven (current verdict `pass`). */
-	met: boolean;
-	/** Which door met it; `null` while not met. */
-	metBy: OutcomeMetBy | null;
-	/** Let go when its session was cancelled — neither met nor owed. */
-	retired: boolean;
-	/** THE mark (tone + glyph), from the one derivation. */
-	state: UnitStateView;
-	/** Criterion outcomes only: the current verdict, or null if never checked. */
-	verdict: OutcomeVerdict | null;
-	/** Produced items joined to it (key first, then label). */
-	evidence: P[];
-	stageKey?: string;
-	/** The stored slot's label — what the label-matching slot doors address. */
-	slotLabel?: string;
-	/** Criterion check detail, when it names one. */
-	capability?: string;
-	evidenceKey?: string;
-}
-/** What an input asks the person for. */
-export type SessionInputNeed = 
-/** A playbook param value (`PARAM_SLOT_KIND`). */
-"param"
-/** A pass/fail grade on an escalated criterion (`CRITERION_SLOT_KIND`). */
- | "grade"
-/** A blocker class (`BLOCKED_REASONS`: decision, credential, …). */
- | (string & {});
-export interface SessionInput {
-	/** The slot's key. */
-	key: string;
-	label: string;
-	need: SessionInputNeed;
-	/** Still waiting on the person. */
-	open: boolean;
-	/** The person answered it (the agent has it now). */
-	answered: boolean;
-	state: UnitStateView;
-	/** The outcome this blocks — null when it names none it can be traced to. */
-	blocksOutcomeKey: string | null;
-	blockedReason?: string;
-	why?: string;
-	owedSince?: string;
-	/** Opaque: the typed ask, for the surface's ask renderer. */
-	ask?: unknown;
-	paramName?: string;
-	criterionKey?: string;
-	/** The stored slot's label — what the label-matching answer doors address. */
-	slotLabel: string;
-}
-/**
- * A stage a SESSION entered, read from its stage ledger
- * (`focus_sessions.stage_history`, 0382; the shape of a goal's `step_moved`).
- * Only `include: ["history"]` carries it; the timeline does not.
- */
-export interface StatusOfStageEntered {
-	/** Stable across reads — a client may key rows by it. */
-	id: string;
-	kind: "stage_entered";
-	/** When it entered the stage (ISO-8601). */
-	at: string;
-	/** Who moved it, named by the pod: the agent when one drove it. */
-	actor: ActivityActor;
-	refs: {
-		sessionId: string;
-	};
-	/** The stage entered. */
-	stageKey: string;
-	/** The stage left; `null` when the session stood on none. */
-	fromStage: string | null;
-	/** Which writer recorded it: the stage door, or a re-applied approval. */
-	via: "advance" | "approval";
-}
-/** One entry of `include: ["history"]`. */
-export type StatusOfHistoryEvent = DevTimelineEvent | TrackHistoryEvent | StatusOfStageEntered;
-/** One role a thing wears, with the role's own status (stored on the facet). */
-export interface StatusOfRole {
-	facetId: string;
-	/** The role's slug (`lead`, `client`). */
-	role: string;
-	/** The role's display name. */
-	roleName: string;
-	status: string | null;
-	label: string | null;
-	category: LifecycleCategory | null;
-	tone: UnitTone | null;
-	/** Its CURRENT hold, when the role stands in a paused status under one. */
-	hold?: RecordedHold;
-}
-/**
- * The account a thing works at (`works_at`), when the reader may read it: its
- * own status and the roles it wears. A person's stage is read off its account.
- */
-export interface StatusOfAccount {
-	id: string;
-	name: string | null;
-	status: string | null;
-	label: string | null;
-	category: LifecycleCategory | null;
-	tone: UnitTone | null;
-	roles: StatusOfRole[];
-	link: string;
-}
-/**
- * `include: ["history"]`: THE timeline, kept to its status events, with a
- * session's stage ledger merged in by time.
- */
-export interface StatusOfHistory {
-	/**
-	 * Newest first: a goal's are `TrackHistoryEvent`s, a session's
-	 * `status_moved` and `stage_entered`, a thing's `status_moved`.
-	 */
-	events: StatusOfHistoryEvent[];
-	/** Older events exist and are not listed. */
-	truncated: boolean;
-}
-/** One end of a `serves` edge, as the reader may see it. */
-export interface StatusOfLinkEnd {
-	type: "goal" | "session";
-	id: string;
-	name: string | null;
-	status: string | null;
-	category: LifecycleCategory | null;
-	tone: UnitTone | null;
-	/** The goal criterion a session serves, when the edge names one. */
-	criterionKey?: string;
-}
-/** `include: ["links"]` on a goal or a session: its `serves` edges. */
-export interface StatusOfLinks {
-	/** What it serves (a goal it is done for). */
-	serves: StatusOfLinkEnd[];
-	/** What serves it (its sessions and sub-goals). */
-	servedBy: StatusOfLinkEnd[];
-}
-/** Waits counted per wait kind; a kind with none is left out. */
-export type WaitKindCounts = Partial<Record<WaitKind, number>>;
-/** The numbers a goal's bars are drawn from, for one node of its tree. */
-export interface StatusOfRollupCounts {
-	/** Its work sessions per category, each session once. */
-	byCategory: Partial<Record<LifecycleCategory, number>>;
-	/** Sessions the reaper found quiet (`stale`): nobody is moving them. */
-	stuck: number;
-	/** What its goals and open sessions wait on, per wait kind (the chips). */
-	waits: WaitKindCounts;
-}
-/** A sub-goal (`track --serves--> goal`), rolled up over its own subtree. */
-export interface StatusOfRollupChild extends StatusOfRollupCounts {
-	id: string;
-	name: string | null;
-	status: string | null;
-	category: LifecycleCategory | null;
-	tone: UnitTone | null;
-}
-/**
- * `include: ["rollup"]` on a goal: the goal and every goal that serves it,
- * down the tree. A node reached twice counts once; a loop of `serves` edges
- * (the door refuses them; an old row may hold one) is walked once and named.
- */
-export interface StatusOfRollup extends StatusOfRollupCounts {
-	/** Goals in the tree the reader may see, this one included. */
-	goals: number;
-	/** Work sessions counted, filed in or serving a goal of the tree. */
-	sessions: number;
-	/** Its direct sub-goals, each over its own subtree. */
-	children: StatusOfRollupChild[];
-	/** The walk met a loop of `serves` edges and cut it. */
-	cycle?: true;
-}
-/** `include: ["signals"]`: a status signal whose episode is still open. */
-export interface StatusOfSignal {
-	signal: StatusSignal;
-	/** The role whose lifecycle raised it; null for the thing's own. */
-	role: string | null;
-	raisedAt: string;
-}
 /**
  * `@synap-core/types/renderer-ref` — what a profile or workspace stores as its
  * renderer choice for a (content kind, profile) pair, and the bounded block
@@ -7765,39 +8186,6 @@ declare const OBJECT_ROOM_CONTEXT_TYPES: readonly [
 	"entity"
 ];
 export type ObjectRoomType = (typeof OBJECT_ROOM_CONTEXT_TYPES)[number];
-export interface GrantDraft {
-	/** Permission patterns, `<subject>[.<kind>].<action>`. */
-	readonly permissions: readonly string[];
-	/** null/undefined/[] = any workspace the person can reach. */
-	readonly workspaceIds?: readonly string[] | null;
-	/** null/undefined/[] = no project narrowing. */
-	readonly projectIds?: readonly string[] | null;
-	/** null/undefined/[] = no object pinning. */
-	readonly entityIds?: readonly string[] | null;
-	/** undefined → DEFAULT_KEY_TTL_DAYS; a number → that many days; null → never. */
-	readonly expiresInDays?: number | null;
-	/** What the person calls it ("Portfolio site"); a stored grant may have none. */
-	readonly label?: string | null;
-}
-export interface KeyDraft {
-	/** What the person calls it. Required. */
-	readonly name: string;
-	/** "Where will you keep it?" — stored with the key. */
-	readonly note?: string;
-	/** The template it started from (a built-in id or a stored role's id). */
-	readonly templateId?: string | null;
-	/** Where it is used (`KEY_USES` ids): this decides its scopes. */
-	readonly uses: readonly string[];
-	/** What it may touch, where, and for how long. */
-	readonly grant: GrantDraft;
-}
-declare const RUNNER_STATES: readonly [
-	"busy",
-	"idle",
-	"needs_permission",
-	"ended"
-];
-export type RunnerState = (typeof RUNNER_STATES)[number];
 /**
  * What a key may touch, as a key list shows it:
  *   - `ungranted` — it never had a grant: it may touch NOTHING (P5);
@@ -7955,147 +8343,6 @@ export interface WorkspacePreflightReport {
 }
 export type PackageDependencyKind = "automation" | "capability" | "cell" | "skill" | "view" | "workflow" | "workspace";
 export type PackageDependencyRelation = "compose" | "require";
-/**
- * Why a handed-over secret came with no read for the agent.
- *   `agent_unknown`  — the pod cannot tell which agent asked.
- *   `not_grantable`  — a legacy client-encrypted secret the pod cannot read.
- *   `key_not_allowed` — the key that answered may not grant vault access.
- *   `agent_changed`  — the agent asking now is not the one the person was
- *                      shown (`expectedGranteeId` on the answer).
- */
-export type ProvideSecretGrantRefusal = "agent_changed" | "agent_unknown" | "key_not_allowed" | "not_grantable";
-/** What a secret answer did about the asking agent's access to it. */
-export type ProvideSecretGrant = {
-	agentName: string;
-	agentUserId: string;
-	/** ISO; `null` when an existing grant with no end already covered it. */
-	expiresAt: string | null;
-	status: "granted";
-} | {
-	reason: ProvideSecretGrantRefusal;
-	status: "refused";
-}
-/** The read could not be written; the hand-over stands. */
- | {
-	status: "failed";
-};
-/**
- * What `provideOptions` says a secret hand-over WILL do, before the person
- * presses: the agent it will grant a read to, or why none will be granted.
- */
-export type ProvideSecretGrantOffer = {
-	agentName: string;
-	/** Sent back on the answer as `expectedGranteeId`. */
-	agentUserId: string;
-	minutes: number;
-	status: "will_grant";
-} | {
-	reason: ProvideSecretGrantRefusal;
-	status: "no_grant";
-};
-/** Why a new connection can't be started from this pod. */
-export type ProvideConnectUnavailableReason = "no_broker" | "not_offered" | "unreadable";
-declare const SECRET_TYPES: readonly [
-	"password",
-	"api_key",
-	"credential",
-	"note",
-	"card",
-	"identity",
-	"ssh_key",
-	"certificate",
-	"env_variable",
-	"database",
-	"oauth"
-];
-export type SecretType = (typeof SECRET_TYPES)[number];
-/** Kind of thing that consumes/uses a secret. */
-export type SecretConsumerType = "automation" | "capability" | "connection" | "entity" | "tool" | "url";
-/**
- * One "this secret is used by X" record — surfaced in the Connections face.
- * Backed by the `secret_usages` join (falls back to `capability_id`/context).
- */
-export interface SecretUsage {
-	id: string;
-	secretId: string;
-	consumerType: SecretConsumerType;
-	consumerId: string;
-	consumerLabel: string;
-	contextType?: string | null;
-	contextId?: string | null;
-	workspaceId?: string | null;
-}
-/**
- * A single grant of access to a secret (which agent/workspace can use it) —
- * surfaced in the Access face. Backed by `vault_grants`. This is the ONE
- * canonical shape: `listGrants`, `listAllGrants`, and `getDetailBundle.grants`
- * all return it. `secretName`/`secretType`/`granteeLabel`/`granteeType` are
- * only populated by `listAllGrants` (which spans multiple secrets and resolves
- * grantee identity); they are `null` from the per-secret endpoints.
- */
-export interface SecretGrantView {
-	grantId: string;
-	grantedTo: string;
-	scope: string;
-	expiresAt?: string | null;
-	/** Uses remaining: null = unlimited; clamped at 0 when exhausted. */
-	usesRemaining?: number | null;
-	workspaceId?: string | null;
-	revokedAt?: string | null;
-	/** True when not revoked, not expired, and uses remain. */
-	active: boolean;
-	/** Populated by `listAllGrants` only; null elsewhere. */
-	secretName?: string | null;
-	secretType?: SecretType | null;
-	granteeLabel?: string | null;
-	granteeType?: "agent" | "user" | "workspace" | null;
-}
-/**
- * A single audit event for a secret (created/revealed/copied/updated/shared) —
- * surfaced in the Activity face. Backed by `secret_audit_log`.
- */
-export interface SecretActivityEvent {
-	id: string;
-	action: string;
-	actorType: "agent" | "user";
-	actorLabel?: string | null;
-	createdAt: string;
-}
-/**
- * The full four-faces bundle for a secret detail view — identity metadata plus
- * where it is used, who can access it, and its recent activity. Fetched in one
- * call to reduce detail round-trips.
- */
-export interface SecretDetailBundle {
-	id: string;
-	name: string;
-	type: SecretType;
-	category?: string | null;
-	url?: string | null;
-	description?: string | null;
-	isFavorite: boolean;
-	createdAt: string;
-	updatedAt: string;
-	usages: SecretUsage[];
-	grants: SecretGrantView[];
-	recentActivity: SecretActivityEvent[];
-}
-declare const AskCauseSchema: z.ZodObject<{
-	at: z.ZodOptional<z.ZodString>;
-	kind: z.ZodEnum<{
-		criterion: "criterion";
-		decision: "decision";
-		external_approval: "external_approval";
-		gate: "gate";
-		param: "param";
-		run: "run";
-	}>;
-	ref: z.ZodOptional<z.ZodObject<{
-		id: z.ZodString;
-		kind: z.ZodString;
-	}, z.core.$strip>>;
-}, z.core.$strip>;
-export type AskCause = z.infer<typeof AskCauseSchema>;
 export type RecordSessionSpawnResult = {
 	linked: true;
 	suspendedIntentRecorded: boolean;
@@ -10532,62 +10779,6 @@ export type UndoPromoteToBodyRefusal = (typeof UNDO_PROMOTE_TO_BODY_REFUSALS)[nu
  * the caller sent). Absent when the refusal is not a validation one.
  */
 export type FieldErrors = Record<string, string[]>;
-declare enum AgentType {
-	DEFAULT = "default",
-	META = "meta",
-	PROMPTING = "prompting",
-	KNOWLEDGE_SEARCH = "knowledge-search",
-	CODE = "code",
-	WRITING = "writing",
-	ACTION = "action",
-	ONBOARDING = "onboarding",
-	WORKSPACE_CREATION = "workspace-creation"
-}
-/**
- * Agent type as string literal union (for flexibility)
- */
-export type AgentTypeString = `${AgentType}` | (string & {});
-declare enum AIStepType {
-	THINKING = "thinking",
-	TOOL_CALL = "tool_call",
-	TOOL_RESULT = "tool_result",
-	DECISION = "decision",
-	ERROR = "error"
-}
-/**
- * AI step - shows what the AI is doing
- *
- * Represents any step in the AI's reasoning/execution process:
- * - thinking: General analysis and reasoning
- * - tool_call: When AI calls a tool
- * - tool_result: Result from tool execution
- * - decision: AI making a decision
- * - error: Error during processing
- */
-export interface AIStep {
-	id: string;
-	type: AIStepType | string;
-	content: string;
-	toolName?: string;
-	toolInput?: unknown;
-	toolOutput?: unknown;
-	timestamp: string;
-	duration?: number;
-	error?: string;
-	title?: string;
-	description?: string;
-	status?: "complete" | "error" | "pending" | "running";
-}
-/**
- * Branch decision from meta-agent
- */
-export interface BranchDecision {
-	shouldBranch: boolean;
-	reason: string;
-	suggestedAgentType?: AgentTypeString;
-	suggestedTitle?: string;
-	suggestedPurpose?: string;
-}
 declare enum MessageLinkTargetType {
 	ENTITY = "entity",
 	DOCUMENT = "document",
@@ -11515,200 +11706,6 @@ export interface StructureFailure {
 	status?: number;
 	failure?: unknown;
 	message?: string;
-}
-/**
- *   `expires`          — an ephemeral ask with a lifetime: lapses at
- *                        `expiresAt`. `orSessionEnd` when it is bound to a
- *                        session too: closing the session retires it as well,
- *                        so it goes at the EARLIER of the two.
- *   `dies_with_session` — a session-bound draft: retired when its session ends.
- *   `review_later`     — objectWork untouched for 7 days: out of the headline
- *                        count, kept in the Review later pile `since` then.
- *   `until_decided`    — waits for a decision, with no deadline.
- */
-export type ProposalFate = {
-	expiresAt: string;
-	kind: "expires";
-	orSessionEnd: boolean;
-} | {
-	kind: "dies_with_session";
-} | {
-	kind: "until_decided";
-} | {
-	kind: "review_later";
-	since: string;
-};
-declare const PROPOSAL_WAIT_REASONS: readonly [
-	"gate",
-	"owed_slot",
-	"parked_run"
-];
-export type ProposalWaitReason = (typeof PROPOSAL_WAIT_REASONS)[number];
-export interface ProposalWaits {
-	waits: boolean;
-	/** Present only when `waits`. */
-	reason?: ProposalWaitReason;
-}
-declare const NEEDS_YOU_SLOT_CLASSES: readonly [
-	"needs_you",
-	"from_system",
-	"stopped",
-	"working",
-	"review_later"
-];
-export type NeedsYouSlotClass = (typeof NEEDS_YOU_SLOT_CLASSES)[number];
-declare const NEEDS_YOU_PROPOSAL_CLASSES: readonly [
-	"needs_you",
-	"working",
-	"review_later",
-	"changes_to_review"
-];
-export type NeedsYouProposalClass = (typeof NEEDS_YOU_PROPOSAL_CLASSES)[number];
-/** Every class a row can carry — one vocabulary across slots and proposals. */
-export type NeedsYouClass = NeedsYouSlotClass | NeedsYouProposalClass;
-declare const NEEDS_YOU_FOLDS: readonly [
-	"working",
-	"stopped",
-	"review_later",
-	"from_system",
-	"changes_to_review"
-];
-export type NeedsYouFold = (typeof NEEDS_YOU_FOLDS)[number];
-/** The headline and every fold, counted over the SAME rows a list draws. */
-export interface NeedsYouFoldCounts {
-	/** The headline: rows that really need the person. */
-	needsYou: number;
-	working: number;
-	/** Stopped rows… */
-	stopped: number;
-	/** …on this many sessions (Stopped draws one row per session). */
-	stoppedSessions: number;
-	reviewLater: number;
-	fromSystem: number;
-	changesToReview: number;
-}
-/**
- * WHO is asking for access, on an `access-request` row — a pod-level request
- * that is not a proposal: an external service asking to be a TRUSTED ISSUER
- * (it would sign identity tokens this pod accepts), or an APPLICATION asking
- * that its browser origin may call this pod. Pod admins only; the pod reads
- * them from their own tables (`trusted_issuers`, application connection
- * requests), so they need no notification to exist.
- *
- * Carried on the row because they are two of the trust signals a reviewer
- * decides on — the asker's name and where it asks from — and a tray must be
- * able to say them without a second read.
- */
-export interface NeedsYouAccessRequest {
-	/**
-	 * What would be granted: issuer trust, an application's browser origin, or
-	 * an API key one of the person's computers asked them for (`api_key`, read
-	 * for its person, not only for admins; decision 68d37853, answer 25).
-	 * `capability`: one of the person's OWN tool connections broke (every
-	 * connection of that tool needs a sign-in again, `secrets.connection_state
-	 * = 'needs_reauth'`); the ask is to reconnect it, read for its person.
-	 */
-	subject: "api_key" | "application" | "capability" | "issuer";
-	/** The asker's display name (the issuer's host, the app's name; a key's requested name; the broken tool's name). */
-	name: string;
-	/** Where it asks from: the issuer URL, the app's requested origin, the computer asking for a key; "" for a broken connection. */
-	from: string;
-}
-/**
- * An invite to ANOTHER space of this pod, addressed to the viewer's email, on
- * a `space-invite` row (founder, wave PQ 2026-10-22): joined IN the app, with
- * Accept on the row and Decline beside it. Read from the pod's own `invites`
- * table for this person only, so it needs no notification to exist.
- *
- * `token` is what `workspaces.acceptInvite` takes (the same value
- * `workspaces.listMyInvites` already hands this person); `id` is what
- * `workspaces.rejectInvite` takes.
- */
-export interface NeedsYouInvite {
-	id: string;
-	token: string;
-	/** The role the invite grants (`editor`, `viewer`, …). */
-	role: string;
-	/** `workspace` = one space; `pod` = every space of the pod. */
-	scope: "pod" | "workspace";
-	/** The space's name; null for a pod-wide invite or an unnamed space. */
-	spaceName: string | null;
-}
-/**
- * One entity of a retired goal kind (Life OS `goal`, Enterprise `objective`,
- * Project Management `okr`) that was never made a goal, on the
- * `convertible-goals` card (founder decision D-3, 2026-10-26).
- */
-export interface NeedsYouConvertibleGoal {
-	entityId: string;
-	/** The entity's title; null when it has none (the host names its kind). */
-	title: string | null;
-	kind: GoalConvertibleKind;
-	/** The space it lives in; null for a pod-wide entity or an unnamed space. */
-	spaceName: string | null;
-	/**
-	 * The projects it is filed in that the viewer can see (`belongs_to_project`)
-	 * — where its goal lands by default, as "Make it a goal" does.
-	 */
-	projectIds: string[];
-}
-/**
- * The pod's ONE "Make them goals" card (founder decision D-3, 2026-10-26): the
- * entities of a retired goal kind the viewer can read that were never made a
- * goal (no `promoted_to` edge to a track). The person reviews them and makes
- * them goals, each through the one convert door; nothing converts on its own.
- */
-export interface NeedsYouConvertibleGoals {
-	/** Newest first, at most the pod's scan cap. */
-	entities: NeedsYouConvertibleGoal[];
-	/** The scan hit its cap: there are more than `entities.length`. */
-	truncated: boolean;
-}
-/**
- * CONNECTION EVENT LINES — the ONE rule that turns a connection's lifecycle
- * event into a human line.
- *
- * `parseRecordChange` reads the CRUD half of the events log ("Created person").
- * Everything a connection does that is NOT a record change — a key revoked or
- * replaced, an app asking for access, a sync, a sign-in that expired, a
- * messaging account connected, a message arriving, a webhook delivery, a
- * session or track moving — is read HERE, so no surface hand-writes those
- * words. Every word goes through the vocabulary (`resolveActionLabel` past
- * mood, `resolveObjectNoun`, `resolveConnectionStateLabel`) and the service
- * names through `resolveServiceName`; this module only arranges them.
- *
- * Input is the event's `type` (`${subjectType}.${action}.completed`, or the
- * two-segment connector form) and, when the reader has it, its `data`. Every
- * line reads without `data` too (a surface that only holds the type still
- * gets words); `data` adds the name and the detail.
- *
- * Null = not a connection lifecycle event (a record change, an unknown
- * family, a governance phase, or an in-flight sync tick that is not a fact).
- */
-/** One lifecycle event, as a line. */
-export interface ConnectionEventLine {
-	/** Vocabulary action token (`revoke`, `sync`, `receive`, …). */
-	action: string;
-	/** Vocabulary object kind (`apiKey`, `app`, `messaging_account`, …). */
-	objectKind: string;
-	/**
-	 * The thing's own name when the event carries one — a key's name, the
-	 * service ("WhatsApp"), the sender, the stage. Already words.
-	 */
-	name: string | null;
-	/** A short trailing fact ("42 new"), or a message preview. Already words. */
-	detail: string | null;
-	/** The act failed (a failed sync or delivery, an expired sign-in). */
-	failed: boolean;
-	/** The whole line, composed: "Synced Gmail · 42 new". */
-	text: string;
-}
-/** An object-nav address (the `Signal.target` shape). The host routes it. */
-export interface LensDoor {
-	kind: string;
-	id: string;
-	/** Optional view reading (`room`), from `OBJECT_NAV_VIEWS`. */
-	view?: string;
 }
 declare const AI_FAILURE_CODES: readonly [
 	"provider_no_credit",
@@ -15684,7 +15681,7 @@ export interface AppSignInDescription {
 	 * was SHOWN.
 	 */
 	fingerprint: string;
-	/** "<App> will act as you in: Sales, Content." */
+	/** "<App> will act as you in: Sales, Content." + its pod-wide reads: "Read Decisions, everywhere in your pod." */
 	headline: string;
 	spaces: AppSignInSpace[];
 	/** "It cannot delete, manage keys, approve outside these spaces, or see anything outside what a member of these spaces sees." */
@@ -16587,6 +16584,48 @@ export interface SessionOutputsWithOutcomes extends SessionOutputsResult {
 		total: number;
 	};
 }
+export type PacketMuted = {
+	muted: boolean;
+	status: "ok";
+} | {
+	reason: string;
+	status: "unavailable";
+};
+/** One gate of a devbox job, as the devbox posted it (`{id, status}`). */
+export interface PacketDevboxGate {
+	/** The gate's name (`app-file`, `be-types`, …). */
+	id: string;
+	/** The devbox's own word for its result (`green`, `red`, `INFRA`, …). */
+	status: string;
+}
+/** A devbox gate job of this session: its NEWEST run. */
+export interface PacketDevboxJobItem {
+	/** The job name (`devbox <name>` workflow). */
+	job: string;
+	repo: string;
+	/** The commit the job checked, as posted (may be abbreviated). */
+	sha: string;
+	/** The run's status (`success`, `failure`, `cancelled`, …). */
+	status: string;
+	/** THE verdict (`ciVerdictOf`): null when the run settled nothing (cancelled, skipped). */
+	verdict: "failed" | "passed" | null;
+	/** The job's gates with their results; [] when the devbox posted none. */
+	gates: PacketDevboxGate[];
+	/** The run's page, when the devbox gave one; null otherwise (never a guess). */
+	url: string | null;
+	/** When the pod heard the run ended (ISO). */
+	at: string;
+	/** Runs of this job name among the runs read (≥ 1). */
+	runs: number;
+}
+export type PacketDevboxJobsSection = {
+	items: PacketDevboxJobItem[];
+	status: "ok";
+	total: number;
+} | {
+	reason: string;
+	status: "unavailable";
+};
 export interface SessionExternalAgent {
 	runId: string;
 	/** The run's own lifecycle (`running`, `failed`, `cancelled`, `proposed`, …). */
@@ -16745,103 +16784,6 @@ export type PacketGatesSection = {
 	 * any of these covers.
 	 */
 	ownerDeploys: PacketDeployApproval[];
-	status: "ok";
-} | {
-	reason: string;
-	status: "unavailable";
-};
-/** One other live copy of the same conversation (0373). */
-export interface TwinCopy {
-	/** The copy's `X-Synap-Process` value — what a client compares to its own. */
-	processId: string;
-	host: string | null;
-	startedAt: string | null;
-	lastSeenAt: string;
-}
-export interface SessionRunner {
-	harness: string;
-	conversationId: string;
-	cwd: string | null;
-	agentUserId: string | null;
-	/** The computer hosting the agent (`users.id` of a `machine` agent user). */
-	machineUserId: string | null;
-	/** The OS process holding the wait (`<host>:<pid>:<startedAtMs>`); '' when its client named none. */
-	processId: string;
-	/** That process's host and start time, as it named itself. */
-	processHost: string | null;
-	processStartedAt: string | null;
-	/**
-	 * The OTHER live copies of this conversation on this session (never this
-	 * row); empty when there is no twin. Only rows that named a process count.
-	 */
-	twin: TwinCopy[];
-	/**
-	 * What it says it is doing (0384). `ended` when it said so, or when it left
-	 * the live window; `null` while live = its client names no state (unknown).
-	 */
-	state: RunnerState | null;
-	/** When it entered that state (for a runner gone quiet: when it was last seen). */
-	stateSince: string | null;
-	firstSeenAt: string;
-	lastSeenAt: string;
-	/** Stamped within {@link RUNNER_LIVE_WINDOW_SECONDS} of `now`, and not `ended`. */
-	live: boolean;
-	/** The reopen door (`claude --resume …`), or null for a harness we cannot reopen. */
-	conversation: AgentConversationRef | null;
-}
-/** The agent on a session, named in the one attribution order (S10). */
-export interface HolderAgent {
-	agentUserId: string;
-	name: string | null;
-	/** "Claude Code on devbox" (its host) or "Claude Code, last seen on MacBook" (a key label). */
-	displayName: string;
-	agentType: string | null;
-	/** Its computer: the host machine, else the label of the key it was last seen on. */
-	computer: {
-		/** The machine's own principal; `null` when it is only a key label. */
-		agentUserId: string | null;
-		name: string;
-		source: "host" | "key";
-	} | null;
-	reach: AgentReach;
-	/** The newest call a process RUNNING this agent made; `null` = never measured. */
-	servedAt: string | null;
-	/** `nobodyRunsOf`: true = nothing runs it now; null = not measured / not applicable. */
-	nobodyRuns: boolean | null;
-}
-/** Where the holder's word came from, in that source's own words. */
-export type HolderSource = {
-	from: "session";
-	status: string;
-} | {
-	from: "external_agent";
-	status: ExternalAgentStatus | "unknown";
-} | {
-	from: "runner";
-	state: SessionRunner["state"];
-} | {
-	from: "live";
-	working: boolean;
-} | {
-	from: "waiting_on";
-} | {
-	from: "roster";
-};
-export interface SessionHolder {
-	/** Whose move: the ball of `waitKind` (`agent` → agent, `me` → person); nobody when none. */
-	kind: "agent" | "nobody" | "person";
-	/** THE one word (`WAIT_KINDS`); `null` for nobody. */
-	waitKind: WaitKind | null;
-	/** When it entered this state (ISO); `null` = not measured. */
-	since: string | null;
-	/** The agent on it — for a person, the one that handed it back; `null` = none. */
-	agent: HolderAgent | null;
-	source: HolderSource;
-	/** Nobody only: the session ended, or no agent is on it. */
-	reason?: "ended" | "no_agent";
-}
-export type SessionHolderSection = {
-	holder: SessionHolder;
 	status: "ok";
 } | {
 	reason: string;
@@ -17297,14 +17239,6 @@ export interface ContinuationPacket {
 		reason: string;
 		status: "unavailable";
 	};
-	/**
-	 * WHO HAS IT — the one holder read (`session-holder.ts`): agent, person or
-	 * nobody, with ONE wait kind as its word, since when, and the agent named
-	 * with its computer and whether anything runs it. Derived from the
-	 * sections this packet already read (`externalAgent`, `runners`, `live`,
-	 * `waitingOn`); any of them failed ⇒ `unavailable`, never "nobody".
-	 */
-	holder: SessionHolderSection;
 	outputs: PacketSection<PacketOutputItem>;
 	/**
 	 * Child sessions (detours and planned sub-sessions), oldest first. A parent
@@ -17524,6 +17458,21 @@ export interface ContinuationPacket {
 	 * prefix-matching X.
 	 */
 	gates: PacketGatesSection;
+	/**
+	 * DEVBOX JOBS — the devbox gate jobs run for this session (its `ci.finished`
+	 * facts of workflow `devbox <name>`), one per job name, its newest run,
+	 * newest first, at most 5 (`total` exact over the newest 100 runs). NOT the
+	 * stage gates above. A failed read is `unavailable`, never "no jobs".
+	 * Optional: an older pod does not send it (`session-notify.ts`).
+	 */
+	devboxJobs?: PacketDevboxJobsSection;
+	/**
+	 * Has the READER muted this session's pushes (tRPC
+	 * `notifCenter.setSessionMute`)? Muted holds back every push about the
+	 * session; nothing is hidden. A failed read is `unavailable`, never "not
+	 * muted". Optional: an older pod does not send it (`session-notify.ts`).
+	 */
+	muted?: PacketMuted;
 	/**
 	 * WHO IS ATTACHED — the client conversations holding this session's
 	 * change-feed wait, most recently seen first (`session-runners.ts`). An
@@ -20655,6 +20604,7 @@ declare const PUSH_CATEGORIES: readonly [
 	"late-or-stuck",
 	"mention",
 	"morning-brief",
+	"delivered-digest",
 	"sent-by-you",
 	"system"
 ];
@@ -23502,6 +23452,13 @@ export type SignalKind =
  */
  | "session-review"
 /**
+ * One session whose agent waits on the person's PERMISSION — a live
+ * runner says `needs_permission` (0384; decision D-R1, the rule's
+ * `classifyRunnerWait`). ONE row per session, whatever its runners; the
+ * door is the session. Its runner word rides in `why`.
+ */
+ | "session-permission"
+/**
  * One capture that still owes the person something (founder, 2026-10-12):
  * an OPEN question, or suggestions nobody filed or refused. The door opens
  * the capture thread (the session's `room` view); `captureStatus` says which.
@@ -23951,6 +23908,17 @@ export interface OwedSlotSignalInput {
 	/** What the answer unblocks, straight from `listOwedSlots`. */
 	unblocks?: string;
 }
+/** One session waiting for the person's permission (`listSessionsWaitingForPermission`). */
+export interface PermissionSessionSignalInput {
+	id: string;
+	title: string | null;
+	goal: string | null;
+	/** When its longest-waiting live runner began to wait. */
+	since: Date;
+	projectId?: string | null;
+	/** The session's space (the per-space split reads it). */
+	workspaceId?: string | null;
+}
 /** A pending trusted issuer, as `listPendingIssuers` reads it. */
 export interface PendingIssuerSignalInput {
 	id: string;
@@ -24037,41 +24005,6 @@ export interface StatusBanner {
 	/** Distinct issues, newest first. */
 	issues: StatusBannerIssue[];
 }
-/** A named container a pick belongs to — drawn as a DOOR chip. */
-export interface NextMoveContainer {
-	id: string;
-	name: string;
-}
-/**
- * One start-tier candidate as the pod sends it (`signals.list({ lens:
- * "page", picks: true })` → `page.picks.rows`, already ranked). Every field
- * is read from stored data; none is estimated.
- */
-export interface NextMoveWire {
-	/** Stable identity — `${door.kind}:${door.id}`; what a skip hides. */
-	key: string;
-	/** Object kind for the noun + icon (`task`, `session`). */
-	objectKind: string;
-	title: string;
-	door: LensDoor;
-	/** The verb that starts it: `start` (never begun) or `resume`. */
-	action: "resume" | "start";
-	/** Facts the score and the reason chips read. */
-	unblocks: number;
-	waitingSince: string | null;
-	project: NextMoveContainer | null;
-	track: NextMoveContainer | null;
-	draftReady: boolean;
-}
-/** The page's start tier — present only when the read asked for it. */
-export interface LensPagePicks {
-	/** Ranked (`rankNextMoves`), skips already removed, capped. */
-	rows: NextMoveWire[];
-	/** More candidates exist than were scanned or sent. */
-	truncated: boolean;
-	/** Halves that FAILED. Non-empty ⇒ never "nothing to do". */
-	unreadable: string[];
-}
 export interface UnfinishedCapture {
 	sessionId: string;
 	title: string | null;
@@ -24093,7 +24026,7 @@ export interface ReviewSessionRow {
 	trackId: string | null;
 }
 /** A sub-read's name — what `unreadable` reports. */
-export type SignalSubRead = "activity" | "app-requests" | "broken-connections" | "captures" | "convertible-goals" | "drafts" | "events" | "invites" | "issuers" | "key-requests" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
+export type SignalSubRead = "activity" | "app-requests" | "broken-connections" | "captures" | "convertible-goals" | "drafts" | "events" | "invites" | "issuers" | "key-requests" | "liveness" | "notifications" | "outputs" | "owed" | "permission" | "proposals" | "review";
 /** One class of the lens page. */
 export interface LensClassWire {
 	/** The first `cap` rows, in the class's own order. */
@@ -32389,6 +32322,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					documentId: string;
 				} | undefined;
 				expectedLabel?: string | undefined;
+				refreshAutomationId?: string | null | undefined;
+				scope?: unknown;
 				title: string;
 				type?: "code" | "docx" | "html" | "markdown" | "pdf" | "text" | undefined;
 				workspaceId?: string | undefined;
@@ -32448,6 +32383,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					lastSavedVersion: number;
 					metadata: unknown;
 					mimeType: string | null;
+					refreshAutomationId: string | null;
+					scope: LensScope | null;
 					size: number;
 					sourceProposalId: string | null;
 					storageKey: string | null;
@@ -32543,6 +32480,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					lastSavedVersion: number;
 					metadata: unknown;
 					mimeType: string | null;
+					refreshAutomationId: string | null;
+					scope: LensScope | null;
 					size: number;
 					sourceProposalId: string | null;
 					storageKey: string | null;
@@ -32597,6 +32536,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					id: string;
 					mimeType: string | null;
+					refreshAutomationId: string | null;
+					scope: LensScope | null;
 					size: number;
 					title: string;
 					type: string;
@@ -32674,6 +32615,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[] | undefined;
 				documentId: string;
 				message?: string | undefined;
+				refreshAutomationId?: string | null | undefined;
+				scope?: unknown;
 				title?: string | undefined;
 			};
 			meta: object;
@@ -37012,7 +36955,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetKind: "action" | "capability" | "connection" | "profile";
 				targetPattern: string;
 				targetProfile?: string | undefined;
-				verdict: "auto" | "propose";
+				verdict: "auto" | "deny" | "propose";
 				window?: number | undefined;
 				workspaceId?: string | undefined;
 			};
@@ -40930,11 +40873,22 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		setPushPrefs: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				categories: Partial<Record<"blocking-ask" | "decision-blocking" | "late-or-stuck" | "mention" | "morning-brief" | "sent-by-you" | "system" | "work-broke", boolean>>;
+				categories: Partial<Record<"blocking-ask" | "decision-blocking" | "delivered-digest" | "late-or-stuck" | "mention" | "morning-brief" | "sent-by-you" | "system" | "work-broke", boolean>>;
 			};
 			meta: object;
 			output: {
 				categories: EffectivePushCategory[];
+			};
+		}>;
+		setSessionMute: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				muted: boolean;
+				sessionId: string;
+			};
+			meta: object;
+			output: {
+				muted: boolean;
+				sessionId: string;
 			};
 		}>;
 		snooze: import("@trpc/server").TRPCMutationProcedure<{
@@ -47884,6 +47838,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				invites: number;
 				needsYou: number;
 				notifications: number;
+				permission?: number;
 				requests: number;
 				review: number;
 				reviewLater: number;
@@ -47912,6 +47867,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					invites: number;
 					needsYou: number;
 					notifications: number;
+					permission?: number;
 					requests: number;
 					review: number;
 					reviewLater: number;
@@ -47944,6 +47900,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					invites: number;
 					needsYou: number;
 					notifications: number;
+					permission?: number;
 					requests: number;
 					review: number;
 					reviewLater: number;
@@ -47969,7 +47926,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					proposed?: number | undefined;
 				} | undefined;
 				cursor?: string | undefined;
-				kinds?: ("access-request" | "activity" | "capture" | "convertible-goals" | "draft-asks" | "event" | "live-session" | "notification" | "output" | "owed-slot" | "proposal-cluster" | "rule-run" | "session-review" | "space-invite")[] | undefined;
+				kinds?: ("access-request" | "activity" | "capture" | "convertible-goals" | "draft-asks" | "event" | "live-session" | "notification" | "output" | "owed-slot" | "proposal-cluster" | "rule-run" | "session-permission" | "session-review" | "space-invite")[] | undefined;
 				lens?: "happening" | "history" | "needs-you" | "page" | "produced" | "proposed" | "suggestions" | undefined;
 				limit?: number | undefined;
 				picks?: boolean | undefined;
@@ -48053,6 +48010,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						workspaceId: string | null;
 					})[];
 					owedTruncated: boolean;
+					permission: {
+						sessions: PermissionSessionSignalInput[];
+						truncated: boolean;
+					};
 					review: {
 						sessions: ReviewSessionRow[];
 						truncated: boolean;
@@ -48074,6 +48035,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					invites: number;
 					needsYou: number;
 					notifications: number;
+					permission?: number;
 					requests: number;
 					review: number;
 					reviewLater: number;
@@ -50945,6 +50907,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				documentTypes?: string[] | undefined;
 				entityTypes?: string[] | undefined;
 				facetBy?: string[] | undefined;
+				facetSlugs?: string[] | undefined;
 				limit?: number | undefined;
 				page?: number | undefined;
 				prefix?: boolean | undefined;
@@ -50965,6 +50928,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				documentTypes?: string[] | undefined;
 				entityTypes?: string[] | undefined;
 				facetBy?: string[] | undefined;
+				facetSlugs?: string[] | undefined;
 				limit?: number | undefined;
 				page?: number | undefined;
 				prefix?: boolean | undefined;

@@ -985,6 +985,8 @@ Every write returns a `status` field:
 "denied"    → blocked, explain reason to user
 ```
 
+**`DENIED_BY_RULE` is a person's "Never".** A refusal whose reason opens with `DENIED_BY_RULE` (a write's `reason`, a run's `reasonCode`) means the person said never for this agent and this kind of act. It was not done. Do not retry it or do it another way; ask the person if it is needed. Only a pod admin can take that back, in pod admin Settings.
+
 **`"proposed"` is not an error.** It's the governance system queueing your change. When you get it:
 
 1. Tell the user exactly what was queued — use the `summary` field **verbatim**. Don't paraphrase.
@@ -1512,6 +1514,13 @@ claim cut off. Everything else goes elsewhere:
 When unsure, ask: "will this still help someone in three months, and is it a
 fact, a pitfall or a rule?" If not, it is not knowledge.
 
+### Descriptions of projects, spaces and goals
+
+A description says what the thing **is** and who it is for. A decision is
+**linked, never restated**: a restated decision goes stale the day the decision
+changes (the Synap project description repeated the 5 Oct branding split, which
+a 13 Oct decision replaced). Link the `decision` entity; let it carry the rule.
+
 ---
 
 ## Document embeds — live entities/views/cells inside markdown
@@ -1720,7 +1729,21 @@ Never rewrite a whole document to change part of it. Read it, then patch it:
    - `replace_all {content}` — the whole body; needs `baseRevision` and is
      always reviewed;
    - `set_title {title}` — renames the document (its one title). A human name,
-     never an id or a slug; the content is left as it is.
+     never an id or a slug; the content is left as it is;
+   - `insert_embed {directive, ref, props?, fallback?, sectionId? | after?}` —
+     adds an embed written for you (`synap-cell` with `{cellKey}` and its props,
+     `synap-entity` with `{id}`, `synap-view` with `{viewId}`): prefer it to
+     typing directive text. It goes at the end, at the end of section
+     `sectionId`, or after the line holding `after` (exact once). Give it a
+     `fallback` sentence: it is what the phone and exports read;
+   - `set_scope {scope}` — what a LIVING document's cells read through:
+     `{kind:"pod"}`, `{kind:"workspace", workspaceId, projectId?}`,
+     `{kind:"project", projectId}`, `{kind:"track", trackId}` or
+     `{kind:"session", sessionId}` (null clears it). Never put a scope in a
+     cell's props: the host stamps the document's scope on every cell;
+   - `set_refresher {automationId}` — binds the automation that refreshes the
+     document (null unbinds). Its runs may rewrite the document's EXISTING
+     `ai` sections without review; anything else they write is reviewed.
 
 Refused, whatever the op: changing a section whose `owner` is `human` (the AI
 never rewrites a person's words — write a new section), and removing an embed
@@ -2218,7 +2241,7 @@ Note: all hub-protocol writes are governance-gated server-side — a start may c
 **Asking the person.** On an `owner: 'human'` slot, add an `ask` so they answer in one tap instead of typing:
 
 - **Say it once.** The `label` is a short key (a few words: "Stripe account"), never the question and never "Decide: …". The `prompt` (confirm) or the options (choose) carry the question. `why` adds only what neither says: the fact that makes it matter, never a repeat of the label or prompt. Give each answer its consequence, and recommend one when you have a view. The person reads this card once and decides.
-- `confirm` — yes/no: `prompt` is the question; `yes` / `no` may each carry a one-line `description` of what that answer does, and ONE may be `recommended`. `choose` — 1–8 `options` (`label`, optional `value` and a one-line `description` of the consequence, at most ONE `recommended`; `allowOther: true` also takes free text). `form` — a small flat form (never a secret field). `act` — something to DO: an http(s) `url` and up to 7 `steps`. `provide` — a `connection`, `file` or `secret` handed over through the vault (you receive a reference, never the secret in the answer). A secret you asked for comes with a read for you alone, for 60 minutes: redeem the `vault://` ref (`POST /vault/redeem`). If the receipt says no agent can read it, ask for access through `POST /vault/request`.
+- `confirm` — yes/no: `prompt` is the question; `yes` / `no` may each carry a one-line `description` of what that answer does, and ONE may be `recommended`. `choose` — 1–8 `options` (`label`, optional `value` and a one-line `description` of the consequence, at most ONE `recommended`; the person can always answer in their own words instead; `allowOther: false` closes that, only for a choice code reads as a value). `form` — a small flat form (never a secret field). `act` — something to DO: an http(s) `url` and up to 7 `steps`. `provide` — a `connection`, `file` or `secret` handed over through the vault (you receive a reference, never the secret in the answer). A secret you asked for comes with a read for you alone, for 60 minutes: redeem the `vault://` ref (`POST /vault/redeem`). If the receipt says no agent can read it, ask for access through `POST /vault/request`.
 - **Which mode.** A DECISION is `confirm` (one yes/no) or `choose` — never `act`. When you have a view, mark exactly ONE answer `recommended` (a choose option, or a confirm's `yes` / `no`): the person's pick vs your recommendation is recorded, and every answered `confirm`/`choose` files a `decision` entity automatically. Recall past decisions first (`synap_ask`) so your recommendation follows the user's past choices. Use `act` ONLY for a physical/world task with `steps` (they answer "I did this"). Always add an `ask`: a human-owned slot with only `blockedReason` + `why` shows a bare "I did this" button. Example: `ask: {"mode":"choose","options":[{"label":"Ship now","recommended":true,"description":"Publishes today"},{"label":"Wait a week"}]}`, or `ask: {"mode":"confirm","prompt":"Publish the post today?","yes":{"description":"Goes live at 9:00","recommended":true},"no":{"description":"Stays a draft"}}`.
 - **How it comes back.** `act` is resolved by "I did this" (attest): the slot is done and you are woken. Every other mode goes through the answer door: the slot comes back to you with `answer.text` (a readable summary) and `answer.value`, the typed pick (`confirm` → `confirmed`, `chip` → the option, `form` → `values`, `provide` → `ref`, `text`). Act on `answer.value`, not the prose. A plain reply in the room answers a typed slot only when the ask takes text (`choose` with `allowOther`); otherwise it answers your question and the slot stays owed.
 - **Then wait — don't end your turn.** After an ask, call `wait_for_answer` with the `sessionId` (when your tools list it; an in-app agent has no such tool, the answer wakes it): it returns the moment the person answers (`status: 'answered'`, `answers[]` with `text` and the typed `value`) or after `timeoutSeconds` (default 50, max 90; Codex: 55 or less) with `status: 'timeout'` and `nextSince` — call again with `since = nextSince` to keep waiting. Without `since` you get only answers you have not picked up yet. Your read marks the answer "Picked up" for the person. If you must stop, the answer stays on the slot for your next turn.

@@ -195,6 +195,7 @@ describe("needs-you union", () => {
       },
       notifications: 0,
       review: 0,
+      permission: 0,
       captures: 0,
       requests: 0,
       invites: 0,
@@ -770,7 +771,7 @@ describe("access requests — pending issuers and app connection requests", () =
     // countdown ends exactly at the handoff lease.
     expect(app).toMatchObject({
       target: { kind: "connection-request", id: "req-1" },
-      title: 'Connect Connected app "Acme CRM"',
+      title: 'Connect "Acme CRM"',
       access: { subject: "application", from: "https://crm.acme.test" },
       lifetimeHours: 0.5,
     });

@@ -49,6 +49,7 @@ import { randomUUID } from "crypto";
 import {
   isKnownToolName,
   nounInSentence,
+  resolveGovernanceRungLabel,
   resolveObjectNoun,
   resolveToolLabel,
 } from "@synap-core/types/vocabulary";
@@ -692,7 +693,8 @@ export async function executeCapability(input: {
 
   // A person's "Never" (0381) is not an approval problem: enabling would not
   // lift it, so it carries no enable-link and files no enable request. It is
-  // recorded for the person all the same, under its own reason.
+  // recorded for the person all the same, under its own reason and in the
+  // person's words: the agent's sentence ("do not retry it…") is for the agent.
   if (decision.decision === "deny" && decision.reasonCode === DENIED_BY_RULE) {
     await recordRefusedCapabilityRun({
       userId,
@@ -700,7 +702,7 @@ export async function executeCapability(input: {
       skillId: skillRow.id,
       verbId: verbId ?? null,
       refusalReason: "denied_by_rule",
-      reason: decision.reason,
+      reason: resolveGovernanceRungLabel("denied-by-rule"),
     });
     return {
       kind: "deny",

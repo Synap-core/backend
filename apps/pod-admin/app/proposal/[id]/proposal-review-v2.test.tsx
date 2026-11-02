@@ -350,7 +350,7 @@ describe("a create with no twin", () => {
   });
 });
 
-describe("Reject and never allow (decision G3)", () => {
+describe("Reject and never allow", () => {
   it("an agent's change offers it beside Reject", () => {
     state.proposal = personCreate(null);
     const seen = text(render());

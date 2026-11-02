@@ -350,6 +350,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "action.section_update.past": "Section modifiée",
   "action.session_narrative_update.imperative": "Mettre à jour le récit",
   "action.session_narrative_update.past": "Récit mis à jour",
+  "action.refresher_section_update.imperative": "Actualiser la section",
+  "action.refresher_section_update.past": "Section actualisée",
   "action.ai_edit.imperative": "Modifier",
   "action.ai_edit.past": "Modifié",
   "action.user_edit.imperative": "Suggérer une modification",

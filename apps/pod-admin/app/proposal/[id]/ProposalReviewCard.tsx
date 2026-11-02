@@ -98,7 +98,7 @@ import { deriveDeferredWritesReview } from "@synap-core/types/proposals/deferred
 import { DocumentChanges } from "../../_lib/object/content/document-changes";
 import { documentChanges } from "../../_lib/object/content/document-changes-model";
 import { AlwaysApproveMenu, RejectNeverMenu } from "./AlwaysApproveMenu";
-import { proposalPageT } from "./copy";
+import { proposalPageT, type OutcomeKey } from "./copy";
 import { DeferredWritesList } from "./DeferredWritesList";
 import { FailedApproval } from "./FailedApproval";
 import {
@@ -462,45 +462,44 @@ function RequesterNote({ who, text }: { who: string | null; text: string }) {
 function terminalOutcome(status: string): {
   tone: "success" | "danger" | "muted";
   icon: ReactNode;
-  message: string;
+  messageKey: OutcomeKey;
 } {
   switch (status) {
     case "approved":
       return {
         tone: "success",
         icon: <Check className="h-6 w-6" strokeWidth={2.2} />,
-        message: "You approved this change — it's now in your pod.",
+        messageKey: "outcome.approved",
       };
     case "auto_approved":
       return {
         tone: "success",
         icon: <Check className="h-6 w-6" strokeWidth={2.2} />,
-        message: "This matched an auto-approve rule and is already applied.",
+        messageKey: "outcome.auto_approved",
       };
     case "rejected":
       return {
         tone: "danger",
         icon: <X className="h-6 w-6" strokeWidth={2.2} />,
-        message: "You rejected this — the agent was told why.",
+        messageKey: "outcome.rejected",
       };
     case "reverted":
       return {
         tone: "muted",
         icon: <X className="h-6 w-6" strokeWidth={2.2} />,
-        message: "This change was undone after it was applied.",
+        messageKey: "outcome.reverted",
       };
     case "expired":
       return {
         tone: "muted",
         icon: <Clock className="h-6 w-6" strokeWidth={2.2} />,
-        message:
-          "Its moment passed before anyone decided — nothing was applied.",
+        messageKey: "outcome.expired",
       };
     default:
       return {
         tone: "muted",
         icon: <X className="h-6 w-6" strokeWidth={2.2} />,
-        message: "The agent withdrew this proposal — nothing was applied.",
+        messageKey: "outcome.withdrawn",
       };
   }
 }
@@ -525,6 +524,7 @@ const OUTCOME_TONE: Record<
 function Outcome({ status }: { status: string }) {
   const o = terminalOutcome(status);
   const tone = OUTCOME_TONE[o.tone];
+  const t = proposalPageT();
   return (
     <div aria-live="polite" className="flex items-center gap-3">
       <span
@@ -538,7 +538,7 @@ function Outcome({ status }: { status: string }) {
           {resolveStatusLabel(status)}
         </span>
         <span className="text-[13px] leading-relaxed text-foreground/60">
-          {o.message}
+          {t(o.messageKey)}
         </span>
       </div>
     </div>
@@ -585,12 +585,15 @@ function DecisionButtons({
   const [reason, setReason] = useState("");
   const [rejecting, setRejecting] = useState(false);
   const [pickedId, setPickedId] = useState<string | null>(null);
+  // A rule menu decides through its own calls (approve or reject, then a
+  // rule): the bar holds every verb while either it or a menu is deciding.
+  const [ruleRunning, setRuleRunning] = useState(false);
   const decision = useProposalDecision(p.id, onDecided, {
     onRejected: () => setRejecting(false),
     expectedRevision: renderedRevision(p),
     revertable: p.revertable,
   });
-  const { busy } = decision;
+  const busy = decision.busy || ruleRunning;
   const t = proposalPageT();
   // A rule is a pod admin's to set (`assertCanManageRule`): anyone else would
   // decide, then be refused the rule they chose, so the menus are not offered.
@@ -611,6 +614,7 @@ function DecisionButtons({
             color="danger"
             className="min-h-10"
             isLoading={decision.rejecting}
+            isDisabled={busy}
             onPress={() => decision.reject(reason)}
           >
             {resolveActionLabel("reject")}
@@ -718,11 +722,21 @@ function DecisionButtons({
       {mayRule &&
         mode.kind === "plain" &&
         !pageOnlyReasonActs(proposalPageOnlyReason(p)) && (
-          <AlwaysApproveMenu proposal={p} disabled={busy} onDone={onDecided} />
+          <AlwaysApproveMenu
+            proposal={p}
+            disabled={busy}
+            onRunningChange={setRuleRunning}
+            onDone={onDecided}
+          />
         )}
       {/* "Never" narrows, so it stays beside a change that acts on its own. */}
       {mayRule && mode.kind === "plain" && (
-        <RejectNeverMenu proposal={p} disabled={busy} onDone={onDecided} />
+        <RejectNeverMenu
+          proposal={p}
+          disabled={busy}
+          onRunningChange={setRuleRunning}
+          onDone={onDecided}
+        />
       )}
       {undoChip}
       {waiting && (
@@ -1210,7 +1224,7 @@ export function ProposalReviewBody({
                 run that is in fact applying. */}
             {progress.isError && (
               <ApprovalProgressLines
-                copy={progressUnavailable}
+                copy={progressUnavailable()}
                 onRetry={() => void progress.refetch()}
               />
             )}

@@ -75,6 +75,10 @@ function fakeResolver(status: Record<string, ReferentStatus>): EmbedResolver {
         ],
         ["bento-only", { placements: ["bento"], requiredConfig: [] }],
         [
+          "entity-list",
+          { placements: ["bento", "inline"], requiredConfig: ["profileSlug"] },
+        ],
+        [
           "cell:pack:thing",
           { placements: ["bento", "inline"], requiredConfig: ["source"] },
         ],
@@ -143,18 +147,76 @@ describe("diagnoseDocument", () => {
       "```json",
       '{"label":"Tokens","data":[{"label":"before","value":84895},{"label":"after","value":56364}],"capturedAt":"2026-10-22T05:00:00Z"}',
       "```",
+      "Tokens fell by a third.",
       ":::",
       "",
       ':::synap-cell{cellKey="chart-live-line"}',
       "```json",
       '{"data":[{"x":"2026-10-01","y":3}],"capturedAt":"2026-10-22T05:00:00Z"}',
       "```",
+      "Three on the first.",
       ":::",
     ].join("\n");
     const out = await diagnoseDocument(md, fakeResolver({}));
     expect(codes(out)).toEqual(["bad_props"]);
     expect(out[0]!.ref).toEqual({ cellKey: "chart-live-line" });
     expect(out[0]!.message).toMatch(/props\.profileSlug/);
+  });
+
+  it("design (rule 7): a list cell over its cap warns; at the cap it does not", async () => {
+    const list = (limit: number) =>
+      [
+        ':::synap-cell{cellKey="entity-list"}',
+        "```json",
+        `{"profileSlug":"task","limit":${limit}}`,
+        "```",
+        "Open tasks.",
+        ":::",
+      ].join("\n");
+    const over = await diagnoseDocument(list(25), fakeResolver({}));
+    expect(codes(over)).toEqual(["over_cap"]);
+    expect(over[0]!.severity).toBe("warning");
+    expect(over[0]!.message).toMatch(/limit 25.*at most 8/);
+    expect(over[0]!.fix).toMatch(/Show all/);
+    expect(await diagnoseDocument(list(8), fakeResolver({}))).toEqual([]);
+  });
+
+  it("design (rule 10): a chart snapshot with no sentence warns; with one it does not", async () => {
+    const chart = (fallback: string) =>
+      [
+        ':::synap-cell{cellKey="chart-bar"}',
+        "```json",
+        '{"data":[{"label":"a","value":1}],"capturedAt":"2026-10-22T05:00:00Z"}',
+        "```",
+        ...(fallback ? [fallback] : []),
+        ":::",
+      ].join("\n");
+    const bare = await diagnoseDocument(chart(""), fakeResolver({}));
+    expect(codes(bare)).toEqual(["chart_no_finding"]);
+    expect(bare[0]!.ref).toEqual({ cellKey: "chart-bar" });
+    expect(await diagnoseDocument(chart("A leads."), fakeResolver({}))).toEqual(
+      []
+    );
+  });
+
+  it("design (grammar pass): empty heading, bare id, raw HTML, banned phrase reach the wire with a fix", async () => {
+    const md = [
+      "## Needs you",
+      "",
+      "## Happened",
+      "",
+      `Oops, ${E_VISIBLE} stopped.`,
+      "",
+      "<div>late</div>",
+    ].join("\n");
+    const out = await diagnoseDocument(md, fakeResolver({}));
+    expect(codes(out)).toEqual([
+      "empty_heading",
+      "bare_id",
+      "banned_phrase",
+      "raw_html",
+    ]);
+    for (const d of out) expect(d.fix.length).toBeGreaterThan(20);
   });
 
   it("grammar: legacy props, malformed props, missing reference, unterminated", async () => {
