@@ -16,6 +16,7 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 import { createLogger } from "@synap-core/core";
 
 import { hubAuthMiddleware } from "./hub-protocol/_middleware/auth.js";
+import { grantDenialCodeMiddleware } from "./hub-protocol/_middleware/grant-denial-code.js";
 import { idempotencyMiddleware } from "./hub-protocol/_middleware/idempotency.js";
 import { sessionMiddleware } from "./hub-protocol/_middleware/session.js";
 import { AuthErrorEnvelopeSchema } from "./hub-protocol/rest/_codecs/auth.js";
@@ -187,6 +188,12 @@ registerHealthRoutes(app);
 // door can be exercised directly by tests without instantiating the whole
 // route tree. Mount position (immediately after the unauthenticated health
 // routes, before the session + idempotency middleware) is unchanged.
+// ── Grant-denial code ──────────────────────────────────────────────────────
+//
+// OUTSIDE auth, so it wraps every route: a 403 carrying a denial of the key's
+// grant gains `code`/`reasonCode` "GRANT_DENIED" and the refused `action`
+// (`./hub-protocol/_middleware/grant-denial-code.ts`).
+app.use("/*", grantDenialCodeMiddleware);
 app.use("/*", hubAuthMiddleware);
 
 // ── Focus-session middleware ───────────────────────────────────────────────
