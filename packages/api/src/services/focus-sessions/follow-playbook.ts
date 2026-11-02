@@ -88,16 +88,14 @@ import {
   getLinksFor,
 } from "../links/links-service.js";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
+import { playbookSlotsMissingFrom } from "./playbook-slots.js";
 import {
   guidanceForBlockedSlots,
   newlyBlockedSlots,
   type BlockGuidance,
 } from "./block-guidelines.js";
 import { notifySessionNeedsYou } from "./notify-needs-you.js";
-import {
-  mergeExpectedOutputs,
-  sanitizeDeclaredOutputs,
-} from "./update-session.js";
+import { mergeExpectedOutputs } from "./update-session.js";
 import { STAGE_GATE_TARGET_TYPE } from "../playbooks/stage-gate.js";
 import { buildDefinitionSnapshot } from "../playbooks/run-playbook.js";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
@@ -241,25 +239,6 @@ export async function pendingStageGate(session: {
     )
     .limit(1);
   return open ? "human" : null;
-}
-
-/** The playbook's slots that the session does not already carry, by label. */
-function newSlotsFrom(
-  playbook: { expectedOutputs: unknown },
-  current: ExpectedOutput[]
-): ExpectedOutput[] {
-  const have = new Set(
-    current.map((o) => normalizeExpectedLabel(o?.label)).filter(Boolean)
-  );
-  const fromPlaybook = Array.isArray(playbook.expectedOutputs)
-    ? (playbook.expectedOutputs as ExpectedOutput[])
-    : [];
-  return sanitizeDeclaredOutputs(
-    fromPlaybook.filter((o) => {
-      const key = normalizeExpectedLabel(o?.label);
-      return !!key && !have.has(key);
-    })
-  );
 }
 
 /**
@@ -455,7 +434,7 @@ export async function followPlaybook(
       // Merged by label like the playbook's own slots, so following twice does
       // not file the same question again.
       const added = [
-        ...newSlotsFrom(playbook, currentOutputs),
+        ...playbookSlotsMissingFrom(playbook, currentOutputs),
         ...paramSlots.filter(
           (slot) =>
             !currentOutputs.some(

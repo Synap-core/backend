@@ -110,7 +110,10 @@ export const entityRelationships = pgTable(
 
     // Relationship type
     relationshipType: text("relationship_type", {
+      // `related_to` is a LEGACY spelling, kept so a row stored before 0391
+      // still types; writers store `canonicalRelationType(...)` (`relates_to`).
       enum: [
+        "relates_to",
         "related_to",
         "part_of",
         "depends_on",

@@ -56,6 +56,7 @@ import {
 } from "./update-session.js";
 import { stampAskProvenance } from "./slot-asked-event.js";
 import { stampSlotKeys } from "./slot-keys.js";
+import { playbookSlotsMissingFrom } from "./playbook-slots.js";
 import {
   guidanceForBlockedSlots,
   newlyBlockedSlots,
@@ -1030,6 +1031,22 @@ export async function createFocusSession(
     new Date().toISOString()
   );
 
+  // The caller's own slots first (its wording wins a label collision), then
+  // the PLAYBOOK's deliverables it does not already declare. Until these were
+  // merged here, a session started from a playbook only SNAPSHOTTED them on
+  // its `playbook_runs` row: nobody owed them and nothing could complete
+  // them. The follow door merges them the same way (`playbook-slots.ts`), so
+  // following the same playbook later adds none twice. Not stamped with the
+  // agent's ask provenance: the playbook declared them, not the agent.
+  const declaredSlots = stampAskProvenance(
+    [],
+    sanitizeDeclaredOutputs(expectedOutputs),
+    { askedBy: agentUserId }
+  );
+  const playbookSlots: ExpectedOutput[] = playbook
+    ? playbookSlotsMissingFrom(playbook, [...declaredSlots, ...paramSlots])
+    : [];
+
   // Session + its playbook_runs ledger row land in ONE transaction: the
   // correlationId idempotency check returns the existing session on retry, so
   // a partial state (session without its run row) could never be repaired.
@@ -1134,9 +1151,8 @@ export async function createFocusSession(
       // Keyed at birth (`slot-keys.ts`): every slot's stable identity.
       expectedOutputs: stampSlotKeys([
         // An agent declaring a slot the person owes from birth asked it.
-        ...stampAskProvenance([], sanitizeDeclaredOutputs(expectedOutputs), {
-          askedBy: agentUserId,
-        }),
+        ...declaredSlots,
+        ...playbookSlots,
         ...paramSlots,
       ]),
       criteria: sessionCriteria,

@@ -10,7 +10,7 @@
  */
 
 import { z } from "zod";
-import { createLogger } from "@synap-core/core";
+import { canonicalRelationType, createLogger } from "@synap-core/core";
 import { eq, sql, type SQL } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { events } from "../schema/events.js";
@@ -596,10 +596,11 @@ async function materializeRelation(
         workspaceId: (data.workspaceId as string) ?? null,
         sourceEntityId: data.sourceEntityId as string,
         targetEntityId: data.targetEntityId as string,
-        // `relates_to` is a real default relation def; `related_to` never was.
+        // `relates_to` is a real default relation def; `related_to` never was,
+        // so a peer's legacy spelling is stored canonical (migration 0391).
         // NB this is a direct insert — the type is NOT validated against
         // relation_defs here (see relations.create for the validated door).
-        type: (data.type as string) ?? "relates_to",
+        type: canonicalRelationType((data.type as string) ?? "relates_to"),
         metadata: data.metadata ?? {},
       })
       // UNTARGETED on purpose. A targeted `ON CONFLICT (id)` arbitrates the

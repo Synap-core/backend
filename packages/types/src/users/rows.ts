@@ -99,6 +99,8 @@ export interface NewEntityEnrichment {
 // ── entity_relationships ────────────────────────────────────────────────────
 
 export type EntityRelationshipType =
+  | "relates_to"
+  /** Legacy spelling of `relates_to`: read only (rows before migration 0391). */
   | "related_to"
   | "part_of"
   | "depends_on"

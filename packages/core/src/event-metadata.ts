@@ -111,24 +111,54 @@ export const AIReasoningMetadataSchema = z.object({
 export type AIReasoningMetadata = z.infer<typeof AIReasoningMetadataSchema>;
 
 /**
+ * Legacy relation-type spellings → the canonical slug.
+ *
+ * `relates_to` is the relation the pod defines (`default-relation-defs.ts` in
+ * `@synap/database`); `related_to` was never a def, only a leftover spelling
+ * in the AI relationship vocabulary below. Readers ACCEPT a legacy spelling
+ * (stored rows, events already emitted, a peer pod's sync); writers store the
+ * canonical one, always through {@link canonicalRelationType}. Migration 0391
+ * rewrote the rows already stored.
+ */
+export const LEGACY_RELATION_TYPE_ALIASES: Readonly<Record<string, string>> =
+  Object.freeze({ related_to: "relates_to" });
+
+/** The canonical spelling of a relation type: a legacy alias is rewritten. */
+export function canonicalRelationType(type: string): string {
+  return Object.prototype.hasOwnProperty.call(
+    LEGACY_RELATION_TYPE_ALIASES,
+    type
+  )
+    ? LEGACY_RELATION_TYPE_ALIASES[type]!
+    : type;
+}
+
+/** What an AI-discovered relationship may be (the canonical spellings). */
+export const AI_RELATIONSHIP_TYPES = [
+  "relates_to",
+  "part_of",
+  "depends_on",
+  "mentioned_in",
+  "created_from",
+  "supersedes",
+  "similar_to",
+  "contradicts",
+] as const;
+export type AIRelationshipType = (typeof AI_RELATIONSHIP_TYPES)[number];
+
+/**
  * AI Relationship Discovery Metadata
  *
- * When AI discovers relationships between entities.
+ * When AI discovers relationships between entities. A legacy `related_to`
+ * is still ACCEPTED (an emitter not yet updated) and parsed to `relates_to`.
  */
 export const AIRelationshipMetadataSchema = z.object({
   relationships: z.array(
     z.object({
       targetEntityId: z.string().uuid(),
-      type: z.enum([
-        "related_to",
-        "part_of",
-        "depends_on",
-        "mentioned_in",
-        "created_from",
-        "supersedes",
-        "similar_to",
-        "contradicts",
-      ]),
+      type: z
+        .union([z.enum(AI_RELATIONSHIP_TYPES), z.literal("related_to")])
+        .transform((t) => canonicalRelationType(t) as AIRelationshipType),
       confidence: z.number().min(0).max(1),
       bidirectional: z.boolean().default(false),
     })

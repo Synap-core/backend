@@ -718,10 +718,26 @@ export const sessionHandlers: McpHandlerMap = {
             await import("../../../services/focus-sessions/subject-ref.js")
           ).subjectCandidatesFor(userId, args.title)
         : [];
+    // METHOD ON BIND: a session started from a playbook hands the agent the
+    // playbook's method (context skill + current stage: goal, expected
+    // outputs, lessons, grants), the same text the IS executor's kickoff
+    // carries (`renderPlaybookMethod`, one renderer for both doors). Without
+    // it an MCP agent bound a playbook and learned nothing from it.
+    const method =
+      result.status === "created" && result.session.playbookId
+        ? await (
+            await import("../../../services/playbooks/playbook-method.js")
+          ).loadBoundPlaybookMethod({
+            playbookId: result.session.playbookId,
+            stageKey: result.session.currentStage ?? null,
+            stages: result.session.stages,
+          })
+        : undefined;
     // Recall runs in the background right after a start; this says so, and
     // where to read it, instead of the agent concluding nothing exists.
     return ok({
       ...result,
+      ...(method ? { method } : {}),
       ...(subjectCandidates.length > 0
         ? {
             subjectCandidates,
@@ -1778,6 +1794,22 @@ export const sessionHandlers: McpHandlerMap = {
           // sent for review) changes nothing on the row, and a caller reading
           // only the session would take the refusal for a success.
           ...(result.follow ? { follow: result.follow } : {}),
+          // METHOD ON BIND, the follow door's half (see synap_start_session):
+          // a session that just started following a playbook gets its method
+          // in the same reply. The stage is the session's own (a follow sets
+          // one only when it is named), so a stageless follow carries the
+          // context skill alone.
+          ...(result.follow?.action === "attached" && result.follow.playbookId
+            ? {
+                method: await (
+                  await import("../../../services/playbooks/playbook-method.js")
+                ).loadBoundPlaybookMethod({
+                  playbookId: result.follow.playbookId,
+                  stageKey: result.session.currentStage ?? null,
+                  stages: result.session.stages,
+                }),
+              }
+            : {}),
           ...(result.followRefusal
             ? { followRefusal: result.followRefusal }
             : {}),
