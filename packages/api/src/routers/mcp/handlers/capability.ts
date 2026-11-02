@@ -25,6 +25,7 @@ import {
 import { db, tools as toolsTable } from "@synap/database";
 import { defineProfile } from "../../hub-protocol/define-profile.js";
 import { proposePropertyDefRetire } from "../../../services/pod-hygiene/retire-property-def.js";
+import { proposeKindLifecycle } from "../../../services/lifecycle/declare-kind-lifecycle.js";
 import {
   ok,
   requireScope,
@@ -51,6 +52,40 @@ export const capabilityHandlers: McpHandlerMap = {
         userId,
         propertyDefId,
         agentUserId: agentUserId ?? null,
+        reason: readReasoning(args),
+      })
+    );
+  },
+  // Governed LIFECYCLE declaration on an existing kind
+  // (`services/lifecycle/declare-kind-lifecycle.ts`): always a pending
+  // proposal, or a refusal with every reason. Like synap_retire_field and
+  // synap_change_kind_scope it has no Hub REST twin yet.
+  synap_declare_lifecycle: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const profileId = args.profileId;
+    if (typeof profileId !== "string" || !profileId) {
+      return ok({ error: "profileId is required" });
+    }
+    if (!Array.isArray(args.options)) {
+      return ok({ error: "options is required (each { key, category })" });
+    }
+    return ok(
+      await proposeKindLifecycle({
+        userId,
+        agentUserId: agentUserId ?? null,
+        input: {
+          profileId,
+          ...(typeof args.property === "string"
+            ? { property: args.property }
+            : {}),
+          options: args.options,
+          ...(typeof args.initialStatus === "string"
+            ? { initialStatus: args.initialStatus }
+            : {}),
+        },
         reason: readReasoning(args),
       })
     );

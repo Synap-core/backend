@@ -2,7 +2,7 @@
 
 # MCP tools
 
-The pod's MCP server lists 110 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
+The pod's MCP server lists 111 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
 
 | Tool                                                                      | Title                             | Group        | Read-only |
 | ------------------------------------------------------------------------- | --------------------------------- | ------------ | --------- |
@@ -91,6 +91,7 @@ The pod's MCP server lists 110 tools. A new agent key lists the `entry` tools; t
 | [`synap_update_space_brief`](#synap_update_space_brief)                   | Edit space brief                  | spaces       | no        |
 | [`synap_move_entities`](#synap_move_entities)                             | Move entities to space            | data         | no        |
 | [`synap_retire_field`](#synap_retire_field)                               | Retire field                      | schema       | no        |
+| [`synap_declare_lifecycle`](#synap_declare_lifecycle)                     | Declare a kind's lifecycle        | schema       | no        |
 | [`synap_grant_profile_access`](#synap_grant_profile_access)               | Share kind with space             | schema       | no        |
 | [`synap_change_kind_scope`](#synap_change_kind_scope)                     | Change kind scope                 | schema       | no        |
 | [`synap_export_project_pack`](#synap_export_project_pack)                 | Export project as suite pack      | spaces       | yes       |
@@ -1433,6 +1434,21 @@ Propose RETIRING a field (a property definition) — including a kind's base fie
 | `propertyDefId` | string | yes      | Property definition UUID.                                                                                                                                                                                                                                                                                                                                 |
 | `reasoning`     | string | no       | Why this field should go — shown to the reviewer. One line.                                                                                                                                                                                                                                                                                               |
 | `sessionId`     | string | no       | Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error. |
+
+## synap_declare_lifecycle
+
+**Declare a kind's lifecycle** · Group: `schema` · readOnlyHint: false · destructiveHint: false · openWorldHint: false
+
+Propose giving an EXISTING kind (or role) a lifecycle: its status field (default `status`, created when the kind has none) gets these options, each with a category (open, active, paused, done, lost), and every status move then goes through the one status door. Always a proposal, for anyone: `proposed` is success. REFUSED with every reason when the kind already has a lifecycle (append an option through the field's update; recategorise or retire one through the lifecycle door), when the field is shared with other kinds, when it would drop a key the field already offers, or when records carry a value no option names. Keys are stored and stay stable: put the words people read in `label`. Existing records keep the status they have (none, for a kind that had no lifecycle) until they are moved, for example with synap_update_entities. Find the kind's id with synap_list_profiles.
+
+| Parameter       | Type          | Required | Description                                                                                                                                                                                                                                                                                                                                               |
+| --------------- | ------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `profileId`     | string        | yes      | The kind's profile UUID.                                                                                                                                                                                                                                                                                                                                  |
+| `property`      | string        | no       | The status field's key. Default `status`. Lowercase letters, digits and -.                                                                                                                                                                                                                                                                                |
+| `options`       | array<object> | yes      | The complete option list, in order. Each option names its stored key and its category.                                                                                                                                                                                                                                                                    |
+| `initialStatus` | string        | no       | The option key a new thing starts in when its creator names none. Omit to leave new things with no status.                                                                                                                                                                                                                                                |
+| `reasoning`     | string        | no       | Why this kind needs a lifecycle — shown to the reviewer. One line.                                                                                                                                                                                                                                                                                        |
+| `sessionId`     | string        | no       | Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error. |
 
 ## synap_grant_profile_access
 
