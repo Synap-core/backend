@@ -19,7 +19,9 @@
  *   - a thing's `roles` (only those the reader may see) and its `account`
  *     line (the account it works at, when the reader may read it);
  *   - `include`: `history` (THE timeline, kept to status events; a hidden
- *     role's move left out; a session's stage ledger merged in by time), `links` (`serves` both ways, a hidden end left
+ *     role's move left out; a session's stage ledger merged in by time; the
+ *     wait episodes merged in by when each opened, a hidden role's left out,
+ *     a failed episode read making the history unavailable), `links` (`serves` both ways, a hidden end left
  *     out), `rollup` (a goal's tree: each session and goal once, a loop cut
  *     and named, stuck and waits per kind), `signals` (only open episodes).
  *
@@ -30,7 +32,11 @@ import { randomUUID } from "node:crypto";
 
 vi.setConfig({ testTimeout: 120_000 });
 
-const holder = vi.hoisted(() => ({ db: undefined as unknown }));
+const holder = vi.hoisted(() => ({
+  db: undefined as unknown,
+  // `include: ["history"]`: THE wait episode reader fails while this is set.
+  failEpisodes: false,
+}));
 const DEAL = "11111111-1111-4111-8111-111111111111";
 const LEAD = "44444444-4444-4444-8444-444444444444";
 
@@ -39,6 +45,10 @@ vi.mock("@synap/database", async (importOriginal) => {
   const mocked = {
     ...actual,
     getDb: async () => holder.db,
+    readWaitEpisodes: (...args: unknown[]) =>
+      holder.failEpisodes
+        ? Promise.reject(new Error("the episode read failed"))
+        : (actual.readWaitEpisodes as (...a: unknown[]) => unknown)(...args),
     ProfileResolutionService: class extends (actual.ProfileResolutionService as new (
       db: unknown
     ) => object) {
@@ -1352,5 +1362,312 @@ describe("readStatusOf: THE next move of a thing and a goal", () => {
       actor: "user",
       label: "Start work on it",
     });
+  });
+});
+
+describe('include: ["history"] — the wait episodes (0386)', () => {
+  const E_TWO = randomUUID();
+  const E_ROLES = randomUUID();
+  const ROLE_SEEN = randomUUID();
+  const ROLE_HIDDEN = randomUUID();
+  const F_SEEN = randomUUID();
+  const F_HIDDEN = randomUUID();
+  const EP_CLOSED = randomUUID();
+  const EP_OPEN = randomUUID();
+  const EP_KIND = randomUUID();
+  const EP_ROLE_SEEN = randomUUID();
+  const EP_ROLE_HIDDEN = randomUUID();
+  const EP_THEIRS = randomUUID();
+  const EP_GOAL = randomUUID();
+  const EP_SESSION = randomUUID();
+  const MOVED_AT = new Date(Date.now() - 4 * 86_400_000).toISOString();
+
+  type Entry = {
+    kind: string;
+    id: string;
+    at: string;
+    facetId?: string | null;
+  };
+  const eventsOf = (a: StatusOf | undefined) =>
+    (a?.history as { events: Entry[] }).events;
+  /** Newest first, by `at`: every entry kind, one order. */
+  const expectNewestFirst = (events: Entry[]) => {
+    for (let i = 1; i < events.length; i++) {
+      expect(Date.parse(events[i - 1]!.at)).toBeGreaterThanOrEqual(
+        Date.parse(events[i]!.at)
+      );
+    }
+  };
+
+  async function episode(e: {
+    id: string;
+    subjectType: string;
+    subjectId: string;
+    facetId?: string;
+    waitKind: string;
+    openedDaysAgo: number;
+    closedDaysAgo?: number;
+    reason?: string;
+    ref?: Record<string, unknown>;
+  }) {
+    await q(
+      `insert into status_wait_episode (id, subject_type, subject_id, facet_id, wait_kind, reason, ref, ref_key, opened_at, closed_at)
+       values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, ${ago(e.openedDaysAgo)}, ${
+         e.closedDaysAgo === undefined ? "null" : ago(e.closedDaysAgo)
+       })`,
+      [
+        e.id,
+        e.subjectType,
+        e.subjectId,
+        e.facetId ?? null,
+        e.waitKind,
+        e.reason ?? null,
+        e.ref ? JSON.stringify(e.ref) : null,
+        e.ref ? `${e.ref.kind}:${e.ref.id}` : "",
+      ]
+    );
+  }
+
+  beforeAll(async () => {
+    for (const [id, title] of [
+      [E_TWO, "Waited twice"],
+      [E_ROLES, "Waits as a role"],
+    ] as const) {
+      await q(
+        `insert into entities (id, user_id, workspace_id, profile_id, title, properties, created_at, updated_at)
+         values ($1, $2, $3, $4, $5, '{}'::jsonb, now(), now())`,
+        [id, ME, W, PERSON, title]
+      );
+    }
+    for (const [id, slug] of [
+      [ROLE_SEEN, "scout"],
+      [ROLE_HIDDEN, "covert"],
+    ] as const) {
+      await q(
+        `insert into profiles (id, slug, display_name, profile_kind, entity_scope) values ($1, $2, $2, 'role', 'workspace')`,
+        [id, slug]
+      );
+    }
+    // A role in my space, and another person's pod-wide one I may not see.
+    for (const [id, profile, owner, ws] of [
+      [F_SEEN, ROLE_SEEN, ME, W],
+      [F_HIDDEN, ROLE_HIDDEN, OTHER, null],
+    ] as const) {
+      await q(
+        `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, status, status_category, created_at, updated_at)
+         values ($1, $2, $3, $4, $5, 'x', 'active', now(), now())`,
+        [id, E_ROLES, profile, owner, ws]
+      );
+    }
+    // One wait that ended, a status move, then one wait that stands.
+    await episode({
+      id: EP_CLOSED,
+      subjectType: "entity",
+      subjectId: E_TWO,
+      waitKind: "their_reply",
+      reason: "person",
+      ref: { kind: "entity", id: C_MINE, label: "Ada Lovelace" },
+      openedDaysAgo: 5,
+      closedDaysAgo: 3,
+    });
+    await outbox({
+      subjectType: "entity",
+      subjectId: E_TWO,
+      from: "new",
+      to: "talking",
+      category: "active",
+      occurredAt: MOVED_AT,
+      recordedAt: MOVED_AT,
+    });
+    await episode({
+      id: EP_OPEN,
+      subjectType: "entity",
+      subjectId: E_TWO,
+      waitKind: "answer",
+      openedDaysAgo: 1,
+    });
+    // The thing's own wait, a visible role's and a hidden role's.
+    await episode({
+      id: EP_KIND,
+      subjectType: "entity",
+      subjectId: E_ROLES,
+      waitKind: "answer",
+      openedDaysAgo: 6,
+      closedDaysAgo: 4,
+    });
+    await episode({
+      id: EP_ROLE_SEEN,
+      subjectType: "entity",
+      subjectId: E_ROLES,
+      facetId: F_SEEN,
+      waitKind: "approval",
+      openedDaysAgo: 2,
+    });
+    await episode({
+      id: EP_ROLE_HIDDEN,
+      subjectType: "entity",
+      subjectId: E_ROLES,
+      facetId: F_HIDDEN,
+      waitKind: "signature",
+      openedDaysAgo: 1,
+    });
+    // Another person's thing, a goal and a session of mine.
+    await episode({
+      id: EP_THEIRS,
+      subjectType: "entity",
+      subjectId: E_THEIRS,
+      waitKind: "answer",
+      openedDaysAgo: 1,
+    });
+    await episode({
+      id: EP_GOAL,
+      subjectType: "track",
+      subjectId: G,
+      waitKind: "decide",
+      openedDaysAgo: 3,
+      closedDaysAgo: 2,
+    });
+    await episode({
+      id: EP_SESSION,
+      subjectType: "focus_session",
+      subjectId: S_ACTIVE,
+      waitKind: "decide",
+      openedDaysAgo: 1,
+    });
+  });
+
+  it("carries a thing's closed and open episodes, newest first among its status moves", async () => {
+    const two = await statusOf(E_TWO, { include: ["history"] });
+    const events = eventsOf(two);
+    expect(
+      events.map((e) => [
+        e.kind,
+        e.id === EP_OPEN || e.id === EP_CLOSED ? e.id : null,
+      ])
+    ).toEqual([
+      ["wait_episode", EP_OPEN],
+      ["status_moved", null],
+      ["wait_episode", EP_CLOSED],
+    ]);
+    expect(events[0]).toEqual({
+      id: EP_OPEN,
+      kind: "wait_episode",
+      at: expect.any(String),
+      waitKind: "answer",
+      on: null,
+      reason: null,
+      ref: null,
+      openedAt: expect.any(String),
+      closedAt: null,
+      facetId: null,
+    });
+    expect(events[1]).toMatchObject({ from: "new", to: "talking" });
+    expect(events[2]).toEqual({
+      id: EP_CLOSED,
+      kind: "wait_episode",
+      at: expect.any(String),
+      waitKind: "their_reply",
+      on: null,
+      reason: "person",
+      ref: { kind: "entity", id: C_MINE, label: "Ada Lovelace" },
+      openedAt: expect.any(String),
+      closedAt: expect.any(String),
+      facetId: null,
+    });
+    const [open, , closed] = events as unknown as Array<{
+      at: string;
+      openedAt: string;
+      closedAt: string | null;
+    }>;
+    // Placed by when it opened; the closed one closed after it opened.
+    expect(open!.at).toBe(open!.openedAt);
+    expect(closed!.at).toBe(closed!.openedAt);
+    expect(Date.parse(closed!.closedAt!)).toBeGreaterThan(
+      Date.parse(closed!.openedAt)
+    );
+    expectNewestFirst(events);
+    expect(two.history).toMatchObject({ truncated: false });
+    for (const e of events) {
+      expect(STATUS_HISTORY_EVENT_KINDS as readonly string[]).toContain(e.kind);
+    }
+  });
+
+  it("a role's episode only for a role the reader may see", async () => {
+    const roles = await statusOf(E_ROLES, { include: ["history"] });
+    expect(
+      eventsOf(roles)
+        .filter((e) => e.kind === "wait_episode")
+        .map((e) => [e.id, e.facetId])
+    ).toEqual([
+      [EP_ROLE_SEEN, F_SEEN],
+      [EP_KIND, null],
+    ]);
+    expect(JSON.stringify(roles)).not.toContain(EP_ROLE_HIDDEN);
+    expect(JSON.stringify(roles)).not.toContain(F_HIDDEN);
+  });
+
+  it("a goal and a session carry theirs among their other entries; a thing with none has none", async () => {
+    const out = await readStatusOf(ME, [G, S_ACTIVE, E_PLAIN], {
+      include: ["history"],
+    });
+    const by = new Map(out.map((a) => [a.id, a as StatusOf]));
+    for (const [id, ep, closed] of [
+      [G, EP_GOAL, true],
+      [S_ACTIVE, EP_SESSION, false],
+    ] as const) {
+      const events = eventsOf(by.get(id));
+      expect(events.filter((e) => e.kind === "wait_episode")).toEqual([
+        expect.objectContaining({
+          id: ep,
+          kind: "wait_episode",
+          waitKind: "decide",
+          closedAt: closed ? expect.any(String) : null,
+        }),
+      ]);
+      // Merged with the goal's or session's own status entries, one order.
+      expect(events.some((e) => e.kind !== "wait_episode")).toBe(true);
+      expectNewestFirst(events);
+    }
+    expect(
+      eventsOf(by.get(E_PLAIN)).filter((e) => e.kind === "wait_episode")
+    ).toEqual([]);
+  });
+
+  it("without history, no episodes at all", async () => {
+    expect(await statusOf(E_TWO)).not.toHaveProperty("history");
+    const signals = await statusOf(E_TWO, { include: ["signals"] });
+    expect(signals).not.toHaveProperty("history");
+    expect(JSON.stringify(signals)).not.toContain(EP_OPEN);
+  });
+
+  it("a thing the reader may not see, or an unknown id, carries none", async () => {
+    const missing = randomUUID();
+    const out = await readStatusOf(ME, [E_THEIRS, missing], {
+      include: ["history"],
+    });
+    expect(out).toEqual([
+      { id: E_THEIRS, type: "unknown" },
+      { id: missing, type: "unknown" },
+    ]);
+    expect(JSON.stringify(out)).not.toContain(EP_THEIRS);
+  });
+
+  it("a FAILED episode read makes the history unavailable, never a list missing its episodes", async () => {
+    holder.failEpisodes = true;
+    try {
+      const out = await readStatusOf(ME, [E_TWO, G, S_ACTIVE], {
+        include: ["history"],
+      });
+      expect(out).toHaveLength(3);
+      for (const a of out) {
+        expect((a as StatusOf).history).toEqual({ status: "unavailable" });
+      }
+    } finally {
+      holder.failEpisodes = false;
+    }
+    // Read again, it answers: the failure was the read, not the subject.
+    expect(
+      eventsOf(await statusOf(E_TWO, { include: ["history"] }))
+    ).toHaveLength(3);
   });
 });

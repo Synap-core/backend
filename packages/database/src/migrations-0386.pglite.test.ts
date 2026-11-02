@@ -199,6 +199,37 @@ describe("wait episodes — the writer and the reader", () => {
     ).toEqual([]);
   });
 
+  it("the cap is per subject and keeps each one's NEWEST episodes", async () => {
+    const db = drizzle(pg) as never;
+    await pg.exec(`DELETE FROM status_wait_episode`);
+    const ep = (subject: string, h: number, closed: boolean, key: string) =>
+      pg.query(
+        `INSERT INTO status_wait_episode (subject_type, subject_id, wait_kind, ref_key, opened_at, closed_at)
+         VALUES ('entity', $1, 'answer', $2, $3, $4)`,
+        [subject, key, at(h), closed ? at(h + 1) : null]
+      );
+    // S waited three times (the last one still open); T once, long ago.
+    await ep(S, 1, true, "a");
+    await ep(S, 3, true, "b");
+    await ep(S, 5, false, "c");
+    await ep(T, 0, true, "d");
+    const read = await readWaitEpisodes(
+      db,
+      [
+        { subjectType: "entity", subjectId: S },
+        { subjectType: "entity", subjectId: T },
+      ],
+      { perSubject: 2 }
+    );
+    // Oldest first in the answer, but S's OLDEST is the one dropped: its
+    // open wait survives, and T keeps its own row.
+    expect(read.map((e) => [e.subjectId, e.openedAt, e.closedAt])).toEqual([
+      [T, at(0).toISOString(), at(1).toISOString()],
+      [S, at(3).toISOString(), at(4).toISOString()],
+      [S, at(5).toISOString(), null],
+    ]);
+  });
+
   it("a kind's own wait (no facet) stays single: NULLS NOT DISTINCT", async () => {
     await pg.exec(`DELETE FROM status_wait_episode`);
     const insert = () =>

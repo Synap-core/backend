@@ -1599,6 +1599,24 @@ declare const RUNNER_STATES: readonly [
 export type RunnerState = (typeof RUNNER_STATES)[number];
 /** A word a LIVE runner says (an ended one says nothing about now). */
 export type LiveRunnerState = Exclude<RunnerState, "ended">;
+export interface WaitEpisode {
+	id: string;
+	subjectType: TransitionSubjectType;
+	subjectId: string;
+	/** The role's facet when the wait is on a role's lifecycle, else null. */
+	facetId: string | null;
+	waitKind: WaitKind;
+	/** A hold's `on` when the wait is a pause, else null. */
+	on: HoldOn | null;
+	/** The coarse waiting-on reason; null for a wait that makes no mark (a park). */
+	reason: WaitingOnReason | null;
+	/** What is waited on, as the thing's holder reads it; null when unnamed. */
+	ref: WaitingOnRef | null;
+	/** ISO. The tick that first found the wait (no backfill: at most a tick late). */
+	openedAt: string;
+	/** ISO; null while the wait stands. */
+	closedAt: string | null;
+}
 /** The loop as stored on the goal (`project_tracks.loop`, 0350). */
 export interface GoalLoopSettings {
 	on: boolean;
@@ -1933,8 +1951,36 @@ export interface StatusOfStageEntered {
 	/** Which writer recorded it: the stage door, or a re-applied approval. */
 	via: "advance" | "approval";
 }
+/**
+ * A stretch of time a thing, goal or session waited on one thing, read from
+ * its wait episodes (`status_wait_episode`, 0386, {@link WaitEpisode}):
+ * "where the time went". Placed in the history when it OPENED; `closedAt` is
+ * null while the wait stands. A role's episode is listed only when the reader
+ * may see that role. Only `include: ["history"]` carries it; the timeline
+ * does not.
+ */
+export interface StatusOfWaitEpisode {
+	/** The episode's id: stable across reads. */
+	id: string;
+	kind: "wait_episode";
+	/** When the wait opened (= `openedAt`): the history's sort key. */
+	at: string;
+	waitKind: WaitEpisode["waitKind"];
+	/** A hold's `on` when the wait is a pause, else null. */
+	on: WaitEpisode["on"];
+	/** The coarse waiting-on reason; null for a wait that makes no mark. */
+	reason: WaitEpisode["reason"];
+	/** What is waited on; null when the pod cannot name it. */
+	ref: WaitEpisode["ref"];
+	/** ISO. The tick that first found the wait. */
+	openedAt: string;
+	/** ISO; null while the wait stands. */
+	closedAt: string | null;
+	/** The role's facet when the wait is on a role's lifecycle, else null. */
+	facetId: string | null;
+}
 /** One entry of `include: ["history"]`. */
-export type StatusOfHistoryEvent = DevTimelineEvent | TrackHistoryEvent | StatusOfStageEntered;
+export type StatusOfHistoryEvent = DevTimelineEvent | TrackHistoryEvent | StatusOfStageEntered | StatusOfWaitEpisode;
 /** One role a thing wears, with the role's own status (stored on the facet). */
 export interface StatusOfRole {
 	facetId: string;
@@ -1965,12 +2011,13 @@ export interface StatusOfAccount {
 }
 /**
  * `include: ["history"]`: THE timeline, kept to its status events, with a
- * session's stage ledger merged in by time.
+ * session's stage ledger and the subject's wait episodes merged in by time.
  */
 export interface StatusOfHistory {
 	/**
 	 * Newest first: a goal's are `TrackHistoryEvent`s, a session's
-	 * `status_moved` and `stage_entered`, a thing's `status_moved`.
+	 * `status_moved` and `stage_entered`, a thing's `status_moved`; each also
+	 * carries its `wait_episode`s.
 	 */
 	events: StatusOfHistoryEvent[];
 	/** Older events exist and are not listed. */
