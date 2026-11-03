@@ -46,6 +46,7 @@ import {
   type ProposalWaitsRow,
 } from "./proposal-waits.js";
 import { isUuid } from "@synap-core/types/property-render";
+import { sessionIdsBlockingOpenPr } from "../dev-loop/open-pr-blocking.js";
 
 export interface ProposalNeedsYouRow extends ProposalWaitsRow {
   createdAt: Date | string;
@@ -110,6 +111,7 @@ export async function classifyPendingProposals(
         ),
   ]);
   const sessionOf = new Map(sessions.map((s) => [s.id, s]));
+  const blocking = await sessionIdsBlockingOpenPr(reader, sessionIds);
   const snoozedUntilOf = new Map(
     snoozes.map((s) => [s.proposalId, s.snoozedUntil])
   );
@@ -125,6 +127,7 @@ export async function classifyPendingProposals(
         sessionStatus: session?.status ?? null,
         sessionClass: session?.sessionClass ?? null,
         snoozedUntil: snoozedUntilOf.get(row.id) ?? null,
+        blocksOpenPr: sessionId !== null && blocking.has(sessionId),
       },
       now
     );

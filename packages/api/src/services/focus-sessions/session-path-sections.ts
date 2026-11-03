@@ -90,6 +90,7 @@ import { isNeedsYou } from "@synap-core/types/needs-you/rule";
 import { foldRunnerState, loadSessionRunnersFor } from "./session-runners.js";
 import { owedSlotClassOf } from "../signals/needs-you-union.js";
 import { classifyPendingProposals } from "../proposals/proposal-needs-you.js";
+import { sessionIdsBlockingOpenPr } from "../dev-loop/open-pr-blocking.js";
 import { readDependencyFacts } from "../links/dependency-links.js";
 import { readOpenInboxes } from "./session-inbox.js";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
@@ -432,6 +433,7 @@ async function readPageNeedsYou<R extends PathSourceRow>(
       ),
   ]);
   const factsOf = new Map(facts.map((f) => [f.id, f]));
+  const blocking = await sessionIdsBlockingOpenPr({ userId }, ids);
   const owed = new Map<string, number>();
   for (const row of rows) {
     const f = factsOf.get(row.id);
@@ -447,6 +449,7 @@ async function readPageNeedsYou<R extends PathSourceRow>(
         turnInFlight: f?.turnInFlight === true,
         lastAgentActivityAt: f?.lastAgentActivityAt ?? null,
         lastAgentWorkAt: f?.lastAgentWorkAt ?? null,
+        blocksOpenPr: blocking.has(row.id),
       },
       now
     );

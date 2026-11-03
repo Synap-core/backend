@@ -172,6 +172,7 @@ import {
   readNextMovePicks,
   writeNextMoveSkip,
 } from "../services/signals/next-moves.js";
+import { sessionIdsBlockingOpenPr } from "../services/dev-loop/open-pr-blocking.js";
 
 const logger = createLogger({ module: "signals" });
 
@@ -661,6 +662,15 @@ async function readAttention(
     ),
   ]);
 
+  // Sessions that hold an open PR: a cluster filed in one blocks it (owed
+  // slots carry the fact from their own read). Unmeasured stays `undefined`.
+  const openPrSessions = await settle("proposals", new Set<string>(), () =>
+    sessionIdsBlockingOpenPr(
+      { userId },
+      groups.value.groups.flatMap((g) => (g.sessionId ? [g.sessionId] : []))
+    )
+  );
+
   const draftAsks = drafts.value as {
     slots: OwedSlotSignalInput[];
     starterNames: Map<string, string>;
@@ -699,6 +709,7 @@ async function readAttention(
       ? undefined
       : openQuestions.value,
     measuredOwedSessionIds: owedPointers.value,
+    openPrSessionIds: openPrSessions.failed ? undefined : openPrSessions.value,
     failures: {
       // What each class read. Blocking: every half but drafts.
       blocking: failuresOf(
@@ -736,6 +747,7 @@ function blockingSignals(a: Attention): Signal[] {
     owedSlots: a.owed,
     openQuestionSessionIds: a.openQuestionSessionIds,
     measuredOwedSessionIds: a.measuredOwedSessionIds,
+    openPrSessionIds: a.openPrSessionIds,
     draftAsks: a.draftAsks,
     reviewSessions: a.review.sessions,
     permissionSessions: a.permission.sessions,

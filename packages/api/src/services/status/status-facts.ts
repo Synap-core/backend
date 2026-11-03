@@ -709,7 +709,7 @@ function blockerRef(b: OpenBlocker): WaitingOnRef {
  * grant alone. A PR with no recorded fact is left out (never guessed). One
  * read of the sessions, one of the PR states. THROWS.
  */
-async function readOpenWorkUnits(
+export async function readOpenWorkUnits(
   reader: WaitingOnReader,
   sessionIds: readonly string[],
   containerIds: readonly string[] = []
