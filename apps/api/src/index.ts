@@ -25,6 +25,7 @@ import { HTTPException } from "hono/http-exception";
 import { logger } from "hono/logger";
 import { redactSecretPath } from "./middleware/redact-secret-path.js";
 import { isUuid } from "@synap-core/types/property-render";
+import { POD_FEATURES } from "@synap-core/types/device";
 import { secureHeaders } from "hono/secure-headers";
 import { getCookie } from "hono/cookie";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
@@ -381,6 +382,9 @@ app.get("/health", async (c) => {
     apiTypesVersion: "1.34.0",
     mode: "multi-user",
     auth: "ory-stack",
+    // Feature marks a client reads before it uses a newer door (0395:
+    // "agent-seats"). Contract: @synap-core/types/device POD_FEATURES.
+    features: POD_FEATURES,
     // Git SHA the running image was built from (see deploy/Dockerfile ARG
     // GIT_SHA -> ENV SYNAP_GIT_SHA, already surfaced on /status/release as
     // `buildStamp`). Repeated here so a single `curl /health` answers "is this

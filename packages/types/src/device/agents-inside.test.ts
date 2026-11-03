@@ -6,7 +6,9 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  AGENT_SEATS_FEATURE,
   DEVICE_IN_USE_WINDOW_MS,
+  POD_FEATURES,
   approveDecision,
   defaultAgentActions,
   defaultReuseId,
@@ -239,5 +241,14 @@ describe("the page's defaults", () => {
     });
     expect(decision.agentActions).toBeUndefined();
     expect(decision.agents).toEqual(["claude-code"]);
+  });
+});
+
+describe("the pod's feature mark (a CLI reads it before it mints)", () => {
+  it("serves agent-seats under its wire name", () => {
+    // A CLI compares this literal: renaming it makes every new CLI treat
+    // this pod as an older one.
+    expect(AGENT_SEATS_FEATURE).toBe("agent-seats");
+    expect(POD_FEATURES).toContain("agent-seats");
   });
 });

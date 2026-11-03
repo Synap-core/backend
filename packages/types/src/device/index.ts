@@ -181,6 +181,21 @@ export interface DeviceDecision {
 /** Agents one device request may ask for (the pod's limit, every door). */
 export const DEVICE_MAX_AGENTS = 8;
 
+/**
+ * The pod's feature mark for agents inside a computer (0395), served on the
+ * public `GET /health` as `features`. A CLI reads it BEFORE it mints:
+ * - present: `POST /setup/device` takes `seat`, `seatId`, `rows` and `held`,
+ *   and `POST /setup/agent` takes `role` / `roleLabel` (the seat from the
+ *   calling computer key);
+ * - absent (an older pod, no `features` at all): send today's request. Such a
+ *   pod ignores `role` and would key the engine's plain agent instead.
+ * The string is a wire contract: never rename it, add a new mark instead.
+ */
+export const AGENT_SEATS_FEATURE = "agent-seats";
+
+/** Every feature mark `GET /health` serves (`features`). */
+export const POD_FEATURES: readonly string[] = [AGENT_SEATS_FEATURE];
+
 /** "Computer" — the one noun, from the vocabulary door. */
 export const COMPUTER_NOUN = resolveObjectNoun(MACHINE_AGENT_TYPE);
 
