@@ -24,7 +24,7 @@ import {
   Textarea,
 } from "@heroui/react";
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { createContext, useContext, type ReactNode } from "react";
 import {
   GRANT_ACTIONS,
   KEY_AGENT_DOOR,
@@ -75,6 +75,11 @@ export interface KeyPlace {
   readonly name: string;
 }
 
+/** The sections a host shows (undefined = all): the editor of an existing key hides name, uses and lifetime. */
+const ShownSections = createContext<readonly KeyDraftSectionId[] | undefined>(
+  undefined
+);
+
 function Section({
   id,
   hint,
@@ -84,6 +89,8 @@ function Section({
   hint?: ReactNode;
   children: ReactNode;
 }) {
+  const shown = useContext(ShownSections);
+  if (shown && !shown.includes(id)) return null;
   return (
     <section
       id={sectionAnchor(id)}
@@ -168,9 +175,19 @@ export interface KeySectionsProps {
   readonly ceiling?: KeyCeiling;
   /** Rendered at the end of "Name and note" (who holds the key). */
   readonly holderSlot?: ReactNode;
+  /** Only these sections are drawn (default: all). */
+  readonly sections?: readonly KeyDraftSectionId[];
 }
 
 export function KeySections(props: KeySectionsProps) {
+  return (
+    <ShownSections.Provider value={props.sections}>
+      <KeySectionsBody {...props} />
+    </ShownSections.Provider>
+  );
+}
+
+function KeySectionsBody(props: KeySectionsProps) {
   const {
     draft,
     onChange,

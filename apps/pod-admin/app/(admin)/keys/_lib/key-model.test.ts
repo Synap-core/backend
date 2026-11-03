@@ -12,6 +12,7 @@ import {
   keyTypeCounts,
   queryKeys,
   type UnifiedKey,
+  keysOfHolderHref,
 } from "./key-model";
 
 const key = (over: Partial<UnifiedKey>): UnifiedKey => ({
@@ -342,5 +343,15 @@ describe("queryKeys — the list toolbar", () => {
     expect(
       keyTypeCounts(keys, { search: "mac", status: "live" }).get("service")
     ).toBeUndefined();
+  });
+});
+
+describe("keysOfHolderHref: an agent's page opens its keys", () => {
+  it("narrows the Keys list to the holder, and the list reads it as its search", () => {
+    const href = keysOfHolderHref("Scout & Co");
+    expect(href).toBe("/keys?q=Scout%20%26%20Co");
+    expect(new URL(href, "https://pod.test").searchParams.get("q")).toBe(
+      "Scout & Co"
+    );
   });
 });

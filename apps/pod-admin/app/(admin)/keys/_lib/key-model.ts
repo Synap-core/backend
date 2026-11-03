@@ -156,6 +156,14 @@ export function keyHref(k: UnifiedKey): string | null {
   return `${navHref("spaces")}/${encodeURIComponent(k.workspaceId)}?tab=api-keys&focus=${encodeURIComponent(k.id)}`;
 }
 
+/**
+ * The Keys list narrowed to one holder's keys (an agent's page names its keys
+ * and opens them here): the list reads `?q=` as its search.
+ */
+export function keysOfHolderHref(holderName: string): string {
+  return navHref("keys", { q: holderName });
+}
+
 export function keyStatus(apiKey: {
   isActive: boolean;
   expiresAt?: Date | string | null;
