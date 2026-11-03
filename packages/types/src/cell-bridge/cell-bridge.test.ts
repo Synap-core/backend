@@ -8,8 +8,10 @@ import {
   CELL_FRAME_MAX_BYTES,
   CELL_FRAME_SANDBOX,
   buildCellFrameCsp,
+  buildCellModuleFrameCsp,
   cellBridgeReadRefusal,
   cellFrameHeadBlock,
+  frameExternalOrigins,
   htmlByteLength,
   isCellBridgeReadOp,
   narrowHomeToSpace,
@@ -28,19 +30,34 @@ function directives(csp: string): Map<string, string> {
   return out;
 }
 
-describe("the frame's Content Security Policy", () => {
-  it("is exactly the approved policy", () => {
+/** Every source the policy names, across all its directives. */
+function sources(csp: string): string[] {
+  return [...directives(csp).values()]
+    .flatMap((s) => s.split(" "))
+    .filter(Boolean);
+}
+/** A source that is a keyword or a bare scheme with no host: never an origin. */
+const NOT_AN_ORIGIN = /^(?:'none'|'unsafe-inline'|data:|blob:)$/;
+
+describe("the frame's Content Security Policy (THE one policy, decision R3)", () => {
+  it("is exactly the desktop's policy, plus an explicit frame-src 'none'", () => {
     expect(buildCellFrameCsp()).toBe(
       "default-src 'none'; " +
-        "script-src 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com; " +
-        "style-src 'unsafe-inline' https://fonts.googleapis.com; " +
-        "font-src data: https://fonts.gstatic.com; " +
+        "script-src 'unsafe-inline'; " +
+        "style-src 'unsafe-inline'; " +
         "img-src data: blob:; " +
+        "font-src data:; " +
         "connect-src 'none'; " +
         "form-action 'none'; " +
         "base-uri 'none'; " +
         "frame-src 'none'"
     );
+  });
+
+  it("names no origin at all: no script CDN, no font host, no image host", () => {
+    for (const source of sources(buildCellFrameCsp())) {
+      expect(source).toMatch(NOT_AN_ORIGIN);
+    }
   });
 
   it("gives the page no network path: connect-src names no host", () => {
@@ -52,19 +69,11 @@ describe("the frame's Content Security Policy", () => {
     expect(d.get("base-uri")).toBe("'none'");
   });
 
-  it("never allows eval, a wildcard or a bare scheme as a script source", () => {
+  it("never allows eval or a wildcard", () => {
     const csp = buildCellFrameCsp();
     expect(csp).not.toContain("unsafe-eval");
     expect(csp).not.toContain("*");
-    const script = directives(csp).get("script-src")!.split(" ");
-    for (const source of script) {
-      expect(
-        ["'unsafe-inline'"].includes(source) ||
-          /^https:\/\/[a-z.]+$/.test(source)
-      ).toBe(true);
-    }
   });
-
   it("the sandbox grants scripts and nothing else", () => {
     expect(CELL_FRAME_SANDBOX).toBe("allow-scripts");
   });
@@ -75,6 +84,53 @@ describe("the frame's Content Security Policy", () => {
     expect(htmlByteLength("é")).toBe(2);
     expect(htmlByteLength("€")).toBe(3);
     expect(htmlByteLength("😀")).toBe(4);
+  });
+});
+
+describe("the module cell's policy: the same policy, plus blob: modules and approved hosts", () => {
+  it("with no approved host, is the web ViewFrame's policy plus frame-src 'none'", () => {
+    expect(buildCellModuleFrameCsp()).toBe(
+      "default-src 'none'; " +
+        "script-src blob: 'unsafe-inline'; " +
+        "style-src 'unsafe-inline'; " +
+        "img-src data: blob:; " +
+        "font-src data:; " +
+        "connect-src blob:; " +
+        "form-action 'none'; " +
+        "base-uri 'none'; " +
+        "frame-src 'none'"
+    );
+  });
+
+  it("differs from the page policy only where a module needs it", () => {
+    const page = directives(buildCellFrameCsp());
+    const mod = directives(
+      buildCellModuleFrameCsp(["https://api.example.com"])
+    );
+    expect([...mod.keys()]).toEqual([...page.keys()]);
+    const changed = [...page.keys()].filter((k) => page.get(k) !== mod.get(k));
+    expect(changed.sort()).toEqual(["connect-src", "img-src", "script-src"]);
+    // No remote SCRIPT origin, ever: an approved host reads and draws, it never runs code.
+    expect(mod.get("script-src")).toBe("blob: 'unsafe-inline'");
+    expect(mod.get("connect-src")).toBe("blob: https://api.example.com");
+    expect(mod.get("img-src")).toBe("data: blob: https://api.example.com");
+  });
+
+  it("keeps only clean origins: a wildcard, a path, credentials or junk is dropped", () => {
+    expect(
+      frameExternalOrigins([
+        "https://*",
+        "https://*.cdn.tld",
+        "https://api.example.com/v1",
+        "https://user:pw@api.example.com",
+        "javascript:alert(1)",
+        "not a url",
+        "https://api.example.com?x=1",
+        " https://api.example.com ",
+        "https://api.example.com",
+        "wss://live.example.com",
+      ])
+    ).toEqual(["https://api.example.com", "wss://live.example.com"]);
   });
 });
 

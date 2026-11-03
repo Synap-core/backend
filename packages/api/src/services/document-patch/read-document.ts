@@ -55,6 +55,21 @@ export function readsAsMarkdown(
   return mime === "" || mime.startsWith("text/");
 }
 
+/**
+ * Whether a read may check this document as a stored HTML page (`documents.type
+ * = "html"`), up to the same {@link MARKDOWN_READ_MAX_CHARS}. A page is never
+ * parsed as markdown: its one check is the frame policy's (`diagnoseHtmlPage`,
+ * a scan of its markup for network loads), so the author reads why a page whose
+ * code is on a CDN does not run. A stored file holding HTML (`type = "file"`) is
+ * a file, not a page.
+ */
+export function readsAsPage(
+  doc: { type: string; mimeType?: string | null },
+  content: string
+): boolean {
+  return doc.type === "html" && content.length <= MARKDOWN_READ_MAX_CHARS;
+}
+
 /** The diagnostics of a document a read does not parse: not checked, and why. */
 export function unparsedDiagnostics(
   doc: { type: string; mimeType?: string | null },
@@ -120,11 +135,22 @@ export function readableMarkdown(markdown: string): string {
 export async function currentDiagnostics(args: {
   documentId: string;
   workspaceId: string | null;
+  /** `documents.type`: an `html` page is checked as a page, never from a stamp. */
+  type?: string | null;
   metadata: unknown;
   revision: number;
   content: string;
   readerUserId: string;
 }): Promise<DiagnosticsOutcome> {
+  // A page's check is pure and cheap, and no stamp was ever judged as a page
+  // (the reactor stamps markdown only), so it is always checked now.
+  if (args.type === "html") {
+    return diagnoseForDocument(
+      args.content,
+      { id: args.documentId, workspaceId: args.workspaceId, type: "html" },
+      args.readerUserId
+    );
+  }
   const stored = readStoredDiagnostics(args.metadata, args.revision);
   if (stored) return { items: stored };
   const checked = await diagnoseForDocument(

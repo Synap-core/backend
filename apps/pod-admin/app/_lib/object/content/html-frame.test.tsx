@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { buildCellFrameCsp } from "@synap-core/types/cell-bridge";
+import {
+  buildCellFrameCsp,
+  frameNetworkCodeRefusal,
+} from "@synap-core/types/cell-bridge";
 
 // The frame reads the console's client only inside an effect (never on a
 // static render); the hook just has to exist.
@@ -11,7 +14,12 @@ vi.mock("../../../../lib/trpc", () => ({
 
 import { DocumentContentSection } from "./content-block";
 import { documentContent } from "./document-model";
-import { HtmlPageBody, HtmlPageSection, SandboxedFrame } from "./html-frame";
+import {
+  HtmlFrame,
+  HtmlPageBody,
+  HtmlPageSection,
+  SandboxedFrame,
+} from "./html-frame";
 import { prepareContent } from "./markdown-model";
 
 const html = (el: ReactElement) => renderToStaticMarkup(el);
@@ -153,5 +161,51 @@ describe("a stored HTML page on its document page", () => {
     expect(out).toContain("The content couldn’t be loaded.");
     expect(out).toContain("Retry");
     expect(iframes(out)).toEqual([]);
+  });
+});
+
+describe("a page whose code is on a CDN (the one frame policy, R3)", () => {
+  const CDN_PAGE =
+    '<!doctype html><html><head><script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script></head><body><canvas id="c"></canvas></body></html>';
+
+  it("is not run: the reader reads why, and the source is one click away", () => {
+    const out = html(
+      <HtmlPageBody
+        view="page"
+        html={CDN_PAGE}
+        bytes={CDN_PAGE.length}
+        tooLarge={false}
+        workspaceId="ws-1"
+        source={prepareContent(CDN_PAGE, "source")}
+        title="Content"
+        sourceBody={(p) => <pre>{p.text}</pre>}
+        onShowSource={() => {}}
+      />
+    );
+    expect(iframes(out)).toEqual([]);
+    expect(unescape(out)).toContain(frameNetworkCodeRefusal(CDN_PAGE)!);
+    expect(out).toContain("cdn.jsdelivr.net");
+    expect(out).toContain("Show source");
+  });
+
+  it("an embedded page shows the host's door beside the reason, never a blank frame", () => {
+    const out = html(
+      <HtmlFrame
+        html={CDN_PAGE}
+        workspaceId={null}
+        title="Q3"
+        refusedAction={<a href="/open/x">Open the page</a>}
+      />
+    );
+    expect(iframes(out)).toEqual([]);
+    expect(out).toContain("Open the page");
+    expect(out).toContain("cdn.jsdelivr.net");
+  });
+
+  it("a page with only web fonts still runs (it draws with system fonts)", () => {
+    const page =
+      '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter"><p>Hi</p>';
+    const out = html(<HtmlFrame html={page} workspaceId={null} title="Q3" />);
+    expect(iframes(out)).toHaveLength(1);
   });
 });
