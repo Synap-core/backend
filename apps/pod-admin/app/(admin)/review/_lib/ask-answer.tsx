@@ -129,6 +129,7 @@ import {
   type ConnectEvent,
   type ConnectWait,
 } from "./provide-connect";
+import { AskContext } from "./ask-context";
 import { fileProblem, uploadProvidedFile } from "./provide-file";
 
 /** A door's error, as tRPC hands it over. */
@@ -307,11 +308,7 @@ export function AskAnswer({
             {view.heading}
           </h3>
         )}
-        {showContext && view.context && (
-          <p className="text-pretty text-[13px] leading-relaxed text-foreground/75">
-            {view.context}
-          </p>
-        )}
+        {showContext && view.context && <AskContext context={view.context} />}
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-foreground/65">
           {view.asker && (
             <>
