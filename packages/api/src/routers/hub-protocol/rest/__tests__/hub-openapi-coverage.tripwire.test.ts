@@ -39,13 +39,23 @@ const SPEC_FILE = join(
 );
 const METHODS = ["get", "post", "put", "patch", "delete"];
 
+/**
+ * Swagger UI is mounted outside production only, after a dynamic `import()`
+ * resolves (hub-protocol-rest.ts), so whether `app.routes` holds it when this
+ * file reads it is a race: two gates of one sha disagreed on it. It is a dev
+ * page, not an API route, so it is left out of the served set.
+ */
+const DEV_ONLY_ASYNC_ROUTES = new Set(["GET /docs"]);
+
 /** Every `METHOD /path` the app serves (middleware `ALL` and wildcards out). */
 function servedRoutes(): string[] {
   const set = new Set<string>();
   for (const r of hubProtocolRestApp.routes) {
     const method = r.method.toLowerCase();
     if (!METHODS.includes(method) || r.path.includes("*")) continue;
-    set.add(`${method.toUpperCase()} ${toOpenApiPath(r.path)}`);
+    const key = `${method.toUpperCase()} ${toOpenApiPath(r.path)}`;
+    if (DEV_ONLY_ASYNC_ROUTES.has(key)) continue;
+    set.add(key);
   }
   return [...set].sort();
 }
