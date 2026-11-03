@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { chartGeometry, describeEmbed } from "../renderables/index.js";
 import {
   CHART_SPOKEN_VALUES,
+  resolveChartComposedLegend,
   resolveChartSpokenLabel,
   resolveChartTableHead,
   resolveEmbedWords,
@@ -120,6 +121,49 @@ describe("resolveChartSpokenLabel / resolveChartTableHead — a drawn chart's wo
     ).toBe("Done: 30 (75%)");
   });
 
+  it("a pie names each value with its share", () => {
+    expect(
+      resolveChartSpokenLabel(
+        "Moves",
+        drawn("chart-pie", [
+          { label: "Crash", value: 3 },
+          { label: "Clean", value: 1 },
+        ])
+      )
+    ).toBe("Moves: Crash 3 (75%), Clean 1 (25%)");
+  });
+
+  it("a composed chart names each bucket with both series, by their authored names", () => {
+    const named = drawn(
+      "chart-composed",
+      [{ x: "30 Oct", bar: 567, line: 44 }],
+      {
+        barLabel: "Jobs run",
+        lineLabel: "Minutes over target",
+      }
+    );
+    expect(resolveChartSpokenLabel("Load", named)).toBe(
+      `Load: 30 Oct Jobs run ${(567).toLocaleString()}, Minutes over target 44`
+    );
+    if (named.kind !== "composed") throw new Error(named.kind);
+    expect(resolveChartComposedLegend(named)).toEqual({
+      bar: "Jobs run",
+      line: "Minutes over target",
+    });
+    const plain = drawn("chart-composed", [
+      { x: "A", bar: 1, line: 2 },
+      { x: "", bar: 3, line: 4 },
+    ]);
+    if (plain.kind !== "composed") throw new Error(plain.kind);
+    expect(resolveChartComposedLegend(plain)).toEqual({
+      bar: "Bars",
+      line: "Line",
+    });
+    expect(resolveChartSpokenLabel("T", plain)).toBe(
+      "T: A Bars 1, Line 2; (no label) Bars 3, Line 4"
+    );
+  });
+
   it("a table and an empty snapshot have no spoken label (their cells / sentence speak)", () => {
     expect(
       resolveChartSpokenLabel("T", drawn("chart-choropleth", { FR: 1 }))
@@ -129,7 +173,6 @@ describe("resolveChartSpokenLabel / resolveChartTableHead — a drawn chart's wo
 
   it("every table shape has a heading per column", () => {
     for (const [cellKey, data] of [
-      ["chart-composed", [{ x: "W1", bar: 1, line: 2 }]],
       ["chart-scatter", [{ x: 1, y: 2 }]],
       [
         "chart-sankey",
