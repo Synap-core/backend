@@ -2293,6 +2293,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   // (founder 2026-10-18: an agent only PROPOSES Library organisation); classed
   // disruptive so no `@reversible` class rule can widen it either.
   "library/organize": "disruptive",
+  "messaging/import_history": "disruptive", // effect: reads every chat of an account into people's channels
   "playbook/archive": "disruptive", // destroy
   "playbook/create": "disruptive", // struct (2.09)
   "playbook/promote": "disruptive", // struct (2.09)
@@ -2580,6 +2581,10 @@ export const GATE_WRITE_DOORS = {
   // `routers/proposals/executors/link.ts`. `delete` is a DESTRUCTIVE_ACTIONS
   // verb, so an agent's removal always proposes.
   "link/delete": "gate",
+  // `POST /messaging/accounts/:id/import-history` (founder, 2026-11-03): an
+  // agent ASKS for an account's history import; the person's approval queues
+  // it (`routers/proposals/executors/messaging.ts`).
+  "messaging/import_history": "gate",
   "playbook/archive": "gate",
   "playbook/create": "gate",
   "playbook/promote": "gate",

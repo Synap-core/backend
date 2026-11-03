@@ -911,7 +911,11 @@ export const GRANT_OWNER_WIDE_REST_DOORS: readonly RegExp[] = [
  *    account at the provider), `POST /messaging/accounts/sync` (rewrites the
  *    person's account mirror, registers provider webhooks). The send through
  *    an account is NOT here: it checks `messaging.send` in the conversation's
- *    space (`sendExternalMessage`).
+ *    space (`sendExternalMessage`). Neither is `POST
+ *    /messaging/accounts/:id/import-history` (founder, 2026-11-03): its
+ *    handler names the gate (`messaging/import_history`), so an agent's ask
+ *    becomes a proposal the person approves, and a narrowed key that is not an
+ *    agent's is refused there — no grant narrows what the import reads.
  *  - `/memory` writes (`POST /memory`, `/memory/turns|sessions|writes`,
  *    `DELETE /memory/:id`; S5 2026-10-20): `knowledge_facts` about the
  *    person, recalled in EVERY workspace, written directly — no grant narrows
@@ -933,8 +937,6 @@ export const GRANT_OWNER_WIDE_REST_WRITES: readonly RegExp[] = [
   /^\/connectors\/disconnect\/?$/,
   /^\/connectors\/(?:connect|session)\/?$/,
   /^\/messaging\/accounts\/[^/]+\/?$/,
-  // Imports an account's history into every matching person's channel.
-  /^\/messaging\/accounts\/[^/]+\/import-history\/?$/,
   /^\/memory(?:\/(?!search\/?$)[^/]+)?\/?$/,
   /^\/knowledge\/(?!(?:search|ask|answer)\/?$)[^/]+\/?$/,
 ];
