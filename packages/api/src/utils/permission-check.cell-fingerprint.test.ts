@@ -94,17 +94,22 @@ import {
 
 const SOURCE = "export default function Cell() { return null; }";
 
-const agentWrite = (
-  subjectType: "cell" | "view",
-  action: "define" | "create",
-  data: Record<string, unknown>
-) => ({
+const BASE = {
   userId: "user-abc",
   agentUserId: "agent-7",
   workspaceId: "ws-123",
-  subjectType,
-  action,
   source: "intelligence" as const,
+};
+const cellDefine = (data: Record<string, unknown>) => ({
+  ...BASE,
+  subjectType: "cell" as const,
+  action: "define" as const,
+  data,
+});
+const viewCreate = (data: Record<string, unknown>) => ({
+  ...BASE,
+  subjectType: "view" as const,
+  action: "create" as const,
   data,
 });
 
@@ -135,7 +140,7 @@ describe("the gate files a cell proposal with its content fingerprint", () => {
 
   it("a cell/define proposal carries the fingerprint of what its approval writes", async () => {
     await checkPermissionOrPropose(
-      agentWrite("cell", "define", { name: "My Cell", rendererSource: SOURCE })
+      cellDefine({ name: "My Cell", rendererSource: SOURCE })
     );
     expect(mockInsertPendingProposal).toHaveBeenCalledTimes(1);
     expect(storedPayload()?.[CELL_CONTENT_FINGERPRINT_KEY]).toBe(
@@ -148,7 +153,7 @@ describe("the gate files a cell proposal with its content fingerprint", () => {
 
   it("a stamp the caller sent is replaced by the derived one", async () => {
     await checkPermissionOrPropose(
-      agentWrite("cell", "define", {
+      cellDefine({
         name: "My Cell",
         rendererSource: SOURCE,
         [CELL_CONTENT_FINGERPRINT_KEY]: "0".repeat(64),
@@ -161,7 +166,7 @@ describe("the gate files a cell proposal with its content fingerprint", () => {
 
   it("another kind of proposal carries none", async () => {
     await checkPermissionOrPropose(
-      agentWrite("view", "create", { name: "A view", rendererSource: SOURCE })
+      viewCreate({ name: "A view", rendererSource: SOURCE })
     );
     expect(storedPayload()).not.toHaveProperty(CELL_CONTENT_FINGERPRINT_KEY);
   });

@@ -4911,7 +4911,7 @@ async function maybeCreateWorkspaceJoinProposal(opts: {
       ? buildDeferredWrite({
           subjectType: requestedSubjectType,
           action: requestedAction,
-          data: callerData,
+          data: requestedData,
           workspaceId,
           agentUserId,
           userId: requesterUserId,
