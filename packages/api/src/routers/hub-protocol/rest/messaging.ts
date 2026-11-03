@@ -758,7 +758,9 @@ export function registerMessagingRoutes(app: HubHono): void {
             message:
               "History import proposed: it runs once the account's owner approves it.",
             accountId: row.id,
-          });
+            // The route answers 202 on both paths: jsonGoverned's 200 branch
+            // (a non-proposed body) is never taken here.
+          }) as never;
         }
         return c.json(await queueOwnerHistoryImport(userId, row), 202);
       } catch (err) {
