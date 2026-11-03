@@ -14,7 +14,7 @@
  *   1. GRAMMAR — `collectDiagnostics` from `@synap-core/markdown-core`
  *      (unterminated embeds, legacy/malformed props, missing references,
  *      unknown `synap-*` directives, column rows), mapped onto the wire codes
- *      below;
+ *      below; run in the CPU pool's worker threads past a tiny input;
  *   2. CATALOG — a `synap-cell{cellKey}` whose key is not in this pod's
  *      renderables (`listRenderables`, the ONE catalog door), is not
  *      embeddable in a document, or lacks its required props;
@@ -27,10 +27,7 @@
  */
 
 import { inArray, entities, views, cellInstances } from "@synap/database";
-import {
-  collectDiagnostics,
-  GRAMMAR_WIRE_CODE,
-} from "@synap-core/markdown-core/diagnostics";
+import { GRAMMAR_WIRE_CODE } from "@synap-core/markdown-core/diagnostics";
 import type { Diagnostic as GrammarDiagnostic } from "@synap-core/markdown-core/diagnostics";
 import {
   WIDGET_BY_KEY,
@@ -47,7 +44,7 @@ import {
 import type { Embed } from "@synap-core/markdown-core/embeds";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { listRenderables, type RenderableRow } from "../cells/renderables.js";
-import { locateEmbeds } from "@synap-core/markdown-core/readable";
+import { diagnoseMarkdownOffLoop } from "@synap/jobs/utils/cpu-pool.js";
 import { embedFallback } from "@synap-core/markdown-core/plain-text";
 import { TEXT_TONES } from "@synap-core/markdown-core/inline-format";
 import {
@@ -339,12 +336,20 @@ function designOfCell(
   return out;
 }
 
-/** Every diagnostic for `markdown`, judged with `resolver`. Never throws on content. */
+/**
+ * Every diagnostic for `markdown`, judged with `resolver`. Never throws on
+ * content. The parse (grammar diagnostics + located embeds) runs in the CPU
+ * pool, off the event loop, past a tiny input (`@synap/jobs/utils/cpu-pool.js`);
+ * a parse that did not finish (deadline, memory, a full pool) throws its
+ * `CpuTaskError`, which `diagnoseForDocument` reports as `{ items: null, error }`.
+ */
 export async function diagnoseDocument(
   markdown: string,
   resolver: EmbedResolver
 ): Promise<DocumentDiagnostic[]> {
-  const out: DocumentDiagnostic[] = collectDiagnostics(markdown).map((d) => {
+  const { diagnostics: grammar, embeds: located } =
+    await diagnoseMarkdownOffLoop(markdown);
+  const out: DocumentDiagnostic[] = grammar.map((d) => {
     const code: DocumentDiagnosticCode = GRAMMAR_WIRE_CODE[d.code];
     return {
       code,
@@ -356,7 +361,6 @@ export async function diagnoseDocument(
     };
   });
 
-  const located = locateEmbeds(markdown);
   const pending: Array<{
     kind: ReferentKind;
     id: string;

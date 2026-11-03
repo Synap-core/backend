@@ -350,6 +350,44 @@ describe("document-passages — a document body as recall passages, kept current
     expect(embeddedFor(doc.entityId)).toHaveLength(0);
   });
 
+  it("a body whose cut runs past the CPU pool's deadline keeps its old passages and records why", async () => {
+    const doc = await seedDocument(NOTE("The seat price is 39 EUR."));
+    await emit("create", doc.documentId);
+    await drain();
+    h.sent = [];
+
+    // ~64 KB (the most loadDocumentBodyTexts reads) of embeds, sections and
+    // lists: hundreds of ms of cut, run in the pool's worker, stopped at 100 ms.
+    let heavy = "";
+    while (heavy.length < 63_000)
+      heavy += `## Part\n\nSome **bold** prose.\n\n:::synap-entity{id="${doc.entityId}"}\nFallback.\n:::\n\n- a\n- b\n\n`;
+    await editBody(doc, heavy);
+    const before = process.env.SYNAP_CPU_TASK_DEADLINE_MS;
+    process.env.SYNAP_CPU_TASK_DEADLINE_MS = "100";
+    try {
+      await emit("update", doc.documentId);
+      const [result] = await drain();
+      expect(result).toEqual({
+        status: "failed",
+        failure:
+          "cutting the body into passages ran past its deadline and was stopped (100 ms deadline)",
+      });
+    } finally {
+      if (before === undefined) delete process.env.SYNAP_CPU_TASK_DEADLINE_MS;
+      else process.env.SYNAP_CPU_TASK_DEADLINE_MS = before;
+    }
+
+    const rows = await passagesOf(doc.documentId);
+    expect(rows).toHaveLength(3);
+    expect(rows[0]!.text).toContain("39 EUR");
+    expect(await stateOf(doc.documentId)).toMatchObject({
+      source_revision: 1,
+      passage_count: 3,
+      failure: expect.stringMatching(/ran past its deadline/),
+    });
+    expect(h.batches).toHaveLength(0);
+  });
+
   it("the sweep re-queues a document whose passages trail its revision, and only that one", async () => {
     const current = await seedDocument(NOTE("Current."));
     const missed = await seedDocument(NOTE("Before the missed edit."));

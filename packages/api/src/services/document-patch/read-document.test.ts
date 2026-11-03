@@ -309,3 +309,44 @@ describe("readsAsPage — a stored HTML page gets its page check, never a parse"
     expect(readsAsPage({ type: "markdown" }, "# A")).toBe(false);
   });
 });
+
+describe("currentDiagnostics — a parse that does not finish is 'not checked', and never holds the event loop", () => {
+  // Seconds of parse (thousands of embeds and sections, under the read cap):
+  // the CPU pool's worker runs it and is stopped at the deadline.
+  const heavy = (() => {
+    let s = "# Heavy\n\n";
+    while (s.length < 600_000)
+      s +=
+        '## Part\n\nSome **bold** prose.\n\n:::synap-entity{id="11111111-1111-4111-8111-111111111111"}\nFallback.\n:::\n\n- a\n- b\n\n';
+    return s;
+  })();
+
+  it("past the deadline: { items: null, error } naming why, while a timer kept firing", async () => {
+    expect(heavy.length).toBeLessThan(MARKDOWN_READ_MAX_CHARS);
+    const before = process.env.SYNAP_CPU_TASK_DEADLINE_MS;
+    process.env.SYNAP_CPU_TASK_DEADLINE_MS = "200";
+    let ticks = 0;
+    const timer = setInterval(() => ticks++, 10);
+    try {
+      const out = await currentDiagnostics({
+        documentId: "doc-1",
+        workspaceId: null,
+        type: "markdown",
+        metadata: null,
+        revision: 1,
+        content: heavy,
+        readerUserId: "user-1",
+      });
+      expect(out).toEqual({
+        items: null,
+        error:
+          "Diagnostics could not run: the markdown parse for diagnostics ran past its deadline and was stopped (200 ms deadline)",
+      });
+      expect(ticks).toBeGreaterThanOrEqual(10);
+    } finally {
+      clearInterval(timer);
+      if (before === undefined) delete process.env.SYNAP_CPU_TASK_DEADLINE_MS;
+      else process.env.SYNAP_CPU_TASK_DEADLINE_MS = before;
+    }
+  });
+});

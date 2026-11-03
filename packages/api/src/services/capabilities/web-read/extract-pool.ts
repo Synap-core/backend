@@ -15,15 +15,22 @@
  * idle pool never keeps the process alive), heap-capped, and replaced
  * lazily after a timeout or crash. Tasks past the queue cap are refused at
  * once (`extract_busy`, retryable) rather than queued without bound.
+ *
+ * The pool itself is THE worker pool (`@synap/shared-utils/worker-pool`,
+ * generalised from this file); this module names its worker, its limits and
+ * how a failed task reads as a page read.
  */
 
-import { createRequire } from "node:module";
-import { pathToFileURL } from "node:url";
-import { Worker } from "node:worker_threads";
+import type { ResourceLimits } from "node:worker_threads";
 import { createLogger } from "@synap-core/core";
 import type { UrlReadFailureClass } from "@synap-core/types/url-read";
+import {
+  createWorkerPool,
+  moduleWorker,
+  type WorkerTaskOutcome,
+} from "@synap/shared-utils/worker-pool";
 import type { SiteRead } from "./adapter.js";
-import type { ExtractRequest, ExtractResponse } from "./extract-worker.js";
+import type { ExtractRequest, ExtractOutcome } from "./extract-worker.js";
 import { EXTRACT_DEADLINE_MS, WEB_READ_PAGE_BYTES_MAX } from "./limits.js";
 
 const logger = createLogger({ module: "web-read/extract-pool" });
@@ -43,49 +50,25 @@ export interface ExtractPageOptions {
   deadlineMs?: number;
 }
 
-interface Task {
-  id: number;
-  html: string;
-  url: string;
-  deadlineMs: number;
-  resolve: (read: SiteRead) => void;
-}
-
-interface Slot {
-  worker: Worker;
-  task: Task | null;
-  timer: ReturnType<typeof setTimeout> | null;
-}
-
-const slots: Slot[] = [];
-const queue: Task[] = [];
-let nextId = 1;
 const loggedDefuddleErrors = new Set<string>();
 
 /**
- * The worker next to this module: the bundled `extract-worker.js` in a build
- * (a tsup entry), or — when this module runs from TypeScript source (tsx dev,
- * vitest) — a bootstrap that registers tsx's loader in the worker, then
- * imports `extract-worker.ts`.
+ * The bundled `extract-worker.js` next to this module in a build (a tsup
+ * entry: a bundle resolves next to itself), its `.ts` under tsx / vitest.
  */
-function newExtractWorker(): Worker {
-  const options = {
-    resourceLimits: { maxOldGenerationSizeMb: WORKER_HEAP_MB },
-  };
-  const here = import.meta.url;
-  if (!here.endsWith(".ts")) {
-    return new Worker(new URL("./extract-worker.js", here), options);
-  }
-  // tsx's ESM api (its `import` condition; `require.resolve` names the .cjs).
-  const tsxApi = pathToFileURL(
-    createRequire(here)
-      .resolve("tsx/esm/api")
-      .replace(/\.cjs$/, ".mjs")
-  ).href;
-  const entry = new URL("./extract-worker.ts", here).href;
-  const bootstrap = `import(${JSON.stringify(tsxApi)}).then((m) => { m.register(); return import(${JSON.stringify(entry)}); });`;
-  return new Worker(bootstrap, { ...options, eval: true });
+function newExtractWorker(resourceLimits: ResourceLimits) {
+  return moduleWorker(import.meta.url, "./extract-worker", resourceLimits);
 }
+
+const pool = createWorkerPool<ExtractRequest, ExtractOutcome>({
+  name: "web-read-extract",
+  newWorker: newExtractWorker,
+  size: POOL_SIZE,
+  queueMax: QUEUE_MAX,
+  heapMb: WORKER_HEAP_MB,
+  deadlineMs: EXTRACT_DEADLINE_MS,
+  describe: (req) => ({ url: req.url, bytes: req.html.length }),
+});
 
 /**
  * A failed extraction, classed: the pool's own trouble (busy, past the
@@ -96,92 +79,35 @@ function failed(error: string, errorClass: UrlReadFailureClass): SiteRead {
   return { status: "failed", error, errorClass };
 }
 
-function settle(slot: Slot, read: SiteRead): void {
-  const task = slot.task;
-  if (slot.timer) clearTimeout(slot.timer);
-  slot.timer = null;
-  slot.task = null;
-  slot.worker.unref();
-  task?.resolve(read);
-}
-
-/** Drop a worker (timed out, crashed, exited) and answer its task. */
-function retire(slot: Slot, read: SiteRead): void {
-  const i = slots.indexOf(slot);
-  if (i >= 0) slots.splice(i, 1);
-  settle(slot, read);
-  void slot.worker.terminate().catch(() => undefined);
-  pump();
-}
-
-function spawn(): Slot {
-  const worker = newExtractWorker();
-  const slot: Slot = { worker, task: null, timer: null };
-  worker.on("message", (msg: ExtractResponse) => {
-    if (!slot.task || msg.id !== slot.task.id) return;
-    const { outcome } = msg;
-    if (
-      outcome.defuddleError &&
-      !loggedDefuddleErrors.has(outcome.defuddleError)
-    ) {
-      loggedDefuddleErrors.add(outcome.defuddleError);
+function asRead(
+  outcome: WorkerTaskOutcome<ExtractOutcome>,
+  url: string
+): SiteRead {
+  if (outcome.ok) {
+    const { defuddleError } = outcome.value;
+    if (defuddleError && !loggedDefuddleErrors.has(defuddleError)) {
+      loggedDefuddleErrors.add(defuddleError);
       logger.warn(
-        { error: outcome.defuddleError, url: slot.task.url },
+        { error: defuddleError, url },
         "web read: the DOM extractor failed — pages read with the plain-text pass (logged once per error)"
       );
     }
-    settle(slot, outcome.read);
-    pump();
-  });
-  worker.on("error", (err) => {
-    logger.warn({ err }, "web read: an extraction worker crashed");
-    const oom = (err as { code?: unknown }).code === "ERR_WORKER_OUT_OF_MEMORY";
-    retire(
-      slot,
-      failed(`extract_failed: ${err.name}`, oom ? "unknown" : "extract_failed")
-    );
-  });
-  worker.on("exit", () => {
-    if (slots.includes(slot))
-      retire(slot, failed("extract_failed: exited", "extract_failed"));
-  });
-  worker.unref();
-  slots.push(slot);
-  return slot;
-}
-
-function run(slot: Slot, task: Task): void {
-  slot.task = task;
-  slot.worker.ref(); // a running extraction keeps the process alive
-  slot.timer = setTimeout(() => {
-    logger.warn(
-      { url: task.url, deadlineMs: task.deadlineMs, bytes: task.html.length },
-      "web read: extraction past its deadline — worker terminated"
-    );
-    retire(slot, failed(EXTRACT_TIMEOUT_ERROR, "extract_timeout"));
-  }, task.deadlineMs);
-  slot.worker.postMessage({
-    id: task.id,
-    html: task.html,
-    url: task.url,
-  } satisfies ExtractRequest);
-}
-
-function pump(): void {
-  while (queue.length > 0) {
-    let slot = slots.find((s) => s.task === null);
-    if (!slot && slots.length < POOL_SIZE) {
-      try {
-        slot = spawn();
-      } catch (err) {
-        logger.error({ err }, "web read: an extraction worker could not start");
-        for (const t of queue.splice(0))
-          t.resolve(failed("extract_failed: no worker", "extract_failed"));
-        return;
-      }
-    }
-    if (!slot) return;
-    run(slot, queue.shift()!);
+    return outcome.value.read;
+  }
+  switch (outcome.failure) {
+    case "busy":
+      return failed(EXTRACT_BUSY_ERROR, "extract_busy");
+    case "timeout":
+      return failed(EXTRACT_TIMEOUT_ERROR, "extract_timeout");
+    case "out_of_memory":
+      return failed("extract_failed: out_of_memory", "unknown");
+    case "no_worker":
+      return failed("extract_failed: no worker", "extract_failed");
+    case "shut_down":
+      return failed("extract_failed: shut down", "extract_failed");
+    case "crashed":
+    case "task_error":
+      return failed(`extract_failed: ${outcome.detail}`, "extract_failed");
   }
 }
 
@@ -190,33 +116,19 @@ function pump(): void {
  * deadline. Never throws, never hangs: past the deadline the read is
  * `failed: extract_timeout`; with the queue full, `failed: extract_busy`.
  */
-export function extractPage(
+export async function extractPage(
   html: string,
   url: string,
   opts: ExtractPageOptions = {}
 ): Promise<SiteRead> {
-  if (queue.length >= QUEUE_MAX) {
-    return Promise.resolve(failed(EXTRACT_BUSY_ERROR, "extract_busy"));
-  }
-  return new Promise<SiteRead>((resolve) => {
-    queue.push({
-      id: nextId++,
-      html: html.slice(0, WEB_READ_PAGE_BYTES_MAX),
-      url,
-      deadlineMs: opts.deadlineMs ?? EXTRACT_DEADLINE_MS,
-      resolve,
-    });
-    pump();
-  });
+  const outcome = await pool.run(
+    { html: html.slice(0, WEB_READ_PAGE_BYTES_MAX), url },
+    { deadlineMs: opts.deadlineMs ?? EXTRACT_DEADLINE_MS }
+  );
+  return asRead(outcome, url);
 }
 
 /** Tests: terminate every worker (the next extraction spawns afresh). */
 export async function shutdownExtractPool(): Promise<void> {
-  const all = slots.splice(0);
-  await Promise.all(
-    all.map((s) => {
-      settle(s, failed("extract_failed: shut down", "extract_failed"));
-      return s.worker.terminate();
-    })
-  );
+  await pool.shutdown();
 }
