@@ -89,6 +89,15 @@ export const LENS_CAPS = {
 } as const satisfies Record<AttentionClass, number>;
 
 /**
+ * The bounds of a `lens-section` block's `limit` (the catalog's `configSchema`
+ * 1-10, `renderables/widgets.ts`): every section's own cap above lies inside
+ * them. Read by the block-props reader (`./block-props.ts`), which re-exports
+ * them.
+ */
+export const LENS_SECTION_LIMIT_MIN = 1;
+export const LENS_SECTION_LIMIT_MAX = 10;
+
+/**
  * The empty answers a `lens-section` block may be GIVEN (the catalog's
  * `empty` prop): the four minus INVITE. INVITE needs an action the reader
  * takes (ui-composition §2), and a block in a document has none to offer, so

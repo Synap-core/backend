@@ -24,6 +24,8 @@ import {
   LENS_CAPS,
   LENS_SECTION_EMPTY_ANSWERS,
   LENS_SECTION_LABELS,
+  LENS_SECTION_LIMIT_MAX,
+  LENS_SECTION_LIMIT_MIN,
 } from "../lens/sections.js";
 
 // Data bindings (decision D2). Declare only what the cell's component renders
@@ -3230,7 +3232,7 @@ const lensSection: WidgetCapabilityDef = {
   key: "lens-section",
   package: "synap.bento-widgets",
   requiredConfig: ["section"],
-  aiHint: `One section of the scope's work page: config.section. "blocking" is Needs you (there is no separate needs-you widget), "happening" what agents do now, "produced" what work made, "proposed" what the AI suggests, "happened" what changed. The scope is the document's, never a prop. Optional limit (1-10) and empty (${LENS_SECTION_EMPTY_ANSWERS.join(" | ")}).`,
+  aiHint: `One section of the scope's work page: config.section. "blocking" is Needs you (there is no separate needs-you widget), "happening" what agents do now, "produced" what work made, "proposed" what the AI suggests, "happened" what changed. The scope is the document's, never a prop. Optional limit (${LENS_SECTION_LIMIT_MIN}-${LENS_SECTION_LIMIT_MAX}) and empty (${LENS_SECTION_EMPTY_ANSWERS.join(" | ")}).`,
   name: "Work section",
   description:
     "One section of a work page (Needs you, Happening, Produced, Proposed, Happened) for the page's own scope, drawn as the work page draws it.",
@@ -3264,11 +3266,11 @@ const lensSection: WidgetCapabilityDef = {
       description: `Rows at rest before "Show all". Absent = the section's own cap (${lensSectionDefaults}).`,
       jsonSchema: {
         type: "integer",
-        minimum: 1,
-        maximum: 10,
-        description: `Rows at rest before "Show all", 1-10. Absent = the section's own cap (${lensSectionDefaults}).`,
+        minimum: LENS_SECTION_LIMIT_MIN,
+        maximum: LENS_SECTION_LIMIT_MAX,
+        description: `Rows at rest before "Show all", ${LENS_SECTION_LIMIT_MIN}-${LENS_SECTION_LIMIT_MAX}. Absent = the section's own cap (${lensSectionDefaults}).`,
       },
-      constraints: { min: 1, max: 10 },
+      constraints: { min: LENS_SECTION_LIMIT_MIN, max: LENS_SECTION_LIMIT_MAX },
     },
     {
       key: "empty",

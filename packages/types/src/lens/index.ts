@@ -21,6 +21,22 @@ export * from "./space-intent.js";
 export * from "./home-brief.js";
 export * from "./home-brief-reads.js";
 /**
+ * The rules of a document's work blocks, one home for web and phone (GUI wave
+ * 3): the scope a cell reads, a block's props (author / reader), the status
+ * route, the empty words and the one placeholder.
+ */
+export * from "./cell-scope.js";
+export * from "./block-props.js";
+export * from "./block-placeholder.js";
+export {
+  LENS_EMPTY_TITLE_KEY,
+  LENS_EMPTY_WHY_KEY,
+  lensBlockCopy,
+  lensBlockT,
+  lensEmptyTitle,
+  lensEmptyWhy,
+} from "./block-copy.js";
+/**
  * @deprecated Import `formatFloorCount` from `@synap-core/types/value-format`
  * (plan 915cc937 Q6). Kept until synap-app's list-cap and relay's three
  * importers move; then this line goes.
