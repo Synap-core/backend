@@ -63,7 +63,7 @@ describe("the ask card draws its why through AskContext, named", () => {
 
   it("labels the why and draws view.context with AskContext", () => {
     expect(source).toMatch(
-      /<Section label=\{ASK_COPY\.why\}>\s*<AskContext context=\{view\.context\} \/>/
+      /<Section label=\{ASK_COPY\.whyHeading\}>\s*<AskContext context=\{view\.context\} \/>/
     );
   });
 });

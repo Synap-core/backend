@@ -309,7 +309,7 @@ export function AskAnswer({
           </h3>
         )}
         {showContext && view.context && (
-          <Section label={ASK_COPY.why}>
+          <Section label={ASK_COPY.whyHeading}>
             <AskContext context={view.context} />
           </Section>
         )}

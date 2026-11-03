@@ -383,6 +383,6 @@ describe("the card's age, in marks and in words", () => {
 
 describe("the card names its why", () => {
   it("has one label for it, the words the act steps point at", () => {
-    expect(ASK_COPY.why).toBe("Why");
+    expect(ASK_COPY.whyHeading).toBe("Why");
   });
 });
