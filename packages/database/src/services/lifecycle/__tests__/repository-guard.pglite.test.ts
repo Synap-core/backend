@@ -138,7 +138,7 @@ describe("repository floor", () => {
     const repo = new EntityRepository(db, events);
     const born = (await repo.create(
       {
-        profileId: dealProfile,
+        profileSlug: "deal",
         title: "Acme renewal",
         properties: {},
         skipEvent: true,
