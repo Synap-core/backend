@@ -56,6 +56,7 @@ import { createLogger } from "@synap-core/core";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { runSkill } from "../services/skills/run-skill.js";
 import { requireUserId } from "../utils/user-scoped.js";
+import { fetchIntelligenceService } from "../utils/intelligence-service-url.js";
 import { completeFocusSession } from "../services/focus-sessions/complete-session.js";
 import { listCapabilityCompositions } from "../services/diagnose/capability-composition.js";
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
@@ -174,10 +175,12 @@ const DEFAULT_INTELLIGENCE_SERVICE = {
 async function pingServiceHealth(webhookUrl: string): Promise<boolean> {
   try {
     const healthUrl = `${webhookUrl.replace(/\/+$/, "")}/health`;
-    const res = await fetch(healthUrl, {
+    const res = await fetchIntelligenceService(healthUrl, {
       signal: AbortSignal.timeout(5000),
       method: "GET",
     });
+    // Only the status is read: release the connection.
+    await res.body?.cancel().catch(() => undefined);
     return res.ok;
   } catch {
     return false;

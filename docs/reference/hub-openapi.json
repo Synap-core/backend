@@ -1139,6 +1139,15 @@
                 "type": "array",
                 "items": { "$ref": "#/components/schemas/EntityMediaRef" },
                 "description": "With `includeMedia=true`: the `file` entities the row links by `references` edges (capped, see `includeMedia`), each one the caller may read, oldest link first. Absent when it links none."
+              },
+              "workspace": {
+                "type": ["object", "null"],
+                "properties": {
+                  "id": { "type": "string" },
+                  "name": { "type": "string" }
+                },
+                "required": ["id", "name"],
+                "description": "With `includeWorkspace=true`: the space the row lives in, `{ id, name }`; `null` for a pod-wide row (no space). Absent without `includeWorkspace`, or when the row's space no longer exists."
               }
             }
           }
@@ -8610,6 +8619,27 @@
             "description": "`true` = a last-interaction window also returns the people never contacted (no value). Default `false`.",
             "name": "includeNever",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "JSON array of view filters, ANDed: `[{\"field\":\"properties.stage\",\"operator\":\"equals\",\"value\":\"won\"}]`. `field` is `title`, `preview`, `type`, `createdAt`, `updatedAt` or `properties.<slug>`; `operator` is a view filter operator (`equals`, `not_equals`, `contains`, `not_contains`, `in`, `not_in`, `greater_than`, `greater_than_or_equal`, `less_than`, `less_than_or_equal`, `is_empty`, `is_not_empty`). At most 10 clauses. A `properties.<slug>` clause needs `profileSlug` naming a kind that declares the property; an unknown property, a secret property, malformed JSON or too many clauses is a 400. Applied after the caller's read floor, so it only narrows. 400 with `q`."
+            },
+            "required": false,
+            "description": "JSON array of view filters, ANDed: `[{\"field\":\"properties.stage\",\"operator\":\"equals\",\"value\":\"won\"}]`. `field` is `title`, `preview`, `type`, `createdAt`, `updatedAt` or `properties.<slug>`; `operator` is a view filter operator (`equals`, `not_equals`, `contains`, `not_contains`, `in`, `not_in`, `greater_than`, `greater_than_or_equal`, `less_than`, `less_than_or_equal`, `is_empty`, `is_not_empty`). At most 10 clauses. A `properties.<slug>` clause needs `profileSlug` naming a kind that declares the property; an unknown property, a secret property, malformed JSON or too many clauses is a 400. Applied after the caller's read floor, so it only narrows. 400 with `q`.",
+            "name": "filters",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["true", "false"],
+              "description": "`true` = each row also carries `workspace`: `{ id, name }` of the space it lives in, `null` for a pod-wide row. Names only the spaces of the rows returned. Default `false`. 400 with `q`."
+            },
+            "required": false,
+            "description": "`true` = each row also carries `workspace`: `{ id, name }` of the space it lives in, `null` for a pod-wide row. Names only the spaces of the rows returned. Default `false`. 400 with `q`.",
+            "name": "includeWorkspace",
+            "in": "query"
           }
         ],
         "responses": {
@@ -8625,7 +8655,7 @@
             }
           },
           "400": {
-            "description": "Malformed or unsupported filter combination — an unparseable createdAfter/createdBefore/lastInteraction bound, an inverted last-interaction window, an unsupported `sort`, or a date window, `sort`, `includeFacets` or `includeMedia` combined with `q`.",
+            "description": "Malformed or unsupported filter combination — an unparseable createdAfter/createdBefore/lastInteraction bound, an inverted last-interaction window, an unsupported `sort`, a `filters` value that is not valid (malformed JSON, more than 10 clauses, a property filter without `profileSlug`, an unknown or secret property), or a date window, `sort`, `filters`, `includeFacets`, `includeMedia` or `includeWorkspace` combined with `q`.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -12887,6 +12917,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": ["provisioned", "proposed"]
+                    },
+                    "proposalId": { "type": "string" },
                     "provider": { "type": "string" },
                     "url": { "type": "string" },
                     "rotated": { "type": "boolean" },
@@ -12896,13 +12931,7 @@
                     },
                     "setupStep": { "type": ["string", "null"] }
                   },
-                  "required": [
-                    "provider",
-                    "url",
-                    "rotated",
-                    "missingConfig",
-                    "setupStep"
-                  ]
+                  "required": ["status"]
                 }
               }
             }
@@ -13066,16 +13095,21 @@
                   "type": "object",
                   "properties": {
                     "tool": {
-                      "type": "object",
+                      "type": ["object", "null"],
                       "properties": {
                         "id": { "type": "string" },
                         "name": { "type": "string" },
                         "kind": { "type": "string" }
                       },
                       "required": ["id", "name", "kind"]
-                    }
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": ["updated", "proposed"]
+                    },
+                    "proposalId": { "type": ["string", "null"] }
                   },
-                  "required": ["tool"]
+                  "required": ["tool", "status", "proposalId"]
                 }
               }
             }

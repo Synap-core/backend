@@ -33,6 +33,7 @@ import {
   entityListOrderBySchema,
   lastInteractionWindowFields,
 } from "../../utils/entity-list-sort.js";
+import { EntityListFiltersSchema } from "../../utils/entity-list-filters.js";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 import { lifecycleConflictOf } from "../../services/lifecycle/conflict.js";
 import {
@@ -119,6 +120,12 @@ export const entitiesRouter = router({
          * `list` (declared here: this forwarder is a whitelist, see above).
          */
         ...lastInteractionWindowFields,
+        /**
+         * Column and property filters, forwarded verbatim to `list`, which
+         * validates and compiles them (declared here: this forwarder is a
+         * whitelist, see above).
+         */
+        filters: EntityListFiltersSchema.optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -170,6 +177,7 @@ export const entitiesRouter = router({
           ? { lastInteractionBefore: input.lastInteractionBefore }
           : {}),
         ...(input.includeNever ? { includeNever: true } : {}),
+        ...(input.filters?.length ? { filters: input.filters } : {}),
       });
 
       return result.entities;

@@ -15,7 +15,11 @@
  * new field that leaks one fails here whatever its name.
  *
  * Driven through the REAL procedures → the REAL `isPodAdmin` → SQL on PGlite.
- * Stubbed: the db handle, the split-brain probe, `fetch`.
+ * Stubbed: the db handle, the split-brain probe, the network. A registered
+ * service URL is sent through the pinned door `safePublicFetch` (finding
+ * e90aa057, `fetchIntelligenceService`), so the network is the door, a
+ * recorder here; the global `fetch` is a second recorder that must stay
+ * unused for a registered service.
  */
 
 import {
@@ -35,6 +39,19 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
   db: null as unknown,
+  pinnedFetch: vi.fn(
+    async (
+      _url: string,
+      _init?: unknown,
+      _maxRedirects?: number,
+      _deps?: unknown
+    ) => new Response(JSON.stringify({ ok: true }), { status: 200 })
+  ),
+}));
+
+vi.mock("@synap/shared-utils", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  safePublicFetch: h.pinnedFetch,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -169,6 +186,7 @@ beforeEach(async () => {
     ]
   );
   fetchSpy.mockClear();
+  h.pinnedFetch.mockClear();
   vi.stubGlobal("fetch", fetchSpy);
 });
 
@@ -185,6 +203,7 @@ describe("intelligence.relayToService — pod admin, one service named exactly",
       })
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(fetchSpy).not.toHaveBeenCalled();
+    expect(h.pinnedFetch).not.toHaveBeenCalled();
   });
 
   it("a prefix no longer reaches another row", async () => {
@@ -201,17 +220,27 @@ describe("intelligence.relayToService — pod admin, one service named exactly",
       })
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
     expect(fetchSpy).not.toHaveBeenCalled();
+    expect(h.pinnedFetch).not.toHaveBeenCalled();
   });
 
-  it("a pod admin relays to the service named exactly", async () => {
+  it("a pod admin relays to the service named exactly, through the pinned door", async () => {
     const res = await intelligence(ADMIN).relayToService({
       serviceId: "openclaw-user-a",
       command: "list_channels",
     });
     expect(res).toMatchObject({ success: true, pending: false });
-    expect(String(fetchSpy.mock.calls[0]![0])).toBe(
-      "https://claw.example/api/management"
-    );
+    expect(h.pinnedFetch).toHaveBeenCalledTimes(1);
+    const [url, init, maxRedirects, deps] = h.pinnedFetch.mock.calls[0]!;
+    expect(url).toBe("https://claw.example/api/management");
+    // The management token rides in the header: no redirect, any port.
+    expect(init).toMatchObject({
+      method: "POST",
+      headers: { Authorization: `Bearer ${MGMT_TOKEN}` },
+    });
+    expect(maxRedirects).toBe(0);
+    expect(deps).toMatchObject({ allowedPorts: "any" });
+    // The registered service never reaches the bare global fetch.
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 

@@ -5,8 +5,9 @@
  *
  *   needs you = an open request that only you can settle, raised by a real
  *   asker, not yet answered, on work that is live (an agent moved in the last
- *   7 days and is not working right now), and either under 7 days old or a
- *   commitment.
+ *   7 days and is not working right now), and either under 7 days old, a
+ *   commitment, or blocking an OPEN pull request (`blocksOpenPr`: the work is
+ *   waiting on it, so its age is a reason to ask first, never to fold).
  *
  * Every owed slot and every pending proposal used to claim the person. The
  * predicate never asked who raised it, whether anyone still works on it, or
@@ -20,7 +21,8 @@
  *                         attends, a param the person's own run lacks, a gate.
  *   `stopped`           — the agent's own question (a confirm / choose that
  *                         ends with its session) on work no agent moved for 7
- *                         days, or that ended. ONE row per session: "Resume
+ *                         days, or that ended; never one that blocks an open
+ *                         PR. ONE row per session: "Resume
  *                         or close" (E1). A person deliverable (act, provide,
  *                         form, plain work, a criterion grade) is never
  *                         Stopped: it is still the person's to do, whatever
@@ -29,7 +31,8 @@
  *                         can" (E2). Derived from live state, no agent flag.
  *                         A pending proposal on that session waits there too,
  *                         unless a gate waits on it (F2).
- *   `review_later`      — a real ask, owed more than 7 days, not a commitment.
+ *   `review_later`      — a real ask, owed more than 7 days, not a commitment,
+ *                         blocking no open PR.
  *   `changes_to_review` — a pending proposal nothing waits on: bookkeeping,
  *                         batch-approved, its own count (E6).
  *
@@ -205,6 +208,13 @@ export interface NeedsYouSessionFacts {
   lastAgentWorkAt?: Date | string | null;
   /** The floor for a session no agent has touched yet. */
   startedAt: Date | string | null;
+  /**
+   * The session holds an OPEN pull request outcome the pod recorded a state
+   * for (`sessionIdsBlockingOpenPr`, api): what it asks blocks that PR, so it
+   * is never folded by age (Review later) or by an idle agent (Stopped).
+   * Absent / `false` = not measured or none: today's rule.
+   */
+  blocksOpenPr?: boolean;
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -361,14 +371,16 @@ export function classifyOwedAsk(
   if (!needsYouHasRealAsker(slot)) return "from_system";
   const at = now instanceof Date ? now.getTime() : now;
   const live = needsYouSessionClass(session, at);
+  const blocksPr = session.blocksOpenPr === true;
   if (live === "stopped") {
-    if (endsWithSession(slot)) return "stopped";
+    if (endsWithSession(slot) && !blocksPr) return "stopped";
   } else if (live === "working") {
     return "working";
   }
   const stamp = owedStamp(slot);
   if (
     stamp !== null &&
+    !blocksPr &&
     !needsYouIsCommitment(slot) &&
     stamp < new Date(at - NEEDS_YOU_REVIEW_LATER_AFTER_MS).toISOString()
   ) {
@@ -442,6 +454,12 @@ export interface NeedsYouProposalFacts {
    * facts never carry it. Absent / `null` / past = not set aside.
    */
   snoozedUntil?: Date | string | null;
+  /**
+   * The session holds an open pull request outcome ({@link
+   * NeedsYouSessionFacts.blocksOpenPr}): a wait on it never ages into Review
+   * later. Absent / `false` = not measured or none.
+   */
+  blocksOpenPr?: boolean;
 }
 
 /**
@@ -470,7 +488,11 @@ export function classifyPendingProposal(
   if (p.waits.reason !== "gate") {
     if (p.sessionClass === "working") return "working";
     const created = timeOf(p.createdAt);
-    if (created !== null && created < at - NEEDS_YOU_REVIEW_LATER_AFTER_MS) {
+    if (
+      created !== null &&
+      p.blocksOpenPr !== true &&
+      created < at - NEEDS_YOU_REVIEW_LATER_AFTER_MS
+    ) {
       return "review_later";
     }
   }

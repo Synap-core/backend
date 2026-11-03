@@ -94,7 +94,12 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       name: "feed.post",
       kind: "builtin",
       scope: "pod",
-      intent: "publish_post",
+      // DECLARED none (not omitted): it posts a message into a Synap channel,
+      // not a post on a social account. Tagged `publish_post`, it was listed as
+      // a publishing tool beside Unipile and Postiz (Content Studio review,
+      // 3 Nov). `null` makes the applier clear the tag on pods seeded before
+      // (an omitted intent is left alone).
+      intent: null,
       description:
         "Post a message into a channel; mirrors to a bound Discord channel if present.",
       parameters: {

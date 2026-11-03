@@ -47,6 +47,10 @@ import {
   buildPaginatedResponse,
 } from "../../utils/pagination.js";
 import {
+  EntityListFiltersSchema,
+  entityListFiltersWhere,
+} from "../../utils/entity-list-filters.js";
+import {
   notInAnyProjectWhere,
   projectLensWhere,
   facetInWorkspaceLensWhere,
@@ -383,6 +387,14 @@ export const readProcs = {
          * One rule for every door: `lastInteractionWindowWhere`.
          */
         ...lastInteractionWindowFields,
+        /**
+         * Column and property filters (APP-ACCESS plan §3 R2): the view filter
+         * grammar, at most 10 clauses, ANDed after the read floor so they
+         * only narrow. A `properties.<slug>` clause needs `profileSlug`
+         * naming a kind that declares it; a secret property is refused
+         * (`entityListFiltersWhere`).
+         */
+        filters: EntityListFiltersSchema.optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -626,6 +638,19 @@ export const readProcs = {
         });
       }
       if (interactionWindow.where) conditions.push(interactionWindow.where);
+
+      // Filters narrow: ANDed with the floor above, never ORed with it.
+      if (input.filters && input.filters.length > 0) {
+        const filtersWhere = await entityListFiltersWhere({
+          filters: input.filters,
+          profileSlug: input.profileSlug,
+          kindProfileIds: slugProfiles
+            ?.filter((p) => p.profileKind !== "role")
+            .map((p) => p.id),
+          workspaceId: lensWorkspaceId,
+        });
+        if (filtersWhere) conditions.push(filtersWhere);
+      }
 
       const results = await db.query.entities.findMany({
         where: and(...conditions),
