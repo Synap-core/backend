@@ -105,7 +105,11 @@ export async function bornLifecycleFor(
   const initial = lifecycle.initialStatus;
   const move = initial ? classifyLifecycleMove(lifecycle, initial) : null;
   const fill =
-    !named && initial !== null && move !== null && !move.intoTerminal && !move.humanOnly;
+    !named &&
+    initial !== null &&
+    move !== null &&
+    !move.intoTerminal &&
+    !move.humanOnly;
   const bornProperties = fill ? { ...properties, [slug]: initial } : properties;
   return {
     columns: columnsForValue(lifecycle, bornProperties[slug]),

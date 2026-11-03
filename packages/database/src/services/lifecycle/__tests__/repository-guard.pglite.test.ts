@@ -145,7 +145,11 @@ describe("repository floor", () => {
         skipValidation: true,
       } as never,
       "u1"
-    )) as { status: string | null; statusCategory: string | null; properties: Record<string, unknown> };
+    )) as {
+      status: string | null;
+      statusCategory: string | null;
+      properties: Record<string, unknown>;
+    };
     expect(born.status).toBe("draft");
     expect(born.statusCategory).toBe("open");
     expect(born.properties.commercialStage).toBe("draft");

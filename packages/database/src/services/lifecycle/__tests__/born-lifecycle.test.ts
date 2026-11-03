@@ -36,9 +36,14 @@ function resolver(l: EffectiveLifecycle | null) {
 
 describe("bornLifecycleFor", () => {
   it("a create that names no status starts in the initial status, bag and columns", async () => {
-    const out = await bornLifecycleFor(resolver(lifecycle("open")), "p-1", null, {
-      severity: "high",
-    });
+    const out = await bornLifecycleFor(
+      resolver(lifecycle("open")),
+      "p-1",
+      null,
+      {
+        severity: "high",
+      }
+    );
     expect(out?.properties).toEqual({ severity: "high", status: "open" });
     expect(out?.columns).toEqual({
       propertySlug: "status",
@@ -48,41 +53,68 @@ describe("bornLifecycleFor", () => {
   });
 
   it("an empty status counts as none named", async () => {
-    const out = await bornLifecycleFor(resolver(lifecycle("open")), "p-1", null, {
-      status: "",
-    });
+    const out = await bornLifecycleFor(
+      resolver(lifecycle("open")),
+      "p-1",
+      null,
+      {
+        status: "",
+      }
+    );
     expect(out?.columns.status).toBe("open");
   });
 
   it("a status the creator names wins over the initial status", async () => {
-    const out = await bornLifecycleFor(resolver(lifecycle("open")), "p-1", null, {
-      status: "fixing",
-    });
+    const out = await bornLifecycleFor(
+      resolver(lifecycle("open")),
+      "p-1",
+      null,
+      {
+        status: "fixing",
+      }
+    );
     expect(out?.properties).toEqual({ status: "fixing" });
     expect(out?.columns.statusCategory).toBe("active");
   });
 
   it("a terminal initial status is not filled in: that birth stays governed", async () => {
     for (const initial of ["fixed", "wont_fix"]) {
-      const out = await bornLifecycleFor(resolver(lifecycle(initial)), "p-1", null, {});
+      const out = await bornLifecycleFor(
+        resolver(lifecycle(initial)),
+        "p-1",
+        null,
+        {}
+      );
       expect(out?.properties).toEqual({});
       expect(out?.columns.status).toBeNull();
     }
   });
 
   it("a human-only initial status is not filled in", async () => {
-    const out = await bornLifecycleFor(resolver(lifecycle("triage")), "p-1", null, {});
+    const out = await bornLifecycleFor(
+      resolver(lifecycle("triage")),
+      "p-1",
+      null,
+      {}
+    );
     expect(out?.columns.status).toBeNull();
   });
 
   it("no initial status declared: the row keeps none", async () => {
-    const out = await bornLifecycleFor(resolver(lifecycle(null)), "p-1", null, {});
+    const out = await bornLifecycleFor(
+      resolver(lifecycle(null)),
+      "p-1",
+      null,
+      {}
+    );
     expect(out?.properties).toEqual({});
     expect(out?.columns.status).toBeNull();
   });
 
   it("a kind with no lifecycle, or no profile, has no born lifecycle", async () => {
     expect(await bornLifecycleFor(resolver(null), "p-1", null, {})).toBeNull();
-    expect(await bornLifecycleFor(resolver(lifecycle("open")), null, null, {})).toBeNull();
+    expect(
+      await bornLifecycleFor(resolver(lifecycle("open")), null, null, {})
+    ).toBeNull();
   });
 });
