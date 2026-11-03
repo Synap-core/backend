@@ -12,14 +12,11 @@
      "rendererSource": "<!DOCTYPE html>…</html>",
      "typeKey":        "burndown-chart",
      "description":    "Sprint burndown over task completions",
-     "defaultSize":    { "w": 8, "h": 6 },
-     "deps": {
-       "recharts": "2.12.0"
-     }
+     "defaultSize":    { "w": 8, "h": 6 }
    }
    ```
 
-   - `deps` pins npm packages for the esm.sh import map. Keys are npm package names; values are version strings. Max 30 entries. React 19 is always available — never put it in `deps`.
+   - Leave `deps` out. The frame loads no code from the network (no CDN, no esm.sh): React and `@synap/kit` come from the host, and a cell that declares runtime `deps` is refused on web and desktop. Bundle any library into the source (`synap cell build --bundle-deps`); the `synap` skill's ViewFrame Cells section lists what the frame provides.
    - Always `GET /api/hub/widget-definitions` first — if a cell already covers the need, use it. New cell definitions are permanent; only create when genuinely novel.
    - For the full in-frame query/mutate/shell-actions API see the `synap` skill's **ViewFrame Cells** section (or load `synap-ui:SKILL` via `GET /api/hub/skills/system?sections=synap-ui:SKILL`).
    - **"Make this my Posts dashboard"** = a cell bound to the kind's `dashboard` slot, not a new workspace:

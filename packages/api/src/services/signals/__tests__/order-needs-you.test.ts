@@ -123,6 +123,104 @@ describe("needs-you order — newest first across kinds", () => {
   }
 });
 
+describe("an ask blocking an open PR leads, oldest first, and is never folded", () => {
+  const blocking = (
+    sessionId: string,
+    label: string,
+    at: Date
+  ): OwedSlotSignalInput => ({
+    ...owed(sessionId, label, at),
+    blocksOpenPr: true,
+  });
+
+  it("a 9-day-old blocker sorts above a fresh ask and stays in `recent`, not Review later", () => {
+    const out = unionNeedsYou({
+      clusters: [],
+      notifications: [],
+      owedSlots: [
+        owed("s-fresh", "Fresh", ago(1)),
+        blocking("s-pr", "Ship it?", ago(9 * DAY)),
+      ],
+      now: NOW,
+    });
+    expect(ids(out)).toEqual(["slot:s-pr:ship it?", "slot:s-fresh:fresh"]);
+    const lead = out[0]!;
+    expect(lead.blocksOpenPr).toBe(true);
+    expect(lead.ageBucket).toBe("recent");
+    expect(lead.reviewLater).toBeUndefined();
+  });
+
+  it("blockers go oldest first", () => {
+    const out = unionNeedsYou({
+      clusters: [],
+      notifications: [],
+      owedSlots: [
+        blocking("s-b", "Newer", ago(2 * DAY)),
+        blocking("s-a", "Older", ago(9 * DAY)),
+        owed("s-c", "Free", ago(1)),
+      ],
+      now: NOW,
+    });
+    expect(ids(out)).toEqual([
+      "slot:s-a:older",
+      "slot:s-b:newer",
+      "slot:s-c:free",
+    ]);
+  });
+
+  it("a cluster filed in a session with an open PR blocks it too", () => {
+    const c = {
+      ...cluster("pr", ago(8 * DAY)),
+      sessionId: "s-pr",
+    } as ProposalCluster;
+    const out = unionNeedsYou({
+      clusters: [c],
+      clusterSessions: new Map([
+        ["s-pr", { title: "PR work", projectId: null }],
+      ]),
+      notifications: [],
+      owedSlots: [owed("s-fresh", "Fresh", ago(1))],
+      openPrSessionIds: new Set(["s-pr"]),
+      now: NOW,
+    });
+    expect(out[0]!.blocksOpenPr).toBe(true);
+    expect(out[0]!.ageBucket).toBe("recent");
+  });
+
+  it("an old ask that blocks no PR keeps today's behaviour: newest first, then Older", () => {
+    const out = unionNeedsYou({
+      clusters: [],
+      notifications: [],
+      owedSlots: [
+        owed("s-old", "Old", ago(9 * DAY)),
+        owed("s-fresh", "Fresh", ago(1)),
+      ],
+      now: NOW,
+    });
+    expect(ids(out)).toEqual(["slot:s-fresh:fresh", "slot:s-old:old"]);
+    expect(out[1]!.ageBucket).toBe("older");
+    expect(out.some((s) => s.blocksOpenPr)).toBe(false);
+  });
+
+  it("the whole session block of a blocker rises with it", () => {
+    const out = unionNeedsYou({
+      clusters: [],
+      notifications: [],
+      owedSlots: [
+        owed("s-fresh", "Fresh", ago(1)),
+        blocking("s-pr", "Blocks the PR", ago(9 * DAY)),
+        owed("s-pr", "Same session, newer", ago(3)),
+      ],
+      now: NOW,
+    });
+    expect(out.slice(0, 2).map((s) => s.groupKey)).toEqual([
+      "session:s-pr",
+      "session:s-pr",
+    ]);
+    expect(out[0]!.id).toBe("slot:s-pr:blocks the pr");
+  });
+});
+
 describe("session blocks are contiguous", () => {
   it("a session's rows sit together at its NEWEST row's position, newest first inside", () => {
     const signals = unionNeedsYou({

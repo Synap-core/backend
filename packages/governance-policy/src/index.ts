@@ -2792,6 +2792,11 @@ export const DIRECT_PROPOSAL_DOORS = {
   // policy as `profile/retire` — always a pending proposal, for anyone; the
   // approval half re-runs the preflight and deletes the def.
   "property_def/retire": "direct",
+  // Declaring a LIFECYCLE on an existing kind
+  // (`services/lifecycle/declare-kind-lifecycle.ts`): a schema change on a
+  // kind every space may read — always a pending proposal, for anyone; the
+  // approval half re-runs the preflight and calls `declareLifecycle`.
+  "profile/declare_lifecycle": "direct",
   "profile/merge": "direct",
   "pod_hygiene/cleanup_pack": "direct",
   "vault/vault.request": "direct",

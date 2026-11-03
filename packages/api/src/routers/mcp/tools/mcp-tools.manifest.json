@@ -8827,20 +8827,24 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "List a project's GOALS — what people call a goal is a TRACK in tool and field names (say 'goal' to the person; the tools keep 'track'): the goals it is pursuing (e.g. 'Grow the newsletter', 'Win the first ten clients' inside one project). Work in a track = synap_start_session with its trackId. A track holds a direction, instructions and a goal, and turns workers on; it has no stages. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met. LEGACY: an old track also follows a project-scoped playbook (its method, with stages), pinned at the version it started with; a new track has none (playbookId null, no stages). Each row: id, name, playbookId, methodVersion, status (proposed|agreed|ready|active|paused|completed|archived — completed reads Closed, archived Dropped), verdict (how a closed or dropped goal ended, else null) and verdictReason, pausedBy (check|human|null — why a paused track is held), currentStage and stages [{ key, name, position: done|active|not_started, addedAt? }] (addedAt marks a stage added after the start), direction (where it is heading, or null) and kpi ({ label, unit?, target, current?, updatedAt? } or null — current is STATED, updatedAt says when). Archived tracks are omitted unless includeArchived. Find the project id with synap_list_projects.",
+      "description": "List a project's GOALS — what people call a goal is a TRACK in tool and field names (say 'goal' to the person; the tools keep 'track'): the goals it is pursuing (e.g. 'Grow the newsletter', 'Win the first ten clients' inside one project). Work in a track = synap_start_session with its trackId. A track holds a direction, instructions and a goal, and turns workers on; it has no stages. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met. LEGACY: an old track also follows a project-scoped playbook (its method, with stages), pinned at the version it started with; a new track has none (playbookId null, no stages). Each row: id, name, playbookId, methodVersion, status (proposed|agreed|ready|active|paused|completed|archived — completed reads Closed, archived Dropped), verdict (how a closed or dropped goal ended, else null) and verdictReason, pausedBy (check|human|null — why a paused track is held), currentStage and stages [{ key, name, position: done|active|not_started, addedAt? }] (addedAt marks a stage added after the start), direction (where it is heading, or null) and kpi ({ label, unit?, target, current?, updatedAt? } or null — current is STATED, updatedAt says when). Archived tracks are omitted unless includeArchived. Find the project id with synap_list_projects, or pass `trackId` to read just one goal.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "projectId": {
             "type": "string",
-            "description": "Project UUID"
+            "description": "Project UUID. Required unless trackId is given."
+          },
+          "trackId": {
+            "type": "string",
+            "description": "Read ONE goal: its row only (same shape), whatever its status — dropped or closed included. projectId is then optional; if you pass both they must match."
           },
           "includeArchived": {
             "type": "boolean",
-            "description": "Also list archived tracks. Default false."
+            "description": "Also list archived tracks. Default false. Ignored with trackId."
           }
         },
-        "required": ["projectId"]
+        "required": []
       }
     },
     {
@@ -9988,6 +9992,77 @@
           }
         },
         "required": ["propertyDefId"]
+      }
+    },
+    {
+      "name": "synap_declare_lifecycle",
+      "annotations": {
+        "title": "Declare a kind's lifecycle",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Propose giving an EXISTING kind (or role) a lifecycle: its status field (default `status`, created when the kind has none) gets these options, each with a category (open, active, paused, done, lost), and every status move then goes through the one status door. Always a proposal, for anyone: `proposed` is success. REFUSED with every reason when the kind already has a lifecycle (append an option through the field's update; recategorise or retire one through the lifecycle door), when the field is shared with other kinds, when it would drop a key the field already offers, or when records carry a value no option names. Keys are stored and stay stable: put the words people read in `label`. Existing records keep the status they have (none, for a kind that had no lifecycle) until they are moved, for example with synap_update_entities. Find the kind's id with synap_list_profiles.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "profileId": {
+            "type": "string",
+            "description": "The kind's profile UUID."
+          },
+          "property": {
+            "type": "string",
+            "description": "The status field's key. Default `status`. Lowercase letters, digits and -."
+          },
+          "options": {
+            "type": "array",
+            "description": "The complete option list, in order. Each option names its stored key and its category.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "The stored value, e.g. `wont_fix`. Never renamed later: change the label instead."
+                },
+                "category": {
+                  "type": "string",
+                  "enum": ["open", "active", "paused", "done", "lost"],
+                  "description": "What the option means to every reader: open (not started), active (in progress), paused, done (finished well), lost (dropped or will not happen)."
+                },
+                "label": {
+                  "type": "string",
+                  "description": "The words people read, e.g. `Won't fix`."
+                },
+                "tone": {
+                  "type": "string",
+                  "description": "Optional tone token."
+                },
+                "humanOnly": {
+                  "type": "boolean",
+                  "description": "Only a person may move a thing into it."
+                },
+                "stuckAfterDays": {
+                  "type": "number",
+                  "description": "Days in this option before a thing is stuck (open, active or paused options only)."
+                }
+              },
+              "required": ["key", "category"]
+            }
+          },
+          "initialStatus": {
+            "type": "string",
+            "description": "The option key a new thing starts in when its creator names none. Omit to leave new things with no status."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why this kind needs a lifecycle — shown to the reviewer. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
+          }
+        },
+        "required": ["profileId", "options"]
       }
     },
     {
