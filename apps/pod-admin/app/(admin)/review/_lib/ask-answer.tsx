@@ -308,7 +308,11 @@ export function AskAnswer({
             {view.heading}
           </h3>
         )}
-        {showContext && view.context && <AskContext context={view.context} />}
+        {showContext && view.context && (
+          <Section label={ASK_COPY.why}>
+            <AskContext context={view.context} />
+          </Section>
+        )}
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-foreground/65">
           {view.asker && (
             <>
