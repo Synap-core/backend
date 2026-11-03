@@ -4448,6 +4448,17 @@
         },
         "required": ["queued", "accountId", "progress"]
       },
+      "MessagingImportHistoryProposed": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "enum": ["proposed"] },
+          "proposalId": { "type": "string" },
+          "reviewUrl": { "type": "string" },
+          "message": { "type": "string" },
+          "accountId": { "type": "string" }
+        },
+        "required": ["status", "proposalId", "message", "accountId"]
+      },
       "MessagingDeleteResult": {
         "type": "object",
         "properties": { "success": { "type": "boolean" } },
@@ -25729,7 +25740,7 @@
     "/messaging/accounts/{accountId}/import-history": {
       "post": {
         "tags": ["Messaging"],
-        "summary": "Import an account's history with people already in the pod (owner only)",
+        "summary": "Import an account's history with people already in the pod (an agent's call becomes a proposal)",
         "parameters": [
           {
             "schema": { "type": "string" },
@@ -25740,11 +25751,18 @@
         ],
         "responses": {
           "202": {
-            "description": "Import queued",
+            "description": "Import queued — or, for an agent, proposed for the person's review (`{ status: 'proposed', proposalId, reviewUrl }`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MessagingImportHistoryResult"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MessagingImportHistoryResult"
+                    },
+                    {
+                      "$ref": "#/components/schemas/MessagingImportHistoryProposed"
+                    }
+                  ]
                 }
               }
             }
@@ -25758,7 +25776,7 @@
             }
           },
           "403": {
-            "description": "Not the account's owner",
+            "description": "Refused by the key's grant or the review rules, or a narrowed key that is not an agent's",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
