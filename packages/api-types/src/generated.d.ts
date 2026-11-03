@@ -15087,6 +15087,7 @@ declare const FAILURE_ERROR_CLASSES: readonly [
 	"validation",
 	"conflict",
 	"kind_missing",
+	"not_connected",
 	"unknown"
 ];
 export type FailureErrorClass = (typeof FAILURE_ERROR_CLASSES)[number];
@@ -25378,6 +25379,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				pausedAt: string | null;
 			};
 		}>;
+		setPosture: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentUserId: string;
+				posture: "ask-first" | "create-with-undo" | null;
+			};
+			meta: object;
+			output: {
+				posture: "ask-first" | "create-with-undo" | null;
+				status: "updated";
+			};
+		}>;
 		update: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				agentUserId: string;
@@ -32570,7 +32582,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				error?: string | undefined;
 				failure?: {
 					enableProposalId?: string | undefined;
-					errorClass: "auth" | "conflict" | "kind_missing" | "missing_field" | "no_connection" | "permission" | "provider" | "target_missing" | "transient" | "unknown" | "validation";
+					errorClass: "auth" | "conflict" | "kind_missing" | "missing_field" | "no_connection" | "not_connected" | "permission" | "provider" | "target_missing" | "transient" | "unknown" | "validation";
 					next?: {
 						hint: string;
 						kind: "add" | "connect" | "enable" | "none" | "run";
