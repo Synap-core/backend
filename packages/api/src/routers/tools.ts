@@ -465,6 +465,27 @@ export const toolsRouter = router({
       } else {
         await requirePodAdmin(userId);
       }
+      // Governed (CP ticket 7c01a8b7): the role gate above is satisfied by an
+      // AGENT key linked to an owner, so it cannot stand alone. An agent caller
+      // proposes (the person approves; `tool/setAuthBinding` executor replays
+      // this procedure as the approver), a person applies directly. Both Hub
+      // REST (`POST /tools/:id/auth-binding`) and tRPC reach this one door.
+      const perm = await checkPermissionOrPropose({
+        userId,
+        workspaceId: existing.workspaceId ?? undefined,
+        subjectType: "tool",
+        action: "setAuthBinding",
+        data: { id: input.id, authBinding: input.authBinding },
+      });
+      if ("denied" in perm && perm.denied)
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      if ("proposalId" in perm)
+        return {
+          tool: null as Tool | null,
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+        };
+
       const bindingChanged = existing.authBinding !== input.authBinding;
       const [tool] = await db
         .update(tools)
@@ -476,7 +497,26 @@ export const toolsRouter = router({
         })
         .where(eq(tools.id, input.id))
         .returning();
-      return { tool: tool as Tool };
+
+      auditLog({
+        subjectType: "tool",
+        action: "setAuthBinding",
+        phase: "completed",
+        subjectId: input.id,
+        userId,
+        workspaceId: existing.workspaceId ?? undefined,
+        data: {
+          id: input.id,
+          from: existing.authBinding,
+          to: input.authBinding,
+        },
+      });
+
+      return {
+        tool: tool as Tool | null,
+        status: "updated" as const,
+        proposalId: null as string | null,
+      };
     }),
 
   /**

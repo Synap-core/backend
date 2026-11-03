@@ -217,6 +217,89 @@ export function registerToolExecutors(): void {
     },
   });
 
+  // ── tool / setAuthBinding ────────────────────────────────────────────────
+  // `tools.setAuthBinding` binds WHOSE credential a tool runs with, so an agent
+  // caller proposes (CP ticket 7c01a8b7). Approval REPLAYS the procedure as the
+  // APPROVER: its owner role gate is an authorization floor the approver must
+  // clear themselves, and the replay carries the direct path's audit row.
+  registerProposalExecutor({
+    key: "tool/setAuthBinding",
+    async execute({ proposal, userId, input, deps }) {
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? {}) as Record<string, unknown>;
+      const toolId =
+        (inner.id as string | undefined) ??
+        (raw.id as string | undefined) ??
+        proposal.targetId;
+      const authBinding = inner.authBinding as string | undefined;
+      if (!toolId || !authBinding) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Tool auth-binding proposal is missing the tool id or binding",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const existing = await db.query.tools.findFirst({
+        where: eq(tools.id, toolId),
+        columns: { id: true, workspaceId: true },
+      });
+      if (!existing) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Tool to bind no longer exists",
+        });
+      }
+
+      const { toolsRouter } = await import("../../tools.js");
+      const toolCaller = toolsRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        workspaceId: existing.workspaceId ?? undefined,
+      } as unknown as Context);
+
+      // The replay must APPLY, never re-propose — see `assertApplied`.
+      assertApplied(
+        await toolCaller.setAuthBinding({
+          id: toolId,
+          authBinding: authBinding as Parameters<
+            typeof toolCaller.setAuthBinding
+          >[0]["authBinding"],
+        })
+      );
+
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
+
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
   // ── tool / update ────────────────────────────────────────────────────────
   // Before the payload widening this gate stored `{ id }` alone, describing NO
   // change — an approved tool-update proposal had literally nothing to apply.
