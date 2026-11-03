@@ -20559,15 +20559,17 @@ export type PaginatedResponse<T> = {
 	};
 };
 export interface RailPin {
-	/** `view:<viewId>`, `kind:<profileSlug>` or `track:<trackId>` — one pin per surface. */
+	/** `view:<viewId>`, `kind:<profileSlug>`, `track:<trackId>` or `doc:<documentId>` — one pin per surface. */
 	key: string;
-	/** The kind the surface lists — `null` on a goal pin. */
+	/** The kind the surface lists — `null` on a goal or a document pin. */
 	profileSlug: string | null;
 	/** The saved pipeline view, when the pin is one. */
 	viewId: string | null;
 	/** The goal, when the pin is one ("This week", D4) — then `profileSlug` is null. */
 	trackId: string | null;
-	/** The name the person (or the template) gave it; null = the kind's (or the goal's) name. */
+	/** The document, when the pin is one (P4) — then `profileSlug` and `trackId` are null. */
+	documentId: string | null;
+	/** The name the person (or the template) gave it; null = the kind's, goal's or document's own name. */
 	label: string | null;
 	/** `template` = suggested by a space's sidebar; `user` = pinned by hand. */
 	source: "template" | "user";
@@ -44508,6 +44510,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		pinSurface: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				documentId?: string | undefined;
+				includeDocuments?: boolean | undefined;
 				includeGoals?: boolean | undefined;
 				label?: string | undefined;
 				profileSlug?: string | undefined;
@@ -44521,6 +44525,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		railPins: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				includeDocuments?: boolean | undefined;
 				includeGoals?: boolean | undefined;
 			} | undefined;
 			meta: object;
@@ -44530,6 +44535,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		reorderRailPins: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				includeDocuments?: boolean | undefined;
 				includeGoals?: boolean | undefined;
 				keys: string[];
 			};
@@ -44577,6 +44583,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		unpinSurface: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				includeDocuments?: boolean | undefined;
 				includeGoals?: boolean | undefined;
 				key: string;
 			};

@@ -12,12 +12,22 @@ import {
 export const en = {
   "bounce.noWebPage": "No web page",
   "bounce.inApp": "It has no page on the web yet. Open it in the Synap app.",
+  "document.live":
+    "This page is live in the Synap app: its parts update there. Below is a copy to read.",
+  "document.liveEditable":
+    "This page is live in the Synap app: its parts update there, and you edit it there. Below is a copy to read.",
+  "document.copy": "A copy to read",
 } as const;
 
 export const fr: Catalog<typeof en> = {
   "bounce.noWebPage": "Pas de page web",
   "bounce.inApp":
     "Cet élément n’a pas encore de page sur le web. Ouvrez-le dans l’application Synap.",
+  "document.live":
+    "Cette page est vivante dans l’application Synap : ses parties s’y mettent à jour. Ci-dessous, une copie à lire.",
+  "document.liveEditable":
+    "Cette page est vivante dans l’application Synap : ses parties s’y mettent à jour, et vous la modifiez là-bas. Ci-dessous, une copie à lire.",
+  "document.copy": "Une copie à lire",
 };
 
 /** `/open`'s translator, in the ambient catalog locale. */
