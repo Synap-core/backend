@@ -74,7 +74,7 @@ const spec = JSON.parse(readFileSync(SPEC_FILE, "utf8")) as {
 };
 
 /** Today's sizes; lower one when an entry is deleted, never raise it. */
-const MISSING_CEILING = 181;
+const MISSING_CEILING = 180;
 const OPEN_CEILING = 7;
 
 describe("hub openapi coverage", () => {

@@ -35,7 +35,6 @@ export const HUB_ROUTES_MISSING_FROM_SPEC: readonly string[] = [
   "GET /cells",
   "GET /channel-egress/pending",
   "GET /channels/{channelId}/context-card",
-  "GET /docs",
   "GET /files/{entityId}/url",
   "GET /focus-sessions/{id}/evaluations",
   "GET /focus-sessions/{sessionId}/document",
