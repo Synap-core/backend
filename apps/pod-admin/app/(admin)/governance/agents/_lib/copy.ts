@@ -2,8 +2,8 @@
  * Agents & work's words for its list of agents and its doors, as catalogs
  * (`@synap-core/types/i18n`): English is the source and the type. The grid
  * and its why-drawer keep their English words for now. A mode's name comes
- * from the vocabulary (`resolveAgentWriteModeLabel`), its sentence from the
- * pod (`agentUsers.governance` `line`). DRAFT French ("vous"), awaiting the
+ * from THE list (`AGENT_WRITE_MODE_CHOICES`, @synap-core/types/agents), its
+ * sentence from the pod (`agentUsers.governance` `line`). DRAFT French ("vous"), awaiting the
  * founder's review.
  */
 import type { Catalog } from "@synap-core/types/i18n";
