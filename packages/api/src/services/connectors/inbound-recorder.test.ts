@@ -60,7 +60,8 @@ const {
   };
 });
 
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db,
   eq: vi.fn(),
   and: vi.fn(),
@@ -116,7 +117,8 @@ vi.mock("../channels/channel-origin.js", () => ({
   recordChannelOrigin: vi.fn(),
 }));
 
-vi.mock("@synap-core/core", () => ({
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap-core/core")>()),
   createLogger: () => ({
     info: vi.fn(),
     warn: vi.fn(),
