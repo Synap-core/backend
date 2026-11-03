@@ -49,12 +49,7 @@ import {
 import { recordChannelOrigin } from "../../../services/channels/channel-origin.js";
 import { ErrorSchema, trpcErrorResponses } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import {
-  httpStatusForTrpcError,
-  logger,
-  type HubHono,
-  type HubVariables,
-} from "./_shared.js";
+import { logger, type HubHono, type HubVariables } from "./_shared.js";
 import { isUuid } from "@synap-core/types/property-render";
 import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import type { Context } from "hono";
@@ -712,7 +707,7 @@ export function registerMessagingRoutes(app: HubHono): void {
         return c.json(
           { error: denial, code: "GRANT_DENIED", reasonCode: "GRANT_DENIED" },
           403
-        );
+        ) as never;
       }
       const userId = c.get("userId") as string;
       const { accountId } = c.req.valid("param");
@@ -753,7 +748,7 @@ export function registerMessagingRoutes(app: HubHono): void {
         return c.json(
           { error: "The import could not be queued" },
           httpStatusForTrpcError(err)
-        );
+        ) as never;
       }
     }
   );
