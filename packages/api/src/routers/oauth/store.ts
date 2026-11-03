@@ -52,6 +52,8 @@ export interface StoredClient {
   requestedPodWide?: string[];
   clientUri?: string | null;
   initiateLoginUri?: string | null;
+  /** CIMD only: `synap_open_uri`, where the app opens an object (`{id}`). */
+  openUri?: string | null;
   metadataFetchedAt?: Date | null;
   metadataExpiresAt?: Date | null;
   /** First registration (DCR) or first fetch (CIMD). */
@@ -70,6 +72,7 @@ export interface CimdClientInput {
   requestedPodWide: string[];
   clientUri: string | null;
   initiateLoginUri: string | null;
+  openUri: string | null;
   metadataFetchedAt: Date;
   metadataExpiresAt: Date;
   metadataSha256: string;
@@ -195,6 +198,7 @@ export async function upsertCimdClient(
     requestedPodWide: input.requestedPodWide,
     clientUri: input.clientUri,
     initiateLoginUri: input.initiateLoginUri,
+    openUri: input.openUri,
     metadataFetchedAt: input.metadataFetchedAt,
     metadataExpiresAt: input.metadataExpiresAt,
     metadataSha256: input.metadataSha256,

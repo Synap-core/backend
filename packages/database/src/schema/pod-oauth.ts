@@ -117,6 +117,10 @@ export const oauthClients = pgTable("oauth_clients", {
   // = "pod"`, 0379, decision e1b59d38): a subset of `requested_permissions`,
   // each a read of one named kind. Empty for DCR rows.
   requestedPodWide: text("requested_pod_wide").array().notNull().default([]),
+  // Where the app opens one of its objects (`synap_open_uri`, 0396): an https
+  // URL on the client_id's origin holding the literal `{id}` exactly once.
+  // NULL for DCR rows and for a document that declares none.
+  openUri: text("open_uri"),
 });
 
 export const oauthAuthorizationCodes = pgTable(

@@ -25,6 +25,10 @@
  *   M  "apply automatically" starts off, is the owner's switch, an agent
  *      cannot flip it (the app's door nor the generic governance door), and
  *      revoke resets it.
+ *   O  where an app opens an object (`synap_open_uri`, W5): from the
+ *      validated document, through the real cache write, to the person's own
+ *      list (tRPC and Hub); never on another member's list; a refreshed
+ *      document that drops it clears it; revoked, the app leaves the list.
  *
  * Seams replaced, and why: the event store (`EventRepository`) and `auditLog`
  * write through the postgres-js client this harness has not — both are
@@ -122,6 +126,8 @@ import type {
   HubHono,
   HubVariables,
 } from "../routers/hub-protocol/rest/_shared.js";
+import { validateClientMetadataDocument } from "../routers/oauth/client-metadata.js";
+import { upsertCimdClient } from "../routers/oauth/store.js";
 import { apiKeyService } from "./api-keys.js";
 import { podAppViews } from "./app-connect.js";
 
@@ -904,5 +910,82 @@ describe("S7 — the pod app lists cost a fixed number of queries", () => {
         newest ? new Date(newest).getTime() : null
       );
     }
+  });
+});
+
+describe("O — where a pod app opens an object (synap_open_uri, W5)", () => {
+  const POSTS = "https://posts.example.com/.well-known/synap-client.json";
+  const POSTS_CB = "https://posts.example.com/api/synap/callback";
+  const OPEN = "https://posts.example.com/open/{id}";
+
+  /** The document as the app serves it, through the REAL validator and cache write. */
+  async function cache(extra: Record<string, unknown>) {
+    const now = Date.now();
+    await upsertCimdClient({
+      clientId: POSTS,
+      ...validateClientMetadataDocument(
+        {
+          client_id: POSTS,
+          client_name: "Posts",
+          redirect_uris: [POSTS_CB],
+          client_uri: "https://posts.example.com",
+          synap_templates: ["content-os", "brand-library"],
+          synap_requests: [{ permission: READ }, { permission: CREATE }],
+          ...extra,
+        },
+        POSTS
+      ),
+      metadataFetchedAt: new Date(now),
+      metadataExpiresAt: new Date(now + 60 * 60 * 1000),
+      metadataSha256: "sha",
+    });
+  }
+  const postsRow = async (userId: string) =>
+    (await caller(userId).list()).find((a) => a.pod_app?.client_id === POSTS);
+
+  it("arrives on the person's own list (tRPC and Hub), never on another member's; a refresh that drops it clears it; revoked, the app is gone", async () => {
+    await cache({ synap_open_uri: OPEN });
+    await connect([{ permission: READ, workspaceId: BRAND }], {
+      clientId: POSTS,
+      redirectUri: POSTS_CB,
+    });
+
+    const mine = await postsRow(OWNER);
+    expect(mine?.pod_app).toMatchObject({
+      client_id: POSTS,
+      client_name: "Posts",
+      client_uri: "https://posts.example.com",
+      open_uri: OPEN,
+      templates: ["content-os", "brand-library"],
+    });
+
+    // The Hub door reads the same view.
+    const listed = await sessionApp(registerAppsRoutes, OWNER).request(
+      "/pod-apps"
+    );
+    const hubRow = ((await listed.json()) as any).apps.find(
+      (a: any) => a.pod_app?.client_id === POSTS
+    );
+    expect(hubRow.pod_app.open_uri).toBe(OPEN);
+
+    // MEMBER reads Brand too and connects another app, never Posts: their
+    // list holds their own pod app (it can see pod apps) and not OWNER's.
+    await connect([{ permission: READ, workspaceId: BRAND }], {
+      clientId: NOTES,
+      redirectUri: NOTES_CB,
+      userId: MEMBER,
+    });
+    const theirs = await caller(MEMBER).list();
+    expect(theirs.map((a) => a.pod_app?.client_id)).toContain(NOTES);
+    expect(await postsRow(MEMBER)).toBeUndefined();
+
+    // The app's next document declares no open address: the cache follows.
+    await cache({});
+    expect((await postsRow(OWNER))?.pod_app?.open_uri).toBeNull();
+    await cache({ synap_open_uri: OPEN });
+    expect((await postsRow(OWNER))?.pod_app?.open_uri).toBe(OPEN);
+
+    await caller(OWNER).revoke({ publicId: mine!.public_id });
+    expect(await postsRow(OWNER)).toBeUndefined();
   });
 });

@@ -16056,6 +16056,19 @@ export interface PodAppView {
 	/** The newest use of any of its access tokens. */
 	last_used_at: Date | null;
 	write_mode: AppWriteModeView;
+	/** The name the app gives itself (`client_name`), display text only. */
+	client_name: string | null;
+	/** Its homepage (`client_uri`), on its own origin. */
+	client_uri: string | null;
+	/**
+	 * Where it opens one of its objects (`synap_open_uri`): an https URL on its
+	 * own origin holding the literal `{id}` exactly once. A caller replaces
+	 * `{id}` with the URL-encoded object id (W5: the browser opens a post in
+	 * the app that made it).
+	 */
+	open_uri: string | null;
+	/** The workspace templates it works in (`synap_templates`, slugs). */
+	templates: string[];
 }
 /** One member's connection of a pod app, as the pod admin reads it. */
 export interface AdminPodAppMember {

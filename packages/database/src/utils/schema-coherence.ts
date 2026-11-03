@@ -1177,6 +1177,12 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "requested_pod_wide",
     addedBy: "0379_oauth_client_requested_pod_wide.sql",
   },
+  // Where a pod app opens an object (0396): every client read selects it.
+  {
+    table: "oauth_clients",
+    column: "open_uri",
+    addedBy: "0396_oauth_client_open_uri.sql",
+  },
   // Pod app refresh tokens (0339). /token's refresh grant and /revoke read
   // and write them, and revoking an app revokes them: without the table the
   // pod app refresh grant, a pod app's /token and every app revoke 500.

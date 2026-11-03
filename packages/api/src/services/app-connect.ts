@@ -48,6 +48,7 @@ import {
   apiKeys,
   apps,
   oauthAuthorizationCodes,
+  oauthClients,
   profiles,
   users,
   webhookSubscriptions,
@@ -2508,6 +2509,22 @@ export interface PodAppView {
   /** The newest use of any of its access tokens. */
   last_used_at: Date | null;
   write_mode: AppWriteModeView;
+  // The four below are what the app's metadata document declares, as the pod
+  // last cached it (`oauth_clients`, refreshed within 24 h): null / [] when
+  // it declares none or no copy is cached.
+  /** The name the app gives itself (`client_name`), display text only. */
+  client_name: string | null;
+  /** Its homepage (`client_uri`), on its own origin. */
+  client_uri: string | null;
+  /**
+   * Where it opens one of its objects (`synap_open_uri`): an https URL on its
+   * own origin holding the literal `{id}` exactly once. A caller replaces
+   * `{id}` with the URL-encoded object id (W5: the browser opens a post in
+   * the app that made it).
+   */
+  open_uri: string | null;
+  /** The workspace templates it works in (`synap_templates`, slugs). */
+  templates: string[];
 }
 
 /**
@@ -2573,6 +2590,28 @@ export async function podAppViews(
     ),
   });
   const podDefaultEnabled = (await readReversibleDefault(db)).enabled;
+  // What each app's cached metadata document declares, one read for all.
+  const documents = new Map(
+    (
+      await db
+        .select({
+          clientId: oauthClients.clientId,
+          clientName: oauthClients.clientName,
+          clientUri: oauthClients.clientUri,
+          openUri: oauthClients.openUri,
+          templates: oauthClients.requestedTemplates,
+        })
+        .from(oauthClients)
+        .where(
+          and(
+            eq(oauthClients.clientKind, "cimd"),
+            inArray(oauthClients.clientId, [
+              ...new Set(pod.map((r) => r.app.oauthClientId!)),
+            ])
+          )
+        )
+    ).map((d) => [d.clientId, d])
+  );
   const out = new Map<string, PodAppView>();
   for (const row of pod) {
     const clientId = row.app.oauthClientId!;
@@ -2611,6 +2650,10 @@ export async function podAppViews(
           : null,
         podDefaultEnabled
       ),
+      client_name: documents.get(clientId)?.clientName ?? null,
+      client_uri: documents.get(clientId)?.clientUri ?? null,
+      open_uri: documents.get(clientId)?.openUri ?? null,
+      templates: documents.get(clientId)?.templates ?? [],
     });
   }
   return out;

@@ -126,7 +126,19 @@ export interface ValidatedClientMetadataDocument {
   requestedTemplates: string[];
   clientUri: string | null;
   initiateLoginUri: string | null;
+  /**
+   * `synap_open_uri`: where the app opens one of its objects, an https URL
+   * on the client_id's origin holding the literal `{id}` exactly once (W5,
+   * founder 3 Nov "The app's own address from its connection"). The desktop
+   * browser replaces `{id}` with the object's id to open it in the app.
+   */
+  openUri: string | null;
 }
+
+/** The placeholder `synap_open_uri` must carry exactly once. */
+export const OPEN_URI_ID_PLACEHOLDER = "{id}";
+/** As long as a client_id may be (`CIMD_MAX_URL_LENGTH`). */
+const CIMD_MAX_OPEN_URI_LENGTH = 512;
 
 function sameOriginHttpsUrl(
   value: unknown,
@@ -320,6 +332,8 @@ export function validateClientMetadataDocument(
       ? null
       : sameOriginHttpsUrl(d.initiate_login_uri, origin, "initiate_login_uri");
   // `logo_uri` is deliberately ignored: no remote logo for unverified apps (T7).
+  const openUri =
+    d.synap_open_uri === undefined ? null : openUriOf(d.synap_open_uri, origin);
 
   // ── what it may ask for ──────────────────────────────────────────────────
   if (d.scope !== undefined && typeof d.scope !== "string") {
@@ -417,7 +431,38 @@ export function validateClientMetadataDocument(
     requestedTemplates,
     clientUri,
     initiateLoginUri,
+    openUri,
   };
+}
+
+/**
+ * `synap_open_uri`: bounded, `{id}` exactly once, and — with `{id}` filled —
+ * an https URL on the client_id's origin (the same check as `client_uri`), so
+ * the id can never move the address to another host, a port or a fragment.
+ */
+function openUriOf(value: unknown, origin: string): string {
+  if (typeof value !== "string") {
+    throw new ClientMetadataError("synap_open_uri must be a string");
+  }
+  if (value.length > CIMD_MAX_OPEN_URI_LENGTH) {
+    throw new ClientMetadataError(
+      `synap_open_uri is longer than ${CIMD_MAX_OPEN_URI_LENGTH} characters`
+    );
+  }
+  if (value.split(OPEN_URI_ID_PLACEHOLDER).length !== 2) {
+    throw new ClientMetadataError(
+      `synap_open_uri must contain ${OPEN_URI_ID_PLACEHOLDER} exactly once`
+    );
+  }
+  sameOriginHttpsUrl(
+    value.replace(
+      OPEN_URI_ID_PLACEHOLDER,
+      "00000000-0000-0000-0000-000000000000"
+    ),
+    origin,
+    "synap_open_uri"
+  );
+  return value;
 }
 
 /**

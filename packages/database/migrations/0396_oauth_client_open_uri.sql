@@ -1,0 +1,17 @@
+-- 0396 — where a pod app opens one of its objects (W5, founder 2026-11-03,
+-- "Where the browser finds Content Studio": the app's own address from its
+-- connection). `synap_open_uri` in its client metadata document: an https URL
+-- on the client_id's origin holding the literal `{id}` exactly once, checked
+-- by `routers/oauth/client-metadata.ts` before the document is cached. The
+-- desktop browser fills `{id}` to open a post in the app that made it.
+--
+-- 0395 is taken by an open PR (agents inside a computer); the migrator
+-- records applied files by NAME, so the order of the two is free.
+--
+-- Additive + idempotent: IF NOT EXISTS. Fresh installs also get the column
+-- from 0000_baseline_schema.sql.
+--
+-- oauth_clients.open_uri — NULL for a DCR row, for a document that declares
+-- none, and for a document cached before this ran; the next refresh of the
+-- document (within 24 h) fills it.
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "open_uri" text;

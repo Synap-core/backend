@@ -449,6 +449,49 @@ describe("CIMD — document validation", () => {
       { synap_templates: Array.from({ length: 9 }, (_, i) => `t${i}`) },
       /at most 8 synap_templates/,
     ],
+    // synap_open_uri (W5): same origin, https, `{id}` exactly once.
+    [
+      "a cross-origin synap_open_uri",
+      { synap_open_uri: "https://evil.example/open/{id}" },
+      /synap_open_uri must be on the same origin/,
+    ],
+    [
+      "an http synap_open_uri",
+      { synap_open_uri: "http://studio.example.com/open/{id}" },
+      /synap_open_uri must use https/,
+    ],
+    [
+      "a synap_open_uri without {id}",
+      { synap_open_uri: "https://studio.example.com/open/" },
+      /synap_open_uri must contain \{id\} exactly once/,
+    ],
+    [
+      "a synap_open_uri with {id} twice",
+      { synap_open_uri: "https://studio.example.com/open/{id}/{id}" },
+      /synap_open_uri must contain \{id\} exactly once/,
+    ],
+    [
+      "a synap_open_uri whose {id} sits in the host",
+      { synap_open_uri: "https://{id}.studio.example.com/open" },
+      /synap_open_uri must be on the same origin/,
+    ],
+    [
+      "a synap_open_uri whose {id} sits in a fragment",
+      { synap_open_uri: "https://studio.example.com/#/open/{id}" },
+      /synap_open_uri must not contain credentials or a fragment/,
+    ],
+    [
+      "a synap_open_uri that is not a string",
+      { synap_open_uri: ["https://studio.example.com/open/{id}"] },
+      /synap_open_uri must be a string/,
+    ],
+    [
+      "a synap_open_uri over 512 characters",
+      {
+        synap_open_uri: `https://studio.example.com/open/{id}?${"p".repeat(480)}`,
+      },
+      /synap_open_uri is longer than 512/,
+    ],
   ];
   for (const [name, overrides, reason] of refused) {
     it(`refuses ${name}`, () => {
@@ -580,6 +623,23 @@ describe("CIMD — document validation", () => {
     expect(
       validateClientMetadataDocument(doc({}), CLIENT_ID).requestedTemplates
     ).toEqual([]);
+  });
+
+  it("keeps synap_open_uri as declared (path or query), and none when absent", () => {
+    for (const declared of [
+      "https://studio.example.com/open/{id}",
+      "https://studio.example.com/posts?open={id}&from=synap",
+    ]) {
+      expect(
+        validateClientMetadataDocument(
+          doc({ synap_open_uri: declared }),
+          CLIENT_ID
+        ).openUri
+      ).toBe(declared);
+    }
+    expect(validateClientMetadataDocument(doc({}), CLIENT_ID).openUri).toBe(
+      null
+    );
   });
 
   it("defaults the display name to the client_id host and ignores logo_uri", () => {
