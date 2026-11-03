@@ -45712,6 +45712,33 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					props?: Record<string, unknown> | undefined;
 					title?: string | undefined;
 				} | {
+					displayMode?: string | undefined;
+					kind: "declarative";
+					props?: Record<string, unknown> | undefined;
+					schema: ({
+						level?: 2 | 1 | 3 | undefined;
+						text: string;
+						type: "heading";
+					} | {
+						text: string;
+						type: "text";
+					} | {
+						hint?: string | undefined;
+						label: string;
+						type: "stat";
+						value: string | number;
+					} | {
+						items: string[];
+						ordered?: boolean | undefined;
+						type: "list";
+					} | {
+						action: string;
+						label: string;
+						params?: Record<string, unknown> | undefined;
+						type: "button";
+					})[];
+					title?: string | undefined;
+				} | {
 					kind: "source-app";
 					title?: string | undefined;
 				} | null;
@@ -45775,6 +45802,33 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					props?: Record<string, unknown> | undefined;
 					title?: string | undefined;
 				} | {
+					displayMode?: string | undefined;
+					kind: "declarative";
+					props?: Record<string, unknown> | undefined;
+					schema: ({
+						level?: 2 | 1 | 3 | undefined;
+						text: string;
+						type: "heading";
+					} | {
+						text: string;
+						type: "text";
+					} | {
+						hint?: string | undefined;
+						label: string;
+						type: "stat";
+						value: string | number;
+					} | {
+						items: string[];
+						ordered?: boolean | undefined;
+						type: "list";
+					} | {
+						action: string;
+						label: string;
+						params?: Record<string, unknown> | undefined;
+						type: "button";
+					})[];
+					title?: string | undefined;
+				} | {
 					kind: "source-app";
 					title?: string | undefined;
 				} | null | undefined;
@@ -45813,6 +45867,33 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					props?: Record<string, unknown> | undefined;
 					title?: string | undefined;
 				} | {
+					displayMode?: string | undefined;
+					kind: "declarative";
+					props?: Record<string, unknown> | undefined;
+					schema: ({
+						level?: 2 | 1 | 3 | undefined;
+						text: string;
+						type: "heading";
+					} | {
+						text: string;
+						type: "text";
+					} | {
+						hint?: string | undefined;
+						label: string;
+						type: "stat";
+						value: string | number;
+					} | {
+						items: string[];
+						ordered?: boolean | undefined;
+						type: "list";
+					} | {
+						action: string;
+						label: string;
+						params?: Record<string, unknown> | undefined;
+						type: "button";
+					})[];
+					title?: string | undefined;
+				} | {
 					kind: "source-app";
 					title?: string | undefined;
 				} | null | undefined;
@@ -45849,6 +45930,33 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					adapterKey: string;
 					kind: "view-adapter";
 					props?: Record<string, unknown> | undefined;
+					title?: string | undefined;
+				} | {
+					displayMode?: string | undefined;
+					kind: "declarative";
+					props?: Record<string, unknown> | undefined;
+					schema: ({
+						level?: 2 | 1 | 3 | undefined;
+						text: string;
+						type: "heading";
+					} | {
+						text: string;
+						type: "text";
+					} | {
+						hint?: string | undefined;
+						label: string;
+						type: "stat";
+						value: string | number;
+					} | {
+						items: string[];
+						ordered?: boolean | undefined;
+						type: "list";
+					} | {
+						action: string;
+						label: string;
+						params?: Record<string, unknown> | undefined;
+						type: "button";
+					})[];
 					title?: string | undefined;
 				} | {
 					kind: "source-app";
