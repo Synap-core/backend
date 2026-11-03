@@ -3,6 +3,10 @@
  *
  *   profile/retire           soft-retire a kind after re-running its preflight
  *   property_def/retire      delete a field after re-running its preflight
+ *   profile/declare_lifecycle declare a lifecycle on an existing kind after
+ *                            re-running its preflight (the same always-pending
+ *                            schema policy as property_def/retire, so it
+ *                            shares this file's approval bookkeeping)
  *   profile/merge            the retire refusal's merge suggestion, applied by
  *                            the conversions engine (pod admin only)
  *   pod_hygiene/cleanup_pack apply the APPROVED items of a pack through the
@@ -40,6 +44,10 @@ import {
   type MergeSuggestion,
 } from "../../../services/pod-hygiene/retire-profile.js";
 import { applyPropertyDefRetire } from "../../../services/pod-hygiene/retire-property-def.js";
+import {
+  applyKindLifecycle,
+  kindLifecycleInputFromProposal,
+} from "../../../services/lifecycle/declare-kind-lifecycle.js";
 import {
   registerProposalExecutor,
   type ProposalExecutorArgs,
@@ -364,6 +372,37 @@ export function registerPodHygieneExecutors(): void {
                 subject: "property_defs",
               }
             : { applied: "none", reason: result.reason },
+      };
+    },
+  });
+
+  registerProposalExecutor({
+    key: "profile/declare_lifecycle",
+    async execute(args): Promise<ProposalExecutorResult> {
+      if (await alreadyApproved(args.input.proposalId)) {
+        return { success: true, alreadyApproved: true };
+      }
+      const result = await applyKindLifecycle({
+        approverUserId: args.userId,
+        sourceProposalId: args.input.proposalId,
+        input: kindLifecycleInputFromProposal(args.proposal),
+      });
+      await markApproved(args, {
+        declared: {
+          propertyDefId: result.propertyDefId,
+          status: result.declared,
+          initialStatus: result.initialStatus,
+        },
+      });
+      return {
+        success: true,
+        primaryId: args.proposal.targetId,
+        effect: {
+          applied: "verified",
+          rows: 1,
+          ids: [result.propertyDefId],
+          subject: "property_defs",
+        },
       };
     },
   });

@@ -29,6 +29,7 @@ export const MCP_TOOL_TEACHING_KEYS: Record<string, string[]> = {
   synap_delete_entity: ["entity.delete", "synap_delete_entity"],
   synap_request_upload: ["synap_request_upload"],
   synap_change_kind_scope: ["synap_change_kind_scope"],
+  synap_declare_lifecycle: ["synap_declare_lifecycle"],
   synap_get_relations: ["graph.relations", "synap_get_relations"],
   synap_link_entities: ["graph.link", "create_relation"],
   synap_get_graph: ["graph.relations", "synap_get_graph"],
