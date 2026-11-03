@@ -10,14 +10,15 @@ import { checkCellSource } from "./cell-source-checks.js";
  * `<script ` (a line count from the start of the text for every hit, a lazy
  * import clause, unclosed comment scans).
  *
- * Each input repeats one opening that the check scans for and never closes it.
- * At 48 KB the old scans took 2-3 s for the quadratic ones and minutes for
- * `<div onclick `; the linear check takes a few milliseconds. The 1 s budget
- * leaves a loaded CI runner two orders of magnitude of slack, and a run over it
- * by less than 10x is retried twice (a GC pause or a busy core), so only a
- * scan that really grows faster than the source turns this red.
+ * Each input repeats one opening that the check scans for and never closes it,
+ * at 12, 48 then 192 KB, and must check in under 1 s at each size. A linear
+ * check takes about 60 ms at 192 KB in the worst case, so a loaded CI runner
+ * has room to spare; a quadratic scan (0.5 s at 48 KB on the old code) passes
+ * 48 KB and fails at 192 KB; a worse one fails at the first size in seconds,
+ * not hours, because the run stops at the first size over budget. A run over
+ * budget by less than 10x is retried twice (a GC pause or a busy core).
  */
-const SIZE = 48 * 1024;
+const SIZES_KB = [12, 48, 192];
 const BUDGET_MS = 1000;
 const ATTEMPTS = 3;
 
@@ -61,13 +62,17 @@ describe("checkCellSource answers in time linear in the source", () => {
   for (const opening of OPENINGS) {
     for (const mechanism of ["frame", "iframe"] as const) {
       it(`${JSON.stringify(opening)} repeated, ${mechanism}`, () => {
-        const source = opening
-          .repeat(Math.ceil(SIZE / opening.length))
-          .slice(0, SIZE);
-        expect(
-          bestTime(() => checkCellSource({ source, mechanism }))
-        ).toBeLessThan(BUDGET_MS);
-      });
+        for (const kb of SIZES_KB) {
+          const size = kb * 1024;
+          const source = opening
+            .repeat(Math.ceil(size / opening.length))
+            .slice(0, size);
+          const ms = bestTime(() => checkCellSource({ source, mechanism }));
+          expect(ms, `${kb} KB took ${ms.toFixed(0)} ms`).toBeLessThan(
+            BUDGET_MS
+          );
+        }
+      }, 60_000);
     }
   }
 });
