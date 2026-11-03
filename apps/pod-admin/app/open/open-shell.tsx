@@ -14,6 +14,7 @@ import { PageSkeleton } from "../(admin)/components/page-header";
 import { ObjectPage, type ObjectPageProps } from "../_lib/object/object-page";
 import type { LoadFailure } from "../_lib/object/load-failure";
 import { OpenInAppLink } from "../_lib/object/open-in-app-link";
+import { objectReadsWide } from "../_lib/object/object-width";
 import type { ObjectFrame } from "../_lib/object/views/object-frame";
 import { labelForOpenType } from "./open-params";
 
@@ -106,14 +107,16 @@ export function OpenFailure({
 }
 
 /**
- * The receiver card's width for an object page: one with a rail reads at a
- * document's width (`lg`), any other at the default. The console's twin is
+ * The receiver card's width for an object page: one with a rail, or of a kind
+ * that reads wide (`objectReadsWide`: a document), reads at a document's
+ * width (`lg`), any other at the default. The console's twin is
  * `consoleWidth`.
  */
-export function openWidth(
-  props: Pick<ObjectPageProps, "rail">
-): ReceiverWidth | undefined {
-  return props.rail ? "lg" : undefined;
+export function openWidth(props: {
+  rail?: ObjectPageProps["rail"];
+  header?: { kind: string };
+}): ReceiverWidth | undefined {
+  return props.rail || objectReadsWide(props.header?.kind) ? "lg" : undefined;
 }
 
 /** The receiver card as an object page's frame — every hosted kind draws in it. */

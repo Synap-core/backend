@@ -121,7 +121,10 @@ import {
 } from "./composite-parts-model";
 import { recordGroups } from "./record-groups";
 import { proposalHeading } from "./proposal-heading";
-import { proposalProfileSlug } from "./proposal-subject-kind";
+import {
+  proposalProfileSlug,
+  proposalSubjectKind,
+} from "./proposal-subject-kind";
 import { proposalRequesterParts } from "./proposal-requester";
 import {
   graphRecords,
@@ -1059,9 +1062,12 @@ export function ProposalReviewBody({
     (item) => !records.some((r) => r.ref === item.forRef)
   );
 
-  /* A review that shows text (a document, code, prose) reads at a
-     document's width; the receiver card widens on this mark. */
+  /* A review of a document, or one that shows text (code, prose), reads at
+     a document's width; the receiver card widens on this mark. */
   const readsWide = reviewReadsWide({
+    subjectKind: p.targetType
+      ? proposalSubjectKind({ targetType: String(p.targetType) }, payload)
+      : null,
     documentChanges: !!docChanges,
     toolArguments: toolRun ? toolRunArguments(toolRun) : [],
     records,
