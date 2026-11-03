@@ -51,7 +51,10 @@ import { ErrorSchema, trpcErrorResponses } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import { logger, type HubHono, type HubVariables } from "./_shared.js";
 import { isFencedGrant } from "../../../access/grant-door-fence.js";
-import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  proposedMessageFor,
+} from "../../../utils/permission-check.js";
 import type { Context } from "hono";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
 import { jsonGoverned } from "../proposal-response.js";
@@ -755,8 +758,12 @@ export function registerMessagingRoutes(app: HubHono): void {
             status: "proposed" as const,
             proposalId: perm.proposalId,
             reviewUrl: perm.reviewUrl,
-            message:
-              "History import proposed: it runs once the account's owner approves it.",
+            // A workspace-join gate files a join INSTEAD of the import: the
+            // sentence is derived from the proposal's type, never assumed.
+            message: proposedMessageFor(
+              perm.proposalType,
+              "History import proposed: it runs once the account's owner approves it."
+            ),
             accountId: row.id,
             // The route answers 202 on both paths: jsonGoverned's 200 branch
             // (a non-proposed body) is never taken here.
