@@ -6233,6 +6233,9 @@ cmd_doctor() {
     if [ -f state/requests/compose.json ] && [ -n "$(find state/requests/compose.json -mmin +10 2>/dev/null)" ]; then
         _dr units warn "a pod-agent compose request has waited over 10 min in state/requests/compose.json — is synap-compose.path active? (synap units status)"
     fi
+    if [ -f state/clean/request.json ] && [ -n "$(find state/clean/request.json -mmin +10 2>/dev/null)" ]; then
+        _dr units warn "a clean request from the pod has waited over 10 min in state/clean/request.json — is synap-clean.path active? (synap units status)"
+    fi
 
     # ── url ──
     local pu
