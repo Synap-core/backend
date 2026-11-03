@@ -56,13 +56,39 @@ describe("checkCellSource: a frame cell that mounts is not refused", () => {
         externalHosts: ["https://api.vendor.com"],
       }).refusals
     ).toEqual([]);
-    expect(
-      checkCellSource({
-        source,
-        mechanism: "frame",
-        externalHosts: ["api.vendor.com"],
-      }).refusals
-    ).toEqual([]);
+    // A declared wss origin opens the WebSocket, and an https origin opens
+    // the wss one too (CSP matches `https://x` for `wss://x`).
+    const live =
+      'export default () => { new WebSocket("wss://live.vendor.com/s"); return null; };';
+    for (const host of ["wss://live.vendor.com", "https://live.vendor.com"]) {
+      expect(
+        checkCellSource({
+          source: live,
+          mechanism: "frame",
+          externalHosts: [host],
+        }).refusals
+      ).toEqual([]);
+    }
+  });
+
+  it("a host the frame drops opens nothing: no scheme, a path, a wildcard", () => {
+    // ViewFrame `buildFrameCsp` keeps an http(s)/ws(s) origin only, so a
+    // request to any of these is blocked at run time and refused here.
+    const source =
+      'export default () => { fetch("https://api.vendor.com/v1/x"); return null; };';
+    for (const host of [
+      "api.vendor.com",
+      "https://api.vendor.com/v1",
+      "https://*.vendor.com",
+      "https://user:pw@api.vendor.com",
+    ]) {
+      expect(
+        codes(
+          checkCellSource({ source, mechanism: "frame", externalHosts: [host] })
+            .refusals
+        )
+      ).toEqual(["network_request"]);
+    }
   });
 
   it("an import in a comment that opens its line is not an import", () => {
@@ -222,5 +248,18 @@ describe("formatCellSourceRefusal", () => {
     expect(text).toContain('Line 1 imports "d3"');
     expect(text).toContain('Line 2 imports "recharts"');
     expect(text.match(/--bundle-deps/g)).toHaveLength(1);
+  });
+
+  it("lists the first 20 reasons and counts the rest", () => {
+    const source = Array.from(
+      { length: 25 },
+      (_, i) => `import x${i} from "lib${i}";`
+    ).join("\n");
+    const { refusals } = checkCellSource({ source, mechanism: "frame" });
+    expect(refusals).toHaveLength(25);
+    const text = formatCellSourceRefusal(refusals);
+    expect(text).toContain('Line 20 imports "lib19"');
+    expect(text).not.toContain("Line 21 imports");
+    expect(text).toContain("…and 5 more.");
   });
 });
