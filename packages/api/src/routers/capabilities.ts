@@ -11,6 +11,7 @@
  */
 
 import { z } from "zod";
+import { RendererRefSchema } from "../services/profiles/renderer-ref-schema.js";
 import { TRPCError } from "@trpc/server";
 import { buildDerivedSessionTitle } from "@synap-core/types/focus-sessions";
 import {
@@ -567,91 +568,6 @@ async function findDependentProcesses(
 }
 
 // ─── Capability renderer schemas ──────────────────────────────────────────────
-
-/**
- * The MINIMAL, bounded declarative-block schema — the zod mirror of
- * `DeclarativeBlock` (@synap/database). Five block kinds, Block-Kit style.
- */
-const DeclarativeBlockSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("heading"),
-    text: z.string(),
-    level: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
-  }),
-  z.object({ type: z.literal("text"), text: z.string() }),
-  z.object({
-    type: z.literal("stat"),
-    label: z.string(),
-    value: z.union([z.string(), z.number()]),
-    hint: z.string().optional(),
-  }),
-  z.object({
-    type: z.literal("list"),
-    items: z.array(z.string()),
-    ordered: z.boolean().optional(),
-  }),
-  z.object({
-    type: z.literal("button"),
-    label: z.string(),
-    action: z.string(),
-    params: z.record(z.string(), z.unknown()).optional(),
-  }),
-]);
-
-/** zod mirror of `RendererRef` (@synap/database) — the polymorphic renderer union. */
-const RendererRefSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("cell"),
-    cellKey: z.string(),
-    props: z.record(z.string(), z.unknown()),
-    title: z.string().optional(),
-    displayMode: z.string().optional(),
-    rendererHint: z.record(z.string(), z.unknown()).optional(),
-  }),
-  z.object({
-    kind: z.literal("view"),
-    viewId: z.string(),
-    title: z.string().optional(),
-    displayMode: z.string().optional(),
-  }),
-  z.object({
-    kind: z.literal("iframe-srcdoc"),
-    appId: z.string(),
-    srcdoc: z.string(),
-    title: z.string().optional(),
-    props: z.record(z.string(), z.unknown()).optional(),
-  }),
-  z.object({
-    kind: z.literal("external-app"),
-    appId: z.string(),
-    url: z.string(),
-    title: z.string().optional(),
-    props: z.record(z.string(), z.unknown()).optional(),
-  }),
-  z.object({
-    kind: z.literal("url"),
-    url: z.string(),
-    external: z.boolean().optional(),
-    title: z.string().optional(),
-  }),
-  z.object({
-    kind: z.literal("view-adapter"),
-    adapterKey: z.string(),
-    props: z.record(z.string(), z.unknown()).optional(),
-    title: z.string().optional(),
-  }),
-  z.object({
-    kind: z.literal("declarative"),
-    schema: z.array(DeclarativeBlockSchema),
-    title: z.string().optional(),
-    props: z.record(z.string(), z.unknown()).optional(),
-    displayMode: z.string().optional(),
-  }),
-  z.object({
-    kind: z.literal("source-app"),
-    title: z.string().optional(),
-  }),
-]);
 
 /** One page of a capability's ORDERED renderer page-set. */
 const CapabilityRendererPageSchema = z.object({
