@@ -135,6 +135,7 @@ import {
 import { reviveSessionForWrite } from "../services/focus-sessions/revive-stale-session.js";
 import { stampWritingRunner } from "../services/focus-sessions/session-runners.js";
 import { normalizeExpectedLabel } from "../services/focus-sessions/expected-label.js";
+import { withCellContentFingerprint } from "../services/cells/cell-content-fingerprint.js";
 import { logEvent } from "../lib/event-helpers.js";
 import { AGENT_WRITE_EVENT_KIND } from "../lib/run-event-kinds.js";
 import { openLink, openPath } from "./deep-links.js";
@@ -1472,7 +1473,7 @@ async function evaluatePermission(
     subjectType,
     action,
     source,
-    data,
+    data: callerData,
     correlationId,
     requestedEventId,
     threadId,
@@ -1485,6 +1486,15 @@ async function evaluatePermission(
     nodeId,
     channelCapabilities,
   } = opts;
+  // A cell definition is proposed with the fingerprint of the content its
+  // approval writes (decision Q9, `services/cells/cell-content-fingerprint.ts`):
+  // stamped HERE, the one gate every door that files a `cell/define` proposal
+  // goes through, so no door can file one without it. The approve executor
+  // refuses a payload that no longer matches its stamp.
+  const data =
+    subjectType === "cell" && action === "define"
+      ? withCellContentFingerprint(callerData)
+      : callerData;
   // Where a proposal or receipt is filed. Record only: every rung below
   // decides on `workspaceId`.
   const filedWorkspaceId =
@@ -4901,7 +4911,7 @@ async function maybeCreateWorkspaceJoinProposal(opts: {
       ? buildDeferredWrite({
           subjectType: requestedSubjectType,
           action: requestedAction,
-          data: requestedData,
+          data: callerData,
           workspaceId,
           agentUserId,
           userId: requesterUserId,

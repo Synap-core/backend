@@ -28,6 +28,7 @@ import type { ProposalRevision } from "@synap/database";
 import { getRequestGrant } from "@synap/database";
 import { isFencedGrant } from "../../access/grant-door-fence.js";
 import { isDeepStrictEqual } from "node:util";
+import { withCellContentFingerprint } from "../cells/cell-content-fingerprint.js";
 import { TRPCError } from "@trpc/server";
 import { assertReviewedRevision } from "../../utils/reviewed-revision.js";
 import {
@@ -636,6 +637,25 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
         priorInner as Record<string, unknown>
       )[key];
     }
+  }
+
+  // A cell definition's fingerprint follows its content (decision Q9): the
+  // gate stamped it when the proposal was filed, and a revision that changes
+  // the source changes what the approval writes, so it is stamped again from
+  // the merged payload, never taken from the patch. The approve executor then
+  // refuses only a payload changed outside a door
+  // (`services/cells/cell-content-fingerprint.ts`).
+  if (
+    merged.targetType === "cell" &&
+    merged.changeType === "define" &&
+    isNestedEnvelope(merged) &&
+    merged.data &&
+    typeof merged.data === "object" &&
+    !Array.isArray(merged.data)
+  ) {
+    merged.data = withCellContentFingerprint(
+      merged.data as Record<string, unknown>
+    );
   }
 
   // `by` is the HUMAN the call acts for (every door passes the key owner), so an
