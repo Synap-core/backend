@@ -389,18 +389,19 @@ interface PageNeedsYou {
  * THE needs-you rule over the page (decision E): the rule's session facts,
  * measured by the SQL twin's own fragments (the needs-you reader's measure),
  * classify each row's owed slots; `classifyPendingProposals` (the groups
- * door's) classifies its pending proposals. Two reads plus the proposal
- * classification's own; a failure THROWS, so `settle` marks the counts
- * unavailable rather than zero.
+ * door's) classifies its pending proposals. Three reads (facts, proposals,
+ * open PRs under the caller's floor) plus the proposal classification's own;
+ * a failure THROWS, so `settle` marks the counts unavailable rather than zero.
  */
 async function readPageNeedsYou<R extends PathSourceRow>(
   database: typeof db,
-  userId: string,
+  reader: SessionReader,
   rows: readonly R[],
   now: Date
 ): Promise<PageNeedsYou> {
+  const { userId } = reader;
   const ids = rows.map((r) => r.id);
-  const [facts, pending] = await Promise.all([
+  const [facts, pending, blocking] = await Promise.all([
     database
       .select({
         id: focusSessions.id,
@@ -431,9 +432,12 @@ async function readPageNeedsYou<R extends PathSourceRow>(
           eq(proposals.status, ProposalStatus.PENDING)
         )
       ),
+    // Which rows hold an open PR, read ONCE for the page under the caller's
+    // floor (a bound key's PR facts stay in its workspace, as the page's work
+    // units do) and handed to the proposal classification below.
+    sessionIdsBlockingOpenPr(reader, ids),
   ]);
   const factsOf = new Map(facts.map((f) => [f.id, f]));
-  const blocking = await sessionIdsBlockingOpenPr({ userId }, ids);
   const owed = new Map<string, number>();
   for (const row of rows) {
     const f = factsOf.get(row.id);
@@ -460,7 +464,9 @@ async function readPageNeedsYou<R extends PathSourceRow>(
       ).length
     );
   }
-  const classes = await classifyPendingProposals(pending, { userId }, now);
+  const classes = await classifyPendingProposals(pending, { userId }, now, {
+    openPrSessionIds: blocking,
+  });
   const decisions = new Map<string, number>();
   for (const p of pending) {
     const cls = classes.get(p.id);
@@ -587,7 +593,13 @@ export async function attachPathSections<R extends PathSourceRow>(
       ctx,
       "needsYou",
       "What needs you in these sessions could not be read.",
-      () => readPageNeedsYou(database, opts.userId, rows, now)
+      () =>
+        readPageNeedsYou(
+          database,
+          { userId: opts.userId, roster: opts.roster, lens: opts.lens },
+          rows,
+          now
+        )
     ),
     // THE verdict per row (rung 6b of the next move) — the batch the list
     // door's `verdict` comes from. A row that already carries it is reused;

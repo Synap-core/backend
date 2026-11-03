@@ -328,6 +328,13 @@ export interface ListOwedSlotsParams {
    */
   needsYouLens?: boolean;
   /**
+   * The caller counts the slots and never reads their needs-you class (the
+   * waiting-on, `readWaitingOnSourcesFor`): skip the open-PR read behind
+   * `blocksOpenPr`, which only moves the class. The waiting-on reads its PR
+   * states once, in `readOpenWorkUnits`, under the caller's lens.
+   */
+  withoutOpenPrFact?: boolean;
+  /**
    * CONTAINER lenses below the project: only this session's slots, or only
    * slots of sessions in this track. In SQL, like the workspace/project lens —
    * owed slots accumulate on OLD sessions, so a page-then-filter pass would
@@ -598,14 +605,15 @@ export async function listOwedSlots(
 
   // The needs-you rule reads whether the session blocks an open PR: one read
   // for the page, the same helper every other classifier calls.
-  const blocking = params.needsYouLens
-    ? await (
-        await import("../dev-loop/open-pr-blocking.js")
-      ).sessionIdsBlockingOpenPr(
-        { userId },
-        rows.map((r) => r.id)
-      )
-    : new Set<string>();
+  const blocking =
+    params.needsYouLens && !params.withoutOpenPrFact
+      ? await (
+          await import("../dev-loop/open-pr-blocking.js")
+        ).sessionIdsBlockingOpenPr(
+          { userId },
+          rows.map((r) => r.id)
+        )
+      : new Set<string>();
   const slots = rows
     .flatMap((r) => {
       const owed = projectOwedSlots(

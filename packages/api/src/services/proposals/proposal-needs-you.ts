@@ -56,7 +56,14 @@ export interface ProposalNeedsYouRow extends ProposalWaitsRow {
 export async function classifyPendingProposals(
   rows: readonly ProposalNeedsYouRow[],
   reader: SessionReader,
-  now: Date = new Date()
+  now: Date = new Date(),
+  opts: {
+    /**
+     * The sessions holding an open PR, already measured by the caller under
+     * its own reader floor (a page that read them once). Absent = read here.
+     */
+    openPrSessionIds?: ReadonlySet<string>;
+  } = {}
 ): Promise<Map<string, NeedsYouProposalClass>> {
   const pending = rows.filter((r) => r.status === "pending");
   const out = new Map<string, NeedsYouProposalClass>();
@@ -111,7 +118,9 @@ export async function classifyPendingProposals(
         ),
   ]);
   const sessionOf = new Map(sessions.map((s) => [s.id, s]));
-  const blocking = await sessionIdsBlockingOpenPr(reader, sessionIds);
+  const blocking =
+    opts.openPrSessionIds ??
+    (await sessionIdsBlockingOpenPr(reader, sessionIds));
   const snoozedUntilOf = new Map(
     snoozes.map((s) => [s.proposalId, s.snoozedUntil])
   );

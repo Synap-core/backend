@@ -396,6 +396,8 @@ export async function readWaitingOnSourcesFor<K>(
           sessionIds,
           ...(containerFloored ? { containerFloored } : {}),
           limit: Number.MAX_SAFE_INTEGER,
+          // Every owed slot is a wait, whatever its class: no PR read here.
+          withoutOpenPrFact: true,
         })
       : Promise.resolve([]);
   const [
@@ -419,6 +421,7 @@ export async function readWaitingOnSourcesFor<K>(
               userId,
               scope: "scope" in q.owed ? q.owed.scope : unscoped,
               limit: WAITING_READ_CAP,
+              withoutOpenPrFact: true,
               ...("subject" in q.owed ? { subject: q.owed.subject } : {}),
             })
           : Promise.resolve(null)
