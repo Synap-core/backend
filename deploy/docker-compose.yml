@@ -549,6 +549,18 @@ services:
       POSTGRES_DB: synap
       PGDATA: /home/postgres/pgdata/data
       SYNAP_ALLOW_PG_REINIT: ${SYNAP_ALLOW_PG_REINIT:-0}
+      # Sizing (pod resilience plan P5). The image tunes postgresql.conf ONCE,
+      # at initdb (/docker-entrypoint-initdb.d/001_timescaledb_tune.sh runs
+      # timescaledb-tune): shared_buffers = 25% of TS_TUNE_MEMORY,
+      # effective_cache_size = 75%, work_mem sized for TS_TUNE_MAX_CONNS.
+      # `synap install` writes POSTGRES_TUNE_MEMORY (pg_tune_memory: half the
+      # host's RAM, 512MB..8192MB); empty = the image measures the whole host.
+      # An existing cluster is never re-tuned by an update: the opt-in is
+      # `synap tune-postgres`. Memory parameters never go on `command:` below
+      # (pg-connection-budget.test.sh G): a `-c` there would change every
+      # running pod on its next update.
+      TS_TUNE_MEMORY: ${POSTGRES_TUNE_MEMORY:-}
+      TS_TUNE_MAX_CONNS: ${POSTGRES_MAX_CONNECTIONS:-200}
     entrypoint:
       - /bin/sh
       - -c

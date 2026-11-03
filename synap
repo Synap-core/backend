@@ -722,6 +722,39 @@ should_start_pod_agent() {
 }
 
 # ============================================================================
+# HELPER: the memory Postgres sizes itself for (pod resilience plan P5)
+# ============================================================================
+# The postgres image (timescale/timescaledb-ha) sizes itself ONCE, when its
+# cluster is created: /docker-entrypoint-initdb.d/001_timescaledb_tune.sh runs
+# timescaledb-tune over postgresql.conf with TS_TUNE_MEMORY (empty = the whole
+# host's RAM) and TS_TUNE_MAX_CONNS. It sets shared_buffers = 25% of that
+# memory, effective_cache_size = 75%, maintenance_work_mem and work_mem from it
+# and the connection ceiling. docker-compose.yml feeds it POSTGRES_TUNE_MEMORY
+# and POSTGRES_MAX_CONNECTIONS; this is the ONE place the pod's share is
+# computed. Postgres shares the host with a dozen services (backend, realtime,
+# Typesense, Redis, MinIO, Kratos, Caddy, pod-admin…), so it is told HALF the
+# host's RAM, at least 512 MB and at most 8 GB (a one-person pod's working set
+# is a few GB). Measured with timescaledb-tune 0.19 (--cpus 4, --max-conns 200):
+#   host 4 GB  → 2048MB → shared_buffers 512MB, effective_cache_size 1536MB, work_mem 2MB
+#   host 8 GB  → 4096MB → shared_buffers 1GB,   effective_cache_size 3GB,    work_mem 4MB
+#   host 16 GB → 8192MB → shared_buffers 2GB,   effective_cache_size 6GB,    work_mem 8MB
+# (told the whole host, as before, a 4 GB pod got shared_buffers 1GB and a
+# work_mem sized for 50 connections while 200 were allowed.)
+# A pod whose cluster already exists keeps its settings across updates (the
+# tune runs at initdb only); `synap tune-postgres` re-tunes it on purpose.
+# Prints "<n>MB", or nothing (rc 1) when the host's memory cannot be read: the
+# image then measures the host itself, as before.
+pg_tune_memory() { # [MemTotal in kB]
+    local kb="${1:-}" mb
+    [ -n "$kb" ] || kb="$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null)"
+    [[ "$kb" =~ ^[0-9]+$ ]] && [ "$kb" -gt 0 ] || return 1
+    mb=$(( kb / 1024 / 2 ))
+    [ "$mb" -lt 512 ] && mb=512
+    [ "$mb" -gt 8192 ] && mb=8192
+    echo "${mb}MB"
+}
+
+# ============================================================================
 # HELPER: Generate secrets and create .env
 # ============================================================================
 
@@ -775,6 +808,10 @@ generate_and_create_env() {
     # Placeholder until the image step pins the release block (SYNAP_IMAGE_*,
     # BACKEND_VERSION=<release id>) — never `latest`.
     local backend_version="unreleased"
+    # What Postgres sizes itself for when its cluster is created (empty: the
+    # image measures the whole host, as before).
+    local pg_memory
+    pg_memory="$(pg_tune_memory || true)"
     
     cat > .env <<EOF
 # Synap Backend Configuration
@@ -812,6 +849,10 @@ EMBEDDING_PROVIDER=deterministic
 ADMIN_EMAIL=${admin_email}
 ADMIN_BOOTSTRAP_MODE=${admin_bootstrap_mode}
 ADMIN_BOOTSTRAP_TOKEN=${admin_bootstrap_token}
+
+# Postgres sizes itself ONCE, when its cluster is created, for this much memory
+# (half this host's RAM, 512MB..8192MB; synap tune-postgres re-tunes it later).
+POSTGRES_TUNE_MEMORY=${pg_memory}
 
 # Auto-generated Secrets
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
@@ -2478,6 +2519,10 @@ cmd_install() {
                 FROM_SOURCE=true
                 shift
                 ;;
+            --dev-host)
+                UE_DEV_HOST=1
+                shift
+                ;;
             --release|-r)
                 FROM_IMAGE=true
                 INSTALL_RELEASE="${2:-}"
@@ -2591,13 +2636,15 @@ ${YELLOW}Usage:${NC}
   synap install [options]
 
 ${YELLOW}Auto-Detection:${NC}
-  - If in git repository: Uses existing repo, defaults to --from-source
+  - If in git repository: Uses existing repo, defaults to --from-image
+    (--from-source on a dev host: --dev-host or SYNAP_ALLOW_SOURCE_BUILD=1)
   - If not in git repository: Clones repo, defaults to --from-image
   - Default clone location: Current directory + "synap-backend"
 
 ${YELLOW}Options:${NC}
   ${GREEN}--from-image${NC}        Use Docker image (default when cloning)
-  ${GREEN}--from-source${NC}        Build from source code (default when in git repo)
+  ${GREEN}--from-source${NC}        Build from source code (a dev host only, with --dev-host)
+  ${GREEN}--dev-host${NC}           Declare this host a dev host: it may build its own images
   ${GREEN}--dir <path>${NC}         Installation directory (default: ./synap-backend when cloning)
   ${GREEN}--domain <domain>${NC}    Domain name (required)
   ${GREEN}--email <email>${NC}     Email for SSL certificates (required for production)
@@ -2787,10 +2834,14 @@ EOF
             # When cloning: default to image
             FROM_IMAGE=true
             echo -e "${BLUE}ℹ️  Defaulting to --from-image (use --from-source to build)${NC}"
-        else
-            # When in git repo: default to source
+        elif [ "${UE_DEV_HOST:-}" = 1 ] || [ "${SYNAP_ALLOW_SOURCE_BUILD:-}" = 1 ] || [ "${SYNAP_ALLOW_SOURCE_BUILD:-}" = true ]; then
+            # A checkout on a declared dev host: default to source
             FROM_SOURCE=true
-            echo -e "${BLUE}ℹ️  Defaulting to --from-source (use --from-image to use pre-built image)${NC}"
+            echo -e "${BLUE}ℹ️  Defaulting to --from-source on this dev host (use --from-image to use pre-built image)${NC}"
+        else
+            # A checkout on a pod: a pod never builds its own images (P5)
+            FROM_IMAGE=true
+            echo -e "${BLUE}ℹ️  Defaulting to --from-image (a pod never builds its own images; --from-source --dev-host on a dev host)${NC}"
         fi
     fi
     
@@ -4305,7 +4356,31 @@ _ue_adopt_running() {
 # time, so the warm-cache cost is paid only once a build has already failed.
 _ue_build_cache_reset() { docker builder prune -af >/dev/null 2>&1 || true; }
 
+# ── a pod never builds its own images (pod resilience plan P5) ───────────────
+# A from-source build is the heaviest load a host takes: ~11 GB of disk at peak
+# and a 4 GB Node heap (deploy/Dockerfile) on the machine that serves the
+# person's data. A pod takes its images from a published release, pulled by
+# digest (`synap update --release <main-<sha7>|vX.Y.Z|fast|stable>`); images are
+# built by CI (docker-publish.yml) or on a dev host. Building is allowed only
+# on a host DECLARED a dev host: `--dev-host` on the command line, or
+# SYNAP_ALLOW_SOURCE_BUILD=1 in the environment or in deploy/.env (operator-
+# local: env.schema gives it no `cp` flag, so a Control Plane cannot turn a pod
+# into a build host). No marker in a deploy dir tells a pod from a dev host
+# (both have a DOMAIN, a .env, a checkout, a release record), so the default
+# refuses. SYNAP_SKIP_GIT_SYNC / SYNAP_FORCE_GIT_SYNC keep their meaning: they
+# say how a permitted build syncs the checkout, never whether it may build.
+UE_DEV_HOST="${UE_DEV_HOST:-}"
+_ue_source_build_allowed() { # cwd = deploy dir
+    [ "${UE_DEV_HOST:-}" = 1 ] && return 0
+    case "${SYNAP_ALLOW_SOURCE_BUILD:-$(_ue_env_get SYNAP_ALLOW_SOURCE_BUILD)}" in 1|true) return 0 ;; esac
+    _ue_err "this host is not declared a dev host, so it does not build its own images. Nothing was changed."
+    _ue_err "  A pod updates from a published release, pulled by digest: synap update --release <main-<sha7>|vX.Y.Z|fast|stable>"
+    _ue_err "  A dev host builds with: synap update --from-source --dev-host (or SYNAP_ALLOW_SOURCE_BUILD=1 in deploy/.env)"
+    return 1
+}
+
 _ue_build_from_source() { # <out-manifest>
+    _ue_source_build_allowed || return 1
     local out="$1" repo_root sha tag be pa mig_dir last count carry pins k v
     repo_root="$(get_repo_root)"
     if [ -z "$repo_root" ] || [ ! -f "$repo_root/deploy/Dockerfile" ]; then
@@ -5155,6 +5230,8 @@ cmd_update() {
                 ref="${2:-}"; shift 2 || { echo -e "${RED}--release needs an id or a channel (fast|stable)${NC}"; exit 1; } ;;
             --from-source|--build|-b|--local|-l)
                 mode="source"; shift ;;
+            --dev-host)
+                UE_DEV_HOST=1; shift ;;
             --from-image)
                 # Legacy flag (eve passes it): "use a published artifact" = a release.
                 shift ;;
@@ -5171,14 +5248,17 @@ cmd_update() {
                 shift ;;
             -h|--help)
                 cat <<'USAGE'
-synap update [--release <id|fast|stable>] [--from-source] [--force] [--unattended]
-             [--insecure-skip-verify]
+synap update [--release <id|fast|stable>] [--from-source --dev-host] [--force]
+             [--unattended] [--insecure-skip-verify]
 
   --release <ref>   apply a published release: a release id (main-<sha7>, vX.Y.Z)
                     or a channel — fast (every green main push) | stable (v* tags).
                     Default: SYNAP_UPDATE_CHANNEL from deploy/.env, else stable.
   --from-source     build THIS checkout as synap-dev/*:<sha> (release local-<sha>);
-                    same backup / canary / rollback as a release.
+                    same backup / canary / rollback as a release. Only on a
+                    dev host: a pod never builds its own images.
+  --dev-host        declare this host a dev host, so --from-source may build
+                    (or SYNAP_ALLOW_SOURCE_BUILD=1 in the environment or deploy/.env).
   --force           re-apply the release the pod is already on, or apply a
                     release older than it (otherwise refused).
   --unattended      what synap-update.service runs: a pending request
@@ -5210,6 +5290,12 @@ USAGE
         unset UE_REQUEST_ID   # a person's run answers no request
     fi
     [ "$ref" = latest ] && ref=""
+    # A pod never builds its own images: refused BEFORE the checkout sync (a
+    # `git reset --hard` on a pod's checkout for a build that will not run).
+    if [ "$mode" = source ] && ! _ue_source_build_allowed; then
+        _ue_record aborted "$(_ue_current_release_id)" local "from-source build refused: this host is not declared a dev host (--dev-host / SYNAP_ALLOW_SOURCE_BUILD=1)" false
+        exit 1
+    fi
     # --from-source: sync the checkout FIRST, then run the synced installer. A
     # running bash keeps the functions it parsed, so without this re-exec every
     # fix to the update path (e.g. the Kratos render) only took effect one
@@ -5219,7 +5305,8 @@ USAGE
         if [ "$(cksum < "$SYNAP_SELF" 2>/dev/null)" != "$SYNAP_SELF_CKSUM" ]; then
             echo -e "${BLUE}🔁 The installer changed with this checkout — continuing with the new one.${NC}"
             # Same pid, so the update lock this process holds carries over.
-            exec env SYNAP_UPDATE_SYNCED=1 SYNAP_LOCK_HELD_BY="$$" "$SYNAP_SELF" update "${_update_argv[@]}"
+            # UE_DEV_HOST: `synap rebuild --dev-host` reaches here with no --dev-host in this argv.
+            exec env SYNAP_UPDATE_SYNCED=1 SYNAP_LOCK_HELD_BY="$$" UE_DEV_HOST="${UE_DEV_HOST:-}" "$SYNAP_SELF" update "${_update_argv[@]}"
         fi
         export SYNAP_UPDATE_SYNCED=1
     fi
@@ -6263,7 +6350,7 @@ cmd_rebuild() {
     
     cd "$deploy_dir"
     
-    local service=${1:-}
+    local service=""
     local no_cache=false
     
     # Parse arguments
@@ -6271,6 +6358,10 @@ cmd_rebuild() {
         case $1 in
             --no-cache)
                 no_cache=true
+                shift
+                ;;
+            --dev-host)
+                UE_DEV_HOST=1
                 shift
                 ;;
             *)
@@ -6990,6 +7081,81 @@ cmd_shell() {
     
     echo -e "${BLUE}🐚 Opening shell in $service (using $shell)...${NC}"
     docker compose exec "$service" "$shell"
+}
+
+# ============================================================================
+# TUNE-POSTGRES — re-size an existing pod's Postgres, on purpose (plan P5)
+# ============================================================================
+# The image tunes postgresql.conf ONCE, at initdb (pg_tune_memory explains how),
+# so an update never changes a running pod's memory settings. This is the
+# opt-in for a pod created before POSTGRES_TUNE_MEMORY existed, or moved to a
+# host of another size: it runs the image's own timescaledb-tune over the live
+# postgresql.conf (a copy is kept beside it), then restarts Postgres. The
+# connection ceiling is the one the running server reports (SHOW
+# max_connections), so work_mem is sized for the real number of connections.
+cmd_tune_postgres() {
+    local deploy_dir mem="" dry=0 yes=0 maxc ts backup
+    deploy_dir=$(get_deploy_dir)
+    [ -n "$deploy_dir" ] || { echo -e "${RED}Error: Not in Synap installation directory${NC}"; exit 1; }
+    cd "$deploy_dir"
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --memory) mem="${2:-}"; shift 2 || { echo -e "${RED}--memory needs a size (4096MB)${NC}"; exit 1; } ;;
+            --dry-run) dry=1; shift ;;
+            --yes|-y) yes=1; shift ;;
+            -h|--help)
+                cat <<'USAGE'
+synap tune-postgres [--memory <size>] [--dry-run] [--yes]
+
+  Re-size this pod's Postgres with the image's own timescaledb-tune, then
+  restart Postgres (a few seconds of downtime). Memory, in this order:
+  --memory, POSTGRES_TUNE_MEMORY in deploy/.env, half this host's RAM
+  (512MB..8192MB). The previous postgresql.conf is kept beside it as
+  postgresql.conf.before-tune-<timestamp>; the command to put it back is printed.
+  --dry-run   print the settings it would write, change nothing
+  --yes       do not ask before restarting Postgres
+USAGE
+                return 0 ;;
+            *) echo -e "${RED}Unknown option: $1 (synap tune-postgres --help)${NC}"; exit 1 ;;
+        esac
+    done
+    [ -n "$mem" ] || mem="$(_ue_env_get POSTGRES_TUNE_MEMORY)"
+    [ -n "$mem" ] || mem="$(pg_tune_memory || true)"
+    if ! [[ "$mem" =~ ^[1-9][0-9]*(MB|GB)$ ]]; then
+        echo -e "${RED}❌ No memory to size Postgres for (got '${mem}'): pass --memory <n>MB|<n>GB. Nothing was changed.${NC}" >&2
+        exit 1
+    fi
+    maxc="$(docker compose exec -T postgres psql -U synap -d synap -tAc 'SHOW max_connections' 2>/dev/null | tr -d '[:space:]')"
+    if ! [[ "$maxc" =~ ^[1-9][0-9]*$ ]]; then
+        echo -e "${RED}❌ Could not read max_connections from the running Postgres (is it up? synap ps). Nothing was changed.${NC}" >&2
+        exit 1
+    fi
+    echo -e "${BLUE}🐘 Sizing Postgres for ${mem} of memory and ${maxc} connections${NC}"
+    if [ "$dry" = 1 ]; then
+        docker compose exec -T postgres sh -c "timescaledb-tune --quiet --yes --dry-run --conf-path=\"\$PGDATA/postgresql.conf\" --memory='${mem}' --max-conns='${maxc}'"
+        return $?
+    fi
+    if [ "$yes" != 1 ] && ! synap_assume_yes; then
+        local ans=""
+        read -r -p "Rewrite postgresql.conf and restart Postgres now? [y/N] " ans || true
+        case "$ans" in y|Y|yes) ;; *) echo "Nothing was changed."; return 0 ;; esac
+    fi
+    ts="$(date -u +%Y%m%dT%H%M%SZ)"; backup="postgresql.conf.before-tune-${ts}"
+    if ! docker compose exec -T postgres sh -c "set -e; cp \"\$PGDATA/postgresql.conf\" \"\$PGDATA/${backup}\"; timescaledb-tune --quiet --yes --conf-path=\"\$PGDATA/postgresql.conf\" --memory='${mem}' --max-conns='${maxc}'"; then
+        echo -e "${RED}❌ timescaledb-tune failed; Postgres was not restarted.${NC}" >&2
+        exit 1
+    fi
+    echo -e "${YELLOW}Previous settings kept: \$PGDATA/${backup}. To put them back:${NC}"
+    echo "  synap exec postgres sh -c 'cp \"\$PGDATA/${backup}\" \"\$PGDATA/postgresql.conf\"' && synap restart postgres"
+    docker compose restart postgres || { echo -e "${RED}❌ Postgres did not restart — put the previous settings back (above).${NC}" >&2; exit 1; }
+    local i
+    for i in $(seq 1 30); do
+        docker compose exec -T postgres pg_isready -U synap >/dev/null 2>&1 && break
+        sleep 2
+    done
+    docker compose exec -T postgres psql -U synap -d synap -tAc "SELECT name || ' = ' || setting || COALESCE(unit, '') FROM pg_settings WHERE name IN ('shared_buffers','effective_cache_size','work_mem','maintenance_work_mem','max_connections') ORDER BY name" \
+        || { echo -e "${RED}❌ Postgres is not answering after the restart — put the previous settings back (above).${NC}" >&2; exit 1; }
+    echo -e "${GREEN}✓ Postgres re-sized${NC}"
 }
 
 cmd_exec() {
@@ -7900,7 +8066,8 @@ ${YELLOW}Management:${NC}
   synap diagnose                 Run comprehensive diagnostics
   synap update [options]         Apply a release (id | fast | stable): backup, canary, auto-rollback
   synap restart [service]        Restart services (interactive if no service)
-  synap rebuild [service]        Rebuild services (interactive if no service)
+  synap rebuild [service] [--dev-host]  Rebuild services (a dev host only; interactive if no service)
+  synap tune-postgres [--dry-run]       Re-size Postgres for this host's memory (restarts it)
   synap start [service]          Start services (all or specific)
   synap stop [service]           Stop services (interactive if no service)
   synap backup [label|init|push|drill|status]   Backups (synap backup --help)
@@ -8001,7 +8168,7 @@ export COMPOSE_PROJECT_NAME
 
 # Pod-mutating commands serialise on <deploy_dir>/state/update.lock.
 case "${1:-help}" in
-    install|update|rebuild|reset|restore|apply)
+    install|update|rebuild|reset|restore|apply|tune-postgres)
         if ! synap_update_lock "$(get_deploy_dir)" "synap $1"; then
             # An unattended run must still consume its request (no .path loop).
             case " $* " in *" --unattended "*) [ "$1" = update ] && ( cd "$(get_deploy_dir)" && _ue_unattended_busy ) ;; esac
@@ -8123,6 +8290,10 @@ case "${1:-help}" in
     exec)
         shift
         cmd_exec "$@"
+        ;;
+    tune-postgres)
+        shift
+        cmd_tune_postgres "$@"
         ;;
     users)
         shift
