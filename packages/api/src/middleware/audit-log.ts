@@ -8,64 +8,66 @@
 
 import { t } from "../init-trpc.js";
 import { createLogger } from "@synap-core/core";
+import { redactPayloadForLog } from "../utils/redact-secrets.js";
 
 const auditLogger = createLogger({ module: "audit" });
 
-/**
- * Keys whose values should be redacted from audit log input.
- * Case-insensitive matching.
- */
-const SENSITIVE_KEYS = new Set([
-  "password",
-  "token",
-  "secret",
-  "apikey",
-  "api_key",
-  "authorization",
-  "credential",
-  "private_key",
-  "privatekey",
-  "accesstoken",
-  "access_token",
-  "refreshtoken",
-  "refresh_token",
-]);
+/** Longest string kept in an audit line (e.g. base64 file content). */
+const AUDIT_STRING_MAX = 500;
+const AUDIT_DEPTH_LIMIT = 5;
+const AUDIT_ARRAY_MAX = 10;
 
 /**
- * Recursively sanitize an object, replacing sensitive values with "[REDACTED]".
- * Handles nested objects and arrays. Returns a new object (no mutation).
+ * A copy of a mutation's input that is SAFE TO LOG and short enough to keep.
+ *
+ * The redaction is the pod's one log redactor, {@link redactPayloadForLog}
+ * (`utils/redact-secrets.ts`). This file used to keep its own exact-match key
+ * list, so `secretsVault.create`'s typed secret (`input.value`) and every
+ * compound key (`clientSecret`, `githubToken`) reached the logs in plaintext
+ * (CP ticket 84f82ed3). What is left here is only the SHAPE of a log line:
+ * strings, arrays and depth are cut, after the redaction, so a secret cannot
+ * survive by being long.
  */
-function sanitizeInput(value: unknown, depth = 0): unknown {
+export function sanitizeAuditInput(path: string, input: unknown): unknown {
+  return shapeForLog(redactPayloadForLog(input, path), 0);
+}
+
+function shapeForLog(value: unknown, depth: number): unknown {
   // Prevent infinite recursion on deeply nested / circular structures
-  if (depth > 5) return "[TRUNCATED]";
+  if (depth > AUDIT_DEPTH_LIMIT) return "[TRUNCATED]";
 
   if (value === null || value === undefined) return value;
 
   if (typeof value === "string") {
     // Truncate very long strings (e.g. base64 file content)
-    return value.length > 500 ? `${value.slice(0, 500)}...[truncated]` : value;
+    return value.length > AUDIT_STRING_MAX
+      ? `${value.slice(0, AUDIT_STRING_MAX)}...[truncated]`
+      : value;
   }
 
   if (typeof value !== "object") return value;
 
   if (Array.isArray(value)) {
     // Only log first 10 items to keep log size reasonable
-    const truncated = value
-      .slice(0, 10)
-      .map((v) => sanitizeInput(v, depth + 1));
-    if (value.length > 10) truncated.push(`...[${value.length - 10} more]`);
+    const truncated: unknown[] = value
+      .slice(0, AUDIT_ARRAY_MAX)
+      .map((v) => shapeForLog(v, depth + 1));
+    if (value.length > AUDIT_ARRAY_MAX) {
+      truncated.push(`...[${value.length - AUDIT_ARRAY_MAX} more]`);
+    }
     return truncated;
   }
 
-  const sanitized: Record<string, unknown> = {};
+  const shaped: Record<string, unknown> = {};
   for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-    if (SENSITIVE_KEYS.has(key.toLowerCase())) {
-      sanitized[key] = "[REDACTED]";
-    } else {
-      sanitized[key] = sanitizeInput(val, depth + 1);
-    }
+    Object.defineProperty(shaped, key, {
+      value: shapeForLog(val, depth + 1),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
-  return sanitized;
+  return shaped;
 }
 
 /**
@@ -86,7 +88,7 @@ export const auditLogMiddleware = t.middleware(async (opts) => {
     // getRawInput() is async in tRPC v11 — best-effort, don't block on failure
     let input: unknown;
     try {
-      input = sanitizeInput(await opts.getRawInput());
+      input = sanitizeAuditInput(opts.path, await opts.getRawInput());
     } catch {
       input = "[unavailable]";
     }
