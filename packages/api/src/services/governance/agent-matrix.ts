@@ -37,6 +37,7 @@ import {
 import {
   createReadSnapshot,
   dryRunAgentGovernanceDecision,
+  seedsOntoHost,
 } from "@synap/database/agent-governance";
 import {
   REVERSIBILITY_DOOR_CLASS,
@@ -56,6 +57,7 @@ import {
   type MatrixComputerGroup,
   type MatrixLens,
   type MatrixProbe,
+  type MatrixProbeAnswer,
   type MatrixTypeGroup,
 } from "@synap-core/types/agent-matrix";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
@@ -231,25 +233,67 @@ export async function readAgentMatrix(p: {
   const hostIds = [
     ...new Set(agents.map((a) => a.hostUserId).filter((h): h is string => !!h)),
   ];
-  const hostNames = new Map(
+  const hosts = new Map(
     hostIds.length
       ? (
           await db
-            .select({ id: users.id, name: users.name })
+            .select({
+              id: users.id,
+              name: users.name,
+              agentType: users.agentType,
+              createdByUserId: users.createdByUserId,
+              computerBelongsTo: users.computerBelongsTo,
+            })
             .from(users)
             .where(inArray(users.id, hostIds))
-        ).map((h) => [h.id, h.name ?? "Computer"] as const)
+        ).map((h) => [h.id, h] as const)
       : []
+  );
+  const hostNames = new Map(
+    [...hosts.values()].map((h) => [h.id, h.name ?? "Computer"] as const)
   );
 
   // Every cell through the ONE resolver, on one snapshot.
   const snapshot = createReadSnapshot(db);
+  // The computer's OWN answer per probe, asked once per computer (plan
+  // 07ecf0be item 3): on a person's own or a shared computer, a rule widened
+  // for the agent is not copied onto it (`seedsOntoHost`), so when the
+  // computer asks, the agent's cell cannot be widened from here.
+  const hostAnswers = new Map<string, Promise<boolean>>();
+  const computerAsks = (
+    host: { id: string; createdByUserId: string | null },
+    column: MatrixColumn,
+    probe: MatrixProbe
+  ): Promise<boolean> => {
+    const key = `${host.id}|${column.workspaceId ?? ""}|${probe.key}`;
+    let answer = hostAnswers.get(key);
+    if (!answer) {
+      answer = dryRunAgentGovernanceDecision({
+        db: snapshot.db,
+        userId: host.createdByUserId ?? p.userId,
+        agentUserId: host.id,
+        workspaceId: column.workspaceId,
+        action: probe.action,
+        profileSlug: probe.profileSlug,
+        door: "chat",
+      }).then((r) => r.outcome !== "auto");
+      hostAnswers.set(key, answer);
+    }
+    return answer;
+  };
   const rows: MatrixAgentRow[] = await pooled(
     agents.map((agent) => async () => {
+      const host = agent.hostUserId ? hosts.get(agent.hostUserId) : undefined;
+      const guestHost =
+        host &&
+        host.id !== agent.id &&
+        !seedsOntoHost(host, agent.createdByUserId)
+          ? host
+          : null;
       const cells: Record<string, MatrixCell> = {};
       for (const column of columns) {
         const answers = await Promise.all(
-          column.probes.map(async (probe) => {
+          column.probes.map(async (probe): Promise<MatrixProbeAnswer> => {
             const r = await dryRunAgentGovernanceDecision({
               db: snapshot.db,
               userId: agent.createdByUserId ?? p.userId,
@@ -259,12 +303,19 @@ export async function readAgentMatrix(p: {
               profileSlug: probe.profileSlug,
               door: "chat",
             });
+            const verdict = matrixVerdictOf(r.outcome);
             return {
               probeKey: probe.key,
-              verdict: matrixVerdictOf(r.outcome),
+              verdict,
               rung: r.rung,
               reason: r.reason,
               ruleId: r.winningRule?.ruleId ?? null,
+              // Only an ask is ever offered Widen: only it needs the answer.
+              ...(guestHost &&
+              verdict === "ask" &&
+              (await computerAsks(guestHost, column, probe))
+                ? { computerAsks: true }
+                : {}),
             };
           })
         );

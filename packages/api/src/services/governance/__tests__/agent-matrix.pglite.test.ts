@@ -210,6 +210,45 @@ describe("readAgentMatrix", () => {
     expect(owned).toEqual({ [CC]: true, [CODEX]: true, [THEIRS]: false });
   });
 
+  it("an ask its person-owned computer makes too is marked (Widen would change nothing); an agent with no computer never is", async () => {
+    const m = await readAgentMatrix({ userId: OWNER, lens: "pod" });
+    const rows = m.groups.flatMap((g) => g.computers.flatMap((c) => c.agents));
+    const cc = rows.find((a) => a.agentUserId === CC)!;
+    let marked = 0;
+    for (const col of m.columns) {
+      if (col.kind === "floors") continue;
+      for (const [i, probe] of col.probes.entries()) {
+        const answer = cc.cells[col.id]!.answers![i]!;
+        if (answer.verdict !== "ask") {
+          expect(answer.computerAsks).toBeUndefined();
+          continue;
+        }
+        const asComputer = await dryRunAgentGovernanceDecision({
+          db: database.db as never,
+          userId: OWNER,
+          agentUserId: COMPUTER,
+          workspaceId: col.workspaceId,
+          action: probe.action,
+          profileSlug: probe.profileSlug,
+          door: "chat",
+        });
+        expect(answer.computerAsks === true).toBe(
+          asComputer.outcome !== "auto"
+        );
+        if (answer.computerAsks) marked++;
+      }
+    }
+    // Non-vacuity: Claude Code may do anything itself, so every ask it shows
+    // is its computer's.
+    expect(marked).toBeGreaterThan(0);
+    const codex = rows.find((a) => a.agentUserId === CODEX)!;
+    expect(
+      Object.values(codex.cells).some((c) =>
+        c.answers?.some((a) => a.computerAsks)
+      )
+    ).toBe(false);
+  });
+
   it("a group's cell is the sum of its members' splits", async () => {
     const m = await readAgentMatrix({ userId: OWNER, lens: "pod" });
     const cc = m.groups.find((g) => g.agentType === "claude-code")!;

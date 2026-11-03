@@ -270,3 +270,55 @@ describe("widenCell — never past what a rule can reach", () => {
     expect(await ruleCount()).toBe(1);
   });
 });
+
+describe("widenCell — an agent never does more than its computer (plan 07ecf0be item 3)", () => {
+  const PC = "computer-1";
+  const onComputer = async (belongsTo: "person" | "agent") => {
+    await client.exec(`
+      insert into users (id, email, user_type, agent_type, created_by_user_id, computer_belongs_to)
+        values ('${PC}', 'pc@x.test', 'agent', 'machine', '${OWNER}', '${belongsTo}');
+      update users set host_user_id = '${PC}' where id = '${AGENT}';
+    `);
+  };
+  const asComputer = () =>
+    dryRunAgentGovernanceDecision({
+      db: holder.db as never,
+      userId: OWNER,
+      agentUserId: PC,
+      workspaceId: DEAL_MOVE.workspaceId,
+      action: DEAL_MOVE.action,
+      profileSlug: DEAL_MOVE.profileSlug,
+      door: "chat",
+    });
+
+  it("on a person's own computer that asks, Widen is refused and no rule is written", async () => {
+    await onComputer("person");
+    expect((await asComputer()).outcome).toBe("propose");
+    let err: unknown;
+    try {
+      await caller(OWNER).widenCell(DEAL_MOVE);
+    } catch (e) {
+      err = e;
+    }
+    expect(isNoNextRungError(err)).toBe(true);
+    expect(String((err as Error).message)).toMatch(/its computer asks first/);
+    expect(await ruleCount()).toBe(0);
+  });
+
+  it("on a person's own computer that allows the write, Widen writes the rule and the write acts", async () => {
+    await onComputer("person");
+    await client.exec(`
+      insert into governance_rules (principal_kind, agent_user_id, scope_kind, workspace_id, target_kind, target_pattern, target_profile, verdict, created_by)
+        values ('agent', '${PC}', 'workspace', '${WS}', 'action', 'entity.transition', 'deal', 'auto', 'user:${OWNER}');
+    `);
+    expect((await asComputer()).outcome).toBe("auto");
+    expect((await caller(OWNER).widenCell(DEAL_MOVE)).outcome).toBe("created");
+    expect(await verdictNow(DEAL_MOVE)).toBe("auto");
+  });
+
+  it("on the agent's own computer the rule is copied onto it (host seed), so Widen works", async () => {
+    await onComputer("agent");
+    expect((await caller(OWNER).widenCell(DEAL_MOVE)).outcome).toBe("created");
+    expect(await verdictNow(DEAL_MOVE)).toBe("auto");
+  });
+});

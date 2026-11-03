@@ -48,6 +48,7 @@ import {
   ComputerKeyLifetimeModal,
   RenameComputerModal,
 } from "./computer-modals";
+import { ComputerWrites } from "./computer-writes-section";
 import {
   RECONNECT_COMMAND,
   activityLine,
@@ -325,6 +326,7 @@ export function ComputerObject({
                     agentHref={links.agentHref}
                   />
                 </SectionCard>
+                {!revoked && <ComputerWrites computer={c} />}
                 {!revoked && (
                   <SectionCard title="Runs scripts">
                     <div className="flex flex-wrap items-center justify-between gap-3">
