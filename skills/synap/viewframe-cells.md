@@ -19,9 +19,7 @@ After binding, tell the user where the result lives: **"⋯ → Customize displa
 ### What ViewFrame Is
 
 - A sandboxed iframe that renders **one ES module** that default-exports a React component (or plain JS)
-- Keep generated cells self-contained. The CLI can analyse bare imports into a
-  `deps` map, but the current Hub `cells/define` persistence path does not yet
-  retain that map, so external runtime dependencies are not a reliable contract.
+- Keep generated cells self-contained. The frame never loads code from the network (no CDN, no esm.sh): React and the shared kit come from the host, and any other library has to be bundled into the cell's own source.
 - The host injects a `SynapWidget` bridge for data access and shell actions
 - Security: `sandbox="allow-scripts allow-modals"` — no `allow-popups`, no `allow-same-origin`, no cookies, no pod token
 
@@ -30,9 +28,11 @@ After binding, tell the user where the result lives: **"⋯ → Customize displa
 A ViewFrame cell is **one self-contained ES module** (inline in `rendererSource`):
 
 - The module **default-exports a React component** (or calls `SynapWidget.onInit()` for plain JS).
-- Bare imports (`"react"`, `"recharts"`, etc.) are resolved via the esm.sh import map generated from `deps`.
-- **No bundler, no `import` of local files** — everything is either inlined or declared in `deps`.
-- External CSS is not supported; inline `<style>` tags or CSS-in-JS only.
+- The only bare imports that resolve are the ones the host provides: `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`, `react/jsx-dev-runtime` and `@synap/kit` (see "What the frame provides" below). Any other bare import (`recharts`, `d3`, `three`, …) fails in the frame.
+- **No `import` of local files and no `import` from a URL.** A third-party library must be bundled into the source before you define the cell (`synap cell build <entry> --bundle-deps`), never fetched at runtime.
+- Leave `deps` out (or `{}`). A cell that still declares runtime `deps`, or names `esm.sh`, is refused by the web and desktop frames with a message saying so.
+- No `<script src>`, no CDN stylesheet, no web font link: the frame's security policy blocks them. Inline `<style>` tags or CSS-in-JS only. Fonts and colours come from the host's tokens (`@synap/kit`).
+- Phone frames (Relay, Telegram) are not the target: they show the snapshot of a cell and a link to open it on the web or desktop, so write the cell for the web and desktop frame.
 
 ### Register a Cell via the Hub Protocol (canonical path)
 
@@ -51,13 +51,11 @@ Content-Type: application/json
   "typeKey": "deal-stage-funnel",        // optional — derived from name if omitted
   "description": "Funnel chart of deal pipeline stages",  // optional
   "defaultSize": { "w": 8, "h": 6 },    // optional
-  "deps": { "recharts": "2.12.0" }    // accepted for forward compatibility; not persisted yet
+  "deps": {}                             // optional; leave empty: the frame refuses runtime deps
 }
 ```
 
-**`deps` status:** the CLI accepts a JSON map for forward compatibility, but
-the current server stores `{}`. Do not make a generated cell depend on an
-external package until the persistence contract is upgraded and verified.
+**`deps`:** the door still stores a `deps` map if you send one (valid npm names, at most 30), but the web and desktop frames refuse a cell whose `deps` name anything the host does not provide. Send `{}` or omit it, and bundle any library into `rendererSource` instead.
 
 **`workspaceId` is intentionally omitted** — cells defined without it are pod-global (`workspaceId IS NULL`), visible in every workspace the user owns. Pass `workspaceId` only when you explicitly want a cell scoped to a single workspace.
 
@@ -94,8 +92,7 @@ The browser receives this deep link, looks the typeKey up in the cell registry (
 ```
 // 1. Generate the HTML/React cell
 POST /api/hub/cells/define
-{ "name": "Q2 Revenue Report", "rendererSource": "<!DOCTYPE html>…</html>",
-  "deps": { "recharts": "2.12.0" } }
+{ "name": "Q2 Revenue Report", "rendererSource": "<!DOCTYPE html>…</html>" }
 // → { "success": true, "typeKey": "generated:q2-revenue-report" }
 
 // 2. Open it in the user's browser
@@ -109,15 +106,16 @@ The cell appears immediately in the side panel with "Q2 Revenue Report" as the t
 ### CLI commands (when running as Claude Code or another terminal agent)
 
 ```bash
-# Build a multi-file cell source into a single ES module bundle
-synap cell build <entry> --out ./dist/my-chart.js
-# → writes the bundle and prints the inferred deps JSON
+# Build a multi-file cell source into a single ES module bundle.
+# --bundle-deps inlines every third-party library (only react and react-dom
+# stay external, the host provides them). Always pass it: without it the CLI
+# leaves libraries external and the frame refuses the cell.
+synap cell build <entry> --out ./dist/my-chart.js --bundle-deps
 
-# Push a built cell (source + deps) to the pod
+# Push a built cell to the pod (no --deps: the bundle has none)
 synap cell define \
   --name "My Chart" \
   --file ./dist/my-chart.js \
-  --deps '{"recharts":"2.12.0"}' \
   [--type-key my-chart] \
   [--workspace <id>]
 
@@ -236,36 +234,15 @@ SynapWidget.subscribe("entity:changed", ({ entityId }) => {
 });
 ```
 
-### Common Dependency Patterns (esm.sh import map)
+### What the frame provides
 
-The `deps` map in `/cells/define` drives the import map. Each key becomes a bare specifier in the `<script type="importmap">`, resolved to `https://esm.sh/<pkg>@<version>`.
+The host hands every frame these modules from its own bundle, with no network:
 
-```json
-// deps in the define call:
-{ "recharts": "2.12.0", "d3": "7" }
+- `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`, `react/jsx-dev-runtime`: one React 19 build, the host's.
+- `@synap/kit`: the shared components and helpers a space package is built against. It exports exactly these names, and nothing else: `LensPageView`, `SYNAP_CHANGED_EVENT`, `SpatialAppHeader`, `SpatialButton`, `SpatialPageFrame`, `encodeActivityScope`, `encodeLensScope`, `installFrameBridge`, `lensActivityScope`, `resolveActionLabel`, `resolveDestinationLabel`, `resolveObjectNoun`, `useLensPageClock`, `useLensPageModelOf`. Do not import a name that is not in this list.
+- `window.SynapWidget`: the data and shell bridge (below). Data reaches the cell only through it.
 
-// → generates this importmap inside the frame:
-{
-  "imports": {
-    "react": "https://esm.sh/react@19",
-    "react-dom/client": "https://esm.sh/react-dom@19/client",
-    "react/jsx-runtime": "https://esm.sh/react@19/jsx-runtime",
-    "recharts": "https://esm.sh/recharts@2.12.0",
-    "d3": "https://esm.sh/d3@7"
-  }
-}
-```
-
-React 19 core entries are always injected by the host — never put them in `deps`.
-
-Common library choices:
-
-| Category | Packages (put in `deps`)                                       |
-| -------- | -------------------------------------------------------------- |
-| Data viz | `recharts@2.12.0`, `d3@7`, `chart.js@4`, `observable-plot@0.6` |
-| Tables   | `@tanstack/react-table@8`                                      |
-| 3D       | `three@0.165.0`, `@react-three/fiber@8`, `@react-three/drei@9` |
-| Maps     | `leaflet@1.9.4`, `react-leaflet@4`                             |
+A charting, map or 3D library is not provided. Draw with plain SVG or canvas in the cell's own source, or bundle the library at build time with `synap cell build --bundle-deps`. Never name `recharts`, `d3` or any other package in `deps`.
 
 ### Minimal Widget Template
 
@@ -285,7 +262,7 @@ Common library choices:
         background: transparent;
       }
     </style>
-    <!-- importmap is injected by the host from deps — do not write one manually -->
+    <!-- the host provides react, react-dom and @synap/kit — do not write an importmap -->
   </head>
   <body>
     <div id="root"></div>
@@ -317,7 +294,7 @@ Common library choices:
 - **Handle errors** — `query()` and `mutate()` can fail; always `.catch()`.
 - **Check `result.status` on mutations** — `"proposed"` is governance, not an error; surface `reviewUrl`.
 - **Transparent background** — `background: transparent` on `body` inherits the host surface color.
-- **No external fetch** — the sandbox has no cross-origin access; all data must go through `SynapWidget`.
-- **Declare all non-React imports in `deps`** — the host generates the import map from that field.
+- **No external fetch, no CDN** — the sandbox has no network for code or data; all data must go through `SynapWidget`.
+- **Import only what the host provides** — React and `@synap/kit`. Bundle anything else into the source; never declare it in `deps`, never load it from a CDN.
 
 ---

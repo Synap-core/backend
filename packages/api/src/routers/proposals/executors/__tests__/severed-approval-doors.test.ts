@@ -124,6 +124,18 @@ const DOORS = [
     effect: "toolCaller.delete(",
   },
   {
+    key: "tool/provisionWebhook",
+    file: "tool.ts",
+    /** visibility floor + write gate + token mint + audit live in the procedure. */
+    effect: "toolCaller.provisionWebhook(",
+  },
+  {
+    key: "tool/setAuthBinding",
+    file: "tool.ts",
+    /** The owner-role gate + audit row live in the procedure; replay, never re-write. */
+    effect: "toolCaller.setAuthBinding(",
+  },
+  {
     key: "a2ai/join",
     file: "channel.ts",
     /** The only hand-written one — no replayable door (see the executor's note). */

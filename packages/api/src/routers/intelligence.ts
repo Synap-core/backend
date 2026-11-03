@@ -55,8 +55,10 @@ import { requireUserId } from "../utils/user-scoped.js";
 import { publicServiceRow } from "../utils/intelligence-service-projection.js";
 import {
   assertSafeServiceUrl,
+  fetchIntelligenceService,
   SERVICE_URL_FETCH,
 } from "../utils/intelligence-service-url.js";
+import type { SafePublicFetchInit } from "@synap/shared-utils";
 import { safePublicFetch, isBlockedOutboundError } from "@synap/shared-utils";
 import { scopedDb, accessFor } from "../access/index.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
@@ -104,15 +106,14 @@ async function hubProxyFetch(
   endpoint: string,
   serviceUrl: string,
   apiKey: string,
-  options: RequestInit = {}
+  options: Pick<SafePublicFetchInit, "method" | "body"> = {}
 ): Promise<Response> {
   const url = `${serviceUrl}/api/hub${endpoint}`;
-  const res = await fetch(url, {
+  const res = await fetchIntelligenceService(url, {
     ...options,
     headers: {
       "Content-Type": "application/json",
       "X-API-Key": apiKey,
-      ...(options.headers ?? {}),
     },
   });
   if (!res.ok) {
@@ -130,15 +131,14 @@ async function apiProxyFetch(
   endpoint: string,
   serviceUrl: string,
   apiKey: string,
-  options: RequestInit = {}
+  options: Pick<SafePublicFetchInit, "method" | "body"> = {}
 ): Promise<Response> {
   const url = `${serviceUrl}/api${endpoint}`;
-  const res = await fetch(url, {
+  const res = await fetchIntelligenceService(url, {
     ...options,
     headers: {
       "Content-Type": "application/json",
       "X-API-Key": apiKey,
-      ...(options.headers ?? {}),
     },
   });
   if (!res.ok) {
@@ -777,7 +777,7 @@ export const intelligenceRouter = router({
       const { serviceId, endpoint, serviceApiKey } =
         await resolveIntelligenceService({ userId, workspaceId });
       const isSynap = serviceId === "default";
-      const res = await fetch(`${endpoint}/api/manifest`, {
+      const res = await fetchIntelligenceService(`${endpoint}/api/manifest`, {
         headers: { Authorization: `Bearer ${serviceApiKey}` },
         signal: AbortSignal.timeout(5000),
       });
@@ -1137,7 +1137,7 @@ export const intelligenceRouter = router({
       const meta = (service.metadata ?? {}) as Record<string, unknown>;
       const managementUrl = `${service.webhookUrl.replace(/\/$/, "")}/api/management`;
       try {
-        const res = await fetch(managementUrl, {
+        const res = await fetchIntelligenceService(managementUrl, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -1324,7 +1324,7 @@ export const intelligenceRouter = router({
         if (!existing) {
           void resolveIntelligenceService({ userId: ctx.userId!, workspaceId })
             .then(({ endpoint: hubUrl, serviceApiKey: hubApiKey }) => {
-              fetch(`${hubUrl}/api/mcp/ping`, {
+              fetchIntelligenceService(`${hubUrl}/api/mcp/ping`, {
                 method: "POST",
                 headers: {
                   "Content-Type": "application/json",
@@ -1439,7 +1439,7 @@ export const intelligenceRouter = router({
       }
 
       try {
-        const res = await fetch(`${endpoint}/api/manifest`, {
+        const res = await fetchIntelligenceService(`${endpoint}/api/manifest`, {
           headers: { Authorization: `Bearer ${serviceApiKey}` },
           signal: AbortSignal.timeout(5000),
         });
@@ -1464,7 +1464,7 @@ export const intelligenceRouter = router({
 
     // Synap IS: always fetch live (no hardcoded manifest)
     try {
-      const res = await fetch(`${endpoint}/api/manifest`, {
+      const res = await fetchIntelligenceService(`${endpoint}/api/manifest`, {
         headers: { Authorization: `Bearer ${serviceApiKey}` },
         signal: AbortSignal.timeout(5000),
       });
@@ -1490,7 +1490,7 @@ export const intelligenceRouter = router({
         userId,
         workspaceId: ctx.workspaceId,
       });
-      const res = await fetch(`${endpoint}/api/skills`, {
+      const res = await fetchIntelligenceService(`${endpoint}/api/skills`, {
         headers: { Authorization: `Bearer ${serviceApiKey}` },
         signal: AbortSignal.timeout(5000),
       });

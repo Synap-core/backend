@@ -12917,6 +12917,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": ["provisioned", "proposed"]
+                    },
+                    "proposalId": { "type": "string" },
                     "provider": { "type": "string" },
                     "url": { "type": "string" },
                     "rotated": { "type": "boolean" },
@@ -12926,13 +12931,7 @@
                     },
                     "setupStep": { "type": ["string", "null"] }
                   },
-                  "required": [
-                    "provider",
-                    "url",
-                    "rotated",
-                    "missingConfig",
-                    "setupStep"
-                  ]
+                  "required": ["status"]
                 }
               }
             }
@@ -13096,16 +13095,21 @@
                   "type": "object",
                   "properties": {
                     "tool": {
-                      "type": "object",
+                      "type": ["object", "null"],
                       "properties": {
                         "id": { "type": "string" },
                         "name": { "type": "string" },
                         "kind": { "type": "string" }
                       },
                       "required": ["id", "name", "kind"]
-                    }
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": ["updated", "proposed"]
+                    },
+                    "proposalId": { "type": ["string", "null"] }
                   },
-                  "required": ["tool"]
+                  "required": ["tool", "status", "proposalId"]
                 }
               }
             }

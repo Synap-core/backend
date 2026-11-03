@@ -1,4 +1,8 @@
 import { redactSecrets } from "@synap/shared-utils";
+import {
+  isSecretFieldValue,
+  redactSecretValues,
+} from "@synap-core/types/vault";
 
 /**
  * redactSecrets — the ONE scrubber for free text that is about to be STORED or
@@ -92,7 +96,25 @@ export function redactDeepForStorage<T>(
  * `keyword` — redacting those would corrupt a legitimate replay.
  */
 const SECRET_PAYLOAD_KEY =
-  /token|secret|password|passwd|api[_-]?key|authorization|credential/i;
+  /token|secret|password|passwd|passphrase|private[_-]?key|api[_-]?key|authorization|credential|cookie/i;
+
+/**
+ * A key NAMED after a credential that holds a POINTER to it, not the
+ * credential: `secretId`, `credential_ids`, `tokenRef`, `npmTokenVaultRef`.
+ * Masking one hid which secret an audit line or a stored body was about, and
+ * made `carriesRedactedSecret` refuse to replay a body that held only an id.
+ */
+const SECRET_POINTER_KEY = /(?:id|ids|uuid|ref|refs)$/i;
+
+/**
+ * Is `key` a payload key whose value is a credential? The ONE key rule, read
+ * by {@link redactSecretKeys} (a stored payload) and {@link redactPayloadForLog}
+ * (an audit line); the free-text scrubber names the same words for a quoted
+ * `"key":"value"` pair.
+ */
+export function isSecretPayloadKey(key: string): boolean {
+  return SECRET_PAYLOAD_KEY.test(key) && !SECRET_POINTER_KEY.test(key);
+}
 
 /** What a redacted credential value reads as in a stored payload. */
 export const REDACTED_SECRET_VALUE = "***REDACTED***";
@@ -114,7 +136,7 @@ export function redactSecretKeys<T>(value: T, depth = 0): T {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
     out[k] =
-      SECRET_PAYLOAD_KEY.test(k) &&
+      isSecretPayloadKey(k) &&
       typeof v === "string" &&
       v.trim() &&
       !/^vault:\/\//.test(v.trim())
@@ -138,7 +160,108 @@ export function carriesRedactedSecret(value: unknown, depth = 0): boolean {
   }
   return Object.entries(value as Record<string, unknown>).some(
     ([k, v]) =>
-      (SECRET_PAYLOAD_KEY.test(k) && v === REDACTED_SECRET_VALUE) ||
+      (isSecretPayloadKey(k) && v === REDACTED_SECRET_VALUE) ||
       carriesRedactedSecret(v, depth + 1)
   );
+}
+
+// ── A mutation's input, about to be LOGGED ──────────────────────────────────
+
+/**
+ * A procedure path segment or a key that names a CREDENTIAL DOOR. Under one, a
+ * neutral `value` key carries the secret itself: `secretsVault.create({ value })`,
+ * `capabilities.credentials.add({ value })`.
+ */
+const CREDENTIAL_DOOR = /vault|secret|credential|password/i;
+
+/**
+ * A key whose whole value is a map of credentials even though its entries are
+ * named freely: an MCP server's `env` (`NOTION_KEY`, `DB_PASS`).
+ */
+const CREDENTIAL_MAP_KEY = /^(?:env|environment)$/i;
+
+/** Longest string scanned: a log keeps far less, and a 10 MB base64 body costs nothing. */
+const LOG_SCAN_MAX = 16_384;
+
+/** none: free text only; door: `value` is the secret; all: every string is. */
+type LogSecrecy = 0 | 1 | 2;
+
+/**
+ * A copy of a mutation's input that is SAFE TO LOG: the ONE redactor the
+ * tRPC audit log (`middleware/audit-log.ts`) calls. It keeps the payload's
+ * shape and every readable field, because an audit line that hides every value
+ * is useless, and removes:
+ *  - a string under a credential key ({@link isSecretPayloadKey}), and every
+ *    string inside an object or array held by one (`credentials: {…}`,
+ *    `apiKeys: […]`, an `env` map); numbers and booleans stay (`maxTokens`);
+ *  - `value` at a credential door: the procedure path or an ancestor key names
+ *    a vault, a secret, a credential or a password. `secretsVault.create`
+ *    sends its typed secret as `input.value` (CP ticket 84f82ed3);
+ *  - a tagged form secret (`{ kind: "new", value }`, `@synap-core/types/vault`);
+ *  - in every other string, what {@link redactSecrets} finds: `Bearer …`,
+ *    `sk-…`, a JWT, a quoted `"api_key":"…"`.
+ * A `vault://` reference is kept: a pointer, not a credential. Past the depth
+ * bound an object or array is replaced, never passed through.
+ */
+export function redactPayloadForLog(
+  input: unknown,
+  procedurePath = ""
+): unknown {
+  const atDoor = procedurePath
+    .split(".")
+    .some((segment) => CREDENTIAL_DOOR.test(segment));
+  return redactForLog(input, atDoor ? 1 : 0, 0);
+}
+
+function redactForLog(
+  value: unknown,
+  secrecy: LogSecrecy,
+  depth: number
+): unknown {
+  if (typeof value === "string") {
+    const scanned =
+      value.length > LOG_SCAN_MAX
+        ? `${value.slice(0, LOG_SCAN_MAX)}...[truncated]`
+        : value;
+    if (
+      secrecy === 2 &&
+      scanned.trim() &&
+      !/^vault:\/\//.test(scanned.trim())
+    ) {
+      return REDACTED_SECRET_VALUE;
+    }
+    return redactSecrets(scanned);
+  }
+  if (value === null || typeof value !== "object") return value;
+  if (isSecretFieldValue(value)) return redactSecretValues({ v: value }).v;
+  if (depth >= REDACT_DEPTH_LIMIT) return REDACTED_SECRET_VALUE;
+  if (Array.isArray(value)) {
+    return value.map((v) => redactForLog(v, secrecy, depth + 1));
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+    let redacted: unknown;
+    if (isSecretPayloadKey(key) || CREDENTIAL_MAP_KEY.test(key)) {
+      redacted = redactForLog(v, 2, depth + 1);
+    } else if (
+      secrecy >= 1 &&
+      key.toLowerCase() === "value" &&
+      v !== null &&
+      v !== undefined
+    ) {
+      redacted = REDACTED_SECRET_VALUE;
+    } else {
+      const next: LogSecrecy =
+        secrecy === 0 && CREDENTIAL_DOOR.test(key) ? 1 : secrecy;
+      redacted = redactForLog(v, next, depth + 1);
+    }
+    // defineProperty: a `__proto__` key becomes an own property of the copy.
+    Object.defineProperty(out, key, {
+      value: redacted,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return out;
 }
