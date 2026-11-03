@@ -22,12 +22,14 @@
  *   is for entity mutations, not alert occurrences. Use `.completed` (a
  *   probe observed a terminal state) or `.requested` (something now awaits
  *   a human) — never `.validated`.
- * - Only a notification type with an ACTUAL producer belongs here. Two
- *   registry types this task investigated (`pod.storage_warning`,
- *   `workspace.invite`) have ZERO call sites anywhere in the codebase — they
- *   are dead registry entries, not live alerts — so they are NOT mapped
- *   here; they are tracked instead in the producer-less allowlist next to
- *   `registry.ts` (`notification-producer-allowlist.test.ts`).
+ * - Only a notification type with an ACTUAL producer belongs here.
+ *   `workspace.invite` has ZERO call sites anywhere in the codebase — a dead
+ *   registry entry, not a live alert — so it is NOT mapped here; it is
+ *   tracked instead in the producer-less allowlist next to `registry.ts`
+ *   (`notification-producer-allowlist.test.ts`). `pod.storage_warning`, the
+ *   other one found then, was generalised into `pod.resource_warning`
+ *   (services/pod-health/notify.ts), which is produced but raises no typed
+ *   domain event of its own (not mapped).
  */
 export const NOTIFICATION_EVENT_TYPE_MAP: Record<string, string> = {
   // notify-connector-unhealthy.ts / notify-service-unhealthy.ts — a

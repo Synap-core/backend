@@ -347,7 +347,7 @@ describe("the lens banner: warning sits between error and info", () => {
       })
     );
     const storage = {
-      key: "pod.storage_warning|",
+      key: "pod.resource_warning|",
       tone: "info" as const,
       title: "Storage at 91%",
     };

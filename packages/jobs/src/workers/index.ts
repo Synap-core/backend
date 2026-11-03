@@ -139,6 +139,7 @@ import {
   handleMorningBrief,
   MORNING_BRIEF_QUEUE,
 } from "./morning-brief-worker.js";
+import { handlePodHealth, POD_HEALTH_QUEUE } from "./pod-health-worker.js";
 import { handleSyncPush, SYNC_PUSH_QUEUE } from "./sync-push.js";
 import { handleSyncPull, SYNC_PULL_QUEUE } from "./sync-pull.js";
 import {
@@ -393,6 +394,8 @@ const ALL_QUEUES = [
   LIBRARY_KEEP_ALIVE_QUEUE,
   // The morning brief (every 15 min; handler slot, IoC).
   MORNING_BRIEF_QUEUE,
+  // The pod health check (every 2 min; handler slot, IoC).
+  POD_HEALTH_QUEUE,
   SYNC_PUSH_QUEUE,
   SYNC_PULL_QUEUE,
   SYNC_PUSH_FILES_QUEUE,
@@ -957,6 +960,10 @@ export async function registerAllWorkers(): Promise<void> {
   // The morning brief (every 15 min; handler slot filled by the api layer).
   await boss.work(MORNING_BRIEF_QUEUE, async () => handleMorningBrief());
   logger.info("Registered worker: morning-brief");
+
+  // The pod health check (every 2 min; handler slot filled by the api layer).
+  await boss.work(POD_HEALTH_QUEUE, async () => handlePodHealth());
+  logger.info("Registered worker: pod-health-check");
 
   // Hydration summary post — Orchestrator's first proactive message after
   // import review (Gap 3 of onboarding). One attempt, swallow-on-fail.

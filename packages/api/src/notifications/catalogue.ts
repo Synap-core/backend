@@ -105,7 +105,8 @@ export const PRODUCERLESS_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
   "inbox.priority_item",
 
   // ── Found during S3 (2026-09-04) — no caller anywhere ────────────────────
-  "pod.storage_warning",
+  // (`pod.storage_warning` was here: generalised into the produced
+  // `pod.resource_warning`, services/pod-health/notify.ts, plan P3 G10.)
   "workspace.invite",
 
   // ── Also S3 — unfinished halves of a set whose sibling IS produced ───────

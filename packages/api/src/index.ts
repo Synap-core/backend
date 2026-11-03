@@ -451,6 +451,16 @@ export {
   POD_UPDATE_FAILED_NOTIFICATION_TYPE,
   type PodUpdateOutcomeInput,
 } from "./notifications/pod-update-outcome.js";
+// Pod health (plan P3, G10): the 2-min resource check (@synap/jobs'
+// `registerPodHealthHandler` IoC slot), the event-loop reader apps/api fills,
+// and the read the provision status reports.
+export {
+  runPodHealthCheck,
+  readPodHealth,
+  openResourceAlerts,
+  podResourcesStatus,
+  registerEventLoopP99Reader,
+} from "./services/pod-health/index.js";
 // Boot-time IoC: api registers the pod-wide proposal notification reactor onto
 // the @synap/events reactor registry, so a proposal filed from @synap/jobs (the
 // widen-lane scanner) still reaches the pod owner + admins without jobs ever

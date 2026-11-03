@@ -310,7 +310,7 @@ beforeAll(async () => {
   );
   // System health, twice (status banner, never Blocking).
   await notify(
-    "pod.storage_warning",
+    "pod.resource_warning",
     "system",
     "system",
     null,
@@ -318,7 +318,7 @@ beforeAll(async () => {
     5
   );
   await notify(
-    "pod.storage_warning",
+    "pod.resource_warning",
     "system",
     "system",
     null,
@@ -485,7 +485,7 @@ describe("the needs-you duplicate causes", () => {
     const p = await page({});
     expect(p.status).toMatchObject({
       title: "Storage at 91% capacity",
-      issues: [{ type: "pod.storage_warning", repeatCount: 2 }],
+      issues: [{ type: "pod.resource_warning", repeatCount: 2 }],
     });
     expect(p.status?.issues).toHaveLength(1);
     expect(p.statusUnreadable).toBe(false);

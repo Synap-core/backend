@@ -127,7 +127,13 @@ export interface HealthSection {
      * newer-vs-previous regressions. Present only when computed (see
      * `GlobalSignals.qualityByPromptVersion`); an unreadable signal says so.
      */
-    | "quality_by_prompt_version";
+    | "quality_by_prompt_version"
+    /**
+     * The pod's host and database resources against their alert thresholds
+     * (plan P3, G10; `./resources.ts`). Present only for a pod admin (see
+     * `GlobalSignals.resources`); an unreadable read says so.
+     */
+    | "resources";
   status: HealthStatus;
   /** Plain-language one-liner — honest-empty aware ("no stuck runs"). */
   headline: string;

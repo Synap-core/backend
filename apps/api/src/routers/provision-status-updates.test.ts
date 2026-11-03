@@ -26,6 +26,7 @@ const h = vi.hoisted(() => {
     admin: false,
     link: undefined as unknown,
     plan: null as unknown,
+    resources: { read: "failed" } as unknown,
   };
 });
 
@@ -72,6 +73,7 @@ vi.mock("@synap/api", () => ({
     role: "primary",
   }),
   resolveServiceKey: vi.fn(),
+  podResourcesStatus: async () => h.resources,
   toRegistrationTrace: vi.fn(),
   verifyTrustedIssuerJwt: vi.fn(async (_token: string, opts: unknown) => {
     h.jwtOpts.push(opts);
@@ -141,6 +143,7 @@ beforeEach(() => {
     source: "enrollment",
   };
   h.plan = null;
+  h.resources = { read: "failed" };
 });
 
 describe("GET /api/provision/status → who reads the details", () => {
@@ -157,6 +160,7 @@ describe("GET /api/provision/status → who reads the details", () => {
     for (const k of [
       "controlPlane",
       "updates",
+      "resources",
       "podVersion",
       "serviceProbe",
       "courier",
@@ -266,6 +270,29 @@ describe("GET /api/provision/status → updates", () => {
     const body = await status();
     expect(body.updates.settings).toBeNull();
     expect(body.updates.settingsRead).toBe("failed");
+  });
+});
+
+describe("GET /api/provision/status → resources (plan P3, G10)", () => {
+  // Catches: the resources part never reaching the CP's poll, or a failed
+  // read reported as "ok" (a frozen or unreadable pod read as healthy).
+  it("carries the level and the open alerts from the one pod-health read", async () => {
+    h.resources = {
+      read: "ok",
+      level: "critical",
+      hostState: "fresh",
+      hostSampledAt: "2026-11-04T10:00:00.000Z",
+      alerts: [
+        { metric: "disk:data", level: "critical", since: null, value: 96 },
+      ],
+    };
+    const body = await status();
+    expect(body.resources).toEqual(h.resources);
+  });
+
+  it("a failed read is reported as failed", async () => {
+    const body = await status();
+    expect(body.resources).toEqual({ read: "failed" });
   });
 });
 

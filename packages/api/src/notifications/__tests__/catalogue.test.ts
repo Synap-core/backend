@@ -152,7 +152,7 @@ describe("notification catalogue — allowedRules derive from channelCeiling", (
     expect(entry("connector.sync.failed")?.defaultChannels).toEqual(["in_app"]);
     expect(entry("connector.sync.failed")?.push).toBeNull();
     // A category OFF by default (system): no push advertised.
-    const storage = entry("pod.storage_warning");
+    const storage = entry("pod.resource_warning");
     if (storage) {
       expect(storage.defaultChannels).toEqual(["in_app"]);
       expect(storage.push).toEqual({

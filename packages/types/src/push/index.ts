@@ -284,7 +284,7 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
   // The person sent it from their desktop ("Send to phone", decision D5).
   "handoff.to_phone": "sent-by-you",
   // Health — the Settings mark carries it; a push only if opted in.
-  "pod.storage_warning": "system",
+  "pod.resource_warning": "system",
   "system.intelligence_degraded": "system",
   "system.issuer_pending_approval": "system",
   // Not a 10-second decision: in-app / Home only.

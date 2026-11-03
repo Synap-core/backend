@@ -39,6 +39,7 @@ import {
   envIntelligenceEndpoint,
   getSyncGenerationState,
   podAudience,
+  podResourcesStatus,
   resolveServiceKey,
   verifyTrustedIssuerJwt,
 } from "@synap/api";
@@ -1024,6 +1025,10 @@ provisionRouter.get("/status", async (c) => {
         readSettingsRaw: readPodUpdateSettingsRaw,
         readLastUpdate: () => readLastUpdate(),
       }),
+      // Host + database resources vs their alert thresholds (plan P3, G10):
+      // the level, whether the host still reports, the open alerts. A failed
+      // read is `{ read: "failed" }`, never "ok".
+      resources: await podResourcesStatus(),
       // Split-brain status (for frontend banner + CP dashboard)
       ...(await (async () => {
         try {
