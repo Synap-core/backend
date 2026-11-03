@@ -931,6 +931,8 @@ export const GRANT_OWNER_WIDE_REST_WRITES: readonly RegExp[] = [
   /^\/connectors\/disconnect\/?$/,
   /^\/connectors\/(?:connect|session)\/?$/,
   /^\/messaging\/accounts\/[^/]+\/?$/,
+  // Imports an account's history into every matching person's channel.
+  /^\/messaging\/accounts\/[^/]+\/import-history\/?$/,
   /^\/memory(?:\/(?!search\/?$)[^/]+)?\/?$/,
   /^\/knowledge\/(?!(?:search|ask|answer)\/?$)[^/]+\/?$/,
 ];

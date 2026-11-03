@@ -47,6 +47,7 @@ import {
   MessageCategory,
   MessageDirection,
   MessageDeliveryStatus,
+  isUniqueViolation,
 } from "@synap/database";
 import { emitSideEffects, getBoss } from "@synap/events";
 import { resolveIdentity } from "@synap/database";
@@ -634,12 +635,6 @@ async function foldPendingChannels(args: {
       "Folded the person's pending channel into their chat channel"
     );
   }
-}
-
-/** Postgres unique_violation. */
-function isUniqueViolation(err: unknown): boolean {
-  const e = err as { code?: string; cause?: { code?: string } } | null;
-  return e?.code === "23505" || e?.cause?.code === "23505";
 }
 
 /**

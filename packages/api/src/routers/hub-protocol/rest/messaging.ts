@@ -49,7 +49,14 @@ import {
 import { recordChannelOrigin } from "../../../services/channels/channel-origin.js";
 import { ErrorSchema, trpcErrorResponses } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { logger, type HubHono, type HubVariables } from "./_shared.js";
+import {
+  httpStatusForTrpcError,
+  logger,
+  type HubHono,
+  type HubVariables,
+} from "./_shared.js";
+import { isUuid } from "@synap-core/types/property-render";
+import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import type { Context } from "hono";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
 import { jsonGoverned } from "../proposal-response.js";
@@ -695,12 +702,21 @@ export function registerMessagingRoutes(app: HubHono): void {
           403
         );
       }
+      // The import writes messages into the person's channels: a key whose
+      // grant does not allow that is refused here, not only by the fence.
+      const denial = await grantWriteDenial({
+        subjectType: "message",
+        action: "create",
+      });
+      if (denial) {
+        return c.json(
+          { error: denial, code: "GRANT_DENIED", reasonCode: "GRANT_DENIED" },
+          403
+        );
+      }
       const userId = c.get("userId") as string;
       const { accountId } = c.req.valid("param");
-      const byId =
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-          accountId
-        );
+      const byId = isUuid(accountId);
       const row = await db.query.messagingAccounts.findFirst({
         where: and(
           eq(messagingAccounts.userId, userId),
@@ -734,7 +750,10 @@ export function registerMessagingRoutes(app: HubHono): void {
           { err, accountId },
           "POST /messaging/accounts/:accountId/import-history failed"
         );
-        return c.json({ error: "The import could not be queued" }, 500);
+        return c.json(
+          { error: "The import could not be queued" },
+          httpStatusForTrpcError(err)
+        );
       }
     }
   );
