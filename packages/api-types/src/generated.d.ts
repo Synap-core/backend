@@ -15995,6 +15995,12 @@ export interface KeyRequestView {
 		name: string;
 		userId: string;
 	};
+	/**
+	 * What was asked: a `template` (named in `template`, null when it no longer
+	 * exists) or an explicit list of `permissions` (`template` is then null and
+	 * the draft's permissions are the list).
+	 */
+	asked: "permissions" | "template";
 	template: {
 		description: string;
 		id: string;

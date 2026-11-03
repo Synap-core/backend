@@ -6,7 +6,9 @@
  *    INTEGRATION_HUB_SCOPES.cli scope set.
  *  - KEY REQUESTS (keys plan Decision 4, `services/key-requests.ts`): the CLI
  *    asks for a key its person approves on pod-admin, then collects it once.
- *    `GET /keys/templates`, `POST /keys/requests`, `POST /keys/requests/token`
+ *    `GET /keys/templates`, `POST /keys/requests` (a template, or the exact
+ *    permissions asked for: `services/key-request-permissions.ts`),
+ *    `POST /keys/requests/token`
  *    (in the idempotency skip list: it returns a one-shot key),
  *    `GET /keys/requested`, `DELETE /keys/requested/:keyId`. The caller never
  *    mints: a request is a question to its person.
@@ -27,6 +29,7 @@ import {
   type KeyRequestTokenError,
 } from "../../../services/key-requests.js";
 import { toPodAdminOrigin } from "../../../utils/pod-admin-origin.js";
+import { MAX_GRANT_PERMISSIONS } from "@synap-core/types/grants";
 import {
   ErrorSchema,
   bearerSecurity,
@@ -330,10 +333,16 @@ function registerKeyRequestRoutes(app: HubHono): void {
       method: "post",
       path: "/keys/requests",
       tags: ["Keys"],
-      summary: "Ask the person for a key made from a template",
+      summary: "Ask the person for a key: a template, or the exact permissions",
       description:
         "Files a key request the person approves on the pod-admin page " +
-        "`review_url` (they may narrow it, never widen it past the template). " +
+        "`review_url` (they may narrow it, never widen it past what was asked). " +
+        "Name EITHER a `template` OR `permissions`, the grant patterns the key " +
+        "needs (`entity.company.update`, `facet.create`, …): the list is then " +
+        "the most the key may be. A list may not hold `*` (ask for the " +
+        "`full-access` template), lasts 90 days unless `expiresInDays` says " +
+        'otherwise (at most 365, never "never"), and is used on `hub` ' +
+        "unless `uses` names `hub` and/or `mcp`. " +
         "It waits 24 hours; asking the same again returns the request already " +
         "waiting (same id and link, a new `request_code`). " +
         "Then poll `POST /keys/requests/token` with `request_code` to collect " +
@@ -345,9 +354,25 @@ function registerKeyRequestRoutes(app: HubHono): void {
             "application/json": {
               schema: z
                 .object({
-                  template: z.string().min(1).max(120),
+                  /** A template id (`GET /keys/templates`). Exactly one of this and `permissions`. */
+                  template: z.string().min(1).max(120).optional(),
+                  /** The exact grant patterns the key needs, instead of a template. */
+                  permissions: z
+                    .array(z.string().trim().min(1).max(120))
+                    .min(1)
+                    .max(MAX_GRANT_PERMISSIONS)
+                    .optional(),
+                  /** With `permissions`: where the key is used (default ["hub"]). */
+                  uses: z
+                    .array(z.string().min(1).max(40))
+                    .min(1)
+                    .max(8)
+                    .optional(),
                   name: z.string().trim().min(1).max(100).optional(),
-                  /** Days (1-36500), or null = never; omitted = the template's. */
+                  /**
+                   * Days (1-36500), or null = never; omitted = the template's.
+                   * By permissions: 1-365, default 90, never null.
+                   */
                   expiresInDays: z
                     .number()
                     .int()
@@ -382,6 +407,11 @@ function registerKeyRequestRoutes(app: HubHono): void {
             },
           },
         },
+        400: {
+          description:
+            "Bad request — both or neither of `template` and `permissions`, or a permission the pod cannot grant",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
         403: {
           description: "Forbidden — missing scope",
           content: { "application/json": { schema: ErrorSchema } },
@@ -402,13 +432,30 @@ function registerKeyRequestRoutes(app: HubHono): void {
       if (!hasScope(c.get("scopes"), "hub-protocol.write"))
         return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
       const body = c.req.valid("json");
+      if (body.template !== undefined && body.permissions !== undefined)
+        return c.json(
+          {
+            error: "Ask for a template or a list of permissions, not both.",
+          },
+          400
+        );
+      if (body.template === undefined && body.permissions === undefined)
+        return c.json(
+          {
+            error:
+              "Name a template or a list of permissions (GET /keys/templates lists the templates).",
+          },
+          400
+        );
       const origin = process.env.PUBLIC_URL || new URL(c.req.url).origin;
       try {
         const res = await createKeyRequest({
           requesterUserId: requesterOf(c.get("agentUserId"), c.get("userId")),
           requesterKeyId: keyId,
           personUserId: c.get("userId") as string,
-          templateId: body.template,
+          ...(body.template !== undefined
+            ? { templateId: body.template }
+            : { permissions: body.permissions, uses: body.uses }),
           name: body.name,
           expiresInDays: body.expiresInDays,
           workspaceId: body.workspaceId,
