@@ -39,7 +39,12 @@ import {
   GrantRepository,
   transitionProposal,
 } from "@synap/database";
-import { agentDisplayName } from "@synap-core/types/agents";
+import {
+  agentDisplayName,
+  agentPostureOfWriteMode,
+  type AgentWriteMode,
+} from "@synap-core/types/agents";
+import { applyAgentPosture } from "@synap/database/agent-governance";
 import { resolveServiceMark } from "@synap-core/types/service-marks";
 import { ProposalStatus, grants as grantRows } from "@synap/database/schema";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
@@ -578,6 +583,13 @@ export async function approvePendingAgentKey(args: {
    * other agent — or this key itself — refuses the whole approval.
    */
   alsoDisconnect?: readonly string[];
+  /**
+   * How the agent's changes land, when the person chose on the approval page
+   * (0395, D6/D7: adding an agent to a computer is one tap, with its
+   * permission choice). Omitted: the agent keeps its own (a reconnect never
+   * changes it unless the person did).
+   */
+  writeMode?: AgentWriteMode | null;
 }): Promise<PendingKeyOutcome> {
   const key = await db.query.apiKeys.findFirst({
     where: eq(apiKeys.id, args.keyId),
@@ -671,6 +683,15 @@ export async function approvePendingAgentKey(args: {
         message: "Approve at least one thing it may do, or reject it.",
       });
   }
+
+  // Posture FIRST, before the key can act (the device door's rule).
+  if (args.writeMode)
+    await applyAgentPosture({
+      db,
+      agentUserId: key.userId,
+      posture: agentPostureOfWriteMode(args.writeMode),
+      createdBy: args.approverId,
+    });
 
   const flipped = await db
     .update(apiKeys)

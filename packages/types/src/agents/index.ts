@@ -1021,5 +1021,7 @@ export * from "./harnesses.js";
 // The model a run used and its provider: facts a client reports, not identity.
 export * from "./model-providers.js";
 export * from "./route-choice.js";
+// Agents inside a computer: seat + engine + role (0395).
+export * from "./seats.js";
 // One agent's typed message to another session (the coordination post).
 export * from "./session-post.js";

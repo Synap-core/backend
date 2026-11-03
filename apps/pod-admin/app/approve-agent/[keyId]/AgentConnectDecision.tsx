@@ -37,11 +37,25 @@ import {
   type ConnectionsView,
 } from "./other-connections";
 import { OtherConnectionsBlock } from "./OtherConnectionsBlock";
+import type { AgentWriteMode } from "@synap-core/types/agents";
+import {
+  approveWriteMode,
+  viewAgentInComputer,
+  type AgentInComputerFacts,
+  type AgentInComputerView,
+} from "./agent-in-computer";
+import { AgentInComputerBlock } from "./AgentInComputerBlock";
 
 /** What the pending key would be allowed to do — read from the pod, never assumed. */
 type DetailsRead =
   | { state: "loading" }
-  | { state: "ok"; view: PendingAccessView; connections: ConnectionsView }
+  | {
+      state: "ok";
+      view: PendingAccessView;
+      connections: ConnectionsView;
+      /** 0395: the computer, job and permission — null off a computer. */
+      computer: AgentInComputerView | null;
+    }
   | { state: "failed"; message: string };
 
 export type AgentConnectStep =
@@ -58,6 +72,8 @@ export function useAgentConnect(keyId: string, agentType: string) {
   const [attempt, setAttempt] = useState(0);
   // The agent's other connections the person chose to switch off too.
   const [chosen, setChosen] = useState<string[]>([]);
+  // How its changes land, when the person chose (null = keep / recommended).
+  const [writeMode, setWriteMode] = useState<AgentWriteMode | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -76,6 +92,7 @@ export function useAgentConnect(keyId: string, agentType: string) {
             state: "ok",
             view: viewPendingAccess(body as PendingAccess),
             connections: viewConnections(body as ConnectionFacts),
+            computer: viewAgentInComputer(body as AgentInComputerFacts),
           });
       })
       .catch((err) => {
@@ -105,7 +122,19 @@ export function useAgentConnect(keyId: string, agentType: string) {
             // Approving disconnects ONLY what the person ticked.
             body:
               action === "approve" && details.state === "ok"
-                ? JSON.stringify(approveBody(details.connections, chosen))
+                ? JSON.stringify({
+                    ...approveBody(details.connections, chosen),
+                    // A new agent's permission; an existing one's only
+                    // when the person changed it (D6).
+                    ...(approveWriteMode(details.computer, writeMode)
+                      ? {
+                          writeMode: approveWriteMode(
+                            details.computer,
+                            writeMode
+                          ),
+                        }
+                      : {}),
+                  })
                 : undefined,
           }
         );
@@ -137,7 +166,7 @@ export function useAgentConnect(keyId: string, agentType: string) {
         });
       }
     },
-    [keyId, podUrl, details, chosen, agentType]
+    [keyId, podUrl, details, chosen, agentType, writeMode]
   );
 
   return {
@@ -147,6 +176,8 @@ export function useAgentConnect(keyId: string, agentType: string) {
     retry: () => setAttempt((n) => n + 1),
     chosen,
     setChosen,
+    writeMode,
+    setWriteMode,
     act,
     connections: details.state === "ok" ? details.connections : null,
   };
@@ -191,6 +222,15 @@ export function AgentConnectDecision({
         )}
         {details.state === "ok" && <PendingAccessBlock view={details.view} />}
       </div>
+
+      {details.state === "ok" && details.computer && (
+        <AgentInComputerBlock
+          view={details.computer}
+          writeMode={agent.writeMode}
+          onWriteMode={agent.setWriteMode}
+          isDisabled={busy}
+        />
+      )}
 
       {connections && (
         <OtherConnectionsBlock

@@ -58,6 +58,10 @@ ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "created_via" text;
 -- 0320: the computer an agent runs on (MACHINE-IDENTITY-PLAN). FK + the
 -- (person, type, computer) unique index live in 0320.
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "host_user_id" text;
+-- 0395: the OS user an agent runs as on its computer, and its job (the
+-- (person, type, computer, seat, role) unique index lives in 0395).
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "host_seat" text;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "agent_role" text;
 -- 0329: agent pause (agent routing W1b).
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "agent_paused_at" timestamp with time zone;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "agent_paused_by" text;
@@ -249,6 +253,11 @@ CREATE TABLE IF NOT EXISTS "device_auth_requests" (
   "machine_name"          text,
   "computer_belongs_to"   text,
   "agent_write_mode"      text,
+  "seat"                  text,
+  "seat_id"               text,
+  "held"                  jsonb,
+  "requested_rows"        jsonb,
+  "agent_actions"         jsonb,
   "minted_key_id"         uuid,
   "failed_code_attempts"  integer NOT NULL DEFAULT 0,
   "poll_interval_seconds" integer NOT NULL DEFAULT 5,

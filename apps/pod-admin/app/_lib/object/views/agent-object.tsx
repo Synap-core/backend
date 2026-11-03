@@ -39,6 +39,7 @@ import { openIn } from "../../../../lib/open-in";
 import { ConfirmModal } from "../../../(admin)/components/confirm-modal";
 import { useConsoleRole } from "../../../(admin)/components/side-nav-role";
 import { agentTrustDoor } from "./agent-trust-door";
+import { AgentJob } from "./agent-job";
 import {
   agentReviewHref,
   agentsByCreator,
@@ -633,6 +634,16 @@ export function AgentObject({
           ownerName={ownerName}
         />
         <AgentGovernance agentUserId={row.id} />
+        {/* 0395: what it is FOR on its computer — its owner only. */}
+        {row.hostComputer && view.ownedByViewer && (
+          <AgentJob
+            agentUserId={row.id}
+            computerName={row.hostComputer.name}
+            role={row.agentRole ?? null}
+            name={row.name ?? null}
+            seat={row.hostSeat ?? null}
+          />
+        )}
         <AgentActions
           view={view}
           roster={roster}

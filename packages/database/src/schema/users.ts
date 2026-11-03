@@ -159,6 +159,14 @@ export const users = pgTable("users", {
   hostUserId: text("host_user_id").references((): any => users.id, {
     onDelete: "set null",
   }),
+  // The OS USER on that computer the agent runs as (0395, "Computer once,
+  // agents inside" D1): "antoine", "agent". NULL = an agent made before seats.
+  // Part of the identity, so a second OS user never lands on another's agent.
+  hostSeat: text("host_seat"),
+  // The agent's JOB (0395): a slug ("crm-worker"); `name` carries its label.
+  // NULL = the engine's plain agent. `agent_type` stays the ENGINE. Identity:
+  // one agent per (person, engine, computer, seat, role).
+  agentRole: text("agent_role"),
   // PAUSED (0329, agent routing W1b): THE route skips a paused agent when it
   // picks for a person, and refuses it by name. Pausing never revokes keys.
   // NULL = not paused. Written only through `agentUsers.setPaused`.

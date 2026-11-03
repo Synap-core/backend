@@ -18,6 +18,7 @@ import { formatRelative } from "../../lib/format";
 import {
   approveDecision,
   decidedRead,
+  defaultAgentActions,
   defaultAgents,
   defaultComputerName,
   defaultReuseId,
@@ -28,6 +29,7 @@ import {
   goneTitle,
   initialDeviceCode,
   isCompleteCode,
+  type DeviceAgentChoice,
   type DeviceDecision,
   type DeviceRead,
   type DeviceRequest,
@@ -115,6 +117,9 @@ export function DeviceFlow({
   const [reuseId, setReuseId] = useState<string | null>(null);
   const [computerName, setComputerName] = useState("");
   const [agents, setAgents] = useState<string[]>([]);
+  // 0395: one decision per row, seeded by the pod's evidence for the
+  // computer being reused (never by its hostname).
+  const [actions, setActions] = useState<DeviceAgentChoice[]>([]);
   const [agentWriteMode, setAgentWriteMode] = useState<AgentWriteMode>(
     RECOMMENDED_AGENT_WRITE_MODE
   );
@@ -133,6 +138,7 @@ export function DeviceFlow({
         setReuseId(reuse);
         setComputerName(defaultComputerName(r.request, reuse));
         setAgents(defaultAgents(r.request));
+        setActions(defaultAgentActions(r.request, reuse));
       }
     });
     return () => {
@@ -158,6 +164,7 @@ export function DeviceFlow({
           ? denyDecision(read.request, code)
           : approveDecision(read.request, code, {
               agents,
+              actions,
               reuseComputerId: reuseId,
               computerName,
               agentWriteMode,
@@ -172,7 +179,7 @@ export function DeviceFlow({
       }
       setRead(decidedRead(read.request, kind));
     },
-    [read, code, agents, reuseId, computerName, agentWriteMode]
+    [read, code, agents, actions, reuseId, computerName, agentWriteMode]
   );
 
   const stage = deviceStage(code, read);
@@ -198,6 +205,7 @@ export function DeviceFlow({
           onReuse={(id) => {
             setReuseId(id);
             setComputerName(defaultComputerName(read.request, id));
+            setActions(defaultAgentActions(read.request, id));
           }}
           computerName={computerName}
           onComputerName={setComputerName}
@@ -205,6 +213,8 @@ export function DeviceFlow({
           onAgents={setAgents}
           agentWriteMode={agentWriteMode}
           onAgentWriteMode={setAgentWriteMode}
+          actions={actions}
+          onActions={setActions}
           busy={busy}
           error={error}
           onApprove={() => void decide("approve")}

@@ -24,7 +24,14 @@ import { randomUUID } from "crypto";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { PENDING_APPROVAL_BATCH_MAX } from "@synap-core/types/external-connect";
-import { SURFACE_HARNESS_SLUGS } from "@synap-core/types/agents";
+import {
+  AGENT_ROLE_LABEL_MAX,
+  AGENT_WRITE_MODES,
+  SURFACE_HARNESS_SLUGS,
+  agentRoleLabel,
+  isAgentRoleSlug,
+  resolveAgentWriteMode,
+} from "@synap-core/types/agents";
 
 import {
   db,
@@ -32,7 +39,9 @@ import {
   eq,
   and,
   inArray,
+  ne,
   count,
+  readReversibleDefault,
   apiKeys,
   apiKeyExternalUsers,
   workspaces,
@@ -45,6 +54,7 @@ import {
   type ApiKeyScope,
 } from "@synap/database";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
+import { readAgentGovernance } from "@synap/database/agent-governance";
 
 import { resolveKeyIdentity } from "../../../access/key-identity.js";
 import { apiKeyService } from "../../../services/api-keys.js";
@@ -662,6 +672,10 @@ export function registerSetupRoutes(app: HubHono): void {
     // body: a computer's key registers its agents on itself; a person's own
     // key registers an agent with no computer (Q-D3).
     let surfaceHostUserId: string | null = null;
+    // 0395: the OS user on that computer, from the calling COMPUTER key — its
+    // instance is the seat's id and its label the seat (device mint). A key
+    // from before seats names none: the agent is the seat-less one, as before.
+    let surfaceHostSeat: string | null = null;
     if (!authenticated) {
       const keyRecord = await apiKeyService.validateApiKey(token);
       if (
@@ -697,6 +711,10 @@ export function registerSetupRoutes(app: HubHono): void {
         }
         surfaceKeyIsHumanOwned = !identity.isAgent;
         surfaceHostUserId = identity.principal.hostUserId;
+        surfaceHostSeat =
+          identity.principal.kind === "machine" && keyRecord.instanceId
+            ? (keyRecord.instanceLabel ?? null)
+            : null;
         surfaceAgentLinkedUserId =
           keyRecord.linkedUserId ?? keyRecord.userId ?? undefined;
       }
@@ -739,6 +757,28 @@ export function registerSetupRoutes(app: HubHono): void {
         400
       );
     }
+    // 0395 — the agent's JOB, optional: `role` a slug ("crm-worker"),
+    // `roleLabel` its name ("CRM worker"). Part of the agent's identity: the
+    // same engine with another job on the same computer and seat is another
+    // agent, with its own key, permissions and history. Omitted: the
+    // engine's plain agent, as before.
+    const role: string | null =
+      typeof body.role === "string" && body.role.trim()
+        ? body.role.trim()
+        : null;
+    if (role !== null && !isAgentRoleSlug(role)) {
+      return c.json(
+        {
+          error:
+            "Invalid `role` — a job slug: lowercase letters, digits and dashes (e.g. crm-worker).",
+        },
+        400
+      );
+    }
+    const roleLabel: string | null =
+      role && typeof body.roleLabel === "string" && body.roleLabel.trim()
+        ? body.roleLabel.trim().slice(0, AGENT_ROLE_LABEL_MAX)
+        : null;
     const requestedWorkspaceId: string | undefined =
       typeof body.workspaceId === "string" ? body.workspaceId : undefined;
     const linkedUserId: string | undefined =
@@ -824,7 +864,9 @@ export function registerSetupRoutes(app: HubHono): void {
       }
     }
 
-    const agentLabel = agentType.charAt(0).toUpperCase() + agentType.slice(1);
+    const agentLabel = role
+      ? agentRoleLabel(role, roleLabel)
+      : agentType.charAt(0).toUpperCase() + agentType.slice(1);
 
     try {
       // ── Resolve linkedUserId (human the agent acts for) ─────────────────────
@@ -1175,6 +1217,8 @@ export function registerSetupRoutes(app: HubHono): void {
         // to the computer's and revoking the computer revokes it. Every other
         // door (issuer JWT, PROVISIONING_TOKEN, a person's key): no computer.
         hostUserId: surfaceHostUserId,
+        hostSeat: surfaceHostSeat,
+        agentRole: role,
         // OPT-IN pod-wide: forces the minted key's linkedUserId to null (governed
         // as the agent-user's own principal). Ignored when false.
         podWide,
@@ -2586,6 +2630,8 @@ export function registerSetupRoutes(app: HubHono): void {
         .array(z.string().uuid())
         .max(ALSO_DISCONNECT_MAX)
         .optional(),
+      /** 0395 (D6/D7): how its changes land; omitted = it keeps its own. */
+      writeMode: z.enum(AGENT_WRITE_MODES).optional(),
     })
     .strict();
 
@@ -2626,6 +2672,7 @@ export function registerSetupRoutes(app: HubHono): void {
         keyId,
         approverId,
         alsoDisconnect: parsed.data.alsoDisconnect ?? [],
+        writeMode: parsed.data.writeMode ?? null,
       });
     } catch (err) {
       // A typed refusal keeps its own status; anything else is a real fault.
@@ -2701,8 +2748,38 @@ export function registerSetupRoutes(app: HubHono): void {
 
     const agent = await db.query.users.findFirst({
       where: eq(users.id, key.userId),
-      columns: { name: true, agentType: true },
+      columns: {
+        name: true,
+        agentType: true,
+        agentRole: true,
+        hostSeat: true,
+        hostUserId: true,
+      },
     });
+    // 0395: what the page shows about the agent inside its computer — the
+    // computer, its job and seat, whether it is NEW (no key before this one)
+    // and how its changes land today (kept unless the person changes it).
+    const computer = agent?.hostUserId
+      ? await db.query.users.findFirst({
+          where: eq(users.id, agent.hostUserId),
+          columns: { name: true },
+        })
+      : undefined;
+    const priorKey = await db.query.apiKeys.findFirst({
+      where: and(eq(apiKeys.userId, key.userId), ne(apiKeys.id, key.id)),
+      columns: { id: true },
+    });
+    const governance = await readAgentGovernance({
+      db,
+      agentUserId: key.userId,
+    });
+    const writeMode = governance
+      ? resolveAgentWriteMode({
+          posture: governance.posture,
+          podDefaultEnabled: (await readReversibleDefault(db)).enabled,
+          writesRequireProposal: governance.writesRequireProposal,
+        })
+      : null;
     // The agent's OTHER live connections: the page lists each, and what
     // approving does to it — replaced (same computer) or left alone unless
     // the person ticks "Also disconnect".
@@ -2721,6 +2798,11 @@ export function registerSetupRoutes(app: HubHono): void {
         key.instanceLabel
       ),
       createdAt: key.createdAt.toISOString(),
+      agentRole: agent?.agentRole ?? null,
+      hostSeat: agent?.hostSeat ?? null,
+      computerName: computer?.name ?? null,
+      isNewAgent: !priorKey,
+      writeMode,
       connections: others.map((o) => ({
         ...o,
         sameComputer: sameComputer(o.instanceId, key.instanceId),

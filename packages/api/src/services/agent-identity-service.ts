@@ -517,6 +517,10 @@ export async function insertServiceAgentUser(opts: {
   metadata?: Partial<AgentMetadata>;
   createdVia?: AgentCreatedVia;
   hostUserId?: string | null;
+  /** The OS user on that computer (0395). NULL = no seat. */
+  hostSeat?: string | null;
+  /** The agent's job slug (0395). NULL = the engine's plain agent. */
+  agentRole?: string | null;
 }): Promise<{ agentUserId: string; email: string }> {
   const { creatorId, agentType, label } = opts;
   const hostUserId = opts.hostUserId ?? null;
@@ -550,6 +554,8 @@ export async function insertServiceAgentUser(opts: {
     createdByUserId: creatorId,
     createdVia: opts.createdVia ?? "cli",
     hostUserId,
+    hostSeat: opts.hostSeat ?? null,
+    agentRole: opts.agentRole ?? null,
     agentMetadata,
     timezone: "UTC",
     locale: "en",
@@ -559,15 +565,19 @@ export async function insertServiceAgentUser(opts: {
 
 /**
  * Find-or-create a non-personal (service) agent user for **(creatorId, agentType)**
- * — singleton per **(createdByUserId, agentType)** on ONE computer: with
- * `hostUserId` it is "Claude Code on devbox", a distinct principal from the
- * same type with no computer (`host_user_id IS NULL`, every agent before 0320).
+ * — singleton per **(createdByUserId, agentType)** on ONE computer, ONE seat and
+ * ONE job: with `hostUserId` it is "Claude Code on devbox", a distinct
+ * principal from the same type with no computer (`host_user_id IS NULL`, every
+ * agent before 0320); with `hostSeat` it is that OS user's, and with
+ * `agentRole` it is that job's ("CRM worker · Claude Code on devbox"), each a
+ * distinct principal from the NULL seat / NULL role one (0395, plan 31470fd5 D1).
  *
  * Shared by `createNamedAgent` and `provisionSurfaceAgentKey` so both doors share
  * one insert shape and the same race recovery against
- * `idx_users_service_agent_creator_type_host_unique` (migration 0320, which
- * replaced 0228's `idx_users_service_agent_creator_type_unique`). Concurrent
- * inserts re-select the winning (oldest) singleton.
+ * `idx_users_service_agent_identity_unique` (migration 0395, which replaced
+ * 0320's `idx_users_service_agent_creator_type_host_unique`, itself 0228's
+ * `idx_users_service_agent_creator_type_unique`). Concurrent inserts re-select
+ * the winning (oldest) singleton.
  *
  * Non-twin service agents always stamp `writesRequireProposal: true` and
  * `kratosIdentityId: null` (agents authenticate on the Hub-key rail, never Kratos).
@@ -592,16 +602,30 @@ export async function findOrCreateServiceAgentUser(opts: {
    * pre-0320 singleton, unchanged.
    */
   hostUserId?: string | null;
+  /**
+   * The OS user on that computer (0395). Part of the identity: omitted/null
+   * is the seat-less agent (every agent before 0395), unchanged.
+   */
+  hostSeat?: string | null;
+  /**
+   * The agent's job slug (0395). Part of the identity: omitted/null is the
+   * engine's plain agent, unchanged.
+   */
+  agentRole?: string | null;
   logger?: ProvisionLogger;
 }): Promise<{ agentUserId: string; email: string }> {
   const { creatorId, agentType, label, logger } = opts;
   const hostUserId = opts.hostUserId ?? null;
+  const hostSeat = opts.hostSeat ?? null;
+  const agentRole = opts.agentRole ?? null;
   const sameIdentity = and(
     eq(users.userType, "agent"),
     eq(users.agentType, agentType),
     eq(users.createdByUserId, creatorId),
     eq(users.isPersonalAgent, false),
-    hostUserId ? eq(users.hostUserId, hostUserId) : isNull(users.hostUserId)
+    hostUserId ? eq(users.hostUserId, hostUserId) : isNull(users.hostUserId),
+    hostSeat ? eq(users.hostSeat, hostSeat) : isNull(users.hostSeat),
+    agentRole ? eq(users.agentRole, agentRole) : isNull(users.agentRole)
   );
 
   // Deterministic: if a race produced more than one row for this pair, reuse the
@@ -632,7 +656,10 @@ export async function findOrCreateServiceAgentUser(opts: {
     return { agentUserId: existing.id, email: existing.email };
   }
 
-  if (hostUserId) {
+  // Adoption moves an agent made before computers onto its only computer —
+  // into the seat-less, role-less identity only (0395): a seat's or a job's
+  // agent is always its own new principal.
+  if (hostUserId && !hostSeat && !agentRole) {
     const adopted = await adoptComputerlessAgent({
       creatorId,
       agentType,
@@ -655,6 +682,8 @@ export async function findOrCreateServiceAgentUser(opts: {
       metadata: opts.metadata,
       createdVia: opts.createdVia,
       hostUserId,
+      hostSeat,
+      agentRole,
     });
     logger?.info(
       { agentUserId, agentType, createdByUserId: creatorId },
@@ -720,7 +749,9 @@ async function adoptComputerlessAgent(opts: {
           eq(users.agentType, opts.agentType),
           eq(users.createdByUserId, opts.creatorId),
           eq(users.isPersonalAgent, false),
-          isNull(users.hostUserId)
+          isNull(users.hostUserId),
+          isNull(users.hostSeat),
+          isNull(users.agentRole)
         )} ORDER BY ${users.createdAt} ASC LIMIT 1)`
       )
     )
@@ -1027,6 +1058,17 @@ export interface ProvisionSurfaceAgentKeyOpts {
    * Tripwire: `agent-creator-type-singleton` reads every call site.
    */
   hostUserId?: string | null;
+  /**
+   * The OS user on that computer the agent runs as (0395): part of the
+   * identity, so a second OS user never lands on another seat's agent.
+   * Omitted/null: the seat-less agent.
+   */
+  hostSeat?: string | null;
+  /**
+   * The agent's job (0395, "crm-worker"): part of the identity. Omitted/null:
+   * the engine's plain agent. A NEW agent is named `agentLabel`.
+   */
+  agentRole?: string | null;
   /** Provenance of a NEW agent user (`users.created_via`). Default "cli". */
   createdVia?: AgentCreatedVia;
   logger?: ProvisionLogger;
@@ -1133,6 +1175,8 @@ export async function provisionSurfaceAgentKey(
       capabilities: aiDefaultCapabilities(),
     },
     hostUserId: opts.hostUserId ?? null,
+    hostSeat: opts.hostSeat ?? null,
+    agentRole: opts.agentRole ?? null,
     ...(opts.createdVia ? { createdVia: opts.createdVia } : {}),
     logger,
   });

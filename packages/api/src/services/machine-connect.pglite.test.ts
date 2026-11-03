@@ -559,7 +559,7 @@ describe("how the approved agents' writes land (0394, AGENT_WRITE_MODE_CHOICES)"
     expect(await postureOf(got.body.agents[0]!.agentUserId)).toBe("ask-first");
   });
 
-  it("a reconnect with a choice applies it to an agent that was ask-first", async () => {
+  it("D6: a reconnect KEEPS the agent's permission; the page's choice is for added agents", async () => {
     const [none] = await q<{ id: string }>(
       `select id from users where agent_type = 'machine' and agent_metadata->>'hostname' = 'modebox-none'`
     );
@@ -576,7 +576,35 @@ describe("how the approved agents' writes land (0394, AGENT_WRITE_MODE_CHOICES)"
     const got = await poll(res.device_code);
     if (!got.ok) throw new Error(got.error);
     expect(got.body.agents[0]!.agentUserId).toBe(before[0]!.id);
-    expect(await postureOf(before[0]!.id)).toBeNull();
-    expect(await liveProposeRules(before[0]!.id)).toBe(0);
+    expect(got.body.agents[0]!.action).toBe("reconnected");
+    // Amends 0394 (plan 31470fd5 D6): its own permission is kept.
+    expect(await postureOf(before[0]!.id)).toBe("ask-first");
+  });
+
+  it("D6: a reconnect whose row changes the permission applies it", async () => {
+    const [none] = await q<{ id: string }>(
+      `select id from users where agent_type = 'machine' and agent_metadata->>'hostname' = 'modebox-none'`
+    );
+    const [agent] = await q<{ id: string }>(
+      `select id from users where host_user_id = $1 and agent_type = 'claude-code'`,
+      [none!.id]
+    );
+    const res = await start("modebox-none", ["claude-code"]);
+    await approve(res.user_code, {
+      reuseComputerId: none!.id,
+      agentActions: [
+        {
+          agentType: "claude-code",
+          action: "reconnect",
+          agentId: agent!.id,
+          writeMode: "pod-default",
+        },
+      ],
+    });
+    const got = await poll(res.device_code);
+    if (!got.ok) throw new Error(got.error);
+    expect(got.body.agents[0]!.agentUserId).toBe(agent!.id);
+    expect(await postureOf(agent!.id)).toBeNull();
+    expect(await liveProposeRules(agent!.id)).toBe(0);
   });
 });

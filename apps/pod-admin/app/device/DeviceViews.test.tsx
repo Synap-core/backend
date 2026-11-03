@@ -76,6 +76,7 @@ const text = (html: string) =>
   html
     .replace(/<[^>]+>/g, " ")
     .replace(/&#x27;/g, "'")
+    .replace(/&quot;/g, '"')
     .replace(/&amp;/g, "&")
     .replace(/\s+/g, " ");
 
@@ -184,6 +185,139 @@ describe("pending", () => {
     expect(pending({ error: "That code doesn't match" })).toMatch(
       /role="alert"[^>]*>[\s\S]*That code doesn(&#x27;|')t match/
     );
+  });
+});
+
+// ── 0395: agents inside a computer (plan 31470fd5 §10 test 7) ───────────────
+
+/** devbox on 2 Nov: two agents of OS user antoine; OS user `agent` asks. */
+const SEATED: DeviceRequest = {
+  ...REQUEST,
+  seat: "agent",
+  rows: [
+    {
+      key: "claude-code:",
+      agentType: "claude-code",
+      role: null,
+      roleLabel: null,
+      name: "Claude Code",
+    },
+  ],
+  reusableComputers: [
+    {
+      id: "m-1",
+      name: "devbox",
+      createdAt: REQUEST.createdAt,
+      agents: [
+        {
+          id: "a-crm",
+          name: "CRM worker",
+          agentType: "claude-code",
+          role: "crm-worker",
+          seat: "antoine",
+          lastSeenAt: REQUEST.createdAt,
+          workerServedAt: REQUEST.createdAt,
+          live: true,
+          writeMode: "pod-default",
+        },
+        {
+          id: "a-codex",
+          name: "Codex",
+          agentType: "codex",
+          role: null,
+          seat: "antoine",
+          lastSeenAt: null,
+          live: true,
+          writeMode: "ask-first",
+        },
+      ],
+      recommended: [
+        { rowKey: "claude-code:", action: "add", agentId: null, reason: "new" },
+      ],
+    },
+  ],
+};
+
+const ADD = {
+  rowKey: "claude-code:",
+  agentType: "claude-code",
+  role: null,
+  roleLabel: null,
+  action: "add" as const,
+  agentId: null,
+};
+
+describe("page-shows-agents (0395)", () => {
+  const seated = (over: Partial<PendingViewProps> = {}) =>
+    text(
+      pending({
+        request: SEATED,
+        reuseId: "m-1",
+        actions: [ADD],
+        onActions: noop,
+        ...over,
+      })
+    );
+
+  it("shows the computer, its agents with last seen, and the one agent being added with its job and permission choice", () => {
+    const t = seated();
+    expect(t).toContain("Add an agent to devbox?");
+    expect(t).toContain('by OS user "agent" (new on this computer)');
+    // The computer's agents, each with its seat, job and last seen.
+    expect(t).toContain("On devbox now, these stay as they are");
+    expect(t).toContain(
+      "CRM worker · Claude Code on devbox · antoine · seen 2m ago, runs a worker"
+    );
+    expect(t).toContain("Codex on devbox · antoine · never seen");
+    // The one agent being added, its job field and the permission choice.
+    expect(t).toContain('For OS user "agent"');
+    expect(t).toContain("Add Claude Code on devbox · agent");
+    expect(t).toContain("Job (optional)");
+    expect(t).toContain("How the added agents' changes land");
+    expect(t).toContain("Normal (recommended)");
+    expect(t).toContain("Nothing else on devbox changes.");
+    // Never the hostname "Reconnect devbox" of 2 Nov.
+    expect(t).not.toContain("Reconnect devbox");
+    expect(t).not.toContain(
+      "anything still running there with an old key stops"
+    );
+  });
+
+  it("a job typed for the added agent names it", () => {
+    expect(
+      seated({
+        actions: [
+          { ...ADD, role: "agent-sessions", roleLabel: "Agent sessions" },
+        ],
+      })
+    ).toContain("Add Agent sessions · Claude Code on devbox · agent");
+  });
+
+  it("reconnecting ONE agent keeps its permission unless changed, and lists the rest as kept", () => {
+    const t = seated({
+      actions: [
+        { ...ADD, action: "reconnect", agentId: "a-codex", agentType: "codex" },
+      ],
+      request: {
+        ...SEATED,
+        seat: "antoine",
+        rows: [
+          {
+            ...SEATED.rows![0]!,
+            key: "codex:",
+            agentType: "codex",
+            name: "Codex",
+          },
+        ],
+      },
+    });
+    expect(t).toContain("Reconnect Codex on devbox?");
+    expect(t).toContain("Keeps its permission: Ask first.");
+    expect(t).toContain("Change its permission…");
+    // One OS user on the computer: names carry no seat.
+    expect(t).toContain("CRM worker · Claude Code on devbox · seen 2m ago");
+    // No added agent: no question about added agents.
+    expect(t).not.toContain("How the added agents' changes land");
   });
 });
 
