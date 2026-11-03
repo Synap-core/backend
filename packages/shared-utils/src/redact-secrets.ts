@@ -10,9 +10,36 @@
  * they are pointers, not values, and they are exactly what makes a credential
  * failure explainable ("the token behind `vault://google/refresh` is expired").
  */
+const SECRET_KEY_NAME =
+  "[\\w.-]{0,40}?(?:token|secret|password|passwd|passphrase|private[_-]?key|api[_-]?key|credentials?|authorization|cookie)[\\w.-]{0,40}";
+
+/** `"key"` `:` `"value"` with `"` or `'`; a backslash-escaped quote stays inside the value. */
+const QUOTED_SECRET_PAIR = new RegExp(
+  `(["'])(${SECRET_KEY_NAME})\\1(\\s*:\\s*)(["'])(?:\\\\.|(?!\\4)[^\\\\])*\\4`,
+  "gi"
+);
+
+/** `\"key\"` `:` `\"value\"`: the pair as it reads inside a serialized JSON string. */
+const ESCAPED_QUOTED_SECRET_PAIR = new RegExp(
+  `(\\\\+")(${SECRET_KEY_NAME})\\1(\\s*:\\s*)\\1[\\s\\S]*?\\1`,
+  "gi"
+);
+
 export function redactSecrets(output: string): string {
   return (
     output
+      // A QUOTED pair: JSON (`"api_key":"x"`) or a Python repr
+      // (`'password': 'x'`). The key=value rule below never saw these: the
+      // closing quote sits between the key and the separator, so a provider
+      // body echoing its request kept every credential (CP ticket 84f82ed3).
+      // The key is any key NAMING a credential (`client_secret`, `githubToken`,
+      // `x-api-key`), the rule of the structured redactor in
+      // `@synap/api` `utils/redact-secrets.ts`. Bounded key length: no
+      // backtracking on a long quoted word.
+      .replace(QUOTED_SECRET_PAIR, "$1$2$1$3$4***REDACTED***$4")
+      // The same pair inside a JSON STRING (`{\"token\":\"x\"}`): a stored
+      // detail or a log line that holds a serialized body.
+      .replace(ESCAPED_QUOTED_SECRET_PAIR, "$1$2$1$3$1***REDACTED***$1")
       // Generic key=value secrets (KEY=sk-..., TOKEN=abc123...)
       .replace(
         /\b(api[_-]?key|secret[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd|credentials?)\s*[=:]\s*\S+/gi,
