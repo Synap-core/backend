@@ -537,6 +537,23 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
     /^\/errors\/[^/]+\/?$/,
     REFUSED("Pod internals: the cause of every server error on the pod."),
   ],
+  // A person's channels (`listPersonChannels`, services/channels/
+  // person-channels.ts): the record through `entityReadVisibleWhere`, its
+  // channels through `channelVisibilityWhere` (a channel follows its person,
+  // grant-read.ts), their last messages through the one history door, the
+  // pending proposed-message counts through `proposalUserFloor`: each read
+  // carries the key's grant, so the answer is what the grant reaches. An app
+  // asks for `channel.read` (consent for the person's DMs), so a key without
+  // it is refused here rather than told "no conversation".
+  [/^\/entities\/[0-9a-fA-F-]{36}\/channels\/?$/, NARROWED("channel", [])],
+  // A channel's proposed messages (`listProposedMessages`): the channel under
+  // `channelVisibilityWhere` (404 when the grant does not reach it), the
+  // pending send proposals under `proposalUserFloor`. Admitted for a key
+  // holding `proposal.read`; the channel check asks `channel.read` too.
+  [
+    /^\/channels\/[0-9a-fA-F-]{36}\/proposed-messages\/?$/,
+    NARROWED("proposal", []),
+  ],
 ];
 
 /**

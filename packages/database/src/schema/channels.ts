@@ -384,6 +384,23 @@ export const channels = pgTable(
       .where(
         sql`${table.channelType} = 'group' AND ${table.status} = 'active' AND ${table.contextObjectType} IN ('document', 'entity')`
       ),
+    /**
+     * ONE pending EXTERNAL channel per person, tool and account (migration
+     * 0393): a channel with a person exists from the first draft, before the
+     * provider gives it a chat id (`external_id` NULL); the first send fills
+     * it. The existing external unique index is partial on `external_id IS
+     * NOT NULL`, so it never sees a pending one. Predicate mirrors the SQL.
+     */
+    externalPendingUnique: uniqueIndex("channels_external_pending_uniq")
+      .on(
+        table.userId,
+        table.externalSource,
+        table.contextObjectId,
+        sql`(COALESCE(${table.metadata} ->> 'accountId', ''))`
+      )
+      .where(
+        sql`${table.channelType} = 'external' AND ${table.externalId} IS NULL AND ${table.status} = 'active'`
+      ),
   })
 );
 

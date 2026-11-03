@@ -31044,8 +31044,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelId: string;
 					content: string;
 					deletedAt: Date | null;
+					deliveryStatus: "delivered" | "failed" | "read" | "sent" | null;
+					direction: "inbound" | "outbound" | null;
 					editedAt: Date | null;
 					ephemeral: boolean;
+					externalMessageId: string | null;
 					externalSource: string | null;
 					hash: string;
 					id: string;
@@ -31327,8 +31330,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelId: string;
 					content: string;
 					deletedAt: Date | null;
+					deliveryStatus: "delivered" | "failed" | "read" | "sent" | null;
+					direction: "inbound" | "outbound" | null;
 					editedAt: Date | null;
 					ephemeral: boolean;
+					externalMessageId: string | null;
 					externalSource: string | null;
 					hash: string;
 					id: string;
@@ -31765,8 +31771,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelId: string;
 					content: string;
 					deletedAt: Date | null;
+					deliveryStatus: "delivered" | "failed" | "read" | "sent" | null;
+					direction: "inbound" | "outbound" | null;
 					editedAt: Date | null;
 					ephemeral: boolean;
+					externalMessageId: string | null;
 					externalSource: string | null;
 					hash: string;
 					id: string;
@@ -31928,8 +31937,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelId: string;
 					content: string;
 					deletedAt: Date | null;
+					deliveryStatus: "delivered" | "failed" | "read" | "sent" | null;
+					direction: "inbound" | "outbound" | null;
 					editedAt: Date | null;
 					ephemeral: boolean;
+					externalMessageId: string | null;
 					externalSource: string | null;
 					hash: string;
 					id: string;

@@ -28,10 +28,16 @@
  *     DB pre-check before hitting the index).
  *
  * This is a PURE EXTRACTION of filters that were already applied verbatim at the
- * migrated call sites — it changes no query's columns, ordering, filters, or
- * pagination. Paths whose current shape lacks part of the triad are deliberately
- * NOT migrated (migrating them would change behavior); they are tracked
- * separately as divergences to reconcile.
+ * migrated call sites — it changes no query's columns or filters. Paths whose
+ * current shape lacks part of the triad are deliberately NOT migrated
+ * (migrating them would change behavior); they are tracked separately as
+ * divergences to reconcile.
+ *
+ * ORDER AND PAGING (channels wave, 0393). Rows are ordered by
+ * `(timestamp, id)`: the id breaks a tie between two messages of the same
+ * instant, so a page boundary is stable. A page continues by KEYSET on that
+ * pair, never on the id alone: ids are random UUIDs, so `id < cursor` (the
+ * old paging) returned a random subset, not the next page.
  */
 
 import type { SQL } from "drizzle-orm";
@@ -46,6 +52,7 @@ import {
   lt,
   asc,
   desc,
+  drizzleSql,
 } from "@synap/database";
 import { channelVisibilityWhere } from "./channel-visibility.js";
 
@@ -68,8 +75,20 @@ export interface QueryChannelMessagesOptions {
   order: "asc" | "desc";
   /** Row cap. Omit for no limit. */
   limit?: number;
-  /** Keyset cursor: only rows with `messages.id < cursor`. */
+  /**
+   * Keyset cursor: a message id of this channel. Only the rows AFTER it in the
+   * read order come back (`desc`: older than it; `asc`: newer), compared on
+   * `(timestamp, id)`. An id that names no message of this channel reads
+   * nothing.
+   */
   cursor?: string;
+  /**
+   * Only rows strictly before this point. With `id` (a message of this
+   * channel, the one a page ended on) the comparison is on that message's own
+   * `(timestamp, id)`, so a tie of instants is broken exactly; with `at`
+   * alone, `timestamp < at`.
+   */
+  before?: { at?: Date; id?: string };
   /**
    * Relational-API column projection (e.g. `{ role: true, content: true }`).
    * Omit for the full row.
@@ -93,7 +112,16 @@ export async function queryChannelMessages<T = FullMessageRow>(
   database: typeof db,
   opts: QueryChannelMessagesOptions
 ): Promise<T[]> {
-  const { channelId, userId, order, limit, cursor, columns, extraWhere } = opts;
+  const {
+    channelId,
+    userId,
+    order,
+    limit,
+    cursor,
+    before,
+    columns,
+    extraWhere,
+  } = opts;
 
   // (1) VISIBILITY — only when the caller delegates the gate to the door.
   if (userId !== undefined) {
@@ -113,18 +141,50 @@ export async function queryChannelMessages<T = FullMessageRow>(
     eq(messages.channelId, channelId),
     isNull(messages.deletedAt),
     eq(messages.ephemeral, false),
-    cursor ? lt(messages.id, cursor) : undefined,
+    cursor
+      ? keysetWhere(channelId, cursor, order === "desc" ? "<" : ">")
+      : undefined,
+    before ? beforeWhere(channelId, before) : undefined,
     extraWhere
   );
 
   const rows = await database.query.messages.findMany({
     where,
     orderBy:
-      order === "asc" ? [asc(messages.timestamp)] : [desc(messages.timestamp)],
+      order === "asc"
+        ? [asc(messages.timestamp), asc(messages.id)]
+        : [desc(messages.timestamp), desc(messages.id)],
     ...(limit !== undefined ? { limit } : {}),
     ...(columns ? { columns } : {}),
   });
   // Column projection is caller-parameterized (`columns`), so the concrete row
   // shape is only known to the caller via the `T` type argument.
   return rows as unknown as T[];
+}
+
+/**
+ * Strictly before `before`. With the id of a message of this channel, on that
+ * message's own stored `(timestamp, id)` (exact: a client's ISO time carries
+ * milliseconds, the column microseconds); with the time alone, `timestamp <
+ * at`.
+ */
+function beforeWhere(
+  channelId: string,
+  before: { at?: Date; id?: string }
+): SQL | undefined {
+  if (before.id) return keysetWhere(channelId, before.id, "<");
+  return before.at ? lt(messages.timestamp, before.at) : undefined;
+}
+
+/**
+ * A row comparison against message `id`'s own `(timestamp, id)` (one indexed
+ * lookup). An id that names no message of the channel matches nothing.
+ */
+function keysetWhere(channelId: string, id: string, op: "<" | ">"): SQL {
+  return drizzleSql`(${messages.timestamp}, ${messages.id}) ${drizzleSql.raw(
+    op
+  )} (
+    SELECT c."timestamp", c."id" FROM "messages" c
+     WHERE c."id" = ${id} AND c."channel_id" = ${channelId}
+  )`;
 }
