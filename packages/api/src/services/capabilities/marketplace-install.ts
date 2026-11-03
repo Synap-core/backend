@@ -317,15 +317,6 @@ async function resolveDefinition(
 }
 
 /**
- * Resolve the CP base URL — the by-key re-resolve source used when there is NO
- * cp_catalog_cache row. Mirrors cp-template-client's `cpUrl()`. Null when the
- * pod has no Control Plane configured (self-hosted).
- */
-function cpBaseUrl(): string | null {
-  return controlPlaneBaseUrl();
-}
-
-/**
  * BY-KEY re-resolve for automation/template when the cp_catalog_cache row is
  * MISSING — the uniform analog of the capability by-key fallback
  * (fetchCPCapabilityTemplate). An opt-in (syncByDefault:false) or just-authored
@@ -339,7 +330,7 @@ async function resolveDefinitionByKey(
   slug: string,
   version?: string | null
 ): Promise<Record<string, unknown>> {
-  const source = cpBaseUrl();
+  const source = controlPlaneBaseUrl();
   if (!source) {
     throw new TRPCError({
       code: "NOT_FOUND",
@@ -421,7 +412,7 @@ async function resolveCellDefinitionByKey(slug: string): Promise<{
   def: CellCatalogDef;
   packageVersion: string | null;
 }> {
-  const source = cpBaseUrl();
+  const source = controlPlaneBaseUrl();
   if (!source) {
     throw new TRPCError({
       code: "NOT_FOUND",

@@ -426,6 +426,36 @@ describe("channel executors — a reviewed channel write gets its target", () =>
     ]);
   });
 
+  it("create_branch / merge_branch: a channel the caller cannot read is NOT_FOUND and files nothing", async () => {
+    // Another person's private thread in the caller's own workspace: its id
+    // must not name the governance scope of a proposal the caller files.
+    const STRANGER = randomUUID();
+    const HIDDEN = randomUUID();
+    await q(
+      `insert into channels (id, workspace_id, user_id, title, channel_type) values ($1, $2, $3, 'Private', 'thread')`,
+      [HIDDEN, WS, STRANGER]
+    );
+    const count = async () =>
+      (await q<{ n: number }>(`select count(*)::int as n from proposals`))
+        .rows[0]!.n;
+    const before = await count();
+    await expect(
+      asAgent(() =>
+        hubBranches().createBranch({
+          userId: USER,
+          parentChannelId: HIDDEN,
+          branchPurpose: "Read their thread",
+        })
+      )
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      asAgent(() =>
+        hubBranches().mergeBranch({ userId: USER, branchId: HIDDEN })
+      )
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(await count()).toBe(before);
+  });
+
   it("create_external: the source, its id and the title reach the write", async () => {
     channelWrites.length = 0;
     const res = await asAgent(() =>

@@ -52,10 +52,6 @@ const InstallBodySchema = z.object({
   workspaceId: uuidQueryParam.optional(),
 });
 
-function getCpUrl(): string {
-  return controlPlaneBaseUrl() ?? "";
-}
-
 export function registerCellsRoutes(app: HubHono): void {
   /**
    * GET /cells?workspaceId=...
@@ -165,7 +161,7 @@ export function registerCellsRoutes(app: HubHono): void {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
 
-    const cpUrl = getCpUrl();
+    const cpUrl = controlPlaneBaseUrl();
     if (!cpUrl) {
       return c.json(
         {

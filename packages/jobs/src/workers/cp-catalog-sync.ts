@@ -182,7 +182,7 @@ export const OFFICIAL_SOURCE_NAME = "Synap";
  * resolved even while the catalog is switched off (the rows stay readable).
  */
 export function officialCatalogUrl(): string {
-  return (controlPlaneBaseUrl() ?? DEFAULT_CATALOG_SOURCE).replace(/\/$/, "");
+  return controlPlaneBaseUrl() ?? DEFAULT_CATALOG_SOURCE;
 }
 
 /** `SYNAP_CATALOG_SOURCE=off`: a pod that must make no outbound catalog calls. */

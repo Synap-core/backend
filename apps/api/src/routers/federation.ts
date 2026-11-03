@@ -941,9 +941,9 @@ async function resolveOrCreateKratosIdentity(input: {
   ).catch(() => null);
   if (!existing?.ok) return { status: "unavailable" };
 
-  // An answer we cannot read is a failed lookup, never "no identity": reading
-  // it as an empty list went on to create a second identity for an email
-  // Kratos may already hold.
+  // An answer we cannot read is a failed lookup, never "no identity": read as
+  // an empty list, it would create a second identity for an email Kratos may
+  // already hold.
   let identities: unknown;
   try {
     identities = await existing.json();

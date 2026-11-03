@@ -2,12 +2,11 @@
  * Where a chat turn goes: the workspace and the channel a streaming chat route
  * (`POST /api/chat/stream`, `POST /api/external/chat/stream`) sends a turn to.
  *
- * ONE resolver for both routes. They each carried a copy, and the copies
- * drifted: the external route resolved an explicit `channelId` by id alone,
- * while the app route also required an ACTIVE channel the caller can read
- * (`channelVisibilityWhere`). A channel with no workspace (a personal agent
- * thread) then passed the external route's workspace-membership check, which
- * only runs when the channel has a workspace.
+ * ONE resolver for both routes: neither keeps its own copy. An explicit
+ * `channelId` is never resolved by id alone. The read floor
+ * (`channelVisibilityWhere`) is what refuses a channel with no workspace (a
+ * personal agent thread) that is not the caller's, since the
+ * workspace-membership check runs only when the channel has a workspace.
  *
  * Rules:
  *  - `workspaceId` given: the caller must be a member. Absent: the caller's
@@ -58,7 +57,7 @@ const FAILURES: Record<
   },
   no_workspace: { status: 404, error: "No workspace found for this user" },
   channel_not_found: { status: 404, error: "Channel not found" },
-  no_default_agent: { status: 500, error: "Default agent not found" },
+  no_default_agent: { status: 500, error: "Failed to resolve chat channel" },
   thread_failed: { status: 500, error: "Failed to resolve chat channel" },
 };
 

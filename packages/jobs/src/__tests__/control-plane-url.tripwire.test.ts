@@ -6,8 +6,8 @@
  * 1. The rule: CONTROL_PLANE_URL, else CP_URL; trimmed; a blank value is
  *    unset; trailing slashes stripped; null when neither is set.
  * 2. The tripwire: no source file outside the helper reads either variable
- *    from the environment. The copies drifted three ways (CONTROL_PLANE_URL
- *    only, CONTROL_PLANE_URL then CP_URL, CP_URL then CONTROL_PLANE_URL).
+ *    from the environment: a second reading is a second rule (one variable
+ *    only, or the two in the other order).
  *
  * Scan: every non-test `.ts` under `packages/*\/src` and `apps/*\/src`,
  * derived by walking the tree. It sees `env.X` and `env["X"]` / `env['X']`
@@ -115,7 +115,7 @@ describe("controlPlaneBaseUrl — the only reader of the environment", () => {
     const importers = scannedFiles().filter((f) =>
       readFileSync(f, "utf8").includes("control-plane-url")
     );
-    // 15 call sites routed through it in the change that added it.
+    // At least 15 source files read the Control Plane URL; each imports it.
     expect(importers.length).toBeGreaterThanOrEqual(15);
   });
 });

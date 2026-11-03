@@ -14,8 +14,9 @@ import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq } from "@synap/database";
+import { db, eq, and } from "@synap/database";
 import { channels } from "@synap/database/schema";
+import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import {
   checkPermissionOrPropose,
   proposedMessageFor,
@@ -58,9 +59,14 @@ export const branchesRouter = router({
       // authenticated key owner — a hub PAT may act only as itself.
       assertMayActAs(ctx, agentUserId);
 
-      // Resolve workspaceId from the parent thread
+      // Resolve workspaceId from the parent thread, through the caller's read
+      // floor: a parent the caller cannot see is NOT_FOUND, so its workspace
+      // never names the proposal's governance scope.
       const parentChannel = await db.query.channels.findFirst({
-        where: eq(channels.id, input.parentChannelId),
+        where: and(
+          eq(channels.id, input.parentChannelId),
+          channelVisibilityWhere(agentUserId)
+        ),
         columns: { workspaceId: true },
       });
 
@@ -192,9 +198,13 @@ export const branchesRouter = router({
       // authenticated key owner — a hub PAT may act only as itself.
       assertMayActAs(ctx, agentUserId);
 
-      // Resolve workspaceId from the branch channel
+      // Resolve workspaceId from the branch channel, through the caller's read
+      // floor: a branch the caller cannot see is NOT_FOUND.
       const branchChannel = await db.query.channels.findFirst({
-        where: eq(channels.id, input.branchId),
+        where: and(
+          eq(channels.id, input.branchId),
+          channelVisibilityWhere(agentUserId)
+        ),
         columns: { workspaceId: true },
       });
 

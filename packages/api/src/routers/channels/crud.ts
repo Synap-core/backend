@@ -193,13 +193,24 @@ export const crudProcedures = {
     .mutation(async ({ input, ctx }) => {
       const workspaceId = ctx.workspaceId;
 
-      // If branching, verify parent channel is in same workspace
+      // A branch hangs only under a parent the caller can read (the canonical
+      // grant-aware floor) that lives in the caller's workspace, or in none (a
+      // personal thread the floor already limits to its owner and members).
+      // Any refusal is NOT_FOUND: it never reveals that the channel exists.
       if (input.parentChannelId) {
         const parentChannel = await db.query.channels.findFirst({
-          where: eq(channels.id, input.parentChannelId),
+          where: and(
+            eq(channels.id, input.parentChannelId),
+            channelVisibilityWhere(ctx.userId)
+          ),
+          columns: { id: true, workspaceId: true },
         });
 
-        if (!parentChannel) {
+        if (
+          !parentChannel ||
+          (parentChannel.workspaceId !== null &&
+            parentChannel.workspaceId !== workspaceId)
+        ) {
           throw new TRPCError({
             code: "NOT_FOUND",
             message: "Parent channel not found",

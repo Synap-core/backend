@@ -183,8 +183,8 @@ const SOURCE_COLUMNS = {
 //
 // The keyset is (created_at, id) at MICROSECOND precision: `created_at` is a
 // `defaultNow()` timestamptz, and a JS `Date` keeps milliseconds only, so a
-// Date cursor skipped every row of the page boundary's millisecond that sorts
-// after it. The cursor carries the instant as SQL formats it (`cursorAt`).
+// Date cursor would skip every row of the page boundary's millisecond that
+// sorts after it. The cursor carries the instant as SQL formats it (`cursorAt`).
 
 /** A listed row: the source columns plus its µs instant for the cursor. */
 type ListRow = SourceRow & { cursorAt: string };
