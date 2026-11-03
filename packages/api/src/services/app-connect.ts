@@ -2652,7 +2652,7 @@ export async function podAppViews(
       ),
       client_name: documents.get(clientId)?.clientName ?? null,
       client_uri: documents.get(clientId)?.clientUri ?? null,
-      open_uri: documents.get(clientId)?.openUri ?? null,
+      open_uri: null,
       templates: documents.get(clientId)?.templates ?? [],
     });
   }
