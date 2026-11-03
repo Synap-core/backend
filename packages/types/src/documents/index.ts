@@ -18,6 +18,9 @@ export {
   type UndoPromoteToBodyRefusal,
 } from "./body-property.js";
 
+// A document on the person's rail: the `doc:<id>` pin key (P4, Q5/Q6).
+export { documentRailPinKey } from "./rail-pin.js";
+
 // Document rows, declared in ./rows.js; @synap/database proves its inferred
 // rows equal (packages/database/src/wire-parity/documents.ts). The Zod schemas
 // live with the drizzle tables in @synap/database, not in this package.

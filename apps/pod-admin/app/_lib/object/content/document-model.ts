@@ -11,6 +11,8 @@ import {
   CELL_FRAME_MAX_BYTES,
   htmlByteLength,
 } from "@synap-core/types/cell-bridge";
+import { EMBED_DIRECTIVES } from "@synap-core/markdown-core/embeds";
+import { scanContainers } from "@synap-core/markdown-core/scan";
 import type { TrpcErrorLike } from "../load-failure";
 import {
   contentHref,
@@ -29,8 +31,35 @@ export interface DocumentReadAnswer {
     mimeType?: string | null;
     /** The space it lives in: the lens a running page reads through. */
     workspaceId?: string | null;
+    /** A living document's stored `LensScope` (0387): what its cells read through. */
+    scope?: unknown;
+    /** The automation bound to refresh its AI sections (0387). */
+    refreshAutomationId?: string | null;
   };
   content: string;
+}
+
+const REFERENCE_EMBEDS: ReadonlySet<string> = new Set(EMBED_DIRECTIVES);
+
+/**
+ * A LIVING document: a page whose parts move without anyone editing it — it
+ * embeds a live object (a cell, a view, a record: markdown-core's
+ * `EMBED_DIRECTIVES`), reads through a stored scope, or is rewritten by a
+ * bound refresher (0387). The Synap app draws those parts live; the console
+ * draws a copy of them (a snapshot, a door). So on `/open` the app is the
+ * page's first door and the console's read the second (Generative UI plan
+ * 9ad4b2fc, founder Q8, 3 Nov 2026). A plain note, a file or a stored HTML
+ * page (which RUNS here) is not living: it reads in place, as before.
+ */
+export function isLivingDocument(answer: DocumentReadAnswer): boolean {
+  const { document, content } = answer;
+  if (documentFormat(document.type, document.mimeType) !== "markdown") {
+    return false;
+  }
+  if (document.scope != null || document.refreshAutomationId) return true;
+  return scanContainers(content).containers.some((c) =>
+    REFERENCE_EMBEDS.has(c.name)
+  );
 }
 
 export type DocumentContent =

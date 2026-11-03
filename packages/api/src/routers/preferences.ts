@@ -28,10 +28,10 @@ import {
 async function railPinsWrite(
   userId: string,
   op: RailPinsOp,
-  includeGoals: boolean | undefined
+  include: PinsInclude
 ) {
   try {
-    return { pins: pinsFor(await writeRailPins(userId, op), includeGoals) };
+    return { pins: pinsFor(await writeRailPins(userId, op), include) };
   } catch (err) {
     if (
       err instanceof RailPinsFullError ||
@@ -46,21 +46,34 @@ async function railPinsWrite(
   }
 }
 
-/**
- * GOAL pins ("This week", `trackId`, `profileSlug: null`) leave every
- * response — the read's and the writes' — unless the caller asks for them
- * (`includeGoals: true`, code.md 2026-10-24): a shipped desktop build reads
- * every pin as a surface and lost every rail badge on a pin with no kind.
- */
-function pinsFor<P extends { trackId: string | null }>(
-  pins: P[],
-  includeGoals: boolean | undefined
-): P[] {
-  return includeGoals ? pins : pins.filter((p) => !p.trackId);
+/** The opt-in flags every rail-pins door takes (each absent ⇒ that arm stays out). */
+interface PinsInclude {
+  includeGoals?: boolean | undefined;
+  includeDocuments?: boolean | undefined;
 }
 
-/** The flag every rail-pins door takes (absent ⇒ surface pins only). */
+/**
+ * GOAL pins ("This week", `trackId`, `profileSlug: null`) and DOCUMENT pins
+ * (`documentId`, `profileSlug: null`, plan 9ad4b2fc Q5) leave every
+ * response — the read's and the writes' — unless the caller asks for them
+ * (`includeGoals: true` / `includeDocuments: true`, code.md 2026-10-24): a
+ * shipped desktop build reads every pin as a surface and lost every rail
+ * badge on a pin with no kind. Each arm is asked for on its own, so a client
+ * that draws goals is never handed documents it cannot open.
+ */
+function pinsFor<
+  P extends { trackId: string | null; documentId: string | null },
+>(pins: P[], include: PinsInclude | undefined): P[] {
+  return pins.filter(
+    (p) =>
+      (!p.trackId || include?.includeGoals) &&
+      (!p.documentId || include?.includeDocuments)
+  );
+}
+
+/** The flags every rail-pins door takes (absent ⇒ surface pins only). */
 const includeGoals = z.boolean().optional();
+const includeDocuments = z.boolean().optional();
 
 export const preferencesRouter = router({
   /**
@@ -69,21 +82,25 @@ export const preferencesRouter = router({
    * spaces; a space's template `sidebarItems` pipeline views are folded in as
    * suggestions until the person first edits their pins.
    *
-   * GOAL pins come back only when asked — `{ includeGoals: true }`
-   * ({@link pinsFor}); the write doors below take the same flag.
+   * GOAL pins come back only when asked — `{ includeGoals: true }` — and
+   * DOCUMENT pins likewise — `{ includeDocuments: true }` ({@link pinsFor});
+   * the write doors below take the same flags.
    */
   railPins: protectedProcedure
-    .input(z.object({ includeGoals }).optional())
+    .input(z.object({ includeGoals, includeDocuments }).optional())
     .query(async ({ ctx, input }) => ({
-      pins: pinsFor(await readRailPins(ctx.userId), input?.includeGoals),
+      pins: pinsFor(await readRailPins(ctx.userId), input),
     })),
 
   /**
    * Pin a surface: a kind/role (`profileSlug`), a saved pipeline view of it
-   * (`viewId`), or a GOAL (`trackId`, exclusive with `profileSlug` — "This
-   * week", D4: at most `RAIL_GOAL_PINS_MAX`, a 4th is PRECONDITION_FAILED).
-   * Idempotent — pinning a pinned surface keeps one pin. The surface must
-   * exist and be readable (NOT_FOUND / BAD_REQUEST otherwise).
+   * (`viewId`), a GOAL (`trackId` — "This week", D4: at most
+   * `RAIL_GOAL_PINS_MAX`, a 4th is PRECONDITION_FAILED), or a DOCUMENT
+   * (`documentId` — a living document on the rail, plan 9ad4b2fc P4; the
+   * person pins it, nothing pins it for them, Q6). Exactly one of
+   * `profileSlug` / `trackId` / `documentId`. Idempotent — pinning a pinned
+   * surface keeps one pin. The surface must exist and be readable (NOT_FOUND
+   * / BAD_REQUEST otherwise).
    */
   pinSurface: protectedProcedure
     .input(
@@ -92,56 +109,63 @@ export const preferencesRouter = router({
           profileSlug: z.string().min(1).optional(),
           viewId: z.string().uuid().optional(),
           trackId: z.string().uuid().optional(),
+          documentId: z.string().uuid().optional(),
           label: z.string().trim().min(1).max(80).optional(),
           includeGoals,
+          includeDocuments,
         })
         .superRefine((v, ctx) => {
-          if (Boolean(v.profileSlug) === Boolean(v.trackId)) {
+          const named = [v.profileSlug, v.trackId, v.documentId].filter(
+            Boolean
+          ).length;
+          if (named !== 1) {
             ctx.addIssue({
               code: "custom",
               message:
-                "Pin a kind (profileSlug) or a goal (trackId) — one of the two.",
+                "Pin a kind (profileSlug), a goal (trackId) or a document (documentId) — exactly one.",
               path: ["trackId"],
             });
           }
-          if (v.trackId && v.viewId) {
+          if ((v.trackId || v.documentId) && v.viewId) {
             ctx.addIssue({
               code: "custom",
               message:
-                "A goal pin names no view — viewId pins a kind's saved board.",
+                "A goal or a document pin names no view — viewId pins a kind's saved board.",
               path: ["viewId"],
             });
           }
         })
     )
     .mutation(async ({ ctx, input }) => {
-      const { trackId, profileSlug, viewId, label } = input;
-      if (trackId) {
-        await assertPinnableSurface(ctx.userId, { trackId });
+      const { trackId, documentId, profileSlug, viewId, label } = input;
+      if (documentId) {
+        await assertPinnableSurface(ctx.userId, { documentId });
         return railPinsWrite(
           ctx.userId,
-          { op: "pin", trackId, label },
-          input.includeGoals
+          { op: "pin", documentId, label },
+          input
         );
+      }
+      if (trackId) {
+        await assertPinnableSurface(ctx.userId, { trackId });
+        return railPinsWrite(ctx.userId, { op: "pin", trackId, label }, input);
       }
       const surface = { profileSlug: profileSlug!, viewId };
       await assertPinnableSurface(ctx.userId, surface);
-      return railPinsWrite(
-        ctx.userId,
-        { op: "pin", ...surface, label },
-        input.includeGoals
-      );
+      return railPinsWrite(ctx.userId, { op: "pin", ...surface, label }, input);
     }),
 
-  /** Unpin by key (`view:<id>` / `kind:<slug>` / `track:<id>`). A suggested pin stays gone. */
+  /** Unpin by key (`view:<id>` / `kind:<slug>` / `track:<id>` / `doc:<id>`). A suggested pin stays gone. */
   unpinSurface: protectedProcedure
-    .input(z.object({ key: z.string().min(1).max(200), includeGoals }))
+    .input(
+      z.object({
+        key: z.string().min(1).max(200),
+        includeGoals,
+        includeDocuments,
+      })
+    )
     .mutation(({ ctx, input }) =>
-      railPinsWrite(
-        ctx.userId,
-        { op: "unpin", key: input.key },
-        input.includeGoals
-      )
+      railPinsWrite(ctx.userId, { op: "unpin", key: input.key }, input)
     ),
 
   /**
@@ -153,14 +177,11 @@ export const preferencesRouter = router({
       z.object({
         keys: z.array(z.string().min(1).max(200)).max(60),
         includeGoals,
+        includeDocuments,
       })
     )
     .mutation(({ ctx, input }) =>
-      railPinsWrite(
-        ctx.userId,
-        { op: "reorder", keys: input.keys },
-        input.includeGoals
-      )
+      railPinsWrite(ctx.userId, { op: "reorder", keys: input.keys }, input)
     ),
 
   /**

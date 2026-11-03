@@ -9,9 +9,12 @@
  * space's `layout.sidebarItems` (per space, admin-only).
  *
  * A pin names a surface: a saved `pipeline` view (`viewId`), a kind/role's
- * implicit surface (`profileSlug` alone), or a GOAL (`trackId` — "This week",
- * D4: at most `RAIL_GOAL_PINS_MAX` of them, `@synap-core/types/units`). Its
- * `key` is `view:<id>`, `kind:<slug>` or `track:<id>` — one pin per surface.
+ * implicit surface (`profileSlug` alone), a GOAL (`trackId` — "This week",
+ * D4: at most `RAIL_GOAL_PINS_MAX` of them, `@synap-core/types/units`), or a
+ * DOCUMENT (`documentId` — a living document opened as an app, plan 9ad4b2fc
+ * P4; pinned by the person only, never suggested, Q6). Its `key` is
+ * `view:<id>`, `kind:<slug>`, `track:<id>` or `doc:<id>` — one pin per
+ * surface.
  *
  * SEEDING (configuration over code, no install-path hook). Every space the
  * person can see whose `layout.sidebarItems` points at a `pipeline` view
@@ -39,7 +42,9 @@ import {
 import { TRPCError } from "@trpc/server";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { RAIL_GOAL_PINS_MAX, goalRailPinKey } from "@synap-core/types/units";
+import { documentRailPinKey } from "@synap-core/types/documents";
 import { assertKnownProfileSlug } from "../../utils/assert-known-profile-slug.js";
+import { loadReadableDocument } from "../../utils/document-edit-access.js";
 import { viewReadableWhere } from "../../utils/view-visibility.js";
 import { getTrack } from "../tracks/tracks-service.js";
 
@@ -48,15 +53,17 @@ export const RAIL_PINS_KEY = "railPins";
 export const RAIL_PINS_MAX = 30;
 
 export interface RailPin {
-  /** `view:<viewId>`, `kind:<profileSlug>` or `track:<trackId>` — one pin per surface. */
+  /** `view:<viewId>`, `kind:<profileSlug>`, `track:<trackId>` or `doc:<documentId>` — one pin per surface. */
   key: string;
-  /** The kind the surface lists — `null` on a goal pin. */
+  /** The kind the surface lists — `null` on a goal or a document pin. */
   profileSlug: string | null;
   /** The saved pipeline view, when the pin is one. */
   viewId: string | null;
   /** The goal, when the pin is one ("This week", D4) — then `profileSlug` is null. */
   trackId: string | null;
-  /** The name the person (or the template) gave it; null = the kind's (or the goal's) name. */
+  /** The document, when the pin is one (P4) — then `profileSlug` and `trackId` are null. */
+  documentId: string | null;
+  /** The name the person (or the template) gave it; null = the kind's, goal's or document's own name. */
   label: string | null;
   /** `template` = suggested by a space's sidebar; `user` = pinned by hand. */
   source: "user" | "template";
@@ -69,6 +76,19 @@ interface StoredRailPins {
 
 export function railPinKey(p: { viewId?: string | null; profileSlug: string }) {
   return p.viewId ? `view:${p.viewId}` : `kind:${p.profileSlug}`;
+}
+
+/** A document pin: always the person's own (Q6 — nothing suggests one). */
+function documentPin(documentId: string, label: string | null): RailPin {
+  return {
+    key: documentRailPinKey(documentId),
+    profileSlug: null,
+    viewId: null,
+    trackId: null,
+    documentId,
+    label,
+    source: "user",
+  };
 }
 
 function readStored(raw: unknown): StoredRailPins {
@@ -84,6 +104,11 @@ function readStored(raw: unknown): StoredRailPins {
         >;
         const label = typeof r.label === "string" ? r.label : null;
         const source = r.source === "template" ? "template" : "user";
+        // A document pin names its document, not a kind — and only the
+        // person pins one (Q6), whatever the stored row claims.
+        if (typeof r.documentId === "string" && r.documentId) {
+          return [documentPin(r.documentId, label)];
+        }
         // A goal pin names its goal, not a kind.
         if (typeof r.trackId === "string" && r.trackId) {
           return [
@@ -92,6 +117,7 @@ function readStored(raw: unknown): StoredRailPins {
               profileSlug: null,
               viewId: null,
               trackId: r.trackId,
+              documentId: null,
               label,
               source,
             },
@@ -105,6 +131,7 @@ function readStored(raw: unknown): StoredRailPins {
             profileSlug: r.profileSlug,
             viewId,
             trackId: null,
+            documentId: null,
             label,
             source,
           },
@@ -185,6 +212,7 @@ async function suggestionsBySpace(
       profileSlug: v.profileSlug,
       viewId: v.id,
       trackId: null,
+      documentId: null,
       label: typeof item.label === "string" ? item.label : v.name,
       source: "template",
     });
@@ -216,14 +244,56 @@ async function unreadableGoalIds(
   return new Set(ids.filter((id) => !keep.has(id)));
 }
 
-function withoutGoals(
+/**
+ * The documents among `pins` the person can no longer read (deleted, or no
+ * longer shared with them) — the documents read floor every document read
+ * goes through (`loadReadableDocument`). Only its NOT_FOUND verdict means
+ * "unreadable": any other failure fails the read, never a silently shorter
+ * rail. Read OUTSIDE the write's transaction, like the goals'.
+ */
+async function unreadableDocumentIds(
+  userId: string,
+  pins: readonly RailPin[]
+): Promise<Set<string>> {
+  const ids = pins.flatMap((p) => (p.documentId ? [p.documentId] : []));
+  const dead = await Promise.all(
+    ids.map(async (id) => {
+      try {
+        await loadReadableDocument(userId, id);
+        return null;
+      } catch (err) {
+        if (err instanceof TRPCError && err.code === "NOT_FOUND") return id;
+        throw err;
+      }
+    })
+  );
+  return new Set(dead.filter((id): id is string => id !== null));
+}
+
+/** The goals and the documents among `pins` the person can no longer read — they leave the rail. */
+async function unreadablePins(
+  userId: string,
+  pins: readonly RailPin[]
+): Promise<{ goals: Set<string>; documents: Set<string> }> {
+  const [goals, documents] = await Promise.all([
+    unreadableGoalIds(userId, pins),
+    unreadableDocumentIds(userId, pins),
+  ]);
+  return { goals, documents };
+}
+
+function withoutUnreadable(
   stored: StoredRailPins,
-  drop: ReadonlySet<string>
+  drop: { goals: ReadonlySet<string>; documents: ReadonlySet<string> }
 ): StoredRailPins {
-  if (drop.size === 0) return stored;
+  if (drop.goals.size === 0 && drop.documents.size === 0) return stored;
   return {
     ...stored,
-    pins: stored.pins.filter((p) => !p.trackId || !drop.has(p.trackId)),
+    pins: stored.pins.filter(
+      (p) =>
+        !(p.trackId && drop.goals.has(p.trackId)) &&
+        !(p.documentId && drop.documents.has(p.documentId))
+    ),
   };
 }
 
@@ -261,23 +331,40 @@ function effective(
 export async function readRailPins(userId: string): Promise<RailPin[]> {
   const stored = await readStoredRow(userId);
   return effective(
-    withoutGoals(stored, await unreadableGoalIds(userId, stored.pins)),
+    withoutUnreadable(stored, await unreadablePins(userId, stored.pins)),
     await suggestionsBySpace(userId)
   );
 }
 
 /**
- * A pin must name a real surface the person can open: a goal they can read
- * (the track read, `getTrack` — visible iff its project is), or a known
+ * A pin must name a real surface the person can open: a document they can
+ * read (the documents read floor, `loadReadableDocument`), a goal they can
+ * read (the track read, `getTrack` — visible iff its project is), or a known
  * kind/role and — for a saved surface — a `pipeline` view they can read whose
  * board is that kind. Throws NOT_FOUND / BAD_REQUEST (never pins a dead door).
  */
 export async function assertPinnableSurface(
   userId: string,
   pin:
+    | { documentId: string; trackId?: undefined }
     | { trackId: string }
     | { profileSlug: string; viewId?: string | null; trackId?: undefined }
 ): Promise<void> {
+  if ("documentId" in pin) {
+    // NOT_FOUND for a document this person cannot read, named like the rest.
+    try {
+      await loadReadableDocument(userId, pin.documentId);
+    } catch (err) {
+      if (err instanceof TRPCError && err.code === "NOT_FOUND") {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `No document ${pin.documentId} you can open.`,
+        });
+      }
+      throw err;
+    }
+    return;
+  }
   if (pin.trackId) {
     if (!(await getTrack(pin.trackId, { userId }))) {
       throw new TRPCError({
@@ -320,6 +407,7 @@ export type RailPinsOp =
       label?: string | null;
     }
   | { op: "pin"; trackId: string; label?: string | null }
+  | { op: "pin"; documentId: string; label?: string | null }
   | { op: "unpin"; key: string }
   | { op: "reorder"; keys: string[] };
 
@@ -333,10 +421,7 @@ export async function writeRailPins(
   op: RailPinsOp
 ): Promise<RailPin[]> {
   const suggested = await suggestionsBySpace(userId);
-  const dead = await unreadableGoalIds(
-    userId,
-    (await readStoredRow(userId)).pins
-  );
+  const dead = await unreadablePins(userId, (await readStoredRow(userId)).pins);
   return db.transaction(async (tx) => {
     await tx
       .insert(userPreferences)
@@ -348,31 +433,37 @@ export async function writeRailPins(
       .where(eq(userPreferences.userId, userId))
       .for("update");
     const ui = (row?.ui ?? {}) as Record<string, unknown>;
-    const stored = withoutGoals(readStored(ui[RAIL_PINS_KEY]), dead);
+    const stored = withoutUnreadable(readStored(ui[RAIL_PINS_KEY]), dead);
     let pins = effective(stored, suggested);
 
     if (op.op === "pin") {
-      // A goal pin carries no `profileSlug` key (the router builds it so).
-      const pin: RailPin = !("profileSlug" in op)
-        ? {
-            key: goalRailPinKey(op.trackId),
-            profileSlug: null,
-            viewId: null,
-            trackId: op.trackId,
-            label: op.label ?? null,
-            source: "user",
-          }
-        : {
-            key: railPinKey({
-              viewId: op.viewId ?? null,
-              profileSlug: op.profileSlug,
-            }),
-            profileSlug: op.profileSlug,
-            viewId: op.viewId ?? null,
-            trackId: null,
-            label: op.label ?? null,
-            source: "user",
-          };
+      // A goal or a document pin carries no `profileSlug` key (the router
+      // builds it so).
+      const pin: RailPin =
+        "documentId" in op
+          ? documentPin(op.documentId, op.label ?? null)
+          : !("profileSlug" in op)
+            ? {
+                key: goalRailPinKey(op.trackId),
+                profileSlug: null,
+                viewId: null,
+                trackId: op.trackId,
+                documentId: null,
+                label: op.label ?? null,
+                source: "user",
+              }
+            : {
+                key: railPinKey({
+                  viewId: op.viewId ?? null,
+                  profileSlug: op.profileSlug,
+                }),
+                profileSlug: op.profileSlug,
+                viewId: op.viewId ?? null,
+                trackId: null,
+                documentId: null,
+                label: op.label ?? null,
+                source: "user",
+              };
       if (!pins.some((p) => p.key === pin.key)) {
         if (pins.length >= RAIL_PINS_MAX) {
           throw new RailPinsFullError();

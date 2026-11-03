@@ -146,6 +146,7 @@ describe("synap:// grammar matches deep-link-constants", () => {
   const OPEN_PROPOSAL_SEGMENT = literal("OPEN_PROPOSAL_SEGMENT");
   const OPEN_ENTITY_SEGMENT = literal("OPEN_ENTITY_SEGMENT");
   const OPEN_VIEW_SEGMENT = literal("OPEN_VIEW_SEGMENT");
+  const OPEN_DOCUMENT_SEGMENT = literal("OPEN_DOCUMENT_SEGMENT");
 
   it.skipIf(!present)("parses the grammar segments out of the package", () => {
     // Same vacuity floor as guard 1: an undefined segment would make every
@@ -159,17 +160,19 @@ describe("synap:// grammar matches deep-link-constants", () => {
       OPEN_PROPOSAL_SEGMENT,
       OPEN_ENTITY_SEGMENT,
       OPEN_VIEW_SEGMENT,
+      OPEN_DOCUMENT_SEGMENT,
     }).toEqual({
       OPEN_HOST: "open",
       OPEN_APP_SEGMENT: "app",
       OPEN_PROPOSAL_SEGMENT: "proposal",
       OPEN_ENTITY_SEGMENT: "entity",
       OPEN_VIEW_SEGMENT: "view",
+      OPEN_DOCUMENT_SEGMENT: "document",
     });
   });
 
   /**
-   * The package's four builders, pinned by the exact expression each returns.
+   * The package's object builders, pinned by the exact expression each returns.
    *
    * Freezing the RETURN EXPRESSION rather than just the function name is the
    * point: a rename is loud (TypeScript, every call site), whereas a change to
@@ -198,6 +201,13 @@ describe("synap:// grammar matches deep-link-constants", () => {
       name: "buildOpenProposalLink",
       emits: [
         "return `synap://${OPEN_HOST}/${OPEN_PROPOSAL_SEGMENT}/${encodeURIComponent(proposalId)}`;",
+      ],
+    },
+    {
+      // The app door a living document leads with on `/open` (Q8, lane 11).
+      name: "buildOpenDocumentLink",
+      emits: [
+        "return `synap://${OPEN_HOST}/${OPEN_DOCUMENT_SEGMENT}/${encodeURIComponent(documentId)}`;",
       ],
     },
   ];
@@ -231,6 +241,8 @@ describe("synap:// grammar matches deep-link-constants", () => {
       `synap://${OPEN_HOST}/${OPEN_VIEW_SEGMENT}/${encodeURIComponent(id)}`,
     proposal: (id: string) =>
       `synap://${OPEN_HOST}/${OPEN_PROPOSAL_SEGMENT}/${encodeURIComponent(id)}`,
+    document: (id: string) =>
+      `synap://${OPEN_HOST}/${OPEN_DOCUMENT_SEGMENT}/${encodeURIComponent(id)}`,
   };
 
   // An id with a character that MUST be percent-encoded. A plain uuid would
@@ -265,6 +277,11 @@ describe("synap:// grammar matches deep-link-constants", () => {
     expect(
       openIn({ kind: "objectInApp", objectKind: "proposal", id: ID }).href
     ).toBe(mirror.proposal(ID));
+    // A document's "Open in the Synap app" (`OpenInAppLink`, first door of a
+    // living document on `/open`).
+    expect(
+      openIn({ kind: "objectInApp", objectKind: "document", id: ID }).href
+    ).toBe(mirror.document(ID));
   });
 
   /**
