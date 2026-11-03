@@ -45,6 +45,7 @@ import {
   MessageCategory,
   MessageDirection,
   MessageDeliveryStatus,
+  isUniqueViolation,
 } from "@synap/database";
 import {
   channels,
@@ -264,11 +265,6 @@ export async function resolveSendAccount(
 /** The property a person's id on a tool lives in: `linkedin` → `linkedinProviderId`. */
 const providerIdProperty = (provider: string) =>
   `${provider.toLowerCase().replace(/[^a-z0-9]/g, "")}ProviderId`;
-
-/** Postgres unique violation. */
-const isUniqueViolation = (err: unknown) =>
-  isRecord(err) &&
-  (err.code === "23505" || (isRecord(err.cause) && err.cause.code === "23505"));
 
 /**
  * Fill a pending channel's chat id, race-safe with the provider's echo. The

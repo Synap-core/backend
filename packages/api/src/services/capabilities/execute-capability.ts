@@ -1111,10 +1111,14 @@ async function runSelfGatedBuiltin(
       ackState: "proposed",
     };
   }
+  // The verb's own refusal (the key's grant does not reach this send). It is a
+  // failed run on the ONE failure channel, classed `permission`: enabling the
+  // capability would not lift it, so it carries no enable-link.
   if (result.success === false) {
     return {
-      kind: "deny",
-      reason:
+      kind: "error",
+      errorClass: "permission",
+      message:
         typeof result.error === "string"
           ? result.error
           : "Nothing was sent: the send was refused.",
