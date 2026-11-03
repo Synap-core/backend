@@ -311,6 +311,18 @@ describe("stale, unreadable and missing readings", () => {
     expect(ev.state.metrics.readings.level).toBe("warning");
   });
 
+  it("what the host actions would free comes from a fresh sample only", () => {
+    expect(run([{ min: 0, file: hostFile(0) }]).reclaimable).toEqual({
+      buildCacheBytes: 3 * GB,
+      imagesReclaimableBytes: 2 * GB,
+      sampledAt: at(0).toISOString(),
+    });
+    expect(run([{ min: 11, file: hostFile(0) }]).reclaimable).toBeNull();
+    expect(
+      run([{ min: 0, file: hostFile(0, { docker: null }) }]).reclaimable
+    ).toBeNull();
+  });
+
   it("an unreadable file is a warning, never all fine", () => {
     const ev = run([
       { min: 0, file: { read: "unreadable", error: "Unexpected token" } },

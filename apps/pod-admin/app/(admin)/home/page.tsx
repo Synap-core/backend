@@ -41,6 +41,7 @@ import {
   CircleCheck,
   Clock,
   Database,
+  Gauge,
   GitBranch,
   HardDrive,
   Layers,
@@ -153,6 +154,7 @@ const SECTION_ICONS: Record<string, LucideIcon> = {
   quality_by_prompt_version: Sparkles,
   schema_hygiene: Wrench,
   schema_contract: Database,
+  resources: Gauge,
 };
 
 function NeedsYouBand({ isAdmin }: { isAdmin: boolean }) {

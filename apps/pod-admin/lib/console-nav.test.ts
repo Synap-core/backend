@@ -152,9 +152,10 @@ describe("SEARCH_DESTINATION", () => {
 });
 
 describe("Pod group", () => {
-  it("lists Pod security, Backups, Updates, Audit log, Server errors, admin-only", () => {
+  it("lists Pod health, Pod security, Backups, Updates, Audit log, Server errors, admin-only", () => {
     const pod = navFor("admin", { allTools: true }).find((g) => g.id === "pod");
     expect(pod?.items.map((i) => [i.id, i.audience])).toEqual([
+      ["health", "admin"],
       ["security", "admin"],
       ["backups", "admin"],
       ["updates", "admin"],
@@ -163,6 +164,8 @@ describe("Pod group", () => {
     ]);
     expect(navLabel("updates")).toBe("Pod updates");
     expect(activeNavId("/updates")).toBe("updates");
+    expect(navLabel("health")).toBe("Pod health");
+    expect(activeNavId("/health")).toBe("health");
   });
 
   it("opens a server error on its own page, the path a 5xx body links to", () => {

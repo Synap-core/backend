@@ -277,6 +277,15 @@ export interface Evaluation {
   readings: ResourceReading[];
   /** The worst alert level across alerting metrics. */
   level: AlertLevel;
+  /**
+   * What the host actions would free (Docker build cache, unused release
+   * images), from a FRESH sample only; null = unknown, never 0.
+   */
+  reclaimable: {
+    buildCacheBytes: number | null;
+    imagesReclaimableBytes: number | null;
+    sampledAt: string | null;
+  } | null;
 }
 
 const BACKUP_MARK: Record<BackupHealth, ReadingMark> = {
@@ -540,6 +549,13 @@ export function evaluateResources(input: EvaluationInput): Evaluation {
     hostSampledAt: res?.sampledAt ?? null,
     readings,
     level,
+    reclaimable: fresh?.docker
+      ? {
+          buildCacheBytes: fresh.docker.buildCacheBytes,
+          imagesReclaimableBytes: fresh.docker.imagesReclaimableBytes,
+          sampledAt: fresh.docker.sampledAt,
+        }
+      : null,
   };
 }
 

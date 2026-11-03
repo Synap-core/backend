@@ -55,6 +55,7 @@ export const podHealthRouter = router({
       hostSampledAt: evaluation.hostSampledAt,
       evaluatedAt: evaluation.state.evaluatedAt,
       readings: evaluation.readings,
+      reclaimable: evaluation.reclaimable,
       alerts: openResourceAlerts(evaluation),
       thresholds: values,
       customized: explicit,
