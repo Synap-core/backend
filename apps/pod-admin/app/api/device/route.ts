@@ -12,6 +12,7 @@
  * forwarded, and `decision` must be `approve` or `deny`.
  */
 
+import { isAgentWriteMode } from "@synap-core/types/agents";
 import { apiSessionDenial } from "../../../lib/kratos";
 import { callPodMutation, callPodQuery } from "../../../lib/pod-trpc";
 
@@ -68,6 +69,8 @@ export async function POST(req: Request) {
       input.reuseComputerId = body.reuseComputerId;
     if (typeof body?.computerName === "string" && body.computerName.trim())
       input.computerName = body.computerName.trim();
+    if (isAgentWriteMode(body?.agentWriteMode))
+      input.agentWriteMode = body.agentWriteMode;
   }
 
   const res = await callPodMutation<{ status: string }>(

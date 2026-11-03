@@ -52,7 +52,6 @@ type ServiceHealthNotifier = (input: {
   serviceId: string;
   serviceName: string;
   healthStatus: string;
-  metadata: Record<string, unknown> | null | undefined;
   detail?: string;
 }) => Promise<boolean>;
 
@@ -153,7 +152,6 @@ export interface HealthCheckCandidate {
   name: string;
   webhookUrl: string | null;
   status: string | null;
-  metadata?: Record<string, unknown> | null;
 }
 
 /**
@@ -208,8 +206,6 @@ export async function handleIntelligenceHealthCheck(): Promise<void> {
       name: true,
       webhookUrl: true,
       status: true,
-      // Carries the alert's 6h dedup watermark (connectionHealth.<key>).
-      metadata: true,
     },
   });
 
@@ -300,7 +296,6 @@ export async function handleIntelligenceHealthCheck(): Promise<void> {
             serviceId: svc.serviceId,
             serviceName: svc.name,
             healthStatus: status,
-            metadata: svc.metadata,
             detail,
           }).catch((err) =>
             logger.warn(

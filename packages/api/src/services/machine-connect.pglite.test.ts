@@ -410,6 +410,10 @@ describe("approve → collect", () => {
       personId: HUMAN,
     });
     expect(view.reusableComputers.map((c) => c.id)).toEqual([first!.id]);
+    // The agents a reconnect keeps (and whose keys it replaces), by name.
+    expect(view.reusableComputers[0]!.agents.map((a) => a.name)).toEqual([
+      "Claude Code",
+    ]);
     await approve(res.user_code, { reuseComputerId: first!.id });
     const got = await poll(res.device_code);
     if (!got.ok) throw new Error(got.error);
@@ -502,5 +506,77 @@ describe("pod default key lifetime (founder decision 4)", () => {
     );
     await expect(setMachineKeyTtlDays(3651)).rejects.toThrow(/between/);
     await expect(setMachineKeyTtlDays(30.5)).rejects.toThrow(/between/);
+  });
+});
+
+describe("how the approved agents' writes land (0394, AGENT_WRITE_MODE_CHOICES)", () => {
+  const postureOf = async (id: string) =>
+    (
+      await q<{ meta: Record<string, unknown> | null }>(
+        `select agent_metadata as meta from users where id = $1`,
+        [id]
+      )
+    )[0]!.meta?.governancePosture ?? null;
+  const liveProposeRules = async (id: string) =>
+    (
+      await q<{ n: number }>(
+        `select count(*)::int n from governance_rules
+          where agent_user_id = $1 and verdict = 'propose' and revoked_at is null`,
+        [id]
+      )
+    )[0]!.n;
+
+  it("normal: the agent follows the pod default (no override); the computer still starts ask-first", async () => {
+    const res = await start("modebox-normal", ["claude-code"]);
+    await approve(res.user_code, { agentWriteMode: "pod-default" });
+    const got = await poll(res.device_code);
+    if (!got.ok) throw new Error(got.error);
+    const agentId = got.body.agents[0]!.agentUserId;
+    expect(await postureOf(agentId)).toBeNull();
+    expect(await liveProposeRules(agentId)).toBe(0);
+    expect(await postureOf(got.body.computer.id)).toBe("ask-first");
+    const [row] = await q<{ m: string | null }>(
+      `select agent_write_mode m from device_auth_requests where hostname = 'modebox-normal'`
+    );
+    expect(row!.m).toBe("pod-default");
+  });
+
+  it("creates only: the agent gets the create-with-undo posture", async () => {
+    const res = await start("modebox-creates", ["claude-code"]);
+    await approve(res.user_code, { agentWriteMode: "create-with-undo" });
+    const got = await poll(res.device_code);
+    if (!got.ok) throw new Error(got.error);
+    const agentId = got.body.agents[0]!.agentUserId;
+    expect(await postureOf(agentId)).toBe("create-with-undo");
+    expect(await liveProposeRules(agentId)).toBeGreaterThan(0);
+  });
+
+  it("no choice sent (an older surface): a new agent starts ask-first, as before", async () => {
+    const res = await start("modebox-none", ["claude-code"]);
+    await approve(res.user_code);
+    const got = await poll(res.device_code);
+    if (!got.ok) throw new Error(got.error);
+    expect(await postureOf(got.body.agents[0]!.agentUserId)).toBe("ask-first");
+  });
+
+  it("a reconnect with a choice applies it to an agent that was ask-first", async () => {
+    const [none] = await q<{ id: string }>(
+      `select id from users where agent_type = 'machine' and agent_metadata->>'hostname' = 'modebox-none'`
+    );
+    const before = await q<{ id: string }>(
+      `select id from users where host_user_id = $1 and agent_type = 'claude-code'`,
+      [none!.id]
+    );
+    expect(await postureOf(before[0]!.id)).toBe("ask-first");
+    const res = await start("modebox-none", ["claude-code"]);
+    await approve(res.user_code, {
+      reuseComputerId: none!.id,
+      agentWriteMode: "pod-default",
+    });
+    const got = await poll(res.device_code);
+    if (!got.ok) throw new Error(got.error);
+    expect(got.body.agents[0]!.agentUserId).toBe(before[0]!.id);
+    expect(await postureOf(before[0]!.id)).toBeNull();
+    expect(await liveProposeRules(before[0]!.id)).toBe(0);
   });
 });

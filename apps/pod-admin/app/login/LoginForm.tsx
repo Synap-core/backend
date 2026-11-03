@@ -18,7 +18,7 @@
  *     navigate to `returnTo` (do NOT reload the login page).
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Card, CardBody, Input } from "@heroui/react";
 import {
@@ -39,6 +39,7 @@ import {
   FLOW_RESET_ERROR_IDS,
   mergeHiddenValues,
   pageForFlow,
+  pauseSeconds,
   submitLoginFlow,
   type KratosFlow,
   type WhoamiFailure,
@@ -98,6 +99,20 @@ export function LoginForm({
   const [cookieScope, setCookieScope] = useState(false);
   // Kratos refused a flow for a session whoami would not confirm.
   const [unconfirmed, setUnconfirmed] = useState<WhoamiFailure | null>(null);
+  // A rate-limited person may continue once this reaches 0.
+  const [pauseLeft, setPauseLeft] = useState(0);
+  useEffect(() => {
+    if (!unconfirmed) return;
+    let left = pauseSeconds(unconfirmed);
+    setPauseLeft(left);
+    if (left <= 0) return;
+    const timer = setInterval(() => {
+      left -= 1;
+      setPauseLeft(left);
+      if (left <= 0) clearInterval(timer);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [unconfirmed]);
 
   // `returnTo` is always a path on this origin (`lib/safe-return-to.ts`), so
   // an in-app navigation is enough and keeps the Next.js bundle.
@@ -177,6 +192,34 @@ export function LoginForm({
       cancelled = true;
     };
   }, [initialFlowId, loginHint, onExistingSession, refresh, router]);
+
+  // The browser's sign-in ended while Kratos still refuses a new flow for it:
+  // ask for one with `refresh=true` (which that refusal cannot block) and
+  // show the form. A reload met the same refusal again.
+  const signInAgain = useCallback(async () => {
+    setUnconfirmed(null);
+    setError(null);
+    setLoading(true);
+    try {
+      const r = await createLoginFlow(window.location.href, { refresh: true });
+      if (r.existingSession) {
+        onExistingSession();
+        return;
+      }
+      if (r.unconfirmed) {
+        setUnconfirmed(r.unconfirmed);
+        return;
+      }
+      if (!r.flow) throw new Error("Kratos returned no flow");
+      setFlow(r.flow);
+      setFlowKind("login");
+      setValues(withLoginHint(extractInitialValues(r.flow), r.flow, loginHint));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load sign-in");
+    } finally {
+      setLoading(false);
+    }
+  }, [loginHint, onExistingSession]);
 
   const submitFlow = useCallback(
     async (submittedValues: Record<string, string>) => {
@@ -307,18 +350,15 @@ export function LoginForm({
           {loading ? (
             <SignInHeader refresh={refresh} reason={reason} />
           ) : unconfirmed ? (
-            <RefusalPanel
-              icon={<RefreshCw className="h-5 w-5" strokeWidth={2} />}
-              title={unconfirmedSessionCopy(unconfirmed).title}
-              actionLabel={unconfirmedSessionCopy(unconfirmed).actionLabel}
-              onAction={() =>
-                unconfirmed.kind === "rate_limited"
-                  ? goReturn()
-                  : window.location.reload()
-              }
-            >
-              <p>{unconfirmedSessionCopy(unconfirmed).body}</p>
-            </RefusalPanel>
+            <UnconfirmedPanel
+              failure={unconfirmed}
+              pauseLeft={pauseLeft}
+              onAction={{
+                sign_in: () => void signInAgain(),
+                continue: goReturn,
+                retry: () => window.location.reload(),
+              }}
+            />
           ) : cookieScope ? (
             <RefusalPanel
               icon={<RefreshCw className="h-5 w-5" strokeWidth={2} />}
@@ -456,24 +496,65 @@ function SignInHeader({
   );
 }
 
+/** Kratos refused a flow for a session whoami would not confirm: why, and the one way on. */
+function UnconfirmedPanel({
+  failure,
+  pauseLeft,
+  onAction,
+}: {
+  failure: WhoamiFailure;
+  pauseLeft: number;
+  onAction: Record<
+    ReturnType<typeof unconfirmedSessionCopy>["action"],
+    () => void
+  >;
+}) {
+  const copy = unconfirmedSessionCopy(failure, pauseLeft);
+  return (
+    <RefusalPanel
+      icon={
+        copy.action === "sign_in" ? (
+          <ShieldCheck className="h-5 w-5" strokeWidth={2} />
+        ) : (
+          <RefreshCw className="h-5 w-5" strokeWidth={2} />
+        )
+      }
+      title={copy.title}
+      actionLabel={copy.actionLabel}
+      actionDisabled={copy.action === "continue" && pauseLeft > 0}
+      onAction={onAction[copy.action]}
+    >
+      {/* The countdown changes every second: not announced each time. */}
+      <p aria-live="off">{copy.body}</p>
+    </RefusalPanel>
+  );
+}
+
 /**
  * An EXPLAIN state: the user cannot fix this from the form, so say why and
- * what to do, with one way back. Not an error banner — nothing failed.
+ * what to do, with one way back. Not an error banner — nothing failed. Focus
+ * moves to its heading when it appears, so a keyboard or screen-reader user
+ * lands on what changed.
  */
-/** A sign-in state that is not an error: what is true, and the one way on. */
 function RefusalPanel({
   icon,
   title,
   children,
   onAction,
   actionLabel = "Back to sign-in",
+  actionDisabled = false,
 }: {
   icon: React.ReactNode;
   title: string;
   children?: React.ReactNode;
   onAction: () => void;
   actionLabel?: string;
+  actionDisabled?: boolean;
 }) {
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    heading.current?.focus();
+  }, [title]);
   return (
     <div className="flex flex-col gap-4" role="status">
       <div className="flex items-start gap-3">
@@ -483,20 +564,25 @@ function RefusalPanel({
         >
           {icon}
         </span>
-        <h1 className="font-heading text-[18px] font-medium leading-snug tracking-tight text-foreground">
+        <h1
+          ref={heading}
+          tabIndex={-1}
+          className="font-heading text-lg font-medium leading-snug tracking-tight text-foreground outline-none"
+        >
           {title}
         </h1>
       </div>
       {children ? (
-        <div className="flex flex-col gap-2 text-[13.5px] leading-relaxed text-foreground/70">
+        <div className="flex flex-col gap-2 text-sm leading-relaxed text-foreground/70">
           {children}
         </div>
       ) : null}
       <Button
-        size="sm"
-        variant="flat"
+        size="md"
+        color="primary"
         radius="md"
         className="min-h-11 self-start"
+        isDisabled={actionDisabled}
         onPress={onAction}
       >
         {actionLabel}

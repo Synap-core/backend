@@ -114,7 +114,8 @@ function apply(
   as: { userId: string; workspaceId: string | null } = {
     userId: UID,
     workspaceId: WS,
-  }
+  },
+  opts: { personApprovesUpdate?: boolean } = {}
 ) {
   return createCapabilityFromDefinition(
     {
@@ -127,7 +128,8 @@ function apply(
       mcpServers: [server],
     } as never,
     {},
-    { ...as, authenticated: true } as never
+    { ...as, authenticated: true } as never,
+    opts
   );
 }
 const theRow = async () =>
@@ -211,6 +213,38 @@ describe("applier re-apply vs an approved MCP server", () => {
     await apply({ ...SERVER, name: "Renamed" });
 
     expect((await theRow())[0]!.approved).toBe(true);
+  });
+
+  it("the owner applying an update approves it: a changed server stays on", async () => {
+    await apply(SERVER);
+    await ownerApproves();
+
+    await apply(
+      { ...SERVER, url: "https://mcp2.example.test/mcp" },
+      { userId: UID, workspaceId: WS },
+      { personApprovesUpdate: true }
+    );
+
+    expect((await theRow())[0]).toMatchObject({
+      url: "https://mcp2.example.test/mcp",
+      approved: true,
+    });
+  });
+
+  it("a re-apply keeps the owner's on/off switch (enabled)", async () => {
+    await apply(SERVER);
+    await h.client!.query(
+      `update mcp_servers set enabled = false where slug = $1`,
+      [SERVER.slug]
+    );
+
+    await apply({ ...SERVER, name: "Renamed" });
+
+    const rows = await h.client!.query<{ enabled: boolean }>(
+      `select enabled from mcp_servers where slug = $1`,
+      [SERVER.slug]
+    );
+    expect(rows.rows[0]!.enabled).toBe(false);
   });
 });
 

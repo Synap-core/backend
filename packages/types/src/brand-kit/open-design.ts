@@ -196,10 +196,95 @@ function flatten(
 }
 
 /**
- * The Open Design tokens carried by a `token-json` string. Accepts a flat map
- * (`{"--text-xs": "12px"}` or `{"text-xs": …}`) or a nested one
- * (`{"text": {"xs": …}}`); keys that are not one of the 56 schema names are
- * dropped. Invalid JSON yields no tokens (a bad row must not break a kit).
+ * A DTCG (`$value`) token file → the Open Design tokens it speaks for. DTCG
+ * names are the brand's own, so each mapping is explicit and equal in meaning:
+ * the paper theme's ground/card/text/accent are the page ground, card, text and
+ * accent; the three font families are the
+ * display/body/mono stacks. Slide-scale sizes (`font.size.*`, 1080 px slides)
+ * are NOT the web type scale, and `radius.card` (18px) would invert OD's
+ * md < lg ramp: both are left unmapped (they stay guessed).
+ */
+const DTCG_TO_OD: ReadonlyArray<readonly [path: string, token: string]> = [
+  ["theme.paper.ground", "--bg"],
+  ["theme.paper.card", "--surface"],
+  ["theme.paper.text", "--fg"],
+  ["theme.paper.accent", "--accent"],
+  ["font.family.serif", "--font-display"],
+  ["font.family.sans", "--font-body"],
+  ["font.family.mono", "--font-mono"],
+  ["font.tracking.display", "--tracking-display"],
+  ["radius.pill", "--radius-pill"],
+];
+
+function isDtcg(node: unknown): boolean {
+  if (!node || typeof node !== "object") return false;
+  if (Array.isArray(node)) return false;
+  const o = node as Record<string, unknown>;
+  return (
+    "$value" in o ||
+    Object.entries(o).some(([k, v]) => !k.startsWith("$") && isDtcg(v))
+  );
+}
+
+function dtcgLeaves(
+  node: unknown,
+  path: string[],
+  out: Map<string, unknown>
+): void {
+  if (!node || typeof node !== "object" || Array.isArray(node)) return;
+  const o = node as Record<string, unknown>;
+  if ("$value" in o) {
+    out.set(path.join("."), o["$value"]);
+    return;
+  }
+  for (const [k, v] of Object.entries(o))
+    if (!k.startsWith("$")) dtcgLeaves(v, [...path, k], out);
+}
+
+/** A DTCG value as CSS text; `{a.b}` references are followed (depth-limited). */
+function dtcgText(
+  value: unknown,
+  leaves: Map<string, unknown>,
+  depth = 0
+): string | undefined {
+  if (depth > 5) return undefined;
+  if (typeof value === "number") return String(value);
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((v) => dtcgText(v, leaves, depth + 1))
+      .filter((v): v is string => !!v);
+    // A font stack: quote a family name that has a space.
+    return parts
+      .map((p) => (/\s/.test(p) && !/^["']/.test(p) ? `"${p}"` : p))
+      .join(", ");
+  }
+  if (typeof value !== "string") return undefined;
+  const ref = /^\{([^}]+)\}$/.exec(value.trim());
+  return ref ? dtcgText(leaves.get(ref[1]!), leaves, depth + 1) : value.trim();
+}
+
+function odTokensFromDtcg(parsed: unknown): OdTokenOverrides {
+  const leaves = new Map<string, unknown>();
+  dtcgLeaves(parsed, [], leaves);
+  const out: Record<string, string> = {};
+  for (const [path, token] of DTCG_TO_OD) {
+    let text = dtcgText(leaves.get(path), leaves);
+    if (!text) continue;
+    // DTCG tracking is a bare number, in em (the file states em for mono).
+    if (token === "--tracking-display" && /^-?[\d.]+$/.test(text))
+      text = `${text}em`;
+    const value = cssValue(text);
+    if (value) out[token] = value;
+  }
+  return out;
+}
+
+/**
+ * The Open Design tokens carried by a `token-json` string. Accepts a DTCG file
+ * (`$value` leaves, see {@link DTCG_TO_OD}), a flat map (`{"--text-xs":
+ * "12px"}` or `{"text-xs": …}`) or a nested one (`{"text": {"xs": …}}`); keys
+ * that are not one of the 56 schema names are dropped. Invalid JSON yields no
+ * tokens (a bad row must not break a kit).
  */
 export function odTokensFromTokenJson(raw: unknown): OdTokenOverrides {
   if (typeof raw !== "string" || !raw.trim()) return {};
@@ -209,6 +294,7 @@ export function odTokensFromTokenJson(raw: unknown): OdTokenOverrides {
   } catch {
     return {};
   }
+  if (isDtcg(parsed)) return odTokensFromDtcg(parsed);
   const flat = new Map<string, string>();
   flatten(parsed, [], flat);
   const out: Record<string, string> = {};
@@ -353,23 +439,21 @@ export function resolveOdTokens(
     const f = firstByRole(kit.fonts, roles);
     if (f) values.set(token, fontStack(f));
   }
+  // An approved token set fills what the roles did not.
+  for (const [name, value] of Object.entries(options.tokens ?? {}))
+    if (!values.has(name)) values.set(name, value);
+
   const accent = values.get("--accent");
   if (accent) {
     // Derived from the accent, not guessed: measured contrast and the
     // schema's own state formulas.
-    values.set("--accent-on", accentOn(accent));
-    values.set(
-      "--accent-hover",
-      "color-mix(in oklab, var(--accent), black 8%)"
-    );
-    values.set(
-      "--accent-active",
-      "color-mix(in oklab, var(--accent), black 14%)"
-    );
+    const derive = (name: string, value: string) => {
+      if (!values.has(name)) values.set(name, value);
+    };
+    derive("--accent-on", accentOn(accent));
+    derive("--accent-hover", "color-mix(in oklab, var(--accent), black 8%)");
+    derive("--accent-active", "color-mix(in oklab, var(--accent), black 14%)");
   }
-  // An approved token set fills what the roles did not.
-  for (const [name, value] of Object.entries(options.tokens ?? {}))
-    if (!values.has(name)) values.set(name, value);
 
   return OD_TOKEN_SCHEMA.map((t) => {
     const v = values.get(t.name);

@@ -44,6 +44,9 @@ export const PROJECTED_FAILURE_FIELDS = [
   // The records a refused create found already existing (id, title, kind):
   // caller-scoped by the gate that found them, and the door the person needs.
   "existing",
+  // A missing kind: its slug and display name, the space it was looked up in
+  // and the spaces where it exists (ids + names the proposal's user can read).
+  "kindMissing",
 ] as const satisfies ReadonlyArray<keyof ProposalFailureMeta>;
 
 /**
@@ -93,6 +96,15 @@ void _classified;
 export interface ProposalFailureSiblings {
   /** `runMaterializationUnderReceipt` — the materializer's error message. */
   materializationError?: string;
+  /**
+   * `runMaterializationUnderReceipt` — what a graph that stopped part-way DID
+   * land, plus `failedOp` / `notRun` / `skipped`. Written through a spread,
+   * so the derived scan in `failure-sibling-redaction.test.ts` cannot see it:
+   * classified here by decision. Its error-shaped strings are the safe
+   * classified sentence (`failedOp.reason`) and `skipped[].reason`, redacted
+   * when the record is built (`buildStoppedRunRecord`).
+   */
+  materialized?: unknown;
   /** `apply-approval` — the all-or-none composite plan report. */
   planFailure?: {
     at: string;
@@ -105,6 +117,7 @@ export interface ProposalFailureSiblings {
 /** Sibling keys that are shown to the user, having been redacted at write. */
 export const REDACTED_AT_WRITE_SIBLINGS = [
   "materializationError",
+  "materialized",
   "planFailure",
 ] as const satisfies ReadonlyArray<keyof ProposalFailureSiblings>;
 

@@ -849,19 +849,60 @@ export function registerThreadsRoutes(app: HubHono): void {
   });
 
   // ── GET /threads/:threadId/messages ─────────────────────────────────────
+  // A channel's messages, gated by the caller's channel floor AND its key's
+  // grant (`channelVisibilityWhere` through the one history door). Until the
+  // channels wave this door passed no userId ("pre-authorized by the scope
+  // gate"), so any key with hub-protocol.read and a channel id read that
+  // channel, whoever's it was. An unreadable or unknown channel is a 404.
+  //
+  // Paging (optional): `limit` returns the newest `limit` messages (before
+  // `before` when given), oldest first. `before` is an ISO time; `beforeId`,
+  // the id of the message a page ended on, breaks a tie of instants exactly.
+  // No `limit` keeps the old answer: every message, oldest first.
   const getThreadMessagesRoute = createRoute({
     method: "get",
     path: "/threads/{threadId}/messages",
     tags: ["Threads"],
     summary: "List messages in a thread",
-    request: { params: z.object({ threadId: z.string() }) },
+    request: {
+      params: z.object({ threadId: z.string() }),
+      query: z.object({
+        limit: z.coerce
+          .number()
+          .int()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe(
+            "Return the newest N messages (oldest first). Omit for every message."
+          ),
+        before: z
+          .string()
+          .datetime({ offset: true })
+          .optional()
+          .describe("ISO time: only messages strictly before it."),
+        beforeId: uuidQueryParam
+          .optional()
+          .describe(
+            "The id of the message a page ended on: pages exactly before it (breaks a tie of instants)."
+          ),
+      }),
+    },
     responses: {
       200: {
         description: "Messages",
         content: { "application/json": { schema: z.array(MessageSchema) } },
       },
+      400: {
+        description: "Bad request",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
       403: {
         description: "Forbidden",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      404: {
+        description: "No channel the caller can read",
         content: { "application/json": { schema: ErrorSchema } },
       },
       500: {
@@ -879,10 +920,22 @@ export function registerThreadsRoutes(app: HubHono): void {
       );
     }
     const { threadId } = c.req.valid("param");
+    const { limit, before, beforeId } = c.req.valid("query");
+    const userId = c.get("userId") as string | undefined;
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    if (!isUuid(threadId)) {
+      return c.json({ error: "Channel not found or access denied" }, 404);
+    }
+    const beforePoint =
+      before || beforeId
+        ? {
+            ...(before ? { at: new Date(before) } : {}),
+            ...(beforeId ? { id: beforeId } : {}),
+          }
+        : undefined;
     try {
-      // Through the one door: excludes soft-deleted AND ephemeral rows (this read
-      // previously returned both — a real leak). Pre-authorized by the scope gate
-      // above, so no userId gate here.
+      // Through the one door: the channel floor + the key's grant (userId),
+      // and never a soft-deleted or ephemeral row.
       const msgs = await queryChannelMessages<
         Pick<
           typeof messages.$inferSelect,
@@ -894,10 +947,19 @@ export function registerThreadsRoutes(app: HubHono): void {
           | "sessionId"
           | "authorType"
           | "metadata"
+          | "direction"
+          | "deliveryStatus"
+          | "externalSource"
+          | "externalMessageId"
         >
       >(db, {
         channelId: threadId,
-        order: "asc",
+        userId,
+        // A page is the newest `limit` before the point: read newest first,
+        // then hand it back oldest first like the unpaged answer.
+        order: limit !== undefined ? "desc" : "asc",
+        ...(limit !== undefined ? { limit } : {}),
+        ...(beforePoint ? { before: beforePoint } : {}),
         columns: {
           id: true,
           role: true,
@@ -907,14 +969,20 @@ export function registerThreadsRoutes(app: HubHono): void {
           sessionId: true,
           authorType: true,
           metadata: true,
+          direction: true,
+          deliveryStatus: true,
+          externalSource: true,
+          externalMessageId: true,
         },
       });
-      return c.json(msgs, 200);
+      return c.json(limit !== undefined ? msgs.reverse() : msgs, 200);
     } catch (err) {
-      logger.error({ err, threadId }, "getThreadMessages failed");
+      const status = threadsStatus(err);
+      if (status !== 404)
+        logger.error({ err, threadId }, "getThreadMessages failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        httpStatusForTrpcError(err) as never
+        status as never
       );
     }
   });

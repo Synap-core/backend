@@ -1240,6 +1240,8 @@ export function ProposalReviewBody({
               : null
           }
           onDecided={onDecided}
+          data={p.data}
+          graph={reviewGraph}
         />
       )}
 

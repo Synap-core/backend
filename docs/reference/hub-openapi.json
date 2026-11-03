@@ -548,7 +548,20 @@
           },
           "sessionId": { "type": ["string", "null"] },
           "authorType": { "type": ["string", "null"] },
-          "metadata": { "type": ["object", "null"], "additionalProperties": {} }
+          "metadata": {
+            "type": ["object", "null"],
+            "additionalProperties": {}
+          },
+          "direction": {
+            "type": ["string", "null"],
+            "enum": ["inbound", "outbound", null]
+          },
+          "deliveryStatus": {
+            "type": ["string", "null"],
+            "enum": ["sent", "delivered", "read", "failed", null]
+          },
+          "externalSource": { "type": ["string", "null"] },
+          "externalMessageId": { "type": ["string", "null"] }
         },
         "required": ["id", "role", "content", "userId"]
       },
@@ -1552,6 +1565,65 @@
             "description": "Required with documentId when the entity already has a body; without it the call is refused (409) naming that body."
           }
         }
+      },
+      "EntityChannelsResponse": {
+        "type": "object",
+        "properties": {
+          "channels": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/PodChannel" }
+          }
+        },
+        "required": ["channels"]
+      },
+      "PodChannel": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "provider": { "type": ["string", "null"] },
+          "accountId": { "type": ["string", "null"] },
+          "title": { "type": ["string", "null"] },
+          "externalId": {
+            "type": ["string", "null"],
+            "description": "The tool's chat id; null until the first send opens the chat."
+          },
+          "participant": {
+            "type": "object",
+            "properties": {
+              "name": { "type": ["string", "null"] },
+              "externalId": { "type": ["string", "null"] }
+            },
+            "required": ["name", "externalId"]
+          },
+          "lastMessage": {
+            "$ref": "#/components/schemas/PodChannelLastMessage"
+          },
+          "unread": { "type": "integer" },
+          "pendingProposals": { "type": "integer" }
+        },
+        "required": [
+          "id",
+          "provider",
+          "accountId",
+          "title",
+          "externalId",
+          "participant",
+          "lastMessage",
+          "unread",
+          "pendingProposals"
+        ]
+      },
+      "PodChannelLastMessage": {
+        "type": ["object", "null"],
+        "properties": {
+          "content": { "type": "string" },
+          "at": { "type": "string" },
+          "direction": {
+            "type": ["string", "null"],
+            "enum": ["inbound", "outbound", null]
+          }
+        },
+        "required": ["content", "at", "direction"]
       },
       "ResolveIdentityResponse": {
         "type": "object",
@@ -4100,6 +4172,40 @@
           "systemPromptOverride"
         ]
       },
+      "ProposedMessagesResponse": {
+        "type": "object",
+        "properties": {
+          "proposed": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/ProposedMessage" }
+          }
+        },
+        "required": ["proposed"]
+      },
+      "ProposedMessage": {
+        "type": "object",
+        "properties": {
+          "proposalId": { "type": "string" },
+          "text": { "type": "string" },
+          "createdAt": { "type": "string" },
+          "draftedBy": {
+            "type": ["object", "null"],
+            "properties": {
+              "agentUserId": { "type": "string" },
+              "name": { "type": ["string", "null"] }
+            },
+            "required": ["agentUserId", "name"]
+          },
+          "reviewUrl": { "type": "string" }
+        },
+        "required": [
+          "proposalId",
+          "text",
+          "createdAt",
+          "draftedBy",
+          "reviewUrl"
+        ]
+      },
       "TerminalLogsResponse": {
         "type": "object",
         "properties": {
@@ -4871,6 +4977,7 @@
                         "missing_field",
                         "validation",
                         "conflict",
+                        "kind_missing",
                         "unknown"
                       ]
                     },
@@ -7710,6 +7817,39 @@
             "required": true,
             "name": "threadId",
             "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "description": "Return the newest N messages (oldest first). Omit for every message."
+            },
+            "required": false,
+            "description": "Return the newest N messages (oldest first). Omit for every message.",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "description": "ISO time: only messages strictly before it."
+            },
+            "required": false,
+            "description": "ISO time: only messages strictly before it.",
+            "name": "before",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "The id of the message a page ended on: pages exactly before it (breaks a tie of instants)."
+            },
+            "required": false,
+            "description": "The id of the message a page ended on: pages exactly before it (breaks a tie of instants).",
+            "name": "beforeId",
+            "in": "query"
           }
         ],
         "responses": {
@@ -7724,8 +7864,24 @@
               }
             }
           },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
           "403": {
             "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No channel the caller can read",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -9648,6 +9804,61 @@
           },
           "403": {
             "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/entities/{id}/channels": {
+      "get": {
+        "tags": ["Entities", "Channels"],
+        "summary": "List the channels with a person",
+        "description": "The conversations the pod holds with one record (LinkedIn, email, Discord, …), newest first: the tool, the account it goes through, the tool's chat id (null until the first send opens the chat), the last message, unread inbound messages and pending proposed messages. A proposed message is a pending `messaging.external.send` proposal (GET /channels/{id}/proposed-messages). 404 when the caller cannot read the record.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The record's channels",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntityChannelsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No record the caller can read",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -24898,6 +25109,61 @@
         }
       }
     },
+    "/channels/{channelId}/proposed-messages": {
+      "get": {
+        "tags": ["Channels"],
+        "summary": "List a channel's proposed messages",
+        "description": "The messages waiting for the person's approval before they go out in this channel, oldest first: each is a pending `messaging.external.send` proposal (its id, text, who drafted it and where to review it). 404 when the caller cannot read the channel.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "channelId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Proposed messages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposedMessagesResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No channel the caller can read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/terminal/logs": {
       "get": {
         "tags": ["Terminal"],
@@ -38811,6 +39077,44 @@
           },
           "403": {
             "description": "Not a pod admin",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/errors/{errorId}": {
+      "get": {
+        "tags": ["Runs"],
+        "summary": "One server error (5xx) by the errorId its client got",
+        "description": "The stored cause of one server fault: the original error's name, message, stack and cause chain, with when, door, method, path, status and caller. A 5xx body names this read in `causeUrl`. Pod owner or admin only; 404 when nothing is stored under the id (kept 30 days).",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string" },
+            "required": true,
+            "name": "errorId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server fault",
+            "content": { "application/json": { "schema": {} } }
+          },
+          "403": {
+            "description": "Not a pod admin",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No fault stored under this id",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }

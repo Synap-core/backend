@@ -23,8 +23,8 @@
 /**
  * Every failure class, in the order the two classifiers reach for them.
  *
- * The first six are DISPATCH outcomes (`classifyDispatchFailure`); the last
- * four classify a proposal APPLY and dispatch never returns them. They share
+ * The first six are DISPATCH outcomes (`classifyDispatchFailure`); the rest
+ * classify a proposal APPLY and dispatch never returns them. They share
  * one union deliberately — a second parallel enum would be a fork of the one
  * table both sides read.
  *
@@ -33,6 +33,8 @@
  *   transient      — a temporary problem                          → RETRY
  *   permission     — needs a permission the actor does not hold
  *   target_missing — what it points at no longer exists
+ *   kind_missing   — the kind it names is not available in the space it
+ *                    was filed in (it may exist in another space)
  *   provider       — the other service refused it
  *   missing_field  — the request declared a parameter it never supplied → FILL
  *   validation     — the supplied values are not valid for the target
@@ -49,6 +51,10 @@ export const FAILURE_ERROR_CLASSES = [
   "missing_field",
   "validation",
   "conflict",
+  // Added 2026-11-02. A client built before it reads the value as unknown
+  // (`isFailureErrorClass` → false) and falls back to its generic wording,
+  // which stays true.
+  "kind_missing",
   "unknown",
 ] as const;
 

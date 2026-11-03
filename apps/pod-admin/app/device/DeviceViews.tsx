@@ -30,8 +30,10 @@ import {
   X,
 } from "lucide-react";
 import type { ReactNode } from "react";
+import type { AgentWriteMode } from "@synap-core/types/agents";
 import { GRANT_PRESETS } from "@synap-core/types/grants";
 import { Outcome } from "../approve-agent/[keyId]/ApproveForm";
+import { WriteModeChoice } from "../_lib/write-mode-choice";
 import {
   COMPUTER_NOUN,
   DEVICE_RUN_AGAIN_COMMAND,
@@ -40,6 +42,7 @@ import {
   computerLine,
   formatCode,
   hostedAgentName,
+  reconnectLine,
   statusLabel,
   type DeviceRequest,
 } from "./device-model";
@@ -141,6 +144,9 @@ export interface PendingViewProps {
   onComputerName: (v: string) => void;
   agents: string[];
   onAgents: (v: string[]) => void;
+  /** How the kept agents' changes land (`AGENT_WRITE_MODE_CHOICES`). */
+  agentWriteMode: AgentWriteMode;
+  onAgentWriteMode: (v: AgentWriteMode) => void;
   busy: "approve" | "deny" | null;
   error: string | null;
   onApprove: () => void;
@@ -149,6 +155,9 @@ export interface PendingViewProps {
 }
 
 const NEW = "__new__";
+
+/** The agents section's question: how their changes land. */
+export const WRITE_MODE_QUESTION = "How its agents' changes land";
 
 export function PendingView(p: PendingViewProps) {
   const r = p.request;
@@ -202,7 +211,7 @@ export function PendingView(p: PendingViewProps) {
                 <Radio
                   key={c.id}
                   value={c.id}
-                  description="Keeps its agents, history and rules"
+                  description={reconnectLine(c, p.ago)}
                 >
                   Reconnect {c.name}
                 </Radio>
@@ -241,6 +250,21 @@ export function PendingView(p: PendingViewProps) {
                 </Checkbox>
               ))}
             </CheckboxGroup>
+          </section>
+        )}
+
+        {/* OMIT when no agent is kept: the choice is about the agents. */}
+        {p.agents.length > 0 && (
+          <section className="flex flex-col gap-2">
+            <p className="text-tiny font-medium uppercase tracking-wide text-foreground/65">
+              {WRITE_MODE_QUESTION}
+            </p>
+            <WriteModeChoice
+              label={WRITE_MODE_QUESTION}
+              value={p.agentWriteMode}
+              onChange={p.onAgentWriteMode}
+              isDisabled={p.busy !== null}
+            />
           </section>
         )}
 

@@ -357,9 +357,10 @@ export interface PushPrefs {
   categories?: Partial<Record<PushCategory, boolean>>;
   /**
    * Sessions whose pushes the person muted (plan d679e92c C9): every push
-   * ABOUT one of them is held back — devbox jobs, dev signals, room activity,
-   * and its asks too. Nothing is hidden: the row still lands in the bell and
-   * an owed ask stays in needs-you; only the phone stops ringing
+   * ABOUT one of them is held back — devbox jobs, dev signals, room activity
+   * — EXCEPT what needs the person (an ask, a decision:
+   * {@link PUSH_NEEDS_YOU_CATEGORIES}; founder, 2026-11-02, RF4 D-MUTE). Nothing
+   * is hidden: the row still lands in the bell; only the phone stops ringing
    * ({@link isSessionPushMuted}). Absent = none muted.
    */
   mutedSessions?: string[];
@@ -369,10 +370,25 @@ export interface PushPrefs {
 export const PUSH_MUTED_SESSIONS_MAX = 200;
 
 /**
- * Categories a session mute never holds back: what the person sent to their
- * phone themselves is their own ask, not the session's noise.
+ * The categories where an agent is blocked on the person: a question to
+ * answer, a decision or approval (a permission, a proposal, a verdict). These
+ * are the two categories `PUSH_TYPE_RULES` gives to "an agent is stopped until
+ * you answer" (the rule at the top of this file); every type that needs the
+ * person classifies into one of them.
+ */
+export const PUSH_NEEDS_YOU_CATEGORIES: readonly PushCategory[] = [
+  "blocking-ask",
+  "decision-blocking",
+];
+
+/**
+ * Categories a session mute never holds back (founder, 2026-11-02, RF4
+ * D-MUTE: "needs-you always pushes"): what needs the person (a permission, a
+ * question, an approval) and what the person sent to their phone themselves.
+ * Mute silences progress and digests, never something that waits on them.
  */
 export const PUSH_MUTE_EXEMPT_CATEGORIES: readonly PushCategory[] = [
+  ...PUSH_NEEDS_YOU_CATEGORIES,
   "sent-by-you",
 ];
 

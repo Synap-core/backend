@@ -319,6 +319,14 @@ export const proposals = pgTable(
       .where(
         sql`${table.status} = 'pending' AND ${table.agentUserId} IS NOT NULL AND ${table.dedupHash} IS NOT NULL`
       ),
+    // A channel's PROPOSED messages (0393): the pending
+    // `messaging.external.send` proposals filed for it (`data.channelId`),
+    // read by GET /channels/:id/proposed-messages. Pairs with the SQL there.
+    messageChannelIdx: index("proposals_msg_channel_idx")
+      .on(sql`(${table.data} ->> 'channelId')`)
+      .where(
+        sql`${table.proposalType} = 'messaging.external.send' AND ${table.status} = 'pending'`
+      ),
   })
 );
 

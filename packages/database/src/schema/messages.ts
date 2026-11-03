@@ -15,8 +15,9 @@
  */
 
 import type { ConversationMessageMetadata } from "@synap-core/core";
-import { isNotNull } from "drizzle-orm";
+import { isNotNull, sql } from "drizzle-orm";
 import {
+  check,
   pgTable,
   uuid,
   text,
@@ -93,6 +94,36 @@ export const RoutedSource = {
   DIRECT: "direct",
 } as const;
 export type RoutedSource = (typeof RoutedSource)[keyof typeof RoutedSource];
+
+/**
+ * Message Direction — which way a message in a channel with a person went
+ * (migration 0393). `null` = in-pod chat (no outside party).
+ *
+ * inbound  — the person (or their side) sent it to us.
+ * outbound — we sent it to the person (a human, or an approved proposal).
+ */
+export const MessageDirection = {
+  INBOUND: "inbound",
+  OUTBOUND: "outbound",
+} as const;
+export type MessageDirection =
+  (typeof MessageDirection)[keyof typeof MessageDirection];
+
+/**
+ * Message Delivery Status — how far an OUTBOUND message got (0393). Moves
+ * forward only: sent → delivered → read; `failed` when the provider refused
+ * it. Never "proposed": a proposed message is the `messaging.external.send`
+ * proposal, never a row here. "replied" is derived (a later inbound row),
+ * never stored.
+ */
+export const MessageDeliveryStatus = {
+  SENT: "sent",
+  DELIVERED: "delivered",
+  READ: "read",
+  FAILED: "failed",
+} as const;
+export type MessageDeliveryStatus =
+  (typeof MessageDeliveryStatus)[keyof typeof MessageDeliveryStatus];
 
 export const messages = pgTable(
   "messages",
@@ -196,6 +227,22 @@ export const messages = pgTable(
     // "catch me up" recap flow: visible live, gone on refresh.
     ephemeral: boolean("ephemeral").notNull().default(false),
 
+    // A channel with a person (0393): which way the message went, how far an
+    // outbound one got, and the provider's own message id (one row per
+    // provider message per channel — `messages_channel_ext_msg_uniq`).
+    direction: text("direction", {
+      enum: [MessageDirection.INBOUND, MessageDirection.OUTBOUND],
+    }),
+    deliveryStatus: text("delivery_status", {
+      enum: [
+        MessageDeliveryStatus.SENT,
+        MessageDeliveryStatus.DELIVERED,
+        MessageDeliveryStatus.READ,
+        MessageDeliveryStatus.FAILED,
+      ],
+    }),
+    externalMessageId: text("external_message_id"),
+
     // Resolve — state on a comment thread's ROOT message (an anchored message
     // in an object room, migration 0279). Written only by the comments door.
     resolvedAt: timestamp("resolved_at", { mode: "date", withTimezone: true }),
@@ -218,6 +265,20 @@ export const messages = pgTable(
     routedTeammateIdx: index("messages_routed_teammate_idx")
       .on(table.routedTeammateId)
       .where(isNotNull(table.routedTeammateId)),
+    // 0393: one row per provider message per channel. Inbound recording and
+    // the send executor insert ON CONFLICT DO NOTHING against it, so a
+    // provider echo of a message the pod sent never doubles it.
+    channelExtMsgUnique: uniqueIndex("messages_channel_ext_msg_uniq")
+      .on(table.channelId, table.externalMessageId)
+      .where(isNotNull(table.externalMessageId)),
+    directionCheck: check(
+      "messages_direction_check",
+      sql`${table.direction} IS NULL OR ${table.direction} IN ('inbound', 'outbound')`
+    ),
+    deliveryStatusCheck: check(
+      "messages_delivery_status_check",
+      sql`${table.deliveryStatus} IS NULL OR ${table.deliveryStatus} IN ('sent', 'delivered', 'read', 'failed')`
+    ),
   })
 );
 

@@ -530,6 +530,30 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // transition log, dev facts and proposals, or a PR's dev facts. Same as MCP
   // `synap_get_timeline`.
   [/^\/timeline\/?$/, READS("track", "session", "event", "proposal")],
+  // Server faults (0392, `services/server-faults/read.ts`): the exact cause of
+  // every 5xx on the pod, whoever met it. Pod owner or admin only, like
+  // `/usage`; no grant can narrow it, so a scoped key is refused.
+  [
+    /^\/errors\/[^/]+\/?$/,
+    REFUSED("Pod internals: the cause of every server error on the pod."),
+  ],
+  // A person's channels (`listPersonChannels`, services/channels/
+  // person-channels.ts): the record through `entityReadVisibleWhere`, its
+  // channels through `channelVisibilityWhere` (a channel follows its person,
+  // grant-read.ts), their last messages through the one history door, the
+  // pending proposed-message counts through `proposalUserFloor`: each read
+  // carries the key's grant, so the answer is what the grant reaches. An app
+  // asks for `channel.read` (consent for the person's DMs), so a key without
+  // it is refused here rather than told "no conversation".
+  [/^\/entities\/[0-9a-fA-F-]{36}\/channels\/?$/, NARROWED("channel", [])],
+  // A channel's proposed messages (`listProposedMessages`): the channel under
+  // `channelVisibilityWhere` (404 when the grant does not reach it), the
+  // pending send proposals under `proposalUserFloor`. Admitted for a key
+  // holding `proposal.read`; the channel check asks `channel.read` too.
+  [
+    /^\/channels\/[0-9a-fA-F-]{36}\/proposed-messages\/?$/,
+    NARROWED("proposal", []),
+  ],
 ];
 
 /**

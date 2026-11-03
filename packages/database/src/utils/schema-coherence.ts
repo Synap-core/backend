@@ -389,6 +389,23 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "resolved_by",
     addedBy: "0279_object_rooms_and_comment_resolve.sql",
   },
+  // A channel with a person (0393): every external message read and write
+  // names these; missing, the channel doors and inbound recording throw.
+  {
+    table: "messages",
+    column: "direction",
+    addedBy: "0393_channel_messages_direction_status.sql",
+  },
+  {
+    table: "messages",
+    column: "delivery_status",
+    addedBy: "0393_channel_messages_direction_status.sql",
+  },
+  {
+    table: "messages",
+    column: "external_message_id",
+    addedBy: "0393_channel_messages_direction_status.sql",
+  },
 
   // entities
   {
@@ -1246,6 +1263,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "device_auth_requests",
     column: "computer_belongs_to",
     addedBy: "0388_computer_belongs_to.sql",
+  },
+  // How the approved agents' writes land (0394): the device approval writes
+  // it, the key collection applies it to each agent before its key exists.
+  {
+    table: "device_auth_requests",
+    column: "agent_write_mode",
+    addedBy: "0394_device_agent_write_mode.sql",
   },
   {
     table: "governance_rules",
@@ -2646,6 +2670,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "proposal_snoozes",
     column: "snoozed_until",
     addedBy: "0381_governance_deny_and_request_later.sql",
+  },
+  // server_faults — the exact cause of each 5xx by errorId (0392). Absence
+  // means every fault write fails (logged, the cause stays in stdout only)
+  // and the admin read (GET /api/hub/errors/:errorId) 42P01s.
+  {
+    table: "server_faults",
+    column: "causes",
+    addedBy: "0392_server_faults.sql",
   },
 ];
 

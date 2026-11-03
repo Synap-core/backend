@@ -236,8 +236,10 @@ describe("index.ts mounts the ONE gate", () => {
   it("uses trpcSessionGate(appSessionMiddleware()) on /trpc/*", () => {
     // The Kratos session gate, widened ONLY to a Synap app's device token
     // (packages/api middleware/app-session.ts, its own bearer tripwire).
+    // index.ts boots a server on import, so its MOUNT is read from source;
+    // the gate's behaviour is every describe above.
     expect(src).toContain(
-      'app.use("/trpc/*", trpcRefusal(trpcSessionGate(appSessionMiddleware())))'
+      'app.use("/trpc/*", trpcSessionGate(appSessionMiddleware()))'
     );
   });
 

@@ -58,7 +58,10 @@ export function Providers({ children }: { children: ReactNode }) {
               "X-Workspace-Id": op.context.workspaceId as string,
             }),
           }),
-          false: httpBatchLink(transport),
+          // The pod refuses a batch over `TRPC_MAX_BATCH_SIZE` (200) whole
+          // (packages/api middleware/trpc-refusal.ts); the console stays
+          // well under it.
+          false: httpBatchLink({ ...transport, maxItems: 50 }),
         }),
       ],
     });
