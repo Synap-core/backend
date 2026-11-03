@@ -296,7 +296,9 @@ describe("vault secrets go only to the origin written in the node (f14cdea7)", (
       { id: "42", q: "a" }
     );
     expect(h.resolveVault).toHaveBeenCalledTimes(1);
-    expect(h.fetch.mock.calls[0]![0]).toBe("https://api.vendor.com/v1/42?q=a");
+    expect((h.fetch.mock.calls[0] as unknown as [string])[0]).toBe(
+      "https://api.vendor.com/v1/42?q=a"
+    );
     expect(sentHeaders()).toMatchObject({ Authorization: "PLAINTEXT-SECRET" });
   });
 
