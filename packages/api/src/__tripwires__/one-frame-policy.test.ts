@@ -20,6 +20,15 @@
  *   3. Every host that RUNS a page (calls `wrapHtmlForFrame`) also asks
  *      `frameNetworkCodeRefusal` first, so a page whose code is on a CDN is
  *      shown with its reason, never as a blank frame.
+ *   4. ONE scanner reads what a source loads
+ *      (`packages/types/src/cell-bridge/network-loads.ts`): no other source
+ *      file spells a loader regex (`<script\b`, `<\/script`, `@import\s`,
+ *      `import\s*\(`, `esm\.sh`, `\bsrc\s*=`, `\bhref\s*=`,
+ *      `(?:fetch|new`). The cell define-time check (`cell-source-checks.ts`)
+ *      had its own set until 3 Nov 2026 (backend#728), quadratic, with a
+ *      looser host rule than the frame's; it now reads the scanner, and this
+ *      test pins that it does. Feed parsers that read `<link>` out of a fetched
+ *      feed (`web-read/adapters`) spell none of these and are not scanners.
  *
  * THE SET IS DERIVED: every non-test `.ts`/`.tsx`/`.js`/`.mjs` file under
  * `apps/` and `packages/` (no `node_modules`, `dist`, `.next`). The test
@@ -83,6 +92,30 @@ function sources(csp: string): string[] {
 
 const NOT_AN_ORIGIN = /^(?:'none'|'unsafe-inline'|data:|blob:)$/;
 
+/** The one scanner, and the rule that used to carry a second one. */
+const SCANNER = "packages/types/src/cell-bridge/network-loads.ts";
+const CELL_CHECK = "packages/types/src/renderables/cell-source-checks.ts";
+/**
+ * Regex text that reads loads out of a source. Each fragment is spelled as it
+ * appears in a regex literal or a `String.raw` pattern (a backslash escape),
+ * so prose and HTML strings never match it.
+ */
+const LOADER_FRAGMENTS = [
+  String.raw`<script\b`,
+  String.raw`<\/script`,
+  String.raw`@import\s`,
+  String.raw`import\s*\(`,
+  String.raw`esm\.sh`,
+  String.raw`\bsrc\s*=`,
+  String.raw`\bhref\s*=`,
+  String.raw`(?:fetch|new`,
+];
+const LOADER_REGEX_TEXT = new RegExp(
+  LOADER_FRAGMENTS.map((f) => f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(
+    "|"
+  )
+);
+
 describe("tripwire: one frame policy, no CDN, taken by every frame host", () => {
   const files = ["apps", "packages"]
     .flatMap((d) => sourceFiles(join(REPO, d)))
@@ -132,6 +165,32 @@ describe("tripwire: one frame policy, no CDN, taken by every frame host", () => 
       return out;
     });
     expect(offenders).toEqual([]);
+  });
+
+  it("one scanner: no source but network-loads.ts spells a loader regex", () => {
+    // The signature finds the scanner itself, so it is not stale or empty.
+    expect(LOADER_REGEX_TEXT.test(text.get(SCANNER)!)).toBe(true);
+    const second = [...text.keys()].flatMap((rel) => {
+      if (rel === SCANNER) return [];
+      const line = text
+        .get(rel)!
+        .split("\n")
+        .findIndex((l) => LOADER_REGEX_TEXT.test(l));
+      return line >= 0
+        ? [
+            `${rel}:${line + 1}: reads loads itself; use frameMarkupLoads / frameModuleLoads`,
+          ]
+        : [];
+    });
+    expect(second).toEqual([]);
+  });
+
+  it("the cell check reads the one scanner and the one host rule", () => {
+    const src = text.get(CELL_CHECK)!;
+    expect(src).toMatch(/\bframeMarkupLoads\(/);
+    expect(src).toMatch(/\bframeModuleLoads\(/);
+    expect(src).toMatch(/\bframeExternalOrigins\(/);
+    expect(src).toMatch(/from\s+["']\.\.\/cell-bridge\/network-loads\.js["']/);
   });
 
   it("every host that runs a page refuses network code first", () => {

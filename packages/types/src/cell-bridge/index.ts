@@ -63,15 +63,26 @@ export {
   buildCellFrameCsp,
   buildCellModuleFrameCsp,
   cellFrameHeadBlock,
-  frameExternalOrigins,
   htmlByteLength,
   wrapHtmlForFrame,
 } from "./frame.js";
+export { frameExternalOrigins } from "./external-origins.js";
 export {
+  frameEsmShAt,
+  frameMarkupLoads,
+  frameModuleLoads,
   frameNetworkAssetsNotice,
   frameNetworkCodeRefusal,
   frameNetworkLoads,
+  frameUrlHost,
+  frameUrlIsInline,
+  frameUrlIsNetwork,
+  markupComments,
+  markupTags,
+  type FrameLoad,
+  type FrameLoadKind,
   type FrameNetworkLoads,
+  type MarkupTag,
 } from "./network-loads.js";
 export { CELL_BRIDGE_SDK } from "./sdk.js";
 export { narrowHomeToSpace } from "./home-lens.js";

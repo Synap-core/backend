@@ -4,6 +4,7 @@
  */
 
 import { CELL_BRIDGE_SDK } from "./sdk.js";
+import { frameExternalOrigins } from "./external-origins.js";
 
 /**
  * The iframe `sandbox` value, exactly. Scripts run; nothing else is granted:
@@ -55,33 +56,6 @@ export const CELL_FRAME_CSP_DIRECTIVES: ReadonlyArray<
 /** The Content-Security-Policy value the frame's `<meta>` carries. */
 export function buildCellFrameCsp(): string {
   return CELL_FRAME_CSP_DIRECTIVES.map(([d, s]) => `${d} ${s}`).join("; ");
-}
-
-/**
- * The origins an approved "connected" cell declared (`externalHosts`), as the
- * policy may name them: well-formed http(s)/ws(s) ORIGINS only. A wildcard
- * (`https://*` is a valid CSP source meaning every https origin), credentials,
- * a path, a query or anything unparseable is dropped: the value is spliced
- * into a directive, and dropping is fail-closed. Parsed, never pattern-matched.
- */
-export function frameExternalOrigins(hosts: readonly string[]): string[] {
-  const out: string[] = [];
-  for (const raw of hosts) {
-    const h = raw.trim();
-    if (h.includes("*")) continue;
-    let u: URL;
-    try {
-      u = new URL(h);
-    } catch {
-      continue;
-    }
-    if (!["http:", "https:", "ws:", "wss:"].includes(u.protocol)) continue;
-    if (!u.hostname || u.username || u.password) continue;
-    if (u.pathname !== "/" || u.search || u.hash) continue;
-    if (/[\s'";]/.test(u.origin)) continue;
-    if (!out.includes(u.origin)) out.push(u.origin);
-  }
-  return out;
 }
 
 /**
