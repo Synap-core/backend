@@ -9,9 +9,12 @@
  * every other read door answers 403 GRANT_DOOR_UNSUPPORTED. Fail closed: a
  * new read door is refused until someone verifies it and lists it here.
  *
- * Writes on Hub REST and MCP stay open: each one is meant to pass the gate,
- * whose rung 0 denies an out-of-grant write. The free-form `POST /proposals`
- * passes no gate, so it runs rung 0 itself on an allowlist
+ * Writes on Hub REST and MCP pass to the gate, whose rung 0 denies an
+ * out-of-grant write. Closed by default (R1, 2 Nov 2026): an MCP tool that is
+ * not read-only passes only when `MCP_WRITE_TOOL_DOORS` classifies it, and
+ * every served non-GET Hub route is a declared read, names its gate, or sits
+ * in a shrink-only baseline (the classification tripwire). The free-form
+ * `POST /proposals` passes no gate, so it runs rung 0 itself on an allowlist
  * (`fenced-proposal.ts`, 2026-10-28). On the Bearer tRPC door (S7,
  * 2026-10-20) a mutation passes only when `TRPC_KEY_MUTATION_DOORS` says the
  * gate really bounds it; every other one needs an unbounded `*` key.
@@ -181,6 +184,17 @@ export function sessionHolderReadable(
   return !isFencedGrant(grant) || grantBoundsDoor(PERSON("agent"), grant!);
 }
 
+/**
+ * An id in a REST path: uuid-shaped, so a future static sibling
+ * (`/projects/summary`, `/focus-sessions/<word>`) is NOT admitted by a
+ * declaration that names an id. Every id below is a uuid; a door whose id is
+ * not one names its own pattern (`/users/me`, `/package-updates/<slug>`).
+ */
+const ID = "[0-9a-fA-F-]{36}";
+/** A declared path, `:id` standing for one uuid, an optional trailing `/`. */
+const route = (path: string): RegExp =>
+  new RegExp(`^${path.replace(/:id/g, ID)}/?$`);
+
 /** Hub REST GET routes that read only through a seam (relative to /api/hub). */
 export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   // Self-introspection: the caller's own identity and key, from the request
@@ -188,41 +202,41 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   // (the CLI's agent installers do, right after a device-flow approval).
   /^\/users\/me\/?$/,
   /^\/auth\/status\/?$/,
-  /^\/users\/[^/]+\/entities\/?$/,
+  // `userId` is the caller's own id or `me` (rest/entities.ts).
+  new RegExp(`^/users/(?:me|${ID})/entities/?$`),
   // The list door. Every branch reads through `entities.getEntities` (the
   // seamed `entities.list` floor) EXCEPT full-text `q` (Typesense), which the
   // route itself refuses for a fenced grant (rest/entities.ts).
   /^\/entities\/?$/,
-  /^\/entities\/[^/]+\/?$/,
-  /^\/entities\/[^/]+\/connections\/?$/,
-  /^\/entities\/[^/]+\/facets\/?$/,
-  /^\/documents\/[^/]+\/?$/,
-  /^\/documents\/[^/]+\/raw\/?$/,
+  route("/entities/:id"),
+  route("/entities/:id/connections"),
+  route("/entities/:id/facets"),
+  route("/documents/:id"),
+  route("/documents/:id/raw"),
   // A file entity's signed GET: `signFileEntityUrl` → `loadSignableFileEntity`
   // reads the entity through `scopedDb` (grant ANDed), then only the document
   // that entity's OWNER owns — no row beyond the granted entity is reached.
-  /^\/files\/[^/]+\/url\/?$/,
+  route("/files/:id/url"),
   /^\/relations\/?$/,
-  /^\/projects\/[^/]+\/outputs\/?$/,
+  route("/projects/:id/outputs"),
   /^\/tracks\/?$/,
-  /^\/tracks\/[^/]+\/?$/,
+  route("/tracks/:id"),
   /^\/artifacts\/?$/,
   /^\/commands\/?$/,
-  /^\/commands\/[^/]+\/?$/,
+  route("/commands/:id"),
   // `listPlaybooksDoor` / `getPlaybookDoor` → `playbooks.listAllPage` /
   // `playbooks.get`: `scopedDb(...).predicate(playbooks)` / `findFirst`
   // (subject `playbook`), and the method's project count reads tracks and
-  // projects with their grant clauses (`countProjectsUsingMethods`). A uuid
-  // id only, so a static sibling is never admitted by this line.
+  // projects with their grant clauses (`countProjectsUsingMethods`).
   /^\/playbooks\/?$/,
-  /^\/playbooks\/[0-9a-fA-F-]{36}\/?$/,
+  route("/playbooks/:id"),
   /^\/brand\/kit\/?$/,
   // Read only through the grant-aware channel / session helpers
   // (utils/channel-visibility.ts, access/session-visibility.ts):
   /^\/channels\/?$/,
   /^\/threads\/?$/,
-  /^\/threads\/[^/]+\/messages\/?$/,
-  /^\/threads\/[^/]+\/branches\/?$/,
+  route("/threads/:id/messages"),
+  route("/threads/:id/branches"),
   /^\/messaging\/channels\/?$/,
   /^\/messaging\/linked-unread\/?$/,
   /^\/focus-sessions\/?$/,
@@ -235,8 +249,8 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   // Read only through ownerPrivateVisibleWhere (grant hook, `project` subject)
   // plus seamed entity reads:
   /^\/projects\/?$/,
-  /^\/projects\/[^/]+\/?$/,
-  /^\/projects\/[^/]+\/digest\/?$/,
+  route("/projects/:id"),
+  route("/projects/:id/digest"),
   // The caller's own webhook subscriptions: a key lists only those it
   // created (S2) — no row a grant bounds.
   /^\/webhooks\/?$/,
@@ -249,10 +263,6 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   /^\/views\/?$/, // hub views.listViews: owner + grantReadPredicate(views)
   /^\/proposals\/?$/, // hub proposals.listProposals: proposalUserFloor (+ grant)
 ];
-
-/** A session id in a REST path: uuid-shaped, so a future static sibling
- * (`/focus-sessions/<word>`) is NOT admitted by the declarations below. */
-const SESSION_ID = "[0-9a-fA-F-]{36}";
 
 /**
  * What GET /focus-sessions/:id reads beyond the row: the continuation packet
@@ -460,31 +470,22 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   ],
   // The session row, narrowed by the route (`sessionPacketReadable`): the
   // packet is added only for a key that reads all of it.
-  [
-    new RegExp(`^/focus-sessions/${SESSION_ID}/?$`),
-    NARROWED("session", SESSION_PACKET_SUBJECTS),
-  ],
+  [route("/focus-sessions/:id"), NARROWED("session", SESSION_PACKET_SUBJECTS)],
   // The row + its `session_evaluations` (subject `session`, grant-read.ts).
-  [
-    new RegExp(`^/focus-sessions/${SESSION_ID}/evaluations/?$`),
-    READS("session"),
-  ],
+  [route("/focus-sessions/:id/evaluations"), READS("session")],
   // `listSessionAnswers`: the row (sessionReadableWhere) + the room's messages.
-  [
-    new RegExp(`^/focus-sessions/${SESSION_ID}/answers/?$`),
-    READS("session", "channel"),
-  ],
+  [route("/focus-sessions/:id/answers"), READS("session", "channel")],
   // `waitForSessionAnswers` / `listSessionChanges`: answers + room messages +
   // proposals filed under the session (`proposal_decided`), the dev facts of
   // its PRs and jobs (`pr_*`, `checks_finished`: events) and the ends of the
   // sessions it waits on (`blocker_ended`: its `blocked_by` links).
   [
-    new RegExp(`^/focus-sessions/${SESSION_ID}/answers/wait/?$`),
+    route("/focus-sessions/:id/answers/wait"),
     READS("session", "channel", "proposal", "event", "link"),
   ],
   // `readSessionDocument`: the row, the designating artifact, the document.
   [
-    new RegExp(`^/focus-sessions/${SESSION_ID}/document/?$`),
+    route("/focus-sessions/:id/document"),
     READS("session", "artifact", "document"),
   ],
   // `buildWorkGraph` (work-graph.ts): session rows (sessionListConditions),
@@ -557,8 +558,11 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
 ];
 
 /**
- * Hub REST POST routes that READ (every other POST is a write, bounded by the
- * gate). Matched in order; the first match classifies the route.
+ * Hub REST POST routes that READ. Every other POST is a write, bounded by the
+ * gate; the classification tripwire (`grant-door-classification`) checks that
+ * each served non-GET route is a declared read, names its write gate, or sits
+ * in its shrink-only baseline. Matched in order; the first match classifies
+ * the route.
  */
 export const GRANT_REST_POST_READS: ReadonlyArray<
   readonly [RegExp, FencedReadDoor]
@@ -575,16 +579,60 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
     ),
   ],
   [/^\/entities\/retrieve\/?$/, READS("entity", "document", "relation")],
+  // `hybridRecall` ranks ids, then the rows are read under
+  // `ownerPrivateVisibleWhere`, which ANDs the key's grant (`grantReadClauseFor`):
+  // only rows the grant reads come back.
+  [/^\/entities\/recall\/?$/, SEAMED],
+  // `resolveIdentity` reads candidates under `accessScopeWhere` (the grant
+  // seam), as MCP `synap_resolve_identity` (SEAMED) does.
+  [/^\/identity\/resolve\/?$/, SEAMED],
+  // No pod row: the static routing rules, the text sent classified, the tabs
+  // sent clustered by the intelligence service.
+  [/^\/routing\/resolve\/?$/, SEAMED],
+  [/^\/rules\/classify\/?$/, SEAMED],
+  [/^\/capture\/cluster-tabs\/?$/, SEAMED],
   // Writes nothing: reads one file entity through `scopedDb` (grant ANDed,
   // `readableFileEntity`) and that entity's owner-locked document, then calls
   // the transcription provider (rate class `ai_interactive`).
-  [/^\/files\/[^/]+\/transcribe\/?$/, SEAMED],
+  [route("/files/:id/transcribe"), SEAMED],
   [/^\/memory\/search\/?$/, READS("entity", "preference")],
   // A read (no `install`) and a governed install (TEMPLATE-LIFECYCLE B). The
   // standing names a space only when the person's floor AND the key's grant
   // reach it (`readTemplateStanding`); a holder it hides is answered as absent
   // and never installed over (fence1).
   [/^\/workspaces\/ensure-template\/?$/, SEAMED],
+  // The write-free preview of `/packages/apply` (finding 634bbbfc): the target
+  // space and its template state (`resolvePreflightComposeTarget`,
+  // `previewTemplateApply`: proposals), the pod's kinds, and the rows an update
+  // would change (`pendingTemplateDataChanges`, every entity of the package's
+  // kinds, read with no floor). The same subjects as GET /workspaces: no pin
+  // narrows it, so a pinned key (an app) is refused.
+  [/^\/packages\/preflight\/?$/, READS("entity", "project", "proposal")],
+  // "Recall again" (`recallSessionAgain`): runs the session's recall as its
+  // OWNER, pod-wide (`retrieve()`, the engine behind `synap_ask`), and writes
+  // what it found into the session and its room, which the key then reads. So
+  // the key must read the session, its room and every subject recall reads,
+  // unnarrowed.
+  [
+    route("/focus-sessions/:id/recall"),
+    READS(
+      "session",
+      "channel",
+      "entity",
+      "document",
+      "relation",
+      "proposal",
+      "preference",
+      "project"
+    ),
+  ],
+  // Writes nothing (a dry run), but a code skill runs as the PERSON
+  // (`runSkill`), its reads bounded by no grant; the skill row itself is read
+  // on the person's floor (`visibleSkillsAnyWorkspaceWhere`).
+  [
+    route("/skills/:id/dry-run"),
+    REFUSED("Runs the skill as you: what it reads is not bounded by a grant."),
+  ],
   [/^\/diagnose\/?$/, REFUSED("Pod internals across every subject.")],
   // Runs a capability. A key the fence bounds may only run an INTENT action
   // (decision 3A, 2026-10-28): the route refuses any other body for it, checks
@@ -684,6 +732,109 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_load_skill: READS(),
   synap_diagnose: REFUSED("Pod internals across every subject."),
 };
+
+/** How a non-read-only MCP tool is bounded for a fenced key. */
+export type McpWriteToolDoor = { readonly bound: "write" } | FencedReadDoor;
+/** A write: it reaches the governed-write gate, whose rung 0 bounds it. */
+const WRITE: McpWriteToolDoor = { bound: "write" };
+
+/**
+ * Every MCP tool that is NOT read-only, classified (R1, 2 Nov 2026): a WRITE
+ * (bounded by the gate) or, when it returns rows, the read door of what it
+ * returns, checked like a read tool's. A tool in neither map is refused to a
+ * fenced key (`mcpToolAllowed`, closed by default), and the classification
+ * tripwire derives the live tool list and fails on an unclassified or stale
+ * entry. That a WRITE tool reaches a gate is not checked here.
+ */
+export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
+  {
+    synap_create_entity: WRITE,
+    synap_update_entity: WRITE,
+    synap_update_entities: WRITE,
+    synap_delete_entity: WRITE,
+    synap_create_document: WRITE,
+    synap_update_document: WRITE,
+    synap_request_upload: WRITE,
+    synap_store_file: WRITE,
+    synap_remember_fact: WRITE,
+    synap_link_entities: WRITE,
+    synap_attach_facet: WRITE,
+    synap_detach_facet: WRITE,
+    synap_define_role: WRITE,
+    synap_define_kind: WRITE,
+    synap_start_session: WRITE,
+    synap_update_session: WRITE,
+    synap_evaluate_session: WRITE,
+    synap_complete_session: WRITE,
+    synap_rerun_session: WRITE,
+    // Not read-only only because an agent's read stamps the "Picked up"
+    // receipt: it RETURNS the person's answers and the session's changes. The
+    // same door as its REST twin, GET /focus-sessions/:id/answers/wait
+    // (`waitForSessionAnswers` / `waitForSessionChanges`).
+    synap_wait_for_answer: READS(
+      "session",
+      "channel",
+      "proposal",
+      "event",
+      "link"
+    ),
+    synap_relay_answer: WRITE,
+    synap_create_cell: WRITE,
+    synap_promote_cell_to_renderer: WRITE,
+    synap_promote_session_to_playbook: WRITE,
+    synap_create_playbook: WRITE,
+    synap_update_playbook: WRITE,
+    synap_set_workspace_focus: WRITE,
+    synap_set_project_focus: WRITE,
+    synap_organize_library: WRITE,
+    synap_capture: WRITE,
+    synap_create_workspace: WRITE,
+    synap_declare_workspace_source: WRITE,
+    synap_create_project: WRITE,
+    synap_start_track: WRITE,
+    synap_start_stage_session: WRITE,
+    synap_advance_track: WRITE,
+    synap_set_track_status: WRITE,
+    synap_reopen_track: WRITE,
+    synap_convert_to_goal: WRITE,
+    synap_enable_worker: WRITE,
+    synap_pause_worker: WRITE,
+    synap_run_worker: WRITE,
+    synap_set_track_participant: WRITE,
+    synap_set_track_params: WRITE,
+    synap_update_track: WRITE,
+    synap_add_track_stage: WRITE,
+    synap_update_project: WRITE,
+    synap_project_use_workspace: WRITE,
+    synap_file_into_project: WRITE,
+    synap_archive_workspace: WRITE,
+    synap_retire_workspace: WRITE,
+    synap_update_workspace: WRITE,
+    synap_update_space_brief: WRITE,
+    synap_move_entities: WRITE,
+    synap_retire_field: WRITE,
+    synap_grant_profile_access: WRITE,
+    synap_change_kind_scope: WRITE,
+    synap_create_view: WRITE,
+    synap_update_view_content: WRITE,
+    // Get-OR-create: it RETURNS a channel row, the person's personal channel
+    // (tRPC `channels.ensurePersonal`, owner-wide) or one bound to an object
+    // (`channels.resolveOrCreateChannel`). The door of what it reads.
+    synap_get_channel: READS("channel"),
+    synap_post_message: WRITE,
+    synap_revise_proposal: WRITE,
+    synap_reject_proposal: WRITE,
+    synap_request_deploy_approval: WRITE,
+    synap_run_capability: WRITE,
+    synap_create_verb: WRITE,
+    synap_trigger_automation: WRITE,
+    synap_create_automation: WRITE,
+    synap_create_rule: WRITE,
+    synap_update_rule: WRITE,
+    synap_run_playbook: WRITE,
+    synap_create_skill: WRITE,
+    synap_update_skill: WRITE,
+  };
 
 /** tRPC QUERIES (by procedure path) that read only through a seam. */
 export const GRANT_SAFE_TRPC_QUERIES: ReadonlySet<string> = new Set([
@@ -862,15 +1013,23 @@ export function restDoorAllowed(
   return true; // PUT / PATCH / DELETE — writes, bounded by the gate
 }
 
-/** MCP: may a scoped key call this tool? Unknown tools → let MCP answer. */
+/**
+ * MCP: may a scoped key call this listed tool? A read tool through its door
+ * (`MCP_READ_TOOL_DOORS`); any other tool as `MCP_WRITE_TOOL_DOORS` classifies
+ * it: a write passes to the gate, a row-returning one through its door, and an
+ * unclassified one is refused (closed by default). A name no tool carries is
+ * never asked: the caller lets MCP answer it.
+ */
 export function mcpToolAllowed(
   toolName: string,
   readOnly: boolean | undefined,
   grant: KeyGrant
 ): boolean {
-  return (
-    readOnly !== true || grantBoundsDoor(MCP_READ_TOOL_DOORS[toolName], grant)
-  );
+  if (readOnly === true)
+    return grantBoundsDoor(MCP_READ_TOOL_DOORS[toolName], grant);
+  const door = MCP_WRITE_TOOL_DOORS[toolName];
+  if (!door) return false;
+  return door.bound === "write" || grantBoundsDoor(door, grant);
 }
 
 /**
