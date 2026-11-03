@@ -412,7 +412,14 @@ export async function planChannelSend(args: {
       };
     }
     // LinkedIn messages only 1st-degree connections: refused BEFORE a send.
-    if (profile.networkDistance && profile.networkDistance !== "FIRST_DEGREE") {
+    // On LinkedIn an unknown distance is not a connection either (the send
+    // would fail after the person approved it); elsewhere only a known
+    // non-connection is refused.
+    const mustBeConnected = provider.toLowerCase() === "linkedin";
+    if (
+      profile.networkDistance !== "FIRST_DEGREE" &&
+      (mustBeConnected || profile.networkDistance)
+    ) {
       return {
         ok: false,
         error: `${name} is not one of your ${humanizeToken(provider)} connections yet, so a message cannot be sent. Ask to connect first.`,
@@ -460,6 +467,8 @@ export async function recordChannelSend(args: {
   workspaceId: string | null;
   proposalId?: string | null;
   draftedBy?: DraftedBy | null;
+  /** A subject the caller gave; recorded, not sent (see SendExternalMessageInput.subject). */
+  subject?: string | null;
 }): Promise<RecordedChannelSend> {
   const { channel, chatId, externalMessageId, accountId } = args;
   const provider = channel.externalSource ?? "unipile";
@@ -509,6 +518,7 @@ export async function recordChannelSend(args: {
       ...(args.proposalId ? { proposalId: args.proposalId } : {}),
       ...(accountId ? { accountId } : {}),
       ...(args.draftedBy ? { draftedBy: args.draftedBy } : {}),
+      ...(args.subject ? { subject: args.subject } : {}),
     },
     // Already delivered by the connector: never mirrored out again.
     alreadyDelivered: true,

@@ -54,6 +54,8 @@ import {
   MessageRole,
   MessageAuthorType,
   getActingAgentUserId,
+  messagingAccounts,
+  profiles,
 } from "@synap/database";
 import type { SQL } from "drizzle-orm";
 import type { Context } from "../../context.js";
@@ -3137,13 +3139,26 @@ const messagingSendParams = z.object({
   inReplyTo: z.string().max(1000).optional(),
 });
 
+/** The kinds a message can be addressed to (`to`): a person or a company. */
+const RECIPIENT_KINDS: ReadonlySet<string> = new Set(["person", "company"]);
+
+/** An entity's stored kind (its profile's slug, else its type), or null. */
+async function storedEntityKind(entityId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ slug: profiles.slug, type: entities.type })
+    .from(entities)
+    .leftJoin(profiles, eq(entities.profileId, profiles.id))
+    .where(eq(entities.id, entityId))
+    .limit(1);
+  return row?.slug ?? row?.type ?? null;
+}
+
 /** The provider a `to` send goes through, and the account it goes from. */
 async function resolveSendTarget(
   userId: string,
   provider: string | undefined,
   accountId: string | undefined
 ): Promise<{ provider: string; accountId: string | null }> {
-  const { messagingAccounts } = await import("@synap/database/schema");
   const rows = await db
     .select({
       provider: messagingAccounts.provider,
@@ -3180,9 +3195,9 @@ async function resolveSendTarget(
       accountId: connected[0]!.externalId,
     };
   }
-  if (provider) {
-    // A tool with no per-person account (Discord's bot), or several: the
-    // channel carries no account and the send door decides.
+  if (provider && connected.length === 0) {
+    // A tool with no per-person account (Discord's bot): the channel
+    // carries no account and the send door decides.
     return { provider: lower(provider), accountId: null };
   }
   throw new TRPCError({
@@ -3218,24 +3233,20 @@ const messagingSendHandler: BuiltinVerbHandler = async (params, ctx) => {
   let channelId = input.channelId ?? null;
   let accountId = input.accountId ?? null;
   if (input.to) {
-    // Only someone the caller may read (the key's grant included): one
-    // answer for absent and unreadable, so an app cannot probe for ids.
+    // Only a person or a company the caller may read (the key's grant
+    // included): one answer for absent, unreadable and any other kind, so an
+    // app cannot probe for ids.
     const { readableRecipient } = await import("./intent-recipient.js");
     const person = await readableRecipient(
       { userId: ctx.userId, agentUserId },
       input.to
     );
-    if (!person) {
+    const kind = person ? await storedEntityKind(person.id) : null;
+    if (!person || !kind || !RECIPIENT_KINDS.has(kind)) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Person not found." });
     }
-    const target = await resolveSendTarget(
-      ctx.userId,
-      input.provider,
-      input.accountId
-    );
-    accountId = target.accountId;
-    // Refused BEFORE a channel is opened: a key that may not send here
-    // leaves nothing behind.
+    // The grant FIRST: a key that may not send here learns nothing more
+    // (not even which accounts exist) and leaves nothing behind.
     const { messagingSendGrantDenial } =
       await import("../../connectors/channel-send.js");
     const denial = await messagingSendGrantDenial({
@@ -3251,6 +3262,12 @@ const messagingSendHandler: BuiltinVerbHandler = async (params, ctx) => {
     if (denial) {
       return { success: false, error: denial };
     }
+    const target = await resolveSendTarget(
+      ctx.userId,
+      input.provider,
+      input.accountId
+    );
+    accountId = target.accountId;
     // The person's channel exists from the first draft (founder decision 2).
     const { openPersonChannel } =
       await import("../connectors/inbound-recorder.js");
@@ -3267,6 +3284,7 @@ const messagingSendHandler: BuiltinVerbHandler = async (params, ctx) => {
         id: channels.id,
         workspaceId: channels.workspaceId,
         channelType: channels.channelType,
+        externalSource: channels.externalSource,
         metadata: channels.metadata,
       })
       .from(channels)
@@ -3295,10 +3313,17 @@ const messagingSendHandler: BuiltinVerbHandler = async (params, ctx) => {
           "messaging.send sends on an EXTERNAL channel (a conversation with someone outside the pod).",
       });
     }
-    // The account: the channel's own, unless the caller names one.
+    // The account: the channel's own, unless the caller names one; with
+    // neither, the person's only account on the tool. Two accounts and none
+    // named is refused NOW, not after the person approved.
     const meta = (channel.metadata ?? {}) as Record<string, unknown>;
     accountId =
       accountId ?? (typeof meta.accountId === "string" ? meta.accountId : null);
+    if (!accountId && channel.externalSource) {
+      accountId = (
+        await resolveSendTarget(ctx.userId, channel.externalSource, undefined)
+      ).accountId;
+    }
   }
 
   // THE one governed send door. Lazy-imported to keep this module's load
@@ -3316,6 +3341,7 @@ const messagingSendHandler: BuiltinVerbHandler = async (params, ctx) => {
     mustPropose,
     governanceReason: ctx.governanceReason ?? null,
     intentRequest: ctx.intentRequest ?? null,
+    subject: input.subject ?? null,
   });
 
   return {
@@ -3347,7 +3373,6 @@ const messagingAccountsParams = z.object({
 
 const messagingAccountsHandler: BuiltinVerbHandler = async (params, ctx) => {
   const input = messagingAccountsParams.parse(params ?? {});
-  const { messagingAccounts } = await import("@synap/database/schema");
   const rows = await db
     .select({
       externalId: messagingAccounts.externalId,

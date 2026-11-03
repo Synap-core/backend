@@ -1100,7 +1100,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       scope: "pod",
       intent: "send_message",
       description:
-        "Write to a person. The channel IS the conversation: give `to` (the person or company, an entity id) and the text, and the message goes into that person's channel on the tool (`provider`) and account (`accountId`, from messaging.accounts) — the channel is opened at the first draft if there is none yet. Or give `channelId` for a conversation you already have. Exactly one of to / channelId. A send that needs review (an agent with no grant, a pod app, an intent action, an automation) is filed as a messaging.external.send PROPOSAL on that channel: it shows as a proposed message there, and the person approves it; it is never sent before. Approved, it is sent once (LinkedIn: only to a 1st-degree connection, else it is refused with errorClass not_connected before anything is sent) and lands in the channel as an outbound message. An owner's own send goes direct. The client-comms firewall stays enforced. Never file a message as an outreach touch or a note. Returns { success, channelId, messageId?, externalMessageId?, proposed?, proposalId?, error?, errorClass? } (proposed=true when routed to review). Read the conversation first with channel.history.",
+        "Write to a person. The channel IS the conversation: give `to` (the person or company, an entity id) and the text, and the message goes into that person's channel on the tool (`provider`) and account (`accountId`, from messaging.accounts) — the channel is opened at the first draft if there is none yet. Or give `channelId` for a conversation you already have. Exactly one of to / channelId. A send that needs review (an agent with no grant, a pod app, an intent action, an automation) is filed as a messaging.external.send PROPOSAL on that channel: it shows as a proposed message there, and the person approves it; it is never sent before. Approved, it is sent once (LinkedIn: only to a 1st-degree connection, else it is refused with errorClass not_connected before anything is sent) and lands in the channel as an outbound message. An owner's own send goes direct. Only the person whose conversation it is can send in it. `subject` is shown to the person and kept on the message; tools that take a subject do not receive it yet. Never file a message as an outreach touch or a note. Returns { success, channelId, messageId?, externalMessageId?, proposed?, proposalId?, error?, errorClass? } (proposed=true when routed to review). Read the conversation first with channel.history.",
       parameters: {
         type: "object",
         required: [],
@@ -1135,7 +1135,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
           subject: {
             type: "string",
             description:
-              "Optional reply subject. Advisory: the per-provider connector derives its own reply envelope; not threaded into the send today.",
+              "Optional subject (email). Shown to the person with the proposed message and kept on the sent message; the connector derives its own reply envelope, so the tool does not receive it yet.",
           },
           inReplyTo: {
             type: "string",

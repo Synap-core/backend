@@ -179,6 +179,8 @@ const q = <T = Record<string, unknown>>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
 const OWNER = randomUUID();
+const STRANGER = randomUUID(); // another person of the pod
+const NOTE = randomUUID(); // a readable record that is not a person
 const AGENT = randomUUID();
 const CRM = randomUUID();
 const PERSON = randomUUID();
@@ -262,6 +264,10 @@ beforeAll(async () => {
     ]
   );
   await q(
+    `insert into entities (id, user_id, type, title, properties, created_at, updated_at) values ($1,$2,'note','A note','{}',now(),now())`,
+    [NOTE, OWNER]
+  );
+  await q(
     `insert into messaging_accounts (id, user_id, provider, external_id, display_name, status, created_at, updated_at)
      values ($1,$2,'linkedin',$3,'Antoine on LinkedIn','connected',now(),now())`,
     [randomUUID(), OWNER, ACCOUNT]
@@ -283,7 +289,8 @@ beforeEach(async () => {
   });
   // Every test starts from a person with no channel and no proposal.
   await h.client!.exec(
-    `delete from messages; delete from proposals; delete from channels;`
+    `delete from messages; delete from proposals; delete from channels; delete from tools;
+     delete from messaging_accounts where external_id <> '${ACCOUNT}';`
   );
 });
 
@@ -302,10 +309,14 @@ const crmApp = {
   clientId: "crm-app",
 };
 
-async function appSendsTo(person: string, grant = crmApp) {
+async function appSendsTo(
+  person: string,
+  grant = crmApp,
+  extra: Record<string, unknown> = {}
+) {
   return runWithGrant(grant, () =>
     handler()(
-      { to: person, text: "Hello Marie" },
+      { to: person, text: "Hello Marie", ...extra },
       {
         userId: OWNER,
         workspaceId: CRM,
@@ -716,5 +727,208 @@ describe("the client-comms firewall still holds on a person's channel", () => {
       mirrorReason: "already-delivered",
     });
     expect((await q(`select 1 from channel_egress`)).rows).toHaveLength(0);
+  });
+});
+
+describe("security review (lane D)", () => {
+  const statusOf = async (id: string) =>
+    (
+      await q<{ status: string; external_dispatched_at: string | null }>(
+        `select status, external_dispatched_at from proposals where id=$1`,
+        [id]
+      )
+    ).rows[0]!;
+
+  it("a recipient swap after filing is refused: nothing is sent", async () => {
+    startChat.mockResolvedValue({ chatId: "chat-swap", messageId: "m-swap" });
+    const marie = await appSendsTo(PERSON);
+    // Another conversation of the pod (Bob's).
+    const bob = randomUUID();
+    await q(
+      `insert into channels (id, user_id, channel_type, scope, status, title, external_source, external_id, metadata, created_at, updated_at)
+       values ($1,$2,'external','pod','active','Bob','linkedin','chat-bob',$3,now(),now())`,
+      [bob, OWNER, JSON.stringify({ accountId: ACCOUNT })]
+    );
+    // The data is rewritten under the card the person reads (Marie).
+    await q(
+      `update proposals set data = jsonb_set(data, '{channelId}', to_jsonb($2::text)) where id=$1`,
+      [marie.proposalId, bob]
+    );
+    let caught: unknown;
+    try {
+      await approve(marie.proposalId as string);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeTruthy();
+    expect(send).not.toHaveBeenCalled();
+    expect(startChat).not.toHaveBeenCalled();
+    expect((await statusOf(marie.proposalId as string)).status).toBe("pending");
+  });
+
+  it("a provider error before the send releases the claim; the retry sends once", async () => {
+    getProfile.mockRejectedValueOnce(
+      new Error("Unipile profile lookup failed: 503 — upstream down")
+    );
+    startChat.mockResolvedValue({ chatId: "chat-retry", messageId: "m-retry" });
+    const out = await appSendsTo(PERSON);
+    let caught: unknown;
+    try {
+      await approve(out.proposalId as string);
+    } catch (err) {
+      caught = err;
+    }
+    expect(readAttachedFailureMeta(caught)?.errorClass).toBe("transient");
+    expect(startChat).not.toHaveBeenCalled();
+    expect(await statusOf(out.proposalId as string)).toMatchObject({
+      status: "pending",
+      external_dispatched_at: null,
+    });
+    await approve(out.proposalId as string);
+    expect(startChat).toHaveBeenCalledTimes(1);
+    expect((await statusOf(out.proposalId as string)).status).toBe("approved");
+  });
+
+  it("a send that went out but could not be recorded is reported sent, never failed", async () => {
+    startChat.mockResolvedValue({ chatId: "chat-norec", messageId: "m-norec" });
+    const out = await appSendsTo(PERSON);
+    await h.client!.exec(`alter table messages rename to messages_away;`);
+    try {
+      await approve(out.proposalId as string);
+    } finally {
+      await h.client!.exec(`alter table messages_away rename to messages;`);
+    }
+    expect(startChat).toHaveBeenCalledTimes(1);
+    expect((await statusOf(out.proposalId as string)).status).toBe("approved");
+  });
+
+  it("mustPropose is tighten-only: a messaging tool the person turned off refuses and files nothing", async () => {
+    await q(
+      `insert into tools (id, name, credential_ref, approved, created_by, workspace_id, created_at, updated_at)
+       values ($1,'linkedin messaging','messaging://linkedin',false,$2,null,now(),now())`,
+      [randomUUID(), OWNER]
+    );
+    const out = await appSendsTo(PERSON);
+    expect(out.success).toBe(false);
+    expect(out.proposed).toBeUndefined();
+    expect((await q(`select 1 from proposals`)).rows).toHaveLength(0);
+  });
+
+  it("only the owner of a conversation can file a send in it (refused before anything is filed)", async () => {
+    const theirs = randomUUID();
+    await q(
+      `insert into channels (id, user_id, channel_type, scope, status, title, external_source, external_id, metadata, created_at, updated_at)
+       values ($1,$2,'external','pod','active','Theirs','linkedin','chat-theirs','{}',now(),now())`,
+      [theirs, STRANGER]
+    );
+    const out = await sendExternalMessage({
+      channelId: theirs,
+      accountId: ACCOUNT,
+      body: "hi",
+      userId: OWNER,
+      mustPropose: true,
+    });
+    expect(out).toMatchObject({ success: false, errorClass: "permission" });
+    expect((await q(`select 1 from proposals`)).rows).toHaveLength(0);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("a named channel the caller cannot read is not found", async () => {
+    const theirs = randomUUID();
+    await q(
+      `insert into channels (id, user_id, channel_type, scope, status, title, external_source, external_id, metadata, created_at, updated_at)
+       values ($1,$2,'external','private','active','Theirs','linkedin','chat-hidden','{}',now(),now())`,
+      [theirs, STRANGER]
+    );
+    await expect(
+      handler()(
+        { channelId: theirs, content: "hi" },
+        { userId: OWNER, workspaceId: null }
+      )
+    ).rejects.toThrow(/not found/i);
+    expect((await q(`select 1 from proposals`)).rows).toHaveLength(0);
+  });
+
+  it("an approved send whose pending channel was retired goes to the person's live channel", async () => {
+    const out = await appSendsTo(PERSON);
+    const live = randomUUID();
+    await q(
+      `insert into channels (id, user_id, channel_type, scope, status, title, context_object_type, context_object_id, external_source, external_id, external_channel_id, metadata, created_at, updated_at)
+       values ($1,$2,'external','pod','active','Marie','entity',$3,'linkedin','chat-live','chat-live',$4,now(),now())`,
+      [live, OWNER, PERSON, JSON.stringify({ accountId: ACCOUNT })]
+    );
+    await q(`update channels set status='archived' where id=$1`, [
+      out.channelId,
+    ]);
+    send.mockResolvedValue({ messageId: "m-live" });
+    await approve(out.proposalId as string);
+    expect(send).toHaveBeenCalledWith(ACCOUNT, "chat-live", "Hello Marie");
+    expect(
+      (await q(`select 1 from messages where channel_id=$1`, [live])).rows
+    ).toHaveLength(1);
+  });
+
+  it("`to` must be a person or a company: another record is not found", async () => {
+    h.readable = new Set([PERSON, NOTE]);
+    await expect(appSendsTo(NOTE)).rejects.toThrow(/not found/i);
+    expect((await q(`select 1 from channels`)).rows).toHaveLength(0);
+  });
+
+  it("a key with no send permission learns nothing about the accounts", async () => {
+    const out = await appSendsTo(
+      PERSON,
+      {
+        scopes: [{ permissions: ["entity.*.read"], workspaceIds: [CRM] }],
+        clientId: "crm-app",
+      },
+      { accountId: "acc-someone-else" }
+    );
+    expect(out.success).toBe(false);
+    expect(String(out.error)).toMatch(/grant does not allow/);
+  });
+
+  it("two connected accounts on the tool and none named: refused at the draft", async () => {
+    await q(
+      `insert into messaging_accounts (id, user_id, provider, external_id, display_name, status, created_at, updated_at)
+       values ($1,$2,'linkedin','acc-linkedin-2','Second','connected',now(),now())`,
+      [randomUUID(), OWNER]
+    );
+    await expect(
+      appSendsTo(PERSON, crmApp, { provider: "linkedin" })
+    ).rejects.toThrow(/several connected accounts/);
+    expect((await q(`select 1 from proposals`)).rows).toHaveLength(0);
+  });
+
+  it("LinkedIn: an unknown network distance is not a connection", async () => {
+    getProfile.mockResolvedValue({
+      providerId: "ACoMarie",
+      publicIdentifier: "marie-dupont",
+      name: "Marie Dupont",
+      networkDistance: null,
+    });
+    const out = await appSendsTo(PERSON);
+    let caught: unknown;
+    try {
+      await approve(out.proposalId as string);
+    } catch (err) {
+      caught = err;
+    }
+    expect(readAttachedFailureMeta(caught)?.errorClass).toBe("not_connected");
+    expect(startChat).not.toHaveBeenCalled();
+  });
+
+  it("a subject is shown on the proposed message and kept on the sent one", async () => {
+    startChat.mockResolvedValue({ chatId: "chat-subj", messageId: "m-subj" });
+    const out = await appSendsTo(PERSON, crmApp, { subject: "Next steps" });
+    const [p] = await proposalsOn(out.channelId as string);
+    expect(p!.data).toMatchObject({ subject: "Next steps" });
+    await approve(out.proposalId as string);
+    const [row] = (
+      await q<{ metadata: Record<string, unknown> }>(
+        `select metadata from messages where channel_id=$1`,
+        [out.channelId]
+      )
+    ).rows;
+    expect(row!.metadata).toMatchObject({ subject: "Next steps" });
   });
 });

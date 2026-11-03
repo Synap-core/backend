@@ -42,11 +42,24 @@ export function registerMessagingExecutors(): void {
       // delivered ON the channel — a chat id when it has one, else the chat is
       // started (1st-degree check first) and its id fills the channel.
       if (typeof data.channelId === "string" && data.channelId) {
+        // WHO it goes to is the row's target, set at filing and never
+        // revisable. A data.channelId that moved off it is a recipient swap:
+        // refused, nothing sent.
+        if (data.channelId !== proposal.targetId) {
+          throw attachFailureMeta(
+            new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message:
+                "Couldn't apply — this message's conversation was changed after it was filed. Nothing was sent; file it again.",
+            }),
+            { errorClass: "conflict" }
+          );
+        }
         return executeChannelSend({
           proposal,
           payload,
           data,
-          channelId: data.channelId,
+          channelId: proposal.targetId,
           userId,
           input,
           deps,
@@ -160,8 +173,6 @@ export function registerMessagingExecutors(): void {
   });
 }
 
-type ExecArgs = ProposalExecutorArgs;
-
 /**
  * Approve a proposed message on a person's channel. At most once
  * (`dispatchExternalOnce`): a second approval finds the claim and sends
@@ -169,13 +180,13 @@ type ExecArgs = ProposalExecutorArgs;
  * the claim and keeps the proposal pending with its next action.
  */
 async function executeChannelSend(args: {
-  proposal: ExecArgs["proposal"];
-  payload: ExecArgs["payload"];
+  proposal: ProposalExecutorArgs["proposal"];
+  payload: ProposalExecutorArgs["payload"];
   data: Record<string, unknown>;
   channelId: string;
   userId: string;
-  input: ExecArgs["input"];
-  deps: ExecArgs["deps"];
+  input: ProposalExecutorArgs["input"];
+  deps: ProposalExecutorArgs["deps"];
 }) {
   const { proposal, payload, data, userId, input, deps } = args;
   const body = typeof data.body === "string" ? data.body : "";
@@ -206,6 +217,7 @@ async function executeChannelSend(args: {
       alreadyApproved: true,
       sessionId: proposal.sessionId ?? null,
       proposalId: input.proposalId,
+      subject: typeof data.subject === "string" ? data.subject : null,
       draftedBy:
         data.draftedBy && typeof data.draftedBy === "object"
           ? (data.draftedBy as {
