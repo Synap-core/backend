@@ -8,6 +8,16 @@
  */
 import { describe, it, expect, vi } from "vitest";
 
+const manyRows = Array.from({ length: 8 }, (_, i) => ({
+  id: `pb-many-${i}`,
+  name: `Shipping a landing page ${i}`,
+  description: "Ship a landing page",
+  goalTemplate: "Ship a landing page",
+  stages: [],
+  scope: null,
+}));
+let useMany = false;
+
 const rows = [
   {
     id: "pb-track",
@@ -32,7 +42,7 @@ vi.mock("@synap/database", async (importOriginal) => {
   const chain = {
     from: () => chain,
     where: () => chain,
-    orderBy: async () => rows,
+    orderBy: async () => (useMany ? manyRows : rows),
   };
   return { ...actual, db: { select: () => chain } };
 });
@@ -60,5 +70,18 @@ describe("matchSessionTemplate — template kind on every candidate", () => {
       scope: "session",
       templateKind: "Work template",
     });
+  });
+
+  it("honours the caller's limit, and keeps the default cap of 5 without one (ticket a9d88abf)", async () => {
+    useMany = true;
+    try {
+      const input = { userId: "u1", goal: "shipping a landing page" };
+      const capped = await matchSessionTemplate({ ...input, limit: 3 });
+      expect(capped.candidates).toHaveLength(3);
+      const dflt = await matchSessionTemplate(input);
+      expect(dflt.candidates).toHaveLength(5);
+    } finally {
+      useMany = false;
+    }
   });
 });

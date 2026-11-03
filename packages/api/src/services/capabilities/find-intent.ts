@@ -478,7 +478,12 @@ export async function findByIntent(
   const catalogs = new Set<FindCatalog>(
     named.length > 0 ? named : FIND_CATALOGS
   );
-  const limit = input.limit ?? CATALOG_LIMIT;
+  // A cap must be a positive whole number: `slice(0, -1)` / `slice(0, 2.5)`
+  // would silently answer a different question than the caller asked.
+  const limit =
+    Number.isInteger(input.limit) && (input.limit as number) > 0
+      ? (input.limit as number)
+      : CATALOG_LIMIT;
   const terms = queryTerms(input.intent);
   const vocabulary = catalogs.has("intents") ? await listIntentSlugs() : [];
 
@@ -617,6 +622,8 @@ export async function findByIntent(
       ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
       workspaceId: input.workspaceId,
       goal: input.intent,
+      // The playbooks arm used to ignore `limit` (hard cap 5): ticket a9d88abf.
+      limit,
     });
     scoring.playbooks = {
       ranker:

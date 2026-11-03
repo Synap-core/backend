@@ -72,6 +72,8 @@ export interface MatchSessionTemplateInput {
   workspaceId?: string | null;
   title?: string | null;
   goal: string;
+  /** Max candidates returned. Default {@link CANDIDATES_MAX}; a caller's own cap (`synap_find` `limit`) wins. */
+  limit?: number;
 }
 
 function stageNames(stages: unknown): string[] {
@@ -116,7 +118,7 @@ export async function matchSessionTemplate(
   }).filter((r) => r.signals.some((s) => s.type === "intent"));
 
   return {
-    candidates: matched.slice(0, CANDIDATES_MAX).map((r) => ({
+    candidates: matched.slice(0, input.limit ?? CANDIDATES_MAX).map((r) => ({
       id: r.candidate.id,
       name: r.candidate.name,
       score: r.score,

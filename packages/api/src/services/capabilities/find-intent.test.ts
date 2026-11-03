@@ -325,6 +325,16 @@ describe("findByIntent — a miss is never bare emptiness", () => {
   });
 });
 
+describe("findByIntent — limit reaches the playbooks arm (ticket a9d88abf)", () => {
+  it("hands the caller's limit to matchSessionTemplate, and ignores a non-positive one", async () => {
+    await findByIntent({ intent: "ship a page", limit: 3, ...lens });
+    expect(matchSessionTemplate.mock.calls[0]![0]).toMatchObject({ limit: 3 });
+    matchSessionTemplate.mockClear();
+    await findByIntent({ intent: "ship a page", limit: -1, ...lens });
+    expect(matchSessionTemplate.mock.calls[0]![0]).toMatchObject({ limit: 5 });
+  });
+});
+
 describe("findByIntent — an unserved intent offers marketplace packages", () => {
   it("an intent match with no verbs attaches up to 3 marketplace packages", async () => {
     queryCatalogCache.mockResolvedValue([
