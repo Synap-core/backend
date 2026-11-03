@@ -475,7 +475,8 @@ function AgentRows({
   const writes = useAgentsOnComputer(computer);
   const modeMark = (agentId: string): string | null => {
     const read = writes.byId.get(agentId);
-    if (!read) return null;
+    if (!read)
+      return writes.failedIds.has(agentId) ? t("agent.mode.failed") : null;
     const { mode, source } = agentModeOnComputer(read);
     const label = writeModeLabel(mode);
     return source === "computer"

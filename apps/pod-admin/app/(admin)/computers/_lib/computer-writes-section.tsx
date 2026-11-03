@@ -62,6 +62,8 @@ const RULES_PREVIEW = 5;
  */
 export function useAgentsOnComputer(computer: ComputerLike): {
   byId: ReadonlyMap<string, AgentOnComputerRead>;
+  /** Agents whose read FAILED (never folded into "not read yet"). */
+  failedIds: ReadonlySet<string>;
   reads: AgentOnComputerRead[] | null;
   isError: boolean;
 } {
@@ -74,12 +76,15 @@ export function useAgentsOnComputer(computer: ComputerLike): {
     )
   );
   const byId = new Map<string, AgentOnComputerRead>();
+  const failedIds = new Set<string>();
   results.forEach((r, i) => {
     if (r.data) byId.set(computer.agents[i]!.id, r.data);
+    else if (r.isError) failedIds.add(computer.agents[i]!.id);
   });
   const isError = results.some((r) => r.isError);
   return {
     byId,
+    failedIds,
     reads:
       !isError && byId.size === computer.agents.length
         ? [...byId.values()]
