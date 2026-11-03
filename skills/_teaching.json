@@ -361,7 +361,7 @@
     "teachesTools": ["generate_widget", "create_cell"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "ViewFrame cell generation: esm.sh imports, SynapWidget bridge, intent reads (board, throughput, needs-you, sessions) for a kind's dashboard.",
+    "summary": "ViewFrame cell generation: what the frame provides (React, @synap/kit, no CDN), SynapWidget bridge, intent reads (board, throughput, needs-you, sessions) for a kind's dashboard.",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,
