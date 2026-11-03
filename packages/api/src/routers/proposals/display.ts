@@ -159,6 +159,11 @@ import {
   loadKeyComputerNames,
   loadMachineNames,
 } from "../../services/machine-roster.js";
+import {
+  askedByFor,
+  readStoredGovernanceDecision,
+  type AskedBy,
+} from "../../utils/proposal-governance-decision.js";
 import { assertEveryOperationRendered } from "./renderable-ops.js";
 import {
   createNameResolvers,
@@ -479,6 +484,14 @@ type DisplayEnrichedProposal = ProposalRow &
      * never rendered.
      */
     governanceRuleId?: string;
+    /**
+     * Why an agent's write ASKED, when the pod knows more than the reason
+     * code (`_governanceDecision`, `proposal-governance-decision.ts`): which
+     * pass of the host step decided — the agent, or the `computer` it runs on
+     * (named, so the card can link to it) — and the `propose` rule that made
+     * it ask, when the viewer may read it. Absent for every other row.
+     */
+    askedBy?: ProposalAskedBy;
     /** What happens on silence — PENDING rows only (`proposalFateFields`). */
     fate?: ProposalFate;
     /** Does an agent wait on it — and why (`resolveProposalWaits`). */
@@ -1420,11 +1433,13 @@ export async function enrichProposalsForDisplay(
   // in the same round — an agent on a computer is named through
   // `actorDisplayName` ("Claude Code on devbox").
   const hostUserIds = uniqueStrings(
-    rows.map((row) =>
+    rows.flatMap((row) => [
       row.agentUserId
         ? (userById.get(row.agentUserId)?.hostUserId ?? undefined)
-        : undefined
-    )
+        : undefined,
+      // The computer that made a proposal ask (stored at filing time).
+      readStoredGovernanceDecision(row.data)?.computerUserId,
+    ])
   );
   // The computer each filing KEY names (B7, `proposals.api_key_id` →
   // `api_keys.instance_label`), read LIVE so labelling a key later names
@@ -1595,6 +1610,11 @@ export async function enrichProposalsForDisplay(
       entityMeta?.type ??
       undefined;
     const governanceRuleId = autoApproveRuleId(row.data);
+    const askedBy = askedByFor(
+      readStoredGovernanceDecision(row.data),
+      hostNames,
+      receiptRules
+    );
     const authorRow = userById.get(
       row.agentUserId ?? row.createdBy ?? request.sourceId
     );
@@ -1960,6 +1980,7 @@ export async function enrichProposalsForDisplay(
       ...(governanceRuleId && receiptRules.has(governanceRuleId)
         ? { governanceRule: receiptRules.get(governanceRuleId)! }
         : {}),
+      ...(askedBy ? { askedBy } : {}),
       // NEW: Resolved names for commonly referenced IDs across proposal kinds
       ...(subjectName ? { subjectName } : {}),
       ...(subjectKind ? { subjectKind } : {}),
@@ -3292,6 +3313,9 @@ export function valueTypeOf(value: unknown): string {
  * named by what it matches (`targetPattern`, worded client-side by the shared
  * `describeWritePattern`) and, for an agent-principal rule, whose it is.
  */
+/** See `askedBy` on the display row (`proposal-governance-decision.ts`). */
+export type ProposalAskedBy = AskedBy<ProposalGovernanceRule>;
+
 export interface ProposalGovernanceRule {
   id: string;
   targetPattern: string;
@@ -3332,7 +3356,13 @@ async function readReceiptRules(
   rows: ReadonlyArray<Pick<ProposalRow, "data">>,
   userId: string
 ): Promise<ReceiptRuleRow[]> {
-  const ruleIds = uniqueStrings(rows.map((row) => autoApproveRuleId(row.data)));
+  // The rule that let a receipt act, and the rule that made a proposal ask.
+  const ruleIds = uniqueStrings(
+    rows.flatMap((row) => [
+      autoApproveRuleId(row.data),
+      readStoredGovernanceDecision(row.data)?.governanceRuleId,
+    ])
+  );
   if (ruleIds.length === 0) return [];
   return db
     .select({

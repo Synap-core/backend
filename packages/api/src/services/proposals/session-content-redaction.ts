@@ -49,6 +49,9 @@ const ENVELOPE_KEEP = [
   "requestedEventId",
   "validatedEventId",
   "_autoApprove",
+  // Why it asked (which rule, which side of the host step) — names the
+  // request's governance, never the session's content.
+  "_governanceDecision",
 ] as const;
 
 interface RedactableRow {
