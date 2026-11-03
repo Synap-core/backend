@@ -2467,6 +2467,20 @@ export interface Channel {
 	updatedAt: Date;
 	mergedAt: Date | null;
 }
+/** Why a row defaults to what it does, in evidence terms. */
+export type DeviceRecommendationReason = 
+/** This OS user's own agent (same seat, engine and job). */
+"this-seat"
+/** An agent made before seats whose newest key this OS user holds. */
+ | "held"
+/** An agent made before seats whose key has not been used for 24 h. */
+ | "idle"
+/** An agent made before seats, in use elsewhere: never re-keyed by default. */
+ | "in-use"
+/** Only agents of other OS users match: they stay as they are. */
+ | "other-seat"
+/** Nothing on this computer matches. */
+ | "new";
 /**
  * Per-user presentation and explicit-open state for user-facing resources.
  */
@@ -15942,25 +15956,49 @@ export interface DeviceRequestView {
 	/** The person's own computers with this hostname: reuse keeps agents, history, rules. */
 	reusableComputers: Array<{
 		/**
-		 * The agents it hosts (`users.host_user_id`), kept by a reconnect, each
-		 * with the newest `last_used_at` over its keys: what the person checks
-		 * before a reconnect replaces those keys.
+		 * The agents it hosts (`users.host_user_id`), each with the newest
+		 * `last_used_at` over its keys, its seat, job, whether a runner served it
+		 * and whether a key of it works now: what the person checks before
+		 * choosing, per row, to add an agent or reconnect one.
 		 */
 		agents: Array<{
+			agentType: string | null;
 			id: string;
 			lastSeenAt: Date | null;
+			live: boolean;
 			name: string;
+			role: string | null;
+			seat: string | null;
+			workerServedAt: Date | null;
+			writeMode: AgentWriteMode | null;
 		}>;
 		/** Whose computer it is today (0388); the approval may change it. */
 		belongsTo: ComputerBelongsTo | null;
 		createdAt: Date;
 		id: string;
 		name: string;
+		/** Per row, what approving does on this computer by default (evidence). */
+		recommended: Array<{
+			action: "add" | "reconnect";
+			agentId: string | null;
+			reason: DeviceRecommendationReason;
+			rowKey: string;
+		}>;
 	}>;
 	/** Days the keys will last (computer override → pod default → 90). */
 	keyTtlDays: number;
 	/** The reach the computer gets — the preset's name, shown in Details. */
 	accessName: string;
+	/** The OS user asking (0395); null from an older CLI. */
+	seat: string | null;
+	/** The agents asked for, each an engine with an optional job (0395). */
+	rows: Array<{
+		agentType: string;
+		key: string;
+		name: string;
+		role: string | null;
+		roleLabel: string | null;
+	}>;
 }
 export type KeyRequestStatusView = "approved" | "consumed" | "denied" | "expired" | "pending";
 export interface KeyRequestView {
@@ -20828,6 +20866,12 @@ declare const ASSIGNMENT_TARGETS: readonly [
 	"workspace"
 ];
 export type AssignmentTarget = (typeof ASSIGNMENT_TARGETS)[number];
+export interface SetAgentJobResult {
+	agentUserId: string;
+	role: string | null;
+	name: string;
+	seat: string | null;
+}
 /** Where a principal's newest key stands — ONE derivation, server-side. */
 export type MachineKeyState = "active" | "expired" | "expiring" | "none" | "revoked";
 export interface MachineKeyView {
@@ -25238,6 +25282,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				activeKeys: number;
 				agentMetadata: AgentMetadata | null;
+				agentRole: string | null;
 				approveUrl: string | null;
 				assignments: {
 					id: string;
@@ -25255,6 +25300,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 				} | null;
 				hostLabel: string | null;
+				hostSeat: string | null;
 				hostUserId: string | null;
 				id: string;
 				isPersonalAgent: boolean;
@@ -25325,6 +25371,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				binding: AgentBindingSummary | null;
 				reach: AgentReach;
 			};
+		}>;
+		setJob: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentUserId: string;
+				label?: string | null | undefined;
+				role: string | null;
+				seat?: string | null | undefined;
+			};
+			meta: object;
+			output: SetAgentJobResult;
 		}>;
 		setPaused: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
@@ -26033,6 +26089,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		decideDeviceRequest: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				agentActions?: {
+					action: "add" | "reconnect" | "skip";
+					agentId?: string | null | undefined;
+					agentType: string;
+					role?: string | null | undefined;
+					roleLabel?: string | null | undefined;
+					writeMode?: "ask-first" | "create-with-undo" | "pod-default" | null | undefined;
+				}[] | null | undefined;
 				agentWriteMode?: "ask-first" | "create-with-undo" | "pod-default" | null | undefined;
 				agents?: string[] | undefined;
 				belongsTo?: "agent" | "person" | "shared" | null | undefined;
@@ -54105,6 +54169,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentMetadata: AgentMetadata | null;
 					agentPausedAt: Date | null;
 					agentPausedBy: string | null;
+					agentRole: string | null;
 					agentTemplate: string | null;
 					agentType: string | null;
 					avatarUrl: string | null;
@@ -54114,6 +54179,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdVia: "cli" | "device" | "intelligence-service" | "system" | "ui" | null;
 					email: string;
 					emailVerified: boolean;
+					hostSeat: string | null;
 					hostUserId: string | null;
 					id: string;
 					isPersonalAgent: boolean;
