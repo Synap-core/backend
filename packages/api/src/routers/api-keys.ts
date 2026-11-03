@@ -60,6 +60,7 @@ import {
 import {
   AGENT_WRITE_MODES,
   MACHINE_AGENT_TYPE,
+  isAgentRoleSlug,
 } from "@synap-core/types/agents";
 import { COMPUTER_BELONGS_TO } from "@synap-core/types/computers";
 import {
@@ -921,8 +922,28 @@ export const apiKeysRouter = router({
         computerName: z.string().trim().min(1).max(80).nullish(),
         /** Whose computer it is (0388); omitted = person's own (new) / unchanged (reused). */
         belongsTo: z.enum(COMPUTER_BELONGS_TO).nullish(),
-        /** How the approved agents' writes land (0394); omitted = ask-first for a new agent. */
+        /** How the ADDED agents' writes land (0394); omitted = ask-first. A reconnect keeps its own (D6). */
         agentWriteMode: z.enum(AGENT_WRITE_MODES).nullish(),
+        /**
+         * Per row (0395): add, reconnect ONE agent of the reused computer, or
+         * skip. Omitted (an older surface): the pod's recommendation by evidence.
+         */
+        agentActions: z
+          .array(
+            z.object({
+              agentType: z.string().min(1).max(64),
+              role: z
+                .string()
+                .refine(isAgentRoleSlug, "a job slug: a-z, 0-9 and dashes")
+                .nullish(),
+              roleLabel: z.string().trim().min(1).max(80).nullish(),
+              action: z.enum(["add", "reconnect", "skip"]),
+              agentId: z.string().min(1).max(64).nullish(),
+              writeMode: z.enum(AGENT_WRITE_MODES).nullish(),
+            })
+          )
+          .max(8)
+          .nullish(),
       })
     )
     .mutation(async ({ ctx, input }) => {

@@ -39,6 +39,9 @@ export interface AgentRosterRowLike
   approveUrl?: string | null;
   /** The computer it runs on (`host_user_id`), named by the pod. */
   hostComputer?: { id: string; name: string } | null;
+  /** 0395: the OS user it runs as on that computer, and its job. */
+  hostSeat?: string | null;
+  agentRole?: string | null;
 }
 
 /** The slice of a `diagnose.agents` standing this page reads. */

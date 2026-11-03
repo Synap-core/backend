@@ -51,6 +51,7 @@ import {
 } from "../../../../lib/agent-writes/agent-writes";
 import { WriteModeChoice } from "../../write-mode-choice";
 import { agentTrustDoor } from "./agent-trust-door";
+import { AgentJob } from "./agent-job";
 import { objectViewsT } from "./copy";
 import {
   agentReviewHref,
@@ -726,6 +727,16 @@ export function AgentObject({
             viewerIsPodAdmin,
           })}
         />
+        {/* 0395: what it is FOR on its computer — its owner only. */}
+        {row.hostComputer && view.ownedByViewer && (
+          <AgentJob
+            agentUserId={row.id}
+            computerName={row.hostComputer.name}
+            role={row.agentRole ?? null}
+            name={row.name ?? null}
+            seat={row.hostSeat ?? null}
+          />
+        )}
         <AgentActions
           view={view}
           roster={roster}

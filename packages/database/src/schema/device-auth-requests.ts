@@ -10,9 +10,21 @@
  * `device-auth-requests.no-plaintext.tripwire.test.ts` refuses a new column
  * that could hold a code, token, secret or key in clear.
  */
-import { pgTable, uuid, text, integer, timestamp } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  uuid,
+  text,
+  integer,
+  jsonb,
+  timestamp,
+} from "drizzle-orm/pg-core";
 import type { AgentWriteMode } from "@synap-core/types/agents";
 import type { ComputerBelongsTo } from "@synap-core/types/computers";
+import type {
+  DeviceHeldKey,
+  DeviceRequestedRow,
+  DeviceStoredAgentAction,
+} from "@synap-core/types/device";
 import { users } from "./users.js";
 
 export const DEVICE_AUTH_STATUSES = [
@@ -53,6 +65,18 @@ export const deviceAuthRequests = pgTable("device_auth_requests", {
    * choice sent (an older surface): a new agent starts ask-first, as before.
    */
   agentWriteMode: text("agent_write_mode").$type<AgentWriteMode>(),
+  /**
+   * What a newer CLI sends (0395, "Computer once, agents inside"), all NULL
+   * from an older one: the OS user asking (`seat`), its stable id (`seat_id`,
+   * the instance of this seat's computer key), the key ids it holds locally
+   * (`held`: evidence, never a secret), the agents it asks for with their job
+   * (`requested_rows`), and the person's decision per row (`agent_actions`).
+   */
+  seat: text("seat"),
+  seatId: text("seat_id"),
+  held: jsonb("held").$type<DeviceHeldKey[]>(),
+  requestedRows: jsonb("requested_rows").$type<DeviceRequestedRow[]>(),
+  agentActions: jsonb("agent_actions").$type<DeviceStoredAgentAction[]>(),
   mintedKeyId: uuid("minted_key_id"),
   failedCodeAttempts: integer("failed_code_attempts").notNull().default(0),
   pollIntervalSeconds: integer("poll_interval_seconds").notNull().default(5),

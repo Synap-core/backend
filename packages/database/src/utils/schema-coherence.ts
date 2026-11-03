@@ -1271,6 +1271,44 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "agent_write_mode",
     addedBy: "0394_device_agent_write_mode.sql",
   },
+  // Agents inside a computer (0395): the seat and job are part of every
+  // service agent's identity lookup, and the device door writes the rest.
+  // Missing means every agent mint and every device request would 42703.
+  {
+    table: "users",
+    column: "host_seat",
+    addedBy: "0395_agents_inside_a_computer.sql",
+  },
+  {
+    table: "users",
+    column: "agent_role",
+    addedBy: "0395_agents_inside_a_computer.sql",
+  },
+  {
+    table: "device_auth_requests",
+    column: "seat",
+    addedBy: "0395_agents_inside_a_computer.sql",
+  },
+  {
+    table: "device_auth_requests",
+    column: "seat_id",
+    addedBy: "0395_agents_inside_a_computer.sql",
+  },
+  {
+    table: "device_auth_requests",
+    column: "held",
+    addedBy: "0395_agents_inside_a_computer.sql",
+  },
+  {
+    table: "device_auth_requests",
+    column: "requested_rows",
+    addedBy: "0395_agents_inside_a_computer.sql",
+  },
+  {
+    table: "device_auth_requests",
+    column: "agent_actions",
+    addedBy: "0395_agents_inside_a_computer.sql",
+  },
   {
     table: "governance_rules",
     column: "principal_class",

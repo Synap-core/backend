@@ -5,7 +5,12 @@
  * auth skip list and the idempotency skip list (they return one-shot secrets).
  * Creation is budgeted per IP at the pod edge (rate class `device_auth`).
  *
- *   POST /setup/device        {clientName, hostname, platform?, agents?}
+ *   POST /setup/device        {clientName, hostname, platform?, agents?,
+ *                              seat?, seatId?, rows?, held?}
+ *     `seat` the OS user, `seatId` its stable id (sha256 of machine id + seat),
+ *     `rows` [{agentType, role?, roleLabel?}] the agents with their job,
+ *     `held` [{keyId, agentUserId?}] the keys this seat keeps (ids only).
+ *     All four are optional (0395): an older CLI sends none and still pairs.
  *     → 200 {device_code, user_code, verification_uri,
  *            verification_uri_complete, expires_in: 600, interval: 5}
  *   POST /setup/device/token  {device_code}  (JSON or form; `grant_type`
@@ -19,9 +24,8 @@
  * `apiKeys.decideDeviceRequest`.
  */
 
-import { z } from "zod";
 import { logger, type HubHono, httpStatusForTrpcError } from "./_shared.js";
-import { SURFACE_AGENT_TYPES } from "./setup.js";
+import { DeviceCreateBody as CreateBody } from "./device-body.js";
 import { toPodAdminOrigin } from "../../../utils/pod-admin-origin.js";
 import {
   DEVICE_MAX_AGENTS,
@@ -29,16 +33,6 @@ import {
   createDeviceRequest,
   type DeviceTokenError,
 } from "../../../services/machine-connect.js";
-
-const CreateBody = z.object({
-  clientName: z.string().trim().min(1).max(80),
-  hostname: z.string().trim().min(1).max(253),
-  platform: z.string().trim().max(40).optional(),
-  agents: z
-    .array(z.enum(SURFACE_AGENT_TYPES))
-    .max(DEVICE_MAX_AGENTS)
-    .optional(),
-});
 
 /** Human words for each RFC 8628 error (`error_description`). */
 const ERROR_DESCRIPTIONS = {
@@ -135,6 +129,22 @@ export function registerDeviceRoutes(app: HubHono): void {
         hostname: parsed.data.hostname,
         platform: parsed.data.platform ?? null,
         agents: parsed.data.agents ?? [],
+        seat: parsed.data.seat ?? null,
+        seatId: parsed.data.seatId ?? null,
+        // An engine named in `agents` but in no row keeps its plain row.
+        ...(parsed.data.rows?.length
+          ? {
+              rows: [
+                ...parsed.data.rows,
+                ...(parsed.data.agents ?? [])
+                  .filter(
+                    (a) => !parsed.data.rows!.some((r) => r.agentType === a)
+                  )
+                  .map((agentType) => ({ agentType })),
+              ].slice(0, DEVICE_MAX_AGENTS),
+            }
+          : {}),
+        ...(parsed.data.held?.length ? { held: parsed.data.held } : {}),
         requesterIp: clientIp(c),
         userAgent: c.req.header("user-agent") ?? null,
         podAdminOrigin: toPodAdminOrigin(origin),

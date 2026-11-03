@@ -74,6 +74,8 @@ import {
 } from "../services/agent-connect.js";
 import { links, tools } from "@synap/database/schema";
 import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
+import { assertSignedInPerson } from "../utils/signed-in-person.js";
+import { setAgentJob } from "../services/agent-job.js";
 import { isAgentCaller } from "../services/library/agent-door.js";
 import { AGENT_POSTURE_NAMES } from "@synap/governance-policy/postures";
 import { createLink } from "../services/links/links-service.js";
@@ -157,6 +159,9 @@ export async function queryAgentUsers(
           pausedAt: users.agentPausedAt,
           // The computer it runs on (`host_user_id`) — named in `list`.
           hostUserId: users.hostUserId,
+          // 0395: the OS user on it and the agent's job (the Job door).
+          hostSeat: users.hostSeat,
+          agentRole: users.agentRole,
           role: workspaceMembers.role,
           joinedAt: workspaceMembers.joinedAt,
         })
@@ -180,6 +185,8 @@ export async function queryAgentUsers(
       pausedAt: users.agentPausedAt,
       // The computer it runs on (`host_user_id`) — named in `list`.
       hostUserId: users.hostUserId,
+      hostSeat: users.hostSeat,
+      agentRole: users.agentRole,
     })
     .from(users)
     .where(
@@ -1329,6 +1336,37 @@ export const agentUsersRouter = router({
         callerId: ctx.userId,
         agentUserId: input.agentUserId,
         paused: input.paused,
+      });
+    }),
+
+  /**
+   * The Job door (0395, plan "Computer once, agents inside" §7): what an
+   * agent on a computer is FOR — its job (role slug), its name, and, for an
+   * agent made before seats, the OS user it runs as. Same agent, same key:
+   * nothing is re-keyed. PERSON-ONLY, signed in: every key is refused (an
+   * agent must never re-label itself or another). Owner only. A combination
+   * another agent holds is refused (CONFLICT).
+   */
+  setJob: protectedProcedure
+    .input(
+      z.object({
+        agentUserId: z.string().uuid(),
+        role: z.string().trim().max(63).nullable(),
+        label: z.string().trim().max(80).nullish(),
+        seat: z.string().trim().max(64).nullish(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      assertSignedInPerson(
+        ctx,
+        "Only you, signed in, can change an agent's job. A key cannot."
+      );
+      return setAgentJob({
+        callerId: ctx.userId,
+        agentUserId: input.agentUserId,
+        role: input.role,
+        label: input.label ?? null,
+        seat: input.seat ?? null,
       });
     }),
 

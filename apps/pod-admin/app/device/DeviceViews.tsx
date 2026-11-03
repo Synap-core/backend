@@ -35,15 +35,28 @@ import { GRANT_PRESETS } from "@synap-core/types/grants";
 import { Outcome } from "../approve-agent/[keyId]/ApproveForm";
 import { WriteModeChoice } from "../_lib/write-mode-choice";
 import {
+  AGENT_WRITE_MODE_CHOICES,
+  agentRoleSlug,
+} from "@synap-core/types/agents";
+import {
   COMPUTER_NOUN,
   DEVICE_RUN_AGAIN_COMMAND,
   accessLine,
+  askerLine,
   canApprove,
+  computerHasSeats,
   computerLine,
+  deviceRows,
+  deviceTitle,
   formatCode,
+  hostedAgentDisplay,
+  hostedAgentFacts,
   hostedAgentName,
   reconnectLine,
+  rowAgentDisplay,
   statusLabel,
+  untouchedAgents,
+  type DeviceAgentChoice,
   type DeviceRequest,
 } from "./device-model";
 
@@ -147,6 +160,13 @@ export interface PendingViewProps {
   /** How the kept agents' changes land (`AGENT_WRITE_MODE_CHOICES`). */
   agentWriteMode: AgentWriteMode;
   onAgentWriteMode: (v: AgentWriteMode) => void;
+  /**
+   * Per row (a 0395 pod, which serves `rows`): add / reconnect one agent /
+   * skip, with the job of an added agent and, for a reconnect, a permission
+   * change only when the person makes one (D6).
+   */
+  actions?: DeviceAgentChoice[];
+  onActions?: (v: DeviceAgentChoice[]) => void;
   busy: "approve" | "deny" | null;
   error: string | null;
   onApprove: () => void;
@@ -163,11 +183,19 @@ export function PendingView(p: PendingViewProps) {
   const r = p.request;
   const name = p.computerName.trim() || r.hostname;
   const preset = GRANT_PRESETS.find((g) => g.name === r.accessName);
+  // A 0395 pod serves `rows`: the decision is per agent, by evidence.
+  const perRow = Boolean(r.rows && p.actions && p.onActions);
+  const actions = p.actions ?? [];
+  const adds = actions.filter((a) => a.action === "add");
   return (
     <>
       <Header
         eyebrow={`Connect a ${COMPUTER_NOUN.toLowerCase()}`}
-        title={`Connect ${name}?`}
+        title={
+          perRow
+            ? deviceTitle(r, p.reuseId, p.computerName, actions)
+            : `Connect ${name}?`
+        }
       />
       <CardBody className={`flex flex-col gap-5 ${PAD} pb-7 pt-5`}>
         {/* The device binding: the person compares, the pod already matched. */}
@@ -198,9 +226,34 @@ export function PendingView(p: PendingViewProps) {
           </div>
           <p className="text-small text-foreground/85">
             {computerLine(r, p.ago)}
+            {perRow && askerLine(r, p.reuseId)
+              ? ` · ${askerLine(r, p.reuseId)}`
+              : ""}
           </p>
 
-          {r.reusableComputers.length > 0 && (
+          {perRow && r.reusableComputers.length > 0 && (
+            <RadioGroup
+              aria-label={COMPUTER_NOUN}
+              size="sm"
+              value={p.reuseId ?? NEW}
+              onValueChange={(v) => p.onReuse(v === NEW ? null : v)}
+            >
+              {r.reusableComputers.map((c) => (
+                <Radio
+                  key={c.id}
+                  value={c.id}
+                  description={`Already connected · ${(c.agents ?? []).length} agent${(c.agents ?? []).length === 1 ? "" : "s"}`}
+                >
+                  {c.name}
+                </Radio>
+              ))}
+              <Radio value={NEW}>
+                Add as a new {COMPUTER_NOUN.toLowerCase()}
+              </Radio>
+            </RadioGroup>
+          )}
+
+          {!perRow && r.reusableComputers.length > 0 && (
             <RadioGroup
               aria-label={COMPUTER_NOUN}
               size="sm"
@@ -232,8 +285,20 @@ export function PendingView(p: PendingViewProps) {
           />
         </section>
 
+        {perRow && (
+          <AgentRows
+            request={r}
+            reuseId={p.reuseId}
+            computerName={name}
+            actions={actions}
+            onActions={p.onActions!}
+            isDisabled={p.busy !== null}
+            ago={p.ago}
+          />
+        )}
+
         {/* OMIT when the terminal asked for no agent. */}
-        {r.agents.length > 0 && (
+        {!perRow && r.agents.length > 0 && (
           <section className="flex flex-col gap-2">
             <p className="text-tiny font-medium uppercase tracking-wide text-foreground/65">
               Agents it will set up
@@ -253,14 +318,14 @@ export function PendingView(p: PendingViewProps) {
           </section>
         )}
 
-        {/* OMIT when no agent is kept: the choice is about the agents. */}
-        {p.agents.length > 0 && (
+        {/* OMIT when no agent is kept (or added): the choice is about them. */}
+        {(perRow ? adds.length > 0 : p.agents.length > 0) && (
           <section className="flex flex-col gap-2">
             <p className="text-tiny font-medium uppercase tracking-wide text-foreground/65">
-              {WRITE_MODE_QUESTION}
+              {perRow ? ADDED_WRITE_MODE_QUESTION : WRITE_MODE_QUESTION}
             </p>
             <WriteModeChoice
-              label={WRITE_MODE_QUESTION}
+              label={perRow ? ADDED_WRITE_MODE_QUESTION : WRITE_MODE_QUESTION}
               value={p.agentWriteMode}
               onChange={p.onAgentWriteMode}
               isDisabled={p.busy !== null}
@@ -342,6 +407,211 @@ export function PendingView(p: PendingViewProps) {
           </dl>
         </details>
       </CardBody>
+    </>
+  );
+}
+
+/** The question over the write mode when agents are added (0395). */
+export const ADDED_WRITE_MODE_QUESTION = "How the added agents' changes land";
+
+/** "Nothing else on devbox changes." — the reassurance under the rows. */
+export function nothingElseLine(computerName: string): string {
+  return `Nothing else on ${computerName} changes.`;
+}
+
+const modeLabel = (mode: AgentWriteMode | null | undefined) =>
+  AGENT_WRITE_MODE_CHOICES.find((c) => c.mode === mode)?.label ?? null;
+
+/**
+ * 0395: the agents of the computer, one decision per row. What is already
+ * there and stays as it is; then each agent asked for — add it (with a job),
+ * reconnect ONE agent of the same engine and job, or leave it out.
+ */
+function AgentRows({
+  request: r,
+  reuseId,
+  computerName,
+  actions,
+  onActions,
+  isDisabled,
+  ago,
+}: {
+  request: DeviceRequest;
+  reuseId: string | null;
+  computerName: string;
+  actions: DeviceAgentChoice[];
+  onActions: (v: DeviceAgentChoice[]) => void;
+  isDisabled: boolean;
+  ago: (iso: string) => string;
+}) {
+  const computer = r.reusableComputers.find((c) => c.id === reuseId);
+  const showSeat = computerHasSeats(computer, r.seat);
+  const kept = untouchedAgents(r, reuseId, actions);
+  const rows = deviceRows(r);
+  const set = (i: number, patch: Partial<DeviceAgentChoice>) =>
+    onActions(actions.map((a, j) => (j === i ? { ...a, ...patch } : a)));
+  return (
+    <>
+      {/* OMIT on a new computer: nothing is there yet. */}
+      {computer && kept.length > 0 && (
+        <section className="flex flex-col gap-2" data-testid="device-kept">
+          <p className="text-tiny font-medium uppercase tracking-wide text-foreground/65">
+            On {computerName} now, these stay as they are
+          </p>
+          <ul className="flex flex-col gap-1">
+            {kept.map((a) => (
+              <li key={a.id} className="text-small text-foreground/85">
+                {hostedAgentDisplay(a, computerName, showSeat)}
+                <span className="text-foreground/65">
+                  {" "}
+                  · {hostedAgentFacts(a, ago)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {rows.length > 0 && (
+        <section className="flex flex-col gap-3" data-testid="device-rows">
+          <p className="text-tiny font-medium uppercase tracking-wide text-foreground/65">
+            {r.seat ? `For OS user "${r.seat}"` : `Agents it will set up`}
+          </p>
+          {actions.map((a, i) => {
+            const candidates = (computer?.agents ?? []).filter(
+              (h) =>
+                h.agentType === a.agentType &&
+                (h.role ?? null) === (rows[i]?.role ?? null)
+            );
+            const target = candidates.find((h) => h.id === a.agentId);
+            const current = modeLabel(target?.writeMode);
+            return (
+              <div
+                key={a.rowKey}
+                className="flex flex-col gap-2 rounded-lg px-3 py-2.5 ring-1 ring-inset ring-foreground/10"
+              >
+                <Checkbox
+                  size="sm"
+                  isSelected={a.action !== "skip"}
+                  isDisabled={isDisabled}
+                  onValueChange={(on) =>
+                    set(i, {
+                      action: on
+                        ? candidates.length > 0 && a.agentId
+                          ? "reconnect"
+                          : "add"
+                        : "skip",
+                    })
+                  }
+                >
+                  {a.action === "reconnect" && target
+                    ? `Reconnect ${hostedAgentDisplay(target, computerName, showSeat)}`
+                    : `Add ${rowAgentDisplay(a, computerName, r.seat, showSeat)}`}
+                </Checkbox>
+
+                {a.action !== "skip" && candidates.length > 0 && (
+                  <RadioGroup
+                    aria-label="Add or reconnect"
+                    size="sm"
+                    value={
+                      a.action === "reconnect" && a.agentId ? a.agentId : NEW
+                    }
+                    isDisabled={isDisabled}
+                    onValueChange={(v) =>
+                      set(
+                        i,
+                        v === NEW
+                          ? {
+                              action: "add",
+                              agentId: null,
+                              writeMode: undefined,
+                            }
+                          : {
+                              action: "reconnect",
+                              agentId: v,
+                              writeMode: undefined,
+                            }
+                      )
+                    }
+                  >
+                    <Radio
+                      value={NEW}
+                      description="Its own key; the others keep theirs."
+                    >
+                      Add a new agent
+                    </Radio>
+                    {candidates.map((h) => (
+                      <Radio
+                        key={h.id}
+                        value={h.id}
+                        description={`${hostedAgentFacts(h, ago)} → new key; it stops until this terminal finishes.`}
+                      >
+                        Reconnect{" "}
+                        {hostedAgentDisplay(h, computerName, showSeat)}
+                      </Radio>
+                    ))}
+                  </RadioGroup>
+                )}
+
+                {a.action === "add" && (
+                  <Input
+                    size="sm"
+                    label="Job (optional)"
+                    placeholder="e.g. CRM worker"
+                    value={a.roleLabel ?? ""}
+                    isDisabled={isDisabled}
+                    maxLength={80}
+                    onValueChange={(v) => {
+                      const slug = agentRoleSlug(v);
+                      set(i, {
+                        role: slug || null,
+                        roleLabel: slug ? v : null,
+                      });
+                    }}
+                  />
+                )}
+
+                {a.action === "reconnect" && target && (
+                  <div className="flex flex-col gap-1.5">
+                    <p className="text-small text-foreground/85">
+                      {a.writeMode
+                        ? "Its changes will land as you choose below."
+                        : `Keeps its permission${current ? `: ${current}` : ""}.`}
+                    </p>
+                    {a.writeMode ? (
+                      <WriteModeChoice
+                        label={`How ${hostedAgentDisplay(target, computerName, false)}'s changes land`}
+                        value={a.writeMode}
+                        onChange={(m) => set(i, { writeMode: m })}
+                        isDisabled={isDisabled}
+                      />
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="light"
+                        className="self-start"
+                        isDisabled={isDisabled}
+                        onPress={() =>
+                          set(i, {
+                            writeMode: target.writeMode ?? "pod-default",
+                          })
+                        }
+                      >
+                        Change its permission…
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {computer && (
+            <p className="text-small text-foreground/65">
+              {nothingElseLine(computerName)}
+            </p>
+          )}
+        </section>
+      )}
     </>
   );
 }

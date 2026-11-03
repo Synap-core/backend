@@ -25,6 +25,16 @@
  * recommended), or ask-first when the approving surface sent none.
  * Reach: the "AI — read & propose" preset; an agent's grant is clipped to the
  * computer's (`clipHostedAgentGrants`, inside `attachGrantsOrRevoke`).
+ *
+ * AGENTS INSIDE A COMPUTER (0395, plan "Computer once, agents inside" D1-D9):
+ * a computer is approved once; each agent inside it is one per (person,
+ * computer, SEAT = the OS user, ENGINE = agentType, ROLE = its job). A newer
+ * CLI names its seat (`seat`, `seatId`), the keys it holds (`held`) and the
+ * job of each agent (`rows`); an older one names none of them. The person's
+ * decision is per row: add an agent, reconnect ONE agent, or skip — defaulted
+ * by evidence (`recommendRowAction`, @synap-core/types/device), never by the
+ * hostname. Collection re-keys only what was decided: this seat's computer
+ * key, and the agents the person ticked. Nothing else on the computer changes.
  */
 
 import { createHash, randomBytes, timingSafeEqual } from "crypto";
@@ -37,8 +47,11 @@ import {
   inArray,
   isNull,
   lt,
+  or,
   sql,
   drizzleSql,
+  notAnAppAgent,
+  readReversibleDefault,
   ApiKeyRepository,
   EventRepository,
 } from "@synap/database";
@@ -64,10 +77,28 @@ import {
 } from "@synap-core/types/grants";
 import {
   MACHINE_AGENT_TYPE,
+  UNNAMED_SEAT_PREFIX,
   agentDisplayName,
+  agentInComputerName,
   agentPostureOfWriteMode,
+  agentRoleLabel,
+  isUnclaimedSeat,
+  resolveAgentWriteMode,
   type AgentWriteMode,
 } from "@synap-core/types/agents";
+import {
+  DEVICE_IN_USE_WINDOW_MS,
+  DEVICE_MAX_AGENTS,
+  recommendRowAction,
+  rowKey,
+  type DeviceAgentAction,
+  type DeviceAgentActionKind,
+  type DeviceHeldKey,
+  type DeviceRecommendationReason,
+  type DeviceRequestedRow,
+  type DeviceStoredAgentAction,
+  type EvidenceAgent,
+} from "@synap-core/types/device";
 import type { ComputerBelongsTo } from "@synap-core/types/computers";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import { auditLog } from "../utils/audit-log.js";
@@ -102,8 +133,8 @@ export const DEVICE_POLL_INTERVAL_SECONDS = 5;
 export const DEVICE_SLOW_DOWN_STEP_SECONDS = 5;
 /** Wrong codes a request (and a person, per window) may take before it locks. */
 export const DEVICE_MAX_WRONG_CODES = 5;
-/** Agents one request may ask for. */
-export const DEVICE_MAX_AGENTS = 8;
+/** Agents one request may ask for (one constant, @synap-core/types/device). */
+export { DEVICE_MAX_AGENTS };
 
 /**
  * The token endpoint's RFC 8628 §3.5 error vocabulary (+ `invalid_grant`, the
@@ -170,6 +201,15 @@ export interface CreateDeviceRequestInput {
   platform?: string | null;
   /** Agent types to run on this computer (validated by the route). */
   agents: readonly string[];
+  /**
+   * 0395, all optional (an older CLI sends none): the OS user asking, its
+   * stable id (this seat's computer-key instance), the agents with their job,
+   * and the key ids this seat holds locally (evidence, never a secret).
+   */
+  seat?: string | null;
+  seatId?: string | null;
+  rows?: readonly DeviceRequestedRow[];
+  held?: readonly DeviceHeldKey[];
   requesterIp?: string | null;
   userAgent?: string | null;
   /** pod-admin origin, for `verification_uri`. */
@@ -195,6 +235,8 @@ export async function createDeviceRequest(
 
   const deviceCode = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + DEVICE_REQUEST_TTL_SECONDS * 1000);
+  const rows = normalizeRows(input.rows, input.agents);
+  const engines = [...new Set(rows.map((r) => r.agentType))];
   // A user code is unique among PENDING requests (partial unique index); a
   // collision is ~1/31^8 — retry a few times rather than ever reuse one.
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -206,7 +248,11 @@ export async function createDeviceRequest(
         clientName: input.clientName,
         hostname: input.hostname,
         platform: input.platform ?? null,
-        requestedAgents: [...new Set(input.agents)],
+        requestedAgents: engines,
+        seat: input.seat ?? null,
+        seatId: input.seatId ?? null,
+        held: input.held?.length ? [...input.held] : null,
+        requestedRows: input.rows?.length ? rows : null,
         requesterIp: input.requesterIp ?? null,
         userAgent: input.userAgent ?? null,
         pollIntervalSeconds: DEVICE_POLL_INTERVAL_SECONDS,
@@ -224,7 +270,9 @@ export async function createDeviceRequest(
           kind: "device_request",
           hostname: input.hostname,
           clientName: input.clientName,
-          agents: input.agents,
+          agents: engines,
+          rows,
+          seat: input.seat ?? null,
           requesterIp: input.requesterIp ?? null,
         },
       });
@@ -241,6 +289,42 @@ export async function createDeviceRequest(
     }
   }
   throw new Error("unreachable");
+}
+
+/**
+ * The rows a request asks for: the CLI's `rows` (engine + job), deduped by
+ * (engine, job), else one plain row per engine of `agents` (an older CLI).
+ */
+function normalizeRows(
+  rows: readonly DeviceRequestedRow[] | null | undefined,
+  agents: readonly string[]
+): Array<{ agentType: string; role: string | null; roleLabel: string | null }> {
+  const source: readonly DeviceRequestedRow[] = rows?.length
+    ? rows
+    : agents.map((agentType) => ({ agentType }));
+  const seen = new Set<string>();
+  const out: Array<{
+    agentType: string;
+    role: string | null;
+    roleLabel: string | null;
+  }> = [];
+  for (const r of source) {
+    const role = r.role ?? null;
+    const key = rowKey(r.agentType, role);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      agentType: r.agentType,
+      role,
+      roleLabel: role ? agentRoleLabel(role, r.roleLabel) : null,
+    });
+  }
+  return out;
+}
+
+/** A stored request's rows (0395), else one per requested engine. */
+function rowsOf(row: DeviceAuthRequest) {
+  return normalizeRows(row.requestedRows, row.requestedAgents);
 }
 
 // ── 2. Review (signed-in person) ────────────────────────────────────────────
@@ -300,16 +384,44 @@ export interface DeviceRequestView {
     /** Whose computer it is today (0388); the approval may change it. */
     belongsTo: ComputerBelongsTo | null;
     /**
-     * The agents it hosts (`users.host_user_id`), kept by a reconnect, each
-     * with the newest `last_used_at` over its keys: what the person checks
-     * before a reconnect replaces those keys.
+     * The agents it hosts (`users.host_user_id`), each with the newest
+     * `last_used_at` over its keys, its seat, job, whether a runner served it
+     * and whether a key of it works now: what the person checks before
+     * choosing, per row, to add an agent or reconnect one.
      */
-    agents: Array<{ id: string; name: string; lastSeenAt: Date | null }>;
+    agents: Array<{
+      id: string;
+      name: string;
+      lastSeenAt: Date | null;
+      agentType: string | null;
+      seat: string | null;
+      role: string | null;
+      workerServedAt: Date | null;
+      live: boolean;
+      writeMode: AgentWriteMode | null;
+    }>;
+    /** Per row, what approving does on this computer by default (evidence). */
+    recommended: Array<{
+      rowKey: string;
+      action: "add" | "reconnect";
+      agentId: string | null;
+      reason: DeviceRecommendationReason;
+    }>;
   }>;
   /** Days the keys will last (computer override → pod default → 90). */
   keyTtlDays: number;
   /** The reach the computer gets — the preset's name, shown in Details. */
   accessName: string;
+  /** The OS user asking (0395); null from an older CLI. */
+  seat: string | null;
+  /** The agents asked for, each an engine with an optional job (0395). */
+  rows: Array<{
+    key: string;
+    agentType: string;
+    role: string | null;
+    roleLabel: string | null;
+    name: string;
+  }>;
 }
 
 function viewStatus(row: DeviceAuthRequest): DeviceRequestView["status"] {
@@ -361,40 +473,9 @@ export async function getDeviceRequest(args: {
         drizzleSql`${users.agentMetadata}->>'hostname' = ${row.hostname}`
       )
     );
-  const hosted = reusable.length
-    ? await db
-        .select({
-          id: users.id,
-          name: users.name,
-          agentType: users.agentType,
-          hostUserId: users.hostUserId,
-        })
-        .from(users)
-        .where(
-          inArray(
-            users.hostUserId,
-            reusable.map((r) => r.id)
-          )
-        )
-    : [];
-  const hostedKeys = hosted.length
-    ? await db
-        .select({ userId: apiKeys.userId, lastUsedAt: apiKeys.lastUsedAt })
-        .from(apiKeys)
-        .where(
-          inArray(
-            apiKeys.userId,
-            hosted.map((a) => a.id)
-          )
-        )
-    : [];
-  const lastSeenOf = (userId: string): Date | null =>
-    hostedKeys
-      .filter((k) => k.userId === userId && k.lastUsedAt)
-      .reduce<Date | null>(
-        (max, k) => (!max || k.lastUsedAt! > max ? k.lastUsedAt : max),
-        null
-      );
+  const hosted = await hostedAgentsOf(reusable.map((r) => r.id));
+  const rows = rowsOf(row);
+  const now = Date.now();
   return {
     requestId: row.id,
     status: viewStatus(row),
@@ -424,13 +505,131 @@ export async function getDeviceRequest(args: {
           id: a.id,
           name:
             a.name?.trim() || (a.agentType ? agentTypeName(a.agentType) : ""),
-          lastSeenAt: lastSeenOf(a.id),
+          lastSeenAt: a.lastSeenAt,
+          agentType: a.agentType,
+          seat: a.seat,
+          role: a.role,
+          workerServedAt: a.workerServedAt,
+          live: a.live,
+          writeMode: a.writeMode,
         }))
         .sort((a, b) => a.name.localeCompare(b.name)),
+      recommended: rows.map((rw) => ({
+        rowKey: rowKey(rw.agentType, rw.role),
+        ...recommendRowAction({
+          row: rw,
+          seat: row.seat,
+          heldKeyIds: (row.held ?? []).map((k) => k.keyId),
+          agents: hosted.filter((a) => a.hostUserId === r.id),
+          now,
+        }),
+      })),
     })),
     keyTtlDays: await resolveMachineKeyTtlDays(null),
     accessName: AI_PRESET_NAME,
+    seat: row.seat,
+    rows: rows.map((rw) => ({
+      key: rowKey(rw.agentType, rw.role),
+      agentType: rw.agentType,
+      role: rw.role,
+      roleLabel: rw.roleLabel,
+      name: agentTypeName(rw.agentType),
+    })),
   };
+}
+
+/**
+ * The agents these computers host, with what the device page and the
+ * evidence rule read: seat, job, newest key, newest use over its LIVE keys,
+ * whether a runner served it, and how its changes land today. Oldest first,
+ * so a rule that picks "the first match" picks the stable one.
+ */
+async function hostedAgentsOf(machineIds: readonly string[]): Promise<
+  Array<
+    EvidenceAgent & {
+      name: string | null;
+      hostUserId: string;
+      lastSeenAt: Date | null;
+      workerServedAt: Date | null;
+      live: boolean;
+      writeMode: AgentWriteMode | null;
+    }
+  >
+> {
+  if (machineIds.length === 0) return [];
+  const hosted = await db
+    .select({
+      id: users.id,
+      name: users.name,
+      agentType: users.agentType,
+      hostUserId: users.hostUserId,
+      seat: users.hostSeat,
+      role: users.agentRole,
+    })
+    .from(users)
+    .where(
+      and(
+        inArray(users.hostUserId, [...machineIds]),
+        eq(users.userType, "agent"),
+        notAnAppAgent(users.id)
+      )
+    )
+    .orderBy(users.createdAt);
+  if (hosted.length === 0) return [];
+  const keys = await db
+    .select({
+      id: apiKeys.id,
+      userId: apiKeys.userId,
+      lastUsedAt: apiKeys.lastUsedAt,
+      workerServedAt: apiKeys.workerServedAt,
+      isActive: apiKeys.isActive,
+      revokedAt: apiKeys.revokedAt,
+      expiresAt: apiKeys.expiresAt,
+      createdAt: apiKeys.createdAt,
+    })
+    .from(apiKeys)
+    .where(
+      inArray(
+        apiKeys.userId,
+        hosted.map((a) => a.id)
+      )
+    );
+  const now = Date.now();
+  const isLive = (k: (typeof keys)[number]) =>
+    k.isActive && !k.revokedAt && (!k.expiresAt || k.expiresAt.getTime() > now);
+  const maxDate = (ds: Array<Date | null>): Date | null =>
+    ds.reduce<Date | null>((m, d) => (d && (!m || d > m) ? d : m), null);
+  const podDefault = (await readReversibleDefault(db)).enabled;
+  const out = [];
+  for (const a of hosted) {
+    const own = keys.filter((k) => k.userId === a.id);
+    const live = own.filter(isLive);
+    const newest = [...own].sort(
+      (x, y) => y.createdAt.getTime() - x.createdAt.getTime()
+    )[0];
+    const state = await readAgentGovernance({ db, agentUserId: a.id });
+    out.push({
+      id: a.id,
+      name: a.name,
+      agentType: a.agentType ?? "",
+      hostUserId: a.hostUserId!,
+      seat: a.seat,
+      role: a.role,
+      newestKeyId: newest?.id ?? null,
+      liveKeyLastUsedAt: maxDate(live.map((k) => k.lastUsedAt)),
+      lastSeenAt: maxDate(own.map((k) => k.lastUsedAt)),
+      workerServedAt: maxDate(own.map((k) => k.workerServedAt)),
+      live: live.length > 0,
+      writeMode: state
+        ? resolveAgentWriteMode({
+            posture: state.posture,
+            podDefaultEnabled: podDefault,
+            writesRequireProposal: state.writesRequireProposal,
+          })
+        : null,
+    });
+  }
+  return out;
 }
 
 export interface DecideDeviceRequestInput {
@@ -451,12 +650,114 @@ export interface DecideDeviceRequestInput {
    */
   belongsTo?: ComputerBelongsTo | null;
   /**
-   * Approve: how the approved agents' writes land (0394), one of
-   * `AGENT_WRITE_MODE_CHOICES`. Applied to every approved agent, a reused one
-   * too (the person chose it now, signed in). Omitted: a new agent starts
-   * ask-first and one already set keeps its own.
+   * Approve: how the ADDED agents' writes land (0394), one of
+   * `AGENT_WRITE_MODE_CHOICES`. Omitted: a new agent starts ask-first. A
+   * reconnected agent keeps its own (D6, amends 0394) unless its row says.
    */
   agentWriteMode?: AgentWriteMode | null;
+  /**
+   * Approve, per row (0395): add an agent, reconnect ONE agent of the reused
+   * computer, or skip. Omitted (an older surface): each kept engine takes the
+   * pod's recommendation by evidence — never a hostname reconnect.
+   */
+  agentActions?: readonly DeviceAgentAction[] | null;
+}
+
+/**
+ * The decision per row, checked and stored until the terminal collects:
+ * the person's `agentActions`, else every kept row at its recommendation.
+ * A reconnect must name an agent this computer hosts for this person, of the
+ * row's engine; nothing else may be re-keyed.
+ */
+async function resolveAgentActions(args: {
+  row: DeviceAuthRequest;
+  personId: string;
+  reuseComputerId: string | null;
+  keptEngines: readonly string[];
+  actions: readonly DeviceAgentAction[] | null | undefined;
+}): Promise<DeviceStoredAgentAction[]> {
+  const { row } = args;
+  const hosted = args.reuseComputerId
+    ? await hostedAgentsOf([args.reuseComputerId])
+    : [];
+  if (!args.actions) {
+    const heldKeyIds = (row.held ?? []).map((k) => k.keyId);
+    const now = Date.now();
+    return rowsOf(row)
+      .filter((r) => args.keptEngines.includes(r.agentType))
+      .map((r) => {
+        const rec = args.reuseComputerId
+          ? recommendRowAction({
+              row: r,
+              seat: row.seat,
+              heldKeyIds,
+              agents: hosted,
+              now,
+            })
+          : { action: "add" as const, agentId: null };
+        return {
+          agentType: r.agentType,
+          role: r.role,
+          roleLabel: r.roleLabel,
+          action: rec.action,
+          agentId: rec.action === "reconnect" ? rec.agentId : null,
+          writeMode: null,
+        };
+      });
+  }
+  if (args.actions.length > DEVICE_MAX_AGENTS)
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `At most ${DEVICE_MAX_AGENTS} agents per request.`,
+    });
+  const out: DeviceStoredAgentAction[] = [];
+  const addKeys = new Set<string>();
+  const reconnected = new Set<string>();
+  for (const a of args.actions) {
+    if (!row.requestedAgents.includes(a.agentType))
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Not asked for by this computer: ${a.agentType}`,
+      });
+    if (a.action === "skip") continue;
+    if (a.action === "reconnect") {
+      const target = hosted.find((h) => h.id === a.agentId);
+      if (!target || target.agentType !== a.agentType)
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "That agent is not one this computer runs for you. Choose it again.",
+        });
+      if (reconnected.has(target.id)) continue;
+      reconnected.add(target.id);
+      out.push({
+        agentType: a.agentType,
+        role: target.role,
+        roleLabel: null,
+        action: "reconnect",
+        agentId: target.id,
+        writeMode: a.writeMode ?? null,
+      });
+      continue;
+    }
+    const role = a.role ?? null;
+    const key = rowKey(a.agentType, role);
+    if (addKeys.has(key))
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "The same agent is added twice. Give each a different job.",
+      });
+    addKeys.add(key);
+    out.push({
+      agentType: a.agentType,
+      role,
+      roleLabel: role ? agentRoleLabel(role, a.roleLabel) : null,
+      action: "add",
+      agentId: null,
+      writeMode: a.writeMode ?? null,
+    });
+  }
+  return out;
 }
 
 export async function decideDeviceRequest(
@@ -536,9 +837,17 @@ export async function decideDeviceRequest(
     return { status: "denied" };
   }
 
-  const agents = input.agents
-    ? [...new Set(input.agents)]
-    : row.requestedAgents;
+  const agents = input.agentActions
+    ? [
+        ...new Set(
+          input.agentActions
+            .filter((a) => a.action !== "skip")
+            .map((a) => a.agentType)
+        ),
+      ]
+    : input.agents
+      ? [...new Set(input.agents)]
+      : row.requestedAgents;
   const outside = agents.filter((a) => !row.requestedAgents.includes(a));
   if (outside.length > 0)
     throw new TRPCError({
@@ -566,6 +875,14 @@ export async function decideDeviceRequest(
       });
   }
 
+  const agentActions = await resolveAgentActions({
+    row,
+    personId: input.personId,
+    reuseComputerId: input.reuseComputerId ?? null,
+    keptEngines: agents,
+    actions: input.agentActions,
+  });
+
   // Governance is consulted: a person deciding in their own session IS the
   // decision, but policy may still refuse a key being made.
   const perm = await checkPermissionOrPropose({
@@ -576,6 +893,7 @@ export async function decideDeviceRequest(
       kind: "device",
       hostname: row.hostname,
       agents,
+      agentActions,
       reuseComputerId: input.reuseComputerId ?? null,
     },
   });
@@ -593,7 +911,8 @@ export async function decideDeviceRequest(
       status: "approved",
       approvedByUserId: input.personId,
       approvedAt: new Date(),
-      approvedAgents: agents,
+      approvedAgents: [...new Set(agentActions.map((a) => a.agentType))],
+      agentActions,
       machineUserId: input.reuseComputerId ?? null,
       machineName: input.computerName?.trim() || null,
       computerBelongsTo: input.belongsTo ?? null,
@@ -622,6 +941,8 @@ export async function decideDeviceRequest(
       kind: "device_request",
       hostname: row.hostname,
       agents,
+      agentActions,
+      seat: row.seat,
       reuseComputerId: input.reuseComputerId ?? null,
       belongsTo: input.belongsTo ?? null,
       agentWriteMode: input.agentWriteMode ?? null,
@@ -651,6 +972,11 @@ export interface DeviceTokenSuccess {
       agentUserId: string;
       name: string;
       displayName: string;
+      /** 0395: its job (null = the engine's plain agent) and its seat. */
+      role: string | null;
+      seat: string | null;
+      /** 0395: what collection did to it. */
+      action: "added" | "reconnected";
     }
   >;
 }
@@ -946,9 +1272,16 @@ async function mintForApprovedRequest(
   const runsScripts =
     (machineMeta?.meta as AgentMetadata | null)?.runsScripts === true;
 
-  // One live key per computer: a re-enrolment replaces the old one.
+  // One live computer key per SEAT (0395, D4): a re-enrolment replaces only
+  // this seat's own — its instance (`seat_id`), or a pre-seat key this seat
+  // says it holds. Another OS user's computer key is never touched. An older
+  // CLI names no seat: it replaces only a pre-seat key nobody used in 24 h.
   await revokeApiKeys(db, {
-    where: and(eq(apiKeys.userId, machineId), isNull(apiKeys.revokedAt)),
+    where: and(
+      eq(apiKeys.userId, machineId),
+      isNull(apiKeys.revokedAt),
+      thisSeatsComputerKeys(row)
+    ),
     revokedBy: approverId,
     reason: MACHINE_RECONNECTED_REPLACED,
   });
@@ -965,6 +1298,10 @@ async function mintForApprovedRequest(
       keyType: "user_pat",
       description: `Computer key for ${computerName} — connected via the device flow`,
       linkedUserId: approverId,
+      // The seat's key: its instance is the seat id, and its label the OS
+      // user, which `/setup/agent` reads to file an agent on this seat.
+      instanceId: row.seatId ?? null,
+      instanceLabel: row.seat ?? null,
       expiresAt: new Date(nowMs + ttlDays * DAY_MS),
       rotationScheduledAt: new Date(
         nowMs + Math.max(ttlDays - AGENT_KEY_ROTATION_LEAD_DAYS, 1) * DAY_MS
@@ -987,33 +1324,86 @@ async function mintForApprovedRequest(
   });
 
   const agents: DeviceTokenSuccess["agents"] = [];
-  for (const agentType of row.approvedAgents ?? []) {
-    const label = agentTypeName(agentType);
+  const showSeat = await computerHasManySeats(machineId, row.seat);
+  for (const action of storedActionsOf(row)) {
+    if (action.action === "skip") continue;
+    const target =
+      action.action === "reconnect"
+        ? await reconnectTarget({
+            machineId,
+            approverId,
+            action,
+            seat: row.seat,
+          })
+        : {
+            seat: await seatForAdd({
+              machineId,
+              approverId,
+              row,
+              agentType: action.agentType,
+              role: action.role,
+            }),
+            role: action.role,
+            agentId: null,
+          };
+    const engine = agentTypeName(action.agentType);
+    const label = action.role
+      ? agentRoleLabel(action.role, action.roleLabel)
+      : engine;
+    const shown = agentInComputerName({
+      agentType: action.agentType,
+      role: target.role,
+      roleLabel: action.roleLabel,
+      hostName: computerName,
+      seat: target.seat,
+      showSeat,
+    });
     const provisioned = await provisionSurfaceAgentKey({
-      agentType,
+      agentType: action.agentType,
       createdByUserId: approverId,
       linkedUserId: approverId,
       hostUserId: machineId,
+      hostSeat: target.seat,
+      agentRole: target.role,
       createdVia: "device",
       agentLabel: label,
       ensureRegistryRow: true,
       ttlDays,
-      agentDescription: `${agentDisplayName({ name: label, hostName: computerName })} — connected via the device flow`,
-      keyName: `${agentDisplayName({ name: label, hostName: computerName })} Hub Key`,
-      keyDescription: `Hub Protocol key for ${agentDisplayName({ name: label, hostName: computerName })}`,
-      // Posture FIRST — before this agent's key exists.
-      onAgentUserResolved: (agentUserId) =>
-        agentPostureAtConnect(agentUserId, approverId, row.agentWriteMode),
+      agentDescription: `${shown} — connected via the device flow`,
+      keyName: `${shown} Hub Key`,
+      keyDescription: `Hub Protocol key for ${shown}`,
+      // Posture FIRST — before this agent's key exists. An added agent takes
+      // the person's choice; a reconnected one keeps its own unless the
+      // person changed it (D6).
+      onAgentUserResolved: async (agentUserId) => {
+        if (target.agentId && agentUserId !== target.agentId)
+          throw new Error("Reconnect resolved a different agent");
+        if (action.action === "add")
+          return agentPostureAtConnect(
+            agentUserId,
+            approverId,
+            action.writeMode ?? row.agentWriteMode
+          );
+        if (action.writeMode)
+          return agentPostureAtConnect(
+            agentUserId,
+            approverId,
+            action.writeMode
+          );
+      },
     });
     if (provisioned.alreadyValid)
       throw new Error("Agent key provisioning returned no fresh key");
     if (provisioned.registration.outcome !== "CONNECTED_VERIFIED")
-      throw new Error(`Agent key for ${agentType} failed verification`);
+      throw new Error(`Agent key for ${action.agentType} failed verification`);
     agents.push({
-      agentType,
+      agentType: action.agentType,
       agentUserId: provisioned.agentUserId,
       name: label,
-      displayName: agentDisplayName({ name: label, hostName: computerName }),
+      displayName: shown,
+      role: target.role,
+      seat: target.seat,
+      action: action.action === "add" ? "added" : "reconnected",
       apiKey: provisioned.plainKey,
       keyId: provisioned.keyId,
       expiresAt: provisioned.apiKey.expiresAt?.toISOString() ?? null,
@@ -1033,6 +1423,132 @@ async function mintForApprovedRequest(
     },
     agents,
   };
+}
+
+/**
+ * The computer keys a request replaces: this seat's (its `seat_id` instance,
+ * or a pre-seat key it holds); for an older CLI (no seat), only a pre-seat
+ * key that nobody used in the last 24 h.
+ */
+function thisSeatsComputerKeys(row: DeviceAuthRequest) {
+  const heldIds = (row.held ?? []).map((k) => k.keyId);
+  if (row.seatId)
+    return heldIds.length
+      ? or(
+          eq(apiKeys.instanceId, row.seatId),
+          and(isNull(apiKeys.instanceId), inArray(apiKeys.id, heldIds))
+        )
+      : eq(apiKeys.instanceId, row.seatId);
+  return and(
+    isNull(apiKeys.instanceId),
+    or(
+      isNull(apiKeys.lastUsedAt),
+      lt(apiKeys.lastUsedAt, new Date(Date.now() - DEVICE_IN_USE_WINDOW_MS))
+    )
+  );
+}
+
+/**
+ * A request's decision per row: the stored one (0395), else — a request
+ * approved before 0395 and collected after — one plain "add" per approved
+ * engine, which resolves the same agent as before (seat-less, role-less).
+ */
+function storedActionsOf(row: DeviceAuthRequest): DeviceStoredAgentAction[] {
+  if (row.agentActions) return row.agentActions;
+  return (row.approvedAgents ?? []).map((agentType) => ({
+    agentType,
+    role: null,
+    roleLabel: null,
+    action: "add" as DeviceAgentActionKind,
+    agentId: null,
+    writeMode: null,
+  }));
+}
+
+/** More than one OS user on this computer: agent names carry the seat. */
+async function computerHasManySeats(
+  machineId: string,
+  seat: string | null
+): Promise<boolean> {
+  const rows = await db
+    .select({ seat: users.hostSeat })
+    .from(users)
+    .where(eq(users.hostUserId, machineId));
+  const seats = new Set(rows.map((r) => r.seat).filter((x) => x != null));
+  if (seat) seats.add(seat);
+  return seats.size > 1;
+}
+
+/**
+ * The seat a NEW agent takes: the asking OS user's. An older CLI names none:
+ * the agent is the seat-less one when that is free, else an `unnamed:` seat
+ * of its own — never the seat-less agent another process is using.
+ */
+async function seatForAdd(args: {
+  machineId: string;
+  approverId: string;
+  row: DeviceAuthRequest;
+  agentType: string;
+  role: string | null;
+}): Promise<string | null> {
+  if (args.row.seat) return args.row.seat;
+  const [taken] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(
+      and(
+        eq(users.userType, "agent"),
+        eq(users.hostUserId, args.machineId),
+        eq(users.createdByUserId, args.approverId),
+        eq(users.agentType, args.agentType),
+        isNull(users.hostSeat),
+        args.role ? eq(users.agentRole, args.role) : isNull(users.agentRole)
+      )
+    )
+    .limit(1);
+  return taken ? `${UNNAMED_SEAT_PREFIX}${args.row.id.slice(0, 8)}` : null;
+}
+
+/**
+ * The ONE agent a reconnect re-keys: hosted by this computer, the person's,
+ * of the row's engine. A seat-less (or unnamed) agent is claimed by the
+ * asking seat (0395 §8: the person chose it, on evidence), unless that seat
+ * already has its own agent for this job.
+ */
+async function reconnectTarget(args: {
+  machineId: string;
+  approverId: string;
+  action: DeviceStoredAgentAction;
+  seat: string | null;
+}): Promise<{ seat: string | null; role: string | null; agentId: string }> {
+  const [agent] = await db
+    .select({ id: users.id, seat: users.hostSeat, role: users.agentRole })
+    .from(users)
+    .where(
+      and(
+        eq(users.id, args.action.agentId ?? ""),
+        eq(users.userType, "agent"),
+        eq(users.hostUserId, args.machineId),
+        eq(users.createdByUserId, args.approverId),
+        eq(users.agentType, args.action.agentType)
+      )
+    )
+    .limit(1);
+  if (!agent) throw new Error("The agent to reconnect is no longer here");
+  let seat = agent.seat;
+  if (args.seat && isUnclaimedSeat(agent.seat)) {
+    try {
+      const [claimed] = await db
+        .update(users)
+        .set({ hostSeat: args.seat, updatedAt: new Date() })
+        .where(eq(users.id, agent.id))
+        .returning({ seat: users.hostSeat });
+      seat = claimed?.seat ?? seat;
+    } catch {
+      // The seat already has this job's agent: keep this one as it was.
+    }
+  }
+  return { seat, role: agent.role, agentId: agent.id };
 }
 
 // ── Whose computer it is ────────────────────────────────────────────────────
