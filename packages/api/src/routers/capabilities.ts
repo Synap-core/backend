@@ -11,10 +11,7 @@
  */
 
 import { z } from "zod";
-import {
-  DeclarativeBlockSchema,
-  RendererRefSchema,
-} from "../services/profiles/renderer-ref-schema.js";
+import { RendererRefSchema } from "../services/profiles/renderer-ref-schema.js";
 import { TRPCError } from "@trpc/server";
 import { buildDerivedSessionTitle } from "@synap-core/types/focus-sessions";
 import {
