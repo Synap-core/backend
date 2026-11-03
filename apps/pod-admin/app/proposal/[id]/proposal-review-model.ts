@@ -16,6 +16,7 @@
  */
 
 import { isUuid } from "../../../lib/format";
+import { objectReadsWide } from "../../_lib/object/object-width";
 import { governanceReasonMark } from "@synap-core/types/proposals";
 import { GOVERNANCE_REASON_RULE_REACH } from "@synap-core/types/trust-ladder";
 
@@ -79,18 +80,29 @@ export function undoMark(
 }
 
 /**
- * Whether the review reads at a document's width: it draws a document's
- * change, or a tool argument or record field that is prose, code or a text
- * diff (each one's `wide`, set by its own model). A review of short values
- * (a status move, an app asking for a key, a few names) stays at the
- * receiver's default width. The page reads this as `READS_WIDE_ATTR`.
+ * Whether the review reads at a document's width. First, as wide as the
+ * object it creates or changes: the proposal's subject, or a record it draws,
+ * is of a kind whose own page reads wide (`objectReadsWide`, the rule the
+ * object page reads too), so a proposed document opens at its document's
+ * width (founder, 2026-11-03). Then, what it draws: a document's change, or
+ * a tool argument or record field that is prose, code or a text diff (each
+ * one's `wide`, set by its own model). A review of short values (a status
+ * move, an app asking for a key, a few names) stays at the receiver's
+ * default width. The page reads this as `READS_WIDE_ATTR`.
  */
 export function reviewReadsWide(drawn: {
+  /** The kind the proposal is about (`proposalSubjectKind`). */
+  subjectKind: string | null;
   documentChanges: boolean;
   toolArguments: readonly { wide: boolean }[];
-  records: readonly { fields: readonly { wide: boolean }[] }[];
+  records: readonly {
+    kind: string | null;
+    fields: readonly { wide: boolean }[];
+  }[];
 }): boolean {
   return (
+    objectReadsWide(drawn.subjectKind) ||
+    drawn.records.some((r) => objectReadsWide(r.kind)) ||
     drawn.documentChanges ||
     drawn.toolArguments.some((a) => a.wide) ||
     drawn.records.some((r) => r.fields.some((f) => f.wide))

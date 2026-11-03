@@ -2329,6 +2329,8 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "skill/update": "disruptive", // egress
   "tool/create": "disruptive", // egress
   "tool/delete": "disruptive", // destroy
+  "tool/provisionWebhook": "disruptive", // scope: mints or rotates the secret inbound URL
+  "tool/setAuthBinding": "disruptive", // egress: whose credential the tool runs with
   "tool/update": "disruptive", // egress
   "track/assign_agent": "disruptive", // effect: another agent starts work on the goal
   "track/create": "disruptive", // struct: a new ongoing method on a project
@@ -2665,6 +2667,8 @@ export const GATE_WRITE_DOORS = {
   "skill/update": "gate",
   "tool/create": "gate",
   "tool/delete": "gate",
+  "tool/provisionWebhook": "gate",
+  "tool/setAuthBinding": "gate",
   "tool/update": "gate",
   // TRACKS (0272) — a method running inside a project. `create` starts one
   // (the legacy `project/instantiate_from_playbook` executor replays through it); `update` is the
@@ -2788,6 +2792,11 @@ export const DIRECT_PROPOSAL_DOORS = {
   // policy as `profile/retire` — always a pending proposal, for anyone; the
   // approval half re-runs the preflight and deletes the def.
   "property_def/retire": "direct",
+  // Declaring a LIFECYCLE on an existing kind
+  // (`services/lifecycle/declare-kind-lifecycle.ts`): a schema change on a
+  // kind every space may read — always a pending proposal, for anyone; the
+  // approval half re-runs the preflight and calls `declareLifecycle`.
+  "profile/declare_lifecycle": "direct",
   "profile/merge": "direct",
   "pod_hygiene/cleanup_pack": "direct",
   "vault/vault.request": "direct",

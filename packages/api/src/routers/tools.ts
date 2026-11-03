@@ -41,6 +41,7 @@ import { refuseAgentApprover } from "../services/capabilities/set-skill-approved
 import { emitSideEffects } from "@synap/events";
 import { isFormToolMetadata } from "../services/forms/form-definition.js";
 import { provisionInboundWebhook } from "../services/webhooks/provision-inbound-webhook.js";
+import { inboundWebhookProviderForTool } from "../services/webhooks/inbound-webhook-providers.js";
 
 /**
  * A PUBLIC FORM is a `tools` row whose `metadata.form` holds its definition,
@@ -465,6 +466,27 @@ export const toolsRouter = router({
       } else {
         await requirePodAdmin(userId);
       }
+      // Governed (CP ticket 7c01a8b7): the role gate above is satisfied by an
+      // AGENT key linked to an owner, so it cannot stand alone. An agent caller
+      // proposes (the person approves; `tool/setAuthBinding` executor replays
+      // this procedure as the approver), a person applies directly. Both Hub
+      // REST (`POST /tools/:id/auth-binding`) and tRPC reach this one door.
+      const perm = await checkPermissionOrPropose({
+        userId,
+        workspaceId: existing.workspaceId ?? undefined,
+        subjectType: "tool",
+        action: "setAuthBinding",
+        data: { id: input.id, authBinding: input.authBinding },
+      });
+      if ("denied" in perm && perm.denied)
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      if ("proposalId" in perm)
+        return {
+          tool: null as Tool | null,
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+        };
+
       const bindingChanged = existing.authBinding !== input.authBinding;
       const [tool] = await db
         .update(tools)
@@ -476,7 +498,26 @@ export const toolsRouter = router({
         })
         .where(eq(tools.id, input.id))
         .returning();
-      return { tool: tool as Tool };
+
+      auditLog({
+        subjectType: "tool",
+        action: "setAuthBinding",
+        phase: "completed",
+        subjectId: input.id,
+        userId,
+        workspaceId: existing.workspaceId ?? undefined,
+        data: {
+          id: input.id,
+          from: existing.authBinding,
+          to: input.authBinding,
+        },
+      });
+
+      return {
+        tool: tool as Tool | null,
+        status: "updated" as const,
+        proposalId: null as string | null,
+      };
     }),
 
   /**
@@ -703,11 +744,54 @@ export const toolsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      return provisionInboundWebhook({
+
+      // Governed (CP ticket 7c01a8b7): minting hands out the secret URL a
+      // provider posts to, and `rotate` breaks the live integration, so an
+      // AGENT caller proposes and a person applies. The gate sits here, in the
+      // procedure BOTH tRPC and Hub REST (`POST /tools/:id/webhook`) reach, not
+      // in `provisionInboundWebhook`: the capability-install step
+      // (`provisionInstalledToolWebhooks`) calls the service after an install
+      // that is itself governed, never rotates, and reports each URL, so it
+      // stays a system path. Visibility, form and provider refusals come first
+      // so no proposal is filed for a row the caller cannot see or that takes
+      // no webhook.
+      const existing = await db.query.tools.findFirst({
+        where: and(
+          eq(tools.id, input.id),
+          userVisibleWhere(tools.workspaceId, userId)
+        ),
+        columns: { id: true, name: true, workspaceId: true, metadata: true },
+      });
+      if (!existing)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Tool ${input.id} not found`,
+        });
+      refuseFormRow(existing.metadata);
+      if (!inboundWebhookProviderForTool(existing.name))
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Tool "${existing.name}" does not receive webhooks.`,
+        });
+
+      const perm = await checkPermissionOrPropose({
+        userId,
+        workspaceId: existing.workspaceId ?? undefined,
+        subjectType: "tool",
+        action: "provisionWebhook",
+        data: { id: input.id, rotate: input.rotate ?? false },
+      });
+      if ("denied" in perm && perm.denied)
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      if ("proposalId" in perm)
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+
+      const provisioned = await provisionInboundWebhook({
         userId,
         toolId: input.id,
         rotate: input.rotate,
       });
+      return { ...provisioned, status: "provisioned" as const };
     }),
 
   delete: protectedProcedure

@@ -52,6 +52,34 @@ vi.mock(
   }
 );
 vi.mock("../../../utils/audit-log.js", () => ({ auditLog: vi.fn() }));
+// `provisionWebhook` is governed (CP ticket 7c01a8b7): it reads the row, then
+// asks the gate. The person here is granted; the proposed branch is pinned by
+// routers/tools.provision-webhook.test.ts.
+vi.mock("../../../utils/permission-check.js", () => ({
+  checkPermissionOrPropose: async () => ({ granted: true }),
+}));
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synap/database")>();
+  return {
+    ...actual,
+    db: new Proxy(actual.db, {
+      get: (target, prop, receiver) =>
+        prop === "query"
+          ? {
+              ...(target as unknown as { query: object }).query,
+              tools: {
+                findFirst: async () => ({
+                  id: "0bbbbbbb-0000-4000-8000-000000000002",
+                  name: "postiz",
+                  workspaceId: null,
+                  metadata: {},
+                }),
+              },
+            }
+          : Reflect.get(target, prop, receiver),
+    }),
+  };
+});
 // The procedure middlewares read live PG; pass them through (same stub as
 // capability-containers.governance.test.ts).
 vi.mock("../../../middleware/read-only-guard.js", async () => {
@@ -130,7 +158,7 @@ describe("POST /tools/:id/webhook", () => {
     provision.mockResolvedValue(ok);
     const res = await mint();
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual(ok);
+    expect(await res.json()).toEqual({ ...ok, status: "provisioned" });
     expect(provision).toHaveBeenCalledWith({
       userId: USER,
       toolId: TOOL,

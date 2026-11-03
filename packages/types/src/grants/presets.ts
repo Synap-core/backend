@@ -211,6 +211,10 @@ export const AI_PRESET_EXCLUSIONS: Readonly<Record<string, string>> = {
     "Authority: a tool is code other flows run with the person's authority.",
   "tool.update":
     "Authority: a tool is code other flows run with the person's authority.",
+  "tool.set_auth_binding":
+    "Credentials: chooses whose credential a tool runs with. An AI proposes it through the gate; the person's key grant never widens to it.",
+  "tool.provision_webhook":
+    "Credentials: mints or rotates the secret URL a provider posts to, and a rotate breaks the live integration.",
 };
 
 const AI_READ_PROPOSE_PERMISSIONS: readonly string[] =

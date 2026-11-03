@@ -73,6 +73,8 @@ interface SessionFixture {
   /** The ASKING itself: an agent question post / its `slot_asked` event. */
   agentQuestionAt?: string;
   agentAskEventAt?: string;
+  /** The session holds an open PR outcome (`blocksOpenPr`, folded in TS). */
+  blocksOpenPr?: boolean;
 }
 
 /** A turn row's `updated_at`: declared, else an old one for a bare running turn. */
@@ -98,6 +100,7 @@ function factsOf(s: SessionFixture) {
     ]),
     lastAgentWorkAt: newest(work),
     startedAt: s.startedAt === undefined ? ago(3 * DAY) : s.startedAt,
+    blocksOpenPr: s.blocksOpenPr === true,
   };
 }
 
@@ -173,9 +176,12 @@ async function insertSession(
   return id;
 }
 
-async function sqlClass(id: string): Promise<string | null> {
+async function sqlClass(
+  id: string,
+  blocksOpenPr = false
+): Promise<string | null> {
   const rows = await run(drizzleSql`
-    select ${needsYouSlotClassSql("fs", NOW)} as c
+    select ${needsYouSlotClassSql("fs", NOW, drizzleSql`${blocksOpenPr}::boolean`)} as c
     from focus_sessions fs, jsonb_array_elements(fs.expected_outputs) as slot
     where fs.id = ${id}::uuid`);
   return (rows[0]?.c as string | null) ?? null;
@@ -517,6 +523,32 @@ const ROWS: ReadonlyArray<{
     session: LIVE,
     slot: { ...ASK, owedSince: 5 },
   },
+  // ── blocks an open PR: never aged, never Stopped (plan 2c8fca91 §4) ─────
+  {
+    rulesOut: "a 9-day ask blocking an open PR aged into Review later",
+    session: { ...LIVE, blocksOpenPr: true },
+    slot: { ...ASK, owedSince: ago(9 * DAY) },
+  },
+  {
+    rulesOut: "an ask blocking an open PR stopped with its idle session",
+    session: { startedAt: ago(20 * DAY), blocksOpenPr: true },
+    slot: ASK,
+  },
+  {
+    rulesOut: "an open PR hid an agent at work",
+    session: { ...LIVE, turnRunning: true, blocksOpenPr: true },
+    slot: ASK,
+  },
+  {
+    rulesOut: "an open PR rescued a not-owed slot",
+    session: { ...LIVE, blocksOpenPr: true },
+    slot: { ...ASK, status: "done" },
+  },
+  {
+    rulesOut: "an open PR rescued a system ask",
+    session: { ...LIVE, blocksOpenPr: true },
+    slot: { owner: "human", askCause: { kind: "decision" } },
+  },
 ];
 
 beforeAll(async () => {
@@ -554,7 +586,10 @@ describe("needsYouSlotClassSql === classifyOwedAsk", () => {
   it("agrees on every discriminating row", async () => {
     for (const { rulesOut, session, slot } of ROWS) {
       const id = await insertSession(session, [slot]);
-      expect({ rulesOut, cls: await sqlClass(id) }).toEqual({
+      expect({
+        rulesOut,
+        cls: await sqlClass(id, session.blocksOpenPr === true),
+      }).toEqual({
         rulesOut,
         cls: classifyOwedAsk(slot, factsOf(session), NOW),
       });

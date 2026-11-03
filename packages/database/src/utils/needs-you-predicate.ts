@@ -168,7 +168,17 @@ function commitmentSql(): SQL {
  * stopped session only an ask that ends with it is Stopped
  * ({@link SLOT_ENDS_WITH_SESSION_SQL}); a deliverable goes on to the age arm.
  */
-export function needsYouSlotClassSql(s: string, now: Date): SQL {
+export function needsYouSlotClassSql(
+  s: string,
+  now: Date,
+  /**
+   * SQL boolean: the session holds an open pull request outcome
+   * (`NeedsYouSessionFacts.blocksOpenPr`). That fact is folded from dev events
+   * in TypeScript (`foldPullRequestState`), so the caller supplies it; the
+   * default is "none" (today's rule).
+   */
+  blocksOpenPr: SQL = drizzleSql`false`
+): SQL {
   const cutoff = new Date(
     now.getTime() - NEEDS_YOU_REVIEW_LATER_AFTER_MS
   ).toISOString();
@@ -176,10 +186,12 @@ export function needsYouSlotClassSql(s: string, now: Date): SQL {
   return drizzleSql`(CASE
       WHEN NOT (${owedSlotPredicateSql}) THEN NULL
       WHEN NOT ${realAskerSql()} THEN 'from_system'
-      WHEN ${session} = 'stopped' AND ${SLOT_ENDS_WITH_SESSION_SQL} THEN 'stopped'
+      WHEN ${session} = 'stopped' AND ${SLOT_ENDS_WITH_SESSION_SQL}
+        AND NOT coalesce(${blocksOpenPr}, false) THEN 'stopped'
       WHEN ${session} = 'working' THEN 'working'
       WHEN slot->>'owedSince' ~ ${ISO_STAMP_PATTERN}
         AND NOT ${commitmentSql()}
+        AND NOT coalesce(${blocksOpenPr}, false)
         AND (slot->>'owedSince') COLLATE "C" < (${cutoff}::text COLLATE "C")
         THEN 'review_later'
       ELSE 'needs_you'
