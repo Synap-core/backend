@@ -51336,7 +51336,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				rotate?: boolean | undefined;
 			};
 			meta: object;
-			output: ProvisionedInboundWebhook;
+			output: {
+				proposalId: string;
+				status: "proposed";
+			} | {
+				missingConfig: string[];
+				proposalId?: undefined;
+				provider: InboundWebhookProvider;
+				rotated: boolean;
+				setupStep: string | null;
+				status: "provisioned";
+				url: string;
+			};
 		}>;
 		setApproved: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
@@ -51355,7 +51366,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
-				tool: Tool;
+				proposalId: string;
+				status: "proposed";
+				tool: Tool | null;
+			} | {
+				proposalId: string | null;
+				status: "updated";
+				tool: Tool | null;
 			};
 		}>;
 		unbindCredential: import("@trpc/server").TRPCMutationProcedure<{
