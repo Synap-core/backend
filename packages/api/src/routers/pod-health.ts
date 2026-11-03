@@ -114,6 +114,8 @@ export const podHealthRouter = router({
               : result.reason === "service_not_allowed"
                 ? "BAD_REQUEST"
                 : "PRECONDITION_FAILED",
+          // The page words each reason (busy, service_not_allowed,
+          // not_ready, unavailable).
           message: result.reason,
         });
       }

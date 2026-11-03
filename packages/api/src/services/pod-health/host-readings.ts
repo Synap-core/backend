@@ -148,12 +148,28 @@ export function parseHostResources(raw: unknown): HostResources | null {
   const avg1 = num(l?.avg1);
   const cores = num(l?.cores);
   const d = obj(r.docker);
+  // One disk per filesystem: the host lists the deploy dir (`data`) and
+  // Docker's root (`docker`) even when they sit on ONE filesystem
+  // (host-resources.v1 schema), and two rows of the same disk would raise two
+  // alerts for one problem. Same label, same path, or the same byte figures
+  // (the paths differ by contract, the filesystem does not) = one disk; the
+  // first listed (`data`) is kept.
   const seen = new Set<string>();
   const disks = (Array.isArray(r.disks) ? r.disks : [])
     .map(disk)
     .filter((x): x is DiskReading => {
-      if (!x || seen.has(x.label)) return false;
-      seen.add(x.label);
+      if (!x) return false;
+      const keys = [
+        `label:${x.label}`,
+        ...(x.path ? [`path:${x.path}`] : []),
+        ...(x.totalBytes !== null &&
+        x.usedBytes !== null &&
+        x.availBytes !== null
+          ? [`fs:${x.totalBytes}:${x.usedBytes}:${x.availBytes}`]
+          : []),
+      ];
+      if (keys.some((k) => seen.has(k))) return false;
+      keys.forEach((k) => seen.add(k));
       return true;
     })
     .slice(0, 8);

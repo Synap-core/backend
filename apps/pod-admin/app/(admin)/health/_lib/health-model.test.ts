@@ -293,6 +293,16 @@ describe("the actions: only where they help the current alert", () => {
     ).toBe("Waiting for the host to take it");
   });
 
+  // Catches: a root-owned dir (minutes after a deploy) read as "no answer".
+  it("a host dir not ready yet says so on each action, never nothing", () => {
+    const v = view({ actions: { pending: null, last: { read: "not_ready" } } });
+    expect(v.actions.last).toEqual({ read: "not_ready" });
+    expect(actionResultLine(t, "prune-old-images", v, "en", NOW)?.text).toBe(
+      "The host is getting ready; its answers show in a few minutes"
+    );
+    expect(actionErrorText(t, "not_ready")).toMatch(/getting ready/);
+  });
+
   it("words the door's refusals", () => {
     expect(actionErrorText(t, "busy")).toBe(
       "Another request is still waiting for the host."

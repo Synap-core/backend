@@ -83,7 +83,7 @@ describe("HealthBody states", () => {
     expect(out).toContain("Critical");
     expect(out).toContain("The data disk is nearly full since 21:05");
     expect(out).toContain("What frees room");
-    expect(out).toContain("Frees about 853 MB. Docker keeps 2 GB");
+    expect(out).toContain("Frees up to 853 MB. Docker keeps 2 GB");
     expect(out).toContain("Keeps the current and the previous release");
     expect(out).toContain(">Trim<");
     expect(out).not.toContain("Restart a service");

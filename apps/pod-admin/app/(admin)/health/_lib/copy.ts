@@ -95,13 +95,13 @@ export const en = {
   "action.pause.agents": "Open agents",
   "action.buildCache.title": "Trim the build cache",
   "action.buildCache.body":
-    "Frees about {bytes}. Docker keeps 2 GB and rebuilds the rest when it needs it.",
+    "Frees up to {bytes}. Docker keeps 2 GB and rebuilds the rest when it needs it.",
   "action.buildCache.bodyUnknown":
     "Docker keeps 2 GB and rebuilds the rest when it needs it.",
   "action.buildCache.run": "Trim",
   "action.images.title": "Remove old release images",
   "action.images.body":
-    "Frees about {bytes}. Keeps the current and the previous release, so you can still roll back.",
+    "Frees up to {bytes}. Keeps the current and the previous release, so you can still roll back.",
   "action.images.bodyUnknown":
     "Keeps the current and the previous release, so you can still roll back.",
   "action.images.run": "Remove old images",
@@ -125,10 +125,14 @@ export const en = {
   "result.refused": "The host refused it {when}",
   "result.failed": "It failed {when}",
   "result.unreadable": "The host’s last answer can’t be read",
+  "result.notReady":
+    "The host is getting ready; its answers show in a few minutes",
 
   "error.title": "Couldn’t ask the host",
   "error.busy": "Another request is still waiting for the host.",
   "error.unavailable": "This pod can’t send requests to its host yet.",
+  "error.notReady":
+    "The host is getting ready after an update. Try again in a few minutes.",
   "error.generic": "The request wasn’t sent. Try again.",
 
   "thresholds.show": "Change thresholds",
@@ -251,13 +255,13 @@ export const fr: Catalog<typeof en> = {
   "action.pause.agents": "Ouvrir les agents",
   "action.buildCache.title": "Réduire le cache de build",
   "action.buildCache.body":
-    "Libère environ {bytes}. Docker en garde 2 Go et reconstruit le reste quand il en a besoin.",
+    "Libère jusqu’à {bytes}. Docker en garde 2 Go et reconstruit le reste quand il en a besoin.",
   "action.buildCache.bodyUnknown":
     "Docker en garde 2 Go et reconstruit le reste quand il en a besoin.",
   "action.buildCache.run": "Réduire",
   "action.images.title": "Supprimer les anciennes images de version",
   "action.images.body":
-    "Libère environ {bytes}. Garde la version actuelle et la précédente : vous pouvez toujours revenir en arrière.",
+    "Libère jusqu’à {bytes}. Garde la version actuelle et la précédente : vous pouvez toujours revenir en arrière.",
   "action.images.bodyUnknown":
     "Garde la version actuelle et la précédente : vous pouvez toujours revenir en arrière.",
   "action.images.run": "Supprimer les anciennes images",
@@ -281,11 +285,15 @@ export const fr: Catalog<typeof en> = {
   "result.refused": "L’hôte l’a refusé {when}",
   "result.failed": "Échec {when}",
   "result.unreadable": "La dernière réponse de l’hôte est illisible",
+  "result.notReady":
+    "L’hôte se prépare ; ses réponses s’affichent dans quelques minutes",
 
   "error.title": "Impossible de demander à l’hôte",
   "error.busy": "Une autre demande attend encore l’hôte.",
   "error.unavailable":
     "Ce pod ne peut pas encore envoyer de demandes à son hôte.",
+  "error.notReady":
+    "L’hôte se prépare après une mise à jour. Réessayez dans quelques minutes.",
   "error.generic": "La demande n’a pas été envoyée. Réessayez.",
 
   "thresholds.show": "Modifier les seuils",

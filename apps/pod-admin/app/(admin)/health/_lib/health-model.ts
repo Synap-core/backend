@@ -93,7 +93,9 @@ export interface PodHealthView {
     last:
       | { read: "ok"; result: HostActionResult }
       | { read: "absent" }
-      | { read: "unreadable" };
+      | { read: "unreadable" }
+      /** The host's dir is not the pod's yet (minutes after a deploy). */
+      | { read: "not_ready" };
   };
   restartableServices: string[];
 }
@@ -225,7 +227,9 @@ export function parsePodHealth(body: unknown): PodHealthView | null {
           ? { read: "ok", result: lastResult }
           : last?.read === "absent"
             ? { read: "absent" }
-            : { read: "unreadable" },
+            : last?.read === "not_ready"
+              ? { read: "not_ready" }
+              : { read: "unreadable" },
     },
     restartableServices: Array.isArray(b.restartableServices)
       ? b.restartableServices.filter((s): s is string => typeof s === "string")
@@ -612,6 +616,12 @@ export function actionResultLine(
   const { pending, last } = view.actions;
   if (pending?.action === action)
     return { text: t("result.pending"), tone: "unknown" };
+  // The host's answers cannot be read: said once per action card, never
+  // read as "nothing happened".
+  if (last.read === "not_ready")
+    return { text: t("result.notReady"), tone: "unknown" };
+  if (last.read === "unreadable")
+    return { text: t("result.unreadable"), tone: "stale" };
   if (last.read !== "ok" || last.result.action !== action) return null;
   const r = last.result;
   const when = r.finishedAt
@@ -638,6 +648,7 @@ export function actionResultLine(
 export function actionErrorText(t: T, message: string | undefined): string {
   if (message === "busy") return t("error.busy");
   if (message === "unavailable") return t("error.unavailable");
+  if (message === "not_ready") return t("error.notReady");
   return t("error.generic");
 }
 

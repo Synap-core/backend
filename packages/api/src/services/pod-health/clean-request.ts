@@ -87,7 +87,13 @@ export interface HostActionsStatus {
   last:
     | { read: "ok"; result: CleanResult }
     | { read: "absent" }
-    | { read: "unreadable" };
+    | { read: "unreadable" }
+    /**
+     * The dir is not the backend's yet (EACCES/EPERM): right after a deploy
+     * it can be root-owned for up to ~2 min, until the heal tick re-owns it
+     * (backend#746). "Not ready", never "no answer".
+     */
+    | { read: "not_ready" };
 }
 
 function isAction(v: unknown): v is HostAction {
@@ -139,7 +145,7 @@ function parsePending(raw: unknown): HostActionsStatus["pending"] {
 type Reader = (p: string) => Promise<string>;
 const readText: Reader = (p) => readFile(p, "utf-8");
 
-/** Never throws. A pending file that cannot be parsed reads as "one waits". */
+/** Never throws. A pending file that cannot be read or parsed reads as none. */
 export async function readHostActionsStatus(
   paths: { request: string; result: string } = {
     request: CLEAN_REQUEST_PATH,
@@ -158,10 +164,13 @@ export async function readHostActionsStatus(
     const result = parseCleanResult(JSON.parse(await read(paths.result)));
     last = result ? { read: "ok", result } : { read: "unreadable" };
   } catch (err) {
+    const code = errorCode(err);
     last =
-      (err as { code?: unknown })?.code === "ENOENT"
+      code === "ENOENT"
         ? { read: "absent" }
-        : { read: "unreadable" };
+        : code === "EACCES" || code === "EPERM"
+          ? { read: "not_ready" }
+          : { read: "unreadable" };
   }
   return { pending, last };
 }
@@ -171,8 +180,17 @@ export type HostActionRefusal =
   | "busy"
   /** The service is not one this door may restart (postgres, an unknown…). */
   | "service_not_allowed"
-  /** The request could not be written (deploy dir not writable, no host door). */
+  /**
+   * The dir is not writable YET (EACCES/EPERM): root-owned for up to ~2 min
+   * after a deploy, until the heal tick re-owns it. Try again later.
+   */
+  | "not_ready"
+  /** The request could not be written (no rw mount: the host has no door). */
   | "unavailable";
+
+function errorCode(err: unknown): unknown {
+  return (err as { code?: unknown } | null)?.code;
+}
 
 export interface HostActionFs {
   exists(p: string): Promise<boolean>;
@@ -188,7 +206,10 @@ const nodeFs: HostActionFs = {
       await readFile(p);
       return true;
     } catch (err) {
-      return (err as { code?: unknown })?.code !== "ENOENT";
+      // Only ENOENT means "no request waits"; anything else (EACCES on a
+      // root-owned dir) is not an answer and goes to the caller's catch.
+      if (errorCode(err) === "ENOENT") return false;
+      throw err;
     }
   },
   mkdir: async (p) => {
@@ -238,8 +259,13 @@ export async function requestHostAction(
     await fs.write(tmp, `${JSON.stringify(request)}\n`);
     await fs.rename(tmp, path);
     return { ok: true, request };
-  } catch {
+  } catch (err) {
     await fs.unlink(tmp).catch(() => undefined);
-    return { ok: false, reason: "unavailable" };
+    const code = errorCode(err);
+    return {
+      ok: false,
+      reason:
+        code === "EACCES" || code === "EPERM" ? "not_ready" : "unavailable",
+    };
   }
 }

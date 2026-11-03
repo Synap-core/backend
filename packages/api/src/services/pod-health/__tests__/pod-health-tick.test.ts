@@ -323,6 +323,52 @@ describe("the host action door", () => {
     expect(files.size).toBe(0);
   });
 
+  // Catches: a root-owned dir right after a deploy read as "busy" or as a
+  // broken door, instead of "not ready yet, try again" (backend#746).
+  it("a dir not yet ours is not_ready, never busy", async () => {
+    const eacces = Object.assign(new Error("EACCES"), { code: "EACCES" });
+    const { fs, files } = memFs();
+    fs.exists = async () => {
+      throw eacces;
+    };
+    expect(
+      await requestHostAction(
+        { action: "prune-old-images", requestedBy: "u1" },
+        { path: "/s/clean/request.json", fs }
+      )
+    ).toEqual({ ok: false, reason: "not_ready" });
+    const fs2 = memFs().fs;
+    fs2.write = async () => {
+      throw eacces;
+    };
+    expect(
+      await requestHostAction(
+        { action: "prune-old-images", requestedBy: "u1" },
+        { path: "/s/clean/request.json", fs: fs2 }
+      )
+    ).toEqual({ ok: false, reason: "not_ready" });
+    expect(files.size).toBe(0);
+    const s = await readHostActionsStatus(
+      { request: "/r", result: "/x" },
+      async () => {
+        throw eacces;
+      }
+    );
+    expect(s).toEqual({ pending: null, last: { read: "not_ready" } });
+  });
+
+  it("the request id is a UUID (the host refuses any other)", async () => {
+    const { fs, files } = memFs();
+    const r = await requestHostAction(
+      { action: "prune-old-images", requestedBy: "u1" },
+      { path: "/s/clean/request.json", fs }
+    );
+    expect(r.ok && r.request.id).toMatch(
+      /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+    );
+    expect(files.size).toBe(1);
+  });
+
   it("reads the waiting request and the host's last answer; unreadable ≠ none", async () => {
     const files: Record<string, string> = {
       "/req": JSON.stringify({

@@ -405,6 +405,41 @@ describe("the host file parser never throws and never invents a number", () => {
     expect(r?.disks.map((d) => d.label)).toEqual(["docker"]);
   });
 
+  // Catches: one filesystem listed twice (deploy dir + Docker root) raising
+  // two alerts for one full disk.
+  it("one filesystem listed under two labels is one disk", () => {
+    const same = {
+      totalBytes: 100 * GB,
+      usedBytes: 90 * GB,
+      availBytes: 10 * GB,
+      usedPct: 90,
+    };
+    const r = parseHostResources(
+      hostFile(0, {
+        disks: [
+          { label: "data", path: "/opt/synap/deploy", ...same },
+          { label: "docker", path: "/var/lib/docker", ...same },
+        ],
+      })
+    );
+    expect(r?.disks.map((d) => d.label)).toEqual(["data"]);
+    const two = parseHostResources(
+      hostFile(0, {
+        disks: [
+          { label: "data", path: "/opt/synap/deploy", ...same },
+          {
+            label: "docker",
+            path: "/mnt/docker",
+            ...same,
+            usedBytes: 50 * GB,
+            usedPct: 50,
+          },
+        ],
+      })
+    );
+    expect(two?.disks.map((d) => d.label)).toEqual(["data", "docker"]);
+  });
+
   it("the reader: ENOENT is absent, a parse failure is unreadable", async () => {
     const enoent = Object.assign(new Error("no"), { code: "ENOENT" });
     expect(
