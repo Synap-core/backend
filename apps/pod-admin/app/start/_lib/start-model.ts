@@ -53,11 +53,28 @@ export interface StartState {
 
 // ── Pages ───────────────────────────────────────────────────────────────────
 
-/** Each step's page. The intent step IS `/start`. */
+/**
+ * Each step's page. Only the intent step has one (`/start`). The other six
+ * have no page yet (where the rest of onboarding lives is a founder decision),
+ * so they resolve to Home, whose "Getting started" band says where setup
+ * stands (`?start=<step>`). A link to `/start/<step>` was a 404 for every
+ * released pod. Add a step to `STEPS_WITH_PAGE` only together with its page:
+ * the guard in `start-shell.test.tsx` derives the existing pages from `app/`.
+ */
+export const STEPS_WITH_PAGE: readonly StartStepId[] = ["start:intent"];
+
 export function startStepHref(step: StartStepId): string {
-  return step === "start:intent"
-    ? "/start"
-    : `/start/${step.slice("start:".length)}`;
+  if (step === "start:intent") return "/start";
+  if (STEPS_WITH_PAGE.includes(step)) {
+    return `/start/${step.slice("start:".length)}`;
+  }
+  return navHref("home", { start: step.slice("start:".length) });
+}
+
+/** Home's band reads `?start=<step>`: the step id, or null for anything else. */
+export function startBandStep(param: string | null): StartStepId | null {
+  if (!param) return null;
+  return START_STEP_IDS.find((id) => id === `start:${param}`) ?? null;
 }
 
 /** "Step N of 7" — the trail every `/start` page shows. */
