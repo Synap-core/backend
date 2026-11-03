@@ -17,6 +17,7 @@ import {
 } from "@synap/database/schema";
 import {
   advanceTrackStage,
+  getTrack,
   listTracks,
   loadTrackViews,
   loadWrittenTrackView,
@@ -85,10 +86,31 @@ export const trackHandlers: McpHandlerMap = {
   synap_list_tracks: async (ctx) => {
     requireScope(ctx.apiKeyScopes, "mcp.read", ctx.toolName);
     const projectId = uuid(ctx.args.projectId);
+    // ONE goal: the same read and the same view as a list row, found by its id
+    // (ticket 635fbe22 — an agent holding a track id had to list a whole
+    // project and filter). A malformed id is refused, never read as "absent".
+    if (ctx.args.trackId != null) {
+      const trackId = uuid(ctx.args.trackId);
+      if (!trackId) {
+        return ok({
+          error:
+            "trackId must be a goal (track) uuid — synap_list_tracks lists a project's goals.",
+        });
+      }
+      return run(async () => {
+        const row = await getTrack(trackId, actorOf(ctx));
+        // The floor is the project's visibility, so "no such goal" and "a goal
+        // you cannot see" read the same; a stated projectId must match.
+        if (!row || (projectId && row.projectId !== projectId)) {
+          return { error: "Track not found" };
+        }
+        return { items: await loadTrackViews([row], ctx) };
+      });
+    }
     if (!projectId) {
       return ok({
         error:
-          "projectId (uuid) is required — find it with synap_list_projects.",
+          "projectId (uuid) is required — find it with synap_list_projects. Or pass trackId to read one goal.",
       });
     }
     return run(async () => {

@@ -326,6 +326,8 @@ const INTENTIONALLY_UNROUTABLE: Record<string, string> = {
     "Find-or-create of a local thread binding — internal plumbing that exists so messaging.send has a channel. Enriching entities is not what it does.",
   "channel.bind":
     "Sets a local association and explicitly never posts. It is not a send, and it does not acquire anything.",
+  "feed.post":
+    "Posts a message into a Synap channel (mirrored to a bound Discord channel). It is not a post on a social account, so publish_post would list it as a publishing tool beside Unipile and Postiz; send_message means a human outside the pod.",
   "feed.read":
     "Reads messages already stored in the pod. Enumerating a kind's records would misdescribe a channel's history.",
   "channel.history":

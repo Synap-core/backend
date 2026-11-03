@@ -385,6 +385,13 @@ export interface Signal {
    */
   reviewLater?: true;
   /**
+   * An `owed-slot` or `proposal-cluster` on a session that holds an OPEN pull
+   * request: what it asks blocks that PR (plan 2c8fca91 §4). The order puts it
+   * first, oldest first ({@link orderNeedsYou}), and the rule never folds it by
+   * age. Absent on every other row.
+   */
+  blocksOpenPr?: true;
+  /**
    * THE needs-you rule's class (decision E, `@synap-core/types/needs-you/rule`)
    * on an `owed-slot` (`classifyOwedAsk`) or a `proposal-cluster`
    * (`classifyPendingProposal`). Every class but `needs_you` is OUT of the
@@ -563,6 +570,7 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "class",
   "lifetimeHours",
   "reviewLater",
+  "blocksOpenPr",
   "needsYouClass",
   "unblocks",
   "source",
@@ -1010,6 +1018,8 @@ function standsForFold(
  */
 export interface OwedSlotSignalInput {
   sessionId: string;
+  /** `OwedSlot.blocksOpenPr`: the session holds an open PR. */
+  blocksOpenPr?: true;
   /** The DECLARED label. It is the title, verbatim — see below. */
   label: string;
   /** ISO-8601, written by the block door. The ordering key. */
@@ -1109,6 +1119,8 @@ export interface OwedSlotSignalInput {
  *                                      when the pod can name it
  *   askCause                        → `askCause` — what raised it when no
  *                                      agent did, the card's door
+ *   blocksOpenPr                    → `blocksOpenPr` — the ask blocks an open
+ *                                      PR: ordered first, never aged out
  *
  * DELIBERATELY WITHHELD — a real field, not surfaced today, and here is why:
  *   sessionStatus  → no `owed-slot` surface renders a session-lifecycle chip;
@@ -1152,6 +1164,7 @@ const _PROJECTED_OWED_SLOT_FIELDS = [
   "unblocks",
   "keptOwedAt",
   "paramName",
+  "blocksOpenPr",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 const _WITHHELD_OWED_SLOT_FIELDS = [
@@ -1243,6 +1256,9 @@ const _WITHHELD_DRAFT_ASK_FIELDS = [
   "sessionStatus",
   "workspaceId",
   "subjectEntityId",
+  // A draft has no PR yet: its asks block nothing (`blocksOpenPr` is read only
+  // on started sessions' owed slots).
+  "blocksOpenPr",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 type _DraftAskFieldsClassified =
@@ -1322,10 +1338,15 @@ export function signalsFromDraftAsks(
  * (`isAskReviewLater`), the headline otherwise.
  */
 export function owedSlotClassOf(
-  row: Pick<OwedSlotSignalInput, "needsYouClass" | "owedSince">,
+  row: Pick<
+    OwedSlotSignalInput,
+    "needsYouClass" | "owedSince" | "blocksOpenPr"
+  >,
   now: Date = new Date()
 ): NeedsYouSlotClass {
   if (row.needsYouClass) return row.needsYouClass;
+  // An ask that blocks an open PR is never aged out, classified or not.
+  if (row.blocksOpenPr) return "needs_you";
   return isAskReviewLater(row, now) ? "review_later" : "needs_you";
 }
 
@@ -1405,6 +1426,7 @@ export function signalFromOwedSlot(
     // its session's freshest row (`needsYouRows`).
     ageBucket: ageBucketOf(occurredAt, now),
     ...outOfHeadline(owedSlotClassOf(row, now), !!row.needsYouClass),
+    ...(row.blocksOpenPr ? { blocksOpenPr: true as const } : {}),
     repeatCount: 1,
   };
 }
@@ -2108,6 +2130,12 @@ export function unionNeedsYou(args: {
    * page's cap (`sessionsWithOwedSlot`). See {@link SessionLiveNeeds}.
    */
   measuredOwedSessionIds?: ReadonlySet<string>;
+  /**
+   * Sessions that hold an open pull request (`sessionIdsBlockingOpenPr`): a
+   * cluster filed in one blocks it, so it sorts first. Owed slots carry the
+   * fact themselves. Absent = unmeasured: no cluster is stamped.
+   */
+  openPrSessionIds?: ReadonlySet<string>;
   /** Undecided drafts — read ONLY to fold their pointers (see above). */
   draftAsks?: DraftAsksInput;
   /** Sessions awaiting the person's review — at every scope. Absent ⇒ none. */
@@ -2146,13 +2174,18 @@ export function unionNeedsYou(args: {
       ...signalsFromAccessRequests(args.accessRequests, now),
       ...signalsFromSpaceInvites(args.spaceInvites, now),
       ...signalsFromConvertibleGoals(args.convertibleGoals, now),
-      ...args.clusters.map((c) =>
-        signalFromCluster(
+      ...args.clusters.map((c) => {
+        const signal = signalFromCluster(
           c,
           now,
           c.sessionId ? args.clusterSessions?.get(c.sessionId) : undefined
-        )
-      ),
+        );
+        return c.sessionId &&
+          !signal.reviewLater &&
+          args.openPrSessionIds?.has(c.sessionId)
+          ? { ...signal, blocksOpenPr: true as const }
+          : signal;
+      }),
       ...notifications.map((f) =>
         signalFromNotification(
           f.row,
@@ -2340,8 +2373,34 @@ function holdAsksWithTheirSession(signals: readonly Signal[]): Signal[] {
 }
 
 /**
+ * A `session:` block (or a lone row) that holds a row blocking an open PR.
+ * Its rows are lifted into `recent`: a blocker is never folded under Older.
+ */
+function liftBlockingAgeBuckets(signals: readonly Signal[]): Signal[] {
+  const blocking = new Set<string>();
+  for (const s of signals) {
+    if (s.blocksOpenPr) blocking.add(s.groupKey ?? `row:${s.id}`);
+  }
+  if (blocking.size === 0) return [...signals];
+  return signals.map((s) =>
+    blocking.has(s.groupKey ?? `row:${s.id}`) && s.ageBucket !== "recent"
+      ? { ...s, ageBucket: "recent" as const }
+      : s
+  );
+}
+
+/** Oldest first; ties broken by id, so the order is total and stable. */
+function oldestFirst(a: Signal, b: Signal): number {
+  return newestFirst(b, a);
+}
+
+/**
  * THE needs-you order. Pure.
  *
+ *   0. Blocks that hold a row blocking an OPEN pull request
+ *      (`blocksOpenPr`) come before everything, OLDEST first (the longest
+ *      wait leads), whatever their age: they are never folded under Older.
+ *      Inside such a block the blocking rows lead, oldest first.
  *   1. `recent` rows first, then every `older` row — the "Older" fold is a
  *      suffix, so a surface can cut it off without re-sorting.
  *   2. Inside each bucket, rows sharing a `groupKey` form ONE contiguous
@@ -2357,13 +2416,40 @@ function holdAsksWithTheirSession(signals: readonly Signal[]): Signal[] {
  * one row anyway. Counts are unaffected (the rows are the same rows).
  */
 export function orderNeedsYou(input: readonly Signal[]): Signal[] {
-  const signals = liftSessionAgeBuckets(input);
+  const signals = liftBlockingAgeBuckets(liftSessionAgeBuckets(input));
   const out: Signal[] = [];
+  const blockingKeys = new Set(
+    signals
+      .filter((s) => s.blocksOpenPr)
+      .map((s) => s.groupKey ?? `row:${s.id}`)
+  );
+  const blockingBlocks = new Map<string, Signal[]>();
+  for (const s of signals) {
+    const key = s.groupKey ?? `row:${s.id}`;
+    if (!blockingKeys.has(key)) continue;
+    const block = blockingBlocks.get(key);
+    if (block) block.push(s);
+    else blockingBlocks.set(key, [s]);
+  }
+  const heads = [...blockingBlocks.values()].map((b) =>
+    b.sort(
+      (x, y) =>
+        Number(!!y.blocksOpenPr) - Number(!!x.blocksOpenPr) ||
+        (x.blocksOpenPr && y.blocksOpenPr
+          ? oldestFirst(x, y)
+          : newestFirst(x, y))
+    )
+  );
+  const oldestBlocker = (b: Signal[]): Signal =>
+    b.filter((r) => r.blocksOpenPr).sort(oldestFirst)[0]!;
+  heads.sort((a, b) => oldestFirst(oldestBlocker(a), oldestBlocker(b)));
+  for (const b of heads) out.push(...b);
   for (const bucket of ["recent", "older"] as const) {
     const blocks = new Map<string, Signal[]>();
     for (const s of signals) {
       if (s.ageBucket !== bucket) continue;
       const key = s.groupKey ?? `row:${s.id}`;
+      if (blockingBlocks.has(key)) continue;
       const block = blocks.get(key);
       if (block) block.push(s);
       else blocks.set(key, [s]);

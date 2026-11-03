@@ -18,6 +18,7 @@ import {
   db,
   entities,
   profiles,
+  workspaces,
   eq,
   and,
   isNull,
@@ -43,6 +44,12 @@ import {
   MAX_LINKED_FILES_PER_ROW,
   loadLinkedFileRefs,
 } from "../../../utils/stored-file-access.js";
+import {
+  ENTITY_LIST_MAX_FILTERS,
+  EntityListFiltersSchema,
+  filteredPropertySlugs,
+} from "../../../utils/entity-list-filters.js";
+import type { ViewFilter } from "@synap-core/types";
 
 import {
   uploadBufferAsFileEntity,
@@ -187,6 +194,25 @@ async function buildUpdateImpact(params: {
 export const PARTIAL_HEADER = "X-Synap-Partial";
 /** Deepest `offset + limit` a scope=all merge asks of each lens. */
 const SCOPE_ALL_MAX_WINDOW = 5000;
+
+/**
+ * `includeWorkspace=true` (APP-ACCESS plan §3 R3): the names of exactly these
+ * spaces, the spaces of the rows a list returned. Never a membership read:
+ * the caller already reads those rows, so the label is the only new fact. A
+ * failed read throws (the route answers 500), never an empty map that would
+ * draw every row as "space unknown".
+ */
+async function loadWorkspaceNames(
+  workspaceIds: readonly string[]
+): Promise<Map<string, string>> {
+  const ids = [...new Set(workspaceIds)];
+  if (ids.length === 0) return new Map();
+  const rows = await db
+    .select({ id: workspaces.id, name: workspaces.name })
+    .from(workspaces)
+    .where(inArray(workspaces.id, ids));
+  return new Map(rows.map((r) => [r.id, r.name]));
+}
 
 /**
  * `/files` placement pin. `targetWorkspaceId` = the caller EXPLICITLY chose
@@ -596,6 +622,32 @@ export function registerEntitiesRoutes(app: HubHono): void {
             "`true` = a last-interaction window also returns the people " +
               "never contacted (no value). Default `false`."
           ),
+        filters: z
+          .string()
+          .optional()
+          .describe(
+            "JSON array of view filters, ANDed: " +
+              '`[{"field":"properties.stage","operator":"equals","value":"won"}]`. ' +
+              "`field` is `title`, `preview`, `type`, `createdAt`, `updatedAt` " +
+              "or `properties.<slug>`; `operator` is a view filter operator " +
+              "(`equals`, `not_equals`, `contains`, `not_contains`, `in`, " +
+              "`not_in`, `greater_than`, `greater_than_or_equal`, `less_than`, " +
+              "`less_than_or_equal`, `is_empty`, `is_not_empty`). At most " +
+              `${ENTITY_LIST_MAX_FILTERS} clauses. ` +
+              "A `properties.<slug>` clause needs `profileSlug` naming a kind " +
+              "that declares the property; an unknown property, a secret " +
+              "property, malformed JSON or too many clauses is a 400. " +
+              "Applied after the caller's read floor, so it only narrows. " +
+              "400 with `q`."
+          ),
+        includeWorkspace: z
+          .enum(["true", "false"])
+          .optional()
+          .describe(
+            "`true` = each row also carries `workspace`: `{ id, name }` of " +
+              "the space it lives in, `null` for a pod-wide row. Names only " +
+              "the spaces of the rows returned. Default `false`. 400 with `q`."
+          ),
       }),
     },
     responses: {
@@ -610,8 +662,12 @@ export function registerEntitiesRoutes(app: HubHono): void {
         description:
           "Malformed or unsupported filter combination — an unparseable " +
           "createdAfter/createdBefore/lastInteraction bound, an inverted " +
-          "last-interaction window, an unsupported `sort`, or a date " +
-          "window, `sort`, `includeFacets` or `includeMedia` combined with `q`.",
+          "last-interaction window, an unsupported `sort`, a `filters` value " +
+          "that is not valid (malformed JSON, more than " +
+          `${ENTITY_LIST_MAX_FILTERS} clauses, a property filter without ` +
+          "`profileSlug`, an unknown or secret property), or a date window, " +
+          "`sort`, `filters`, `includeFacets`, `includeMedia` or " +
+          "`includeWorkspace` combined with `q`.",
         content: { "application/json": { schema: ErrorSchema } },
       },
       401: {
@@ -687,6 +743,62 @@ export function registerEntitiesRoutes(app: HubHono): void {
         return refs ? { ...r, media: refs } : r;
       });
     };
+    const includeWorkspace = query.includeWorkspace === "true";
+    // Each row's space, named from the rows returned and nothing else: the
+    // caller already reads every row of the final page, so the one new fact
+    // is the label of a space one of them lives in (minimal disclosure).
+    const withWorkspace = async (
+      page: WireListedEntity[]
+    ): Promise<WireListedEntity[]> => {
+      if (!includeWorkspace) return page;
+      const names = await loadWorkspaceNames(
+        page.flatMap((r) => (r.workspaceId ? [r.workspaceId] : []))
+      );
+      return page.map((r) => {
+        if (!r.workspaceId) return { ...r, workspace: null };
+        const name = names.get(r.workspaceId);
+        return name === undefined
+          ? r
+          : { ...r, workspace: { id: r.workspaceId, name } };
+      });
+    };
+    const annotate = async (page: WireListedEntity[]) =>
+      withWorkspace(await withMedia(page));
+
+    // FILTERS (APP-ACCESS plan §3 R2): the view filter grammar, capped. The
+    // shape is checked here (a 400 the caller can read); `entities.list`
+    // checks the properties against the kind and compiles them.
+    let filters: ViewFilter[] | undefined;
+    if (query.filters !== undefined && query.filters.trim() !== "") {
+      let raw: unknown;
+      try {
+        raw = JSON.parse(query.filters);
+      } catch {
+        return c.json(
+          { error: "filters must be a JSON array of view filters" },
+          400
+        );
+      }
+      const parsed = EntityListFiltersSchema.safeParse(raw);
+      if (!parsed.success) {
+        return c.json(
+          {
+            error: `Invalid filters: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+          },
+          400
+        );
+      }
+      filters = parsed.data.length > 0 ? parsed.data : undefined;
+      const propertySlugs = filters ? filteredPropertySlugs(filters) : [];
+      if (propertySlugs.length > 0 && !profileSlug) {
+        return c.json(
+          {
+            error: `A filter on a property (${propertySlugs.map((s) => `properties.${s}`).join(", ")}) needs profileSlug: properties are declared per kind`,
+          },
+          400
+        );
+      }
+    }
 
     // CREATION-DATE WINDOW. Parsed HERE rather than handed on as a string so an
     // unparseable date is a 400 the caller can see, not a silent `Invalid Date`
@@ -785,6 +897,25 @@ export function registerEntitiesRoutes(app: HubHono): void {
         {
           error:
             "includeMedia cannot be combined with q — full-text search results carry no linked files. List without q.",
+        },
+        400
+      );
+    }
+    // The `q` branch is Typesense: it compiles no filter and reads no space.
+    if (filters && q.length > 0) {
+      return c.json(
+        {
+          error:
+            "filters cannot be combined with q — full-text search does not apply them. List without q.",
+        },
+        400
+      );
+    }
+    if (includeWorkspace && q.length > 0) {
+      return c.json(
+        {
+          error:
+            "includeWorkspace cannot be combined with q — full-text search results are not list rows. List without q.",
         },
         400
       );
@@ -935,6 +1066,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
               ...(createdBefore ? { createdBefore } : {}),
               ...(orderBy ? { orderBy } : {}),
               ...interactionFilter,
+              ...(filters ? { filters } : {}),
             })
           )
         );
@@ -998,7 +1130,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
             ) => number
           );
         }
-        return c.json(await withMedia(rows.slice(offset, offset + limit)), 200);
+        return c.json(await annotate(rows.slice(offset, offset + limit)), 200);
       }
 
       const listed = await caller.entities.getEntities({
@@ -1019,11 +1151,12 @@ export function registerEntitiesRoutes(app: HubHono): void {
         ...(createdBefore ? { createdBefore } : {}),
         ...(orderBy ? { orderBy } : {}),
         ...interactionFilter,
+        ...(filters ? { filters } : {}),
       });
 
       const rows = (listed as unknown[]).map((e) => toWire(e));
 
-      return c.json(await withMedia(rows), 200);
+      return c.json(await annotate(rows), 200);
     } catch (err) {
       logger.error({ err, userId }, "GET /entities failed");
       return c.json(

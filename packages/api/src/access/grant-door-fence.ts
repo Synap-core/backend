@@ -206,7 +206,9 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   new RegExp(`^/users/(?:me|${ID})/entities/?$`),
   // The list door. Every branch reads through `entities.getEntities` (the
   // seamed `entities.list` floor) EXCEPT full-text `q` (Typesense), which the
-  // route itself refuses for a fenced grant (rest/entities.ts).
+  // route itself refuses for a fenced grant (rest/entities.ts). `filters` are
+  // ANDed inside that floor (only narrow); `includeWorkspace` names only the
+  // spaces of the rows returned (entities.filters-space-names.pglite.test.ts).
   /^\/entities\/?$/,
   route("/entities/:id"),
   route("/entities/:id/connections"),
@@ -815,6 +817,9 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     synap_retire_field: WRITE,
     synap_grant_profile_access: WRITE,
     synap_change_kind_scope: WRITE,
+    // Always files a profile/declare_lifecycle proposal and returns its receipt,
+    // never rows (backend#689).
+    synap_declare_lifecycle: WRITE,
     synap_create_view: WRITE,
     synap_update_view_content: WRITE,
     // Get-OR-create: it RETURNS a channel row, the person's personal channel

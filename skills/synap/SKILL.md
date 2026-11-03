@@ -60,32 +60,42 @@ Depth: `load_skill` `system/synap/concepts`, `work-model`, `focus-sessions`, `fr
 
 The ONE glossary; other skills point here. Word = what the user sees; internal = tools and tables.
 
-| Word                | Internal                | Answers                            | Test · e.g. · not                                                                                                                                                     |
-| ------------------- | ----------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Space**           | workspace               | which domain: kinds + tools?       | owns kinds, never done · CRM · not a project or method; findable, not emphasised                                                                                      |
-| **Project**         | project                 | what am I committed to, with whom? | ends with the commitment; spans spaces · a launch · not a task, method, or the owner's company                                                                        |
-| **Goal**            | project_tracks          | what goal am I pursuing?           | in ONE project; open while it matters, or its judge closes it with a verdict; criteria say when it is done; work = sessions · grow the newsletter · tools say "track" |
-| **Step**            | stage                   | where does this work stand?        | = the subject's status: move the thing, the step follows · legacy: steps of a goal started from a method                                                              |
-| **Work**            | focus_session           | what am I doing this sitting?      | one aim · no noun: "Start work"                                                                                                                                       |
-| **Template**        | playbook                | how do I reuse it?                 | kind DERIVED, never declared: scope session = work template (a method a session or worker follows), project = goal template (legacy); also space and rule templates   |
-| **Pack**            | suite                   | which templates come together?     | a bundle; depends on space templates, never creates a space                                                                                                           |
-| **Rule**            | automation              | what runs by itself, when?         | standing · "every Monday…" · not Approvals                                                                                                                            |
-| **Approvals**       | governance rules        | which AI writes wait for me?       | decides review vs auto, does no work                                                                                                                                  |
-| **Tools**           | capability, skill, tool | what can it act with?              | one word; the detail shows the kind                                                                                                                                   |
-| **To review**       | proposal                | what awaits my approval?           | `proposed` is success                                                                                                                                                 |
-| **Role**            | role profile + facet    | which hat does it wear?            | one role per name, pod-wide; spaces add properties by overlay; its entities show in all · client · never a twin                                                       |
-| **Thing**           | entity                  | what is being worked on?           | one kind, maybe roles · a post, a lead · never a twin for a hat                                                                                                       |
-| **Status**          | lifecycle               | where does it stand?               | ONE list per kind or role, declared on its profile; category open·active·paused·done·lost · moved only through the door (`expectedStatus`)                            |
-| **Pipeline**        | pipeline view           | what is in each status?            | computed from a lifecycle, never created · not an object                                                                                                              |
-| **Worker**          | playbook activator      | what starts work by itself?        | a method + trigger (enters status · schedule · count · manual) + size (per thing · per batch); a goal or project turns it on                                          |
-| **Inbox**           | needs-you signals       | what needs me?                     | one list: decisions, questions, routine changes, broken · not Work                                                                                                    |
-| **Questions**       | owed slot ask           | what did an agent ask me?          | an Inbox filter · answer it, the work resumes                                                                                                                         |
-| **Routine changes** | reversible proposal     | what can I approve in a batch?     | an Inbox filter · only reversible changes batch; undo says what it cannot restore                                                                                     |
-| **Broken**          | failed or stuck work    | what needs a fix?                  | an Inbox filter · a failed run, a stuck session                                                                                                                       |
-| **Library**         | data (things, files)    | what did we bring in?              | what you and your agents kept or made: things, files, imports · not a space                                                                                           |
-| **Unfiled**         | entity in no project    | what is not filed yet?             | things outside every project · file them into one                                                                                                                     |
-| **Agents**          | agent users + keys      | who acts for me?                   | Claude Code, Codex, any MCP client; each has its own page · not a Tool                                                                                                |
-| **Getting started** | first-run Home card     | what do I try first?               | goes away once done                                                                                                                                                   |
+| Word                | Internal                | Answers                               | Test · e.g. · not                                                                                                                                                         |
+| ------------------- | ----------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Space**           | workspace               | which domain: kinds + tools?          | owns kinds, never done · CRM · not a project or method; findable, not emphasised                                                                                          |
+| **Project**         | project                 | what am I committed to, with whom?    | ends with the commitment; spans spaces · a launch · not a task, method, or the owner's company                                                                            |
+| **Goal**            | project_tracks          | what goal am I pursuing?              | in ONE project; open while it matters, or its judge closes it with a verdict; criteria say when it is done; work = sessions · grow the newsletter · tools say "track"     |
+| **Step**            | stage                   | where does this work stand?           | = the subject's status: move the thing, the step follows · legacy: steps of a goal started from a method                                                                  |
+| **Work**            | focus_session           | what am I doing this sitting?         | one aim · no noun: "Start work"                                                                                                                                           |
+| **Template**        | playbook                | how do I reuse it?                    | kind DERIVED, never declared: scope session = work template (a method a session or worker follows), project = goal template (legacy); also space and automation templates |
+| **Pack**            | suite                   | which templates come together?        | a bundle; depends on space templates, never creates a space                                                                                                               |
+| **Rule**            | skill rule              | what do my agents always follow?      | a standing instruction written for agents · "always cite sources" · not an Automation, not Approvals                                                                      |
+| **Automation**      | automation              | what runs by itself, when?            | standing · "every Monday…" · not a Rule, not Approvals                                                                                                                    |
+| **Approvals**       | governance rules        | which AI writes wait for me?          | decides review vs auto, does no work                                                                                                                                      |
+| **Tools**           | capability, skill, tool | what can it act with?                 | one word; the detail shows the kind                                                                                                                                       |
+| **Card**            | cell                    | what block did I make?                | the made UI block · "a deals summary" · never Cell, Widget or Interface                                                                                                   |
+| **Display**         | renderer                | how does this kind look?              | a card bound to a kind's slot · "Change display" · Renderer stays an engine word                                                                                          |
+| **View**            | view                    | how do I look at the data?            | a saved arrangement of things · a table, a board · not a Card                                                                                                             |
+| **App**             | built-in surface        | what do I open in Synap?              | CRM, Calendar, a space's own front end · never a space, never outside software                                                                                            |
+| **Connected app**   | application             | which outside software holds a grant? | reaches the pod with a grant · not an App                                                                                                                                 |
+| **Account**         | provider connection     | which of my accounts is linked?       | a person's link to an outside service · never Connection, Connector or Integration                                                                                        |
+| **Kind**            | profile                 | what shape does a thing have?         | its fields and status list · never Data type, Schema or Profile                                                                                                           |
+| **Make**            | destination             | where do I make things?               | a view, a card, a space, an automation · pairs with Work                                                                                                                  |
+| **Get more**        | destination             | where do I add more?                  | the store · never Marketplace or Get more tools                                                                                                                           |
+| **To review**       | proposal                | what awaits my approval?              | `proposed` is success                                                                                                                                                     |
+| **Role**            | role profile + facet    | which hat does it wear?               | one role per name, pod-wide; spaces add properties by overlay; its entities show in all · client · never a twin                                                           |
+| **Thing**           | entity                  | what is being worked on?              | one kind, maybe roles · a post, a lead · never a twin for a hat                                                                                                           |
+| **Status**          | lifecycle               | where does it stand?                  | ONE list per kind or role, declared on its profile; category open·active·paused·done·lost · moved only through the door (`expectedStatus`)                                |
+| **Pipeline**        | pipeline view           | what is in each status?               | computed from a lifecycle, never created · not an object                                                                                                                  |
+| **Worker**          | playbook activator      | what starts work by itself?           | a method + trigger (enters status · schedule · count · manual) + size (per thing · per batch); a goal or project turns it on · not `synap worker`, a runner (`hand-off`)  |
+| **Inbox**           | needs-you signals       | what needs me?                        | one list: decisions, questions, routine changes, broken · not Work                                                                                                        |
+| **Questions**       | owed slot ask           | what did an agent ask me?             | an Inbox filter · answer it, the work resumes                                                                                                                             |
+| **Routine changes** | reversible proposal     | what can I approve in a batch?        | an Inbox filter · only reversible changes batch; undo says what it cannot restore                                                                                         |
+| **Broken**          | failed or stuck work    | what needs a fix?                     | an Inbox filter · a failed run, a stuck session                                                                                                                           |
+| **Library**         | data (things, files)    | what did we bring in?                 | what you and your agents kept or made: things, files, imports · not a space                                                                                               |
+| **Unfiled**         | entity in no project    | what is not filed yet?                | things outside every project · file them into one                                                                                                                         |
+| **Agents**          | agent users + keys      | who acts for me?                      | Claude Code, Codex, any MCP client; each has its own page · not a Tool                                                                                                    |
+| **Getting started** | first-run Home card     | what do I try first?                  | goes away once done                                                                                                                                                       |
 
 Doors: `start_track`, `start_session`, `create_rule`, `attach_facet`, `update_entity` + `expectedStatus` (a status). How they fit (sizes, workers, tenses): `work-model`.
 
@@ -2746,9 +2756,7 @@ After binding, tell the user where the result lives: **"⋯ → Customize displa
 ### What ViewFrame Is
 
 - A sandboxed iframe that renders **one ES module** that default-exports a React component (or plain JS)
-- Keep generated cells self-contained. The CLI can analyse bare imports into a
-  `deps` map, but the current Hub `cells/define` persistence path does not yet
-  retain that map, so external runtime dependencies are not a reliable contract.
+- Keep generated cells self-contained. The frame never loads code from the network (no CDN, no esm.sh): React and the shared kit come from the host, and any other library has to be bundled into the cell's own source.
 - The host injects a `SynapWidget` bridge for data access and shell actions
 - Security: `sandbox="allow-scripts allow-modals"` — no `allow-popups`, no `allow-same-origin`, no cookies, no pod token
 
@@ -2757,9 +2765,11 @@ After binding, tell the user where the result lives: **"⋯ → Customize displa
 A ViewFrame cell is **one self-contained ES module** (inline in `rendererSource`):
 
 - The module **default-exports a React component** (or calls `SynapWidget.onInit()` for plain JS).
-- Bare imports (`"react"`, `"recharts"`, etc.) are resolved via the esm.sh import map generated from `deps`.
-- **No bundler, no `import` of local files** — everything is either inlined or declared in `deps`.
-- External CSS is not supported; inline `<style>` tags or CSS-in-JS only.
+- The only bare imports that resolve are the ones the host provides: `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`, `react/jsx-dev-runtime` and `@synap/kit` (see "What the frame provides" below). Any other bare import (`recharts`, `d3`, `three`, …) fails in the frame.
+- **No `import` of local files and no `import` from a URL.** A third-party library must be bundled into the source before you define the cell (`synap cell build <entry> --bundle-deps`), never fetched at runtime.
+- Leave `deps` out (or `{}`). A cell that still declares runtime `deps`, or names `esm.sh`, is refused by the web and desktop frames with a message saying so.
+- No `<script src>`, no CDN stylesheet, no web font link: the frame's security policy blocks them. Inline `<style>` tags or CSS-in-JS only. Fonts and colours come from the host's tokens (`@synap/kit`).
+- Phone frames (Relay, Telegram) are not the target: they show the snapshot of a cell and a link to open it on the web or desktop, so write the cell for the web and desktop frame.
 
 ### Register a Cell via the Hub Protocol (canonical path)
 
@@ -2778,13 +2788,11 @@ Content-Type: application/json
   "typeKey": "deal-stage-funnel",        // optional — derived from name if omitted
   "description": "Funnel chart of deal pipeline stages",  // optional
   "defaultSize": { "w": 8, "h": 6 },    // optional
-  "deps": { "recharts": "2.12.0" }    // accepted for forward compatibility; not persisted yet
+  "deps": {}                             // optional; leave empty: the frame refuses runtime deps
 }
 ```
 
-**`deps` status:** the CLI accepts a JSON map for forward compatibility, but
-the current server stores `{}`. Do not make a generated cell depend on an
-external package until the persistence contract is upgraded and verified.
+**`deps`:** the door still stores a `deps` map if you send one (valid npm names, at most 30), but the web and desktop frames refuse a cell whose `deps` name anything the host does not provide. Send `{}` or omit it, and bundle any library into `rendererSource` instead.
 
 **`workspaceId` is intentionally omitted** — cells defined without it are pod-global (`workspaceId IS NULL`), visible in every workspace the user owns. Pass `workspaceId` only when you explicitly want a cell scoped to a single workspace.
 
@@ -2821,8 +2829,7 @@ The browser receives this deep link, looks the typeKey up in the cell registry (
 ```
 // 1. Generate the HTML/React cell
 POST /api/hub/cells/define
-{ "name": "Q2 Revenue Report", "rendererSource": "<!DOCTYPE html>…</html>",
-  "deps": { "recharts": "2.12.0" } }
+{ "name": "Q2 Revenue Report", "rendererSource": "<!DOCTYPE html>…</html>" }
 // → { "success": true, "typeKey": "generated:q2-revenue-report" }
 
 // 2. Open it in the user's browser
@@ -2836,15 +2843,16 @@ The cell appears immediately in the side panel with "Q2 Revenue Report" as the t
 ### CLI commands (when running as Claude Code or another terminal agent)
 
 ```bash
-# Build a multi-file cell source into a single ES module bundle
-synap cell build <entry> --out ./dist/my-chart.js
-# → writes the bundle and prints the inferred deps JSON
+# Build a multi-file cell source into a single ES module bundle.
+# --bundle-deps inlines every third-party library (only react and react-dom
+# stay external, the host provides them). Always pass it: without it the CLI
+# leaves libraries external and the frame refuses the cell.
+synap cell build <entry> --out ./dist/my-chart.js --bundle-deps
 
-# Push a built cell (source + deps) to the pod
+# Push a built cell to the pod (no --deps: the bundle has none)
 synap cell define \
   --name "My Chart" \
   --file ./dist/my-chart.js \
-  --deps '{"recharts":"2.12.0"}' \
   [--type-key my-chart] \
   [--workspace <id>]
 
@@ -2963,36 +2971,15 @@ SynapWidget.subscribe("entity:changed", ({ entityId }) => {
 });
 ```
 
-### Common Dependency Patterns (esm.sh import map)
+### What the frame provides
 
-The `deps` map in `/cells/define` drives the import map. Each key becomes a bare specifier in the `<script type="importmap">`, resolved to `https://esm.sh/<pkg>@<version>`.
+The host hands every frame these modules from its own bundle, with no network:
 
-```json
-// deps in the define call:
-{ "recharts": "2.12.0", "d3": "7" }
+- `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`, `react/jsx-dev-runtime`: one React 19 build, the host's.
+- `@synap/kit`: the shared components and helpers a space package is built against. It exports exactly these names, and nothing else: `LensPageView`, `SYNAP_CHANGED_EVENT`, `SpatialAppHeader`, `SpatialButton`, `SpatialPageFrame`, `encodeActivityScope`, `encodeLensScope`, `installFrameBridge`, `lensActivityScope`, `resolveActionLabel`, `resolveDestinationLabel`, `resolveObjectNoun`, `useLensPageClock`, `useLensPageModelOf`. Do not import a name that is not in this list.
+- `window.SynapWidget`: the data and shell bridge (below). Data reaches the cell only through it.
 
-// → generates this importmap inside the frame:
-{
-  "imports": {
-    "react": "https://esm.sh/react@19",
-    "react-dom/client": "https://esm.sh/react-dom@19/client",
-    "react/jsx-runtime": "https://esm.sh/react@19/jsx-runtime",
-    "recharts": "https://esm.sh/recharts@2.12.0",
-    "d3": "https://esm.sh/d3@7"
-  }
-}
-```
-
-React 19 core entries are always injected by the host — never put them in `deps`.
-
-Common library choices:
-
-| Category | Packages (put in `deps`)                                       |
-| -------- | -------------------------------------------------------------- |
-| Data viz | `recharts@2.12.0`, `d3@7`, `chart.js@4`, `observable-plot@0.6` |
-| Tables   | `@tanstack/react-table@8`                                      |
-| 3D       | `three@0.165.0`, `@react-three/fiber@8`, `@react-three/drei@9` |
-| Maps     | `leaflet@1.9.4`, `react-leaflet@4`                             |
+A charting, map or 3D library is not provided. Draw with plain SVG or canvas in the cell's own source, or bundle the library at build time with `synap cell build --bundle-deps`. Never name `recharts`, `d3` or any other package in `deps`.
 
 ### Minimal Widget Template
 
@@ -3012,7 +2999,7 @@ Common library choices:
         background: transparent;
       }
     </style>
-    <!-- importmap is injected by the host from deps — do not write one manually -->
+    <!-- the host provides react, react-dom and @synap/kit — do not write an importmap -->
   </head>
   <body>
     <div id="root"></div>
@@ -3044,8 +3031,8 @@ Common library choices:
 - **Handle errors** — `query()` and `mutate()` can fail; always `.catch()`.
 - **Check `result.status` on mutations** — `"proposed"` is governance, not an error; surface `reviewUrl`.
 - **Transparent background** — `background: transparent` on `body` inherits the host surface color.
-- **No external fetch** — the sandbox has no cross-origin access; all data must go through `SynapWidget`.
-- **Declare all non-React imports in `deps`** — the host generates the import map from that field.
+- **No external fetch, no CDN** — the sandbox has no network for code or data; all data must go through `SynapWidget`.
+- **Import only what the host provides** — React and `@synap/kit`. Bundle anything else into the source; never declare it in `deps`, never load it from a CDN.
 
 ---
 
@@ -3372,6 +3359,10 @@ a server would need to be public to be reached, it needs `auth` first.
 
 The person says "start this on my devbox", "have my Mac's Claude Code do it", "give this session to Codex". You find the agent, hand it the work through a session, follow the session's room, and report back. You never run their machine yourself: an agent they connected there (`synap worker`, Claude Code, Codex) picks the work up.
 
+**Words.** A _runner_ is the process on a computer that works the sessions handed to one agent (`synap worker`). It is not a pod _worker_ (`synap_list_workers`, `synap_enable_worker`): that is a playbook's trigger turned on for a goal, which starts runs and runs nothing itself (`concepts`). Say "the agent on your Mac", never just "the worker".
+
+**Where work runs.** Each computer takes the work it is for. A pod may hold its own skill naming which of the person's computers takes which work (load it when it exists); follow it over any guess. A runner started with `--protocols work-folder` takes playbook runs only: a code session handed to it is never launched, and it says so in the session's room.
+
 **1. Find it — `synap_list_agents`.** One read: `computers[]` (the person's own) and `agents[]`, each with `computer`, `canTakeYourWork` (else `whyNot`), `live`, `paused`, `lastSeenAt`, and `handOff`: what YOUR hand-off would do right now (`direct`, `asks_you`, `blocked` + `handOffReason`). Ready agents come first.
 
 - **Match the person's words against computer names first** ("my devbox" → the computer named `devbox`, any case), **then agent names and types** ("Codex", "claude-code"). Take the agents on that computer that can take the work.
@@ -3379,6 +3370,8 @@ The person says "start this on my devbox", "have my Mac's Claude Code do it", "g
 - **None fits → say so.** "I see no agent on a computer called devbox" plus what you do see. Never hand it to a different machine silently.
 - **`paused: true` → say it is paused** and that a person must resume it (Settings › Agents). Do not hand it off.
 - **`live: false` → say when it was last seen** (`lastSeenAt`) and that it picks the work up the next time it checks in. Hand off only if the person still wants it.
+- **Is a runner serving it? Read `servedAt` and `nobodyRuns`.** `nobodyRuns: false` (a recent `servedAt`): a runner serves it now. `nobodyRuns: true`: nothing on that computer runs it now; say so ("the agent on your Mac has not run since <servedAt>") and hand off only if the person wants the run to wait. `nobodyRuns: null`: the pod cannot tell (no runner ever stamped, or an old CLI); say "I cannot tell whether anything runs it; last seen <lastSeenAt>". `live` says only that its key was used.
+- **No runner online → recommend waiting, never a second path.** The session shows who holds it (nobody, or the agent stopped) until a runner picks it up. Do not do the same job another way; if the computer must be awake, that is the person's step.
 - **`canTakeYourWork: false`** — `whyNot` says why: `not_owned` (another person's agent: it would never see this work), `wrong_reach` (the pod's own agent: it answers in rooms, it never picks work up), `paused`.
 
 **2. Hand it — through a session.** The session's roster is how work reaches an agent.
@@ -3389,13 +3382,11 @@ The person says "start this on my devbox", "have my Mac's Claude Code do it", "g
 - **`asks_you` / `proposed`: the person approves the hand-off first.** Tell them plainly: "approve the hand-off on your phone", with the `reviewUrl` from the reply. It is success, do not retry. Then wait: `synap_get_session` until the agent is on its roster (or `synap_wait_for_answer` if you also asked them something), and go on to step 3.
 - **`blocked` / `denied`: say why, in the reason's words.** Never retry it as is. One case the list cannot predict: your own proposal limit ("Agent proposal limit reached") — the reply carries a link to raise it; pass that to the person.
 
-**3. Follow the room.** Everything the agent says lands in the session's room (`session.channelId`). Read it with `synap_get_thread_context { threadId: channelId }`; read the session's outcomes with `synap_get_session`. A `synap worker` on that computer follows this protocol:
+**3. Follow the room.** Everything the agent says lands in the session's room (`session.channelId`). Read it with `synap_get_thread_context { threadId: channelId }`; read the session's outcomes with `synap_get_session`. A `synap worker` on that computer checks for handed sessions about every 30 seconds (never one its own identity started), starts ONE run of Claude Code per session, and **claims** it in the room in one line. Which protocol the run follows depends on the session:
 
-- It checks for handed sessions about every 30 seconds and starts ONE run of Claude Code per session, in its working folder.
-- It **claims** the session in the room in one line: picked up, and what it will do first.
-- It works on a branch (`devbox/<session>-<slug>`, in a git worktree). It never pushes to main and never deploys.
-- It **asks** with a room message starting `QUESTION:`. Kind `update` = you, the orchestrating AI, can answer; kind `question` = a decision only the person can make (the person is notified). It waits up to 30 minutes, reading the room every minute, and takes the FIRST reply posted after its question. No reply: it states its assumption and continues, or stops and says what is blocked.
-- It **reports** in the room (what changed, branch, commit, files) and records deliverables against the session's outcomes. It does not close the session; the owner does.
+- **Code** — a session that runs no playbook, or one with a `repo`/`repos`/`branch` param or a `pull_request`/`branch`/`code` deliverable. It works on a branch (`devbox/<session>-<slug>`, in a git worktree), never pushes to main, never deploys, and may open a DRAFT pull request. It **asks** with a room message starting `QUESTION:`: kind `update` = you, the orchestrating AI, can answer; kind `question` = a decision only the person can make (the person is notified). It waits up to 30 minutes and takes the FIRST reply posted after its question; no reply: it states its assumption and continues, or stops and says what is blocked.
+- **Work-folder** — a playbook run over pod data (a video edit, a CRM list, an interview). It works in a folder of its own (`<work root>/<session id>`), with no git; files every deliverable to the pod and records it on the session's outcomes. It **asks** through a human-owned slot with an ask (what the person sees in Needs you), never a `QUESTION:` line, and waits up to 30 minutes for the answer.
+- Either way it **reports** in the room (what it made and where, the first thing to check) and records deliverables against the session's outcomes. It does not close the session; the owner does.
 - **Any room message posted after its run ended, by anyone but the agent, wakes it again** in the same conversation (up to 20 times). That is how an answer reaches it after it stopped. So post in the room only what you want it to act on.
 
 Answer a `QUESTION:` of kind `update` yourself with `synap_post_message` to the room. Leave kind `question` to the person, or ask them and relay their answer.

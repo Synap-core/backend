@@ -36,6 +36,8 @@
  *                   scripts/test-floors.json (entries with no `args` only),
  *                   or a floored package did not run at all
  *   tripwire-unrun  a discovered tripwire file appears in no report
+ *   tests-unrun     a package holds test files but no `vitest run` script, and
+ *                   TESTS_RUN_ELSEWHERE does not say where they run instead
  *
  * A file FAILS when vitest reports it `failed` OR it collected zero tests (an
  * import error or a bad `vi.mock` makes a file test nothing — vitest does not
@@ -271,16 +273,61 @@ function workspaceDirs() {
   return dirs.sort();
 }
 
+/**
+ * Packages that hold test files on purpose without a `vitest run` script,
+ * each with WHERE its tests run instead (or why they cannot run yet). Every
+ * other package with a test file and no run is `tests-unrun`: on 2026-11-03
+ * shared-utils (its SSRF guards among them) and hub-rest-client had 12 test
+ * files between them that no gate had ever run (`if (!script) continue`).
+ */
+const TESTS_RUN_ELSEWHERE = {
+  "packages/core":
+    "its tests import @synap/database, a circular dependency (its test script says so)",
+  "packages/test-e2e": "the API e2e job runs it (`pnpm test:e2e`)",
+  "packages/feed-service":
+    "its one test imports @synap-core/core, whose config needs a live database at import",
+};
+
+const TEST_FILE = /\.test\.(ts|tsx|mts|cts|js|mjs)$/;
+const NOT_SOURCE = new Set([
+  "node_modules",
+  "dist",
+  ".claude",
+  ".turbo",
+  "coverage",
+]);
+
+function hasTestFile(absDir) {
+  for (const d of readdirSync(absDir, { withFileTypes: true })) {
+    if (d.isDirectory()) {
+      if (!NOT_SOURCE.has(d.name) && hasTestFile(join(absDir, d.name)))
+        return true;
+    } else if (TEST_FILE.test(d.name)) return true;
+  }
+  return false;
+}
+
 function packageRuns() {
   const runs = [];
   const skipped = [];
+  const unrunPackages = [];
   for (const dir of workspaceDirs()) {
     const pkg = JSON.parse(
       readFileSync(join(REPO_ROOT, dir, "package.json"), "utf8")
     );
     const script = pkg.scripts?.[SCRIPT];
+    const m = script?.match(/^vitest run(?:\s+(.*))?$/);
+    // Judged for the Full suite's `test` script only: the e2e job runs another.
+    if (
+      SCRIPT === "test" &&
+      !m &&
+      !(dir in TESTS_RUN_ELSEWHERE) &&
+      hasTestFile(join(REPO_ROOT, dir))
+    )
+      unrunPackages.push(
+        `${dir} (${script ? `${SCRIPT} script is \`${script}\`` : `no ${SCRIPT} script`})`
+      );
     if (!script) continue;
-    const m = script.match(/^vitest run(?:\s+(.*))?$/);
     if (!m) {
       skipped.push(
         `${dir} (${SCRIPT} script is not \`vitest run …\`: ${script})`
@@ -295,7 +342,7 @@ function packageRuns() {
       allowEmpty: scriptArgs.includes("--passWithNoTests"),
     });
   }
-  return { runs, skipped };
+  return { runs, skipped, unrunPackages };
 }
 
 function runVitest(run, outFile) {
@@ -384,7 +431,7 @@ const tripwireOwner = (file) =>
 // ── main ─────────────────────────────────────────────────────────────────────
 const inScope = (path) =>
   !ONLY || ONLY.some((d) => path === d || path.startsWith(`${d}/`));
-const { runs: allRuns, skipped } = packageRuns();
+const { runs: allRuns, skipped, unrunPackages } = packageRuns();
 const runs = allRuns.filter((r) => inScope(r.dir));
 
 // The tripwires in scope run on their own, under their package's config,
@@ -663,6 +710,14 @@ async function selectMode() {
       detail: `${addedUncollected.length} test file(s) this PR adds that their package's vitest config does not collect: they would never run, here or on main. Move each under a path the config includes, or change the config:\n${addedUncollected
         .slice(0, 20)
         .map((f) => `      ${f}`)
+        .join("\n")}`,
+    });
+  const pkgUnrun = unrunPackages.filter((u) => inScope(u.split(" ")[0]));
+  if (pkgUnrun.length)
+    problems.push({
+      kind: "tests-unrun",
+      detail: `${pkgUnrun.length} package(s) hold test files that no run executes — give each a \`${SCRIPT}: vitest run\` script, or name where its tests run in TESTS_RUN_ELSEWHERE:\n${pkgUnrun
+        .map((u) => `      ${u}`)
         .join("\n")}`,
     });
   const twUnrun = discovered.filter((t) => !results.has(t));

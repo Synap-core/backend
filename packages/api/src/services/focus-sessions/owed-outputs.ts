@@ -189,6 +189,12 @@ export const MISSING_OWED_SINCE = "0000-00-00";
 /** One owed deliverable, with just enough of its session to be actionable. */
 export interface OwedSlot {
   sessionId: string;
+  /**
+   * The session holds an open pull request outcome: this ask blocks it. Set
+   * only when true; the needs-you order puts it first and the rule never folds
+   * it by age.
+   */
+  blocksOpenPr?: true;
   sessionGoal: string | null;
   /**
    * The session's DISPLAY NAME (`resolveSessionTitle` — its title, else the
@@ -322,6 +328,13 @@ export interface ListOwedSlotsParams {
    */
   needsYouLens?: boolean;
   /**
+   * The caller counts the slots and never reads their needs-you class (the
+   * waiting-on, `readWaitingOnSourcesFor`): skip the open-PR read behind
+   * `blocksOpenPr`, which only moves the class. The waiting-on reads its PR
+   * states once, in `readOpenWorkUnits`, under the caller's lens.
+   */
+  withoutOpenPrFact?: boolean;
+  /**
    * CONTAINER lenses below the project: only this session's slots, or only
    * slots of sessions in this track. In SQL, like the workspace/project lens —
    * owed slots accumulate on OLD sessions, so a page-then-filter pass would
@@ -372,6 +385,11 @@ type OwedRow = {
   turnInFlight?: boolean;
   lastAgentActivityAt?: Date | string | null;
   lastAgentWorkAt?: Date | string | null;
+  /**
+   * The session holds an open PR outcome (`sessionIdsBlockingOpenPr`), read by
+   * the caller that measured the facts above. Absent = not measured.
+   */
+  blocksOpenPr?: boolean;
 };
 
 /**
@@ -410,6 +428,7 @@ export function projectOwedSlots(
           lastAgentActivityAt: row.lastAgentActivityAt,
           lastAgentWorkAt: row.lastAgentWorkAt ?? null,
           startedAt: row.startedAt ?? null,
+          blocksOpenPr: row.blocksOpenPr === true,
         }
       : null;
   const outputs: ExpectedOutput[] = Array.isArray(row.expectedOutputs)
@@ -463,6 +482,7 @@ export function projectOwedSlots(
       ...(facts
         ? { needsYouClass: classifyOwedAsk(slot, facts, now) ?? undefined }
         : {}),
+      ...(facts?.blocksOpenPr ? { blocksOpenPr: true as const } : {}),
       ...(slot.keptOwedAt ? { keptOwedAt: slot.keptOwedAt } : {}),
       ...(slot.paramName ? { paramName: slot.paramName } : {}),
     });
@@ -583,9 +603,23 @@ export async function listOwedSlots(
     .orderBy(owedSlotOrder())
     .limit(limit);
 
+  // The needs-you rule reads whether the session blocks an open PR: one read
+  // for the page, the same helper every other classifier calls.
+  const blocking =
+    params.needsYouLens && !params.withoutOpenPrFact
+      ? await (
+          await import("../dev-loop/open-pr-blocking.js")
+        ).sessionIdsBlockingOpenPr(
+          { userId },
+          rows.map((r) => r.id)
+        )
+      : new Set<string>();
   const slots = rows
     .flatMap((r) => {
-      const owed = projectOwedSlots(r as OwedRow, params.now);
+      const owed = projectOwedSlots(
+        { ...(r as OwedRow), blocksOpenPr: blocking.has(r.id) },
+        params.now
+      );
       // The needs-you lens: on a DRAFT only the slots with an ask count
       // (`ask` here is already `effectiveSlotAsk`, see `projectOwedSlots`).
       return params.needsYouLens && (r as OwedRow).isDraft
