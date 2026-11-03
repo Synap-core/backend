@@ -3,9 +3,11 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   URL_IDENTITY_KINDS,
+  IDENTITY_SIGNAL_PROPERTY_KEYS,
   canonicalizeUrl,
   extractIdentitySignals,
   normalizeIdentitySignal,
+  signalsFromExplicit,
 } from "./identity-resolution-service.js";
 
 describe("extractIdentitySignals", () => {
@@ -267,5 +269,38 @@ describe("URL_IDENTITY_KINDS ↔ ensure-system-profiles bookmark family", () => 
     expect(new Set(["bookmark", ...children])).toEqual(
       new Set(URL_IDENTITY_KINDS)
     );
+  });
+});
+
+describe("a messaging provider's id for a person (channels design §2)", () => {
+  it("linkedinProviderId / instagramProviderId register `<provider>:<id>` external ids", () => {
+    expect(
+      extractIdentitySignals({
+        linkedinProviderId: " ACoAAMarie ",
+        instagramProviderId: "1789",
+      })
+    ).toEqual([
+      { type: "external_id", value: "linkedin:ACoAAMarie" },
+      { type: "external_id", value: "instagram:1789" },
+    ]);
+  });
+
+  it("the id keeps its case (an opaque provider id)", () => {
+    const [signal] = extractIdentitySignals({ linkedinProviderId: "ACoAB" });
+    expect(normalizeIdentitySignal(signal!.type, signal!.value)).toBe(
+      "linkedin:ACoAB"
+    );
+  });
+
+  it("writing the property re-registers it (the update door's key map names it)", () => {
+    expect(IDENTITY_SIGNAL_PROPERTY_KEYS.external_id).toEqual(
+      expect.arrayContaining(["linkedinProviderId", "instagramProviderId"])
+    );
+  });
+
+  it("an explicit {linkedinProviderId} pre-check names the same atom the property registers", () => {
+    expect(signalsFromExplicit({ linkedinProviderId: "ACoAAMarie" })).toEqual([
+      { type: "external_id", value: "linkedin:ACoAAMarie" },
+    ]);
   });
 });

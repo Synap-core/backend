@@ -5,8 +5,10 @@
  * CLI already speaks for `synap init` (RFC 8628, `machine-connect.ts`):
  *
  *   1. REQUEST (CLI, its own key): `POST /api/hub/keys/requests`
- *      {template, name?, ttl?, space?} → {request_code, request_id, review_url,
- *      expires_in, interval}. The template, as asked, is the request's CEILING.
+ *      {template | permissions, name?, ttl?, space?} → {request_code,
+ *      request_id, review_url, expires_in, interval}. The template, or the
+ *      explicit permission list (`key-request-permissions.ts`, 2 Nov 2026),
+ *      as asked, is the request's CEILING.
  *   2. DECIDE (the person, signed in, on pod-admin `/keys/requests/<id>`):
  *      tRPC `apiKeys.getKeyRequest` / `apiKeys.decideKeyRequest`. The person
  *      may narrow the key, never widen it past the ceiling (`validateKeyDraft`
@@ -64,6 +66,11 @@ import {
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { deriveKeyScopes } from "./key-grant.js";
+import {
+  CUSTOM_KEY_REQUEST_NAME,
+  CUSTOM_KEY_REQUEST_TEMPLATE_ID,
+  ceilingFromPermissions,
+} from "./key-request-permissions.js";
 import { mintPersonKey } from "./person-key-mint.js";
 
 /**
@@ -177,9 +184,20 @@ export interface CreateKeyRequestInput {
   requesterKeyId: string;
   /** The person who will approve it (the key's human). */
   personUserId: string;
-  templateId: string;
+  /** A template the person can make keys from. Exactly one of this and `permissions`. */
+  templateId?: string;
+  /**
+   * The exact grant patterns asked for, instead of a template: the list IS
+   * the ceiling (`key-request-permissions.ts`).
+   */
+  permissions?: readonly string[];
+  /** With `permissions` only: where the key is used (default `hub`). */
+  uses?: readonly string[];
   name?: string;
-  /** Days, or null = never; omitted = the template's lifetime. */
+  /**
+   * Days, or null = never; omitted = the template's lifetime (by
+   * permissions: 90 days, at most 365, never "never").
+   */
   expiresInDays?: number | null;
   /** Narrow the key to this space. */
   workspaceId?: string;
@@ -258,20 +276,52 @@ export function ceilingFromTemplate(
   return { ceiling: { grant, uses: [...(template.uses ?? [])] }, problems };
 }
 
-export async function createKeyRequest(
-  input: CreateKeyRequestInput
-): Promise<KeyRequestResponse> {
-  // Housekeeping: requests past their TTL hold nothing anyone can use.
-  await db
-    .delete(keyRequests)
-    .where(
-      and(
-        lt(keyRequests.expiresAt, new Date()),
-        inArray(keyRequests.status, ["pending", "approved", "denied"])
-      )
-    );
+/**
+ * The ceiling a request asks for, from its template or its explicit list
+ * (exactly one), refused with every reason when it cannot be filed.
+ */
+async function askedCeiling(input: CreateKeyRequestInput): Promise<{
+  ceiling: KeyCeiling & { grant: GrantDraft };
+  templateId: string;
+  defaultName: string;
+}> {
+  const byTemplate = input.templateId !== undefined;
+  const byPermissions = input.permissions !== undefined;
+  if (byTemplate && byPermissions)
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Ask for a template or a list of permissions, not both.",
+    });
+  if (!byTemplate && !byPermissions)
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "Name a template or a list of permissions (synap keys request --list-templates).",
+    });
 
-  const template = await resolveTemplate(input.personUserId, input.templateId);
+  if (byPermissions) {
+    const { ceiling, problems } = ceilingFromPermissions(input.permissions!, {
+      expiresInDays: input.expiresInDays,
+      workspaceId: input.workspaceId,
+      projectId: input.projectId,
+      uses: input.uses,
+    });
+    if (problems.length > 0)
+      throw new TRPCError({ code: "BAD_REQUEST", message: problems.join(" ") });
+    return {
+      ceiling,
+      templateId: CUSTOM_KEY_REQUEST_TEMPLATE_ID,
+      defaultName: CUSTOM_KEY_REQUEST_NAME,
+    };
+  }
+
+  if (input.uses !== undefined)
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "A template sets where its key is used; `uses` goes with a list of permissions.",
+    });
+  const template = await resolveTemplate(input.personUserId, input.templateId!);
   if (!template.uses || template.uses.length === 0)
     throw new TRPCError({
       code: "BAD_REQUEST",
@@ -289,11 +339,28 @@ export async function createKeyRequest(
       code: "BAD_REQUEST",
       message: `"${template.name}" can do nothing there. Pick another template or scope.`,
     });
+  return { ceiling, templateId: template.id, defaultName: template.name };
+}
 
-  const requestedName = input.name?.trim() || template.name;
+export async function createKeyRequest(
+  input: CreateKeyRequestInput
+): Promise<KeyRequestResponse> {
+  // Housekeeping: requests past their TTL hold nothing anyone can use.
+  await db
+    .delete(keyRequests)
+    .where(
+      and(
+        lt(keyRequests.expiresAt, new Date()),
+        inArray(keyRequests.status, ["pending", "approved", "denied"])
+      )
+    );
+
+  const { ceiling, templateId, defaultName } = await askedCeiling(input);
+
+  const requestedName = input.name?.trim() || defaultName;
   const lifetime = grantLifetime(ceiling.grant);
   const asked = {
-    templateId: template.id,
+    templateId,
     requestedName,
     requestedWorkspaceIds: ceiling.grant.workspaceIds
       ? [...ceiling.grant.workspaceIds]
@@ -303,9 +370,12 @@ export async function createKeyRequest(
       : null,
     requestedExpiresInDays: lifetime.kind === "days" ? lifetime.days : null,
     requestedNeverExpires: lifetime.kind === "never",
+    requestedUses: [...ceiling.uses],
+    requestedPermissions: [...ceiling.grant.permissions],
   };
 
-  // The SAME ask (same asker, template, name, space, project, lifetime) hands
+  // The SAME ask (same asker, template, name, space, project, lifetime, and
+  // the same permissions and uses: by permissions, the list IS the ask) hands
   // back the request already waiting — its id, its link, its expiry — never a
   // new link (finding 214947f7: the devbox re-filed every 15 minutes). Its
   // code is rotated: only a hash is stored, so the new code is the one that
@@ -367,8 +437,6 @@ export async function createKeyRequest(
       requesterKeyId: input.requesterKeyId,
       personUserId: input.personUserId,
       ...asked,
-      requestedUses: [...ceiling.uses],
-      requestedPermissions: [...ceiling.grant.permissions],
       requestedEntityIds: ceiling.grant.entityIds
         ? [...ceiling.grant.entityIds]
         : null,
@@ -388,7 +456,13 @@ export async function createKeyRequest(
         ? input.requesterUserId
         : undefined,
     workspaceId: input.workspaceId ?? null,
-    data: { kind: "key_request", templateId: template.id },
+    data: {
+      kind: "key_request",
+      templateId,
+      ...(templateId === CUSTOM_KEY_REQUEST_TEMPLATE_ID
+        ? { permissions: [...ceiling.grant.permissions] }
+        : {}),
+    },
   });
 
   return {
@@ -414,10 +488,14 @@ function sameAsk(
     requestedProjectIds: string[] | null;
     requestedExpiresInDays: number | null;
     requestedNeverExpires: boolean;
+    requestedUses: string[];
+    requestedPermissions: string[];
   }
 ): boolean {
   return (
     row.templateId === asked.templateId &&
+    sameIds(row.requestedUses, asked.requestedUses) &&
+    sameIds(row.requestedPermissions, asked.requestedPermissions) &&
     row.requestedName === asked.requestedName &&
     sameIds(row.requestedWorkspaceIds, asked.requestedWorkspaceIds) &&
     sameIds(row.requestedProjectIds, asked.requestedProjectIds) &&
@@ -459,6 +537,12 @@ export interface KeyRequestView {
   status: KeyRequestStatusView;
   /** Who asks: the computer (or the person's own key). */
   requester: { userId: string; name: string; isComputer: boolean };
+  /**
+   * What was asked: a `template` (named in `template`, null when it no longer
+   * exists) or an explicit list of `permissions` (`template` is then null and
+   * the draft's permissions are the list).
+   */
+  asked: "template" | "permissions";
   template: { id: string; name: string; description: string } | null;
   /** The most the key may be: approving unchanged mints exactly this. */
   draft: KeyDraft;
@@ -506,11 +590,13 @@ export async function getKeyRequest(args: {
     .from(users)
     .where(eq(users.id, row.requesterUserId))
     .limit(1);
-  const template =
-    keyTemplate(row.templateId) ??
-    (await storedTemplates(args.personUserId)).find(
-      (r) => r.id === row.templateId
-    );
+  const byPermissions = row.templateId === CUSTOM_KEY_REQUEST_TEMPLATE_ID;
+  const template = byPermissions
+    ? undefined
+    : (keyTemplate(row.templateId) ??
+      (await storedTemplates(args.personUserId)).find(
+        (r) => r.id === row.templateId
+      ));
   return {
     requestId: row.id,
     status: viewStatus(row),
@@ -519,6 +605,7 @@ export async function getKeyRequest(args: {
       name: requester?.name ?? "",
       isComputer: requester?.userType === "agent",
     },
+    asked: byPermissions ? "permissions" : "template",
     template: template
       ? {
           id: template.id,

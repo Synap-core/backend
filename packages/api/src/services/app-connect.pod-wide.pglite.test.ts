@@ -310,7 +310,7 @@ describe("an app's pod-wide ask covers the pod-wide read only", () => {
 // a sign-in screen that leaves them out and still says the app sees nothing
 // outside its spaces.
 describe("the owner's sign-in names the pod-wide reads it carries", () => {
-  it("says them after the spaces, and drops 'nothing outside these spaces'", async () => {
+  it("says them as their own place, and drops 'nothing outside these spaces'", async () => {
     await h.client!.query(
       `insert into workspaces (id, name) values ($1, 'Sales') on conflict do nothing`,
       [SALES]
@@ -319,8 +319,8 @@ describe("the owner's sign-in names the pod-wide reads it carries", () => {
       { permission: "entity.task.read", workspaceId: SALES },
       { permission: "entity.decision.read", workspaceId: null },
     ]);
-    expect(d.headline).toMatch(
-      /^DevPlane will act as you in: Sales\. .*Decisions.*, everywhere in your pod\.$/
+    expect(d.headline).toBe(
+      "Reads decisions everywhere in your pod and tasks in Sales."
     );
     expect(d.spaces.map((s) => s.name)).toEqual(["Sales"]);
     expect(d.cannot).toContain("see anything else outside");
@@ -330,7 +330,7 @@ describe("the owner's sign-in names the pod-wide reads it carries", () => {
     const d = await describeAppSignIn("DevPlane", "Antoine", [
       { permission: "entity.task.read", workspaceId: SALES },
     ]);
-    expect(d.headline).toBe("DevPlane will act as you in: Sales.");
+    expect(d.headline).toBe("Reads tasks in Sales.");
     expect(d.cannot).toContain(
       "see anything outside what a member of these spaces sees"
     );

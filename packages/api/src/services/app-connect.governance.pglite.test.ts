@@ -744,7 +744,9 @@ describe("an app approval can only narrow what was asked", () => {
     });
     const out = await approve(app, proposalId, data);
     expect(out.ok).toBe(true);
-    expect(await approvedOf(app.id)).toEqual(narrowed);
+    expect(await approvedOf(app.id)).toEqual(
+      narrowed.map((r) => ({ ...r, scope: "space" }))
+    );
   });
 
   it.each([

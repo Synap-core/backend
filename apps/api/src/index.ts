@@ -71,6 +71,7 @@ import {
 } from "@synap/api";
 import { serve } from "@hono/node-server";
 import {
+  getBoss,
   startBoss,
   stopBoss,
   registerAllWorkers,
@@ -1256,6 +1257,8 @@ app.route("/mcp", mcpHttpApp);
 app.route("/", oauthApp);
 // GET /.well-known/synap-pod-jwks — the public half of this pod's identity key
 // Public + cacheable; the CP trusts only the key registered with it.
+// POST /.well-known/synap-pod-proof — signs a client's nonce with that key, so
+// an app following a moved pod can check the new host holds it (plan D3).
 app.route("/", podIdentityJwksApp);
 
 // External API — Skills invocation (API key auth, scope: skills.invoke)
@@ -1953,6 +1956,11 @@ try {
               registerFirefliesIngestRunner,
               registerFirefliesBackfillRunner,
             } = await import("@synap/jobs/workers/fireflies-worker.js");
+            const {
+              registerMessagingHistoryImportRunner,
+              registerMessagingWebhookEnsureRunner,
+              MESSAGING_WEBHOOK_ENSURE_QUEUE,
+            } = await import("@synap/jobs/workers/messaging-sync.js");
             const { registerSessionRecallRunner } =
               await import("@synap/jobs/workers/session-recall-worker.js");
             const { registerGoalLoopSweeper, registerSessionLifecycleSweeper } =
@@ -2077,6 +2085,28 @@ try {
               api.runFirefliesIngest(input)
             );
             registerFirefliesBackfillRunner(() => api.runFirefliesBackfill());
+            // Messaging: the silent history import and the webhook
+            // self-registration (messaging-sync.ts) run api-side code.
+            registerMessagingHistoryImportRunner((input) =>
+              api.runMessagingHistoryImport(input)
+            );
+            registerMessagingWebhookEnsureRunner(() =>
+              api.runMessagingWebhookEnsure()
+            );
+            // Deferred and non-fatal: check the webhook a minute after boot
+            // rather than waiting for the hourly cron.
+            try {
+              await getBoss().send(
+                MESSAGING_WEBHOOK_ENSURE_QUEUE,
+                {},
+                { startAfter: 60 }
+              );
+            } catch (err) {
+              apiLogger.warn(
+                { err },
+                "messaging-webhook-ensure boot check not queued (non-fatal)"
+              );
+            }
             // Session recall (on start / the sweep floor) delegates to the
             // api-side runner — requested by session synap-68.
             registerSessionRecallRunner((d) => api.runSessionRecall(d));

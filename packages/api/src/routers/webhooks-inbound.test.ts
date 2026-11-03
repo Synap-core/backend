@@ -784,9 +784,12 @@ describe("mailgun inbound webhook", () => {
     const arg = recordInboundMessageMock.mock.calls[0][0] as {
       externalId: string;
       participant: string;
+      contextEntityId?: string;
     };
     expect(arg.externalId).toBe("entity-client-1");
     expect(arg.participant).toBe("sam@etik.com");
+    // The channel binds to the person, not only keyed by their id.
+    expect(arg.contextEntityId).toBe("entity-client-1");
   });
 
   it("falls back to the sender email as the channel key when unresolved (unlinked review queue)", async () => {
@@ -794,8 +797,10 @@ describe("mailgun inbound webhook", () => {
     await postMailgun(MG_TOKEN, mailgunForm());
     const arg = recordInboundMessageMock.mock.calls[0][0] as {
       externalId: string;
+      contextEntityId?: string;
     };
     expect(arg.externalId).toBe("sam@etik.com");
+    expect(arg.contextEntityId).toBeUndefined();
   });
 
   it("ignores a message with no parseable sender address", async () => {

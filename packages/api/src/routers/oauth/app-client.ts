@@ -23,7 +23,16 @@ import {
   workspaces,
 } from "@synap/database/schema";
 import { isAppPublicId } from "@synap-core/types/membrane";
-import { EVERYWHERE_IN_POD, summarizeGrant } from "@synap-core/types/grants";
+import {
+  accessModel,
+  assertNeverPlace,
+  describeAccess,
+  grantsOfRequests,
+  parsePlace,
+  parseRequestPlace,
+  placeSpaceIds,
+  summarizeGrant,
+} from "@synap-core/types/grants";
 import {
   GRANT_ACTIONS,
   parsePermission,
@@ -215,13 +224,21 @@ export async function appSignInReach(
   const reach = new Set(await getUserWorkspaceIds(personUserId));
   return intersectAppGrant(
     approved,
-    grantable.filter((r) =>
-      r.workspaceId === null
-        ? // A pod-wide read is its owner's own (a pod app connection):
+    grantable.filter((r) => {
+      const place = parseRequestPlace(r, "app");
+      switch (place.kind) {
+        case "pod":
+          // A pod-wide read is its owner's own (a pod app connection):
           // never handed to another member signing in.
-          personUserId === app.ownerUserId
-        : reach.has(r.workspaceId)
-    )
+          return personUserId === app.ownerUserId;
+        case "spaces":
+          return place.ids.every((id) => reach.has(id));
+        case "unbounded":
+          return false; // an app never holds one
+        default:
+          return assertNeverPlace(place);
+      }
+    })
   );
 }
 
@@ -242,9 +259,10 @@ export function narrowKeyGrant(
   const ok = new Set(reach.map((r) => `${r.workspaceId} ${r.permission}`));
   const scopes: KeyGrant["scopes"][number][] = [];
   for (const scope of grant.scopes) {
-    // A scope with no space holds the pod-wide reads: kept only as the
-    // reach's own pod-wide pairs (`workspaceId: null`), never anything else.
-    if (!scope.workspaceIds) {
+    const place = parsePlace(scope, "app");
+    if (place.kind !== "spaces") {
+      // A scope with no space holds the pod-wide reads: kept only as the
+      // reach's own pod-wide pairs (`workspaceId: null`), never anything else.
       if (scope.projectIds || scope.entityIds) continue;
       const permissions = scope.permissions.filter(
         (p) => isPodWideReadPermission(p) && ok.has(`null ${p}`)
@@ -252,7 +270,7 @@ export function narrowKeyGrant(
       if (permissions.length > 0) scopes.push({ ...scope, permissions });
       continue;
     }
-    for (const ws of scope.workspaceIds) {
+    for (const ws of place.ids) {
       const permissions = scope.permissions.filter((p) => ok.has(`${ws} ${p}`));
       if (permissions.length > 0)
         scopes.push({ ...scope, permissions, workspaceIds: [ws] });
@@ -315,7 +333,11 @@ export interface AppSignInDescription {
    * was SHOWN.
    */
   fingerprint: string;
-  /** "<App> will act as you in: Sales, Content." + its pod-wide reads: "Read Decisions, everywhere in your pod." */
+  /**
+   * The ONE access sentence (`describeAccess`), the same the app's page shows
+   * for this grant: "Reads decisions everywhere in your pod; changes people in
+   * Sales." (founder, 2 Nov 2026: the sign-in headline IS the holder sentence).
+   */
   headline: string;
   spaces: AppSignInSpace[];
   /** "It cannot delete, manage keys, approve outside these spaces, or see anything outside what a member of these spaces sees." */
@@ -334,10 +356,12 @@ export async function describeAppSignIn(
   registeredBy: string,
   requests: readonly AppGrantRequest[]
 ): Promise<AppSignInDescription> {
-  // Spaces by name; a pod-wide read (the owner's own, `appSignInReach`) has no
-  // space and is said once, after them.
+  // Spaces by name; a pod-wide read (the owner's own, `appSignInReach`) has
+  // no space: the headline says it as its own place.
   const ids = [
-    ...new Set(requests.flatMap((r) => (r.workspaceId ? [r.workspaceId] : []))),
+    ...new Set(
+      requests.flatMap((r) => placeSpaceIds(parseRequestPlace(r, "app")))
+    ),
   ];
   const rows =
     ids.length > 0
@@ -357,13 +381,9 @@ export async function describeAppSignIn(
       can: summarizeGrant({ permissions, workspaceIds: [id] }).what,
     };
   });
-  const podWide = requests
-    .filter((r) => r.workspaceId === null)
-    .map((r) => r.permission);
-  const podWideCan =
-    podWide.length > 0
-      ? summarizeGrant({ permissions: podWide, workspaceIds: null }).what
-      : null;
+  const podWide = requests.some(
+    (r) => parseRequestPlace(r, "app").kind === "pod"
+  );
   const all = requests.map((r) => r.permission);
   const canDelete = all.some((p) => patternGrants(p, "delete"));
   const canApprove = all.some((p) => patternGrants(p, "approve"));
@@ -371,21 +391,19 @@ export async function describeAppSignIn(
     ...(canDelete ? [] : ["delete"]),
     "manage keys",
     canApprove ? "approve outside these spaces" : "approve changes",
-    podWideCan
+    podWide
       ? "see anything else outside what a member of these spaces sees"
       : "see anything outside what a member of these spaces sees",
   ];
-  const acts =
-    spaces.length > 0
-      ? `${appName} will act as you in: ${spaces.map((s) => s.name).join(", ")}.`
-      : `${appName} will act as you.`;
+  const headline = describeAccess(
+    accessModel(grantsOfRequests(requests), "app"),
+    { names: Object.fromEntries(nameOf) }
+  ).sentence;
   return {
     appName,
     registeredBy,
     fingerprint: appGrantFingerprint(requests),
-    headline: podWideCan
-      ? `${acts} ${podWideCan}, ${EVERYWHERE_IN_POD}.`
-      : acts,
+    headline,
     spaces,
     cannot: `It cannot ${orList(cannot)}.`,
     note: `What you do in ${appName} is saved as you, right away — not sent for review. You stay signed in for ${APP_PERSON_TOKEN_TTL_DAYS} days, and you can sign it out any time from Connected.`,
@@ -396,15 +414,14 @@ export async function describeAppSignIn(
 /**
  * What a POD APP's consent screen says about who its token acts as
  * (`podAppActsAs`), every word from here — the screen writes none of it.
- *  - `person` (a Synap app): `lead` + the spaces the person ticks IS the grant
- *    the token will carry ("Content Studio will act as you in: Content OS,
- *    Ecosystem."); `note` says how a write lands and what it cannot do,
- *    derived from the permissions the app asked for.
+ *  - `person` (a Synap app): `note` says it acts as the person, how a write
+ *    lands and what it cannot do, derived from the permissions the app asked
+ *    for. What it may do where is the consent's headline, the ONE access
+ *    sentence over the person's ticks (pod admin `consentHeadline`).
  *  - `agent` (any other app): the ask-first sentence, unchanged.
  */
 export type PodAppActsAsDescription =
-  | { kind: "person"; lead: string; note: string }
-  | { kind: "agent"; note: string };
+  { kind: "person"; note: string } | { kind: "agent"; note: string };
 
 export function describePodAppActsAs(
   clientId: string,
@@ -426,7 +443,6 @@ export function describePodAppActsAs(
   const cannot = [...(canDelete ? [] : ["delete"]), "create keys"];
   return {
     kind: "person",
-    lead: `${appName} will act as you in`,
     note: `What you do in ${appName} is saved as you, right away — not sent for review${
       canApprove ? ", approving changes included" : ""
     }. It cannot ${orList(cannot)}. You can sign it out any time from Connected.`,

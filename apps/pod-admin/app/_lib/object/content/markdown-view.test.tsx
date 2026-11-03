@@ -174,6 +174,83 @@ describe("MarkdownView — embeds are drawn from the shared model", () => {
     expect(out).toContain("<path");
   });
 
+  // The founder's report (document dad7e3cb, 3 Nov 2026) drew these two as a
+  // table and as bar rows.
+  it("a snapshot composed chart draws bars and a line with its legend, not a table", () => {
+    const out = html(
+      embed("synap-cell", 'cellKey="chart-composed"', {
+        label: "Jobs run per day vs minutes over the wait target (light queue)",
+        barLabel: "Jobs run",
+        lineLabel: "Minutes over target",
+        data: [
+          { x: "30 Oct", bar: 567, line: 44 },
+          { x: "31 Oct", bar: 468, line: 18 },
+          { x: "1 Nov", bar: 367, line: 37 },
+          { x: "2 Nov", bar: 616, line: 294 },
+        ],
+        capturedAt: "2026-11-03T00:05:00Z",
+      })
+    );
+    expect(count(out, 'data-chart="composed"')).toBe(1);
+    expect(out).not.toContain("<table");
+    expect(count(out, "<rect")).toBe(4);
+    expect(count(out, "<circle")).toBe(4);
+    expect(count(out, "data-mark")).toBe(8);
+    expect(count(out, "<path")).toBe(1);
+    // Legend and both scales' ticks.
+    expect(out).toContain("Jobs run");
+    expect(out).toContain("Minutes over target");
+    expect(out).toContain((616).toLocaleString());
+    expect(out).toContain(">294<");
+    expect(out).toContain("30 Oct");
+    expect(out).toContain("2 Nov");
+    expect(out).toContain('role="img"');
+    expect(out).toContain(
+      `aria-label="Jobs run per day vs minutes over the wait target (light queue): 30 Oct Jobs run ${(567).toLocaleString()}, Minutes over target 44; `
+    );
+  });
+
+  it("a snapshot pie draws a donut with one segment per share and a legend, not bars", () => {
+    const out = html(
+      embed("synap-cell", 'cellKey="chart-pie"', {
+        label: "How the account moves happened (all moves on record)",
+        groupBy: "trigger",
+        data: [
+          { label: "After a crash (failed turn)", value: 347 },
+          { label: "Cleanly, at the end of a turn", value: 7 },
+        ],
+        capturedAt: "2026-11-03T00:05:00Z",
+      })
+    );
+    expect(count(out, 'data-chart="categories"')).toBe(1);
+    expect(out).not.toContain("<rect");
+    expect(out).not.toContain("<table");
+    expect(count(out, "data-mark")).toBe(2);
+    expect(count(out, "stroke-dasharray")).toBe(2);
+    expect(out).toContain("var(--synap-identity-1)");
+    expect(out).toContain("var(--synap-identity-2)");
+    expect(out).toContain("After a crash (failed turn)");
+    expect(out).toContain("347 · 98%");
+    expect(out).toContain("7 · 2%");
+    expect(out).toContain(
+      'aria-label="How the account moves happened (all moves on record): After a crash (failed turn) 347 (98%), Cleanly, at the end of a turn 7 (2%)"'
+    );
+  });
+
+  it("a pie whose values add up to zero draws no segment and no NaN", () => {
+    const out = html(
+      embed("synap-cell", 'cellKey="chart-pie"', {
+        data: [
+          { label: "A", value: 0 },
+          { label: "B", value: 0 },
+        ],
+      })
+    );
+    expect(count(out, "data-mark")).toBe(0);
+    expect(out).not.toContain("NaN");
+    expect(out).toContain("0 · 0%");
+  });
+
   it("a malformed snapshot shows the error, not an empty chart", () => {
     const out = html(
       embed(

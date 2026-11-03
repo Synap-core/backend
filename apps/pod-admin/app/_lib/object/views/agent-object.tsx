@@ -12,7 +12,9 @@
  *     admin (the pod's agent read floor). Anyone else is told who can read it
  *     rather than shown an empty card.
  *   • Governance — `agentUsers.governance`: the one sentence every surface
- *     shows, plus the per-space ask-first overrides the viewer can see.
+ *     shows, plus the per-space ask-first overrides the viewer can see; its
+ *     creator or a pod admin sets it pod-wide here (`agentUsers.setPosture`:
+ *     the choices of `AGENT_WRITE_MODE_CHOICES`, drawn by `WriteModeChoice`).
  *   • Disconnect — `agentUsers.disconnect` revokes every live and pending key
  *     (offered when the pod says the viewer may: `viewerCanDisconnect`); the
  *     agent stays listed and `synap init` reconnects it.
@@ -29,8 +31,10 @@ import { Button, addToast } from "@heroui/react";
 import { Plug, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState, type ReactNode } from "react";
-import { resolveAgentReachMark } from "@synap-core/types/agents";
-import { humanizeToken } from "@synap-core/types/vocabulary";
+import {
+  agentPostureOfWriteMode,
+  resolveAgentReachMark,
+} from "@synap-core/types/agents";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { formatRelative } from "../../../../lib/format";
@@ -38,8 +42,17 @@ import { ExitLink } from "../../../../lib/exit-link";
 import { openIn } from "../../../../lib/open-in";
 import { ConfirmModal } from "../../../(admin)/components/confirm-modal";
 import { useConsoleRole } from "../../../(admin)/components/side-nav-role";
+import { navHref } from "../../../../lib/console-nav";
+import {
+  currentWriteMode,
+  mayChangeWrites,
+  writeModeLabel,
+  writeModeLines,
+} from "../../../../lib/agent-writes/agent-writes";
+import { WriteModeChoice } from "../../write-mode-choice";
 import { agentTrustDoor } from "./agent-trust-door";
 import { AgentJob } from "./agent-job";
+import { objectViewsT } from "./copy";
 import {
   agentReviewHref,
   agentsByCreator,
@@ -277,11 +290,44 @@ function Stat({ label, value }: { label: string; value: number }) {
 
 // ─── Governance ─────────────────────────────────────────────────────
 
-export function AgentGovernance({ agentUserId }: { agentUserId: string }) {
+/**
+ * How its writes land: the one sentence, and — for the person who connected
+ * it or a pod admin (`mayChange`, the server's own gate) — the control that
+ * sets it pod-wide (`agentUsers.setPosture`, THE posture writer). Per-space
+ * ask-first overrides stay listed under it: inside that space they win.
+ */
+export function AgentGovernance({
+  agentUserId,
+  mayChange,
+}: {
+  agentUserId: string;
+  mayChange: boolean;
+}) {
+  const t = objectViewsT();
+  const utils = trpc.useUtils();
   const gov = trpc.agentUsers.governance.useQuery(
     { agentUserId },
     { staleTime: 60_000, retry: false }
   );
+  const setPosture = trpc.agentUsers.setPosture.useMutation({
+    onSuccess: (res) => {
+      void utils.agentUsers.governance.invalidate({ agentUserId });
+      addToast({
+        title: t("agent.writes.saved", {
+          mode: writeModeLabel(res.posture),
+        }),
+        color: "success",
+      });
+    },
+    onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err)) return;
+      addToast({
+        title: t("agent.writes.failed"),
+        description: t("agent.writes.failedHint"),
+        color: "danger",
+      });
+    },
+  });
   return (
     <Section title="How its writes land">
       {gov.isLoading ? (
@@ -308,22 +354,60 @@ export function AgentGovernance({ agentUserId }: { agentUserId: string }) {
         </div>
       ) : (
         <>
-          <p className="text-[12.5px] text-foreground">{gov.data.line}</p>
-          {gov.data.postures.spaces.length > 0 && (
-            <ul className="flex flex-col gap-1 text-[12px] text-foreground/65">
-              {gov.data.postures.spaces.map((sp) => (
-                <li key={sp.workspaceId}>
-                  In {sp.name}:{" "}
-                  {sp.posture === "ask-first"
-                    ? "every change asks first"
-                    : sp.posture
-                      ? humanizeToken(sp.posture)
-                      : "follows the pod default"}
-                </li>
-              ))}
-            </ul>
+          {mayChange ? (
+            <WriteModeChoice
+              label="How its writes land"
+              // The pick shows while the pod saves it; a refused one falls back.
+              value={
+                setPosture.isPending && setPosture.variables
+                  ? (setPosture.variables.posture ?? "pod-default")
+                  : currentWriteMode(gov.data)
+              }
+              isDisabled={setPosture.isPending}
+              lines={writeModeLines(gov.data)}
+              onChange={(mode) =>
+                setPosture.mutate({
+                  agentUserId,
+                  posture: agentPostureOfWriteMode(mode),
+                })
+              }
+            />
+          ) : (
+            <>
+              <p className="text-[12.5px] text-foreground">{gov.data.line}</p>
+              <p className="text-[12px] text-foreground/65">
+                {t("agent.writes.whoMay")}
+              </p>
+            </>
           )}
-          <AgentTrustDoorLine />
+          {gov.data.postures.spaces.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <p className="text-[12px] text-foreground/65">
+                {t("agent.writes.spacesNote")}
+              </p>
+              <ul className="flex flex-col gap-1 text-[12px] text-foreground/65">
+                {gov.data.postures.spaces.map((sp) => (
+                  <li key={sp.workspaceId}>
+                    {t("agent.writes.space", {
+                      space: sp.name,
+                      mode: writeModeLabel(sp.posture),
+                    })}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            {mayChange && (
+              <Link
+                href={navHref("settings")}
+                className="inline-flex min-h-6 items-center self-start text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
+              >
+                {t("agent.writes.podDefault")}
+              </Link>
+            )}
+            <AgentTrustDoorLine agentUserId={agentUserId} />
+          </div>
         </>
       )}
     </Section>
@@ -331,8 +415,8 @@ export function AgentGovernance({ agentUserId }: { agentUserId: string }) {
 }
 
 /** Where this agent's trust is changed, for this viewer (`agent-trust-door.ts`). */
-function AgentTrustDoorLine() {
-  const door = agentTrustDoor(useConsoleRole());
+function AgentTrustDoorLine({ agentUserId }: { agentUserId: string }) {
+  const door = agentTrustDoor(useConsoleRole(), agentUserId);
   return door.kind === "link" ? (
     <Link
       href={door.href}
@@ -595,7 +679,9 @@ export function AgentObject({
             ownerId={null}
             ownerName={ownerName}
           />
-          <AgentGovernance agentUserId={id} />
+          {/* Off the roster its creator is unknown here: the control is
+              offered to a pod admin only (the server decides either way). */}
+          <AgentGovernance agentUserId={id} mayChange={viewerIsPodAdmin} />
         </div>
       ),
       advanced: { ids: [{ label: "Agent id", value: id }] },
@@ -633,7 +719,14 @@ export function AgentObject({
           ownerId={row.createdByUserId}
           ownerName={ownerName}
         />
-        <AgentGovernance agentUserId={row.id} />
+        <AgentGovernance
+          agentUserId={row.id}
+          mayChange={mayChangeWrites({
+            viewerId,
+            creatorId: row.createdByUserId,
+            viewerIsPodAdmin,
+          })}
+        />
         {/* 0395: what it is FOR on its computer — its owner only. */}
         {row.hostComputer && view.ownedByViewer && (
           <AgentJob

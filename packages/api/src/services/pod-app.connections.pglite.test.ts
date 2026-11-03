@@ -426,7 +426,7 @@ describe("N — narrow without a new consent", () => {
       approved: [{ permission: READ, workspaceId: BRAND }],
     });
     expect(narrowed.approved_requests).toEqual([
-      { permission: READ, workspaceId: BRAND },
+      { permission: READ, workspaceId: BRAND, scope: "space" },
     ]);
     // The live key shrinks NOW: the token the app holds is refused.
     expect(await valid(access)).toBe(false);
@@ -437,7 +437,12 @@ describe("N — narrow without a new consent", () => {
     const r = await refresh(rt);
     expect(r.status).toBe(200);
     expect(r.body.synap_grant).toEqual([
-      { permission: READ, workspaceId: BRAND, workspaceName: "Brand" },
+      {
+        permission: READ,
+        workspaceId: BRAND,
+        workspaceName: "Brand",
+        scope: "space",
+      },
     ]);
     const keyId = await keyIdOf(r.body.access_token);
     expect(await liveGrantSpaces(keyId)).toEqual([
@@ -462,7 +467,7 @@ describe("N — narrow without a new consent", () => {
       })
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect((await connection()).approved_requests).toEqual([
-      { permission: READ, workspaceId: BRAND },
+      { permission: READ, workspaceId: BRAND, scope: "space" },
     ]);
   });
 
@@ -511,7 +516,7 @@ describe("N — narrow without a new consent", () => {
     const byPerson = await narrow(sessionApp(registerAppsRoutes, OWNER));
     expect(byPerson.status).toBe(200);
     expect(((await byPerson.json()) as any).app.approved_requests).toEqual([
-      { permission: READ, workspaceId: BRAND },
+      { permission: READ, workspaceId: BRAND, scope: "space" },
     ]);
     expect(await valid(access)).toBe(false);
 

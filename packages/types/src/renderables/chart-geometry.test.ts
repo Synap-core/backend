@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CHART_COMPOSED_BAR_SHARE,
   CHART_DATA_EXAMPLES,
   CHART_DATA_SHAPE_BY_KEY,
   CHART_LABEL_COLUMN_PERCENT,
@@ -11,11 +12,15 @@ import {
 } from "./index.js";
 
 /** A snapshot through the REAL embed model — never a hand-built model. */
-function snapshot(cellKey: string, data: unknown): ChartSnapshotModel {
+function snapshot(
+  cellKey: string,
+  data: unknown,
+  props: Record<string, unknown> = {}
+): ChartSnapshotModel {
   const model = describeEmbed({
     kind: "cell",
     attrs: { cellKey },
-    props: { data },
+    props: { ...props, data },
   });
   if (model.kind !== "chart-snapshot") {
     throw new Error(`${cellKey}: expected a snapshot, got ${model.kind}`);
@@ -53,7 +58,14 @@ describe("chartGeometry — every snapshot shape has marks", () => {
       expect(g.kind).not.toBe("empty");
       kinds.add(g.kind);
     }
-    expect([...kinds].sort()).toEqual(["bars", "line", "ring", "table"]);
+    expect([...kinds].sort()).toEqual([
+      "bars",
+      "composed",
+      "line",
+      "pie",
+      "ring",
+      "table",
+    ]);
   });
 });
 
@@ -273,6 +285,230 @@ describe("chartGeometry — scalar", () => {
       percentRounded: 75,
       showPercent: true,
     });
+  });
+});
+
+// The founder's report (document dad7e3cb, 3 Nov 2026): two composed charts
+// and a pie that pod admin drew as a table and as bars.
+const FOUNDER_COMPOSED_DAYS = {
+  label: "Jobs run per day vs minutes over the wait target (light queue)",
+  barLabel: "Jobs run",
+  lineLabel: "Minutes over target",
+  data: [
+    { x: "30 Oct", bar: 567, line: 44 },
+    { x: "31 Oct", bar: 468, line: 18 },
+    { x: "1 Nov", bar: 367, line: 37 },
+    { x: "2 Nov", bar: 616, line: 294 },
+  ],
+  capturedAt: "2026-11-03T00:05:00Z",
+};
+const FOUNDER_COMPOSED_HOURS = {
+  label: "2 Nov, light queue: jobs waiting and longest wait",
+  barLabel: "Jobs waiting (average)",
+  lineLabel: "Longest wait (min)",
+  data: [
+    { x: "12:00", bar: 0, line: 0 },
+    { x: "13:00", bar: 2, line: 7 },
+    { x: "14:00", bar: 8, line: 20 },
+    { x: "15:00", bar: 11, line: 31 },
+    { x: "16:00", bar: 9, line: 19 },
+    { x: "17:00", bar: 14, line: 29 },
+    { x: "18:00", bar: 11, line: 23 },
+    { x: "19:00", bar: 24, line: 33 },
+    { x: "19:30", bar: 26, line: 54 },
+    { x: "20:00", bar: 18, line: 69 },
+    { x: "20:30", bar: 18, line: 83 },
+    { x: "21:00", bar: 16, line: 73 },
+    { x: "22:00", bar: 23, line: 63 },
+    { x: "22:30", bar: 30, line: 83 },
+    { x: "23:00", bar: 28, line: 91 },
+    { x: "23:30", bar: 23, line: 83 },
+    { x: "00:00", bar: 22, line: 87 },
+  ],
+  capturedAt: "2026-11-03T00:05:00Z",
+};
+const FOUNDER_PIE = {
+  label: "How the account moves happened (all moves on record)",
+  groupBy: "trigger",
+  data: [
+    { label: "After a crash (failed turn)", value: 347 },
+    { label: "Cleanly, at the end of a turn", value: 7 },
+  ],
+  capturedAt: "2026-11-03T00:05:00Z",
+};
+
+function composedOf(
+  fixture: { data: unknown } & Record<string, unknown>,
+  opts?: Parameters<typeof chartGeometry>[1]
+) {
+  const { data, ...props } = fixture;
+  const g = chartGeometry(snapshot("chart-composed", data, props), opts);
+  expect(g.kind).toBe("composed");
+  return g as Extract<ChartGeometry, { kind: "composed" }>;
+}
+
+describe("chartGeometry — composed (bars and a line on one x axis)", () => {
+  it("the founder's two composed charts draw bars and a line, never a table", () => {
+    for (const fixture of [FOUNDER_COMPOSED_DAYS, FOUNDER_COMPOSED_HOURS]) {
+      const g = composedOf(fixture);
+      expect(g.bars).toHaveLength(fixture.data.length);
+      expect(g.points).toHaveLength(fixture.data.length);
+      expect(g.path.startsWith("M")).toBe(true);
+      expect(g.path.split(" L")).toHaveLength(fixture.data.length);
+      // The authored series names reach the geometry (the legend's words).
+      expect([g.barLabel, g.lineLabel]).toEqual([
+        fixture.barLabel,
+        fixture.lineLabel,
+      ]);
+    }
+  });
+
+  it("bars and line each have their OWN scale, and each holds zero", () => {
+    const g = composedOf(FOUNDER_COMPOSED_DAYS);
+    expect(g.barScale).toEqual({ lo: 0, hi: 616, span: 616 });
+    expect(g.lineScale).toEqual({ lo: 0, hi: 294, span: 294 });
+    // The tallest bar and the highest point both reach the top of the plot.
+    const top = g.pad;
+    expect(g.bars[3]!.y).toBeCloseTo(top, 9);
+    expect(g.points[3]!.cy).toBeCloseTo(top, 9);
+    // Bar height is proportional to its value on the bars' scale.
+    const plot = g.height - 2 * g.pad;
+    for (const bar of g.bars) {
+      expect(bar.h).toBeCloseTo((bar.value / 616) * plot, 9);
+      expect(bar.y + bar.h).toBeCloseTo(g.baseline, 9);
+    }
+    // The line reads its own scale: 44 of 294, not 44 of 616.
+    expect(g.points[0]!.cy).toBeCloseTo(
+      g.height - g.pad - (44 / 294) * plot,
+      9
+    );
+    expect(g.barTicks).toEqual({ top: (616).toLocaleString(), bottom: "0" });
+    expect(g.lineTicks).toEqual({ top: "294", bottom: "0" });
+  });
+
+  it("each dot sits above the centre of its bucket's bar, buckets left to right", () => {
+    const g = composedOf(FOUNDER_COMPOSED_HOURS, { width: PHONE });
+    const slot = (PHONE - 2 * g.pad) / FOUNDER_COMPOSED_HOURS.data.length;
+    g.bars.forEach((bar, i) => {
+      expect(bar.x + bar.w / 2).toBeCloseTo(g.points[i]!.cx, 9);
+      expect(bar.w).toBeCloseTo(slot * CHART_COMPOSED_BAR_SHARE, 9);
+      // Inside the padded box.
+      expect(bar.x).toBeGreaterThanOrEqual(g.pad - EPS);
+      expect(bar.x + bar.w).toBeLessThanOrEqual(PHONE - g.pad + EPS);
+    });
+    const xs = g.points.map((p) => p.cx);
+    expect([...xs].sort((a, b) => a - b)).toEqual(xs);
+    expect(g.xTicks).toEqual([
+      { text: "12:00", align: "start" },
+      { text: "00:00", align: "end" },
+    ]);
+  });
+
+  it("a negative bar hangs below the zero line; one bucket sits in the middle", () => {
+    const g = composedOf({
+      data: [
+        { x: "A", bar: -5, line: 2 },
+        { x: "B", bar: 15, line: -2 },
+      ],
+    });
+    expect(g.barScale).toEqual({ lo: -5, hi: 15, span: 20 });
+    expect(g.bars[0]!.negative).toBe(true);
+    expect(g.bars[0]!.y).toBeCloseTo(g.baseline, 9);
+    expect(g.bars[1]!.y + g.bars[1]!.h).toBeCloseTo(g.baseline, 9);
+    expect(g.barLabel).toBeNull();
+    expect(g.lineLabel).toBeNull();
+
+    const one = composedOf({ data: [{ x: "Only", bar: 0, line: 0 }] });
+    expect(one.points[0]!.cx).toBe(one.width / 2);
+    expect(one.xTicks).toHaveLength(1);
+    for (const n of [one.bars[0]!.y, one.bars[0]!.h, one.points[0]!.cy])
+      expect(Number.isFinite(n)).toBe(true);
+  });
+
+  it("states each bucket's two numbers for the spoken label", () => {
+    const g = composedOf(FOUNDER_COMPOSED_DAYS);
+    expect(g.values[0]).toEqual({
+      name: "30 Oct",
+      bar: (567).toLocaleString(),
+      line: "44",
+    });
+  });
+});
+
+function pieOf(fixture: { data: unknown } & Record<string, unknown>) {
+  const { data, ...props } = fixture;
+  const g = chartGeometry(snapshot("chart-pie", data, props));
+  expect(g.kind).toBe("pie");
+  return g as Extract<ChartGeometry, { kind: "pie" }>;
+}
+
+describe("chartGeometry — pie (chart-pie)", () => {
+  it("the founder's pie draws segments that share one ring, never bars", () => {
+    const g = pieOf(FOUNDER_PIE);
+    expect(g.ring.r * 2 * Math.PI).toBeCloseTo(100, 3);
+    expect(g.total).toBe(354);
+    expect(g.segments.map((s) => s.labelText)).toEqual([
+      "After a crash (failed turn)",
+      "Cleanly, at the end of a turn",
+    ]);
+    const [crash, clean] = g.segments;
+    expect(crash!.share).toBeCloseTo((347 / 354) * 100, 9);
+    expect(clean!.share).toBeCloseTo((7 / 354) * 100, 9);
+    expect(crash!.shareText).toBe("98%");
+    expect(clean!.shareText).toBe("2%");
+    // Each segment starts where the one before ended; together they close the ring.
+    expect(crash!.offset).toBe(0);
+    expect(crash!.dashOffset).toBe(0);
+    expect(clean!.offset).toBeCloseTo(crash!.share, 9);
+    expect(clean!.dashOffset).toBeCloseTo(100 - crash!.share, 9);
+    expect(clean!.offset + clean!.share).toBeCloseTo(100, 9);
+    expect(crash!.dash).toBe(`${crash!.share} ${100 - crash!.share}`);
+    expect(g.values[0]).toEqual({
+      name: "After a crash (failed turn)",
+      value: "347 (98%)",
+    });
+  });
+
+  it("a bar chart with the same data still draws bars (the pie is told by its key)", () => {
+    expect(chartGeometry(snapshot("chart-bar", FOUNDER_PIE.data)).kind).toBe(
+      "bars"
+    );
+  });
+
+  it("one category is the whole ring", () => {
+    const g = pieOf({ data: [{ label: "All", value: 9 }] });
+    expect(g.segments[0]!.share).toBe(100);
+    expect(g.segments[0]!.dash).toBe("100 0");
+  });
+
+  it("an all-zero pie and a negative value are safe: no NaN, no share", () => {
+    const zero = pieOf({
+      data: [
+        { label: "a", value: 0 },
+        { label: "", value: 0 },
+      ],
+    });
+    expect(zero.total).toBe(0);
+    for (const s of zero.segments) {
+      expect(s.share).toBe(0);
+      expect(s.dash).toBe("0 100");
+      expect(Number.isFinite(s.offset) && Number.isFinite(s.dashOffset)).toBe(
+        true
+      );
+    }
+    expect(zero.segments[1]!.labelText).toBe("—");
+    expect(zero.values[1]!.name).toBeNull();
+
+    const neg = pieOf({
+      data: [
+        { label: "Gain", value: 3 },
+        { label: "Loss", value: -2 },
+        { label: "Other", value: 1 },
+      ],
+    });
+    expect(neg.total).toBe(4);
+    expect(neg.segments.map((s) => s.share)).toEqual([75, 0, 25]);
+    expect(neg.segments[1]!.valueText).toBe((-2).toLocaleString());
   });
 });
 

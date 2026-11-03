@@ -75,7 +75,13 @@ export type ChartSnapshotModel = {
         /** The scalar on 0–100, as a gauge / ring draws it. */
         percent: number;
       }
-    : unknown);
+    : S extends "composed"
+      ? {
+          /** The authored names of the two series (`barLabel` / `lineLabel` props), or null. */
+          barLabel: string | null;
+          lineLabel: string | null;
+        }
+      : unknown);
 }[ChartDataShape];
 
 export type EmbedModel =
@@ -154,6 +160,15 @@ function authoredLabel(input: DescribeEmbedInput): string | null {
     : null;
 }
 
+/** A string prop the author set (trimmed), or null. */
+function authoredProp(
+  props: Record<string, unknown>,
+  key: string
+): string | null {
+  const value = props[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 function describeCell(input: DescribeEmbedInput): EmbedModel {
   const cellKey = attr(input, "cellKey", "data-cell-key");
   const instanceId = attr(input, "instanceId", "data-instance-id");
@@ -211,6 +226,12 @@ function describeCell(input: DescribeEmbedInput): EmbedModel {
       label,
       ...(shape === "scalar"
         ? { percent: chartScalarPercent(props, parsed.data as number) }
+        : {}),
+      ...(shape === "composed"
+        ? {
+            barLabel: authoredProp(props, "barLabel"),
+            lineLabel: authoredProp(props, "lineLabel"),
+          }
         : {}),
     } as ChartSnapshotModel;
   }

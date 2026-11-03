@@ -7,6 +7,7 @@
  */
 
 import { resolveKeyExpiry } from "@synap/governance-policy/grants";
+import { placeBeyondPodWideReads } from "@synap-core/types/grants";
 import {
   ExpiresInDaysSchema,
   GrantInputSchema,
@@ -110,7 +111,6 @@ import {
   API_KEY_TOOL_PROFILES,
   APP_PERSON_KEY_TYPE,
   type ApiKeyToolProfile,
-  isPodWideReadScope,
   isValidScope,
   isPrivilegedMintScope,
 } from "@synap/database/schema";
@@ -1066,11 +1066,13 @@ export function registerSetupRoutes(app: HubHono): void {
         }
         // A pod-wide read (decision e1b59d38 "B") reaches no space to add
         // an AI to: only a scope about spaces does.
-        const withinGrant = surfaceCallerGrants.some(
-          (g) =>
-            (g.workspaceIds === null && !isPodWideReadScope(g)) ||
-            (g.workspaceIds?.includes(ws.id) ?? false)
-        );
+        const withinGrant = surfaceCallerGrants.some((g) => {
+          const place = placeBeyondPodWideReads(g);
+          return (
+            place !== null &&
+            (place.kind !== "spaces" || place.ids.includes(ws.id))
+          );
+        });
         if (
           !["owner", "admin"].includes(callerMembership.role) ||
           !withinGrant

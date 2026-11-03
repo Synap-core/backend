@@ -170,6 +170,12 @@ import {
   INBOUND_ATTACHMENT_QUEUE,
 } from "./inbound-attachment-worker.js";
 import {
+  handleMessagingHistoryImport,
+  handleMessagingWebhookEnsure,
+  MESSAGING_HISTORY_IMPORT_QUEUE,
+  MESSAGING_WEBHOOK_ENSURE_QUEUE,
+} from "./messaging-sync.js";
+import {
   handleEntityMediaCopy,
   ENTITY_MEDIA_COPY_QUEUE,
 } from "./entity-media-copy-worker.js";
@@ -422,6 +428,10 @@ const ALL_QUEUES = [
   FIREFLIES_INGEST_QUEUE,
   FIREFLIES_BACKFILL_CRON_QUEUE,
   INBOUND_ATTACHMENT_QUEUE,
+  // A person's channel stays complete: the silent history import (on demand)
+  // and the hourly webhook self-registration (messaging-sync.ts).
+  MESSAGING_HISTORY_IMPORT_QUEUE,
+  MESSAGING_WEBHOOK_ENSURE_QUEUE,
   // Entity media copy (on-demand, D2): enqueued by the api-side reactor on an
   // entity create/update; copies its external images into the pod.
   ENTITY_MEDIA_COPY_QUEUE,
@@ -1006,6 +1016,21 @@ export async function registerAllWorkers(): Promise<void> {
     handleFirefliesBackfillCron(job)
   );
   logger.info("Registered worker: fireflies-backfill-cron");
+
+  // Messaging history import (on-demand) — a connected account's past
+  // conversations with people already in the pod, silently (api-side runner,
+  // IoC slot). Re-throws so pg-boss retries; every message dedups.
+  await boss.work(MESSAGING_HISTORY_IMPORT_QUEUE, async ([job]: any[]) =>
+    handleMessagingHistoryImport(job)
+  );
+  logger.info("Registered worker: messaging-history-import");
+
+  // Messaging webhook self-registration (cron: hourly, + after boot and on
+  // account.created) — registers the pod's endpoint, records its health.
+  await boss.work(MESSAGING_WEBHOOK_ENSURE_QUEUE, async ([job]: any[]) =>
+    handleMessagingWebhookEnsure(job)
+  );
+  logger.info("Registered worker: messaging-webhook-ensure");
 
   // Inbound attachment ingest (on-demand) — the inbound sensor recorder enqueues
   // one job per inbound message that carried attachments; the api-side runner

@@ -100,7 +100,16 @@ import {
 } from "../routers/oauth/config.js";
 import type { Context } from "../types/context.js";
 import { isAgentCaller } from "./library/agent-door.js";
-import { EVERYWHERE_IN_POD, permissionWithin } from "@synap-core/types/grants";
+import {
+  assertNeverPlace,
+  EVERYWHERE_IN_POD,
+  parsePlace,
+  parseRequestPlace,
+  permissionWithin,
+  PlaceError,
+  withAppRequestScope,
+  type Place,
+} from "@synap-core/types/grants";
 
 /**
  * A request as a door sends it: a permission plus EITHER the workspace's id
@@ -629,7 +638,8 @@ export async function requestAccess(args: {
       appId: found.app.id,
       publicId: found.app.publicId,
       name: found.app.name,
-      requests,
+      // Each with its explicit place (`scope`, access model B).
+      requests: requests.map(withAppRequestScope),
       // Frozen at filing: what an approval may narrow, never widen.
       asked: requests.map(({ permission, workspaceId }) => ({
         permission,
@@ -718,14 +728,29 @@ export function grantsForApprovedRequests(
   const byWorkspace = new Map<string, Set<string>>();
   const podWide = new Set<string>();
   for (const r of approved) {
-    if (r.workspaceId === null) {
-      // Pod-wide: a read of one kind, never anything else (dropped if so).
-      if (isPodWideReadPermission(r.permission)) podWide.add(r.permission);
-      continue;
+    let place: Place;
+    try {
+      place = parseRequestPlace(r, "app");
+    } catch (err) {
+      if (err instanceof PlaceError) continue; // no place: never a grant
+      throw err;
     }
-    const perms = byWorkspace.get(r.workspaceId) ?? new Set<string>();
-    perms.add(r.permission);
-    byWorkspace.set(r.workspaceId, perms);
+    switch (place.kind) {
+      case "spaces": {
+        const perms = byWorkspace.get(place.ids[0]) ?? new Set<string>();
+        perms.add(r.permission);
+        byWorkspace.set(place.ids[0], perms);
+        break;
+      }
+      case "pod":
+        podWide.add(r.permission);
+        break;
+      case "unbounded":
+        // A write with no space: an app never holds one (dropped).
+        break;
+      default:
+        assertNeverPlace(place);
+    }
   }
   const grants: GrantInput[] = [...byWorkspace].map(([workspaceId, perms]) => ({
     permissions: [...perms],
@@ -942,8 +967,11 @@ async function narrowAppPersonTokens(
     const kept: AppApprovedRequest[] = [];
     let before = 0;
     for (const scope of live) {
-      // A scope with no space is the pod-wide reads (`workspaceId: null`).
-      const places: Array<string | null> = scope.workspaceIds ?? [null];
+      // A scope with no space holds the pod-wide reads (`workspaceId: null`);
+      // anything else in it has no approved pair, so it is not kept.
+      const place = parsePlace(scope, "app");
+      const places: Array<string | null> =
+        place.kind === "spaces" ? [...place.ids] : [null];
       for (const workspaceId of places) {
         for (const permission of scope.permissions) {
           before += 1;
@@ -1423,7 +1451,7 @@ export async function connectOAuthApp(args: {
   );
 
   const requests = approved.map((r) => ({
-    ...r,
+    ...withAppRequestScope(r),
     workspaceName: nameOf.get(r.workspaceId) ?? null,
   }));
   // Filed inside a transaction so `createPendingProposal` skips its "is

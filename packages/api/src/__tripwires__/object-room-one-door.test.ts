@@ -20,6 +20,12 @@ import { join, relative } from "path";
  * The allowed exceptions are the door itself and the private "Ask AI" thread
  * (a SUB_THREAD under the room, `services/comments/object-channel.ts`).
  *
+ * Not an object room: an EXTERNAL channel (a LinkedIn / email / Discord
+ * conversation) stamped with the person it is with. That stamp is how a
+ * channel follows its person (channels wave, decision d3; `grant-read.ts`
+ * `channelFollowsEntityWhere`), and a person has one such channel per tool and
+ * account, minted by `openPersonChannel`, not by the object-room door.
+ *
  * What it CANNOT see: an insert whose values are built in a variable and
  * spread in, or a stamp written by a later UPDATE. Behaviour is pinned by
  * `services/comments/comments.pglite.test.ts` (one room under a race).
@@ -36,6 +42,7 @@ const ALLOWLIST_SUFFIXES = [
 const INSERT =
   /\.insert\(\s*channels\s*\)\s*\.values\(\s*\{([\s\S]{0,1200}?)\}\s*\)/g;
 const LITERAL_OBJECT_STAMP = /contextObjectType:\s*["'](document|entity)["']/;
+const EXTERNAL_CHANNEL = /channelType:\s*ChannelType\.EXTERNAL\b/;
 const GROUP_WITH_CONTEXT =
   /channelType:\s*ChannelType\.GROUP[\s\S]*contextObjectType:|contextObjectType:[\s\S]*channelType:\s*ChannelType\.GROUP/;
 
@@ -60,6 +67,7 @@ export function offendingInserts(source: string): string[] {
   const hits: string[] = [];
   for (const m of source.matchAll(INSERT)) {
     const values = m[1];
+    if (EXTERNAL_CHANNEL.test(values)) continue;
     if (LITERAL_OBJECT_STAMP.test(values) || GROUP_WITH_CONTEXT.test(values)) {
       hits.push(values.trim().slice(0, 120));
     }
@@ -92,6 +100,14 @@ describe("tripwire: object rooms have one mint", () => {
         `db.insert(channels).values({ channelType: ChannelType.GROUP, contextObjectType: ref.type })`
       )
     ).toHaveLength(1);
+    // An external conversation stamped with its person is not an object room.
+    expect(
+      offendingInserts(`db.insert(channels).values({
+        channelType: ChannelType.EXTERNAL,
+        contextObjectType: "entity",
+        contextObjectId: person.id,
+      })`)
+    ).toHaveLength(0);
   });
 
   it("no source file mints an object-room-shaped channel outside the door", () => {

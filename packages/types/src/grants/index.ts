@@ -17,6 +17,8 @@
  *  - `access-levels` — families (Records, Content, Work, Activity, Decide) at one level.
  *  - `key-steps` — where a key acts, who holds it, which templates work there.
  *  - `pod-wide` — the one rule for an app's pod-wide reads, and its words.
+ *  - `reach`    — where a grant reaches: ONE explicit `Place`, parsed once.
+ *  - `access-model` — per tier, what and where; the ONE access sentence.
  *
  * Pure and dependency-free: browser, Electron, landing, Node and CLI.
  */
@@ -35,3 +37,5 @@ export * from "./key-draft.js";
 export * from "./access-levels.js";
 export * from "./key-steps.js";
 export * from "./pod-wide.js";
+export * from "./reach.js";
+export * from "./access-model.js";

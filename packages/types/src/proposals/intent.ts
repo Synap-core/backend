@@ -48,7 +48,17 @@
  * not made here.
  */
 
-import { POD_WIDE_HEADING, summarizeGrant } from "../grants/index.js";
+import {
+  accessModel,
+  describeAccess,
+  grantsOfRequests,
+  parseRequestPlace,
+  PlaceError,
+  placeKey,
+  summarizeGrant,
+  type Place,
+} from "../grants/index.js";
+import { resolvePlaceLabel } from "../vocabulary/index.js";
 import type { UnitTone } from "../units/state.js";
 import { isNonWidenableGovernanceReason } from "./governance-grant-options.js";
 
@@ -557,10 +567,18 @@ export function rollupComposite(
 /** One request as the proposal stores it (`data.requests[]`). */
 export interface AppConnectRequestLike {
   permission: string;
-  /** The space it applies in; `null` = anywhere (an AI's request may be). */
+  /**
+   * The space it applies in; `null` = no space: an app's pod-wide read, an
+   * AI's unbounded request. Read through `parseRequestPlace`, never by hand.
+   */
   workspaceId: string | null;
   /** The space's name, when the filer stored it. Preferred over `workspaceNames`. */
   workspaceName?: string | null;
+  /**
+   * An app's explicit place beside `workspaceId` (access model B, additive):
+   * "space" or "pod". Absent on older rows and on an AI's request.
+   */
+  scope?: "space" | "pod" | null;
 }
 
 /** The proposal fields this reads — any proposal row satisfies it. */
@@ -571,11 +589,13 @@ export interface AppConnectProposalLike {
 }
 
 export interface AppConnectLine {
-  /** `null` = anywhere. */
+  /** `null` = no space (its `place` says which: the pod, or anywhere). */
   workspaceId: string | null;
-  /** "Create People" — `summarizeGrant(...).what` for this space's permissions. */
+  /** Where it applies, parsed once (`parseRequestPlace`). */
+  place: Place;
+  /** "Create People" — `summarizeGrant(...).what` for this place's permissions. */
   what: string;
-  /** The space's name, "Anywhere", or `summarizeGrant`'s "1 Space" when no name is known. */
+  /** The place in words (`resolvePlaceLabel`): "Sales", "Everywhere in your pod". */
   where: string;
   /** "Create People · Sales". */
   text: string;
@@ -587,7 +607,13 @@ export interface AppConnectSummary {
   title: string;
   /** One line PER SPACE — never a cross product of permissions × spaces. */
   lines: AppConnectLine[];
-  /** "synap.live asks for access: Create People · Sales, Read Notes · Finance". */
+  /**
+   * What approving lets it do, in the ONE access sentence the holder's page
+   * then shows (`describeAccess` over `grantsOfRequests`): "Reads notes in
+   * Finance; changes people in Sales."
+   */
+  access: string;
+  /** "synap.live asks for access. Reads notes in Finance; changes people in Sales." */
   sentence: string;
   /** The requests as read, for the holder reading (`grantsOfRequests`). */
   requests: AppConnectRequestLike[];
@@ -608,12 +634,6 @@ export function isConnectProposal(p: AppConnectProposalLike): boolean {
   );
 }
 
-/**
- * An AI's ask with no space reaches anywhere. An app's ask with no space is a
- * pod-wide read (decision e1b59d38 "B"), named as consent and pod admin name it.
- */
-const ANYWHERE = "Anywhere";
-
 function rec(v: unknown): Record<string, unknown> | null {
   return v && typeof v === "object" && !Array.isArray(v)
     ? (v as Record<string, unknown>)
@@ -621,14 +641,16 @@ function rec(v: unknown): Record<string, unknown> | null {
 }
 
 /**
- * The request in grant words, grouped BY SPACE. Each space's permissions are
- * summarized on their own (`summarizeGrant` with that one space), because the
- * approval grants each space only what was asked in it — "Create People in
- * Sales" + "Read Notes in Finance" must never read (or become) "Create People,
- * Read Notes in Sales and Finance".
+ * The request in grant words, grouped BY PLACE (`parseRequestPlace`). Each
+ * place's permissions are summarized on their own, because the approval
+ * grants each place only what was asked in it — "Create People in Sales" +
+ * "Read Notes in Finance" must never read (or become) "Create People, Read
+ * Notes in Sales and Finance". `access` is the holder's sentence for what
+ * approving attaches (`grantsOfRequests`), so the card and the app's page say
+ * the same thing.
  *
  * `workspaceNames` (id → name) fills a name the stored request lacks; a space
- * with no known name reads "1 Space" rather than a raw id.
+ * with no known name reads as the noun ("Space") rather than a raw id.
  */
 export function summarizeAppConnectRequest(input: {
   appName: string;
@@ -636,49 +658,52 @@ export function summarizeAppConnectRequest(input: {
   workspaceNames?: Readonly<Record<string, string>>;
   holderKind?: "app" | "agent";
 }): AppConnectSummary {
-  const order: Array<string | null> = [];
-  const bySpace = new Map<
-    string | null,
-    { permissions: string[]; name: string | null }
+  const holderKind = input.holderKind ?? "app";
+  const names: Record<string, string> = { ...input.workspaceNames };
+  for (const r of input.requests)
+    if (r.workspaceId !== null && r.workspaceName)
+      names[r.workspaceId] = r.workspaceName;
+  const byPlace = new Map<
+    string,
+    { place: Place; workspaceId: string | null; permissions: string[] }
   >();
   for (const r of input.requests) {
-    let entry = bySpace.get(r.workspaceId);
-    if (!entry) {
-      entry = { permissions: [], name: null };
-      bySpace.set(r.workspaceId, entry);
-      order.push(r.workspaceId);
-    }
+    const place = parseRequestPlace(r, holderKind);
+    const k = placeKey(place);
+    const entry = byPlace.get(k) ?? {
+      place,
+      workspaceId: r.workspaceId,
+      permissions: [],
+    };
     if (!entry.permissions.includes(r.permission))
       entry.permissions.push(r.permission);
-    entry.name =
-      entry.name ??
-      (r.workspaceId === null
-        ? input.holderKind === "agent"
-          ? ANYWHERE
-          : POD_WIDE_HEADING
-        : (r.workspaceName ?? input.workspaceNames?.[r.workspaceId] ?? null));
+    byPlace.set(k, entry);
   }
-  const lines = order.map((workspaceId) => {
-    const entry = bySpace.get(workspaceId)!;
-    const s = summarizeGrant({
-      permissions: entry.permissions,
-      workspaceIds: workspaceId === null ? null : [workspaceId],
-      projectIds: null,
-      entityIds: null,
-    });
-    const where = entry.name ?? s.where.join(" · ");
-    return { workspaceId, what: s.what, where, text: `${s.what} · ${where}` };
-  });
+  const lines = [...byPlace.values()].map(
+    ({ place, workspaceId, permissions }) => {
+      const what = summarizeGrant({
+        permissions,
+        workspaceIds: workspaceId === null ? null : [workspaceId],
+        projectIds: null,
+        entityIds: null,
+      }).what;
+      const where = resolvePlaceLabel(place, names);
+      return { workspaceId, place, what, where, text: `${what} · ${where}` };
+    }
+  );
   const title = `${input.appName} asks for access`;
+  const access = describeAccess(
+    accessModel(grantsOfRequests(input.requests), holderKind),
+    { names }
+  ).sentence;
   return {
     appName: input.appName,
     title,
     lines,
-    sentence: lines.length
-      ? `${title}: ${lines.map((l) => l.text).join(", ")}`
-      : title,
+    access,
+    sentence: lines.length ? `${title}. ${access}` : title,
     requests: [...input.requests],
-    holderKind: input.holderKind ?? "app",
+    holderKind,
   };
 }
 
@@ -703,20 +728,30 @@ export function describeAppConnectProposal(
     if (
       !r ||
       typeof r.permission !== "string" ||
-      (r.workspaceId != null && typeof r.workspaceId !== "string")
+      (r.workspaceId != null && typeof r.workspaceId !== "string") ||
+      (r.scope != null && r.scope !== "space" && r.scope !== "pod")
     )
       return null;
     requests.push({
       permission: r.permission,
-      workspaceId: (r.workspaceId as string | null | undefined) || null,
+      workspaceId: (r.workspaceId as string | null | undefined) ?? null,
       workspaceName:
         typeof r.workspaceName === "string" ? r.workspaceName : null,
+      scope: (r.scope as "space" | "pod" | null | undefined) ?? null,
     });
   }
-  return summarizeAppConnectRequest({
-    appName,
-    requests,
-    workspaceNames,
-    holderKind: p.targetType === "agent" ? "agent" : "app",
-  });
+  // A request whose place does not parse (a blank space id, a scope that
+  // contradicts its space) is unreadable: the caller's generic title, never
+  // a half-read sentence.
+  try {
+    return summarizeAppConnectRequest({
+      appName,
+      requests,
+      workspaceNames,
+      holderKind: p.targetType === "agent" ? "agent" : "app",
+    });
+  } catch (err) {
+    if (err instanceof PlaceError) return null;
+    throw err;
+  }
 }

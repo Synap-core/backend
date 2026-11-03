@@ -224,6 +224,51 @@ export function findRow(matrix: AgentMatrix, key: string): MatrixRow | null {
 
 export const agentRowKey = (agentUserId: string) => `agent:${agentUserId}`;
 
+// ─── One agent's grid (`?agent=<id>`) ───────────────────────────────────────
+
+/** The query param that narrows Agents & work to one agent's grid. */
+export const AGENT_PARAM = "agent";
+/** The query param that opens the whole grid (every agent, grouped). */
+export const VIEW_PARAM = "view";
+
+/** Agents & work: the list, one agent's grid, or the whole grid. */
+export function agentsAndWorkHref(
+  base: string,
+  target: { agentUserId: string } | "grid" | null = null
+): string {
+  if (target === "grid") return `${base}?${VIEW_PARAM}=grid`;
+  if (target)
+    return `${base}?${AGENT_PARAM}=${encodeURIComponent(target.agentUserId)}`;
+  return base;
+}
+
+/**
+ * One agent's row, standing alone (level 1: no group above it to indent
+ * under), from the CURRENT read — or `null` when the read does not hold it
+ * (an agent past the matrix's limit, or one that was removed).
+ */
+export function agentOnlyRows(
+  matrix: AgentMatrix,
+  agentUserId: string
+): MatrixRow[] | null {
+  const row = findRow(matrix, agentRowKey(agentUserId));
+  return row ? [{ ...row, level: 1 }] : null;
+}
+
+/** Every agent in the read, in the matrix's order (type → computer → agent). */
+export function matrixAgents(
+  matrix: AgentMatrix
+): Array<{ agent: MatrixAgentRow; computer: string | null }> {
+  return matrix.groups.flatMap((g) =>
+    g.computers.flatMap((c) =>
+      c.agents.map((agent) => ({
+        agent,
+        computer: c.hostUserId === null ? null : c.label,
+      }))
+    )
+  );
+}
+
 export function toggleExpanded(
   expanded: ReadonlySet<string>,
   key: string

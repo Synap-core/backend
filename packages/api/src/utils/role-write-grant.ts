@@ -53,11 +53,16 @@ import {
 import {
   entities,
   entityFacets,
-  isPodWideReadScope,
   profiles,
   profileWorkspaceAccess,
 } from "@synap/database/schema";
 import { grantRequestKey } from "@synap/governance-policy";
+import {
+  holderOfGrant,
+  parsePlace,
+  placeBeyondPodWideReads,
+  placeSpaceIds,
+} from "@synap-core/types/grants";
 import {
   keyGrantReadClause,
   sharedRoleRowsInSpacesWhere,
@@ -159,7 +164,7 @@ export async function roleWriteGrantSpace(
  * it the row is not found, as an attach onto a record the key cannot read is,
  * never a refusal that names another space. No grant, or a scope not limited
  * to spaces: every row the person's floor finds. A pod-wide READ scope
- * (`isPodWideReadScope`, decision e1b59d38 "B") writes nothing, so it does
+ * (`placeBeyondPodWideReads`, decision e1b59d38 "B") writes nothing, so it does
  * not count as one.
  */
 export async function roleRowInKeyReach(
@@ -169,7 +174,7 @@ export async function roleRowInKeyReach(
   if (
     !grant ||
     grant.scopes.some(
-      (scope) => !scope.workspaceIds && !isPodWideReadScope(scope)
+      (scope) => placeBeyondPodWideReads(scope)?.kind === "unbounded"
     )
   )
     return true;
@@ -194,7 +199,11 @@ export async function roleRowInKeyReach(
 /** Every space the key's scopes are limited to. */
 function keySpaces(grant: KeyGrant): string[] {
   return [
-    ...new Set(grant.scopes.flatMap((scope) => scope.workspaceIds ?? [])),
+    ...new Set(
+      grant.scopes.flatMap((scope) =>
+        placeSpaceIds(parsePlace(scope, holderOfGrant(grant)))
+      )
+    ),
   ];
 }
 
@@ -204,7 +213,10 @@ async function permittedUnlimited(
   space: string,
   grant: KeyGrant
 ): Promise<boolean> {
-  const unlimited = grant.scopes.filter((scope) => !scope.workspaceIds);
+  // Its pod-wide reads ride along: the write check refuses them per verb.
+  const unlimited = grant.scopes.filter(
+    (scope) => parsePlace(scope, holderOfGrant(grant)).kind !== "spaces"
+  );
   if (unlimited.length === 0) return false;
   return (
     (await grantWriteDenial(

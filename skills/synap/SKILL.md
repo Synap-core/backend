@@ -790,6 +790,15 @@ synap set entity <id> --props='{"status":"done"}' --json
 
 **Multi-agent:** If `SYNAP_AGENT` env var is set, the CLI uses that named identity's API key from `~/.synap/config.json` instead of the default pod credentials. Use `synap agents list` to see configured identities.
 
+**A key for one job:** when a script, a deploy or another tool needs its own pod key, ask your person for exactly the reach it needs; never reuse your own key there. Name the permissions (repeatable `--permission`), or a template (`synap keys request --list-templates`):
+
+```bash
+synap keys request --permission entity.company.read --permission entity.company.update \
+  --permission facet.create --workspace <id> --name company-sync --out company-sync.env
+```
+
+The person approves it on one page and may narrow it, never widen it; the key is written once to `--out` (0600), never to stdout. A list cannot hold `*` (ask for the `full-access` template), and lasts 90 days unless `--expires-days` says otherwise (at most 365). An agent cannot run `synap app connect`: it prints this command, built from `synap.app.json`, instead.
+
 **Rules:**
 
 - Always use `--json` when calling from code — clean stdout, no spinners, machine-parseable

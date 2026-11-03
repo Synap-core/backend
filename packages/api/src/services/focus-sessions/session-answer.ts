@@ -106,6 +106,7 @@ import {
   type QuestionClosed,
 } from "@synap-core/types/ask";
 import { vaultSecretIdOf } from "@synap-core/types/vault";
+import { holderOfGrant, parsePlace } from "@synap-core/types/grants";
 import {
   ROOM_POST_META_KEY,
   readRoomPostMeta,
@@ -868,9 +869,14 @@ export async function answerGrantWrite(sessionId: string): Promise<{
 }> {
   // Only a key bounded by space or project needs the session's place; a
   // signed-in person (no grant) and an unbounded key are answered as before.
+  // A pod-wide read is placed too: it never covers the update on its own,
+  // so its holder is answered at the session's place like any narrowed key.
+  const grant = getRequestGrant();
   const placed =
-    getRequestGrant()?.scopes.some((s) => s.workspaceIds || s.projectIds) ??
-    false;
+    grant?.scopes.some(
+      (s) =>
+        parsePlace(s, holderOfGrant(grant)).kind !== "unbounded" || s.projectIds
+    ) ?? false;
   const [row] =
     placed && isUuid(sessionId)
       ? await db

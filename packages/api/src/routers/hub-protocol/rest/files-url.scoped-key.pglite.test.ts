@@ -254,9 +254,11 @@ describe("GET /files/{entityId}/url — a signed URL bounded by the key's grant"
     );
   });
 
-  it("an unknown file ⇒ 404; a non-uuid id ⇒ 400 (never a 500)", async () => {
+  it("an unknown file ⇒ 404; a non-uuid id ⇒ the fence's 403 (never a 500)", async () => {
     expect((await get("pinned", randomUUID())).status).toBe(404);
-    expect((await get("pinned", "not-a-uuid")).status).toBe(400);
+    // The fence admits only uuid ids on a seamed door, so a non-uuid id never
+    // reaches the route's own 400.
+    expect((await get("pinned", "not-a-uuid")).status).toBe(403);
   });
 
   it("a key without hub-protocol.read ⇒ 403, no URL", async () => {

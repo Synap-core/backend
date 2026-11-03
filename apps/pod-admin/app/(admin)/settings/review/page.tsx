@@ -1,7 +1,7 @@
 /**
  * /settings/review — how the person reviews what agents ask (founder B-3,
- * B-4): the grouping, each package's layout, and the agents they always let
- * take hand-offs. A member page (route-policy `MEMBER_CONSOLE_PATHS`): every
+ * B-4): the grouping, each package's layout, the pod's defaults for how
+ * agents act, and the agents they always let take hand-offs. A member page (route-policy `MEMBER_CONSOLE_PATHS`): every
  * read and write is the caller's own preference or a rule `governanceRules`
  * gates itself.
  */

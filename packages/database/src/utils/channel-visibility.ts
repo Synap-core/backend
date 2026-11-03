@@ -21,6 +21,17 @@
  *      workspace). A NULL-workspace SHARED channel is a genuine pod-wide global
  *      (team-visible), distinguished from a personal NULL-workspace channel
  *      purely by channelType — personal channels stay branch-1 owner-only.
+ *      A PERSON'S CONVERSATION is not pod-wide (founder decision d7,
+ *      2026-11-03, channels wave d00cd2ac): see branch 6.
+ *   6. it is a space-less PERSON'S CONVERSATION (an EXTERNAL channel bound to a
+ *      person, `contextObjectType = 'entity'`, or born of a connected account,
+ *      `metadata.accountId`) whose person the caller may READ — the channel
+ *      follows its person, as for an app key (decision d3, `grant-read.ts`
+ *      `channelFollowsEntityWhere`) and as an object room follows its object.
+ *      It uses the SAME registered entity floor as branch 5. A conversation
+ *      bound to no person (a DM whose sender was not identified yet) is its
+ *      owner's and its members' only. A space-less EXTERNAL channel that is
+ *      neither (a Discord bridge, a team feed) stays branch 4.
  *
  * Branch 3 deliberately does NOT use `userVisibleWhere` — that helper also
  * matches pod-visible workspaces, which would leak shared channels to pod-wide
@@ -223,6 +234,43 @@ function objectRoomBranch(userId: string | AnyColumn): SQL | undefined {
 }
 
 /**
+ * The row is a PERSON'S CONVERSATION (branch 6): an EXTERNAL channel bound to a
+ * person or born of a connected messaging account. Never NULL (each arm is
+ * coalesced), so `not()` of it is safe in branch 4.
+ */
+function personConversationWhere(): SQL {
+  return and(
+    eq(channels.channelType, ChannelType.EXTERNAL),
+    drizzleSql`(coalesce(${channels.contextObjectType} = 'entity', false) or (${channels.metadata} ->> 'accountId') is not null)`
+  )!;
+}
+
+/** A space-less person's conversation bound to its person (branch 6's rows). */
+function spacelessPersonChannelWhere(): SQL {
+  return and(
+    isNull(channels.workspaceId),
+    personConversationWhere(),
+    eq(channels.contextObjectType, "entity")
+  )!;
+}
+
+/**
+ * Branch 6: a space-less person's conversation whose PERSON the caller may
+ * read, through the registered entity floor (branch 5's). Literal ids only,
+ * like branch 5 (the audience is completed per user); no floor registered →
+ * nothing (fail closed: owner and roster only).
+ */
+function personConversationBranch(userId: string | AnyColumn): SQL | undefined {
+  if (typeof userId !== "string") return;
+  const floor = objectRoomFloors.get("entity");
+  if (!floor) return;
+  return and(
+    spacelessPersonChannelWhere(),
+    floor(userId, channels.contextObjectId)
+  );
+}
+
+/**
  * NOT a session room. Gates the two broadcast branches (3, 4) so a session room
  * is reachable only through ownership or the roster.
  */
@@ -289,10 +337,14 @@ export function channelVisibilityWhere(userId: string | AnyColumn): SQL {
       isNull(channels.workspaceId),
       inArray(channels.channelType, [...SHARED_CHANNEL_TYPES]),
       notSessionRoom(),
-      notObjectRoom()
+      notObjectRoom(),
+      // A person's conversation is never pod-wide (decision d7): branch 6.
+      not(personConversationWhere())
     ),
     // 5. An object room whose OBJECT the caller may read (see the docblock).
-    objectRoomBranch(userId)
+    objectRoomBranch(userId),
+    // 6. A space-less person's conversation whose PERSON the caller may read.
+    personConversationBranch(userId)
   );
   // A GUEST (`podGuestWhere`: a guest project role, no pod participation) reads
   // NO channel through any branch. Guests were let in to read what an owner
@@ -332,10 +384,16 @@ export async function listChannelAudienceUserIds(
   // An object room's branch 5 needs a literal id, so it is completed per user
   // through the SAME predicate (`canUserSeeChannel`). Pods are small; this runs
   // only for object rooms.
+  // Branches 5 and 6 take a literal id only: complete their audience per user.
   const [room] = await database
     .select({ id: channels.id })
     .from(channels)
-    .where(and(eq(channels.id, channelId), objectRoomWhere()))
+    .where(
+      and(
+        eq(channels.id, channelId),
+        or(objectRoomWhere(), spacelessPersonChannelWhere())
+      )
+    )
     .limit(1);
   if (!room) return base;
   const seen = new Set(base);

@@ -37,6 +37,44 @@ declare const STATUS_SIGNALS: readonly [
 	"main_red_unowned"
 ];
 export type StatusSignal = (typeof STATUS_SIGNALS)[number];
+export interface GrantDraft {
+	/** Permission patterns, `<subject>[.<kind>].<action>`. */
+	readonly permissions: readonly string[];
+	/** null/undefined/[] = any workspace the person can reach. */
+	readonly workspaceIds?: readonly string[] | null;
+	/** null/undefined/[] = no project narrowing. */
+	readonly projectIds?: readonly string[] | null;
+	/** null/undefined/[] = no object pinning. */
+	readonly entityIds?: readonly string[] | null;
+	/** undefined → DEFAULT_KEY_TTL_DAYS; a number → that many days; null → never. */
+	readonly expiresInDays?: number | null;
+	/** What the person calls it ("Portfolio site"); a stored grant may have none. */
+	readonly label?: string | null;
+}
+/** Where a grant (or one request) reaches. */
+export type Place = {
+	readonly kind: "pod";
+} | {
+	readonly kind: "unbounded";
+} | {
+	readonly ids: readonly [
+		string,
+		...string[]
+	];
+	readonly kind: "spaces";
+};
+export interface KeyDraft {
+	/** What the person calls it. Required. */
+	readonly name: string;
+	/** "Where will you keep it?" — stored with the key. */
+	readonly note?: string;
+	/** The template it started from (a built-in id or a stored role's id). */
+	readonly templateId?: string | null;
+	/** Where it is used (`KEY_USES` ids): this decides its scopes. */
+	readonly uses: readonly string[];
+	/** What it may touch, where, and for how long. */
+	readonly grant: GrantDraft;
+}
 /**
  * Why a handed-over secret came with no read for the agent.
  *   `agent_unknown`  — the pod cannot tell which agent asked.
@@ -5215,32 +5253,6 @@ export interface CatalogSyncStamp {
 	 */
 	retirementsUnreported?: true;
 }
-export interface GrantDraft {
-	/** Permission patterns, `<subject>[.<kind>].<action>`. */
-	readonly permissions: readonly string[];
-	/** null/undefined/[] = any workspace the person can reach. */
-	readonly workspaceIds?: readonly string[] | null;
-	/** null/undefined/[] = no project narrowing. */
-	readonly projectIds?: readonly string[] | null;
-	/** null/undefined/[] = no object pinning. */
-	readonly entityIds?: readonly string[] | null;
-	/** undefined → DEFAULT_KEY_TTL_DAYS; a number → that many days; null → never. */
-	readonly expiresInDays?: number | null;
-	/** What the person calls it ("Portfolio site"); a stored grant may have none. */
-	readonly label?: string | null;
-}
-export interface KeyDraft {
-	/** What the person calls it. Required. */
-	readonly name: string;
-	/** "Where will you keep it?" — stored with the key. */
-	readonly note?: string;
-	/** The template it started from (a built-in id or a stored role's id). */
-	readonly templateId?: string | null;
-	/** Where it is used (`KEY_USES` ids): this decides its scopes. */
-	readonly uses: readonly string[];
-	/** What it may touch, where, and for how long. */
-	readonly grant: GrantDraft;
-}
 /**
  * Apps — a developer's application identity (App Connect v1, 2026-10-06).
  *
@@ -5272,6 +5284,12 @@ export interface KeyDraft {
 export interface AppApprovedRequest {
 	permission: string;
 	workspaceId: string | null;
+	/**
+	 * The explicit place beside `workspaceId` (access model B, 2 Nov 2026,
+	 * additive): "space" or "pod". Rows written before it carry none; every
+	 * reader parses the place (`parseRequestPlace`) either way.
+	 */
+	scope?: "pod" | "space";
 }
 /**
  * Cell Instances Schema — The Universal Rendering Unit (persisted)
@@ -15903,8 +15921,13 @@ export interface KeyDetail {
 			name: string | null;
 		};
 		permissions: string[];
+		/**
+		 * Where it reaches, parsed once (`parsePlace`): an app's grant with no
+		 * space is a pod-wide read, any other "anywhere you can reach".
+		 */
+		place: Place;
 		projectIds: string[] | null;
-		/** null = no narrowing on that axis. */
+		/** null = no space list (its `place` says what that means for it). */
 		workspaces: Array<{
 			id: string;
 			name: string | null;
@@ -16010,6 +16033,12 @@ export interface KeyRequestView {
 		name: string;
 		userId: string;
 	};
+	/**
+	 * What was asked: a `template` (named in `template`, null when it no longer
+	 * exists) or an explicit list of `permissions` (`template` is then null and
+	 * the draft's permissions are the list).
+	 */
+	asked: "permissions" | "template";
 	template: {
 		description: string;
 		id: string;
@@ -16108,7 +16137,11 @@ export interface AppSignInDescription {
 	 * was SHOWN.
 	 */
 	fingerprint: string;
-	/** "<App> will act as you in: Sales, Content." + its pod-wide reads: "Read Decisions, everywhere in your pod." */
+	/**
+	 * The ONE access sentence (`describeAccess`), the same the app's page shows
+	 * for this grant: "Reads decisions everywhere in your pod; changes people in
+	 * Sales." (founder, 2 Nov 2026: the sign-in headline IS the holder sentence).
+	 */
 	headline: string;
 	spaces: AppSignInSpace[];
 	/** "It cannot delete, manage keys, approve outside these spaces, or see anything outside what a member of these spaces sees." */
@@ -16120,15 +16153,14 @@ export interface AppSignInDescription {
 /**
  * What a POD APP's consent screen says about who its token acts as
  * (`podAppActsAs`), every word from here — the screen writes none of it.
- *  - `person` (a Synap app): `lead` + the spaces the person ticks IS the grant
- *    the token will carry ("Content Studio will act as you in: Content OS,
- *    Ecosystem."); `note` says how a write lands and what it cannot do,
- *    derived from the permissions the app asked for.
+ *  - `person` (a Synap app): `note` says it acts as the person, how a write
+ *    lands and what it cannot do, derived from the permissions the app asked
+ *    for. What it may do where is the consent's headline, the ONE access
+ *    sentence over the person's ticks (pod admin `consentHeadline`).
  *  - `agent` (any other app): the ask-first sentence, unchanged.
  */
 export type PodAppActsAsDescription = {
 	kind: "person";
-	lead: string;
 	note: string;
 } | {
 	kind: "agent";
@@ -16145,8 +16177,8 @@ export interface OAuthAppConsent {
 	verified: boolean;
 	/**
 	 * Who its token will act as, and the words for it (`describePodAppActsAs`):
-	 * a Synap app acts AS THE PERSON ("<app> will act as you in: <the spaces
-	 * ticked>"); every other app is its own agent, every change for review.
+	 * a Synap app acts AS THE PERSON; every other app is its own agent, every
+	 * change for review.
 	 */
 	actsAs: PodAppActsAsDescription;
 	/** The document's `client_uri` (same origin as the client_id), or null. */
@@ -21197,6 +21229,19 @@ export type SyncConnectionToImportResult = {
 	source: typeof IMPORT_SOURCE;
 };
 export type UnipileConnectionProblem = "no-key" | "not-installed" | "unreadable";
+/**
+ * Whether the provider delivers this pod's events, as the last check found
+ * it (`messaging-webhook-ensure`: hourly, shortly after boot, and when an
+ * account connects). `checkedAt: null` = not checked since this process
+ * started; `unknown` with an `error` = the check could not read the provider.
+ */
+export interface MessagingWebhookState {
+	state: "missing" | "missing-events" | "no-public-url" | "registered" | "unknown";
+	url: string | null;
+	missingEvents: string[];
+	error: string | null;
+	checkedAt: string | null;
+}
 /** The messaging service's connection state, as the settings screens read it. */
 export interface MessagingServiceState {
 	configured: boolean;
@@ -21204,6 +21249,8 @@ export interface MessagingServiceState {
 	capabilityId: string | null;
 	problem: UnipileConnectionProblem | null;
 	message: string | null;
+	/** Whether inbound messages reach the pod (the last webhook check). */
+	webhook: MessagingWebhookState;
 }
 export interface EnrichmentResult {
 	source: string;
@@ -25391,6 +25438,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				agentUserId: string;
 				pausedAt: string | null;
+			};
+		}>;
+		setPosture: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentUserId: string;
+				posture: "ask-first" | "create-with-undo" | null;
+			};
+			meta: object;
+			output: {
+				posture: "ask-first" | "create-with-undo" | null;
+				status: "updated";
 			};
 		}>;
 		update: import("@trpc/server").TRPCMutationProcedure<{

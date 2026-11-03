@@ -1999,6 +1999,7 @@ describe("CIMD clients", () => {
         permission: "entity.post.read",
         workspaceId: SPACE_ID,
         workspaceName: "Brand",
+        scope: "space",
       },
     ]);
     expect(body.synap_user).toEqual({ id: HUMAN_ID, name: "Ada" });

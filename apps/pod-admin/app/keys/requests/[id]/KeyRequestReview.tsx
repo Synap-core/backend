@@ -2,8 +2,9 @@
 
 /**
  * The Review of a key a computer asked for (page grammar: Review). Who asks,
- * the change first (the key in words, its marks), why (the template, the
- * command), what approving does; then the same sections as New key, locked
+ * the change first (the key in words, its marks), why (the template, or, for
+ * a request by permissions, "Asked for by <computer>" and each permission in
+ * words, `grantLines`), what approving does; then the same sections as New key, locked
  * to the request: the person may narrow the key, never widen it
  * (`validateKeyDraft` with the request's ceiling, re-checked by the pod).
  * One primary, the approve action; Decline beside it (the vocabulary's negative
@@ -22,6 +23,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   describeKey,
   grantLifetime,
+  grantLines,
   isKeyUseId,
   validateKeyDraft,
   type KeyCeiling,
@@ -110,6 +112,11 @@ export function KeyRequestReview({
         name: p.displayName || p.slug,
       })),
     [profilesQuery.data]
+  );
+
+  const kindNames = useMemo(
+    () => Object.fromEntries(kinds.map((k) => [k.slug, k.name])),
+    [kinds]
   );
 
   const requester = data?.requester.name.trim() || "Your computer";
@@ -272,9 +279,22 @@ export function KeyRequestReview({
         </header>
 
         <dl className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1.5 text-[12.5px]">
-          <dt className="text-foreground/60">Why</dt>
+          <dt className="text-foreground/60">
+            {data.asked === "permissions" ? "Asked for by" : "Why"}
+          </dt>
           <dd>
-            {data.template ? (
+            {data.asked === "permissions" ? (
+              <>
+                <span className="font-medium">{requester}</span>
+                {data.requester.isComputer ? " (a computer)" : ""}: these
+                permissions, and nothing else.
+                <ul className="mt-1 list-disc pl-4">
+                  {grantLines(data.draft.grant, { kindNames }).map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              </>
+            ) : data.template ? (
               <>
                 <span className="font-medium">{data.template.name}</span>:{" "}
                 {data.template.description}
