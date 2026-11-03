@@ -1014,7 +1014,15 @@ export async function sendExternalMessage(
     });
   }
 
-  await connector.sendMessage(accountId, threadId!, body);
+  // No channel: the thread is the target (the guard above refused neither).
+  if (!threadId) {
+    return {
+      success: false,
+      error: "Nothing to send to: name the person's channel or a thread.",
+      errorClass: "validation",
+    };
+  }
+  await connector.sendMessage(accountId, threadId, body);
 
   // Mirror the outbound message into the messages table.
   let messageId: string | undefined;
