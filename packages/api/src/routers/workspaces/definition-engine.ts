@@ -43,6 +43,7 @@ import type { LayerTwoBody } from "../../services/template-apply/index.js";
 import { applyDefinitionSeeds } from "../../services/definition-seeds.js";
 import { workspacePrimarySurfaceSchema } from "../../schemas/workspace-primary-surface.js";
 import { playbookDefinitionSchema } from "../../schemas/playbook-definition.js";
+import { templateDocumentsSchema } from "../../schemas/template-document.js";
 import {
   buildPostWorkspaceBodyFromDefinition,
   type CreateDefinitionPostWorkspaceSlice,
@@ -307,6 +308,8 @@ export const definitionEngineProcedures = {
               )
               .optional(),
             /** Override the default "Home" name for the workspace home bento view */
+            /** Template documents — see `schemas/template-document.ts`. */
+            documents: templateDocumentsSchema,
             bentoViewName: z.string().optional(),
             bentoLayout: z
               .array(
@@ -408,10 +411,14 @@ export const definitionEngineProcedures = {
                           "profile",
                           "external",
                           "cell",
+                          // a template document, by `documentSlug` (resolved at install)
+                          "document",
                         ]),
                         appId: z.string().optional(),
                         viewName: z.string().optional(),
                         viewId: z.string().optional(),
+                        documentSlug: z.string().optional(),
+                        documentId: z.string().optional(),
                         profileSlug: z.string().optional(),
                         url: z.string().optional(),
                         cellKey: z.string().optional(),
@@ -960,6 +967,8 @@ export const definitionEngineProcedures = {
               })
             )
             .optional(),
+          /** Template documents — see `schemas/template-document.ts`. */
+          documents: templateDocumentsSchema,
           entityLinks: z
             .array(
               z.object({
@@ -1217,6 +1226,8 @@ export const definitionEngineProcedures = {
               )
               .optional(),
             views: z.array(z.record(z.string(), z.unknown())).optional(),
+            /** Template documents — see `schemas/template-document.ts`. */
+            documents: templateDocumentsSchema,
             bentoLayout: z.array(z.record(z.string(), z.unknown())).optional(),
             bentoViewBlocks: z
               .array(z.record(z.string(), z.unknown()))

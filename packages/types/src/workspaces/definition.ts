@@ -92,6 +92,35 @@ export interface WorkspaceCommandInput {
   permissionsProfile?: string;
 }
 
+/**
+ * The scope a template document's embeds read (`documents.scope`, 0387), as a
+ * template can name it before any id exists: `space` = the space the template
+ * is installed in (stored `{kind:"workspace", workspaceId}`), `pod` = the
+ * whole pod (`{kind:"pod"}`). Absent = no scope (the document's own context).
+ */
+export type WorkspaceDocumentScopeHint = "space" | "pod";
+
+/**
+ * A document a template carries (plan 9ad4b2fc §5 lane 12, P4: a pinned set of
+ * documents hosts a space package). Installed through the same layer-1 path
+ * as `views` (`createWorkspaceFromDefinition`, converged by
+ * `reconcileWorkspaceFromDefinition`; `@synap/database`
+ * `utils/template-documents.ts`): created once through the one document create
+ * door, identified in its space by `slug`, and never rewritten by a re-install
+ * (the person owns it after the first one). A sidebar item
+ * `{kind:"document", documentSlug}` is resolved to its `documentId`.
+ */
+export interface WorkspaceDocumentInput {
+  /** Stable id inside the template (kebab-case). The space's identity of the document. */
+  slug: string;
+  /** The document's name (its one title). */
+  title: string;
+  /** Markdown body; may carry `synap-cell` / `synap-section` embeds. */
+  content: string;
+  /** What its embeds read. See {@link WorkspaceDocumentScopeHint}. */
+  scope?: WorkspaceDocumentScopeHint;
+}
+
 export interface WorkspaceDefinitionInput {
   workspaceName?: string;
   description?: string;
@@ -255,6 +284,11 @@ export interface WorkspaceDefinitionInput {
     endField?: string;
     colorBy?: string;
   }>;
+  /**
+   * Documents the template carries — see {@link WorkspaceDocumentInput}.
+   * Created after the views; a sidebar item names one by `documentSlug`.
+   */
+  documents?: WorkspaceDocumentInput[];
   bentoLayout?: Array<{
     widgetType: string;
     pos: { x: number; y: number; w: number; h: number };
@@ -300,10 +334,14 @@ export interface WorkspaceDefinitionInput {
     pinnedApps?: string[];
     defaultView?: string;
     sidebarItems?: Array<{
-      kind: "app" | "view" | "profile" | "external" | "cell";
+      kind: "app" | "view" | "profile" | "external" | "cell" | "document";
       appId?: string;
       viewName?: string;
       viewId?: string;
+      /** kind='document': the template document's slug (`documents[].slug`). */
+      documentSlug?: string;
+      /** kind='document': resolved from `documentSlug` at install. */
+      documentId?: string;
       profileSlug?: string;
       url?: string;
       cellKey?: string;
