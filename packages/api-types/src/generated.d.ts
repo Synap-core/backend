@@ -52937,6 +52937,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				category: string | null;
 				configSchema: Record<string, unknown>;
 				contentKind: "collection" | "entity-card" | "entity-detail" | "entity-profile" | "widget";
+				contentSha256: string | null;
 				createdAt: Date;
 				defaultConfig: Record<string, unknown> | null;
 				defaultSize: {
@@ -52974,6 +52975,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				category: string | null;
 				configSchema: Record<string, unknown>;
 				contentKind: "collection" | "entity-card" | "entity-detail" | "entity-profile" | "widget";
+				contentSha256: string | null;
 				createdAt: Date;
 				defaultConfig: Record<string, unknown> | null;
 				defaultSize: {
@@ -53011,6 +53013,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				category: string | null;
 				configSchema: Record<string, unknown>;
 				contentKind: "collection" | "entity-card" | "entity-detail" | "entity-profile" | "widget";
+				contentSha256: string | null;
 				createdAt: Date;
 				defaultConfig: Record<string, unknown> | null;
 				defaultSize: {
@@ -53069,6 +53072,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				category: string | null;
 				configSchema: Record<string, unknown>;
 				contentKind: "collection" | "entity-card" | "entity-detail" | "entity-profile" | "widget";
+				contentSha256: string | null;
 				createdAt: Date;
 				defaultConfig: Record<string, unknown> | null;
 				defaultSize: {

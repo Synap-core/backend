@@ -1214,6 +1214,13 @@ const SUPPLEMENTARY_TABLES: Record<
           //
           // "generated" is the floor, not a default: do not restore the `??`.
           trustLevel: "generated",
+          // NULL unconditionally, for the reason trustLevel is floored: the
+          // content fingerprint says "this exact content was approved (or
+          // written by its operator) HERE" (decision Q9, migration 0396). A
+          // peer's row passed no approval on this pod, and a peer-supplied
+          // value is not one this pod computed. Cleared on update too, so a
+          // synced change of content never keeps the stamp of the old one.
+          contentSha256: null,
           role:
             (row.role as typeof widgetDefinitions.$inferInsert.role) ??
             "widget",
@@ -1248,6 +1255,7 @@ const SUPPLEMENTARY_TABLES: Record<
           isActive: values.isActive,
           version: values.version,
           trustLevel: values.trustLevel,
+          contentSha256: values.contentSha256,
           role: values.role,
           contentKind: values.contentKind,
           viewRendererViewTypes: values.viewRendererViewTypes,
