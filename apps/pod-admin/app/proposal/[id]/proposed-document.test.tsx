@@ -140,6 +140,7 @@ vi.mock("../../../lib/trpc", () => ({
 
 import { ProposalReview } from "./ProposalReview";
 import { ProposedDocumentBody } from "./ProposedDocumentBody";
+import { READS_WIDE_ATTR } from "../../_lib/receiver-shell";
 
 const text = (html: string) =>
   html
@@ -246,6 +247,15 @@ describe("a Create document request, pending", () => {
     const out = text(render());
     expect(out).toContain("Done.");
     expect(out).not.toContain("Read the whole document");
+  });
+
+  /* Proposal 70fc80c4 (founder, 2026-11-03): the review of a document opens
+     at the document page's width. The receiver card widens on this mark. */
+  it("reads at the document's width, long or short", () => {
+    state.proposal = documentCreate("pending", longBody());
+    expect(render()).toContain(`${READS_WIDE_ATTR}=""`);
+    state.proposal = documentCreate("pending", "# Note\n\nTwo lines.");
+    expect(render()).toContain(`${READS_WIDE_ATTR}=""`);
   });
 });
 

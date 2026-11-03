@@ -7,6 +7,10 @@ import {
   undoMark,
 } from "./proposal-review-model";
 import { initials } from "../../_lib/object/provenance-chips";
+import { proposedRecord } from "./proposal-record-model";
+import { proposalSubjectKind } from "./proposal-subject-kind";
+import { openWidth } from "../../open/open-shell";
+import { consoleWidth } from "../../_lib/object/views/object-frame";
 
 describe("reasonMark — WHY it waits, as one mark, only when it is particular", () => {
   it("names the reason, not the ladder's reach; the sentence rides behind it", () => {
@@ -55,8 +59,13 @@ describe("initials", () => {
 });
 
 describe("reviewReadsWide — a review that shows text reads at a document's width", () => {
-  const none = { documentChanges: false, toolArguments: [], records: [] };
-  const short = { fields: [{ wide: false }, { wide: false }] };
+  const none = {
+    subjectKind: null,
+    documentChanges: false,
+    toolArguments: [],
+    records: [],
+  };
+  const short = { kind: null, fields: [{ wide: false }, { wide: false }] };
 
   it("short values only: the default width", () => {
     expect(reviewReadsWide(none)).toBe(false);
@@ -86,9 +95,154 @@ describe("reviewReadsWide — a review that shows text reads at a document's wid
     expect(
       reviewReadsWide({
         ...none,
-        records: [short, { fields: [{ wide: false }, { wide: true }] }],
+        records: [
+          short,
+          { kind: null, fields: [{ wide: false }, { wide: true }] },
+        ],
       })
     ).toBe(true);
+  });
+});
+
+describe("reviewReadsWide — a proposal is as wide as the object it creates or changes", () => {
+  /* Proposal 70fc80c4 (founder, 2026-11-03): a `document` / `create` holding
+     a long markdown report read at the receiver's narrow default. Its body
+     is drawn as the document (`record.body`), not as a wide field, so only
+     the object's kind can say it reads wide. */
+  const report = `Report 1 of 2.\n\n## The numbers\n\n${"A sentence of the report. ".repeat(300)}`;
+  const docCreate = {
+    targetType: "document",
+    payload: {
+      title: "How the work flowed",
+      content: report,
+      type: "markdown",
+    },
+    changes: [
+      {
+        path: "title",
+        label: "Title",
+        operation: "create" as const,
+        after: "How the work flowed",
+      },
+      {
+        path: "content",
+        label: "Content",
+        operation: "create" as const,
+        after: report,
+      },
+      { path: "url", label: "Url", operation: "create" as const, after: null },
+      {
+        path: "type",
+        label: "Type",
+        operation: "create" as const,
+        after: "markdown",
+      },
+    ],
+  };
+  const drawn = (
+    p: { targetType: string; payload: unknown },
+    records: ReturnType<typeof proposedRecord>[]
+  ) => ({
+    subjectKind: proposalSubjectKind(p, p.payload),
+    documentChanges: false,
+    toolArguments: [],
+    records: records.filter((r) => r !== null),
+  });
+
+  it("a document create reads wide, though no field of it is wide", () => {
+    const record = proposedRecord({
+      changes: docCreate.changes,
+      action: "create",
+      kind: "document",
+    });
+    expect(record?.body).toBe(report);
+    expect(record?.fields.some((f) => f.wide)).toBe(false);
+    expect(reviewReadsWide(drawn(docCreate, [record]))).toBe(true);
+  });
+
+  it("a document edit reads wide, even a short one with no text diff drawn", () => {
+    const rename = proposedRecord({
+      changes: [
+        {
+          path: "title",
+          label: "Title",
+          operation: "update" as const,
+          before: "Old",
+          after: "New",
+        },
+      ],
+      action: "update",
+      kind: "document",
+    });
+    expect(
+      reviewReadsWide(
+        drawn({ targetType: "document", payload: { title: "New" } }, [rename])
+      )
+    ).toBe(true);
+  });
+
+  it("a document drawn inside a graph reads wide", () => {
+    expect(
+      reviewReadsWide({
+        ...drawn({ targetType: "entity", payload: {} }, []),
+        records: [
+          { kind: "task", fields: [] },
+          { kind: "document", fields: [] },
+        ],
+      })
+    ).toBe(true);
+  });
+
+  it("a short record keeps the default width, as its page does", () => {
+    const task = {
+      targetType: "entity",
+      payload: { profileSlug: "task", title: "Call Ana" },
+    };
+    const record = proposedRecord({
+      changes: [
+        {
+          path: "title",
+          label: "Title",
+          operation: "create" as const,
+          after: "Call Ana",
+        },
+        {
+          path: "profileSlug",
+          label: "Kind",
+          operation: "create" as const,
+          after: "task",
+        },
+        {
+          path: "properties.priority",
+          label: "Priority",
+          operation: "create" as const,
+          after: "high",
+        },
+      ],
+      action: "create",
+    });
+    expect(reviewReadsWide(drawn(task, [record]))).toBe(false);
+  });
+
+  it("a prose tool argument still reads wide (the content rule holds)", () => {
+    expect(
+      reviewReadsWide({
+        ...drawn({ targetType: "tool", payload: {} }, []),
+        toolArguments: [{ wide: true }],
+      })
+    ).toBe(true);
+  });
+
+  it("one source: the card is wide exactly when the object's own page is", () => {
+    for (const kind of ["document", "task", "skill", "automation", "session"]) {
+      const card = reviewReadsWide({
+        ...drawn({ targetType: kind, payload: {} }, []),
+      });
+      expect(openWidth({ header: { kind } }) === "lg").toBe(card);
+      expect(consoleWidth({ header: { kind } }, undefined) === "wide").toBe(
+        card
+      );
+    }
   });
 });
 
