@@ -12,6 +12,7 @@
  */
 import type { ProfileResolutionService } from "../profile-resolution-service.js";
 import {
+  classifyLifecycleMove,
   findLifecycleOption,
   type EffectiveLifecycle,
   type LifecycleCategory,
@@ -63,6 +64,53 @@ export async function lifecycleColumnsFor(
   );
   if (!lifecycle) return null;
   return columnsForValue(lifecycle, properties?.[lifecycle.propertySlug]);
+}
+
+/**
+ * The lifecycle of a row being CREATED: its columns, and the properties it is
+ * stored with. A create that names no status starts in the lifecycle's
+ * initial status (`EffectiveLifecycle.initialStatus`, the link default the
+ * lifecycle doors write) — the promise "new things start in X" that
+ * `setLifecycleInitialStatus` and `synap_declare_lifecycle` make.
+ *
+ * WHY HERE and not in property validation: validation applies a link default
+ * only to a REQUIRED property, and a lifecycle field is optional, so a kind
+ * that declared `initialStatus: open` (finding, 3 Nov) still bore rows with
+ * NO status through every create door (capture / import.graph included).
+ *
+ * ONLY a non-terminal, non-person-only initial status is filled in. The create
+ * gate's lifecycle floor (`initialCreateStatusFloor`) reads the caller's
+ * properties, not this default; a row born into a done/lost or human-only
+ * option must stay a governed birth, so such an initial status is left to the
+ * caller (unchanged behaviour) rather than silently applied past the floor.
+ */
+export async function bornLifecycleFor(
+  resolver: ProfileResolutionService,
+  profileId: string | null | undefined,
+  workspaceId: string | null | undefined,
+  properties: Record<string, unknown>
+): Promise<{
+  columns: LifecycleColumns;
+  properties: Record<string, unknown>;
+} | null> {
+  if (!profileId) return null;
+  const lifecycle = await resolver.getEffectiveLifecycle(
+    profileId,
+    workspaceId
+  );
+  if (!lifecycle) return null;
+  const slug = lifecycle.propertySlug;
+  const given = properties[slug];
+  const named = typeof given === "string" && given !== "";
+  const initial = lifecycle.initialStatus;
+  const move = initial ? classifyLifecycleMove(lifecycle, initial) : null;
+  const fill =
+    !named && initial !== null && move !== null && !move.intoTerminal && !move.humanOnly;
+  const bornProperties = fill ? { ...properties, [slug]: initial } : properties;
+  return {
+    columns: columnsForValue(lifecycle, bornProperties[slug]),
+    properties: bornProperties,
+  };
 }
 
 /**
