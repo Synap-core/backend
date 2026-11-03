@@ -80,12 +80,14 @@ function keyRecord(over: Record<string, unknown> = {}) {
   };
 }
 
-// A seamed read path (`/entities/:id`), so a scoped key passes the W1 door
-// fence and the facts it entered can be observed downstream.
+// A seamed read path (`/entities/:id`, a uuid id: the fence admits only uuids
+// there), so a scoped key passes the W1 door fence and the facts it entered
+// can be observed downstream.
+const ENTITY_PATH = "/api/hub/entities/00000000-0000-4000-8000-000000000001";
 async function factsSeenDownstream() {
   const app = new Hono();
   app.use("/api/hub/*", hubAuthMiddleware as never);
-  app.get("/api/hub/entities/facts", async (c) => {
+  app.get(ENTITY_PATH, async (c) => {
     await new Promise((r) => setTimeout(r, 1));
     return c.json({
       actingAgent: getActingAgentUserId() ?? null,
@@ -93,7 +95,7 @@ async function factsSeenDownstream() {
       grant: getRequestGrant() ?? null,
     });
   });
-  const res = await app.request("/api/hub/entities/facts", {
+  const res = await app.request(ENTITY_PATH, {
     headers: { authorization: "Bearer synap_test" },
   });
   return (await res.json()) as {
@@ -239,7 +241,9 @@ describe("hub auth door enters the request write facts", () => {
         })
       ).status;
     expect(await status("/api/hub/search")).toBe(403);
-    expect(await status("/api/hub/entities/abc")).toBe(200);
+    expect(await status(ENTITY_PATH)).toBe(200);
+    // A static sibling of a seamed door is not admitted (uuid-only ids).
+    expect(await status("/api/hub/entities/abc")).toBe(403);
   });
 
   // P5 — deny by default. Was the W1 guard "a key with NO grant keeps every
