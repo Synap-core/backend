@@ -644,12 +644,15 @@ export async function executeOutputStep(
       // Resolve vault references in headers (Authorization: vault://secret-id)
       // only where the author wrote them: `config` went through
       // deepResolveTemplates, so a header templated from the trigger could
-      // otherwise turn a sender's `vault://<id>` into the owner's secret.
+      // otherwise turn a sender's `vault://<id>` into the owner's secret, and
+      // a URL templated from it could send an authored secret to the run's
+      // host (finding f14cdea7). The authored URL is `data.config.url`.
       headers = await resolveAuthoredVaultRefs(
         (data.config?.headers ?? {}) as Record<string, unknown>,
         headers,
         ownerId,
-        "webhook output"
+        "webhook output",
+        { authoredUrl: data.config?.url, resolvedUrl: url }
       );
 
       const controller = new AbortController();

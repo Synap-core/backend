@@ -124,6 +124,7 @@ export const TOOL_GROUPS = {
     "synap_grant_profile_access",
     "synap_change_kind_scope",
     "synap_retire_field",
+    "synap_declare_lifecycle",
   ],
   /** Spaces, projects and focus. */
   spaces: [

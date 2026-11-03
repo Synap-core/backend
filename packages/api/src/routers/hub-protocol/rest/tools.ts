@@ -119,15 +119,22 @@ const ProvisionWebhookRequestSchema = z.object({
 });
 
 const ProvisionWebhookResponseSchema = z.object({
-  provider: z.string(),
-  url: z.string(),
-  rotated: z.boolean(),
-  missingConfig: z.array(z.string()),
-  setupStep: z.string().nullable(),
+  // An agent caller PROPOSES (`status: "proposed"`, only `proposalId` set):
+  // the person approves, nothing is minted until then.
+  status: z.enum(["provisioned", "proposed"]),
+  proposalId: z.string().optional(),
+  provider: z.string().optional(),
+  url: z.string().optional(),
+  rotated: z.boolean().optional(),
+  missingConfig: z.array(z.string()).optional(),
+  setupStep: z.string().nullable().optional(),
 });
 
 const SetAuthBindingResponseSchema = z.object({
-  tool: ToolWireSchema,
+  // `tool` is null and `status` is "proposed" when an agent caller proposes.
+  tool: ToolWireSchema.nullable(),
+  status: z.enum(["updated", "proposed"]),
+  proposalId: z.string().nullable(),
 });
 
 const CredentialBindingSchema = z.object({
