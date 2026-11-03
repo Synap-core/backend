@@ -39,6 +39,7 @@ import {
   channels,
   entities,
   messages,
+  proposals,
   ChannelType,
   ChannelScope,
   MessageRole,
@@ -58,6 +59,8 @@ import {
   type MessagingHistoryImportJobData,
 } from "@synap/jobs/workers/messaging-sync.js";
 import { resolveExistingExternalUser } from "../external-user-mapping.js";
+import { accountHomeWorkspaceFor } from "./account-home-workspace.js";
+import { storedProviderId } from "./participant-lookup.js";
 import { emitMessageObservation } from "../../utils/emit-message-observation.js";
 import {
   recordChannelOrigin,
@@ -185,6 +188,11 @@ export interface ResolveOrCreateExternalChannelArgs {
    * outbound message and for history: neither is news to the owner.
    */
   markUnread?: boolean;
+  /**
+   * The chat is a GROUP (more than one other person): cached as
+   * `metadata.groupChat` so no message ever binds it to one sender.
+   */
+  groupChat?: boolean;
 }
 
 /** `channels.metadata.participantLookup` — one lookup per chat, never two. */
@@ -286,6 +294,7 @@ export async function resolveOrCreateExternalChannel(
       ...(args.participantLookup
         ? { participantLookup: args.participantLookup }
         : {}),
+      ...(args.groupChat ? { groupChat: true } : {}),
     })}::jsonb`;
     // Provider coordinates are backfilled onto existing channels too (same
     // rationale as participantExternalId above — a channel born before the
@@ -307,7 +316,12 @@ export async function resolveOrCreateExternalChannel(
     if (!existing.contextObjectId && args.contextEntityId) {
       const bound = await bindChannelToEntity(
         existing.id,
-        args.contextEntityId
+        args.contextEntityId,
+        {
+          userId: args.userId,
+          provider: args.provider,
+          accountExternalId: args.accountExternalId,
+        }
       );
       if (bound) {
         return {
@@ -443,6 +457,7 @@ export async function resolveOrCreateExternalChannel(
         ...(args.participantLookup
           ? { participantLookup: args.participantLookup }
           : {}),
+        ...(args.groupChat ? { groupChat: true } : {}),
       },
     })
     .onConflictDoNothing({
@@ -514,10 +529,15 @@ async function liveEntity(
  * Bind an UNBOUND channel to a person and title it after them. Only while it
  * is still unbound (`context_object_id IS NULL`): a channel someone already
  * bound is never moved by an inbound message. True when it bound.
+ *
+ * The person may already have a PENDING channel on this tool and account (a
+ * draft opened it before the pod knew this chat was theirs): it is folded into
+ * this one, so the person keeps ONE channel and its drafts follow.
  */
 async function bindChannelToEntity(
   channelId: string,
-  entityId: string
+  entityId: string,
+  owner: { userId: string; provider: string; accountExternalId?: string | null }
 ): Promise<boolean> {
   const person = await liveEntity(entityId);
   if (!person) return false;
@@ -531,7 +551,89 @@ async function bindChannelToEntity(
     })
     .where(and(eq(channels.id, channelId), isNull(channels.contextObjectId)))
     .returning({ id: channels.id });
-  return rows.length > 0;
+  if (rows.length === 0) return false;
+  await foldPendingChannels({
+    ...owner,
+    entityId: person.id,
+    intoChannelId: channelId,
+  });
+  return true;
+}
+
+/**
+ * Fold the person's PENDING channels (same tool, same account or none) into
+ * the chat channel just bound to them: their pending proposed messages
+ * (`messaging.external.send`, `data.channelId` and `target_id`) and any
+ * message move over, then the pending channel is archived
+ * (`metadata.archivedBy` 'channel-bound', `mergedInto`). Never deletes.
+ */
+async function foldPendingChannels(args: {
+  userId: string;
+  provider: string;
+  accountExternalId?: string | null;
+  entityId: string;
+  intoChannelId: string;
+}): Promise<void> {
+  const account = args.accountExternalId ?? "";
+  const pending = await db
+    .select({ id: channels.id })
+    .from(channels)
+    .where(
+      and(
+        eq(channels.userId, args.userId),
+        eq(channels.channelType, ChannelType.EXTERNAL),
+        eq(channels.externalSource, args.provider),
+        eq(channels.contextObjectId, args.entityId),
+        eq(channels.status, "active"),
+        isNull(channels.externalId),
+        ne(channels.id, args.intoChannelId),
+        drizzleSql`COALESCE(${channels.metadata} ->> 'accountId', '') IN (${account}, '')`
+      )
+    );
+  for (const p of pending) {
+    await db
+      .update(proposals)
+      .set({
+        data: drizzleSql`jsonb_set(${proposals.data}, '{channelId}', to_jsonb(${args.intoChannelId}::text))`,
+        targetId: args.intoChannelId,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(proposals.proposalType, "messaging.external.send"),
+          eq(proposals.status, "pending"),
+          drizzleSql`${proposals.data} ->> 'channelId' = ${p.id}`
+        )
+      );
+    // A message of the pending channel the chat already holds stays where it
+    // is (the unique (channel, provider message id) index would refuse it).
+    await db
+      .update(messages)
+      .set({ channelId: args.intoChannelId })
+      .where(
+        and(
+          eq(messages.channelId, p.id),
+          drizzleSql`("messages"."external_message_id" IS NULL OR NOT EXISTS (
+            SELECT 1 FROM "messages" AS held
+             WHERE held.channel_id = ${args.intoChannelId}
+               AND held.external_message_id = "messages"."external_message_id"))`
+        )
+      );
+    await db
+      .update(channels)
+      .set({
+        status: "archived",
+        metadata: drizzleSql`COALESCE(${channels.metadata}, '{}'::jsonb) || ${JSON.stringify(
+          { archivedBy: "channel-bound", mergedInto: args.intoChannelId }
+        )}::jsonb`,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(channels.id, p.id), isNull(channels.externalId)));
+    logger.info(
+      { pendingChannelId: p.id, channelId: args.intoChannelId },
+      "Folded the person's pending channel into their chat channel"
+    );
+  }
 }
 
 /** Postgres unique_violation. */
@@ -612,7 +714,12 @@ export interface OpenPersonChannelArgs {
   accountId?: string | null;
   /** The person's id on the provider, when known (the send's attendee). */
   participantExternalId?: string | null;
-  /** Workspace pin; `null`/absent = pod-level (the channel follows its person). */
+  /**
+   * Workspace pin; absent = the account's home workspace (its pin, else the
+   * owner's first workspace), the same rule as the webhook and the import. A
+   * channel with a person is never born pod-wide by default: a SHARED-type
+   * channel with no workspace is visible to every member.
+   */
   workspaceId?: string | null;
 }
 
@@ -633,6 +740,11 @@ export interface OpenPersonChannelResult {
  * one-pending-channel index (0393). The first inbound or sent message on the
  * chat fills its chat id (`adoptPendingChannel`).
  *
+ * Before making a pending one, an UNBOUND chat channel on that tool and
+ * account whose participant is the person's provider id (the person wrote
+ * before the pod knew them) is bound to them and returned: never two
+ * channels for one person on one tool.
+ *
  * A new channel also asks for the person's history on that account (silent
  * import, design §7). Lane D's send executor calls this for a lead with no
  * chat yet.
@@ -641,8 +753,10 @@ export async function openPersonChannel(
   args: OpenPersonChannelArgs
 ): Promise<OpenPersonChannelResult> {
   const account = args.accountId ?? "";
+  // A channel from before accounts were recorded on it (no accountId) is
+  // still this person's channel on this account.
   const accountMatch = account
-    ? drizzleSql`COALESCE(${channels.metadata} ->> 'accountId', '') = ${account}`
+    ? drizzleSql`COALESCE(${channels.metadata} ->> 'accountId', '') IN (${account}, '')`
     : drizzleSql`true`;
   const findExisting = async () => {
     const [row] = await db
@@ -677,14 +791,64 @@ export async function openPersonChannel(
     };
   }
 
-  const person = await liveEntity(args.entityId);
+  const person = await db.query.entities.findFirst({
+    where: and(eq(entities.id, args.entityId), isNull(entities.deletedAt)),
+    columns: { id: true, title: true, properties: true },
+  });
   if (!person) {
     throw new Error(
       `openPersonChannel: entity ${args.entityId} does not exist or was deleted`
     );
   }
 
-  const workspaceId = args.workspaceId ?? null;
+  // The person already wrote, before the pod knew them: their chat channel
+  // is unbound, its participant is their provider id. Bind it, not a twin.
+  const providerId =
+    args.participantExternalId?.trim() ||
+    (await storedProviderId(
+      person.id,
+      args.provider,
+      (person.properties ?? {}) as Record<string, unknown>
+    ));
+  if (providerId) {
+    const [unbound] = await db
+      .select({ id: channels.id, externalId: channels.externalId })
+      .from(channels)
+      .where(
+        and(
+          eq(channels.userId, args.userId),
+          eq(channels.channelType, ChannelType.EXTERNAL),
+          eq(channels.externalSource, args.provider),
+          eq(channels.status, "active"),
+          isNull(channels.contextObjectId),
+          isNotNull(channels.externalId),
+          drizzleSql`${channels.metadata} ->> 'participantExternalId' = ${providerId}`,
+          drizzleSql`COALESCE((${channels.metadata} ->> 'groupChat')::boolean, false) = false`,
+          accountMatch
+        )
+      )
+      .orderBy(desc(channels.updatedAt))
+      .limit(1);
+    if (
+      unbound &&
+      (await bindChannelToEntity(unbound.id, person.id, {
+        userId: args.userId,
+        provider: args.provider,
+        accountExternalId: account || null,
+      }))
+    ) {
+      return {
+        channelId: unbound.id,
+        externalId: unbound.externalId,
+        created: false,
+      };
+    }
+  }
+
+  const workspaceId =
+    args.workspaceId !== undefined
+      ? args.workspaceId
+      : await accountHomeWorkspaceFor(args.userId, account || null);
   const [inserted] = await db
     .insert(channels)
     .values({
@@ -794,6 +958,8 @@ export interface RecordInboundMessageArgs {
   contextEntityId?: string | null;
   /** See ResolveOrCreateExternalChannelArgs.participantLookup. */
   participantLookup?: ParticipantLookupRecord;
+  /** See ResolveOrCreateExternalChannelArgs.groupChat. */
+  groupChat?: boolean;
   /** Message timestamp; defaults to now. */
   sentAt?: string | Date;
   /**
@@ -934,6 +1100,7 @@ export async function recordInboundMessage(
         : {}),
       // The owner's own message and history are not news to the owner.
       ...(outbound || args.suppressSideEffects ? { markUnread: false } : {}),
+      ...(args.groupChat ? { groupChat: true } : {}),
     });
 
   // Dual-use note: this is an inbound *delivery* fingerprint
@@ -986,6 +1153,64 @@ export async function recordInboundMessage(
   const authorType =
     args.authorType ??
     (outbound ? MessageAuthorType.HUMAN : MessageAuthorType.EXTERNAL);
+  const role =
+    args.role ?? (outbound ? MessageRole.ASSISTANT : MessageRole.USER);
+
+  // A message the RETIRED paths already stored (the LinkedIn backfill and the
+  // old webhook hashed thread + time + body and never kept the provider's
+  // message id): stamp the id on that row instead of a second copy, and set
+  // the direction the provider now tells. Never touches a row that has an id.
+  if (externalMessageId) {
+    const legacyHash =
+      typeof args.sentAt === "string"
+        ? createHash("sha256")
+            .update(
+              `${args.provider}:${args.externalId}:${args.sentAt}:${args.text}`
+            )
+            .digest("hex")
+        : null;
+    const legacy = await db.query.messages.findFirst({
+      where: and(
+        eq(messages.channelId, channelId),
+        eq(messages.externalSource, args.provider),
+        isNull(messages.externalMessageId),
+        isNull(messages.deletedAt),
+        legacyHash
+          ? drizzleSql`(${messages.hash} = ${legacyHash} OR (${messages.timestamp} = ${sentAt.toISOString()}::timestamptz AND ${messages.content} = ${args.text}))`
+          : and(eq(messages.timestamp, sentAt), eq(messages.content, args.text))
+      ),
+      columns: { id: true },
+    });
+    if (legacy) {
+      try {
+        const stamped = await db
+          .update(messages)
+          .set({
+            externalMessageId,
+            direction,
+            role,
+            authorType,
+            ...(outbound
+              ? {
+                  deliveryStatus: drizzleSql`COALESCE(${messages.deliveryStatus}, ${MessageDeliveryStatus.SENT})`,
+                }
+              : {}),
+          })
+          .where(
+            and(eq(messages.id, legacy.id), isNull(messages.externalMessageId))
+          )
+          .returning({ id: messages.id });
+        if (stamped.length > 0) {
+          return { channelId, contextObjectId, inboundHash, recorded: false };
+        }
+      } catch (err) {
+        // The id landed on another row meanwhile: that row is the message.
+        if (!isUniqueViolation(err)) throw err;
+        return { channelId, contextObjectId, inboundHash, recorded: false };
+      }
+    }
+  }
+
   const [inserted] = await db
     .insert(messages)
     .values({
@@ -993,7 +1218,7 @@ export async function recordInboundMessage(
       userId: args.userId,
       // Inbound = EXTERNAL/USER; outbound = the operator's own message,
       // HUMAN/ASSISTANT, so the inbox attributes it to them.
-      role: args.role ?? (outbound ? MessageRole.ASSISTANT : MessageRole.USER),
+      role,
       authorType,
       messageCategory: MessageCategory.CHAT,
       externalSource: args.provider,
@@ -1153,6 +1378,7 @@ export async function recordInboundMessage(
     where: and(
       eq(messages.channelId, channelId),
       eq(messages.direction, MessageDirection.OUTBOUND),
+      isNull(messages.deletedAt),
       lte(messages.timestamp, sentAt),
       ne(messages.id, inserted.id)
     ),

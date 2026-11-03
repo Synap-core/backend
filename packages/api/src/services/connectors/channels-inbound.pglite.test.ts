@@ -26,7 +26,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -176,13 +176,16 @@ const chatMessages: Record<string, FakeMsg[]> = {};
 const fake = {
   parseWebhook: async (_h: unknown, raw: string) => JSON.parse(raw),
   getProfile: vi.fn(async (_acc: string, id: string) => profiles[id] ?? null),
+  // A chat id starting "group-" is a group chat (no single counterpart).
   getChat: vi.fn(async (_acc: string, chatId: string) => ({
     chatId,
-    counterpart: {
-      providerId: "ACoMarie",
-      name: "Marie Curie",
-      publicIdentifier: null,
-    },
+    counterpart: chatId.startsWith("group-")
+      ? null
+      : {
+          providerId: "ACoMarie",
+          name: "Marie Curie",
+          publicIdentifier: null,
+        },
   })),
   getConversations: vi.fn(async () => ({ items: conversations })),
   getMessagesPage: vi.fn(async (_acc: string, chatId: string) => ({
@@ -324,6 +327,7 @@ beforeEach(async () => {
     "entities",
     "entity_identity_signals",
     "messaging_accounts",
+    "proposals",
   ]) {
     await h.client!.exec(`delete from "${t}"`);
   }
@@ -655,6 +659,218 @@ describe("a person's channel before the first message", () => {
     );
     expect(rows).toEqual([{ id: a.channelId, external_id: "chat-lead" }]);
     expect(await messagesIn(a.channelId)).toHaveLength(1);
+  });
+});
+
+describe("review fixes (#698)", () => {
+  async function seedChannel(chat: string, entityId: string | null) {
+    const { rows } = await q<{ id: string }>(
+      `insert into channels (user_id, workspace_id, channel_type, scope, title, context_object_type, context_object_id,
+                             external_source, external_id, external_channel_id, status, metadata)
+       values ($1,$2,'external','workspace','Chat',$3,$4,'linkedin',$5,$5,'active','{"accountId":"acc-1"}'::jsonb)
+       returning id`,
+      [OWNER, WS, entityId ? "entity" : null, entityId, chat]
+    );
+    return rows[0]!.id;
+  }
+
+  it("a message the retired backfill stored (no provider id) is stamped, not imported twice", async () => {
+    const channelId = await seedChannel("chat-legacy", MARIE);
+    // The old webhook / backfill: seed thread:sentAt:body, no message id.
+    const oldHash = (sentAt: string, body: string) =>
+      createHash("sha256")
+        .update(`linkedin:chat-legacy:${sentAt}:${body}`)
+        .digest("hex");
+    for (const [sentAt, body] of [
+      [T(3), "hello from before"],
+      [T(4), "the provider wrote this time differently"],
+    ] as const) {
+      await q(
+        `insert into messages (channel_id, user_id, role, author_type, content, hash, timestamp, direction, external_source)
+         values ($1,$2,'user','external',$3,$4,$5,'inbound','linkedin')`,
+        [channelId, OWNER, body, oldHash(sentAt, body), sentAt]
+      );
+    }
+    conversations.push({
+      externalThreadId: "chat-legacy",
+      provider: "linkedin",
+      participantName: "Marie Curie",
+      participantExternalId: "ACoMarie",
+    });
+    chatMessages["chat-legacy"] = [
+      // Same time string: the legacy hash matches.
+      msg("chat-legacy", "L1", { body: "hello from before", sentAt: T(3) }),
+      // Another format of the same instant: matched by time + text. It was the
+      // owner's own message the backfill stored as inbound.
+      msg("chat-legacy", "L2", {
+        body: "the provider wrote this time differently",
+        sentAt: "2026-11-01T10:04:00Z",
+        direction: "outbound",
+      }),
+    ];
+    const result = await runMessagingHistoryImport(
+      { accountExternalId: "acc-1", userId: OWNER },
+      { connector: fake as never, sleep: async () => {} }
+    );
+    expect(result).toMatchObject({ chatsImported: 1, messagesRecorded: 0 });
+    const rows = await messagesIn(channelId);
+    expect(rows.map((r) => [r.external_message_id, r.direction])).toEqual([
+      ["L1", "inbound"],
+      ["L2", "outbound"],
+    ]);
+  });
+
+  it("openPersonChannel binds the chat the person already wrote in, never a pending twin", async () => {
+    const ADA = randomUUID();
+    // Ada writes while the pod does not know her: the chat stays unbound.
+    await webhook(msg("chat-ada", "a1", { from: "ACoAda" }));
+    const [chat] = await channelOf("chat-ada");
+    expect(chat?.context_object_id).toBeNull();
+    // She becomes a lead, her LinkedIn id known; the first draft opens her
+    // channel.
+    await seedPerson(ADA, "Ada Lovelace", { linkedinProviderId: "ACoAda" });
+    const opened = await openPersonChannel({
+      userId: OWNER,
+      entityId: ADA,
+      provider: "linkedin",
+      accountId: "acc-1",
+    });
+    expect(opened).toEqual({
+      channelId: chat!.id,
+      externalId: "chat-ada",
+      created: false,
+    });
+    const { rows } = await q<{ id: string }>(
+      `select id from channels where context_object_id = $1 and status = 'active'`,
+      [ADA]
+    );
+    expect(rows).toEqual([{ id: chat!.id }]);
+  });
+
+  it("binding a chat folds the person's pending channel into it, drafts included", async () => {
+    const BEA = randomUUID();
+    await webhook(msg("chat-bea", "b1", { from: "ACoBea" }));
+    await seedPerson(BEA, "Bea Lead", {});
+    // A draft before the pod knows her LinkedIn id: a pending channel.
+    const pending = await openPersonChannel({
+      userId: OWNER,
+      entityId: BEA,
+      provider: "linkedin",
+      accountId: "acc-1",
+    });
+    expect(pending.created).toBe(true);
+    const proposalId = randomUUID();
+    await q(
+      `insert into proposals (id, created_by, workspace_id, target_type, target_id, proposal_type, data, status)
+       values ($1,$2,$3,'messaging',$4,'messaging.external.send',$5::jsonb,'pending')`,
+      [
+        proposalId,
+        OWNER,
+        WS,
+        pending.channelId,
+        JSON.stringify({ channelId: pending.channelId, text: "Hi Bea" }),
+      ]
+    );
+    // Her id becomes known, then she writes again: the chat binds to her.
+    await registerIdentitySignals(
+      pgDb as never,
+      BEA,
+      [{ type: "external_id", value: "linkedin:ACoBea" }],
+      "test"
+    );
+    await webhook(msg("chat-bea", "b2", { from: "ACoBea", sentAt: T(1) }));
+    const [chat] = await channelOf("chat-bea");
+    expect(chat?.context_object_id).toBe(BEA);
+    const { rows } = await q<{ id: string; status: string }>(
+      `select id, status from channels where context_object_id = $1 order by status`,
+      [BEA]
+    );
+    expect(rows).toEqual([
+      { id: chat!.id, status: "active" },
+      { id: pending.channelId, status: "archived" },
+    ]);
+    const { rows: prop } = await q<{ target_id: string; channel: string }>(
+      `select target_id, data->>'channelId' as channel from proposals where id = $1`,
+      [proposalId]
+    );
+    expect(prop).toEqual([{ target_id: chat!.id, channel: chat!.id }]);
+  });
+
+  it("a channel opened from a draft is pinned to the account's workspace, never pod-wide", async () => {
+    const opened = await openPersonChannel({
+      userId: OWNER,
+      entityId: LEAD,
+      provider: "linkedin",
+      accountId: "acc-1",
+    });
+    const { rows } = await q<{ workspace_id: string | null; scope: string }>(
+      `select workspace_id, scope from channels where id = $1`,
+      [opened.channelId]
+    );
+    expect(rows).toEqual([{ workspace_id: WS, scope: "workspace" }]);
+  });
+
+  it("a lookup that found nobody is tried again after 30 days", async () => {
+    await webhook(msg("chat-old", "o1", { from: "ACoNobody" }));
+    expect(fake.getProfile).toHaveBeenCalledTimes(1);
+    const old = new Date(Date.now() - 40 * 24 * 3600 * 1000).toISOString();
+    await q(
+      `update channels set metadata = jsonb_set(metadata, '{participantLookup,at}', to_jsonb($2::text)) where external_id = $1`,
+      ["chat-old", old]
+    );
+    await webhook(msg("chat-old", "o2", { from: "ACoNobody", sentAt: T(1) }));
+    expect(fake.getProfile).toHaveBeenCalledTimes(2);
+  });
+
+  it("a group chat is never bound to one sender", async () => {
+    await webhook(msg("group-1", "g1", { from: "ACoMarie" }));
+    await webhook(msg("group-1", "g2", { from: "ACoMarie", sentAt: T(1) }));
+    const [ch] = await channelOf("group-1");
+    expect(ch?.context_object_id).toBeNull();
+    expect(ch?.metadata.groupChat).toBe(true);
+  });
+
+  it("a second whole-account import while one runs does nothing", async () => {
+    await q(
+      `update messaging_accounts set metadata = $2::jsonb where id = $1`,
+      [
+        ACC_ROW,
+        JSON.stringify({
+          historyImportLease: {
+            runId: "another-run",
+            until: new Date(Date.now() + 600_000).toISOString(),
+          },
+        }),
+      ]
+    );
+    fake.getConversations.mockClear();
+    const result = await runMessagingHistoryImport(
+      { accountExternalId: "acc-1", userId: OWNER },
+      { connector: fake as never, sleep: async () => {} }
+    );
+    expect(result).toMatchObject({
+      status: "skipped",
+      reason: "already_running",
+    });
+    expect(fake.getConversations).not.toHaveBeenCalled();
+  });
+
+  it("a deleted outbound message does not make the next inbound a reply", async () => {
+    await webhook(
+      msg("chat-del", "d1", {
+        direction: "outbound",
+        senderName: "Me",
+        senderProviderId: "ACoMe",
+        sentAt: T(1),
+      })
+    );
+    await q(
+      `update messages set deleted_at = now() where external_message_id = 'd1'`
+    );
+    h.emitSideEffects.mockClear();
+    await webhook(msg("chat-del", "d2", { from: "ACoMarie", sentAt: T(2) }));
+    const [received] = sideEffects("received");
+    expect(received!.data.isReply).toBeUndefined();
   });
 });
 

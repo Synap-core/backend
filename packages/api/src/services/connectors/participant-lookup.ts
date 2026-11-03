@@ -44,12 +44,28 @@ const logger = createLogger({ module: "participant-lookup" });
 /** Profile lookups one messaging account may spend in a UTC day. */
 export const PROFILE_LOOKUP_DAILY_CAP = 80;
 
-/** Lookup outcomes that settle a chat: it is never looked up again. */
-const FINAL_LOOKUPS: ReadonlySet<ParticipantLookupRecord["result"]> = new Set([
-  "matched",
-  "no-match",
-  "not-found",
-]);
+/** Lookup outcomes that settle a chat for a while. */
+const SETTLED_LOOKUPS: ReadonlySet<ParticipantLookupRecord["result"]> = new Set(
+  ["matched", "no-match", "not-found"]
+);
+
+/**
+ * How long a lookup that found nobody holds: the person may be added to the
+ * pod later (a lead captured next week), so the chat is looked up again after
+ * this. no-budget and failed never hold.
+ */
+export const LOOKUP_MISS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** True while a cached lookup still answers for the chat. */
+export function lookupStillHolds(
+  rec: ParticipantLookupRecord,
+  now: Date = new Date()
+): boolean {
+  if (!SETTLED_LOOKUPS.has(rec.result)) return false;
+  if (rec.result === "matched") return true;
+  const at = Date.parse(rec.at);
+  return !Number.isNaN(at) && now.getTime() - at < LOOKUP_MISS_TTL_MS;
+}
 
 /** The property that holds a provider's id for a person (`linkedinProviderId`). */
 export function providerIdProperty(provider: string): string | null {
@@ -195,12 +211,14 @@ async function strongMatch(
 
 /** The cached lookup on the chat's channel, when the channel exists. */
 async function cachedLookup(
+  userId: string,
   provider: string,
   chatId: string | undefined
 ): Promise<ParticipantLookupRecord | null> {
   if (!chatId) return null;
   const row = await db.query.channels.findFirst({
     where: and(
+      eq(channels.userId, userId),
       eq(channels.channelType, ChannelType.EXTERNAL),
       eq(channels.externalSource, provider),
       eq(channels.externalId, chatId)
@@ -250,8 +268,8 @@ export async function resolveParticipant(
   if (args.allowLookup === false || !args.connector.getProfile) {
     return { entityId: null };
   }
-  const cached = await cachedLookup(provider, args.chatId);
-  if (cached && FINAL_LOOKUPS.has(cached.result)) return { entityId: null };
+  const cached = await cachedLookup(args.userId, provider, args.chatId);
+  if (cached && lookupStillHolds(cached, args.now)) return { entityId: null };
 
   const at = (args.now ?? new Date()).toISOString();
   if (!(await takeProfileLookup(args.account.id, args.now))) {

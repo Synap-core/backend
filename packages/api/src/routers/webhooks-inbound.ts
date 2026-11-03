@@ -35,7 +35,7 @@ import {
   type ParticipantLookupRecord,
 } from "../services/connectors/inbound-recorder.js";
 import { resolveParticipant } from "../services/connectors/participant-lookup.js";
-import { accountHomeWorkspace } from "../services/connectors/messaging-history-import.js";
+import { accountHomeWorkspace } from "../services/connectors/account-home-workspace.js";
 import {
   MESSAGING_HISTORY_IMPORT_QUEUE,
   MESSAGING_WEBHOOK_ENSURE_QUEUE,
@@ -974,21 +974,30 @@ webhooksInboundRouter.post("/messaging", async (c) => {
       let publicIdentifier = outbound ? undefined : m.senderPublicIdentifier;
       const known = await db.query.channels.findFirst({
         where: and(
+          eq(channels.userId, account.userId),
           eq(channels.channelType, ChannelType.EXTERNAL),
           eq(channels.externalSource, event.provider),
           eq(channels.externalId, event.threadId)
         ),
-        columns: { id: true, contextObjectId: true },
+        columns: { id: true, contextObjectId: true, metadata: true },
       });
-      if (outbound && !known && connector.getChat) {
+      // A GROUP chat is never one person's channel: no sender binds it.
+      let groupChat =
+        (known?.metadata as Record<string, unknown> | null | undefined)
+          ?.groupChat === true;
+      if (!known && connector.getChat) {
         try {
           const chat = await connector.getChat(
             account.externalId,
             event.threadId
           );
-          participantExternalId = chat?.counterpart?.providerId;
-          participantName = chat?.counterpart?.name;
-          publicIdentifier = chat?.counterpart?.publicIdentifier ?? undefined;
+          if (chat && !chat.counterpart) {
+            groupChat = true;
+          } else if (outbound) {
+            participantExternalId = chat?.counterpart?.providerId;
+            participantName = chat?.counterpart?.name;
+            publicIdentifier = chat?.counterpart?.publicIdentifier ?? undefined;
+          }
         } catch (err) {
           // The message is still recorded; the channel stays unbound until
           // a message names the person.
@@ -1004,6 +1013,10 @@ webhooksInboundRouter.post("/messaging", async (c) => {
       // channel, never repeated). An unknown sender stays unbound.
       let contextEntityId: string | null = null;
       let participantLookup: ParticipantLookupRecord | undefined;
+      if (groupChat) {
+        participantExternalId = undefined;
+        participantName = undefined;
+      }
       if (participantExternalId && !known?.contextObjectId) {
         const who = await resolveParticipant({
           provider: event.provider,
@@ -1032,7 +1045,9 @@ webhooksInboundRouter.post("/messaging", async (c) => {
         participant: participantName,
         participantExternalId,
         accountExternalId: account.externalId,
-        title: participantName ?? `${event.provider} conversation`,
+        title:
+          participantName ??
+          `${event.provider} ${groupChat ? "group" : "conversation"}`,
         idempotencySeed: m.externalMessageId
           ? `${event.threadId}:${m.externalMessageId}`
           : `${event.threadId}:${m.sentAt}:${m.body}`,
@@ -1041,6 +1056,7 @@ webhooksInboundRouter.post("/messaging", async (c) => {
         direction: outbound ? "outbound" : "inbound",
         ...(contextEntityId ? { contextEntityId } : {}),
         ...(participantLookup ? { participantLookup } : {}),
+        ...(groupChat ? { groupChat: true } : {}),
         // Origin: the Unipile messaging bridge has no tools/sources registry
         // row, so the producer is the provider slug under the `source` kind
         // (channel-origin convention).

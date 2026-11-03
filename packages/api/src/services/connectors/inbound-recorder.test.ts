@@ -74,6 +74,7 @@ vi.mock("@synap/database", () => ({
   channels: {},
   entities: {},
   messages: {},
+  proposals: {},
   ChannelType: { EXTERNAL: "external" },
   ChannelScope: { WORKSPACE: "workspace", POD: "pod" },
   MessageRole: { USER: "user", ASSISTANT: "assistant" },
@@ -99,6 +100,12 @@ vi.mock("@synap/jobs/workers/inbound-attachment-worker.js", () => ({
 }));
 vi.mock("@synap/jobs/workers/messaging-sync.js", () => ({
   MESSAGING_HISTORY_IMPORT_QUEUE: "messaging-history-import",
+}));
+vi.mock("./participant-lookup.js", () => ({
+  storedProviderId: vi.fn(async () => null),
+}));
+vi.mock("./account-home-workspace.js", () => ({
+  accountHomeWorkspaceFor: vi.fn(async () => null),
 }));
 
 vi.mock("../external-user-mapping.js", () => ({

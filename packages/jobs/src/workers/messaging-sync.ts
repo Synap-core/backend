@@ -39,6 +39,8 @@ export interface MessagingHistoryImportJobData {
   entityId?: string;
   /** Resume from this chat page (a paused or handed-over run). */
   cursor?: string;
+  /** The run this job continues (holds the account's import lease). */
+  runId?: string;
 }
 
 type HistoryImportRunner = (

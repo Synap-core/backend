@@ -25,6 +25,7 @@
  *     hands over to a fresh job every few minutes.
  */
 
+import { randomUUID } from "node:crypto";
 import { createLogger } from "@synap-core/core";
 import {
   db,
@@ -34,7 +35,6 @@ import {
   drizzleSql,
   entities,
   messagingAccounts,
-  workspaces,
 } from "@synap/database";
 import { getBoss } from "@synap/events";
 import {
@@ -45,6 +45,7 @@ import { getMessagingConnector } from "../../connectors/index.js";
 import type { MessagingConnector } from "../../connectors/MessagingConnector.js";
 import { MessagingAccountService } from "../messaging-account-service.js";
 import { recordInboundMessage } from "./inbound-recorder.js";
+import { accountHomeWorkspace } from "./account-home-workspace.js";
 import {
   recordProviderId,
   storedProviderId,
@@ -115,21 +116,57 @@ function secondsUntilTomorrow(now: Date): number {
   return (next.getTime() - now.getTime()) / 1000;
 }
 
+/** How long a whole-account run holds the account (renewed each page). */
+export const HISTORY_LEASE_MS = 15 * 60 * 1000;
+
 /**
- * The workspace a NEW channel from this account is pinned to: the account's
- * own pin, else the owner's first workspace (the webhook's rule, so both paths
- * create the same channel the same way).
+ * Take (or renew) the account's import lease for this run: one whole-account
+ * import at a time, so two asks (a connect and the owner's button) never page
+ * the same chats twice. Atomic: lands only when the lease is free, expired, or
+ * already this run's. `metadata.historyImportLease {runId, until}`.
  */
-export async function accountHomeWorkspace(account: {
-  workspaceId: string | null;
-  userId: string;
-}): Promise<string | null> {
-  if (account.workspaceId) return account.workspaceId;
-  const ws = await db.query.workspaces.findFirst({
-    where: eq(workspaces.ownerId, account.userId),
-    columns: { id: true },
-  });
-  return ws?.id ?? null;
+async function takeImportLease(
+  accountRowId: string,
+  runId: string,
+  now: Date
+): Promise<boolean> {
+  const meta = drizzleSql`COALESCE(${messagingAccounts.metadata}, '{}'::jsonb)`;
+  const until = new Date(now.getTime() + HISTORY_LEASE_MS).toISOString();
+  const rows = await db
+    .update(messagingAccounts)
+    .set({
+      metadata: drizzleSql`jsonb_set(${meta}, '{historyImportLease}', ${JSON.stringify(
+        { runId, until }
+      )}::jsonb)`,
+    })
+    .where(
+      and(
+        eq(messagingAccounts.id, accountRowId),
+        drizzleSql`(${meta} -> 'historyImportLease' IS NULL
+          OR ${meta} -> 'historyImportLease' ->> 'runId' = ${runId}
+          OR (${meta} -> 'historyImportLease' ->> 'until') < ${now.toISOString()})`
+      )
+    )
+    .returning({ id: messagingAccounts.id });
+  return rows.length > 0;
+}
+
+/** Give the lease back (this run's only). */
+async function releaseImportLease(
+  accountRowId: string,
+  runId: string
+): Promise<void> {
+  await db
+    .update(messagingAccounts)
+    .set({
+      metadata: drizzleSql`COALESCE(${messagingAccounts.metadata}, '{}'::jsonb) - 'historyImportLease'`,
+    })
+    .where(
+      and(
+        eq(messagingAccounts.id, accountRowId),
+        drizzleSql`${messagingAccounts.metadata} -> 'historyImportLease' ->> 'runId' = ${runId}`
+      )
+    );
 }
 
 async function saveState(
@@ -257,6 +294,7 @@ export async function runMessagingHistoryImport(
       : await getMessagingConnector();
   if (!connector) return skipped("messaging_not_configured");
   if (!connector.getMessagesPage) return skipped("connector_cannot_page");
+  const getMessagesPage = connector.getMessagesPage.bind(connector);
 
   const account = await loadAccount(
     connector,
@@ -288,127 +326,147 @@ export async function runMessagingHistoryImport(
     onlyProviderId = target.providerId;
   }
 
-  const prior = (account.metadata as Record<string, unknown> | null)
-    ?.historyImport as HistoryImportState | undefined;
-  let cursor: string | undefined =
-    input.cursor ??
-    (wholeAccount && prior && prior.status !== "done"
-      ? (prior.cursor ?? undefined)
-      : undefined);
-  const counts = () => ({
-    chatsImported: result.chatsImported,
-    messagesRecorded: result.messagesRecorded,
-  });
-  const save = async (state: Omit<HistoryImportState, "updatedAt">) => {
-    if (!wholeAccount) return;
-    await saveState(account.id, { ...state, updatedAt: now().toISOString() });
-  };
-
-  await save({ status: "running", cursor: cursor ?? null, ...counts() });
-
-  for (let page = 0; page < MAX_CHAT_PAGES; page += 1) {
-    const pageCursor = cursor;
-    const chats = await connector.getConversations(account.externalId, cursor);
-    await sleep(HISTORY_REQUEST_GAP_MS);
-
-    for (const chat of chats.items) {
-      const counterpart = chat.participantExternalId?.trim();
-      if (!counterpart) continue;
-      result.chatsSeen += 1;
-      if (onlyProviderId && counterpart !== onlyProviderId) continue;
-
-      let entityId: string | null = input.entityId ?? null;
-      if (!entityId) {
-        const who = await resolveParticipant({
-          provider,
-          userId: input.userId,
-          account: accountRef,
-          providerId: counterpart,
-          chatId: chat.externalThreadId,
-          connector,
-          now: now(),
-        });
-        if (who.lookup) await sleep(HISTORY_REQUEST_GAP_MS);
-        if (who.lookup?.result === "no-budget") {
-          // Spent for today: resume from this page tomorrow (what already
-          // landed dedups on the second pass).
-          await save({
-            status: "paused",
-            cursor: pageCursor ?? null,
-            reason: "no-budget",
-            ...counts(),
-          });
-          await enqueue(
-            { ...input, cursor: pageCursor },
-            secondsUntilTomorrow(now())
-          );
-          return { ...result, status: "paused", reason: "no-budget" };
-        }
-        entityId = who.entityId;
-      }
-      if (!entityId) continue;
-
-      result.chatsImported += 1;
-      let msgCursor: string | undefined;
-      let taken = 0;
-      do {
-        const msgPage = await connector.getMessagesPage(
-          account.externalId,
-          chat.externalThreadId,
-          msgCursor
-        );
-        await sleep(HISTORY_REQUEST_GAP_MS);
-        for (const m of msgPage.messages) {
-          if (taken >= HISTORY_MAX_MESSAGES_PER_CHAT) break;
-          taken += 1;
-          if (!m.body?.trim() || !m.externalMessageId) continue;
-          const rec = await recordInboundMessage({
-            provider,
-            externalId: chat.externalThreadId,
-            userId: input.userId,
-            workspaceId,
-            text: m.body,
-            participant: chat.participantName,
-            participantExternalId: counterpart,
-            accountExternalId: account.externalId,
-            title: chat.participantName,
-            idempotencySeed: `${chat.externalThreadId}:${m.externalMessageId}`,
-            messageId: m.externalMessageId,
-            sentAt: m.sentAt,
-            direction: m.direction,
-            contextEntityId: entityId,
-            // History, not news: no automation, no webhook fan-out.
-            suppressSideEffects: true,
-            origin: {
-              producerType: "source",
-              producerId: provider,
-              producerName: `${provider} (Unipile)`,
-            },
-          });
-          if (rec.recorded) result.messagesRecorded += 1;
-        }
-        msgCursor = msgPage.nextCursor || undefined;
-      } while (msgCursor && taken < HISTORY_MAX_MESSAGES_PER_CHAT);
-
-      // A targeted import is about one person's chat: done once found.
-      if (onlyProviderId) return result;
-    }
-
-    const next = chats.nextCursor?.trim() || undefined;
-    if (!next || next === cursor) break;
-    cursor = next;
-    await save({ status: "running", cursor, ...counts() });
-
-    if (now().getTime() - startedAt > HISTORY_RUN_BUDGET_MS) {
-      await enqueue({ ...input, cursor }, 1);
-      return { ...result, status: "continued" };
-    }
+  // One whole-account run at a time (a continuation carries its run id).
+  const runId = input.runId ?? randomUUID();
+  if (wholeAccount && !(await takeImportLease(account.id, runId, now()))) {
+    return skipped("already_running");
   }
+  const importPages = async (): Promise<MessagingHistoryImportResult> => {
+    const prior = (account.metadata as Record<string, unknown> | null)
+      ?.historyImport as HistoryImportState | undefined;
+    let cursor: string | undefined =
+      input.cursor ??
+      (wholeAccount && prior && prior.status !== "done"
+        ? (prior.cursor ?? undefined)
+        : undefined);
+    const counts = () => ({
+      chatsImported: result.chatsImported,
+      messagesRecorded: result.messagesRecorded,
+    });
+    const save = async (state: Omit<HistoryImportState, "updatedAt">) => {
+      if (!wholeAccount) return;
+      await saveState(account.id, { ...state, updatedAt: now().toISOString() });
+    };
 
-  await save({ status: "done", cursor: null, ...counts() });
-  logger.info(
-    { accountExternalId: account.externalId, ...result },
-    "messaging history import complete"
-  );
-  return result;
+    await save({ status: "running", cursor: cursor ?? null, ...counts() });
+
+    for (let page = 0; page < MAX_CHAT_PAGES; page += 1) {
+      const pageCursor = cursor;
+      const chats = await connector.getConversations(
+        account.externalId,
+        cursor
+      );
+      await sleep(HISTORY_REQUEST_GAP_MS);
+
+      for (const chat of chats.items) {
+        const counterpart = chat.participantExternalId?.trim();
+        if (!counterpart) continue;
+        result.chatsSeen += 1;
+        if (onlyProviderId && counterpart !== onlyProviderId) continue;
+
+        let entityId: string | null = input.entityId ?? null;
+        if (!entityId) {
+          const who = await resolveParticipant({
+            provider,
+            userId: input.userId,
+            account: accountRef,
+            providerId: counterpart,
+            chatId: chat.externalThreadId,
+            connector,
+            now: now(),
+          });
+          if (who.lookup) await sleep(HISTORY_REQUEST_GAP_MS);
+          if (who.lookup?.result === "no-budget") {
+            // Spent for today: resume from this page tomorrow (what already
+            // landed dedups on the second pass).
+            await save({
+              status: "paused",
+              cursor: pageCursor ?? null,
+              reason: "no-budget",
+              ...counts(),
+            });
+            if (wholeAccount) await releaseImportLease(account.id, runId);
+            await enqueue(
+              { ...input, runId, cursor: pageCursor },
+              secondsUntilTomorrow(now())
+            );
+            return { ...result, status: "paused", reason: "no-budget" };
+          }
+          entityId = who.entityId;
+        }
+        if (!entityId) continue;
+
+        result.chatsImported += 1;
+        let msgCursor: string | undefined;
+        let taken = 0;
+        do {
+          const msgPage = await getMessagesPage(
+            account.externalId,
+            chat.externalThreadId,
+            msgCursor
+          );
+          await sleep(HISTORY_REQUEST_GAP_MS);
+          for (const m of msgPage.messages) {
+            if (taken >= HISTORY_MAX_MESSAGES_PER_CHAT) break;
+            taken += 1;
+            if (!m.body?.trim() || !m.externalMessageId) continue;
+            const rec = await recordInboundMessage({
+              provider,
+              externalId: chat.externalThreadId,
+              userId: input.userId,
+              workspaceId,
+              text: m.body,
+              participant: chat.participantName,
+              participantExternalId: counterpart,
+              accountExternalId: account.externalId,
+              title: chat.participantName,
+              idempotencySeed: `${chat.externalThreadId}:${m.externalMessageId}`,
+              messageId: m.externalMessageId,
+              sentAt: m.sentAt,
+              direction: m.direction,
+              contextEntityId: entityId,
+              // History, not news: no automation, no webhook fan-out.
+              suppressSideEffects: true,
+              origin: {
+                producerType: "source",
+                producerId: provider,
+                producerName: `${provider} (Unipile)`,
+              },
+            });
+            if (rec.recorded) result.messagesRecorded += 1;
+          }
+          msgCursor = msgPage.nextCursor || undefined;
+        } while (msgCursor && taken < HISTORY_MAX_MESSAGES_PER_CHAT);
+
+        // A targeted import is about one person's chat: done once found.
+        if (onlyProviderId) return result;
+      }
+
+      const next = chats.nextCursor?.trim() || undefined;
+      if (!next || next === cursor) break;
+      cursor = next;
+      await save({ status: "running", cursor, ...counts() });
+      if (wholeAccount) await takeImportLease(account.id, runId, now());
+
+      if (now().getTime() - startedAt > HISTORY_RUN_BUDGET_MS) {
+        await enqueue({ ...input, runId, cursor }, 1);
+        return { ...result, status: "continued" };
+      }
+    }
+
+    await save({ status: "done", cursor: null, ...counts() });
+    if (wholeAccount) await releaseImportLease(account.id, runId);
+    logger.info(
+      { accountExternalId: account.externalId, ...result },
+      "messaging history import complete"
+    );
+    return result;
+  };
+  try {
+    return await importPages();
+  } catch (err) {
+    // A failed run gives the account back at once, so pg-boss's retry runs.
+    if (wholeAccount) await releaseImportLease(account.id, runId);
+    throw err;
+  }
 }
