@@ -455,6 +455,84 @@ export function sessionRoom(
   };
 }
 
+// ─── Where it came from and what it spawned ──────────────────────────────────
+
+/** One linked session, as the continuation packet names it (`PacketChildItem`). */
+interface LinkedSessionLike {
+  id: string;
+  title: string;
+  status: string;
+  statusLabel?: string;
+}
+
+/** A linked session as a row: its name, its status mark, its id for the door. */
+export interface LineageRow {
+  key: string;
+  id: string;
+  title: string;
+  mark: { kind: StatusKind; label: string } | null;
+}
+
+export type SessionParent =
+  { state: "none" } | { state: "failed" } | { state: "ok"; row: LineageRow };
+
+export type SessionChildren =
+  | { state: "none" }
+  | { state: "failed" }
+  /** `rows` are the packet's first few; `total` counts every child. */
+  | { state: "ok"; rows: LineageRow[]; total: number };
+
+export function lineageRow(s: LinkedSessionLike): LineageRow {
+  return {
+    key: s.id,
+    id: s.id,
+    title: s.title.trim() || "Untitled session",
+    mark: statusPillFor(s.status),
+  };
+}
+
+/**
+ * The session it was spawned from (`this --spawned_from--> parent`). No parent
+ * and a failed read are two facts: the first draws nothing, the second says so.
+ */
+export function sessionParent(
+  section:
+    | { status: "ok"; session: LinkedSessionLike | null }
+    | { status: "unavailable"; reason?: string }
+    | null
+    | undefined
+): SessionParent {
+  if (!section) return { state: "none" };
+  if (section.status !== "ok") return { state: "failed" };
+  return section.session
+    ? { state: "ok", row: lineageRow(section.session) }
+    : { state: "none" };
+}
+
+/**
+ * The sessions it spawned (`child --spawned_from--> this`). The packet sends
+ * the first few and the exact `total`; the rest are read on "Show all"
+ * (`focusSessions.browse` with `parentSessionId`). None is OMITTED; a failed
+ * read is drawn as one, never as "no sub-sessions".
+ */
+export function sessionChildren(
+  section:
+    | { status: "ok"; total: number; items: LinkedSessionLike[] }
+    | { status: "unavailable"; reason?: string }
+    | null
+    | undefined
+): SessionChildren {
+  if (!section) return { state: "none" };
+  if (section.status !== "ok") return { state: "failed" };
+  if (section.total === 0 && section.items.length === 0)
+    return { state: "none" };
+  return {
+    state: "ok",
+    rows: section.items.map(lineageRow),
+    total: Math.max(section.total, section.items.length),
+  };
+}
+
 // ─── What a move reports back ────────────────────────────────────────────────
 
 /** A line under the header after a move, when the new mark alone is not the whole story. */

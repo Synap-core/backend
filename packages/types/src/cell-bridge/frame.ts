@@ -17,25 +17,31 @@ export const CELL_FRAME_SANDBOX = "allow-scripts";
 export const CELL_FRAME_MAX_BYTES = 2 * 1024 * 1024;
 
 /**
- * Script and font CDNs a page may load from. They serve published packages,
- * not the page's data — but a URL path is still a way out (see the leaf's
- * header, "what it does not cover").
+ * THE frame policy (decision R3, 3 Nov 2026: one policy everywhere, the
+ * desktop's). Every frame that runs stored code, on every client, reads it
+ * from here: a stored HTML page (pod admin's `html-frame`, the web and desktop
+ * srcdoc frames) and, through `buildCellModuleFrameCsp`, a module cell whose
+ * React and kit the host supplies as `blob:` modules (ViewFrame).
+ *
+ * No remote origin, for anything: no script CDN, no font or style host, no
+ * image host. What a page needs it carries inline; what a cell needs the host
+ * supplies (React, react-dom, the JSX runtimes, `@synap/kit`). Until 3 Nov this
+ * leaf allowed three script CDNs and Google Fonts while the desktop allowed
+ * none, so one page ran in pod admin and was refused on the desktop.
+ * `frameNetworkLoads` says which stored pages that change stops.
+ *
+ * It is the desktop's `SRCDOC_CSP` plus an explicit `frame-src 'none'`
+ * (which `default-src 'none'` already implies): a host adopting it only
+ * tightens.
  */
-export const CELL_FRAME_SCRIPT_HOSTS = [
-  "https://cdnjs.cloudflare.com",
-  "https://cdn.jsdelivr.net",
-  "https://unpkg.com",
-] as const;
-
-/** The policy, directive by directive, in the order it is written. */
 export const CELL_FRAME_CSP_DIRECTIVES: ReadonlyArray<
   readonly [directive: string, sources: string]
 > = [
   ["default-src", "'none'"],
-  ["script-src", `'unsafe-inline' ${CELL_FRAME_SCRIPT_HOSTS.join(" ")}`],
-  ["style-src", "'unsafe-inline' https://fonts.googleapis.com"],
-  ["font-src", "data: https://fonts.gstatic.com"],
+  ["script-src", "'unsafe-inline'"],
+  ["style-src", "'unsafe-inline'"],
   ["img-src", "data: blob:"],
+  ["font-src", "data:"],
   // The page has NO network path of its own: every read goes through the
   // host bridge (postMessage), answered with the viewer's own permissions.
   ["connect-src", "'none'"],
@@ -49,6 +55,54 @@ export const CELL_FRAME_CSP_DIRECTIVES: ReadonlyArray<
 /** The Content-Security-Policy value the frame's `<meta>` carries. */
 export function buildCellFrameCsp(): string {
   return CELL_FRAME_CSP_DIRECTIVES.map(([d, s]) => `${d} ${s}`).join("; ");
+}
+
+/**
+ * The origins an approved "connected" cell declared (`externalHosts`), as the
+ * policy may name them: well-formed http(s)/ws(s) ORIGINS only. A wildcard
+ * (`https://*` is a valid CSP source meaning every https origin), credentials,
+ * a path, a query or anything unparseable is dropped: the value is spliced
+ * into a directive, and dropping is fail-closed. Parsed, never pattern-matched.
+ */
+export function frameExternalOrigins(hosts: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const raw of hosts) {
+    const h = raw.trim();
+    if (h.includes("*")) continue;
+    let u: URL;
+    try {
+      u = new URL(h);
+    } catch {
+      continue;
+    }
+    if (!["http:", "https:", "ws:", "wss:"].includes(u.protocol)) continue;
+    if (!u.hostname || u.username || u.password) continue;
+    if (u.pathname !== "/" || u.search || u.hash) continue;
+    if (/[\s'";]/.test(u.origin)) continue;
+    if (!out.includes(u.origin)) out.push(u.origin);
+  }
+  return out;
+}
+
+/**
+ * The same policy for a MODULE cell (ViewFrame): the host decodes React, the
+ * kit and the cell's own module into `blob:` URLs inside the frame, so
+ * `script-src` and `connect-src` add `blob:` (Chromium counts an `import()` of
+ * a module URL as a connect). An approved cell's `externalHosts` are added to
+ * `connect-src` and `img-src`, and to nothing else. Never a remote script
+ * origin. Every other directive is `CELL_FRAME_CSP_DIRECTIVES`, unchanged.
+ */
+export function buildCellModuleFrameCsp(
+  externalHosts: readonly string[] = []
+): string {
+  const hosts = frameExternalOrigins(externalHosts);
+  const extra = hosts.length > 0 ? ` ${hosts.join(" ")}` : "";
+  return CELL_FRAME_CSP_DIRECTIVES.map(([d, s]) => {
+    if (d === "script-src") return `${d} blob: ${s}`;
+    if (d === "img-src") return `${d} ${s}${extra}`;
+    if (d === "connect-src") return `${d} blob:${extra}`;
+    return `${d} ${s}`;
+  }).join("; ");
 }
 
 /** The block injected ahead of everything the author wrote. */

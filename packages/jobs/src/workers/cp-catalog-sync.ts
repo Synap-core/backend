@@ -55,6 +55,7 @@ import {
   readMarketplaceSources,
   type MarketplaceSourcesSnapshot,
 } from "@synap/database";
+import type { CatalogSyncStatus } from "@synap/database/schema";
 import { cpCatalogCache } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import {
@@ -638,7 +639,15 @@ async function fetchKind(
 }
 
 /** Sync one (source, kind) pair: upsert fetched rows, prune stale ones. Never throws. */
-async function syncOne(source: string, kind: CatalogKind): Promise<void> {
+/**
+ * Sync one (source, kind) pair. Returns the stamp it recorded, so a caller who
+ * must answer a person (`refreshOfficialCatalogNow`) can tell a run that
+ * refreshed the cache from one that left it as it was.
+ */
+async function syncOne(
+  source: string,
+  kind: CatalogKind
+): Promise<CatalogSyncStatus> {
   const result = await fetchKind(source, kind);
 
   if (!result.ok) {
@@ -652,14 +661,14 @@ async function syncOne(source: string, kind: CatalogKind): Promise<void> {
         "Catalog source REJECTED the request (4xx) — the pod asked for a category/kind the Control Plane no longer accepts. This will NOT self-heal; fix the request vocabulary in cp-catalog-sync.ts. Cache left intact."
       );
       await recordCatalogSyncStamp(source, kind, "misconfigured", 0);
-      return;
+      return "misconfigured";
     }
     logger.warn(
       { source, kind },
       "Catalog source unreachable — leaving cache intact"
     );
     await recordCatalogSyncStamp(source, kind, "unreachable", 0);
-    return;
+    return "unreachable";
   }
   const { entries, complete } = result.data;
   if (entries.length === 0) {
@@ -668,7 +677,7 @@ async function syncOne(source: string, kind: CatalogKind): Promise<void> {
       "Catalog source returned 0 entries — leaving cache intact"
     );
     await recordCatalogSyncStamp(source, kind, "empty", 0);
-    return;
+    return "empty";
   }
 
   const now = new Date();
@@ -765,7 +774,7 @@ async function syncOne(source: string, kind: CatalogKind): Promise<void> {
         "Catalog fetch INCOMPLETE — upserted the retrieved page(s) but SKIPPED prune to avoid deleting entries the pod never saw. Cache left as a superset until the next full sync."
       );
       await recordCatalogSyncStamp(source, kind, "partial", dedupedRows.length);
-      return;
+      return "partial";
     }
 
     const fetchedSlugs = rows.map((r) => r.slug);
@@ -793,6 +802,7 @@ async function syncOne(source: string, kind: CatalogKind): Promise<void> {
     } else {
       await recordCatalogSyncStamp(source, kind, "ok", dedupedRows.length);
     }
+    return "ok";
   } catch (err) {
     logger.error(
       { err, source, kind },
@@ -840,18 +850,20 @@ async function afterOfficialSync(): Promise<void> {
 async function syncOfficialSource(
   source: CatalogSource,
   snapshot: Pick<MarketplaceSourcesSnapshot, "officialSignature"> | null
-): Promise<void> {
+): Promise<Record<CatalogKind, CatalogSyncStatus>> {
   const signature = await checkOfficialCatalogSignature(
     source.url,
     snapshot?.officialSignature ?? null
   );
+  const kinds = {} as Record<CatalogKind, CatalogSyncStatus>;
   for (const kind of CATALOG_KINDS) {
-    await syncOne(source.cacheKey, kind);
+    kinds[kind] = await syncOne(source.cacheKey, kind);
   }
   if (signature?.lastOkAt) {
     await reportUnverifiedOfficialRows(source.cacheKey, signature);
   }
   await afterOfficialSync();
+  return kinds;
 }
 
 /**
@@ -907,4 +919,127 @@ export async function syncCatalogSourceNow(sourceId: string): Promise<void> {
     return;
   }
   await syncThirdPartySource(source, snapshot.status[source.id]);
+}
+
+// ── On-demand refresh of the official catalog (Hub `POST /catalog/refresh`) ──
+
+/** A refresh that ran (or was shared): when it finished, and what each kind did. */
+export interface OfficialCatalogRefresh {
+  /** ISO time the sync run finished. */
+  refreshedAt: string;
+  /** The stamp each kind recorded (`ok`, `partial`, `empty`: the cache was read fresh). */
+  kinds: Record<CatalogKind, CatalogSyncStatus>;
+  /** True when this call did not start a run: it joined one, or got one under the floor. */
+  reused: boolean;
+}
+
+/** Why a refresh could not give a fresh catalog. Never folded into "ok". */
+export type CatalogRefreshFailure = "switched_off" | "unreachable" | "rejected";
+
+export class CatalogRefreshError extends Error {
+  constructor(
+    readonly reason: CatalogRefreshFailure,
+    message: string
+  ) {
+    super(message);
+    this.name = "CatalogRefreshError";
+  }
+}
+
+/**
+ * A call this soon after a finished run gets that run's outcome instead of a
+ * new one: a CLI loop (or many people at once) cannot hammer the Control
+ * Plane. The 10-min cron still runs on its own.
+ */
+export const OFFICIAL_REFRESH_FLOOR_MS = 20_000;
+
+type RefreshOutcome =
+  | { ok: true; value: Omit<OfficialCatalogRefresh, "reused"> }
+  | { ok: false; error: unknown };
+
+let refreshInFlight: Promise<RefreshOutcome> | null = null;
+let lastRefresh: { finishedAt: number; outcome: RefreshOutcome } | null = null;
+
+/** Test seam: forget the in-flight run and the last outcome. */
+export function __resetOfficialRefreshForTests(): void {
+  refreshInFlight = null;
+  lastRefresh = null;
+}
+
+async function runOfficialRefresh(): Promise<RefreshOutcome> {
+  try {
+    // Same tolerance as the schedule: settings that cannot be read leave the
+    // official source answering from the environment alone.
+    let snapshot: MarketplaceSourcesSnapshot | null = null;
+    try {
+      snapshot = await readMarketplaceSources();
+    } catch (err) {
+      logger.warn(
+        { err },
+        "Could not read the pod's marketplace sources — refreshing the official catalog from the environment"
+      );
+    }
+    const source = describeCatalogSources(snapshot).find((s) => s.official)!;
+    if (!source.enabled) {
+      throw new CatalogRefreshError(
+        "switched_off",
+        source.lockedOff
+          ? "This pod makes no catalog calls (SYNAP_CATALOG_SOURCE=off)."
+          : `The "${source.name}" catalog source is switched off on this pod.`
+      );
+    }
+    const kinds = await syncOfficialSource(source, snapshot);
+    const failed = CATALOG_KINDS.filter(
+      (k) => kinds[k] === "unreachable" || kinds[k] === "misconfigured"
+    );
+    if (failed.length > 0) {
+      const rejected = failed.some((k) => kinds[k] === "misconfigured");
+      throw new CatalogRefreshError(
+        rejected ? "rejected" : "unreachable",
+        `${rejected ? "The catalog refused" : "Could not reach the catalog for"} ${failed.join(", ")} at ${source.url}; the pod keeps its last copy.`
+      );
+    }
+    return {
+      ok: true,
+      value: { refreshedAt: new Date().toISOString(), kinds },
+    };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
+/**
+ * Refresh the OFFICIAL catalog's cache now, with the same sync the 10-min
+ * schedule runs (`syncOfficialSource`), so an update published a minute ago
+ * shows in the pod's update verdict at once. Single-flight: concurrent calls
+ * share one run. A call within `OFFICIAL_REFRESH_FLOOR_MS` of a finished run
+ * gets that run's outcome (`reused: true`), a failure included. Throws a
+ * `CatalogRefreshError` when the cache could not be refreshed: a kind the
+ * Control Plane did not serve is a failure, never an "ok".
+ */
+export async function refreshOfficialCatalogNow(
+  now: () => number = Date.now
+): Promise<OfficialCatalogRefresh> {
+  let reused = true;
+  let outcome: RefreshOutcome;
+  if (
+    lastRefresh &&
+    now() - lastRefresh.finishedAt < OFFICIAL_REFRESH_FLOOR_MS
+  ) {
+    outcome = lastRefresh.outcome;
+  } else if (refreshInFlight) {
+    outcome = await refreshInFlight;
+  } else {
+    reused = false;
+    const run = runOfficialRefresh();
+    refreshInFlight = run;
+    try {
+      outcome = await run;
+      lastRefresh = { finishedAt: now(), outcome };
+    } finally {
+      refreshInFlight = null;
+    }
+  }
+  if (!outcome.ok) throw outcome.error;
+  return { ...outcome.value, reused };
 }

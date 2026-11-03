@@ -66,6 +66,7 @@ import {
 import { auditLog } from "../../../utils/audit-log.js";
 import { workspacePrimarySurfaceSchema } from "../../../schemas/workspace-primary-surface.js";
 import { packagePlaybookDefinitionSchema } from "../../../schemas/playbook-definition.js";
+import { templateDocumentsSchema } from "../../../schemas/template-document.js";
 import { appliedPackageVersion } from "../../../services/applied-package-version.js";
 import { layerTwoFailedSentence } from "../../../services/template-health.js";
 import { isPodAdmin } from "../../../utils/workspace-role.js";
@@ -261,6 +262,10 @@ export const PackageApplySchema = z.object({
   color: z.string().optional(),
   profiles: z.array(z.record(z.string(), z.unknown())).optional(),
   views: z.array(z.record(z.string(), z.unknown())).optional(),
+  // Template documents — created with the views, through the one installer
+  // (`@synap/database` `utils/template-documents.ts`). Without this slot the
+  // plain object strips them.
+  documents: templateDocumentsSchema,
   suggestedEntities: z.array(z.record(z.string(), z.unknown())).optional(),
   suggestedRelations: z.array(z.record(z.string(), z.unknown())).optional(),
   displayTemplates: z.array(z.record(z.string(), z.unknown())).optional(),

@@ -272,6 +272,20 @@ export const widgetDefinitions = pgTable(
      */
     externalHosts: jsonb("external_hosts").$type<string[]>(),
 
+    /**
+     * sha256 (hex) of the cell's CONTENT as stored: mechanism, source, runtime
+     * deps and egress grant (`cellContentFingerprint`,
+     * `@synap/api` `services/cells/cell-content-fingerprint.ts`). Written by
+     * `defineCell`, the one writer, from the row as written, so a person's
+     * approval (or an operator's own write) is tied to exactly this content
+     * (decision Q9, approval per fingerprint).
+     *
+     * NULL = written before fingerprints (migration 0396, no backfill: the next
+     * write stamps it), or replicated from another pod (`routers/sync.ts`
+     * clears it: nobody approved that content here).
+     */
+    contentSha256: text("content_sha256"),
+
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .defaultNow()
       .notNull(),

@@ -20,6 +20,12 @@ export const en = {
   "agent.writes.space": "In {space}: {mode}",
   "agent.writes.spacesNote": "A space’s own setting wins inside that space.",
   "agent.writes.podDefault": "Change the pod default in Settings",
+  "session.lineage.partOf": "Part of",
+  "session.lineage.parentFailed": "Couldn’t read what it is part of",
+  "session.subSessions.title": "Sub-sessions",
+  "session.subSessions.failed": "Its sub-sessions couldn’t be read.",
+  "session.subSessions.showAll": "Show all {n} sub-sessions",
+  "session.subSessions.restFailed": "The other sub-sessions couldn’t be read.",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -37,6 +43,13 @@ export const fr: Catalog<typeof en> = {
     "Le réglage propre à un espace l’emporte dans cet espace.",
   "agent.writes.podDefault":
     "Changer le réglage par défaut du pod dans Réglages",
+  "session.lineage.partOf": "Fait partie de",
+  "session.lineage.parentFailed": "Impossible de lire ce dont elle fait partie",
+  "session.subSessions.title": "Sous-sessions",
+  "session.subSessions.failed": "Ses sous-sessions n’ont pas pu être lues.",
+  "session.subSessions.showAll": "Voir les {n} sous-sessions",
+  "session.subSessions.restFailed":
+    "Les autres sous-sessions n’ont pas pu être lues.",
 };
 
 /** The object views' translator, in the ambient catalog locale. */

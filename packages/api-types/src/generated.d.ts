@@ -2798,13 +2798,20 @@ export interface WorkspaceSidebarSurface {
 	meta?: Record<string, unknown>;
 }
 export interface WorkspaceSidebarItem {
-	kind: "app" | "cell" | "external" | "profile" | "view";
+	kind: "app" | "cell" | "document" | "external" | "profile" | "view";
 	/** App ID for kind='app' (e.g. 'dashboard', 'intelligence', 'data') */
 	appId?: string;
 	/** View name for kind='view' — resolved lazily at click time */
 	viewName?: string;
 	/** View ID for kind='view' — preferred over viewName when available */
 	viewId?: string;
+	/**
+	 * Template document slug for kind='document' (the template's
+	 * `documents[].slug`), kept beside the id it resolves to, like `viewName`.
+	 */
+	documentSlug?: string;
+	/** Document ID for kind='document' — resolved from `documentSlug` at install. */
+	documentId?: string;
 	/**
 	 * Profile slug for kind='profile'.
 	 * ActivityBar resolves this to the profile bento view via workspace.settings.profileBentoViewIds,
@@ -10009,6 +10016,16 @@ export interface ReconcileReport {
 	views: {
 		added: string[];
 		deferred: string[];
+		skipped: string[];
+	};
+	/**
+	 * Template documents (`utils/template-documents.ts`, the installer the create
+	 * door shares), keyed on `metadata.templateDocument.slug` in the space.
+	 * `added` = slug absent → created (a dry run: would be); `skipped` = the
+	 * space has it (live, or deleted by the person) → untouched, never rewritten.
+	 */
+	documents: {
+		added: string[];
 		skipped: string[];
 	};
 	/**
@@ -35421,6 +35438,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				limit?: number | undefined;
 				liveness?: boolean | undefined;
 				offset?: number | undefined;
+				parentSessionId?: string | undefined;
 				projectId?: string | string[] | null | undefined;
 				q?: string | undefined;
 				settledSince?: string | undefined;
@@ -45721,6 +45739,33 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					props?: Record<string, unknown> | undefined;
 					title?: string | undefined;
 				} | {
+					displayMode?: string | undefined;
+					kind: "declarative";
+					props?: Record<string, unknown> | undefined;
+					schema: ({
+						level?: 2 | 1 | 3 | undefined;
+						text: string;
+						type: "heading";
+					} | {
+						text: string;
+						type: "text";
+					} | {
+						hint?: string | undefined;
+						label: string;
+						type: "stat";
+						value: string | number;
+					} | {
+						items: string[];
+						ordered?: boolean | undefined;
+						type: "list";
+					} | {
+						action: string;
+						label: string;
+						params?: Record<string, unknown> | undefined;
+						type: "button";
+					})[];
+					title?: string | undefined;
+				} | {
 					kind: "source-app";
 					title?: string | undefined;
 				} | null;
@@ -45784,6 +45829,33 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					props?: Record<string, unknown> | undefined;
 					title?: string | undefined;
 				} | {
+					displayMode?: string | undefined;
+					kind: "declarative";
+					props?: Record<string, unknown> | undefined;
+					schema: ({
+						level?: 2 | 1 | 3 | undefined;
+						text: string;
+						type: "heading";
+					} | {
+						text: string;
+						type: "text";
+					} | {
+						hint?: string | undefined;
+						label: string;
+						type: "stat";
+						value: string | number;
+					} | {
+						items: string[];
+						ordered?: boolean | undefined;
+						type: "list";
+					} | {
+						action: string;
+						label: string;
+						params?: Record<string, unknown> | undefined;
+						type: "button";
+					})[];
+					title?: string | undefined;
+				} | {
 					kind: "source-app";
 					title?: string | undefined;
 				} | null | undefined;
@@ -45822,6 +45894,33 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					props?: Record<string, unknown> | undefined;
 					title?: string | undefined;
 				} | {
+					displayMode?: string | undefined;
+					kind: "declarative";
+					props?: Record<string, unknown> | undefined;
+					schema: ({
+						level?: 2 | 1 | 3 | undefined;
+						text: string;
+						type: "heading";
+					} | {
+						text: string;
+						type: "text";
+					} | {
+						hint?: string | undefined;
+						label: string;
+						type: "stat";
+						value: string | number;
+					} | {
+						items: string[];
+						ordered?: boolean | undefined;
+						type: "list";
+					} | {
+						action: string;
+						label: string;
+						params?: Record<string, unknown> | undefined;
+						type: "button";
+					})[];
+					title?: string | undefined;
+				} | {
 					kind: "source-app";
 					title?: string | undefined;
 				} | null | undefined;
@@ -45858,6 +45957,33 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					adapterKey: string;
 					kind: "view-adapter";
 					props?: Record<string, unknown> | undefined;
+					title?: string | undefined;
+				} | {
+					displayMode?: string | undefined;
+					kind: "declarative";
+					props?: Record<string, unknown> | undefined;
+					schema: ({
+						level?: 2 | 1 | 3 | undefined;
+						text: string;
+						type: "heading";
+					} | {
+						text: string;
+						type: "text";
+					} | {
+						hint?: string | undefined;
+						label: string;
+						type: "stat";
+						value: string | number;
+					} | {
+						items: string[];
+						ordered?: boolean | undefined;
+						type: "list";
+					} | {
+						action: string;
+						label: string;
+						params?: Record<string, unknown> | undefined;
+						type: "button";
+					})[];
 					title?: string | undefined;
 				} | {
 					kind: "source-app";
@@ -52830,6 +52956,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				category: string | null;
 				configSchema: Record<string, unknown>;
 				contentKind: "collection" | "entity-card" | "entity-detail" | "entity-profile" | "widget";
+				contentSha256: string | null;
 				createdAt: Date;
 				defaultConfig: Record<string, unknown> | null;
 				defaultSize: {
@@ -52867,6 +52994,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				category: string | null;
 				configSchema: Record<string, unknown>;
 				contentKind: "collection" | "entity-card" | "entity-detail" | "entity-profile" | "widget";
+				contentSha256: string | null;
 				createdAt: Date;
 				defaultConfig: Record<string, unknown> | null;
 				defaultSize: {
@@ -52904,6 +53032,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				category: string | null;
 				configSchema: Record<string, unknown>;
 				contentKind: "collection" | "entity-card" | "entity-detail" | "entity-profile" | "widget";
+				contentSha256: string | null;
 				createdAt: Date;
 				defaultConfig: Record<string, unknown> | null;
 				defaultSize: {
@@ -52962,6 +53091,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				category: string | null;
 				configSchema: Record<string, unknown>;
 				contentKind: "collection" | "entity-card" | "entity-detail" | "entity-profile" | "widget";
+				contentSha256: string | null;
 				createdAt: Date;
 				defaultConfig: Record<string, unknown> | null;
 				defaultSize: {
@@ -53421,6 +53551,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					}[] | undefined;
 					views?: Record<string, unknown>[] | undefined;
+					documents?: {
+						content: string;
+						scope?: "pod" | "space" | undefined;
+						slug: string;
+						title: string;
+					}[] | undefined;
 					bentoLayout?: Record<string, unknown>[] | undefined;
 					bentoViewBlocks?: Record<string, unknown>[] | undefined;
 					bentoViewName?: string | undefined;
@@ -53650,6 +53786,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						startField?: string | undefined;
 						type: string;
 					}[] | undefined;
+					documents?: {
+						content: string;
+						scope?: "pod" | "space" | undefined;
+						slug: string;
+						title: string;
+					}[] | undefined;
 					bentoViewName?: string | undefined;
 					bentoLayout?: {
 						config?: Record<string, unknown> | undefined;
@@ -53705,10 +53847,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						primarySurface?: unknown;
 						sidebarItems?: {
 							[x: string]: unknown;
-							kind: "app" | "cell" | "external" | "profile" | "view";
+							kind: "app" | "cell" | "document" | "external" | "profile" | "view";
 							appId?: string | undefined;
 							viewName?: string | undefined;
 							viewId?: string | undefined;
+							documentSlug?: string | undefined;
+							documentId?: string | undefined;
 							profileSlug?: string | undefined;
 							url?: string | undefined;
 							cellKey?: string | undefined;
@@ -54444,6 +54588,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					}[] | undefined;
 					capabilities?: Record<string, unknown>[] | undefined;
+					documents?: {
+						content: string;
+						scope?: "pod" | "space" | undefined;
+						slug: string;
+						title: string;
+					}[] | undefined;
 					entityLinks?: {
 						label?: string | undefined;
 						required?: boolean | undefined;

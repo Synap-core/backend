@@ -11,6 +11,8 @@ import {
   draftSummary,
   moveNotice,
   sessionMoves,
+  sessionChildren,
+  sessionParent,
   sessionRoom,
   sessionStarter,
   sessionStatusMark,
@@ -383,5 +385,90 @@ describe("railGradedKeys — the criteria a session's rail grades", () => {
 
   it("fewer than the cap: every one", () => {
     expect([...railGradedKeys(rows.slice(0, 2), 5)]).toEqual(["a", "b"]);
+  });
+});
+
+describe("sessionParent — no parent and a failed read are two facts", () => {
+  it("omits a session with no parent", () => {
+    expect(sessionParent(undefined)).toEqual({ state: "none" });
+    expect(sessionParent({ status: "ok", session: null })).toEqual({
+      state: "none",
+    });
+  });
+
+  it("says a failed read failed", () => {
+    expect(sessionParent({ status: "unavailable", reason: "x" })).toEqual({
+      state: "failed",
+    });
+  });
+
+  it("names the parent with its status mark", () => {
+    expect(
+      sessionParent({
+        status: "ok",
+        session: { id: "p1", title: "Ship the wave", status: "active" },
+      })
+    ).toEqual({
+      state: "ok",
+      row: {
+        key: "p1",
+        id: "p1",
+        title: "Ship the wave",
+        mark: { kind: expect.any(String), label: "Active" },
+      },
+    });
+  });
+});
+
+describe("sessionChildren — the first rows and the exact total", () => {
+  const item = (id: string, status = "active") => ({
+    id,
+    title: `Lane ${id}`,
+    status,
+  });
+
+  it("omits a session that spawned nothing", () => {
+    expect(sessionChildren(undefined)).toEqual({ state: "none" });
+    expect(sessionChildren({ status: "ok", total: 0, items: [] })).toEqual({
+      state: "none",
+    });
+  });
+
+  it('says a failed read failed, never "no sub-sessions"', () => {
+    expect(sessionChildren({ status: "unavailable", reason: "x" })).toEqual({
+      state: "failed",
+    });
+  });
+
+  it('keeps the total past the packet\'s cut, so "Show all" can name it', () => {
+    const view = sessionChildren({
+      status: "ok",
+      total: 7,
+      items: ["a", "b", "c", "d", "e"].map((id) => item(id)),
+    });
+    expect(view.state).toBe("ok");
+    if (view.state !== "ok") return;
+    expect(view.total).toBe(7);
+    expect(view.rows.map((r) => r.id)).toEqual(["a", "b", "c", "d", "e"]);
+  });
+
+  it("gives each row its status mark, and a name when the title is blank", () => {
+    const view = sessionChildren({
+      status: "ok",
+      total: 1,
+      items: [{ id: "a", title: "  ", status: "closed" }],
+    });
+    expect(view).toEqual({
+      state: "ok",
+      total: 1,
+      rows: [
+        {
+          key: "a",
+          id: "a",
+          title: "Untitled session",
+          mark: { kind: expect.any(String), label: expect.any(String) },
+        },
+      ],
+    });
   });
 });

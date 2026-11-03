@@ -122,6 +122,11 @@ function toWorkspaceDefinitionInput(
     ...({
       intent: (pkg as { intent?: unknown }).intent,
     } as Record<string, unknown>),
+    // The template's documents (`utils/template-documents.ts`): same reason,
+    // read untyped until the installed templates package declares them.
+    ...({
+      documents: (pkg as { documents?: unknown }).documents,
+    } as Record<string, unknown>),
     sourceRoles: pkg.sourceRoles,
     defaultSources: pkg.defaultSources,
     onboarding: pkg.onboarding,

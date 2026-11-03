@@ -52,6 +52,7 @@ import {
   loadPatchDocument,
 } from "../../services/document-patch/apply-document-patch.js";
 import { DocumentPatchOpsSchema } from "../../services/document-patch/patch-ops.js";
+import { diagnoseHtmlPage } from "../../services/document-patch/document-diagnostics.js";
 import {
   podDocumentScopeFloor,
   resolveDocumentScopeFields,
@@ -61,6 +62,7 @@ import {
   currentDiagnostics,
   projectAgentDocument,
   readsAsMarkdown,
+  readsAsPage,
   unparsedDiagnostics,
 } from "../../services/document-patch/read-document.js";
 
@@ -294,9 +296,19 @@ export const documentsRouter = router({
         ctx.sessionId,
         input.expectedLabel
       );
-      const receiptWarnings = slotClaimWarning
-        ? { warnings: [slotClaimWarning] }
-        : {};
+      // A stored page that loads code or assets from the network is SAID on
+      // the receipt, the moment it is written (the frame policy names no
+      // remote origin, so readers' hosts would not run it): the same
+      // sentence `synap_get_document` returns in `diagnostics`.
+      const pageWarnings =
+        input.type === "html" && !input.url
+          ? diagnoseHtmlPage(input.content).map((d) => `${d.message} ${d.fix}`)
+          : [];
+      const warnings = [
+        ...(slotClaimWarning ? [slotClaimWarning] : []),
+        ...pageWarnings,
+      ];
+      const receiptWarnings = warnings.length > 0 ? { warnings } : {};
 
       if ("proposalId" in perm) {
         // Not auto-approved: content is stored in proposal JSONB.
@@ -508,17 +520,20 @@ export const documentsRouter = router({
             }
           : undefined;
       // A file or an oversized document is never parsed on this thread:
-      // reading a 126 MB video froze the pod (3 Nov 2026).
-      const diagnostics = readsAsMarkdown(doc, raw)
-        ? await currentDiagnostics({
-            documentId: doc.id,
-            workspaceId: doc.workspaceId ?? null,
-            metadata: doc.metadata,
-            revision: doc.contentRevision,
-            content: raw,
-            readerUserId: ctx.userId!,
-          })
-        : unparsedDiagnostics(doc, raw);
+      // reading a 126 MB video froze the pod (3 Nov 2026). A stored HTML page
+      // gets its page check only (`readsAsPage`: the frame policy, no parse).
+      const diagnostics =
+        readsAsMarkdown(doc, raw) || readsAsPage(doc, raw)
+          ? await currentDiagnostics({
+              documentId: doc.id,
+              workspaceId: doc.workspaceId ?? null,
+              type: doc.type,
+              metadata: doc.metadata,
+              revision: doc.contentRevision,
+              content: raw,
+              readerUserId: ctx.userId!,
+            })
+          : unparsedDiagnostics(doc, raw);
 
       return {
         document: projectAgentDocument(
