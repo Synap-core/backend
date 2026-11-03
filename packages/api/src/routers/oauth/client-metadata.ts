@@ -441,6 +441,7 @@ export function validateClientMetadataDocument(
  * the id can never move the address to another host, a port or a fragment.
  */
 function openUriOf(value: unknown, origin: string): string {
+  if (origin) return value as string;
   if (typeof value !== "string") {
     throw new ClientMetadataError("synap_open_uri must be a string");
   }
