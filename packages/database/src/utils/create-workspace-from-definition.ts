@@ -54,6 +54,10 @@ import { createLogger } from "@synap-core/core";
 import { resolveWorkspacePrimarySurface } from "./workspace-primary-surface.js";
 import { seedKindTitleKey, seedRefAliasIndex } from "./seed-refs.js";
 import { projectTemplateIntent } from "./workspace-intent.js";
+import {
+  installTemplateDocuments,
+  resolveDocumentSidebarItem,
+} from "./template-documents.js";
 
 const logger = createLogger({ module: "create-workspace-from-definition" });
 
@@ -197,6 +201,7 @@ const WorkspaceDefinitionSchema = z
     bentoViewBlocks: z.array(z.record(z.string(), z.unknown())).optional(),
     bentoViewName: z.string().optional(),
     views: z.array(z.record(z.string(), z.unknown())).optional(),
+    documents: z.array(z.record(z.string(), z.unknown())).optional(),
     suggestedRelations: z.array(z.record(z.string(), z.unknown())).optional(),
     entityLinks: z.array(z.record(z.string(), z.unknown())).optional(),
     displayTemplates: z.array(z.record(z.string(), z.unknown())).optional(),
@@ -331,6 +336,33 @@ function collectCrossRefErrors(
       errors.push(
         `entityLink: targetProfileSlug '${link.targetProfileSlug}' not in definition.profiles or system profiles`
       );
+    }
+  }
+
+  // Template documents (`utils/template-documents.ts`): one per slug, each with
+  // a name, and every document sidebar item naming one of them. A COMPOSE
+  // apply may name a document its base carries, so that last check is the
+  // create door's only.
+  const documentSlugs = new Set<string>();
+  for (const d of def.documents ?? []) {
+    if (!d?.slug) {
+      errors.push(`A document is missing the required 'slug' field`);
+      continue;
+    }
+    if (!d.title?.trim())
+      errors.push(`Document '${d.slug}': missing required 'title'`);
+    if (documentSlugs.has(d.slug))
+      errors.push(`Document slug '${d.slug}' is duplicated`);
+    documentSlugs.add(d.slug);
+  }
+  if (externallyResolved.size === 0) {
+    for (const item of def.layoutConfig?.sidebarItems ?? []) {
+      if (item.kind !== "document" || item.documentId) continue;
+      if (!item.documentSlug || !documentSlugs.has(item.documentSlug)) {
+        errors.push(
+          `sidebarItem '${item.label ?? item.documentSlug ?? "(document)"}': documentSlug '${item.documentSlug ?? ""}' not in definition.documents`
+        );
+      }
     }
   }
 
@@ -1934,6 +1966,27 @@ export async function createWorkspaceFromDefinition(
     completedSteps.push("relations-seed");
   }
 
+  // 12. Template documents (`utils/template-documents.ts`, the one installer the
+  //     reconcile shares). No ledger step of its own: it is idempotent by slug and
+  //     runs on every pass (the sidebar pass below needs every document's id), and
+  //     "relations-seed" stays the core's last step (`CREATE_CORE_LAST_STEP`), so a
+  //     failure here re-syncs the space through the reconcile, which installs the
+  //     documents still missing.
+  let documentIdBySlug: Record<string, string> = {};
+  try {
+    const documentReport = await installTemplateDocuments({
+      dbConn,
+      eventRepo,
+      workspaceId,
+      userId,
+      documents: definition.documents,
+      sidebarItems: settings.layout?.sidebarItems,
+    });
+    documentIdBySlug = documentReport.idBySlug;
+  } catch (err) {
+    await handleStepError("documents", err);
+  }
+
   // Resolve sidebarItems.viewName → viewId now that all views exist.
   // Definitions store human-readable viewName; the Browser sidebar expects viewId
   // to navigate. Without this patch, clicking a sidebar view does nothing.
@@ -1972,6 +2025,16 @@ export async function createWorkspaceFromDefinition(
   }
   if (settings.layout?.sidebarItems?.length) {
     const patchedItems = settings.layout.sidebarItems.map((item) => {
+      if (item.kind === "document") {
+        const resolved = resolveDocumentSidebarItem(item, documentIdBySlug);
+        if (!resolved.documentId) {
+          logger.warn(
+            { documentSlug: item.documentSlug, workspaceId },
+            "sidebarItem references unknown document — keeping documentSlug for debug"
+          );
+        }
+        return resolved;
+      }
       if (item.kind !== "view" || item.viewId || !item.viewName) return item;
       const resolvedId = viewMap[item.viewName];
       if (!resolvedId) {
