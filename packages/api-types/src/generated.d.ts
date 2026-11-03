@@ -34075,6 +34075,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdBefore?: unknown;
 				facetProfileId?: string | undefined;
 				facetSlug?: string | undefined;
+				filters?: unknown[] | undefined;
 				globalOnly?: boolean | undefined;
 				includeDescendants?: boolean | undefined;
 				includeFacets?: boolean | undefined;

@@ -91,10 +91,20 @@ export const WireMediaRefSchema = z
   .openapi("EntityMediaRef");
 export type WireMediaRef = z.infer<typeof WireMediaRefSchema>;
 
+/** The space a listed row lives in — its id and the name people read. */
+export const WireWorkspaceRefSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+  })
+  .openapi("EntityWorkspaceRef");
+export type WireWorkspaceRef = z.infer<typeof WireWorkspaceRefSchema>;
+
 /**
  * A `GET /entities` row: the entity wire shape, plus its role facets when the
- * caller asked `includeFacets=true` and the row wears at least one, and its
- * linked files when it asked `includeMedia=true` and the row links one.
+ * caller asked `includeFacets=true` and the row wears at least one, its
+ * linked files when it asked `includeMedia=true` and the row links one, and
+ * its space when it asked `includeWorkspace=true`.
  */
 export const WireListedEntitySchema = WireEntitySchema.extend({
   facetSlugs: z
@@ -114,6 +124,11 @@ export const WireListedEntitySchema = WireEntitySchema.extend({
     .optional()
     .describe(
       "With `includeMedia=true`: the `file` entities the row links by `references` edges (capped, see `includeMedia`), each one the caller may read, oldest link first. Absent when it links none."
+    ),
+  workspace: WireWorkspaceRefSchema.nullable()
+    .optional()
+    .describe(
+      "With `includeWorkspace=true`: the space the row lives in, `{ id, name }`; `null` for a pod-wide row (no space). Absent without `includeWorkspace`, or when the row's space no longer exists."
     ),
 }).openapi("ListedEntity");
 export type WireListedEntity = z.infer<typeof WireListedEntitySchema>;
