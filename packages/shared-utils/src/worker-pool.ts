@@ -25,7 +25,6 @@
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { Worker, type ResourceLimits } from "node:worker_threads";
-import { createLogger } from "@synap-core/core";
 import type { WorkerRequest, WorkerResponse } from "./worker-task.js";
 
 export type { WorkerRequest, WorkerResponse } from "./worker-task.js";
@@ -51,9 +50,15 @@ export type WorkerTaskOutcome<R> =
   | { ok: true; value: R }
   | { ok: false; failure: WorkerTaskFailure; detail: string };
 
+/** What the pool logs through (a pino logger fits); injected, so this module loads no config. */
+export interface WorkerPoolLogger {
+  warn(obj: object, msg: string): void;
+  error(obj: object, msg: string): void;
+}
+
 export interface WorkerPoolOptions<P> {
-  /** Names the pool in its logs (`worker-pool/<name>`). */
-  name: string;
+  /** Where a timeout, a crash or a worker that cannot start is logged. */
+  logger: WorkerPoolLogger;
   /** Starts one worker with these limits (see {@link moduleWorker}). */
   newWorker: (resourceLimits: ResourceLimits) => Worker;
   /** Workers alive at most. */
@@ -94,7 +99,7 @@ interface Slot<P, R> {
 export function createWorkerPool<P, R>(
   opts: WorkerPoolOptions<P>
 ): WorkerPool<P, R> {
-  const logger = createLogger({ module: `worker-pool/${opts.name}` });
+  const { logger } = opts;
   const slots: Slot<P, R>[] = [];
   const queue: Task<P, R>[] = [];
   let nextId = 1;

@@ -61,7 +61,7 @@ function newExtractWorker(resourceLimits: ResourceLimits) {
 }
 
 const pool = createWorkerPool<ExtractRequest, ExtractOutcome>({
-  name: "web-read-extract",
+  logger,
   newWorker: newExtractWorker,
   size: POOL_SIZE,
   queueMax: QUEUE_MAX,

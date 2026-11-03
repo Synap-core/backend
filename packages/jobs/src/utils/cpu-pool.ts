@@ -28,6 +28,7 @@
  */
 
 import type { ResourceLimits } from "node:worker_threads";
+import { createLogger } from "@synap-core/core";
 import { envInt } from "@synap/shared-utils";
 import {
   createWorkerPool,
@@ -133,7 +134,7 @@ function newCpuWorker(resourceLimits: ResourceLimits) {
 }
 
 const pool = createWorkerPool<CpuTask, CpuTaskResult[CpuTask["kind"]]>({
-  name: "cpu",
+  logger: createLogger({ module: "cpu-pool" }),
   newWorker: newCpuWorker,
   size: POOL_SIZE,
   queueMax: QUEUE_MAX,

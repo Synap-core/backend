@@ -24,7 +24,7 @@ let pool: WorkerPool<Payload, { echoed: unknown }> | null = null;
 
 function newPool(over: Partial<{ size: number; queueMax: number }> = {}) {
   pool = createWorkerPool<Payload, { echoed: unknown }>({
-    name: "test",
+    logger: { warn: () => undefined, error: () => undefined },
     newWorker: (resourceLimits) =>
       new Worker(WORKER, { eval: true, resourceLimits }),
     size: over.size ?? 1,

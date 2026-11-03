@@ -362,6 +362,7 @@ describe("document-passages — a document body as recall passages, kept current
     while (heavy.length < 63_000)
       heavy += `## Part\n\nSome **bold** prose.\n\n:::synap-entity{id="${doc.entityId}"}\nFallback.\n:::\n\n- a\n- b\n\n`;
     await editBody(doc, heavy);
+    const batches = h.batches.length;
     const before = process.env.SYNAP_CPU_TASK_DEADLINE_MS;
     process.env.SYNAP_CPU_TASK_DEADLINE_MS = "100";
     try {
@@ -385,7 +386,8 @@ describe("document-passages — a document body as recall passages, kept current
       passage_count: 3,
       failure: expect.stringMatching(/ran past its deadline/),
     });
-    expect(h.batches).toHaveLength(0);
+    // Nothing was embedded for the uncut body.
+    expect(h.batches).toHaveLength(batches);
   });
 
   it("the sweep re-queues a document whose passages trail its revision, and only that one", async () => {
