@@ -89,6 +89,11 @@ import {
   type SectionPreview,
 } from "./patch-ops.js";
 import {
+  buildDocumentEditRecord,
+  documentPatchPayload,
+  type DocumentEditRecord,
+} from "./document-edit-undo.js";
+import {
   DOCUMENT_DIAGNOSTICS_CHECKER,
   RUN_TIME_DIAGNOSTIC_CODES,
   diagnoseDocument,
@@ -365,7 +370,7 @@ async function writeFieldsOnly(args: {
   };
 }
 
-async function writePatch(args: {
+export async function writePatch(args: {
   doc: PatchDocumentRow;
   base: PatchBase;
   baseContent: string;
@@ -909,6 +914,25 @@ export async function applyDocumentPatch(
     rename,
     fields,
   });
+  // The auto-approved receipt records what this write changed, so its Undo
+  // puts back exactly that (decision 6c5e9642). Best-effort: the write is
+  // committed; a failed stamp leaves the receipt saying it cannot be undone.
+  if ("autoApprovedProposalId" in perm && perm.autoApprovedProposalId) {
+    const { stampAutoApprovedCreate } =
+      await import("../proposals/stamp-materialized.js");
+    await stampAutoApprovedCreate({
+      receiptId: perm.autoApprovedProposalId,
+      record: {
+        documentEdit: buildDocumentEditRecord({
+          documentId: doc.id,
+          before: baseContent,
+          after: rendered.markdown,
+          rename,
+        }),
+      },
+      door: `document.${action}`,
+    });
+  }
   return {
     status: "applied",
     documentId: doc.id,
@@ -1080,14 +1104,14 @@ export async function applyApprovedDocumentPatch(
   proposal: ApprovableProposal,
   approverUserId: string
 ): Promise<
-  AppliedPatchWrite & { documentId: string; diagnostics: DiagnosticsOutcome }
+  AppliedPatchWrite & {
+    documentId: string;
+    diagnostics: DiagnosticsOutcome;
+    /** What the write changed — the approval stamps it for Undo. */
+    edit: DocumentEditRecord;
+  }
 > {
-  const raw = (proposal.data ?? {}) as Record<string, unknown>;
-  const inner = (
-    raw.data && typeof raw.data === "object" && !Array.isArray(raw.ops)
-      ? raw.data
-      : raw
-  ) as Record<string, unknown>;
+  const inner = documentPatchPayload(proposal.data);
   const { ops, author, sessionState } = proposalOps(inner);
   const baseRevision = readProposalBaseRevision(inner);
   const baseVersion = readProposalBaseVersion(inner);
@@ -1167,5 +1191,15 @@ export async function applyApprovedDocumentPatch(
     rename,
     fields,
   });
-  return { ...applied, documentId: doc.id, diagnostics };
+  return {
+    ...applied,
+    documentId: doc.id,
+    diagnostics,
+    edit: buildDocumentEditRecord({
+      documentId: doc.id,
+      before: baseContent,
+      after: rendered.markdown,
+      rename,
+    }),
+  };
 }

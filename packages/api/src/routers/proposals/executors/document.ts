@@ -5,6 +5,7 @@ import { reportApproved, storedProposalFields } from "./shared.js";
 import { materializeApprovedDocument } from "../../../services/proposals/materialize-approved-document.js";
 import { DOCUMENT_PATCH_PROPOSAL_TYPES } from "@synap-core/types/proposals/intent";
 import { applyApprovedDocumentPatch } from "../../../services/document-patch/apply-document-patch.js";
+import { stampMaterialized } from "../../../services/proposals/stamp-materialized.js";
 import {
   podDocumentScopeFloor,
   resolveDocumentScopeFields,
@@ -112,14 +113,22 @@ export function registerDocumentExecutors(): void {
 
         const applied = await applyApprovedDocumentPatch(proposal, userId);
 
-        await transitionProposal(db, {
-          to: ProposalStatus.APPROVED,
-          set: {
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
+        // One statement: the status flip and the undo record (what this
+        // approval changed, before and after) land together — the
+        // `entity/update` precedent. Undo puts back only what still holds
+        // what this write left (decision 6c5e9642).
+        await stampMaterialized({
+          proposalId: input.proposalId,
+          record: { documentEdit: applied.edit },
+          baseData: (proposal.data ?? null) as Record<string, unknown> | null,
+          transition: {
+            to: ProposalStatus.APPROVED,
+            set: {
+              reviewedBy: userId,
+              reviewedAt: new Date(),
+              updatedAt: new Date(),
+            },
           },
-          where: eq(proposals.id, input.proposalId),
         });
         reportApproved(deps, proposal, input.proposalId);
         deps.emitProposalReviewed(
