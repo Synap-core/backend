@@ -28,11 +28,9 @@ import {
   storeDocumentDiagnostics,
   storedRunTimeDiagnostics,
 } from "./apply-document-patch.js";
+import { readsAsMarkdown } from "./read-document.js";
 
 const logger = createLogger({ module: "document-diagnostics-reactor" });
-
-/** Documents whose body is markdown — the only ones directives can live in. */
-const MARKDOWN_TYPES = new Set(["markdown", "text"]);
 
 export async function refreshDocumentDiagnostics(
   documentId: string
@@ -43,6 +41,7 @@ export async function refreshDocumentDiagnostics(
       userId: documents.userId,
       workspaceId: documents.workspaceId,
       type: documents.type,
+      mimeType: documents.mimeType,
       storageKey: documents.storageKey,
       metadata: documents.metadata,
       contentRevision: documents.contentRevision,
@@ -50,11 +49,15 @@ export async function refreshDocumentDiagnostics(
     .from(documents)
     .where(eq(documents.id, documentId))
     .limit(1);
-  if (!doc || !doc.storageKey || !MARKDOWN_TYPES.has(doc.type))
-    return "skipped";
+  // The one read rule (`readsAsMarkdown`, the agent read's): only a markdown
+  // or text body is checked; a stored file is never downloaded for it, and
+  // a body over the cap is never parsed. The parse runs on the pod's thread:
+  // on 3 Nov 2026 a 126 MB video parsed for 60-110 s and froze the pod.
+  if (!doc || !doc.storageKey || !readsAsMarkdown(doc, "")) return "skipped";
   if (readStoredDiagnostics(doc.metadata, doc.contentRevision))
     return "current";
   const content = await readPatchDocumentContent(doc);
+  if (!readsAsMarkdown(doc, content)) return "skipped";
   // Judged as the document's owner would write it: the leak floor is the
   // owner's, the readers' lens is the document's own workspace.
   const outcome = await diagnoseForDocument(content, doc, doc.userId);
