@@ -25,7 +25,7 @@
  *     keeps `code`, replaces the message and records the fault under an
  *     `errorId`: a pod admin sees which route timed out.
  *  2. IN-FLIGHT LIMIT (G9 step 1). At most {@link hubMaxInFlightPerKey}
- *     (default 8, env `SYNAP_HUB_MAX_IN_FLIGHT_PER_KEY`) counted requests per
+ *     (default 32, env `SYNAP_HUB_MAX_IN_FLIGHT_PER_KEY`) counted requests per
  *     API key run at once; the next one answers 429 with `Retry-After: 1` and
  *     code {@link TOO_MANY_IN_FLIGHT}. A slot is released when the WORK
  *     settles, not when a 503 was sent: a key whose requests timed out but
@@ -48,7 +48,10 @@
  * G9 STEP 2 (not built): a per-key cost/time budget is charged where
  * {@link runGuarded} acquires the slot; see the marked line.
  *
- * Bodies carry no internals: a fixed sentence, the code and the limit.
+ * Bodies carry no internals: a fixed sentence, the code and the limit. The
+ * 429 is a 4xx, so its sentence reaches the client unchanged; the 503's is
+ * replaced by the egress door, which has no allowlist of safe messages (only
+ * `code` survives).
  */
 
 import type { MiddlewareHandler } from "hono";
@@ -63,7 +66,7 @@ export const REQUEST_TIMEOUT = "REQUEST_TIMEOUT";
 export const TOO_MANY_IN_FLIGHT = "TOO_MANY_IN_FLIGHT";
 
 export const DEFAULT_HUB_REQUEST_TIMEOUT_MS = 30_000;
-export const DEFAULT_HUB_MAX_IN_FLIGHT_PER_KEY = 8;
+export const DEFAULT_HUB_MAX_IN_FLIGHT_PER_KEY = 32;
 /** A slot whose work never settles is released after this, with a warning. */
 export const IN_FLIGHT_LEASE_MS = 10 * 60_000;
 
@@ -87,7 +90,7 @@ export function hubRequestTimeoutMs(): number {
   );
 }
 
-/** How many counted requests one key may run at once: env, else 8. */
+/** How many counted requests one key may run at once: env, else 32. */
 export function hubMaxInFlightPerKey(): number {
   return positiveIntEnv(
     HUB_REQUEST_GUARD_ENV.maxInFlight,

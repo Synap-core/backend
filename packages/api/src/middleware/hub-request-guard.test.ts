@@ -68,7 +68,6 @@ describe("hub request guard", () => {
   beforeEach(() => {
     resetHubInFlightForTests();
     process.env.SYNAP_HUB_REQUEST_TIMEOUT_MS = "100";
-    process.env.SYNAP_HUB_MAX_IN_FLIGHT_PER_KEY = "8";
   });
   afterEach(() => {
     delete process.env.SYNAP_HUB_REQUEST_TIMEOUT_MS;
@@ -112,38 +111,47 @@ describe("hub request guard", () => {
     expect(await res.json()).toEqual({ status: "timeout" });
   });
 
-  it("refuses a key's 9th concurrent request with 429 + Retry-After, frees on completion", async () => {
-    process.env.SYNAP_HUB_REQUEST_TIMEOUT_MS = "5000";
-    const held = gate();
-    const a = app(held);
-    const headers = { "x-test-key": "k1" };
-    const eight = Array.from({ length: 8 }, () =>
-      a.request("/api/hub/held", { headers })
-    );
-    await sleep(20);
-    expect(inFlightCount("k1")).toBe(8);
+  // The N+1-th refusal, at the code's default (no env) and at an env override.
+  for (const override of [undefined, "5"]) {
+    const limit = override
+      ? Number(override)
+      : // The default with no env (lead, 2026-11-04): one key is shared by
+        // ~19 Claude Code sessions and their sub-agents, so 8 refused normal work.
+        32;
+    it(`refuses a key's request ${limit + 1} with 429 + Retry-After at limit ${limit}${override ? " (env)" : " (default)"}, frees on completion`, async () => {
+      process.env.SYNAP_HUB_REQUEST_TIMEOUT_MS = "5000";
+      if (override) process.env.SYNAP_HUB_MAX_IN_FLIGHT_PER_KEY = override;
+      const held = gate();
+      const a = app(held);
+      const headers = { "x-test-key": "k1" };
+      const full = Array.from({ length: limit }, () =>
+        a.request("/api/hub/held", { headers })
+      );
+      await sleep(20);
+      expect(inFlightCount("k1")).toBe(limit);
 
-    const ninth = await a.request("/api/hub/held", { headers });
-    expect(ninth.status).toBe(429);
-    expect(ninth.headers.get("retry-after")).toBe("1");
-    const body = (await ninth.json()) as Record<string, unknown>;
-    expect(body.code).toBe(TOO_MANY_IN_FLIGHT);
-    expect(body.limit).toBe(8);
+      const over = await a.request("/api/hub/held", { headers });
+      expect(over.status).toBe(429);
+      expect(over.headers.get("retry-after")).toBe("1");
+      const body = (await over.json()) as Record<string, unknown>;
+      expect(body.code).toBe(TOO_MANY_IN_FLIGHT);
+      expect(body.limit).toBe(limit);
 
-    // Another key is not affected.
-    const other = a.request("/api/hub/held", {
-      headers: { "x-test-key": "k2" },
+      // Another key is not affected.
+      const other = a.request("/api/hub/held", {
+        headers: { "x-test-key": "k2" },
+      });
+      await sleep(20);
+      expect(inFlightCount("k2")).toBe(1);
+
+      held.open();
+      const done = await Promise.all([...full, other]);
+      expect(done.map((r) => r.status)).toEqual(Array(limit + 1).fill(200));
+      expect(inFlightCount("k1")).toBe(0);
+      const again = await a.request("/api/hub/held", { headers });
+      expect(again.status).toBe(200);
     });
-    await sleep(20);
-    expect(inFlightCount("k2")).toBe(1);
-
-    held.open();
-    const done = await Promise.all([...eight, other]);
-    expect(done.map((r) => r.status)).toEqual(Array(9).fill(200));
-    expect(inFlightCount("k1")).toBe(0);
-    const again = await a.request("/api/hub/held", { headers });
-    expect(again.status).toBe(200);
-  });
+  }
 
   it("frees the slot when the request fails", async () => {
     process.env.SYNAP_HUB_REQUEST_TIMEOUT_MS = "5000";

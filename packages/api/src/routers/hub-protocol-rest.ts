@@ -202,7 +202,7 @@ app.use("/*", hubAuthMiddleware);
 // ── Request guard: timeout + per-key in-flight limit ───────────────────────
 //
 // A request still running after 30 s answers 503 REQUEST_TIMEOUT (its work
-// may finish); a key already running 8 requests gets 429 TOO_MANY_IN_FLIGHT.
+// may finish); a key already running 32 requests gets 429 TOO_MANY_IN_FLIGHT.
 // Streams, long polls, uploads and model calls are exempt from the timeout
 // (`../middleware/hub-request-guard.ts`). AFTER auth (it counts per key) and
 // BEFORE session + idempotency, so those run inside the guarded time and a

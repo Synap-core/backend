@@ -194,7 +194,7 @@ x-backend-env: &backend-env
   # Hub request guard (packages/api/src/middleware/hub-request-guard.ts): a
   # Hub REST or MCP request still running after this many ms answers 503
   # REQUEST_TIMEOUT, and one key may run at most this many requests at once
-  # (429 TOO_MANY_IN_FLIGHT). Empty = the code's defaults (30000 ms, 8).
+  # (429 TOO_MANY_IN_FLIGHT). Empty = the code's defaults (30000 ms, 32).
   SYNAP_HUB_REQUEST_TIMEOUT_MS: ${SYNAP_HUB_REQUEST_TIMEOUT_MS:-}
   SYNAP_HUB_MAX_IN_FLIGHT_PER_KEY: ${SYNAP_HUB_MAX_IN_FLIGHT_PER_KEY:-}
   # Every visitor reaches this pod from ONE client IP (a Cloudflare tunnel's

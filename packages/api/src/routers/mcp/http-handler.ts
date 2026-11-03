@@ -727,7 +727,7 @@ mcpHttpApp.post("/", async (c) => {
 
   // The Hub request guard (`middleware/hub-request-guard.ts`): a call still
   // running after 30 s answers 503 REQUEST_TIMEOUT, and a key already running
-  // 8 calls gets 429. A long-poll tool, a model call and an open-world tool
+  // 32 calls gets 429. A long-poll tool, a model call and an open-world tool
   // are never timed out.
   const rpc = parsedBody as {
     id?: unknown;
