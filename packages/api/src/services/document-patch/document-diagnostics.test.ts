@@ -52,6 +52,7 @@ vi.mock("../cells/renderables.js", () => ({
 
 import {
   diagnoseDocument,
+  diagnoseHtmlPage,
   podEmbedResolver,
   type EmbedResolver,
   type ReferentStatus,
@@ -319,5 +320,34 @@ describe("podEmbedResolver — the document's lens, and the leak floor", () => {
       "visible"
     );
     expect(h.asked).toEqual(["writer|floor", "writer|floor"]);
+  });
+});
+
+describe("diagnoseHtmlPage — what the one frame policy refuses, said to the author", () => {
+  it("a page that loads code from a CDN is an error naming the host", () => {
+    const out = diagnoseHtmlPage(
+      '<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script><canvas></canvas>'
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ code: "network_code", severity: "error" });
+    expect(out[0]!.message).toContain("cdn.jsdelivr.net");
+    expect(out[0]!.fix).toMatch(/inline/i);
+  });
+
+  it("a page with only web fonts is a warning: it still runs, with system fonts", () => {
+    const out = diagnoseHtmlPage(
+      '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter"><h1>Hi</h1>'
+    );
+    expect(out.map((d) => [d.code, d.severity])).toEqual([
+      ["network_assets", "warning"],
+    ]);
+  });
+
+  it("a self-contained page, raw HTML and all, has nothing to say", () => {
+    expect(
+      diagnoseHtmlPage(
+        "<!doctype html><html><body><div>chart</div><script>draw()</script></body></html>"
+      )
+    ).toEqual([]);
   });
 });

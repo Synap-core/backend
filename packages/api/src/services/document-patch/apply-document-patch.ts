@@ -97,6 +97,7 @@ import {
   DOCUMENT_DIAGNOSTICS_CHECKER,
   RUN_TIME_DIAGNOSTIC_CODES,
   diagnoseDocument,
+  diagnoseHtmlPage,
   podEmbedResolver,
   type DocumentDiagnostic,
 } from "./document-diagnostics.js";
@@ -111,6 +112,8 @@ export type PatchDocumentRow = {
   userId: string;
   workspaceId: string | null;
   title: string;
+  /** `documents.type`: an `html` page is diagnosed as a page, not as markdown. */
+  type: string;
   mimeType: string | null;
   storageKey: string | null;
   currentVersion: number;
@@ -128,6 +131,7 @@ export async function loadPatchDocument(
       userId: documents.userId,
       workspaceId: documents.workspaceId,
       title: documents.title,
+      type: documents.type,
       mimeType: documents.mimeType,
       storageKey: documents.storageKey,
       currentVersion: documents.currentVersion,
@@ -254,9 +258,13 @@ export type DiagnosticsOutcome =
 
 export async function diagnoseForDocument(
   markdown: string,
-  doc: Pick<PatchDocumentRow, "id" | "workspaceId">,
+  doc: Pick<PatchDocumentRow, "id" | "workspaceId"> & {
+    /** `documents.type`; an `html` page gets the page checks (`diagnoseHtmlPage`). */
+    type?: string | null;
+  },
   writerUserId: string
 ): Promise<DiagnosticsOutcome> {
+  if (doc.type === "html") return { items: diagnoseHtmlPage(markdown) };
   try {
     return {
       items: await diagnoseDocument(

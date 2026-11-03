@@ -40,6 +40,10 @@ import {
   type WidgetCapabilityDef,
 } from "@synap-core/types/renderables";
 import { isUuid } from "@synap-core/types/property-render";
+import {
+  frameNetworkAssetsNotice,
+  frameNetworkCodeRefusal,
+} from "@synap-core/types/cell-bridge";
 import type { Embed } from "@synap-core/markdown-core/embeds";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { listRenderables, type RenderableRow } from "../cells/renderables.js";
@@ -89,6 +93,18 @@ export const DOCUMENT_DIAGNOSTIC_CODES = [
    * and gone at the next revision (the chart is simply live then).
    */
   "freeze_failed",
+  /**
+   * A stored HTML page that loads CODE from the network (`<script src>` or an
+   * `import` from a URL). The one frame policy names no remote origin
+   * (decision R3), so that code never loads and readers' hosts do not run the
+   * page: they show why, with its source.
+   */
+  "network_code",
+  /**
+   * A stored HTML page that loads styles, fonts or images from the network:
+   * the page runs and draws without them (system fonts, no picture).
+   */
+  "network_assets",
 ] as const;
 export type DocumentDiagnosticCode = (typeof DOCUMENT_DIAGNOSTIC_CODES)[number];
 
@@ -225,6 +241,10 @@ export const GRAMMAR_FIX: Record<DocumentDiagnosticCode, string> = {
     "Write one sentence after the chart's ```json block saying what it shows; the phone and exports read that sentence.",
   freeze_failed:
     "The chart still reads live. Press Freeze on it once its data can be read, or leave it live.",
+  network_code:
+    "Put the code in the page itself (an inline `<script>`, bundled with its libraries), or build a frame cell that reads React and `@synap/kit` from the host (`synap cell build`).",
+  network_assets:
+    "Inline the styles (a `<style>` block), embed fonts and images as `data:` URLs, or leave them out: the page draws with the system fonts.",
 };
 
 const KIND_OF_DIRECTIVE: Record<
@@ -453,4 +473,35 @@ export async function diagnoseDocument(
   }
 
   return out.sort((a, b) => (a.line ?? 0) - (b.line ?? 0));
+}
+
+/**
+ * Every diagnostic for a stored HTML page (`documents.type = "html"`). A page
+ * is not markdown: no directive, embed or design rule applies to it, only the
+ * frame it runs in. Its one check is what the frame policy refuses (the shared
+ * rule, `@synap-core/types/cell-bridge`), so the author reads at write and read
+ * time the same sentence the reader's host shows instead of running the page.
+ * Pure: no catalog, no access read.
+ */
+export function diagnoseHtmlPage(html: string): DocumentDiagnostic[] {
+  const out: DocumentDiagnostic[] = [];
+  const refusal = frameNetworkCodeRefusal(html);
+  if (refusal) {
+    out.push({
+      code: "network_code",
+      severity: "error",
+      message: refusal,
+      fix: GRAMMAR_FIX.network_code,
+    });
+  }
+  const assets = frameNetworkAssetsNotice(html);
+  if (assets) {
+    out.push({
+      code: "network_assets",
+      severity: "warning",
+      message: assets,
+      fix: GRAMMAR_FIX.network_assets,
+    });
+  }
+  return out;
 }

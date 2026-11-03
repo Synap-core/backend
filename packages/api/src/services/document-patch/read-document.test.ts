@@ -5,12 +5,15 @@
 import { describe, it, expect } from "vitest";
 import {
   MARKDOWN_READ_MAX_CHARS,
+  currentDiagnostics,
   listDocumentSections,
   projectAgentDocument,
   readableMarkdown,
   readsAsMarkdown,
+  readsAsPage,
   unparsedDiagnostics,
 } from "./read-document.js";
+import { DOCUMENT_DIAGNOSTICS_CHECKER } from "./document-diagnostics.js";
 
 describe("readableMarkdown — embeds become their fallback", () => {
   it("uses the author's fallback prose, dropping the directive and its props", () => {
@@ -234,5 +237,75 @@ describe("projectAgentDocument — a file reads as stored, unparsed", () => {
     const out = projectAgentDocument(md, raw, "readable", { items: [] });
     expect(out.content).not.toBe(raw);
     expect(out.sections.map((s) => s.id)).toEqual(["a"]);
+  });
+});
+
+describe("currentDiagnostics — a stored HTML page is checked as a page (frame policy R3)", () => {
+  const CDN_PAGE =
+    '<!doctype html><html><head><script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script></head><body><canvas></canvas></body></html>';
+  /** A same-revision stamp from the current checker, judged as markdown. */
+  const markdownStamp = {
+    diagnostics: {
+      revision: 3,
+      checker: DOCUMENT_DIAGNOSTICS_CHECKER,
+      checkedAt: "2026-11-01T00:00:00.000Z",
+      items: [
+        {
+          code: "raw_html",
+          severity: "warning",
+          message: "Raw HTML in the body.",
+          fix: "x",
+        },
+      ],
+    },
+  };
+
+  it("a page that loads code from a CDN reads network_code, naming the host, and no stamp is served", async () => {
+    const out = await currentDiagnostics({
+      documentId: "doc-1",
+      workspaceId: null,
+      type: "html",
+      metadata: markdownStamp,
+      revision: 3,
+      content: CDN_PAGE,
+      readerUserId: "user-1",
+    });
+    expect(out.items?.map((d) => d.code)).toEqual(["network_code"]);
+    expect(out.items?.[0]?.severity).toBe("error");
+    expect(out.items?.[0]?.message).toContain("cdn.jsdelivr.net");
+    expect(out.items?.[0]?.fix).toBeTruthy();
+  });
+
+  it("a self-contained page has nothing to say (never markdown's raw_html)", async () => {
+    const out = await currentDiagnostics({
+      documentId: "doc-1",
+      workspaceId: null,
+      type: "html",
+      metadata: null,
+      revision: 1,
+      content:
+        "<!doctype html><style>p{color:red}</style><p>Hi</p><script>window.synap.query('views.list')</script>",
+      readerUserId: "user-1",
+    });
+    expect(out).toEqual({ items: [] });
+  });
+});
+
+describe("readsAsPage — a stored HTML page gets its page check, never a parse", () => {
+  it("checks an html page up to the cap", () => {
+    expect(readsAsPage({ type: "html" }, "<p>Hi</p>")).toBe(true);
+    expect(
+      readsAsPage({ type: "html" }, "x".repeat(MARKDOWN_READ_MAX_CHARS))
+    ).toBe(true);
+  });
+
+  it("never a page longer than the cap, and never another type", () => {
+    expect(
+      readsAsPage({ type: "html" }, "x".repeat(MARKDOWN_READ_MAX_CHARS + 1))
+    ).toBe(false);
+    expect(readsAsPage({ type: "file", mimeType: "text/html" }, "<p>")).toBe(
+      false
+    );
+    expect(readsAsPage({ type: "markdown" }, "# A")).toBe(false);
   });
 });

@@ -370,6 +370,9 @@ function CellFrameBody({
           html={read.html}
           workspaceId={read.workspaceId}
           title={words.label}
+          refusedAction={
+            <CellDoor model={model} words={words} inline={false} />
+          }
         />
       );
     case "app":
