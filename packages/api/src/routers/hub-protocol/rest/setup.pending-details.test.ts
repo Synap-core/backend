@@ -59,6 +59,12 @@ vi.mock("../../../services/agent-connect.js", async (importOriginal) => ({
   liveAgentConnections: async () => [],
   newerPendingRequest: async () => null,
 }));
+// How the agent's changes land (0395) is read on PGlite in
+// agents-inside-computer.pglite.test.ts; here it answers "no governance row".
+vi.mock("@synap/database/agent-governance", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  readAgentGovernance: async () => null,
+}));
 
 const { registerSetupRoutes } = await import("./setup.js");
 
@@ -143,6 +149,14 @@ describe("GET /setup/agent/pending/:keyId/details", () => {
       instanceLabel: null,
       displayName: "Agent",
       createdAt: CREATED.toISOString(),
+      // 0395: the agent inside its computer. This agent has no computer, no
+      // job and no governance row; `findKey` answers every key lookup, so the
+      // "earlier key" read finds one: not a new agent.
+      agentRole: null,
+      hostSeat: null,
+      computerName: null,
+      isNewAgent: false,
+      writeMode: null,
       connections: [],
       supersededBy: null,
       scopes: ["hub-protocol.read", "mcp.read"],
@@ -150,6 +164,17 @@ describe("GET /setup/agent/pending/:keyId/details", () => {
       grants: TWO_SCOPES_WIRE,
     });
     expect(resolveForKey).toHaveBeenCalledWith(KEY);
+  });
+
+  // 0395 — rules out `isNewAgent` stuck at one value: the same key reads as a
+  // NEW agent only when no other key of that agent exists.
+  it("an agent whose only key is this one reads as new", async () => {
+    findKey.mockReset();
+    findKey.mockReturnValueOnce(row(HUMAN)).mockReturnValue(undefined);
+    resolveForKey.mockResolvedValue(TWO_SCOPES);
+    const res = await get();
+    expect(res.status).toBe(200);
+    expect((await res.json()).isNewAgent).toBe(true);
   });
 
   // P5 — deny by default. Rules out a never-granted key read as "only its

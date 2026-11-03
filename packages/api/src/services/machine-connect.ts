@@ -50,6 +50,7 @@ import {
   or,
   sql,
   drizzleSql,
+  notAnAppAgent,
   readReversibleDefault,
   ApiKeyRepository,
   EventRepository,
@@ -569,7 +570,8 @@ async function hostedAgentsOf(machineIds: readonly string[]): Promise<
     .where(
       and(
         inArray(users.hostUserId, [...machineIds]),
-        eq(users.userType, "agent")
+        eq(users.userType, "agent"),
+        notAnAppAgent(users.id)
       )
     )
     .orderBy(users.createdAt);
