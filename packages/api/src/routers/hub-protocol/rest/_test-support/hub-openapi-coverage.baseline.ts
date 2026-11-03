@@ -199,15 +199,9 @@ export const HUB_ROUTES_MISSING_FROM_SPEC: readonly string[] = [
  */
 export const APP_FACING_OPEN_RESPONSES: readonly string[] = [
   "GET /errors/{errorId}",
-  "GET /files/{entityId}/url",
   "GET /projects",
-  "GET /projects/{id}",
-  "GET /projects/{projectId}/digest",
-  "GET /projects/{projectId}/outputs",
   "GET /tracks",
-  "GET /tracks/{id}",
   "POST /diagnose",
-  "POST /files/{entityId}/transcribe",
   "POST /packages/preflight",
   "POST /routing/resolve",
   "POST /workspaces/ensure-template",
