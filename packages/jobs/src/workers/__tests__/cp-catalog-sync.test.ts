@@ -92,9 +92,13 @@ vi.mock("@synap-core/core", () => ({
 const fetchMock = vi.fn();
 
 import {
+  CatalogRefreshError,
   DEFAULT_CATALOG_SOURCE,
+  OFFICIAL_REFRESH_FLOOR_MS,
+  __resetOfficialRefreshForTests,
   describeCatalogSources,
   handleCpCatalogSync,
+  refreshOfficialCatalogNow,
   registerOfficialCatalogSyncedHandler,
 } from "../cp-catalog-sync.js";
 
@@ -912,5 +916,103 @@ describe("handleCpCatalogSync — installed capabilities converge after a publis
     await expect(handleCpCatalogSync()).resolves.toBeUndefined();
     expect(loggerMock.error).toHaveBeenCalled();
     registerOfficialCatalogSyncedHandler(async () => undefined);
+  });
+});
+
+describe("refreshOfficialCatalogNow — the on-demand official sync (Hub POST /catalog/refresh)", () => {
+  /** Runs of the official sync = fetches of the capability endpoint. */
+  const runs = () =>
+    fetchedUrls().filter((u) => u.includes("/api/marketplace/capabilities"))
+      .length;
+
+  beforeEach(() => {
+    __resetOfficialRefreshForTests();
+    sourcesMock.read.mockReset();
+    sourcesMock.read.mockResolvedValue({
+      sources: [],
+      official: null,
+      status: {},
+    });
+    serveWorkspace([pkg("content-os")]);
+  });
+
+  it("runs the same per-kind sync and says what each kind did", async () => {
+    const r = await refreshOfficialCatalogNow();
+    expect(r.reused).toBe(false);
+    expect(r.kinds).toEqual({
+      capability: "empty",
+      automation: "empty",
+      template: "ok",
+      cell: "empty",
+      view: "empty",
+      skill: "empty",
+    });
+    expect(Number.isNaN(Date.parse(r.refreshedAt))).toBe(false);
+    expect(upsertedRows().map((x) => x.slug)).toEqual(["content-os"]);
+    expect(runs()).toBe(1);
+  });
+
+  it("concurrent calls share ONE run (single-flight)", async () => {
+    const [a, b, c] = await Promise.all([
+      refreshOfficialCatalogNow(),
+      refreshOfficialCatalogNow(),
+      refreshOfficialCatalogNow(),
+    ]);
+    expect(runs()).toBe(1);
+    expect([a.reused, b.reused, c.reused].sort()).toEqual([false, true, true]);
+    expect(b.refreshedAt).toBe(a.refreshedAt);
+  });
+
+  it("a call under the floor gets the last run; past it, a new run", async () => {
+    let t = 1_000_000;
+    const now = () => t;
+    const first = await refreshOfficialCatalogNow(now);
+    t += OFFICIAL_REFRESH_FLOOR_MS - 1;
+    const second = await refreshOfficialCatalogNow(now);
+    expect(runs()).toBe(1);
+    expect(second).toEqual({ ...first, reused: true });
+    t += 2;
+    const third = await refreshOfficialCatalogNow(now);
+    expect(runs()).toBe(2);
+    expect(third.reused).toBe(false);
+  });
+
+  it("an unreachable Control Plane is a failure with its reason, never ok — and the floor holds it too", async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 503,
+      json: async () => ({}),
+    });
+    const t = 5_000_000;
+    const err = await refreshOfficialCatalogNow(() => t).catch((e) => e);
+    expect(err).toBeInstanceOf(CatalogRefreshError);
+    expect((err as CatalogRefreshError).reason).toBe("unreachable");
+    expect((err as Error).message).toContain("capability");
+    const before = fetchMock.mock.calls.length;
+    await expect(refreshOfficialCatalogNow(() => t + 1)).rejects.toBe(err);
+    expect(fetchMock.mock.calls.length).toBe(before);
+  });
+
+  it("a request the Control Plane refuses (4xx) is a `rejected` failure", async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({}),
+    });
+    await expect(refreshOfficialCatalogNow()).rejects.toMatchObject({
+      reason: "rejected",
+    });
+  });
+
+  it("a switched-off official source is refused with its reason and fetches nothing", async () => {
+    sourcesMock.read.mockResolvedValue({
+      sources: [],
+      official: { enabled: false, changedBy: "u", changedAt: "" },
+      status: {},
+    });
+    await expect(refreshOfficialCatalogNow()).rejects.toMatchObject({
+      reason: "switched_off",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

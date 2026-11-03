@@ -119,6 +119,15 @@ export interface SessionListQuery {
    */
   waveRootId?: string;
   /**
+   * Only the DIRECT children of this session: the sessions whose
+   * `spawned_from` edge points at it (`child --spawned_from--> parent`, the
+   * edge lineage is derived from). The continuation packet's `children`
+   * section counts every kind and status, so a "Show all N sub-sessions"
+   * passes `kind: "all"`, `lens: "all"` and `status: "all"` with it to list
+   * exactly the population that `total` counted.
+   */
+  parentSessionId?: string;
+  /**
    * Also list sessions the caller reads through the HUMAN ROSTER of the
    * session's room (`sessionReadableWhere`, founder decision C). Default false:
    * a door that does not opt in keeps the owner-only population — which is
@@ -170,6 +179,7 @@ export function sessionListConditions({
   includeTrackedRuns,
   trackId,
   waveRootId,
+  parentSessionId,
   roster,
   subject,
 }: SessionListQuery): SQL[] {
@@ -200,6 +210,15 @@ export function sessionListConditions({
            AND w_l.link_type = 'spawned_from'
       )
       SELECT id FROM wave)`);
+  }
+  if (parentSessionId) {
+    conditions.push(drizzleSql`${focusSessions.id}::text IN (
+      SELECT c_l.from_id
+        FROM ${links} c_l
+       WHERE c_l.to_id = ${parentSessionId}::text
+         AND c_l.from_type = 'session'
+         AND c_l.to_type = 'session'
+         AND c_l.link_type = 'spawned_from')`);
   }
   if (subject) {
     conditions.push(sessionSubjectWhere(subject));

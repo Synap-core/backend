@@ -120,13 +120,20 @@ export interface WorkspaceSidebarSurface {
 }
 
 export interface WorkspaceSidebarItem {
-  kind: "app" | "view" | "profile" | "external" | "cell";
+  kind: "app" | "view" | "profile" | "external" | "cell" | "document";
   /** App ID for kind='app' (e.g. 'dashboard', 'intelligence', 'data') */
   appId?: string;
   /** View name for kind='view' — resolved lazily at click time */
   viewName?: string;
   /** View ID for kind='view' — preferred over viewName when available */
   viewId?: string;
+  /**
+   * Template document slug for kind='document' (the template's
+   * `documents[].slug`), kept beside the id it resolves to, like `viewName`.
+   */
+  documentSlug?: string;
+  /** Document ID for kind='document' — resolved from `documentSlug` at install. */
+  documentId?: string;
   /**
    * Profile slug for kind='profile'.
    * ActivityBar resolves this to the profile bento view via workspace.settings.profileBentoViewIds,

@@ -54,6 +54,29 @@ export function insertsWidgetDefinitions(source: string): boolean {
   );
 }
 
+/**
+ * An UPDATE of widget_definitions that sets a CONTENT column: what the frame
+ * runs or may reach, the fields the content fingerprint covers (decision Q9,
+ * `services/cells/cell-content-fingerprint.ts`), or the fingerprint itself.
+ * An update elsewhere may retire a row (`isActive`); changing what an approved
+ * cell runs is a new write through `defineCell`, which stamps its fingerprint.
+ */
+export function updatesWidgetDefinitionContent(source: string): boolean {
+  const code = stripComments(source, "ts");
+  const content =
+    /\b(?:rendererSource|rendererType|deps|externalHosts|contentSha256)\b/;
+  const drizzle = /\.update\(\s*(?:\w+\.)*widgetDefinitions\s*\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = drizzle.exec(code))) {
+    const rest = code.slice(m.index + m[0].length);
+    const end = rest.search(/\.where\(|\.returning\(|;/);
+    if (content.test(end === -1 ? rest : rest.slice(0, end))) return true;
+  }
+  return /update\s+"?widget_definitions"?\s+set\s+[^;`]*\b(?:renderer_source|renderer_type|deps|external_hosts|content_sha256)\b/i.test(
+    code
+  );
+}
+
 const scanned = [
   ...walk(join(REPO, "packages")),
   ...(statSync(join(REPO, "apps"), { throwIfNoEntry: false })
@@ -103,6 +126,48 @@ describe("tripwire: widget_definitions has one authoring writer", () => {
     ).toBe(false);
     expect(
       insertsWidgetDefinitions("db.select().from(widgetDefinitions)")
+    ).toBe(false);
+  });
+
+  it("only define-cell.ts changes a cell's content in place", () => {
+    const writers = scanned
+      .filter((f) => updatesWidgetDefinitionContent(readFileSync(f, "utf8")))
+      .map(rel)
+      .sort();
+    expect(
+      writers,
+      "A second door rewrites a cell's content (source, mechanism, deps, " +
+        "egress or its fingerprint) in place. Write it through defineCell " +
+        "(services/cells/define-cell.ts), which stamps content_sha256, or file " +
+        "a cell/define proposal."
+    ).toEqual([THE_WRITER]);
+  });
+
+  it("the content-update detector fires on each shape and ignores retire/reads", () => {
+    expect(
+      updatesWidgetDefinitionContent(
+        "await db.update(widgetDefinitions).set({ rendererSource: s }).where(x)"
+      )
+    ).toBe(true);
+    expect(
+      updatesWidgetDefinitionContent(
+        "db.update(schema.widgetDefinitions)\n.set({\n  deps,\n}).where(x)"
+      )
+    ).toBe(true);
+    expect(
+      updatesWidgetDefinitionContent(
+        "sql`UPDATE widget_definitions SET renderer_source = ${s}`"
+      )
+    ).toBe(true);
+    expect(
+      updatesWidgetDefinitionContent(
+        "db.update(widgetDefinitions).set({ isActive: false, updatedAt: d }).where(eq(widgetDefinitions.rendererType, t))"
+      )
+    ).toBe(false);
+    expect(
+      updatesWidgetDefinitionContent(
+        "// db.update(widgetDefinitions).set({ rendererSource: s })"
+      )
     ).toBe(false);
   });
 

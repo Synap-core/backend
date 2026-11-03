@@ -809,6 +809,14 @@ export const focusSessionsRouter = router({
          */
         subject: sessionSubjectInputSchema.optional(),
         /**
+         * Only the direct children of this session (`spawned_from`), the
+         * "Show all" behind the continuation packet's `children` section.
+         * Pass `kind: "all"`, `lens: "all"` and `status: "all"` with it to
+         * list the population that section's `total` counts. See
+         * `SessionListQuery.parentSessionId`.
+         */
+        parentSessionId: z.string().uuid().optional(),
+        /**
          * Attach `live` on every row — the D1 liveness facts the "working
          * right now" rule (`isSessionWorkingNow`) reads, the same batched
          * read `list` attaches under `nextMove`, BOUNDED to the working
@@ -821,7 +829,14 @@ export const focusSessionsRouter = router({
     )
     .query(async ({ ctx, input }) => {
       assertTrackedRunsKind(input);
-      const scope = resolveScope(ctx, input);
+      // A session's children are a SELECTION, like `ids`: the packet counts
+      // them in every space, so the ambient active-space header must not
+      // narrow them (a child filed in another space would vanish from
+      // "Show all"). An explicit `workspaceId` still narrows.
+      const scope = resolveScope(
+        input.parentSessionId ? { workspaceId: null } : ctx,
+        input
+      );
       const subject = input.subject
         ? await resolveSessionSubject(input.subject)
         : undefined;
@@ -842,6 +857,7 @@ export const focusSessionsRouter = router({
               unfiled: input.unfiled,
               includeTrackedRuns: input.includeTrackedRuns,
               trackId: input.trackId,
+              parentSessionId: input.parentSessionId,
               roster: rosterReadFor(ctx),
               subject,
             })

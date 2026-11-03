@@ -93,6 +93,7 @@ import {
   registerWorkspaceOpsRoutes,
   registerInstalledRoutes,
   registerPackageUpdatesRoutes,
+  registerCatalogRefreshRoutes,
   registerMessagingRoutes,
   registerDiscordRoutes,
   registerDiscordIdentityRoutes,
@@ -294,6 +295,7 @@ registerWorkspacesRoutes(app); // /workspaces, /workspaces/:id/*, /users/:id/con
 registerWorkspaceOpsRoutes(app); // governed archive/restore/rename, /entities/move, /profiles/grant-access (R8a)
 registerInstalledRoutes(app); // /installed — the ONE read door over the install ledgers
 registerPackageUpdatesRoutes(app); // /package-updates — one update's plan and its apply (S2/S3)
+registerCatalogRefreshRoutes(app); // POST /catalog/refresh — the official catalog sync now (pod admins)
 registerThreadsRoutes(app); // /threads* — combines GET-list, context, link, branches, messages, etc.
 registerEventsRoutes(app); // /events
 registerEntitiesRoutes(app); // /users/:id/entities + /entities*

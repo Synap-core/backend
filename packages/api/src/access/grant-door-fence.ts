@@ -636,6 +636,11 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
     REFUSED("Runs the skill as you: what it reads is not bounded by a grant."),
   ],
   [/^\/diagnose\/?$/, REFUSED("Pod internals across every subject.")],
+  // Writes no person's row and returns none: it re-reads the public official
+  // catalog into the pod's mirror (`cp_catalog_cache`), the run the 10-min
+  // schedule makes anyway, single-flight with a 20 s floor. Pod admins only
+  // (the route checks `assertPodAdmin`).
+  [/^\/catalog\/refresh\/?$/, SEAMED],
   // Runs a capability. A key the fence bounds may only run an INTENT action
   // (decision 3A, 2026-10-28): the route refuses any other body for it, checks
   // `capability.<intent>.run` on the verb's own intent in the named space, and

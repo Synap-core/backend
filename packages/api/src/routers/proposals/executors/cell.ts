@@ -17,6 +17,12 @@ import {
   type ProposalExecutorArgs,
 } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
+import {
+  cellContentFingerprint,
+  gatedRendererTypeOf,
+  proposedCellContent,
+  stampedCellFingerprint,
+} from "../../../services/cells/cell-content-fingerprint.js";
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -24,9 +30,6 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 function isSize(v: unknown): v is { w: number; h: number } {
   return isPlainObject(v) && typeof v.w === "number" && typeof v.h === "number";
 }
-
-/** Mechanisms a gated cell definition may carry. `native` is absent by construction. */
-const GATED_RENDERER_TYPES = ["builtin", "iframe", "frame"] as const;
 
 /**
  * Materialise a gated cell definition through `defineCell` and mark the proposal
@@ -56,6 +59,30 @@ export async function applyCellDefineProposal(
     .where(eq(proposals.id, input.proposalId));
   if (alreadyDone?.status === ProposalStatus.APPROVED) {
     return { success: true, alreadyApproved: true };
+  }
+
+  // APPROVAL PER FINGERPRINT (decision Q9): the content this approval writes
+  // must be the content the proposal was filed with. The gate stamps the
+  // fingerprint when the proposal is filed and the revise core stamps it again
+  // on every revision (`withCellContentFingerprint`), so a payload whose
+  // fingerprint is not its stamp was changed by a path that is no door, and
+  // nobody reviewed what it now holds. Refused before any write: the proposal
+  // stays as it is. No stamp = filed before fingerprints (or a legacy
+  // `widget/register` payload): applied as before.
+  const stamp = stampedCellFingerprint(innerData);
+  const content = proposedCellContent(innerData);
+  if (stamp && content) {
+    const actual = cellContentFingerprint(content);
+    if (actual !== stamp) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message:
+          `This cell proposal no longer holds the content it was filed with ` +
+          `(fingerprint ${actual.slice(0, 12)}, filed as ${stamp.slice(0, 12)}), ` +
+          `and nothing was written. Reject it and file the cell again.`,
+        cause: { reasonCode: "CELL_CONTENT_FINGERPRINT_MISMATCH" },
+      });
+    }
   }
 
   // typeKey the door carried into the gate `data`. Without it an approved
@@ -130,11 +157,9 @@ export async function applyCellDefineProposal(
     // the legacy `widget/register` payload). Each is re-validated, never
     // trusted; absent ⇒ undefined ⇒ defineCell derives (mechanism) or leaves
     // the stored value alone.
-    rendererType: (GATED_RENDERER_TYPES as readonly string[]).includes(
-      innerData.rendererType as string
-    )
-      ? (innerData.rendererType as (typeof GATED_RENDERER_TYPES)[number])
-      : undefined,
+    // The same reading `proposedCellContent` fingerprints, so the check above
+    // and this write cannot disagree on the mechanism.
+    rendererType: gatedRendererTypeOf(innerData.rendererType),
     category:
       typeof innerData.category === "string" ? innerData.category : undefined,
     icon: typeof innerData.icon === "string" ? innerData.icon : undefined,

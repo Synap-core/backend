@@ -89,6 +89,7 @@ import {
   watchPodRateLimits,
 } from "./middleware/security.js";
 import { usageTelemetry } from "./middleware/usage-telemetry.js";
+import { eventLoopWatch } from "./status/event-loop-watch.js";
 import { configuredPodAdminBase } from "./pod-admin-config.js";
 import { registerInviteBounce } from "./invite-bounce.js";
 import { registerLinkCloudBounce } from "./link-cloud-bounce.js";
@@ -401,6 +402,11 @@ app.get("/health", async (c) => {
     // and, for the pool, whether it can: `unavailable` + `reason` when a
     // runner cannot start. Body-only, like `data`.
     skillRuntime: skillRuntimeHealth(),
+    // Event-loop delay and utilization over the rolling window, and how many
+    // stalls were logged (status/event-loop-watch.ts). In memory, no I/O;
+    // numbers only: the requests a stall named are on /status/release's
+    // details and in the `event loop blocked` log line.
+    eventLoop: eventLoopWatch.snapshot(),
   });
 });
 
@@ -414,6 +420,10 @@ app.get("/status/backup", async (c) =>
     })
   )
 );
+
+// The Synap mark at /favicon.ico, /favicon.svg and /icon.svg: what an MCP
+// client or a favicon service draws for this pod's connector (brand-icons.ts).
+app.route("/", brandIconsApp);
 
 // Root (direct :4000 / dev without Caddy): not the admin SPA — that lives at /admin/
 app.get("/", (c) => {
@@ -589,6 +599,9 @@ app.get("/status/release", async (c) => {
     // systemProfiles — the boot seeder's result. status:"error" means schema
     // upgrades did not apply; null until the post-listen startup hook reports.
     systemProfiles: systemProfilesStatusSection(),
+    // eventLoop — /health's numbers plus the requests the last stall named
+    // (method, redacted path, key id): who blocked the loop, after the fact.
+    eventLoop: eventLoopWatch.snapshot({ named: true }),
   });
 });
 
@@ -1176,6 +1189,7 @@ app.route("/api/webhooks/intelligence", intelligenceWebhookRouter);
 
 // Pod-to-Pod Sync receive endpoint (Bearer token auth from registered peers)
 import { syncReceiveApp } from "@synap/api";
+import { brandIconsApp } from "@synap/api";
 app.route("/api/sync", syncReceiveApp);
 
 // Hub Protocol tRPC bridge — Bearer API-key authenticated tRPC surface used by
@@ -1728,6 +1742,9 @@ import { handleWebSocketUpgrade } from "./ws-router.js";
 import { serverBindHostname } from "./server-bind.js";
 
 // Start server
+// The event-loop watch runs from here on: a stall logs the requests that ran
+// across it (status/event-loop-watch.ts). Its timer is unref'd.
+eventLoopWatch.start();
 try {
   const httpServer = serve(
     {
@@ -2396,6 +2413,7 @@ process.on("uncaughtException", (error) => {
     if (config.server.localMode) {
       stopLocalSyncDriver();
     }
+    eventLoopWatch.stop();
     try {
       usageTelemetry.stop();
       await usageTelemetry.flushNow();
