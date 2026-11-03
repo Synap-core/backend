@@ -20,6 +20,11 @@
  * pod objects through the read-only bridge, answered with THIS viewer's
  * permissions and lensed to the page's own space (`content/html-frame`,
  * contract `@synap-core/types/cell-bridge`). Source is a toggle away.
+ *
+ * A LIVING document (`isLivingDocument`: it embeds live objects, reads
+ * through a stored scope or has a bound refresher) leads with the app, where
+ * its parts are drawn live; the body here is the second door, "a copy to
+ * read" (founder Q8, 3 Nov 2026). A plain note still reads in place.
  */
 
 import { trpc } from "../../../lib/trpc";
@@ -31,12 +36,16 @@ import {
   documentFileMedia,
   fileTypeLabel,
 } from "../../_lib/media/stored-media-model";
-import { documentContent } from "../../_lib/object/content/document-model";
+import {
+  documentContent,
+  isLivingDocument,
+} from "../../_lib/object/content/document-model";
 import { couldNotLoad, loadFailure } from "../../_lib/object/load-failure";
 import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
 import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
 import { OpenFailure, OpenLoading, OpenObject, openWidth } from "../open-shell";
 import { BounceView } from "./bounce-view";
+import { openT } from "../copy";
 
 /** The stored type, as a reader calls it. */
 const TYPE_LABEL: Record<string, string> = {
@@ -87,15 +96,19 @@ export function DocumentView({ id }: { id: string }) {
     ? (spaces.data ?? []).find((row) => row.id === workspaceId)?.name
     : undefined;
   const openInApp = <OpenInAppLink type="document" id={id} />;
+  const living = query.data ? isLivingDocument(query.data) : false;
+  const t = openT();
   return (
     <OpenObject
       width={openWidth({ header: { kind: "document" } })}
       header={{
         kind: "document",
         title: doc.title?.trim() || "Untitled document",
-        summary: query.data?.canEdit
-          ? "You can read it here. Edit it in the Synap app."
-          : "You can read it here.",
+        summary: living
+          ? t(query.data?.canEdit ? "document.liveEditable" : "document.live")
+          : query.data?.canEdit
+            ? "You can read it here. Edit it in the Synap app."
+            : "You can read it here.",
         primaryAction: openInApp,
       }}
       facts={[
@@ -124,7 +137,7 @@ export function DocumentView({ id }: { id: string }) {
         <MediaView media={media} alt={mediaAlt(doc.title, null)} size="full" />
       ) : (
         <DocumentContentSection
-          title="Content"
+          title={living ? t("document.copy") : "Content"}
           content={content}
           openInApp={openInApp}
           measure="wide"

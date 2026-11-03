@@ -15358,6 +15358,52 @@ export interface ProposalRepair {
 	/** The kind the proposal names, when it no longer resolves. */
 	missingKind?: string;
 }
+/** Who may rewrite a section. Absent or unknown reads as `human` — see `sectionOwner`. */
+export type SectionOwner = "ai" | "human";
+/** One affected region, before and after — what the reviewer is shown. */
+export interface SectionPreview {
+	/** The section's id, or null for text outside any section. */
+	sectionId: string | null;
+	/** The section's heading (after the patch, else before), or null. */
+	title: string | null;
+	before: string;
+	after: string;
+}
+/** A rename a patch carries: the document's name before and after. */
+export interface PatchRename {
+	before: string;
+	after: string;
+}
+/** What one applied document patch changed — `data.materialized.documentEdit`. */
+export interface DocumentEditRecord {
+	documentId: string;
+	granularity: "body" | "sections";
+	/**
+	 * `sections`: one entry per changed section block (`before` "" = added).
+	 * `body`: one entry, `sectionId` null, the whole content before and after.
+	 * Empty when the patch changed no content (a rename only).
+	 */
+	changes: SectionPreview[];
+	/** The rename the patch made, when it made one. */
+	rename?: PatchRename;
+}
+/** What an undo names when it leaves a part of the document alone. */
+export type DocumentEditTarget = {
+	documentId: string;
+	kind: "document_section";
+	/** null = the whole body (`granularity: "body"`). */
+	sectionId: string | null;
+	title: string | null;
+} | {
+	documentId: string;
+	kind: "document_title";
+};
+/** The same shape as the undo engine's `RevertSkip`, for a document part. */
+export interface DocumentEditSkip {
+	target: DocumentEditTarget;
+	reason: RevertSkipReason;
+	detail: string;
+}
 /**
  * The complete created-rows record. Extends the shared
  * `ProposalMaterializedRecord` (`@synap-core/types`) with the fields only the
@@ -15395,6 +15441,11 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
 	 * restores `before` only while every column still holds `after`.
 	 */
 	rowPatches?: RowPatchRecord[];
+	/**
+	 * A document patch's text changes, before and after (`document-edit-undo.ts`):
+	 * Undo puts each `before` back only while the document still holds `after`.
+	 */
+	documentEdit?: DocumentEditRecord;
 	/** ISO time the record was last stamped. */
 	stampedAt?: string;
 	/**
@@ -16439,11 +16490,11 @@ export interface IntakeSourceMetadata {
 	 */
 	pending?: "awaiting_curation";
 }
-declare function revertSkipView(skip: RevertSkip): {
+declare function revertSkipView(skip: RevertSkip | DocumentEditSkip): {
 	detail: string;
 	id: string;
 	key?: string;
-	kind: RevertTarget["kind"];
+	kind: RevertTarget["kind"] | DocumentEditTarget["kind"];
 	reason: RevertSkip["reason"];
 };
 export type SessionRevertSkipView = ReturnType<typeof revertSkipView>;
@@ -18288,8 +18339,6 @@ export type UsedWorkspaceRef = {
 	id: string;
 	name: string;
 };
-/** Who may rewrite a section. Absent or unknown reads as `human` — see `sectionOwner`. */
-export type SectionOwner = "ai" | "human";
 /** A relation row as the relation readers return it — plus the dependency marker. */
 export type RelationReadRow = typeof relations.$inferSelect & {
 	/** 0301: the relation id this dependency was migrated from, if any. */
@@ -20560,15 +20609,17 @@ export type PaginatedResponse<T> = {
 	};
 };
 export interface RailPin {
-	/** `view:<viewId>`, `kind:<profileSlug>` or `track:<trackId>` — one pin per surface. */
+	/** `view:<viewId>`, `kind:<profileSlug>`, `track:<trackId>` or `doc:<documentId>` — one pin per surface. */
 	key: string;
-	/** The kind the surface lists — `null` on a goal pin. */
+	/** The kind the surface lists — `null` on a goal or a document pin. */
 	profileSlug: string | null;
 	/** The saved pipeline view, when the pin is one. */
 	viewId: string | null;
 	/** The goal, when the pin is one ("This week", D4) — then `profileSlug` is null. */
 	trackId: string | null;
-	/** The name the person (or the template) gave it; null = the kind's (or the goal's) name. */
+	/** The document, when the pin is one (P4) — then `profileSlug` and `trackId` are null. */
+	documentId: string | null;
+	/** The name the person (or the template) gave it; null = the kind's, goal's or document's own name. */
 	label: string | null;
 	/** `template` = suggested by a space's sidebar; `user` = pinned by hand. */
 	source: "template" | "user";
@@ -44510,6 +44561,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		pinSurface: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				documentId?: string | undefined;
+				includeDocuments?: boolean | undefined;
 				includeGoals?: boolean | undefined;
 				label?: string | undefined;
 				profileSlug?: string | undefined;
@@ -44523,6 +44576,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		railPins: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				includeDocuments?: boolean | undefined;
 				includeGoals?: boolean | undefined;
 			} | undefined;
 			meta: object;
@@ -44532,6 +44586,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		reorderRailPins: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				includeDocuments?: boolean | undefined;
 				includeGoals?: boolean | undefined;
 				keys: string[];
 			};
@@ -44579,6 +44634,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		unpinSurface: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				includeDocuments?: boolean | undefined;
 				includeGoals?: boolean | undefined;
 				key: string;
 			};
@@ -45714,6 +45770,33 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					props?: Record<string, unknown> | undefined;
 					title?: string | undefined;
 				} | {
+					displayMode?: string | undefined;
+					kind: "declarative";
+					props?: Record<string, unknown> | undefined;
+					schema: ({
+						level?: 2 | 1 | 3 | undefined;
+						text: string;
+						type: "heading";
+					} | {
+						text: string;
+						type: "text";
+					} | {
+						hint?: string | undefined;
+						label: string;
+						type: "stat";
+						value: string | number;
+					} | {
+						items: string[];
+						ordered?: boolean | undefined;
+						type: "list";
+					} | {
+						action: string;
+						label: string;
+						params?: Record<string, unknown> | undefined;
+						type: "button";
+					})[];
+					title?: string | undefined;
+				} | {
 					kind: "source-app";
 					title?: string | undefined;
 				} | null;
@@ -45777,6 +45860,33 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					props?: Record<string, unknown> | undefined;
 					title?: string | undefined;
 				} | {
+					displayMode?: string | undefined;
+					kind: "declarative";
+					props?: Record<string, unknown> | undefined;
+					schema: ({
+						level?: 2 | 1 | 3 | undefined;
+						text: string;
+						type: "heading";
+					} | {
+						text: string;
+						type: "text";
+					} | {
+						hint?: string | undefined;
+						label: string;
+						type: "stat";
+						value: string | number;
+					} | {
+						items: string[];
+						ordered?: boolean | undefined;
+						type: "list";
+					} | {
+						action: string;
+						label: string;
+						params?: Record<string, unknown> | undefined;
+						type: "button";
+					})[];
+					title?: string | undefined;
+				} | {
 					kind: "source-app";
 					title?: string | undefined;
 				} | null | undefined;
@@ -45815,6 +45925,33 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					props?: Record<string, unknown> | undefined;
 					title?: string | undefined;
 				} | {
+					displayMode?: string | undefined;
+					kind: "declarative";
+					props?: Record<string, unknown> | undefined;
+					schema: ({
+						level?: 2 | 1 | 3 | undefined;
+						text: string;
+						type: "heading";
+					} | {
+						text: string;
+						type: "text";
+					} | {
+						hint?: string | undefined;
+						label: string;
+						type: "stat";
+						value: string | number;
+					} | {
+						items: string[];
+						ordered?: boolean | undefined;
+						type: "list";
+					} | {
+						action: string;
+						label: string;
+						params?: Record<string, unknown> | undefined;
+						type: "button";
+					})[];
+					title?: string | undefined;
+				} | {
 					kind: "source-app";
 					title?: string | undefined;
 				} | null | undefined;
@@ -45851,6 +45988,33 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					adapterKey: string;
 					kind: "view-adapter";
 					props?: Record<string, unknown> | undefined;
+					title?: string | undefined;
+				} | {
+					displayMode?: string | undefined;
+					kind: "declarative";
+					props?: Record<string, unknown> | undefined;
+					schema: ({
+						level?: 2 | 1 | 3 | undefined;
+						text: string;
+						type: "heading";
+					} | {
+						text: string;
+						type: "text";
+					} | {
+						hint?: string | undefined;
+						label: string;
+						type: "stat";
+						value: string | number;
+					} | {
+						items: string[];
+						ordered?: boolean | undefined;
+						type: "list";
+					} | {
+						action: string;
+						label: string;
+						params?: Record<string, unknown> | undefined;
+						type: "button";
+					})[];
 					title?: string | undefined;
 				} | {
 					kind: "source-app";
@@ -47023,7 +47187,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					detail: string;
 					id: string;
 					key?: string;
-					kind: RevertTarget["kind"];
+					kind: RevertTarget["kind"] | DocumentEditTarget["kind"];
 					reason: RevertSkip["reason"];
 				}[];
 				success: boolean;
@@ -47043,6 +47207,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reverted: {
 					automationIds?: string[];
 					byOp?: Record<string, MaterializedOpRecord>;
+					documentEdit?: DocumentEditRecord;
 					documentIds: never[];
 					entityDocumentIds?: string[];
 					entityIds?: string[];
@@ -47087,7 +47252,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					detail: string;
 					id: string;
 					key?: string;
-					kind: RevertTarget["kind"];
+					kind: RevertTarget["kind"] | DocumentEditTarget["kind"];
 					reason: RevertSkip["reason"];
 				}[] | undefined;
 				success: boolean;
@@ -47115,7 +47280,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					detail: string;
 					id: string;
 					key?: string;
-					kind: RevertTarget["kind"];
+					kind: RevertTarget["kind"] | DocumentEditTarget["kind"];
 					reason: RevertSkip["reason"];
 				}[];
 				success: boolean;
@@ -47149,7 +47314,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					detail: string;
 					id: string;
 					key?: string;
-					kind: RevertTarget["kind"];
+					kind: RevertTarget["kind"] | DocumentEditTarget["kind"];
 					reason: RevertSkip["reason"];
 				}[] | undefined;
 				success: boolean;

@@ -25,7 +25,10 @@
  *     provider (refused `not_connected` BEFORE startChat);
  *   - a chat already held by another channel (the provider's echo) leaving
  *     two channels for one conversation;
- *   - `external_message.sent` not reaching the automations fan-out.
+ *   - `external_message.sent` not reaching the automations fan-out;
+ *   - an agent's send beyond its key's grant refused instead of filed, sent,
+ *     or filed for a person the key cannot read; an app's or a person's
+ *     narrowed key filed instead of refused (founder, 2026-11-03).
  *
  * Cannot see: a live Unipile account, the intent actions door's HTTP layer.
  */
@@ -64,6 +67,8 @@ const h = vi.hoisted(() => {
     events: [] as Array<Record<string, unknown>>,
     readable: new Set<string>(),
     connector: null as unknown,
+    /** The capability gate answers `run` (a rule or a grant would let it). */
+    gateSaysRun: false,
   };
   return state;
 });
@@ -128,6 +133,23 @@ vi.mock(
         ? { id: entityId, title: "Marie Dupont", properties: {} }
         : null,
   })
+);
+// The REAL capability gate, unless a row makes it answer `run` (what a
+// governance rule or an agent's capability grant would say).
+vi.mock(
+  "../services/capabilities/gate-capability-execution.js",
+  async (importOriginal) => {
+    const actual = await importOriginal<{
+      gateCapabilityExecution: (...a: unknown[]) => Promise<unknown>;
+    }>();
+    return {
+      ...actual,
+      gateCapabilityExecution: async (...a: unknown[]) =>
+        h.gateSaysRun
+          ? { decision: "run" }
+          : actual.gateCapabilityExecution(...a),
+    };
+  }
 );
 vi.mock(
   "../services/capabilities/execute-capability.js",
@@ -278,6 +300,7 @@ beforeEach(async () => {
   h.connector = fakeUnipile();
   h.events.length = 0;
   h.readable = new Set([PERSON]);
+  h.gateSaysRun = false;
   send.mockReset();
   startChat.mockReset();
   getProfile.mockReset();
@@ -939,5 +962,150 @@ describe("security review (lane D)", () => {
       )
     ).rows;
     expect(row!.metadata).toMatchObject({ subject: "Next steps" });
+  });
+});
+
+// Founder, 2026-11-03: "normally, like we do all, it should still be possible,
+// but it creates a proposal". An AGENT's key whose grant does not reach the
+// send asks: its message is filed on the person's channel, never sent, and
+// only the person's approval sends it. Every other narrowed key is refused.
+describe("an agent's send beyond its key's grant is a proposed message", () => {
+  /** An agent's key (no app): reads people in CRM, may not send. */
+  const agentKey = {
+    scopes: [
+      { permissions: ["entity.*.read", "channel.read"], workspaceIds: [CRM] },
+    ],
+  };
+
+  /** A person's channel with a chat, owned by OWNER. */
+  async function personChannel(chat: string) {
+    const id = randomUUID();
+    await q(
+      `insert into channels (id, user_id, channel_type, scope, status, title, context_object_type, context_object_id, external_source, external_id, external_channel_id, metadata, created_at, updated_at)
+       values ($1,$2,'external','pod','active','Marie','entity',$3,'linkedin',$4,$4,$5,now(),now())`,
+      [id, OWNER, PERSON, chat, JSON.stringify({ accountId: ACCOUNT })]
+    );
+    return id;
+  }
+
+  function agentSendsTo(
+    person: string,
+    grant: Record<string, unknown> = agentKey
+  ) {
+    return runWithGrant(grant as never, () =>
+      handler()(
+        { to: person, content: "Hi from the agent" },
+        {
+          userId: OWNER,
+          workspaceId: CRM,
+          agentUserId: AGENT,
+          // What execute-capability hands a self-gated verb for an agent.
+          mustPropose: true,
+          governanceReason: "CAPABILITY_PROPOSE",
+        }
+      )
+    ) as Promise<Record<string, unknown>>;
+  }
+
+  it("files the proposed message on the person's channel, drafted by the agent; nothing is sent", async () => {
+    const out = await agentSendsTo(PERSON);
+    expect(out).toMatchObject({ proposed: true, success: false });
+    expect(out.error).toBeUndefined();
+    const filed = await proposalsOn(out.channelId as string);
+    expect(filed).toHaveLength(1);
+    expect(filed[0]).toMatchObject({
+      proposal_type: "messaging.external.send",
+      target_id: out.channelId,
+    });
+    expect(filed[0]!.data).toMatchObject({
+      body: "Hi from the agent",
+      draftedBy: { agentUserId: AGENT, appClientId: null },
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(startChat).not.toHaveBeenCalled();
+  });
+
+  it("is filed even when the gate would let it run: no rule sends a message beyond the grant", async () => {
+    const channelId = await personChannel("chat-beyond-run");
+    h.gateSaysRun = true;
+    const out = await runWithGrant(agentKey as never, () =>
+      sendExternalMessage({
+        channelId,
+        accountId: ACCOUNT,
+        body: "Hi from the agent",
+        userId: OWNER,
+        agentUserId: AGENT,
+        workspaceId: CRM,
+      })
+    );
+    expect(out).toMatchObject({ success: false, proposed: true });
+    expect(await proposalsOn(channelId)).toHaveLength(1);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("a person the key cannot read is refused, never filed", async () => {
+    const channelId = await personChannel("chat-unreadable");
+    h.readable = new Set();
+    const out = await runWithGrant(agentKey as never, () =>
+      sendExternalMessage({
+        channelId,
+        accountId: ACCOUNT,
+        body: "Hi from the agent",
+        userId: OWNER,
+        agentUserId: AGENT,
+        workspaceId: CRM,
+        mustPropose: true,
+      })
+    );
+    expect(out.success).toBe(false);
+    expect(out.proposed).toBeUndefined();
+    expect(String(out.error)).toMatch(/grant does not allow/);
+    expect((await q(`select 1 from proposals`)).rows).toHaveLength(0);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("an app's key acting as an agent is still refused: nothing opened or filed", async () => {
+    const out = await agentSendsTo(PERSON, {
+      ...agentKey,
+      clientId: "crm-app",
+    });
+    expect(out.success).toBe(false);
+    expect(out.proposed).toBeUndefined();
+    expect(String(out.error)).toMatch(/grant does not allow/);
+    expect((await q(`select 1 from channels`)).rows).toHaveLength(0);
+    expect((await q(`select 1 from proposals`)).rows).toHaveLength(0);
+  });
+
+  it("a person's narrowed key (no agent) is still refused: nothing opened or filed", async () => {
+    const out = (await runWithGrant(agentKey as never, () =>
+      handler()(
+        { to: PERSON, content: "Hi" },
+        { userId: OWNER, workspaceId: CRM }
+      )
+    )) as Record<string, unknown>;
+    expect(out.success).toBe(false);
+    expect(out.proposed).toBeUndefined();
+    expect(String(out.error)).toMatch(/grant does not allow/);
+    expect((await q(`select 1 from channels`)).rows).toHaveLength(0);
+    expect((await q(`select 1 from proposals`)).rows).toHaveLength(0);
+  });
+
+  it("the person's approval sends it exactly once", async () => {
+    startChat.mockResolvedValue({ chatId: "chat-beyond", messageId: "m-b" });
+    const out = await agentSendsTo(PERSON);
+    await approve(out.proposalId as string);
+    const again = await approve(out.proposalId as string);
+    expect(again).toMatchObject({ alreadyApproved: true });
+    expect(startChat).toHaveBeenCalledTimes(1);
+    expect(startChat).toHaveBeenCalledWith(
+      ACCOUNT,
+      "ACoMarie",
+      "Hi from the agent"
+    );
+    expect(send).not.toHaveBeenCalled();
+    expect(
+      (await q(`select 1 from messages where channel_id=$1`, [out.channelId]))
+        .rows
+    ).toHaveLength(1);
   });
 });

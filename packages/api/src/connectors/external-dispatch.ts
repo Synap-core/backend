@@ -87,7 +87,7 @@ import {
   channelMeta,
   channelPersonId,
   loadSendChannel,
-  messagingSendGrantDenial,
+  messagingSendGrantVerdict,
   successorChannel,
   planChannelSend,
   recordChannelSend,
@@ -903,28 +903,39 @@ export async function sendExternalMessage(
   // connected account is `messaging.send` — a verb only `*` or a pattern that
   // names it grants — in the space of the conversation's channel, never the
   // caller's (a pod-wide or unmirrored thread is pod scope: a key pinned to a
-  // space fails closed). Refused, never proposed, and before the agent gate
-  // below: a reviewer approving a send the key was never allowed to make
-  // would widen it. A person's own key is bounded too (that branch has no
-  // gate). No grant (a signed-in session, a job) → no-op. An approved replay
-  // was bounded when it was filed.
+  // space fails closed). A person's own key is bounded too (that branch has
+  // no gate). No grant (a signed-in session, a job) → no-op. An approved
+  // replay was bounded when it was filed.
   // A channel bound to a person follows the person (channels wave): the key
   // may also send when it reads that person and may send in the space it acts
-  // in (`messagingSendGrantDenial`).
+  // in (`messagingSendGrantVerdict`).
+  // Beyond the grant, an AGENT asks (founder, 2026-11-03): on a person's
+  // channel the key may read, its send is FORCED to a proposal below
+  // (`beyondGrant`, the `mustPropose` path: the gate still runs, so a "Never"
+  // or a policy deny holds, and a `run` it would allow becomes a review).
+  // Nothing is sent until the channel's owner approves it. Every other key
+  // beyond its grant is refused here, before the gate, so nothing is filed.
+  let beyondGrant = false;
   if (!input.alreadyApproved) {
-    const denial = sendChannel
-      ? await messagingSendGrantDenial({
-          channel: sendChannel,
-          userId,
-          agentUserId: input.agentUserId ?? null,
-          actingWorkspaceId: input.workspaceId ?? null,
-        })
-      : await grantWriteDenial({
-          subjectType: "messaging",
-          action: "send",
-          workspaceId: linkedChannel?.workspaceId ?? null,
-        });
-    if (denial) return { success: false, error: denial };
+    if (sendChannel) {
+      const verdict = await messagingSendGrantVerdict({
+        channel: sendChannel,
+        userId,
+        agentUserId: input.agentUserId ?? null,
+        actingWorkspaceId: input.workspaceId ?? null,
+      });
+      if (verdict && !verdict.proposeOnly) {
+        return { success: false, error: verdict.denial };
+      }
+      beyondGrant = !!verdict;
+    } else {
+      const denial = await grantWriteDenial({
+        subjectType: "messaging",
+        action: "send",
+        workspaceId: linkedChannel?.workspaceId ?? null,
+      });
+      if (denial) return { success: false, error: denial };
+    }
   }
 
   const provider = linkedChannel?.externalSource ?? undefined;
@@ -970,12 +981,11 @@ export async function sendExternalMessage(
   // no agent): the gate's app outward floor proposes it (decision 4A), and the
   // owner branch would have sent it with no review.
   const appSend = !!getRequestGrant()?.clientId;
-  if (
-    (input.agentUserId || appSend || input.mustPropose) &&
-    !input.alreadyApproved
-  ) {
+  const mustPropose = !!input.mustPropose || beyondGrant;
+  if ((input.agentUserId || appSend || mustPropose) && !input.alreadyApproved) {
     const gateResult = await gateMessagingSend({
       ...input,
+      mustPropose,
       threadId,
       provider,
       sendChannel,

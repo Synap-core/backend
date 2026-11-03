@@ -32,6 +32,12 @@ vi.mock("@synap/database", () => ({
   getRequestGrant: () => h.grant,
   getDb: async () => ({
     query: { widgetDefinitions: { findMany: async () => [] } },
+    // The define-time check reads the stored row only for a source it
+    // refuses (is it kept as builtin / mcp-app, does it hold an egress grant):
+    // none here.
+    select: () => ({
+      from: () => ({ where: () => ({ limit: async () => [] }) }),
+    }),
   }),
   and: (...c: unknown[]) => ({ op: "and", c }),
   eq: (a: unknown, b: unknown) => ({ op: "eq", a, b }),
@@ -63,6 +69,10 @@ vi.mock("../../../services/cells/define-cell.js", async () => {
   >("../../../services/cells/define-cell.js");
   return {
     validateDeps: actual.validateDeps,
+    // The REAL define-time check: it runs before the gate, and reads nothing
+    // for a source that mounts.
+    assertCellSourceMounts: actual.assertCellSourceMounts,
+    CellDefinitionError: actual.CellDefinitionError,
     defineCell: async (input: Record<string, unknown>) => {
       h.defineCalls.push(input);
       return { typeKey: "generated:my-cell", changeType: "created" as const };
@@ -303,5 +313,64 @@ describe("POST /cells/define — a key that is not an agent is bounded by its gr
 
     expect(res.status).toBe(201);
     expect(h.defineCalls).toHaveLength(1);
+  });
+});
+
+describe("POST /cells/define — a source that cannot mount is refused before the gate", () => {
+  const RECHARTS =
+    'import { LineChart } from "recharts";\nexport default () => null;';
+
+  it("an agent's define is a 400 naming the line and the fix: no proposal, nothing written", async () => {
+    h.gateResult = { granted: false, proposalId: "never" };
+    const app = buildApp({});
+    const res = await app.request(
+      "/cells/define",
+      defineBody({ agentUserId: AGENT, rendererSource: RECHARTS })
+    );
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain('Line 1 imports "recharts"');
+    expect(body.error).toContain("--bundle-deps");
+    expect(h.gateCalls).toHaveLength(0);
+    expect(h.defineCalls).toHaveLength(0);
+  });
+
+  it("an operator's define is refused the same way", async () => {
+    const app = buildApp({});
+    const res = await app.request(
+      "/cells/define",
+      defineBody({ deps: { recharts: "2.12.0" } })
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain(
+      "`deps` names recharts"
+    );
+    expect(h.defineCalls).toHaveLength(0);
+  });
+
+  it("advice rides on the proposal reply and never blocks it", async () => {
+    h.gateResult = {
+      granted: false,
+      proposalId: "proposal-9",
+      proposalType: "cell.define",
+      summary: "s",
+      reasoning: "r",
+      reviewPath: "/open/proposal-9",
+      reviewUrl: "u",
+    };
+    const app = buildApp({});
+    const res = await app.request(
+      "/cells/define",
+      defineBody({
+        agentUserId: AGENT,
+        rendererSource:
+          'export default () => <p style={{ color: "#ff0000" }}>hi</p>;',
+      })
+    );
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as { advice?: Array<{ code: string }> };
+    expect(body.advice?.map((a) => a.code)).toEqual(["raw_colour"]);
+    expect(h.gateCalls).toHaveLength(1);
   });
 });

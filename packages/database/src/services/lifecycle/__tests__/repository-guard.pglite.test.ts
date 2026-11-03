@@ -4,12 +4,16 @@
  *    and the read projection agrees;
  *  - a generic facet update that would MOVE the role's status — as `status` or
  *    as the property — is refused; re-sending the current value passes;
- *  - a generic entity update that would move the kind's status is refused.
+ *  - a generic entity update that would move the kind's status is refused;
+ *  - a kind CREATED with no status starts in its lifecycle's initial status
+ *    (the link default), in the columns and the bag.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { eq } from "drizzle-orm";
 import { makeLifecyclePglite } from "./lifecycle-pglite.js";
 import { declareLifecycle } from "../declare-lifecycle.js";
 import { LifecycleWriteOutsideDoorError } from "../lifecycle-columns.js";
+import { setLifecycleInitialStatus } from "../lifecycle-def-guard.js";
 import { FacetRepository } from "../../../repositories/facet-repository.js";
 import { EntityRepository } from "../../../repositories/entity-repository.js";
 import { buildStoredConstraints } from "../../../utils/property-enum.js";
@@ -119,5 +123,35 @@ describe("repository floor", () => {
     await expect(
       repo.update(deal.id, { deleteProperties: ["commercialStage"] }, "u1")
     ).rejects.toBeInstanceOf(LifecycleWriteOutsideDoorError);
+  });
+
+  it("a create that names no status starts in the kind's initial status", async () => {
+    const [def] = await db
+      .select()
+      .from(schema.propertyDefs)
+      .where(eq(schema.propertyDefs.slug, "commercialStage"));
+    const set = await setLifecycleInitialStatus(db, {
+      propertyDefId: def.id,
+      initialStatus: "draft",
+    });
+    expect(set).toEqual({ status: "changed", links: 1 });
+    const repo = new EntityRepository(db, events);
+    const born = (await repo.create(
+      {
+        profileSlug: "deal",
+        title: "Acme renewal",
+        properties: {},
+        skipEvent: true,
+        skipValidation: true,
+      } as never,
+      "u1"
+    )) as {
+      status: string | null;
+      statusCategory: string | null;
+      properties: Record<string, unknown>;
+    };
+    expect(born.status).toBe("draft");
+    expect(born.statusCategory).toBe("open");
+    expect(born.properties.commercialStage).toBe("draft");
   });
 });

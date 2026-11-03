@@ -10,7 +10,8 @@
  *    app asks for, or `messaging.send`) in the space it acts in. A channel
  *    bound to a person follows the person (founder decision 3), so the
  *    channel's own space stamp (none, for a pod-wide external channel) is not
- *    what decides.
+ *    what decides. An agent's key the grant does not reach still ASKS: its
+ *    send is filed as a proposed message (`messagingSendGrantVerdict`).
  *  - The account: the person's own connected account, named by the channel
  *    (`metadata.accountId`) or the caller, owned by the channel's owner.
  *  - The plan: with a chat id, a message into that chat. Without one (a
@@ -166,17 +167,8 @@ export async function successorChannel(
 const quietDenial = (input: GrantWriteInput) =>
   runCollectingGrantDenials([], () => grantWriteDenial(input));
 
-/**
- * null when the calling key may send on this channel; the refusal otherwise.
- * No grant (a signed-in person, a job) → null.
- *
- * Passes when the key holds `messaging.send` in the channel's space (the
- * check this door always made), OR — for a channel bound to a person — when
- * the key may read that person and holds `capability.send_message.run` or
- * `messaging.send` in the space it acts in. A pod-wide channel no longer fails
- * closed for an app that reads the person (the CRM).
- */
-export async function messagingSendGrantDenial(args: {
+/** Who asks for a send, on which channel, acting in which space. */
+interface SendGrantArgs {
   channel: Pick<
     SendChannel,
     "workspaceId" | "contextObjectType" | "contextObjectId"
@@ -184,23 +176,33 @@ export async function messagingSendGrantDenial(args: {
   userId: string;
   agentUserId: string | null;
   actingWorkspaceId: string | null;
-}): Promise<string | null> {
-  if (!getRequestGrant()) return null;
+}
+
+/**
+ * The grant check, and whether the refused key may READ the channel's
+ * person (the recipient floor a beyond-grant ask needs).
+ */
+async function sendGrantCheck(
+  args: SendGrantArgs
+): Promise<{ denial: string | null; personReadable: boolean }> {
+  if (!getRequestGrant()) return { denial: null, personReadable: false };
   const own: GrantWriteInput = {
     subjectType: "messaging",
     action: "send",
     workspaceId: args.channel?.workspaceId ?? null,
   };
-  if (!(await quietDenial(own))) return null;
+  if (!(await quietDenial(own))) return { denial: null, personReadable: false };
   const personId =
     args.channel?.contextObjectType === "entity"
       ? args.channel.contextObjectId
       : null;
+  let personReadable = false;
   if (personId) {
     const person = await readableRecipient(
       { userId: args.userId, agentUserId: args.agentUserId },
       personId
     );
+    personReadable = !!person;
     if (person) {
       for (const alt of [
         {
@@ -215,12 +217,54 @@ export async function messagingSendGrantDenial(args: {
           workspaceId: args.actingWorkspaceId,
         },
       ] satisfies GrantWriteInput[]) {
-        if (!(await quietDenial(alt))) return null;
+        if (!(await quietDenial(alt)))
+          return { denial: null, personReadable: true };
       }
     }
   }
   // Refused: record it (the door's 403 carries the code) and say why.
-  return grantWriteDenial(own);
+  return { denial: await grantWriteDenial(own), personReadable };
+}
+
+/**
+ * null when the calling key may send on this channel; the refusal otherwise.
+ * No grant (a signed-in person, a job) → null.
+ *
+ * Passes when the key holds `messaging.send` in the channel's space (the
+ * check this door always made), OR — for a channel bound to a person — when
+ * the key may read that person and holds `capability.send_message.run` or
+ * `messaging.send` in the space it acts in. A pod-wide channel no longer fails
+ * closed for an app that reads the person (the CRM).
+ */
+export async function messagingSendGrantDenial(
+  args: SendGrantArgs
+): Promise<string | null> {
+  return (await sendGrantCheck(args)).denial;
+}
+
+/**
+ * The key's grant on a send to a channel: null when it may send (or there is
+ * no grant: a signed-in person, a job); otherwise the refusal, and whether
+ * the send is still FILED for the person's approval (`proposeOnly`).
+ *
+ * An AGENT asks (founder, 2026-11-03: "normally, like we do all, it should
+ * still be possible, but it creates a proposal"): an agent's key whose grant
+ * does not reach the send, on a channel bound to a person the key may READ,
+ * gets its message filed as a proposed message on that channel. The send door
+ * then forces the review (`sendExternalMessage`, `mustPropose`): nothing is
+ * sent until the channel's owner approves it, and no rule can let it run on
+ * its own. Everyone else keeps the refusal: an app's key (its grant names a
+ * client), a person's narrowed key (no agent), and a channel with no person
+ * or a person the key cannot read.
+ */
+export async function messagingSendGrantVerdict(
+  args: SendGrantArgs
+): Promise<{ denial: string; proposeOnly: boolean } | null> {
+  const { denial, personReadable } = await sendGrantCheck(args);
+  if (!denial) return null;
+  const proposeOnly =
+    !!args.agentUserId && !getRequestGrant()?.clientId && personReadable;
+  return { denial, proposeOnly };
 }
 
 /**

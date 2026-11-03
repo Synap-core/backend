@@ -3356,6 +3356,28 @@ export const proposalsRouter = router({
           }
         }
         // else: already back where it was — idempotent no-op.
+      } else if (plan.kind === "restore-document-edit") {
+        // Decision 6c5e9642: put back each recorded part of the document
+        // (a section, the body, the name) ONLY while it still holds what the
+        // edit wrote, as a new revision through the one content door. Parts
+        // edited since are kept and named — never a version restore.
+        const { undoDocumentEdit } =
+          await import("../services/document-patch/undo-document-edit.js");
+        const undone = await undoDocumentEdit({ edit: plan.edit, userId });
+        liveSkips = undone.skipped.map(revertSkipView);
+        for (const s of undone.skipped) {
+          failures.push(`${describeRevertTarget(s.target)} (${s.detail})`);
+        }
+        if (undone.restored === 0) {
+          // Every part was changed since: the edit still stands.
+          return {
+            success: false,
+            nothingReverted: true,
+            reverted: deleted,
+            skipped: liveSkips,
+            partialFailures: failures,
+          };
+        }
       } else {
         // Everything the record names — entities, relations, facets, config
         // rows, and what a merge overwrote — through the ONE undo engine: one

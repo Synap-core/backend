@@ -40,6 +40,10 @@ const h = vi.hoisted(() => ({
   filed: [] as Array<Record<string, unknown>>,
   /** Ids the scope floor lets the writer read (spaces, projects, automations…). */
   readable: new Set<string>(),
+  /** The auto-approved receipt the gate mints, when set. */
+  receiptId: null as string | null,
+  /** What was stamped on a receipt (`stampAutoApprovedCreate`). */
+  stamped: [] as Array<{ receiptId?: string; record: unknown }>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -113,7 +117,9 @@ vi.mock("../../utils/permission-check.js", () => ({
       data: opts.data,
     });
     if (!opts.agentUserId || (h.agentAutoApply && !opts.forcePropose))
-      return { granted: true };
+      return h.receiptId && opts.agentUserId
+        ? { granted: true, autoApprovedProposalId: h.receiptId }
+        : { granted: true };
     return {
       granted: false,
       proposalId: "prop-1",
@@ -123,6 +129,18 @@ vi.mock("../../utils/permission-check.js", () => ({
       reviewPath: "/open/prop-1",
       reviewUrl: "https://pod/open/prop-1",
     };
+  },
+}));
+
+// The receipt stamp's writer has its own suites; the seam here is WHAT the
+// door hands it.
+vi.mock("../proposals/stamp-materialized.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  stampAutoApprovedCreate: async (a: {
+    receiptId?: string;
+    record: unknown;
+  }) => {
+    h.stamped.push({ receiptId: a.receiptId, record: a.record });
   },
 }));
 
@@ -184,6 +202,7 @@ import {
   applyApprovedDocumentPatch,
   suggestDocumentPatch,
 } from "./apply-document-patch.js";
+import { undoDocumentEdit } from "./undo-document-edit.js";
 
 const USER = "user-1";
 const AGENT = "agent-1";
@@ -280,6 +299,8 @@ beforeEach(() => {
   h.catalogFails = false;
   h.filed = [];
   h.readable = new Set();
+  h.receiptId = null;
+  h.stamped = [];
 });
 
 describe("applyDocumentPatch — a person's patch applies", () => {
@@ -1226,5 +1247,181 @@ describe("applyDocumentPatch — the bound refresher (decision D4)", () => {
     h.gate = [];
     await refresh(id, await runSession());
     expect(h.gate.map((g) => g.action)).toEqual(["section_update"]);
+  });
+});
+
+describe("document edit Undo (decision 6c5e9642): put back only what still holds the edit's text", () => {
+  const aiSection = (id: string, body: string) =>
+    [
+      `::::synap-section{id="${id}" owner="ai"}`,
+      `## ${id}`,
+      "",
+      body,
+      "::::",
+    ].join("\n");
+  const SECTIONED = [
+    "# Plan",
+    "",
+    "We ship on Friday.",
+    "",
+    aiSection("a", "Alpha."),
+    "",
+    aiSection("b", "Beta."),
+    "",
+  ].join("\n");
+
+  async function approvedEdit(id: string, ops: unknown[]) {
+    await applyDocumentPatch({
+      userId: USER,
+      agentUserId: AGENT,
+      documentId: id,
+      ops: ops as never,
+    });
+    return applyApprovedDocumentPatch(
+      {
+        targetId: id,
+        agentUserId: AGENT,
+        data: h.gate[h.gate.length - 1]!.data,
+      },
+      USER
+    );
+  }
+
+  async function latestVersion(id: string) {
+    const { rows } = await q<{ author: string; author_id: string }>(
+      `select author, author_id from document_versions where document_id = $1 order by version desc limit 1`,
+      [id]
+    );
+    return rows[0]!;
+  }
+
+  it("an approved edit nobody touched since is undone byte for byte, as a new revision by the person", async () => {
+    const id = await newDocument(SECTIONED);
+    const { edit } = await approvedEdit(id, [
+      { op: "upsert_section", id: "a", title: "a", body: "Alpha, rewritten." },
+      { op: "upsert_section", id: "c", title: "c", body: "Gamma." },
+    ]);
+    expect(edit).toMatchObject({ documentId: id, granularity: "sections" });
+    const before = await row(id);
+
+    const undone = await undoDocumentEdit({ edit, userId: USER });
+
+    expect(undone).toEqual({ restored: 2, skipped: [] });
+    const after = await row(id);
+    expect(after.content).toBe(SECTIONED);
+    expect(after.content_revision).toBe(before.content_revision + 1);
+    expect(await latestVersion(id)).toEqual({
+      author: "user",
+      author_id: USER,
+    });
+  });
+
+  it("a section the person edited since is KEPT and named; the others are put back", async () => {
+    const id = await newDocument(SECTIONED);
+    const { edit } = await approvedEdit(id, [
+      { op: "upsert_section", id: "a", title: "a", body: "Alpha, rewritten." },
+      { op: "upsert_section", id: "b", title: "b", body: "Beta, rewritten." },
+      { op: "upsert_section", id: "c", title: "c", body: "Gamma." },
+    ]);
+    await applyDocumentPatch({
+      userId: USER,
+      documentId: id,
+      ops: [
+        { op: "replace_text", old: "Beta, rewritten.", new: "Beta, mine." },
+      ],
+    });
+
+    const undone = await undoDocumentEdit({ edit, userId: USER });
+
+    expect(undone.restored).toBe(2);
+    expect(undone.skipped).toEqual([
+      {
+        target: {
+          kind: "document_section",
+          documentId: id,
+          sectionId: "b",
+          title: "b",
+        },
+        reason: "edited_since",
+        detail: 'section "b" was edited since',
+      },
+    ]);
+    const content = (await row(id)).content;
+    expect(content).toContain(aiSection("a", "Alpha."));
+    expect(content).toContain("Beta, mine.");
+    expect(content).not.toContain("Gamma.");
+  });
+
+  it("a whole-body edit is not undone once the document changed anywhere — nothing is written", async () => {
+    const id = await newDocument(SECTIONED);
+    const { edit } = await approvedEdit(id, [
+      { op: "replace_text", old: "on Friday", new: "on Monday" },
+    ]);
+    expect(edit.granularity).toBe("body");
+    await applyDocumentPatch({
+      userId: USER,
+      documentId: id,
+      ops: [{ op: "append", body: "A person's line." }],
+    });
+    const before = await row(id);
+
+    const undone = await undoDocumentEdit({ edit, userId: USER });
+
+    expect(undone.restored).toBe(0);
+    expect(undone.skipped[0]).toMatchObject({
+      reason: "edited_since",
+      detail: "the document was edited since",
+    });
+    const after = await row(id);
+    expect(after.content).toBe(before.content);
+    expect(after.content_revision).toBe(before.content_revision);
+  });
+
+  it("an approved rename is put back while the name is still the one it set", async () => {
+    const id = await newDocument(SECTIONED);
+    const { edit } = await approvedEdit(id, [
+      { op: "set_title", title: "Launch plan" },
+    ]);
+    expect(edit.rename).toEqual({ before: "Plan", after: "Launch plan" });
+
+    expect(await undoDocumentEdit({ edit, userId: USER })).toEqual({
+      restored: 1,
+      skipped: [],
+    });
+    const { rows } = await q<{ title: string }>(
+      `select title from documents where id = $1`,
+      [id]
+    );
+    expect(rows[0]!.title).toBe("Plan");
+  });
+
+  it("an auto-applied agent edit stamps what it changed on its receipt", async () => {
+    const id = await newDocument(SECTIONED);
+    h.agentAutoApply = true;
+    h.receiptId = "receipt-1";
+    const res = await applyDocumentPatch({
+      userId: USER,
+      agentUserId: AGENT,
+      documentId: id,
+      ops: [{ op: "upsert_section", id: "c", title: "c", body: "Gamma." }],
+    });
+    expect(res.status).toBe("applied");
+    expect(h.stamped).toHaveLength(1);
+    expect(h.stamped[0]).toMatchObject({
+      receiptId: "receipt-1",
+      record: {
+        documentEdit: {
+          documentId: id,
+          granularity: "sections",
+          changes: [{ sectionId: "c", before: "" }],
+        },
+      },
+    });
+    // …and that record undoes the write.
+    const { documentEdit } = h.stamped[0]!.record as {
+      documentEdit: Parameters<typeof undoDocumentEdit>[0]["edit"];
+    };
+    await undoDocumentEdit({ edit: documentEdit, userId: USER });
+    expect((await row(id)).content).toBe(SECTIONED);
   });
 });

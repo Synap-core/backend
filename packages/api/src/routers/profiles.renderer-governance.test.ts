@@ -177,4 +177,43 @@ describe("profiles.setProfileRendererOverride governance", () => {
       })
     );
   });
+
+  it("accepts a declarative ref as a profile renderer and hands it to the service", async () => {
+    const declarativeRef = {
+      kind: "declarative" as const,
+      schema: [
+        { type: "heading" as const, text: "Contact", level: 1 as const },
+        { type: "stat" as const, label: "Deals", value: 3 },
+      ],
+    };
+    const caller = profilesRouter.createCaller(callerContext());
+
+    const result = await caller.setProfileRendererOverride({
+      profileSlug: "contact",
+      contentKind: "entity-detail",
+      ref: declarativeRef,
+    });
+
+    expect(h.setProfileRenderer).toHaveBeenCalledWith(
+      expect.objectContaining({ slot: "detail", ref: declarativeRef })
+    );
+    expect(result).toEqual({
+      success: true,
+      status: "applied",
+      proposalId: null,
+    });
+  });
+
+  it("still refuses a declarative ref whose blocks are malformed", async () => {
+    const caller = profilesRouter.createCaller(callerContext());
+
+    await expect(
+      caller.setProfileRendererOverride({
+        profileSlug: "contact",
+        contentKind: "entity-detail",
+        ref: { kind: "declarative", schema: [{ type: "nope" }] } as never,
+      })
+    ).rejects.toThrow();
+    expect(h.setProfileRenderer).not.toHaveBeenCalled();
+  });
 });

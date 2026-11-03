@@ -6,6 +6,10 @@ import { sendExternalMessage } from "../../../connectors/external-dispatch.js";
 import { getMessagingConnector } from "../../../connectors/index.js";
 import { assertApprovalTargetResolves } from "../../../services/capabilities/execute-capability.js";
 import {
+  findOwnMessagingAccount,
+  queueOwnerHistoryImport,
+} from "../../../services/connectors/owner-history-import.js";
+import {
   registerProposalExecutor,
   attachFailureMeta,
   type ProposalExecutorArgs,
@@ -14,8 +18,62 @@ import { reportApproved, dispatchExternalOnce } from "./shared.js";
 
 const logger = createLogger({ module: "proposal-approve-executors-messaging" });
 
-/** Register the messaging.external.send approve executor. */
+/** Register the messaging approve executors (send, history import). */
 export function registerMessagingExecutors(): void {
+  // ── messaging/import_history ───────────────────────────────────────────────
+  // An agent asked for an account's history import (`POST
+  // /messaging/accounts/:id/import-history`). Approving queues it through the
+  // same door the person's own call uses, as the approver — who must own the
+  // account: the account is the row's target, set at filing.
+  registerProposalExecutor({
+    key: "messaging/import_history",
+    async execute({ proposal, payload, userId, input, deps }) {
+      const [current] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (current?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+      const account = await findOwnMessagingAccount(userId, proposal.targetId);
+      if (!account) {
+        throw attachFailureMeta(
+          new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "Couldn't apply — this messaging account is not yours, or it was disconnected. Nothing was imported.",
+          }),
+          { errorClass: "conflict" }
+        );
+      }
+      const result = await queueOwnerHistoryImport(userId, account);
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
+          data: {
+            ...payload,
+            importResult: {
+              queuedAt: new Date().toISOString(),
+              queued: result.queued,
+            },
+          } as unknown as typeof payload,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
+      reportApproved(deps, proposal, input.proposalId);
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
   // ── messaging.external.send (proposalType-only) ─────────────────────────────
   registerProposalExecutor({
     key: "messaging.external.send",
