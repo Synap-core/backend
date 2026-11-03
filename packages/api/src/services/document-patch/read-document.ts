@@ -29,6 +29,45 @@ import {
 } from "./apply-document-patch.js";
 
 export const DOCUMENT_READ_FORMATS = ["raw", "readable"] as const;
+
+/**
+ * The longest document a read parses as markdown, in characters. The largest
+ * markdown document on the founder's pod was 175 KB (3 Nov 2026).
+ */
+export const MARKDOWN_READ_MAX_CHARS = 1_000_000;
+
+/**
+ * Whether a read may parse this document as markdown (its diagnostics, its
+ * readable form, its sections): a `markdown` or `text` document whose type is
+ * text (or unset), up to {@link MARKDOWN_READ_MAX_CHARS}. A stored file (a
+ * video, an audio, an image, a PDF) and anything longer are never parsed: the
+ * parse runs on the request thread, and on 3 Nov 2026 reading a 126 MB video
+ * parsed its bytes as markdown for 60-110 s per read, so the pod answered
+ * nothing else and its health check restarted it.
+ */
+export function readsAsMarkdown(
+  doc: { type: string; mimeType?: string | null },
+  content: string
+): boolean {
+  if (content.length > MARKDOWN_READ_MAX_CHARS) return false;
+  if (doc.type !== "markdown" && doc.type !== "text") return false;
+  const mime = doc.mimeType?.trim().toLowerCase() ?? "";
+  return mime === "" || mime.startsWith("text/");
+}
+
+/** The diagnostics of a document a read does not parse: not checked, and why. */
+export function unparsedDiagnostics(
+  doc: { type: string; mimeType?: string | null },
+  content: string
+): DiagnosticsOutcome {
+  return {
+    items: null,
+    error:
+      content.length > MARKDOWN_READ_MAX_CHARS
+        ? `Not checked: the document is longer than ${MARKDOWN_READ_MAX_CHARS} characters.`
+        : `Not checked: a ${doc.mimeType?.trim() || doc.type} document is not markdown.`,
+  };
+}
 export type DocumentReadFormat = (typeof DOCUMENT_READ_FORMATS)[number];
 
 export interface DocumentSectionSummary {
@@ -107,6 +146,8 @@ export interface AgentDocumentRow {
   id: string;
   title: string;
   type: string;
+  /** The stored file's media type, when it is one (`readsAsMarkdown`). */
+  mimeType?: string | null;
   language: string | null;
   workspaceId: string | null;
   contentRevision: number;
@@ -131,6 +172,7 @@ export function projectAgentDocument(
   format: DocumentReadFormat,
   diagnostics: DiagnosticsOutcome
 ) {
+  const parsed = readsAsMarkdown(doc, raw);
   return {
     id: doc.id,
     title: doc.title,
@@ -140,10 +182,12 @@ export function projectAgentDocument(
     scope: doc.scope ?? null,
     refreshAutomationId: doc.refreshAutomationId ?? null,
     format,
-    content: format === "readable" ? readableMarkdown(raw) : raw,
+    // A file or an oversized document is never parsed (`readsAsMarkdown`):
+    // its content comes back as stored, with no sections.
+    content: format === "readable" && parsed ? readableMarkdown(raw) : raw,
     revision: doc.contentRevision,
     version: doc.currentVersion,
-    sections: listDocumentSections(raw),
+    sections: parsed ? listDocumentSections(raw) : [],
     diagnostics: diagnostics.items,
     ...(diagnostics.error ? { diagnosticsError: diagnostics.error } : {}),
     updatedAt: doc.updatedAt,

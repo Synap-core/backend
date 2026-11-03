@@ -58,6 +58,7 @@ import { auditLog } from "../utils/audit-log.js";
 import {
   DOCUMENT_READ_FORMATS,
   readableMarkdown,
+  readsAsMarkdown,
 } from "../services/document-patch/read-document.js";
 import { emitSideEffects, getBoss } from "@synap/events";
 import {
@@ -344,7 +345,9 @@ export const documentsRouter = router({
       );
 
       if (input.format === "readable") {
-        if (document.type === "pdf" || document.type === "docx") {
+        // One rule with the agent read (`readsAsMarkdown`): a stored file or
+        // an oversized document is never parsed on the request thread.
+        if (!readsAsMarkdown(document, content)) {
           throw new TRPCError({
             code: "BAD_REQUEST",
             message: `A ${document.type} document has no readable markdown form.`,
