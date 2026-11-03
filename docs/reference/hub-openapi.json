@@ -24986,7 +24986,7 @@
         }
       }
     },
-    "/channels/:externalChannelId/pins/:messageId": {
+    "/channels/{externalChannelId}/pins/{messageId}": {
       "post": {
         "tags": ["Channels"],
         "summary": "Pin a message in a Discord channel",
@@ -25043,7 +25043,7 @@
         }
       }
     },
-    "/channels/:externalChannelId/rename": {
+    "/channels/{externalChannelId}/rename": {
       "post": {
         "tags": ["Channels"],
         "summary": "Rename a Discord channel",
@@ -25118,7 +25118,7 @@
         }
       }
     },
-    "/channels/:channelId/bind": {
+    "/channels/{channelId}/bind": {
       "post": {
         "tags": ["Channels"],
         "summary": "Propose binding a channel to a context object",
@@ -31457,7 +31457,7 @@
         }
       }
     },
-    "/focus-sessions/:id": {
+    "/focus-sessions/{id}": {
       "get": {
         "tags": ["FocusSessions"],
         "summary": "Get a focus session by ID",
@@ -33866,7 +33866,7 @@
         }
       }
     },
-    "/focus-sessions/:id/complete": {
+    "/focus-sessions/{id}/complete": {
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Complete (close) a focus session and return the proposal pack",
@@ -33981,7 +33981,7 @@
         }
       }
     },
-    "/focus-sessions/:id/outputs": {
+    "/focus-sessions/{id}/outputs": {
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Record an existing object as a session output",
@@ -34082,7 +34082,7 @@
         }
       }
     },
-    "/focus-sessions/:id/outputs/delegate": {
+    "/focus-sessions/{id}/outputs/delegate": {
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Hand a declared deliverable to an agent",
@@ -34184,7 +34184,7 @@
         }
       }
     },
-    "/focus-sessions/:id/outputs/block": {
+    "/focus-sessions/{id}/outputs/block": {
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Hand a declared deliverable to the human",
@@ -34740,7 +34740,7 @@
         }
       }
     },
-    "/focus-sessions/:id/outputs/unblock": {
+    "/focus-sessions/{id}/outputs/unblock": {
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Hand a deliverable back from the human (people only)",
@@ -34823,7 +34823,7 @@
         }
       }
     },
-    "/focus-sessions/:id/outputs/answer": {
+    "/focus-sessions/{id}/outputs/answer": {
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Answer what an agent asked about a deliverable (people only)",
@@ -35104,7 +35104,7 @@
         }
       }
     },
-    "/focus-sessions/:id/answers/relay": {
+    "/focus-sessions/{id}/answers/relay": {
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Relay the person's answer from a chat (agents only)",
@@ -35353,7 +35353,7 @@
         }
       }
     },
-    "/focus-sessions/:id/answers/wait": {
+    "/focus-sessions/{id}/answers/wait": {
       "get": {
         "tags": ["FocusSessions"],
         "summary": "Wait (bounded long-poll) for the session owner's next answer",
@@ -35471,7 +35471,7 @@
         }
       }
     },
-    "/focus-sessions/:id/answers": {
+    "/focus-sessions/{id}/answers": {
       "get": {
         "tags": ["FocusSessions"],
         "summary": "Poll the session owner's answers since a cursor",
@@ -38652,7 +38652,7 @@
         }
       }
     },
-    "/artifacts/:id": {
+    "/artifacts/{id}": {
       "patch": {
         "tags": ["Artifacts"],
         "summary": "Update artifact state / placement",
