@@ -16691,6 +16691,12 @@ export type SubstrateKind = "episodic" | "library" | "procedural" | "semantic" |
 /** One owed deliverable, with just enough of its session to be actionable. */
 export interface OwedSlot {
 	sessionId: string;
+	/**
+	 * The session holds an open pull request outcome: this ask blocks it. Set
+	 * only when true; the needs-you order puts it first and the rule never folds
+	 * it by age.
+	 */
+	blocksOpenPr?: true;
 	sessionGoal: string | null;
 	/**
 	 * The session's DISPLAY NAME (`resolveSessionTitle` — its title, else the
@@ -24337,6 +24343,13 @@ export interface Signal {
 	 */
 	reviewLater?: true;
 	/**
+	 * An `owed-slot` or `proposal-cluster` on a session that holds an OPEN pull
+	 * request: what it asks blocks that PR (plan 2c8fca91 §4). The order puts it
+	 * first, oldest first ({@link orderNeedsYou}), and the rule never folds it by
+	 * age. Absent on every other row.
+	 */
+	blocksOpenPr?: true;
+	/**
 	 * THE needs-you rule's class (decision E, `@synap-core/types/needs-you/rule`)
 	 * on an `owed-slot` (`classifyOwedAsk`) or a `proposal-cluster`
 	 * (`classifyPendingProposal`). Every class but `needs_you` is OUT of the
@@ -24545,6 +24558,8 @@ export interface NotificationContainer {
  */
 export interface OwedSlotSignalInput {
 	sessionId: string;
+	/** `OwedSlot.blocksOpenPr`: the session holds an open PR. */
+	blocksOpenPr?: true;
 	/** The DECLARED label. It is the title, verbatim — see below. */
 	label: string;
 	/** ISO-8601, written by the block door. The ordering key. */
@@ -48916,6 +48931,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						workspaceId: string | null;
 					})[];
 					notificationsTruncated: boolean;
+					openPrSessionIds: Set<string> | undefined;
 					openQuestionSessionIds: Set<string> | undefined;
 					owed: (OwedSlotSignalInput & {
 						workspaceId: string | null;
