@@ -273,6 +273,9 @@ const CHECKOUTS: Array<{ repo: Repo; root: string | null; required: boolean }> =
     { repo: "browser", root: siblingCheckout("browser"), required: false },
   ];
 
+/** The budget of one repo's scan: generous, it is a filesystem read, not a hang. */
+const SCAN_TIMEOUT_MS = 60_000;
+
 // ── The tables a pending copy can be compared on ────────────────────────────
 
 /** `export const NAME = { key: 'words', … }` → { key: words } (one pair per line). */
@@ -387,7 +390,9 @@ describe("work block rules: one home in @synap-core/types/lens", () => {
       continue;
     }
 
-    it(label, () => {
+    // A whole-tree read (~4,000 files in synap-app): about 2 s alone, past
+    // vitest's 5 s default on a loaded machine (seen at load 40 on the Mac).
+    it(label, { timeout: SCAN_TIMEOUT_MS }, () => {
       const { files, defs } = scan(root, repo);
       expect(files, `${repo}: the scan read no tree`).toBeGreaterThan(100);
       const pending = new Set(
