@@ -21,6 +21,7 @@ import {
 import { readableMarkdown as coreReadableMarkdown } from "@synap-core/markdown-core/readable";
 import type { Embed } from "@synap-core/markdown-core/embeds";
 import type { LensScope } from "@synap-core/types/lens";
+import { isTextMediaType } from "@synap/database";
 import {
   diagnoseForDocument,
   readStoredDiagnostics,
@@ -53,6 +54,38 @@ export function readsAsMarkdown(
   if (doc.type !== "markdown" && doc.type !== "text") return false;
   const mime = doc.mimeType?.trim().toLowerCase() ?? "";
   return mime === "" || mime.startsWith("text/");
+}
+
+/**
+ * Why a read left a document's content out: its stored bytes are not text.
+ * Never an empty document: `content` is "" and this says it was left out.
+ */
+export const CONTENT_OMITTED_BINARY = "binary" as const;
+
+/**
+ * Whether a content read leaves this document's stored bytes in storage,
+ * decided from the ROW before any download: a stored body whose media type
+ * is not text (`isTextMediaType`: a video, an audio, an image, a zip, a
+ * font), or a `file` with no media type. On 3 Nov 2026 every read of a stored
+ * video (46-126 MB) downloaded it whole and decoded it as UTF-8.
+ *
+ * PDF and DOCX are still read (base64): the IS `get_document` tool extracts
+ * their text from that body, and it is their only text door. An external
+ * reference (no `storageKey`) and an inline body are never downloaded here.
+ * The bytes stay reachable through the file door (`fileUrlPath`).
+ */
+export function readOmitsStoredBody(doc: {
+  type: string;
+  mimeType?: string | null;
+  storageKey?: string | null;
+}): boolean {
+  if (!doc.storageKey) return false;
+  if (doc.type === "pdf" || doc.type === "docx") return false;
+  const mime = doc.mimeType?.trim().toLowerCase() ?? "";
+  // A `file` is what an upload of a non-text type becomes, so a `file` with
+  // no stated type is bytes too; any other type with none is a text body.
+  if (mime === "") return doc.type === "file";
+  return !isTextMediaType(mime);
 }
 
 /** The diagnostics of a document a read does not parse: not checked, and why. */
@@ -170,7 +203,13 @@ export function projectAgentDocument(
   doc: AgentDocumentRow,
   raw: string,
   format: DocumentReadFormat,
-  diagnostics: DiagnosticsOutcome
+  diagnostics: DiagnosticsOutcome,
+  /**
+   * Set when the read left the stored bytes out (`readOmitsStoredBody`):
+   * the projection says so and names the file door, `null` when the caller
+   * can reach no file entity holding it.
+   */
+  omitted?: { fileUrlPath: string | null }
 ) {
   const parsed = readsAsMarkdown(doc, raw);
   return {
@@ -190,6 +229,12 @@ export function projectAgentDocument(
     sections: parsed ? listDocumentSections(raw) : [],
     diagnostics: diagnostics.items,
     ...(diagnostics.error ? { diagnosticsError: diagnostics.error } : {}),
+    ...(omitted
+      ? {
+          contentOmitted: CONTENT_OMITTED_BINARY,
+          fileUrlPath: omitted.fileUrlPath,
+        }
+      : {}),
     updatedAt: doc.updatedAt,
     createdAt: doc.createdAt,
   };

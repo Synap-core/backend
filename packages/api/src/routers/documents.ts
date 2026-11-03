@@ -57,7 +57,9 @@ import { randomUUID } from "crypto";
 import { auditLog } from "../utils/audit-log.js";
 import {
   DOCUMENT_READ_FORMATS,
+  CONTENT_OMITTED_BINARY,
   readableMarkdown,
+  readOmitsStoredBody,
   readsAsMarkdown,
 } from "../services/document-patch/read-document.js";
 import { emitSideEffects, getBoss } from "@synap/events";
@@ -320,8 +322,15 @@ export const documentsRouter = router({
       //   - stored bytes → base64 for pdf/docx, else utf-8 (behavior-preserving)
       //   - external ref → the URL string (previously an unreadable crash)
       //   - inline       → the latest version's inline content
-      const entityBodyService = new EntityBodyService(db, eventRepository);
-      const body = await entityBodyService.getBytes(input.documentId);
+      //   - stored bytes that are not text (a video, an audio, an image) →
+      //     never downloaded (`readOmitsStoredBody`): `content` is "" and
+      //     `contentOmitted` says so, with the file door that signs them.
+      const omitted = readOmitsStoredBody(document);
+      const body = omitted
+        ? null
+        : await new EntityBodyService(db, eventRepository).getBytes(
+            input.documentId
+          );
       let content = "";
       if (body?.kind === "bytes") {
         content =
@@ -365,6 +374,13 @@ export const documentsRouter = router({
         canEdit,
         editReason,
         format: input.format,
+        ...(omitted
+          ? {
+              contentOmitted: CONTENT_OMITTED_BINARY,
+              // The person door that signs the stored bytes (file-upload.ts).
+              fileUrlPath: `/api/files/documents/${document.id}/url`,
+            }
+          : {}),
       };
     }),
 
