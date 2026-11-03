@@ -27,6 +27,10 @@ import { createLogger } from "@synap-core/core";
 import { DEPENDENCY_LINK_TYPES } from "@synap-core/types/connections";
 import { recordLinkMutation } from "../links/dependency-links.js";
 import type { ProposalRevertPlan } from "../../routers/proposals/revert.js";
+import type {
+  DocumentEditSkip,
+  DocumentEditTarget,
+} from "../document-patch/document-edit-undo.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import { syncRelationToPropertyOnDelete } from "../../utils/property-relation-sync.js";
 import {
@@ -154,8 +158,16 @@ export function revertTargetsFromPlan(
 }
 
 /** One short, human-readable name for a target — for skip lines in a receipt. */
-export function describeRevertTarget(target: RevertTarget): string {
+export function describeRevertTarget(
+  target: RevertTarget | DocumentEditTarget
+): string {
   switch (target.kind) {
+    case "document_section":
+      return target.sectionId
+        ? `section "${target.title ?? target.sectionId}" of document ${target.documentId}`
+        : `document ${target.documentId}`;
+    case "document_title":
+      return `name of document ${target.documentId}`;
     case "property":
       return `"${target.key}" on entity ${target.entityId}`;
     case "entity_body":
@@ -169,15 +181,30 @@ export function describeRevertTarget(target: RevertTarget): string {
   }
 }
 
-/** The wire shape of a skipped item on a revert receipt. */
-export function revertSkipView(skip: RevertSkip): {
-  kind: RevertTarget["kind"];
+/**
+ * The wire shape of a skipped item on a revert receipt — the undo engine's
+ * rows and a document edit's parts (`document-edit-undo.ts`) alike.
+ */
+export function revertSkipView(skip: RevertSkip | DocumentEditSkip): {
+  kind: RevertTarget["kind"] | DocumentEditTarget["kind"];
   id: string;
   key?: string;
   reason: RevertSkip["reason"];
   detail: string;
 } {
   const target = skip.target;
+  if (target.kind === "document_section" || target.kind === "document_title") {
+    return {
+      kind: target.kind,
+      id: target.documentId,
+      // The section id: which part of the document was kept.
+      ...(target.kind === "document_section" && target.sectionId
+        ? { key: target.sectionId }
+        : {}),
+      reason: skip.reason,
+      detail: skip.detail,
+    };
+  }
   return {
     kind: target.kind,
     id:

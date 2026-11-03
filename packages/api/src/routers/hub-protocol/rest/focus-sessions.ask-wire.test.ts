@@ -82,11 +82,13 @@ describe("GET /openapi.json — the hub spec generates", () => {
     };
     // Non-vacuity: the whole hub registry, not an empty shell.
     expect(Object.keys(doc.paths).length).toBeGreaterThan(100);
-    // Keys are the Hono form (`:id`), as `registerOpenApi` registers them.
-    expect(doc.paths["/focus-sessions/:id/outputs/block"]?.post).toBeDefined();
-    expect(doc.paths["/focus-sessions/:id/outputs/answer"]?.post).toBeDefined();
+    // Keys are OpenAPI templates (`{id}`): `registerOpenApi` normalises Hono `:id`.
+    expect(doc.paths["/focus-sessions/{id}/outputs/block"]?.post).toBeDefined();
+    expect(
+      doc.paths["/focus-sessions/{id}/outputs/answer"]?.post
+    ).toBeDefined();
     expect(doc.paths["/focus-sessions"]?.post).toBeDefined();
-    expect(doc.paths["/focus-sessions/:id"]?.patch).toBeDefined();
+    expect(doc.paths["/focus-sessions/{id}"]?.patch).toBeDefined();
   });
 
   it("the block body documents `ask` as the ask union, not an empty schema", () => {
@@ -96,7 +98,7 @@ describe("GET /openapi.json — the hub spec generates", () => {
       openapi: "3.1.0",
       info: { title: "t", version: "0" },
     });
-    const op = doc.paths?.["/focus-sessions/:id/outputs/block"]?.post as {
+    const op = doc.paths?.["/focus-sessions/{id}/outputs/block"]?.post as {
       requestBody?: { content?: Record<string, { schema?: unknown }> };
     };
     const schema = JSON.stringify(

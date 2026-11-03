@@ -140,6 +140,9 @@ export const AI_GATE_VERBS: readonly string[] = [
   "facet.detach",
   // Propose how to organise the person's Library (always a proposal).
   "library.organize",
+  // Ask to import a messaging account's history (founder, 2026-11-03): a
+  // proposal by default, run only once the person approves it.
+  "messaging.import_history",
   "playbook.promote",
   "playbook.run",
   "proactive.recap",

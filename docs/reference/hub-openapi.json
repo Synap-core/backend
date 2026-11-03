@@ -4448,6 +4448,17 @@
         },
         "required": ["queued", "accountId", "progress"]
       },
+      "MessagingImportHistoryProposed": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "enum": ["proposed"] },
+          "proposalId": { "type": "string" },
+          "reviewUrl": { "type": "string" },
+          "message": { "type": "string" },
+          "accountId": { "type": "string" }
+        },
+        "required": ["status", "proposalId", "message", "accountId"]
+      },
       "MessagingDeleteResult": {
         "type": "object",
         "properties": { "success": { "type": "boolean" } },
@@ -24986,7 +24997,7 @@
         }
       }
     },
-    "/channels/:externalChannelId/pins/:messageId": {
+    "/channels/{externalChannelId}/pins/{messageId}": {
       "post": {
         "tags": ["Channels"],
         "summary": "Pin a message in a Discord channel",
@@ -25043,7 +25054,7 @@
         }
       }
     },
-    "/channels/:externalChannelId/rename": {
+    "/channels/{externalChannelId}/rename": {
       "post": {
         "tags": ["Channels"],
         "summary": "Rename a Discord channel",
@@ -25118,7 +25129,7 @@
         }
       }
     },
-    "/channels/:channelId/bind": {
+    "/channels/{channelId}/bind": {
       "post": {
         "tags": ["Channels"],
         "summary": "Propose binding a channel to a context object",
@@ -25729,7 +25740,7 @@
     "/messaging/accounts/{accountId}/import-history": {
       "post": {
         "tags": ["Messaging"],
-        "summary": "Import an account's history with people already in the pod (owner only)",
+        "summary": "Import an account's history with people already in the pod (an agent's call becomes a proposal)",
         "parameters": [
           {
             "schema": { "type": "string" },
@@ -25740,11 +25751,18 @@
         ],
         "responses": {
           "202": {
-            "description": "Import queued",
+            "description": "Import queued — or, for an agent, proposed for the person's review (`{ status: 'proposed', proposalId, reviewUrl }`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MessagingImportHistoryResult"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MessagingImportHistoryResult"
+                    },
+                    {
+                      "$ref": "#/components/schemas/MessagingImportHistoryProposed"
+                    }
+                  ]
                 }
               }
             }
@@ -25758,7 +25776,7 @@
             }
           },
           "403": {
-            "description": "Not the account's owner",
+            "description": "Refused by the key's grant or the review rules, or a narrowed key that is not an agent's",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -31457,7 +31475,7 @@
         }
       }
     },
-    "/focus-sessions/:id": {
+    "/focus-sessions/{id}": {
       "get": {
         "tags": ["FocusSessions"],
         "summary": "Get a focus session by ID",
@@ -33866,7 +33884,7 @@
         }
       }
     },
-    "/focus-sessions/:id/complete": {
+    "/focus-sessions/{id}/complete": {
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Complete (close) a focus session and return the proposal pack",
@@ -33981,7 +33999,7 @@
         }
       }
     },
-    "/focus-sessions/:id/outputs": {
+    "/focus-sessions/{id}/outputs": {
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Record an existing object as a session output",
@@ -34082,7 +34100,7 @@
         }
       }
     },
-    "/focus-sessions/:id/outputs/delegate": {
+    "/focus-sessions/{id}/outputs/delegate": {
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Hand a declared deliverable to an agent",
@@ -34184,7 +34202,7 @@
         }
       }
     },
-    "/focus-sessions/:id/outputs/block": {
+    "/focus-sessions/{id}/outputs/block": {
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Hand a declared deliverable to the human",
@@ -34740,7 +34758,7 @@
         }
       }
     },
-    "/focus-sessions/:id/outputs/unblock": {
+    "/focus-sessions/{id}/outputs/unblock": {
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Hand a deliverable back from the human (people only)",
@@ -34823,7 +34841,7 @@
         }
       }
     },
-    "/focus-sessions/:id/outputs/answer": {
+    "/focus-sessions/{id}/outputs/answer": {
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Answer what an agent asked about a deliverable (people only)",
@@ -35104,7 +35122,7 @@
         }
       }
     },
-    "/focus-sessions/:id/answers/relay": {
+    "/focus-sessions/{id}/answers/relay": {
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Relay the person's answer from a chat (agents only)",
@@ -35353,7 +35371,7 @@
         }
       }
     },
-    "/focus-sessions/:id/answers/wait": {
+    "/focus-sessions/{id}/answers/wait": {
       "get": {
         "tags": ["FocusSessions"],
         "summary": "Wait (bounded long-poll) for the session owner's next answer",
@@ -35471,7 +35489,7 @@
         }
       }
     },
-    "/focus-sessions/:id/answers": {
+    "/focus-sessions/{id}/answers": {
       "get": {
         "tags": ["FocusSessions"],
         "summary": "Poll the session owner's answers since a cursor",
@@ -38652,7 +38670,7 @@
         }
       }
     },
-    "/artifacts/:id": {
+    "/artifacts/{id}": {
       "patch": {
         "tags": ["Artifacts"],
         "summary": "Update artifact state / placement",

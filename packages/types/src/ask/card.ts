@@ -80,6 +80,11 @@ export const ASK_COPY = {
    */
   lookedAt: "What I looked at",
   /**
+   * The label over an ask's `why`: act steps say "in this card's why", so the
+   * card names it. The agent speaks, so no first person is needed.
+   */
+  whyHeading: "Why",
+  /**
    * The mark on an answered choose whose ask carried an AI recommendation
    * ({@link askRecommendationOutcome}). Nothing is drawn for `none`.
    */

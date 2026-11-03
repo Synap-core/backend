@@ -18,6 +18,15 @@ import type { ZodType } from "zod";
 type Method = "get" | "post" | "put" | "patch" | "delete";
 
 /**
+ * Hono writes a path parameter `:id` (or `:id{regex}`); an OpenAPI path template
+ * is `{id}`. A `:id` left in the spec is not a template, so generated clients
+ * and validators read it as a literal path. Registered paths go through this.
+ */
+export function toOpenApiPath(path: string): string {
+  return path.replace(/:([A-Za-z0-9_]+)(\{[^}]*\})?\??/g, "{$1}");
+}
+
+/**
  * Minimal stub: registers a route in the OpenAPI doc with `path`, `method`,
  * `tags`, `summary` and a generic 200 response. Used when full schema design
  * isn't worth the overhead but the path should still be discoverable in the
@@ -37,7 +46,7 @@ export function registerStub(
 ): void {
   app.openAPIRegistry.registerPath({
     method: config.method,
-    path: config.path,
+    path: toOpenApiPath(config.path),
     tags: config.tags,
     summary: config.summary,
     description: config.description,
@@ -116,7 +125,7 @@ export function registerOpenApi(
 
   app.openAPIRegistry.registerPath({
     method: config.method,
-    path: config.path,
+    path: toOpenApiPath(config.path),
     tags: config.tags,
     summary: config.summary,
     description: config.description,
