@@ -89,6 +89,7 @@ import {
   watchPodRateLimits,
 } from "./middleware/security.js";
 import { usageTelemetry } from "./middleware/usage-telemetry.js";
+import { eventLoopWatch } from "./status/event-loop-watch.js";
 import { configuredPodAdminBase } from "./pod-admin-config.js";
 import { registerInviteBounce } from "./invite-bounce.js";
 import { registerLinkCloudBounce } from "./link-cloud-bounce.js";
@@ -401,6 +402,11 @@ app.get("/health", async (c) => {
     // and, for the pool, whether it can: `unavailable` + `reason` when a
     // runner cannot start. Body-only, like `data`.
     skillRuntime: skillRuntimeHealth(),
+    // Event-loop delay and utilization over the rolling window, and how many
+    // stalls were logged (status/event-loop-watch.ts). In memory, no I/O;
+    // numbers only: the requests a stall named are on /status/release's
+    // details and in the `event loop blocked` log line.
+    eventLoop: eventLoopWatch.snapshot(),
   });
 });
 
@@ -589,6 +595,9 @@ app.get("/status/release", async (c) => {
     // systemProfiles — the boot seeder's result. status:"error" means schema
     // upgrades did not apply; null until the post-listen startup hook reports.
     systemProfiles: systemProfilesStatusSection(),
+    // eventLoop — /health's numbers plus the requests the last stall named
+    // (method, redacted path, key id): who blocked the loop, after the fact.
+    eventLoop: eventLoopWatch.snapshot({ named: true }),
   });
 });
 
@@ -1728,6 +1737,9 @@ import { handleWebSocketUpgrade } from "./ws-router.js";
 import { serverBindHostname } from "./server-bind.js";
 
 // Start server
+// The event-loop watch runs from here on: a stall logs the requests that ran
+// across it (status/event-loop-watch.ts). Its timer is unref'd.
+eventLoopWatch.start();
 try {
   const httpServer = serve(
     {
@@ -2396,6 +2408,7 @@ process.on("uncaughtException", (error) => {
     if (config.server.localMode) {
       stopLocalSyncDriver();
     }
+    eventLoopWatch.stop();
     try {
       usageTelemetry.stop();
       await usageTelemetry.flushNow();

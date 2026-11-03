@@ -173,6 +173,13 @@ x-backend-env: &backend-env
   RATE_LIMIT_OAUTH_TOKEN_MAX: ${RATE_LIMIT_OAUTH_TOKEN_MAX:-}
   RATE_LIMIT_OAUTH_TOKEN_IP_CEILING: ${RATE_LIMIT_OAUTH_TOKEN_IP_CEILING:-}
   RATE_LIMIT_OAUTH_TOKEN_WINDOW_MS: ${RATE_LIMIT_OAUTH_TOKEN_WINDOW_MS:-}
+  # Event-loop watch (apps/api/src/status/event-loop-watch.ts). Empty = the
+  # code's default: a watchdog tick every 500 ms; a tick late by more than
+  # 2000 ms logs `event loop blocked` with the requests running across it;
+  # delay percentiles and utilization over a 60 s window (/health `eventLoop`).
+  SYNAP_EVENT_LOOP_STALL_MS: ${SYNAP_EVENT_LOOP_STALL_MS:-}
+  SYNAP_EVENT_LOOP_TICK_MS: ${SYNAP_EVENT_LOOP_TICK_MS:-}
+  SYNAP_EVENT_LOOP_WINDOW_MS: ${SYNAP_EVENT_LOOP_WINDOW_MS:-}
   # Mirrored only so the backend can introspect its own courier (SMTP) config
   # in /api/provision/status. Kratos reads this directly via its own service env
   # block below — the backend never sends mail itself; it just reports status.
