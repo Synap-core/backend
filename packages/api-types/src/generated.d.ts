@@ -765,6 +765,31 @@ export type AgentDirection = "external" | "house";
  * Deletions and structural changes ask in every mode (engine floors).
  */
 export type AgentWriteMode = "ask-first" | "create-with-undo" | "pod-default";
+/**
+ * Which side set the mode an agent's writes actually follow:
+ *  - `agent`       — the agent's own named override;
+ *  - `computer`    — the computer it runs on, whose mode is stricter (the
+ *                    host step: an agent on a computer is judged as itself AND
+ *                    as its computer, and the stricter answer wins);
+ *  - `pod-default` — neither has an override: the pod default decides.
+ */
+export type AgentWriteModeDecidedBy = "agent" | "computer" | "pod-default";
+/**
+ * The effective write mode as the pod serves it (`agentUsers.governance`
+ * `effective`, Hub `GET /agent-users/:id/governance` `effective`). `line` is
+ * `AGENT_WRITE_MODE_LINE[writeMode]`; `computer` is the computer the agent
+ * runs on (null when it runs on none), named so a surface can link to it when
+ * `decidedBy` is `computer`.
+ */
+export interface AgentEffectiveWriteMode {
+	writeMode: AgentWriteMode;
+	line: string;
+	decidedBy: AgentWriteModeDecidedBy;
+	computer: {
+		id: string;
+		name: string | null;
+	} | null;
+}
 declare const AGENT_REACHES: readonly [
 	"pod",
 	"dispatch",
@@ -14784,6 +14809,21 @@ export interface ProposalSessionBefore {
 	expectedOutputs: unknown[];
 }
 /**
+ * Why an agent's write asked, as the review row serves it (`askedBy`): which
+ * pass decided, the computer NAMED (so a card can link to it), and the rule
+ * only when the viewer may read it. Names only, never a bare id.
+ */
+export interface AskedBy<Rule> {
+	principal: "agent" | "computer";
+	/** The computer that asked, when `principal` is `computer` and it still exists. */
+	computer?: {
+		id: string;
+		name: string;
+	};
+	/** The `propose` rule that made it ask, when the viewer may read it. */
+	governanceRule?: Rule;
+}
+/**
  * The three states of "is a human's identity behind this agent's act?", read
  * off `proposals.subjectUserId` (RFC 8693 delegation).
  *
@@ -14835,6 +14875,8 @@ export type ProposalPrincipal = {
  * named by what it matches (`targetPattern`, worded client-side by the shared
  * `describeWritePattern`) and, for an agent-principal rule, whose it is.
  */
+/** See `askedBy` on the display row (`proposal-governance-decision.ts`). */
+export type ProposalAskedBy = AskedBy<ProposalGovernanceRule>;
 export interface ProposalGovernanceRule {
 	id: string;
 	targetPattern: string;
@@ -25323,6 +25365,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				askFirst: boolean;
+				effective: AgentEffectiveWriteMode | null;
 				line: string;
 				podDefaultEnabled: boolean;
 				postures: {
@@ -46511,6 +46554,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				appId: string | null;
 				appName?: string;
 				approverName?: string;
+				askedBy?: ProposalAskedBy;
 				authorName?: string;
 				automationId?: string;
 				automationName?: string;
@@ -46663,6 +46707,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					appId: string | null;
 					appName?: string;
 					approverName?: string;
+					askedBy?: ProposalAskedBy;
 					authorName?: string;
 					automationId?: string;
 					automationName?: string;
@@ -46754,6 +46799,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					appId: string | null;
 					appName?: string;
 					approverName?: string;
+					askedBy?: ProposalAskedBy;
 					authorName?: string;
 					automationId?: string;
 					automationName?: string;

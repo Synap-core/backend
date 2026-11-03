@@ -38,6 +38,17 @@ vi.mock("@synap/database", async (importOriginal) => {
     ...actual,
     getDb: async () => holder.db,
     eventRepository: { append: async () => undefined },
+    // `enrichProposalsForDisplay` builds `new EventRepository(sql)` on the raw
+    // postgres.js client, which no PGlite mock reaches: with a correlation id
+    // on the row it would dial a real Postgres. The correlated events are not
+    // what this suite asserts, so only that read answers "none".
+    EventRepository: class extends (actual.EventRepository as new (
+      ...a: unknown[]
+    ) => object) {
+      async getCorrelatedEventsBatch() {
+        return [];
+      }
+    },
     insertPendingProposal: (input: unknown) =>
       (actual.insertPendingProposal as (i: unknown, e: unknown) => unknown)(
         input,
