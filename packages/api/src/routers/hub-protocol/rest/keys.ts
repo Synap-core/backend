@@ -407,6 +407,11 @@ function registerKeyRequestRoutes(app: HubHono): void {
             },
           },
         },
+        400: {
+          description:
+            "Bad request — both or neither of `template` and `permissions`, or a permission the pod cannot grant",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
         403: {
           description: "Forbidden — missing scope",
           content: { "application/json": { schema: ErrorSchema } },
