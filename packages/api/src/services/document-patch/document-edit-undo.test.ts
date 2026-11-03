@@ -107,6 +107,20 @@ describe("planDocumentEditUndo", () => {
     expect(plan.skipped).toEqual([]);
   });
 
+  it("removing an added section keeps the spaces of text a person typed next to it since", () => {
+    const { after, record } = edit(SECTIONED, [
+      { op: "upsert_section", id: "c", title: "c", body: "Gamma." },
+    ]);
+    const typed = "\n\n    const indented = true;\n";
+    const plan = planDocumentEditUndo(
+      { content: after.replace(/\n*$/, "") + typed, title: "Plan" },
+      record
+    );
+    expect(plan.restored).toBe(1);
+    expect(plan.content).not.toContain("Gamma.");
+    expect(plan.content).toContain("\n\n    const indented = true;\n");
+  });
+
   it("a section edited since is KEPT and named; the others are still put back", () => {
     const { after, record } = edit(SECTIONED, [
       { op: "upsert_section", id: "a", title: "a", body: "Alpha, rewritten." },

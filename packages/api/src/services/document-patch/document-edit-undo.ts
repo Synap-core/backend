@@ -171,8 +171,10 @@ function sectionName(change: SectionPreview): string {
 
 /** Cut a block out, leaving one blank line where it was (none at the end). */
 function removeBlock(content: string, block: SectionBlock): string {
-  const head = content.slice(0, block.start).replace(/\s+$/, "");
-  const tail = content.slice(block.end).replace(/^\s+/, "");
+  // Only the blank lines around the block go: the text a person typed next to
+  // it keeps its spaces (a code block's indentation, a line's trailing break).
+  const head = content.slice(0, block.start).replace(/(?:\n[ \t]*)+$/, "");
+  const tail = content.slice(block.end).replace(/^(?:[ \t]*\n)+/, "");
   if (!head) return tail;
   if (!tail) return `${head}\n`;
   return `${head}\n\n${tail}`;
