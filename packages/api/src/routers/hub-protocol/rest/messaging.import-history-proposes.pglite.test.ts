@@ -254,11 +254,16 @@ describe("an agent's history import becomes a proposal, never a 403", () => {
   });
 
   it("an agent on the AI preset is proposed too: the door asks first", async () => {
-    const before = (await importProposals()).length;
     const res = await importHistory({ grant: AI_PRESET, agentUserId: AGENT });
     expect(res.status).toBe(202);
-    expect(await res.json()).toMatchObject({ status: "proposed" });
-    expect((await importProposals()).length).toBeGreaterThanOrEqual(before);
+    const body = (await res.json()) as { status: string; proposalId: string };
+    expect(body).toMatchObject({ status: "proposed" });
+    // The proposal it names is a pending row (the gate may hand back the one
+    // the previous test filed for the same account, so no count is asserted).
+    const pending = (await importProposals()).filter(
+      (r) => r.status === "pending"
+    );
+    expect(pending.map((r) => r.id)).toContain(body.proposalId);
     expect(h.queued).toEqual([]);
   });
 
