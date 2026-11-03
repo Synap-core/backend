@@ -36,13 +36,19 @@ describe("decideAgentPolicy — governanceRuleId", () => {
     expect(verdict).not.toHaveProperty("governanceRuleId");
   });
 
-  it("a `propose` rule stays propose and names no rule on the verdict", () => {
+  // Until 2026-11-03 a `propose` rule named no rule, so a proposal could say
+  // only "one of your rules" (finding 168956d8). It now names the rule that
+  // made it ask, as a receipt names the rule that let it act.
+  it("a `propose` rule stays propose and names the rule that made it ask", () => {
     const verdict = decideAgentPolicy({
       ...base,
       governanceRuleVerdict: "propose",
       governanceRuleId: "rule-1",
     });
-    expect(verdict.verdict).toBe("propose");
-    expect(verdict).not.toHaveProperty("governanceRuleId");
+    expect(verdict).toMatchObject({
+      verdict: "propose",
+      reasonCode: "GOVERNANCE_RULE",
+      governanceRuleId: "rule-1",
+    });
   });
 });

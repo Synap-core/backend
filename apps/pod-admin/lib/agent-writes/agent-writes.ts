@@ -4,7 +4,9 @@
  * the decisions worth testing live here and the components only draw.
  *
  * Read: `agentUsers.governance` (`writeMode`, its one sentence `line`, the
- * pod-wide posture `postures.pod`, `podDefaultEnabled`). Write:
+ * pod-wide posture `postures.pod`, `podDefaultEnabled`, and `effective`: the
+ * mode its writes REALLY follow once the computer it runs on is counted, the
+ * stricter of the two, with `decidedBy`). Write:
  * `agentUsers.setPosture` with `agentPostureOfWriteMode(mode)` (`null` =
  * follow the pod default).
  *
@@ -19,6 +21,7 @@ import {
   agentPostureOfWriteMode,
   isAgentWriteMode,
   resolveAgentWriteMode,
+  type AgentEffectiveWriteMode,
   type AgentWriteMode,
 } from "@synap-core/types/agents";
 import { humanizeToken } from "@synap-core/types/vocabulary";
@@ -29,6 +32,22 @@ export interface AgentWritesRead {
   line: string;
   postures: { pod: string | null };
   podDefaultEnabled: boolean;
+  /** Absent on a pod older than the effective read: the agent's own then. */
+  effective?: AgentEffectiveWriteMode | null;
+}
+
+/**
+ * The computer that sets how its writes land — only when it is STRICTER than
+ * the agent's own choice (`effective.decidedBy === "computer"`), so the page
+ * can say the choice is not what applies, and link to the computer. Null
+ * otherwise, and when the computer has no name to show.
+ */
+export function decidingComputer(
+  read: AgentWritesRead
+): { id: string; name: string; mode: AgentWriteMode } | null {
+  const e = read.effective;
+  if (e?.decidedBy !== "computer" || !e.computer?.name) return null;
+  return { id: e.computer.id, name: e.computer.name, mode: e.writeMode };
 }
 
 /**
@@ -77,12 +96,30 @@ export function writeModeLines(
   return lines;
 }
 
-/** A row's mark and sentence: the choice in force, and what it does today. */
+/**
+ * A row's mark and sentence: the mode its writes REALLY follow, and what it
+ * does today — the agent's own choice, or its computer's when that one is
+ * stricter (then `computer` names it). A pod with no effective read falls
+ * back to the agent's own.
+ */
 export function writesSummary(read: AgentWritesRead): {
   label: string;
   line: string;
+  computer: { id: string; name: string } | null;
 } {
-  return { label: writeModeLabel(currentWriteMode(read)), line: read.line };
+  const e = read.effective;
+  const computer = decidingComputer(read);
+  return e
+    ? {
+        label: writeModeLabel(e.writeMode),
+        line: e.line,
+        computer: computer ? { id: computer.id, name: computer.name } : null,
+      }
+    : {
+        label: writeModeLabel(currentWriteMode(read)),
+        line: read.line,
+        computer: null,
+      };
 }
 
 /**

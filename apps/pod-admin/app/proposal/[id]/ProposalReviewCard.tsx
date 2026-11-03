@@ -37,6 +37,7 @@
  * was never shown — the plain Approve kept both without asking.
  */
 
+import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Button,
@@ -82,7 +83,7 @@ import { ExitFallback, ExitLink } from "../../../lib/exit-link";
    non-uuid workspace ref would fire a request that can only fail. */
 import { formatRelative, formatTimestamp, isUuid } from "../../../lib/format";
 import { trpc } from "../../../lib/trpc";
-import { navItem } from "../../../lib/console-nav";
+import { computerHref, navItem } from "../../../lib/console-nav";
 import { proposalExpiresAt, proposalLapsed } from "../../_lib/proposal-expiry";
 import { mediaAlt } from "../../_lib/media/stored-media-model";
 import { useConsoleRole } from "../../(admin)/components/side-nav-role";
@@ -139,7 +140,7 @@ import {
   createdObject,
   type CreatedObject,
 } from "./proposal-review-model";
-import { proposalWhy } from "./proposal-why";
+import { askingComputer, proposalWhy } from "./proposal-why";
 import {
   ApprovalProgressLines,
   showApprovalProgressToast,
@@ -1032,6 +1033,7 @@ export function ProposalReviewBody({
     reasoning: p.review.reasoning,
   });
   const reason = reasonMark(p.governanceReason);
+  const reasonComputer = askingComputer(p);
   const undo = undoMark(p.revertable);
   const { actor } = proposalRequesterParts(p);
   // Present only when `proposals.source` named it: a session the reader may
@@ -1218,6 +1220,14 @@ export function ProposalReviewBody({
                   mark={reason}
                   icon={reason.tone === "warning" ? ShieldAlert : ShieldCheck}
                 />
+              )}
+              {reason && reasonComputer && (
+                <Link
+                  href={computerHref(reasonComputer.id)}
+                  className="text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
+                >
+                  {reasonComputer.name}
+                </Link>
               )}
               {duplicate?.check.status === "unchecked" && (
                 <DuplicateUnchecked />

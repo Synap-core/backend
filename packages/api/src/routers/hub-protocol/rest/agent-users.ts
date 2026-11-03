@@ -23,6 +23,7 @@ import {
   NEVER_SEEN,
 } from "../../../services/agent-presence.js";
 import { liveAgentConnections } from "../../../services/agent-connect.js";
+import { readEffectiveWriteMode } from "../../../services/machine-roster.js";
 import { isPodAdmin } from "../../../utils/workspace-role.js";
 import { loadAgentDispatchSummaries } from "../../../services/agent-dispatch/agent-binding.js";
 import {
@@ -545,7 +546,9 @@ export function registerAgentUsersRoutes(app: HubHono): void {
    * GET /agent-users/:agentUserId/governance
    *
    * The read half of the PATCH below — `{ posture, writesRequireProposal,
-   * rules, configured }` (`readAgentGovernance`), plus `writeModeChoices`:
+   * rules, configured }` (`readAgentGovernance`), plus `effective` (the mode
+   * its writes follow once its computer is counted, `readEffectiveWriteMode`)
+   * and `writeModeChoices`:
    * the ONE list a client offers (`AGENT_WRITE_MODE_CHOICES`), each with the
    * `posture` to PATCH (null = follow the pod default). `synap init` reads it
    * before it writes, so re-running init never overwrites a posture someone
@@ -585,12 +588,16 @@ export function registerAgentUsersRoutes(app: HubHono): void {
       }
       const state = await readAgentGovernance({ db, agentUserId });
       if (!state) return c.json({ error: "Agent not found" }, 404);
+      // How its writes REALLY land once its computer is counted (the host
+      // step), and which side set it — the same read as `agentUsers.governance`.
+      const effective = await readEffectiveWriteMode(agentUserId);
       // The choices a client offers before it PATCHes `{ posture }`, from the
       // pod (`AGENT_WRITE_MODE_CHOICES`): an older CLI shows what this pod
       // knows, and never keeps a list of its own.
       return c.json({
         agentUserId,
         ...state,
+        effective,
         writeModeChoices: AGENT_WRITE_MODE_CHOICES.map((choice) => ({
           ...choice,
           posture: agentPostureOfWriteMode(choice.mode),

@@ -910,6 +910,29 @@ async function runStartupHooksInner(): Promise<void> {
     );
   }
 
+  // POSTURE ROWS FOLLOW THE CLASS. An agent's "Ask first" is stored as rows
+  // that snapshot `REVERSIBLE_EVENT_KEYS` when it was applied; a key added to
+  // the class since then acted while the agent's page said "Every change asks
+  // you first". Re-applies the named posture through its one writer
+  // (`applyAgentPosture`) wherever the rows differ from it today; stamps
+  // nothing. Idempotent; non-fatal.
+  try {
+    const { reconcileAgentPostures } =
+      await import("@synap/database/agent-governance");
+    const result = await reconcileAgentPostures({ db });
+    if (result.reapplied.length > 0 || result.leftAlone.length > 0) {
+      logger.info(
+        result,
+        "Re-applied agent postures whose rules fell behind their class"
+      );
+    }
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Failed to reconcile agent postures on startup (non-fatal)"
+    );
+  }
+
   // ONE-TIME MIGRATION of the pre-July `workspaces.settings.controlPlane`
   // record (lane cp-link): its tier/trial seed the pod's plan until the first
   // pull from the CP replaces it, and the block is removed from every workspace

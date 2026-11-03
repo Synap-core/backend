@@ -45,10 +45,12 @@ import { useConsoleRole } from "../../../(admin)/components/side-nav-role";
 import { navHref } from "../../../../lib/console-nav";
 import {
   currentWriteMode,
+  decidingComputer,
   mayChangeWrites,
   writeModeLabel,
   writeModeLines,
 } from "../../../../lib/agent-writes/agent-writes";
+import { computerHref } from "../../../../lib/console-nav";
 import { WriteModeChoice } from "../../write-mode-choice";
 import { agentTrustDoor } from "./agent-trust-door";
 import { AgentJob } from "./agent-job";
@@ -380,6 +382,7 @@ export function AgentGovernance({
               </p>
             </>
           )}
+          <ComputerDecidesLine read={gov.data} />
           {gov.data.postures.spaces.length > 0 && (
             <div className="flex flex-col gap-1">
               <p className="text-[12px] text-foreground/65">
@@ -411,6 +414,34 @@ export function AgentGovernance({
         </>
       )}
     </Section>
+  );
+}
+
+/**
+ * When the computer it runs on is STRICTER than its own choice, its writes
+ * follow the computer (the host step): one sentence, and the computer as a
+ * door to its page. Nothing otherwise.
+ */
+function ComputerDecidesLine({
+  read,
+}: {
+  read: Parameters<typeof decidingComputer>[0];
+}) {
+  const t = objectViewsT();
+  const computer = decidingComputer(read);
+  if (!computer) return null;
+  return (
+    <p className="text-[12.5px] text-foreground">
+      {t("agent.writes.computerDecides", {
+        mode: writeModeLabel(computer.mode),
+      })}{" "}
+      <Link
+        href={computerHref(computer.id)}
+        className="font-medium text-primary underline-offset-2 hover:underline"
+      >
+        {computer.name}
+      </Link>
+    </p>
   );
 }
 

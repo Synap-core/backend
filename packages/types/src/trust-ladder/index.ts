@@ -177,8 +177,9 @@ export const NEXT_RUNG_VIA = {
  *                 `auto` rule outranks it.
  *   - `below`   — decided below rung 2.8 (the writes-require-proposal
  *                 switch). Any matching rule decides first.
- *   - `ambiguous` — the code is emitted both above and below 2.8, so the code
- *                 alone cannot say. Treated as `floor` (fail closed).
+ *   - `ambiguous` — the code alone cannot say whether the offered rule would
+ *                 reach it (emitted both above and below 2.8, or decided on
+ *                 the agent's computer). Treated as `floor` (fail closed).
  *
  * Keys are EXACTLY `PROPOSE_REASON`'s keys (`@synap/governance-policy`) —
  * asserted by the reach tripwire, which also proves each `rule`/`below` code
@@ -210,6 +211,12 @@ export const GOVERNANCE_REASON_RULE_REACH = {
   HUMAN_ONLY_STATUS: "floor",
   LIFECYCLE_TERMINAL: "below",
   CHANNEL_PROPOSE: "ambiguous",
+  // The host step: the agent's COMPUTER asked (its own pass would have acted).
+  // The rule the ladder offers is the AGENT's, which the computer's pass only
+  // sees when the computer belongs to that agent (host seed, `host-seed.ts`);
+  // on a person's computer it changes nothing. The code alone cannot tell
+  // which, so it is never offered (fail closed).
+  HOST_ASKS_FIRST: "ambiguous",
 } as const satisfies Record<string, "floor" | "rule" | "below" | "ambiguous">;
 
 export type GovernanceReasonRuleReach =
