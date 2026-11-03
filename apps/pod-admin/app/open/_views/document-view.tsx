@@ -35,7 +35,7 @@ import { documentContent } from "../../_lib/object/content/document-model";
 import { couldNotLoad, loadFailure } from "../../_lib/object/load-failure";
 import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
 import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
-import { OpenFailure, OpenLoading, OpenObject } from "../open-shell";
+import { OpenFailure, OpenLoading, OpenObject, openWidth } from "../open-shell";
 import { BounceView } from "./bounce-view";
 
 /** The stored type, as a reader calls it. */
@@ -89,7 +89,7 @@ export function DocumentView({ id }: { id: string }) {
   const openInApp = <OpenInAppLink type="document" id={id} />;
   return (
     <OpenObject
-      width="lg"
+      width={openWidth({ header: { kind: "document" } })}
       header={{
         kind: "document",
         title: doc.title?.trim() || "Untitled document",
