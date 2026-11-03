@@ -21,6 +21,10 @@
 #   (e) heal: budget 3 per window, then stops (+ doctor marker); postgres is
 #       never restarted (alert once); skips while the update lock is held;
 #       restores kratos.yml.good on a crash-looping Kratos
+#   (e2) heal records WHY (Docker's last 3 health results, the in-container
+#       /health probe, the backend's last `event loop blocked` line, never a
+#       key id or a secret-looking value) and gives a STUCK backend
+#       SYNAP_HEAL_STUCK_GRACE_TICKS more ticks; a dead one restarts at once
 #   + pre-update dumps (newest 2 + every dump an update record names), the unattended update path
 #     (request contract, policy, window, enforce), units install/status/remove,
 #     `synap clean` scoped to this pod, and a static no-global-prune scan.
@@ -58,6 +62,7 @@ case "$*" in
 esac
 case "$1" in
   info) [ "$2" = --format ] && echo "$F/root"; exit 0 ;;
+  logs) cat "$F/logs-${*: -1}" 2>/dev/null; exit 0 ;;
   df) exit 0 ;;
   pull) exit 1 ;;
   system)
@@ -116,6 +121,7 @@ case "$1" in
       case "$fmt" in
         "{{.Image}}") awk -F'|' -v c="$c" '$1 == c { print $7 }' "$CT" ;;
         *State.Status*) awk -F'|' -v c="$c" '$1 == c { print $4 "|" $6 "|" $8 }' "$CT" ;;
+        *State.Pid*) echo "$(cat "$F/pid-$c" 2>/dev/null || echo 4242)|$(cat "$F/health-$c.json" 2>/dev/null || echo null)" ;;
       esac
     done; exit 0 ;;
   compose)
@@ -123,6 +129,9 @@ case "$1" in
       "compose ps -a -q postgres"*|"compose ps -q postgres"*|"compose ps -a -q --status running postgres"*) exit 0 ;;
       "compose ps -a -q") awk -F'|' -v p="$COMPOSE_PROJECT_NAME" '$3 == p { print $1 }' "$CT" ;;
       "compose restart "*) echo "${*: -1}" >> "$F/restarted" ;;
+      # heal's why (G7a), only once a test opts in with $F/why
+      "compose ps -q "*) [ -e "$F/why" ] && awk -F'|' -v p="$COMPOSE_PROJECT_NAME" -v s="${*: -1}" '$3 == p && $4 == s { print $1 }' "$CT" ;;
+      "compose exec -T "*) [ -e "$F/why" ] && cat "$F/probe-$4" 2>/dev/null ;;
     esac; exit 0 ;;
 esac
 exit 0
@@ -320,6 +329,8 @@ for i in 1 2 3 4 5; do run_synap heal; done
 ! grep -qx postgres "$FAKE/restarted" 2>/dev/null && ok "(e) postgres never restarted" || bad "(e) postgres restarted"
 [ -e "$DEPLOY/state/heal/exhausted-backend" ] && [ "$(grep -c '"status":"budget_exhausted","service":"backend"' "$DEPLOY/state/events.jsonl")" = 1 ] \
   && ok "(e) budget used up: heal stopped, marker written, ONE budget_exhausted event" || bad "(e) exhausted: $(grep budget "$DEPLOY/state/events.jsonl")"
+grep '"status":"budget_exhausted"' "$DEPLOY/state/events.jsonl" | jq -e '.why.class == "unhealthy" and .why.probe == "unavailable"' >/dev/null \
+  && ok "(e) budget_exhausted records why (unknown here: no health log, no probe answer)" || bad "(e) exhausted why: $(grep budget "$DEPLOY/state/events.jsonl")"
 [ "$(grep -c '"status":"alert","service":"postgres"' "$DEPLOY/state/events.jsonl")" = 1 ] && [ -e "$DEPLOY/state/heal/alert-postgres" ] \
   && ok "(e) postgres: one alert event across 5 runs, never a restart" || bad "(e) postgres alerts: $(grep -c alert "$DEPLOY/state/events.jsonl")"
 [ ! -e "$DEPLOY/state/last-update.json" ] && ok "(e) heal never writes last-update.json" || bad "(e) heal wrote last-update.json"
@@ -356,6 +367,86 @@ grep -q "^compose up -d --no-deps --force-recreate kratos" "$FAKE/log" && grep -
   && ok "(e) kratos recreated on the restored config, event recorded" || bad "(e) kratos not recreated: $(grep kratos "$FAKE/log")"
 : > "$FAKE/log"; run_synap heal
 ! grep -qE "^compose (up|restart).*kratos" "$FAKE/log" && ok "(e) kratos on its verified config still crash-looping: heal leaves it to Docker's backoff" || bad "(e) heal kept acting on kratos: $(grep kratos "$FAKE/log")"
+
+# ═══ 4b. heal records WHY, and gives a stuck backend more time (G7a) ═════════
+# The fake answers heal's questions once $FAKE/why exists: the container id
+# (compose ps -q), its pid + Docker health log (inspect), the in-container
+# /health probe (compose exec), and its log (docker logs).
+why_setup() { # <name> <probe-json> <last-health-output>
+  setup "$1"; touch "$FAKE/why"
+  sed -i.x 's/^c-backend|\(.*\)|healthy$/c-backend|\1|unhealthy/' "$FAKE/containers.tsv"; rm -f "$FAKE/containers.tsv.x"
+  printf '%s\n' "$2" > "$FAKE/probe-backend"
+  jq -cn --arg last "$3" '{Status:"unhealthy", FailingStreak:3, Log:[
+      {Start:"2026-11-03T09:58:00Z", End:"2026-11-03T09:58:01Z", ExitCode:0, Output:"OLDEST-ENTRY"},
+      {Start:"2026-11-03T09:58:30Z", End:"2026-11-03T09:58:40Z", ExitCode:1, Output:"Error: socket hang up\n    at token=abc123secret"},
+      {Start:"2026-11-03T09:59:00Z", End:"2026-11-03T09:59:10Z", ExitCode:-1, Output:"Health check exceeded timeout (10s)"},
+      {Start:"2026-11-03T09:59:30Z", End:"2026-11-03T09:59:40Z", ExitCode:-1, Output:$last}]}' > "$FAKE/health-c-backend.json"
+  printf '%s\n' '{"level":30,"time":"2026-11-03T09:00:00.000Z","msg":"server listening"}' \
+    '{"level":40,"time":"2026-11-03T09:59:20.000Z","module":"event-loop-watch","blockedMs":95000,"stallThresholdMs":2000,"inFlight":2,"requests":[{"method":"GET","path":"/api/hub/documents/doc-1/content","runningMs":95010,"ended":true,"apiKeyId":"key-SECRETID","agentUserId":"agent-SECRETID"}],"msg":"event loop blocked"}' \
+    > "$FAKE/logs-c-backend"
+  : > "$FAKE/restarted"
+}
+backend_restarts() { grep -cx backend "$FAKE/restarted" 2>/dev/null || true; }
+last_heal() { grep '"kind":"pod.heal"' "$DEPLOY/state/events.jsonl" | grep "\"status\":\"$1\"" | tail -1; }
+
+# stuck: alive, its own /health times out ⇒ 2 ticks of grace, then a restart that says why
+why_setup heal-stuck '{"probe":"timeout"}' "Health check exceeded timeout (10s)"
+run_synap heal
+[ "$(backend_restarts)" = 0 ] && [ "$(cat "$DEPLOY/state/heal/stuck-backend" 2>/dev/null)" = 1 ] \
+  && last_heal stuck_waiting | jq -e '.why.class == "stuck" and .why.waitedTicks == 1 and (.reason | test("1 of 2"))' >/dev/null \
+  && ok "(e2) stuck backend, tick 1: not restarted, stuck_waiting recorded (1 of 2)" || { bad "(e2) stuck tick 1: restarts=$(backend_restarts) $(last_heal stuck_waiting)"; show; }
+run_synap heal
+[ "$(backend_restarts)" = 0 ] && [ "$(cat "$DEPLOY/state/heal/stuck-backend" 2>/dev/null)" = 2 ] \
+  && ok "(e2) stuck backend, tick 2: still given time" || bad "(e2) stuck tick 2: restarts=$(backend_restarts)"
+run_synap heal
+ev="$(last_heal restarted)"
+[ "$(backend_restarts)" = 1 ] && [ ! -e "$DEPLOY/state/heal/stuck-backend" ] \
+  && jq -e '.why.class == "stuck" and .why.waitedTicks == 2 and .why.pidAlive == true and .why.probe == "timeout" and (.reason | test("stuck"))' >/dev/null <<<"$ev" \
+  && ok "(e2) stuck backend, tick 3: restarted, the event says stuck after 2 more ticks" || { bad "(e2) stuck tick 3: restarts=$(backend_restarts) ev=$ev"; show; }
+jq -e '(.why.health | length) == 3 and .why.health[0].output == "Error: socket hang up at token=[redacted]" and .why.health[2].exitCode == -1' >/dev/null <<<"$ev" \
+  && ok "(e2) the event carries Docker's last 3 health results, whitespace folded, a secret-looking value redacted" || bad "(e2) health log: $(jq -c .why.health <<<"$ev")"
+jq -e '.why.lastStall == {at:"2026-11-03T09:59:20.000Z", blockedMs:95000, inFlight:2, requests:[{method:"GET", path:"/api/hub/documents/doc-1/content", runningMs:95010, ended:true}]}' >/dev/null <<<"$ev" \
+  && ok "(e2) the event names the request that blocked the loop (method, path, running time) from the backend's log" || bad "(e2) lastStall: $(jq -c .why.lastStall <<<"$ev")"
+! grep -qE 'SECRETID|abc123secret|OLDEST-ENTRY' "$DEPLOY/state/events.jsonl" \
+  && ok "(e2) no key id, agent id, secret-looking value or older health entry reached events.jsonl" || bad "(e2) leaked: $(grep -oE 'SECRETID|abc123secret|OLDEST-ENTRY' "$DEPLOY/state/events.jsonl" | sort -u | tr '\n' ' ')"
+
+# dead: nothing listens (refused) ⇒ restarted at once, as before
+# (Docker's last result is a hang-up, not a refusal: the probe's answer decides)
+why_setup heal-dead '{"probe":"refused","code":"ECONNREFUSED"}' "Error: socket hang up"
+run_synap heal
+ev="$(last_heal restarted)"
+[ "$(backend_restarts)" = 1 ] && [ -z "$(last_heal stuck_waiting)" ] && [ ! -e "$DEPLOY/state/heal/stuck-backend" ] \
+  && jq -e '.why.class == "dead" and .why.probe == "refused" and (.reason | test("not answering"))' >/dev/null <<<"$ev" \
+  && ok "(e2) dead backend (connection refused): restarted on the first tick, class dead" || { bad "(e2) dead: restarts=$(backend_restarts) ev=$ev"; show; }
+
+# a slow loop that still answers: p99 delay over SYNAP_HEAL_STUCK_LAG_MS ⇒ stuck, eventLoop recorded
+why_setup heal-lag '{"probe":"answered","httpStatus":200,"eventLoop":{"delay":{"state":"measured","windowStartedAt":"x","windowMs":60000,"samples":9,"p50Ms":900,"p99Ms":4500,"maxMs":90000},"utilization":{"state":"measured","ratio":0.99,"windowStartedAt":"x"},"stalls":{"thresholdMs":2000,"count":7,"last":{"at":"2026-11-03T09:59:20.000Z","blockedMs":90000,"inFlight":3}}}}' "Error: socket hang up"
+run_synap heal
+[ "$(backend_restarts)" = 0 ] && last_heal stuck_waiting | jq -e '.why.class == "stuck" and .why.eventLoop == {delayP99Ms:4500, delayMaxMs:90000, utilization:0.99, stalls:7, lastStall:{at:"2026-11-03T09:59:20.000Z", blockedMs:90000, inFlight:3}}' >/dev/null \
+  && ok "(e2) loop p99 4500 ms ≥ 1000: stuck, given time; /health's eventLoop numbers recorded" || { bad "(e2) lag: restarts=$(backend_restarts) $(last_heal stuck_waiting)"; show; }
+SYNAP_HEAL_STUCK_LAG_MS=5000 run_synap heal
+[ "$(backend_restarts)" = 1 ] && last_heal restarted | jq -e '.why.class == "unhealthy" and .reason == "backend was unhealthy"' >/dev/null \
+  && ok "(e2) the same loop under SYNAP_HEAL_STUCK_LAG_MS=5000: not stuck, restarted at once as before" || { bad "(e2) lag threshold: restarts=$(backend_restarts) $(last_heal restarted)"; show; }
+
+# SYNAP_HEAL_STUCK_GRACE_TICKS=0 ⇒ a stuck backend is restarted at once
+why_setup heal-nograce '{"probe":"timeout"}' "Health check exceeded timeout (10s)"
+SYNAP_HEAL_STUCK_GRACE_TICKS=0 run_synap heal
+[ "$(backend_restarts)" = 1 ] && last_heal restarted | jq -e '.why.class == "stuck" and .why.waitedTicks == 0' >/dev/null \
+  && ok "(e2) grace 0: stuck backend restarted on the first tick" || { bad "(e2) grace 0: restarts=$(backend_restarts)"; show; }
+
+# stuck, then it frees itself ⇒ no restart, the marker goes, a recovered event says so
+why_setup heal-unstuck '{"probe":"timeout"}' "Health check exceeded timeout (10s)"
+run_synap heal
+sed -i.x 's/^c-backend|\(.*\)|unhealthy$/c-backend|\1|healthy/' "$FAKE/containers.tsv"; rm -f "$FAKE/containers.tsv.x"
+run_synap heal
+[ "$(backend_restarts)" = 0 ] && [ ! -e "$DEPLOY/state/heal/stuck-backend" ] && last_heal recovered | jq -e '.reason | test("no restart was needed")' >/dev/null \
+  && ok "(e2) a stuck backend that answers again: never restarted, recovered recorded" || { bad "(e2) unstuck: restarts=$(backend_restarts) $(last_heal recovered)"; show; }
+
+# postgres stuck too: still never restarted (SYNAP_HEAL_NEVER wins)
+why_setup heal-pg '{"probe":"timeout"}' "Health check exceeded timeout (10s)"
+sed -i.x 's/^c-postgres|\(.*\)|healthy$/c-postgres|\1|unhealthy/' "$FAKE/containers.tsv"; rm -f "$FAKE/containers.tsv.x"
+for i in 1 2 3 4; do SYNAP_HEAL_PROBE_SERVICES="backend postgres" run_synap heal; done
+! grep -qx postgres "$FAKE/restarted" && [ "$(backend_restarts)" = 1 ] && ok "(e2) postgres never restarted, even probed; backend once after its grace" || bad "(e2) restarts: $(tr '\n' ' ' < "$FAKE/restarted")"
 
 # ═══ 5. unattended update: request contract, policy, window, enforce ══════════
 setup unattended; publish main-4444444
