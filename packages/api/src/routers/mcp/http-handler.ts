@@ -33,6 +33,7 @@
 import { MCP_BATCH_REFUSED } from "./call-fence.js";
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
+import { createLogger } from "@synap-core/core";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { apiKeyService } from "../../services/api-keys.js";
 import { resolveKeyIdentity } from "../../access/key-identity.js";
@@ -45,7 +46,14 @@ import {
   checkHubRateLimit,
   type HubRateLimitCause,
 } from "../../utils/hub-protocol-rate-limit.js";
-import { tools } from "./tools/index.js";
+import { tools, openWorldToolNames } from "./tools/index.js";
+import {
+  classifyMcpToolCall,
+  REQUEST_TIMEOUT,
+  runGuarded,
+  TOO_MANY_IN_FLIGHT,
+  UNCOUNTED_KEY_TYPES,
+} from "../../middleware/hub-request-guard.js";
 import { createMCPServer, groundingBudgetBytes } from "./index.js";
 import { resolveUiRendererFromDb } from "./ui-tools.js";
 import { loadKeyToolAccess } from "./tool-access.js";
@@ -330,6 +338,64 @@ function jsonRpcRateLimited(
       ...(wait ? { headers: { "Retry-After": String(wait.retryAfter) } } : {}),
     }
   );
+}
+
+const logger = createLogger({ module: "mcp-http" });
+
+/**
+ * A key over its in-flight limit (`middleware/hub-request-guard.ts`): 429 like
+ * the burst cap, never a 401, with `Retry-After: 1` (a slot frees when one of
+ * the key's running requests finishes).
+ */
+function jsonRpcInFlightLimited(id: unknown, limit: number) {
+  return Response.json(
+    {
+      jsonrpc: "2.0",
+      id,
+      error: {
+        code: -32000,
+        message: `This key already has ${limit} requests running on the pod. Wait for one to finish, then retry.`,
+        data: { code: TOO_MANY_IN_FLIGHT, limit, scope: "key", retryAfter: 1 },
+      },
+    },
+    { status: 429, headers: { "Retry-After": "1" } }
+  );
+}
+
+/**
+ * A request past the guard's timeout: 503. The top-level `code` is what the
+ * 5xx egress door keeps (`middleware/error-egress.ts`); the work may finish.
+ */
+function jsonRpcTimedOut(id: unknown, timeoutMs: number) {
+  return Response.json(
+    {
+      jsonrpc: "2.0",
+      id,
+      code: REQUEST_TIMEOUT,
+      error: {
+        code: -32000,
+        message: `The pod did not answer within ${Math.round(timeoutMs / 1000)} s. The work may still finish: check before retrying a write.`,
+        data: { code: REQUEST_TIMEOUT, timeoutMs },
+      },
+    },
+    { status: 503 }
+  );
+}
+
+/**
+ * The tools that declare `openWorldHint` (static list). A failed read is not
+ * cached and not hidden: it is logged, and the call is guarded like any other.
+ */
+let openWorldTools: Promise<Set<string>> | undefined;
+async function mcpOpenWorldTools(): Promise<ReadonlySet<string>> {
+  try {
+    openWorldTools ??= openWorldToolNames();
+    return await openWorldTools;
+  } catch (err) {
+    openWorldTools = undefined;
+    logger.warn({ err }, "could not read the open-world MCP tool list");
+    return new Set();
+  }
 }
 
 /** The wait a `checkHubRateLimit` refusal carries (its TRPCError `cause`). */
@@ -627,34 +693,63 @@ mcpHttpApp.post("/", async (c) => {
   // Request write facts: D8 probe key, D6 agent principal, C1 calling client
   // (key + conversation — what keeps two conversations' writes and focus out
   // of each other's, even on one shared agent key).
-  return runWithProbeWrites(isProbeApiKey(keyRecord), () =>
-    runWithActingAgent(agentUserId, () =>
-      // B7: the calling key, recorded on every proposal this request files.
-      runWithCallingKey(keyRecord.id, () =>
-        runWithClientKey(
-          clientKeyForApiKey(keyRecord, conversationId),
-          () =>
-            // 0389: the model and provider the client says it runs on.
-            runWithReportedModel(
-              c.req.header(MODEL_HEADER) ?? metaString(MODEL_META_KEY),
-              c.req.header(MODEL_PROVIDER_HEADER) ??
-                metaString(MODEL_PROVIDER_META_KEY),
-              () => {
-                // 0384: what the runner says it is doing, recorded off the request path.
-                void reportRunnerState();
-                // W1: the key's grant bounds every write gate and scoped read below.
-                return runWithGrant(grant, () =>
-                  transport.handleRequest(c.req.raw, { parsedBody })
-                );
-              }
-            ),
-          c.req.header(CONVERSATION_CWD_HEADER) ??
-            metaString(CONVERSATION_CWD_META_KEY),
-          c.req.header(PROCESS_HEADER) ?? metaString(PROCESS_META_KEY),
-          c.req.header(RUNNER_STATE_HEADER) ?? metaString(RUNNER_STATE_META_KEY)
+  const mcpCall = () =>
+    runWithProbeWrites(isProbeApiKey(keyRecord), () =>
+      runWithActingAgent(agentUserId, () =>
+        // B7: the calling key, recorded on every proposal this request files.
+        runWithCallingKey(keyRecord.id, () =>
+          runWithClientKey(
+            clientKeyForApiKey(keyRecord, conversationId),
+            () =>
+              // 0389: the model and provider the client says it runs on.
+              runWithReportedModel(
+                c.req.header(MODEL_HEADER) ?? metaString(MODEL_META_KEY),
+                c.req.header(MODEL_PROVIDER_HEADER) ??
+                  metaString(MODEL_PROVIDER_META_KEY),
+                () => {
+                  // 0384: what the runner says it is doing, recorded off the request path.
+                  void reportRunnerState();
+                  // W1: the key's grant bounds every write gate and scoped read below.
+                  return runWithGrant(grant, () =>
+                    transport.handleRequest(c.req.raw, { parsedBody })
+                  );
+                }
+              ),
+            c.req.header(CONVERSATION_CWD_HEADER) ??
+              metaString(CONVERSATION_CWD_META_KEY),
+            c.req.header(PROCESS_HEADER) ?? metaString(PROCESS_META_KEY),
+            c.req.header(RUNNER_STATE_HEADER) ??
+              metaString(RUNNER_STATE_META_KEY)
+          )
         )
       )
-    )
+    );
+
+  // The Hub request guard (`middleware/hub-request-guard.ts`): a call still
+  // running after 30 s answers 503 REQUEST_TIMEOUT, and a key already running
+  // 8 calls gets 429. A long-poll tool, a model call and an open-world tool
+  // are never timed out.
+  const rpc = parsedBody as {
+    id?: unknown;
+    method?: string;
+    params?: { name?: unknown };
+  } | null;
+  const toolName =
+    rpc?.method === "tools/call" && typeof rpc.params?.name === "string"
+      ? rpc.params.name
+      : undefined;
+  const rpcId = rpc?.id ?? null;
+  return runGuarded(
+    {
+      key: UNCOUNTED_KEY_TYPES.has(keyRecord.keyType) ? null : keyRecord.id,
+      route: `MCP ${rpc?.method ?? "?"}${toolName ? ` ${toolName}` : ""}`,
+      exemption: classifyMcpToolCall(toolName, await mcpOpenWorldTools()),
+    },
+    () => mcpCall(),
+    {
+      timedOut: (ms) => jsonRpcTimedOut(rpcId, ms),
+      busy: (limit) => jsonRpcInFlightLimited(rpcId, limit),
+    }
   );
 });
 
