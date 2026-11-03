@@ -2329,6 +2329,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "skill/update": "disruptive", // egress
   "tool/create": "disruptive", // egress
   "tool/delete": "disruptive", // destroy
+  "tool/provisionWebhook": "disruptive", // scope: mints or rotates the secret inbound URL
   "tool/setAuthBinding": "disruptive", // egress: whose credential the tool runs with
   "tool/update": "disruptive", // egress
   "track/assign_agent": "disruptive", // effect: another agent starts work on the goal
@@ -2666,6 +2667,7 @@ export const GATE_WRITE_DOORS = {
   "skill/update": "gate",
   "tool/create": "gate",
   "tool/delete": "gate",
+  "tool/provisionWebhook": "gate",
   "tool/setAuthBinding": "gate",
   "tool/update": "gate",
   // TRACKS (0272) — a method running inside a project. `create` starts one
