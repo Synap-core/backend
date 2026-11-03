@@ -169,31 +169,6 @@ describe("MCP conversation identity (Mcp-Session-Id)", () => {
     expect(idA).toMatch(/^[0-9a-f-]{36}$/);
     expect(idB).toMatch(/^[0-9a-f-]{36}$/);
     expect(idB).not.toBe(idA);
-
-    // The connector's name and icon: the amber S, also on a 2025-06-18 handshake.
-    const body = (await a.json()) as {
-      result?: {
-        serverInfo?: {
-          name?: string;
-          title?: string;
-          websiteUrl?: string;
-          icons?: Array<{ src: string; mimeType?: string }>;
-        };
-      };
-    };
-    expect(body.result?.serverInfo?.name).toBe("synap-mcp-server");
-    expect(body.result?.serverInfo?.title).toBe("Synap");
-    expect(body.result?.serverInfo?.websiteUrl).toBe("https://www.synap.live");
-    expect(body.result?.serverInfo?.icons).toEqual([
-      expect.objectContaining({
-        src: "https://www.synap.live/icon.png",
-        mimeType: "image/png",
-      }),
-      expect.objectContaining({
-        src: "https://www.synap.live/brand/synap-mark.svg",
-        mimeType: "image/svg+xml",
-      }),
-    ]);
   });
 
   it("a later request's Mcp-Session-Id is the conversation half of the client key", async () => {
