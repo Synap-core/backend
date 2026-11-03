@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synap.live/schemas/host-resources.v1.schema.json",
+  "title": "deploy/state/resources.json (version 1)",
+  "description": "What the pod's host has left, written by every `synap heal` tick (synap-heal.timer, every 2 min; writer: _res_sample in `synap`), atomically. The backend reads it at /opt/synap/deploy/state/resources.json. A value the host could not read is null (or a disk left out), never 0. Percentages are 0-100.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "sampledAt",
+    "hostKind",
+    "memory",
+    "swap",
+    "pressure",
+    "load",
+    "disks",
+    "docker"
+  ],
+  "properties": {
+    "version": { "const": 1 },
+    "sampledAt": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "hostKind": { "enum": ["lxc", "vm", "baremetal", "unknown"] },
+    "memory": {
+      "description": "/proc/meminfo MemTotal and MemAvailable. null when unreadable. In an LXC container these are the container's limits only where lxcfs is mounted.",
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["totalBytes", "availableBytes", "usedPct"],
+      "properties": {
+        "totalBytes": { "type": "integer", "minimum": 1 },
+        "availableBytes": { "type": "integer", "minimum": 0 },
+        "usedPct": { "type": "number", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "swap": {
+      "description": "null when the host has no swap (SwapTotal 0) or it is unreadable.",
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["totalBytes", "usedBytes", "usedPct"],
+      "properties": {
+        "totalBytes": { "type": "integer", "minimum": 1 },
+        "usedBytes": { "type": "integer", "minimum": 0 },
+        "usedPct": { "type": "number", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "pressure": {
+      "description": "/proc/pressure (PSI), percent of time stalled over 10 s and 60 s. A block is null when its file is missing or unreadable (a kernel without PSI, or booted psi=0).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["memory", "cpu", "io"],
+      "properties": {
+        "memory": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["someAvg10", "someAvg60", "fullAvg10", "fullAvg60"],
+          "properties": {
+            "someAvg10": { "type": "number", "minimum": 0, "maximum": 100 },
+            "someAvg60": { "type": "number", "minimum": 0, "maximum": 100 },
+            "fullAvg10": { "type": "number", "minimum": 0, "maximum": 100 },
+            "fullAvg60": { "type": "number", "minimum": 0, "maximum": 100 }
+          }
+        },
+        "cpu": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["someAvg10", "someAvg60"],
+          "properties": {
+            "someAvg10": { "type": "number", "minimum": 0, "maximum": 100 },
+            "someAvg60": { "type": "number", "minimum": 0, "maximum": 100 }
+          }
+        },
+        "io": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["someAvg10", "someAvg60", "fullAvg10", "fullAvg60"],
+          "properties": {
+            "someAvg10": { "type": "number", "minimum": 0, "maximum": 100 },
+            "someAvg60": { "type": "number", "minimum": 0, "maximum": 100 },
+            "fullAvg10": { "type": "number", "minimum": 0, "maximum": 100 },
+            "fullAvg60": { "type": "number", "minimum": 0, "maximum": 100 }
+          }
+        }
+      }
+    },
+    "load": {
+      "description": "/proc/loadavg 1 and 5 min, and the cores this host shows. null when unreadable.",
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["avg1", "avg5", "cores"],
+      "properties": {
+        "avg1": { "type": "number", "minimum": 0 },
+        "avg5": { "type": "number", "minimum": 0 },
+        "cores": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "disks": {
+      "description": "df -B1 of the deploy dir (label data) and of Docker's data root (label docker). Both entries are listed even when they are on one filesystem. A disk df cannot read is left out. usedPct is df's Use%: used / (used + avail).",
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "label",
+          "path",
+          "totalBytes",
+          "usedBytes",
+          "availBytes",
+          "usedPct"
+        ],
+        "properties": {
+          "label": { "enum": ["data", "docker"] },
+          "path": { "type": "string", "pattern": "^/" },
+          "totalBytes": { "type": "integer", "minimum": 0 },
+          "usedBytes": { "type": "integer", "minimum": 0 },
+          "availBytes": { "type": "integer", "minimum": 0 },
+          "usedPct": { "type": "number", "minimum": 0, "maximum": 100 }
+        }
+      }
+    },
+    "docker": {
+      "description": "Docker's disk usage (the Docker API /system/df, images and build cache; what `docker system df` shows), asked at most once an hour. sampledAt is when it was asked; between two asks the last answer is repeated. null until one ask has answered.",
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["sampledAt", "buildCacheBytes", "imagesReclaimableBytes"],
+      "properties": {
+        "sampledAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+        },
+        "buildCacheBytes": { "type": "integer", "minimum": 0 },
+        "imagesReclaimableBytes": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

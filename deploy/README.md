@@ -129,6 +129,25 @@ synap config set KEY=VALUE      # then `synap apply` to recreate services with i
 synap users list                # pod users (also add-admin, reset-password, delete)
 ```
 
+### Host resources and clean-ups
+
+Every `synap heal` tick (`synap-heal.timer`, every 2 minutes) also writes
+`deploy/state/resources.json`: memory, swap, pressure stall (PSI), load, the
+disks of the deploy dir and of Docker's data root, and, at most once an hour,
+Docker's build cache and reclaimable images. It only reads; a value the host
+cannot give is `null`, never `0`. The backend reads it for the pod's resource
+alerts. Format: [`schemas/host-resources.v1.schema.json`](schemas/host-resources.v1.schema.json).
+
+Pod admin can ask the host for three clean-ups, all regenerable: cap the build
+cache at 2 GB, remove this pod's old release images (the current and previous
+release stay, so a rollback is still possible), or restart one service
+(never `postgres`). The backend writes `deploy/state/clean/request.json`, its
+only writable dir besides `state/kit`; `synap-clean.path` runs
+`synap clean-request`, which answers in `deploy/state/clean/result.json` and
+`state/events.jsonl` (`pod.clean`). Formats:
+[`schemas/clean-request.v1.schema.json`](schemas/clean-request.v1.schema.json),
+[`schemas/clean-result.v1.schema.json`](schemas/clean-result.v1.schema.json).
+
 ## Update
 
 ```bash
