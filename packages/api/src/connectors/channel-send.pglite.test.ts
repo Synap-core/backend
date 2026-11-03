@@ -834,11 +834,20 @@ describe("security review (lane D)", () => {
   });
 
   it("a named channel the caller cannot read is not found", async () => {
+    // In the stranger's own space, which the caller is not a member of. (An
+    // EXTERNAL channel with NO space is visible to every pod member today:
+    // channelVisibilityWhere's shared-type branch. That floor is a separate
+    // decision, so this case pins the channel where the floor does hide it.)
     const theirs = randomUUID();
+    const theirSpace = randomUUID();
     await q(
-      `insert into channels (id, user_id, channel_type, scope, status, title, external_source, external_id, metadata, created_at, updated_at)
-       values ($1,$2,'external','private','active','Theirs','linkedin','chat-hidden','{}',now(),now())`,
-      [theirs, STRANGER]
+      `insert into workspaces (id, owner_id, name, settings) values ($1, $2, 'Theirs', '{}'::jsonb)`,
+      [theirSpace, STRANGER]
+    );
+    await q(
+      `insert into channels (id, user_id, workspace_id, channel_type, scope, status, title, external_source, external_id, metadata, created_at, updated_at)
+       values ($1,$2,$3,'external','workspace','active','Theirs','linkedin','chat-hidden','{}',now(),now())`,
+      [theirs, STRANGER, theirSpace]
     );
     await expect(
       handler()(
