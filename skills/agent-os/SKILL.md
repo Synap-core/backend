@@ -100,8 +100,7 @@ governance.
 | `ecosystem`          | Ecosystem          | Market actors, segments, trends, relationships         |
 | `brand-library`      | Brand Library      | Brand voice, assets, tokens, components, rules         |
 | `crm`                | CRM                | Contacts, companies, deals, pipeline                   |
-| `content-os`         | Content OS         | THE content surface — posts, pillars, calendar, text   |
-| `content-studio`     | Content Studio     | Video only — HyperFrames compositions for a post       |
+| `content-os`         | Content OS         | THE content surface — posts, calendar, video, visuals  |
 | `marketing-campaign` | Marketing          | Campaigns, leads, channels                             |
 | `project-management` | Project Management | OKRs, projects, sprints, tasks                         |
 | `builder-workspace`  | Dev                | DevPlane + agents — building the product               |
@@ -135,8 +134,8 @@ Ask: "Describe what you do in a sentence." From the answer, **infer** which
 workspaces fit. Examples:
 
 - "dev agency with clients" → Dev (`builder-workspace`) + CRM + Project Management
-- "I want to create content" → Content OS (+ offer Brand Library; add Content
-  Studio only when they make video)
+- "I want to create content" → Content OS (+ offer Brand Library); it holds
+  video and visual posts too (Content Studio was retired into it)
 - "I want to build a product" → Dev (`builder-workspace`) (+ offer CRM)
 - "I need a shopping/procurement domain" → market-search first; else propose
 - "SaaS startup" → Dev + CRM + Project Management + Content OS

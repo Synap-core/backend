@@ -11,6 +11,7 @@
  * that could hold a code, token, secret or key in clear.
  */
 import { pgTable, uuid, text, integer, timestamp } from "drizzle-orm/pg-core";
+import type { AgentWriteMode } from "@synap-core/types/agents";
 import type { ComputerBelongsTo } from "@synap-core/types/computers";
 import { users } from "./users.js";
 
@@ -46,6 +47,12 @@ export const deviceAuthRequests = pgTable("device_auth_requests", {
   machineName: text("machine_name"),
   /** The approver's "whose computer is it" (0388), applied when the key is collected. */
   computerBelongsTo: text("computer_belongs_to").$type<ComputerBelongsTo>(),
+  /**
+   * How the approved agents' writes land (0394), the approver's choice from
+   * `AGENT_WRITE_MODE_CHOICES`, applied when the key is collected. NULL = no
+   * choice sent (an older surface): a new agent starts ask-first, as before.
+   */
+  agentWriteMode: text("agent_write_mode").$type<AgentWriteMode>(),
   mintedKeyId: uuid("minted_key_id"),
   failedCodeAttempts: integer("failed_code_attempts").notNull().default(0),
   pollIntervalSeconds: integer("poll_interval_seconds").notNull().default(5),

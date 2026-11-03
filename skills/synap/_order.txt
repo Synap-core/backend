@@ -24,6 +24,7 @@ reading.md
 multi-entity-capture.md
 worked-examples.md
 crm.md
+channels.md
 common-mistakes.md
 inline-patterns.md
 focus-sessions.md

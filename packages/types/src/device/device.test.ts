@@ -17,6 +17,7 @@ import {
   goneTitle,
   hostedAgentName,
   isCompleteCode,
+  reconnectLine,
   type DeviceRead,
   type DeviceRequest,
 } from "./index.js";
@@ -100,6 +101,32 @@ describe("reconnect or new (locked decision 2)", () => {
   });
 });
 
+describe("the reconnect line", () => {
+  const old = { id: "m-1", name: "devbox", createdAt: REQUEST.createdAt };
+  const ago = (iso: string) => `<${iso}>`;
+  it("names each kept agent and when it was last seen", () => {
+    expect(
+      reconnectLine(
+        {
+          ...old,
+          agents: [
+            { id: "a-1", name: "Claude Code", lastSeenAt: "T1" },
+            { id: "a-2", name: "Codex", lastSeenAt: null },
+          ],
+        },
+        ago
+      )
+    ).toBe(
+      "Keeps Claude Code (seen <T1>), Codex (never seen), its history and rules. Its agents get new keys: anything still running there with an old key stops and must reconnect."
+    );
+  });
+  it("an older pod's read (no agents) still says what stops", () => {
+    expect(reconnectLine(old, ago)).toBe(
+      "Keeps its agents, history and rules. Its agents get new keys: anything still running there with an old key stops and must reconnect."
+    );
+  });
+});
+
 describe("decisions", () => {
   it("'This wasn't me' sends deny and nothing else", () => {
     expect(denyDecision(REQUEST, "abcd-efgh")).toEqual({
@@ -124,6 +151,26 @@ describe("decisions", () => {
       reuseComputerId: "m-1",
       computerName: "My devbox",
     });
+  });
+
+  it("sends how the kept agents' writes land only when chosen and an agent is kept", () => {
+    expect(
+      approveDecision(REQUEST, "ABCD-EFGH", {
+        agents: ["codex"],
+        reuseComputerId: null,
+        computerName: "devbox",
+        agentWriteMode: "pod-default",
+      }).agentWriteMode
+    ).toBe("pod-default");
+    expect(
+      "agentWriteMode" in
+        approveDecision(REQUEST, "ABCD-EFGH", {
+          agents: [],
+          reuseComputerId: null,
+          computerName: "devbox",
+          agentWriteMode: "pod-default",
+        })
+    ).toBe(false);
   });
 
   it("names agents by the computer as it is renamed, through the one door", () => {
@@ -207,7 +254,7 @@ describe("the pending choices", () => {
   });
   it("the access sentence names the computer and the key's validity", () => {
     expect(accessLine(REQUEST, " My devbox ")).toBe(
-      "My devbox gets its own access: it reads your data and proposes changes — every change waits for your approval. Key valid 90 days."
+      "My devbox gets its own access: it reads your data, and every change it makes itself waits for your approval. Key valid 90 days."
     );
     expect(accessLine(REQUEST, "")).toMatch(/^devbox gets/);
   });

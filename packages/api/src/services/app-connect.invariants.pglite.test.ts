@@ -254,7 +254,7 @@ describe("invariant 3 — an agent never approves an app's access", () => {
     const result = await approveAs(proposalId, {});
     expect(result.success).toBe(true);
     expect(await approvedOf(app.id)).toEqual([
-      { permission: "entity.note.read", workspaceId: SALES },
+      { permission: "entity.note.read", workspaceId: SALES, scope: "space" },
     ]);
   });
 });

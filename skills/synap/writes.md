@@ -291,3 +291,5 @@ GET  /api/hub/channels/personal?userId={userId}&workspaceId={workspaceId}
 POST /api/hub/threads/{threadId}/messages
        { "userId": "{userId}", "role": "user", "content": "…" }
 ```
+
+This is the person's own AI thread. The conversation with ANOTHER person (a lead, a client) is that person's channel: read it with `synap_get_channel` `{mode: "person", entityId}` and write to them only by filing `messaging.send` `{to, text}`, a proposed message the person approves (`load_skill system/synap/channels`).

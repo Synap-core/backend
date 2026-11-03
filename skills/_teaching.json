@@ -1058,6 +1058,17 @@
       "capability": null
     }
   },
+  "synap/channels": {
+    "teachesTools": ["synap_get_channel"],
+    "skillGroup": "core",
+    "alwaysOn": false,
+    "summary": "A channel bound to a person IS the conversation with them (one per tool and account): read it with synap_get_channel mode person; write to them only by filing messaging.send {to, text}, a proposed message they approve; never an outreach touch or note.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
   "synap/hand-off": {
     "teachesTools": [
       "synap_list_agents",

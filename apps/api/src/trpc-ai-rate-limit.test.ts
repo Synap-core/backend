@@ -96,9 +96,11 @@ describe("index.ts mounts the AI limit through the ONE wrapper", () => {
     "ts"
   ) as string;
 
+  // index.ts boots a server on import, so its MOUNT is read from source; the
+  // limit's behaviour is the describe above.
   it("uses trpcAiRateLimit(aiRateLimitMiddleware) on /trpc/*", () => {
     expect(src).toContain(
-      'app.use("/trpc/*", trpcRefusal(trpcAiRateLimit(aiRateLimitMiddleware)))'
+      'app.use("/trpc/*", trpcAiRateLimit(aiRateLimitMiddleware))'
     );
   });
 

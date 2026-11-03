@@ -15,7 +15,11 @@
  * ("Computer"), agent names ("Claude Code on devbox") and statuses. Pure:
  * loaded by Next (pod-admin), React Native (relay) and Node alike.
  */
-import { MACHINE_AGENT_TYPE, agentDisplayName } from "../agents/index.js";
+import {
+  MACHINE_AGENT_TYPE,
+  agentDisplayName,
+  type AgentWriteMode,
+} from "../agents/index.js";
 import { GRANT_PRESETS, resolveHolderAccess } from "../grants/index.js";
 import { resolveObjectNoun, resolveStatusLabel } from "../vocabulary/index.js";
 
@@ -31,7 +35,16 @@ export interface DeviceRequest {
   userAgent: string | null;
   createdAt: string;
   expiresAt: string;
-  reusableComputers: Array<{ id: string; name: string; createdAt: string }>;
+  reusableComputers: Array<{
+    id: string;
+    name: string;
+    createdAt: string;
+    /**
+     * The agents it hosts, kept by a reconnect (their keys are replaced).
+     * Absent from a pod older than this read: the line then names none.
+     */
+    agents?: Array<{ id: string; name: string; lastSeenAt: string | null }>;
+  }>;
   keyTtlDays: number;
   accessName: string;
 }
@@ -44,6 +57,8 @@ export interface DeviceDecision {
   agents?: string[];
   reuseComputerId?: string | null;
   computerName?: string | null;
+  /** How the approved agents' writes land (`AGENT_WRITE_MODE_CHOICES`). */
+  agentWriteMode?: AgentWriteMode | null;
 }
 
 /** "Computer" — the one noun, from the vocabulary door. */
@@ -238,12 +253,38 @@ export function computerLine(
 }
 
 /**
+ * What "Reconnect devbox" keeps and what it stops — the ONE sentence, both
+ * surfaces. A reconnect keeps the computer's agents, history and rules, and
+ * replaces its keys and its agents' (machine-connect `mintForApprovedRequest`
+ * revokes the old ones), so anything still running with an old key stops.
+ * Names the kept agents and when each was last seen, when the read carries them.
+ */
+export function reconnectLine(
+  computer: DeviceRequest["reusableComputers"][number],
+  ago: (iso: string) => string
+): string {
+  const agents = computer.agents ?? [];
+  const kept =
+    agents.length > 0
+      ? `Keeps ${agents
+          .map(
+            (a) =>
+              `${a.name} (${a.lastSeenAt ? `seen ${ago(a.lastSeenAt)}` : "never seen"})`
+          )
+          .join(", ")}, its history and rules.`
+      : "Keeps its agents, history and rules.";
+  return `${kept} Its agents get new keys: anything still running there with an old key stops and must reconnect.`;
+}
+
+/**
  * "devbox gets its own access: …" — the ONE access sentence, both surfaces.
- * Names the key's validity, which the read carries.
+ * It speaks of the COMPUTER's own changes (it starts ask-first); its agents'
+ * changes land as the person chose (`agentWriteMode`). Names the key's
+ * validity, which the read carries.
  */
 export function accessLine(req: DeviceRequest, computerName: string): string {
   const name = computerName.trim() || req.hostname;
-  return `${name} gets its own access: it reads your data and proposes changes — every change waits for your approval. Key valid ${req.keyTtlDays} days.`;
+  return `${name} gets its own access: it reads your data, and every change it makes itself waits for your approval. Key valid ${req.keyTtlDays} days.`;
 }
 
 /**
@@ -285,24 +326,38 @@ export interface ApproveChoice {
   agents: string[];
   reuseComputerId: string | null;
   computerName: string;
+  /**
+   * How the kept agents' writes land, from `AGENT_WRITE_MODE_CHOICES`.
+   * Omitted (a surface that does not offer the choice yet): the pod starts a
+   * new agent ask-first.
+   */
+  agentWriteMode?: AgentWriteMode;
 }
 
-/** "Approve": the computer, the agents kept, reuse-or-new, the name. */
+/**
+ * "Approve": the computer, the agents kept, reuse-or-new, the name, and how
+ * the kept agents' writes land (sent only when the surface offered it and an
+ * agent is kept).
+ */
 export function approveDecision(
   req: DeviceRequest,
   code: string,
   choice: ApproveChoice
 ): DeviceDecision {
   const name = choice.computerName.trim();
+  const agents = req.agents
+    .map((a) => a.agentType)
+    .filter((t) => choice.agents.includes(t));
   return {
     requestId: req.requestId,
     userCode: normalizeCode(code),
     decision: "approve",
-    agents: req.agents
-      .map((a) => a.agentType)
-      .filter((t) => choice.agents.includes(t)),
+    agents,
     reuseComputerId: choice.reuseComputerId,
     computerName: name || null,
+    ...(choice.agentWriteMode && agents.length > 0
+      ? { agentWriteMode: choice.agentWriteMode }
+      : {}),
   };
 }
 

@@ -6,8 +6,9 @@ import {
   eq,
   and,
   drizzleSql,
-  workspaces,
   entities,
+  channels,
+  ChannelType,
   messagingAccounts,
   webhookSubscriptions,
   resolveVaultSecret,
@@ -28,7 +29,18 @@ import {
 } from "@synap/jobs/workers/webhook-worker.js";
 import { getMessagingConnector } from "../connectors/index.js";
 import { MessagingAccountService } from "../services/messaging-account-service.js";
-import { recordInboundMessage } from "../services/connectors/inbound-recorder.js";
+import {
+  recordInboundMessage,
+  advanceDeliveryStatus,
+  type ParticipantLookupRecord,
+} from "../services/connectors/inbound-recorder.js";
+import { resolveParticipant } from "../services/connectors/participant-lookup.js";
+import { accountHomeWorkspace } from "../services/connectors/account-home-workspace.js";
+import {
+  MESSAGING_HISTORY_IMPORT_QUEUE,
+  MESSAGING_WEBHOOK_ENSURE_QUEUE,
+  type MessagingHistoryImportJobData,
+} from "@synap/jobs/workers/messaging-sync.js";
 import { markWebhookSeen } from "../services/connectors/mark-webhook-seen.js";
 import { submitCaptureGraph } from "../services/capture-agent/submit-capture-graph.js";
 import { stageCaptureSources } from "../services/intake/record-structure-intake.js";
@@ -815,6 +827,11 @@ webhooksInboundRouter.post("/mailgun/:token", async (c) => {
     title: mapped.senderEmail,
     idempotencySeed: mapped.messageId,
     messageId: mapped.messageId,
+    // A strong match is the person: the channel binds to them (not only
+    // keyed by their id), so it follows them like any channel with a person.
+    ...(resolvedClientEntityId
+      ? { contextEntityId: resolvedClientEntityId }
+      : {}),
     // Origin: the Mailgun connector TOOL row is a real registry id.
     origin: {
       producerType: "tool",
@@ -933,42 +950,113 @@ webhooksInboundRouter.post("/messaging", async (c) => {
       });
       if (!account) return c.json({ ok: true });
 
-      // Resolve the target workspace. Prefer the account's own pin (set when the
-      // account was backfilled / bound) — this removes the arbitrary-workspace
-      // guess for a multi-workspace owner. Only fall back to the owner's first
-      // workspace for legacy/unpinned rows (back-compat).
-      let workspaceId = account.workspaceId ?? null;
+      // The channel's workspace at birth: the account's own pin, else the
+      // owner's first workspace (legacy unpinned rows).
+      const workspaceId = await accountHomeWorkspace(account);
       if (!workspaceId) {
-        const workspace = await db.query.workspaces.findFirst({
-          where: eq(workspaces.ownerId, account.userId),
-        });
-        if (!workspace) {
-          logger.warn(
-            { userId: account.userId },
-            "No workspace found for messaging account owner"
-          );
-          return c.json({ ok: true });
-        }
-        workspaceId = workspace.id;
+        logger.warn(
+          { userId: account.userId },
+          "No workspace found for messaging account owner"
+        );
+        return c.json({ ok: true });
       }
 
-      const senderName = event.message.senderName;
+      const m = event.message;
+      const outbound = m.direction === "outbound";
 
-      // Resolve-or-create the EXTERNAL channel + dedup-record the inbound
-      // message + fire `external_message.received` via the shared recorder.
-      // The idempotency seed is the composite the LinkedIn backfill also
-      // hashes (thread + sentAt + body), so a message both paths see lands once.
+      // WHO the conversation is with. Inbound: the sender. Outbound (the
+      // owner wrote from their own app, or the provider's echo of a pod
+      // send): the sender is the owner, so the person is the chat's 1:1
+      // counterpart — asked from the provider only for a chat the pod has no
+      // channel for yet. Never our own name or id.
+      let participantExternalId = outbound ? undefined : m.senderProviderId;
+      let participantName = outbound ? undefined : m.senderName;
+      let publicIdentifier = outbound ? undefined : m.senderPublicIdentifier;
+      const known = await db.query.channels.findFirst({
+        where: and(
+          eq(channels.userId, account.userId),
+          eq(channels.channelType, ChannelType.EXTERNAL),
+          eq(channels.externalSource, event.provider),
+          eq(channels.externalId, event.threadId)
+        ),
+        columns: { id: true, contextObjectId: true, metadata: true },
+      });
+      // A GROUP chat is never one person's channel: no sender binds it.
+      let groupChat =
+        (known?.metadata as Record<string, unknown> | null | undefined)
+          ?.groupChat === true;
+      if (!known && connector.getChat) {
+        try {
+          const chat = await connector.getChat(
+            account.externalId,
+            event.threadId
+          );
+          if (chat && !chat.counterpart) {
+            groupChat = true;
+          } else if (outbound) {
+            participantExternalId = chat?.counterpart?.providerId;
+            participantName = chat?.counterpart?.name;
+            publicIdentifier = chat?.counterpart?.publicIdentifier ?? undefined;
+          }
+        } catch (err) {
+          // The message is still recorded; the channel stays unbound until
+          // a message names the person.
+          logger.warn(
+            { err, threadId: event.threadId },
+            "Messaging webhook: chat counterpart unreadable"
+          );
+        }
+      }
+
+      // The person, when the pod knows them: their provider id, their
+      // handle, or one profile lookup within the daily budget (cached on the
+      // channel, never repeated). An unknown sender stays unbound.
+      let contextEntityId: string | null = null;
+      let participantLookup: ParticipantLookupRecord | undefined;
+      if (groupChat) {
+        participantExternalId = undefined;
+        participantName = undefined;
+      }
+      if (participantExternalId && !known?.contextObjectId) {
+        const who = await resolveParticipant({
+          provider: event.provider,
+          userId: account.userId,
+          account: { id: account.id, externalId: account.externalId },
+          providerId: participantExternalId,
+          publicIdentifier,
+          chatId: event.threadId,
+          connector,
+        });
+        contextEntityId = who.entityId;
+        participantLookup = who.lookup;
+      }
+
+      // Resolve-or-create the EXTERNAL channel + dedup-record the message +
+      // fire `external_message.received` (or `.sent` for an outbound one).
+      // The seed is the provider message id, as the history import hashes
+      // it, so a message both paths see lands once; the echo of a message the
+      // pod sent collapses onto its row by external message id.
       await recordInboundMessage({
         provider: event.provider,
         externalId: event.threadId,
         userId: account.userId,
         workspaceId,
-        text: event.message.body,
-        participant: senderName,
+        text: m.body,
+        participant: participantName,
+        participantExternalId,
         accountExternalId: account.externalId,
-        title: senderName,
-        idempotencySeed: `${event.threadId}:${event.message.sentAt}:${event.message.body}`,
-        sentAt: event.message.sentAt,
+        title:
+          participantName ??
+          `${event.provider} ${groupChat ? "group" : "conversation"}`,
+        idempotencySeed: m.externalMessageId
+          ? `${event.threadId}:${m.externalMessageId}`
+          : `${event.threadId}:${m.sentAt}:${m.body}`,
+        messageId: m.externalMessageId || undefined,
+        sentAt: m.sentAt,
+        direction: outbound ? "outbound" : "inbound",
+        ...(contextEntityId ? { contextEntityId } : {}),
+        ...(participantLookup ? { participantLookup } : {}),
+        ...(groupChat ? { groupChat: true } : {}),
         // Origin: the Unipile messaging bridge has no tools/sources registry
         // row, so the producer is the provider slug under the `source` kind
         // (channel-origin convention).
@@ -977,6 +1065,24 @@ webhooksInboundRouter.post("/messaging", async (c) => {
           producerId: event.provider,
           producerName: `${event.provider} (Unipile)`,
         },
+      });
+    } else if (event.type === "message.status") {
+      // A receipt: the other side got or read a message we sent. Moves its
+      // delivery status forward only (sent → delivered → read).
+      const account = await db.query.messagingAccounts.findFirst({
+        where: and(
+          eq(messagingAccounts.externalId, event.accountExternalId),
+          eq(messagingAccounts.provider, event.provider)
+        ),
+        columns: { userId: true },
+      });
+      if (!account) return c.json({ ok: true });
+      await advanceDeliveryStatus({
+        provider: event.provider,
+        userId: account.userId,
+        threadId: event.threadId,
+        externalMessageId: event.externalMessageId,
+        status: event.status,
       });
     } else if (event.type === "account.created") {
       // `account.add` / `account.reconnect` (state = the user who started the
@@ -1005,6 +1111,22 @@ webhooksInboundRouter.post("/messaging", async (c) => {
             },
             "Account auto-synced after hosted auth connection"
           );
+          // A new account: make sure its events reach the pod, and bring in
+          // its history with the people already here (silently). Non-fatal:
+          // the account is connected either way.
+          try {
+            const boss = getBoss();
+            await boss.send(MESSAGING_WEBHOOK_ENSURE_QUEUE, {});
+            await boss.send(MESSAGING_HISTORY_IMPORT_QUEUE, {
+              accountExternalId: account.externalId,
+              userId: event.userId,
+            } satisfies MessagingHistoryImportJobData);
+          } catch (err) {
+            logger.warn(
+              { err, externalId: event.accountExternalId },
+              "Account connected; webhook check / history import not queued"
+            );
+          }
         }
       }
     } else if (event.type === "account.reconnection_required") {

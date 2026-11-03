@@ -70,6 +70,7 @@ import {
 } from "@synap/api";
 import { serve } from "@hono/node-server";
 import {
+  getBoss,
   startBoss,
   stopBoss,
   registerAllWorkers,
@@ -110,7 +111,11 @@ import { configureLocalMode, safeTokenEqual } from "@synap/auth";
 import { buildKratosProxyTargetUrl } from "./kratos-proxy-url.js";
 import { trpcSessionGate } from "./trpc-session-gate.js";
 import { trpcAiRateLimit } from "./trpc-ai-rate-limit.js";
-import { trpcRefusals } from "@synap/api/trpc-refusal";
+import {
+  markTrpcAnswer,
+  TRPC_MAX_BATCH_SIZE,
+  trpcEnvelope,
+} from "@synap/api/trpc-refusal";
 import { createRequire } from "node:module";
 import {
   DEFAULT_POD_STATE_DIR,
@@ -277,6 +282,12 @@ if (!hasConfiguredOrigins() && process.env.NODE_ENV === "production") {
     "[SECURITY] Neither SYNAP_BASE_DOMAIN nor ALLOWED_ORIGINS is set — all cross-origin browser requests will be denied. Set SYNAP_BASE_DOMAIN to your pod's base domain (e.g. example.com) so first-party surfaces (studio., app., …) can reach the pod."
   );
 }
+
+// Every /trpc answer is a tRPC response, the refusals below included (the
+// CORS 403, the size limit's 413, the rate limit's 429, the session gate's
+// 401): OUTERMOST on /trpc, so it sees what every middleware answered. See
+// packages/api middleware/trpc-refusal.ts.
+app.use("/trpc/*", trpcEnvelope(appRouter));
 
 // Credentialless public doors FIRST (outermost): their transport policy must
 // never be seen, widened or 403'd by the credentialed CORS below.
@@ -1054,11 +1065,8 @@ mountAdminEventStream(app);
 // tRPC routes — session auth on every call except the public procedures
 // (health.*, setup.*, invite preview/accept). See trpc-session-gate.ts. The
 // session is a Kratos one or a Synap app's device token, and no other bearer
-// (packages/api middleware/app-session.ts). Its refusals, and the AI rate
-// limit's below, reach the client as tRPC errors (packages/api
-// middleware/trpc-refusal.ts).
-const trpcRefusal = trpcRefusals(appRouter);
-app.use("/trpc/*", trpcRefusal(trpcSessionGate(appSessionMiddleware())));
+// (packages/api middleware/app-session.ts).
+app.use("/trpc/*", trpcSessionGate(appSessionMiddleware()));
 
 // WebSocket ticket minting (see ws-auth.ts for the CSWSH rationale). The browser
 // exchanges its authenticated session for a short-lived, single-use ticket, then
@@ -1201,6 +1209,7 @@ app.use("/api/hub/trpc/*", async (c) => {
     endpoint: "/api/hub/trpc",
     req,
     router: hubProtocolRouter,
+    maxBatchSize: TRPC_MAX_BATCH_SIZE,
     createContext: async () => context as any,
     onError({ error, path }) {
       apiLogger.error({ err: error, path }, "hub tRPC error");
@@ -1244,6 +1253,8 @@ app.route("/mcp", mcpHttpApp);
 app.route("/", oauthApp);
 // GET /.well-known/synap-pod-jwks — the public half of this pod's identity key
 // Public + cacheable; the CP trusts only the key registered with it.
+// POST /.well-known/synap-pod-proof — signs a client's nonce with that key, so
+// an app following a moved pod can check the new host holds it (plan D3).
 app.route("/", podIdentityJwksApp);
 
 // External API — Skills invocation (API key auth, scope: skills.invoke)
@@ -1287,7 +1298,7 @@ app.route("/api/media", mediaTranscribeApp);
 
 // AI rate limiting — charged once per AI procedure in the request, batched or
 // not (chat.sendMessage, channels.sendMessage). See trpc-ai-rate-limit.ts.
-app.use("/trpc/*", trpcRefusal(trpcAiRateLimit(aiRateLimitMiddleware)));
+app.use("/trpc/*", trpcAiRateLimit(aiRateLimitMiddleware));
 
 // tRPC endpoint
 // NOTE: Using fetchRequestHandler directly from @trpc/server instead of
@@ -1335,12 +1346,14 @@ app.use("/trpc/*", async (c) => {
     endpoint,
     req,
     router: appRouter,
+    maxBatchSize: TRPC_MAX_BATCH_SIZE,
     createContext: async () => context as any,
     onError({ error, path }) {
       apiLogger.error({ err: error, path }, "tRPC error");
     },
   });
 
+  markTrpcAnswer(c);
   return c.newResponse(res.body, res);
 });
 
@@ -1383,16 +1396,21 @@ app.onError((err, c) => {
   const shouldLogStack =
     synapError.statusCode >= 500 || config.server.nodeEnv === "development";
 
+  // A server fault logs the ORIGINAL error, not the wrapper `toSynapError`
+  // made ("An unexpected error occurred", its own stack): pino's serializer
+  // gives the original's name, message, stack and `cause` chain. The egress
+  // door (middleware/error-egress.ts) stores it under the same errorId.
+  const logged = synapError.statusCode >= 500 ? err : synapError;
   apiLogger[synapError.statusCode >= 500 ? "error" : "warn"](
     {
-      err: synapError,
+      err: logged,
       errorId,
       // Redacted: a 4xx/5xx on a secret-in-path route (calendar feed, agent
       // setup) would otherwise file the capability into the error log.
       path: redactSecretPath(c.req.path),
       method: c.req.method,
       statusCode: synapError.statusCode,
-      ...(shouldLogStack && { stack: synapError.stack }),
+      ...(shouldLogStack && { stack: logged.stack }),
     },
     synapError.statusCode >= 500 ? "Server error" : "Client error"
   );
@@ -1934,6 +1952,11 @@ try {
               registerFirefliesIngestRunner,
               registerFirefliesBackfillRunner,
             } = await import("@synap/jobs/workers/fireflies-worker.js");
+            const {
+              registerMessagingHistoryImportRunner,
+              registerMessagingWebhookEnsureRunner,
+              MESSAGING_WEBHOOK_ENSURE_QUEUE,
+            } = await import("@synap/jobs/workers/messaging-sync.js");
             const { registerSessionRecallRunner } =
               await import("@synap/jobs/workers/session-recall-worker.js");
             const { registerGoalLoopSweeper, registerSessionLifecycleSweeper } =
@@ -2058,6 +2081,28 @@ try {
               api.runFirefliesIngest(input)
             );
             registerFirefliesBackfillRunner(() => api.runFirefliesBackfill());
+            // Messaging: the silent history import and the webhook
+            // self-registration (messaging-sync.ts) run api-side code.
+            registerMessagingHistoryImportRunner((input) =>
+              api.runMessagingHistoryImport(input)
+            );
+            registerMessagingWebhookEnsureRunner(() =>
+              api.runMessagingWebhookEnsure()
+            );
+            // Deferred and non-fatal: check the webhook a minute after boot
+            // rather than waiting for the hourly cron.
+            try {
+              await getBoss().send(
+                MESSAGING_WEBHOOK_ENSURE_QUEUE,
+                {},
+                { startAfter: 60 }
+              );
+            } catch (err) {
+              apiLogger.warn(
+                { err },
+                "messaging-webhook-ensure boot check not queued (non-fatal)"
+              );
+            }
             // Session recall (on start / the sweep floor) delegates to the
             // api-side runner — requested by session synap-68.
             registerSessionRecallRunner((d) => api.runSessionRecall(d));

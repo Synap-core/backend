@@ -272,8 +272,11 @@ export async function reconcileCapabilitiesToTemplates(
      * Apply `updatePolicy:"notify"` drift too (default false → defer it to a
      * human). The operator Apply door sets this true: clicking "Apply updates"
      * IS the human consent that the notify policy defers to, so those updates
-     * must actually land. The same consent lands an update that switches off
-     * an approved skill (see `approvedSkillsAnUpdateSwitchesOff`). (Param-
+     * must actually land. The same consent lands an update that changes what
+     * an approved skill runs (see `approvedSkillsAnUpdateSwitchesOff`), and
+     * approves it: the applier keeps the skill on (`personApprovesUpdate`).
+     * Only a person's door sets this (pod admin's Apply, the approval of an
+     * agent's update proposal). (Param-
      * requiring templates still can't be applied with `{}` and stay in
      * `updatesAvailable`.)
      */
@@ -610,12 +613,14 @@ export async function reconcileCapabilitiesToTemplates(
       }
 
       // An update that changes what an APPROVED skill executes demotes it
-      // (the applier's security rule), and the owner learned that only when a
-      // run was refused as "not enabled" — fal.ai, 2026-10-27, after every
-      // catalog publish of a new version. An automatic pass never switches off
-      // what the owner turned on: it holds the update for the owner, the
-      // approved version keeps running, and the owner's "Apply updates" (the
-      // consent `applyNotifyPolicy` carries) lands it and the demotion.
+      // when nobody approved the new version (the applier's security rule),
+      // and the owner learned that only when a run was refused as "not
+      // enabled" — fal.ai, 2026-10-27, after every catalog publish of a new
+      // version. An automatic pass never switches off what the owner turned
+      // on: it holds the update for the owner and the approved version keeps
+      // running. The owner's "Apply updates" (the consent `applyNotifyPolicy`
+      // carries) lands it AND approves it, so the skill stays on (founder,
+      // 2026-11-02: an update from the marketplace used to switch it off).
       if (!opts.applyNotifyPolicy) {
         const switchedOff = await approvedSkillsAnUpdateSwitchesOff(
           cachedDef,
@@ -627,7 +632,7 @@ export async function reconcileCapabilitiesToTemplates(
             containerId: container.id,
             name: container.name,
             templateKey,
-            reason: `${driftReason} — waits for you: applying it turns off ${switchedOff.join(", ")} until you turn it on again (what it runs changed)`,
+            reason: `${driftReason} — waits for you: it changes what ${switchedOff.join(", ")} runs`,
           });
           continue;
         }
@@ -682,7 +687,12 @@ export async function reconcileCapabilitiesToTemplates(
           workspaceId: container.workspaceId,
         }),
         // An official template (the comparator's `expected` assumes the same).
-        { officialSource: true }
+        // A person's Apply approves the new version: what they turned on
+        // stays on.
+        {
+          officialSource: true,
+          personApprovesUpdate: opts.applyNotifyPolicy === true,
+        }
       );
       await stampContainerMetadata(
         container.id,

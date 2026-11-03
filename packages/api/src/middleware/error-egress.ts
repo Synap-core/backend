@@ -25,9 +25,18 @@
  * middleware's `await next()` observes BOTH paths' responses. One door.
  *
  * What survives sanitization: the status, the machine-readable `code` (clients
- * branch on it), and an `errorId` that is also written to the server log so a
- * report can be traced back to the real stack. What does not: any message the
- * handler wrote.
+ * branch on it), an `errorId` that is also written to the server log so a
+ * report can be traced back to the real stack, and `causeUrl`, where a pod
+ * admin reads that cause. What does not: any message the handler wrote.
+ *
+ * THE CAUSE, KEPT (founder ask 2026-11-02, errorId a74f6adc): this door is the
+ * one place that sees every REST 5xx, thrown or returned, so it is also where
+ * the fault is described (`describeFault`: the original's name, message,
+ * stack and cause chain, a query's bound params cut) and stored in
+ * `server_faults` under the errorId the client gets
+ * (`services/server-faults/record.ts`). A THROWN fault is read from Hono's
+ * `c.error`, the original error, never the wrapper `onError` made; a RETURNED
+ * one from what its body said. It is stored in development too.
  *
  * EXEMPTIONS (deliberate, each justified):
  *  - development (`nodeEnv === "development"`) — full detail is the point.
@@ -47,6 +56,11 @@
 import { randomUUID } from "crypto";
 import type { MiddlewareHandler } from "hono";
 import { redactSecretPath } from "./redact-secret-path.js";
+import { describeFault } from "../services/server-faults/describe-fault.js";
+import {
+  faultCauseUrl,
+  recordServerFault,
+} from "../services/server-faults/record.js";
 
 /** What a client is told about a server fault, on REST and on tRPC alike. */
 export const SERVER_FAULT_MESSAGE =
@@ -64,8 +78,6 @@ export function sanitizeErrorEgress(opts: {
 }): MiddlewareHandler {
   return async (c, next) => {
     await next();
-
-    if (opts.isDev) return;
 
     const status = c.res.status;
     if (status < 500 || status > 599) return;
@@ -94,19 +106,52 @@ export function sanitizeErrorEgress(opts: {
 
     const errorId =
       typeof parsed?.errorId === "string" ? parsed.errorId : randomUUID();
-
-    // The ONLY place the original body survives. Ops correlates by errorId.
     // The path is redacted: a public share / form / calendar token IS the
     // capability, and a 5xx on that door must not copy it into the log.
+    const path = redactSecretPath(c.req.path);
+
+    // The ORIGINAL error when one was thrown (`c.error`, set by Hono before
+    // `onError` ran), else what the returned body said.
+    const fault = describeFault(
+      c.error ?? {
+        name: typeof parsed?.code === "string" ? parsed.code : "ServerError",
+        message:
+          typeof parsed?.message === "string"
+            ? parsed.message
+            : typeof parsed?.error === "string"
+              ? parsed.error
+              : raw,
+      }
+    );
+    const get = c.get as (key: string) => unknown;
+    const caller = (key: string) => {
+      const v = get.call(c, key);
+      return typeof v === "string" && v ? v : null;
+    };
+    void recordServerFault({
+      errorId,
+      door: "rest",
+      method: c.req.method,
+      path,
+      status,
+      userId: caller("userId"),
+      agentUserId: caller("agentUserId"),
+      fault,
+    });
+
+    if (opts.isDev) return;
+
+    // Ops correlates by errorId; `fault` is the cause, flat.
     opts.log.error(
       {
         errorId,
-        path: redactSecretPath(c.req.path),
+        path,
         method: c.req.method,
         statusCode: status,
+        fault,
         originalBody: raw,
       },
-      "5xx body redacted before egress"
+      `5xx body redacted before egress: ${fault.name}: ${fault.message.split("\n")[0]}`
     );
 
     c.res = new Response(
@@ -121,6 +166,9 @@ export function sanitizeErrorEgress(opts: {
             : "INTERNAL_SERVER_ERROR",
         message: SERVER_FAULT_MESSAGE,
         errorId,
+        // Where a pod admin reads the cause: a link; the content stays behind
+        // the pod-admin floor (services/server-faults/read.ts).
+        causeUrl: faultCauseUrl(errorId, c.req.url),
       }),
       { status, headers: { "content-type": "application/json" } }
     );

@@ -11,7 +11,15 @@ import {
   decideAgentPolicy,
   isReversibleWrite,
 } from "./index.js";
-import { classifyFloorEntry, resolveAgentPosture } from "./postures.js";
+import {
+  AGENT_POSTURE_NAMES,
+  classifyFloorEntry,
+  resolveAgentPosture,
+} from "./postures.js";
+import {
+  AGENT_WRITE_MODES,
+  agentPostureOfWriteMode,
+} from "@synap-core/types/agents";
 
 describe("create-with-undo (stricter preset)", () => {
   const posture = resolveAgentPosture("create-with-undo");
@@ -107,5 +115,14 @@ describe("ask-first (the per-agent 'Require approval for writes' override)", () 
         : "auto",
     }).verdict;
     expect(verdict).toBe("propose");
+  });
+});
+
+describe("the write modes a person chooses map onto the pod's postures", () => {
+  it("every non-default mode is a posture, and every posture is a mode", () => {
+    const stored = AGENT_WRITE_MODES.map(agentPostureOfWriteMode).filter(
+      (p): p is NonNullable<typeof p> => p !== null
+    );
+    expect([...stored].sort()).toEqual([...AGENT_POSTURE_NAMES].sort());
   });
 });

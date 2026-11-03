@@ -60,20 +60,34 @@ const {
   };
 });
 
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db,
   eq: vi.fn(),
   and: vi.fn(),
   asc: vi.fn(),
+  desc: vi.fn(),
+  ne: vi.fn(),
+  lte: vi.fn(),
+  isNull: vi.fn(),
   isNotNull: vi.fn(),
   drizzleSql: vi.fn(),
   channels: {},
+  entities: {},
   messages: {},
+  proposals: {},
   ChannelType: { EXTERNAL: "external" },
   ChannelScope: { WORKSPACE: "workspace", POD: "pod" },
-  MessageRole: { USER: "user" },
-  MessageAuthorType: { EXTERNAL: "external" },
+  MessageRole: { USER: "user", ASSISTANT: "assistant" },
+  MessageAuthorType: { EXTERNAL: "external", HUMAN: "human" },
   MessageCategory: { CHAT: "chat" },
+  MessageDirection: { INBOUND: "inbound", OUTBOUND: "outbound" },
+  MessageDeliveryStatus: {
+    SENT: "sent",
+    DELIVERED: "delivered",
+    READ: "read",
+    FAILED: "failed",
+  },
   resolveIdentity: vi.fn(),
 }));
 
@@ -85,6 +99,15 @@ vi.mock("@synap/events", () => ({
 vi.mock("@synap/jobs/workers/inbound-attachment-worker.js", () => ({
   INBOUND_ATTACHMENT_QUEUE: "inbound-attachment",
 }));
+vi.mock("@synap/jobs/workers/messaging-sync.js", () => ({
+  MESSAGING_HISTORY_IMPORT_QUEUE: "messaging-history-import",
+}));
+vi.mock("./participant-lookup.js", () => ({
+  storedProviderId: vi.fn(async () => null),
+}));
+vi.mock("./account-home-workspace.js", () => ({
+  accountHomeWorkspaceFor: vi.fn(async () => null),
+}));
 
 vi.mock("../external-user-mapping.js", () => ({
   resolveExistingExternalUser: vi.fn(),
@@ -94,7 +117,8 @@ vi.mock("../channels/channel-origin.js", () => ({
   recordChannelOrigin: vi.fn(),
 }));
 
-vi.mock("@synap-core/core", () => ({
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap-core/core")>()),
   createLogger: () => ({
     info: vi.fn(),
     warn: vi.fn(),

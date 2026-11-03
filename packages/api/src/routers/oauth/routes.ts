@@ -49,6 +49,7 @@
  */
 
 import { cleanLoginHint } from "@synap-core/types/sign-in";
+import { withAppRequestScope } from "@synap-core/types/grants";
 import { randomUUID } from "crypto";
 import { Hono } from "hono";
 import { createLogger } from "@synap-core/core";
@@ -521,7 +522,9 @@ function appTokenResponse(minted: AppOAuthAccessKey, refreshToken: string) {
     scope: [...new Set(minted.grant.map((g) => g.permission))].join(" "),
     // Synap extension (spec 17 §6.6): what the token reaches and for whom,
     // so the app can say "Connected as …" without another call.
-    synap_grant: minted.grant,
+    // Each pair carries its explicit place (`scope`, access model B) beside
+    // `workspaceId`; an SDK that reads only `workspaceId` keeps working.
+    synap_grant: minted.grant.map(withAppRequestScope),
     synap_user: minted.user,
     // Which app this connection is on the pod, and the pod-admin page where
     // the person narrows or revokes it (null: no valid POD_ADMIN_URL).

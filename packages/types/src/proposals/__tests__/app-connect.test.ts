@@ -27,10 +27,12 @@ const PROPOSAL = {
 const NAMES = { "ws-sales": "Sales", "ws-fin": "Finance" };
 
 describe("app/connect proposal words", () => {
-  it("reads the founder's sentence", () => {
-    expect(describeAppConnectProposal(PROPOSAL, NAMES)?.sentence).toBe(
-      "synap.live asks for access: Create People · Sales, Read Notes · Finance"
-    );
+  // Rules out: the card's sentence and the holder's sentence written apart
+  // (access model B: one sentence, each tier in its own place).
+  it("reads the holder's sentence: each tier in its own place", () => {
+    const s = describeAppConnectProposal(PROPOSAL, NAMES)!;
+    expect(s.access).toBe("Reads notes in Finance; changes people in Sales.");
+    expect(s.sentence).toBe(`synap.live asks for access. ${s.access}`);
   });
 
   it("groups per space — never 'Create People, Read Notes' across both spaces", () => {
@@ -66,7 +68,7 @@ describe("app/connect proposal words", () => {
       ],
     });
     expect(s.lines[0]!.where).toBe("Ops");
-    expect(s.lines[1]!.where).toBe("1 Space");
+    expect(s.lines[1]!.where).toBe("Space");
     expect(s.sentence).not.toContain("uuid-123");
   });
 
@@ -89,7 +91,7 @@ describe("app/connect proposal words", () => {
     ).toBeNull();
   });
 
-  it("reads an AI's request, where `workspaceId: null` is anywhere", () => {
+  it("reads an AI's request, where `workspaceId: null` is anywhere it can reach", () => {
     const AGENT = {
       targetType: "agent",
       proposalType: "connect",
@@ -106,10 +108,15 @@ describe("app/connect proposal words", () => {
     expect(isConnectProposal(AGENT)).toBe(true);
     expect(isAppConnectProposal(AGENT)).toBe(false);
     const s = describeAppConnectProposal(AGENT, NAMES)!;
-    expect(s.sentence).toBe(
-      "Claude Code asks for access: Read Notes · Anywhere, Create People · Sales"
+    expect(s.lines.map((l) => l.text)).toEqual([
+      "Read Notes · Anywhere you can reach",
+      "Create People · Sales",
+    ]);
+    expect(s.access).toBe(
+      "Reads notes anywhere you can reach; changes people in Sales."
     );
     expect(s.lines[0]!.workspaceId).toBeNull();
+    expect(s.lines[0]!.place).toEqual({ kind: "unbounded" });
     expect(
       isConnectProposal({ targetType: "entity", proposalType: "connect" })
     ).toBe(false);
@@ -119,7 +126,7 @@ describe("app/connect proposal words", () => {
 // Rules out: an app's pod-wide read named "Anywhere" in Relay and the browser
 // while consent and pod admin say "Everywhere in your pod".
 describe("an app's ask with no space is named as consent names it", () => {
-  it("an app reads 'Everywhere in your pod'; an AI still 'Anywhere'", () => {
+  it("an app reads 'Everywhere in your pod'; an AI 'Anywhere you can reach'", () => {
     const requests = [
       { permission: "entity.decision.read", workspaceId: null },
     ] as const;
@@ -130,7 +137,25 @@ describe("an app's ask with no space is named as consent names it", () => {
       requests,
       holderKind: "agent",
     });
-    expect(ai.lines[0]!.where).toBe("Anywhere");
+    expect(ai.lines[0]!.where).toBe("Anywhere you can reach");
+  });
+
+  // Rules out: a blank space id read as "no space" (`|| null`), which made it
+  // a pod-wide read; and a stored scope that contradicts its space.
+  it("a request whose place does not parse is unreadable, never pod-wide", () => {
+    const bad = (request: Record<string, unknown>) =>
+      describeAppConnectProposal({
+        ...PROPOSAL,
+        data: { name: "x", requests: [request] },
+      });
+    expect(bad({ permission: "entity.note.read", workspaceId: "" })).toBeNull();
+    expect(
+      bad({ permission: "entity.note.read", workspaceId: "w", scope: "pod" })
+    ).toBeNull();
+    expect(
+      bad({ permission: "entity.note.read", workspaceId: null, scope: "pod" })
+        ?.lines[0]?.where
+    ).toBe("Everywhere in your pod");
   });
 });
 

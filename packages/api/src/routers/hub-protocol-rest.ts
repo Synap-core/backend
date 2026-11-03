@@ -38,6 +38,7 @@ import {
   registerLoopsRoutes,
   registerCaptureRoutes,
   registerChannelsRoutes,
+  registerEntityChannelsRoutes,
   registerChannelEgressRoutes,
   registerCommandsRoutes,
   registerDocumentsRoutes,
@@ -296,6 +297,7 @@ registerPackageUpdatesRoutes(app); // /package-updates — one update's plan and
 registerThreadsRoutes(app); // /threads* — combines GET-list, context, link, branches, messages, etc.
 registerEventsRoutes(app); // /events
 registerEntitiesRoutes(app); // /users/:id/entities + /entities*
+registerEntityChannelsRoutes(app); // GET /entities/:id/channels — a person's channels
 registerIdentityRoutes(app); // /identity/resolve — read-only identity pre-check
 registerCaptureRoutes(app); // /capture/*
 registerSearchRoutes(app); // /search*, /vector-search

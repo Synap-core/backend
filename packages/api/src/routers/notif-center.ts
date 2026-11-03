@@ -570,8 +570,9 @@ export const notifCenterRouter = router({
   /**
    * Mute or unmute ONE session's pushes (plan d679e92c C9). Muted, nothing
    * about that session rings the person's phone (devbox jobs, dev signals,
-   * room activity, its asks); nothing is hidden either: its rows still land in
-   * the bell and an owed ask stays in needs-you. Person-only, like the push
+   * room activity) EXCEPT what needs them (an ask, a decision: needs-you always
+   * pushes, RF4 D-MUTE); nothing is hidden either: its rows still land in the
+   * bell. Person-only, like the push
    * categories. A session the person may not read is NOT_FOUND (missing and
    * not-yours are the same answer). The session read carries the state back
    * as `continuation.muted`.

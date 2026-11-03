@@ -13,6 +13,7 @@
 import { z } from "zod";
 import { diagnoseRouter } from "../../../services/diagnose/index.js";
 import { readUsageForCaller } from "../../../services/usage/read-usage.js";
+import { readServerFaultForCaller } from "../../../services/server-faults/read.js";
 import { API_USAGE_GROUP_BY } from "@synap/database";
 import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -205,6 +206,61 @@ export function registerDiagnoseRoutes(app: HubHono): void {
       const refused = code === "FORBIDDEN" || code === "BAD_REQUEST";
       if (!refused) {
         logger.error({ err, userId }, "usage read failed");
+      }
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  // ── Server faults (0392): the exact cause of a 5xx, by its errorId ────────
+  // Pod owner or admin only (`services/server-faults/read.ts`), like /usage.
+  // A scoped key is refused by the grant fence (GRANT_REST_GET_READS). The
+  // list is pod admin's (tRPC `system.listServerFaults`); a 5xx body links
+  // here (`causeUrl`) when the pod has no console origin.
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/errors/{errorId}",
+    tags: ["Runs"],
+    summary: "One server error (5xx) by the errorId its client got",
+    description:
+      "The stored cause of one server fault: the original error's name, " +
+      "message, stack and cause chain, with when, door, method, path, " +
+      "status and caller. A 5xx body names this read in `causeUrl`. Pod " +
+      "owner or admin only; 404 when nothing is stored under the id (kept " +
+      "30 days).",
+    request: { params: z.object({ errorId: z.string() }) },
+    responses: {
+      200: { description: "Server fault", schema: z.any() },
+      403: { description: "Not a pod admin", schema: ErrorSchema },
+      404: {
+        description: "No fault stored under this id",
+        schema: ErrorSchema,
+      },
+    },
+  });
+
+  app.get("/errors/:errorId", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const userId = c.get("userId") as string | undefined;
+    if (!userId) return c.json({ error: "Unauthorized" }, 401);
+    try {
+      const fault = await readServerFaultForCaller(
+        userId,
+        c.req.param("errorId")
+      );
+      return c.json(fault);
+    } catch (err) {
+      const code = errCode(err);
+      if (code !== "FORBIDDEN" && code !== "NOT_FOUND") {
+        logger.error({ err, userId }, "server fault read failed");
       }
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },

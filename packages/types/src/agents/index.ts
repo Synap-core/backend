@@ -447,6 +447,66 @@ export const AGENT_WRITE_MODE_LINE: Record<AgentWriteMode, string> = {
   "ask-first": "Every change asks you first.",
 };
 
+/** Every write mode, in the order a person is offered them. */
+export const AGENT_WRITE_MODES = [
+  "pod-default",
+  "create-with-undo",
+  "ask-first",
+] as const satisfies readonly AgentWriteMode[];
+
+export function isAgentWriteMode(v: unknown): v is AgentWriteMode {
+  return (
+    typeof v === "string" &&
+    (AGENT_WRITE_MODES as readonly string[]).includes(v)
+  );
+}
+
+/**
+ * The mode a person is offered first when they ADD or APPROVE an agent
+ * (founder, 2026-11-02: "the normal one … accept every undoable option to be
+ * automatic"): the pod default, which acts on reversible writes with Undo.
+ */
+export const RECOMMENDED_AGENT_WRITE_MODE: AgentWriteMode = "pod-default";
+
+export interface AgentWriteModeChoice {
+  mode: AgentWriteMode;
+  /** The short name of the choice. */
+  label: string;
+  /** What it does, in one sentence: `AGENT_WRITE_MODE_LINE[mode]`. */
+  line: string;
+  recommended: boolean;
+}
+
+const AGENT_WRITE_MODE_LABEL: Record<AgentWriteMode, string> = {
+  "pod-default": "Normal",
+  "create-with-undo": "Creates only",
+  "ask-first": "Ask first",
+};
+
+/**
+ * THE list a person chooses from, on every surface that adds an agent or
+ * changes how its writes land (pod-admin `/device`, the agent page, Relay,
+ * the CLI). A surface draws these rows; it never writes its own labels.
+ */
+export const AGENT_WRITE_MODE_CHOICES: readonly AgentWriteModeChoice[] =
+  AGENT_WRITE_MODES.map((mode) => ({
+    mode,
+    label: AGENT_WRITE_MODE_LABEL[mode],
+    line: AGENT_WRITE_MODE_LINE[mode],
+    recommended: mode === RECOMMENDED_AGENT_WRITE_MODE,
+  }));
+
+/**
+ * The pod posture a mode is stored as (`applyAgentPosture`): `pod-default`
+ * is NO posture (the agent follows the pod rule), the others are the named
+ * postures of `@synap/governance-policy/postures`.
+ */
+export function agentPostureOfWriteMode(
+  mode: AgentWriteMode
+): "create-with-undo" | "ask-first" | null {
+  return mode === "pod-default" ? null : mode;
+}
+
 // ---------------------------------------------------------------------------
 // Agent REACH — how the pod reaches an agent, as a mark (tone + glyph + words).
 // The pod computes the reach (`resolveAgentReach`) and serves it with the

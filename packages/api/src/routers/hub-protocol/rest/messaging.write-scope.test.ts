@@ -82,9 +82,8 @@ const FIXTURES: Record<string, { url: string; body?: unknown }> = {
   "POST /messaging/channels/:channelId/mark-read": {
     url: `/messaging/channels/${ID}/mark-read`,
   },
-  "POST /messaging/conversations/:threadId/import": {
-    url: "/messaging/conversations/t1/import",
-    body: { accountId: "a1" },
+  "POST /messaging/accounts/:accountId/import-history": {
+    url: "/messaging/accounts/a1/import-history",
   },
   "POST /messaging/conversations/:threadId/send": {
     url: "/messaging/conversations/t1/send",

@@ -14,14 +14,13 @@ vi.mock("../../../lib/trpc", () => ({ trpc: {} }));
 
 import { AppConsent } from "./ConsentForm";
 import {
-  actsAsHeadline,
   allowBlockedReason,
+  consentHeadline,
   allowNewAsks,
   initialPodWide,
   initialSelection,
   newAsks,
-  SPACE_REACH_NOTE,
-  SPACE_REACH_NOTE_WITH_POD_WIDE,
+  placeReachNote,
   toggle,
   type OfferedPermission,
   type PodWideSelection,
@@ -46,7 +45,6 @@ const APP: App = {
   verified: true,
   actsAs: {
     kind: "person",
-    lead: "Content Studio will act as you in",
     note: "It acts as you.",
   },
   homepage: null,
@@ -277,13 +275,9 @@ describe("AppConsent rows (default view)", () => {
   });
 
   it("by default only Content OS and Ecosystem are given, at each row's level", () => {
-    expect(
-      actsAsHeadline(
-        "Content Studio will act as you in",
-        first,
-        STUDIO.permissions
-      )
-    ).toBe("Content Studio will act as you in: Content OS, Ecosystem.");
+    const headline = consentHeadline(first, STUDIO.permissions);
+    expect(headline).toMatch(/ in Content OS and Ecosystem\.$/);
+    expect(headline).not.toContain("Brand");
     expect(selectedLevel(levelGroup(out, "Posts: access"))).toEqual(["Edit"]);
     expect(selectedLevel(levelGroup(out, "Pillars: access"))).toEqual(["View"]);
     expect(selectedLevel(levelGroup(out, "It can also see: access"))).toEqual([
@@ -321,7 +315,7 @@ describe("AppConsent rows (default view)", () => {
   });
 
   it("the reach sentence shows once in both views for a record read, never without one (#128)", () => {
-    const once = (o: string) => o.split(SPACE_REACH_NOTE).length - 1;
+    const once = (o: string) => o.split(placeReachNote("spaces")).length - 1;
     expect(once(out)).toBe(1);
     expect(once(html(first, true, STUDIO))).toBe(1);
     const writesOnly: App = {
@@ -549,9 +543,10 @@ describe("pod-wide reads (decision e1b59d38 B): their own section, everywhere in
   });
 
   // Rules out: the space note's "Nothing else in your pod." shown beside the
-  // section that reads everywhere in the pod (the review of 1 Nov), and the
-  // widest read placed last, after every space row.
-  it("the space note names the pod-wide section instead of contradicting it, and that section comes first", () => {
+  // section that reads everywhere in the pod (the review of 1 Nov), the
+  // widest read placed last, after every space row, and taking it back said
+  // twice (in the section and under Allow).
+  it("one reach line per place, never contradicting another; the pod-wide section first; revocation said once", () => {
     for (const customize of [false, true]) {
       const out = html(
         initialSelection(DEVPLANE.permissions, []),
@@ -560,11 +555,13 @@ describe("pod-wide reads (decision e1b59d38 B): their own section, everywhere in
         initialPodWide(DEVPLANE.podWide, [])
       );
       expect(out).not.toContain("Nothing else in your pod");
-      expect(out.split(SPACE_REACH_NOTE_WITH_POD_WIDE).length - 1).toBe(1);
+      expect(out.split(placeReachNote("spaces")).length - 1).toBe(1);
       const pod = out.indexOf("data-pod-wide");
       expect(pod).toBeGreaterThan(-1);
       expect(pod).toBeLessThan(out.indexOf("It asks to"));
-      expect(section(out)).toContain("take these reads back");
+      expect(section(out)).toContain(placeReachNote("pod"));
+      expect(section(out)).not.toMatch(/take these reads back/);
+      expect(out.match(/revoke it at any time/g)?.length).toBe(1);
     }
   });
 

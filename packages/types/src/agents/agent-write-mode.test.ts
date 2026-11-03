@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { AGENT_WRITE_MODE_LINE, resolveAgentWriteMode } from "./index.js";
+import {
+  AGENT_WRITE_MODE_CHOICES,
+  AGENT_WRITE_MODE_LINE,
+  agentPostureOfWriteMode,
+  isAgentWriteMode,
+  resolveAgentWriteMode,
+} from "./index.js";
 
 describe("resolveAgentWriteMode", () => {
   it("an agent's own override wins over the pod default", () => {
@@ -53,5 +59,34 @@ describe("resolveAgentWriteMode", () => {
     expect(AGENT_WRITE_MODE_LINE["ask-first"]).toBe(
       "Every change asks you first."
     );
+  });
+});
+
+describe("AGENT_WRITE_MODE_CHOICES — the one list every surface offers", () => {
+  it("offers every mode once, the normal one first and recommended", () => {
+    expect(AGENT_WRITE_MODE_CHOICES.map((c) => c.mode)).toEqual([
+      "pod-default",
+      "create-with-undo",
+      "ask-first",
+    ]);
+    expect(
+      AGENT_WRITE_MODE_CHOICES.filter((c) => c.recommended).map((c) => c.mode)
+    ).toEqual(["pod-default"]);
+    for (const c of AGENT_WRITE_MODE_CHOICES)
+      expect(c.line).toBe(AGENT_WRITE_MODE_LINE[c.mode]);
+  });
+
+  it("stores the normal mode as no posture, the others as their posture", () => {
+    expect(agentPostureOfWriteMode("pod-default")).toBeNull();
+    expect(agentPostureOfWriteMode("create-with-undo")).toBe(
+      "create-with-undo"
+    );
+    expect(agentPostureOfWriteMode("ask-first")).toBe("ask-first");
+  });
+
+  it("knows its own modes and nothing else", () => {
+    expect(isAgentWriteMode("ask-first")).toBe(true);
+    expect(isAgentWriteMode("normal")).toBe(false);
+    expect(isAgentWriteMode(null)).toBe(false);
   });
 });

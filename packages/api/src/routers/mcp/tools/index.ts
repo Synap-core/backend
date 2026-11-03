@@ -5503,15 +5503,23 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Get or create a channel. Use mode 'personal' to get the user's personal AI thread for a workspace. Use mode 'by-context' to get/create a thread scoped to an entity or document.",
+          "Get or create a channel. Use mode 'personal' to get the user's personal AI thread for a workspace. Use mode 'by-context' to get/create a thread scoped to an entity or document. Use mode 'person' with `entityId` to READ the conversations the pod holds with a person (LinkedIn, email, Discord…): each channel's tool, chat id (null until the first send), last message, unread count and its pending proposed messages (send proposals waiting for approval). To write to a person, file `synap_run_capability` messaging.send {to: <entityId>, text}: it lands as a proposed message in their channel.",
         inputSchema: {
           type: "object",
           properties: {
             mode: {
               type: "string",
-              enum: ["personal", "by-context"],
+              enum: ["personal", "by-context", "person"],
             },
-            workspaceId: { type: "string" },
+            workspaceId: {
+              type: "string",
+              description: "Required for modes 'personal' and 'by-context'",
+            },
+            entityId: {
+              type: "string",
+              description:
+                "Required for mode 'person': the record whose channels to read",
+            },
             contextObjectType: {
               type: "string",
               enum: ["entity", "document"],
@@ -5522,7 +5530,7 @@ export const tools = {
               description: "Required for mode 'by-context'",
             },
           },
-          required: ["mode", "workspaceId"],
+          required: ["mode"],
         },
       },
       {

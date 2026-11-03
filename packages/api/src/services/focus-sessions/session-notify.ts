@@ -174,11 +174,20 @@ export function foldDevboxJobs(
  */
 const DEVBOX_JOBS_BEFORE_START_MS = 24 * 3_600_000;
 
-/** The session's devbox jobs (see the header). THROWS on a failed read. */
+/**
+ * The session's devbox jobs (see the header). THROWS on a failed read.
+ *
+ * ONE reader for both doors: the packet's `devboxJobs` lists the first
+ * {@link DEVBOX_JOBS_TOP_N}; `uncapped` (tRPC `focusSessions.devboxJobs`, the
+ * surfaces' "Show all") lists every job folded from the SAME runs, so its
+ * `items.length` is the packet's `total`. The row must already be read through
+ * `sessionReadableWhere` by the door.
+ */
 export async function readSessionDevboxJobs(
   database: Database,
   reader: SessionReader,
-  row: { id: string; expectedOutputs: unknown; createdAt: Date | string }
+  row: { id: string; expectedOutputs: unknown; createdAt: Date | string },
+  opts: { uncapped?: boolean } = {}
 ): Promise<{ total: number; items: PacketDevboxJobItem[] }> {
   const from = new Date(
     new Date(row.createdAt).getTime() - DEVBOX_JOBS_BEFORE_START_MS
@@ -209,5 +218,8 @@ export async function readSessionDevboxJobs(
     .orderBy(desc(events.timestamp))
     .limit(DEVBOX_JOB_RUNS_CAP);
   const jobs = foldDevboxJobs(rows);
-  return { total: jobs.length, items: jobs.slice(0, DEVBOX_JOBS_TOP_N) };
+  return {
+    total: jobs.length,
+    items: opts.uncapped ? jobs : jobs.slice(0, DEVBOX_JOBS_TOP_N),
+  };
 }

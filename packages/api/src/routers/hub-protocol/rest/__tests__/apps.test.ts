@@ -366,6 +366,7 @@ describe("POST /apps/:id/connect — always files one proposal", () => {
     expect((state.proposalInput!.data as any).requests).toEqual([
       {
         permission: "entity.person.create",
+        scope: "space",
         workspaceId: WORKSPACE_ID,
         workspaceName: "Operations",
       },
@@ -607,7 +608,11 @@ describe("approve executor — app/connect writes approved_requests", () => {
       {
         appId: APP_UUID,
         requests: [
-          { permission: "entity.person.create", workspaceId: WORKSPACE_ID },
+          {
+            permission: "entity.person.create",
+            workspaceId: WORKSPACE_ID,
+            scope: "space",
+          },
         ],
       },
     ]);

@@ -53,6 +53,10 @@ import {
 import { getTrustedIssuerSeedHealth } from "../utils/startup-health.js";
 import { disconnectAllUserConnections } from "../services/capabilities/capability-nango-sync.js";
 import { kratosAdmin } from "@synap/auth";
+import {
+  listServerFaultsForCaller,
+  readServerFaultForCaller,
+} from "../services/server-faults/read.js";
 
 const execAsync = promisify(execCb);
 
@@ -1426,6 +1430,33 @@ export const systemRouter = router({
       }
       return { ok: true };
     }),
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Server errors (0392) — the exact cause of each 5xx, keyed by the errorId
+  // its client got. Pod owner or admin only: the ONE read door
+  // (services/server-faults/read.ts) checks it, as for Hub GET /errors/:errorId.
+  // ─────────────────────────────────────────────────────────────────────
+  listServerFaults: protectedProcedure
+    .input(
+      z
+        .object({
+          limit: z.number().int().min(1).max(200).optional(),
+          before: z.string().datetime().optional(),
+        })
+        .optional()
+    )
+    .query(({ ctx, input }) =>
+      listServerFaultsForCaller(ctx.userId, {
+        limit: input?.limit,
+        before: input?.before ? new Date(input.before) : undefined,
+      })
+    ),
+
+  getServerFault: protectedProcedure
+    .input(z.object({ errorId: z.string().min(1).max(200) }))
+    .query(({ ctx, input }) =>
+      readServerFaultForCaller(ctx.userId, input.errorId)
+    ),
 
   // ─────────────────────────────────────────────────────────────────────
   // Audit log — curated lens on the events table for governance/security.

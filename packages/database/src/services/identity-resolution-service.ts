@@ -242,10 +242,29 @@ export const IDENTITY_SIGNAL_PROPERTY_KEYS: Record<StrongSignalType, string[]> =
     // Consequence: an entity UPDATE that changes a bookmark's url does not
     // re-register (mutate.ts gates on this map). Creates always register.
     url: [],
-    // No property key maps to external_id — it's derived from (provider,
-    // externalId), so a property change never re-registers it.
-    external_id: [],
+    // A provider's own id for the person, stored on a property and registered
+    // as `<provider>:<id>` (PROVIDER_ID_PROPERTY_KEYS): writing one re-registers
+    // the atom. Any other external_id is derived from (provider, externalId)
+    // by the external-link door and is never a property.
+    external_id: ["linkedinProviderId", "instagramProviderId"],
   };
+
+/**
+ * Properties that hold a messaging provider's own id for a person (LinkedIn
+ * member id `ACo…`, Instagram user id), and the provider each one names. The
+ * atom is `external_id` = `<provider>:<id>`, the same value an inbound
+ * message's sender id resolves through (inbound-recorder link-at-birth), so a
+ * message from that id lands bound to the person (channels design §2).
+ */
+export const PROVIDER_ID_PROPERTY_KEYS: Readonly<Record<string, string>> = {
+  linkedinProviderId: "linkedin",
+  instagramProviderId: "instagram",
+};
+
+/** `<provider>:<id>`, the `external_id` value a provider id registers. */
+export function providerExternalId(provider: string, id: string): string {
+  return `${provider.trim().toLowerCase()}:${id.trim()}`;
+}
 
 /**
  * Kinds whose `properties.url` IS the subject's identity: the system capture
@@ -329,6 +348,16 @@ export function extractIdentitySignals(
   const github = properties.githubUsername ?? properties["github-username"];
   if (typeof github === "string" && github.trim().length > 0) {
     signals.push({ type: "github_username", value: github });
+  }
+
+  for (const [key, provider] of Object.entries(PROVIDER_ID_PROPERTY_KEYS)) {
+    const id = properties[key];
+    if (typeof id === "string" && id.trim().length > 0) {
+      signals.push({
+        type: "external_id",
+        value: providerExternalId(provider, id),
+      });
+    }
   }
 
   if (opts?.aliases && Array.isArray(properties.aliases)) {
@@ -456,7 +485,14 @@ export function signalsFromExplicit(
   if (externalId) out.push({ type: "external_id", value: externalId });
   for (const [key, atom] of EXPLICIT_SIGNAL_ALIASES) {
     const value = text(key);
-    if (value) out.push({ type: atom, value });
+    if (!value) continue;
+    // A provider-id property names its provider: `{linkedinProviderId: "ACo…"}`
+    // is the atom `linkedin:ACo…`, exactly what the property registers.
+    const provider = PROVIDER_ID_PROPERTY_KEYS[key];
+    out.push({
+      type: atom,
+      value: provider ? providerExternalId(provider, value) : value,
+    });
   }
   return out;
 }

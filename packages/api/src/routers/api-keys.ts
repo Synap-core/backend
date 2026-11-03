@@ -57,7 +57,10 @@ import {
   users,
   apps,
 } from "@synap/database/schema";
-import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
+import {
+  AGENT_WRITE_MODES,
+  MACHINE_AGENT_TYPE,
+} from "@synap-core/types/agents";
 import { COMPUTER_BELONGS_TO } from "@synap-core/types/computers";
 import {
   checkPermissionOrPropose,
@@ -918,6 +921,8 @@ export const apiKeysRouter = router({
         computerName: z.string().trim().min(1).max(80).nullish(),
         /** Whose computer it is (0388); omitted = person's own (new) / unchanged (reused). */
         belongsTo: z.enum(COMPUTER_BELONGS_TO).nullish(),
+        /** How the approved agents' writes land (0394); omitted = ask-first for a new agent. */
+        agentWriteMode: z.enum(AGENT_WRITE_MODES).nullish(),
       })
     )
     .mutation(async ({ ctx, input }) => {

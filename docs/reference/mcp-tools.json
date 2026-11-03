@@ -13173,15 +13173,26 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Get or create a channel. Use mode 'personal' to get the user's personal AI thread for a workspace. Use mode 'by-context' to get/create a thread scoped to an entity or document.",
+      "description": "Get or create a channel. Use mode 'personal' to get the user's personal AI thread for a workspace. Use mode 'by-context' to get/create a thread scoped to an entity or document. Use mode 'person' with `entityId` to READ the conversations the pod holds with a person (LinkedIn, email, Discord…): each channel's tool, chat id (null until the first send), last message, unread count and its pending proposed messages (send proposals waiting for approval). To write to a person, file `synap_run_capability` messaging.send {to: <entityId>, text}: it lands as a proposed message in their channel.",
       "parameters": [
         {
           "name": "mode",
           "type": "enum",
           "required": true,
-          "enum": ["personal", "by-context"]
+          "enum": ["personal", "by-context", "person"]
         },
-        { "name": "workspaceId", "type": "string", "required": true },
+        {
+          "name": "workspaceId",
+          "type": "string",
+          "required": false,
+          "description": "Required for modes 'personal' and 'by-context'"
+        },
+        {
+          "name": "entityId",
+          "type": "string",
+          "required": false,
+          "description": "Required for mode 'person': the record whose channels to read"
+        },
         {
           "name": "contextObjectType",
           "type": "enum",
@@ -13205,8 +13216,18 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "mode": { "type": "string", "enum": ["personal", "by-context"] },
-          "workspaceId": { "type": "string" },
+          "mode": {
+            "type": "string",
+            "enum": ["personal", "by-context", "person"]
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Required for modes 'personal' and 'by-context'"
+          },
+          "entityId": {
+            "type": "string",
+            "description": "Required for mode 'person': the record whose channels to read"
+          },
           "contextObjectType": {
             "type": "string",
             "enum": ["entity", "document"],
@@ -13221,7 +13242,7 @@
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
-        "required": ["mode", "workspaceId"]
+        "required": ["mode"]
       }
     },
     {
