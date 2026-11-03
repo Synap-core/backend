@@ -26,11 +26,14 @@
  *
  * Layout A (founder, 2026-10-28): the body at a document's width with a rail
  * beside it, in both frames (`ObjectPage`'s `rail`). The main column, top →
- * down: who started it and where it lives (chips, each a door); what it waits
+ * down: who started it, the session it is part of, and where it lives
+ * (chips, each a door); what it waits
  * on the owner for — the agents' questions and blockers, answered in place,
  * and the changes it proposed, each a door to its review
  * (`session-needs-you.tsx`); what it left — its report
- * (`focusSessions.document`) and its outputs (`focusSessions.outputs`); its
+ * (`focusSessions.document`), its outputs (`focusSessions.outputs`, 5 then
+ * "Show all") and the sessions it spawned (the packet's `children`, the rest
+ * through `focusSessions.browse` by `parentSessionId`); its
  * room (the session channel, from the continuation packet's `room`), read in
  * a side panel (`RoomPanel`) or on `/open/channel/:id`. The rail: its
  * criteria, an escalated one graded right there (and so not again in Needs
@@ -57,6 +60,7 @@ import {
   CircleDashed,
   CircleX,
   Clock,
+  CornerLeftUp,
   Layers,
   MoreHorizontal,
   Pause,
@@ -95,6 +99,9 @@ import {
   deliverableRows,
   draftSummary,
   holdsRun,
+  lineageRow,
+  sessionChildren,
+  sessionParent,
   railGradedKeys,
   sessionMoves,
   sessionRoom,
@@ -102,12 +109,16 @@ import {
   sessionStatusMark,
   type CriterionRow,
   type DeliverableRow,
+  type LineageRow,
   type SessionGlyph,
   type SessionMove,
   type SessionMoveKey,
+  type SessionChildren,
+  type SessionParent,
   type SessionRoom,
   type SessionStarter,
 } from "../session-status";
+import { objectViewsT } from "./copy";
 import { useSessionMoves } from "../use-session-moves";
 import {
   CriterionGrade,
@@ -125,9 +136,7 @@ import { ContentBlock, DocumentContentSection } from "../content/content-block";
 import { documentContent } from "../content/document-model";
 import { objectPage, prepareContent } from "../content/markdown-model";
 
-/** Outputs listed here; the rest are in the app. */
-const OUTPUTS_SHOWN = 20;
-/** Deliverables and criteria shown before "Show all". */
+/** Deliverables, criteria and outputs shown before "Show all". */
 const LIST_CAP = 5;
 
 /** The mark's glyph, as an icon. */
@@ -253,6 +262,13 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
     session.continuation.project.status === "ok"
       ? session.continuation.project.project
       : null;
+  // Where it came from and what it spawned: each a door to that session's
+  // page in this frame (the console's `/sessions/:id`, the receiver's
+  // `/open/session/:id`).
+  const parent = sessionParent(session.continuation.parent);
+  const children = sessionChildren(session.continuation.children);
+  const sessionHref = (sid: string) =>
+    frame.pathFor?.("session", sid) ?? objectPage("session", sid);
   // Picking a move that ends work opens its confirm; the rest go straight
   // through their door.
   const pick = (m: SessionMove) =>
@@ -404,6 +420,8 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
       <>
         <Provenance
           starter={starter}
+          parent={parent}
+          sessionHref={sessionHref}
           space={
             session.workspaceId
               ? {
@@ -472,18 +490,24 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
         ) : null}
 
         {(outputs.data?.outputs.length ?? 0) > 0 && (
-          <SectionCard variant="flat" title="What it made">
-            <ul className="flex flex-col">
-              {outputs.data!.outputs.slice(0, OUTPUTS_SHOWN).map((output) => {
+          <SectionCard
+            variant="flat"
+            title="What it made"
+            hint={String(outputs.data!.outputs.length)}
+          >
+            <CappedList
+              items={outputs.data!.outputs.map((output) => ({
+                key: output.id,
+                output,
+              }))}
+              noun="outputs"
+              render={({ output }) => {
                 const href = objectPage(output.kind, output.refId);
                 const noun =
                   output.entityProfile?.displayName ??
                   resolveObjectNoun(output.kind);
                 return (
-                  <li
-                    key={output.id}
-                    className="flex flex-wrap items-baseline gap-x-2 border-b border-foreground/[0.05] py-2 last:border-b-0"
-                  >
+                  <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
                     <span className="text-[12px] text-foreground/65">
                       {noun}
                     </span>
@@ -499,18 +523,18 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
                         {output.title || "Untitled"}
                       </span>
                     )}
-                  </li>
+                  </span>
                 );
-              })}
-            </ul>
-            {outputs.data!.outputs.length > OUTPUTS_SHOWN && (
-              <p className="text-[12.5px] text-foreground/65">
-                And {outputs.data!.outputs.length - OUTPUTS_SHOWN} more in the
-                app.
-              </p>
-            )}
+              }}
+            />
           </SectionCard>
         )}
+        <SubSessionsSection
+          sessionId={id}
+          view={children}
+          hrefFor={sessionHref}
+          onRetry={() => void query.refetch()}
+        />
         <RoomSection
           room={room}
           name={channel.data?.channel.title?.trim() || null}
@@ -690,15 +714,21 @@ function confirmCopy(
  */
 function Provenance({
   starter,
+  parent,
+  sessionHref,
   space,
   project,
 }: {
   starter: SessionStarter | null;
+  parent: SessionParent;
+  sessionHref: (id: string) => string | null;
   space: { id: string; name: string | null } | null;
   project: { id: string; name: string } | null;
 }) {
-  if (!starter && !space && !project) return null;
+  if (!starter && parent.state === "none" && !space && !project) return null;
   const ProjectIcon = kindIcon("project");
+  const t = objectViewsT();
+  const parentHref = parent.state === "ok" ? sessionHref(parent.row.id) : null;
   return (
     <div
       role="group"
@@ -706,6 +736,31 @@ function Provenance({
       className="flex flex-wrap items-center gap-1.5"
     >
       {starter && <StarterChip starter={starter} />}
+      {parent.state === "ok" && (
+        <Pill
+          exit={
+            parentHref ? { href: parentHref, isDesktopLink: false } : undefined
+          }
+          title={parent.row.mark?.label}
+        >
+          <CornerLeftUp
+            aria-hidden
+            className="h-3.5 w-3.5 text-foreground/55"
+          />
+          <span className="text-foreground/55">
+            {t("session.lineage.partOf")}
+          </span>
+          <span className="truncate font-medium text-foreground">
+            {parent.row.title}
+          </span>
+        </Pill>
+      )}
+      {parent.state === "failed" && (
+        <Pill>
+          <TriangleAlert aria-hidden className="h-3.5 w-3.5 text-warning" />
+          <span>{t("session.lineage.parentFailed")}</span>
+        </Pill>
+      )}
       {space && (
         <Pill
           exit={openIn({
@@ -887,6 +942,111 @@ function RoomSection({
             )}
           </div>
         </div>
+      )}
+    </SectionCard>
+  );
+}
+
+/** The most children "Show all" reads in one page (`browse`'s ceiling). */
+const CHILDREN_PAGE = 100;
+
+/**
+ * The sessions this one spawned, each a door to its page with its status
+ * mark. The packet carries the first few and the exact total; "Show all N"
+ * reads the rest through `focusSessions.browse` (`parentSessionId`, every
+ * kind, lens and status: the population the total counts). OMITTED when it
+ * spawned nothing; a failed read says so, with a retry.
+ */
+function SubSessionsSection({
+  sessionId,
+  view,
+  hrefFor,
+  onRetry,
+}: {
+  sessionId: string;
+  view: SessionChildren;
+  hrefFor: (id: string) => string | null;
+  onRetry: () => void;
+}) {
+  const t = objectViewsT();
+  const [all, setAll] = useState(false);
+  const more = view.state === "ok" && view.total > view.rows.length;
+  const rest = trpc.focusSessions.browse.useQuery(
+    {
+      parentSessionId: sessionId,
+      kind: "all",
+      lens: "all",
+      status: "all",
+      limit: CHILDREN_PAGE,
+    },
+    { enabled: all && more, retry: false }
+  );
+  if (view.state === "none") return null;
+  const title = t("session.subSessions.title");
+  if (view.state === "failed") {
+    return (
+      <SectionCard variant="flat" title={title}>
+        <ResourceRowError
+          message={t("session.subSessions.failed")}
+          onRetry={onRetry}
+        />
+      </SectionCard>
+    );
+  }
+  const rows: LineageRow[] =
+    all && rest.data
+      ? rest.data.items.map((row) =>
+          lineageRow({
+            id: row.id,
+            title: resolveSessionTitle(row),
+            status: row.status,
+          })
+        )
+      : view.rows;
+  return (
+    <SectionCard variant="flat" title={title} hint={String(view.total)}>
+      <ul className="flex flex-col">
+        {rows.map((row) => {
+          const href = hrefFor(row.id);
+          return (
+            <li
+              key={row.key}
+              className="flex items-center gap-2 border-b border-foreground/[0.05] py-2 last:border-b-0"
+            >
+              {row.mark && (
+                <StatusPill kind={row.mark.kind} label={row.mark.label} />
+              )}
+              {href ? (
+                <Link
+                  href={href}
+                  className="min-w-0 flex-1 break-words rounded-sm text-[13px] text-foreground underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                >
+                  {row.title}
+                </Link>
+              ) : (
+                <span className="min-w-0 flex-1 break-words text-[13px] text-foreground/85">
+                  {row.title}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {all && rest.error && (
+        <ResourceRowError
+          message={t("session.subSessions.restFailed")}
+          onRetry={() => void rest.refetch()}
+        />
+      )}
+      {more && !(all && rest.data) && !(all && rest.error) && (
+        <button
+          type="button"
+          onClick={() => setAll(true)}
+          disabled={rest.isFetching}
+          className={DOOR}
+        >
+          {t("session.subSessions.showAll", { n: view.total })}
+        </button>
       )}
     </SectionCard>
   );

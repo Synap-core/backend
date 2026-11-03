@@ -35419,6 +35419,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				limit?: number | undefined;
 				liveness?: boolean | undefined;
 				offset?: number | undefined;
+				parentSessionId?: string | undefined;
 				projectId?: string | string[] | null | undefined;
 				q?: string | undefined;
 				settledSince?: string | undefined;
