@@ -1460,6 +1460,9 @@ function anonymousPolicyInput(facts: AnonymousPolicyFacts): AgentPolicyInput {
     // B6: only an attributed agent's run is held as the person's draft
     // (`runPlaybook` holds on `agentUserId`); an unattributed write never is.
     heldAsDraft: undefined,
+    // The host step's second pass judges an agent AS its computer; an
+    // unattributed key has no agent and runs on no computer.
+    hostPass: undefined,
   };
   return input;
 }
