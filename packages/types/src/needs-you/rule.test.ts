@@ -361,6 +361,58 @@ describe("review_later: a real ask owed more than 7 days", () => {
   });
 });
 
+describe("blocks an open PR: never aged into Review later, never Stopped", () => {
+  const blocking: NeedsYouSessionFacts = { ...live, blocksOpenPr: true };
+  const old: NeedsYouSlotFacts = { ...ask, owedSince: ago(9 * DAY) };
+
+  it("a 9-day ask blocking an open PR needs you; one that blocks none folds", () => {
+    expect(classifyOwedAsk(old, blocking, NOW)).toBe("needs_you");
+    expect(classifyOwedAsk(old, live, NOW)).toBe("review_later");
+    expect(classifyOwedAsk(old, { ...live, blocksOpenPr: false }, NOW)).toBe(
+      "review_later"
+    );
+  });
+
+  it("an idle agent's question on it is not Stopped", () => {
+    const idle: NeedsYouSessionFacts = {
+      ...blocking,
+      lastAgentActivityAt: ago(9 * DAY),
+      startedAt: ago(20 * DAY),
+    };
+    expect(classifyOwedAsk(ask, idle, NOW)).toBe("needs_you");
+    expect(classifyOwedAsk(ask, { ...idle, blocksOpenPr: false }, NOW)).toBe(
+      "stopped"
+    );
+  });
+
+  it("an agent at work still wins, and a system ask is still the system's", () => {
+    expect(classifyOwedAsk(ask, { ...blocking, turnInFlight: true }, NOW)).toBe(
+      "working"
+    );
+    expect(
+      classifyOwedAsk(
+        { ...ask, askCause: { kind: "decision" }, askedBy: undefined },
+        blocking,
+        NOW
+      )
+    ).toBe("from_system");
+  });
+
+  it("a pending proposal it waits on is not aged either", () => {
+    const base: NeedsYouProposalFacts = {
+      status: "pending",
+      createdAt: ago(9 * DAY),
+      waits: { waits: true, reason: "owed_slot" },
+      sessionId: "s1",
+      sessionStatus: "active",
+    };
+    expect(classifyPendingProposal({ ...base, blocksOpenPr: true }, NOW)).toBe(
+      "needs_you"
+    );
+    expect(classifyPendingProposal(base, NOW)).toBe("review_later");
+  });
+});
+
 describe("proposals: needs you only when something waits on it", () => {
   const base: NeedsYouProposalFacts = {
     status: "pending",
