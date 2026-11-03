@@ -631,7 +631,13 @@ describe("AppRepository — the pending request projection", () => {
     const found = await repo.getByPublicId(app.publicId);
     expect(found!.pendingRequest).toEqual({
       proposalId: newest,
-      requests: [{ permission: "entity.person.create", workspaceId: WS_SALES }],
+      requests: [
+        {
+          permission: "entity.person.create",
+          scope: "space",
+          workspaceId: WS_SALES,
+        },
+      ],
       requestedAt: new Date("2026-10-06T10:00:00Z"),
     });
   });

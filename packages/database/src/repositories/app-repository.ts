@@ -15,11 +15,17 @@ import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { randomUUID } from "crypto";
 import { APP_PUBLIC_ID_PREFIX } from "@synap-core/types/membrane";
+import {
+  assertNeverPlace,
+  parseRequestPlace,
+  PlaceError,
+  withAppRequestScope,
+  type Place,
+} from "@synap-core/types/grants";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { db } from "../client-pg.js";
 import {
   apps,
-  isPodWideReadPermission,
   type AppApprovedRequest,
   type AppRecord,
 } from "../schema/apps.js";
@@ -87,9 +93,12 @@ export const APP_CONNECT_TARGET_TYPE = "app";
 export const APP_CONNECT_PROPOSAL_TYPE = "connect";
 
 /**
- * Read `[{ permission, workspaceId }]` off an `app/connect` proposal payload
- * (`data` or `data.data`). The ONE reader: the approval executor records
- * exactly what the pending projection shows.
+ * Read `[{ permission, workspaceId, scope }]` off an `app/connect` proposal
+ * payload (`data` or `data.data`). The ONE reader: the approval executor
+ * records exactly what the pending projection shows. Each pair's place is
+ * parsed once (`parseRequestPlace`, as an app's): a pair in a space, or a
+ * pod-wide READ; anything else (a write with no space, a blank id, a scope
+ * that contradicts its space) is dropped.
  */
 export function readAppConnectRequests(raw: unknown): AppApprovedRequest[] {
   const outer = (raw ?? {}) as Record<string, unknown>;
@@ -99,17 +108,30 @@ export function readAppConnectRequests(raw: unknown): AppApprovedRequest[] {
   const out: AppApprovedRequest[] = [];
   for (const item of list) {
     if (!item || typeof item !== "object") continue;
-    const permission = (item as Record<string, unknown>).permission;
-    const workspaceId = (item as Record<string, unknown>).workspaceId;
+    const { permission, workspaceId, scope } = item as Record<string, unknown>;
     if (typeof permission !== "string" || !permission.trim()) continue;
-    // A pod-wide pair (null) only for a pod-wide READ: any other is dropped.
-    if (workspaceId === null) {
-      if (isPodWideReadPermission(permission))
-        out.push({ permission, workspaceId: null });
-      continue;
+    if (workspaceId !== null && typeof workspaceId !== "string") continue;
+    if (scope != null && scope !== "space" && scope !== "pod") continue;
+    let place: Place;
+    try {
+      place = parseRequestPlace({ permission, workspaceId, scope }, "app");
+    } catch (err) {
+      if (err instanceof PlaceError) continue;
+      throw err;
     }
-    if (typeof workspaceId !== "string" || !workspaceId.trim()) continue;
-    out.push({ permission, workspaceId });
+    switch (place.kind) {
+      case "spaces":
+        out.push({ permission, workspaceId: place.ids[0], scope: "space" });
+        break;
+      case "pod":
+        out.push({ permission, workspaceId: null, scope: "pod" });
+        break;
+      case "unbounded":
+        // An app never holds a part with no space beyond a pod-wide read.
+        break;
+      default:
+        assertNeverPlace(place);
+    }
   }
   return out;
 }
@@ -512,15 +534,23 @@ export class AppRepository {
   /**
    * The approval write — the `app/connect` executor's ONLY effect. Records what
    * the human approved. Mints nothing (the key is minted on demand by
-   * `POST /apps/:id/key`).
+   * `POST /apps/:id/key`). Each pair is stored with its explicit place
+   * (`scope`, `withAppRequestScope`); a pair no app may hold (a write with no
+   * space) is refused here, whoever checked it before.
    */
   async setApprovedRequests(
     appId: string,
     requests: AppApprovedRequest[]
   ): Promise<AppRecord | null> {
+    const approvedRequests = requests.map((r) =>
+      withAppRequestScope({
+        permission: r.permission,
+        workspaceId: r.workspaceId,
+      })
+    );
     const [row] = await this.db
       .update(apps)
-      .set({ approvedRequests: requests })
+      .set({ approvedRequests })
       .where(eq(apps.id, appId))
       .returning();
     return row ?? null;

@@ -42,6 +42,12 @@ import { users } from "./users.js";
 export interface AppApprovedRequest {
   permission: string;
   workspaceId: string | null;
+  /**
+   * The explicit place beside `workspaceId` (access model B, 2 Nov 2026,
+   * additive): "space" or "pod". Rows written before it carry none; every
+   * reader parses the place (`parseRequestPlace`) either way.
+   */
+  scope?: "space" | "pod";
 }
 
 // The pod-wide read rule lives in `@synap-core/types/grants` (pod-wide.ts), so

@@ -5,18 +5,17 @@ import {
 } from "@synap-core/types/grants";
 
 import {
-  actsAsHeadline,
   allowBlockedReason,
+  consentHeadline,
   consentClientKind,
   consentWidth,
   initialSelection,
   invalidRequestHint,
   isTicked,
   permissionLabel,
+  placeReachNote,
   readsSpaceRecords,
   reasonOf,
-  SPACE_REACH_NOTE,
-  spaceReachNote,
   sectionCheckboxLabel,
   sectionState,
   spaceCheckboxLabel,
@@ -208,45 +207,55 @@ describe("the reach line under the space choice", () => {
     expect(readsSpaceRecords(offer("not a permission"))).toBe(false);
   });
 
-  it("says what a member sees, and that nothing else is reached (rv-ui U1)", () => {
-    expect(SPACE_REACH_NOTE).toBe(
-      "It sees what a member of these spaces sees: what is stored there, plus the people, companies and other records of your pod that have a role there or were filed there. Nothing else in your pod."
+  it("says what a member sees (rv-ui U1)", () => {
+    expect(placeReachNote("spaces")).toBe(
+      "It sees what a member of these spaces sees: what is stored there, plus the people, companies and other records of your pod that have a role there or were filed there."
     );
-    expect(SPACE_REACH_NOTE).not.toContain("\u2014");
+    expect(placeReachNote("spaces")).not.toContain("\u2014");
   });
 
-  it("with pod-wide reads on offer, names their section instead of 'nothing else'", () => {
-    expect(spaceReachNote(false)).toBe(SPACE_REACH_NOTE);
-    const withPod = spaceReachNote(true);
-    expect(withPod).not.toContain("Nothing else in your pod");
-    expect(withPod).toContain("Everywhere in your pod");
-    expect(withPod).not.toContain("\u2014");
+  // Rules out: a place's line that speaks for another place — "Nothing else
+  // in your pod" under the spaces contradicted the pod-wide section, and the
+  // fix was a second hand-written variant (access model B: one line per place).
+  it("each place's line says only what that place gives", () => {
+    for (const kind of ["spaces", "pod", "unbounded"] as const) {
+      expect(placeReachNote(kind)).not.toMatch(/nothing else/i);
+      expect(placeReachNote(kind)).not.toMatch(/take .* back|revoke/i);
+    }
+    expect(placeReachNote("pod")).toBe(
+      "It reads these in every space and outside any space, as you can. It cannot change them."
+    );
   });
 });
 
-describe("a Synap app's headline — the spaces ticked are the grant", () => {
-  const LEAD = "Content Studio will act as you in";
-  it("names each ticked space once, in offer order, and follows the ticks", () => {
+// Rules out: the consent headline written apart from the app's page (the old
+// "<app> will act as you in: Brand, Shared." named spaces but not what it may
+// do in each, and only for a Synap app).
+describe("the consent's headline — the one access sentence over the ticks", () => {
+  it("each tier in its own spaces, and it follows the ticks", () => {
     let s = initialSelection(OFFER, []);
-    expect(actsAsHeadline(LEAD, s, OFFER)).toBe(
-      "Content Studio will act as you in: Brand, Shared."
+    expect(consentHeadline(s, OFFER)).toBe(
+      "Reads posts in Brand and Shared; changes posts in Brand."
     );
     s = toggle(s, OFFER, "entity.post.read", "shared");
-    expect(actsAsHeadline(LEAD, s, OFFER)).toBe(
-      "Content Studio will act as you in: Brand."
+    expect(consentHeadline(s, OFFER)).toBe(
+      "Reads posts, changes posts in Brand."
     );
     s = toggle(s, OFFER, "entity.post.read", "shared");
     s = toggle(s, OFFER, "entity.post.create", "brand");
     s = toggle(s, OFFER, "entity.post.read", "brand");
-    expect(actsAsHeadline(LEAD, s, OFFER)).toBe(
-      "Content Studio will act as you in: Shared."
-    );
+    expect(consentHeadline(s, OFFER)).toBe("Reads posts in Shared.");
   });
 
-  it("nothing ticked: no space is named", () => {
-    expect(actsAsHeadline(LEAD, new Set(), OFFER)).toBe(
-      "Content Studio will act as you in the spaces you choose below."
+  it("a ticked pod-wide read is its own place; nothing ticked is no access", () => {
+    const s = initialSelection(OFFER, []);
+    const podWide = [{ permission: "entity.decision.read" }];
+    expect(
+      consentHeadline(s, OFFER, new Set(["entity.decision.read"]), podWide)
+    ).toBe(
+      "Reads decisions everywhere in your pod and posts in Brand and Shared; changes posts in Brand."
     );
+    expect(consentHeadline(new Set(), OFFER)).toBe("No access yet.");
   });
 });
 

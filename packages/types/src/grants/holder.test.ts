@@ -338,8 +338,10 @@ describe("resolveHolderAccess — apps", () => {
     expect(podOnly.where.spaces).toEqual([]);
   });
 
-  // Rules out: per-space grants merged into one cross product.
-  it("per-space grants: one line each, spaces named, no single draft", () => {
+  // Rules out: per-space grants merged into one cross product, and ONE
+  // "where" for every tier — "changes people in Sales and Finance" when it
+  // creates people in Sales only (it only reads notes in Finance).
+  it("per-space grants: one line each, each tier in its own spaces, no single draft", () => {
     const h = resolveHolderAccess({
       kind: "app",
       name: "synap.live",
@@ -364,8 +366,78 @@ describe("resolveHolderAccess — apps", () => {
     expect(h.tiers.read).toBe(NOTES);
     expect(h.tiers.change).toBe(resolveObjectNounPlural("person"));
     expect(h.sentence).toBe(
-      `Reads ${inSentence(NOTES)}, changes ${inSentence(resolveObjectNounPlural("person"))} in Sales and Finance. Asks you first.`
+      `Reads ${inSentence(NOTES)} in Finance; changes ${inSentence(resolveObjectNounPlural("person"))} in Sales. Asks you first.`
     );
+    expect(h.sentence).not.toMatch(/changes .* Finance/);
+    expect(h.places.change).toEqual([
+      {
+        what: inSentence(resolveObjectNounPlural("person")),
+        where: "Sales",
+        place: { kind: "spaces", ids: ["ws-sales"] },
+      },
+    ]);
+    expect(h.places.read.map((p) => p.where)).toEqual(["Finance"]);
+  });
+
+  // Rules out: a pod-wide read hidden behind the spaces of the changes —
+  // "Reads decisions, changes notes in Sales" read as reading in Sales only.
+  it("a pod-wide read is said as one, beside changes in a space", () => {
+    const h = resolveHolderAccess({
+      kind: "app",
+      name: "DevPlane",
+      limits: {
+        source: "grants",
+        access: "granted",
+        grants: [
+          grant(["entity.note"], { workspaceIds: ["ws-sales"] }),
+          grant(["entity.decision.read"], { workspaceIds: null }),
+        ],
+      },
+      workspaceNames: { "ws-sales": "Sales" },
+      now: NOW,
+    });
+    const decisions = inSentence(resolveObjectNounPlural("decision"));
+    expect(h.sentence).toBe(
+      `Reads ${decisions} everywhere in your pod and ${inSentence(NOTES)} in Sales; changes ${inSentence(NOTES)} in Sales.`
+    );
+    expect(h.places.read.map((p) => [p.where, p.place.kind])).toEqual([
+      ["Everywhere in your pod", "pod"],
+      ["Sales", "spaces"],
+    ]);
+    // The same grants held by a key: no space means anywhere it can reach.
+    const asKey = resolveHolderAccess({
+      kind: "key",
+      name: "CLI",
+      limits: {
+        source: "grants",
+        access: "granted",
+        grants: [
+          grant(["entity.note"], { workspaceIds: ["ws-sales"] }),
+          grant(["entity.decision.read"], { workspaceIds: null }),
+        ],
+      },
+      workspaceNames: { "ws-sales": "Sales" },
+      now: NOW,
+    });
+    expect(asKey.sentence).toBe(
+      `Reads ${decisions} anywhere you can reach and ${inSentence(NOTES)} in Sales; changes ${inSentence(NOTES)} in Sales.`
+    );
+  });
+
+  // Rules out: an empty space list read as "anywhere" (a fifth meaning).
+  it("an empty space list is no place: refused, never anywhere", () => {
+    expect(() =>
+      resolveHolderAccess({
+        kind: "app",
+        name: "X",
+        limits: {
+          source: "grants",
+          access: "granted",
+          grants: [grant(["entity.note.read"], { workspaceIds: [] })],
+        },
+        now: NOW,
+      })
+    ).toThrow(/empty space list/);
   });
 });
 

@@ -20,11 +20,22 @@
 import type { AppConnectRequestLike } from "../proposals/intent.js";
 import {
   resolveObjectNoun,
-  nounInSentence,
-  resolveObjectNounPlural,
+  resolveSpacesLabel,
   resolveStatusLabel,
-  sentenceCaseLabel,
 } from "../vocabulary/index.js";
+import {
+  accessModelOfParts,
+  candidateRows,
+  describeAccess,
+  HOLDER_EVERYTHING,
+  HOLDER_NOTHING,
+  permissionsMatch,
+  rowRequest,
+  tierReachOf,
+  tierValue,
+  type AccessPart,
+  type TierPlace,
+} from "./access-model.js";
 import {
   AGENT_ALWAYS_ALLOWED,
   AGENT_GRANT_CATALOG,
@@ -36,25 +47,28 @@ import {
   type GrantSubjectSpec,
 } from "./catalog.js";
 import { isFullAccess, type GrantDraft } from "./draft.js";
-import { isPodWideReadScope } from "./pod-wide.js";
+import { parsePermission, type GrantRequest } from "./grammar.js";
 import {
-  parsePermission,
-  patternMatches,
-  type GrantRequest,
-} from "./grammar.js";
+  meetPlaces,
+  parsePlace,
+  placeKey,
+  spacesPlace,
+  UNBOUNDED_PLACE,
+  type Place,
+  type PlaceHolder,
+} from "./reach.js";
 import {
   describeKeyAccess,
-  GRANT_FULL_ACCESS_SENTENCE,
   KEY_ACCESS_ENDED_SENTENCE,
   KEY_ACCESS_UNGRANTED_SENTENCE,
   summarizeGrant,
-  type GrantSummaryRow,
   type KeyAccess,
   type KeyAccessGrant,
   type KeyAccessLine,
 } from "./summary.js";
 
-export type HolderKind = "agent" | "app" | "key";
+/** Who holds the access: decides what a grant with no space means (`parsePlace`). */
+export type HolderKind = PlaceHolder;
 
 export interface HolderKeyInput {
   readonly id: string;
@@ -118,6 +132,16 @@ export interface HolderAccess {
     readonly approves: boolean;
     readonly deletes: boolean;
   };
+  /**
+   * Per tier, where it holds and what there (`describeAccess`): the reads it
+   * has pod-wide get their own place, never folded into the spaces of its
+   * changes. Empty = the tier is empty. Each place is the parsed `Place`.
+   */
+  readonly places: {
+    readonly read: readonly TierPlace[];
+    readonly change: readonly TierPlace[];
+    readonly approve: readonly TierPlace[];
+  };
   /** Per grant (key/app: describeKeyAccess lines; agent: its ceiling). Empty once ended. */
   readonly lines: readonly KeyAccessLine[];
   readonly where: {
@@ -144,23 +168,7 @@ export interface HolderAccess {
   readonly draft: GrantDraft | null;
 }
 
-export const HOLDER_EVERYTHING = "Everything";
-export const HOLDER_NOTHING = "Nothing";
-export const HOLDER_NO_ACCESS_SENTENCE = "No access yet";
-
-const CHANGE_ACTIONS = ["create", "update", "delete"] as const;
-
 type Gate = (req: GrantRequest) => boolean;
-
-function matches(permissions: readonly string[], req: GrantRequest): boolean {
-  return permissions.some((p) => {
-    try {
-      return patternMatches(p, req);
-    } catch {
-      return false;
-    }
-  });
-}
 
 function toDate(v: Date | string | null | undefined): Date | null {
   if (v === null || v === undefined) return null;
@@ -172,82 +180,6 @@ const isPast = (v: Date | string | null | undefined, now: number) => {
   const d = toDate(v);
   return d !== null && d.getTime() <= now;
 };
-
-/**
- * Spaces a set of grants reaches: null = anywhere, else the union. A pod-wide
- * read part (`isPodWideReadScope`) only reads its kinds everywhere, so it never
- * makes the grants "anywhere": an app that changes notes in Sales and reads
- * decisions pod-wide still changes notes in Sales only. Only when every part is
- * a pod-wide read does the holder reach anywhere (it reads, nothing else).
- */
-function grantSpaces(grants: readonly GrantDraft[]): Set<string> | null {
-  const spaced = grants.filter((g) => !isPodWideReadScope(g));
-  if (spaced.length === 0 && grants.length > 0) return null;
-  const out = new Set<string>();
-  for (const g of spaced) {
-    if (!g.workspaceIds || g.workspaceIds.length === 0) return null;
-    for (const id of g.workspaceIds) out.add(id);
-  }
-  return out;
-}
-
-function intersectSpaces(
-  a: Set<string> | null,
-  b: Set<string> | null
-): Set<string> | null {
-  if (a === null) return b;
-  if (b === null) return a;
-  return new Set([...a].filter((id) => b.has(id)));
-}
-
-const rowRequest = (row: GrantSummaryRow, action: string): GrantRequest => ({
-  subject: row.subject,
-  qualifier: row.kind === null || row.kind === "*" ? null : row.kind,
-  action,
-});
-
-/** One tier's labels from the candidate rows: a kind row hides under its subject's every-kind row. */
-function tierLabels(
-  rows: readonly GrantSummaryRow[],
-  test: (row: GrantSummaryRow) => boolean
-): string[] | null {
-  const hit = rows.filter(test);
-  const covered = new Set(
-    hit.filter((r) => r.kind === "*").map((r) => r.subject)
-  );
-  const labels: string[] = [];
-  for (const r of hit) {
-    if (r.kind !== null && r.kind !== "*" && covered.has(r.subject)) continue;
-    if (!labels.includes(r.label)) labels.push(r.label);
-  }
-  return labels.length > 0 ? labels : null;
-}
-
-/** A tier as a VALUE (the "Can change" fact): its labels as listed. */
-/**
- * A tier's value as it reads beside its label ("Can read  Entities and
- * documents"): one phrase, nouns mid-sentence after the first word — never a
- * comma list of capitalised plurals ("Entities, Documents").
- */
-const tierValue = (labels: readonly string[] | null) =>
-  labels ? sentenceCaseLabel(and(labels.map(nounInSentence))) : null;
-
-/**
- * A tier inside the header SENTENCE: nouns mid-sentence ("changes notes and
- * people"), never the listed labels' capitals ("changes Notes, People").
- */
-const phrase = (labels: readonly string[] | "all" | "none") =>
-  labels === "all"
-    ? HOLDER_EVERYTHING.toLowerCase()
-    : labels === "none"
-      ? HOLDER_NOTHING.toLowerCase()
-      : and(labels.map(nounInSentence));
-
-function and(parts: readonly string[]): string {
-  return parts.length > 1
-    ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`
-    : (parts[0] ?? "");
-}
 
 /** `agentUsers.governance().postures` — the posture at the pod and in each space. */
 export interface AskFirstPostures {
@@ -312,13 +244,6 @@ export function holderPostureOf(
   };
 }
 
-/** "Sales", "Sales and Finance", "3 spaces". */
-function spacesPhrase(names: readonly string[]): string {
-  return names.length <= 2
-    ? and(names)
-    : `${names.length} ${resolveObjectNounPlural("workspace").toLowerCase()}`;
-}
-
 export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
   const now = input.now ?? Date.now();
   const { limits } = input;
@@ -326,20 +251,23 @@ export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
     input.kind === "agent" ? AGENT_GRANT_CATALOG : GRANT_SUBJECT_CATALOG;
   const summaryOpts = { kindNames: input.kindNames };
 
-  // ── the ceiling ──────────────────────────────────────────────────────────
-  let ceiling: Gate;
-  let ceilingFull: boolean;
-  let ceilingSpaces: Set<string> | null;
+  // ── the ceiling, as parts (a gate and its place) ────────────────────────
+  let ceilingParts: AccessPart[];
   let lines: readonly KeyAccessLine[];
   let draft: GrantDraft | null;
   let accessEnded = false;
   if (limits.source === "capabilities") {
     const d = agentCapabilitiesToDraft(limits.capabilities);
-    ceiling = (req) =>
-      (AGENT_ALWAYS_ALLOWED as readonly string[]).includes(req.action) ||
-      matches(d.permissions, req);
-    ceilingFull = isFullAccess(d);
-    ceilingSpaces = null;
+    ceilingParts = [
+      {
+        can: (req) =>
+          (AGENT_ALWAYS_ALLOWED as readonly string[]).includes(req.action) ||
+          permissionsMatch(d.permissions, req),
+        full: isFullAccess(d),
+        // A capability list names no space: the AI acts wherever its person can.
+        place: UNBOUNDED_PLACE,
+      },
+    ];
     lines = [
       {
         label: null,
@@ -358,10 +286,11 @@ export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
     const described = describeKeyAccess(limits, summaryOpts);
     accessEnded = limits.access === "ended";
     const grants = limits.access === "granted" ? limits.grants : [];
-    ceiling = (req) => grants.some((g) => matches(g.permissions, req));
-    ceilingFull = described.full;
-    ceilingSpaces =
-      limits.access === "granted" ? grantSpaces(grants) : new Set();
+    ceilingParts = grants.map((g) => ({
+      can: (req) => permissionsMatch(g.permissions, req),
+      full: isFullAccess(g),
+      place: parsePlace(g, input.kind),
+    }));
     lines = described.lines;
     if (grants.length === 1) {
       const { expiresAt: _expiresAt, ...one } = grants[0];
@@ -371,24 +300,32 @@ export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
 
   // ── an agent's live keys narrow it ──────────────────────────────────────
   // A key that may touch nothing (ended, or never granted) cannot act, so it
-  // narrows nothing.
+  // narrows nothing. Each (ceiling part, key grant) pair holds where both do.
   const liveKeys = (input.keys ?? []).filter(
     (k) => !k.revokedAt && !isPast(k.expiresAt, now) && k.access === "granted"
   );
-  const narrowed = liveKeys.length > 0;
-  const keyGate: Gate = (req) =>
-    !narrowed ||
-    liveKeys.some((k) => k.grants.some((g) => matches(g.permissions, req)));
-  const keysFull =
-    !narrowed || liveKeys.some((k) => describeKeyAccess(k, summaryOpts).full);
-  const keySpaces = narrowed
-    ? grantSpaces(liveKeys.flatMap((k) => k.grants))
-    : null;
+  const keyGrants = liveKeys.flatMap((k) => k.grants);
+  const parts: AccessPart[] =
+    liveKeys.length === 0
+      ? ceilingParts
+      : ceilingParts.flatMap((c) =>
+          keyGrants.flatMap((g) => {
+            const place = meetPlaces(c.place, parsePlace(g, input.kind));
+            if (place === null) return [];
+            return [
+              {
+                can: (req: GrantRequest) =>
+                  c.can(req) && permissionsMatch(g.permissions, req),
+                full: c.full && isFullAccess(g),
+                place,
+              },
+            ];
+          })
+        );
   const keyLines = liveKeys.flatMap(
     (k) => describeKeyAccess(k, summaryOpts).lines
   );
-
-  const can: Gate = (req) => ceiling(req) && keyGate(req);
+  const can: Gate = (req) => parts.some((p) => p.can(req));
 
   // ── ended ───────────────────────────────────────────────────────────────
   const expiresAt = toDate(input.expiresAt);
@@ -410,14 +347,7 @@ export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
     posture = {
       mode: input.posture.mode,
       where:
-        ids.length === 0
-          ? null
-          : spacesPhrase(
-              ids.map(
-                (id) =>
-                  input.workspaceNames?.[id] ?? resolveObjectNoun("workspace")
-              )
-            ),
+        ids.length === 0 ? null : resolveSpacesLabel(ids, input.workspaceNames),
     };
   } else posture = input.kind === "key" ? null : "unread";
 
@@ -426,6 +356,7 @@ export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
       state: "ended",
       sentence: KEY_ACCESS_ENDED_SENTENCE,
       tiers: { read: HOLDER_NOTHING, change: null, approve: null },
+      places: { read: [], change: [], approve: [] },
       danger: { full: false, approves: false, deletes: false },
       lines: [],
       where: { anywhere: false, spaces: [], projectIds: [] },
@@ -435,56 +366,44 @@ export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
       draft: null,
     };
 
-  // ── tiers ───────────────────────────────────────────────────────────────
-  const full = ceilingFull && keysFull;
-  const candidates: GrantSummaryRow[] = [];
-  for (const l of [...lines, ...keyLines])
-    for (const r of l.summary.rows)
-      if (!candidates.some((c) => c.key === r.key)) candidates.push(r);
-  const top = (subject: string, action: string): GrantRequest => ({
-    subject,
-    qualifier: null,
-    action,
-  });
-
-  const readAll = catalog.every((s) => can(top(s.subject, "read")));
-  const readLabels = readAll
-    ? null
-    : tierLabels(candidates, (r) => can(rowRequest(r, "read")));
-  const read = readAll
-    ? HOLDER_EVERYTHING
-    : (tierValue(readLabels) ?? HOLDER_NOTHING);
-  const changeAll = catalog.every((s) =>
-    s.actions.filter((a) => a !== "read").every((a) => can(top(s.subject, a)))
-  );
-  const changeLabels = changeAll
-    ? null
-    : tierLabels(candidates, (r) =>
-        CHANGE_ACTIONS.some((a) => can(rowRequest(r, a)))
-      );
-  const change = changeAll ? HOLDER_EVERYTHING : tierValue(changeLabels);
-  const approveLabels = full
-    ? null
-    : tierLabels(candidates, (r) => can(rowRequest(r, "approve")));
-  const approve = full ? HOLDER_EVERYTHING : tierValue(approveLabels);
+  // ── the model: per tier, what and where ─────────────────────────────────
+  const summaries = [...lines, ...keyLines].map((l) => l.summary);
+  const model = accessModelOfParts(parts, { summaries, catalog });
+  const candidates = candidateRows(summaries);
+  // The tier VALUES ("Can read  Notes and people") read the whole holder.
+  const whole = tierReachOf(can, model.state === "full", candidates, catalog);
+  const full = model.state === "full";
+  const value = (t: readonly string[] | "all" | null) =>
+    t === "all" ? HOLDER_EVERYTHING : tierValue(t);
+  const read = value(whole.read) ?? HOLDER_NOTHING;
+  const change = value(whole.change);
+  const approve = value(whole.approve);
   const deletes = full || candidates.some((r) => can(rowRequest(r, "delete")));
 
-  // ── where ───────────────────────────────────────────────────────────────
-  const spaceIds = intersectSpaces(ceilingSpaces, keySpaces);
-  const nameOf = (id: string) =>
-    input.workspaceNames?.[id] ??
-    input.pending?.requests.find((r) => r.workspaceId === id && r.workspaceName)
-      ?.workspaceName ??
-    resolveObjectNoun("workspace");
-  const spaces = spaceIds
-    ? [...spaceIds].map((id) => ({ id, name: nameOf(id) }))
-    : [];
+  // ── where (every place a part reaches) ──────────────────────────────────
+  const pendingNames: Record<string, string> = {};
+  for (const r of input.pending?.requests ?? [])
+    if (r.workspaceId && r.workspaceName)
+      pendingNames[r.workspaceId] ??= r.workspaceName;
+  const names = { ...pendingNames, ...input.workspaceNames };
+  const anywhere =
+    model.places.some((p) => p.kind === "unbounded") ||
+    (model.places.length > 0 && model.places.every((p) => p.kind === "pod"));
+  const spaceIds: string[] = [];
+  if (!anywhere)
+    for (const p of model.places)
+      if (p.kind === "spaces")
+        for (const id of p.ids) if (!spaceIds.includes(id)) spaceIds.push(id);
+  const spaces = spaceIds.map((id) => ({
+    id,
+    name: names[id] ?? resolveObjectNoun("workspace"),
+  }));
   const projects = new Set<string>();
   const allGrants: readonly GrantDraft[] = [
     ...(limits.source === "grants" && limits.access === "granted"
       ? limits.grants
       : []),
-    ...liveKeys.flatMap((k) => k.grants),
+    ...keyGrants,
   ];
   for (const g of allGrants)
     for (const p of g.projectIds ?? []) projects.add(p);
@@ -493,40 +412,20 @@ export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
   for (const l of [...lines, ...keyLines])
     for (const p of l.summary.other) if (!other.includes(p)) other.push(p);
 
-  const nothing =
-    !full &&
-    read === HOLDER_NOTHING &&
-    change === null &&
-    approve === null &&
-    other.length === 0;
-  const state: HolderAccess["state"] = full
-    ? "full"
-    : nothing
-      ? "nothing"
-      : "limited";
+  const state: HolderAccess["state"] = model.state;
 
   // ── the sentence ────────────────────────────────────────────────────────
-  let what: string;
-  if (state === "nothing")
-    what =
-      limits.source === "grants" && limits.access === "ungranted"
-        ? KEY_ACCESS_UNGRANTED_SENTENCE
-        : HOLDER_NO_ACCESS_SENTENCE;
-  else if (full) what = GRANT_FULL_ACCESS_SENTENCE;
-  else {
-    const verbs = [`Reads ${phrase(readAll ? "all" : (readLabels ?? "none"))}`];
-    if (change)
-      verbs.push(`changes ${phrase(changeAll ? "all" : changeLabels!)}`);
-    if (approve)
-      verbs.push(`approves ${phrase(full ? "all" : approveLabels!)}`);
-    what = verbs.join(", ");
-    if (spaces.length > 0)
-      what += ` in ${spacesPhrase(spaces.map((s) => s.name))}`;
-  }
-  const parts = [`${what}.`];
+  const described = describeAccess(model, { names });
+  const what =
+    state === "nothing" &&
+    limits.source === "grants" &&
+    limits.access === "ungranted"
+      ? `${KEY_ACCESS_UNGRANTED_SENTENCE}.`
+      : described.sentence;
+  const sentenceParts = [what];
   if (posture && posture !== "unread" && state !== "nothing") {
     const scope = posture.where === null ? "" : ` in ${posture.where}`;
-    parts.push(
+    sentenceParts.push(
       posture.mode === "ask"
         ? `Asks you first${scope}.`
         : `Acts without asking${scope}.`
@@ -535,15 +434,12 @@ export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
 
   return {
     state,
-    sentence: parts.join(" "),
+    sentence: sentenceParts.join(" "),
     tiers: { read, change, approve },
+    places: described.tiers,
     danger: { full, approves: approve !== null, deletes },
     lines,
-    where: {
-      anywhere: spaceIds === null,
-      spaces,
-      projectIds: [...projects],
-    },
+    where: { anywhere, spaces, projectIds: [...projects] },
     lifetime,
     posture,
     other,
@@ -559,16 +455,20 @@ export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
 export function grantsOfRequests(
   requests: readonly AppConnectRequestLike[]
 ): KeyAccessGrant[] {
-  const byPlace = new Map<string | null, string[]>();
+  // By the space each request names (none = one grant with no space, which
+  // the holder reads for its kind: `parsePlace`). A blank id is no space:
+  // `spacesPlace` refuses it rather than reading it as "no space".
+  const byPlace = new Map<string, { place: Place | null; perms: string[] }>();
   for (const r of requests) {
-    const place = r.workspaceId || null;
-    const perms = byPlace.get(place) ?? [];
-    if (!perms.includes(r.permission)) perms.push(r.permission);
-    byPlace.set(place, perms);
+    const place = r.workspaceId === null ? null : spacesPlace([r.workspaceId]);
+    const k = place ? placeKey(place) : "none";
+    const entry = byPlace.get(k) ?? { place, perms: [] };
+    if (!entry.perms.includes(r.permission)) entry.perms.push(r.permission);
+    byPlace.set(k, entry);
   }
-  return [...byPlace].map(([workspaceId, permissions]) => ({
-    permissions,
-    workspaceIds: workspaceId ? [workspaceId] : null,
+  return [...byPlace.values()].map(({ place, perms }) => ({
+    permissions: perms,
+    workspaceIds: place?.kind === "spaces" ? [...place.ids] : null,
     projectIds: null,
     entityIds: null,
     expiresAt: null,
@@ -613,7 +513,7 @@ export function narrowRequestsToRead(
       qualifier: kind && kind !== "*" ? kind : null,
       action: "read",
     };
-    if (!matches([r.permission], req)) continue;
+    if (!permissionsMatch([r.permission], req)) continue;
     push(
       r,
       kind === null || kind === "*"

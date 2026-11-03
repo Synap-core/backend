@@ -614,7 +614,12 @@ describe("R5 — the refreshed key carries the CURRENT approval", () => {
     expect(after.status).toBe(200);
     expect(await keyGrants(after.body.access_token)).toEqual([[BRAND]]);
     expect(after.body.synap_grant).toEqual([
-      { permission: READ, workspaceId: BRAND, workspaceName: "Brand" },
+      {
+        permission: READ,
+        workspaceId: BRAND,
+        workspaceName: "Brand",
+        scope: "space",
+      },
     ]);
   });
 
@@ -1004,7 +1009,12 @@ describe("PB3b — the reuse grace: the same client, within 30 s, gets the same 
     const replay = await refresh(first.refresh);
     expect(replay.status).toBe(200);
     expect(replay.body.synap_grant).toEqual([
-      { permission: READ, workspaceId: SHARED, workspaceName: "Shared" },
+      {
+        permission: READ,
+        workspaceId: SHARED,
+        workspaceName: "Shared",
+        scope: "space",
+      },
     ]);
     expect(await keyGrants(replay.body.access_token)).toEqual([[SHARED]]);
   });
