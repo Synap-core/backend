@@ -5436,6 +5436,18 @@
         "type": "object",
         "properties": {
           "template": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "permissions": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1, "maxLength": 120 },
+            "minItems": 1,
+            "maxItems": 128
+          },
+          "uses": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1, "maxLength": 40 },
+            "minItems": 1,
+            "maxItems": 8
+          },
           "name": { "type": "string", "minLength": 1, "maxLength": 100 },
           "expiresInDays": {
             "type": ["integer", "null"],
@@ -5452,8 +5464,7 @@
             "format": "uuid",
             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
           }
-        },
-        "required": ["template"]
+        }
       },
       "KeyRequestTokenResult": {
         "type": "object",
@@ -28278,8 +28289,8 @@
     "/keys/requests": {
       "post": {
         "tags": ["Keys"],
-        "summary": "Ask the person for a key made from a template",
-        "description": "Files a key request the person approves on the pod-admin page `review_url` (they may narrow it, never widen it past the template). It waits 24 hours; asking the same again returns the request already waiting (same id and link, a new `request_code`). Then poll `POST /keys/requests/token` with `request_code` to collect the key once. The caller never mints a key itself.",
+        "summary": "Ask the person for a key: a template, or the exact permissions",
+        "description": "Files a key request the person approves on the pod-admin page `review_url` (they may narrow it, never widen it past what was asked). Name EITHER a `template` OR `permissions`, the grant patterns the key needs (`entity.company.update`, `facet.create`, …): the list is then the most the key may be. A list may not hold `*` (ask for the `full-access` template), lasts 90 days unless `expiresInDays` says otherwise (at most 365, never \"never\"), and is used on `hub` unless `uses` names `hub` and/or `mcp`. It waits 24 hours; asking the same again returns the request already waiting (same id and link, a new `request_code`). Then poll `POST /keys/requests/token` with `request_code` to collect the key once. The caller never mints a key itself.",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {
@@ -28298,7 +28309,7 @@
             }
           },
           "400": {
-            "description": "Bad request — the wrapped door refused the input",
+            "description": "Bad request — both or neither of `template` and `permissions`, or a permission the pod cannot grant",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
