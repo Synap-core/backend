@@ -22,6 +22,10 @@
  *     class in its body (`{class}`) wins, since that is the bucket it spent.
  *
  * Health and metrics (`free`) are not counted.
+ *
+ * The same slot names the request in the event-loop watch (`inFlight`,
+ * `status/event-loop-watch.ts`): registered here because this is where the
+ * slot the key-auth doors fill is born, removed in the same `finally`.
  */
 
 import type { MiddlewareHandler } from "hono";
@@ -42,6 +46,10 @@ import {
   clientIp,
   hashBearerToken,
 } from "./rate-limit-classes.js";
+import {
+  eventLoopWatch,
+  type EventLoopWatch,
+} from "../status/event-loop-watch.js";
 
 const logger = createLogger({ module: "usage-telemetry" });
 
@@ -113,6 +121,8 @@ export function createUsageTelemetry(
     flush?: (rows: ApiUsageRow[]) => Promise<unknown>;
     intervalMs?: number;
     now?: () => number;
+    /** Requests in flight, named when the event loop stalls. */
+    inFlight?: Pick<EventLoopWatch, "begin" | "end">;
   } = {}
 ): UsageTelemetry {
   const counter = opts.counter ?? new ApiUsageCounter();
@@ -165,9 +175,11 @@ export function createUsageTelemetry(
     if (pathClass === "free") return next();
     const started = now();
     const slot: UsageSlot = {};
+    const entry = opts.inFlight?.begin(c.req.method, c.req.path, slot, c);
     try {
       await runWithUsageSlot(slot, () => next());
     } finally {
+      opts.inFlight?.end(entry);
       try {
         const status = c.res?.status ?? 500;
         const rlClass =
@@ -219,4 +231,6 @@ export function createUsageTelemetry(
 }
 
 /** The pod's one instance: mounted in `index.ts`, flushed on shutdown. */
-export const usageTelemetry = createUsageTelemetry();
+export const usageTelemetry = createUsageTelemetry({
+  inFlight: eventLoopWatch,
+});
