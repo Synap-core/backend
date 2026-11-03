@@ -6,9 +6,9 @@
  * no operation, 14 spec paths wrote `:id` (not an OpenAPI template), and 54 of
  * 309 2xx responses had no schema. This tripwire derives the SERVED set from
  * the real app (never a hand list) and pins:
- *   1. every served route is in docs/reference/hub-openapi.json (what clients
+ *   1. every served route is in the Hub OpenAPI reference (what clients
  *      read), except a shrink-only baseline;
- *   2. no registered or committed spec path contains `:`;
+ *   2. no registered or published spec path contains `:`;
  *   3. app-facing (grant fence SAFE / NARROWED) routes have a described 2xx,
  *      except a shrink-only baseline.
  * Each baseline is exact in both directions: a new gap fails, and a fixed one
@@ -16,9 +16,6 @@
  * (`_test-support/hub-response-check.ts`), see hub-response-drift.tripwire.test.ts.
  */
 
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { hubProtocolRestApp } from "../../../hub-protocol-rest.js";
 import { toOpenApiPath } from "../_codecs/_register.js";
@@ -32,11 +29,6 @@ import {
   GRANT_SAFE_REST_READS,
 } from "../../../../access/grant-door-fence.js";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const SPEC_FILE = join(
-  HERE,
-  "../../../../../../../docs/reference/hub-openapi.json"
-);
 const METHODS = ["get", "post", "put", "patch", "delete"];
 
 /**
@@ -78,10 +70,43 @@ function registeredRoutes() {
 const keyOf = (method: string, path: string) =>
   `${method.toUpperCase()} ${toOpenApiPath(path)}`;
 
-/** The committed spec (`pnpm docs:reference`; CI's "Reference docs are current" pins it to the registry). */
-const spec = JSON.parse(readFileSync(SPEC_FILE, "utf8")) as {
-  paths: Record<string, Record<string, any>>;
-};
+/**
+ * The spec clients read, built the way `pnpm docs:reference`
+ * (scripts/docs/gen-reference.ts) builds the committed reference: every
+ * registered operation the generator can express, the others left out. The
+ * required check "Reference docs are current" pins the committed file to this
+ * build, so the test reads the registry, never the file: the reference folder
+ * is SUITE_NEUTRAL (scripts/ci/affected.mjs), and a test reading it would not
+ * re-run when it changes.
+ */
+function publishedSpec(): { paths: Record<string, Record<string, any>> } {
+  const registry = hubProtocolRestApp.openAPIRegistry as unknown as {
+    _definitions: unknown[];
+  };
+  const all = registry._definitions;
+  const generate = (defs: unknown[]) => {
+    registry._definitions = defs;
+    try {
+      return hubProtocolRestApp.getOpenAPI31Document({
+        openapi: "3.1.0",
+        info: { title: "coverage", version: "0" },
+      }) as unknown as { paths: Record<string, Record<string, any>> };
+    } finally {
+      registry._definitions = all;
+    }
+  };
+  const kept = all.filter((d) => {
+    try {
+      generate([d]);
+      return true;
+    } catch {
+      return false; // the generator leaves it out of the reference too
+    }
+  });
+  return generate(kept);
+}
+
+const spec = publishedSpec();
 
 /** Today's sizes; lower one when an entry is deleted, never raise it. */
 const MISSING_CEILING = 180;
@@ -113,7 +138,7 @@ describe("hub openapi coverage", () => {
     const fresh = missing.filter((k) => !baseline.has(k));
     expect(
       fresh,
-      "served but not in docs/reference/hub-openapi.json: register it with registerOpenApi (or app.openapi), then `pnpm docs:reference`"
+      "served but not in the Hub OpenAPI reference: register it with registerOpenApi (or app.openapi), then `pnpm docs:reference`"
     ).toEqual([]);
     const fixed = [...baseline].filter((k) => !missing.includes(k));
     expect(
@@ -137,7 +162,7 @@ describe("hub openapi coverage", () => {
 
   it("no spec path is written with a Hono `:param`", () => {
     const registeredPaths = registry.map((d) => d.route!.path);
-    // as registered ('{id}', never ':id') AND as committed in docs/reference
+    // as registered ('{id}', never ':id') AND as published in the reference
     expect(registeredPaths.filter((p) => p.includes(":"))).toEqual([]);
     expect(Object.keys(spec.paths).filter((p) => p.includes(":"))).toEqual([]);
     expect(registeredPaths.length).toBeGreaterThan(250);
