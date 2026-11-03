@@ -1274,7 +1274,7 @@ export async function readAgentWritePostures(input: {
  * What it does NOT see: a computer's hand-written rules that match no posture
  * (they decide writes but name no mode), and per-space postures. Its parity
  * with the write path is pinned for every pair of postures by
- * `effective-write-mode.pglite.test.ts`.
+ * `effective-agent-permission.pglite.test.ts`.
  */
 export async function readEffectiveAgentWriteMode(input: {
   db: DbHandle;
