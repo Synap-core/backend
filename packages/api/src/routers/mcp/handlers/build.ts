@@ -174,6 +174,16 @@ export const buildHandlers: McpHandlerMap = {
       );
     }
     const cellWorkspaceId = parsed.data.workspaceId ?? null;
+    // Define-time check BEFORE the gate: a source that cannot mount in the
+    // frame is refused now, with its line and its fix, instead of becoming a
+    // proposal a person approves and then watches fail on every open.
+    const { assertCellSourceMounts } =
+      await import("../../../services/cells/define-cell.js");
+    const advice = await assertCellSourceMounts({
+      name: parsed.data.name,
+      rendererSource: parsed.data.rendererSource,
+      workspaceId: cellWorkspaceId,
+    });
     // Route through the governance gate — it owns RBAC (workspace membership +
     // role, or the agent-join proposal for a non-member) AND the agent
     // propose/execute decision. No manual membership check: that would
@@ -225,6 +235,8 @@ export const buildHandlers: McpHandlerMap = {
         reviewPath: perm.reviewPath,
         reviewUrl: perm.reviewUrl,
         ...(perm.deduped ? { deduped: true } : {}),
+        // Words, colour, accessibility: what the author can still fix.
+        ...(advice.length > 0 ? { advice } : {}),
       });
     }
     // Granted (operator authority) → apply inline via the ONE door.

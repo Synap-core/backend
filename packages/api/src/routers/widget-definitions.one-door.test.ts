@@ -140,7 +140,9 @@ function cellStudioShaped(extra: Record<string, unknown> = {}) {
     rendererType: "frame" as const,
     category: "app-specific",
     rendererSource: "export default () => null;",
-    deps: { recharts: "2.12.0" },
+    // Empty: a frame loads no runtime dependency, so a cell naming one is
+    // refused at define time (`assertCellSourceMounts`, below).
+    deps: {} as Record<string, string>,
     viewTypes: [] as string[],
     configSchema: {},
     defaultConfig: { language: "react", mode: "react" },
@@ -209,9 +211,22 @@ describe("deps are validated on every path into the row", () => {
     );
   });
 
-  it("accepts a well-formed scoped dependency", async () => {
+  it("a well-formed dependency passes the format check, then is refused: the frame does not load it", async () => {
+    // Format first (no "Invalid package name"), then the define-time check:
+    // a frame resolves no runtime dependency the host does not provide.
+    const err = await defineCell(
+      cellStudioShaped({ deps: { "@scope/pkg": "^1.2.3" } })
+    ).catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: "CELL_SOURCE_CANNOT_MOUNT" });
+    expect(String((err as Error).message)).toContain("@scope/pkg");
+    expect(String((err as Error).message)).not.toMatch(/Invalid package name/);
+    expect(h.inserted).toHaveLength(0);
+    expect(h.events).toHaveLength(0);
+  });
+
+  it("deps naming only host modules still save (the frame ignores them)", async () => {
     await expect(
-      defineCell(cellStudioShaped({ deps: { "@scope/pkg": "^1.2.3" } }))
+      defineCell(cellStudioShaped({ deps: { react: "19.0.0" } }))
     ).resolves.toMatchObject({ typeKey: "my-chart" });
   });
 

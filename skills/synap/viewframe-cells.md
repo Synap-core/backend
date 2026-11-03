@@ -30,8 +30,10 @@ A ViewFrame cell is **one self-contained ES module** (inline in `rendererSource`
 - The module **default-exports a React component** (or calls `SynapWidget.onInit()` for plain JS).
 - The only bare imports that resolve are the ones the host provides: `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`, `react/jsx-dev-runtime` and `@synap/kit` (see "What the frame provides" below). Any other bare import (`recharts`, `d3`, `three`, …) fails in the frame.
 - **No `import` of local files and no `import` from a URL.** A third-party library must be bundled into the source before you define the cell (`synap cell build <entry> --bundle-deps`), never fetched at runtime.
-- Leave `deps` out (or `{}`). A cell that still declares runtime `deps`, or names `esm.sh`, is refused by the web and desktop frames with a message saying so.
+- Leave `deps` out (or `{}`). A cell that declares runtime `deps`, names `esm.sh`, imports anything the host does not provide, or loads code or a stylesheet from the network is **refused when you define it** (`synap_create_cell`, `POST /cells/define`): nothing is saved or proposed, and the error names the line and the fix.
+- Advice on colour (raw hex instead of `var(--synap-*)` tokens) and accessibility (an image with no `alt`, a clickable `div`) comes back as `advice` with the reply. It never blocks the cell; fix what it names.
 - No `<script src>`, no CDN stylesheet, no web font link: the frame's security policy blocks them. Inline `<style>` tags or CSS-in-JS only. Fonts and colours come from the host's tokens (`@synap/kit`).
+- An **HTML page** (a source that opens with `<`) is drawn as a page, not a module: it gets **no host modules**, so it can run inline script only and cannot `import` anything, not even `react`. To use React or `@synap/kit`, write the cell as an ES module that default-exports a component.
 - Phone frames (Relay, Telegram) are not the target: they show the snapshot of a cell and a link to open it on the web or desktop, so write the cell for the web and desktop frame.
 
 ### Register a Cell via the Hub Protocol (canonical path)
@@ -55,7 +57,7 @@ Content-Type: application/json
 }
 ```
 
-**`deps`:** the door still stores a `deps` map if you send one (valid npm names, at most 30), but the web and desktop frames refuse a cell whose `deps` name anything the host does not provide. Send `{}` or omit it, and bundle any library into `rendererSource` instead.
+**`deps`:** a `deps` map that names anything the host does not provide is refused (400, nothing proposed): the frame loads no runtime dependency. Send `{}` or omit it, and bundle any library into `rendererSource` instead.
 
 **`workspaceId` is intentionally omitted** — cells defined without it are pod-global (`workspaceId IS NULL`), visible in every workspace the user owns. Pass `workspaceId` only when you explicitly want a cell scoped to a single workspace.
 
@@ -262,23 +264,19 @@ A charting, map or 3D library is not provided. Draw with plain SVG or canvas in 
         background: transparent;
       }
     </style>
-    <!-- the host provides react, react-dom and @synap/kit — do not write an importmap -->
+    <!-- a page gets no host modules: inline script only, no import, no importmap -->
   </head>
   <body>
-    <div id="root"></div>
-    <script type="module">
-      import { createRoot } from "react-dom/client";
-      import { createElement as h, useState } from "react";
-
+    <p id="root"></p>
+    <script>
       SynapWidget.onInit(async ({ context }) => {
         const items = await SynapWidget.query("entities.list", {
           profileSlug: "deal",
           limit: 200,
         }).catch(() => []);
 
-        createRoot(document.getElementById("root")).render(
-          h("p", null, `Loaded ${(items ?? []).length} deals`)
-        );
+        document.getElementById("root").textContent =
+          `Loaded ${(items ?? []).length} deals`;
 
         SynapWidget.resize(document.body.scrollHeight);
       });
@@ -295,6 +293,6 @@ A charting, map or 3D library is not provided. Draw with plain SVG or canvas in 
 - **Check `result.status` on mutations** — `"proposed"` is governance, not an error; surface `reviewUrl`.
 - **Transparent background** — `background: transparent` on `body` inherits the host surface color.
 - **No external fetch, no CDN** — the sandbox has no network for code or data; all data must go through `SynapWidget`.
-- **Import only what the host provides** — React and `@synap/kit`. Bundle anything else into the source; never declare it in `deps`, never load it from a CDN.
+- **Import only what the host provides** — React and `@synap/kit`, in an ES-module cell (a page imports nothing). Bundle anything else into the source; never declare it in `deps`, never load it from a CDN.
 
 ---

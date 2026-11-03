@@ -11,6 +11,7 @@ import {
   type PackageCellRendererType,
 } from "@synap/database/schema";
 import {
+  assertCellSourceMounts,
   CellDefinitionError,
   defineCell,
   AgentCellRequiresProposalError,
@@ -394,6 +395,18 @@ export function registerCellsRoutes(app: HubHono): void {
         );
       }
 
+      // DEFINE-TIME CHECK — also before the gate, for the same reason: a
+      // source that cannot mount in the frame must not become a proposal a
+      // person approves and then watches fail on every open. A refusal is a
+      // `CellDefinitionError` (400 below) naming the line and the fix.
+      const advice = await assertCellSourceMounts({
+        name,
+        rendererSource,
+        typeKey: parsed.data.typeKey,
+        workspaceId: workspaceId ?? null,
+        deps,
+      });
+
       // Governance membrane — AGENT callers only. Operator-initiated defines
       // (CLI `synap cell push` / `synap artifact`, which post to this same
       // route with no agentUserId) stay DIRECT writes: hub-protocol calls are
@@ -457,6 +470,7 @@ export function registerCellsRoutes(app: HubHono): void {
               perm.proposalType,
               "Cell definition proposed for review (AI-generated renderer source is governed) — it materializes on approval."
             ),
+            ...(advice.length > 0 ? { advice } : {}),
           });
         }
       }
@@ -474,7 +488,10 @@ export function registerCellsRoutes(app: HubHono): void {
         userId: userId ?? "",
       });
 
-      return c.json({ success: true, typeKey }, 201);
+      return c.json(
+        { success: true, typeKey, ...(advice.length > 0 ? { advice } : {}) },
+        201
+      );
     } catch (err) {
       // A forged namespaced typeKey is a CALLER error — 400, not the 500 a
       // bare rethrow would produce.
