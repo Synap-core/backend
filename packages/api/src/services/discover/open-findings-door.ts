@@ -19,7 +19,6 @@ import {
   db,
   entities,
   and,
-  or,
   inArray,
   isNull,
   drizzleSql,
@@ -47,17 +46,16 @@ const OPEN_FINDING_CATEGORIES: LifecycleCategory[] = ["open", "active"];
  * key no profile declares and no finding carries, so `openTotal` was 0 on a
  * pod with 296 findings and none of them resolved.
  *
- * A finding with NO status counts as open: nothing has resolved it. That is
- * every finding while the kind declares no lifecycle, and every finding a
- * declaration has not given a value yet (the projection copies only the
- * values rows already carry, so declaring one does not move old rows). A
- * status no option declares (`status` set, category NULL) is not counted: it
- * is a claim this read cannot place.
+ * Only the lifecycle decides. `finding` declares one (open / fixing / fixed /
+ * verified / won't fix / superseded, lane E of wave 0): a new finding starts
+ * at its initial status, open, and every existing finding was backfilled to
+ * a status. So a row with NO status is a row the lifecycle does not place,
+ * like a status no option declares (`status` set, category NULL): neither is
+ * counted. This used to count a NULL status as open, which was right only
+ * while the kind declared no lifecycle; kept after it, the count would no
+ * longer be the lifecycle's.
  */
-const openFinding = or(
-  inArray(entities.statusCategory, OPEN_FINDING_CATEGORIES),
-  isNull(entities.status)
-);
+const openFinding = inArray(entities.statusCategory, OPEN_FINDING_CATEGORIES);
 
 /** One row as the door returns it — the raw bag, not yet projected. */
 export interface OpenFindingRow {

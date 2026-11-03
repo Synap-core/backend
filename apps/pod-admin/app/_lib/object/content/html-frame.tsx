@@ -22,6 +22,7 @@ import { Button, Tab, Tabs } from "@heroui/react";
 import {
   CELL_FRAME_MAX_BYTES,
   CELL_FRAME_SANDBOX,
+  frameNetworkCodeRefusal,
   wrapHtmlForFrame,
 } from "@synap-core/types/cell-bridge";
 import {
@@ -66,26 +67,37 @@ export function SandboxedFrame({
   );
 }
 
-/** A page running in its frame, with the bridge answering its reads. */
+/**
+ * A page running in its frame, with the bridge answering its reads. A page
+ * that loads code from the network is NOT run: the frame policy names no
+ * remote origin (decision R3), so that code would never load and the frame
+ * would sit blank. The reader is told why instead, next to the host's door
+ * (`refusedAction`: the source, or the page's own door); the author reads the
+ * same sentence in the document's diagnostics (`network_code`).
+ */
 export function HtmlFrame({
   html,
   workspaceId,
   title,
+  refusedAction,
 }: {
   html: string;
   /** The page's space: the lens every read is stamped with. */
   workspaceId: string | null;
   title: string;
+  /** The door shown beside the reason when the page is not run. */
+  refusedAction?: ReactNode;
 }) {
   const client = trpc.useUtils().client;
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const loads = useRef(0);
   const [run, setRun] = useState(0);
   const [left, setLeft] = useState(false);
+  const refusal = useMemo(() => frameNetworkCodeRefusal(html), [html]);
   const srcDoc = useMemo(() => wrapHtmlForFrame(html), [html]);
 
   useEffect(() => {
-    if (left) return;
+    if (left || refusal) return;
     const host = createHtmlBridgeHost({
       frameWindow: () => frameRef.current?.contentWindow ?? null,
       read: (op, params) => readForPage(client, op, params, { workspaceId }),
@@ -93,8 +105,16 @@ export function HtmlFrame({
     const onMessage = (event: MessageEvent) => void host(event);
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [client, workspaceId, left, run]);
+  }, [client, workspaceId, left, refusal, run]);
 
+  if (refusal) {
+    return (
+      <div className="flex flex-col items-start gap-2 rounded-lg bg-foreground/[0.04] px-3 py-3">
+        <p className="text-[13px] text-foreground/85">{refusal}</p>
+        {refusedAction}
+      </div>
+    );
+  }
   if (left) {
     return (
       <ResourceRowError
@@ -164,7 +184,20 @@ export function HtmlPageBody({
       </div>
     );
   }
-  return <HtmlFrame html={html} workspaceId={workspaceId} title={title} />;
+  return (
+    <HtmlFrame
+      html={html}
+      workspaceId={workspaceId}
+      title={title}
+      refusedAction={
+        onShowSource && (
+          <Button size="sm" variant="flat" radius="md" onPress={onShowSource}>
+            Show source
+          </Button>
+        )
+      }
+    />
+  );
 }
 
 /** A stored page as an object-page section: Page by default, Source a toggle away. */

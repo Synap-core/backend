@@ -11,7 +11,12 @@
  *    `RAIL_GOAL_PINS_MAX` (a 4th is PRECONDITION_FAILED while the rail has
  *    room), unpin / reorder by the `track:` key, a goal the person cannot read
  *    is refused, and a pinned goal that stops being readable leaves the read
- *    and frees its place.
+ *    and frees its place;
+ *  - DOCUMENT pins (plan 9ad4b2fc P4, Q5/Q6): `doc:<id>`, `profileSlug` and
+ *    `trackId` null, always the person's own; sent only with
+ *    `includeDocuments: true` (never with `includeGoals` alone); a document the
+ *    person cannot read is refused; one that stops being readable leaves the
+ *    read; nothing in a space's sidebar suggests one.
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -101,7 +106,9 @@ const as = (userId: string) =>
     workspaceId: null,
   } as never);
 const keys = async (userId = U) =>
-  (await as(userId).railPins({ includeGoals: true })).pins.map((p) => p.key);
+  (
+    await as(userId).railPins({ includeGoals: true, includeDocuments: true })
+  ).pins.map((p) => p.key);
 
 let LEADS = "";
 let POSTS = "";
@@ -170,6 +177,7 @@ describe("preferences rail pins", () => {
           profileSlug: "lead",
           viewId: LEADS,
           trackId: null,
+          documentId: null,
           label: "Leads",
           source: "template",
         },
@@ -178,6 +186,7 @@ describe("preferences rail pins", () => {
           profileSlug: "post",
           viewId: POSTS,
           trackId: null,
+          documentId: null,
           label: "Posts",
           source: "template",
         },
@@ -271,6 +280,7 @@ describe("goal pins — This week (D4)", () => {
       profileSlug: null,
       viewId: null,
       trackId: goals[0],
+      documentId: null,
       label: null,
       source: "user",
     });
@@ -355,5 +365,133 @@ describe("goal pins — This week (D4)", () => {
     expect((await keys()).filter((k) => k.startsWith("track:"))).toHaveLength(
       3
     );
+  });
+});
+
+describe("document pins — a living document on the rail (P4)", () => {
+  const MINE = randomUUID();
+  const ALSO_MINE = randomUUID();
+  const THEIRS = randomUUID();
+  const THEIR_SPACE = randomUUID();
+
+  async function doc(id: string, owner: string, ws: string | null) {
+    await q(
+      `insert into documents (id, user_id, workspace_id, title, type, current_version, content_revision)
+       values ($1,$2,$3,'Doc','markdown',1,1)`,
+      [id, owner, ws]
+    );
+  }
+
+  beforeAll(async () => {
+    await space(THEIR_SPACE, OTHER, []);
+    await doc(MINE, U, W1);
+    await doc(ALSO_MINE, U, W1);
+    await doc(THEIRS, OTHER, THEIR_SPACE);
+  });
+
+  it("pins a document under its doc: key, the person's own, with no kind", async () => {
+    const { pins } = await as(U).pinSurface({
+      documentId: MINE,
+      includeDocuments: true,
+    });
+    expect(pins).toContainEqual({
+      key: `doc:${MINE}`,
+      profileSlug: null,
+      viewId: null,
+      trackId: null,
+      documentId: MINE,
+      label: null,
+      source: "user",
+    });
+    // Idempotent: pinning it again keeps one pin.
+    await as(U).pinSurface({ documentId: MINE, label: "Dashboard" });
+    expect((await keys()).filter((k) => k === `doc:${MINE}`)).toHaveLength(1);
+  });
+
+  it("document pins come back only when asked — never with goals alone", async () => {
+    const all = (
+      await as(U).railPins({ includeGoals: true, includeDocuments: true })
+    ).pins;
+    expect(all.some((p) => p.documentId)).toBe(true); // non-vacuity
+    for (const read of [
+      await as(U).railPins(),
+      await as(U).railPins({ includeGoals: true }),
+    ]) {
+      expect(read.pins.every((p) => p.documentId === null)).toBe(true);
+    }
+    const docsOnly = (await as(U).railPins({ includeDocuments: true })).pins;
+    expect(docsOnly.some((p) => p.key === `doc:${MINE}`)).toBe(true);
+    expect(docsOnly.every((p) => p.trackId === null)).toBe(true);
+    // The WRITE doors answer the same way.
+    const written = [
+      await as(U).pinSurface({ documentId: ALSO_MINE }),
+      await as(U).reorderRailPins({ keys: [`doc:${ALSO_MINE}`] }),
+      await as(U).unpinSurface({ key: "kind:nothing-pinned" }),
+    ];
+    for (const w of written) {
+      expect(w.pins.every((p) => p.documentId === null)).toBe(true);
+    }
+    const asked = await as(U).reorderRailPins({
+      keys: [`doc:${ALSO_MINE}`],
+      includeDocuments: true,
+    });
+    expect(asked.pins[0]?.key).toBe(`doc:${ALSO_MINE}`);
+  });
+
+  it("refuses a document the person cannot read, and a pin that names two things", async () => {
+    await expect(
+      as(U).pinSurface({ documentId: THEIRS })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      as(U).pinSurface({ documentId: randomUUID() })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      as(U).pinSurface({ documentId: MINE, profileSlug: "post" })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(
+      as(U).pinSurface({ documentId: MINE, trackId: randomUUID() })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(
+      as(U).pinSurface({ documentId: MINE, viewId: LEADS })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(await keys(OTHER)).not.toContain(`doc:${MINE}`);
+  });
+
+  it("unpins by the doc: key", async () => {
+    await as(U).unpinSurface({ key: `doc:${ALSO_MINE}` });
+    expect(await keys()).not.toContain(`doc:${ALSO_MINE}`);
+  });
+
+  it("a pinned document that is no longer readable leaves the read", async () => {
+    expect(await keys()).toContain(`doc:${MINE}`);
+    await q(`delete from documents where id = $1`, [MINE]);
+    expect(await keys()).not.toContain(`doc:${MINE}`);
+    // A write drops it from the stored row too, and keeps the rest.
+    const before = (await keys()).length;
+    await as(U).reorderRailPins({ keys: [] });
+    expect(await keys()).toHaveLength(before);
+  });
+
+  it("only the person pins a document: a stored 'template' claim reads as theirs, and no sidebar item suggests one", async () => {
+    const D = randomUUID();
+    await doc(D, U, W1);
+    await q(
+      `update user_preferences
+          set ui_preferences = jsonb_set(ui_preferences, '{railPins,pins}',
+            (ui_preferences #> '{railPins,pins}') || $2::jsonb)
+        where user_id = $1`,
+      [U, JSON.stringify([{ documentId: D, label: null, source: "template" }])]
+    );
+    const pin = (await as(U).railPins({ includeDocuments: true })).pins.find(
+      (p) => p.documentId === D
+    );
+    expect(pin?.source).toBe("user");
+
+    // A space whose sidebar names a document suggests no pin (Q6).
+    const W4 = randomUUID();
+    const E = randomUUID();
+    await space(W4, U, [{ kind: "document", documentId: E }]);
+    await doc(E, U, W4);
+    expect(await keys()).not.toContain(`doc:${E}`);
   });
 });

@@ -8,8 +8,7 @@
  * `high`. A stubbed door could not see it.
  *
  * The seed is DISCRIMINATING — each row exists because one predicate decides
- * it: no status (open: nothing resolved it), each lifecycle category, a status
- * no option declares, a soft-deleted row, a row of another kind.
+ * it: each lifecycle category, no status, a status no option declares, a soft-deleted row, a row of another kind.
  *
  * Stubbed, and why:
  *  - `profileSlugScopeCondition` — the polymorphic kind door has its own
@@ -109,17 +108,21 @@ beforeEach(() => {
 });
 
 describe("readOpenBlockerFindings", () => {
-  it("counts a finding with no status as open, and a resolved one as not", async () => {
-    await finding({});
-    const noStatusBlocker = await finding({ severity: "blocker" });
-    await finding({ status: "new", category: "open" });
+  it("counts open and active findings only: resolved, dropped, parked and unplaced are not", async () => {
+    await finding({ status: "open", category: "open" });
+    const openBlocker = await finding({
+      severity: "blocker",
+      status: "open",
+      category: "open",
+    });
     const working = await finding({
       severity: "blocker",
-      status: "investigating",
+      status: "fixing",
       category: "active",
     });
-    // Not open: resolved, dropped, parked, a status no option declares,
-    // soft-deleted, and another kind.
+    // Not open: resolved, dropped, parked, NO status (the lifecycle does not
+    // place it, so it is not counted: no 'no status = open' rule), a status
+    // no option declares, soft-deleted, and another kind.
     await finding({ severity: "blocker", status: "fixed", category: "done" });
     await finding({ severity: "blocker", status: "wontfix", category: "lost" });
     await finding({
@@ -127,19 +130,21 @@ describe("readOpenBlockerFindings", () => {
       status: "parked",
       category: "paused",
     });
+    await finding({ severity: "blocker" });
+    await finding({});
     await finding({ severity: "blocker", status: "weird", category: null });
     await finding({ severity: "blocker", deleted: true });
     await finding({ severity: "blocker", profileId: P_TASK });
 
     const out = await readOpenBlockerFindings(U);
 
-    expect(out.openTotal).toBe(4);
-    expect(out.blockers.map((r) => r.id)).toEqual([working, noStatusBlocker]);
+    expect(out.openTotal).toBe(3);
+    expect(out.blockers.map((r) => r.id)).toEqual([working, openBlocker]);
   });
 
   it("reads CAP + 1 blockers so the caller can say there are more", async () => {
     for (let i = 0; i < OPEN_FINDINGS_READ_CAP + 3; i++) {
-      await finding({ severity: "blocker" });
+      await finding({ severity: "blocker", status: "open", category: "open" });
     }
 
     const out = await readOpenBlockerFindings(U);

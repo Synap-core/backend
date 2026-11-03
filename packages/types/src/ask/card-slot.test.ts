@@ -380,3 +380,9 @@ describe("the card's age, in marks and in words", () => {
     expect(FATE_COPY.reviewLaterFold(3)).toBe("Review later · 3");
   });
 });
+
+describe("the card names its why", () => {
+  it("has one label for it, the words the act steps point at", () => {
+    expect(ASK_COPY.whyHeading).toBe("Why");
+  });
+});

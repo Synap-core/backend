@@ -21,6 +21,7 @@ import type { LoadFailure } from "../load-failure";
 import type { ObjectCrumb } from "../object-header";
 import { ObjectPage, type ObjectPageProps } from "../object-page";
 import { OpenInAppLink } from "../open-in-app-link";
+import { objectReadsWide } from "../object-width";
 
 export interface ObjectFrame {
   loading: (label: string) => ReactNode;
@@ -44,14 +45,15 @@ export interface ObjectFrame {
 
 /**
  * The console column an object page draws in: a page with a rail reads wide
- * (its body keeps the reading measure, the rail sits beside it); any other
- * keeps its list's width. The receiver card's twin is `openWidth`.
+ * (its body keeps the reading measure, the rail sits beside it), and so does
+ * a kind that reads wide (`objectReadsWide`: a document); any other keeps its
+ * list's width. The receiver card's twin is `openWidth`.
  */
 export function consoleWidth(
-  props: Pick<ObjectPageProps, "rail">,
+  props: { rail?: ObjectPageProps["rail"]; header?: { kind: string } },
   listWidth: PageWidth | undefined
 ): PageWidth | undefined {
-  return props.rail ? "wide" : listWidth;
+  return props.rail || objectReadsWide(props.header?.kind) ? "wide" : listWidth;
 }
 
 /**

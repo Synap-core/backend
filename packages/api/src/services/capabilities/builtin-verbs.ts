@@ -3246,10 +3246,13 @@ const messagingSendHandler: BuiltinVerbHandler = async (params, ctx) => {
       throw new TRPCError({ code: "NOT_FOUND", message: "Person not found." });
     }
     // The grant FIRST: a key that may not send here learns nothing more
-    // (not even which accounts exist) and leaves nothing behind.
-    const { messagingSendGrantDenial } =
+    // (not even which accounts exist) and leaves nothing behind. An agent's
+    // key beyond its grant still asks (`proposeOnly`, founder 2026-11-03):
+    // it goes on, and the send door files its message for the person's
+    // approval, never sending it.
+    const { messagingSendGrantVerdict } =
       await import("../../connectors/channel-send.js");
-    const denial = await messagingSendGrantDenial({
+    const verdict = await messagingSendGrantVerdict({
       channel: {
         workspaceId: null,
         contextObjectType: "entity",
@@ -3259,8 +3262,8 @@ const messagingSendHandler: BuiltinVerbHandler = async (params, ctx) => {
       agentUserId,
       actingWorkspaceId: ctx.workspaceId,
     });
-    if (denial) {
-      return { success: false, error: denial };
+    if (verdict && !verdict.proposeOnly) {
+      return { success: false, error: verdict.denial };
     }
     const target = await resolveSendTarget(
       ctx.userId,

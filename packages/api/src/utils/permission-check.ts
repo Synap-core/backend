@@ -1169,9 +1169,11 @@ export interface PermissionCheckBaseOpts {
    * other rung still runs first (RBAC on the agent), and nothing after it
    * can auto-approve the write.
    *
-   * Set ONLY by `proposeTemplateApply` (services/template-apply/propose.ts)
-   * for a template UPDATE of a space (`workspace/update`), so a computer's
-   * key running `synap market update --yes` asks instead of failing. A
+   * Set by `proposeTemplateApply` (services/template-apply/propose.ts) for a
+   * template UPDATE of a space (`workspace/update`), so a computer's key
+   * running `synap market update --yes` asks instead of failing; and by the
+   * history import door (`messaging/import_history`, rest/messaging.ts;
+   * founder 2026-11-03: an agent's import "creates a proposal"). A
    * caller with no agent attribution is still denied: the floor that keeps
    * the key from approving its own request holds for agent credentials only.
    */

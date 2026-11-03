@@ -28,6 +28,7 @@ import { assertMayActAs } from "./guard.js";
 import { actingAgentUserId } from "./utils.js";
 import { listRenderables } from "../../services/cells/renderables.js";
 import {
+  assertCellSourceMounts,
   CellDefinitionError,
   defineCell,
 } from "../../services/cells/define-cell.js";
@@ -164,6 +165,23 @@ export const hubWidgetDefinitionsRouter = router({
           }`,
         });
       }
+      // Define-time check, before a proposal is filed: a source that cannot
+      // mount in the frame is refused now, with its line and its fix.
+      let advice: Awaited<ReturnType<typeof assertCellSourceMounts>>;
+      try {
+        advice = await assertCellSourceMounts({
+          name: input.name,
+          rendererSource: input.rendererSource,
+          typeKey: input.typeKey,
+          workspaceId: input.workspaceId ?? null,
+          rendererType: input.rendererType,
+        });
+      } catch (err) {
+        if (err instanceof CellDefinitionError) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
+        throw err;
+      }
       // Governance check — cell.define is NOT auto-approved. Same key and same
       // payload shape as `synap_create_cell` / `POST /cells/define`, so the
       // `cell/define` approve-executor materialises it through `defineCell`.
@@ -210,6 +228,7 @@ export const hubWidgetDefinitionsRouter = router({
           reviewPath: perm.reviewPath,
           reviewUrl: perm.reviewUrl,
           widgetDef: null,
+          ...(advice.length > 0 ? { advice } : {}),
         };
       }
 

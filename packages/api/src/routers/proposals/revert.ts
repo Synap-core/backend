@@ -20,6 +20,11 @@ import type {
 } from "../../services/proposals/stamp-materialized.js";
 import type { EntityPropertyDiff } from "../../utils/entity-property-diff.js";
 import { isUndoableSessionPatch } from "../../services/focus-sessions/session-undo.js";
+import {
+  documentEditUndoBlocker,
+  type DocumentEditRecord,
+} from "../../services/document-patch/document-edit-undo.js";
+import { DOCUMENT_PATCH_PROPOSAL_TYPES } from "@synap-core/types/proposals/intent";
 
 // ---------------------------------------------------------------------------
 // Revert planning (pure — no DB, fully unit-testable)
@@ -91,6 +96,14 @@ export type ProposalRevertPlan =
       winnerId: string;
       loserId: string;
     }
+  /**
+   * A document patch (decision 6c5e9642): put back each recorded part's text
+   * — a section, or the whole body, and the name — ONLY where the document
+   * still holds what the edit wrote; every other part is skipped and named.
+   * Written through the one content door as a new revision, never a version
+   * restore (`undo-document-edit.ts`).
+   */
+  | { kind: "restore-document-edit"; edit: DocumentEditRecord }
   | { kind: "unsupported"; reason: string };
 
 /**
@@ -165,6 +178,25 @@ export function planProposalRevert(
     !isUpdate &&
     !isDelete &&
     (proposal.proposalType === "merge" || changeType === "merge");
+
+  // A document patch (a section write, a text edit, a person's suggestion, or
+  // their receipts): undone from the text record its write stamped
+  // (`documentEdit`, `applyDocumentPatch` / `applyApprovedDocumentPatch`).
+  if (isDocumentPatch(proposal) && !isCompositeProposalData(data ?? null)) {
+    const blocker = documentEditUndoBlocker(proposal.data);
+    if (blocker) return { kind: "unsupported", reason: blocker };
+    const edit = (materialized as CompleteMaterializedRecord | undefined)
+      ?.documentEdit;
+    if (edit && (edit.changes.length > 0 || edit.rename)) {
+      return { kind: "restore-document-edit", edit };
+    }
+    return {
+      kind: "unsupported",
+      reason: edit
+        ? "Revert of this document edit is not supported: it changed nothing, so there is nothing to undo."
+        : "Revert of this document edit is not supported: it was applied before undo records were kept, so what it changed was never recorded.",
+    };
+  }
 
   // Update/edit: undo reads ONLY the APPLY-time record the write stamped
   // (`stampEntityUpdate` — the `entity/update` executor and the auto-approve
@@ -438,6 +470,21 @@ function isStatusMove(
   );
 }
 
+/**
+ * A document patch — a proposal of one of `DOCUMENT_PATCH_PROPOSAL_TYPES` on a
+ * document, or the auto-approved receipt of one (`document.<action>`, the
+ * gate's event key: `document.update`, `document.section_update`, …).
+ */
+function isDocumentPatch(
+  proposal: Pick<RevertPlannerInput, "targetType" | "proposalType">
+): boolean {
+  if (proposal.targetType !== "document") return false;
+  const type = proposal.proposalType.startsWith("document.")
+    ? proposal.proposalType.slice("document.".length)
+    : proposal.proposalType;
+  return (DOCUMENT_PATCH_PROPOSAL_TYPES as readonly string[]).includes(type);
+}
+
 /** A project filing — the proposal (`file_entities`) or its receipt (`project.file_entities`). */
 function isProjectFiling(
   proposal: Pick<RevertPlannerInput, "targetType" | "proposalType">
@@ -490,14 +537,15 @@ function carriesUnrevertableEntityChange(data: unknown): boolean {
  * which a pending proposal does not have yet, so it cannot be asked as-is about
  * a live row. It CAN be asked about everything that does not need that record:
  * a non-entity delete has no recoverable target, an unmapped type is
- * unsupported — all knowable from the type alone. Four cases the planner
+ * unsupported — all knowable from the type alone. Five cases the planner
  * decides from the record, which approval writes, are predicted from what
  * approval WILL stamp: a composite graph (created ids minted and stamped at
  * approval), an entity update (the `entity/update` executor stamps its
  * apply-time diff), a project filing (its executor stamps the edges it
- * wrote) and a session update carrying only undoable changes (its executor
- * stamps the columns). Every other update/edit is stamped by nothing, so it
- * stays false.
+ * wrote), a session update carrying only undoable changes (its executor
+ * stamps the columns) and a document patch that sets no scope or refresher
+ * (its executor stamps the text it changed). Every other update/edit is
+ * stamped by nothing, so it stays false.
  *
  * The planner stays the ONE place the kind→inverse rule lives: this asks it,
  * with the status it will have, rather than mirroring its branches. `status` is
@@ -519,6 +567,11 @@ export function wouldBeRevertable(
   }
   // The `project/file_entities` executor stamps the edges it writes.
   if (isProjectFiling(proposal)) return true;
+  // The `document/<type>` executors stamp the text they change — unless the
+  // patch carries a change no record covers, which the planner refuses.
+  if (isDocumentPatch(proposal) && !isCompositeProposalData(data)) {
+    return documentEditUndoBlocker(proposal.data) === null;
+  }
   // A PENDING status move is not predicted revertable: the prediction feeds
   // the swipe/batch gate, and a person decides a status move by reading it
   // (founder B3e: no batch approval beyond routine). Once applied, the

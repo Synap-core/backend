@@ -209,7 +209,7 @@ function refuseUnlocatable(
   );
 }
 
-interface SectionBlock {
+export interface SectionBlock {
   id: string;
   owner: SectionOwner;
   title: string | null;
@@ -219,7 +219,7 @@ interface SectionBlock {
   end: number;
 }
 
-function sectionBlocks(
+export function sectionBlocks(
   markdown: string,
   parsed: ParsedSections
 ): SectionBlock[] {

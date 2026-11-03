@@ -52,6 +52,7 @@ import {
   RENDERER_SCOPES,
   type RendererSlot,
 } from "../services/profiles/renderer-slots.js";
+import { RendererRefSchema } from "../services/profiles/renderer-ref-schema.js";
 import { rendererRefScopeViolation } from "../services/profiles/renderer-ref-scope.js";
 import { auditLog } from "../utils/audit-log.js";
 import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
@@ -84,69 +85,6 @@ const ProfileUiHintsInput = z
   });
 
 const ProfileScopeSchema = z.enum(["system", "shared", "workspace", "user"]);
-
-/**
- * Zod schema for RendererRef.
- *
- * Mirrors RendererTarget from @synap-core/renderer-runtime. Discriminated union
- * by `kind`. Used to validate JSONB payloads written into:
- *   - profiles.default_(list|detail)_renderer (system default)
- *   - workspaces.settings.profileRenderers[slug][slot] (workspace overlay)
- *
- * Two paths are encoded by kind:
- *   - config path → 'cell' | 'view'
- *   - file path   → 'iframe-srcdoc' | 'external-app'
- *   - 'url' is a passthrough used by some link-style surfaces
- *
- * Spec: synap-app/docs/architecture/profile-renderer.md
- */
-const RendererRefSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("cell"),
-    cellKey: z.string(),
-    props: z.record(z.string(), z.unknown()),
-    title: z.string().optional(),
-    displayMode: z.string().optional(),
-    rendererHint: z.record(z.string(), z.unknown()).optional(),
-  }),
-  z.object({
-    kind: z.literal("view"),
-    viewId: z.string(),
-    title: z.string().optional(),
-    displayMode: z.string().optional(),
-  }),
-  z.object({
-    kind: z.literal("iframe-srcdoc"),
-    appId: z.string(),
-    srcdoc: z.string(),
-    title: z.string().optional(),
-    props: z.record(z.string(), z.unknown()).optional(),
-  }),
-  z.object({
-    kind: z.literal("external-app"),
-    appId: z.string(),
-    url: z.string(),
-    title: z.string().optional(),
-    props: z.record(z.string(), z.unknown()).optional(),
-  }),
-  z.object({
-    kind: z.literal("url"),
-    url: z.string(),
-    external: z.boolean().optional(),
-    title: z.string().optional(),
-  }),
-  z.object({
-    kind: z.literal("view-adapter"),
-    adapterKey: z.string(),
-    props: z.record(z.string(), z.unknown()).optional(),
-    title: z.string().optional(),
-  }),
-  // Places — "open where it lives". No url: resolved per entity on the pod.
-  z.object({
-    kind: z.literal("source-app"),
-    title: z.string().optional(),
-  }),
-]);
 
 /**
  * A POD-scope default ref for one slot (`profiles.update`). Refuses what the

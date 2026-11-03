@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { documentContent, documentFormat } from "./document-model";
+import {
+  documentContent,
+  documentFormat,
+  isLivingDocument,
+} from "./document-model";
 
 const err = (code: string) => ({ data: { code } });
 const md = (content: string, type = "markdown") => ({
@@ -148,5 +152,49 @@ describe("documentContent — an uploaded image", () => {
       kind: "file",
       mimeType: "image/png",
     });
+  });
+});
+
+describe("isLivingDocument — the app is the first door (Q8)", () => {
+  const CELL = [
+    "# Week",
+    "",
+    ':::synap-cell{cellKey="lens-section"}',
+    '{"section":"needs-you"}',
+    ":::",
+  ].join("\n");
+
+  it("a page that embeds a live object is living, whatever the embed", () => {
+    expect(isLivingDocument(md(CELL))).toBe(true);
+    for (const directive of ["synap-view", "synap-entity"]) {
+      const body = `Intro\n\n:::${directive}{id="00000000-0000-4000-8000-000000000001"}\nFallback\n:::`;
+      expect(isLivingDocument(md(body))).toBe(true);
+    }
+  });
+
+  it("a stored scope or a bound refresher makes it living with no embed", () => {
+    const base = md("Plain words.");
+    expect(
+      isLivingDocument({
+        ...base,
+        document: { ...base.document, scope: { kind: "pod" } },
+      })
+    ).toBe(true);
+    expect(
+      isLivingDocument({
+        ...base,
+        document: { ...base.document, refreshAutomationId: "a1" },
+      })
+    ).toBe(true);
+  });
+
+  it("a plain note, a section frame, an embed in a code fence, a file or an HTML page reads in place", () => {
+    expect(isLivingDocument(md("Just a note."))).toBe(false);
+    expect(
+      isLivingDocument(md('::::synap-section{id="s1" owner="ai"}\nWords\n::::'))
+    ).toBe(false);
+    expect(isLivingDocument(md("```\n" + CELL + "\n```"))).toBe(false);
+    expect(isLivingDocument(md(CELL, "html"))).toBe(false);
+    expect(isLivingDocument(md(CELL, "pdf"))).toBe(false);
   });
 });

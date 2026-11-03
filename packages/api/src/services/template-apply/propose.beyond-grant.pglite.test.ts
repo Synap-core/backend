@@ -355,11 +355,12 @@ describe("a template update beyond the key's grant is filed for the person's app
   });
 });
 
-// The exception is ONE door's: only the template-apply filing asks for it.
-// Derived from the source tree (never a hand list), so a second door that
-// starts turning grant denials into proposals goes red here until decided.
-describe("only the template-apply door asks to propose beyond the grant", () => {
-  it("proposeBeyondGrant is set in services/template-apply/propose.ts and nowhere else", async () => {
+// The exception is decided door by door: the template-apply filing, and the
+// history import (founder, 2026-11-03). Derived from the source tree (never a
+// hand list), so another door that starts turning grant denials into
+// proposals goes red here until decided.
+describe("only the decided doors ask to propose beyond the grant", () => {
+  it("proposeBeyondGrant is set by the template apply and the history import, nowhere else", async () => {
     const { readdirSync, readFileSync, statSync } = await import("node:fs");
     const { join, relative } = await import("node:path");
     const root = join(__dirname, "../..");
@@ -378,6 +379,9 @@ describe("only the template-apply door asks to propose beyond the grant", () => 
       }
     };
     walk(root);
-    expect(setters).toEqual(["services/template-apply/propose.ts"]);
+    expect(setters.sort()).toEqual([
+      "routers/hub-protocol/rest/messaging.ts",
+      "services/template-apply/propose.ts",
+    ]);
   });
 });

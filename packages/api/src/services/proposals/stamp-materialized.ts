@@ -61,6 +61,7 @@ import {
   type SessionUndoColumn,
 } from "../focus-sessions/session-undo.js";
 import { isUuid } from "@synap-core/types/property-render";
+import type { DocumentEditRecord } from "../document-patch/document-edit-undo.js";
 
 const logger = createLogger({ module: "stamp-materialized" });
 
@@ -101,6 +102,11 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
    * restores `before` only while every column still holds `after`.
    */
   rowPatches?: RowPatchRecord[];
+  /**
+   * A document patch's text changes, before and after (`document-edit-undo.ts`):
+   * Undo puts each `before` back only while the document still holds `after`.
+   */
+  documentEdit?: DocumentEditRecord;
   /** ISO time the record was last stamped. */
   stampedAt?: string;
   /**
@@ -1174,7 +1180,8 @@ export async function stampSessionUpdate(args: {
 
 /**
  * Stamp what an AUTO-APPROVED create actually wrote onto its receipt — the
- * create-side twin of `stampEntityUpdate`.
+ * create-side twin of `stampEntityUpdate`. The document patch door stamps its
+ * receipt's `documentEdit` through it too (the same best-effort contract).
  *
  * The gate (`checkPermissionOrPropose`) mints the `<subject>.create` receipt
  * BEFORE the write, with `targetId = data.id ?? random`. That id is a guess

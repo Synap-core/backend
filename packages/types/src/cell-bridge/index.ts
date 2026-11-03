@@ -10,10 +10,13 @@
  *      cookies, storage or DOM, cannot open windows, submit forms, show
  *      dialogs or navigate the host.
  *   2. No network of its own. A CSP `<meta>` written before any byte of the
- *      page (`wrapHtmlForFrame`) sets `connect-src 'none'`, `form-action
- *      'none'`, `frame-src 'none'`, images from `data:`/`blob:` only, scripts
- *      only inline or from three public CDNs, styles/fonts only inline or
- *      Google Fonts.
+ *      page (`wrapHtmlForFrame`) is THE frame policy (decision R3, the
+ *      desktop's): `connect-src 'none'`, `form-action 'none'`, `base-uri
+ *      'none'`, `frame-src 'none'`, scripts and styles inline only, images from `data:`/`blob:`,
+ *      fonts from `data:`. No remote origin for anything: no CDN. A module
+ *      cell's frame (`buildCellModuleFrameCsp`) adds only `blob:` and the
+ *      cell's approved hosts. A page that loads code from a URL cannot run,
+ *      and says so (`frameNetworkCodeRefusal`).
  *   3. One data path: the bridge. The page asks `window.synap.query(op,
  *      params)` (`CELL_BRIDGE_SDK`); the host answers ONLY a message whose
  *      source is that frame's window, ONLY an op in `CELL_BRIDGE_READ_OPS`,
@@ -26,14 +29,12 @@
  *      frame — only the answer to what the page asked.
  *
  * WHAT IT DOES NOT COVER (measured limits, not wishes)
- *   - A page can still LEAK what it read, through a URL: a script `src` on one
- *     of the allowed CDNs, a Google Fonts stylesheet URL, or by navigating its
+ *   - A page can still LEAK what it read, through a URL: by navigating its
  *     OWN frame to an outside address (CSP has no navigation directive; the
  *     sandbox only stops navigating the host). A host can detect the frame
  *     leaving (a second `load`) and tear it down — after the request left.
  *     DNS prefetch and WebRTC are outside CSP in some browsers too.
  *   - What the page SHOWS is the author's: a page can present data falsely.
- *   - The CDN scripts themselves are trusted as published.
  *   - Writes: none yet. They come later through the proposal door, never
  *     directly.
  */
@@ -59,11 +60,18 @@ export {
   CELL_FRAME_CSP_DIRECTIVES,
   CELL_FRAME_MAX_BYTES,
   CELL_FRAME_SANDBOX,
-  CELL_FRAME_SCRIPT_HOSTS,
   buildCellFrameCsp,
+  buildCellModuleFrameCsp,
   cellFrameHeadBlock,
+  frameExternalOrigins,
   htmlByteLength,
   wrapHtmlForFrame,
 } from "./frame.js";
+export {
+  frameNetworkAssetsNotice,
+  frameNetworkCodeRefusal,
+  frameNetworkLoads,
+  type FrameNetworkLoads,
+} from "./network-loads.js";
 export { CELL_BRIDGE_SDK } from "./sdk.js";
 export { narrowHomeToSpace } from "./home-lens.js";

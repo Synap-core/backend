@@ -16,7 +16,14 @@ import {
   getActingAgentUserId,
   drizzleSql,
 } from "@synap/database";
-import { isHtmlPageSource } from "@synap-core/types/renderables";
+import {
+  checkCellSource,
+  formatCellSourceRefusal,
+  isHtmlPageSource,
+  type CellSourceAdviceCode,
+  type CellSourceFinding,
+  type CellSourceRefusalCode,
+} from "@synap-core/types/renderables";
 import { execFieldsChanged } from "../capabilities/skill-exec-fields.js";
 import { widgetDefinitions } from "@synap/database/schema";
 import type { ContentKind } from "@synap/database/schema";
@@ -59,6 +66,115 @@ export class CellDefinitionError extends Error {
     super(message);
     this.name = "CellDefinitionError";
   }
+}
+
+/** Machine-readable reason on {@link CellSourceRefusedError}. */
+export const CELL_SOURCE_CANNOT_MOUNT = "CELL_SOURCE_CANNOT_MOUNT" as const;
+
+/**
+ * The source cannot mount in a Synap frame (`checkCellSource`,
+ * `@synap-core/types/renderables`). A `CellDefinitionError`, so every door that
+ * already answers that with a 400 / BAD_REQUEST answers this one the same way.
+ */
+export class CellSourceRefusedError extends CellDefinitionError {
+  readonly code = CELL_SOURCE_CANNOT_MOUNT;
+  constructor(readonly refusals: CellSourceFinding<CellSourceRefusalCode>[]) {
+    super(formatCellSourceRefusal(refusals));
+    this.name = "CellSourceRefusedError";
+  }
+}
+
+/** What `assertCellSourceMounts` hands back: advice, never a refusal. */
+export type CellSourceAdvice = CellSourceFinding<CellSourceAdviceCode>[];
+
+/** The typeKey `defineCell` writes for this name, when none is given. */
+export function cellTypeKeyFor(name: string, typeKey?: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  return typeKey ?? `generated:${slug}`;
+}
+
+/**
+ * Define-time check (decision Q9, plan 9ad4b2fc lane 16): REFUSE a source that
+ * cannot mount in the frame its mechanism draws it in, and hand back advice on
+ * words, colour and accessibility. Run by `defineCell` before it writes, and by
+ * each door that files a cell proposal before it files one, so an author hears
+ * the refusal at once instead of a person approving a cell that then fails on
+ * every open.
+ *
+ * Mechanism: the explicit one, else the one `defineCell` derives from the
+ * source. When the source passes, nothing is read. When it does not and the
+ * caller was silent on the mechanism or on `externalHosts`, the stored row is
+ * read: a row kept as `builtin` / `mcp-app` is not drawn in a Synap frame (no
+ * check), and a stored egress grant still counts for a source-only re-push.
+ *
+ * Existing rows are never re-checked: a stored cell that would be refused keeps
+ * drawing as it does today, until its next write.
+ */
+export async function assertCellSourceMounts(input: {
+  name: string;
+  rendererSource: string;
+  typeKey?: string;
+  workspaceId?: string | null;
+  rendererType?: DefineCellInput["rendererType"];
+  deps?: Record<string, string>;
+  externalHosts?: string[] | null;
+}): Promise<CellSourceAdvice> {
+  const explicit = input.rendererType;
+  if (explicit === "builtin" || explicit === "mcp-app") return [];
+  const mechanism =
+    explicit ?? (isHtmlPageSource(input.rendererSource) ? "iframe" : "frame");
+  const first = checkCellSource({
+    source: input.rendererSource,
+    mechanism,
+    deps: input.deps ?? null,
+    externalHosts: input.externalHosts ?? null,
+  });
+  if (first.refusals.length === 0) return first.advice;
+  if (explicit !== undefined && input.externalHosts !== undefined) {
+    throw new CellSourceRefusedError(first.refusals);
+  }
+
+  const workspaceId = input.workspaceId ?? null;
+  const db = await getDb();
+  const [stored] = await db
+    .select({
+      rendererType: widgetDefinitions.rendererType,
+      externalHosts: widgetDefinitions.externalHosts,
+    })
+    .from(widgetDefinitions)
+    .where(
+      and(
+        eq(
+          widgetDefinitions.typeKey,
+          cellTypeKeyFor(input.name, input.typeKey)
+        ),
+        workspaceId
+          ? eq(widgetDefinitions.workspaceId, workspaceId)
+          : isNull(widgetDefinitions.workspaceId)
+      )
+    )
+    .limit(1);
+  if (
+    explicit === undefined &&
+    (stored?.rendererType === "builtin" || stored?.rendererType === "mcp-app")
+  ) {
+    return [];
+  }
+  const again =
+    input.externalHosts === undefined && stored?.externalHosts
+      ? checkCellSource({
+          source: input.rendererSource,
+          mechanism,
+          deps: input.deps ?? null,
+          externalHosts: stored.externalHosts,
+        })
+      : first;
+  if (again.refusals.length > 0)
+    throw new CellSourceRefusedError(again.refusals);
+  return again.advice;
 }
 
 export interface DefineCellInput {
@@ -226,9 +342,13 @@ export class AgentCellRequiresProposalError extends Error {
   }
 }
 
-export async function defineCell(
-  input: DefineCellInput
-): Promise<{ id: string; typeKey: string; changeType: "created" | "updated" }> {
+export async function defineCell(input: DefineCellInput): Promise<{
+  id: string;
+  typeKey: string;
+  changeType: "created" | "updated";
+  /** Advice on words, colour and accessibility (`assertCellSourceMounts`). Never a refusal. */
+  advice: CellSourceAdvice;
+}> {
   // D1 floor: an agent never defines a cell directly, whichever door it came
   // through (hub /cells/install and an unattributed /cells/define had no gate).
   // The governed doors propose before reaching here; an approved proposal is
@@ -240,14 +360,22 @@ export async function defineCell(
   if (depsError) {
     throw new Error(`defineCell: ${depsError}`);
   }
+  // What cannot mount is refused here, the one writer, whichever door came in
+  // (a door that proposes ran it already; an approval re-runs it on the source
+  // it materialises).
+  const advice = await assertCellSourceMounts({
+    name: input.name,
+    rendererSource: input.rendererSource,
+    typeKey: input.typeKey,
+    workspaceId: input.workspaceId,
+    rendererType: input.rendererType,
+    deps: input.deps,
+    externalHosts: input.externalHosts,
+  });
   const db = await getDb();
   const workspaceId = input.workspaceId ?? null;
 
-  const slug = input.name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-  const typeKey = input.typeKey ?? `generated:${slug}`;
+  const typeKey = cellTypeKeyFor(input.name, input.typeKey);
 
   const viewTypes = normalizeStringList(input.viewTypes);
   const externalHosts = normalizeStringList(input.externalHosts);
@@ -568,5 +696,5 @@ export async function defineCell(
     },
   });
 
-  return { id, typeKey, changeType };
+  return { id, typeKey, changeType, advice };
 }

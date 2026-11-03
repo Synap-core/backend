@@ -26,6 +26,7 @@ import {
   entities,
   ChannelType,
   ensureExternalChannel,
+  getRequestGrant,
 } from "@synap/database";
 import {
   hasScope,
@@ -41,17 +42,19 @@ import {
 } from "../../../connectors/unipile-connection.js";
 import { sendExternalMessage } from "../../../connectors/external-dispatch.js";
 import { landInboundMessage } from "../../../services/connectors/land-inbound-message.js";
-import { getBoss } from "@synap/events";
 import {
-  MESSAGING_HISTORY_IMPORT_QUEUE,
-  type MessagingHistoryImportJobData,
-} from "@synap/jobs/workers/messaging-sync.js";
+  findOwnMessagingAccount,
+  queueOwnerHistoryImport,
+} from "../../../services/connectors/owner-history-import.js";
 import { recordChannelOrigin } from "../../../services/channels/channel-origin.js";
 import { ErrorSchema, trpcErrorResponses } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import { logger, type HubHono, type HubVariables } from "./_shared.js";
-import { isUuid } from "@synap-core/types/property-render";
-import { grantWriteDenial } from "../../../utils/grant-write-check.js";
+import { isFencedGrant } from "../../../access/grant-door-fence.js";
+import {
+  checkPermissionOrPropose,
+  proposedMessageFor,
+} from "../../../utils/permission-check.js";
 import type { Context } from "hono";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
 import { jsonGoverned } from "../proposal-response.js";
@@ -636,46 +639,62 @@ export function registerMessagingRoutes(app: HubHono): void {
   // The owner asks for an account's past conversations with the people
   // already in the pod, landed silently in their channels (the
   // `messaging-history-import` job; it also runs when an account connects).
-  // Owner only: an agent or app key is refused — the import reads every
-  // conversation of the person's account.
+  // An agent ASKS (founder, 2026-11-03): its call passes the gate
+  // (`messaging/import_history`, disruptive) and becomes a proposal the
+  // person approves; approving queues the import as them
+  // (`proposals/executors/messaging.ts`). A narrowed key that is not an
+  // agent's is refused: no grant narrows what the import reads.
   app.openapi(
     createRoute({
       method: "post",
       path: "/messaging/accounts/{accountId}/import-history",
       tags: ["Messaging"],
       summary:
-        "Import an account's history with people already in the pod (owner only)",
+        "Import an account's history with people already in the pod (an agent's call becomes a proposal)",
       request: {
         params: z.object({ accountId: z.string() }),
       },
       responses: {
         ...trpcErrorResponses,
         202: {
-          description: "Import queued",
+          description:
+            "Import queued — or, for an agent, proposed for the person's review (`{ status: 'proposed', proposalId, reviewUrl }`)",
           content: {
             "application/json": {
-              schema: z
-                .object({
-                  queued: z.boolean(),
-                  accountId: z.string(),
-                  /** The last run's progress, when one ran. */
-                  progress: z
-                    .object({
-                      status: z.enum(["running", "paused", "done"]),
-                      cursor: z.string().nullable(),
-                      updatedAt: z.string(),
-                      chatsImported: z.number(),
-                      messagesRecorded: z.number(),
-                      reason: z.string().optional(),
-                    })
-                    .nullable(),
-                })
-                .openapi("MessagingImportHistoryResult"),
+              schema: z.union([
+                z
+                  .object({
+                    queued: z.boolean(),
+                    accountId: z.string(),
+                    /** The last run's progress, when one ran. */
+                    progress: z
+                      .object({
+                        status: z.enum(["running", "paused", "done"]),
+                        cursor: z.string().nullable(),
+                        updatedAt: z.string(),
+                        chatsImported: z.number(),
+                        messagesRecorded: z.number(),
+                        reason: z.string().optional(),
+                      })
+                      .nullable(),
+                  })
+                  .openapi("MessagingImportHistoryResult"),
+                z
+                  .object({
+                    status: z.literal("proposed"),
+                    proposalId: z.string(),
+                    reviewUrl: z.string().optional(),
+                    message: z.string(),
+                    accountId: z.string(),
+                  })
+                  .openapi("MessagingImportHistoryProposed"),
+              ]),
             },
           },
         },
         403: {
-          description: "Not the account's owner",
+          description:
+            "Refused by the key's grant or the review rules, or a narrowed key that is not an agent's",
           content: { "application/json": { schema: ErrorSchema } },
         },
         404: {
@@ -691,55 +710,66 @@ export function registerMessagingRoutes(app: HubHono): void {
     async (c) => {
       const denied = writeScopeDenied(c);
       if (denied) return denied as never;
-      if (c.get("agentUserId")) {
+      const agentUserId = c.get("agentUserId") as string | undefined;
+      // A narrowed key that is not an agent's cannot ask: the import reads
+      // every conversation of the account, which no space, project or kind
+      // limit narrows, and only an agent's ask becomes a proposal.
+      if (!agentUserId && isFencedGrant(getRequestGrant())) {
         return c.json(
-          { error: "Only the account's owner can import its history" },
-          403
-        );
-      }
-      // The import writes messages into the person's channels: a key whose
-      // grant does not allow that is refused here, not only by the fence.
-      const denial = await grantWriteDenial({
-        subjectType: "message",
-        action: "create",
-      });
-      if (denial) {
-        return c.json(
-          { error: denial, code: "GRANT_DENIED", reasonCode: "GRANT_DENIED" },
+          {
+            error:
+              "Importing an account's history reads every conversation of it, so a key limited to a space, project or kind cannot run it. Ask through your agent: it files a proposal you approve.",
+            code: "GRANT_DOOR_UNSUPPORTED",
+          },
           403
         ) as never;
       }
       const userId = c.get("userId") as string;
       const { accountId } = c.req.valid("param");
-      const byId = isUuid(accountId);
-      const row = await db.query.messagingAccounts.findFirst({
-        where: and(
-          eq(messagingAccounts.userId, userId),
-          byId
-            ? eq(messagingAccounts.id, accountId)
-            : eq(messagingAccounts.externalId, accountId)
-        ),
-      });
+      const row = await findOwnMessagingAccount(userId, accountId);
       if (!row) return c.json({ error: "Account not found" }, 404);
       try {
-        const jobId = await getBoss().send(MESSAGING_HISTORY_IMPORT_QUEUE, {
-          accountExternalId: row.externalId,
+        // The gate decides for every caller: a person imports directly; an
+        // agent's ask is a proposal by default (disruptive door), and one its
+        // key's grant does not name is still filed for the person's approval
+        // (`proposeBeyondGrant`, founder 2026-11-03: "it creates a proposal"),
+        // never run on its own.
+        const perm = await checkPermissionOrPropose({
           userId,
-        } satisfies MessagingHistoryImportJobData);
-        const progress =
-          ((row.metadata as Record<string, unknown> | null)?.historyImport as
-            | {
-                status: "running" | "paused" | "done";
-                cursor: string | null;
-                updatedAt: string;
-                chatsImported: number;
-                messagesRecorded: number;
-                reason?: string;
-              }
-            | undefined) ?? null;
-        // Two runs at once are harmless (every message dedups); a standard
-        // pg-boss queue does not enforce a singleton key, so none is claimed.
-        return c.json({ queued: !!jobId, accountId: row.id, progress }, 202);
+          agentUserId,
+          workspaceId: null,
+          subjectType: "messaging",
+          action: "import_history",
+          proposeBeyondGrant: true,
+          reasoning:
+            "Import this account's past conversations with people already in the pod into their channels, within the daily lookup budget. No one new is created.",
+          data: {
+            id: row.id,
+            accountId: row.id,
+            provider: row.provider,
+            name: row.displayName || row.provider,
+          },
+        });
+        if ("denied" in perm && perm.denied) {
+          return c.json({ error: perm.reason ?? "Not permitted" }, 403);
+        }
+        if ("proposalId" in perm && perm.proposalId) {
+          return jsonGoverned(c, {
+            status: "proposed" as const,
+            proposalId: perm.proposalId,
+            reviewUrl: perm.reviewUrl,
+            // A workspace-join gate files a join INSTEAD of the import: the
+            // sentence is derived from the proposal's type, never assumed.
+            message: proposedMessageFor(
+              perm.proposalType,
+              "History import proposed: it runs once the account's owner approves it."
+            ),
+            accountId: row.id,
+            // The route answers 202 on both paths: jsonGoverned's 200 branch
+            // (a non-proposed body) is never taken here.
+          }) as never;
+        }
+        return c.json(await queueOwnerHistoryImport(userId, row), 202);
       } catch (err) {
         logger.error(
           { err, accountId },

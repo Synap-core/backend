@@ -87,8 +87,11 @@ const KNOWN_UNGATED = new Set<string>([
   // /channel-egress/:id/ack — floored on the /pending predicate since
   // 2026-10-19 (lane/sec-w3); no gate (no principal owns an outbox row).
   "rest/channel-egress.ts",
-  // Account sync / channel delete / mark-read (write scope since 2026-10-19).
-  "rest/messaging.ts",
+  // rest/messaging.ts left this list on 2026-11-03 (backend#716): its
+  // import-history route now goes through checkPermissionOrPropose. Its account
+  // sync / channel delete / mark-read routes still write without the gate
+  // (write scope since 2026-10-19), and this file-granular scan can no longer
+  // see them: that debt is tracked on pod session 566adc68, not here.
   // CP-JWT door (one-time consent code) — likely by design; unreviewed here.
   "rest/mcp-redeem.ts",
   // Grant-bounded (grantWriteDenial) but not via the gate.

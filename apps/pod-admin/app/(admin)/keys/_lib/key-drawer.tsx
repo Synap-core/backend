@@ -10,23 +10,28 @@
 import { Button, Chip, Spinner } from "@heroui/react";
 import { ArrowUpRight, FileCheck2, PlayCircle } from "lucide-react";
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@synap-core/api-types";
 import { trpc } from "../../../../lib/trpc";
 import { formatRelative, shortId } from "../../../../lib/format";
 import { openIn } from "../../../../lib/open-in";
 import { permissionLabel } from "../../../oauth/consent/consent-model";
+import { useT } from "../../../../lib/i18n/locale-provider";
 import { DetailDrawer } from "../../components/detail-drawer";
 import { StatusPill } from "../../components/status-pill";
 import {
   CATEGORY_LABEL,
   categorize,
+  holderHref,
   holderName,
   keyHref,
   keyStatus,
   type UnifiedKey,
 } from "./key-model";
+import { KEYS_CATALOGS } from "./copy";
+import { keyEditDoor, type ListedKey } from "./key-edit-model";
+import { KeyPermissionsModal } from "./key-permissions-modal";
 
 export function KeyDrawer({
   apiKey,
@@ -111,6 +116,7 @@ export function KeyDrawer({
                   <GrantCard key={g.id} grant={g} />
                 ))
               )}
+              <ChangeAccessDoor apiKey={apiKey} />
             </Section>
 
             <Section
@@ -172,6 +178,76 @@ export function KeyDrawer({
         ) : null}
       </div>
     </DetailDrawer>
+  );
+}
+
+/**
+ * The door to changing what the key may do, offered only to who the server
+ * would let through (`keyEditDoor`): the key's owner, on a live key that is
+ * not an app's. An app's key points to its app's page instead.
+ */
+function ChangeAccessDoor({ apiKey }: { apiKey: UnifiedKey }) {
+  const t = useT(KEYS_CATALOGS);
+  const [editing, setEditing] = useState(false);
+  const list = trpc.apiKeys.list.useQuery(undefined, { staleTime: 30_000 });
+  if (list.isError)
+    return (
+      <p
+        role="alert"
+        className="flex items-center gap-2 text-[12px] text-danger"
+      >
+        <span>
+          {t("edit.whoFailed")} {list.error.message}
+        </span>
+        <Button size="sm" variant="flat" onPress={() => void list.refetch()}>
+          {t("edit.retry")}
+        </Button>
+      </p>
+    );
+  if (!list.data) return null;
+  const door = keyEditDoor(
+    list.data.find((k) => k.id === apiKey.id) as ListedKey | undefined
+  );
+  if (door.kind === "ended") return null;
+  if (door.kind === "not-yours")
+    return (
+      <p className="text-[12px] text-foreground/65">{t("edit.notYours")}</p>
+    );
+  if (door.kind === "app") {
+    const app = holderHref(apiKey);
+    return (
+      <div className="flex flex-col items-start gap-2">
+        <p className="text-[12px] text-foreground/75">{t("edit.app")}</p>
+        {app ? (
+          <Button
+            as={Link}
+            href={app}
+            size="sm"
+            variant="flat"
+            endContent={<ArrowUpRight className="h-3.5 w-3.5" />}
+          >
+            {t("edit.appOpen")}
+          </Button>
+        ) : null}
+      </div>
+    );
+  }
+  return (
+    <>
+      <div>
+        <Button size="sm" variant="flat" onPress={() => setEditing(true)}>
+          {t("edit.open")}
+        </Button>
+      </div>
+      {editing ? (
+        <KeyPermissionsModal
+          keyId={apiKey.id}
+          keyName={apiKey.keyName}
+          confinedSpaceId={apiKey.workspaceId ?? null}
+          onClose={() => setEditing(false)}
+        />
+      ) : null}
+    </>
   );
 }
 
