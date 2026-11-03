@@ -74,6 +74,8 @@ import {
 } from "../services/agent-connect.js";
 import { links, tools } from "@synap/database/schema";
 import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
+import { isAgentCaller } from "../services/library/agent-door.js";
+import { AGENT_POSTURE_NAMES } from "@synap/governance-policy/postures";
 import { createLink } from "../services/links/links-service.js";
 import { redispatchAfterAgentBound } from "../services/agent-dispatch/redispatch-on-choice.js";
 import {
@@ -969,6 +971,86 @@ export const agentUsersRouter = router({
       });
 
       return { status: "updated" as const };
+    }),
+
+  /**
+   * How this agent's writes land, pod-wide — the named posture, through THE
+   * posture writer (`applyAgentPosture`, one store): `null` = follow the pod
+   * default, `create-with-undo` = its creates act with Undo and its edits ask,
+   * `ask-first` = every change asks. The tRPC twin of Hub
+   * `PATCH /agent-users/:id/governance {posture}`, with the SAME gate:
+   *
+   *   - a PERSON's act: an agent credential (an agent key, the IS internal
+   *     key) is refused before anything is read (audit 2026-10-28 F2 — a
+   *     posture change revokes `propose` rows, so an agent could free itself);
+   *   - an app's agent is its owner's to govern (PB4);
+   *   - a key is bounded by its grant (`rule.update`, governance is the rule
+   *     store); a signed-in session carries no grant;
+   *   - the agent's CREATOR or a pod admin — decided on the loaded row.
+   *
+   * Not `update`: that door needs a workspace the caller manages, and a
+   * pod-wide posture has none — the agent page (pod admin) has no space to
+   * name. Per-space ask-first stays on `update({ askFirst })`.
+   */
+  setPosture: credentialProcedure
+    .input(
+      z.object({
+        agentUserId: z.string().uuid(),
+        posture: z.enum(AGENT_POSTURE_NAMES).nullable(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      if (
+        isAgentCaller({ agentUserId: ctx.agentUserId, keyType: ctx.keyType })
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "How an agent's writes are reviewed is the person's choice, never an agent's.",
+        });
+      }
+      const [agent] = await db
+        .select({ id: users.id, createdByUserId: users.createdByUserId })
+        .from(users)
+        .where(
+          and(eq(users.id, input.agentUserId), eq(users.userType, "agent"))
+        )
+        .limit(1);
+      if (!agent) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Agent user not found",
+        });
+      }
+      const appDenial = await appAgentGovernanceDenial(input.agentUserId, ctx);
+      if (appDenial) {
+        throw new TRPCError({ code: "FORBIDDEN", message: appDenial });
+      }
+      await assertKeyMayWrite({ subjectType: "rule", action: "update" });
+      const isCreator =
+        !!agent.createdByUserId && agent.createdByUserId === ctx.userId;
+      if (!isCreator && !(await isPodAdmin(ctx.userId))) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only the person who connected this agent, or a pod admin, can change how its writes land.",
+        });
+      }
+      const applied = await applyAgentPosture({
+        db,
+        agentUserId: input.agentUserId,
+        posture: input.posture,
+        createdBy: ctx.userId,
+      });
+      auditLog({
+        subjectType: "agent_user",
+        action: "update",
+        phase: "completed",
+        subjectId: input.agentUserId,
+        userId: ctx.userId,
+        data: { posture: input.posture },
+      });
+      return { status: "updated" as const, posture: applied.posture };
     }),
 
   /**

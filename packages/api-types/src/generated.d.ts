@@ -25378,6 +25378,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				pausedAt: string | null;
 			};
 		}>;
+		setPosture: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentUserId: string;
+				posture: "ask-first" | "create-with-undo" | null;
+			};
+			meta: object;
+			output: {
+				posture: "ask-first" | "create-with-undo" | null;
+				status: "updated";
+			};
+		}>;
 		update: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				agentUserId: string;

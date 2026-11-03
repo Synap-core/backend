@@ -9,15 +9,34 @@ import {
 } from "@synap-core/types/i18n";
 
 export const en = {
-  "agent.trust.change": "Change what it may do without asking",
+  "agent.trust.change": "What it may do in each space",
   "agent.trust.askAdmin":
     "An admin of your company’s Synap can change what it may do without asking.",
+  "agent.writes.saved": "Changed: {mode}",
+  "agent.writes.failed": "Couldn’t change how its writes land",
+  "agent.writes.failedHint": "Nothing changed. Try again.",
+  "agent.writes.whoMay":
+    "Only the person who connected it, or a pod admin, can change this.",
+  "agent.writes.space": "In {space}: {mode}",
+  "agent.writes.spacesNote": "A space’s own setting wins inside that space.",
+  "agent.writes.podDefault": "Change the pod default in Settings",
 } as const;
 
 export const fr: Catalog<typeof en> = {
-  "agent.trust.change": "Changer ce qu’il peut faire sans demander",
+  "agent.trust.change": "Ce qu’il peut faire dans chaque espace",
   "agent.trust.askAdmin":
     "Un administrateur du Synap de votre entreprise peut changer ce qu’il peut faire sans demander.",
+  "agent.writes.saved": "Modifié\u00a0: {mode}",
+  "agent.writes.failed":
+    "Impossible de changer la façon dont ses écritures s’appliquent",
+  "agent.writes.failedHint": "Rien n’a changé. Réessayez.",
+  "agent.writes.whoMay":
+    "Seule la personne qui l’a connecté, ou un administrateur du pod, peut changer cela.",
+  "agent.writes.space": "Dans {space}\u00a0: {mode}",
+  "agent.writes.spacesNote":
+    "Le réglage propre à un espace l’emporte dans cet espace.",
+  "agent.writes.podDefault":
+    "Changer le réglage par défaut du pod dans Réglages",
 };
 
 /** The object views' translator, in the ambient catalog locale. */

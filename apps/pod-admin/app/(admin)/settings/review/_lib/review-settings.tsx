@@ -9,6 +9,9 @@
  *                      every surface reads from `users.me.locale`
  *   Group by           Package (default) · Work · Agent · Time
  *   Layout per package for each package that has a second layout
+ *   How your AIs act   the pod's two defaults for every agent and the
+ *                      floors that always ask (`pod-defaults.tsx`; pod
+ *                      admins switch them, everyone reads them)
  *   Hand-offs          the agents the person always lets take hand-offs:
  *                      one `governance_rules` row each, created and revoked
  *                      through `governanceRules`' own doors (`create` is the
@@ -54,6 +57,7 @@ import {
 } from "../../../../../lib/i18n/locale-provider";
 import { en, fr } from "./copy";
 import { RequestRules } from "./request-rules";
+import { PodDefaults } from "./pod-defaults";
 
 const CATALOGS = { en, fr };
 
@@ -127,6 +131,7 @@ export function ReviewSettings() {
           </ul>
         </SectionCard>
 
+        <PodDefaults />
         <HandOffRules />
         <RequestRules />
       </div>
