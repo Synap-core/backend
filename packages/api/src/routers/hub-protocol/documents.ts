@@ -59,6 +59,8 @@ import {
   DOCUMENT_READ_FORMATS,
   currentDiagnostics,
   projectAgentDocument,
+  readsAsMarkdown,
+  unparsedDiagnostics,
 } from "../../services/document-patch/read-document.js";
 
 const logger = createLogger({ module: "hub-documents" });
@@ -491,14 +493,18 @@ export const documentsRouter = router({
       });
       const doc = result.document;
       const raw = result.content ?? "";
-      const diagnostics = await currentDiagnostics({
-        documentId: doc.id,
-        workspaceId: doc.workspaceId ?? null,
-        metadata: doc.metadata,
-        revision: doc.contentRevision,
-        content: raw,
-        readerUserId: ctx.userId!,
-      });
+      // A file or an oversized document is never parsed on this thread:
+      // reading a 126 MB video froze the pod (3 Nov 2026).
+      const diagnostics = readsAsMarkdown(doc, raw)
+        ? await currentDiagnostics({
+            documentId: doc.id,
+            workspaceId: doc.workspaceId ?? null,
+            metadata: doc.metadata,
+            revision: doc.contentRevision,
+            content: raw,
+            readerUserId: ctx.userId!,
+          })
+        : unparsedDiagnostics(doc, raw);
 
       return {
         document: projectAgentDocument(doc, raw, input.format, diagnostics),

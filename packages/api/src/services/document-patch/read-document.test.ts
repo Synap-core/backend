@@ -4,9 +4,12 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  MARKDOWN_READ_MAX_CHARS,
   listDocumentSections,
   projectAgentDocument,
   readableMarkdown,
+  readsAsMarkdown,
+  unparsedDiagnostics,
 } from "./read-document.js";
 
 describe("readableMarkdown — embeds become their fallback", () => {
@@ -135,5 +138,101 @@ describe("projectAgentDocument — every field a guarded edit needs arrives", ()
     });
     expect(out.diagnostics).toBeNull();
     expect(out.diagnosticsError).toBe("catalog down");
+  });
+});
+
+describe("readsAsMarkdown — a read never parses a file or an oversized document", () => {
+  // 3 Nov 2026: reading a 126 MB video (type `file`) parsed its bytes as
+  // markdown for 60-110 s per read, and the pod answered nothing else.
+  it("parses a markdown or text document up to the cap", () => {
+    expect(readsAsMarkdown({ type: "markdown" }, "# Plan")).toBe(true);
+    expect(
+      readsAsMarkdown({ type: "markdown", mimeType: "text/markdown" }, "# A")
+    ).toBe(true);
+    expect(readsAsMarkdown({ type: "text", mimeType: null }, "notes")).toBe(
+      true
+    );
+    expect(
+      readsAsMarkdown({ type: "markdown" }, "x".repeat(MARKDOWN_READ_MAX_CHARS))
+    ).toBe(true);
+  });
+
+  it("never parses a stored file, whatever its size", () => {
+    expect(
+      readsAsMarkdown({ type: "file", mimeType: "video/mp4" }, "\u0000ftyp")
+    ).toBe(false);
+    expect(readsAsMarkdown({ type: "pdf" }, "%PDF-1.7")).toBe(false);
+  });
+
+  it("never parses a text row holding audio (output.wav stored as text)", () => {
+    expect(
+      readsAsMarkdown({ type: "text", mimeType: "audio/wav" }, "RIFF")
+    ).toBe(false);
+  });
+
+  it("never parses a document longer than the cap", () => {
+    expect(
+      readsAsMarkdown(
+        { type: "markdown" },
+        "x".repeat(MARKDOWN_READ_MAX_CHARS + 1)
+      )
+    ).toBe(false);
+  });
+});
+
+describe("projectAgentDocument — a file reads as stored, unparsed", () => {
+  const file = {
+    id: "v1",
+    title: "free-take-v1-draft.mp4",
+    type: "file",
+    mimeType: "video/mp4",
+    language: null,
+    workspaceId: "ws-1",
+    contentRevision: 1,
+    currentVersion: 1,
+    scope: null,
+    refreshAutomationId: null,
+    updatedAt: "2026-10-31T00:00:00.000Z",
+    createdAt: "2026-10-31T00:00:00.000Z",
+  };
+  // Text the parse would change: a section and an embed with a fallback.
+  const raw = [
+    '::::synap-section{id="a" owner="ai"}',
+    "## A",
+    ':::synap-cell{cellKey="chart-bar"}',
+    "Fallback.",
+    ":::",
+    "::::",
+  ].join("\n");
+
+  it("returns the content as stored even when `readable` is asked, with no sections", () => {
+    const out = projectAgentDocument(
+      file,
+      raw,
+      "readable",
+      unparsedDiagnostics(file, raw)
+    );
+    expect(out.content).toBe(raw);
+    expect(out.sections).toEqual([]);
+  });
+
+  it("says its diagnostics were not checked, and why", () => {
+    const out = projectAgentDocument(
+      file,
+      raw,
+      "raw",
+      unparsedDiagnostics(file, raw)
+    );
+    expect(out.diagnostics).toBeNull();
+    expect(out.diagnosticsError).toBe(
+      "Not checked: a video/mp4 document is not markdown."
+    );
+  });
+
+  it("a markdown document still gets its readable form and sections", () => {
+    const md = { ...file, type: "markdown", mimeType: null };
+    const out = projectAgentDocument(md, raw, "readable", { items: [] });
+    expect(out.content).not.toBe(raw);
+    expect(out.sections.map((s) => s.id)).toEqual(["a"]);
   });
 });
