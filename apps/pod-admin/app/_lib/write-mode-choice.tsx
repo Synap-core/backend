@@ -36,12 +36,19 @@ export function WriteModeChoice({
   onChange,
   label,
   isDisabled,
+  lines,
 }: {
   value: AgentWriteMode;
   onChange: (mode: AgentWriteMode) => void;
   /** The section's question, e.g. "How their changes land". */
   label: string;
   isDisabled?: boolean;
+  /**
+   * What each choice does on THIS pod, when the pod's own state changes it
+   * (the agent page: following the pod default while it is switched off
+   * asks for every change). Omitted, a row says its `line`.
+   */
+  lines?: Readonly<Partial<Record<AgentWriteMode, string>>>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const shown = visibleWriteModeChoices(value, expanded);
@@ -58,7 +65,11 @@ export function WriteModeChoice({
         }}
       >
         {shown.map((c) => (
-          <Radio key={c.mode} value={c.mode} description={c.line}>
+          <Radio
+            key={c.mode}
+            value={c.mode}
+            description={lines?.[c.mode] ?? c.line}
+          >
             {c.label}
             {c.recommended ? (
               <span className="ml-1.5 text-tiny text-foreground/65">

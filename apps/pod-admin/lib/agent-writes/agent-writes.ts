@@ -5,28 +5,23 @@
  *
  * Read: `agentUsers.governance` (`writeMode`, its one sentence `line`, the
  * pod-wide posture `postures.pod`, `podDefaultEnabled`). Write:
- * `agentUsers.setPosture` (`null` = follow the pod default).
+ * `agentUsers.setPosture` with `agentPostureOfWriteMode(mode)` (`null` =
+ * follow the pod default).
  *
- * Words: the mode's name from the vocabulary (`resolveAgentWriteModeLabel`),
- * its sentence from `AGENT_WRITE_MODE_LINE` — never a local map.
+ * Words: THE list a person chooses from, `AGENT_WRITE_MODE_CHOICES`
+ * (@synap-core/types/agents, also drawn by `/device`), and its sentences
+ * `AGENT_WRITE_MODE_LINE` — never a local map.
  */
 
 import {
+  AGENT_WRITE_MODE_CHOICES,
   AGENT_WRITE_MODE_LINE,
+  agentPostureOfWriteMode,
+  isAgentWriteMode,
   resolveAgentWriteMode,
   type AgentWriteMode,
 } from "@synap-core/types/agents";
-import { resolveAgentWriteModeLabel } from "@synap-core/types/vocabulary";
-
-/** What a person chooses: no posture of its own (the pod decides), or a preset. */
-export type AgentPostureChoice = null | "create-with-undo" | "ask-first";
-
-/** The three choices, loosest first. */
-export const AGENT_POSTURE_CHOICES: readonly AgentPostureChoice[] = [
-  null,
-  "create-with-undo",
-  "ask-first",
-];
+import { humanizeToken } from "@synap-core/types/vocabulary";
 
 /** The slice of `agentUsers.governance` this reads. */
 export interface AgentWritesRead {
@@ -36,52 +31,50 @@ export interface AgentWritesRead {
   podDefaultEnabled: boolean;
 }
 
-/** The mode that names a choice (`null` is "follows the pod default"). */
-export function choiceMode(choice: AgentPostureChoice): AgentWriteMode {
-  return choice ?? "pod-default";
-}
-
-/** The choice in force pod-wide. A posture the pod does not name reads as none. */
-export function currentChoice(read: AgentWritesRead): AgentPostureChoice {
+/**
+ * The choice in force pod-wide, read from the stored posture: no posture is
+ * `pod-default` (the pod's rule decides); a posture the pod does not name
+ * reads as none, never as a preset.
+ */
+export function currentWriteMode(read: AgentWritesRead): AgentWriteMode {
   const pod = read.postures.pod;
-  return pod === "create-with-undo" || pod === "ask-first" ? pod : null;
+  return isAgentWriteMode(pod) ? pod : "pod-default";
 }
 
-export interface PostureChoiceView {
-  /** What `setPosture` receives. */
-  value: AgentPostureChoice;
-  /** A stable key for the radio (`pod-default`, `create-with-undo`, `ask-first`). */
-  key: AgentWriteMode;
-  label: string;
-  /** Its consequence, in one line, for THIS pod. */
-  line: string;
-  selected: boolean;
+/** A choice's name from THE list; no posture is `pod-default`, an unknown one humanizes. */
+export function writeModeLabel(mode: string | null | undefined): string {
+  const key = mode ?? "pod-default";
+  return (
+    AGENT_WRITE_MODE_CHOICES.find((c) => c.mode === key)?.label ??
+    humanizeToken(key)
+  );
 }
 
 /**
- * The three choices with their consequence. The chosen one says what the pod
- * answers today (`read.line`, exact even for an older agent's flag). Another
- * says what choosing it would do: a posture is applied STRICT
- * (`applyAgentPosture` pins `writesRequireProposal`), so "follow the pod
- * default" with the pod default switched off means every change asks.
+ * What each choice does on THIS pod. The chosen one says what the pod answers
+ * today (`read.line`, exact even for an older agent's flag). Another says
+ * what choosing it would do: a posture is applied STRICT (`applyAgentPosture`
+ * pins `writesRequireProposal`), so following the pod default while it is
+ * switched off means every change asks.
  */
-export function postureChoices(read: AgentWritesRead): PostureChoiceView[] {
-  const current = currentChoice(read);
-  return AGENT_POSTURE_CHOICES.map((choice) => {
-    const selected = choice === current;
-    const mode = resolveAgentWriteMode({
-      posture: choice,
-      podDefaultEnabled: read.podDefaultEnabled,
-      writesRequireProposal: true,
-    });
-    return {
-      value: choice,
-      key: choiceMode(choice),
-      label: resolveAgentWriteModeLabel(choiceMode(choice)),
-      line: selected ? read.line : AGENT_WRITE_MODE_LINE[mode],
-      selected,
-    };
-  });
+export function writeModeLines(
+  read: AgentWritesRead
+): Record<AgentWriteMode, string> {
+  const current = currentWriteMode(read);
+  const lines = {} as Record<AgentWriteMode, string>;
+  for (const { mode } of AGENT_WRITE_MODE_CHOICES) {
+    lines[mode] =
+      mode === current
+        ? read.line
+        : AGENT_WRITE_MODE_LINE[
+            resolveAgentWriteMode({
+              posture: agentPostureOfWriteMode(mode),
+              podDefaultEnabled: read.podDefaultEnabled,
+              writesRequireProposal: true,
+            })
+          ];
+  }
+  return lines;
 }
 
 /** A row's mark and sentence: the choice in force, and what it does today. */
@@ -89,15 +82,7 @@ export function writesSummary(read: AgentWritesRead): {
   label: string;
   line: string;
 } {
-  return {
-    label: resolveAgentWriteModeLabel(choiceMode(currentChoice(read))),
-    line: read.line,
-  };
-}
-
-/** A radio's value (`choiceMode`) back to the choice `setPosture` takes. */
-export function choiceFromKey(key: string): AgentPostureChoice {
-  return key === "create-with-undo" || key === "ask-first" ? key : null;
+  return { label: writeModeLabel(currentWriteMode(read)), line: read.line };
 }
 
 /**

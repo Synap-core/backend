@@ -14,7 +14,7 @@
  *   • Governance — `agentUsers.governance`: the one sentence every surface
  *     shows, plus the per-space ask-first overrides the viewer can see; its
  *     creator or a pod admin sets it pod-wide here (`agentUsers.setPosture`:
- *     follow the pod default · create with undo · ask first).
+ *     the choices of `AGENT_WRITE_MODE_CHOICES`, drawn by `WriteModeChoice`).
  *   • Disconnect — `agentUsers.disconnect` revokes every live and pending key
  *     (offered when the pod says the viewer may: `viewerCanDisconnect`); the
  *     agent stays listed and `synap init` reconnects it.
@@ -27,12 +27,14 @@
  * page then names it from the scorecard and says the rest is not visible.
  */
 
-import { Button, Radio, RadioGroup, addToast } from "@heroui/react";
+import { Button, addToast } from "@heroui/react";
 import { Plug, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState, type ReactNode } from "react";
-import { resolveAgentReachMark } from "@synap-core/types/agents";
-import { resolveAgentWriteModeLabel } from "@synap-core/types/vocabulary";
+import {
+  agentPostureOfWriteMode,
+  resolveAgentReachMark,
+} from "@synap-core/types/agents";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { formatRelative } from "../../../../lib/format";
@@ -42,12 +44,12 @@ import { ConfirmModal } from "../../../(admin)/components/confirm-modal";
 import { useConsoleRole } from "../../../(admin)/components/side-nav-role";
 import { navHref } from "../../../../lib/console-nav";
 import {
-  choiceFromKey,
-  choiceMode,
-  currentChoice,
+  currentWriteMode,
   mayChangeWrites,
-  postureChoices,
+  writeModeLabel,
+  writeModeLines,
 } from "../../../../lib/agent-writes/agent-writes";
+import { WriteModeChoice } from "../../write-mode-choice";
 import { agentTrustDoor } from "./agent-trust-door";
 import { objectViewsT } from "./copy";
 import {
@@ -311,7 +313,7 @@ export function AgentGovernance({
       void utils.agentUsers.governance.invalidate({ agentUserId });
       addToast({
         title: t("agent.writes.saved", {
-          mode: resolveAgentWriteModeLabel(choiceMode(res.posture)),
+          mode: writeModeLabel(res.posture),
         }),
         color: "success",
       });
@@ -352,26 +354,23 @@ export function AgentGovernance({
       ) : (
         <>
           {mayChange ? (
-            <RadioGroup
-              aria-label="How its writes land"
-              size="sm"
+            <WriteModeChoice
+              label="How its writes land"
               // The pick shows while the pod saves it; a refused one falls back.
-              value={choiceMode(
+              value={
                 setPosture.isPending && setPosture.variables
-                  ? setPosture.variables.posture
-                  : currentChoice(gov.data)
-              )}
-              isDisabled={setPosture.isPending}
-              onValueChange={(key) =>
-                setPosture.mutate({ agentUserId, posture: choiceFromKey(key) })
+                  ? (setPosture.variables.posture ?? "pod-default")
+                  : currentWriteMode(gov.data)
               }
-            >
-              {postureChoices(gov.data).map((c) => (
-                <Radio key={c.key} value={c.key} description={c.line}>
-                  {c.label}
-                </Radio>
-              ))}
-            </RadioGroup>
+              isDisabled={setPosture.isPending}
+              lines={writeModeLines(gov.data)}
+              onChange={(mode) =>
+                setPosture.mutate({
+                  agentUserId,
+                  posture: agentPostureOfWriteMode(mode),
+                })
+              }
+            />
           ) : (
             <>
               <p className="text-[12.5px] text-foreground">{gov.data.line}</p>
@@ -390,9 +389,7 @@ export function AgentGovernance({
                   <li key={sp.workspaceId}>
                     {t("agent.writes.space", {
                       space: sp.name,
-                      mode: resolveAgentWriteModeLabel(
-                        sp.posture ?? "pod-default"
-                      ),
+                      mode: writeModeLabel(sp.posture),
                     })}
                   </li>
                 ))}
