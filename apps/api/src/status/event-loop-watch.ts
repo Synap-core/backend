@@ -278,18 +278,19 @@ export function createEventLoopWatch(opts: {
   /**
    * The requests that ran across a stall: still in flight, or ended since the
    * previous tick (the loop was free then, so the blocking began after it),
-   * and started before the block could have begun. The block began by the
-   * time the late tick was due (`due`), give or take the callbacks the loop
-   * ran before its timers in that same turn: hence a tolerance of one tick
-   * (at most half the threshold). A request that arrived after the block
-   * cannot pass it (blockedMs > stallMs > the tolerance). Longest-running
+   * and started at least half the threshold before the late tick ran. The
+   * request that held the loop for more than `stallMs` started at least that
+   * long before the tick, wherever its start fell against the ticks (a
+   * reference to the due time would miss one that started after a tick that
+   * was itself late); a request that arrived after the block started only
+   * the few callbacks the loop ran before its timers ago. Longest-running
    * first.
    */
-  const tolerance = Math.min(config.tickMs, config.stallMs / 2);
-  const nameRequests = (t: number, due: number) => {
+  const nameRequests = (t: number) => {
+    const startedBy = t - config.stallMs / 2;
     const across: Array<{ r: InFlightEntry; runningMs: number }> = [];
     const consider = (r: InFlightEntry) => {
-      if (r.startedAt <= due + tolerance) {
+      if (r.startedAt <= startedBy) {
         across.push({ r, runningMs: (r.endedAt ?? t) - r.startedAt });
       }
     };
@@ -319,7 +320,7 @@ export function createEventLoopWatch(opts: {
     const blockedMs = t - lastTick - config.tickMs;
     if (blockedMs > config.stallMs) {
       try {
-        const named = nameRequests(t, t - blockedMs);
+        const named = nameRequests(t);
         stallCount += 1;
         lastStall = { at: new Date(t).toISOString(), blockedMs, ...named };
         warn(
