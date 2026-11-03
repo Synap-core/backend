@@ -46,8 +46,8 @@ import type { MessagingConnector } from "../../connectors/MessagingConnector.js"
 import { MessagingAccountService } from "../messaging-account-service.js";
 import { recordInboundMessage } from "./inbound-recorder.js";
 import {
-  providerIdProperty,
   recordProviderId,
+  storedProviderId,
   resolveParticipant,
   takeProfileLookup,
 } from "./participant-lookup.js";
@@ -197,11 +197,8 @@ async function targetProviderId(args: {
   });
   if (!person) return { providerId: null };
   const props = (person.properties ?? {}) as Record<string, unknown>;
-  const key = providerIdProperty(args.provider);
-  const stored = key ? props[key] : undefined;
-  if (typeof stored === "string" && stored.trim()) {
-    return { providerId: stored.trim() };
-  }
+  const stored = await storedProviderId(args.entityId, args.provider, props);
+  if (stored) return { providerId: stored };
   if (args.provider !== "linkedin" || !args.connector.getProfile) {
     return { providerId: null };
   }

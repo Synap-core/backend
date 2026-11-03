@@ -543,16 +543,39 @@ describe("the person is found, once, and only the right one", () => {
     await webhook(msg("chat-p", "p1", { from: "ACoPierre" }));
     const [ch] = await channelOf("chat-p");
     expect(ch?.context_object_id).toBe(PIERRE);
+    // Her id is learned as an identity signal; her properties are untouched
+    // (they are written only through the entity doors).
     const { rows } = await q<{ properties: Record<string, unknown> }>(
       `select properties from entities where id = $1`,
       [PIERRE]
     );
-    expect(rows[0]!.properties.linkedinProviderId).toBe("ACoPierre");
+    expect(rows[0]!.properties.linkedinProviderId).toBeUndefined();
+    const { rows: sig } = await q<{ entity_id: string }>(
+      `select entity_id from entity_identity_signals where signal_type = 'external_id' and signal_value = 'linkedin:ACoPierre'`
+    );
+    expect(sig).toEqual([{ entity_id: PIERRE }]);
 
     // Next chat with Pierre: bound by the stored id, no lookup.
     await webhook(msg("chat-p2", "p2", { from: "ACoPierre" }));
     expect((await channelOf("chat-p2"))[0]?.context_object_id).toBe(PIERRE);
     expect(fake.getProfile).toHaveBeenCalledTimes(1);
+
+    // A history import for Pierre alone finds her chat by the learned id,
+    // with no second lookup.
+    conversations.push({
+      externalThreadId: "chat-p3",
+      provider: "linkedin",
+      participantName: "Pierre Curie",
+      participantExternalId: "ACoPierre",
+    });
+    chatMessages["chat-p3"] = [msg("chat-p3", "p3", { from: "ACoPierre" })];
+    const result = await runMessagingHistoryImport(
+      { accountExternalId: "acc-1", userId: OWNER, entityId: PIERRE },
+      { connector: fake as never, sleep: async () => {} }
+    );
+    expect(result).toMatchObject({ chatsImported: 1, messagesRecorded: 1 });
+    expect(fake.getProfile).toHaveBeenCalledTimes(1);
+    expect((await channelOf("chat-p3"))[0]?.context_object_id).toBe(PIERRE);
   });
 
   it("an unrelated provider id never binds to a person", async () => {

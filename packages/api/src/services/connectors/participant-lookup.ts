@@ -13,8 +13,8 @@
  *      `linkedinUrl`. The outcome is cached on the chat's channel
  *      (`metadata.participantLookup`) so a later message never repeats it.
  *
- * A match by handle writes the provider id on the person (a system write of
- * an identity fact, step 1 next time). No match leaves the chat unbound: the
+ * A match by handle registers the provider id as the person's external id
+ * signal (step 1 next time); the person's properties are never written here. No match leaves the chat unbound: the
  * pod never creates a person for an unknown sender. Instagram resolves by
  * external id only (design §2).
  */
@@ -28,6 +28,7 @@ import {
   drizzleSql,
   channels,
   entities,
+  entityIdentitySignals,
   messagingAccounts,
   ChannelType,
   resolveIdentity,
@@ -95,10 +96,14 @@ export async function takeProfileLookup(
 }
 
 /**
- * Write the provider's id on the person and register `<provider>:<id>`, so
- * the next message from that id binds at once. Only on a person the account
- * owner owns, and only when the person carries no id for that provider yet
- * (a person's id is never overwritten by a lookup).
+ * Register `<provider>:<id>` as the person's external id, so the next message
+ * from that id binds at once. An IDENTITY SIGNAL, never a property write: the
+ * person's properties (and so their lifecycle projection) are only written
+ * through the entity doors (`lifecycle-one-door` tripwire), and a rule must not
+ * fire because the pod learned an id. The chat's channel keeps the id too
+ * (`metadata.participantExternalId`), which is what the send side reads. Only
+ * on a live person the account owner owns; a signal another person already
+ * holds is never moved (`registerIdentitySignals` skips a taken pair).
  */
 export async function recordProviderId(args: {
   entityId: string;
@@ -106,23 +111,15 @@ export async function recordProviderId(args: {
   provider: string;
   providerId: string;
 }): Promise<void> {
-  const key = providerIdProperty(args.provider);
-  if (!key) return;
-  // A system write of an identity fact: a plain JSONB merge, no entity.update
-  // event (a rule must not fire because the pod learned an id), no proposal.
-  await db
-    .update(entities)
-    .set({
-      properties: drizzleSql`COALESCE(${entities.properties}, '{}'::jsonb) || jsonb_build_object(${key}::text, ${args.providerId}::text)`,
-    })
-    .where(
-      and(
-        eq(entities.id, args.entityId),
-        eq(entities.userId, args.userId),
-        isNull(entities.deletedAt),
-        drizzleSql`NOT (COALESCE(${entities.properties}, '{}'::jsonb) ? ${key})`
-      )
-    );
+  const owned = await db.query.entities.findFirst({
+    where: and(
+      eq(entities.id, args.entityId),
+      eq(entities.userId, args.userId),
+      isNull(entities.deletedAt)
+    ),
+    columns: { id: true },
+  });
+  if (!owned) return;
   await registerIdentitySignals(
     db,
     args.entityId,
@@ -134,6 +131,33 @@ export async function recordProviderId(args: {
     ],
     "messaging.participant-lookup"
   );
+}
+
+/**
+ * The provider's id for a person, as the pod knows it: their property
+ * (`linkedinProviderId`, written by a person or a capture), else the external
+ * id signal a lookup registered. `null` = not known.
+ */
+export async function storedProviderId(
+  entityId: string,
+  provider: string,
+  properties: Record<string, unknown>
+): Promise<string | null> {
+  const key = providerIdProperty(provider);
+  const fromProperty = key ? properties[key] : undefined;
+  if (typeof fromProperty === "string" && fromProperty.trim()) {
+    return fromProperty.trim();
+  }
+  const prefix = providerExternalId(provider, "");
+  const row = await db.query.entityIdentitySignals.findFirst({
+    where: and(
+      eq(entityIdentitySignals.entityId, entityId),
+      eq(entityIdentitySignals.signalType, "external_id"),
+      drizzleSql`starts_with(${entityIdentitySignals.signalValue}, ${prefix})`
+    ),
+    columns: { signalValue: true },
+  });
+  return row ? row.signalValue.slice(prefix.length) || null : null;
 }
 
 export interface ResolveParticipantArgs {
