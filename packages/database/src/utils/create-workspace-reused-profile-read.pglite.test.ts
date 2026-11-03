@@ -2,11 +2,10 @@
  * A reused profile whose existing properties cannot be read FAILS the step,
  * through the REAL `createWorkspaceFromDefinition` on PGlite.
  *
- * Before: the read sat in `catch { continue; }`, so the apply skipped that
- * profile's new properties AND its lifecycle declaration, and the space went
- * on as if it had converged. Now the error goes through `handleStepError`:
- * the create rejects, naming the step, and the space is marked failed for the
- * resume machinery.
+ * The error goes through `handleStepError`: the create rejects, naming the
+ * step, and the space is marked failed for the resume machinery. A swallowed
+ * read would skip that profile's new properties AND its lifecycle
+ * declaration while the space reported it had converged.
  *
  *   Space A declares a shared kind `w0-gadget` (created there).
  *   Space B declares the same kind with one more property: the kind is REUSED,

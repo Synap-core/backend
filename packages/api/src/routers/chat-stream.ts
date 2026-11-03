@@ -355,7 +355,7 @@ chatStreamApp.post("/stream", async (c) => {
   }
 
   // ── Resolve workspace + channel (the ONE resolver, shared with the
-  // external chat route so the two can never drift again) ─────────────────
+  // external chat route: both routes accept exactly the same channels) ────
   const target = await resolveChatTarget(db, userId, {
     workspaceId: input.workspaceId,
     channelId: input.channelId,

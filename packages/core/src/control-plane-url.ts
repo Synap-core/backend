@@ -1,11 +1,9 @@
 /**
  * The ONE reading of this pod's Control Plane base URL from the environment.
  *
- * It used to be read in about fifteen places, three ways: some honoured
- * `CONTROL_PLANE_URL` only, some `CONTROL_PLANE_URL ?? CP_URL`, one
- * `CP_URL ?? CONTROL_PLANE_URL`; some trimmed, some stripped one trailing
- * slash, some all of them. A pod configured with `CP_URL` then ran half its
- * Control Plane features and silently skipped the rest.
+ * Every reader goes through it, so a pod configured with either spelling
+ * runs every Control Plane feature, and no reader trims or orders the two
+ * variables differently from the others.
  *
  * Rule: `CONTROL_PLANE_URL`, else `CP_URL` (the legacy spelling). Each is
  * trimmed; a blank value counts as unset (so a blank `CONTROL_PLANE_URL`

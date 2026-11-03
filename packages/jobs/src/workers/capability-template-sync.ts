@@ -52,17 +52,12 @@ interface CPCapabilityTemplate {
   definition: Record<string, unknown>;
 }
 
-/** Resolve the Control Plane base URL (mirrors cp-template-client.ts `cpUrl`). */
-function cpUrl(): string | null {
-  return controlPlaneBaseUrl();
-}
-
 /**
  * Fetch the CP catalog. Returns `null` on ANY failure (no CP configured, non-2xx,
  * timeout, parse error) so the handler degrades to "leave cache intact". 8s timeout.
  */
 async function fetchFromCP(): Promise<CPCapabilityTemplate[] | null> {
-  const base = cpUrl();
+  const base = controlPlaneBaseUrl();
   if (!base) return null;
   try {
     const res = await fetch(`${base}/api/marketplace/capabilities`, {
@@ -88,7 +83,7 @@ export async function handleCapabilityTemplateSync(): Promise<void> {
   // Staleness stamp key: this legacy worker mirrors a DIFFERENT cache
   // (capability_template_cache) than cp-catalog-sync's `capability` kind, so it
   // carries its own `capability-template` kind label — the two never collide.
-  const stampSource = cpUrl() ?? "unconfigured";
+  const stampSource = controlPlaneBaseUrl() ?? "unconfigured";
   const stampKind = "capability-template";
 
   const items = await fetchFromCP();

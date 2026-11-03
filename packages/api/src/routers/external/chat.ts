@@ -163,13 +163,7 @@ externalChatApp.post(
       channelId: input.channelId,
     });
     if (!target.ok) {
-      // This route has always answered a missing default agent like any
-      // other personal-thread failure.
-      const error =
-        target.reason === "no_default_agent"
-          ? "Failed to resolve chat channel"
-          : target.error;
-      return c.json({ error }, target.status);
+      return c.json({ error: target.error }, target.status);
     }
     const resolvedWorkspaceId = target.workspaceId;
     const resolvedChannelId = target.channelId;

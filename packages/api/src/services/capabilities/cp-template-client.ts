@@ -49,11 +49,6 @@ interface OwnedCapabilityTemplate extends CPCapabilityTemplate {
   isPublic?: boolean;
 }
 
-/** Resolve the Control Plane base URL (mirrors cells.ts `getCpUrl`). */
-function cpUrl(): string | null {
-  return controlPlaneBaseUrl();
-}
-
 /**
  * Raw Control-Plane fetch — the network call. Resilient: returns `null` on ANY
  * failure (no CP configured, non-2xx, timeout, parse error) so the caller decides
@@ -62,7 +57,7 @@ function cpUrl(): string | null {
 export async function fetchCPCapabilityTemplatesFromCP(): Promise<
   CPCapabilityTemplate[] | null
 > {
-  const base = cpUrl();
+  const base = controlPlaneBaseUrl();
   if (!base) return null;
 
   try {
@@ -105,7 +100,7 @@ async function resolveCpPodId(): Promise<string | null> {
 async function fetchCPCapabilityTemplateByKeyAsOwner(
   key: string
 ): Promise<OwnedCapabilityTemplate | null> {
-  const base = cpUrl();
+  const base = controlPlaneBaseUrl();
   if (!base) return null;
 
   try {
@@ -152,7 +147,7 @@ async function resolveCPCapabilityTemplateByKey(
   const owned = await fetchCPCapabilityTemplateByKeyAsOwner(key);
   if (owned) return { door: "owner", template: owned };
 
-  const base = cpUrl();
+  const base = controlPlaneBaseUrl();
   if (!base) return null;
 
   try {
