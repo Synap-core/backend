@@ -12,6 +12,7 @@ import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
 import {
   assertNoLifecycleMove,
+  bornLifecycleFor,
   lifecycleColumnsFor,
 } from "../services/lifecycle/lifecycle-columns.js";
 import { FacetRepository } from "./facet-repository.js";
@@ -549,8 +550,8 @@ export class EntityRepository extends BaseRepository<
     unmodeled.push(...prepared.unmodeled);
     profile = prepared.profile;
     data = { ...data, properties: prepared.entityProperties };
-    const { roleFacetProfile, roleFacetProperties, validatedProperties } =
-      prepared;
+    const { roleFacetProfile, roleFacetProperties } = prepared;
+    let { validatedProperties } = prepared;
 
     const profileId: string = profile.id;
     const entityType: string = profile.slug;
@@ -564,14 +565,18 @@ export class EntityRepository extends BaseRepository<
 
     // 2b. LIFECYCLE columns for the new row, from the same value the read
     // projection holds (a born row is not a move — it has no "from").
-    const bornColumns = roleFacetProfile
+    // A create that names no status starts in the lifecycle's initial status
+    // (non-terminal only: see `bornLifecycleFor`), in the bag AND the columns.
+    const born = roleFacetProfile
       ? null
-      : await lifecycleColumnsFor(
+      : await bornLifecycleFor(
           this.profileResolution,
           profileId,
           effectiveWorkspaceId,
           validatedProperties
         );
+    const bornColumns = born?.columns ?? null;
+    if (born) validatedProperties = born.properties;
 
     // 3. Create entity
     const provenance = stampProvenance({

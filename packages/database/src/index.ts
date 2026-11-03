@@ -508,6 +508,7 @@ export {
 export {
   LifecycleWriteOutsideDoorError,
   assertNoLifecycleMove,
+  bornLifecycleFor,
   columnsForValue,
   lifecycleColumnsFor,
   type LifecycleColumns,
