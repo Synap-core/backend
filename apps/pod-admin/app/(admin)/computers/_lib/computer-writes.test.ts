@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { computerRuleGroups, type RuleRowLike } from "./computer-writes";
+import {
+  agentModeOnComputer,
+  agentsChangedBy,
+  computerRuleGroups,
+  heldByThisComputer,
+  type AgentOnComputerRead,
+  type RuleRowLike,
+} from "./computer-writes";
 
 const PC = "pc-1";
 const CC = "agent-cc";
@@ -96,5 +103,64 @@ describe("the rules a computer's page lists, by source", () => {
         agents: AGENTS,
       })
     ).toEqual([]);
+  });
+});
+
+describe("its agents on the computer page", () => {
+  const read = (
+    own: string | null,
+    effective?: AgentOnComputerRead["effective"]
+  ): AgentOnComputerRead => ({
+    writeMode: (own ?? "pod-default") as AgentOnComputerRead["writeMode"],
+    postures: { pod: own },
+    effective,
+  });
+  const eff = (
+    writeMode: "pod-default" | "create-with-undo" | "ask-first",
+    decidedBy: "agent" | "computer" | "pod-default"
+  ) => ({
+    writeMode,
+    line: "",
+    decidedBy,
+    computer: { id: "pc-1", name: "Mac" },
+  });
+
+  it("each row shows the mode its writes really follow, and whether this computer set it", () => {
+    // The founder's case: Claude Code on Normal, its Mac ask-first.
+    expect(
+      agentModeOnComputer(read(null, eff("ask-first", "computer")))
+    ).toEqual({ mode: "ask-first", source: "computer" });
+    expect(
+      agentModeOnComputer(read("ask-first", eff("ask-first", "agent")))
+    ).toEqual({ mode: "ask-first", source: "agent" });
+    // A pod with no effective read: the agent's own setting.
+    expect(agentModeOnComputer(read("create-with-undo"))).toEqual({
+      mode: "create-with-undo",
+      source: "agent",
+    });
+    expect(agentModeOnComputer(read(null))).toEqual({
+      mode: "pod-default",
+      source: "pod-default",
+    });
+  });
+
+  it("counts the agents this computer holds back", () => {
+    expect(
+      heldByThisComputer([
+        read(null, eff("ask-first", "computer")),
+        read("create-with-undo", eff("ask-first", "computer")),
+        read("ask-first", eff("ask-first", "agent")),
+      ])
+    ).toBe(2);
+  });
+
+  it("before saving, says how many agents a new computer mode changes: the stricter of the two moves", () => {
+    const agents = [read(null), read("create-with-undo"), read("ask-first")];
+    // Ask first → Normal frees the first two; the third asks first itself.
+    expect(agentsChangedBy(agents, "ask-first", "pod-default")).toBe(2);
+    // Normal → Creates only: only the agent on Normal is held back.
+    expect(agentsChangedBy(agents, "pod-default", "create-with-undo")).toBe(1);
+    expect(agentsChangedBy(agents, "ask-first", "ask-first")).toBe(0);
+    expect(agentsChangedBy([], "ask-first", "pod-default")).toBe(0);
   });
 });

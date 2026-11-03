@@ -15,9 +15,22 @@ export const en = {
     "Only the person who connected this computer, or a pod admin, can change this.",
   "writes.loadFailed": "Couldn’t load what agents on it may do.",
   "writes.retry": "Retry",
+  "writes.held":
+    "{n, plural, one {# agent on it asks more because of this computer.} other {# agents on it ask more because of this computer.}}",
+  "writes.confirm.title": "Set {computer} to {mode}?",
+  "writes.confirm.changes":
+    "{n, plural, =0 {No agent on it changes now.} one {This changes how # of its agents’ changes land.} other {This changes how # of its agents’ changes land.}} Agents added to it later follow it too.",
+  "writes.confirm.uncounted":
+    "Couldn’t read every agent on it, so the number it changes is not known. Agents added to it later follow it too.",
+  "writes.confirm.counting":
+    "Still reading its agents. Agents added to it later follow it too.",
+  "writes.confirm.action": "Change it",
   "writes.saved": "{computer}: {mode}",
   "writes.failed": "Couldn’t change this",
   "writes.failedHint": "Nothing changed. Try again.",
+  "agent.mode.computer": "{mode}, inherited from this computer",
+  "agent.mode.agent": "{mode}, set on the agent",
+  "agent.mode.podDefault": "{mode}, the pod default",
   "rules.show": "Show the rules",
   "rules.hide": "Hide the rules",
   "rules.loadFailed": "Couldn’t load the rules.",
@@ -44,9 +57,22 @@ export const fr: Catalog<typeof en> = {
     "Seule la personne qui a connecté cet ordinateur, ou un administrateur du pod, peut changer ceci.",
   "writes.loadFailed": "Impossible de charger ce que ses agents peuvent faire.",
   "writes.retry": "Réessayer",
+  "writes.held":
+    "{n, plural, one {# agent dessus demande davantage à cause de cet ordinateur.} other {# agents dessus demandent davantage à cause de cet ordinateur.}}",
+  "writes.confirm.title": "Passer {computer} en {mode} ?",
+  "writes.confirm.changes":
+    "{n, plural, =0 {Aucun de ses agents ne change maintenant.} one {Cela change la façon dont les modifications de # de ses agents s’appliquent.} other {Cela change la façon dont les modifications de # de ses agents s’appliquent.}} Les agents ajoutés plus tard le suivent aussi.",
+  "writes.confirm.uncounted":
+    "Impossible de lire chacun de ses agents : le nombre qui change n’est pas connu. Les agents ajoutés plus tard le suivent aussi.",
+  "writes.confirm.counting":
+    "Lecture de ses agents en cours. Les agents ajoutés plus tard le suivent aussi.",
+  "writes.confirm.action": "Le changer",
   "writes.saved": "{computer} : {mode}",
   "writes.failed": "Impossible de changer ceci",
   "writes.failedHint": "Rien n’a changé. Réessayez.",
+  "agent.mode.computer": "{mode}, hérité de cet ordinateur",
+  "agent.mode.agent": "{mode}, réglé sur l’agent",
+  "agent.mode.podDefault": "{mode}, le réglage du pod",
   "rules.show": "Afficher les règles",
   "rules.hide": "Masquer les règles",
   "rules.loadFailed": "Impossible de charger les règles.",

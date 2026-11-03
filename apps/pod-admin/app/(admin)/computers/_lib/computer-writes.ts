@@ -14,7 +14,14 @@
  * `any` rows, the principal's own `agent` rows, `class` rows of its type).
  */
 
-import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
+import {
+  MACHINE_AGENT_TYPE,
+  agentPostureOfWriteMode,
+  effectiveAgentWriteMode,
+  isAgentWriteMode,
+  type AgentEffectiveWriteMode,
+  type AgentWriteMode,
+} from "@synap-core/types/agents";
 import { ruleTarget } from "../../settings/review/_lib/request-rules-model";
 
 /** The slice of a `governanceRules.listAll` row this reads. */
@@ -138,4 +145,69 @@ export function computerRuleGroups(
   return [...groups.values()].sort(
     (a, b) => rank(a.source) - rank(b.source) || a.key.localeCompare(b.key)
   );
+}
+
+// ─── Its agents: what each one's writes REALLY follow ────────────────────────
+
+/** The slice of an agent's `agentUsers.governance` this reads. */
+export interface AgentOnComputerRead {
+  /** The agent's OWN mode (what its choice control shows). */
+  writeMode: AgentWriteMode;
+  postures: { pod: string | null };
+  /** The mode its writes follow once its computer is counted (the pod's read). */
+  effective?: AgentEffectiveWriteMode | null;
+}
+
+/** Where an agent's mode comes from, as its row on the computer page marks it. */
+export type AgentModeSource = "agent" | "computer" | "pod-default";
+
+/**
+ * An agent row's mode and its mark, from the pod's effective read (the
+ * stricter of the agent and this computer, `decidedBy`). A pod with no
+ * effective read yet falls back to the agent's own setting.
+ */
+export function agentModeOnComputer(read: AgentOnComputerRead): {
+  mode: AgentWriteMode;
+  source: AgentModeSource;
+} {
+  if (read.effective)
+    return { mode: read.effective.writeMode, source: read.effective.decidedBy };
+  return {
+    mode: read.writeMode,
+    source: isAgentWriteMode(read.postures.pod) ? "agent" : "pod-default",
+  };
+}
+
+/** How many of its agents follow this computer's mode instead of their own. */
+export function heldByThisComputer(
+  reads: readonly AgentOnComputerRead[]
+): number {
+  return reads.filter((r) => agentModeOnComputer(r).source === "computer")
+    .length;
+}
+
+/**
+ * How many agents a change of the computer's mode would change — said before
+ * it is saved. Each agent's writes follow the stricter of its own mode and
+ * the computer's (`effectiveAgentWriteMode`, the same rule as the pod's read
+ * and the resolver's host step); an agent changes when that stricter mode
+ * moves.
+ */
+export function agentsChangedBy(
+  reads: readonly AgentOnComputerRead[],
+  from: AgentWriteMode,
+  to: AgentWriteMode
+): number {
+  if (from === to) return 0;
+  const side = (mode: AgentWriteMode) => ({
+    mode,
+    posture: agentPostureOfWriteMode(mode),
+  });
+  return reads.filter((r) => {
+    const own = { mode: r.writeMode, posture: r.postures.pod };
+    return (
+      effectiveAgentWriteMode(own, side(from)).mode !==
+      effectiveAgentWriteMode(own, side(to)).mode
+    );
+  }).length;
 }

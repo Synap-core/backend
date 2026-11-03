@@ -18,7 +18,10 @@
 
 import { Button, addToast } from "@heroui/react";
 import { useState } from "react";
-import { agentPostureOfWriteMode } from "@synap-core/types/agents";
+import {
+  agentPostureOfWriteMode,
+  type AgentWriteMode,
+} from "@synap-core/types/agents";
 import { MATRIX_MARKS, matrixVerdictOf } from "@synap-core/types/agent-matrix";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import { resolveMatrixMarkLabel } from "@synap-core/types/vocabulary";
@@ -31,11 +34,15 @@ import {
   writeModeLines,
 } from "../../../../lib/agent-writes/agent-writes";
 import { WriteModeChoice } from "../../../_lib/write-mode-choice";
+import { ConfirmModal } from "../../components/confirm-modal";
 import { SectionCard } from "../../components/section-card";
 import { toneTextClass } from "../../governance/agents/_lib/mark-tone";
 import { en, fr } from "./copy";
 import {
+  agentsChangedBy,
   computerRuleGroups,
+  heldByThisComputer,
+  type AgentOnComputerRead,
   type ComputerRule,
   type ComputerRuleGroup,
   type RuleSource,
@@ -47,10 +54,46 @@ const CATALOGS = { en, fr };
 /** Rules a group shows before "Show all N". */
 const RULES_PREVIEW = 5;
 
+/**
+ * How each agent on the computer writes, from the pod (`agentUsers.governance`
+ * per agent, its `effective` part: the stricter of the agent and this
+ * computer). `reads` is null until EVERY agent is read, and stays null when
+ * one read failed (`isError`): never a partial count.
+ */
+export function useAgentsOnComputer(computer: ComputerLike): {
+  byId: ReadonlyMap<string, AgentOnComputerRead>;
+  reads: AgentOnComputerRead[] | null;
+  isError: boolean;
+} {
+  const results = trpc.useQueries((q) =>
+    computer.agents.map((a) =>
+      q.agentUsers.governance(
+        { agentUserId: a.id },
+        { staleTime: 60_000, retry: false }
+      )
+    )
+  );
+  const byId = new Map<string, AgentOnComputerRead>();
+  results.forEach((r, i) => {
+    if (r.data) byId.set(computer.agents[i]!.id, r.data);
+  });
+  const isError = results.some((r) => r.isError);
+  return {
+    byId,
+    reads:
+      !isError && byId.size === computer.agents.length
+        ? [...byId.values()]
+        : null,
+    isError,
+  };
+}
+
 export function ComputerWrites({ computer }: { computer: ComputerLike }) {
   const t = useT(CATALOGS);
   const utils = trpc.useUtils();
   const [showRules, setShowRules] = useState(false);
+  const [pick, setPick] = useState<AgentWriteMode | null>(null);
+  const agents = useAgentsOnComputer(computer);
   const gov = trpc.agentUsers.governance.useQuery(
     { agentUserId: computer.id },
     { staleTime: 60_000, retry: false }
@@ -62,6 +105,7 @@ export function ComputerWrites({ computer }: { computer: ComputerLike }) {
         utils.agentUsers.governance.invalidate(),
         utils.governanceRules.listAll.invalidate(),
       ]);
+      setPick(null);
       addToast({
         title: t("writes.saved", {
           computer: computer.name,
@@ -71,6 +115,7 @@ export function ComputerWrites({ computer }: { computer: ComputerLike }) {
       });
     },
     onError: (err) => {
+      setPick(null);
       if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: t("writes.failed"),
@@ -113,16 +158,19 @@ export function ComputerWrites({ computer }: { computer: ComputerLike }) {
             }
             isDisabled={setPosture.isPending}
             lines={writeModeLines(gov.data)}
-            onChange={(mode) =>
-              setPosture.mutate({
-                agentUserId: computer.id,
-                posture: agentPostureOfWriteMode(mode),
-              })
-            }
+            // A computer's mode changes every agent on it: say how many first.
+            onChange={(mode) => {
+              if (mode !== currentWriteMode(gov.data!)) setPick(mode);
+            }}
           />
           <p className="text-[12.5px] text-foreground/75">
             {t("writes.ceiling", { computer: computer.name })}
           </p>
+          {agents.reads && heldByThisComputer(agents.reads) > 0 && (
+            <p className="text-[12.5px] text-foreground/75">
+              {t("writes.held", { n: heldByThisComputer(agents.reads) })}
+            </p>
+          )}
           <Button
             variant="light"
             size="sm"
@@ -133,6 +181,37 @@ export function ComputerWrites({ computer }: { computer: ComputerLike }) {
             {showRules ? t("rules.hide") : t("rules.show")}
           </Button>
           {showRules && <ComputerRules computer={computer} />}
+          <ConfirmModal
+            isOpen={pick !== null}
+            onClose={() => setPick(null)}
+            onConfirm={() =>
+              pick &&
+              setPosture.mutate({
+                agentUserId: computer.id,
+                posture: agentPostureOfWriteMode(pick),
+              })
+            }
+            title={t("writes.confirm.title", {
+              computer: computer.name,
+              mode: writeModeLabel(pick),
+            })}
+            consequence={
+              agents.reads
+                ? t("writes.confirm.changes", {
+                    n: agentsChangedBy(
+                      agents.reads,
+                      currentWriteMode(gov.data),
+                      pick ?? currentWriteMode(gov.data)
+                    ),
+                  })
+                : agents.isError
+                  ? t("writes.confirm.uncounted")
+                  : t("writes.confirm.counting")
+            }
+            confirmLabel={t("writes.confirm.action")}
+            confirmColor="warning"
+            isPending={setPosture.isPending}
+          />
         </div>
       )}
     </SectionCard>

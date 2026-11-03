@@ -18,9 +18,16 @@ vi.mock("../../../../lib/trpc", () => {
     error: null,
     refetch: () => undefined,
   });
+  const q = {
+    agentUsers: {
+      governance: ({ agentUserId }: { agentUserId: string }) =>
+        query(reads.gov[agentUserId]),
+    },
+  };
   return {
     trpc: {
       useUtils: () => ({}),
+      useQueries: (fn: (t: typeof q) => unknown[]) => fn(q),
       agentUsers: {
         governance: {
           useQuery: ({ agentUserId }: { agentUserId: string }) =>
@@ -60,12 +67,27 @@ const MAC: ComputerLike = {
   agents: [],
 };
 
-const govOf = (posture: string | null) => ({
+const govOf = (
+  posture: string | null,
+  effective?: { writeMode: string; decidedBy: string }
+) => ({
   writeMode: posture ?? "pod-default",
   line: "line",
   askFirst: posture === "ask-first",
   postures: { pod: posture, spaces: [] },
   podDefaultEnabled: true,
+  effective: effective
+    ? { ...effective, line: "", computer: { id: "pc-1", name: "MacBook" } }
+    : null,
+});
+
+const agent = (id: string, name: string) => ({
+  id,
+  agentType: "claude-code",
+  name,
+  displayName: name,
+  lastSeenAt: null,
+  key: null,
 });
 
 const text = (html: string) =>
@@ -89,5 +111,39 @@ describe("ComputerWrites", () => {
     // The rules wait behind the disclosure.
     expect(t).toContain("Show the rules");
     expect(t).not.toContain("Pod default");
+  });
+
+  it("counts the agents this computer holds back, from the pod's effective read", () => {
+    reads.gov = {
+      "pc-1": govOf("ask-first"),
+      cc: govOf(null, { writeMode: "ask-first", decidedBy: "computer" }),
+      codex: govOf("ask-first", { writeMode: "ask-first", decidedBy: "agent" }),
+    };
+    const t = text(
+      renderToStaticMarkup(
+        <ComputerWrites
+          computer={{
+            ...MAC,
+            agents: [agent("cc", "Claude Code"), agent("codex", "Codex")],
+          }}
+        />
+      )
+    );
+    expect(t).toContain("1 agent on it asks more because of this computer.");
+  });
+
+  it("says nothing about held agents when none is held", () => {
+    reads.gov = {
+      "pc-1": govOf(null),
+      cc: govOf(null, { writeMode: "pod-default", decidedBy: "pod-default" }),
+    };
+    const t = text(
+      renderToStaticMarkup(
+        <ComputerWrites
+          computer={{ ...MAC, agents: [agent("cc", "Claude Code")] }}
+        />
+      )
+    );
+    expect(t).not.toContain("because of this computer");
   });
 });

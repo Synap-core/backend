@@ -211,11 +211,15 @@ function AgentWhy({
               <p className="pl-6 text-[11.5px] text-foreground/65">
                 {p.answer.reason}
               </p>
-              {p.answer.verdict === "ask" && p.answer.computerAsks && (
-                <p className="pl-6 text-[11.5px] text-foreground/65">
-                  Its computer asks first here too.
-                </p>
-              )}
+              {/* The tie: the agent's own pass decided, its computer asks
+                  too. When the computer decided, the rung already says so. */}
+              {p.answer.verdict === "ask" &&
+                p.answer.computerAsks &&
+                p.answer.rung !== "host-asks-first" && (
+                  <p className="pl-6 text-[11.5px] text-foreground/65">
+                    Its computer asks first here too.
+                  </p>
+                )}
               {p.answer.ruleId && (
                 <div className="flex items-center gap-2 pl-6 pt-1">
                   {ruleLink && (
