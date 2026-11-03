@@ -35879,6 +35879,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "unavailable";
 			};
 		}>;
+		devboxJobs: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				sessionId: string;
+			};
+			meta: object;
+			output: {
+				items: PacketDevboxJobItem[];
+				status: "ok";
+				total: number;
+			};
+		}>;
 		discardFromTriage: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				sessionId: string;
