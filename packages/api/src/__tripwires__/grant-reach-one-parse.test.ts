@@ -28,7 +28,8 @@ import { join, relative } from "path";
  * and its rule, exempt by definition.
  *
  * What stays in the baseline and why (each reads a raw list on purpose):
- *  - `grammar.ts` `permits` / `isNarrowedScope` — the oracle every other
+ *  - `grammar.data.ts` (the grammar leaf `grammar.ts` re-exports, backend#681)
+ *    `permits` / `isNarrowedScope` — the oracle every other
  *    reading is checked against; `null` = no space check, `[]` = nowhere.
  *  - `algebra.ts` — meet / within work on the raw pinning axes alike
  *    (spaces, projects, objects); which holder a missing list belongs to is
@@ -48,7 +49,7 @@ const EXEMPT = new Set<string>([
 const BASELINE: Readonly<Record<string, number>> = {
   "packages/types/src/apps/app-view.ts": 1,
   "packages/types/src/grants/algebra.ts": 1,
-  "packages/types/src/grants/grammar.ts": 2,
+  "packages/types/src/grants/grammar.data.ts": 2,
   "packages/types/src/grants/key-steps.ts": 2,
   "packages/types/src/grants/listed.ts": 1,
   "packages/types/src/grants/presets.ts": 1,
@@ -144,15 +145,15 @@ describe("tripwire: a grant's reach is read through one parse (access model B)",
     expect(found.size).toBeGreaterThan(40);
     for (const f of [
       "packages/types/src/grants/holder.ts",
-      "packages/types/src/grants/grammar.ts",
+      "packages/types/src/grants/grammar.data.ts",
       "packages/api/src/services/app-connect.ts",
       "apps/pod-admin/app/oauth/consent/consent-model.ts",
     ])
       expect(found.has(f), f).toBe(true);
     // The baseline counts real interpretations: the oracle has some.
-    expect(found.get("packages/types/src/grants/grammar.ts")).toBeGreaterThan(
-      0
-    );
+    expect(
+      found.get("packages/types/src/grants/grammar.data.ts")
+    ).toBeGreaterThan(0);
   });
 
   it("no file interprets `workspaceIds` by hand beyond its baseline", () => {
