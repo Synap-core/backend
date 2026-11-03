@@ -8,7 +8,10 @@
  * the cloud states are read off the markup a person sees.
  */
 import { createElement, type ReactElement } from "react";
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
+import { START_STEP_IDS } from "@synap-core/types/onboarding/start";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { pod, requestHeaders, Redirect } = vi.hoisted(() => {
@@ -53,6 +56,7 @@ import { StartIntentForm } from "./StartIntentForm";
 import {
   intentModel,
   intentPatch,
+  startBandStep,
   startStepHref,
   type CloudState,
   type StartCard,
@@ -159,16 +163,56 @@ describe("the root gate", () => {
   });
 });
 
+// ── No step link leads to a missing page ───────────────────────────────────
+
+/** Does `app/` hold a page at this path? Route groups `(x)` are transparent. */
+function pageExists(pathname: string, dir = join(__dirname, "..")): boolean {
+  const [seg, ...rest] = pathname.split("/").filter(Boolean);
+  if (seg === undefined) return existsSync(join(dir, "page.tsx"));
+  const subdirs = readdirSync(dir, { withFileTypes: true }).filter((e) =>
+    e.isDirectory()
+  );
+  return subdirs.some(
+    (e) =>
+      (e.name === seg && pageExists(rest.join("/"), join(dir, e.name))) ||
+      (/^\(.+\)$/.test(e.name) && pageExists(pathname, join(dir, e.name)))
+  );
+}
+
+describe("every start step resolves to a page that exists", () => {
+  it("the page finder sees real pages and misses fake ones", () => {
+    expect(pageExists("/start")).toBe(true);
+    expect(pageExists("/home")).toBe(true);
+    expect(pageExists("/start/views")).toBe(false);
+  });
+
+  it.each(START_STEP_IDS)("%s", (step) => {
+    const href = startStepHref(step);
+    expect(pageExists(new URL(href, "http://x").pathname)).toBe(true);
+  });
+
+  it("Home's band reads back the step the href carries", () => {
+    for (const step of START_STEP_IDS) {
+      const param = new URL(startStepHref(step), "http://x").searchParams.get(
+        "start"
+      );
+      if (step !== "start:intent") expect(startBandStep(param)).toBe(step);
+    }
+    expect(startBandStep("nonsense")).toBeNull();
+    expect(startBandStep(null)).toBeNull();
+  });
+});
+
 // ── /start: resume ──────────────────────────────────────────────────────────
 
 describe("/start reopens the step the person is at", () => {
   it.each([
-    ["start:views", "/start/views"],
-    ["start:path", "/start/path"],
-    ["start:setup", "/start/setup"],
-    ["start:agent", "/start/agent"],
-    ["start:first-work", "/start/first-work"],
-    ["start:done", "/start/done"],
+    ["start:views", "/home?start=views"],
+    ["start:path", "/home?start=path"],
+    ["start:setup", "/home?start=setup"],
+    ["start:agent", "/home?start=agent"],
+    ["start:first-work", "/home?start=first-work"],
+    ["start:done", "/home?start=done"],
   ] as const)("next %s → %s", async (next, href) => {
     answer("onboarding.startState", state({ next, starts: undefined }));
     expect(
