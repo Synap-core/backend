@@ -82,6 +82,20 @@ import {
   type ProviderFileBody,
 } from "./provider-file-body.js";
 import { createLogger } from "@synap-core/core";
+import { humanizeToken } from "@synap-core/types/vocabulary";
+import {
+  channelMeta,
+  channelPersonId,
+  loadSendChannel,
+  messagingSendGrantDenial,
+  successorChannel,
+  planChannelSend,
+  recordChannelSend,
+  resolveSendAccount,
+  type DraftedBy,
+  type SendChannel,
+} from "./channel-send.js";
+import type { MessagingConnector } from "./MessagingConnector.js";
 
 const logger = createLogger({ module: "external-dispatch" });
 
@@ -705,8 +719,18 @@ async function resolveBoundCredentialRef(
 // ── External messaging send ──────────────────────────────────────────────────
 
 export interface SendExternalMessageInput {
-  /** The conversation thread id (external platform id). */
-  threadId: string;
+  /**
+   * The conversation thread id (external platform id). Optional when
+   * `channelId` names the channel: a person's channel opened at the first
+   * draft has no chat id until its first send.
+   */
+  threadId?: string | null;
+  /**
+   * The person's channel to send on (channels wave, lane D). When given, the
+   * send is filed and delivered ON THAT CHANNEL: the proposal carries it
+   * (`data.channelId`), and the message lands in it as an outbound row.
+   */
+  channelId?: string | null;
   /** The account that sends (Unipile/Stalwart account id). */
   accountId: string;
   /** Message body. */
@@ -739,6 +763,28 @@ export interface SendExternalMessageInput {
    * No external/untrusted caller may supply it.
    */
   alreadyApproved?: boolean;
+  /**
+   * The OUTER capability gate decided this send needs the person's review
+   * (`execute-capability.ts`, SELF_GATED_BUILTIN_VERBS), or it runs inside an
+   * automation. The send is then filed as a `messaging.external.send`
+   * proposal, whoever asked: never sent directly. Tighten-only.
+   */
+  mustPropose?: boolean;
+  /** Why the outer gate asked for review (`proposals.governance_reason`). */
+  governanceReason?: string | null;
+  /** What a pod app asked, for the approval screen (intent actions). */
+  intentRequest?: Record<string, unknown> | null;
+  /** The approved proposal this send replays (the executor): stamped on the row. */
+  proposalId?: string | null;
+  /** Who drafted it, carried from the proposal onto the message row. */
+  draftedBy?: DraftedBy | null;
+  /**
+   * A subject line the caller gave (email). Recorded on the proposal (the
+   * person reads it before approving) and on the message row. The connectors'
+   * send takes the body only and derives their own reply envelope, so no
+   * provider receives it yet: said here and in the verb's description.
+   */
+  subject?: string | null;
 }
 
 export interface SendExternalMessageResult {
@@ -776,6 +822,14 @@ export interface SendExternalMessageResult {
   errorClass?: FailureErrorClass;
   /** P1: the provider/platform the failed send targeted (for the action label). */
   providerRef?: string;
+  /** A channel send: the channel the message landed in (another one when its chat was already held). */
+  channelId?: string;
+  /** A channel send: the provider's chat id. */
+  chatId?: string;
+  /** A channel send: the provider's message id (may be null on a provider that gives none). */
+  externalMessageId?: string | null;
+  /** A channel send: it started the chat. */
+  first?: boolean;
 }
 
 /**
@@ -786,18 +840,64 @@ export interface SendExternalMessageResult {
 export async function sendExternalMessage(
   input: SendExternalMessageInput
 ): Promise<SendExternalMessageResult> {
-  const { threadId, accountId, body, userId } = input;
+  const { accountId, body, userId } = input;
+
+  // A send that names the person's CHANNEL (the one door for apps, agents and
+  // automations): it is filed and delivered on that channel.
+  let sendChannel = input.channelId
+    ? await loadSendChannel(input.channelId)
+    : null;
+  // An approved send whose pending channel was retired meanwhile (its chat
+  // was already held by another channel of the person) goes to that one.
+  if (sendChannel && sendChannel.status !== "active" && input.alreadyApproved) {
+    sendChannel = (await successorChannel(sendChannel)) ?? sendChannel;
+  }
+  if (
+    input.channelId &&
+    (!sendChannel ||
+      sendChannel.channelType !== ChannelType.EXTERNAL ||
+      sendChannel.status !== "active")
+  ) {
+    return {
+      success: false,
+      error: "That conversation does not exist or was archived.",
+      errorClass: "target_missing",
+    };
+  }
+  // A message on a person's channel goes out through the channel OWNER's
+  // account, as them: nobody else files (or approves) a send through it.
+  // Refused before the gate, so nothing is filed.
+  if (sendChannel && sendChannel.userId !== userId) {
+    return {
+      success: false,
+      error: "Only the person whose conversation this is can send in it.",
+      errorClass: "permission",
+      providerRef: sendChannel.externalSource ?? undefined,
+    };
+  }
+  const threadId = input.threadId ?? sendChannel?.externalId ?? null;
 
   // Resolve the EXTERNAL channel to route to the correct connector provider
   // (stalwart vs unipile vs gmail). Same resolution the immediate REST path
   // already does.
-  const linkedChannel = await db.query.channels.findFirst({
-    where: and(
-      eq(channels.channelType, ChannelType.EXTERNAL),
-      eq(channels.externalId as any, threadId)
-    ),
-    columns: { id: true, externalSource: true, workspaceId: true },
-  });
+  const linkedChannel = sendChannel
+    ? sendChannel
+    : threadId
+      ? await db.query.channels.findFirst({
+          where: and(
+            eq(channels.channelType, ChannelType.EXTERNAL),
+            eq(channels.externalId as any, threadId)
+          ),
+          columns: { id: true, externalSource: true, workspaceId: true },
+        })
+      : undefined;
+  if (!threadId && !sendChannel) {
+    return {
+      success: false,
+      error: "Nothing to send to: name the person's channel or a thread.",
+      errorClass: "validation",
+    };
+  }
 
   // The calling key's grant (task d890410b). A send through the person's
   // connected account is `messaging.send` — a verb only `*` or a pattern that
@@ -808,12 +908,22 @@ export async function sendExternalMessage(
   // would widen it. A person's own key is bounded too (that branch has no
   // gate). No grant (a signed-in session, a job) → no-op. An approved replay
   // was bounded when it was filed.
+  // A channel bound to a person follows the person (channels wave): the key
+  // may also send when it reads that person and may send in the space it acts
+  // in (`messagingSendGrantDenial`).
   if (!input.alreadyApproved) {
-    const denial = await grantWriteDenial({
-      subjectType: "messaging",
-      action: "send",
-      workspaceId: linkedChannel?.workspaceId ?? null,
-    });
+    const denial = sendChannel
+      ? await messagingSendGrantDenial({
+          channel: sendChannel,
+          userId,
+          agentUserId: input.agentUserId ?? null,
+          actingWorkspaceId: input.workspaceId ?? null,
+        })
+      : await grantWriteDenial({
+          subjectType: "messaging",
+          action: "send",
+          workspaceId: linkedChannel?.workspaceId ?? null,
+        });
     if (denial) return { success: false, error: denial };
   }
 
@@ -860,8 +970,16 @@ export async function sendExternalMessage(
   // no agent): the gate's app outward floor proposes it (decision 4A), and the
   // owner branch would have sent it with no review.
   const appSend = !!getRequestGrant()?.clientId;
-  if ((input.agentUserId || appSend) && !input.alreadyApproved) {
-    const gateResult = await gateMessagingSend({ ...input, provider });
+  if (
+    (input.agentUserId || appSend || input.mustPropose) &&
+    !input.alreadyApproved
+  ) {
+    const gateResult = await gateMessagingSend({
+      ...input,
+      threadId,
+      provider,
+      sendChannel,
+    });
     if (gateResult.kind === "deny") {
       // Say why nothing was sent (this used to return a bare `success: false`),
       // and hand an agent the enable request it filed, if any.
@@ -887,6 +1005,23 @@ export async function sendExternalMessage(
     // gateResult.kind === "run" → fall through and dispatch.
   }
 
+  if (sendChannel) {
+    return sendOnChannel({
+      input,
+      channel: sendChannel,
+      connector,
+      provider,
+    });
+  }
+
+  // No channel: the thread is the target (the guard above refused neither).
+  if (!threadId) {
+    return {
+      success: false,
+      error: "Nothing to send to: name the person's channel or a thread.",
+      errorClass: "validation",
+    };
+  }
   await connector.sendMessage(accountId, threadId, body);
 
   // Mirror the outbound message into the messages table.
@@ -967,6 +1102,162 @@ export async function sendExternalMessage(
 }
 
 /**
+ * Deliver a send that names the person's channel (channels wave, lane D):
+ * the account the channel's owner holds, the plan (attendee,
+ * 1st-degree check, start or continue the chat, the outbound row, events),
+ * then the same `{channel}.send.completed` audit every dispatch leaves.
+ */
+async function sendOnChannel(args: {
+  input: SendExternalMessageInput;
+  channel: SendChannel;
+  connector: MessagingConnector;
+  provider: string | undefined;
+}): Promise<SendExternalMessageResult> {
+  const { input, channel, connector } = args;
+  const provider = args.provider ?? "unipile";
+  // A message goes out through the channel OWNER's account, as them: nobody
+  // else sends (or approves a send) through it.
+  if (channel.userId !== input.userId) {
+    return {
+      success: false,
+      error: "Only the person whose conversation this is can send in it.",
+      errorClass: "permission",
+      providerRef: provider,
+    };
+  }
+  let accountId = "";
+  let plan!: Awaited<ReturnType<typeof planChannelSend>>;
+  // Before anything is sent: the account, then continue the chat or start it
+  // (attendee resolved, 1st-degree check). Everything here is a read: a
+  // failure (a provider 5xx or 429, a timeout, a database error) is a
+  // DEFINITE not-sent, so it is returned, never thrown — a throw would keep
+  // the approval's at-most-once claim and refuse every retry.
+  try {
+    if (connector.requiresAccount()) {
+      const resolved = await resolveSendAccount(channel, input.accountId);
+      if (!resolved) {
+        return {
+          success: false,
+          error: `No ${humanizeToken(provider)} account of yours is connected for this conversation.`,
+          errorClass: "no_connection",
+          providerRef: provider,
+        };
+      }
+      accountId = resolved;
+    }
+    plan = await planChannelSend({ channel, connector, accountId });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const status = Number(/failed: (\d{3})\b/.exec(message)?.[1] ?? 0);
+    logger.warn(
+      { err, channelId: channel.id, provider },
+      "channel send: a read before the send failed; nothing was sent"
+    );
+    return {
+      success: false,
+      error: `Nothing was sent: ${humanizeToken(provider)} could not be read before sending (${redactForStorage(message, 160)}).`,
+      errorClass: status
+        ? classifyDispatchFailure({ status, message })
+        : "transient",
+      providerRef: provider,
+    };
+  }
+  if (!plan.ok) {
+    return {
+      success: false,
+      error: plan.error,
+      errorClass: plan.errorClass,
+      providerRef: plan.providerRef ?? provider,
+    };
+  }
+  // THE provider call (a throw past here is ambiguous: it propagates, and the
+  // approval executor keeps its at-most-once claim).
+  let chatId: string;
+  let externalMessageId: string | null;
+  if (plan.kind === "continue") {
+    chatId = plan.chatId;
+    const sent = await connector.sendMessage(accountId, chatId, input.body);
+    externalMessageId = (sent && sent.messageId) || null;
+  } else {
+    const started = await connector.startChat!(
+      accountId,
+      plan.attendee,
+      input.body
+    );
+    chatId = started.chatId;
+    externalMessageId = started.messageId;
+  }
+  // The message went out: from here a failure to RECORD it is logged, never
+  // reported as "not sent" (that would invite a second send).
+  let recorded: { channelId: string; messageId: string | undefined } = {
+    channelId: channel.id,
+    messageId: undefined,
+  };
+  try {
+    recorded = await recordChannelSend({
+      channel,
+      chatId,
+      externalMessageId,
+      started: plan.kind === "start" ? { attendee: plan.attendee } : null,
+      accountId,
+      body: input.body,
+      userId: input.userId,
+      workspaceId: input.workspaceId ?? null,
+      proposalId: input.proposalId ?? null,
+      draftedBy: input.draftedBy ?? null,
+      subject: input.subject ?? null,
+    });
+  } catch (err) {
+    logger.error(
+      { err, channelId: channel.id, chatId, externalMessageId },
+      "channel send: the message was SENT but not recorded in its channel; not retried"
+    );
+  }
+  const delivered = {
+    channelId: recorded.channelId,
+    messageId: recorded.messageId,
+    chatId,
+    externalMessageId,
+    first: plan.kind === "start",
+  };
+  const correlationId = randomUUID();
+  try {
+    await recordExternalAction({
+      channel: provider,
+      action: "send",
+      userId: input.userId,
+      workspaceId: input.workspaceId ?? null,
+      agentUserId: input.agentUserId ?? null,
+      sessionId: input.sessionId ?? null,
+      correlationId,
+      target: delivered.chatId,
+      status: "sent",
+      data: {
+        accountId,
+        channelId: delivered.channelId,
+        messageId: delivered.messageId ?? null,
+        externalMessageId: delivered.externalMessageId,
+        proposalId: input.proposalId ?? null,
+      },
+    });
+  } catch (err) {
+    logger.error(
+      { err, channel: provider, correlationId, target: delivered.chatId },
+      "recordExternalAction failed after a completed channel send — audit row missing, send was NOT retried"
+    );
+  }
+  return {
+    success: true,
+    messageId: delivered.messageId,
+    correlationId,
+    channelId: delivered.channelId,
+    chatId: delivered.chatId,
+    externalMessageId: delivered.externalMessageId,
+    first: delivered.first,
+  };
+}
+
+/**
  * Verdict of the messaging-send capability gate (W3b). Mirrors the four
  * `gateCapabilityExecution` outcomes, with `propose` carrying the created
  * proposal id so the caller can surface it.
@@ -997,7 +1288,11 @@ type MessagingGateResult =
  * upstream).
  */
 async function gateMessagingSend(
-  input: SendExternalMessageInput & { provider?: string }
+  input: Omit<SendExternalMessageInput, "threadId"> & {
+    threadId: string | null;
+    provider?: string;
+    sendChannel: SendChannel | null;
+  }
 ): Promise<MessagingGateResult> {
   const provider = input.provider ?? "unipile";
   const credentialRef = `messaging://${provider}`;
@@ -1022,10 +1317,17 @@ async function gateMessagingSend(
     createdBy: seeded?.createdBy ?? null,
   };
 
-  const decision = await gateCapabilityExecution({
+  // The outer capability gate already said "the person reviews this" (an app
+  // or an agent's intent send, an automation). Tighten-only: the gate still
+  // runs here, so a person's "Never", a policy deny and a dry-run hold, and a
+  // `run` it would have allowed becomes a review. The synthesized row (no
+  // seeded `messaging://` tool) carries no approval concept on this path: the
+  // outer gate already judged the approved builtin verb that asked.
+  const gated = await gateCapabilityExecution({
     capabilityKind: "tool",
     capabilityId,
-    tool: toolRow,
+    tool:
+      input.mustPropose && !seeded ? { ...toolRow, approved: null } : toolRow,
     grantMetadata: input.grantMetadata ?? null,
     actorUserId: input.agentUserId ?? input.userId,
     agentUserId: input.agentUserId ?? null,
@@ -1034,6 +1336,20 @@ async function gateMessagingSend(
     playbookId: input.playbookId ?? null,
     issuer: "messaging.external.send",
   });
+  const decision: Awaited<ReturnType<typeof gateCapabilityExecution>> =
+    input.mustPropose && gated.decision === "run"
+      ? {
+          decision: "propose",
+          proposalType: "messaging.external.send",
+          data: {},
+          reasonCode: input.governanceReason ?? undefined,
+        }
+      : input.mustPropose &&
+          gated.decision === "propose" &&
+          !gated.reasonCode &&
+          input.governanceReason
+        ? { ...gated, reasonCode: input.governanceReason }
+        : gated;
 
   if (decision.decision === "deny") {
     // A SEEDED messaging tool row can be enabled (agent → enable request); a
@@ -1070,6 +1386,21 @@ async function gateMessagingSend(
     // proposal lands in the user's pod-wide review queue (workspace is an
     // optional lens, never a routing requirement).
     const proposalWorkspaceId = input.workspaceId ?? null;
+    // A send on a person's channel: the proposal IS the proposed message in
+    // that channel (founder decision 1) — `data.channelId` is what the
+    // channel's proposed-messages door reads.
+    const channel = input.sendChannel;
+    const entityId = channel ? channelPersonId(channel) : null;
+    const draftedBy: DraftedBy | null =
+      input.agentUserId || getRequestGrant()?.clientId
+        ? {
+            agentUserId: input.agentUserId ?? null,
+            appClientId: getRequestGrant()?.clientId ?? null,
+          }
+        : null;
+    const accountId = channel
+      ? input.accountId || (channelMeta(channel).accountId as string) || null
+      : null;
     const proposal = await createPendingProposal({
       userId: input.userId,
       // ATTRIBUTION IS ADDITIVE (routers/capture.ts:2745). Without an explicit
@@ -1080,12 +1411,26 @@ async function gateMessagingSend(
       createdBy: input.userId,
       workspaceId: proposalWorkspaceId,
       targetType: "messaging",
-      targetId: input.threadId,
+      targetId: channel?.id ?? input.threadId ?? "",
       proposalType: "messaging.external.send",
       data: {
         threadId: input.threadId,
         body: input.body,
         platform: provider,
+        ...(channel
+          ? {
+              channelId: channel.id,
+              entityId,
+              provider,
+              accountId,
+              draftedBy,
+              summary: `Send a ${humanizeToken(provider)} message to ${
+                channel.title ?? "them"
+              }`,
+            }
+          : {}),
+        ...(input.intentRequest ? { intentRequest: input.intentRequest } : {}),
+        ...(input.subject ? { subject: input.subject } : {}),
         capabilityKind: "tool",
         capabilityId,
         workspaceId: proposalWorkspaceId,
@@ -1095,7 +1440,12 @@ async function gateMessagingSend(
       },
       agentUserId: input.agentUserId ?? undefined,
       sessionId: input.sessionId ?? null,
-      notificationDescription: `Send message via ${provider}`,
+      ...(decision.decision === "propose" && decision.reasonCode
+        ? { governanceReason: decision.reasonCode }
+        : {}),
+      notificationDescription: channel
+        ? `Send a ${humanizeToken(provider)} message to ${channel.title ?? "them"}`
+        : `Send message via ${provider}`,
     });
     return { kind: "propose", proposalId: proposal.id };
   }

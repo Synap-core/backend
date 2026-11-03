@@ -1100,22 +1100,102 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       scope: "pod",
       intent: "send_message",
       description:
-        "Send a governed EXTERNAL message on a bound channel, on ANY provider (email / LinkedIn / Discord / Proton). Routes through the ONE governed send door (sendExternalMessage): an AGENT-initiated send with no approving grant is PROPOSED (never auto-sent), an owner send goes direct, and the client-comms firewall stays enforced. Provider-agnostic — the connector is resolved from the channel's externalSource and owns any reply-header derivation. WRITE: flows through the full capability gate. Returns { success, messageId?, proposed?, proposalId? } (proposed=true when routed to review).",
+        "Write to a person. The channel IS the conversation: give `to` (the person or company, an entity id) and the text, and the message goes into that person's channel on the tool (`provider`) and account (`accountId`, from messaging.accounts) — the channel is opened at the first draft if there is none yet. Or give `channelId` for a conversation you already have. Exactly one of to / channelId. A send that needs review (an agent with no grant, a pod app, an intent action, an automation) is filed as a messaging.external.send PROPOSAL on that channel: it shows as a proposed message there, and the person approves it; it is never sent before. Approved, it is sent once (LinkedIn: only to a 1st-degree connection, else it is refused with errorClass not_connected before anything is sent) and lands in the channel as an outbound message. An owner's own send goes direct. Only the person whose conversation it is can send in it. `subject` is shown to the person and kept on the message; tools that take a subject do not receive it yet. Never file a message as an outreach touch or a note. Returns { success, channelId, messageId?, externalMessageId?, proposed?, proposalId?, error?, errorClass? } (proposed=true when routed to review). Read the conversation first with channel.history.",
       parameters: {
         type: "object",
-        required: ["channelId", "content"],
+        required: [],
         properties: {
-          channelId: { type: "string", format: "uuid" },
-          content: { type: "string" },
+          to: {
+            type: "string",
+            format: "uuid",
+            description:
+              "The person or company (entity id) to write to. Their channel on the tool is used, or opened.",
+          },
+          channelId: {
+            type: "string",
+            format: "uuid",
+            description:
+              "An existing EXTERNAL channel (a conversation) to send on.",
+          },
+          provider: {
+            type: "string",
+            description:
+              "With `to`: the tool (linkedin, email…) when the person can be reached on several.",
+          },
+          accountId: {
+            type: "string",
+            description:
+              "The connected account to send from (messaging.accounts `externalId`). Defaults to the channel's account, else your only account on the tool.",
+          },
+          content: { type: "string", description: "The message text." },
+          text: {
+            type: "string",
+            description: "Same as content (the send_message intent's word).",
+          },
           subject: {
             type: "string",
             description:
-              "Optional reply subject. Advisory: the per-provider connector derives its own reply envelope; not threaded into the send today.",
+              "Optional subject (email). Shown to the person with the proposed message and kept on the sent message; the connector derives its own reply envelope, so the tool does not receive it yet.",
           },
           inReplyTo: {
             type: "string",
             description:
               "Optional parent Message-Id for threading. Advisory: derived by the connector; not threaded into the send today.",
+          },
+        },
+      },
+      // A pod app asks the intent with ONE input ({ to, text, subject? }) and
+      // picks one of the person's accounts (listed by messaging.accounts).
+      inputMap: {
+        params: {
+          to: "$.to",
+          content: "$.text",
+          subject: "$.subject",
+          accountId: "$account.id",
+          provider: "$account.provider",
+        },
+        accounts: {
+          verb: "messaging.accounts",
+          id: "externalId",
+          label: "displayName",
+          provider: "provider",
+        },
+      },
+    },
+    {
+      name: "messaging.accounts",
+      kind: "builtin",
+      scope: "pod",
+      metadata: { readOnly: true },
+      description:
+        "List the person's connected messaging accounts (LinkedIn, email, WhatsApp…): the accounts messaging.send can send from. READ, auto-runs. Returns { accounts: [{ externalId, displayName, provider, status }] }; pass an externalId to messaging.send as accountId.",
+      parameters: {
+        type: "object",
+        properties: {
+          provider: {
+            type: "string",
+            description: "Only the accounts on this tool (linkedin, email…).",
+          },
+        },
+      },
+    },
+    {
+      name: "channel.history",
+      kind: "builtin",
+      scope: "pod",
+      metadata: { readOnly: true },
+      description:
+        "Read the conversation with a person: each of their channels (one per tool and account) with its latest messages, newest first — direction inbound/outbound and delivery status — and the proposed messages waiting for approval. By person (entityId) or one channel (channelId), exactly one. The channel is the conversation: use this to check whether a message was sent or answered, never an outreach touch. READ, auto-runs. Returns { channels: [{ channelId, provider, chatId, messages: [{ id, content, at, direction, deliveryStatus, authorType }], proposed: [{ proposalId, text, createdAt, draftedBy, reviewUrl }] }] }.",
+      parameters: {
+        type: "object",
+        properties: {
+          entityId: { type: "string", format: "uuid" },
+          channelId: { type: "string", format: "uuid" },
+          limit: {
+            type: "integer",
+            minimum: 1,
+            maximum: 50,
+            description: "Messages per channel (default 20, max 50).",
           },
         },
       },

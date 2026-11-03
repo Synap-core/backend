@@ -15,7 +15,8 @@
  *
  * A proposed message is the pending `messaging.external.send` PROPOSAL filed
  * for the channel (`data.channelId`, founder decision 1), never a message row.
- * Until the send door writes `data.channelId` (lane D) there are none.
+ * The send door (`messaging.send`) files it with `data.channelId` = the
+ * channel and `targetId` = the same channel.
  */
 
 import {

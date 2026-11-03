@@ -8,6 +8,7 @@ import { assertApprovalTargetResolves } from "../../../services/capabilities/exe
 import {
   registerProposalExecutor,
   attachFailureMeta,
+  type ProposalExecutorArgs,
 } from "../execution-registry.js";
 import { reportApproved, dispatchExternalOnce } from "./shared.js";
 
@@ -37,6 +38,34 @@ export function registerMessagingExecutors(): void {
           { errorClass: targetFail.errorClass }
         );
       }
+      // A proposed message on a person's channel (channels wave, lane D):
+      // delivered ON the channel — a chat id when it has one, else the chat is
+      // started (1st-degree check first) and its id fills the channel.
+      if (typeof data.channelId === "string" && data.channelId) {
+        // WHO it goes to is the row's target, set at filing and never
+        // revisable. A data.channelId that moved off it is a recipient swap:
+        // refused, nothing sent.
+        if (data.channelId !== proposal.targetId) {
+          throw attachFailureMeta(
+            new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message:
+                "Couldn't apply — this message's conversation was changed after it was filed. Nothing was sent; file it again.",
+            }),
+            { errorClass: "conflict" }
+          );
+        }
+        return executeChannelSend({
+          proposal,
+          payload,
+          data,
+          channelId: proposal.targetId,
+          userId,
+          input,
+          deps,
+        });
+      }
+
       const threadId = data.threadId as string | undefined;
       const body = data.body as string | undefined;
       const platform = data.platform as string | undefined;
@@ -142,4 +171,119 @@ export function registerMessagingExecutors(): void {
       return { success: true };
     },
   });
+}
+
+/**
+ * Approve a proposed message on a person's channel. At most once
+ * (`dispatchExternalOnce`): a second approval finds the claim and sends
+ * nothing; a refusal before any send (not a connection, no account) releases
+ * the claim and keeps the proposal pending with its next action.
+ */
+async function executeChannelSend(args: {
+  proposal: ProposalExecutorArgs["proposal"];
+  payload: ProposalExecutorArgs["payload"];
+  data: Record<string, unknown>;
+  channelId: string;
+  userId: string;
+  input: ProposalExecutorArgs["input"];
+  deps: ProposalExecutorArgs["deps"];
+}) {
+  const { proposal, payload, data, userId, input, deps } = args;
+  const body = typeof data.body === "string" ? data.body : "";
+  if (!body) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "This proposed message has no text.",
+    });
+  }
+
+  const [alreadyDone] = await db
+    .select({ status: proposals.status })
+    .from(proposals)
+    .where(eq(proposals.id, input.proposalId));
+  if (alreadyDone?.status === ProposalStatus.APPROVED) {
+    return { success: true, alreadyApproved: true };
+  }
+
+  let sent: Awaited<ReturnType<typeof sendExternalMessage>> | null = null;
+  await dispatchExternalOnce(input.proposalId, async () => {
+    const result = await sendExternalMessage({
+      channelId: args.channelId,
+      threadId: null,
+      accountId: typeof data.accountId === "string" ? data.accountId : "",
+      body,
+      userId,
+      workspaceId: proposal.workspaceId ?? null,
+      alreadyApproved: true,
+      sessionId: proposal.sessionId ?? null,
+      proposalId: input.proposalId,
+      subject: typeof data.subject === "string" ? data.subject : null,
+      draftedBy:
+        data.draftedBy && typeof data.draftedBy === "object"
+          ? (data.draftedBy as {
+              agentUserId: string | null;
+              appClientId: string | null;
+            })
+          : null,
+    });
+    if (!result.success) {
+      logger.warn(
+        {
+          proposalId: input.proposalId,
+          channelId: args.channelId,
+          errorClass: result.errorClass,
+        },
+        "messaging.external.send: not sent on the channel"
+      );
+      return {
+        delivered: false,
+        reason: result.error,
+        errorClass: result.errorClass,
+        providerRef: result.providerRef,
+      };
+    }
+    sent = result;
+    return { delivered: true };
+  });
+  const done = sent as Awaited<ReturnType<typeof sendExternalMessage>> | null;
+
+  // The message may have landed in the channel that already held the chat:
+  // the proposal then points there.
+  const materializedPayload = {
+    ...payload,
+    ...(done?.channelId ? { channelId: done.channelId } : {}),
+    ...(done?.chatId ? { threadId: done.chatId } : {}),
+    sentResult: {
+      sentAt: new Date().toISOString(),
+      channelId: done?.channelId ?? args.channelId,
+      chatId: done?.chatId ?? null,
+      messageId: done?.messageId ?? null,
+      externalMessageId: done?.externalMessageId ?? null,
+      first: done?.first ?? false,
+      platform: data.platform ?? null,
+    },
+  } as unknown as typeof payload;
+
+  await transitionProposal(db, {
+    to: ProposalStatus.APPROVED,
+    set: {
+      data: materializedPayload,
+      ...(done?.channelId && done.channelId !== proposal.targetId
+        ? { targetId: done.channelId }
+        : {}),
+      reviewedBy: userId,
+      reviewedAt: new Date(),
+      updatedAt: new Date(),
+    },
+    where: eq(proposals.id, input.proposalId),
+  });
+
+  reportApproved(deps, proposal, input.proposalId);
+  deps.emitProposalReviewed(
+    input.proposalId,
+    proposal.workspaceId,
+    "approved",
+    userId
+  );
+  return { success: true };
 }

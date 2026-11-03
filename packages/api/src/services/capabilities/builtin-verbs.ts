@@ -54,6 +54,8 @@ import {
   MessageRole,
   MessageAuthorType,
   getActingAgentUserId,
+  messagingAccounts,
+  profiles,
 } from "@synap/database";
 import type { SQL } from "drizzle-orm";
 import type { Context } from "../../context.js";
@@ -140,6 +142,17 @@ export interface BuiltinVerbContext {
    * unchanged by it, and the capability gate never sees it.
    */
   automationRun?: { sessionId: string; agentUserId: string | null } | null;
+  /**
+   * SELF-GATED verbs only (`SELF_GATED_BUILTIN_VERBS`, execute-capability.ts):
+   * the outer capability gate decided this run needs the person's review and
+   * let it through so the verb's OWN gate files the review (a send's
+   * proposal on the person's channel). The verb must propose, never act.
+   */
+  mustPropose?: boolean;
+  /** Why the outer gate asked for review (with `mustPropose`). */
+  governanceReason?: string | null;
+  /** What a pod app asked (an intent action), for the approval screen. */
+  intentRequest?: Record<string, unknown> | null;
 }
 
 export type BuiltinVerbHandler = (
@@ -3081,114 +3094,419 @@ const channelIngestHandler: BuiltinVerbHandler = async (params, ctx) => {
 };
 
 /**
- * messaging.send — send a governed EXTERNAL message on a bound channel, on ANY
- * provider (email / LinkedIn / Discord / Proton …). This is the ONE builtin door
- * that lets a stored config (an automation/playbook `capability` node) emit an
- * outbound message that STILL passes the governance + client-comms firewall — it
- * routes through `sendExternalMessage`, the single governed send door, and never
- * reimplements or bypasses it.
+ * messaging.send — THE send door for apps, agents and automations (channels
+ * wave, lane D, design d00cd2ac §4). A message to a person goes into the
+ * person's CHANNEL — the channel is the conversation:
  *
- * PROVIDER-AGNOSTIC: it resolves the channel's `externalSource` and lets
- * `getMessagingConnector` (inside `sendExternalMessage`) pick the connector — no
- * provider is special-cased here. The connector owns any header derivation (e.g.
- * Proton reads reply headers from the DB); this verb only carries the body.
+ *   - `to` (a person or company the caller may read) + optional `provider` /
+ *     `accountId`: the person's channel on that tool and account is opened if
+ *     it does not exist yet (`openPersonChannel`, a pending channel with no
+ *     chat id until the first send);
+ *   - `channelId`: an EXTERNAL channel the caller names (a pending one too).
  *
- * GOVERNANCE: `sendExternalMessage` gates an AGENT-initiated send
- * (`agentUserId` present) through `gateMessagingSend`, which PROPOSES rather than
- * auto-sends when there's no approving grant. An owner send (no agentUserId) goes
- * direct. A `proposed` verdict is a normal, non-error outcome — surfaced as
- * `{ proposed: true, proposalId }` so a flow can see it went to review.
+ * Then the ONE governed send door (`sendExternalMessage`) runs: the grant
+ * check (the channel follows its person), the client-comms firewall, the
+ * worker ceiling, and the gate. A send that needs the person's review (an
+ * app, an agent with no grant, an intent action, an automation) is filed as a
+ * `messaging.external.send` proposal ON THE CHANNEL (`data.channelId`): the
+ * proposed message the channel shows. Approved, it is sent once and lands in
+ * the channel as an outbound message. An owner's own run sends directly.
+ *
+ * SELF-GATED: the outer capability gate lets this verb run when it would have
+ * proposed (`SELF_GATED_BUILTIN_VERBS`, execute-capability.ts) and passes
+ * `mustPropose`, so the review is the send's own proposal, never a generic
+ * capability-run proposal that would not show in the channel.
  */
 const messagingSendParams = z.object({
-  /** The bound EXTERNAL channel to send on. */
-  channelId: z.string().uuid(),
+  /** The person's EXTERNAL channel to send on. Exactly one of channelId / to. */
+  channelId: z.string().uuid().optional(),
+  /** The person or company (entity id) to write to. Exactly one of channelId / to. */
+  to: z.string().uuid().optional(),
+  /** The tool (`linkedin`, `email`…), when `to` names someone on several. */
+  provider: z.string().min(1).max(100).optional(),
+  /** The connected account to send from (`messaging.accounts` `externalId`). */
+  accountId: z.string().max(500).optional(),
   /** Message body. */
-  content: z.string().min(1).max(100000),
+  content: z.string().min(1).max(100000).optional(),
+  /** Alias of `content` (the send_message intent's word). */
+  text: z.string().min(1).max(100000).optional(),
   /**
    * OPTIONAL reply headers — part of the frozen caller contract. NOT threaded
-   * into the send today: `sendExternalMessage` carries only the body, and the
-   * per-provider connector derives its own reply envelope from the DB (Proton) or
-   * live thread (Stalwart/JMAP). Accepted here so a caller's config is stable and
-   * a future explicit-override path has a home; changing that would mean a shared
-   * connector-signature change, out of scope for this verb.
+   * into the send today: the per-provider connector derives its own reply
+   * envelope from the DB (Proton) or live thread (Stalwart/JMAP).
    */
   subject: z.string().max(2000).optional(),
   inReplyTo: z.string().max(1000).optional(),
 });
 
+/** The kinds a message can be addressed to (`to`): a person or a company. */
+const RECIPIENT_KINDS: ReadonlySet<string> = new Set(["person", "company"]);
+
+/** An entity's stored kind (its profile's slug, else its type), or null. */
+async function storedEntityKind(entityId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ slug: profiles.slug, type: entities.type })
+    .from(entities)
+    .leftJoin(profiles, eq(entities.profileId, profiles.id))
+    .where(eq(entities.id, entityId))
+    .limit(1);
+  return row?.slug ?? row?.type ?? null;
+}
+
+/** The provider a `to` send goes through, and the account it goes from. */
+async function resolveSendTarget(
+  userId: string,
+  provider: string | undefined,
+  accountId: string | undefined
+): Promise<{ provider: string; accountId: string | null }> {
+  const rows = await db
+    .select({
+      provider: messagingAccounts.provider,
+      externalId: messagingAccounts.externalId,
+      status: messagingAccounts.status,
+    })
+    .from(messagingAccounts)
+    .where(eq(messagingAccounts.userId, userId));
+  const lower = (v: string | null | undefined) => (v ?? "").toLowerCase();
+  if (accountId) {
+    const account = rows.find((r) => r.externalId === accountId);
+    if (!account) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "That account is not one of your connected accounts.",
+      });
+    }
+    if (provider && lower(provider) !== lower(account.provider)) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `That account is on ${account.provider}, not ${provider}.`,
+      });
+    }
+    return { provider: lower(account.provider), accountId: account.externalId };
+  }
+  const connected = rows.filter(
+    (r) =>
+      r.status === "connected" &&
+      (!provider || lower(r.provider) === lower(provider))
+  );
+  if (connected.length === 1) {
+    return {
+      provider: lower(connected[0]!.provider),
+      accountId: connected[0]!.externalId,
+    };
+  }
+  if (provider && connected.length === 0) {
+    // A tool with no per-person account (Discord's bot): the channel
+    // carries no account and the send door decides.
+    return { provider: lower(provider), accountId: null };
+  }
+  throw new TRPCError({
+    code: "BAD_REQUEST",
+    message:
+      connected.length === 0
+        ? "No messaging account is connected: connect one first."
+        : "You have several connected accounts: name the one to send from (accountId, see messaging.accounts).",
+  });
+}
+
 const messagingSendHandler: BuiltinVerbHandler = async (params, ctx) => {
   const input = messagingSendParams.parse(params);
-
-  // Resolve the channel: an EXTERNAL channel carries the routing identity the
-  // send door needs (`externalId` = the thread key; `externalSource` = the
-  // provider). Bound WHICH channel the run may target — the capability gate
-  // already governs THAT this operator/agent may run messaging.send.
-  const [channel] = await db
-    .select({
-      id: channels.id,
-      workspaceId: channels.workspaceId,
-      channelType: channels.channelType,
-      externalId: channels.externalId,
-      externalSource: channels.externalSource,
-    })
-    .from(channels)
-    .where(eq(channels.id, input.channelId))
-    .limit(1);
-  if (!channel) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Channel not found." });
-  }
-  if (
-    channel.workspaceId &&
-    ctx.workspaceId &&
-    channel.workspaceId !== ctx.workspaceId
-  ) {
+  const content = input.content ?? input.text;
+  if (!content) {
     throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Channel is not in the acting workspace.",
+      code: "BAD_REQUEST",
+      message: "messaging.send needs the message: content (or text).",
     });
   }
-  if (!channel.externalId) {
+  if (!!input.channelId === !!input.to) {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message:
-        "messaging.send requires an EXTERNAL channel with an externalId (a bound external conversation).",
+        "messaging.send needs exactly one of channelId (a conversation) or to (a person).",
     });
   }
+  // An automation's send is the automation's agent drafting: propose, never
+  // send as the owner (design §4).
+  const agentUserId = ctx.agentUserId ?? ctx.automationRun?.agentUserId ?? null;
+  const mustPropose = ctx.mustPropose === true || !!ctx.automationRun;
 
-  // THE one governed send door. It resolves the connector from the channel's
-  // externalSource, runs the governance + client-comms firewall INSIDE, mirrors
-  // the outbound to `messages`, and emits `{provider}.send.completed`. An agent
-  // send with no grant routes to a proposal (never auto-sent); an owner send goes
-  // direct. Lazy-imported to keep this module's load graph light (mirrors the
-  // other router/service imports in this file).
+  let channelId = input.channelId ?? null;
+  let accountId = input.accountId ?? null;
+  if (input.to) {
+    // Only a person or a company the caller may read (the key's grant
+    // included): one answer for absent, unreadable and any other kind, so an
+    // app cannot probe for ids.
+    const { readableRecipient } = await import("./intent-recipient.js");
+    const person = await readableRecipient(
+      { userId: ctx.userId, agentUserId },
+      input.to
+    );
+    const kind = person ? await storedEntityKind(person.id) : null;
+    if (!person || !kind || !RECIPIENT_KINDS.has(kind)) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Person not found." });
+    }
+    // The grant FIRST: a key that may not send here learns nothing more
+    // (not even which accounts exist) and leaves nothing behind.
+    const { messagingSendGrantDenial } =
+      await import("../../connectors/channel-send.js");
+    const denial = await messagingSendGrantDenial({
+      channel: {
+        workspaceId: null,
+        contextObjectType: "entity",
+        contextObjectId: person.id,
+      },
+      userId: ctx.userId,
+      agentUserId,
+      actingWorkspaceId: ctx.workspaceId,
+    });
+    if (denial) {
+      return { success: false, error: denial };
+    }
+    const target = await resolveSendTarget(
+      ctx.userId,
+      input.provider,
+      input.accountId
+    );
+    accountId = target.accountId;
+    // The person's channel exists from the first draft (founder decision 2).
+    const { openPersonChannel } =
+      await import("../connectors/inbound-recorder.js");
+    const opened = await openPersonChannel({
+      userId: ctx.userId,
+      entityId: person.id,
+      provider: target.provider,
+      accountId: target.accountId,
+    });
+    channelId = opened.channelId;
+  } else {
+    const [channel] = await db
+      .select({
+        id: channels.id,
+        workspaceId: channels.workspaceId,
+        channelType: channels.channelType,
+        externalSource: channels.externalSource,
+        metadata: channels.metadata,
+      })
+      .from(channels)
+      .where(eq(channels.id, input.channelId!))
+      .limit(1);
+    // Only a conversation the caller can read (the key's grant included).
+    const { canUserSeeChannel } =
+      await import("../../utils/channel-visibility.js");
+    if (!channel || !(await canUserSeeChannel(db, channel.id, ctx.userId))) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Channel not found." });
+    }
+    if (
+      channel.workspaceId &&
+      ctx.workspaceId &&
+      channel.workspaceId !== ctx.workspaceId
+    ) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Channel is not in the acting workspace.",
+      });
+    }
+    if (channel.channelType !== "external") {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "messaging.send sends on an EXTERNAL channel (a conversation with someone outside the pod).",
+      });
+    }
+    // The account: the channel's own, unless the caller names one; with
+    // neither, the person's only account on the tool. Two accounts and none
+    // named is refused NOW, not after the person approved.
+    const meta = (channel.metadata ?? {}) as Record<string, unknown>;
+    accountId =
+      accountId ?? (typeof meta.accountId === "string" ? meta.accountId : null);
+    if (!accountId && channel.externalSource) {
+      accountId = (
+        await resolveSendTarget(ctx.userId, channel.externalSource, undefined)
+      ).accountId;
+    }
+  }
+
+  // THE one governed send door. Lazy-imported to keep this module's load
+  // graph light (mirrors the other router/service imports in this file).
   const { sendExternalMessage } =
     await import("../../connectors/external-dispatch.js");
   const result = await sendExternalMessage({
-    threadId: channel.externalId,
-    // The connector resolves its own account (Discord/Proton ignore it; Unipile/
-    // Stalwart resolve per-call from DB/vault/env).
-    accountId: "",
-    body: input.content,
+    channelId,
+    accountId: accountId ?? "",
+    body: content,
     userId: ctx.userId,
-    // Thread the agent identity so an agent-initiated send is GATED (propose when
-    // ungranted); an owner run (no agentUserId) skips the gate byte-identically.
-    agentUserId: ctx.agentUserId ?? null,
+    agentUserId,
     workspaceId: ctx.workspaceId,
-    sessionId: ctx.sessionId ?? null,
+    sessionId: ctx.sessionId ?? ctx.automationRun?.sessionId ?? null,
+    mustPropose,
+    governanceReason: ctx.governanceReason ?? null,
+    intentRequest: ctx.intentRequest ?? null,
+    subject: input.subject ?? null,
   });
 
   return {
     success: result.success,
+    channelId: result.channelId ?? channelId,
     ...(result.messageId ? { messageId: result.messageId } : {}),
-    // A gated agent send routed to review is NOT a failure — surface it distinctly
-    // so a flow reads it as pending, not errored.
+    ...(result.externalMessageId
+      ? { externalMessageId: result.externalMessageId }
+      : {}),
+    // A send routed to review is NOT a failure — surface it distinctly so a
+    // flow reads it as pending, not errored.
     ...(result.proposed ? { proposed: true } : {}),
     ...(result.proposalId ? { proposalId: result.proposalId } : {}),
-    // A refused send says why ("Nothing ran …") and, for an agent on a
-    // not-enabled messaging tool, carries the enable request it filed.
     ...(result.error ? { error: result.error } : {}),
+    ...(result.errorClass ? { errorClass: result.errorClass } : {}),
     ...(result.enableProposal ? { enableProposal: result.enableProposal } : {}),
   };
+};
+
+/**
+ * messaging.accounts — READ: the person's connected messaging accounts (the
+ * accounts a `send_message` intent action can send from). The account source
+ * of `messaging.send`'s input map: one action per account.
+ */
+const messagingAccountsParams = z.object({
+  /** Only the accounts on this tool (`linkedin`, `email`…). */
+  provider: z.string().min(1).max(100).optional(),
+});
+
+const messagingAccountsHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = messagingAccountsParams.parse(params ?? {});
+  const rows = await db
+    .select({
+      externalId: messagingAccounts.externalId,
+      displayName: messagingAccounts.displayName,
+      provider: messagingAccounts.provider,
+      status: messagingAccounts.status,
+    })
+    .from(messagingAccounts)
+    .where(
+      and(
+        eq(messagingAccounts.userId, ctx.userId),
+        eq(messagingAccounts.status, "connected"),
+        input.provider
+          ? drizzleSql`lower(${messagingAccounts.provider}) = lower(${input.provider})`
+          : undefined
+      )
+    );
+  return {
+    accounts: rows.map((r) => ({
+      externalId: r.externalId,
+      displayName: r.displayName || r.provider,
+      provider: r.provider.toLowerCase(),
+      status: r.status,
+    })),
+  };
+};
+
+/**
+ * channel.history — READ: the conversation with a person, as the pod holds
+ * it: each of their channels' latest messages (`direction`, `deliveryStatus`)
+ * and the proposed messages waiting for approval. By person (`entityId`, every
+ * channel of theirs the caller can read) or by one `channelId`. For playbook
+ * checks ("was a message sent?", "did they reply?").
+ */
+const channelHistoryParams = z.object({
+  entityId: z.string().uuid().optional(),
+  channelId: z.string().uuid().optional(),
+  /** Messages per channel, newest first (max 50, default 20). */
+  limit: z.number().int().min(1).max(50).optional(),
+});
+
+const channelHistoryHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = channelHistoryParams.parse(params ?? {});
+  if (!!input.entityId === !!input.channelId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "channel.history needs exactly one of entityId or channelId.",
+    });
+  }
+  const limit = input.limit ?? 20;
+  const { listPersonChannels, listProposedMessages } =
+    await import("../channels/person-channels.js");
+  const { queryChannelMessages } =
+    await import("../../utils/query-channel-messages.js");
+
+  let channelIds: Array<{
+    id: string;
+    provider: string | null;
+    externalId: string | null;
+  }>;
+  if (input.entityId) {
+    const listed = await listPersonChannels({
+      userId: ctx.userId,
+      entityId: input.entityId,
+    });
+    if (listed.status === "not_found") {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Person not found." });
+    }
+    channelIds = listed.channels.map((c) => ({
+      id: c.id,
+      provider: c.provider,
+      externalId: c.externalId,
+    }));
+  } else {
+    const { canUserSeeChannel } =
+      await import("../../utils/channel-visibility.js");
+    if (!(await canUserSeeChannel(db, input.channelId!, ctx.userId))) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Channel not found." });
+    }
+    const [row] = await db
+      .select({
+        id: channels.id,
+        provider: channels.externalSource,
+        externalId: channels.externalId,
+      })
+      .from(channels)
+      .where(eq(channels.id, input.channelId!))
+      .limit(1);
+    channelIds = row ? [row] : [];
+  }
+
+  const out = [];
+  for (const ch of channelIds) {
+    // Admitted by the floor above (the person's channels / the channel read).
+    const rows = await queryChannelMessages<{
+      id: string;
+      content: string;
+      timestamp: Date;
+      direction: "inbound" | "outbound" | null;
+      deliveryStatus: string | null;
+      authorType: string;
+    }>(db, {
+      channelId: ch.id,
+      order: "desc",
+      limit,
+      columns: {
+        id: true,
+        content: true,
+        timestamp: true,
+        direction: true,
+        deliveryStatus: true,
+        authorType: true,
+      },
+    });
+    const proposed = await listProposedMessages({
+      userId: ctx.userId,
+      channelId: ch.id,
+    });
+    out.push({
+      channelId: ch.id,
+      provider: ch.provider,
+      chatId: ch.externalId,
+      messages: rows.map((m) => ({
+        id: m.id,
+        content: m.content,
+        at: new Date(m.timestamp).toISOString(),
+        direction: m.direction ?? null,
+        deliveryStatus: m.deliveryStatus ?? null,
+        authorType: m.authorType,
+      })),
+      proposed: proposed.status === "ok" ? proposed.proposed : [],
+    });
+  }
+  return { channels: out };
 };
 
 /**
@@ -4141,6 +4459,10 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   // ONE governed send door (sendExternalMessage). Agent sends propose; owner
   // sends go direct. Provider-agnostic (routes by the channel's externalSource).
   "messaging.send": messagingSendHandler,
+  // The person's connected accounts (messaging.send's account source) and the
+  // conversation with a person (messages + proposed messages).
+  "messaging.accounts": messagingAccountsHandler,
+  "channel.history": channelHistoryHandler,
   // Governance TIGHTEN recommender — mirror of the earned streak. Scans rejected
   // agent proposals and files governance.tighten_lane review items. No params.
   "governance.recommend_tighten": governanceRecommendTightenHandler,
@@ -4230,6 +4552,8 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "capability.rotate_key": capabilityRotateKeyParams,
   "channel.ingest": channelIngestParams,
   "messaging.send": messagingSendParams,
+  "messaging.accounts": messagingAccountsParams,
+  "channel.history": channelHistoryParams,
   "governance.recommend_tighten": governanceRecommendTightenParams,
   "governance.recommend_raise_ceiling": governanceRecommendRaiseCeilingParams,
   "governance.recommend_raise_proposal_cap":
@@ -4346,4 +4670,10 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // web.search — runs a search provider through ITS own gate (the same
   // shape as web.read naming a reader). Mutates nothing in the pod.
   "web.search",
+  // messaging.accounts — the person's connected accounts (labels and ids);
+  // the intent actions door runs it to list send_message's accounts.
+  "messaging.accounts",
+  // channel.history — a person's channels' messages and proposed messages,
+  // read through the channel floor and the proposal floor. Writes nothing.
+  "channel.history",
 ]);

@@ -2129,7 +2129,7 @@ A **channel** bound to a person (a `person` or `company` record) is THE conversa
 
 **Who reads it.** A channel bound to a person follows the person: whoever can read the record can read its channel. An app also needs `channel.read` in its requested access (the person consents to sharing their DMs), then reads the channels of the records its space reaches. A record you cannot read answers 404, never an empty list.
 
-**Write to a person: propose, never send.** File the message with `synap_run_capability` `messaging.send` `{to: <person's entity id>, text}`. It lands as a **proposed message**: a pending `messaging.external.send` proposal shown inline in the person's channel, which the person approves (then it is sent and becomes an outbound row) or rejects. Never create an outreach touch, a note or a task holding the text of a message. An agent never sends to a person on its own; the proposal is the only way into a person's channel. _(The single `messaging.send` door and proposals carrying `data.channelId` land with the channels send lane; until then the proposed-message list of a channel is empty.)_
+**Write to a person: propose, never send.** File the message with `synap_run_capability` `messaging.send` `{to: <person's entity id>, text}`. It lands as a **proposed message**: a pending `messaging.external.send` proposal shown inline in the person's channel, which the person approves (then it is sent and becomes an outbound row) or rejects. Never create an outreach touch, a note or a task holding the text of a message. An agent never sends to a person on its own; the proposal is the only way into a person's channel.
 
 **How a channel opens and binds.**
 
@@ -2137,7 +2137,7 @@ A **channel** bound to a person (a `person` or `company` record) is THE conversa
 - An inbound message binds to the person through their identity: email, `linkedinUrl`, or the provider's own id stored as an external id signal (`linkedin:<id>`, `instagram:<id>`, `discord:<id>`). Writing `linkedinProviderId` on a person registers that signal. A sender the pod cannot match stays unbound: the pod never creates a person for an unknown sender. _(Matching by provider id and the pending-channel adoption land with the channels inbound lane.)_
 - History from before the account was connected is imported **silently** and only for people already in the pod: no event fires, no automation runs on it. _(The history import lands with the channels inbound lane.)_
 
-**What happens on a message.** An inbound message emits `external_message.received` (with `isReply` when it answers an outbound one); an outbound one emits `external_message.sent`. Automations hang off those events (a reply moves a lead to `engaged`; a send sets the next follow-up), never off agent prose. _(`isReply` and `external_message.sent` land with the channels inbound and send lanes.)_
+**What happens on a message.** An inbound message emits `external_message.received` (with `isReply` when it answers an outbound one); an outbound one emits `external_message.sent`. Automations hang off those events (a reply moves a lead to `engaged`; a send sets the next follow-up), never off agent prose.
 
 ---
 

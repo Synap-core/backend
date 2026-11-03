@@ -161,6 +161,11 @@ describe("W6 read/resolve verbs — registry", () => {
       // authorization claim: the handler gates on `assertPodAdmin(ctx.userId)`
       // because it scans every user's automations pod-wide.
       "automation.recommend_health",
+      // channel.history (channels wave lane D, 2026-11-03): a person's
+      // channels' messages and proposed messages, read through the channel
+      // floor and the proposal floor; it writes nothing, and a playbook check
+      // ("did they reply?") must not stall behind a proposal.
+      "channel.history",
       "channel.resolve",
       // connector.health_check mutates NO graph data — it only emits deduped
       // operator reconnect notices — so it auto-runs unattended in a cron feed.
@@ -208,6 +213,10 @@ describe("W6 read/resolve verbs — registry", () => {
       // always proposes). Governance lives on the proposal it emits, not on
       // running interpret.
       "message.interpret",
+      // messaging.accounts (channels wave lane D): the caller's own connected
+      // accounts (labels and ids), the account source of send_message's input
+      // map. Reads only; the send itself (messaging.send) stays gated.
+      "messaging.accounts",
       // web.read reads a public page (or a read-only reader verb through its
       // own gate); it mutates nothing in the pod.
       "web.read",

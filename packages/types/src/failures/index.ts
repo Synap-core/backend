@@ -24,7 +24,8 @@
  * Every failure class, in the order the two classifiers reach for them.
  *
  * The first six are DISPATCH outcomes (`classifyDispatchFailure`); the rest
- * classify a proposal APPLY and dispatch never returns them. They share
+ * classify a proposal APPLY, or are the send door's own refusal before it sends
+ * (`not_connected`); dispatch never returns them. They share
  * one union deliberately — a second parallel enum would be a fork of the one
  * table both sides read.
  *
@@ -36,6 +37,9 @@
  *   kind_missing   — the kind it names is not available in the space it
  *                    was filed in (it may exist in another space)
  *   provider       — the other service refused it
+ *   not_connected  — the person is not connected to the recipient on that
+ *                    network (LinkedIn messages only 1st-degree connections)
+ *                                                               → CONNECT FIRST
  *   missing_field  — the request declared a parameter it never supplied → FILL
  *   validation     — the supplied values are not valid for the target
  *   conflict       — the target changed under the proposal (stale/duplicate)
@@ -55,6 +59,8 @@ export const FAILURE_ERROR_CLASSES = [
   // (`isFailureErrorClass` → false) and falls back to its generic wording,
   // which stays true.
   "kind_missing",
+  // Added 2026-11-03 (the channels send door), same rule as kind_missing.
+  "not_connected",
   "unknown",
 ] as const;
 

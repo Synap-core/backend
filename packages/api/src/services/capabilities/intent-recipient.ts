@@ -34,9 +34,15 @@
  *
  * READ FLOOR. The recipient is read through the entity's registered floor
  * under the request's key grant (`scopedDb`, `grantReadPredicate`): an app
- * names only someone its grant lets it read. The chats and the past touches
+ * names only someone its grant lets it read. The chats and the past sends
  * read next are the person's own rows; they decide an address and an order,
  * and are never returned to the app.
+ *
+ * PAST SENDS (channels wave, lane D). "The channel last used with them" is
+ * read from the messages the person SENT in a channel bound to the recipient
+ * (`direction` outbound), by the channel's tool. The channel is the
+ * conversation; CRM's outreach-touch kind is retired, and its touches already
+ * marked sent still count until the last ones are moved.
  */
 import {
   db,
@@ -44,8 +50,10 @@ import {
   eq,
   isNull,
   isNotNull,
+  max,
   channels,
   entities,
+  messages,
   relations,
   ChannelType,
 } from "@synap/database";
@@ -69,9 +77,9 @@ export interface RecipientConversation {
   at: number;
 }
 
-/** A message sent to the recipient before (a touch `sent_to` them). */
+/** A message sent to the recipient before: an outbound channel message (or a legacy touch `sent_to` them). */
 export interface RecipientTouch {
-  /** The channel it went through (`linkedin`, `email`…), lower-cased. */
+  /** The tool it went through (`linkedin`, `email`…), lower-cased. */
   channel: string;
   at: number;
 }
@@ -113,14 +121,15 @@ const timeOf = (v: unknown, fallback: Date | null): number => {
 const lower = (v: string | null | undefined) => (v ? v.toLowerCase() : null);
 
 /**
- * The recipient the caller may read, with what the pod knows of how to reach
- * them; null when the id names nothing the caller may read (absent, deleted,
- * outside the key's grant — one answer, so an app cannot probe for ids).
+ * The record `entityId` names, read through its floor under the request's key
+ * grant, or null (absent, deleted, outside the grant: one answer). The ONE
+ * read for "may this caller name this person": the intent run's recipient and
+ * the send door's grant check (`connectors/channel-send.ts`) both use it.
  */
-export async function loadRecipient(
+export async function readableRecipient(
   ctx: { userId: string; agentUserId: string | null },
   entityId: string
-): Promise<IntentRecipient | null> {
+): Promise<{ id: string; title: string | null; properties: unknown } | null> {
   if (!isUuid(entityId)) return null;
   const entity = await scopedDb(
     AccessContext.agent({ userId: ctx.userId, agentUserId: ctx.agentUserId })
@@ -132,6 +141,19 @@ export async function loadRecipient(
     columns: { id: true, title: true, properties: true },
     where: and(eq(entities.id, entityId), isNull(entities.deletedAt)),
   });
+  return entity ?? null;
+}
+
+/**
+ * The recipient the caller may read, with what the pod knows of how to reach
+ * them; null when the id names nothing the caller may read (absent, deleted,
+ * outside the key's grant — one answer, so an app cannot probe for ids).
+ */
+export async function loadRecipient(
+  ctx: { userId: string; agentUserId: string | null },
+  entityId: string
+): Promise<IntentRecipient | null> {
+  const entity = await readableRecipient(ctx, entityId);
   if (!entity) return null;
 
   const chats = await db
@@ -181,6 +203,28 @@ export async function loadRecipient(
       )
     );
   const touches: RecipientTouch[] = [];
+  // The messages the person sent them, per tool: the newest one counts.
+  const outbound = await db
+    .select({ provider: channels.externalSource, at: max(messages.timestamp) })
+    .from(messages)
+    .innerJoin(channels, eq(channels.id, messages.channelId))
+    .where(
+      and(
+        eq(channels.channelType, ChannelType.EXTERNAL),
+        eq(channels.contextObjectType, "entity"),
+        eq(channels.contextObjectId, entity.id),
+        eq(channels.userId, ctx.userId),
+        eq(messages.direction, "outbound"),
+        isNull(messages.deletedAt)
+      )
+    )
+    .groupBy(channels.externalSource);
+  for (const o of outbound) {
+    const channel = lower(o.provider);
+    if (!channel || !o.at) continue;
+    touches.push({ channel, at: timeOf(null, new Date(o.at)) });
+  }
+  // Legacy: CRM outreach touches already marked sent (retired kind).
   for (const t of sent) {
     const props = isRecord(t.properties) ? t.properties : {};
     const status = text(t.status) ?? text(props.status);
@@ -214,7 +258,8 @@ function onTarget(c: RecipientConversation, target: RecipientTarget): boolean {
 const providerKey = (provider: string) =>
   provider.toLowerCase().replace(/[^a-z0-9]/g, "");
 
-function linkedinSlug(url: unknown): string | null {
+/** The profile slug of a `linkedin.com/in/<slug>` URL, or null. */
+export function linkedinSlug(url: unknown): string | null {
   const raw = text(url);
   if (!raw) return null;
   const m = /linkedin\.com\/in\/([^/?#\s]+)/i.exec(raw);

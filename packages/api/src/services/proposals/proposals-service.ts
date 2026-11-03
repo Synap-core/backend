@@ -271,6 +271,28 @@ export type ProposalRevisionPatch = {
  * the field is pinned here. Nothing a reviser legitimately expresses requires
  * changing it: it is stamped once, by the door that created the proposal.
  */
+/**
+ * Fields a revise may not change for ONE proposal type (on top of
+ * `PROTECTED_ENVELOPE_FIELDS`). A `messaging.external.send` is a message to
+ * ONE person on ONE channel through ONE account (channels wave, lane D): the
+ * author agent may still revise the words, but a revise that repointed the
+ * channel would have the person approve a card for Marie and send to Bob.
+ * The approval executor also sends to the row's `targetId` and refuses a
+ * `data.channelId` that differs from it.
+ */
+export const PROTECTED_FIELDS_BY_TYPE: Readonly<
+  Record<string, readonly string[]>
+> = {
+  "messaging.external.send": [
+    "channelId",
+    "entityId",
+    "accountId",
+    "provider",
+    "platform",
+    "threadId",
+  ],
+};
+
 export const PROTECTED_ENVELOPE_FIELDS = [
   "sourceFile",
   "sourceId",
@@ -450,6 +472,11 @@ const PROTECTED_FIELD_REASON: Record<
 };
 
 export interface ComputeRevisedEnvelopeParams {
+  /**
+   * The row's `proposal_type`, when the caller has it: some types pin fields
+   * of their own (`PROTECTED_FIELDS_BY_TYPE`).
+   */
+  proposalType?: string | null;
   /** The stored `proposals.data` envelope (never mutated). */
   envelope: Record<string, unknown>;
   /** Optional field edits (see {@link ProposalRevisionPatch}). */
@@ -499,6 +526,21 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
       message:
         `A revision cannot set or alter \`${protectedField}\` — ` +
         `${PROTECTED_FIELD_REASON[protectedField]}.`,
+    });
+  }
+  // A proposal type's own pinned fields: WHO a message goes to is what the
+  // person approves, so a revise may change the words, never the recipient.
+  const typeProtected = params.proposalType
+    ? PROTECTED_FIELDS_BY_TYPE[params.proposalType]
+    : undefined;
+  const typeField =
+    patch && typeProtected
+      ? patchAltersProtectedField(patch, envelope, typeProtected)
+      : null;
+  if (typeField) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `A revision cannot change \`${typeField}\` — it names who the message goes to and through which account; the person approves that. Withdraw it and file a new one to write to someone else.`,
     });
   }
   // A skill's `kind` is what every review labels it (code, instruction), so
@@ -730,6 +772,7 @@ export async function mergeProposalRevision(
         revisionHistory: proposals.revisionHistory,
         subjectUserId: proposals.subjectUserId,
         rejectionReason: proposals.rejectionReason,
+        proposalType: proposals.proposalType,
       })
       .from(proposals)
       .where(eq(proposals.id, params.proposalId))
@@ -872,6 +915,7 @@ export async function mergeProposalRevision(
     }
 
     const { merged, revision } = computeRevisedEnvelope({
+      proposalType: existing.proposalType,
       envelope: reopening
         ? withoutFailureRecord(existing.data)
         : ((existing.data ?? {}) as Record<string, unknown>),

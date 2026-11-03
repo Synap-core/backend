@@ -8,6 +8,8 @@
  *    the sweep runs after it; an undated note does not count, a dated one
  *    does; a sent touch counts (by `sentDate`, else its move to `sent`), a
  *    drafted one does not;
+ *  - a message the person SENT in a channel bound to someone counts for them
+ *    (channels wave); a received one, or one in an unbound channel, does not;
  *  - the operator rebuild is the one writer that lowers and clears.
  *
  * NOT COVERED: the reactor wiring and the jobs worker that call this
@@ -20,6 +22,8 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { entities } from "../../schema/entities.js";
 import { relations } from "../../schema/relations.js";
 import { events } from "../../schema/events.js";
+import { channels } from "../../schema/channels.js";
+import { messages } from "../../schema/messages.js";
 import { noteInteraction } from "./note-interaction.js";
 import {
   collectInteractionEvidence,
@@ -93,6 +97,29 @@ async function moved(touch: string, to: string, at: Date) {
   );
 }
 
+async function channelWith(person: string | null) {
+  const cid = id();
+  await client.query(
+    `insert into channels (id, user_id, channel_type, context_object_type, context_object_id, external_source)
+     values ($1, 'u1', 'external', $2, $3, 'linkedin')`,
+    [cid, person ? "entity" : null, person]
+  );
+  return cid;
+}
+
+async function message(
+  channel: string,
+  direction: "inbound" | "outbound",
+  at: Date
+) {
+  const mid = id();
+  await client.query(
+    `insert into messages (id, channel_id, user_id, content, direction, timestamp) values ($1, $2, 'u1', 'hi', $3, $4)`,
+    [mid, channel, direction, at.toISOString()]
+  );
+  return mid;
+}
+
 async function row(eid: string) {
   const r = await client.query<{
     at: Date | null;
@@ -108,11 +135,11 @@ async function row(eid: string) {
 
 beforeEach(async () => {
   client = new PGlite();
-  for (const t of [entities, relations, events]) {
+  for (const t of [entities, relations, events, channels, messages]) {
     await client.exec(ddlFor(t as unknown as PgTable));
   }
   db = drizzle(client, {
-    schema: { entities, relations, events },
+    schema: { entities, relations, events, channels, messages },
   }) as unknown as Db;
 });
 
@@ -275,5 +302,33 @@ describe("the evidence rule (reactor, sweep, recompute)", () => {
     expect(
       await rebuildLastInteraction(db, { apply: false, now: NOW })
     ).toMatchObject({ set: 0, cleared: 0, unchanged: 1 });
+  });
+
+  it("a message sent in the person's channel counts for them; a received one, or an unbound channel, never", async () => {
+    const lead = await entity("person");
+    const other = await entity("person");
+    const leads = await channelWith(lead);
+    const unbound = await channelWith(null);
+    const sent = await message(leads, "outbound", ago(2));
+    const received = await message(leads, "inbound", ago(1));
+    const loose = await message(unbound, "outbound", ago(1));
+
+    await noteInteractionsFrom(
+      db,
+      { messageIds: [sent, received, loose] },
+      NOW
+    );
+    expect((await row(lead)).at?.toISOString()).toBe(ago(2).toISOString());
+    expect((await row(other)).at).toBeNull();
+
+    // The sweep and the rebuild read the same messages.
+    const swept = await collectInteractionEvidence(
+      db,
+      { recordDatesFrom: ago(7) },
+      NOW
+    );
+    expect(swept.filter((e) => e.entityId === lead)).toEqual([
+      { entityId: lead, at: ago(2), source: "outreach" },
+    ]);
   });
 });

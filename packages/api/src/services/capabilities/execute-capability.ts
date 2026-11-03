@@ -779,6 +779,37 @@ export async function executeCapability(input: {
   if (decision.decision === "dry-run") {
     return { kind: "dry-run", skillId: skillRow.id };
   }
+  // SELF-GATED builtin (channels wave, lane D): the review is the verb's OWN
+  // proposal, filed by its inner gate, never a generic capability-run here.
+  if (
+    decision.decision === "propose" &&
+    !input.suppressProposal &&
+    isSelfGatedBuiltin(skillRow)
+  ) {
+    const paramCheck = checkVerbParameters(skillRow, parameters);
+    if (paramCheck.status === "invalid") {
+      const message = describeParameterRepair(
+        verbId ?? skillRow.name,
+        paramCheck.repair
+      );
+      return { kind: "error", message, repair: paramCheck.repair };
+    }
+    return runSelfGatedBuiltin(skillRow, parameters, {
+      userId,
+      workspaceId,
+      agentUserId: input.agentUserId ?? null,
+      sessionId: input.sessionId ?? null,
+      automationRun: input.automationRun ?? null,
+      selfGate: {
+        mustPropose: true,
+        governanceReason: decision.reasonCode ?? null,
+        intentRequest: (input.intentRequest ?? null) as Record<
+          string,
+          unknown
+        > | null,
+      },
+    });
+  }
   if (decision.decision === "propose") {
     // VALIDATE BEFORE ASKING A HUMAN. A proposal is a request to SPEND an
     // approval; filing one whose arguments cannot work spends it on a call that
@@ -1025,6 +1056,82 @@ export async function executeCapability(input: {
     observability: input.observability ?? "full",
   });
   return { ...ran, ackState: "applied" as const, correlationId };
+}
+
+/**
+ * The SELF-GATED builtin verbs (channels wave, lane D; SECURITY REVIEW): a
+ * verb whose handler runs the SAME `gateCapabilityExecution` itself, one
+ * level down, on the real thing it does — so when the outer gate would file
+ * a generic `capability.run` proposal, the verb runs instead, told
+ * `mustPropose`, and its own gate files the specific proposal.
+ *
+ *   messaging.send → `sendExternalMessage` → `gateMessagingSend`: with
+ *   `mustPropose` it files a `messaging.external.send` proposal ON THE
+ *   PERSON'S CHANNEL (the proposed message the channel shows) and sends
+ *   nothing. A capability.run proposal would not show in the channel, and on
+ *   approval would have replayed the verb as the approver — an owner send.
+ *
+ * Tighten-only: only a `propose` verdict is handed down (a deny stays a deny,
+ * a dry-run a dry-run, an unattended run with no review surface is refused
+ * as before), and the handler's grant check still runs before anything. A
+ * verb listed here MUST pass `mustPropose` to a gate that files a proposal
+ * and never acts on it: `self-gated-builtin-verbs.tripwire.test.ts` drives
+ * each listed verb under `mustPropose` and fails if it does not.
+ */
+export const SELF_GATED_BUILTIN_VERBS: ReadonlySet<string> = new Set([
+  "messaging.send",
+]);
+
+function isSelfGatedBuiltin(skill: { kind: string; name: string }): boolean {
+  return skill.kind === "builtin" && SELF_GATED_BUILTIN_VERBS.has(skill.name);
+}
+
+/**
+ * Run a self-gated builtin past an outer `propose`: its result must be the
+ * proposal its own gate filed. A refusal (the key's grant) is a deny; a
+ * handler that did not propose is reported as an error, never as a run.
+ */
+async function runSelfGatedBuiltin(
+  skillRow: ResolvedSkillRow,
+  parameters: Record<string, unknown> | undefined,
+  ctx: Parameters<typeof runResolvedSkillInner>[2]
+): Promise<ExecuteCapabilityResult> {
+  const ran = await runResolvedSkillInner(skillRow, parameters, ctx);
+  if (ran.kind !== "run") return ran;
+  const result = (ran.result ?? {}) as {
+    proposalId?: unknown;
+    error?: unknown;
+    success?: unknown;
+  };
+  if (isProposedEnvelope(ran.result) && typeof result.proposalId === "string") {
+    return {
+      kind: "proposed",
+      proposalId: result.proposalId,
+      reviewUrl: openLink(result.proposalId),
+      ackState: "proposed",
+    };
+  }
+  // The verb's own refusal (the key's grant does not reach this send). It is a
+  // failed run on the ONE failure channel, classed `permission`: enabling the
+  // capability would not lift it, so it carries no enable-link.
+  if (result.success === false) {
+    return {
+      kind: "error",
+      errorClass: "permission",
+      message:
+        typeof result.error === "string"
+          ? result.error
+          : "Nothing was sent: the send was refused.",
+    };
+  }
+  logger.error(
+    { skillId: skillRow.id, verb: skillRow.name },
+    "self-gated builtin did not file its own proposal under mustPropose"
+  );
+  return {
+    kind: "error",
+    message: `"${skillRow.name}" did not file its review; nothing is reported as done.`,
+  };
 }
 
 /** Anything carrying the live `skills.metadata` bag the declaration lives in. */
@@ -1707,6 +1814,16 @@ async function runResolvedSkillInner(
     provenance?: { agentUserId?: string | null; proposalId?: string | null };
     /** The automation run this is a step of (builtin handlers only; never a gate). */
     automationRun?: AutomationRunContext | null;
+    /**
+     * A SELF-GATED builtin run past an outer `propose` verdict: the handler
+     * must file its own review (`mustPropose`). Set ONLY by
+     * `runSelfGatedBuiltin`; never a gate input.
+     */
+    selfGate?: {
+      mustPropose: true;
+      governanceReason: string | null;
+      intentRequest: Record<string, unknown> | null;
+    } | null;
   }
 ): Promise<
   | { kind: "run"; skillId: string; result: unknown }
@@ -1791,6 +1908,13 @@ async function runResolvedSkillInner(
       agentUserId: ctx.agentUserId ?? null,
       sessionId: ctx.sessionId ?? null,
       ...(ctx.automationRun ? { automationRun: ctx.automationRun } : {}),
+      ...(ctx.selfGate
+        ? {
+            mustPropose: true,
+            governanceReason: ctx.selfGate.governanceReason,
+            intentRequest: ctx.selfGate.intentRequest,
+          }
+        : {}),
       // The verb identity is known HERE and was previously dropped at the
       // handler boundary. Handlers that create durable objects need it to stamp
       // provenance (channel origin), so it is threaded rather than re-derived.

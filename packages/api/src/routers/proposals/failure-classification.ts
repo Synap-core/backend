@@ -540,6 +540,8 @@ export const CLASS_TRPC_CODE: Record<FailureErrorClass, TRPCError["code"]> = {
   target_missing: "NOT_FOUND",
   kind_missing: "NOT_FOUND",
   provider: "BAD_GATEWAY",
+  // Refused before anything was sent: the recipient is not a connection.
+  not_connected: "PRECONDITION_FAILED",
   unknown: "INTERNAL_SERVER_ERROR",
 };
 
