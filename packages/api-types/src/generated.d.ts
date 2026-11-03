@@ -33216,6 +33216,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				canEdit: boolean;
 				content: string;
+				contentOmitted?: "binary" | undefined;
 				document: {
 					agentUserId: string | null;
 					contentRevision: number;
@@ -33245,6 +33246,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 				};
 				editReason: "not_member" | "not_owner" | "pod_shared_read" | "view_only" | null;
+				fileUrlPath?: string | undefined;
 				format: "raw" | "readable";
 			};
 		}>;
