@@ -94,6 +94,10 @@ const EXCLUDE_PARAMS = new Set([
   "type",
   "slugOrPublicId",
   "userId",
+  // diagnose.ts GET /errors/:errorId: `server_faults.error_id` is a `text`
+  // primary key (schema/server-faults.ts), so a non-uuid reaches no uuid column;
+  // an id with nothing stored is a 404 (server-faults-read-door.test.ts).
+  "errorId",
 ]);
 
 /**

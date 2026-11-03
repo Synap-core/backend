@@ -12,7 +12,9 @@ x-backend-env: &backend-env
   # reported null, so the CP offered — and ordered — the release already
   # running (2026-10-19).
   BACKEND_VERSION: ${BACKEND_VERSION:-}
-  DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
+  # `application_name` names the connection in pg_stat_activity, one per
+  # service (pg-connection-budget.test.sh F); backend-canary sets its own.
+  DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap?application_name=backend
   # Postgres connection budget: every service's pool cap must sum under the
   # postgres service's max_connections (packages/database/src/client-pg.ts
   # lists the consumers; deploy/__tests__/pg-connection-budget.test.sh sums them).
@@ -296,6 +298,7 @@ services:
     restart: "no"
     environment:
       <<: *backend-env
+      DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap?application_name=backend-canary
       # The canary only has to boot and pass a health check, but it runs
       # BESIDE the production backend on the same Postgres. With the shared
       # 50 + 10 it could take 60 more connections mid-update and starve Kratos.
@@ -343,7 +346,7 @@ services:
       # in production. When unset, the bridge keeps its existing local-dev
       # compatibility behavior.
       BRIDGE_SECRET: ${BRIDGE_SECRET:-}
-      DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
+      DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap?application_name=realtime
       # Realtime imports @synap/database, so it gets its own pool (default 50
       # otherwise). Its queries are short and bursty: the socket handshake's
       # key/session lookups, room grant checks, and debounced Yjs document
@@ -442,7 +445,7 @@ services:
         GIT_SHA: "${GIT_SHA:-}"
     working_dir: /app
     environment:
-      DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
+      DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap?application_name=backend-migrate
       # migrate.js opens max 1; the seed scripts import @synap/database's
       # pool (default 50). They run one query after another, so 5 is plenty.
       DB_POOL_SIZE: "5"
@@ -742,7 +745,7 @@ services:
     environment:
       # max_conns caps Ory's pool (unset it is 2 x CPUs); it counts against
       # the postgres max_connections budget (client-pg.ts).
-      DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/kratos?sslmode=disable&max_conns=10&max_idle_conns=5
+      DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/kratos?sslmode=disable&max_conns=10&max_idle_conns=5&application_name=kratos-migrate
     command: migrate sql -e --yes
     depends_on:
       postgres:
@@ -758,7 +761,7 @@ services:
       # Login and whoami need a connection: an explicit cap of Ory's pool
       # (unset it is 2 x CPUs), counted in the postgres max_connections
       # budget (client-pg.ts), so the other services cannot crowd it out.
-      DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/kratos?sslmode=disable&max_conns=10&max_idle_conns=5
+      DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/kratos?sslmode=disable&max_conns=10&max_idle_conns=5&application_name=kratos
       # Each is an ORDERED comma list `new,old` (Ory parses a non-JSON value of
       # an array key as CSV): the first signs/encrypts, all verify/decrypt. A
       # single value is a one-item list. Cipher items are exactly 32 chars.

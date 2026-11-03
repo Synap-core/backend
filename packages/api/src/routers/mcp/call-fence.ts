@@ -17,7 +17,9 @@
  *     MCP, so its WRITE is refused; left alone it falls to the human governance
  *     path and DEFAULT_AUTO_APPROVE verbs execute with no proposal. Reads pass.
  *  2. W1 grant fence (`access/grant-door-fence.ts`): a scoped key may only call
- *     READ tools whose reads its grant bounds. Writes pass to the gate.
+ *     READ tools whose reads its grant bounds. A classified write passes to the
+ *     gate; one that returns rows passes its read door; an unclassified tool is
+ *     refused (`MCP_WRITE_TOOL_DOORS`, R1).
  *
  * An unknown tool name is refused by neither: the SDK's own error names it.
  * `resources/read` gets the same fence (`resourceReadRefusal`): it was never

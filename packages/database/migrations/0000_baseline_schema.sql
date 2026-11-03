@@ -248,6 +248,7 @@ CREATE TABLE IF NOT EXISTS "device_auth_requests" (
   "machine_user_id"       text REFERENCES "users"("id") ON DELETE SET NULL,
   "machine_name"          text,
   "computer_belongs_to"   text,
+  "agent_write_mode"      text,
   "minted_key_id"         uuid,
   "failed_code_attempts"  integer NOT NULL DEFAULT 0,
   "poll_interval_seconds" integer NOT NULL DEFAULT 5,
@@ -1535,6 +1536,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS "channels_object_room_lens_uniq"
     AND "status" = 'active'
     AND "context_object_type" IN ('document', 'entity');
 
+-- 0393: ONE pending external channel (no provider chat id yet) per person,
+-- tool and account — a channel with a person exists from the first draft.
+CREATE UNIQUE INDEX IF NOT EXISTS "channels_external_pending_uniq"
+  ON "channels" ("user_id", "external_source", "context_object_id",
+                 (COALESCE("metadata" ->> 'accountId', '')))
+  WHERE "channel_type" = 'external'
+    AND "external_id" IS NULL
+    AND "status" = 'active';
+
 -- ─── 19. channel_connections + channel_link_tokens ───────────────────────────
 
 CREATE TABLE IF NOT EXISTS "channel_connections" (
@@ -1860,7 +1870,14 @@ CREATE TABLE IF NOT EXISTS "messages" (
   "edited_at"        timestamp with time zone,
   "ephemeral"        boolean NOT NULL DEFAULT false,
   "resolved_at"      timestamp with time zone,
-  "resolved_by"      text
+  "resolved_by"      text,
+  -- 0393: a channel with a person — direction, delivery, provider message id.
+  "direction"        text CONSTRAINT "messages_direction_check"
+                       CHECK ("direction" IS NULL OR "direction" IN ('inbound', 'outbound')),
+  "delivery_status"  text CONSTRAINT "messages_delivery_status_check"
+                       CHECK ("delivery_status" IS NULL
+                         OR "delivery_status" IN ('sent', 'delivered', 'read', 'failed')),
+  "external_message_id" text
 );
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
 ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "channel_id" uuid REFERENCES "channels"("id") ON DELETE CASCADE;
@@ -1882,6 +1899,9 @@ ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "edited_at" timestamp with time 
 ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "ephemeral" boolean NOT NULL DEFAULT false;
 ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "resolved_at" timestamp with time zone;
 ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "resolved_by" text;
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "direction" text;
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "delivery_status" text;
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "external_message_id" text;
 
 -- 0279: the unresolved-comment count per object room.
 CREATE INDEX IF NOT EXISTS "messages_open_comment_root_idx"
@@ -1925,6 +1945,12 @@ CREATE INDEX IF NOT EXISTS "messages_channel_timestamp_idx"
 -- tamper includes UUID id so legitimate rows never collide intentionally.
 CREATE UNIQUE INDEX IF NOT EXISTS "messages_hash_unique"
   ON "messages" ("hash");
+
+-- 0393: one row per provider message per channel (an echo of a message the
+-- pod sent never doubles it).
+CREATE UNIQUE INDEX IF NOT EXISTS "messages_channel_ext_msg_uniq"
+  ON "messages" ("channel_id", "external_message_id")
+  WHERE "external_message_id" IS NOT NULL;
 
 -- Add FK from channel_context_items → messages (now that messages table exists)
 DO $$ BEGIN
@@ -2193,6 +2219,12 @@ CREATE INDEX IF NOT EXISTS "proposals_correlation_id_idx"
 CREATE UNIQUE INDEX IF NOT EXISTS "proposals_agent_dedup_uq"
   ON "proposals" ("dedup_hash")
   WHERE status = 'pending' AND agent_user_id IS NOT NULL AND dedup_hash IS NOT NULL;
+
+-- 0393: a channel's pending proposed messages (data->>'channelId').
+CREATE INDEX IF NOT EXISTS "proposals_msg_channel_idx"
+  ON "proposals" (("data" ->> 'channelId'))
+  WHERE "proposal_type" = 'messaging.external.send'
+    AND "status" = 'pending';
 
 -- (idx_proposals_session_id moved next to the proposals.session_id ALTER
 --  after the focus_sessions section below.)
@@ -5648,3 +5680,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS "uq_status_wait_episode_open"
 
 CREATE INDEX IF NOT EXISTS "idx_status_wait_episode_subject"
   ON "status_wait_episode" ("subject_type", "subject_id", "opened_at");
+
+-- 0392: the exact cause of each 5xx, keyed by the client's errorId — mirrors
+-- 0392_server_faults.sql.
+CREATE TABLE IF NOT EXISTS "server_faults" (
+  "error_id"      text        PRIMARY KEY,
+  "occurred_at"   timestamptz NOT NULL DEFAULT now(),
+  "door"          text        NOT NULL,
+  "method"        text,
+  "path"          text,
+  "status"        integer     NOT NULL,
+  "user_id"       text,
+  "agent_user_id" text,
+  "error_name"    text        NOT NULL,
+  "message"       text        NOT NULL,
+  "stack"         text,
+  "causes"        jsonb       NOT NULL DEFAULT '[]'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS "idx_server_faults_occurred_at"
+  ON "server_faults" ("occurred_at");

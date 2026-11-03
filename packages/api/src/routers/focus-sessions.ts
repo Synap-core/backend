@@ -1587,6 +1587,37 @@ export const focusSessionsRouter = router({
     }),
 
   /**
+   * EVERY devbox job a session ran (its test runs), each its newest run: the
+   * session page's "Show all" (its packet carries the first few). The SAME
+   * reader as the packet's `devboxJobs` (`readSessionDevboxJobs`, uncapped),
+   * under the same read floor as `get`. A failed read throws, never `[]`.
+   */
+  devboxJobs: protectedProcedure
+    .input(z.object({ sessionId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const roster = rosterReadFor(ctx);
+      const userId = requireUserId(ctx.userId);
+      const row = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, input.sessionId),
+          sessionReadableWhere({ userId, roster })
+        ),
+      });
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+      const { readSessionDevboxJobs } =
+        await import("../services/focus-sessions/session-notify.js");
+      const read = await readSessionDevboxJobs(db, { userId, roster }, row, {
+        uncapped: true,
+      });
+      return { status: "ok" as const, ...read };
+    }),
+
+  /**
    * Get a single focus session by ID.
    * Scoped to the authenticated user — cannot read another user's session.
    *

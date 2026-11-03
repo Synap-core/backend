@@ -37,6 +37,13 @@ import type {
 
 const logger = createLogger({ module: "hub-protocol-client" });
 
+/**
+ * At most this many calls per batched request. The pod refuses a batch over
+ * `TRPC_MAX_BATCH_SIZE` (200, packages/api middleware/trpc-refusal.ts) whole;
+ * this package does not depend on @synap/api, so the cap is a literal.
+ */
+const POD_MAX_BATCH_SIZE = 50;
+
 // ============================================================================
 // CLIENT CLASS
 // ============================================================================
@@ -78,6 +85,7 @@ export class HubProtocolClient {
       links: [
         httpBatchLink({
           url: `${this.config.dataPodUrl}/trpc`,
+          maxItems: POD_MAX_BATCH_SIZE,
           headers: async () => {
             const headers: Record<string, string> = {
               "Content-Type": "application/json",
@@ -117,6 +125,7 @@ export class HubProtocolClient {
       links: [
         httpBatchLink({
           url: `${this.config.dataPodUrl}/trpc`,
+          maxItems: POD_MAX_BATCH_SIZE,
           headers: async () => {
             const headers: Record<string, string> = {
               "Content-Type": "application/json",

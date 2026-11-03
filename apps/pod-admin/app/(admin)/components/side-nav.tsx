@@ -33,6 +33,7 @@ import {
   AppWindow,
   Bot,
   Boxes,
+  Bug,
   Building2,
   Database,
   Grid3x3,
@@ -112,6 +113,7 @@ const NAV_ICONS: Record<NavIconName, LucideIcon> = {
   HardDrive,
   RefreshCw,
   ScrollText,
+  Bug,
   SlidersHorizontal,
 };
 

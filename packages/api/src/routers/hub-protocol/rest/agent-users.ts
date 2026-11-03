@@ -31,6 +31,10 @@ import {
 } from "../../../services/agent-dispatch/agent-assignment.js";
 import { checkLinkEndpointVisible } from "./link-endpoint-visibility.js";
 import { TRPCError } from "@trpc/server";
+import {
+  AGENT_WRITE_MODE_CHOICES,
+  agentPostureOfWriteMode,
+} from "@synap-core/types/agents";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -541,8 +545,11 @@ export function registerAgentUsersRoutes(app: HubHono): void {
    * GET /agent-users/:agentUserId/governance
    *
    * The read half of the PATCH below — `{ posture, writesRequireProposal,
-   * rules, configured }` (`readAgentGovernance`). `synap init` reads it before
-   * it writes, so re-running init never overwrites a posture someone chose.
+   * rules, configured }` (`readAgentGovernance`), plus `writeModeChoices`:
+   * the ONE list a client offers (`AGENT_WRITE_MODE_CHOICES`), each with the
+   * `posture` to PATCH (null = follow the pod default). `synap init` reads it
+   * before it writes, so re-running init never overwrites a posture someone
+   * chose.
    * Same authz as the PATCH: the agent's creator or a pod admin.
    */
   app.get("/agent-users/:agentUserId/governance", async (c) => {
@@ -578,7 +585,17 @@ export function registerAgentUsersRoutes(app: HubHono): void {
       }
       const state = await readAgentGovernance({ db, agentUserId });
       if (!state) return c.json({ error: "Agent not found" }, 404);
-      return c.json({ agentUserId, ...state });
+      // The choices a client offers before it PATCHes `{ posture }`, from the
+      // pod (`AGENT_WRITE_MODE_CHOICES`): an older CLI shows what this pod
+      // knows, and never keeps a list of its own.
+      return c.json({
+        agentUserId,
+        ...state,
+        writeModeChoices: AGENT_WRITE_MODE_CHOICES.map((choice) => ({
+          ...choice,
+          posture: agentPostureOfWriteMode(choice.mode),
+        })),
+      });
     } catch (err) {
       logger.error(
         { err, agentUserId },

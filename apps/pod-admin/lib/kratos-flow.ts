@@ -176,17 +176,10 @@ export const FLOW_RESET_ERROR_IDS = new Set<string>([
 // Session
 // ---------------------------------------------------------------------------
 
+/** This browser's active session, or null (`probeWhoami` says why). */
 export async function whoami(): Promise<KratosSession | null> {
-  try {
-    const res = await fetch(`${kratosPublic()}/sessions/whoami`, {
-      credentials: "include",
-      headers: { Accept: "application/json" },
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as KratosSession;
-  } catch {
-    return null;
-  }
+  const probe = await probeWhoami();
+  return probe.ok ? probe.session : null;
 }
 
 /** Browser whoami, with the failure classified (429 / 5xx+network / 401,403). */
@@ -239,9 +232,38 @@ export async function browserSessionState(): Promise<
 // Login flow
 // ---------------------------------------------------------------------------
 
-export async function createLoginFlow(
+/** How long to wait before asking whoami again after it did not answer. */
+const WHOAMI_RECHECK_MS = 1000;
+/** A longer `Retry-After` is not waited out here: /login counts it down. */
+const WHOAMI_RECHECK_MAX_S = 5;
+/** The pause /login counts down when a 429 named no `Retry-After`. */
+const DEFAULT_PAUSE_S = 5;
+
+/**
+ * When to ask whoami again, in ms, or null to answer at once: a 429 says how
+ * long it lasts (`Retry-After`, exposed by the pod's CORS), and asking again
+ * inside that window only spends another request.
+ */
+function recheckDelayMs(failure: WhoamiFailure): number | null {
+  if (failure.kind !== "rate_limited" || !failure.retryAfterSeconds) {
+    return WHOAMI_RECHECK_MS;
+  }
+  return failure.retryAfterSeconds <= WHOAMI_RECHECK_MAX_S
+    ? failure.retryAfterSeconds * 1000
+    : null;
+}
+
+export function createLoginFlow(
   returnTo?: string,
-  opts: { refresh?: boolean; retryDelayMs?: number; _retried?: boolean } = {}
+  opts: { refresh?: boolean } = {}
+): Promise<CreateLoginFlowResult> {
+  return startLoginFlow(returnTo, opts, false);
+}
+
+async function startLoginFlow(
+  returnTo: string | undefined,
+  opts: { refresh?: boolean },
+  retried: boolean
 ): Promise<CreateLoginFlowResult> {
   // `return_to` brings the browser back here after a federated (oidc) round-trip
   // through the Control Plane. It must be an allowed Kratos return URL — the
@@ -281,14 +303,17 @@ export async function createLoginFlow(
   // short pause before giving up.
   let probe = await probeWhoami();
   if (!probe.ok && probe.failure.kind !== "signed_out") {
-    await new Promise((r) => setTimeout(r, opts.retryDelayMs ?? 1000));
-    probe = await probeWhoami();
+    const delay = recheckDelayMs(probe.failure);
+    if (delay !== null) {
+      await new Promise((r) => setTimeout(r, delay));
+      probe = await probeWhoami();
+    }
   }
   if (probe.ok) return { existingSession: probe.session };
-  if (probe.failure.kind === "signed_out" && !opts._retried) {
+  if (probe.failure.kind === "signed_out" && !retried) {
     // Refusal and whoami disagree: the refusal was stale. Ask for the flow
     // again so the person just gets the sign-in form.
-    return createLoginFlow(returnTo, { ...opts, _retried: true });
+    return startLoginFlow(returnTo, opts, true);
   }
   return { unconfirmed: probe.failure };
 }
@@ -345,29 +370,55 @@ export const COOKIE_SCOPE_COPY = {
   body: "Reload the page. If you land here again, this pod's sign-in isn't shared with the address you opened it at — open the console from the pod's own address, or ask whoever runs the pod.",
 } as const;
 
+/** The seconds /login waits before it lets a rate-limited person continue. */
+export function pauseSeconds(failure: WhoamiFailure): number {
+  if (failure.kind !== "rate_limited") return 0;
+  return failure.retryAfterSeconds ?? DEFAULT_PAUSE_S;
+}
+
 /**
  * What /login says when Kratos refused a flow for a session that whoami would
  * not confirm. Calm notes with one act each; never the raw status.
+ *
+ * `action`: `sign_in` starts a fresh login flow (Kratos `refresh=true`, which
+ * a stale session cannot refuse); `continue` goes back to `returnTo`;
+ * `retry` reloads the page. A reload of a signed-out browser met the same
+ * refusal again, so it looped on "Your pod didn't answer".
  */
-export function unconfirmedSessionCopy(failure: WhoamiFailure): {
+export function unconfirmedSessionCopy(
+  failure: WhoamiFailure,
+  secondsLeft = pauseSeconds(failure)
+): {
   title: string;
   body: string;
   actionLabel: string;
+  action: "sign_in" | "continue" | "retry";
 } {
-  if (failure.kind === "rate_limited") {
-    const wait = failure.retryAfterSeconds;
+  if (failure.kind === "signed_out") {
     return {
-      title: "You're signed in. The pod asked for a short pause.",
-      body: wait
-        ? `Wait ${wait} s, then continue. Nothing was signed out.`
-        : "Wait a few seconds, then continue. Nothing was signed out.",
+      title: "Sign in again",
+      body: "This browser's sign-in to the console has ended.",
+      actionLabel: "Sign in",
+      action: "sign_in",
+    };
+  }
+  if (failure.kind === "rate_limited") {
+    const n = Math.max(0, Math.ceil(secondsLeft));
+    return {
+      title: "You're still signed in",
+      body:
+        n > 0
+          ? `The pod asked for a short pause. You can continue in ${n} ${n === 1 ? "second" : "seconds"}.`
+          : "The pod asked for a short pause. You can continue now.",
       actionLabel: "Continue",
+      action: "continue",
     };
   }
   return {
     title: "Your pod didn't answer just now",
     body: "The pod is busy or restarting, so the console couldn't check your sign-in. Nothing was signed out. Try again in a few seconds.",
     actionLabel: "Try again",
+    action: "retry",
   };
 }
 

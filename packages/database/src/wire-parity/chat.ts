@@ -24,6 +24,8 @@ import type {
 import type {
   MessageAuthorType,
   MessageCategory,
+  MessageDeliveryStatus,
+  MessageDirection,
   MessageRole,
   MessageRow,
   messages,
@@ -55,6 +57,12 @@ export const _messageAuthorType: Equal<
 export const _messageCategory: Equal<MessageCategory, Wire.MessageCategory> =
   true;
 export const _routedSource: Equal<RoutedSource, Wire.RoutedSource> = true;
+export const _messageDirection: Equal<MessageDirection, Wire.MessageDirection> =
+  true;
+export const _messageDeliveryStatus: Equal<
+  MessageDeliveryStatus,
+  Wire.MessageDeliveryStatus
+> = true;
 export const _contextObjectType: Equal<
   ChannelContextObjectType,
   Wire.ChannelContextObjectType

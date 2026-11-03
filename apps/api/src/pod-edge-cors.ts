@@ -4,9 +4,9 @@
  * REAL middleware chain (`index.ts` boots a server on import and cannot be
  * imported by a test). Mount order in `index.ts` is unchanged:
  *
- *   publicDoorTransport → podEdgeCorsMiddleware → requestSizeLimit →
- *   rateLimitMiddleware → secureHeaders → sanitizeErrorEgress →
- *   httpCacheHeadersMiddleware → logger → routes
+ *   trpcEnvelope (/trpc only) → publicDoorTransport → podEdgeCorsMiddleware →
+ *   requestSizeLimit → rateLimitMiddleware → secureHeaders →
+ *   sanitizeErrorEgress → httpCacheHeadersMiddleware → logger → routes
  *
  * The only behavioural change is the first line of `podEdgeCorsMiddleware`:
  * a credentialless public-door path is skipped (see `public-door-transport.ts`).
@@ -89,9 +89,12 @@ export const podEdgeCorsMiddleware: MiddlewareHandler = async (c, next) => {
       // joined it when the tRPC door started resolving focus sessions.
       "Content-Type, Authorization, Cookie, X-Workspace-Id, X-Project-Id, X-Session-Id, X-Session-Token"
     );
+    // Retry-After and the draft-7 RateLimit pair (hono-rate-limiter) say how
+    // long a 429 lasts. Unexposed, a console on another origin cannot read
+    // them and retried inside the window.
     c.header(
       "Access-Control-Expose-Headers",
-      "Content-Length, X-Request-Id, Set-Cookie"
+      "Content-Length, X-Request-Id, Set-Cookie, Retry-After, RateLimit, RateLimit-Policy"
     );
     c.header("Access-Control-Max-Age", "86400");
   }

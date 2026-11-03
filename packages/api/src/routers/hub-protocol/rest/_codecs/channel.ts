@@ -75,3 +75,58 @@ export const TriggerAiRequestSchema = z
       .describe("Entity to inject as context for the AI response."),
   })
   .openapi("TriggerAiRequest");
+
+// ── A person's channels (channels wave, design d00cd2ac §6) ────────────────
+
+/** The last message of a channel with a person (content ≤ 200 chars). */
+export const PodChannelLastMessageSchema = z
+  .object({
+    content: z.string(),
+    at: z.string(),
+    direction: z.enum(["inbound", "outbound"]).nullable(),
+  })
+  .openapi("PodChannelLastMessage");
+
+/** One conversation with a person: GET /entities/:id/channels. */
+export const PodChannelSchema = z
+  .object({
+    id: z.string(),
+    provider: z.string().nullable(),
+    accountId: z.string().nullable(),
+    title: z.string().nullable(),
+    externalId: z
+      .string()
+      .nullable()
+      .describe(
+        "The tool's chat id; null until the first send opens the chat."
+      ),
+    participant: z.object({
+      name: z.string().nullable(),
+      externalId: z.string().nullable(),
+    }),
+    lastMessage: PodChannelLastMessageSchema.nullable(),
+    unread: z.number().int(),
+    pendingProposals: z.number().int(),
+  })
+  .openapi("PodChannel");
+
+export const EntityChannelsResponseSchema = z
+  .object({ channels: z.array(PodChannelSchema) })
+  .openapi("EntityChannelsResponse");
+
+/** A proposed message: the pending send proposal filed for the channel. */
+export const ProposedMessageSchema = z
+  .object({
+    proposalId: z.string(),
+    text: z.string(),
+    createdAt: z.string(),
+    draftedBy: z
+      .object({ agentUserId: z.string(), name: z.string().nullable() })
+      .nullable(),
+    reviewUrl: z.string(),
+  })
+  .openapi("ProposedMessage");
+
+export const ProposedMessagesResponseSchema = z
+  .object({ proposed: z.array(ProposedMessageSchema) })
+  .openapi("ProposedMessagesResponse");

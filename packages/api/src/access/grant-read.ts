@@ -90,7 +90,7 @@ import {
   views,
   widgetDefinitions,
 } from "@synap/database/schema";
-import { and, sql, type SQL } from "drizzle-orm";
+import { and, eq, exists, sql, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import {
   allowedQualifiers,
@@ -120,9 +120,11 @@ export interface GrantReadSpec {
   /**
    * What a space-restricted grant reaches BEYOND `workspaceColumn ∈ spaces`:
    * the rows a member of those spaces sees through a role (ORed with the
-   * workspace match). Unset = the workspace match alone.
+   * workspace match). Unset = the workspace match alone. `scope` is the
+   * grant scope being read, for a row that follows ANOTHER table's grant
+   * (a channel follows its person).
    */
-  spaceReach?: (spaces: string[]) => SQL;
+  spaceReach?: (spaces: string[], scope: GrantScope) => SQL;
 }
 
 /** `subject` is folded to the grammar spelling (`relationDef` → `relation_def`). */
@@ -205,7 +207,17 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
   // No id column (PK session × client key): a grant on the SESSION reads its
   // runners — who is attached to it — and nothing else.
   [sessionRunners, spec("session", {}, { idColumn: sessionRunners.sessionId })],
-  [channels, spec("channel", channels)],
+  [
+    channels,
+    spec("channel", channels, {
+      // A channel bound to a person FOLLOWS the person (channels wave,
+      // founder decision 3, 2026-11-02): a key granted `channel.read` in a
+      // space reads the channel of every record that SAME scope reads there,
+      // as a document follows its entity. The channel's own stamp is not
+      // enough: a person's external channel is pod-wide (no space).
+      spaceReach: (_spaces, scope) => channelFollowsEntityWhere(scope),
+    }),
+  ],
   [events, spec("event", events)],
   [automations, spec("automation", automations)],
   [automationRuns, spec("automation", automationRuns)],
@@ -275,6 +287,32 @@ export function sharedRoleRowsInSpacesWhere(spaces: readonly string[]): SQL {
   )!;
 }
 
+/**
+ * The channels bound to a live entity this scope reads (`contextObjectType =
+ * 'entity'`), through the entity's OWN grant clause for the same scope: the
+ * kinds it names, the spaces and their reach (a pod-wide person roled in a
+ * granted space), its project and object pins. A scope that reads no entity
+ * reaches no channel this way.
+ */
+export function channelFollowsEntityWhere(scope: GrantScope): SQL {
+  const entityClause = grantReadClause(entities, scope);
+  return and(
+    eq(channels.contextObjectType, "entity"),
+    exists(
+      db
+        .select({ one: sql`1` })
+        .from(entities)
+        .where(
+          and(
+            eq(entities.id, channels.contextObjectId),
+            isNull(entities.deletedAt),
+            entityClause
+          )
+        )
+    )
+  )!;
+}
+
 const NONE = sql`false`;
 
 function kindClause(
@@ -324,7 +362,9 @@ export function grantReadClause(
     if (!s.workspaceColumn) return NONE;
     const spaces = [...grant.workspaceIds];
     const stamped = inArray(s.workspaceColumn, spaces);
-    parts.push(s.spaceReach ? or(stamped, s.spaceReach(spaces)) : stamped);
+    parts.push(
+      s.spaceReach ? or(stamped, s.spaceReach(spaces, grant)) : stamped
+    );
   }
   if (grant.entityIds) {
     if (!s.idColumn) return NONE;

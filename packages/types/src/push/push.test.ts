@@ -24,6 +24,8 @@ import {
   type PushDeviceRow,
   PUSH_CAP_EXEMPT_CATEGORIES,
   PUSH_MUTED_SESSIONS_MAX,
+  PUSH_MUTE_EXEMPT_CATEGORIES,
+  PUSH_NEEDS_YOU_CATEGORIES,
   isSessionPushMuted,
   pushCapExemptTypes,
 } from "./index.js";
@@ -518,6 +520,34 @@ describe("the delivered digest and the session mute (plan d679e92c C9)", () => {
     expect(kept).toHaveLength(PUSH_MUTED_SESSIONS_MAX);
     expect(kept.at(-1)).toBe(many.at(-1));
     expect(kept[0]).toBe(many[5]);
+  });
+
+  it("the mute exempts exactly what needs the person, derived from the rules, plus sent-by-you", () => {
+    // Every type that classifies as "an agent is blocked on you" is exempt...
+    for (const [type, rule] of Object.entries(PUSH_TYPE_RULES)) {
+      const category = classifyPush(type, { proposalBlocksOpenSession: true });
+      if (
+        rule === "blocking-ask" ||
+        rule === "decision-blocking" ||
+        rule === "blocking-proposal"
+      ) {
+        expect(PUSH_MUTE_EXEMPT_CATEGORIES).toContain(category);
+      }
+    }
+    expect([...PUSH_MUTE_EXEMPT_CATEGORIES].sort()).toEqual(
+      [...PUSH_NEEDS_YOU_CATEGORIES, "sent-by-you"].sort()
+    );
+    // ...and progress, digests and breakage stay muted.
+    for (const c of [
+      "late-or-stuck",
+      "morning-brief",
+      "delivered-digest",
+      "mention",
+      "work-broke",
+      "system",
+    ] as const) {
+      expect(PUSH_MUTE_EXEMPT_CATEGORIES).not.toContain(c);
+    }
   });
 
   it("isSessionPushMuted reads the list, case-insensitively; nothing muted is never muted", () => {

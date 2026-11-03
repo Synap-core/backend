@@ -60,6 +60,8 @@ const pending = (over: Partial<PendingViewProps> = {}) =>
       onComputerName={noop}
       agents={["claude-code"]}
       onAgents={noop}
+      agentWriteMode="pod-default"
+      onAgentWriteMode={noop}
       busy={null}
       error={null}
       onApprove={noop}
@@ -84,7 +86,7 @@ describe("pending", () => {
     expect(t).toContain("ABCD-EFGH");
     expect(t).toContain("devbox · linux · created 2m ago");
     expect(t).toContain("Claude Code on devbox");
-    expect(t).toContain("every change waits for your approval");
+    expect(t).toContain("every change it makes itself waits for your approval");
     expect(t).toContain("Key valid 90 days");
     expect(t).toContain("Approve");
     expect(t).toContain("This wasn't me");
@@ -109,13 +111,67 @@ describe("pending", () => {
     );
     expect(t).toContain("Reconnect devbox");
     expect(t).toContain("Keeps its agents, history and rules");
+    expect(t).toContain(
+      "anything still running there with an old key stops and must reconnect"
+    );
     expect(t).toContain("Add as a new computer");
+  });
+
+  it("names the agents a reconnect keeps, and when each was last seen", () => {
+    const t = text(
+      pending({
+        request: {
+          ...REQUEST,
+          reusableComputers: [
+            {
+              id: "m-1",
+              name: "devbox",
+              createdAt: REQUEST.createdAt,
+              agents: [
+                {
+                  id: "a-1",
+                  name: "Claude Code",
+                  lastSeenAt: REQUEST.createdAt,
+                },
+              ],
+            },
+          ],
+        },
+        reuseId: "m-1",
+      })
+    );
+    expect(t).toContain(
+      "Keeps Claude Code (seen 2m ago), its history and rules"
+    );
   });
 
   it("omits the agents section when the terminal asked for none", () => {
     expect(
       text(pending({ request: { ...REQUEST, agents: [] } }))
     ).not.toContain("Agents it will set up");
+  });
+
+  it("asks how the agents' changes land: normal shown and recommended, the others one click away", () => {
+    const t = text(pending());
+    expect(t).toContain("How its agents' changes land");
+    expect(t).toContain("Normal (recommended)");
+    expect(t).toContain(
+      "Creates and edits apply directly with Undo; deletions and structural changes ask you."
+    );
+    expect(t).not.toContain("Ask first");
+    expect(t).toContain("Show all 3");
+  });
+
+  it("shows a chosen non-recommended mode without opening anything", () => {
+    const t = text(pending({ agentWriteMode: "ask-first" }));
+    expect(t).toContain("Ask first");
+    expect(t).toContain("Every change asks you first.");
+  });
+
+  it("omits the changes question when no agent is kept", () => {
+    expect(text(pending({ agents: [] }))).not.toContain(
+      "How its agents' changes land"
+    );
   });
 
   it("renames agents with the computer", () => {

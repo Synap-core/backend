@@ -20,7 +20,9 @@
  * the approver); its key is a `user_pat` linked to the approver, so it reads
  * what the approver may read and writes as itself, governed. Each agent is
  * "<type> on <computer>" (`users.host_user_id`). Posture FIRST, then keys
- * (the `ensureAppAgent` precedent): a new computer or agent starts ask-first.
+ * (the `ensureAppAgent` precedent): a new computer starts ask-first; its agents
+ * take the write mode the approver chose (`AGENT_WRITE_MODE_CHOICES`, normal
+ * recommended), or ask-first when the approving surface sent none.
  * Reach: the "AI — read & propose" preset; an agent's grant is clipped to the
  * computer's (`clipHostedAgentGrants`, inside `attachGrantsOrRevoke`).
  */
@@ -60,7 +62,12 @@ import {
   GRANT_PRESETS,
   aiDefaultCapabilities,
 } from "@synap-core/types/grants";
-import { MACHINE_AGENT_TYPE, agentDisplayName } from "@synap-core/types/agents";
+import {
+  MACHINE_AGENT_TYPE,
+  agentDisplayName,
+  agentPostureOfWriteMode,
+  type AgentWriteMode,
+} from "@synap-core/types/agents";
 import type { ComputerBelongsTo } from "@synap-core/types/computers";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import { auditLog } from "../utils/audit-log.js";
@@ -292,6 +299,12 @@ export interface DeviceRequestView {
     createdAt: Date;
     /** Whose computer it is today (0388); the approval may change it. */
     belongsTo: ComputerBelongsTo | null;
+    /**
+     * The agents it hosts (`users.host_user_id`), kept by a reconnect, each
+     * with the newest `last_used_at` over its keys: what the person checks
+     * before a reconnect replaces those keys.
+     */
+    agents: Array<{ id: string; name: string; lastSeenAt: Date | null }>;
   }>;
   /** Days the keys will last (computer override → pod default → 90). */
   keyTtlDays: number;
@@ -348,6 +361,40 @@ export async function getDeviceRequest(args: {
         drizzleSql`${users.agentMetadata}->>'hostname' = ${row.hostname}`
       )
     );
+  const hosted = reusable.length
+    ? await db
+        .select({
+          id: users.id,
+          name: users.name,
+          agentType: users.agentType,
+          hostUserId: users.hostUserId,
+        })
+        .from(users)
+        .where(
+          inArray(
+            users.hostUserId,
+            reusable.map((r) => r.id)
+          )
+        )
+    : [];
+  const hostedKeys = hosted.length
+    ? await db
+        .select({ userId: apiKeys.userId, lastUsedAt: apiKeys.lastUsedAt })
+        .from(apiKeys)
+        .where(
+          inArray(
+            apiKeys.userId,
+            hosted.map((a) => a.id)
+          )
+        )
+    : [];
+  const lastSeenOf = (userId: string): Date | null =>
+    hostedKeys
+      .filter((k) => k.userId === userId && k.lastUsedAt)
+      .reduce<Date | null>(
+        (max, k) => (!max || k.lastUsedAt! > max ? k.lastUsedAt : max),
+        null
+      );
   return {
     requestId: row.id,
     status: viewStatus(row),
@@ -371,6 +418,15 @@ export async function getDeviceRequest(args: {
       name: r.name ?? row.hostname,
       createdAt: r.createdAt,
       belongsTo: r.belongsTo ?? null,
+      agents: hosted
+        .filter((a) => a.hostUserId === r.id)
+        .map((a) => ({
+          id: a.id,
+          name:
+            a.name?.trim() || (a.agentType ? agentTypeName(a.agentType) : ""),
+          lastSeenAt: lastSeenOf(a.id),
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
     })),
     keyTtlDays: await resolveMachineKeyTtlDays(null),
     accessName: AI_PRESET_NAME,
@@ -394,6 +450,13 @@ export interface DecideDeviceRequestInput {
    * person's own; a reused one keeps what it was.
    */
   belongsTo?: ComputerBelongsTo | null;
+  /**
+   * Approve: how the approved agents' writes land (0394), one of
+   * `AGENT_WRITE_MODE_CHOICES`. Applied to every approved agent, a reused one
+   * too (the person chose it now, signed in). Omitted: a new agent starts
+   * ask-first and one already set keeps its own.
+   */
+  agentWriteMode?: AgentWriteMode | null;
 }
 
 export async function decideDeviceRequest(
@@ -534,6 +597,7 @@ export async function decideDeviceRequest(
       machineUserId: input.reuseComputerId ?? null,
       machineName: input.computerName?.trim() || null,
       computerBelongsTo: input.belongsTo ?? null,
+      agentWriteMode: input.agentWriteMode ?? null,
     })
     .where(
       and(
@@ -560,6 +624,7 @@ export async function decideDeviceRequest(
       agents,
       reuseComputerId: input.reuseComputerId ?? null,
       belongsTo: input.belongsTo ?? null,
+      agentWriteMode: input.agentWriteMode ?? null,
       requesterIp: row.requesterIp,
     },
   });
@@ -767,6 +832,25 @@ export async function setMachineKeyTtlDays(keyTtlDays: number): Promise<void> {
   }
 }
 
+/**
+ * An approved agent's posture, before its key exists: the write mode the
+ * approver chose, applied as is (`agentPostureOfWriteMode`: normal = no
+ * override, the pod default acts); none chosen = {@link postureFirst}.
+ */
+async function agentPostureAtConnect(
+  agentUserId: string,
+  by: string,
+  mode: AgentWriteMode | null
+): Promise<void> {
+  if (!mode) return postureFirst(agentUserId, by);
+  await applyAgentPosture({
+    db,
+    agentUserId,
+    posture: agentPostureOfWriteMode(mode),
+    createdBy: by,
+  });
+}
+
 /** A NEW principal starts ask-first; one the person already set keeps theirs. */
 async function postureFirst(agentUserId: string, by: string): Promise<void> {
   const state = await readAgentGovernance({ db, agentUserId });
@@ -919,7 +1003,7 @@ async function mintForApprovedRequest(
       keyDescription: `Hub Protocol key for ${agentDisplayName({ name: label, hostName: computerName })}`,
       // Posture FIRST — before this agent's key exists.
       onAgentUserResolved: (agentUserId) =>
-        postureFirst(agentUserId, approverId),
+        agentPostureAtConnect(agentUserId, approverId, row.agentWriteMode),
     });
     if (provisioned.alreadyValid)
       throw new Error("Agent key provisioning returned no fresh key");

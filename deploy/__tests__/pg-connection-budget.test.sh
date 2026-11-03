@@ -26,7 +26,10 @@
 #      The sum is the worst case: every service at once, the profile-gated
 #      canary and the one-shot migrators included.
 #   E. the env names compose sets are the names the code reads
-#      (client-pg.ts DB_POOL_SIZE, events/src/boss.ts PGBOSS_POOL_SIZE -> max).
+#      (client-pg.ts DB_POOL_SIZE via pool-size.ts, events/src/boss.ts
+#      PGBOSS_POOL_SIZE -> max).
+#   F. every consumer's URL names it: `application_name=<service>`, so
+#      pg_stat_activity says which service holds each connection.
 #   Non-vacuity: the known consumers are all found, and the ${...} resolver
 #   still reads a literal sample.
 #
@@ -40,12 +43,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$SCRIPT_DIR/../.."
 COMPOSE_FILE="${PG_BUDGET_COMPOSE_FILE:-$ROOT/deploy/docker-compose.yml}"
 CLIENT_PG="${PG_BUDGET_CLIENT_PG:-$ROOT/packages/database/src/client-pg.ts}"
+POOL_SIZE_TS="${PG_BUDGET_POOL_SIZE_TS:-$ROOT/packages/database/src/pool-size.ts}"
 BOSS_TS="${PG_BUDGET_BOSS_TS:-$ROOT/packages/events/src/boss.ts}"
 
-python3 - "$COMPOSE_FILE" "$CLIENT_PG" "$BOSS_TS" <<'PY'
+python3 - "$COMPOSE_FILE" "$CLIENT_PG" "$BOSS_TS" "$POOL_SIZE_TS" <<'PY'
 import re, sys, yaml
 from urllib.parse import urlsplit, parse_qs
-compose, client_pg, boss_ts = sys.argv[1:4]
+compose, client_pg, boss_ts, pool_size_ts = sys.argv[1:5]
 svcs = (yaml.safe_load(open(compose)) or {}).get("services") or {}
 fails = []
 
@@ -81,10 +85,13 @@ def pos_int(v):
 def is_backend_image(s):
     return "synap-core/backend" in str(s.get("image", "")) or "SYNAP_IMAGE_BACKEND" in str(s.get("image", ""))
 
-code_default = re.search(r'process\.env\.DB_POOL_SIZE \|\| "(\d+)"', open(client_pg).read())
+pool_src = open(pool_size_ts).read()
+code_default = re.search(r"DEFAULT_DB_POOL_SIZE = (\d+);", pool_src)
 code_default = int(code_default.group(1)) if code_default else None
-if code_default is None:
-    fails.append("E: client-pg.ts no longer reads process.env.DB_POOL_SIZE || \"<n>\"")
+if code_default is None or "raw = process.env.DB_POOL_SIZE" not in pool_src:
+    fails.append("E: pool-size.ts no longer reads process.env.DB_POOL_SIZE with a DEFAULT_DB_POOL_SIZE = <n>")
+if not re.search(r"\bmax:\s*DB_POOL_SIZE\b", open(client_pg).read()) or "dbPoolSize()" not in open(client_pg).read():
+    fails.append("E: client-pg.ts no longer passes dbPoolSize() to postgres.js as `max`")
 boss_src = open(boss_ts).read()
 if "process.env.PGBOSS_POOL_SIZE" not in boss_src or not re.search(r"\bmax:\s*pgBossPoolSize\(\)", boss_src):
     fails.append("E: events/src/boss.ts no longer passes PGBOSS_POOL_SIZE to pg-boss as `max`")
@@ -99,6 +106,9 @@ for name, s in sorted(svcs.items()):
         if u.hostname != "postgres":
             continue
         consumers.add(name)
+        app = (parse_qs(u.query).get("application_name") or [""])[0]
+        if app != name:
+            fails.append(f"F: {name}'s {k} names itself {app!r} in application_name, not {name!r}")
         if k == "DSN":
             q = parse_qs(u.query)
             mc = pos_int((q.get("max_conns") or [""])[0])
