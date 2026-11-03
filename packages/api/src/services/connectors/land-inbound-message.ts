@@ -120,8 +120,8 @@ export async function landInboundMessage(
   //    an existing entity via the strong `email` signal, unlinked-fallback to the
   //    email itself (same call + posture as the Mailgun inbound route).
   let externalId = args.externalId;
+  let strongMatchEntityId: string | null = null;
   if (!externalId && args.participantEmail) {
-    let strongMatchEntityId: string | null = null;
     try {
       const resolution = await resolveIdentity(db, {
         userId: args.userId,
@@ -174,6 +174,9 @@ export async function landInboundMessage(
       ? { externalCoordinates: args.externalCoordinates }
       : {}),
     ...(args.sentAt !== undefined ? { sentAt: args.sentAt } : {}),
+    // A strong email match IS the person: bind the channel to them, not only
+    // key it by their id (channels design §2).
+    ...(strongMatchEntityId ? { contextEntityId: strongMatchEntityId } : {}),
   });
 
   return { ...result, deduped: !result.recorded };

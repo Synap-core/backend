@@ -40,16 +40,18 @@ import {
   UNIPILE_NOT_CONFIGURED_MESSAGE,
 } from "../../../connectors/unipile-connection.js";
 import { sendExternalMessage } from "../../../connectors/external-dispatch.js";
-import { pullToImport } from "../../../services/connector-import-bridge.js";
 import { landInboundMessage } from "../../../services/connectors/land-inbound-message.js";
-import { recordChannelOrigin } from "../../../services/channels/channel-origin.js";
+import { getBoss } from "@synap/events";
 import {
-  ErrorSchema,
-  uuidQueryParam,
-  trpcErrorResponses,
-} from "./_codecs/_openapi.js";
+  MESSAGING_HISTORY_IMPORT_QUEUE,
+  type MessagingHistoryImportJobData,
+} from "@synap/jobs/workers/messaging-sync.js";
+import { recordChannelOrigin } from "../../../services/channels/channel-origin.js";
+import { ErrorSchema, trpcErrorResponses } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import { logger, type HubHono, type HubVariables } from "./_shared.js";
+import { isUuid } from "@synap-core/types/property-render";
+import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import type { Context } from "hono";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
 import { jsonGoverned } from "../proposal-response.js";
@@ -602,6 +604,24 @@ export function registerMessagingRoutes(app: HubHono): void {
                     .enum(["not-installed", "no-key", "unreadable"])
                     .nullable(),
                   message: z.string().nullable(),
+                  // Whether inbound messages reach the pod: the last
+                  // `messaging-webhook-ensure` check (hourly, after boot, on
+                  // a new account). checkedAt null = not checked yet.
+                  webhook: z
+                    .object({
+                      state: z.enum([
+                        "registered",
+                        "missing",
+                        "missing-events",
+                        "no-public-url",
+                        "unknown",
+                      ]),
+                      url: z.string().nullable(),
+                      missingEvents: z.array(z.string()),
+                      error: z.string().nullable(),
+                      checkedAt: z.string().nullable(),
+                    })
+                    .openapi("MessagingWebhookState"),
                 })
                 .openapi("MessagingServiceConfig"),
             },
@@ -610,6 +630,127 @@ export function registerMessagingRoutes(app: HubHono): void {
       },
     }),
     async (c) => c.json(await describeMessagingService(), 200)
+  );
+
+  // ── POST /messaging/accounts/:accountId/import-history ────────────────────
+  // The owner asks for an account's past conversations with the people
+  // already in the pod, landed silently in their channels (the
+  // `messaging-history-import` job; it also runs when an account connects).
+  // Owner only: an agent or app key is refused — the import reads every
+  // conversation of the person's account.
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/messaging/accounts/{accountId}/import-history",
+      tags: ["Messaging"],
+      summary:
+        "Import an account's history with people already in the pod (owner only)",
+      request: {
+        params: z.object({ accountId: z.string() }),
+      },
+      responses: {
+        ...trpcErrorResponses,
+        202: {
+          description: "Import queued",
+          content: {
+            "application/json": {
+              schema: z
+                .object({
+                  queued: z.boolean(),
+                  accountId: z.string(),
+                  /** The last run's progress, when one ran. */
+                  progress: z
+                    .object({
+                      status: z.enum(["running", "paused", "done"]),
+                      cursor: z.string().nullable(),
+                      updatedAt: z.string(),
+                      chatsImported: z.number(),
+                      messagesRecorded: z.number(),
+                      reason: z.string().optional(),
+                    })
+                    .nullable(),
+                })
+                .openapi("MessagingImportHistoryResult"),
+            },
+          },
+        },
+        403: {
+          description: "Not the account's owner",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+        404: {
+          description: "No such account",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+        500: {
+          description: "Internal error",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+      },
+    }),
+    async (c) => {
+      const denied = writeScopeDenied(c);
+      if (denied) return denied as never;
+      if (c.get("agentUserId")) {
+        return c.json(
+          { error: "Only the account's owner can import its history" },
+          403
+        );
+      }
+      // The import writes messages into the person's channels: a key whose
+      // grant does not allow that is refused here, not only by the fence.
+      const denial = await grantWriteDenial({
+        subjectType: "message",
+        action: "create",
+      });
+      if (denial) {
+        return c.json(
+          { error: denial, code: "GRANT_DENIED", reasonCode: "GRANT_DENIED" },
+          403
+        ) as never;
+      }
+      const userId = c.get("userId") as string;
+      const { accountId } = c.req.valid("param");
+      const byId = isUuid(accountId);
+      const row = await db.query.messagingAccounts.findFirst({
+        where: and(
+          eq(messagingAccounts.userId, userId),
+          byId
+            ? eq(messagingAccounts.id, accountId)
+            : eq(messagingAccounts.externalId, accountId)
+        ),
+      });
+      if (!row) return c.json({ error: "Account not found" }, 404);
+      try {
+        const jobId = await getBoss().send(MESSAGING_HISTORY_IMPORT_QUEUE, {
+          accountExternalId: row.externalId,
+          userId,
+        } satisfies MessagingHistoryImportJobData);
+        const progress =
+          ((row.metadata as Record<string, unknown> | null)?.historyImport as
+            | {
+                status: "running" | "paused" | "done";
+                cursor: string | null;
+                updatedAt: string;
+                chatsImported: number;
+                messagesRecorded: number;
+                reason?: string;
+              }
+            | undefined) ?? null;
+        // Two runs at once are harmless (every message dedups); a standard
+        // pg-boss queue does not enforce a singleton key, so none is claimed.
+        return c.json({ queued: !!jobId, accountId: row.id, progress }, 202);
+      } catch (err) {
+        logger.error(
+          { err, accountId },
+          "POST /messaging/accounts/:accountId/import-history failed"
+        );
+        return c.json(
+          { error: "The import could not be queued" },
+          httpStatusForTrpcError(err)
+        ) as never;
+      }
+    }
   );
 
   // ── DELETE /messaging/accounts/:accountId ─────────────────────────────────
@@ -1358,137 +1499,6 @@ export function registerMessagingRoutes(app: HubHono): void {
         return c.json(messages, 200);
       } catch (err) {
         logger.error({ err, threadId, accountId }, "GET messages failed");
-        return c.json(
-          { error: err instanceof Error ? err.message : "Unknown error" },
-          httpStatusForTrpcError(err)
-        ) as never;
-      }
-    }
-  );
-
-  // ── POST /messaging/conversations/:threadId/import ────────────────────────
-  // W4 unified sink: pull a thread's messages and land them as ONE governed
-  // `import.graph` proposal (reviewable), the SAME path Nango records take.
-  //
-  // This is the "import these into my pod" path. It is SEPARATE from the
-  // display read (`GET .../messages`), which still streams live messages to the
-  // inbox UI unchanged. Agent-initiated pulls (agent API key) are gated through
-  // `gateCapabilityExecution` inside `pullToImport` (owner → run, agent → grant).
-  app.openapi(
-    createRoute({
-      method: "post",
-      path: "/messaging/conversations/{threadId}/import",
-      tags: ["Messaging"],
-      summary:
-        "Import a conversation thread into the pod as a governed proposal",
-      request: {
-        params: z.object({ threadId: z.string() }),
-        body: {
-          content: {
-            "application/json": {
-              schema: z
-                .object({
-                  accountId: z.string(),
-                  workspaceId: uuidQueryParam.optional(),
-                  sessionId: z.string().optional(),
-                })
-                .openapi("ImportThreadRequest"),
-            },
-          },
-        },
-      },
-      responses: {
-        ...trpcErrorResponses,
-        200: {
-          description: "Import proposal created (or no messages to import)",
-          content: {
-            "application/json": {
-              schema: z
-                .object({
-                  proposalId: z.string().nullable(),
-                  recordCount: z.number(),
-                  itemCount: z.number(),
-                  gated: z.enum(["denied", "deferred"]).optional(),
-                })
-                .openapi("ImportThreadResult"),
-            },
-          },
-        },
-        400: {
-          description: "Bad request",
-          content: { "application/json": { schema: ErrorSchema } },
-        },
-        403: {
-          description: "Access denied",
-          content: { "application/json": { schema: ErrorSchema } },
-        },
-        500: {
-          description: "Internal error",
-          content: { "application/json": { schema: ErrorSchema } },
-        },
-        409: {
-          description: MESSAGING_NOT_CONFIGURED_DESCRIPTION,
-          content: {
-            "application/json": { schema: MessagingNotConfiguredSchema },
-          },
-        },
-      },
-    }),
-    async (c) => {
-      const denied = writeScopeDenied(c);
-      if (denied) return denied as never;
-      const { threadId } = c.req.valid("param");
-      const { accountId, workspaceId, sessionId } = c.req.valid("json");
-      const agentUserId = c.get("agentUserId");
-
-      const acting = await resolveActingContext(c, { workspaceId });
-      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-      // Importing a messaging thread lands entities into a workspace — the
-      // connector import bridge requires one. A no-workspace import is not
-      // supported on this door.
-      if (!acting.workspaceId) {
-        return c.json(
-          { error: "workspaceId is required to import a messaging thread" },
-          400
-        );
-      }
-
-      // Messaging connectors are resolved PER CALL (DB/vault/env), so we hand the
-      // bridge the live `Readable` instance rather than a registry type string
-      // (the registry holds a resolver DESCRIPTOR, not a `getMessages` surface).
-      const connector = await getMessagingConnector();
-      if (!connector) return messagingNotConfigured(c);
-
-      try {
-        const result = await pullToImport({
-          ctx: {
-            workspaceId: acting.workspaceId,
-            userId: acting.userId,
-            trpcCtx: {},
-            sessionId: sessionId ?? null,
-          },
-          // Live messaging connector instance; `pullToImport` wraps it into a
-          // `Readable` (supplying type/kind) and dispatches the messaging `read`.
-          connector,
-          request: { kind: "messaging", accountId, threadId },
-          gate: agentUserId
-            ? { agentUserId, issuer: "messaging.read.import" }
-            : undefined,
-        });
-        return c.json(
-          {
-            proposalId: result.proposalId,
-            recordCount: result.recordCount,
-            itemCount: result.itemCount,
-            ...(result.gated ? { gated: result.gated } : {}),
-          },
-          200
-        );
-      } catch (err) {
-        logger.error(
-          { err, threadId, accountId },
-          "POST /messaging/conversations/:threadId/import failed"
-        );
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
           httpStatusForTrpcError(err)

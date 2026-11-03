@@ -100,7 +100,6 @@ export const UNCLASSIFIED_WRITE_ROUTES: readonly string[] = [
   "POST /mcp/revoke",
   "POST /messaging/channels/:channelId/mark-read",
   "POST /messaging/channels/connect",
-  "POST /messaging/conversations/:threadId/import",
   "POST /messaging/inbound",
   "POST /notifications",
   "POST /package-updates/:slug/apply",
@@ -180,4 +179,4 @@ export const UNCLASSIFIED_WRITE_ROUTES: readonly string[] = [
 ];
 
 /** Lower it when the list shrinks; never raise it. */
-export const UNCLASSIFIED_WRITE_ROUTES_CAP = 161;
+export const UNCLASSIFIED_WRITE_ROUTES_CAP = 160;

@@ -4378,15 +4378,66 @@
             "type": ["string", "null"],
             "enum": ["not-installed", "no-key", "unreadable", null]
           },
-          "message": { "type": ["string", "null"] }
+          "message": { "type": ["string", "null"] },
+          "webhook": { "$ref": "#/components/schemas/MessagingWebhookState" }
         },
         "required": [
           "configured",
           "capabilityKey",
           "capabilityId",
           "problem",
-          "message"
+          "message",
+          "webhook"
         ]
+      },
+      "MessagingWebhookState": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "registered",
+              "missing",
+              "missing-events",
+              "no-public-url",
+              "unknown"
+            ]
+          },
+          "url": { "type": ["string", "null"] },
+          "missingEvents": { "type": "array", "items": { "type": "string" } },
+          "error": { "type": ["string", "null"] },
+          "checkedAt": { "type": ["string", "null"] }
+        },
+        "required": ["state", "url", "missingEvents", "error", "checkedAt"]
+      },
+      "MessagingImportHistoryResult": {
+        "type": "object",
+        "properties": {
+          "queued": { "type": "boolean" },
+          "accountId": { "type": "string" },
+          "progress": {
+            "type": ["object", "null"],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": ["running", "paused", "done"]
+              },
+              "cursor": { "type": ["string", "null"] },
+              "updatedAt": { "type": "string" },
+              "chatsImported": { "type": "number" },
+              "messagesRecorded": { "type": "number" },
+              "reason": { "type": "string" }
+            },
+            "required": [
+              "status",
+              "cursor",
+              "updatedAt",
+              "chatsImported",
+              "messagesRecorded"
+            ]
+          }
+        },
+        "required": ["queued", "accountId", "progress"]
       },
       "MessagingDeleteResult": {
         "type": "object",
@@ -4546,25 +4597,6 @@
           "sentAt",
           "direction"
         ]
-      },
-      "ImportThreadResult": {
-        "type": "object",
-        "properties": {
-          "proposalId": { "type": ["string", "null"] },
-          "recordCount": { "type": "number" },
-          "itemCount": { "type": "number" },
-          "gated": { "type": "string", "enum": ["denied", "deferred"] }
-        },
-        "required": ["proposalId", "recordCount", "itemCount"]
-      },
-      "ImportThreadRequest": {
-        "type": "object",
-        "properties": {
-          "accountId": { "type": "string" },
-          "workspaceId": { "type": "string" },
-          "sessionId": { "type": "string" }
-        },
-        "required": ["accountId"]
       },
       "SendMessageResult": {
         "type": "object",
@@ -25648,6 +25680,80 @@
         }
       }
     },
+    "/messaging/accounts/{accountId}/import-history": {
+      "post": {
+        "tags": ["Messaging"],
+        "summary": "Import an account's history with people already in the pod (owner only)",
+        "parameters": [
+          {
+            "schema": { "type": "string" },
+            "required": true,
+            "name": "accountId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Import queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingImportHistoryResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request — the wrapped door refused the input",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the account's owner",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such account",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — a refusal the caller can act on",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "Precondition failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/messaging/accounts/{accountId}": {
       "delete": {
         "tags": ["Messaging"],
@@ -26135,87 +26241,6 @@
           },
           "404": {
             "description": "Account not found",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "409": {
-            "description": "No messaging service is set up on this pod (code MESSAGING_NOT_CONFIGURED)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MessagingNotConfigured"
-                }
-              }
-            }
-          },
-          "412": {
-            "description": "Precondition failed",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/messaging/conversations/{threadId}/import": {
-      "post": {
-        "tags": ["Messaging"],
-        "summary": "Import a conversation thread into the pod as a governed proposal",
-        "parameters": [
-          {
-            "schema": { "type": "string" },
-            "required": true,
-            "name": "threadId",
-            "in": "path"
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": { "$ref": "#/components/schemas/ImportThreadRequest" }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Import proposal created (or no messages to import)",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ImportThreadResult" }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "403": {
-            "description": "Access denied",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }

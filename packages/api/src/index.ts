@@ -378,6 +378,14 @@ export {
   type RunFirefliesBackfillResult,
 } from "./services/fireflies/run-fireflies-backfill.js";
 export { runInboundAttachmentIngest } from "./services/connectors/ingest-inbound-attachments.js";
+export {
+  runMessagingHistoryImport,
+  type MessagingHistoryImportResult,
+} from "./services/connectors/messaging-history-import.js";
+export {
+  runMessagingWebhookEnsure,
+  type RunMessagingWebhookEnsureResult,
+} from "./services/connectors/messaging-webhook-ensure.js";
 // Entity media copy (D2): the reactor (registered at boot) enqueues; the runner
 // fills the jobs IoC slot and copies an entity's external images into the pod.
 export { runEntityMediaCopy } from "./services/media-copy/copy-entity-media.js";

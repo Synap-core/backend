@@ -71,6 +71,24 @@ export const workerRegistry: WorkerMetadata[] = [
     category: "ai",
   },
   {
+    id: "messaging-history-import",
+    name: "Messaging History Import",
+    description:
+      "On-demand (an account connects, the owner asks for it, or a person's channel is opened). Delegates to the api-side runner (in-process, IoC slot) which pages through the account's chats and lands, silently, up to 500 messages of each chat whose counterpart is a person already in the pod, in that person's channel via recordInboundMessage (suppressSideEffects). About one provider request a second; pauses until the next day when the profile lookup budget is spent.",
+    triggers: ["queue:messaging-history-import"],
+    outputs: ["message.received"],
+    category: "ai",
+  },
+  {
+    id: "messaging-webhook-ensure",
+    name: "Messaging Webhook Ensure",
+    description:
+      "Hourly, shortly after boot and when an account connects: registers the pod's messaging webhook with the provider (every event it handles) and records whether it is complete, read by GET /messaging/service-config (webhook).",
+    triggers: ["cron:17 * * * *"],
+    outputs: [],
+    category: "ai",
+  },
+  {
     id: "event-sync-cron",
     name: "Event Sync",
     description:

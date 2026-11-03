@@ -21179,6 +21179,19 @@ export type SyncConnectionToImportResult = {
 	source: typeof IMPORT_SOURCE;
 };
 export type UnipileConnectionProblem = "no-key" | "not-installed" | "unreadable";
+/**
+ * Whether the provider delivers this pod's events, as the last check found
+ * it (`messaging-webhook-ensure`: hourly, shortly after boot, and when an
+ * account connects). `checkedAt: null` = not checked since this process
+ * started; `unknown` with an `error` = the check could not read the provider.
+ */
+export interface MessagingWebhookState {
+	state: "missing" | "missing-events" | "no-public-url" | "registered" | "unknown";
+	url: string | null;
+	missingEvents: string[];
+	error: string | null;
+	checkedAt: string | null;
+}
 /** The messaging service's connection state, as the settings screens read it. */
 export interface MessagingServiceState {
 	configured: boolean;
@@ -21186,6 +21199,8 @@ export interface MessagingServiceState {
 	capabilityId: string | null;
 	problem: UnipileConnectionProblem | null;
 	message: string | null;
+	/** Whether inbound messages reach the pod (the last webhook check). */
+	webhook: MessagingWebhookState;
 }
 export interface EnrichmentResult {
 	source: string;

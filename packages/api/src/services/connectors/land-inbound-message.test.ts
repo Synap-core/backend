@@ -79,6 +79,8 @@ describe("landInboundMessage — email identity path (frozen contract)", () => {
 
     const args = recordInboundMessage.mock.calls[0][0];
     expect(args.externalId).toBe("entity-42");
+    // ...and the channel binds to that person (channels design §2).
+    expect(args.contextEntityId).toBe("entity-42");
     expect(args.provider).toBe("proton");
     // Subject folded into the body (mirrors the Mailgun mapper).
     expect(args.text).toBe("Subject: Re: proposal\n\nhello there");
