@@ -25,6 +25,7 @@ export {
   type InstalledRow,
 } from "./installed.js";
 export { registerPackageUpdatesRoutes } from "./package-updates.js";
+export { registerCatalogRefreshRoutes } from "./catalog-refresh.js";
 export { registerThreadsRoutes } from "./threads.js";
 export { registerEventsRoutes } from "./events.js";
 export { registerEntitiesRoutes } from "./entities.js";

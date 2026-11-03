@@ -25,6 +25,7 @@ import {
   type CellSourceRefusalCode,
 } from "@synap-core/types/renderables";
 import { execFieldsChanged } from "../capabilities/skill-exec-fields.js";
+import { cellContentFingerprint } from "./cell-content-fingerprint.js";
 import { widgetDefinitions } from "@synap/database/schema";
 import type { ContentKind } from "@synap/database/schema";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
@@ -348,6 +349,12 @@ export async function defineCell(input: DefineCellInput): Promise<{
   changeType: "created" | "updated";
   /** Advice on words, colour and accessibility (`assertCellSourceMounts`). Never a refusal. */
   advice: CellSourceAdvice;
+  /**
+   * The fingerprint of the content as written (`widget_definitions.content_sha256`),
+   * or null when a concurrent write to the same row landed in between: that
+   * write stamps its own.
+   */
+  contentSha256: string | null;
 }> {
   // D1 floor: an agent never defines a cell directly, whichever door it came
   // through (hub /cells/install and an unattributed /cells/define had no gate).
@@ -598,7 +605,32 @@ export async function defineCell(input: DefineCellInput): Promise<{
         : {}),
     // INSERT branch: omitted ⇒ let the column default ('1.0.0') apply.
     ...versionUpdate,
+    // Stamped right after the write, from the row as written (see below).
+    contentSha256: null,
   };
+
+  // What the fingerprint is computed from: the row AS WRITTEN, read back from
+  // the write itself. Not from the input: `rendererType` (re-derived in SQL
+  // between frame and iframe, kept for builtin / mcp-app) and `externalHosts`
+  // (omit-is-silence) can be the stored values, and the fingerprint covers
+  // what the row holds.
+  const writtenContent = {
+    id: widgetDefinitions.id,
+    updatedAt: widgetDefinitions.updatedAt,
+    rendererType: widgetDefinitions.rendererType,
+    rendererSource: widgetDefinitions.rendererSource,
+    deps: widgetDefinitions.deps,
+    externalHosts: widgetDefinitions.externalHosts,
+  };
+  let written:
+    | {
+        updatedAt: Date | null;
+        rendererType: string | null;
+        rendererSource: string | null;
+        deps: Record<string, string> | null;
+        externalHosts: string[] | null;
+      }
+    | undefined;
 
   let changeType: "created" | "updated" = "created";
   let id: string;
@@ -622,18 +654,21 @@ export async function defineCell(input: DefineCellInput): Promise<{
           ...versionUpdate,
           ...externalHostsUpdate,
           ...trustDemotion,
+          // The content changes in this statement: the old fingerprint no
+          // longer describes it. Stamped again right after.
+          contentSha256: null,
           updatedAt: new Date(),
         },
       })
       .returning({
-        id: widgetDefinitions.id,
-        updatedAt: widgetDefinitions.updatedAt,
+        ...writtenContent,
         createdAt: widgetDefinitions.createdAt,
       });
     const row = result[0];
     if (!row)
       throw new Error(`defineCell: upsert of "${typeKey}" returned no row`);
     id = row.id;
+    written = row;
     if (
       row.updatedAt &&
       row.createdAt &&
@@ -658,6 +693,8 @@ export async function defineCell(input: DefineCellInput): Promise<{
         ...versionUpdate,
         ...externalHostsUpdate,
         ...trustDemotion,
+        // Same as the space branch: cleared here, stamped right after.
+        contentSha256: null,
         updatedAt: new Date(),
       })
       .where(
@@ -666,19 +703,52 @@ export async function defineCell(input: DefineCellInput): Promise<{
           isNull(widgetDefinitions.workspaceId)
         )
       )
-      .returning({ id: widgetDefinitions.id });
+      .returning(writtenContent);
     if (updated[0]) {
       id = updated[0].id;
+      written = updated[0];
       changeType = "updated";
     } else {
       const [inserted] = await db
         .insert(widgetDefinitions)
         .values(values)
-        .returning({ id: widgetDefinitions.id });
+        .returning(writtenContent);
       if (!inserted)
         throw new Error(`defineCell: insert of "${typeKey}" returned no row`);
       id = inserted.id;
+      written = inserted;
     }
+  }
+
+  // APPROVAL PER FINGERPRINT (decision Q9): the row records the fingerprint of
+  // the content it now holds, so what was approved (or written by an operator
+  // directly) is tied to exactly this content. A second statement because the
+  // mechanism is resolved in SQL (above); it is guarded on the write it
+  // describes (same updatedAt, same source), so a concurrent write to the row
+  // that landed in between is never stamped with this one's fingerprint: that
+  // write stamps its own, and until then the row reads NULL, never a stale value.
+  let contentSha256: string | null = null;
+  if (written?.rendererSource != null && written.rendererType != null) {
+    const fingerprint = cellContentFingerprint({
+      rendererType: written.rendererType,
+      rendererSource: written.rendererSource,
+      deps: written.deps,
+      externalHosts: written.externalHosts,
+    });
+    const stamped = await db
+      .update(widgetDefinitions)
+      .set({ contentSha256: fingerprint })
+      .where(
+        and(
+          eq(widgetDefinitions.id, id),
+          eq(widgetDefinitions.rendererSource, written.rendererSource),
+          written.updatedAt
+            ? eq(widgetDefinitions.updatedAt, written.updatedAt)
+            : isNull(widgetDefinitions.updatedAt)
+        )
+      )
+      .returning({ id: widgetDefinitions.id });
+    if (stamped.length > 0) contentSha256 = fingerprint;
   }
 
   emitHubRealtimeEvent({
@@ -696,5 +766,5 @@ export async function defineCell(input: DefineCellInput): Promise<{
     },
   });
 
-  return { id, typeKey, changeType, advice };
+  return { id, typeKey, changeType, advice, contentSha256 };
 }

@@ -413,6 +413,99 @@
         },
         "required": ["error"]
       },
+      "CatalogRefreshResponse": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean", "enum": [true] },
+          "refreshedAt": { "type": "string" },
+          "reused": { "type": "boolean" },
+          "kinds": {
+            "type": "object",
+            "properties": {
+              "capability": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "partial",
+                  "empty",
+                  "unreachable",
+                  "misconfigured"
+                ]
+              },
+              "automation": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "partial",
+                  "empty",
+                  "unreachable",
+                  "misconfigured"
+                ]
+              },
+              "template": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "partial",
+                  "empty",
+                  "unreachable",
+                  "misconfigured"
+                ]
+              },
+              "cell": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "partial",
+                  "empty",
+                  "unreachable",
+                  "misconfigured"
+                ]
+              },
+              "skill": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "partial",
+                  "empty",
+                  "unreachable",
+                  "misconfigured"
+                ]
+              },
+              "view": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "partial",
+                  "empty",
+                  "unreachable",
+                  "misconfigured"
+                ]
+              }
+            },
+            "required": [
+              "capability",
+              "automation",
+              "template",
+              "cell",
+              "skill",
+              "view"
+            ]
+          }
+        },
+        "required": ["ok", "refreshedAt", "reused", "kinds"]
+      },
+      "CatalogRefreshError": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string" },
+          "reason": {
+            "type": "string",
+            "enum": ["switched_off", "unreachable", "rejected"]
+          }
+        },
+        "required": ["error", "reason"]
+      },
       "Thread": {
         "type": "object",
         "properties": {
@@ -7661,6 +7754,58 @@
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/catalog/refresh": {
+      "post": {
+        "tags": ["Packages"],
+        "summary": "Refresh this pod's copy of the official catalog now",
+        "description": "Runs the official catalog sync the pod otherwise runs every 10 minutes, so the update verdicts (`GET /package-updates`, template health) see a package published a moment ago. Concurrent calls share one run; a call within 20 s of a finished run gets that run's outcome (`reused: true`). A refresh that could not read the catalog answers 409 (the source is switched off) or 502 (unreachable or refused), never `ok`. Pod admins only. Requires hub-protocol.read scope.",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Refreshed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogRefreshResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "The official catalog is switched off on this pod",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CatalogRefreshError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "502": {
+            "description": "The catalog could not be read; the pod keeps its last copy",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CatalogRefreshError" }
               }
             }
           }

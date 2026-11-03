@@ -109,6 +109,10 @@ import { createLogger } from "@synap-core/core";
 import { writeTemplateState } from "./template-state.js";
 import { projectTemplateIntent } from "./workspace-intent.js";
 import { isUniqueViolation } from "./pg-errors.js";
+import {
+  installTemplateDocuments,
+  resolveDocumentSidebarItem,
+} from "./template-documents.js";
 import { withRequiredLinkMark } from "./required-link-mark.js";
 import {
   bindWebhookSourceDeclaration,
@@ -296,6 +300,13 @@ export interface ReconcileReport {
     targets: PropertyTargetResolutionReport;
   };
   views: { added: string[]; skipped: string[]; deferred: string[] };
+  /**
+   * Template documents (`utils/template-documents.ts`, the installer the create
+   * door shares), keyed on `metadata.templateDocument.slug` in the space.
+   * `added` = slug absent → created (a dry run: would be); `skipped` = the
+   * space has it (live, or deleted by the person) → untouched, never rewritten.
+   */
+  documents: { added: string[]; skipped: string[] };
   /**
    * Schema-level links between entity types (relation_defs + profile_relations).
    * `added` = a (source, target, type) edge that did not exist and was created.
@@ -511,6 +522,7 @@ export async function reconcileWorkspaceFromDefinition(
       targets: { set: [], unresolved: [] },
     },
     views: { added: [], skipped: [], deferred: [] },
+    documents: { added: [], skipped: [] },
     entityLinks: { added: [], updated: [], skipped: [], unresolved: [] },
     home: { created: false, blocksAdded: [], skipped: true },
     layout: { sidebarItemsAdded: [], primarySurfaceChanged: false },
@@ -1080,6 +1092,24 @@ export async function reconcileWorkspaceFromDefinition(
     }
   }
 
+  // ── 3b. Template documents — find-or-create by slug, never rewritten ────────
+  // The create door's installer (`utils/template-documents.ts`). A document
+  // the space already has (or the person deleted) is left alone; the ids it
+  // returns resolve the overlay's document sidebar items below.
+  const templateDocuments = await installTemplateDocuments({
+    dbConn,
+    eventRepo,
+    workspaceId,
+    userId,
+    documents: definition.documents,
+    sidebarItems: (
+      definition.layoutConfig as WorkspaceLayoutDefinition | undefined
+    )?.sidebarItems,
+    dryRun,
+  });
+  report.documents.added = templateDocuments.added;
+  report.documents.skipped = templateDocuments.skipped;
+
   // ── 4. Entity links (schema relations) — add-only, `required` converges ─────
   // Each entityLink = a relation_def (find-or-create by slug=type) + a
   // profile_relation edge (source → target). Adding a link that already exists
@@ -1465,6 +1495,8 @@ export async function reconcileWorkspaceFromDefinition(
         if (item.profileSlug) return `profile:${item.profileSlug}`;
         if (item.viewId) return `view:${item.viewId}`;
         if (item.viewName) return `viewName:${item.viewName}`;
+        if (item.documentId) return `document:${item.documentId}`;
+        if (item.documentSlug) return `documentSlug:${item.documentSlug}`;
         if (item.appId) return `app:${item.appId}`;
         if (item.url) return `url:${item.url}`;
         if (item.cellKey) return `cell:${item.cellKey}`;
@@ -1476,7 +1508,10 @@ export async function reconcileWorkspaceFromDefinition(
         // Resolve viewName → viewId (create-path parity) before keying/appending.
         // Same resolver as the bento pass: a name shared by several views picks
         // the declared/non-bento one, or stays unresolved rather than guessing.
-        let item: SidebarItem = raw;
+        let item: SidebarItem = resolveDocumentSidebarItem(
+          raw,
+          templateDocuments.idBySlug
+        );
         if (raw.kind === "view" && !raw.viewId && raw.viewName) {
           const resolved = resolveDefinitionViewRef(
             { viewName: raw.viewName },
@@ -1747,6 +1782,7 @@ export async function reconcileWorkspaceFromDefinition(
       propsAdded: report.properties.added.length,
       propConflicts: report.properties.conflicts.length,
       viewsAdded: report.views.added.length,
+      documentsAdded: report.documents.added.length,
       entityLinksAdded: report.entityLinks.added.length,
       homeCreated: report.home.created,
       homeBlocksAdded: report.home.blocksAdded.length,

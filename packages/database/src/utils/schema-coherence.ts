@@ -670,6 +670,11 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "external_hosts",
     addedBy: "0249_widget_definitions_external_hosts.sql",
   },
+  {
+    table: "widget_definitions",
+    column: "content_sha256",
+    addedBy: "0396_widget_definitions_content_sha256.sql",
+  },
 
   // knowledge_facts — Ebbinghaus decay columns (0113)
   {

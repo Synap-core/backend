@@ -44,6 +44,7 @@ import {
   withToolUiMeta,
   type UiRendererLookup,
 } from "./ui-tools.js";
+import { SYNAP_MCP_ICONS, SYNAP_WEBSITE_URL } from "../../brand-icons.js";
 
 const logger: any = createLogger({ module: "mcp-server" });
 
@@ -213,7 +214,10 @@ export function createMCPServer(
   const server = new Server(
     {
       name: "synap-mcp-server",
+      title: "Synap",
       version: "1.0.0",
+      websiteUrl: SYNAP_WEBSITE_URL,
+      icons: SYNAP_MCP_ICONS,
     },
     {
       capabilities: {

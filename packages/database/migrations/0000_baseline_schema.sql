@@ -3490,6 +3490,9 @@ ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "view_renderer_view_ty
 -- frame reaches no external origin at all; the CSP composer adds these origins
 -- to connect-src / img-src and to nothing else.
 ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "external_hosts" jsonb;
+-- sha256 of the cell's content as stored (mechanism, source, deps, egress),
+-- written by defineCell (0396). NULL = written before fingerprints, or synced.
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "content_sha256" text;
 
 CREATE UNIQUE INDEX IF NOT EXISTS "widget_def_type_key_workspace_uniq"
   ON "widget_definitions" ("type_key", "workspace_id");

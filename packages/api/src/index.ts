@@ -36,6 +36,7 @@ export {
 } from "./services/skills/runner/index.js";
 export { integrationsCapabilitiesApp } from "./routers/integrations-capabilities.js";
 export { syncReceiveApp } from "./routers/sync.js";
+export { brandIconsApp } from "./brand-icons.js";
 export { webhooksInboundRouter } from "./routers/webhooks-inbound.js";
 export { createHubProtocolCallerContext } from "./routers/hub-protocol/utils.js";
 export { proposalsRouter } from "./routers/proposals.js";
