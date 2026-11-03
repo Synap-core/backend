@@ -1149,6 +1149,7 @@ app.route(
 // door. The CP reads the same facts from /api/provision/status `updates`.
 import { createPodUpdatesRouter } from "./routers/pod-updates.js";
 import { readLastUpdate } from "./pod-updates/index.js";
+import { startHealNoticeWatch } from "./status/heal-events.js";
 import { podUpdatesDeps } from "./routers/pod-updates-deps.js";
 app.route("/api/pod-updates", createPodUpdatesRouter(podUpdatesDeps));
 import { createPodRateLimitsRouter } from "./routers/pod-rate-limits.js";
@@ -2247,6 +2248,16 @@ try {
               .catch((err) =>
                 apiLogger.warn({ err }, "Update outcome notification failed")
               );
+            // G7b: the host's self-heal (`synap heal`) records each restart,
+            // and why, in deploy/state/events.jsonl. Read now (a heal restart
+            // of this backend is what led to this boot) and every 5 min (a
+            // restart of another service, a spent budget); the owner and
+            // admins are told once (`pod-heal-notice.ts`). The timer is
+            // unref'd and the process exits on SIGTERM, so it needs no stop.
+            startHealNoticeWatch({
+              notify: (events) => api.notifyPodHealEvents(events),
+              warn: (obj, msg) => apiLogger.warn(obj, msg),
+            });
             registerSessionRecapRunner((input) => api.runSessionRecap(input));
             registerSignalRouter((input) => api.routeSignal(input));
             // The 2-minute IS health cron used to only log a degraded verdict.

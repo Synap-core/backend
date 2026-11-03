@@ -1248,6 +1248,45 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     ttl: 0,
   },
   {
+    // Plan "Pod resilience" G7b: the host's self-heal (`synap heal`,
+    // synap-heal.timer) restarted a service Docker marked unhealthy. Produced
+    // by `pod-heal-notice.ts` from deploy/state/events.jsonl, to the pod owner
+    // + admins; `detail` says why (stuck / not answering / unhealthy, and the
+    // request the last stall named). NEWS: the restart already happened and
+    // nothing waits on the person, so informational and stale after a week.
+    // One per service per 30 min (the heal window): heal can restart the
+    // same service three times in it.
+    type: "pod.service_restarted",
+    category: "system",
+    label: "Service Restarted",
+    icon: "rotate-ccw",
+    priority: "normal",
+    titleTemplate: "Your pod restarted {{service}}",
+    bodyTemplate: "{{detail}}",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
+    dedupeWindowMs: 30 * 60 * 1000,
+  },
+  {
+    // The ASK of the pair above: heal restarted the service as many times as
+    // its budget allows (3 per 30 min), it is still unhealthy, and heal has
+    // stopped restarting it until it is healthy again. Only a person on the
+    // host can act ("Run `synap doctor`"), like a failed rollback: the
+    // default needs-you role, no expiry. Once per service per 6 h.
+    type: "pod.service_heal_exhausted",
+    category: "system",
+    label: "Service Keeps Failing",
+    icon: "alert-triangle",
+    priority: "high",
+    titleTemplate: "Your pod stopped restarting {{service}}: it keeps failing",
+    bodyTemplate: "{{detail}}",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    dedupeWindowMs: 6 * 60 * 60 * 1000,
+  },
+  {
     // The invite was the consent: a member who joined by a Pod invite linked
     // their Synap account through a first-party app, and no owner was asked
     // (`services/application-connections/invite-consent.ts`). News for the
