@@ -65,6 +65,11 @@ export {
   describeCatalogSources,
   officialCatalogUrl,
   syncCatalogSourceNow,
+  // Hub `POST /catalog/refresh`: the official sync now, single-flight + floor.
+  refreshOfficialCatalogNow,
+  CatalogRefreshError,
+  type CatalogRefreshFailure,
+  type OfficialCatalogRefresh,
 } from "./workers/cp-catalog-sync.js";
 // Marketplace sources a pod admin adds (D11): anonymous fetches, the pure
 // signature/digest checks, and dropping a removed source's rows.
