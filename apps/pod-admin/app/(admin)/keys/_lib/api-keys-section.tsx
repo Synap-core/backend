@@ -37,7 +37,7 @@ import {
   Search,
   Trash2,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
@@ -101,7 +101,8 @@ export function ApiKeysSection() {
 
   const utils = trpc.useUtils();
 
-  const [search, setSearch] = useState("");
+  const queryParams = useSearchParams();
+  const [search, setSearch] = useState(() => queryParams.get("q") ?? "");
   const [type, setType] = useState<KeyCategory | null>(null);
   const [status, setStatus] = useState<KeyStatusFilter>("live");
   const [sort, setSort] = useState<KeySort>("recent");

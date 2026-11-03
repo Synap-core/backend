@@ -43,6 +43,7 @@ import { openIn } from "../../../../lib/open-in";
 import { ConfirmModal } from "../../../(admin)/components/confirm-modal";
 import { useConsoleRole } from "../../../(admin)/components/side-nav-role";
 import { navHref } from "../../../../lib/console-nav";
+import { keysOfHolderHref } from "../../../(admin)/keys/_lib/key-model";
 import {
   currentWriteMode,
   mayChangeWrites,
@@ -106,7 +107,12 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 // ─── Facts ──────────────────────────────────────────────────────────
 
-export function agentFacts(view: AgentRowView, ownerName: OwnerName): Fact[] {
+export function agentFacts(
+  view: AgentRowView,
+  ownerName: OwnerName,
+  /** The Keys list narrowed to this agent, for a viewer who may open Keys. */
+  keysHref: string | null = null
+): Fact[] {
   const row = view.row;
   const reach = resolveAgentReachMark(row);
   const origin = originLine(row.origin);
@@ -134,7 +140,19 @@ export function agentFacts(view: AgentRowView, ownerName: OwnerName): Fact[] {
       : view.mark.host
         ? [{ label: "Last machine", value: view.mark.host, mono: true }]
         : []),
-    { label: "Keys", value: keyCountsLine(row) },
+    {
+      label: "Keys",
+      value: keysHref ? (
+        <Link
+          href={keysHref}
+          className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        >
+          {keyCountsLine(row)}
+        </Link>
+      ) : (
+        keyCountsLine(row)
+      ),
+    },
     ...(reach
       ? [
           {
@@ -710,7 +728,11 @@ export function AgentObject({
       ) : undefined,
       secondaryActions: openInApp,
     },
-    facts: agentFacts(view, ownerName),
+    facts: agentFacts(
+      view,
+      ownerName,
+      viewerIsPodAdmin && row.name ? keysOfHolderHref(row.name) : null
+    ),
     children: (
       <div className="flex flex-col gap-5">
         <AgentScorecard
