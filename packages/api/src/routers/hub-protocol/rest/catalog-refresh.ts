@@ -33,7 +33,13 @@ import {
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { errCode, hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  errCode,
+  hasScope,
+  httpStatusForTrpcError,
+  logger,
+  type HubHono,
+} from "./_shared.js";
 import { assertPodAdmin } from "../../../trpc.js";
 
 const KindStatusSchema = zOpenapi.enum([
@@ -124,7 +130,10 @@ export function registerCatalogRefreshRoutes(app: HubHono): void {
         );
       }
       logger.error({ err }, "catalog refresh: pod admin check failed");
-      return c.json({ error: "Could not check your access." }, 500);
+      return c.json(
+        { error: "Could not check your access." },
+        httpStatusForTrpcError(err)
+      );
     }
     try {
       const run = await refreshOfficialCatalogNow();
@@ -141,7 +150,7 @@ export function registerCatalogRefreshRoutes(app: HubHono): void {
         {
           error: `The catalog refresh failed: ${err instanceof Error ? err.message : String(err)}`,
         },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
