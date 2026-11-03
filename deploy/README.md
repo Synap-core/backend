@@ -69,15 +69,18 @@ common ones:
 
 ### Install from a clone
 
-From a checkout of this repository, the same engine installs the pod. Inside a
-git checkout it builds the images from source by default; add `--from-image`
-to use published images instead.
+From a checkout of this repository, the same engine installs the pod, from
+published images by default. A pod never builds its own images: a build takes
+~11 GB of disk and a 4 GB Node heap on the machine that serves your data. Only
+a host declared a dev host builds (`--dev-host`, or `SYNAP_ALLOW_SOURCE_BUILD=1`
+in the environment or in `deploy/.env`); on such a host a checkout builds from
+source by default.
 
 ```bash
 git clone https://github.com/synap-core/backend.git
 cd backend
-./synap install --domain localhost                  # build from source
-./synap install --from-image --domain pod.example.com --email you@example.com
+./synap install --domain pod.example.com --email you@example.com   # published images
+./synap install --dev-host --domain localhost                      # dev host: build from source
 ```
 
 With `--domain localhost` the pod answers on `http://localhost:4000` (API) and
@@ -93,7 +96,28 @@ variables override that:
 | `SYNAP_SKIP_GIT_SYNC=1`  | Build the checkout as-is, unsynced. For local work; not for a deploy pod |
 | `SYNAP_FORCE_GIT_SYNC=1` | Reset anyway, after printing the work it discards                        |
 
-`synap update --from-source` applies the same guard.
+`synap update --from-source --dev-host` applies the same guard.
+
+### Dev hosts and pods: where images are built
+
+A pod updates from a published release, pulled by digest. `synap update
+--from-source` on a host that is not declared a dev host is refused before
+anything runs (the checkout is not even synced), and the refusal is recorded in
+`deploy/state/last-update.json`; so is the unattended `source` channel.
+
+| Host     | Gets its images from                                                                      |
+| -------- | ----------------------------------------------------------------------------------------- |
+| pod      | `synap update --release <main-<sha7>\|vX.Y.Z\|fast\|stable>`: CI-built, signed, by digest |
+| dev host | `synap update --from-source --dev-host`: tagged `synap-dev/*:<sha>`, never pushed         |
+
+To get a change onto a pod, land it on `main`. The nightly publishes the newest
+all-green main commit as `main-<sha7>` (channel fast); "Run workflow" on
+`docker-publish.yml` publishes main's head at once (after the `production`
+approval). Then, on the pod: `synap update --release main-<sha7>`. The release
+manifest is signed by CI's own identity (keyless cosign), and the pod refuses
+an unsigned one, so an image built on the devbox and pushed to GHCR by hand
+cannot become a release a pod accepts. Build on the devbox to test a change;
+publish through CI to ship it.
 
 ### First admin
 
@@ -129,13 +153,43 @@ synap config set KEY=VALUE      # then `synap apply` to recreate services with i
 synap users list                # pod users (also add-admin, reset-password, delete)
 ```
 
+### Postgres sizing
+
+Postgres sizes itself once, when its cluster is created: the image
+(`timescale/timescaledb-ha`) runs `timescaledb-tune` at initdb with
+`TS_TUNE_MEMORY` and `TS_TUNE_MAX_CONNS`, which `docker-compose.yml` feeds from
+two `deploy/.env` keys:
+
+| Key                        | Written by                                           | Sets                                                                |
+| -------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------- |
+| `POSTGRES_TUNE_MEMORY`     | `synap install`: half the host's RAM, 512MB..8192MB  | `shared_buffers` 25% of it, `effective_cache_size` 75%, `work_mem`  |
+| `POSTGRES_MAX_CONNECTIONS` | you (default 200, over the pools' worst case of 120) | `max_connections`, and the connection count `work_mem` is sized for |
+
+Measured with the image's `timescaledb-tune` 0.19: a 4 GB host gets
+`shared_buffers` 512MB, 8 GB gets 1GB, 16 GB gets 2GB. An empty
+`POSTGRES_TUNE_MEMORY` (a pod installed before it existed) lets the image
+measure the whole host, as it always did. The Control Plane sends nothing:
+`synap install`, which a managed pod's cloud-init runs, computes it on the host.
+
+An update never changes a running pod's Postgres settings. To re-size an
+existing pod (installed before this, or moved to a host of another size):
+
+```bash
+synap config set POSTGRES_TUNE_MEMORY=4096MB   # optional: else half the host's RAM
+synap tune-postgres --dry-run                  # the settings it would write
+synap tune-postgres                            # rewrite postgresql.conf, restart Postgres
+```
+
+It keeps the previous `postgresql.conf` beside it and prints the command that
+puts it back.
+
 ## Update
 
 ```bash
 synap update                     # SYNAP_UPDATE_CHANNEL from deploy/.env, else stable
 synap update --release fast      # the latest green main build
 synap update --release v1.1.3    # one specific release
-synap update --from-source       # build this checkout and apply it as a release
+synap update --from-source --dev-host  # a dev host only: build this checkout, apply it as a release
 ```
 
 Every update takes a lock, reads the release manifest, runs preflight checks,
