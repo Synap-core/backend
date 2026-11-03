@@ -72,12 +72,15 @@ export async function executeFetchStep(
   }
 
   // Vault references (`Authorization: vault://secret-id`) are resolved only
-  // where the author wrote them; one that came out of a template is refused.
+  // where the author wrote them, and only toward the origin the author wrote:
+  // a reference that came out of a template, or a URL whose host came out of
+  // one, is refused (finding f14cdea7).
   const finalHeaders = await resolveAuthoredVaultRefs(
     data.headers ?? {},
     resolvedHeaders,
     ownerId,
-    "fetch node"
+    "fetch node",
+    { authoredUrl: data.url, resolvedUrl }
   );
 
   // Parse body as JSON if valid, else send as raw string
