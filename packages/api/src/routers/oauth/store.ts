@@ -198,7 +198,6 @@ export async function upsertCimdClient(
     requestedPodWide: input.requestedPodWide,
     clientUri: input.clientUri,
     initiateLoginUri: input.initiateLoginUri,
-    openUri: input.openUri,
     metadataFetchedAt: input.metadataFetchedAt,
     metadataExpiresAt: input.metadataExpiresAt,
     metadataSha256: input.metadataSha256,
