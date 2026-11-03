@@ -200,8 +200,31 @@ describe("the actions: only where they help the current alert", () => {
         })
       )
     ).toEqual([
-      { kind: "host", action: "prune-build-cache", freesBytes: 3 * GB },
+      // The host keeps 2 GiB of build cache: only what is above it is freed.
+      {
+        kind: "host",
+        action: "prune-build-cache",
+        freesBytes: 3 * GB - 2 * 1024 ** 3,
+      },
       { kind: "host", action: "prune-old-images", freesBytes: 2 * GB },
+    ]);
+  });
+
+  it("an action that would free nothing is not offered; an unmeasured one is", () => {
+    const disk = [
+      { metric: "disk:data", level: "warning", since: null, value: 85 },
+    ];
+    expect(
+      actionsFor(
+        view({
+          alerts: disk,
+          reclaimable: { buildCacheBytes: 1 * GB, imagesReclaimableBytes: 0 },
+        })
+      )
+    ).toEqual([]);
+    expect(actionsFor(view({ alerts: disk, reclaimable: null }))).toEqual([
+      { kind: "host", action: "prune-build-cache", freesBytes: null },
+      { kind: "host", action: "prune-old-images", freesBytes: null },
     ]);
   });
 

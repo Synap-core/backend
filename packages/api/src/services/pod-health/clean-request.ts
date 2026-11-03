@@ -1,12 +1,16 @@
 /**
  * The host action door, backend side: a pod admin asks the host to free room
- * (trim Docker's build cache, remove old release images) or to restart one
- * service. The backend never runs a host command: it writes ONE request file
- * that the host's `synap-clean.path` unit watches (lane p3a), the same
- * contract as the update and compose requests pod-agent writes
- * (`deploy/pod-agent/update-request.js`, `deploy/host-request.sh`):
- * `<name>.json` written as tmp + rename, 0600, one request at a time, and the
- * host's answer in a result file keyed by the request id.
+ * (trim Docker's build cache to 2 GB, remove old release images) or to
+ * restart one service. The backend never runs a host command: it writes ONE
+ * request file that the host's `synap-clean.path` unit watches (backend#746,
+ * `synap clean-request`), the same pattern as the update and compose requests
+ * pod-agent writes (`deploy/pod-agent/update-request.js`,
+ * `deploy/host-request.sh`): tmp + rename, 0600, one request at a time, and
+ * the host's answer in a result file keyed by the request id.
+ *
+ * Its own directory, `state/clean/` (a nested rw mount, like `state/kit`):
+ * the backend may never write `state/requests/`, where an archive request
+ * names an upload URL (backend#746, "contract deviation").
  *
  * Every action here is reversible or regenerable (plan P3 firewall): a build
  * cache is rebuilt, old images are pulled again, a restarted service comes
@@ -21,11 +25,11 @@ import { dirname, join, basename } from "node:path";
 
 export const CLEAN_REQUEST_PATH =
   process.env.SYNAP_CLEAN_REQUEST_PATH ||
-  "/opt/synap/deploy/state/requests/clean.json";
+  "/opt/synap/deploy/state/clean/request.json";
 
 export const CLEAN_RESULT_PATH =
   process.env.SYNAP_CLEAN_RESULT_PATH ||
-  "/opt/synap/deploy/state/clean-result.json";
+  "/opt/synap/deploy/state/clean/result.json";
 
 export const HOST_ACTIONS = [
   "prune-build-cache",
@@ -35,17 +39,16 @@ export const HOST_ACTIONS = [
 export type HostAction = (typeof HOST_ACTIONS)[number];
 
 /**
- * Services a pod admin may restart. Stateless or rebuildable ones only:
- * never postgres (and its backup job), redis, minio or kratos, whose restart
- * can lose in-flight writes or sign everyone out.
+ * Services a pod admin may restart: stateless or rebuildable ones, a subset
+ * of what the host itself accepts (backend#746 also takes minio, redis and
+ * kratos; this page does not offer them). Never postgres or its backup job:
+ * the host refuses those too.
  */
 export const RESTARTABLE_SERVICES = [
   "backend",
   "realtime",
   "pod-admin",
   "typesense",
-  "browserless",
-  "rsshub",
 ] as const;
 export type RestartableService = (typeof RESTARTABLE_SERVICES)[number];
 

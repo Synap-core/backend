@@ -552,6 +552,12 @@ export type ActionCard =
   | { kind: "readings" };
 
 /**
+ * The host trims Docker's build cache DOWN TO this much (backend#746,
+ * `_ue_cap_build_cache`), so it frees what is above it.
+ */
+export const BUILD_CACHE_KEEP_BYTES = 2 * 1024 ** 3;
+
+/**
  * Which actions help, from the open alerts. Memory, swap and pressure: pause
  * what runs, or restart a service. Database connections: pause, or restart
  * (the API holds them). A disk: trim the build cache, remove old images.
@@ -569,16 +575,24 @@ export function actionsFor(
   const cards: ActionCard[] = [];
   if (memory || connections) cards.push({ kind: "pause" });
   if (disk) {
-    cards.push({
-      kind: "host",
-      action: "prune-build-cache",
-      freesBytes: view.reclaimable?.buildCacheBytes ?? null,
-    });
-    cards.push({
-      kind: "host",
-      action: "prune-old-images",
-      freesBytes: view.reclaimable?.imagesReclaimableBytes ?? null,
-    });
+    // What each frees, when the host measured it; an action that would free
+    // nothing is not offered, an unmeasured one is (its size unknown).
+    const cache = view.reclaimable?.buildCacheBytes ?? null;
+    const cacheFrees =
+      cache === null ? null : Math.max(0, cache - BUILD_CACHE_KEEP_BYTES);
+    const images = view.reclaimable?.imagesReclaimableBytes ?? null;
+    if (cacheFrees !== 0)
+      cards.push({
+        kind: "host",
+        action: "prune-build-cache",
+        freesBytes: cacheFrees,
+      });
+    if (images !== 0)
+      cards.push({
+        kind: "host",
+        action: "prune-old-images",
+        freesBytes: images,
+      });
   }
   if ((memory || connections) && view.restartableServices.length > 0) {
     cards.push({ kind: "restart", services: view.restartableServices });

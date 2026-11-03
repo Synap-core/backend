@@ -30,6 +30,8 @@ const {
   parseHostResources,
   requestHostAction,
   readHostActionsStatus,
+  CLEAN_REQUEST_PATH,
+  CLEAN_RESULT_PATH,
   resourceWarningGroupKey,
   describeResourceAlert,
 } = await import("../index.js");
@@ -256,6 +258,7 @@ describe("the host action door", () => {
   it("never restarts Postgres or an unknown service", async () => {
     for (const service of [
       "postgres",
+      "postgres-backup",
       "redis",
       "minio",
       "kratos",
@@ -265,7 +268,7 @@ describe("the host action door", () => {
       const { fs, files } = memFs();
       const r = await requestHostAction(
         { action: "restart-service", service, requestedBy: "u1" },
-        { path: "/s/requests/clean.json", fs }
+        { path: "/s/clean/request.json", fs }
       );
       expect(r, String(service)).toEqual({
         ok: false,
@@ -275,15 +278,24 @@ describe("the host action door", () => {
     }
   });
 
+  // Catches: the door moved back under state/requests/, where the backend
+  // could also write an archive or update request (backend#746).
+  it("writes under its own state/clean dir, never state/requests", () => {
+    expect(CLEAN_REQUEST_PATH).toBe(
+      "/opt/synap/deploy/state/clean/request.json"
+    );
+    expect(CLEAN_RESULT_PATH).toBe("/opt/synap/deploy/state/clean/result.json");
+  });
+
   it("writes one request (tmp + rename) and refuses a second while it waits", async () => {
     const { fs, files } = memFs();
     const r = await requestHostAction(
       { action: "prune-build-cache", service: "backend", requestedBy: "u1" },
-      { path: "/s/requests/clean.json", fs, id: "req-1", now: new Date(T0) }
+      { path: "/s/clean/request.json", fs, id: "req-1", now: new Date(T0) }
     );
     expect(r.ok).toBe(true);
-    expect([...files.keys()]).toEqual(["/s/requests/clean.json"]);
-    expect(JSON.parse(files.get("/s/requests/clean.json") ?? "")).toEqual({
+    expect([...files.keys()]).toEqual(["/s/clean/request.json"]);
+    expect(JSON.parse(files.get("/s/clean/request.json") ?? "")).toEqual({
       id: "req-1",
       action: "prune-build-cache",
       requestedBy: "u1",
@@ -292,7 +304,7 @@ describe("the host action door", () => {
     expect(
       await requestHostAction(
         { action: "prune-old-images", requestedBy: "u1" },
-        { path: "/s/requests/clean.json", fs }
+        { path: "/s/clean/request.json", fs }
       )
     ).toEqual({ ok: false, reason: "busy" });
   });
@@ -305,7 +317,7 @@ describe("the host action door", () => {
     expect(
       await requestHostAction(
         { action: "restart-service", service: "realtime", requestedBy: "u1" },
-        { path: "/s/requests/clean.json", fs }
+        { path: "/s/clean/request.json", fs }
       )
     ).toEqual({ ok: false, reason: "unavailable" });
     expect(files.size).toBe(0);

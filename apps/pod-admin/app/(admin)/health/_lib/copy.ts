@@ -95,9 +95,9 @@ export const en = {
   "action.pause.agents": "Open agents",
   "action.buildCache.title": "Trim the build cache",
   "action.buildCache.body":
-    "Frees about {bytes}. Docker rebuilds it the next time something is built.",
+    "Frees about {bytes}. Docker keeps 2 GB and rebuilds the rest when it needs it.",
   "action.buildCache.bodyUnknown":
-    "Docker rebuilds it the next time something is built.",
+    "Docker keeps 2 GB and rebuilds the rest when it needs it.",
   "action.buildCache.run": "Trim",
   "action.images.title": "Remove old release images",
   "action.images.body":
@@ -251,8 +251,9 @@ export const fr: Catalog<typeof en> = {
   "action.pause.agents": "Ouvrir les agents",
   "action.buildCache.title": "Réduire le cache de build",
   "action.buildCache.body":
-    "Libère environ {bytes}. Docker le reconstruit au prochain build.",
-  "action.buildCache.bodyUnknown": "Docker le reconstruit au prochain build.",
+    "Libère environ {bytes}. Docker en garde 2 Go et reconstruit le reste quand il en a besoin.",
+  "action.buildCache.bodyUnknown":
+    "Docker en garde 2 Go et reconstruit le reste quand il en a besoin.",
   "action.buildCache.run": "Réduire",
   "action.images.title": "Supprimer les anciennes images de version",
   "action.images.body":
