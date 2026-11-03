@@ -1256,6 +1256,9 @@ const _WITHHELD_DRAFT_ASK_FIELDS = [
   "sessionStatus",
   "workspaceId",
   "subjectEntityId",
+  // A draft has no PR yet: its asks block nothing (`blocksOpenPr` is read only
+  // on started sessions' owed slots).
+  "blocksOpenPr",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 type _DraftAskFieldsClassified =
