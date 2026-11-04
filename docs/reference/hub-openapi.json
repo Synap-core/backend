@@ -3793,6 +3793,107 @@
         },
         "required": ["userId", "workspaceId", "slug", "valueType"]
       },
+      "PublishChartsResult": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["published", "none", "proposed"]
+          },
+          "siteId": { "type": "string" },
+          "proposalId": { "type": "string" },
+          "published": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "cellInstanceId": { "type": "string" },
+                "publicId": { "type": "string" },
+                "slug": { "type": ["string", "null"] },
+                "mode": { "type": "string", "enum": ["snapshot", "live"] },
+                "status": {
+                  "type": "string",
+                  "enum": ["published", "republished"]
+                }
+              },
+              "required": [
+                "cellInstanceId",
+                "publicId",
+                "slug",
+                "mode",
+                "status"
+              ]
+            }
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "cellInstanceId": { "type": "string" },
+                "code": { "type": "string" },
+                "reason": { "type": "string" }
+              },
+              "required": ["cellInstanceId", "code", "reason"]
+            }
+          },
+          "rowsWritten": { "type": "integer" }
+        },
+        "required": ["status", "siteId", "skipped"]
+      },
+      "PublishChartsBody": {
+        "type": "object",
+        "properties": {
+          "charts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "cellInstanceId": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The chart (a cell instance)."
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": ["snapshot", "live"],
+                  "description": "snapshot: data frozen now; live: re-read on each public read (pod chart keys only)."
+                },
+                "slug": {
+                  "type": ["string", "null"],
+                  "maxLength": 96,
+                  "description": "The URL slug; default the cell's name. null = public id only."
+                }
+              },
+              "required": ["cellInstanceId", "mode"]
+            },
+            "minItems": 1,
+            "maxItems": 200
+          },
+          "reasoning": { "type": "string", "maxLength": 2000 }
+        },
+        "required": ["charts"]
+      },
+      "UnpublishChartsResult": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "enum": ["unpublished", "none"] },
+          "count": { "type": "integer" }
+        },
+        "required": ["status", "count"]
+      },
+      "UnpublishChartsBody": {
+        "type": "object",
+        "properties": {
+          "cellInstanceIds": {
+            "type": "array",
+            "items": { "type": "string", "format": "uuid" },
+            "minItems": 1,
+            "maxItems": 200
+          }
+        },
+        "required": ["cellInstanceIds"]
+      },
       "ListRelationsResponse": {
         "anyOf": [
           {
@@ -21786,6 +21887,140 @@
           },
           "500": {
             "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/shares/sites/{id}/charts/publish": {
+      "post": {
+        "tags": ["Shares"],
+        "summary": "Publish charts into a site, as snapshots or live",
+        "description": "A person's publish applies at once; an agent key's batch is ONE proposal (202). The site's token then serves each chart at /public/sites/{siteToken}/charts/{slug}.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "The site (its share row id)."
+            },
+            "required": true,
+            "description": "The site (its share row id).",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PublishChartsBody" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Published (or none, with the refusals)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PublishChartsResult" }
+              }
+            }
+          },
+          "202": {
+            "description": "Proposed: the person approves the batch",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PublishChartsResult" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body or chart",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing scope, or refused by the policy or the key's grant",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Site or chart not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/shares/sites/{id}/charts/unpublish": {
+      "post": {
+        "tags": ["Shares"],
+        "summary": "Take charts off a site",
+        "description": "Back to draft (the public door answers 404; publishing again restores the same URL). Direct: it only narrows.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "The site (its share row id)."
+            },
+            "required": true,
+            "description": "The site (its share row id).",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/UnpublishChartsBody" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Taken off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnpublishChartsResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing scope, or outside the key's grant",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Site not found",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
