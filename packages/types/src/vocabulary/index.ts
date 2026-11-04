@@ -1998,6 +1998,8 @@ export const CONNECTION_KIND_STATE_LABELS: Readonly<
   >
 > = {
   app: { needs_signin: "Key expired" },
+  // A computer's sign-in IS its key: reconnecting it on the computer renews it.
+  machine: { needs_signin: "Key expired" },
 };
 
 /** The chip word of a connection state, for this kind. Unknown states humanize. */

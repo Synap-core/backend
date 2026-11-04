@@ -1477,6 +1477,7 @@ export {
   askOptionForChip,
   followUpChips,
   askRiskView,
+  askIsSwipeSafe,
   actView,
   askRecommendationOutcome,
   answerProvenanceMark,
