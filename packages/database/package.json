@@ -65,6 +65,11 @@
       "types": "./dist/services/interactions/interaction-kinds.d.ts",
       "import": "./dist/services/interactions/interaction-kinds.js",
       "default": "./dist/services/interactions/interaction-kinds.js"
+    },
+    "./property-key": {
+      "types": "./dist/utils/property-key.d.ts",
+      "import": "./dist/utils/property-key.js",
+      "default": "./dist/utils/property-key.js"
     }
   },
   "files": [

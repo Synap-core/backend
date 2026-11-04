@@ -47,6 +47,7 @@
  */
 
 import { z } from "zod";
+import { PROPERTY_KEY_PATTERN } from "@synap/database/property-key";
 
 export const SHARE_KINDS = ["entity", "document", "view", "project"] as const;
 export type ShareKind = (typeof SHARE_KINDS)[number];
@@ -89,9 +90,11 @@ const CellInput = z.object({ read: ReadMode, create: CreateMode }).strict();
  * `fields`: the allowlist of property keys a publication SNAPSHOTS (`title`
  * names the record's title). Empty = nothing but the pinned body and the day it
  * was published. Guest and link cells have no such key — guests read the live
- * record through the access floor, not a snapshot.
+ * record through the access floor, not a snapshot. The grammar is THE property
+ * key (`@synap/database/property-key`): a field define_kind stored as
+ * `contracts-total` can be published (CP ticket 5980e79d).
  */
-const PublishedFieldKey = z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/);
+const PublishedFieldKey = z.string().regex(PROPERTY_KEY_PATTERN);
 /** `fields` is REQUIRED (possibly `[]`): omitting it must fail, never erase
  *  the stored allowlist (get → edit → set once dropped it by omission). */
 const PublicCellInput = CellInput.extend({
