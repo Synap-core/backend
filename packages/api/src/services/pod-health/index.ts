@@ -126,7 +126,7 @@ export async function runPodHealthCheck(
     logger.info(
       {
         raised: plan.raise.map((r) => `${r.metric}:${r.level}`),
-        cleared: plan.clear,
+        clearedMetrics: plan.clear,
         ...result,
       },
       "Pod resource alerts changed"
