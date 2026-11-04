@@ -23,7 +23,7 @@ export const PublishChartsBodySchema = z
           mode: z
             .enum(CHART_MODES)
             .describe(
-              "snapshot: data frozen now; live: re-read on each public read (pod chart keys only).",
+              "snapshot: data frozen now; live: re-read on each public read (pod chart keys only)."
             ),
           slug: z
             .string()
@@ -31,9 +31,9 @@ export const PublishChartsBodySchema = z
             .nullable()
             .optional()
             .describe(
-              "The URL slug; default the cell's name. null = public id only.",
+              "The URL slug; default the cell's name. null = public id only."
             ),
-        }),
+        })
       )
       .min(1)
       .max(MAX),
@@ -61,7 +61,7 @@ export const PublishChartsResultSchema = z
           slug: z.string().nullable(),
           mode: z.enum(CHART_MODES),
           status: z.enum(["published", "republished"]),
-        }),
+        })
       )
       .optional(),
     skipped: z.array(ChartSkipSchema),

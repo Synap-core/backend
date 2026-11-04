@@ -183,7 +183,7 @@ function fail(c: Ctx, err: unknown, what: string) {
   if (status === 500) logger.error({ err }, `${what} failed`);
   return c.json(
     { error: err instanceof Error ? err.message : `${what} failed` },
-    status,
+    status
   );
 }
 
@@ -216,7 +216,7 @@ export function registerSharesRoutes(app: HubHono): void {
     if (!page.success) return c.json({ error: "Invalid cursor or limit" }, 400);
     try {
       return c.json(
-        await siteStatus(actorOf(c), { projectId: project.data, ...page.data }),
+        await siteStatus(actorOf(c), { projectId: project.data, ...page.data })
       );
     } catch (err) {
       return fail(c, err, "GET /shares/sites");
@@ -233,7 +233,7 @@ export function registerSharesRoutes(app: HubHono): void {
     if (!page.success) return c.json({ error: "Invalid cursor or limit" }, 400);
     try {
       return c.json(
-        await siteStatus(actorOf(c), { siteId: id.data, ...page.data }),
+        await siteStatus(actorOf(c), { siteId: id.data, ...page.data })
       );
     } catch (err) {
       return fail(c, err, "GET /shares/sites/:id");
@@ -245,12 +245,12 @@ export function registerSharesRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const body = ConfigureSiteSchema.safeParse(
-      await c.req.json().catch(() => null),
+      await c.req.json().catch(() => null)
     );
     if (!body.success) {
       return c.json(
         { error: "Validation failed", details: body.error.issues },
-        400,
+        400
       );
     }
     try {
@@ -260,7 +260,7 @@ export function registerSharesRoutes(app: HubHono): void {
         await configureSite(actorOf(c, reasoning), {
           ...rest,
           homeWorkspaceId: homeWorkspaceId ?? null,
-        }),
+        })
       );
     } catch (err) {
       return fail(c, err, "POST /shares/sites");
@@ -274,12 +274,12 @@ export function registerSharesRoutes(app: HubHono): void {
     const id = Uuid.safeParse(c.req.param("id"));
     if (!id.success) return c.json({ error: "Invalid site id" }, 400);
     const body = PublishToSiteSchema.safeParse(
-      await c.req.json().catch(() => null),
+      await c.req.json().catch(() => null)
     );
     if (!body.success) {
       return c.json(
         { error: "Validation failed", details: body.error.issues },
-        400,
+        400
       );
     }
     try {
@@ -289,7 +289,7 @@ export function registerSharesRoutes(app: HubHono): void {
         await publishToSite(actorOf(c, reasoning), {
           siteId: id.data,
           entityIds,
-        }),
+        })
       );
     } catch (err) {
       return fail(c, err, "POST /shares/sites/:id/publish");
@@ -308,7 +308,7 @@ export function registerSharesRoutes(app: HubHono): void {
     if (!body.success) {
       return c.json(
         { error: "Validation failed", details: body.error.issues },
-        400,
+        400
       );
     }
     try {
@@ -316,7 +316,7 @@ export function registerSharesRoutes(app: HubHono): void {
         await unpublishFromSite(actorOf(c), {
           siteId: id.data,
           entityIds: body.data.entityIds,
-        }),
+        })
       );
     } catch (err) {
       return fail(c, err, "POST /shares/sites/:id/unpublish");
@@ -377,12 +377,12 @@ export function registerSharesRoutes(app: HubHono): void {
     const id = Uuid.safeParse(c.req.param("id"));
     if (!id.success) return c.json({ error: "Invalid site id" }, 400);
     const body = PublishChartsBodySchema.safeParse(
-      await c.req.json().catch(() => null),
+      await c.req.json().catch(() => null)
     );
     if (!body.success) {
       return c.json(
         { error: "Validation failed", details: body.error.issues },
-        400,
+        400
       );
     }
     try {
@@ -392,7 +392,7 @@ export function registerSharesRoutes(app: HubHono): void {
         await publishChartsToSite(actorOf(c, reasoning), {
           siteId: id.data,
           charts,
-        }),
+        })
       );
     } catch (err) {
       return fail(c, err, "POST /shares/sites/:id/charts/publish");
@@ -406,12 +406,12 @@ export function registerSharesRoutes(app: HubHono): void {
     const id = Uuid.safeParse(c.req.param("id"));
     if (!id.success) return c.json({ error: "Invalid site id" }, 400);
     const body = UnpublishChartsBodySchema.safeParse(
-      await c.req.json().catch(() => null),
+      await c.req.json().catch(() => null)
     );
     if (!body.success) {
       return c.json(
         { error: "Validation failed", details: body.error.issues },
-        400,
+        400
       );
     }
     try {
@@ -419,7 +419,7 @@ export function registerSharesRoutes(app: HubHono): void {
         await unpublishChartsFromSite(actorOf(c), {
           siteId: id.data,
           cellInstanceIds: body.data.cellInstanceIds,
-        }),
+        })
       );
     } catch (err) {
       return fail(c, err, "POST /shares/sites/:id/charts/unpublish");
@@ -449,7 +449,7 @@ export function registerSharesRoutes(app: HubHono): void {
     try {
       if (anchor.success) {
         return c.json(
-          await listShares(actorOf(c), { anchorProjectId: anchor.data }),
+          await listShares(actorOf(c), { anchorProjectId: anchor.data })
         );
       }
       if (kind.success && id.success) {
@@ -457,14 +457,14 @@ export function registerSharesRoutes(app: HubHono): void {
           await listShares(actorOf(c), {
             resourceType: kind.data,
             resourceId: id.data,
-          }),
+          })
         );
       }
       return c.json(
         {
           error: "Pass anchorProjectId, or resourceType + resourceId (uuid).",
         },
-        400,
+        400
       );
     } catch (err) {
       return fail(c, err, "GET /shares");
@@ -479,7 +479,7 @@ export function registerSharesRoutes(app: HubHono): void {
     if (!body.success) {
       return c.json(
         { error: "Validation failed", details: body.error.issues },
-        400,
+        400
       );
     }
     try {
@@ -508,7 +508,7 @@ export function registerSharesRoutes(app: HubHono): void {
     if (!body.success) {
       return c.json(
         { error: "Validation failed", details: body.error.issues },
-        400,
+        400
       );
     }
     try {
@@ -516,7 +516,7 @@ export function registerSharesRoutes(app: HubHono): void {
         await revokeLink(actorOf(c), id.data, {
           // The default lives in the core (`revokeLink`): undefined = remove.
           removeGuests: body.data.removeGuests,
-        }),
+        })
       );
     } catch (err) {
       return fail(c, err, "POST /shares/links/:id/revoke");
@@ -531,14 +531,14 @@ export function registerSharesRoutes(app: HubHono): void {
     if (!body.success) {
       return c.json(
         { error: "Validation failed", details: body.error.issues },
-        400,
+        400
       );
     }
     try {
       const { reasoning, ...rest } = body.data;
       return jsonGoverned(
         c,
-        await publishResource(actorOf(c, reasoning), rest),
+        await publishResource(actorOf(c, reasoning), rest)
       );
     } catch (err) {
       return fail(c, err, "POST /shares/publish");
@@ -550,12 +550,12 @@ export function registerSharesRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const body = UnpublishSchema.safeParse(
-      await c.req.json().catch(() => null),
+      await c.req.json().catch(() => null)
     );
     if (!body.success) {
       return c.json(
         { error: "Validation failed", details: body.error.issues },
-        400,
+        400
       );
     }
     try {
@@ -570,12 +570,12 @@ export function registerSharesRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const body = UnpublishSchema.safeParse(
-      await c.req.json().catch(() => null),
+      await c.req.json().catch(() => null)
     );
     if (!body.success) {
       return c.json(
         { error: "Validation failed", details: body.error.issues },
-        400,
+        400
       );
     }
     try {
@@ -593,7 +593,7 @@ export function registerSharesRoutes(app: HubHono): void {
     if (!body.success) {
       return c.json(
         { error: "Validation failed", details: body.error.issues },
-        400,
+        400
       );
     }
     try {
@@ -603,7 +603,7 @@ export function registerSharesRoutes(app: HubHono): void {
         await shareResource(actorOf(c, reasoning), {
           ...rest,
           expiresAt: expiresAt ?? null,
-        }),
+        })
       );
     } catch (err) {
       return fail(c, err, "POST /shares");
