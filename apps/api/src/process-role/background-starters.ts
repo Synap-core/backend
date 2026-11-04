@@ -648,6 +648,7 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         const {
           registerMessagingHistoryImportRunner,
           registerMessagingWebhookEnsureRunner,
+          registerLinkedinReachSweepRunner,
         } = await import("@synap/jobs/workers/messaging-sync.js");
         const { registerSessionRecallRunner } =
           await import("@synap/jobs/workers/session-recall-worker.js");
@@ -777,6 +778,7 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         registerMessagingWebhookEnsureRunner(() =>
           api.runMessagingWebhookEnsure()
         );
+        registerLinkedinReachSweepRunner(() => api.runLinkedinReachSweep());
         // Session recall (on start / the sweep floor) delegates to the
         // api-side runner — requested by session synap-68.
         registerSessionRecallRunner((d) => api.runSessionRecall(d));

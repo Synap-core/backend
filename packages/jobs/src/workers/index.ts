@@ -178,8 +178,10 @@ import {
 import {
   handleMessagingHistoryImport,
   handleMessagingWebhookEnsure,
+  handleLinkedinReachSweep,
   MESSAGING_HISTORY_IMPORT_QUEUE,
   MESSAGING_WEBHOOK_ENSURE_QUEUE,
+  LINKEDIN_REACH_SWEEP_QUEUE,
 } from "./messaging-sync.js";
 import {
   handleEntityMediaCopy,
@@ -442,6 +444,8 @@ const ALL_QUEUES = [
   // and the hourly webhook self-registration (messaging-sync.ts).
   MESSAGING_HISTORY_IMPORT_QUEUE,
   MESSAGING_WEBHOOK_ENSURE_QUEUE,
+  // A person's LinkedIn reach (daily): sent requests → pending, 21 days → ignored.
+  LINKEDIN_REACH_SWEEP_QUEUE,
   // Entity media copy (on-demand, D2): enqueued by the api-side reactor on an
   // entity create/update; copies its external images into the pod.
   ENTITY_MEDIA_COPY_QUEUE,
@@ -1070,6 +1074,13 @@ export async function registerAllWorkers(): Promise<void> {
     handleMessagingWebhookEnsure(job)
   );
   logger.info("Registered worker: messaging-webhook-ensure");
+
+  // A person's LinkedIn reach (cron: daily) — the requests the person sent
+  // and that still wait mark their people pending; 21 days → ignored.
+  await boss.work(LINKEDIN_REACH_SWEEP_QUEUE, async ([job]: any[]) =>
+    handleLinkedinReachSweep(job)
+  );
+  logger.info("Registered worker: linkedin-reach-sweep");
 
   // Inbound attachment ingest (on-demand) — the inbound sensor recorder enqueues
   // one job per inbound message that carried attachments; the api-side runner
