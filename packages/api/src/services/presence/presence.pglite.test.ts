@@ -60,7 +60,7 @@ vi.mock("@synap/auth", () => ({
 }));
 
 const { assertPresenceForApproval } = await import("./gate.js");
-const { issuePresenceChallenge } = await import("./proof.js");
+const { issuePresenceChallenge, passkeyRpId } = await import("./proof.js");
 const { presenceMessage } = await import("@synap-core/types/presence");
 
 const POD = "https://pod.example.test";
@@ -428,5 +428,26 @@ describe("proof of presence: the gate", () => {
         })
       )
     ).toBe("PRESENCE_INVALID");
+  });
+});
+
+describe("passkeyRpId: the rp id the installer gives Kratos", () => {
+  it("is the domain the pod and its console share, else the pod host", () => {
+    expect(
+      passkeyRpId(
+        "https://antoine.pod.synap.live",
+        "https://admin.antoine.pod.synap.live"
+      )
+    ).toBe("antoine.pod.synap.live");
+    expect(
+      passkeyRpId("https://pod.example.com", "https://pod-admin.example.com")
+    ).toBe("example.com");
+    // A legacy flat pod shares only the tenant zone: host-only, the pod's own.
+    expect(
+      passkeyRpId(
+        "https://antoine.synap.live",
+        "https://antoine-admin.synap.live"
+      )
+    ).toBe("antoine.synap.live");
   });
 });

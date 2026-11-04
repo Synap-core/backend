@@ -22,6 +22,7 @@
 
 import crypto from "node:crypto";
 import { kratosAdmin } from "@synap/auth";
+import { isRefusedSiteBase } from "@synap-core/types/tenancy";
 import {
   PRESENCE_CHALLENGE_TTL_SECONDS,
   PRESENCE_EXPIRED,
@@ -162,6 +163,32 @@ export function passkeyRpIds(origin: string): string[] {
     ids.push(labels.slice(i).join("."));
   }
   return ids;
+}
+
+/**
+ * The rp id this pod's passkeys are registered under. The installer gives
+ * Kratos `rp.id` = the domain the pod and its console share (its cookie
+ * domain, `shared_cookie_domain` in `synap`): their longest common parent,
+ * unless that is a bare TLD or a tenant zone (`isRefusedSiteBase`, the TS
+ * twin), and then the pod's own host. `passkeyRpIds` still accepts every
+ * parent, so a pod whose Kratos says otherwise keeps verifying.
+ */
+export function passkeyRpId(podOrigin: string, consoleOrigin: string): string {
+  const pod = new URL(podOrigin).hostname.split(".");
+  const con = new URL(consoleOrigin).hostname.split(".");
+  const common: string[] = [];
+  while (
+    pod.length > 0 &&
+    con.length > 0 &&
+    pod[pod.length - 1] === con[con.length - 1]
+  ) {
+    common.unshift(pod.pop()!);
+    con.pop();
+  }
+  const shared = common.join(".");
+  return shared && !isRefusedSiteBase(shared)
+    ? shared
+    : new URL(podOrigin).hostname;
 }
 
 /** A passkey as Kratos stores it (go-webauthn `Credential`, bytes base64 std). */

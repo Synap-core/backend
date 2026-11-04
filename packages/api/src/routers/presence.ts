@@ -45,10 +45,12 @@ import { assertSignedInPerson } from "../utils/signed-in-person.js";
 import { kratosCredentialTime } from "../utils/device-session.js";
 import { assertProposalVisibleTo } from "../utils/proposal-visibility.js";
 import { openAgentConnectProposal } from "../services/agent-connect.js";
+import { toPodAdminOrigin } from "../utils/pod-admin-origin.js";
 import {
   issuePresenceChallenge,
   readPasskeys,
   verifyDeviceSignature,
+  passkeyRpId,
   passkeyRpIds,
   presencePodOrigin,
   PresenceError,
@@ -131,6 +133,9 @@ export const presenceRouter = router({
           passkeys.length > 0
             ? {
                 challenge: issued.webauthnChallenge,
+                /** The rp id to pass to `navigator.credentials.get`. */
+                rpId: passkeyRpId(podOrigin, toPodAdminOrigin(podOrigin)),
+                /** Every rp id the pod accepts (the host and each parent). */
                 rpIds: passkeyRpIds(podOrigin),
                 allowCredentials: passkeys.map((p) => ({
                   id: p.id,
