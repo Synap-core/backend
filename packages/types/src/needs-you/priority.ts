@@ -2,20 +2,23 @@
  * THE PRIORITY of one needs-you row: P0-P3, DERIVED by the pod, never
  * nominated by an agent (founder, 2026-11-04; research doc 353be97e §4.2).
  *
- *   P0 — breaks through: a headline ask whose `answerBy` is due within the
- *        hour (or already past).
- *   P1 — push: the needs-you headline (a real asker, the agent stopped on it).
- *   P2 — feed: no push, in the feed and the badge — an agent is still working
+ *   P0 — first: a headline ask whose `answerBy` is due within the hour (or
+ *        already past).
+ *   P1 — the needs-you headline (a real asker, the agent stopped on it).
+ *   P2 — below it, in the feed and the badge — an agent is still working
  *        (`working`), a pending proposal nothing waits on
  *        (`changes_to_review`), or a headline ask its asker marked
  *        `urgency: 'whenever'`.
- *   P3 — digest: `stopped`, `review_later`, `from_system`.
+ *   P3 — last: `stopped`, `review_later`, `from_system`.
+ *
+ * A RANK only, today: it orders the list and stamps the notification row's
+ * level; no push decision reads it (push levels are a later change).
  *
  * Same principle as a proposal's class (`proposal-class.ts` in the pod): an
  * agent that could pick its level would pick the loud one. So the level comes
  * from the needs-you rule's CLASS (`./rule.ts`, decided by the pod) plus one
  * fact the ask carries (`answerBy`), and the asker's `urgency` can only LOWER
- * it: `whenever` holds it at P2 at most; `now` and `today` change nothing.
+ * it: `whenever` holds it at P2 at most; `today` (the default) changes nothing.
  *
  * It ranks what the rule already admitted; it never moves a row between the
  * headline and a fold. Pure, zod-free (relay loads the needs-you leaves), the

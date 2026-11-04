@@ -21,7 +21,7 @@ describe("needsYouPriority", () => {
   it("a headline ask with no deadline is P1 (push), whatever urgency it claims above that", () => {
     expect(needsYouPriority({ needsYouClass: "needs_you" }, NOW)).toBe("P1");
     expect(
-      needsYouPriority({ needsYouClass: "needs_you", urgency: "now" }, NOW)
+      needsYouPriority({ needsYouClass: "needs_you", urgency: "asap" }, NOW)
     ).toBe("P1");
     expect(
       needsYouPriority({ needsYouClass: "needs_you", urgency: "today" }, NOW)
@@ -87,7 +87,7 @@ describe("needsYouPriority", () => {
     for (const c of folds) {
       expect(
         needsYouPriority(
-          { needsYouClass: c, answerBy: inMinutes(1), urgency: "now" },
+          { needsYouClass: c, answerBy: inMinutes(1), urgency: "today" },
           NOW
         )
       ).toBe(NEEDS_YOU_CLASS_PRIORITY[c]);

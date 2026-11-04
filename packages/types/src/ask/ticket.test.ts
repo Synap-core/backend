@@ -48,11 +48,14 @@ describe.each(["v3", "v4"] as const)(
       }
     });
 
-    it("refuse an urgency outside the closed three", async () => {
+    it("refuse an urgency outside the closed two (no louder value: a deadline is answerBy)", async () => {
       const { AskSchema } = await loadAskUnder(major);
-      expect(
-        AskSchema.safeParse({ mode: "confirm", urgency: "asap" }).success
-      ).toBe(false);
+      for (const bad of ["asap", "now"]) {
+        expect(
+          AskSchema.safeParse({ mode: "confirm", urgency: bad }).success,
+          bad
+        ).toBe(false);
+      }
     });
 
     it("refuse an answerBy that is not an instant with its offset", async () => {

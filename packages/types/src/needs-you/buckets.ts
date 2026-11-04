@@ -42,7 +42,7 @@ import {
   JUDGEMENT_NOTIFICATION_TYPES,
 } from "../lens/classes.js";
 import { isSwipeSafe, type ProposalIntentInput } from "../proposals/intent.js";
-import { needsYouPriorityRank } from "./priority.js";
+import { needsYouPriorityRank, type NeedsYouPriority } from "./priority.js";
 
 /** The four Inbox filters, in the order the filter control lists them. */
 export const NEEDS_YOU_BUCKETS = [
@@ -75,7 +75,7 @@ export interface BucketableSignal {
    * RANK KEY of the triage order, never a filter: the needs-you rule decides
    * which rows are here.
    */
-  priority?: string | null;
+  priority?: NeedsYouPriority | null;
 }
 
 /**

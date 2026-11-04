@@ -561,13 +561,15 @@ const stakesField = {
 
 /**
  * The asker's HINT of how soon (founder, 2026-11-04, research 353be97e §4.1):
- *   `now`      — it matters within the hour;
- *   `today`    — the default (absent reads `today`);
- *   `whenever` — no hurry: it never pushes.
+ *   `today`    — the default (absent reads `today`): no lowering;
+ *   `whenever` — no hurry: the ask ranks lower (P2 at most).
  * A hint only: the pod derives the priority from facts (`needsYouPriority`,
  * `../needs-you/priority.ts`), and `urgency` can only LOWER it, never raise it.
+ * There is no louder value on purpose: "it matters within the hour" is
+ * `answerBy`, a fact. The priority RANKS; it changes no push yet (every ask
+ * still notifies as before until push levels ship).
  */
-export const ASK_URGENCIES = ["now", "today", "whenever"] as const;
+export const ASK_URGENCIES = ["today", "whenever"] as const;
 export type AskUrgency = (typeof ASK_URGENCIES)[number];
 
 /**
@@ -595,7 +597,7 @@ const ticketFields = {
     .enum(ASK_URGENCIES)
     .optional()
     .describe(
-      "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+      "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
     ),
   answerBy: z
     .string()

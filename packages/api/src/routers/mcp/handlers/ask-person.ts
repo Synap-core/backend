@@ -13,17 +13,18 @@
  * WHERE IT FILES, first that applies:
  *   1. the open ask THIS agent filed earlier with the same `dedupeKey`
  *      (updated in place, never a second card);
- *   2. the session this call is attributed to — a `sessionId` it names (its
- *      own, open), else the pod's automatic grouping (`resolveSessionHandle`
- *      → `resolveWorkSession`: the conversation's session, else the person's
- *      one unclaimed open session), handed in as `ctx.sessionId`;
+ *   2. a `sessionId` it names (its own, open), else the session bound to THIS
+ *      caller (`findClientSession` on the request's client key: the session
+ *      its conversation started, else its write receipt). NEVER the person's
+ *      one unclaimed open session (`resolveWorkSession` rung 3): an outside
+ *      AI's ask must not land in the person's unrelated work;
  *   3. the asker's ONE standing "Asks from <agent>" session (opened on its
  *      first ask, with no criteria asked of the caller): never one session
  *      per ask, which would escape the per-session push dedupe.
  *
  * The PRIORITY is not the caller's: the needs-you read derives P0-P3
- * (`needsYouPriority`); `urgency` can only lower it. This door changes no push
- * behaviour.
+ * (`needsYouPriority`); `urgency` can only lower it. The priority ranks; this
+ * door changes no push behaviour (every ask notifies as before).
  */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { ExpectedOutput } from "@synap/playbooks";
@@ -156,53 +157,67 @@ const text = (v: unknown): string | undefined =>
 
 /**
  * The OPEN ask this agent filed with `dedupeKey`, on any open session of the
- * person's, or null. Read with JSONB containment on the stored array, then
- * the slot is picked in TypeScript with the owed predicate (`isOwedSlot`, the
- * one the needs-you read uses), so an answered, done or withdrawn ask is never
- * reopened.
+ * person's, or null. EXACT in SQL — the session holds a slot that is owed
+ * (`owedSlotPredicateSql`, THE owed-slot predicate), unanswered, asked by this
+ * agent, with this key — so no page window can hide it; the slot is then
+ * picked in TypeScript with the same rule (`isOwedSlot`). An answered, done or
+ * withdrawn ask is never reopened.
  */
 async function findDedupedAsk(input: {
   userId: string;
   agentUserId: string;
   dedupeKey: string;
 }): Promise<{ sessionId: string; slot: ExpectedOutput } | null> {
-  const { db, focusSessions, and, eq, inArray, desc, drizzleSql } =
-    await import("@synap/database");
+  const {
+    db,
+    focusSessions,
+    and,
+    eq,
+    inArray,
+    desc,
+    drizzleSql,
+    owedSlotPredicateSql,
+  } = await import("@synap/database");
   const { OPEN_SESSION_STATUSES } =
     await import("../../../services/focus-sessions/session-statuses.js");
   const { isOwedSlot } =
     await import("../../../services/focus-sessions/owed-outputs.js");
-  const probe = JSON.stringify([
-    { askedBy: input.agentUserId, ask: { dedupeKey: input.dedupeKey } },
-  ]);
-  const rows = await db
+  const [row] = await db
     .select({ id: focusSessions.id, outputs: focusSessions.expectedOutputs })
     .from(focusSessions)
     .where(
       and(
         eq(focusSessions.userId, input.userId),
         inArray(focusSessions.status, [...OPEN_SESSION_STATUSES]),
-        drizzleSql`${focusSessions.expectedOutputs} @> ${probe}::jsonb`
+        drizzleSql`EXISTS (
+          SELECT 1 FROM jsonb_array_elements(
+            CASE WHEN jsonb_typeof(${focusSessions.expectedOutputs}) = 'array'
+                 THEN ${focusSessions.expectedOutputs}
+                 ELSE '[]'::jsonb END
+          ) AS slot
+          WHERE ${owedSlotPredicateSql}
+            AND slot->>'askedBy' = ${input.agentUserId}
+            AND slot->'ask'->>'dedupeKey' = ${input.dedupeKey}
+            AND slot->'answer' IS NULL
+        )`
       )
     )
     // SESSION-KIND-LENS-EXEMPT: a dedupe lookup by the asker's own key, not a
-    // list door — any open session holding THIS agent's ask, whatever its kind.
+    // list door — the open session holding THIS agent's ask, whatever its kind.
     .orderBy(desc(focusSessions.updatedAt))
-    .limit(5);
-  for (const row of rows) {
-    const outputs = Array.isArray(row.outputs)
-      ? (row.outputs as ExpectedOutput[])
-      : [];
-    const slot = outputs.find(
-      (o) =>
-        o?.askedBy === input.agentUserId &&
-        o.ask?.dedupeKey === input.dedupeKey &&
-        o.answer === undefined &&
-        isOwedSlot(o)
-    );
-    if (slot) return { sessionId: row.id, slot };
-  }
-  return null;
+    .limit(1);
+  if (!row) return null;
+  const outputs = Array.isArray(row.outputs)
+    ? (row.outputs as ExpectedOutput[])
+    : [];
+  const slot = outputs.find(
+    (o) =>
+      o?.askedBy === input.agentUserId &&
+      o.ask?.dedupeKey === input.dedupeKey &&
+      o.answer === undefined &&
+      isOwedSlot(o)
+  );
+  return slot ? { sessionId: row.id, slot } : null;
 }
 
 export const askPersonHandlers: McpHandlerMap = {
@@ -274,7 +289,7 @@ export const askPersonHandlers: McpHandlerMap = {
       });
     }
     let sessionId: string | undefined;
-    let filedOn: "dedupe" | "named" | "attributed" | "standing";
+    let filedOn: "dedupe" | "named" | "conversation" | "standing";
     let slotKey: string | undefined;
     const deduped =
       agentUserId && ask.dedupeKey
@@ -294,16 +309,29 @@ export const askPersonHandlers: McpHandlerMap = {
       // put the person's answer where the caller never looks.
       if (ctx.sessionId !== named) {
         return ok({
-          error: `Focus session ${named} is not one of yours — NOTHING WAS FILED. Omit sessionId to file it where your writes are grouped.`,
+          error: `Focus session ${named} is not one of yours — NOTHING WAS FILED. Omit sessionId to file it on your conversation's session or your standing asks session.`,
         });
       }
       sessionId = named;
       filedOn = "named";
-    } else if (ctx.sessionId) {
-      sessionId = ctx.sessionId;
-      filedOn = "attributed";
     } else {
-      filedOn = "standing";
+      // Only the session bound to THIS caller (its conversation's own, else
+      // its write receipt) — never the adapter's rung-3 guess, the person's
+      // one unclaimed open session, which is unrelated work for an outside AI.
+      const [{ findClientSession }, { requestClientKey }] = await Promise.all([
+        import("@synap/database"),
+        import("../../../services/focus-sessions/resolve-work-session.js"),
+      ]);
+      const clientKey = requestClientKey(agentUserId);
+      const bound = clientKey
+        ? await findClientSession(userId, clientKey)
+        : null;
+      if (bound) {
+        sessionId = bound.id;
+        filedOn = "conversation";
+      } else {
+        filedOn = "standing";
+      }
     }
 
     // An ask on an ENDED session reaches nobody (pod finding 619aa1e3).

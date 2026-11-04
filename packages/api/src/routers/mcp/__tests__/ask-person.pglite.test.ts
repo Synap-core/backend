@@ -394,7 +394,7 @@ describe("synap_ask_person, on PGlite", () => {
     expect(strip(viaAskPerson)).toEqual(strip(viaUpdate));
   });
 
-  it("a conversation with its own session: the ask lands on THAT session, through the pod's attribution", async () => {
+  it("a conversation with its own session: the ask lands on THAT session (the one bound to this caller)", async () => {
     const inside = await seedSession({ clientKey: INSIDE, title: "Work map" });
     const before = await sessionCount();
     const out = await askPerson(INSIDE, {
@@ -406,7 +406,7 @@ describe("synap_ask_person, on PGlite", () => {
     });
     expect(out).toMatchObject({
       status: "asked",
-      filedOn: "attributed",
+      filedOn: "conversation",
       sessionId: inside,
     });
     expect(await sessionCount()).toBe(before);
@@ -477,6 +477,30 @@ describe("synap_ask_person, on PGlite", () => {
     expect(String(noAsk.error)).toContain("NOTHING WAS FILED");
     expect(await sessionCount()).toBe(before);
     expect((await slotsOf(standing)).length).toBe(standingBefore);
+  });
+
+  it("an outside AI never lands on the person's own unrelated open session — its standing session instead", async () => {
+    // The person's own open session, touched just now and bound to no client:
+    // the pod's generic attribution (rung 3) would hand it to ANY caller.
+    const personal = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, goal, title, status, expected_outputs, criteria, agent_ids, metadata, origin, created_at, updated_at, started_at)
+       values ($1, $2, 'Plan the offsite', 'Offsite', 'active', '[]'::jsonb, '[]'::jsonb, '{}', '{}'::jsonb, 'human', now(), now(), now())`,
+      [personal, USER]
+    );
+    const out = await askPerson("key:k1|conv:claude-ai:fresh-chat", {
+      question: "Which venue for the offsite?",
+      ask: { mode: "confirm" },
+    });
+    expect(out).toMatchObject({
+      status: "asked",
+      filedOn: "standing",
+      sessionId: standing,
+    });
+    expect(await slotsOf(personal)).toEqual([]);
+    await q(`update focus_sessions set status = 'closed' where id = $1`, [
+      personal,
+    ]);
   });
 
   it("the priority reaches the notification row and the needs-you read from what the door stored", async () => {

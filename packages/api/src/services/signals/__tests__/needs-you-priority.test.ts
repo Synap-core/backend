@@ -71,7 +71,7 @@ describe("signal.priority on the needs-you read", () => {
   });
 
   it("an ask while the agent is still working is P2, whatever its deadline", () => {
-    const s = signalOf(ask({ answerBy: inMinutes(5), urgency: "now" }), {
+    const s = signalOf(ask({ answerBy: inMinutes(5), urgency: "today" }), {
       lastAgentActivityAt: "2026-11-04T11:50:00.000Z",
       turnInFlight: true,
     });

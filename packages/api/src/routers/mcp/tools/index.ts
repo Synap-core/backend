@@ -3101,7 +3101,7 @@ export const tools = {
         description:
           "Put ONE thing in front of the PERSON: a question only they can answer, a choice, a form, something to do or to hand over. It lands in their Needs you, where they answer it. (synap_ask asks the POD, not the person.) Works with or without a session: it files on the session this conversation works in (or `sessionId`), else on your one standing \"Asks from <you>\" session — you never need a goal or criteria. It is the same owed ask `synap_update_session` writes with owner 'human' + `ask`, so inside a session either door is fine. " +
           "Send `question` (one line) and `ask` (confirm / choose with ONE recommended / form / act / provide). Add `why`, `unblocks`, `consequence` (what the answer DOES) and `reversible` when you know them. " +
-          "PRIORITY is the pod's, not yours: it derives P0-P3 (P0 = due within the hour by `answerBy`; P1 = waiting on them; P2 = feed only; P3 = digest). `urgency` is a hint that can only LOWER it ('whenever' never pushes). " +
+          "PRIORITY is the pod's, not yours: it derives P0-P3 to RANK what the person sees (P0 = due within the hour by `answerBy`; P1 = waiting on them; P2 = an agent still working, or `urgency` 'whenever'; P3 = stale or from the system). `urgency` is a hint that can only LOWER it. Every ask still notifies as today until push levels ship. " +
           "`dedupeKey`: asking again with the same key UPDATES your open ask instead of adding a second card. " +
           "Then `synap_wait_for_answer` with the returned sessionId; if they answer you in this chat instead, `synap_relay_answer` with their words.",
         inputSchema: {
@@ -3161,7 +3161,7 @@ export const tools = {
               type: "string",
               enum: [...ASK_URGENCIES],
               description:
-                "A hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; 'whenever' never pushes.",
+                "A hint: today (default) | whenever. It can only LOWER the priority the pod derives: 'whenever' ranks the ask lower. It still notifies as today until push levels ship.",
             },
             answerBy: {
               type: "string",

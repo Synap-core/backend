@@ -805,7 +805,7 @@ export type SlotAsk = (
 };
 
 /** Mirrors `ASK_URGENCIES` (@synap-core/types/ask). */
-export type SlotAskUrgency = "now" | "today" | "whenever";
+export type SlotAskUrgency = "today" | "whenever";
 
 /** Mirrors `ASK_STAKES` (@synap-core/types/ask). */
 export type SlotAskStakes = "routine" | "commitment";
