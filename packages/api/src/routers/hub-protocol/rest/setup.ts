@@ -1409,9 +1409,9 @@ export function registerSetupRoutes(app: HubHono): void {
             agentType,
             instanceId,
             expiresAt: apiKey.expiresAt ?? null,
-            asPerson: asPerson
-              ? { instanceLabel: instanceLabel ?? surfaceHostSeat ?? null }
-              : null,
+            // The computer the audit names ("requested from …"): the
+            // filing key's own machine record, never this request's body.
+            asPerson: asPerson ? { instanceLabel: surfaceHostSeat } : null,
           }));
         } catch (err) {
           await revokeApiKeys(db, {

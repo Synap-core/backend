@@ -619,6 +619,12 @@ export async function applyProposalApproval(args: {
   presence?: PresenceProof | null;
   /** Which door approves, for the presence audit. */
   door?: string;
+  /**
+   * The ONE door that checked the proof itself, for a request it decides in
+   * the same call (the OAuth consent's `app/connect`, W3 slice 2). Nothing
+   * else may pass it: the tripwire `presence-gate-every-door` pins its callers.
+   */
+  presenceChecked?: "oauth.consent";
 }): Promise<ProposalExecutorResult> {
   // Approval is the human step — an agent caller (agent key, the IS internal
   // key, or an acting agent in the ALS) never applies one, whichever door.
@@ -639,12 +645,14 @@ export async function applyProposalApproval(args: {
   // Proof of presence (W3): a sensitive approval needs the person's fresh
   // signature over a challenge naming THIS proposal — before anything applies,
   // and before a large graph is handed to the background job.
-  await assertPresenceForApproval({
-    userId: args.userId,
-    proposal: args.proposal,
-    proof: args.presence,
-    door: args.door ?? "applyProposalApproval",
-  });
+  if (args.presenceChecked !== "oauth.consent") {
+    await assertPresenceForApproval({
+      userId: args.userId,
+      proposal: args.proposal,
+      proof: args.presence,
+      door: args.door ?? "applyProposalApproval",
+    });
+  }
 
   // A LARGE graph is applied by the background job — every gate above has
   // already run, here, in the request. A graph that is being applied right

@@ -9,6 +9,8 @@
  * Any workspace member can list servers and see their status.
  */
 
+import { presenceProofSchema } from "@synap-core/types/presence";
+import { assertPresenceForRequest } from "../services/presence/gate.js";
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { AccessContext, scopedDb } from "../access/index.js";
@@ -337,9 +339,26 @@ export const mcpServersRouter = router({
    * Requires owner only (security-critical action).
    */
   setApproved: protectedProcedure
-    .input(z.object({ id: z.string().uuid(), approved: z.boolean() }))
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        approved: z.boolean(),
+        /** Proof of presence (W3): giving the AIs a server's tools is setup. */
+        presence: presenceProofSchema.optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
+      // Revoking only takes power away; approving needs the person.
+      if (input.approved) {
+        await assertPresenceForRequest({
+          userId,
+          kind: "mcp_server",
+          id: input.id,
+          proof: input.presence ?? null,
+          door: "trpc.mcpServers.setApproved",
+        });
+      }
 
       const existing = await db.query.mcpServers.findFirst({
         where: eq(mcpServers.id, input.id),

@@ -26,6 +26,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  PRESENCE_REQUEST_KINDS,
   SENSITIVE_APPROVALS,
   SENSITIVE_PROPOSAL_TYPE_PREFIXES,
 } from "@synap-core/types/presence";
@@ -175,6 +176,77 @@ describe("TRIPWIRE: every approve door passes the proof-of-presence gate", () =>
     expect(missing, "sensitive keys no executor registers").toEqual([]);
     expect(Object.keys(SENSITIVE_PROPOSAL_TYPE_PREFIXES)).toEqual([
       "governance.",
+    ]);
+  });
+
+  // ── W3 slice 2: decisions that settle no proposal ──────────────────────────
+
+  /** Approve/decide mutations that are everyday (or no pod approval), and why. */
+  const EVERYDAY_DECISIONS: Record<string, string> = {
+    "routers/intelligence.ts approveProposal":
+      "forwards to the AI service's own proposal list (hubProxyFetch); any pod write it leads to comes back through the pod's own approve doors",
+  };
+
+  /** Every tRPC mutation named approve…/…Approve…/decide…, with its body. */
+  function decisionProcedures(): Array<{ key: string; body: string }> {
+    const out: Array<{ key: string; body: string }> = [];
+    for (const f of FILES.filter((x) => x.path.startsWith("routers/"))) {
+      const starts = [...f.src.matchAll(/^ {2}([A-Za-z]+):\s*[A-Za-z.]+/gm)];
+      starts.forEach((m, i) => {
+        const name = m[1]!;
+        if (!/(?:approve|Approve|decide|Decide)/.test(name)) return;
+        const body = f.src.slice(m.index, starts[i + 1]?.index ?? undefined);
+        if (!body.includes(".mutation(")) return;
+        out.push({ key: `${f.path} ${name}`, body });
+      });
+    }
+    return out;
+  }
+
+  it("every approve/decide mutation gates with a proof, applies through applyProposalApproval, or is listed as everyday", () => {
+    const procs = decisionProcedures();
+    expect(procs.map((p) => p.key)).toEqual(
+      expect.arrayContaining([
+        "routers/proposals.ts approve",
+        "routers/api-keys.ts decideKeyRequest",
+        "routers/trusted-issuers.ts approve",
+      ])
+    );
+    const ungated = procs
+      .filter(
+        (p) =>
+          !/\bassertPresenceFor(?:Request|Approval)\(|\bapplyProposalApproval\(|\bdecideOAuthAuthorization\(|\bsetSkillApproved\(/.test(
+            p.body
+          ) && !(p.key in EVERYDAY_DECISIONS)
+      )
+      .map((p) => p.key);
+    expect(
+      ungated,
+      "Gate these with assertPresenceForRequest (services/presence/gate.ts), or list them in EVERYDAY_DECISIONS with the reason"
+    ).toEqual([]);
+    // The OAuth consent's decision function gates itself.
+    expect(
+      FILES.find((f) => f.path === "routers/oauth/consent.ts")!.src
+    ).toMatch(/kind: "oauth_consent"/);
+  });
+
+  it("every request kind is gated by a door, and the skip hooks are held by their one door each", () => {
+    const all = FILES.map((f) => f.src).join("\n");
+    for (const kind of Object.keys(PRESENCE_REQUEST_KINDS)) {
+      expect(all, `no door gates "${kind}"`).toMatch(
+        new RegExp(`kind: "${kind}"`)
+      );
+    }
+    const holders = (hook: string) =>
+      FILES.filter((f) => f.src.includes(hook))
+        .map((f) => f.path)
+        .sort();
+    expect(holders('presenceChecked: "oauth.consent",')).toEqual([
+      "routers/oauth/consent.ts",
+    ]);
+    expect(holders('presenceChecked: "applyProposalApproval",')).toEqual([
+      "routers/proposals/executors/agent.ts",
+      "routers/proposals/executors/skill.ts",
     ]);
   });
 });

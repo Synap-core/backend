@@ -5,6 +5,7 @@
  * again (live pod 2026-09-25: approved request, stale "not turned on").
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PresenceProof } from "@synap-core/types/presence";
 
 const state = vi.hoisted(() => ({
   skill: null as null | {
@@ -54,6 +55,12 @@ vi.mock("../../utils/workspace-role.js", () => ({
 }));
 vi.mock("../../utils/audit-log.js", () => ({ auditLog: vi.fn() }));
 vi.mock("./capability-nango-sync.js", () => ({ enqueueSyncForCapability }));
+// The presence gate (W3): its own suite is presence.pglite.test.ts; here only
+// WHEN this door asks it, and that a refusal writes nothing.
+const assertPresenceForRequest = vi.hoisted(() =>
+  vi.fn(async (_args: unknown) => undefined)
+);
+vi.mock("../presence/gate.js", () => ({ assertPresenceForRequest }));
 
 import { setSkillApproved } from "./set-skill-approved.js";
 
@@ -63,6 +70,8 @@ beforeEach(() => {
   state.writes = [];
   state.role = "owner";
   enqueueSyncForCapability.mockClear();
+  assertPresenceForRequest.mockReset();
+  assertPresenceForRequest.mockResolvedValue(undefined);
 });
 
 describe("setSkillApproved", () => {
@@ -93,5 +102,54 @@ describe("setSkillApproved", () => {
     ).rejects.toThrow(/workspace owners/);
     expect(state.writes).toEqual([]);
     expect(enqueueSyncForCapability).not.toHaveBeenCalled();
+  });
+
+  describe("proof of presence (W3: turning a skill or tool ON is sensitive)", () => {
+    const proof: PresenceProof = {
+      kind: "device_key",
+      challengeId: "00000000-0000-4000-8000-0000000000c1",
+      keyId: "00000000-0000-4000-8000-0000000000d1",
+      signature: "c2ln",
+    };
+
+    it("turning ON asks the gate for THIS skill with the proof sent", async () => {
+      await setSkillApproved({
+        userId: "u",
+        skillId: "s1",
+        approved: true,
+        presence: proof,
+        door: "skills.setApproved",
+      });
+      expect(assertPresenceForRequest).toHaveBeenCalledWith({
+        userId: "u",
+        kind: "skill",
+        id: "s1",
+        proof,
+        door: "skills.setApproved",
+      });
+    });
+
+    it("a refused proof turns nothing on and queues nothing", async () => {
+      assertPresenceForRequest.mockRejectedValueOnce(
+        new Error("PRESENCE_REQUIRED")
+      );
+      await expect(
+        setSkillApproved({ userId: "u", skillId: "s1", approved: true })
+      ).rejects.toThrow(/PRESENCE_REQUIRED/);
+      expect(state.writes).toEqual([]);
+      expect(enqueueSyncForCapability).not.toHaveBeenCalled();
+    });
+
+    it("turning OFF, or the executor of an approval already proved, does not ask", async () => {
+      await setSkillApproved({ userId: "u", skillId: "s1", approved: false });
+      await setSkillApproved({
+        userId: "u",
+        skillId: "s1",
+        approved: true,
+        presenceChecked: "applyProposalApproval",
+      });
+      expect(assertPresenceForRequest).not.toHaveBeenCalled();
+      expect(state.writes).toHaveLength(2);
+    });
   });
 });

@@ -41,7 +41,14 @@ vi.mock("@synap/database", async (importOriginal) => {
   h.client = client as unknown as typeof h.client;
   h.db = drizzle(client, { schema });
   class EventRepository {
-    async append(e: { type: string; data: Record<string, unknown> }) {
+    async append(e: {
+      type: string;
+      data: Record<string, unknown>;
+      subjectId?: string;
+    }) {
+      // The real repository validates with SynapEventSchema (subjectId: uuid).
+      const { SynapEventSchema } = await import("@synap-core/core");
+      SynapEventSchema.parse(e);
       h.events.push({ type: e.type, data: e.data });
       return e;
     }
@@ -59,7 +66,8 @@ vi.mock("@synap/auth", () => ({
   },
 }));
 
-const { assertPresenceForApproval } = await import("./gate.js");
+const { assertPresenceForApproval, assertPresenceForRequest } =
+  await import("./gate.js");
 const { issuePresenceChallenge, passkeyRpId } = await import("./proof.js");
 const { presenceMessage } = await import("@synap-core/types/presence");
 
@@ -449,5 +457,74 @@ describe("passkeyRpId: the rp id the installer gives Kratos", () => {
         "https://antoine-admin.synap.live"
       )
     ).toBe("antoine.synap.live");
+  });
+});
+
+describe("proof of presence: decisions that settle no proposal (slice 2)", () => {
+  beforeEach(() => {
+    process.env.PUBLIC_URL = POD;
+    process.env.SYNAP_PRESENCE_PROOF = "enforce";
+    h.events.length = 0;
+  });
+  afterEach(() => {
+    delete process.env.SYNAP_PRESENCE_PROOF;
+  });
+
+  const request = (
+    kind: "key_request" | "device_request",
+    id: string,
+    proof?: unknown
+  ) =>
+    assertPresenceForRequest({
+      userId: PERSON,
+      kind,
+      id,
+      proof: (proof ?? null) as never,
+      door: "test",
+    });
+
+  it("GUARDRAIL: a key request approved with no proof is refused (enforce), naming the request", async () => {
+    const id = crypto.randomUUID();
+    const err = await request("key_request", id).catch(
+      (e: { cause?: { reasonCode?: string; proposalId?: string } }) => e.cause
+    );
+    expect(err).toMatchObject({
+      reasonCode: "PRESENCE_REQUIRED",
+      proposalId: `key_request:${id}`,
+    });
+  });
+
+  it("a proof made for that request approves it, once; it is refused on another kind or id", async () => {
+    const id = crypto.randomUUID();
+    const c = await challengeFor(`key_request:${id}`);
+    const proof = {
+      kind: "device_key",
+      challengeId: c.challengeId,
+      keyId: deviceKeyId,
+      signature: deviceSign(c.message),
+    };
+    expect(await refusal(request("device_request", id, proof))).toBe(
+      "PRESENCE_INVALID"
+    );
+    expect(
+      await refusal(request("key_request", crypto.randomUUID(), proof))
+    ).toBe("PRESENCE_INVALID");
+    expect(await refusal(request("key_request", id, proof))).toBe("accepted");
+    expect(await refusal(request("key_request", id, proof))).toBe(
+      "PRESENCE_USED"
+    );
+    // The event validates (a request is no uuid subject) and says what it was.
+    expect(h.events.at(-1)).toMatchObject({
+      type: "presence.proved",
+      data: { proposalId: `key_request:${id}`, proposalType: "key_request" },
+    });
+  });
+
+  it("report mode lets it through and records a valid presence.missing", async () => {
+    delete process.env.SYNAP_PRESENCE_PROOF;
+    expect(await refusal(request("device_request", crypto.randomUUID()))).toBe(
+      "accepted"
+    );
+    expect(h.events.map((e) => e.type)).toEqual(["presence.missing"]);
   });
 });

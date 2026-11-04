@@ -14,6 +14,8 @@
  * to, so a sync that failed for want of it runs again instead of showing a
  * stale "not turned on". Best-effort — the enable itself has already landed.
  */
+import type { PresenceProof } from "@synap-core/types/presence";
+import { assertPresenceForRequest } from "../presence/gate.js";
 import { TRPCError } from "@trpc/server";
 import {
   db,
@@ -59,8 +61,26 @@ export async function setSkillApproved(input: {
   approved: boolean;
   /** The caller's acting agent when the door knows it (`ctx.agentUserId`). */
   agentUserId?: string | null;
+  /**
+   * Proof of presence (W3, founder 4 Nov: turning a skill ON is sensitive).
+   * The `skill/*` executor passes `presenceChecked` instead: the approval that
+   * runs it already checked the proof (`applyProposalApproval`).
+   */
+  presence?: PresenceProof | null;
+  presenceChecked?: "applyProposalApproval";
+  door?: string;
 }) {
   refuseAgentApprover(input.agentUserId);
+  // Turning OFF only takes power away; turning ON needs the person.
+  if (input.approved && input.presenceChecked !== "applyProposalApproval") {
+    await assertPresenceForRequest({
+      userId: input.userId,
+      kind: "skill",
+      id: input.skillId,
+      proof: input.presence ?? null,
+      door: input.door ?? "setSkillApproved",
+    });
+  }
   const existing = await db.query.skills.findFirst({
     where: eq(skills.id, input.skillId),
   });
