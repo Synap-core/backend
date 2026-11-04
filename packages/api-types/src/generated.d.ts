@@ -622,7 +622,10 @@ export interface UnitStateView {
 declare const AGENT_HARNESSES: readonly [
 	{
 		readonly cliTarget: "claude-code";
-		readonly doors: readonly ["account", "pod"];
+		readonly doors: readonly [
+			"account",
+			"pod"
+		];
 		readonly label: "Claude Code";
 		readonly launch: {
 			readonly modelFlag: "--model";
@@ -637,28 +640,37 @@ declare const AGENT_HARNESSES: readonly [
 	},
 	{
 		readonly cliTarget: "claude-desktop";
-		readonly doors: readonly ["pod"];
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Claude Desktop";
 		readonly slug: "claude-desktop";
 		readonly surface: true;
 	},
 	{
 		readonly cliTarget: "cursor";
-		readonly doors: readonly ["account", "pod"];
+		readonly doors: readonly [
+			"account",
+			"pod"
+		];
 		readonly label: "Cursor";
 		readonly slug: "cursor";
 		readonly surface: true;
 	},
 	{
 		readonly cliTarget: "raycast";
-		readonly doors: readonly ["pod"];
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Raycast";
 		readonly slug: "raycast";
 		readonly surface: true;
 	},
 	{
 		readonly cliTarget: "codex";
-		readonly doors: readonly ["pod"];
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Codex";
 		readonly launch: {
 			readonly modelFlag: "--model";
@@ -669,77 +681,100 @@ declare const AGENT_HARNESSES: readonly [
 	},
 	{
 		readonly cliTarget: "openwebui";
-		readonly doors: readonly ["pod"];
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Open WebUI";
 		readonly slug: "openwebui";
 		readonly surface: true;
 	},
 	{
 		readonly cliTarget: null;
-		readonly doors: readonly ["pod"];
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Discord";
 		readonly slug: "discord";
 		readonly surface: true;
 	},
 	{
 		readonly cliTarget: null;
-		readonly doors: readonly ["pod"];
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Proton";
 		readonly slug: "proton";
 		readonly surface: true;
 	},
 	{
 		readonly cliTarget: "generic";
-		readonly doors: readonly ["pod"];
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Generic";
 		readonly slug: "generic";
 		readonly surface: true;
 	},
 	{
 		readonly cliTarget: "chatgpt";
-		readonly doors: readonly ["account", "pod"];
+		readonly doors: readonly [
+			"account",
+			"pod"
+		];
 		readonly label: "ChatGPT";
 		readonly slug: "chatgpt";
 		readonly surface: true;
 	},
 	{
 		readonly cliTarget: "opencode";
-		readonly doors: readonly ["pod"];
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "OpenCode";
 		readonly slug: "opencode";
 		readonly surface: true;
 	},
 	{
 		readonly cliTarget: "windsurf";
-		readonly doors: readonly ["pod"];
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Windsurf";
 		readonly slug: "windsurf";
 		readonly surface: true;
 	},
 	{
 		readonly cliTarget: "goose";
-		readonly doors: readonly ["pod"];
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Goose";
 		readonly slug: "goose";
 		readonly surface: true;
 	},
 	{
 		readonly cliTarget: "zed";
-		readonly doors: readonly ["pod"];
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Zed";
 		readonly slug: "zed";
 		readonly surface: true;
 	},
 	{
 		readonly cliTarget: "vscode";
-		readonly doors: readonly ["pod"];
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "VS Code";
 		readonly slug: "vscode";
 		readonly surface: true;
 	},
 	{
 		readonly cliTarget: "grok";
-		readonly doors: readonly ["pod"];
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Grok";
 		readonly slug: "grok";
 		readonly surface: true;
