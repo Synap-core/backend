@@ -17,7 +17,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const defineCell = vi.fn(async (_args: { workspaceId: string | null }) => ({
   id: "cell-1",
 }));
-vi.mock("../../../services/cells/define-cell.js", () => ({
+// Partial, like the database mocks below: the executor also imports
+// `storedCellContentForPayload` from this module (fingerprint check).
+vi.mock("../../../services/cells/define-cell.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../../services/cells/define-cell.js")
+  >()),
   defineCell: (args: { workspaceId: string | null }) => defineCell(args),
 }));
 vi.mock("../executors/shared.js", () => ({ reportApproved: () => undefined }));
