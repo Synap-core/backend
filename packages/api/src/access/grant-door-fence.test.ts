@@ -953,3 +953,99 @@ describe("a person's channel doors", () => {
     ).toBe(false);
   });
 });
+
+describe("read doors a scoped key met unclassified (findings 3122ba42, cce86e6b, 7da9c21f)", () => {
+  // The key a computer or the CLI gets: one scope, no pin, AI read & propose.
+  const COMPUTER = key({ permissions: aiDefaultCapabilities() });
+  const PINNED = key({
+    permissions: aiDefaultCapabilities(),
+    workspaceIds: ["w1"],
+  });
+  const DENY_ALL = key({ permissions: [] });
+  /** Aggregate doors: open to an unpinned key reading every subject. */
+  const AGGREGATE: ReadonlyArray<readonly [string, readonly string[]]> = [
+    [
+      "/capabilities/catalog",
+      ["tool.read", "skill.read", "link.read", "automation.read"],
+    ],
+    ["/discover", ["entity.read", "relation_def.read"]],
+    ["/memory", ["entity.read", "preference.read"]],
+    ["/cells", ["widget.read"]],
+    ["/widget-definitions", ["widget.read"]],
+  ];
+  it.each(AGGREGATE)("GET %s is open to the computer's key", (path) => {
+    expect(isFencedGrant(COMPUTER)).toBe(true);
+    expect(restDoorAllowed("GET", path, COMPUTER)).toBe(true);
+    expect(restDoorAllowed("GET", `${path}/`, COMPUTER)).toBe(true);
+  });
+  it.each(AGGREGATE)(
+    "GET %s needs exactly the subjects it reads, unnarrowed",
+    (path, subjects) => {
+      expect(restDoorAllowed("GET", path, key({ permissions: subjects }))).toBe(
+        true
+      );
+      // Each subject is load-bearing: drop one and the door closes.
+      for (const missing of subjects)
+        expect(
+          restDoorAllowed(
+            "GET",
+            path,
+            key({ permissions: subjects.filter((s) => s !== missing) })
+          ),
+          `${path} without ${missing}`
+        ).toBe(false);
+      // Never a blanket allow: no route narrows these lists to a pin.
+      expect(restDoorAllowed("GET", path, PINNED)).toBe(false);
+      expect(
+        restDoorAllowed(
+          "GET",
+          path,
+          key({ permissions: subjects, workspaceIds: ["w1"] })
+        )
+      ).toBe(false);
+      expect(restDoorAllowed("GET", path, DENY_ALL)).toBe(false);
+    }
+  );
+  it("GET /memory reads what POST /memory/search reads: one declaration", () => {
+    for (const k of [COMPUTER, PINNED, DENY_ALL, DOC_ONLY])
+      expect(restDoorAllowed("GET", "/memory", k)).toBe(
+        restDoorAllowed("POST", "/memory/search", k)
+      );
+    // The other /memory routes stay owner-wide writes.
+    expect(hubRouteClass("GET", "/memory")).toBe("read");
+    expect(hubRouteClass("POST", "/memory")).toBe("owner-wide");
+    expect(hubRouteClass("DELETE", `/memory/${U}`)).toBe("owner-wide");
+  });
+  const SKILL_DOORS = [
+    "/agent-skills",
+    "/agent-skills/by-slug/rules%2Fstart-here",
+    "/agent-skills/by-slug/catalog",
+    `/agent-skills/${U}`,
+  ];
+  it.each(SKILL_DOORS)(
+    "GET %s loads a skill as MCP synap_load_skill does",
+    (path) => {
+      for (const k of [COMPUTER, PINNED, DENY_ALL, DOC_ONLY])
+        expect(restDoorAllowed("GET", path, k), String(k)).toBe(
+          mcpToolAllowed("synap_load_skill", true, k)
+        );
+      expect(restDoorAllowed("GET", path, PINNED)).toBe(true);
+      expect(restDoorAllowed("GET", path, DENY_ALL)).toBe(false);
+    }
+  );
+  it("the skill doors open no code skill and no deeper path", () => {
+    for (const path of [
+      "/agent-skills/executable",
+      `/agent-skills/executable/${U}`,
+      "/agent-skills/by-slug/rules/start-here",
+      "/agent-skills/not-a-uuid",
+    ])
+      expect(restDoorAllowed("GET", path, COMPUTER), path).toBe(false);
+  });
+  it("GET /skills/system serves the image's static SKILL.md files to any key", () => {
+    expect(restDoorAllowed("GET", "/skills/system", DENY_ALL)).toBe(true);
+    expect(restDoorAllowed("GET", "/skills/system", PINNED)).toBe(true);
+    // The pod's skill list is another door, still unclassified.
+    expect(restDoorAllowed("GET", "/skills", COMPUTER)).toBe(false);
+  });
+});
