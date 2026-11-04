@@ -33,6 +33,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  GRANT_SUBJECT_CATALOG,
+  assertPermissions,
+} from "@synap-core/types/grants";
 
 // ─── In-memory store standing in for Postgres ────────────────────────────────
 
@@ -439,6 +443,23 @@ describe("discovery metadata", () => {
     expect(doc.token_endpoint).toBe(`${ISSUER}/token`);
     expect(doc.registration_endpoint).toBe(`${ISSUER}/register`);
     expect(doc.code_challenge_methods_supported).toEqual(["S256"]);
+  });
+
+  it("advertises the permissions a pod app may request, from the grant catalog", async () => {
+    const res = await oauthApp.request(
+      "/.well-known/oauth-authorization-server"
+    );
+    const doc = (await res.json()) as any;
+    expect(doc.synap_app_permissions).toEqual(
+      GRANT_SUBJECT_CATALOG.flatMap((s) =>
+        s.actions.map((a) => `${s.subject}.${a}`)
+      )
+    );
+    expect(doc.synap_app_permissions).toContain("entity.read");
+    // `scope` values stay the narrowed set the server accepts, no permission names.
+    expect(doc.scopes_supported).toEqual(["mcp.read", "mcp.write"]);
+    // Every advertised permission is one the CIMD parser accepts.
+    expect(() => assertPermissions(doc.synap_app_permissions)).not.toThrow();
   });
 
   it("canonicalizes a PUBLIC_URL with a trailing slash", async () => {
