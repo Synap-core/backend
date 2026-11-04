@@ -71,7 +71,15 @@ const dialect = new PgDialect();
 function defaultOf(c: ReturnType<typeof getTableConfig>["columns"][number]) {
   if (!c.hasDefault || c.default === undefined) return "";
   const d = c.default;
-  if (is(d, SQL)) return ` DEFAULT ${dialect.sqlToQuery(d).sql}`;
+  if (is(d, SQL)) {
+    const sql = dialect.sqlToQuery(d).sql;
+    // PGlite's clock ticks in milliseconds, so its `now()` round-trips through
+    // a JS `Date` and hides the defect; Postgres' `now()` has microseconds.
+    // Add some, so a row stamped by the column default is what Postgres writes.
+    return sql === "now()"
+      ? ` DEFAULT (now() + interval '123 microseconds')`
+      : ` DEFAULT ${sql}`;
+  }
   if (typeof d === "string") return ` DEFAULT '${d.replace(/'/g, "''")}'`;
   if (typeof d === "number" || typeof d === "boolean") return ` DEFAULT ${d}`;
   return ` DEFAULT '${JSON.stringify(d).replace(/'/g, "''")}'`;
