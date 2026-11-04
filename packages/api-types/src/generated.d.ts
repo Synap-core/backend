@@ -14175,6 +14175,16 @@ export type BranchTreeNode = {
 	channel: Channel;
 	children: BranchTreeNode[];
 };
+/** The object a conversation belongs to: an `/open/<type>/<id>` address. */
+export interface ChannelLinkedObject {
+	/** The open grammar's kind (`session`, `entity`, `document`, `channel`, …). */
+	type: string;
+	id: string;
+	/** Its name, when the reader may read it; null otherwise. */
+	title: string | null;
+	/** Which rule found it. */
+	via: "context" | "parent" | "session_room";
+}
 export interface SearchResult {
 	id: string;
 	collection: string;
@@ -31488,6 +31498,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} & {
 					objectName: string | null;
 				})[] | undefined;
+				linkedObject: ChannelLinkedObject | null;
 			};
 		}>;
 		getChannelContext: import("@trpc/server").TRPCQueryProcedure<{
