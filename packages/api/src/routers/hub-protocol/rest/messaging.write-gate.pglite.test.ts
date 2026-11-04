@@ -238,6 +238,11 @@ beforeAll(async () => {
   );
   const byName = new Map(tables.map((t) => [getTableConfig(t).name, t]));
   for (const t of byName.values()) await h.client!.exec(pgliteTableDdl(t));
+  // The DDL helper creates no indexes: the account upsert needs its unique
+  // (user, provider, external id) index to resolve ON CONFLICT.
+  await h.client!.exec(
+    `create unique index idx_messaging_accounts_user_provider_external on messaging_accounts (user_id, provider, external_id)`
+  );
   await q(
     `insert into users (id, email, user_type) values ($1, $2, 'human'), ($3, $4, 'human')`,
     [OWNER, "owner-wg@x.test", OTHER, "other-wg@x.test"]
@@ -248,9 +253,9 @@ beforeAll(async () => {
   );
   await q(
     `insert into messaging_accounts (id, user_id, provider, external_id, display_name) values
-       ($1, $2, 'LINKEDIN', 'acc-owner', 'Owner LinkedIn'),
-       ($3, $2, 'WHATSAPP', 'acc-owner-2', 'Owner WhatsApp'),
-       ($4, $5, 'LINKEDIN', 'acc-other', 'Other LinkedIn')`,
+       ($1, $2, 'linkedin', 'acc-owner', 'Owner LinkedIn'),
+       ($3, $2, 'whatsapp', 'acc-owner-2', 'Owner WhatsApp'),
+       ($4, $5, 'linkedin', 'acc-other', 'Other LinkedIn')`,
     [ACC_OWNER, OWNER, ACC_OWNER_2, ACC_OTHER, OTHER]
   );
   // Three conversations linked to a record: two of the owner's, one of the
