@@ -113,6 +113,7 @@ export { registerArtifactsRoutes } from "./artifacts.js";
 export { registerRunsRoutes } from "./runs.js";
 export { registerBoxRunsRoutes } from "./box-runs.js";
 export { registerComputerWakesRoutes } from "./computer-wakes.js";
+export { registerHostJobsRoutes } from "./host-jobs.js";
 export { registerDiagnoseRoutes } from "./diagnose.js";
 export { registerWorkflowsRoutes } from "./workflows.js";
 export { registerResolveRoutes } from "./resolve.js";
