@@ -144,6 +144,12 @@ export interface CreateNotificationInput {
   // Override registry defaults (optional)
   groupKey?: string;
   expiresAt?: Date;
+  /**
+   * The row's level when the PRODUCER derived one (a needs-you ask's P-level,
+   * `NEEDS_YOU_PRIORITY_NOTIFICATION_LEVEL`); else the registry's. Stored on
+   * `notifications.priority` and sent to the bell; no push decision reads it.
+   */
+  priority?: NotificationPriority;
 
   /**
    * Where a TAP on this notification should land, as `{kind, id}` — the same
@@ -701,7 +707,7 @@ export const NotificationService = {
         userId: input.userId,
         type: input.type,
         category: def.category as NotificationCategory,
-        priority: def.priority as NotificationPriority,
+        priority: input.priority ?? (def.priority as NotificationPriority),
         title,
         body,
         icon: def.icon ?? undefined,
@@ -817,7 +823,7 @@ export const NotificationService = {
         id: row.id,
         type: input.type,
         category: def.category,
-        priority: def.priority,
+        priority: input.priority ?? def.priority,
         title,
         body,
         icon: def.icon ?? undefined,

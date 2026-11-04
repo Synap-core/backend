@@ -17,8 +17,9 @@
  *      own, open), else the pod's automatic grouping (`resolveSessionHandle`
  *      → `resolveWorkSession`: the conversation's session, else the person's
  *      one unclaimed open session), handed in as `ctx.sessionId`;
- *   3. a small one-ask session opened for it, named by the question, with no
- *      criteria asked of the caller (the answer is its only deliverable).
+ *   3. the asker's ONE standing "Asks from <agent>" session (opened on its
+ *      first ask, with no criteria asked of the caller): never one session
+ *      per ask, which would escape the per-session push dedupe.
  *
  * The PRIORITY is not the caller's: the needs-you read derives P0-P3
  * (`needsYouPriority`); `urgency` can only lower it. This door changes no push
@@ -62,9 +63,89 @@ export function blockedReasonForAsk(
   return "decision";
 }
 
-/** A one-ask session's goal: the question, said as the outcome. */
-function oneAskGoal(question: string): string {
-  return `Get the person's answer: ${question}`;
+/**
+ * The client key that marks an asker's STANDING asks session. Never a
+ * request's client key (those are `key:` / `agent:` / `channel:` / per-call),
+ * so the session attracts none of the asker's other writes, and it is never
+ * the "one unclaimed open session" every other conversation would fall into
+ * (`resolveWorkSession` rung 3 reads only sessions with no client key).
+ */
+export function standingAsksClientKey(
+  agentUserId: string | undefined,
+  userId: string
+): string {
+  return agentUserId ? `asks:agent:${agentUserId}` : `asks:person:${userId}`;
+}
+
+/**
+ * The asker's ONE standing "Asks from <agent>" session: its open one, else a
+ * new one (no criteria asked of the caller — its deliverables ARE the asks).
+ *
+ * Why one per asker, not one per ask (effects review ef0d7294 §0.5): a
+ * `session.needs_you` push is deduped per SESSION (6 h), and attribution
+ * declines when several sessions are open, so a fresh session per call would
+ * be a fresh push per call. One standing session keeps an outside AI's asks in
+ * one place and under one dedupe window.
+ */
+async function standingAskSession(input: {
+  userId: string;
+  agentUserId?: string;
+}): Promise<
+  | { status: "ok"; sessionId: string }
+  | { status: "proposed"; proposalId: string; reviewUrl?: string }
+> {
+  const { db, focusSessions, users, and, eq, inArray, desc, drizzleSql } =
+    await import("@synap/database");
+  const { OPEN_SESSION_STATUSES } =
+    await import("../../../services/focus-sessions/session-statuses.js");
+  const clientKey = standingAsksClientKey(input.agentUserId, input.userId);
+  const [open] = await db
+    .select({ id: focusSessions.id })
+    .from(focusSessions)
+    .where(
+      and(
+        eq(focusSessions.userId, input.userId),
+        inArray(
+          focusSessions.status,
+          OPEN_SESSION_STATUSES.filter((st) => st !== "scheduled")
+        ),
+        drizzleSql`${focusSessions.metadata} ->> 'clientKey' = ${clientKey}`
+      )
+    )
+    // SESSION-KIND-LENS-EXEMPT: one row by its asker's marker, not a list door.
+    .orderBy(desc(focusSessions.startedAt))
+    .limit(1);
+  if (open) return { status: "ok", sessionId: open.id };
+
+  const [asker] = input.agentUserId
+    ? await db
+        .select({ name: users.name })
+        .from(users)
+        .where(eq(users.id, input.agentUserId))
+        .limit(1)
+    : [];
+  const name = asker?.name?.trim() || (input.agentUserId ? "an agent" : "you");
+  const { createFocusSession } =
+    await import("../../../services/focus-sessions/create-session.js");
+  const created = await createFocusSession({
+    userId: input.userId,
+    agentUserId: input.agentUserId,
+    title: `Asks from ${name}`,
+    goal: `Answer what ${name} asks you`,
+    // Its deliverables are the asks themselves: no NO_CRITERIA refusal.
+    requireCriteria: false,
+    clientKey,
+    // Never turn a conversation's write receipt into the asks session.
+    adoptAutoOpened: false,
+  });
+  if (created.status === "proposed") {
+    return {
+      status: "proposed",
+      proposalId: created.proposalId,
+      ...(created.reviewUrl ? { reviewUrl: created.reviewUrl } : {}),
+    };
+  }
+  return { status: "ok", sessionId: created.session.id };
 }
 
 const text = (v: unknown): string | undefined =>
@@ -182,7 +263,7 @@ export const askPersonHandlers: McpHandlerMap = {
       });
     }
     let sessionId: string | undefined;
-    let filedOn: "dedupe" | "named" | "attributed" | "new";
+    let filedOn: "dedupe" | "named" | "attributed" | "standing";
     let slotKey: string | undefined;
     const deduped =
       agentUserId && ask.dedupeKey
@@ -211,7 +292,7 @@ export const askPersonHandlers: McpHandlerMap = {
       sessionId = ctx.sessionId;
       filedOn = "attributed";
     } else {
-      filedOn = "new";
+      filedOn = "standing";
     }
 
     // An ask on an ENDED session reaches nobody (pod finding 619aa1e3).
@@ -234,48 +315,27 @@ export const askPersonHandlers: McpHandlerMap = {
       if (isTerminalSessionStatus(row.status)) {
         if (filedOn === "named") {
           return ok({
-            error: `Focus session ${sessionId} has ended (${row.status}): an ask there reaches nobody — NOTHING WAS FILED. Omit sessionId to file it on its own.`,
+            error: `Focus session ${sessionId} has ended (${row.status}): an ask there reaches nobody — NOTHING WAS FILED. Omit sessionId to file it on your standing asks session.`,
           });
         }
         sessionId = undefined;
-        filedOn = "new";
+        filedOn = "standing";
       }
     }
 
     if (!sessionId) {
-      const [{ createFocusSession }, { requestClientKey }] = await Promise.all([
-        import("../../../services/focus-sessions/create-session.js"),
-        import("../../../services/focus-sessions/resolve-work-session.js"),
-      ]);
-      const created = await createFocusSession({
-        userId,
-        agentUserId,
-        // A personal session (no space) unless the caller's lens names a
-        // project: the ask is the person's, wherever the asker works.
-        projectId: text(args.projectId),
-        title: question,
-        goal: oneAskGoal(question),
-        // The one-ask session's only deliverable IS the answer: no criteria
-        // are asked of the caller (no NO_CRITERIA refusal on this door).
-        requireCriteria: false,
-        // Bound to this conversation, as `synap_start_session` binds: its next
-        // writes group here, and an unbound agent session would become every
-        // other conversation's "one unclaimed open session" (rung 3).
-        clientKey: requestClientKey(agentUserId) ?? null,
-        // Never turn the conversation's write receipt into this ask's session.
-        adoptAutoOpened: false,
-      });
-      if (created.status === "proposed") {
+      const standing = await standingAskSession({ userId, agentUserId });
+      if (standing.status === "proposed") {
         return ok({
           status: "proposed",
           filedOn,
-          proposalId: created.proposalId,
-          reviewUrl: created.reviewUrl,
+          proposalId: standing.proposalId,
+          reviewUrl: standing.reviewUrl,
           message:
-            "Opening the session that holds your ask needs the person's approval first: nothing is in front of them yet, and your ask was NOT filed. Do not retry; ask again once it is approved, or name a session you own with sessionId.",
+            "Opening the session that holds your asks needs the person's approval first: nothing is in front of them yet, and your ask was NOT filed. Do not retry; ask again once it is approved, or name a session you own with sessionId.",
         });
       }
-      sessionId = created.session.id;
+      sessionId = standing.sessionId;
     }
 
     // ── File it: THE owed-ask write (`updateFocusSession`) ───────────────────
@@ -315,6 +375,15 @@ export const askPersonHandlers: McpHandlerMap = {
       filedOn,
       question,
       expectedPriority,
+      // An ask filed with the PERSON's own key (no agent principal) lands in
+      // Needs you but never rings their phone (`notifySessionNeedsYou` tells
+      // the person only what an agent handed them).
+      ...(agentUserId
+        ? {}
+        : {
+            pushes: false,
+            note: "Filed with the person's own key: it is in their Needs you, but no notification is sent for it. Use an agent key for the person to be told.",
+          }),
       ...(result.warnings?.length ? { warnings: result.warnings } : {}),
       next: `Wait for the answer with synap_wait_for_answer({sessionId: "${sessionId}"}); if the person answers you in this chat instead, relay their words with synap_relay_answer({sessionId: "${sessionId}", slotLabel: ${JSON.stringify(question)}, disposition: "answered", quote}).`,
     });

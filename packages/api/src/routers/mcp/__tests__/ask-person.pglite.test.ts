@@ -4,19 +4,22 @@
  *
  * Real: the MCP handler, the attribution resolver an MCP call goes through
  * (`resolveSessionHandle` → `resolveWorkSession`, under the request's client
- * key), `createFocusSession` (the one-ask session), `updateFocusSession` (THE
- * owed-ask write), the owed read's projection (`projectOwedSlots`) and the
- * needs-you signal (`signalFromOwedSlot`). Stubbed: governance (granted — its
- * own suites), the session room, realtime, block guidance, project placement,
- * side-effect events, and the needs-you producer (recorded, so the test sees
- * the person is told through the SAME producer `update_session` uses).
+ * key), `createFocusSession` (the agent's standing asks session),
+ * `updateFocusSession` (THE owed-ask write), the needs-you producer
+ * (`notifySessionNeedsYou`), the owed read's projection (`projectOwedSlots`)
+ * and the needs-you signal (`signalFromOwedSlot`). Stubbed: governance
+ * (granted — its own suites), the session room, realtime, block guidance,
+ * project placement, side-effect events, and the notification WRITE
+ * (recorded, so the test reads the row the producer asked for).
  *
- *   - no session for this conversation → a one-ask session, no criteria asked;
+ *   - no session for this conversation → the agent's ONE standing "Asks from"
+ *     session (no criteria asked), reused by its next conversation;
  *   - the stored ask is the SAME row `synap_update_session` writes;
  *   - a conversation with a session → the ask lands on it;
  *   - the same `dedupeKey` → that ask is updated, never a second one;
  *   - an ended session named, or a malformed ask → refused, nothing filed;
- *   - the needs-you read derives the priority from what was stored.
+ *   - the priority: on the notification row (existing scale) and on the
+ *     needs-you signal derived from what was stored.
  */
 import { describe, it, expect, vi, beforeAll } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -29,7 +32,7 @@ const h = vi.hoisted(() => {
       query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
     },
     db: null as unknown,
-    notified: [] as Array<{ sessionId: string; byAgent: boolean }>,
+    notified: [] as Array<Record<string, unknown>>,
     async init(): Promise<unknown> {
       if (!state.db) {
         const { PGlite } = await import("@electric-sql/pglite");
@@ -93,19 +96,20 @@ vi.mock(
     guidanceForBlockedSlots: async () => undefined,
   })
 );
-vi.mock(
-  "../../../services/focus-sessions/notify-needs-you.js",
-  async (importOriginal) => ({
-    ...(await importOriginal<Record<string, unknown>>()),
-    notifySessionNeedsYou: async (p: {
-      sessionId: string;
-      byAgent: boolean;
-    }) => {
-      h.notified.push({ sessionId: p.sessionId, byAgent: p.byAgent });
-      return true;
+// The REAL needs-you producer runs; only the notification write is recorded.
+vi.mock("../../../notifications/NotificationService.js", async (orig) => {
+  const actual = await orig<Record<string, unknown>>();
+  return {
+    ...actual,
+    NotificationService: {
+      ...(actual.NotificationService as object),
+      create: async (input: Record<string, unknown>) => {
+        h.notified.push(input);
+        return "n-1";
+      },
     },
-  })
-);
+  };
+});
 vi.mock("@synap/events", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   emitSideEffects: async () => undefined,
@@ -179,6 +183,8 @@ const AGENT = "22222222-2222-4222-8222-222222222222";
 const OUTSIDE = "key:k1|conv:claude-ai:outside";
 /** A Claude Code conversation that started its own session. */
 const INSIDE = "key:k1|conv:claude-code:inside";
+
+const IN_TWO_DAYS = new Date(Date.now() + 2 * 86_400_000).toISOString();
 
 const ASK = {
   mode: "confirm",
@@ -262,9 +268,9 @@ beforeAll(async () => {
 }, 120_000);
 
 describe("synap_ask_person, on PGlite", () => {
-  let outsideSession: string;
+  let standing: string;
 
-  it("an AI with no session files ONE owed ask on a one-ask session — no goal or criteria asked of it", async () => {
+  it("an AI with no session files ONE owed ask on its standing asks session — no goal or criteria asked of it", async () => {
     const before = await sessionCount();
     const out = await askPerson(OUTSIDE, {
       question: "Publish the launch post today?",
@@ -272,14 +278,22 @@ describe("synap_ask_person, on PGlite", () => {
       why: "The post is drafted and scheduled for 17:00",
       consequence: "Publishes the post to LinkedIn",
       reversible: false,
-      answerBy: "2026-11-05T17:00:00Z",
+      answerBy: IN_TWO_DAYS,
     });
-    expect(out).toMatchObject({ status: "asked", filedOn: "new" });
+    expect(out).toMatchObject({ status: "asked", filedOn: "standing" });
     expect(out.reasonCode).toBeUndefined();
-    outsideSession = out.sessionId as string;
+    standing = out.sessionId as string;
     expect(await sessionCount()).toBe(before + 1);
 
-    const slots = await slotsOf(outsideSession);
+    const [row] = (
+      await q<{ title: string; criteria: unknown[] }>(
+        `select title, criteria from focus_sessions where id = $1`,
+        [standing]
+      )
+    ).rows;
+    expect(row).toMatchObject({ title: "Asks from Claude", criteria: [] });
+
+    const slots = await slotsOf(standing);
     expect(slots).toHaveLength(1);
     expect(slots[0]).toMatchObject({
       kind: "ask",
@@ -292,15 +306,40 @@ describe("synap_ask_person, on PGlite", () => {
         mode: "confirm",
         consequence: "Publishes the post to LinkedIn",
         reversible: false,
-        answerBy: "2026-11-05T17:00:00Z",
+        answerBy: IN_TWO_DAYS,
       },
     });
     expect(slots[0]!.owedSince).toEqual(expect.any(String));
-    // The person is told through the SAME producer update_session uses.
-    expect(h.notified).toContainEqual({
-      sessionId: outsideSession,
-      byAgent: true,
+    // The person is told through the SAME producer update_session uses, and
+    // the row carries the P-level on the EXISTING scale (P1 = high).
+    expect(h.notified).toContainEqual(
+      expect.objectContaining({
+        type: "session.needs_you",
+        sourceId: standing,
+        priority: "high",
+      })
+    );
+  });
+
+  it("the same agent's NEXT conversation lands on the same standing session — never one session (and one push window) per ask", async () => {
+    const before = await sessionCount();
+    const out = await askPerson("key:k1|conv:claude-ai:another-chat", {
+      question: "Which photo for the post?",
+      ask: {
+        mode: "choose",
+        options: [{ label: "A", recommended: true }, { label: "B" }],
+      },
     });
+    expect(out).toMatchObject({
+      status: "asked",
+      filedOn: "standing",
+      sessionId: standing,
+    });
+    expect(await sessionCount()).toBe(before);
+    expect((await slotsOf(standing)).map((s) => s.label)).toEqual([
+      "Publish the launch post today?",
+      "Which photo for the post?",
+    ]);
   });
 
   it("ONE STORE: the row is the one synap_update_session writes for the same owed ask", async () => {
@@ -324,7 +363,7 @@ describe("synap_ask_person, on PGlite", () => {
                 ...ASK,
                 consequence: "Publishes the post to LinkedIn",
                 reversible: false,
-                answerBy: "2026-11-05T17:00:00Z",
+                answerBy: IN_TWO_DAYS,
               },
             },
           ],
@@ -340,15 +379,18 @@ describe("synap_ask_person, on PGlite", () => {
     expect(JSON.parse(res.content[0]!.text)).toMatchObject({
       status: "updated",
     });
-    const strip = (s: ExpectedOutput) => {
-      const { owedSince: _o, ...rest } = s as ExpectedOutput & {
+    const strip = (s: ExpectedOutput | undefined) => {
+      const { owedSince: _o, ...rest } = (s ?? {}) as ExpectedOutput & {
         owedSince?: string;
       };
       return rest;
     };
     const [viaUpdate] = await slotsOf(other);
-    const [viaAskPerson] = await slotsOf(outsideSession);
-    expect(strip(viaAskPerson!)).toEqual(strip(viaUpdate!));
+    const viaAskPerson = (await slotsOf(standing)).find(
+      (s) => s.label === "Publish the launch post today?"
+    );
+    expect(viaAskPerson).toBeDefined();
+    expect(strip(viaAskPerson)).toEqual(strip(viaUpdate));
   });
 
   it("a conversation with its own session: the ask lands on THAT session, through the pod's attribution", async () => {
@@ -373,14 +415,20 @@ describe("synap_ask_person, on PGlite", () => {
   });
 
   it("the same dedupeKey UPDATES the agent's open ask — one card, wherever it was filed", async () => {
-    const first = await askPerson("key:k1|conv:claude-ai:dedupe-1", {
+    // Filed on the conversation's own session…
+    const home = await seedSession({
+      clientKey: "key:k1|conv:claude-code:dedupe-1",
+      title: "Domains",
+    });
+    const first = await askPerson("key:k1|conv:claude-code:dedupe-1", {
       question: "Renew the domain?",
       ask: { mode: "confirm" },
       dedupeKey: "domain-renewal",
     });
-    expect(first).toMatchObject({ status: "asked", filedOn: "new" });
+    expect(first).toMatchObject({ status: "asked", sessionId: home });
     const before = await sessionCount();
-    // Another conversation of the same agent, a reworded question.
+    const standingBefore = (await slotsOf(standing)).length;
+    // …asked again from another conversation, reworded: the same ask.
     const again = await askPerson("key:k1|conv:claude-ai:dedupe-2", {
       question: "Renew synap.live for 2 years?",
       ask: { mode: "confirm" },
@@ -390,10 +438,11 @@ describe("synap_ask_person, on PGlite", () => {
     expect(again).toMatchObject({
       status: "updated",
       filedOn: "dedupe",
-      sessionId: first.sessionId,
+      sessionId: home,
     });
     expect(await sessionCount()).toBe(before);
-    const slots = await slotsOf(first.sessionId as string);
+    expect((await slotsOf(standing)).length).toBe(standingBefore);
+    const slots = await slotsOf(home);
     expect(slots).toHaveLength(1);
     expect(slots[0]).toMatchObject({
       label: "Renew synap.live for 2 years?",
@@ -408,6 +457,7 @@ describe("synap_ask_person, on PGlite", () => {
       status: "closed",
     });
     const before = await sessionCount();
+    const standingBefore = (await slotsOf(standing)).length;
     const closed = await askPerson("key:k1|conv:claude-code:ended", {
       sessionId: ended,
       question: "Still there?",
@@ -425,14 +475,21 @@ describe("synap_ask_person, on PGlite", () => {
     const noAsk = await askPerson(OUTSIDE, { question: "When?" });
     expect(String(noAsk.error)).toContain("NOTHING WAS FILED");
     expect(await sessionCount()).toBe(before);
+    expect((await slotsOf(standing)).length).toBe(standingBefore);
   });
 
-  it("the needs-you read derives the priority from what the door stored", async () => {
+  it("the priority reaches the notification row and the needs-you read from what the door stored", async () => {
+    h.notified.length = 0;
     const out = await askPerson("key:k1|conv:claude-ai:soon", {
       question: "Approve the hotfix deploy?",
       ask: { mode: "confirm", stakes: "commitment" },
       answerBy: new Date(Date.now() + 20 * 60_000).toISOString(),
     });
+    expect(out).toMatchObject({ status: "asked", expectedPriority: "P0" });
+    // P0 = urgent on the existing notifications.priority scale.
+    expect(h.notified).toContainEqual(
+      expect.objectContaining({ type: "session.needs_you", priority: "urgent" })
+    );
     const [row] = (
       await q<{
         id: string;
@@ -444,7 +501,7 @@ describe("synap_ask_person, on PGlite", () => {
         [out.sessionId]
       )
     ).rows;
-    const [owed] = projectOwedSlots({
+    const owed = projectOwedSlots({
       id: row!.id,
       goal: row!.goal,
       status: row!.status,
@@ -456,7 +513,7 @@ describe("synap_ask_person, on PGlite", () => {
       lastAgentWorkAt: new Date(Date.now() - 10 * 60_000).toISOString(),
       turnInFlight: false,
       startedAt: new Date(Date.now() - 60 * 60_000).toISOString(),
-    } as never);
+    } as never).find((s) => s.label === "Approve the hotfix deploy?");
     const signal = signalFromOwedSlot(owed!);
     expect(signal.needsYouClass).toBe("needs_you");
     expect(signal.priority).toBe("P0");

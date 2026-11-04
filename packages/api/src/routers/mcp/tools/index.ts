@@ -3099,7 +3099,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Put ONE thing in front of the PERSON: a question only they can answer, a choice, a form, something to do or to hand over. It lands in their Needs you, where they answer it. (synap_ask asks the POD, not the person.) Works with or without a session: it files on the session this conversation works in (or `sessionId`), else on a small session opened just for this ask — you never need a goal or criteria. It is the same owed ask `synap_update_session` writes with owner 'human' + `ask`, so inside a session either door is fine. " +
+          "Put ONE thing in front of the PERSON: a question only they can answer, a choice, a form, something to do or to hand over. It lands in their Needs you, where they answer it. (synap_ask asks the POD, not the person.) Works with or without a session: it files on the session this conversation works in (or `sessionId`), else on your one standing \"Asks from <you>\" session — you never need a goal or criteria. It is the same owed ask `synap_update_session` writes with owner 'human' + `ask`, so inside a session either door is fine. " +
           "Send `question` (one line) and `ask` (confirm / choose with ONE recommended / form / act / provide). Add `why`, `unblocks`, `consequence` (what the answer DOES) and `reversible` when you know them. " +
           "PRIORITY is the pod's, not yours: it derives P0-P3 (P0 = due within the hour by `answerBy`; P1 = waiting on them; P2 = feed only; P3 = digest). `urgency` is a hint that can only LOWER it ('whenever' never pushes). " +
           "`dedupeKey`: asking again with the same key UPDATES your open ask instead of adding a second card. " +
@@ -3189,12 +3189,7 @@ export const tools = {
             sessionId: {
               type: "string",
               description:
-                "Optional: a session of yours, still open, to file it on. Omit it: the ask lands where this conversation's writes are grouped, else on a session of its own.",
-            },
-            projectId: {
-              type: "string",
-              description:
-                "Optional: the project a NEW one-ask session is filed in (ignored when the ask lands on an existing session).",
+                "Optional: a session of yours, still open, to file it on. Omit it: the ask lands where this conversation's writes are grouped, else on your standing asks session.",
             },
           },
           required: ["question", "ask"],

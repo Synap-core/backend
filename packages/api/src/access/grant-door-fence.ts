@@ -799,6 +799,7 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
       "link"
     ),
     synap_relay_answer: WRITE,
+    synap_ask_person: WRITE,
     synap_create_cell: WRITE,
     synap_promote_cell_to_renderer: WRITE,
     synap_promote_session_to_playbook: WRITE,

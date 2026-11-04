@@ -84,3 +84,34 @@ export function needsYouPriority(
   if (facts.urgency === "whenever") level = quieter(level, "P2");
   return level;
 }
+
+/**
+ * The level a needs-you NOTIFICATION row is stamped with (the EXISTING
+ * `notifications.priority` scale, low · normal · high · urgent — never a fifth
+ * scale). P1 is `high`, the `session.needs_you` registry default, so an ask
+ * with no deadline and no urgency is stamped exactly as before. Display only:
+ * no push decision reads it.
+ */
+export const NEEDS_YOU_PRIORITY_NOTIFICATION_LEVEL: Readonly<
+  Record<NeedsYouPriority, "urgent" | "high" | "normal" | "low">
+> = { P0: "urgent", P1: "high", P2: "normal", P3: "low" };
+
+/** The louder of several levels (a push naming several asks names the loudest). */
+export function loudestNeedsYouPriority(
+  levels: readonly NeedsYouPriority[]
+): NeedsYouPriority | null {
+  let best: NeedsYouPriority | null = null;
+  for (const l of levels) if (best === null || rank(l) < rank(best)) best = l;
+  return best;
+}
+
+/**
+ * A needs-you row's rank in the triage order (`orderNeedsYouByBlocking`): its
+ * level's index, and P1 when the pod stamped none (a notification, an access
+ * request, an older pod) — so only a row the pod DERIVED as quieter or louder
+ * moves, and every other row keeps its place.
+ */
+export function needsYouPriorityRank(priority: unknown): number {
+  const i = NEEDS_YOU_PRIORITIES.indexOf(priority as NeedsYouPriority);
+  return i === -1 ? rank("P1") : i;
+}
