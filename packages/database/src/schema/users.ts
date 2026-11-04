@@ -127,6 +127,12 @@ export interface AgentMetadata {
    * (`push-decision.ts` rule 4b).
    */
   pushDailyLimit?: number;
+  /**
+   * COMPUTER principals only (0409): the person turned on "Installs from the pod" —
+   * the computer's key carries `host.runner` and leases the host jobs of the
+   * installations on itself. Kept here for the same reason as `runsScripts`.
+   */
+  hostsServices?: boolean;
 }
 
 export const users = pgTable("users", {

@@ -174,7 +174,7 @@ const PRIVILEGED_SCOPE_RULE: Record<keyof typeof MINT_SITES, PrivilegedRule> = {
     calls: 4,
   },
   "packages/api/src/services/machine-connect.ts":
-    'SETUP_AGENT_HUB_SCOPES + `box.runner` only when the person turned on "Runs scripts" for their OWN computer (server-chosen).',
+    'SETUP_AGENT_HUB_SCOPES + `box.runner` only when the person turned on "Runs scripts", and `host.runner` only when they turned on "Hosts services", for their OWN computer (server-chosen).',
   "packages/api/src/routers/hub-protocol/rest/mcp-redeem.ts":
     "scopes from the consent code, through mapCpScopesToPodScopes (drops every privileged scope).",
   "packages/api/src/routers/oauth/routes.ts":
