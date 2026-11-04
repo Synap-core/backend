@@ -21,6 +21,7 @@ import type { Node, Parent } from "unist";
 import type { Heading, Html, Root, RootContent, Text } from "mdast";
 import { visit } from "unist-util-visit";
 import { splitInlineMarkers } from "./markers.js";
+import { findObjectIds } from "./object-ids.js";
 import type { Diagnostic } from "./diagnostics.js";
 
 export const DESIGN_DIAGNOSTIC_CODES = [
@@ -34,9 +35,6 @@ export const DESIGN_DIAGNOSTIC_CODES = [
   "banned-phrase",
 ] as const;
 export type DesignDiagnosticCode = (typeof DESIGN_DIAGNOSTIC_CODES)[number];
-
-const UUID_IN_TEXT_RE =
-  /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
 
 /** The failure-words door's banned phrases (`feedback-and-forms.md` §4). */
 const BANNED_PHRASE_RE = /\b(oops|sorry|something went wrong)\b/i;
@@ -96,12 +94,14 @@ export function designDiagnostics(tree: Root): Diagnostic[] {
       .filter((s) => s.type === "text")
       .map((s) => (s as { value: string }).value)
       .join(" ");
-    const id = UUID_IN_TEXT_RE.exec(prose)?.[0];
+    // The renderer's own rule (`findObjectIds`): exactly the ids a reader
+    // sees as a chip, which plain-text readers still see as an id.
+    const id = findObjectIds(node.value)[0]?.id;
     if (id) {
       out.push({
         code: "bare-id",
         severity: "warning",
-        message: `"${id}" is a bare id in prose; a reader cannot open it.`,
+        message: `"${id}" is a bare id in prose: a screen looks it up, but search and summaries see only the id. Write it as [[kind:${id}|Name]].`,
         line: node.position?.start.line,
       });
     }

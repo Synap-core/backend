@@ -98,6 +98,12 @@ const READERS: Record<string, Probe> = {
     const p = core.createMarkdownProcessor().use(core.remarkSynapDirectives);
     return textValues(p.runSync(p.parse(DOC), DOC));
   },
+  // A renderer's transform (bare ids → object chips): every word stays.
+  linkObjectIds: () => textValues(core.linkObjectIds(core.parseMarkdown(DOC))),
+  remarkObjectIds: () => {
+    const p = core.createMarkdownProcessor().use(core.remarkObjectIds);
+    return textValues(p.runSync(p.parse(DOC), DOC));
+  },
 };
 
 /** NOT readers (or not of prose), and why. */
@@ -149,6 +155,8 @@ const NOT_READERS: Record<string, string> = {
   synapRemarkPlugins: "plugin list (in every reader)",
   ALERT_KINDS: "data",
   isMarkerHref: "predicate (a URL, no parse)",
+  OBJECT_REF_SCHEME: "data",
+  findObjectIds: "inline grammar (ids in one string)",
   readAlertMarker: "reads one text line (the alert-marker rule), no parse",
   // embeds + frames
   EMBED_DIRECTIVES: "data",

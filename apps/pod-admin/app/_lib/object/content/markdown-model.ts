@@ -13,6 +13,7 @@
 // the lazily-loaded view may pay for.
 import { splitMarkdownBlocks } from "@synap-core/markdown-core/diff";
 import { isMarkerHref } from "@synap-core/markdown-core/markers";
+import { OBJECT_REF_SCHEME } from "@synap-core/markdown-core/object-ids";
 import {
   CELL_FRAME_MAX_BYTES,
   htmlByteLength,
@@ -22,6 +23,10 @@ import {
   type MediaRef,
 } from "@synap-core/types/presentation";
 import { isHtmlPageSource } from "@synap-core/types/renderables";
+import {
+  resolveObjectNoun,
+  type ProfileIdentityInput,
+} from "@synap-core/types/vocabulary";
 import { openIn } from "../../../../lib/open-in";
 import { parseOpenParams } from "../../../open/open-params";
 
@@ -359,5 +364,160 @@ export function cellEmbedRead(query: {
     bytes,
     tooLarge: bytes > CELL_FRAME_MAX_BYTES,
     workspaceId: typeof def.workspaceId === "string" ? def.workspaceId : null,
+  };
+}
+
+// ─── Object references (a marker, or a bare id in prose) ────────────────────
+
+/**
+ * A reference in content: the kind its marker names (`null` when the author
+ * wrote only the id: `object://<id>`, from markdown-core `linkObjectIds`) and
+ * the id. Commands (`run://`, `open://`) are not references.
+ */
+export interface ObjectRef {
+  markerKind: string | null;
+  id: string;
+}
+
+export function objectRefOf(url: string | null | undefined): ObjectRef | null {
+  const raw = url?.trim() ?? "";
+  // The same order as `contentHref`: a web address is a web link first, even
+  // one with no path (`https://example.com` has the shape of a marker).
+  if (!isMarkerHref(raw)) return null;
+  const m = /^([a-z][a-z0-9_-]*):\/\/([^/?#\s]+)$/i.exec(raw);
+  if (!m) return null;
+  const scheme = m[1]!.toLowerCase();
+  if (COMMAND_SCHEMES.has(scheme) || EXTERNAL_PROTOCOLS.has(`${scheme}:`))
+    return null;
+  let id: string;
+  try {
+    id = decodeURIComponent(m[2]!);
+  } catch {
+    return null;
+  }
+  return { markerKind: scheme === OBJECT_REF_SCHEME ? null : scheme, id };
+}
+
+/**
+ * What the reader's own lookup says about a reference (`diagnose.resolveOpen`,
+ * the one user-floored "what is this id"). `unknown` = the lookup ran and
+ * nothing this reader can see has the id; `failed` = the lookup broke
+ * (retryable) — never folded into `unknown`. `unresolved` = this surface
+ * looks nothing up (no host).
+ */
+export type ObjectRefRead =
+  | { state: "unresolved" }
+  | { state: "loading" }
+  | {
+      state: "ready";
+      /** The open route label (`entity`, `document`, `session`…). */
+      type: string;
+      name: string | null;
+      openable: boolean;
+      /** The entity's kind, when it is one (`task`, `person`…). */
+      profileSlug?: string;
+      profile?: ProfileIdentityInput;
+    }
+  | { state: "unknown" }
+  | { state: "failed"; retry?: () => void };
+
+export function objectRefRead(query: {
+  isLoading: boolean;
+  error: unknown;
+  data:
+    | {
+        type?: string | null;
+        displayName?: string | null;
+        openable?: boolean | null;
+        profileSlug?: string | null;
+      }
+    | null
+    | undefined;
+  profile?: ProfileIdentityInput | null;
+  retry?: () => void;
+}): ObjectRefRead {
+  if (query.error)
+    return { state: "failed", ...(query.retry ? { retry: query.retry } : {}) };
+  if (query.isLoading) return { state: "loading" };
+  const type = query.data?.type?.trim();
+  if (!type)
+    return { state: "failed", ...(query.retry ? { retry: query.retry } : {}) };
+  if (type === "unknown") return { state: "unknown" };
+  const name = query.data?.displayName?.trim() || null;
+  const profileSlug = query.data?.profileSlug?.trim() || undefined;
+  return {
+    state: "ready",
+    type,
+    name,
+    openable: query.data?.openable === true,
+    ...(profileSlug ? { profileSlug } : {}),
+    ...(query.profile ? { profile: query.profile } : {}),
+  };
+}
+
+/** How a reference is drawn: plain words, or a chip with its kind's identity. */
+export type ObjectRefView =
+  | {
+      kind: "text";
+      text: string;
+      /** The lookup broke: the words stay, with a mark to ask again. */
+      failed?: { retry?: () => void };
+    }
+  | {
+      kind: "chip";
+      text: string;
+      /** The kind the icon and colour come from (the entity's kind first). */
+      identityKind: string;
+      profile?: ProfileIdentityInput;
+      href: string | null;
+      /** The name is still being looked up. */
+      pending: boolean;
+      failed?: { retry?: () => void };
+    };
+
+/**
+ * The one rule for drawing a reference.
+ *
+ * A BARE id (no marker kind) is a chip only once the lookup names it: until
+ * then, and when nobody this reader can see has it, it stays the text the
+ * author wrote (it may not be an object at all); a broken lookup keeps the
+ * text and marks it. A MARKER is always a chip on its own console page; its
+ * label wins, else the looked-up name, else its kind's noun (never empty,
+ * never the id).
+ */
+export function objectRefView(
+  ref: ObjectRef,
+  label: string,
+  read: ObjectRefRead
+): ObjectRefView {
+  const ready = read.state === "ready" ? read : null;
+  const failed =
+    read.state === "failed"
+      ? { failed: read.retry ? { retry: read.retry } : {} }
+      : {};
+  if (ref.markerKind === null) {
+    if (!ready) return { kind: "text", text: ref.id, ...failed };
+    const identityKind = ready.profileSlug ?? ready.type;
+    return {
+      kind: "chip",
+      text: ready.name ?? resolveObjectNoun(identityKind),
+      identityKind,
+      ...(ready.profile ? { profile: ready.profile } : {}),
+      href: ready.openable ? objectPage(ready.type, ref.id) : null,
+      pending: false,
+    };
+  }
+  const kind = objectKindForMarker(ref.markerKind);
+  const identityKind = ready ? (ready.profileSlug ?? ready.type) : kind;
+  const own = label.trim();
+  return {
+    kind: "chip",
+    text: own || ready?.name || resolveObjectNoun(identityKind),
+    identityKind,
+    ...(ready?.profile ? { profile: ready.profile } : {}),
+    href: objectPage(kind, ref.id),
+    pending: !own && read.state === "loading",
+    // A labelled marker reads right without the lookup: no mark.
+    ...(own ? {} : failed),
   };
 }
