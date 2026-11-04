@@ -2917,6 +2917,7 @@ ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "tool_profile" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "tool_groups" text[] NOT NULL DEFAULT '{}';
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "worker_served_at" timestamp with time zone;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "worker_served_version" text;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "origin" text;
 DO $$ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'api_keys_tool_profile_check'

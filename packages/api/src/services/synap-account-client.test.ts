@@ -1,13 +1,15 @@
 /**
  * Which agent the Synap account connector gets per AI client (W5): claude.ai
- * keeps `claude-web`, a registry client gets its own slug, an unknown client
- * the named `generic` fallback — never a silent `claude-web`.
+ * keeps `claude-web`, a client whose registry `doors` include `account` gets
+ * its own slug, any other client the named `generic` fallback (review
+ * bf96d410, lane B) — never a silent `claude-web`.
  */
 
 import { describe, expect, it } from "vitest";
-import { AGENT_HARNESSES } from "@synap-core/types/agents";
+import { AGENT_HARNESSES, type HarnessDoor } from "@synap-core/types/agents";
 
 import {
+  SYNAP_ACCOUNT_KEY_ORIGIN,
   isSynapAccountKey,
   registrySlugForHarness,
   resolveSynapAccountMint,
@@ -22,9 +24,29 @@ describe("resolveSynapAccountMint", () => {
     ).toMatchObject({ agentType: "claude-web", agentLabel: "Claude (Web)" });
   });
 
-  // Derived from the registry, never a hand-picked list.
-  it.each(AGENT_HARNESSES.map((h) => [h.slug, h.label] as const))(
-    "registry client %s gets its own agent",
+  it("the bare `claude` alias is no longer claude.ai: it is an unknown client", () => {
+    expect(resolveSynapAccountMint({ harness: "claude" }).agentType).toBe(
+      "generic"
+    );
+  });
+
+  // Derived from the registry, never a hand-picked list: the rows whose
+  // `doors` include `account` get their own agent, every other row `generic`.
+  const doorsOf = (h: (typeof AGENT_HARNESSES)[number]) =>
+    h.doors as readonly HarnessDoor[];
+  const accountDoor = AGENT_HARNESSES.filter((h) =>
+    doorsOf(h).includes("account")
+  );
+  const podOnly = AGENT_HARNESSES.filter(
+    (h) => !doorsOf(h).includes("account") && h.slug !== "generic"
+  );
+  it("the registry still has clients on both sides (non-vacuity)", () => {
+    expect(accountDoor.map((h) => h.slug)).toContain("chatgpt");
+    expect(podOnly.map((h) => h.slug)).toContain("grok");
+  });
+
+  it.each(accountDoor.map((h) => [h.slug, h.label] as const))(
+    "account-door client %s gets its own agent",
     (slug, label) => {
       expect(resolveSynapAccountMint({ harness: slug })).toMatchObject({
         agentType: slug,
@@ -33,11 +55,23 @@ describe("resolveSynapAccountMint", () => {
     }
   );
 
-  it("a longer Control Plane slug maps to its registry slug", () => {
-    expect(registrySlugForHarness("raycast-mcp-client")).toBe("raycast");
+  it.each(podOnly.map((h) => [h.slug] as const))(
+    "pod-only client %s is minted as generic, never its own slug",
+    (slug) => {
+      expect(resolveSynapAccountMint({ harness: slug }).agentType).toBe(
+        "generic"
+      );
+      expect(registrySlugForHarness(slug)).toBeNull();
+    }
+  );
+
+  it("a longer Control Plane slug maps to its account-door registry slug", () => {
     // `-cp` marks a reserved conversation harness on the CP side.
     expect(registrySlugForHarness("claude-code-cp")).toBe("claude-code");
-    expect(registrySlugForHarness("claude-desktop")).toBe("claude-desktop");
+    expect(registrySlugForHarness("cursor-ide")).toBe("cursor");
+    // A pod-only prefix maps to nothing.
+    expect(registrySlugForHarness("raycast-mcp-client")).toBeNull();
+    expect(registrySlugForHarness("claude-desktop")).toBeNull();
   });
 
   it("an unknown or malformed client gets the named fallback, carrying its own name on the key", () => {
@@ -55,22 +89,19 @@ describe("resolveSynapAccountMint", () => {
 });
 
 describe("isSynapAccountKey", () => {
-  it("a key the Control Plane redeemed (mcp: instance), or the pre-W5 claude-web agent", () => {
-    expect(isSynapAccountKey({ instanceId: "mcp:u:p:grok" })).toBe(true);
-    expect(isSynapAccountKey({ instanceId: "mcp:u:p" })).toBe(true);
-    expect(isSynapAccountKey({ agentType: "claude-web" })).toBe(true);
+  it("a key /mcp/redeem minted: its origin says so", () => {
+    expect(isSynapAccountKey({ origin: SYNAP_ACCOUNT_KEY_ORIGIN })).toBe(true);
   });
 
-  it("any other key is not, the same client's key from another door included", () => {
+  it("any other key is not, whatever instance id it claims", () => {
+    // What `/setup/agent` used to let any caller send: an instance id is no
+    // evidence, only the origin the redeem door stamps.
     expect(
-      isSynapAccountKey({ agentType: "grok", instanceId: "machine-1" })
-    ).toBe(false);
-    expect(
-      isSynapAccountKey({
-        agentType: "claude-web-direct",
-        instanceId: "oauth:x:y",
+      isSynapAccountKey({ origin: null, instanceId: "mcp:u:p:grok" } as {
+        origin: string | null;
       })
     ).toBe(false);
+    expect(isSynapAccountKey({ origin: null })).toBe(false);
     expect(isSynapAccountKey({})).toBe(false);
   });
 });

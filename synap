@@ -4500,7 +4500,12 @@ _ue_build_cache_reset() { docker builder prune -af >/dev/null 2>&1 || true; }
 # SYNAP_FORCE_GIT_SYNC keep their meaning: they say how a permitted build syncs
 # the checkout, never whether it may build.
 UE_DEV_HOST="${UE_DEV_HOST:-}"
-UE_SOURCE_EXPLICIT="${UE_SOURCE_EXPLICIT:-}"
+# UE_SOURCE_EXPLICIT says a person typed the build into THIS run, so it is never
+# taken from the environment: an unattended run that inherited it (a timer, a
+# request, a shell where it was exported) would pass the refusal below. It
+# survives only this installer's own re-exec (same pid, the lock marked held by
+# it: `exec env … SYNAP_LOCK_HELD_BY="$$"`). Review bf96d410, #782 follow-up.
+if [ "${SYNAP_LOCK_HELD_BY:-}" != "$$" ]; then UE_SOURCE_EXPLICIT=""; fi
 _ue_source_build_allowed() { # cwd = deploy dir
     [ "${UE_DEV_HOST:-}" = 1 ] && return 0
     case "${SYNAP_ALLOW_SOURCE_BUILD:-$(_ue_env_get SYNAP_ALLOW_SOURCE_BUILD)}" in 1|true) return 0 ;; esac
