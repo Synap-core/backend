@@ -9,7 +9,9 @@ export type SiblingRepo =
   | "synap-cli"
   | "synap-landing"
   | "synap-control-plane-dashboard"
-  | "synap-intelligence-service";
+  | "synap-intelligence-service"
+  | "synap-bridge"
+  | "site-content-studio";
 
 /** The root of THIS checkout (the directory holding `scripts/`). */
 export const BACKEND_ROOT: string;
