@@ -50,7 +50,7 @@ const STUBS = `
 const TABLES: Array<{ table: PgTable; columns: number }> = [
   { table: installations, columns: 21 },
   { table: installationBindings, columns: 21 },
-  { table: hostJobs, columns: 29 },
+  { table: hostJobs, columns: 31 },
   { table: intentDefaults, columns: 9 },
 ];
 

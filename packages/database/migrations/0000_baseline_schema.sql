@@ -5827,6 +5827,8 @@ CREATE TABLE IF NOT EXISTS "host_jobs" (
   "last_heartbeat_at"  timestamptz,
   "stop_requested_at"  timestamptz,
   "logs_requested_at"  timestamptz,
+  "log"                jsonb,
+  "log_received_at"    timestamptz,
   "evidence"           jsonb,
   "error"              text,
   "queued_at"          timestamptz NOT NULL DEFAULT now(),
