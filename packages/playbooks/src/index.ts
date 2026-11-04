@@ -735,6 +735,12 @@ export interface PlaybookActivator {
   mode: "run" | "propose";
   /** Pending approvals before the worker stops starting runs (default 20). */
   maxPendingApprovals?: number;
+  /**
+   * `created` / `enters_status` only: leave out a thing that carries this
+   * property (a non-empty value), e.g. `{ property: "post-copy-of", present:
+   * true }`. Mirror of `WorkerUnless` (`@synap-core/types/workers`).
+   */
+  unless?: { property: string; present: true };
 }
 
 /** Where a failed stage gate sends the run — see {@link PlaybookStage.onFail}. */

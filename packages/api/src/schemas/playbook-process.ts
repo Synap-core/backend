@@ -53,6 +53,19 @@ export const playbookActivatorSchema = z
       .min(1)
       .max(WORKER_MAX_PENDING_APPROVALS_CEILING)
       .optional(),
+    // Leave out a thing that carries this property (read off the thing when
+    // the worker fires: `skippedByUnless`, `@synap-core/types/workers`).
+    unless: z
+      .strictObject({
+        property: z
+          .string()
+          .trim()
+          .min(1)
+          .max(120)
+          .regex(/^[A-Za-z0-9_-]+$/, "a property slug"),
+        present: z.literal(true),
+      })
+      .optional(),
   })
   .refine((a) => (a.on !== "enters_status" && a.on !== "count") || !!a.status, {
     message:
@@ -85,6 +98,17 @@ export const playbookActivatorSchema = z
       message:
         "a count or schedule worker runs once for the whole set (per_moment) — per_thing has no single thing to run on",
       path: ["size"],
+    }
+  )
+  .refine(
+    (a) =>
+      a.unless === undefined ||
+      ((a.on === "created" || a.on === "enters_status") &&
+        a.size !== "per_moment"),
+    {
+      message:
+        'unless leaves out ONE thing: only a per_thing "created" or "enters_status" activator takes it',
+      path: ["unless"],
     }
   );
 
