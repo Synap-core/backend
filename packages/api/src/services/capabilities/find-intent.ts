@@ -79,6 +79,7 @@
  */
 
 import { listIntentSlugs } from "./intent-registry.js";
+import { selectIntentProviders } from "./propose-intent-gap-install.js";
 
 import {
   rankByTerms,
@@ -346,53 +347,29 @@ function marketplaceSlugFor(
   return undefined;
 }
 
-/** "capture_into_pod" → "capture into pod capture_into_pod". */
-function marketplaceQueryFor(slug: string): string {
-  return `${intentText(slug)} ${slug}`;
-}
-
 /**
- * Catalog search is per word, so "post" alone hits unrelated packages.
- * Keep a row only when its slug, name, or description contains the raw slug
- * or the full spaced phrase. Fields are not joined. No survivor means
- * `matches: []` — never the loose hits.
- */
-function marketplaceEntryServesIntent(
-  entry: { slug: string; name: string; description: string | null },
-  slug: string
-): boolean {
-  const needles = [...new Set([slug, intentText(slug)])]
-    .map((needle) => needle.toLowerCase())
-    .filter((needle) => needle.length > 0);
-  if (needles.length === 0) return false;
-  return [entry.slug, entry.name, entry.description ?? ""].some((field) => {
-    const haystack = field.toLowerCase();
-    return needles.some((needle) => haystack.includes(needle));
-  });
-}
-
-/**
+ * The marketplace arm reads the catalog through THE one rule for "which pack
+ * serves this intent": its declared `provides` (`selectIntentProviders`, plan
+ * U5). It used to match the slug or phrase as a substring of each pack's name
+ * and description, so an agent and the gap proposer could disagree on the
+ * same intent (addendum 000e75ff §1, defect 2). A pack that never declares the
+ * intent is not offered, however its description reads.
+ *
  * Catalog-cache read. A throw becomes `error` and does not fail the find —
  * the intent matches are already on the result.
  */
 async function lookupMarketplace(slug: string): Promise<FindMarketplace> {
   try {
     const { queryCatalogCache } = await import("./catalog-cache-query.js");
-    const entries = await queryCatalogCache({
-      query: marketplaceQueryFor(slug),
-      kind: "capability",
-      limit: MARKETPLACE_LIMIT,
-    });
+    const entries = await queryCatalogCache({ kind: "capability" });
+    const { candidates } = selectIntentProviders({ entries, intent: slug });
     return {
-      matches: entries
-        .filter((entry) => marketplaceEntryServesIntent(entry, slug))
-        .slice(0, MARKETPLACE_LIMIT)
-        .map((entry) => ({
-          slug: entry.slug,
-          name: entry.name,
-          description: entry.description,
-          kind: entry.kind,
-        })),
+      matches: candidates.slice(0, MARKETPLACE_LIMIT).map((c) => ({
+        slug: c.slug,
+        name: c.name,
+        description: c.description,
+        kind: "capability" as const,
+      })),
     };
   } catch (err) {
     return {
