@@ -2,7 +2,7 @@
 
 > Canonical source — the MCP `instructions` field is derived from this file and composed with live grounding under ONE 2 KB budget (pinned by `instructions-budget.test.ts`). Most important first. Depth belongs in a skill, never here.
 
-The user's Synap pod: source of truth. Tool names below are stems; your door may prefix them (`pod__ask`).
+The user's Synap pod: source of truth. Tool names below are stems; your door may prefix them (`synap_ask`).
 
 1. **Recall first.** `get_*` a known id, else `ask`.
 2. **Capture as you go.** A decision, learning, pain (`finding`), win (`proof-point`), fact or task: `capture` it when it happens; about the user: `remember_fact`.
