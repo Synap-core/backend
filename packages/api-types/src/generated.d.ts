@@ -20717,6 +20717,35 @@ export interface SiteStatusMember {
 	/** The record changed after its snapshot: publish it again to refresh it. */
 	stale: boolean;
 }
+declare const CHART_MODES: readonly [
+	"snapshot",
+	"live"
+];
+export type ChartMode = (typeof CHART_MODES)[number];
+export interface ChartSkip {
+	cellInstanceId: string;
+	code: string;
+	reason: string;
+}
+export interface PublishedChart {
+	cellInstanceId: string;
+	publicId: string;
+	slug: string | null;
+	mode: ChartMode;
+	status: "published" | "republished";
+}
+export type PublishChartsResult = {
+	proposalId: string;
+	siteId: string;
+	skipped: ChartSkip[];
+	status: "proposed";
+} | {
+	published: PublishedChart[];
+	rowsWritten: number;
+	siteId: string;
+	skipped: ChartSkip[];
+	status: "none" | "published";
+};
 declare const FormConfigSchema: z.ZodObject<{
 	captcha: z.ZodDefault<z.ZodObject<{
 		enabled: z.ZodBoolean;
@@ -48489,6 +48518,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: PublishResult;
 		}>;
+		publishChartsToSite: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				charts: {
+					cellInstanceId: string;
+					mode: "live" | "snapshot";
+					slug?: string | null | undefined;
+				}[];
+				reasoning?: string | undefined;
+				siteId: string;
+			};
+			meta: object;
+			output: PublishChartsResult;
+		}>;
 		publishSite: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				siteId: string;
@@ -48694,6 +48736,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				shareId?: string;
+				status: "none" | "unpublished";
+			};
+		}>;
+		unpublishChartsFromSite: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				cellInstanceIds: string[];
+				siteId: string;
+			};
+			meta: object;
+			output: {
+				count: number;
 				status: "none" | "unpublished";
 			};
 		}>;
