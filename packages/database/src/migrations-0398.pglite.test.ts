@@ -65,9 +65,9 @@ describe("0398 intent contracts", () => {
     expect(all.map((r) => r.slug)).toEqual([
       "dns_record",
       "expose_http",
+      "host_service",
+      "open_tunnel",
       "render_video",
-      "tls_cert",
-      "tunnel",
     ]);
     for (const r of all) {
       expect(r.input_schema, r.slug).toMatchObject({ type: "object" });
@@ -83,9 +83,9 @@ describe("0398 intent contracts", () => {
     expect(effect).toEqual({
       dns_record: "act",
       expose_http: "act",
+      host_service: "act",
+      open_tunnel: "act",
       render_video: "write",
-      tls_cert: "act",
-      tunnel: "act",
     });
   });
 

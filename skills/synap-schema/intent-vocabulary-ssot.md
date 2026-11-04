@@ -92,8 +92,8 @@ a package that consumes nothing would go stale in the one direction that is invi
    start / send / status / cancel), `read_webpage` (0329, read), `search_web`
    (0360, read), `edit_video` (0370, act — sends the person's video to an
    outside service; its one input, `{ video }`, is seeded on `input_schema` in
-   the same file), and from 0398 `expose_http`, `tunnel`, `dns_record`,
-   `tls_cert` (act) and `render_video` (write), each with a contract.
+   the same file), and from 0398 `expose_http`, `open_tunnel`, `dns_record`,
+   `host_service` (act) and `render_video` (write), each with a contract.
 3. **Add it to mirror 2** — the same two lists in the control plane's
    `capability-intent-vocabulary.ts`.
 4. **Update the arity floors** — `SEED_SLUG_ARITY` / `EXTRA_SLUG_ARITY` in

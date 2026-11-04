@@ -10,7 +10,8 @@
  *  - an input or output schema the pod's reader cannot compile, or one that
  *    accepts what it must refuse (an http source on no port, a `public` that is
  *    not a boolean, an extra field);
- *  - `tls_cert` not owing `renew` (certificates always expire);
+ *  - `host_service` letting a provider qualify without `revoke` (containers
+ *    nobody can remove);
  *  - an intent seeded without a contract or without its one input.
  */
 import { describe, expect, it } from "vitest";
@@ -38,9 +39,9 @@ const SQL = readFileSync(
 
 const SEEDED = [
   "expose_http",
-  "tunnel",
+  "open_tunnel",
   "dns_record",
-  "tls_cert",
+  "host_service",
   "render_video",
 ] as const;
 
@@ -54,7 +55,12 @@ function literals(column: "input_schema" | "contract") {
   return out;
 }
 const INPUTS = literals("input_schema");
-const CONTRACTS = literals("contract") as Map<string, IntentContract>;
+// A cast through `unknown`: the literals are parsed JSON, checked by
+// `intentContractProblems` below, not by the compiler.
+const CONTRACTS = literals("contract") as unknown as Map<
+  string,
+  IntentContract
+>;
 
 const contract = (slug: string) => CONTRACTS.get(slug)!;
 const output = (slug: string) => contract(slug).output;
@@ -106,8 +112,8 @@ describe("0398 — the lifecycle each contract demands of a provider", () => {
     expect(missingIntentOps(c, ["create", "status", "revoke"])).toEqual([]);
   });
 
-  it("tunnel and dns_record require create, status and revoke", () => {
-    expect(requiredIntentOps(contract("tunnel"))).toEqual([
+  it("open_tunnel and dns_record require create, status and revoke", () => {
+    expect(requiredIntentOps(contract("open_tunnel"))).toEqual([
       "create",
       "status",
       "revoke",
@@ -119,13 +125,11 @@ describe("0398 — the lifecycle each contract demands of a provider", () => {
     ]);
   });
 
-  it("tls_cert requires renew as well: a certificate always expires", () => {
-    expect(requiredIntentOps(contract("tls_cert"))).toEqual([
-      "create",
-      "status",
-      "renew",
-      "revoke",
-    ]);
+  it("host_service requires create, status and revoke, and declares no renew", () => {
+    const c = contract("host_service");
+    expect(requiredIntentOps(c)).toEqual(["create", "status", "revoke"]);
+    expect(c.ops.renew).toBeUndefined();
+    expect(c.constraints).toEqual(["os", "arch", "resources", "runsOn"]);
   });
 
   it("render_video is a run, not a living thing: create is required, status optional, no revoke", () => {
@@ -214,6 +218,18 @@ describe("0398 — the shapes accept what they must and refuse the rest", () => 
     expect(
       validateInput(status, { installationId: INSTALLATION, needKey: "x" }).ok
     ).toBe(false);
+  });
+
+  it("host_service takes the services to run on one computer, and refuses none", () => {
+    const schema = INPUTS.get("host_service")!;
+    const run = {
+      installationId: INSTALLATION,
+      needKey: "runtime",
+      computer: "410cae52",
+      services: [{ id: "render" }],
+    };
+    expect(validateInput(schema, run).ok).toBe(true);
+    expect(validateInput(schema, { ...run, services: [] }).ok).toBe(false);
   });
 
   it("dns_record accepts one CNAME and refuses a record type it does not know", () => {

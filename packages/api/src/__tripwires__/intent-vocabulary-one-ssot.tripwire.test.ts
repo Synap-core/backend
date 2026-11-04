@@ -237,8 +237,8 @@ void _seedArityFloor;
 /**
  * The post-seed registry rows' declared size. Same independence, same purpose.
  * `publish_post` (0284), `delegate_agent_task` (0314), `read_webpage` (0329)
- * `search_web` (0360), `edit_video` (0370), and `expose_http`, `tunnel`,
- * `dns_record`, `tls_cert` and `render_video` (0398) today; adding an
+ * `search_web` (0360), `edit_video` (0370), and `expose_http`, `open_tunnel`,
+ * `dns_record`, `host_service` and `render_video` (0398) today; adding an
  * eleventh post-seed slug stops the build here.
  */
 const EXTRA_SLUG_ARITY: 10 = REGISTERED_EXTRAS.length;

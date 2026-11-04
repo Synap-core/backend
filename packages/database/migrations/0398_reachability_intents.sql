@@ -33,10 +33,12 @@
 -- (an app's run of it is always proposed, `appRunMustPropose`), `write` files
 -- into the pod.
 --   expose_http   act    make an HTTP service reachable at a URL
---   tunnel        act    carry traffic from an edge to a computer, outbound only
+--   open_tunnel   act    carry traffic from an edge to a computer, outbound only
 --   dns_record    act    one DNS record in a zone the person controls
---   tls_cert      act    obtain and renew a certificate
+--   host_service  act    run declared containers on a computer, report health
 --   render_video  write  render a composition (a pod file) to MP4 or stills
+-- The names are the plan's set (founder, 2026-11-04, on session f137c810:
+-- "the plan's set"); certificates (`tls_cert`) wait for Stage 2.
 --
 -- Fresh installs get both columns from 0000_baseline_schema.sql; this file is
 -- for pods that already booted, and inserts the rows on both. Like 0370, a
@@ -50,12 +52,12 @@ INSERT INTO "capability_intents" ("slug", "effect", "statement", "synonyms")
 VALUES
   ('expose_http', 'act', 'Make an HTTP service reachable at a URL, under an access mode the person chooses.',
    ARRAY['make reachable', 'expose a service', 'url for a local app', 'reverse proxy', 'share a web app', 'route a subdomain']),
-  ('tunnel', 'act', 'Carry traffic from an edge to a service on a computer, over an outbound-only connection.',
+  ('open_tunnel', 'act', 'Carry traffic from an edge to a service on a computer, over an outbound-only connection.',
    ARRAY['outbound tunnel', 'reverse tunnel', 'connect a computer to the edge', 'reach a service without opening a port']),
   ('dns_record', 'act', 'Create, update or remove one DNS record in a zone the person controls.',
    ARRAY['dns record', 'add a cname', 'point a domain', 'dns entry', 'subdomain record']),
-  ('tls_cert', 'act', 'Obtain and renew a TLS certificate for a hostname.',
-   ARRAY['tls certificate', 'ssl certificate', 'https certificate', 'issue a certificate', 'renew a certificate']),
+  ('host_service', 'act', 'Run declared containers on a registered computer and report their health.',
+   ARRAY['run a service', 'host a container', 'install on a computer', 'run on my computer', 'self-host']),
   ('render_video', 'write', 'Render a composition (a pod file) to a video or stills, filed back to the pod.',
    ARRAY['render video', 'render a composition', 'export video', 'make an mp4', 'render stills', 'html to video'])
 ON CONFLICT ("slug") DO NOTHING;
@@ -246,7 +248,7 @@ SET "contract" = '{
 }'::jsonb
 WHERE "slug" = 'expose_http' AND "contract" IS NULL;
 
--- tunnel
+-- open_tunnel
 UPDATE "capability_intents"
 SET "input_schema" = '{
   "type": "object",
@@ -295,7 +297,7 @@ SET "input_schema" = '{
   "required": ["installationId","needKey","computer","upstream"],
   "additionalProperties": false
 }'::jsonb
-WHERE "slug" = 'tunnel' AND "input_schema" IS NULL;
+WHERE "slug" = 'open_tunnel' AND "input_schema" IS NULL;
 
 UPDATE "capability_intents"
 SET "contract" = '{
@@ -376,7 +378,7 @@ SET "contract" = '{
   },
   "constraints": ["runsOn","source"]
 }'::jsonb
-WHERE "slug" = 'tunnel' AND "contract" IS NULL;
+WHERE "slug" = 'open_tunnel' AND "contract" IS NULL;
 
 -- dns_record
 UPDATE "capability_intents"
@@ -470,7 +472,7 @@ SET "contract" = '{
 }'::jsonb
 WHERE "slug" = 'dns_record' AND "contract" IS NULL;
 
--- tls_cert
+-- host_service
 UPDATE "capability_intents"
 SET "input_schema" = '{
   "type": "object",
@@ -485,20 +487,24 @@ SET "input_schema" = '{
       "pattern": "^[a-z][a-z0-9_]{0,63}$",
       "description": "Which need of that installation."
     },
-    "hostname": {
+    "computer": {
       "type": "string",
-      "pattern": "^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "The computer the service runs on (its id), or \"pod\"."
     },
-    "challenge": {
-      "type": "string",
-      "pattern": "^[a-z][a-z0-9_]{0,63}$",
-      "description": "How ownership is proven (for example http_01, dns_01). Open: a provider declares what it supports."
+    "services": {
+      "type": "array",
+      "items": {"type":"object"},
+      "minItems": 1,
+      "maxItems": 16,
+      "description": "The services to run, as the manifest rule normalised them (@synap-core/types/capability-manifest): images by digest, ports on 127.0.0.1, health, limits."
     }
   },
-  "required": ["installationId","needKey","hostname"],
+  "required": ["installationId","needKey","computer","services"],
   "additionalProperties": false
 }'::jsonb
-WHERE "slug" = 'tls_cert' AND "input_schema" IS NULL;
+WHERE "slug" = 'host_service' AND "input_schema" IS NULL;
 
 UPDATE "capability_intents"
 SET "contract" = '{
@@ -506,20 +512,19 @@ SET "contract" = '{
   "output": {
     "type": "object",
     "properties": {
-      "hostname": {"type":"string","maxLength":253},
       "state": {"enum":["pending","live","degraded","revoked","failed"]},
       "handle": {
         "description": "The provider reference (an id, a record, a list for a composite). The pod stores it and never reads it."
       },
-      "expiresAt": {
+      "computer": {
         "type": ["string","null"],
-        "format": "date-time",
-        "description": "When the certificate expires."
+        "maxLength": 200,
+        "description": "The computer the services run on."
       },
       "checkedAt": {
         "type": ["string","null"],
         "format": "date-time",
-        "description": "The last check."
+        "description": "The last health check."
       },
       "detail": {
         "type": ["string","null"],
@@ -527,25 +532,12 @@ SET "contract" = '{
         "description": "The last result in plain words."
       }
     },
-    "required": ["hostname","state","handle","expiresAt"],
+    "required": ["state","handle","computer"],
     "additionalProperties": false
   },
   "ops": {
     "create": {"required":true},
     "status": {
-      "required": true,
-      "input": {
-        "type": "object",
-        "properties": {
-          "installationId": {"type":"string","format":"uuid"},
-          "needKey": {"type":"string","pattern":"^[a-z][a-z0-9_]{0,63}$"},
-          "handle": {"description":"What create returned."}
-        },
-        "required": ["installationId","needKey","handle"],
-        "additionalProperties": false
-      }
-    },
-    "renew": {
       "required": true,
       "input": {
         "type": "object",
@@ -572,9 +564,9 @@ SET "contract" = '{
       }
     }
   },
-  "constraints": ["hostname","challenge"]
+  "constraints": ["os","arch","resources","runsOn"]
 }'::jsonb
-WHERE "slug" = 'tls_cert' AND "contract" IS NULL;
+WHERE "slug" = 'host_service' AND "contract" IS NULL;
 
 -- render_video
 UPDATE "capability_intents"

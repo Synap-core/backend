@@ -25,9 +25,12 @@ describe("intentRunLabel", () => {
 
   it.each([
     ["expose_http", "Make your services reachable at a web address"],
-    ["tunnel", "Connect your computers to the internet edge, outbound only"],
+    [
+      "open_tunnel",
+      "Connect your computers to the internet edge, outbound only",
+    ],
     ["dns_record", "Change DNS records in your domains"],
-    ["tls_cert", "Get and renew certificates for your web addresses"],
+    ["host_service", "Run services on your computers"],
     ["render_video", "Render videos with your tools"],
   ])("%s (0398) has its own sentence, not the fallback", (slug, label) => {
     expect(intentRunLabel(slug)).toBe(label);

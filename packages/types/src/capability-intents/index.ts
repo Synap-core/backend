@@ -21,8 +21,8 @@
  * (`publish_post`), `0314_delegate_agent_task_intent.sql` (`delegate_agent_task`),
  * `0329_read_webpage_intent.sql` (`read_webpage`), `0360_search_web_intent.sql`
  * (`search_web`), `0370_edit_video_intent.sql` (`edit_video`) and
- * `0398_reachability_intents.sql` (`expose_http`, `tunnel`, `dns_record`,
- * `tls_cert`, `render_video`, with their contracts). Slugs live in ROWS, not
+ * `0398_reachability_intents.sql` (`expose_http`, `open_tunnel`,
+ * `dns_record`, `host_service`, `render_video`, with their contracts). Slugs live in ROWS, not
  * in a TypeScript union.
  *
  * The pod reads THIS file: `ABSTRACT_VERBS` (`@synap/database`
@@ -113,9 +113,9 @@ export const REGISTERED_EXTRAS = [
   "edit_video",
   // 0398 — the reachability family and render_video, each with a contract
   "expose_http",
-  "tunnel",
+  "open_tunnel",
   "dns_record",
-  "tls_cert",
+  "host_service",
   "render_video",
 ] as const;
 
@@ -216,9 +216,9 @@ const INTENT_RUN_LABELS: Readonly<Record<string, string>> = {
   search_web: "Search the web with your tools",
   edit_video: "Edit videos with your tools",
   expose_http: "Make your services reachable at a web address",
-  tunnel: "Connect your computers to the internet edge, outbound only",
+  open_tunnel: "Connect your computers to the internet edge, outbound only",
   dns_record: "Change DNS records in your domains",
-  tls_cert: "Get and renew certificates for your web addresses",
+  host_service: "Run services on your computers",
   render_video: "Render videos with your tools",
 };
 
