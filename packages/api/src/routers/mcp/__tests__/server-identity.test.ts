@@ -22,6 +22,7 @@ vi.mock("../../../services/agent-identity-service.js", async (orig) => ({
 }));
 
 const { createMCPServer } = await import("../index.js");
+const { SYNAP_MARK_SVG } = await import("../../../brand-icons.js");
 
 describe("the pod MCP server's identity", () => {
   it("initialize names it Synap, with the website and the amber S icons", async () => {
@@ -38,17 +39,19 @@ describe("the pod MCP server's identity", () => {
     expect(info?.name).toBe("synap-mcp-server");
     expect(info?.title).toBe("Synap");
     expect(info?.websiteUrl).toBe("https://www.synap.live");
-    expect(info?.icons).toEqual([
-      expect.objectContaining({
-        src: "https://www.synap.live/icon.png",
-        mimeType: "image/png",
-        sizes: ["512x512"],
-      }),
-      expect.objectContaining({
-        src: "https://www.synap.live/brand/synap-mark.svg",
-        mimeType: "image/svg+xml",
-      }),
+    // Data URIs only: an MCP client must not fetch an icon from another origin.
+    const icons = info?.icons ?? [];
+    expect(icons.map((i) => [i.mimeType, i.sizes])).toEqual([
+      ["image/png", ["64x64"]],
+      ["image/svg+xml", ["any"]],
     ]);
+    for (const icon of icons)
+      expect(icon.src).toMatch(/^data:image\/(png|svg\+xml);base64,/);
+    const png = Buffer.from(icons[0].src.split(",")[1], "base64");
+    expect([...png.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+    expect(Buffer.from(icons[1].src.split(",")[1], "base64").toString()).toBe(
+      SYNAP_MARK_SVG
+    );
     await client.close();
   });
 });
