@@ -16,10 +16,9 @@ export const en = {
   "refused.line": "This page can’t run here.",
   "refused.why": "Why",
   "tooLarge.mark": "Too large",
-  "tooLarge.line":
-    "This page is {size}. The console runs pages up to {max}.",
+  "tooLarge.line": "This page is {size}. The console runs pages up to {max}.",
   "left.line": "This page tried to open another address, so it was stopped.",
-  "viewSource": "View source",
+  viewSource: "View source",
   "toggle.aria": "Show this page as",
   "toggle.page": "Page",
   "toggle.source": "Source",
@@ -34,7 +33,7 @@ export const fr: Catalog<typeof en> = {
     "Cette page fait {size}. La console exécute les pages jusqu’à {max}.",
   "left.line":
     "Cette page a tenté d’ouvrir une autre adresse : elle a été arrêtée.",
-  "viewSource": "Voir la source",
+  viewSource: "Voir la source",
   "toggle.aria": "Afficher cette page en tant que",
   "toggle.page": "Page",
   "toggle.source": "Source",
