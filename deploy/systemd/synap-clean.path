@@ -1,0 +1,14 @@
+# Runs synap-clean.service when the backend asks the host for a clean-up
+# (contract: the CLEAN REQUEST comment above cmd_clean_request in `synap`).
+# The backend may write state/clean/ only, never state/requests/.
+# synap-clean.service takes the file (ExecStartPre) before the engine runs,
+# so this cannot loop even when the engine dies early. Template: synap units install.
+[Unit]
+Description=Synap pod clean requests (from the backend)
+
+[Path]
+PathExists=@DEPLOY_DIR@/state/clean/request.json
+Unit=synap-clean.service
+
+[Install]
+WantedBy=multi-user.target
