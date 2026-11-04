@@ -22,6 +22,10 @@ import {
   type AgentEffectiveWriteMode,
   type AgentWriteMode,
 } from "@synap-core/types/agents";
+import {
+  OWN_ORGANISE_CLASS_PATTERN,
+  REVERSIBLE_CLASS_PATTERN,
+} from "@synap-core/types/governance-rules";
 import { ruleTarget } from "../../settings/review/_lib/request-rules-model";
 
 /** The slice of a `governanceRules.listAll` row this reads. */
@@ -54,8 +58,8 @@ export type RuleSource =
 export type RuleTargetClass = "reversible" | "ownOrganise" | "everything";
 
 const TARGET_CLASSES: Readonly<Record<string, RuleTargetClass>> = {
-  "@reversible": "reversible",
-  "@own-organise": "ownOrganise",
+  [REVERSIBLE_CLASS_PATTERN]: "reversible",
+  [OWN_ORGANISE_CLASS_PATTERN]: "ownOrganise",
   "*": "everything",
 };
 

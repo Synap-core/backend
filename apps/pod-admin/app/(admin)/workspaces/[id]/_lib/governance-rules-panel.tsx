@@ -8,9 +8,9 @@
  * was raw SQL (docs/decisions/agent-governance.md, phase 2 D2).
  *
  * Lists active rules visible to this workspace (workspace-scoped + pod-wide),
- * newest first, with a Revoke button per row. Humanization lives in the
- * framework-agnostic `../../../../lib/governance-rules/rule-view-model.ts` —
- * see that file's header for why it isn't literally shared with the browser.
+ * newest first, with a Revoke button per row. The words come from
+ * `@synap-core/types/governance-rules` (through
+ * `lib/governance-rules/rule-view-model.ts`), the home the browser reads too.
  */
 
 import {
@@ -64,8 +64,7 @@ export function GovernanceRulesPanel({
   const utils = trpc.useUtils();
 
   const rulesQuery = trpc.governanceRules.list.useQuery({ workspaceId });
-  const rules =
-    (rulesQuery.data?.rules as GovernanceRuleRow[] | undefined) ?? [];
+  const rules: GovernanceRuleRow[] = rulesQuery.data?.rules ?? [];
 
   // A connection rule targets a registry row id; name it from the admin
   // connection list. Unresolved (or the list failed) → "A connection", never
@@ -170,7 +169,7 @@ function RuleRow({
                 : "bg-foreground/[0.06] text-foreground/65",
             ].join(" ")}
           >
-            {verdictLabel(rule)}
+            {verdictLabel(rule.verdict)}
           </span>
           <span
             className="rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[10.5px] text-foreground/65"

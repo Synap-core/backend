@@ -536,6 +536,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "status.__unclassified": "Aucun statut déclaré",
   "status.wont_fix": "Ne sera pas corrigé",
   "status.muted": "En sourdine",
+  "status.no_effect": "Aucun changement",
+  "status.blocked_by_policy": "Bloqué par une règle",
   // ── Runner states: `runner.<state>` (what a session's agent says it does) ──
   "runner.busy": "Au travail",
   "runner.idle": "Inactif",
