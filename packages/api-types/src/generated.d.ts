@@ -676,6 +676,41 @@ declare const AGENT_HARNESSES: readonly [
 		readonly label: "Generic";
 		readonly slug: "generic";
 		readonly surface: true;
+	},
+	{
+		readonly label: "ChatGPT";
+		readonly slug: "chatgpt";
+		readonly surface: true;
+	},
+	{
+		readonly label: "OpenCode";
+		readonly slug: "opencode";
+		readonly surface: true;
+	},
+	{
+		readonly label: "Windsurf";
+		readonly slug: "windsurf";
+		readonly surface: true;
+	},
+	{
+		readonly label: "Goose";
+		readonly slug: "goose";
+		readonly surface: true;
+	},
+	{
+		readonly label: "Zed";
+		readonly slug: "zed";
+		readonly surface: true;
+	},
+	{
+		readonly label: "VS Code";
+		readonly slug: "vscode";
+		readonly surface: true;
+	},
+	{
+		readonly label: "Grok";
+		readonly slug: "grok";
+		readonly surface: true;
 	}
 ];
 /** Harnesses whose conversation id we can turn into a reopen door (the registry's `reopen`). */

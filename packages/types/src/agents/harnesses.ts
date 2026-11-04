@@ -77,6 +77,18 @@ export const AGENT_HARNESSES = [
   { slug: "discord", label: "Discord", surface: true },
   { slug: "proton", label: "Proton", surface: true },
   { slug: "generic", label: "Generic", surface: true },
+  // The other clients `synap connect` mints a key for under their own name
+  // (synap-cli TARGETS, 4 Nov 2026). Without a row here the setup door
+  // refused them to an agent key (SURFACE_AGENT_TYPE_REQUIRED): 6 of the
+  // CLI's 16 targets could not connect. ChatGPT is still minted as `generic`
+  // by the CLI; its row lets the CLI name it once it mints `chatgpt`.
+  { slug: "chatgpt", label: "ChatGPT", surface: true },
+  { slug: "opencode", label: "OpenCode", surface: true },
+  { slug: "windsurf", label: "Windsurf", surface: true },
+  { slug: "goose", label: "Goose", surface: true },
+  { slug: "zed", label: "Zed", surface: true },
+  { slug: "vscode", label: "VS Code", surface: true },
+  { slug: "grok", label: "Grok", surface: true },
 ] as const satisfies readonly AgentHarness[];
 
 export type AgentHarnessSlug = (typeof AGENT_HARNESSES)[number]["slug"];
