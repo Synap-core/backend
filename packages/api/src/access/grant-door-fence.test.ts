@@ -1042,6 +1042,25 @@ describe("read doors a scoped key met unclassified (findings 3122ba42, cce86e6b,
     ])
       expect(restDoorAllowed("GET", path, COMPUTER), path).toBe(false);
   });
+  it("GET /import/units-job/:id: polled by a key that can start an import", () => {
+    const path = `/import/units-job/${U}`;
+    // The enqueue door checks `entity.<kind>.create`; a pinned key holds it in
+    // its space, and the route reads only the submitter's own job.
+    expect(restDoorAllowed("GET", path, COMPUTER)).toBe(true);
+    expect(restDoorAllowed("GET", path, PINNED)).toBe(true);
+    expect(
+      restDoorAllowed("GET", path, key({ permissions: ["entity.note.create"] }))
+    ).toBe(true);
+    // Read-only or deny-all keys could not have enqueued one.
+    expect(
+      restDoorAllowed("GET", path, key({ permissions: ["entity.read"] }))
+    ).toBe(false);
+    expect(restDoorAllowed("GET", path, DOC_ONLY)).toBe(false);
+    expect(restDoorAllowed("GET", path, DENY_ALL)).toBe(false);
+    expect(
+      restDoorAllowed("GET", "/import/units-job/not-a-uuid", COMPUTER)
+    ).toBe(false);
+  });
   it("GET /skills/system serves the image's static SKILL.md files to any key", () => {
     expect(restDoorAllowed("GET", "/skills/system", DENY_ALL)).toBe(true);
     expect(restDoorAllowed("GET", "/skills/system", PINNED)).toBe(true);

@@ -608,6 +608,13 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // read on no grant clause, so a pinned key is refused.
   [/^\/cells\/?$/, READS("widget")],
   [/^\/widget-definitions\/?$/, READS("widget")],
+  // Poll a bulk import (`rest/import-units.ts`): the pg-boss job the caller
+  // enqueued, its state and per-unit outcome (`entityId` | `proposalId` |
+  // `error`), never the payload; another person's job is the same 404 as a
+  // missing one. Admitted to the keys that can enqueue one, which
+  // POST /import/enqueue-units checks as `entity.<kind>.create`: a key that
+  // could not start an import has nothing to poll.
+  [route("/import/units-job/:id"), NARROWED("entity", [], "create")],
   // Server faults (0392, `services/server-faults/read.ts`): the exact cause of
   // every 5xx on the pod, whoever met it. Pod owner or admin only, like
   // `/usage`; no grant can narrow it, so a scoped key is refused.
