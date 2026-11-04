@@ -23,7 +23,8 @@
 #   minfrom*    minFrom compares the newest migration by NAME (byte order), of the
 #               database AND of the running release; the refusal names minFromRelease
 #   pull        a pull fails                     → nothing changes at all
-#   source      --from-source                    → synap-dev/* only, never ghcr
+#   source      --from-source --dev-host         → synap-dev/* only, never ghcr
+#   sourcepod   --from-source on a pod (no --dev-host) → refused, nothing built (P5)
 #   traefik     SYNAP_EDGE=traefik               → caddy never touched, every service up
 #   eve-unpinned / port80 / skip-edge             → edge refusals + eve pin
 #   kprefer/kgood  rollback kratos.yml: valid .before wins; a broken one → kratos.yml.good (W6-HEAL N5)
@@ -764,7 +765,7 @@ cp "$HERE/deploy/Dockerfile" "$DEPLOY/Dockerfile"; echo "FROM scratch" > "$REPO/
 : > "$REPO/packages/database/migrations/0011_old.sql"; : > "$REPO/packages/database/migrations/0012_new.sql"
 ( cd "$REPO" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm fixture ) || bad "source: git fixture"
 LOCAL_SHA="$(git -C "$REPO" rev-parse HEAD)"; export LOCAL_SHA
-SYNAP_SKIP_GIT_SYNC=1 run_update --from-source; rc=$?
+SYNAP_SKIP_GIT_SYNC=1 run_update --from-source --dev-host; rc=$?
 tag12="${LOCAL_SHA:0:12}"
 [ "$rc" = 0 ] && ok "source: from-source update succeeded" || { bad "source: rc=$rc"; show; }
 builds="$(grep '^build ' "$FAKE/log")"
@@ -797,7 +798,7 @@ cp "$HERE/deploy/Dockerfile" "$DEPLOY/Dockerfile"; echo "FROM scratch" > "$REPO/
 : > "$REPO/packages/database/migrations/0012_new.sql"
 ( cd "$REPO" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm fixture ) || bad "sourcenobuildx: git fixture"
 LOCAL_SHA="$(git -C "$REPO" rev-parse HEAD)"; export LOCAL_SHA
-FAKE_NO_BUILDX=1 SYNAP_SKIP_GIT_SYNC=1 run_update --from-source; rc=$?
+FAKE_NO_BUILDX=1 SYNAP_SKIP_GIT_SYNC=1 run_update --from-source --dev-host; rc=$?
 want7="sha256:$(printf '7%.0s' $(seq 1 64))"
 [ "$rc" = 0 ] && [ "$(envpin SYNAP_IMAGE_POSTGRES)" = "timescale/timescaledb-ha:pg15@$want7" ] && grep -q "^pull -q timescale/timescaledb-ha:pg15$" "$FAKE/log" \
   && ok "sourcenobuildx: no buildx → each tag is pulled and pinned by the digest docker recorded (RepoDigests)" || { bad "sourcenobuildx: rc=$rc postgres=$(envpin SYNAP_IMAGE_POSTGRES)"; show; }
@@ -808,7 +809,7 @@ cp "$HERE/deploy/Dockerfile" "$DEPLOY/Dockerfile"; echo "FROM scratch" > "$REPO/
 : > "$REPO/packages/database/migrations/0011_old.sql"
 ( cd "$REPO" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm fixture ) || bad "sourcepin: git fixture"
 : > "$FAKE/log"
-FAKE_RESOLVE_FAIL=1 SYNAP_SKIP_GIT_SYNC=1 run_update --from-source; rc=$?
+FAKE_RESOLVE_FAIL=1 SYNAP_SKIP_GIT_SYNC=1 run_update --from-source --dev-host; rc=$?
 [ "$rc" != 0 ] && ! grep -q '^build ' "$FAKE/log" && grep -q "could not pin this release's third-party images" "$S/out" && [ "$(cur_id)" = "$R1" ] && cmp -s "$DEPLOY/.env" "$S/env.orig" \
   && ok "sourcepin: a registry that cannot resolve the pins refuses the update BEFORE any build" || { bad "sourcepin: rc=$rc builds=$(grep -c '^build ' "$FAKE/log")"; show; }
 
@@ -826,10 +827,53 @@ cp "$HERE/deploy/Dockerfile" "$DEPLOY/Dockerfile"; echo "FROM scratch" > "$REPO/
 : > "$REPO/packages/database/migrations/0011_old.sql"; : > "$REPO/packages/database/migrations/0012_new.sql"
 ( cd "$REPO" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm fixture ) || bad "sourcefail: git fixture"
 : > "$FAKE/log"
-FAKE_BUILD_FAIL=1 SYNAP_SKIP_GIT_SYNC=1 run_update --from-source; rc=$?
+FAKE_BUILD_FAIL=1 SYNAP_SKIP_GIT_SYNC=1 run_update --from-source --dev-host; rc=$?
 [ "$rc" != 0 ] && ok "sourcefail: a failed build aborts the update" || { bad "sourcefail: rc=$rc (build failure ignored)"; show; }
 grep -qE "^builder prune -af" "$FAKE/log" && ok "sourcefail: the (poisoned) BuildKit cache is reset after a failed build" || bad "sourcefail: cache not reset after a failed build — the pod self-locks, every retry re-fails"
 [ "$(cur_id)" = "$R1" ] && ok "sourcefail: the release is unchanged after a failed build" || bad "sourcefail: current-release=$(cur_id)"
+
+# ── 6c. a pod never builds its own images (pod resilience plan P5) ────────────
+# Without --dev-host (or SYNAP_ALLOW_SOURCE_BUILD=1) --from-source is refused
+# before anything runs, the refusal names the release path, and it is recorded.
+setup sourcepod r1
+mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations" "$DEPLOY/release"
+cp "$HERE/deploy/release/resolve-images.sh" "$DEPLOY/release/"
+cp "$HERE/deploy/Dockerfile" "$DEPLOY/Dockerfile"; echo "FROM scratch" > "$REPO/apps/pod-admin/Dockerfile"
+: > "$REPO/packages/database/migrations/0011_old.sql"
+( cd "$REPO" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm fixture ) || bad "sourcepod: git fixture"
+LOCAL_SHA="$(git -C "$REPO" rev-parse HEAD)"; export LOCAL_SHA
+: > "$FAKE/log"
+SYNAP_SKIP_GIT_SYNC=1 run_update --from-source; rc=$?
+[ "$rc" != 0 ] && ! grep -q '^build ' "$FAKE/log" && ! grep -qE "^compose .*(up|run|stop)" "$FAKE/log" && [ "$(cur_id)" = "$R1" ] && cmp -s "$DEPLOY/.env" "$S/env.orig" \
+  && ok "sourcepod: --from-source without --dev-host is refused: no build, no compose, release and .env unchanged" || { bad "sourcepod: rc=$rc builds=$(grep -c '^build ' "$FAKE/log")"; show; }
+grep -q 'synap update --release' "$S/out" && grep -q -- '--dev-host' "$S/out" && ok "sourcepod: the refusal names the release path and the dev-host override" || bad "sourcepod: message: $(tail -3 "$S/out")"
+[ "$(last status)" = aborted ] && last reason | grep -q 'not declared a dev host' && ok "sourcepod: recorded as aborted, with why" || bad "sourcepod: record=$(last status) $(last reason)"
+# SYNAP_ALLOW_SOURCE_BUILD in deploy/.env declares a dev host for every run (the unattended source channel too)
+setup sourceenv r1
+mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations" "$DEPLOY/release"
+cp "$HERE/deploy/release/resolve-images.sh" "$DEPLOY/release/"
+cp "$HERE/deploy/Dockerfile" "$DEPLOY/Dockerfile"; echo "FROM scratch" > "$REPO/apps/pod-admin/Dockerfile"
+: > "$REPO/packages/database/migrations/0011_old.sql"
+: > "$REPO/packages/database/migrations/0012_new.sql"
+echo "SYNAP_ALLOW_SOURCE_BUILD=true" >> "$DEPLOY/.env"
+( cd "$REPO" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm fixture ) || bad "sourceenv: git fixture"
+LOCAL_SHA="$(git -C "$REPO" rev-parse HEAD)"; export LOCAL_SHA
+: > "$FAKE/log"
+SYNAP_SKIP_GIT_SYNC=1 run_update --from-source; rc=$?
+[ "$rc" = 0 ] && [ "$(grep -c '^build ' "$FAKE/log")" = 2 ] && ok "sourceenv: SYNAP_ALLOW_SOURCE_BUILD=true in .env lets this dev host build" || { bad "sourceenv: .env override rc=$rc"; show; }
+# The unattended source channel on a pod (a buildable checkout): refused and recorded, never built
+setup sourcetimer r1
+mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations" "$DEPLOY/release" "$DEPLOY/state"
+cp "$HERE/deploy/release/resolve-images.sh" "$DEPLOY/release/"
+cp "$HERE/deploy/Dockerfile" "$DEPLOY/Dockerfile"; echo "FROM scratch" > "$REPO/apps/pod-admin/Dockerfile"
+: > "$REPO/packages/database/migrations/0011_old.sql"; : > "$REPO/packages/database/migrations/0012_new.sql"
+echo '{"auto":true,"channel":"source","window":"00:00-00:00"}' > "$DEPLOY/state/update-policy.json"
+( cd "$REPO" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm fixture ) || bad "sourcetimer: git fixture"
+LOCAL_SHA="$(git -C "$REPO" rev-parse HEAD)"; export LOCAL_SHA
+: > "$FAKE/log"
+SYNAP_SKIP_GIT_SYNC=1 run_update --unattended; rc=$?
+[ "$rc" != 0 ] && ! grep -q '^build ' "$FAKE/log" && [ "$(last status)" = aborted ] && last reason | grep -q 'not declared a dev host' && [ "$(cur_id)" = "$R1" ] \
+  && ok "sourcetimer: a pod's unattended 'source' channel is refused and recorded, never built" || { bad "sourcetimer: rc=$rc record=$(last status)"; show; }
 
 # ── 7. edge=traefik: caddy never touched, every other service comes up ───────
 setup traefik r1; publish "$R2" 0012_new.sql

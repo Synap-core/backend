@@ -30,6 +30,15 @@
 #      PGBOSS_POOL_SIZE -> max).
 #   F. every consumer's URL names it: `application_name=<service>`, so
 #      pg_stat_activity says which service holds each connection.
+#   G. sizing (pod resilience plan P5): the image's initdb tune
+#      (timescaledb-tune) sizes work_mem for TS_TUNE_MAX_CONNS, so the postgres
+#      service passes it the SAME variable the `-c max_connections` reads, with
+#      the same shipped default; TS_TUNE_MEMORY reads POSTGRES_TUNE_MEMORY; and
+#      NO_TS_TUNE is not set (it would drop the sizing in silence).
+#   H. the postgres command sets no parameter but max_connections: a `-c` there
+#      changes every RUNNING pod on its next update, while sizing must change
+#      a pod only at initdb or through `synap tune-postgres` (the opt-in).
+#      A new `-c` is a decision: add it to PG_COMMAND_PARAMS with its reason.
 #   Non-vacuity: the known consumers are all found, and the ${...} resolver
 #   still reads a literal sample.
 #
@@ -148,6 +157,24 @@ for i, c in enumerate(cmd):
     if m and i > 0 and cmd[i - 1] == "-c":
         pg_max = int(m.group(1))
 
+# G. the initdb tune sizes for the real connection ceiling and the pod's memory share
+PG_COMMAND_PARAMS = {"max_connections"}  # H: each one changes running pods on update
+raw_env = pg.get("environment") or {}
+raw_cmd = pg.get("command") or []
+raw_cmd = raw_cmd if isinstance(raw_cmd, list) else str(raw_cmd).split()
+cmd_var = next((re.search(r"max_connections=(\$\{[^}]*\})", c).group(1) for c in raw_cmd if re.search(r"max_connections=\$\{", c)), None)
+if not isinstance(raw_env, dict) or str(raw_env.get("TS_TUNE_MAX_CONNS")) != str(cmd_var):
+    fails.append(f"G: postgres TS_TUNE_MAX_CONNS is {raw_env.get('TS_TUNE_MAX_CONNS')!r}, not the command's max_connections {cmd_var!r}: work_mem would be sized for another number of connections")
+if not re.fullmatch(r"\$\{POSTGRES_TUNE_MEMORY:-\}", str(raw_env.get("TS_TUNE_MEMORY", ""))):
+    fails.append(f"G: postgres TS_TUNE_MEMORY is {raw_env.get('TS_TUNE_MEMORY')!r}, not ${{POSTGRES_TUNE_MEMORY:-}} (what synap install writes)")
+if "NO_TS_TUNE" in (raw_env or {}):
+    fails.append("G: postgres sets NO_TS_TUNE: the initdb tune (and the pod's sizing) would be skipped in silence")
+for i, c in enumerate(cmd):
+    if i > 0 and cmd[i - 1] == "-c":
+        param = c.split("=", 1)[0]
+        if param not in PG_COMMAND_PARAMS:
+            fails.append(f"H: postgres command sets -c {c}: it would change every running pod on its next update (size at initdb, or opt in with synap tune-postgres)")
+
 total = sum(n for _, _, n in rows)
 print(f"  budget (shipped defaults) vs postgres max_connections={pg_max}:")
 for name, what, n in rows:
@@ -160,6 +187,7 @@ for f in fails:
     print("  ✗ " + f)
 if not fails:
     print(f"  ✓ {len(consumers)} Postgres consumers, every pool capped, worst case {total} < max_connections {pg_max}")
+    print(f"  ✓ sizing: the initdb tune reads TS_TUNE_MAX_CONNS={raw_env.get('TS_TUNE_MAX_CONNS')} (= -c max_connections) and TS_TUNE_MEMORY; the command sets only {sorted(PG_COMMAND_PARAMS)}")
 known = {"backend", "backend-canary", "realtime", "backend-migrate", "kratos", "kratos-migrate", "postgres-backup"}
 nv = known <= consumers and "postgres" in svcs
 print(("  ✓ " if nv else "  ✗ ") + f"non-vacuity: consumers {sorted(consumers)} (must include {sorted(known)})")
