@@ -140,7 +140,6 @@ import {
 import { reviveSessionForWrite } from "../services/focus-sessions/revive-stale-session.js";
 import { stampWritingRunner } from "../services/focus-sessions/session-runners.js";
 import { normalizeExpectedLabel } from "../services/focus-sessions/expected-label.js";
-import { withCellContentFingerprint } from "../services/cells/cell-content-fingerprint.js";
 import { logEvent } from "../lib/event-helpers.js";
 import { AGENT_WRITE_EVENT_KIND } from "../lib/run-event-kinds.js";
 import { openLink, openPath } from "./deep-links.js";
@@ -1494,21 +1493,25 @@ async function evaluatePermission(
     nodeId,
     channelCapabilities,
   } = opts;
-  // A cell definition is proposed with the fingerprint of the content its
-  // approval writes (decision Q9, `services/cells/cell-content-fingerprint.ts`):
-  // stamped HERE, the one gate every door that files a `cell/define` proposal
-  // goes through, so no door can file one without it. The approve executor
-  // refuses a payload that no longer matches its stamp.
-  const data =
-    subjectType === "cell" && action === "define"
-      ? withCellContentFingerprint(callerData)
-      : callerData;
   // Where a proposal or receipt is filed. Record only: every rung below
   // decides on `workspaceId`.
   const filedWorkspaceId =
     opts.proposalWorkspaceId !== undefined
       ? opts.proposalWorkspaceId
       : workspaceId;
+  // A cell definition is proposed with the fingerprint of the content its
+  // approval writes (decision Q9, `services/cells/cell-content-fingerprint.ts`):
+  // stamped HERE, the one gate every door that files a `cell/define` proposal
+  // goes through, so no door can file one without it. Resolved against the row
+  // the approval writes at the scope it is filed at (the executor writes at
+  // `proposal.workspaceId`), so a kept mechanism or egress grant is in it. The
+  // approve executor refuses a payload that no longer matches its stamp.
+  const data =
+    subjectType === "cell" && action === "define"
+      ? await (
+          await import("../services/cells/define-cell.js")
+        ).stampCellDefinePayload(callerData, filedWorkspaceId ?? null, db)
+      : callerData;
 
   // ATTRIBUTION FLOOR. `agentUserId` arrives as a CALLER-SUPPLIED option, so a door
   // that simply omits it skips the whole AI-policy block below (`if (agentUserId)`)

@@ -12,14 +12,18 @@
  *     builtin row keeps its mechanism, a re-push that names no egress keeps
  *     the stored grant, and both are in the fingerprint;
  *   - approved = stored: for an agent cell, the stamp its proposal is filed
- *     with is the fingerprint its approval writes to the row.
+ *     with is the fingerprint its approval writes to the row, also over a row
+ *     that keeps a builtin mechanism and an egress grant;
+ *   - a NEW cell is stamped: the table keeps the schema's real defaults, so
+ *     the insert's timestamps are what Postgres would write.
  * And migration 0396 adds the column, idempotently, to a table without it.
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
-import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
+import { is, SQL } from "drizzle-orm";
+import { getTableConfig, PgDialect, type PgTable } from "drizzle-orm/pg-core";
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -44,7 +48,7 @@ vi.mock("../../utils/domain-event-bridge.js", () => ({
 }));
 
 import { widgetDefinitions } from "@synap/database";
-import { defineCell } from "./define-cell.js";
+import { defineCell, stampCellDefinePayload } from "./define-cell.js";
 import {
   CELL_CONTENT_FINGERPRINT_KEY,
   cellContentFingerprint,
@@ -55,6 +59,24 @@ import {
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
 
+const dialect = new PgDialect();
+
+/**
+ * The column's REAL default, as the schema declares it. A table built without
+ * them hides what the write path depends on: with no `defaultNow()`, a new row's
+ * `updated_at` was NULL here and the fingerprint stamp's equality guard matched
+ * NULL, while on Postgres a microsecond `now()` never equalled the returned
+ * millisecond `Date` and no new cell was ever stamped.
+ */
+function defaultOf(c: ReturnType<typeof getTableConfig>["columns"][number]) {
+  if (!c.hasDefault || c.default === undefined) return "";
+  const d = c.default;
+  if (is(d, SQL)) return ` DEFAULT ${dialect.sqlToQuery(d).sql}`;
+  if (typeof d === "string") return ` DEFAULT '${d.replace(/'/g, "''")}'`;
+  if (typeof d === "number" || typeof d === "boolean") return ` DEFAULT ${d}`;
+  return ` DEFAULT '${JSON.stringify(d).replace(/'/g, "''")}'`;
+}
+
 function ddlFor(table: PgTable): string {
   const cfg = getTableConfig(table);
   const cols = cfg.columns.map((c) => {
@@ -62,8 +84,9 @@ function ddlFor(table: PgTable): string {
     const type = BASIC.test(t) ? t.replace(/\(.*\)/, "") : "text";
     const pk = c.primary ? " primary key" : "";
     const defaults =
-      type === "uuid" && c.primary ? " DEFAULT gen_random_uuid()" : "";
-    return `"${c.name}" ${type}${pk}${defaults}`;
+      type === "uuid" && c.primary ? " DEFAULT gen_random_uuid()" : defaultOf(c);
+    const notNull = c.notNull && !c.primary ? " NOT NULL" : "";
+    return `"${c.name}" ${type}${pk}${notNull}${defaults}`;
   });
   return `create table "${cfg.name}" (${cols.join(", ")});`;
 }
@@ -179,6 +202,39 @@ describe.each([
       userId: "u",
     });
     const row = await stored("generated:my-cell", ws);
+    expect(row.content_sha256).toBe(payload[CELL_CONTENT_FINGERPRINT_KEY]);
+  });
+
+  it("approved = stored over a row that keeps a builtin mechanism and an egress grant", async () => {
+    // An operator's cell: a kept mechanism and an egress grant.
+    await defineCell({
+      name: "My Cell",
+      workspaceId: ws,
+      rendererSource: MODULE,
+      rendererType: "builtin",
+      externalHosts: ["https://api.vendor.com"],
+      userId: "operator",
+    });
+    // An agent proposes a new source for it: the gate stamps it against the
+    // row its approval writes …
+    const payload = await stampCellDefinePayload(
+      { name: "My Cell", rendererSource: MODULE_V2 },
+      ws
+    );
+    // … and the executor writes it, naming no mechanism and no egress.
+    await defineCell({
+      name: payload.name,
+      rendererSource: payload.rendererSource,
+      rendererType: gatedRendererTypeOf(
+        (payload as Record<string, unknown>).rendererType
+      ),
+      workspaceId: ws,
+      userId: "u",
+    });
+    const row = await stored("generated:my-cell", ws);
+    expect(row.renderer_type).toBe("builtin");
+    expect(row.external_hosts).toEqual(["https://api.vendor.com"]);
+    expect(row.content_sha256).toBe(fingerprintOf(row));
     expect(row.content_sha256).toBe(payload[CELL_CONTENT_FINGERPRINT_KEY]);
   });
 });

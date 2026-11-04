@@ -25,7 +25,11 @@ import {
   type CellSourceRefusalCode,
 } from "@synap-core/types/renderables";
 import { execFieldsChanged } from "../capabilities/skill-exec-fields.js";
-import { cellContentFingerprint } from "./cell-content-fingerprint.js";
+import {
+  cellContentFingerprint,
+  withCellContentFingerprint,
+  type StoredCellContent,
+} from "./cell-content-fingerprint.js";
 import { widgetDefinitions } from "@synap/database/schema";
 import type { ContentKind } from "@synap/database/schema";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
@@ -138,26 +142,7 @@ export async function assertCellSourceMounts(input: {
     throw new CellSourceRefusedError(first.refusals);
   }
 
-  const workspaceId = input.workspaceId ?? null;
-  const db = await getDb();
-  const [stored] = await db
-    .select({
-      rendererType: widgetDefinitions.rendererType,
-      externalHosts: widgetDefinitions.externalHosts,
-    })
-    .from(widgetDefinitions)
-    .where(
-      and(
-        eq(
-          widgetDefinitions.typeKey,
-          cellTypeKeyFor(input.name, input.typeKey)
-        ),
-        workspaceId
-          ? eq(widgetDefinitions.workspaceId, workspaceId)
-          : isNull(widgetDefinitions.workspaceId)
-      )
-    )
-    .limit(1);
+  const stored = await readStoredCellContent(input);
   if (
     explicit === undefined &&
     (stored?.rendererType === "builtin" || stored?.rendererType === "mcp-app")
@@ -176,6 +161,83 @@ export async function assertCellSourceMounts(input: {
   if (again.refusals.length > 0)
     throw new CellSourceRefusedError(again.refusals);
   return again.advice;
+}
+
+type CellRowReader = Pick<Awaited<ReturnType<typeof getDb>>, "select">;
+
+/**
+ * The stored row's mechanism and egress at (typeKey, scope): what a write
+ * silent on them keeps. Null = no row. Read by the define-time check above and
+ * by the fingerprint stamp (`stampCellDefinePayload`), so both see the row the
+ * write lands on. `reader` lets a caller read inside its transaction.
+ */
+export async function readStoredCellContent(
+  cell: { name: string; typeKey?: string; workspaceId?: string | null },
+  reader?: CellRowReader
+): Promise<StoredCellContent | null> {
+  const workspaceId = cell.workspaceId ?? null;
+  const db = reader ?? (await getDb());
+  const [stored] = await db
+    .select({
+      rendererType: widgetDefinitions.rendererType,
+      externalHosts: widgetDefinitions.externalHosts,
+    })
+    .from(widgetDefinitions)
+    .where(
+      and(
+        eq(widgetDefinitions.typeKey, cellTypeKeyFor(cell.name, cell.typeKey)),
+        workspaceId
+          ? eq(widgetDefinitions.workspaceId, workspaceId)
+          : isNull(widgetDefinitions.workspaceId)
+      )
+    )
+    .limit(1);
+  return stored
+    ? {
+        rendererType: stored.rendererType ?? null,
+        externalHosts: stored.externalHosts ?? null,
+      }
+    : null;
+}
+
+/**
+ * The row a `cell/define` proposal's approval writes: the payload's own
+ * typeKey, else the one derived from its name, at the scope the proposal is
+ * filed (or re-targeted) at. Null when the payload names no cell, or no row
+ * exists yet.
+ */
+export async function storedCellContentForPayload(
+  payload: Record<string, unknown>,
+  workspaceId: string | null,
+  reader?: CellRowReader
+): Promise<StoredCellContent | null> {
+  if (typeof payload.name !== "string" || payload.name === "") return null;
+  const typeKey =
+    typeof payload.typeKey === "string" && payload.typeKey !== ""
+      ? payload.typeKey
+      : undefined;
+  return readStoredCellContent(
+    { name: payload.name, typeKey, workspaceId },
+    reader
+  );
+}
+
+/**
+ * A `cell/define` payload stamped with the fingerprint of what its approval
+ * writes to the row at `workspaceId` (decision Q9): the gate stamps it when the
+ * proposal is filed, the revise core again on every revision, both through
+ * here, so the stamp and the row's `content_sha256` after approval are the
+ * same value even when the row keeps a `builtin` mechanism or an egress grant.
+ */
+export async function stampCellDefinePayload<T extends Record<string, unknown>>(
+  payload: T,
+  workspaceId: string | null,
+  reader?: CellRowReader
+) {
+  return withCellContentFingerprint(
+    payload,
+    await storedCellContentForPayload(payload, workspaceId, reader)
+  );
 }
 
 export interface DefineCellInput {
@@ -560,9 +622,17 @@ export async function defineCell(input: DefineCellInput): Promise<{
     }
   }
 
+  // ONE instant for the insert's timestamps, set here rather than left to the
+  // column default: `now()` has microsecond precision, the `Date` the write
+  // hands back has milliseconds, so a row stamped by `defaultNow()` never equals
+  // its own returned `updatedAt`, and the fingerprint stamp below (guarded on
+  // that equality) would skip every NEW cell. A JS `Date` round-trips exactly.
+  const writtenAt = new Date();
   const values = {
     typeKey,
     workspaceId,
+    createdAt: writtenAt,
+    updatedAt: writtenAt,
     name: input.name,
     description: input.description ?? null,
     // INSERT defaults: `category` is what this door hardcoded before it became

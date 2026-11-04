@@ -495,6 +495,20 @@ export interface ComputeRevisedEnvelopeParams {
   actingAgentUserId?: string | null;
 }
 
+/** A nested `cell/define` envelope whose payload carries the content to stamp. */
+function isCellDefineEnvelope(
+  envelope: Record<string, unknown>
+): envelope is Record<string, unknown> & { data: Record<string, unknown> } {
+  return (
+    envelope.targetType === "cell" &&
+    envelope.changeType === "define" &&
+    isNestedEnvelope(envelope) &&
+    !!envelope.data &&
+    typeof envelope.data === "object" &&
+    !Array.isArray(envelope.data)
+  );
+}
+
 /**
  * PURE (no DB): compute the merged envelope + the `revisionHistory` entry for a
  * revise. The nesting decision is the shared `isNestedEnvelope` SSOT — the exact
@@ -645,17 +659,8 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
   // the merged payload, never taken from the patch. The approve executor then
   // refuses only a payload changed outside a door
   // (`services/cells/cell-content-fingerprint.ts`).
-  if (
-    merged.targetType === "cell" &&
-    merged.changeType === "define" &&
-    isNestedEnvelope(merged) &&
-    merged.data &&
-    typeof merged.data === "object" &&
-    !Array.isArray(merged.data)
-  ) {
-    merged.data = withCellContentFingerprint(
-      merged.data as Record<string, unknown>
-    );
+  if (isCellDefineEnvelope(merged)) {
+    merged.data = withCellContentFingerprint(merged.data);
   }
 
   // `by` is the HUMAN the call acts for (every door passes the key owner), so an
@@ -946,6 +951,21 @@ export async function mergeProposalRevision(
       actingAgentUserId:
         params.attributionAgentUserId ?? actingAgentUserId ?? null,
     });
+    // The stamp `computeRevisedEnvelope` derived knows no row; stamped again
+    // here against the row this approval writes, at the scope it now targets
+    // (a revision may re-target it, or rename the cell it writes), read in
+    // this transaction. Same door as the gate (`stampCellDefinePayload`).
+    if (isCellDefineEnvelope(merged)) {
+      const { stampCellDefinePayload } =
+        await import("../cells/define-cell.js");
+      merged.data = await stampCellDefinePayload(
+        merged.data,
+        params.workspaceId !== undefined
+          ? params.workspaceId
+          : (existing.workspaceId ?? null),
+        tx
+      );
+    }
 
     // A revision that changes the PAYLOAD was checked before the lock by
     // what its approval will run (`REVISED_PAYLOAD_VALIDATORS`); refused here,
