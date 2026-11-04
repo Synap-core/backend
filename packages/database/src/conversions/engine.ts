@@ -39,6 +39,7 @@ import type {
   FoldRoleIntoStatusOp,
   RenameProfileOp,
   FoldBookingDealIntoLeadOp,
+  RekindByStatusOp,
   MergeIntoScope,
 } from "./manifest.js";
 import {
@@ -151,6 +152,12 @@ export interface OpCounts {
   relationsCreated?: number;
   /** foldBookingDealIntoLead (destructive tail): converted deals soft-deleted. */
   entitiesArchived?: number;
+  /** rekindByStatus: things moved onto the target kind. */
+  entitiesRekinded?: number;
+  /** rekindByStatus: things at the status that hold a `skipWhenSet` value — kept on their kind. */
+  entitiesKeptByRule?: number;
+  /** rekindByStatus (dry run only): things to move whose workspace has no target kind yet. */
+  entitiesKeptNoTarget?: number;
   /** projectLifecycleColumns: rows whose lifecycle columns were filled from the projection. */
   lifecycleColumnsProjected?: number;
   /** projectLifecycleColumns: of those, rows whose value no option declares (status kept, no category). */
@@ -274,6 +281,7 @@ export const CONVERSION_BOOT_SEVERITY: Record<
   foldRoleIntoStatus: "fatal",
   renameProfile: "fatal",
   foldBookingDealIntoLead: "fatal",
+  rekindByStatus: "fatal",
   // Derivation only: an unfilled column reads as "no status yet"; the declare
   // door and the next boot fill it.
   projectLifecycleColumns: "advisory",
@@ -635,6 +643,8 @@ async function applyOp(
       return applyRenameProfile(tx, op);
     case "foldBookingDealIntoLead":
       return applyFoldBookingDealIntoLead(tx, op, options.destructiveTail);
+    case "rekindByStatus":
+      return applyRekindByStatus(tx, op);
     case "projectLifecycleColumns":
       return applyProjectLifecycleColumns(tx);
     case "keep":
@@ -2620,6 +2630,125 @@ export async function applyRenameProfile(
   return counts;
 }
 
+// ─── rekindByStatus ──────────────────────────────────────────────────────────
+
+/** The things a rekindByStatus op selects: live, on the row, at the status. */
+function rekindAtStatus(sql: Sql, op: RekindByStatusOp) {
+  return sql`e.deleted_at IS NULL
+    AND e.properties->>${op.status.key}::text = ${op.status.value}::text`;
+}
+
+/** True when the thing holds a value under any `skipWhenSet` key. */
+function rekindHeld(sql: Sql, op: RekindByStatusOp) {
+  return sql`EXISTS (
+    SELECT 1 FROM unnest(${op.skipWhenSet ?? []}::text[]) AS k(key)
+    WHERE jsonb_typeof(e.properties -> k.key) IS NOT NULL
+      AND jsonb_typeof(e.properties -> k.key) <> 'null'
+      AND (e.properties -> k.key) NOT IN ('""'::jsonb, '[]'::jsonb, '{}'::jsonb)
+  )`;
+}
+
+interface RekindRow {
+  sourceId: string;
+  targetId: string | null;
+  toMove: number;
+  kept: number;
+}
+
+/** Per active source row: its target kind and how many things move or stay. */
+async function rekindPlan(
+  sql: Sql,
+  op: RekindByStatusOp
+): Promise<RekindRow[]> {
+  const rows = await sql<Array<{ id: string; workspace_id: string | null }>>`
+    SELECT id, workspace_id FROM profiles
+    WHERE slug = ${op.slug} AND is_active = true
+  `;
+  const plan: RekindRow[] = [];
+  for (const src of rows) {
+    const [c] = await sql<Array<{ to_move: number; kept: number }>>`
+      SELECT COUNT(*) FILTER (WHERE NOT ${rekindHeld(sql, op)})::int AS to_move,
+             COUNT(*) FILTER (WHERE ${rekindHeld(sql, op)})::int AS kept
+      FROM entities e
+      WHERE e.profile_id = ${src.id} AND ${rekindAtStatus(sql, op)}
+    `;
+    plan.push({
+      sourceId: src.id,
+      targetId: await resolveTargetProfileId(sql, op.toSlug, src.workspace_id),
+      toMove: c?.to_move ?? 0,
+      kept: c?.kept ?? 0,
+    });
+  }
+  return plan;
+}
+
+/**
+ * Move the things of one kind at one lifecycle value onto another kind,
+ * keeping each row. See RekindByStatusOp for the contract. One transaction
+ * (runConversions wraps applyOp in `sql.begin`), idempotent.
+ */
+export async function applyRekindByStatus(
+  tx: Sql,
+  op: RekindByStatusOp
+): Promise<OpCounts> {
+  const plan = await rekindPlan(tx, op);
+  const stranded = plan.filter((r) => r.targetId === null && r.toMove > 0);
+  if (stranded.length > 0) {
+    const n = stranded.reduce((sum, r) => sum + r.toMove, 0);
+    throw new Error(
+      `rekindByStatus '${op.opKey}': ${n} "${op.slug}" at "${op.status.value}" would move, but no "${op.toSlug}" kind exists where they are (source profile ${stranded
+        .map((r) => r.sourceId)
+        .join(
+          ", "
+        )}). Nothing was written. Fix: apply the template that declares "${op.toSlug}" first.`
+    );
+  }
+  // Text param + server-side ::jsonb cast (sql.json() is banned in this module).
+  const mappingPairs = JSON.parse(
+    buildPropertyMappingJson(op.propertyMapping)
+  ) as Array<[string, string]>;
+  const mappedKeys = mappingPairs.map(([from]) => from);
+
+  let moved = 0;
+  let kept = 0;
+  for (const r of plan) {
+    kept += r.kept;
+    if (r.toMove === 0 || r.targetId === null) continue;
+    // Both SET expressions read the row as it was before this UPDATE.
+    const res = await tx`
+      UPDATE entities e
+      SET profile_id = ${r.targetId},
+          type = ${op.toSlug},
+          properties =
+            COALESCE((
+              SELECT jsonb_object_agg(pair->>1, e.properties -> (pair->>0))
+              FROM jsonb_array_elements(${JSON.stringify(mappingPairs)}::jsonb) AS pair
+              WHERE e.properties ? (pair->>0)
+            ), '{}'::jsonb)
+            || jsonb_build_object(${op.targetStatus.key}::text, ${op.targetStatus.value}::text),
+          system_data = COALESCE(e.system_data, '{}'::jsonb)
+            || jsonb_build_object('convertedFrom', jsonb_build_object(
+                 'kind', ${op.slug}::text,
+                 'conversion', ${op.opKey}::text,
+                 'properties', COALESCE((
+                   SELECT jsonb_object_agg(kv.key, kv.value)
+                   FROM jsonb_each(COALESCE(e.properties, '{}'::jsonb)) AS kv
+                   WHERE NOT (kv.key = ANY(${mappedKeys}::text[]))
+                 ), '{}'::jsonb)
+               )),
+          updated_at = now()
+      WHERE e.profile_id = ${r.sourceId}
+        AND ${rekindAtStatus(tx, op)}
+        AND NOT ${rekindHeld(tx, op)}
+    `;
+    moved += res.count ?? 0;
+  }
+  const counts: OpCounts = {};
+  if (moved) counts.entitiesRekinded = moved;
+  if (kept) counts.entitiesKeptByRule = kept;
+  return counts;
+}
+
 // ─── Dry-run counting (no writes) ────────────────────────────────────────────
 
 export async function computeCounts(
@@ -2696,6 +2825,24 @@ export async function computeCounts(
       // carries no field plan — opCarriesFieldPlan stays merge/dedupe only — but
       // its counts come from the same rolled-back apply, never a count query.)
       return (await planByRollback(sql, op, options)).counts;
+    case "rekindByStatus": {
+      // The apply refuses while a workspace has things to move and no target
+      // kind; the dry run reports them as left alone instead, so a template
+      // update that brings the target kind is not held by this op. Otherwise
+      // derived from the apply itself, rolled back.
+      const plan = await rekindPlan(sql, op);
+      const noTarget = plan
+        .filter((r) => r.targetId === null)
+        .reduce((n, r) => n + r.toMove, 0);
+      if (noTarget > 0) {
+        const kept = plan.reduce((n, r) => n + r.kept, 0);
+        return {
+          entitiesKeptNoTarget: noTarget,
+          ...(kept > 0 ? { entitiesKeptByRule: kept } : {}),
+        };
+      }
+      return (await planByRollback(sql, op, options)).counts;
+    }
     case "reconcileFacetScope": {
       // Would-rescope = the number of (entity, profile, ctx) groups the apply
       // picks one row from; parked = every other lensed row of those roles.

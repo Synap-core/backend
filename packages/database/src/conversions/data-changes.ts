@@ -89,6 +89,7 @@ const OP_PROFILE_SLUGS: {
     op.companySlug,
     op.eventSlug,
   ],
+  rekindByStatus: (op) => [op.slug, op.toSlug],
 };
 
 export function opProfileSlugs(op: ConversionOp): OpProfileSlugs {
@@ -148,6 +149,7 @@ const CHANGED_COUNTERS = [
   "leadsAdvanced",
   "relationsCreated",
   "entitiesArchived",
+  "entitiesRekinded",
 ] as const satisfies ReadonlyArray<keyof OpCounts>;
 
 const _LEFT_ALONE_COUNTERS = [
@@ -161,6 +163,10 @@ const _LEFT_ALONE_COUNTERS = [
   "dealsKeptEdited",
   "dealsKeptNoPerson",
   "leadsUnjudged",
+  // rekindByStatus: planned things kept on their kind, and things that wait
+  // for the target kind's template (dry run only).
+  "entitiesKeptByRule",
+  "entitiesKeptNoTarget",
 ] as const satisfies ReadonlyArray<keyof OpCounts>;
 
 type _CountersClassified =
@@ -244,6 +250,15 @@ export function describeConversionOp(op: ConversionOp): string {
       return "Fill in each thing's lifecycle status from the value it already holds.";
     case "foldBookingDealIntoLead":
       return `Turn each untouched booked-call "${op.slug}" into a "${op.lead.role}" at "${op.lead.status}" on its person, linking the call; edited ones are kept.`;
+    case "rekindByStatus": {
+      const skip = op.skipWhenSet ?? [];
+      return (
+        `Turn each "${op.slug}" at "${op.status.value}" into a "${op.toSlug}" at "${op.targetStatus.value}", keeping it and its links` +
+        (skip.length > 0
+          ? `; one with ${skip.map((k) => `a "${k}"`).join(", ")} stays a "${op.slug}".`
+          : ".")
+      );
+    }
     default: {
       const unhandled: never = op;
       return unhandled;

@@ -37,7 +37,8 @@ export type ConversionOp =
   | FoldRoleIntoStatusOp
   | RenameProfileOp
   | ProjectLifecycleColumnsOp
-  | FoldBookingDealIntoLeadOp;
+  | FoldBookingDealIntoLeadOp
+  | RekindByStatusOp;
 
 interface BaseOp {
   /** Stable, globally-unique key. Recorded in `_conversions`; never reused. */
@@ -593,6 +594,43 @@ export interface FoldBookingDealIntoLeadOp extends BaseOp {
   companySlug: string;
   eventSlug: string;
   relations: { dealLink: string; attendedBy: string; worksAt: string };
+}
+
+/**
+ * Move the things of one kind that sit at ONE lifecycle value onto another
+ * kind, keeping the row: its id, title, document, relations and history follow
+ * (decision b5c3f2f2, 4 Nov 2026: the posts at Idea become ideas). Per active
+ * `slug` profile row, the target is the `toSlug` row of that row's workspace
+ * (else the shared, else the system one). For every live entity on the row
+ * whose `properties[status.key]` equals `status.value`:
+ *   - KEPT and counted (`entitiesKeptByRule`) when any `skipWhenSet` key holds
+ *     a value (not null, "", [] or {}): a dated or planned post stays a post;
+ *   - otherwise re-profiled (`profile_id`, `type = toSlug`): its properties
+ *     become the `propertyMapping` keys (source key → target key) plus
+ *     `targetStatus`, and every other key it held (the source status
+ *     included) moves to `system_data.convertedFrom.properties`, beside the
+ *     source kind and the op key, so nothing is lost and the property editor
+ *     shows only the new kind's fields.
+ * A row with things to move but no target kind REFUSES the apply (nothing
+ * written, nothing ledgered: install the template that declares `toSlug`
+ * first); its dry run counts them as `entitiesKeptNoTarget`, a left-alone
+ * count, so a template update that brings the target kind is not held by it.
+ * Idempotent: a moved thing is no longer on `slug`. No destructive tail.
+ */
+export interface RekindByStatusOp extends BaseOp {
+  op: "rekindByStatus";
+  /** The kind the things leave. */
+  slug: string;
+  /** The kind they become. */
+  toSlug: string;
+  /** Only the things whose `properties[key]` equals `value` move. */
+  status: { key: string; value: string };
+  /** The lifecycle value each moved thing starts at on the new kind. */
+  targetStatus: { key: string; value: string };
+  /** Source property key → target property key, for the keys that carry over. */
+  propertyMapping: Record<string, string>;
+  /** Source keys: a thing holding a value under any of them stays where it is. */
+  skipWhenSet?: string[];
 }
 
 export const FOLD_ROLE_NO_TARGET = ["attachFirst", "park"] as const;
@@ -2069,6 +2107,31 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       },
       preferTargetValues: ["open", "exploring", "answered", "abandoned"],
     },
+    // Content OS, decision b5c3f2f2 (founder, 4 Nov 2026): an idea is its own
+    // kind (decision B, review 22fec5ee), so the posts still at Idea become
+    // ideas, keeping their id, words, pillar, stage and tags. A post that is
+    // already planned (a publish date, a series or a campaign) stays a post:
+    // on 4 Nov that kept 6 of 31 and moved 25. The rest of a moved post's
+    // fields (hook, format, platform, goal) is kept in
+    // system_data.convertedFrom. Operator-run, after the Content OS template
+    // that declares `idea` is applied.
+    {
+      op: "rekindByStatus",
+      opKey: "content-os.post-at-idea-into-idea",
+      deferAtBoot: true,
+      slug: "post",
+      toSlug: "idea",
+      status: { key: "post-status", value: "Idea" },
+      targetStatus: { key: "idea-status", value: "New" },
+      propertyMapping: {
+        title: "title",
+        content: "content",
+        "post-pillar": "idea-pillar",
+        "post-stage": "idea-stage",
+        "post-tags": "idea-tags",
+      },
+      skipWhenSet: ["publish-date", "post-series", "post-campaign"],
+    },
   ],
 };
 
@@ -2095,6 +2158,7 @@ export const CONVERSION_OP_TYPES = [
   "renameProfile",
   "projectLifecycleColumns",
   "foldBookingDealIntoLead",
+  "rekindByStatus",
 ] as const satisfies ReadonlyArray<ConversionOp["op"]>;
 
 export type ConversionOpType = (typeof CONVERSION_OP_TYPES)[number];
@@ -2394,6 +2458,35 @@ export function validateManifest(manifest: ConversionManifest): void {
           );
         }
         break;
+      case "rekindByStatus": {
+        requireSlug(op.opKey, op.slug);
+        requireSlug(op.opKey, op.toSlug, "toSlug");
+        if (op.slug === op.toSlug) {
+          throw new Error(
+            `Conversion manifest: rekindByStatus '${op.opKey}' cannot move '${op.slug}' onto itself`
+          );
+        }
+        requireSlug(op.opKey, op.status?.key, "status.key");
+        requireSlug(op.opKey, op.status?.value, "status.value");
+        requireSlug(op.opKey, op.targetStatus?.key, "targetStatus.key");
+        requireSlug(op.opKey, op.targetStatus?.value, "targetStatus.value");
+        const mapping = Object.entries(op.propertyMapping ?? {});
+        for (const [from, to] of mapping) {
+          requireSlug(op.opKey, from, "propertyMapping key");
+          requireSlug(op.opKey, to, "propertyMapping value");
+        }
+        // The new status is written by targetStatus; a mapped key landing on
+        // it would be silently overwritten.
+        if (mapping.some(([, to]) => to === op.targetStatus.key)) {
+          throw new Error(
+            `Conversion manifest: rekindByStatus '${op.opKey}' maps a property onto its targetStatus key '${op.targetStatus.key}'`
+          );
+        }
+        for (const k of op.skipWhenSet ?? []) {
+          requireSlug(op.opKey, k, "skipWhenSet");
+        }
+        break;
+      }
       case "foldBookingDealIntoLead":
         requireSlug(op.opKey, op.slug);
         requireSlug(op.opKey, op.source, "source");
