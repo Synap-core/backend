@@ -66,6 +66,23 @@ const POD_DOORS: Record<string, { inputs: number; doors: string[] }> = {
     inputs: 1,
     doors: ["REST /proposals/:id/approve"],
   },
+  // W3 slice 2 (backend#808): the decisions that settle no proposal take a
+  // proof bound to their own request (`presence.challenge({request})` or
+  // `{oauthConsent}`). Pod admin still calls them directly: routing each
+  // through app/_lib/presence (and adding its DOORS pattern here, which then
+  // forbids the direct call) is lane w3-podadmin's follow-up (review bf96d410,
+  // Lane E). Until then these doors are counted, not yet forced.
+  "api-keys.ts": { inputs: 3, doors: [] },
+  "application-connections.ts": { inputs: 1, doors: [] },
+  "capabilities.ts": { inputs: 1, doors: [] },
+  "hub-protocol/rest/skills-crud.ts": { inputs: 1, doors: [] },
+  "hub-protocol/rest/tools.ts": { inputs: 1, doors: [] },
+  "intelligence-registry.ts": { inputs: 1, doors: [] },
+  "marketplace.ts": { inputs: 1, doors: [] },
+  "mcp-servers.ts": { inputs: 1, doors: [] },
+  "skills.ts": { inputs: 1, doors: [] },
+  "tools.ts": { inputs: 1, doors: [] },
+  "trusted-issuers.ts": { inputs: 1, doors: [] },
 };
 
 function walk(dir: string, keep: (name: string) => boolean): string[] {
