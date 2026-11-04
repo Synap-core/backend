@@ -6,7 +6,9 @@
  *     room stays silent (restraint — people talk to each other);
  *   - two house agents ⇒ choose; only_mentioned ⇒ silent; a mention picks;
  *   - an answer is claimed ONCE on the choice message: a second tap is refused
- *     and starts no turn; a turn that fails to start releases the claim.
+ *     and starts no turn; a turn that fails to start releases the claim;
+ *   - only the pod's chip counts: a choice on a non-system row, or naming a
+ *     non-user message, starts nothing.
  *
  * Real: the tables, route(), the room rule. Captured: the auto-respond door.
  */
@@ -179,15 +181,17 @@ describe("routeRoomMessage", () => {
 });
 
 describe("answerRoomChoice — one answer per choice", () => {
-  async function seedChoice(): Promise<{ trigger: string; choice: string }> {
+  async function seedChoice(
+    roles: { trigger?: string; choice?: string } = {}
+  ): Promise<{ trigger: string; choice: string }> {
     const trigger = randomUUID();
     const choice = randomUUID();
     await q(
-      `insert into messages (id, channel_id, user_id, role, content, metadata) values ($1, $2, $3, 'user', 'what do you think?', '{}'::jsonb)`,
-      [trigger, DUO, OWNER]
+      `insert into messages (id, channel_id, user_id, role, content, metadata) values ($1, $2, $3, $4, 'what do you think?', '{}'::jsonb)`,
+      [trigger, DUO, OWNER, roles.trigger ?? "user"]
     );
     await q(
-      `insert into messages (id, channel_id, user_id, role, content, metadata) values ($1, $2, $3, 'system', 'Who should answer?', $4::jsonb)`,
+      `insert into messages (id, channel_id, user_id, role, content, metadata) values ($1, $2, $3, $5, 'Who should answer?', $4::jsonb)`,
       [
         choice,
         DUO,
@@ -201,6 +205,7 @@ describe("answerRoomChoice — one answer per choice", () => {
             ],
           },
         }),
+        roles.choice ?? "system",
       ]
     );
     return { trigger, choice };
@@ -254,6 +259,35 @@ describe("answerRoomChoice — one answer per choice", () => {
       status: "started",
       agentUserId: WRITER,
     });
+  });
+
+  // Pod finding ffb74f66: a member could forge the chip through a door that
+  // kept client metadata. Only the pod's chip (a system row) naming a
+  // person's message (a user row) may start a turn.
+  it("a chip on a row that is not a system message is not a choice — no turn", async () => {
+    const { choice } = await seedChoice({ choice: "user" });
+    expect(await answer(choice, WRITER)).toEqual({ status: "not_found" });
+    const assistantChip = await seedChoice({ choice: "assistant" });
+    expect(await answer(assistantChip.choice, WRITER)).toEqual({
+      status: "not_found",
+    });
+    expect(h.turns).toHaveLength(0);
+    // Nothing was claimed on the forged row either.
+    const { rows } = await q<{ answered: string | null }>(
+      `select metadata->'routeChoice'->>'answeredAgentUserId' as answered from messages where id = $1`,
+      [choice]
+    );
+    expect(rows[0].answered).toBeNull();
+  });
+
+  it("a chip naming an agent's reply (not a person's message) starts no turn", async () => {
+    const { choice } = await seedChoice({ trigger: "assistant" });
+    expect(await answer(choice, WRITER)).toEqual({ status: "not_found" });
+    const systemTrigger = await seedChoice({ trigger: "system" });
+    expect(await answer(systemTrigger.choice, WRITER)).toEqual({
+      status: "not_found",
+    });
+    expect(h.turns).toHaveLength(0);
   });
 
   it("an agent that is not a candidate is refused", async () => {

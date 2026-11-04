@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { ROOM_POST_META_KEY, withoutRoomPostMeta } from "./room-post-kind.js";
+import { withoutServerOwnedMessageMeta } from "@synap-core/types/agents";
+import { ROOM_POST_META_KEY } from "./room-post-kind.js";
 
-describe("withoutRoomPostMeta", () => {
+describe("withoutServerOwnedMessageMeta — the room post marker", () => {
   it("drops every server stamp under the marker — answer provenance, pending relay, closure", () => {
     const forged = {
       keep: 1,
@@ -18,7 +19,7 @@ describe("withoutRoomPostMeta", () => {
         closed: { reason: "session_ended", at: "t" },
       },
     };
-    const out = withoutRoomPostMeta(forged);
+    const out = withoutServerOwnedMessageMeta(forged);
     expect(out).toEqual({ keep: 1 });
     expect(JSON.stringify(out)).not.toMatch(/pendingRelay|closed|relayed|via/);
   });

@@ -134,6 +134,8 @@ import {
 import {
   MESSAGING_WEBHOOK_ENSURE_QUEUE,
   MESSAGING_WEBHOOK_ENSURE_CRON,
+  LINKEDIN_REACH_SWEEP_QUEUE,
+  LINKEDIN_REACH_SWEEP_CRON,
 } from "./workers/messaging-sync.js";
 import {
   CONNECTION_SYNC_RUN_QUEUE,
@@ -556,6 +558,16 @@ export async function registerCronSchedules(): Promise<void> {
     {}
   );
   logger.info("Registered cron: messaging-webhook-ensure (hourly)");
+
+  // A person's LinkedIn reach (daily): the requests sent and still waiting
+  // mark their people pending; a request pending 21 days is ignored.
+  await scheduleSafe(
+    boss,
+    LINKEDIN_REACH_SWEEP_QUEUE,
+    LINKEDIN_REACH_SWEEP_CRON,
+    {}
+  );
+  logger.info("Registered cron: linkedin-reach-sweep (daily)");
 
   // Event sync (every 6 hours — the cron worker invokes the api-side runner
   // in-process (IoC slot) which mirrors upcoming Synap events + Stellar

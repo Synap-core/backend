@@ -218,6 +218,14 @@ const REPLAY_DOORS: Record<ReplayableDeferredPair, ReplayDoor> = {
       }),
     });
   },
+  // A whole capture graph (finding 590ca76a): replayed through the capture
+  // door, which lands all of it or files it for review. Its placement was
+  // stored with it, so the join's space is not passed again.
+  "entity/capture.graph": async (w) => {
+    const { replayKeptCaptureGraph } =
+      await import("../capture-agent/submit-capture-graph.js");
+    return replayKeptCaptureGraph(w);
+  },
 };
 
 /** Read a door's answer: proposed (its own proposal), or what it wrote. */

@@ -102,6 +102,8 @@ export function registerAgentExecutors(): void {
         approvedRequests: payload.requests,
         settleProposal: false,
         agentUserId: payload.agentUserId,
+        // applyProposalApproval already checked (and consumed) the proof.
+        presenceChecked: "applyProposalApproval",
       });
       if (outcome === "forbidden")
         throw new TRPCError({

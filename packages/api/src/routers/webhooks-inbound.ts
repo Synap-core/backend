@@ -35,6 +35,7 @@ import {
   type ParticipantLookupRecord,
 } from "../services/connectors/inbound-recorder.js";
 import { resolveParticipant } from "../services/connectors/participant-lookup.js";
+import { recordAcceptedRelation } from "../services/connectors/linkedin-reach-sync.js";
 import { accountHomeWorkspace } from "../services/connectors/account-home-workspace.js";
 import {
   MESSAGING_HISTORY_IMPORT_QUEUE,
@@ -1129,6 +1130,16 @@ webhooksInboundRouter.post("/messaging", async (c) => {
           }
         }
       }
+    } else if (event.type === "relation.created") {
+      // `relation.new`: a connection request was accepted. The person (found
+      // by their LinkedIn member id or handle, never created) is connected.
+      await recordAcceptedRelation({
+        accountExternalId: event.accountExternalId,
+        provider: event.provider,
+        providerId: event.providerId,
+        publicIdentifier: event.publicIdentifier,
+        connector,
+      });
     } else if (event.type === "account.reconnection_required") {
       await MessagingAccountService.updateStatus(
         event.accountExternalId,

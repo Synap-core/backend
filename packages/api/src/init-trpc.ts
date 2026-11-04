@@ -165,6 +165,13 @@ export const t = initTRPC.context<Context>().create({
           ? { captureQuestionStatus }
           : {}),
         ...(typeof reasonCode === "string" ? { reasonCode } : {}),
+        // A proof-of-presence refusal (W3, PRESENCE_*) names the proposal it
+        // was for, so a client asks for that proposal's challenge and retries.
+        ...(typeof reasonCode === "string" &&
+        reasonCode.startsWith("PRESENCE_") &&
+        typeof cause?.proposalId === "string"
+          ? { proposalId: cause.proposalId }
+          : {}),
         // A Library rebuild refused while the group's last bundle waits for
         // review names that bundle, so "Open the review" opens it.
         ...(typeof cause?.pendingProposalId === "string"

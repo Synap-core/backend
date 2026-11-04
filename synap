@@ -2563,6 +2563,7 @@ cmd_install() {
                 ;;
             --from-source|--build)
                 FROM_SOURCE=true
+                UE_SOURCE_EXPLICIT=1   # a person typed it: honoured without --dev-host
                 shift
                 ;;
             --dev-host)
@@ -2683,13 +2684,13 @@ ${YELLOW}Usage:${NC}
 
 ${YELLOW}Auto-Detection:${NC}
   - If in git repository: Uses existing repo, defaults to --from-image
-    (--from-source on a dev host: --dev-host or SYNAP_ALLOW_SOURCE_BUILD=1)
+    (--from-source builds on request; it is the default only on a dev host: --dev-host or SYNAP_ALLOW_SOURCE_BUILD=1)
   - If not in git repository: Clones repo, defaults to --from-image
   - Default clone location: Current directory + "synap-backend"
 
 ${YELLOW}Options:${NC}
   ${GREEN}--from-image${NC}        Use Docker image (default when cloning)
-  ${GREEN}--from-source${NC}        Build from source code (a dev host only, with --dev-host)
+  ${GREEN}--from-source${NC}        Build from source code (uses memory, disk and time on this host)
   ${GREEN}--dev-host${NC}           Declare this host a dev host: it may build its own images
   ${GREEN}--dir <path>${NC}         Installation directory (default: ./synap-backend when cloning)
   ${GREEN}--domain <domain>${NC}    Domain name (required)
@@ -2887,7 +2888,7 @@ EOF
         else
             # A checkout on a pod: a pod never builds its own images (P5)
             FROM_IMAGE=true
-            echo -e "${BLUE}ℹ️  Defaulting to --from-image (a pod never builds its own images; --from-source --dev-host on a dev host)${NC}"
+            echo -e "${BLUE}ℹ️  Defaulting to --from-image (--from-source builds on request; the default only on a declared dev host)${NC}"
         fi
     fi
     
@@ -4419,26 +4420,39 @@ _ue_adopt_running() {
 # time, so the warm-cache cost is paid only once a build has already failed.
 _ue_build_cache_reset() { docker builder prune -af >/dev/null 2>&1 || true; }
 
-# ── a pod never builds its own images (pod resilience plan P5) ───────────────
+# ── an unattended path never builds a pod's images (pod resilience plan P5) ──
 # A from-source build is the heaviest load a host takes: ~11 GB of disk at peak
 # and a 4 GB Node heap (deploy/Dockerfile) on the machine that serves the
 # person's data. A pod takes its images from a published release, pulled by
 # digest (`synap update --release <main-<sha7>|vX.Y.Z|fast|stable>`); images are
-# built by CI (docker-publish.yml) or on a dev host. Building is allowed only
-# on a host DECLARED a dev host: `--dev-host` on the command line, or
-# SYNAP_ALLOW_SOURCE_BUILD=1 in the environment or in deploy/.env (operator-
-# local: env.schema gives it no `cp` flag, so a Control Plane cannot turn a pod
-# into a build host). No marker in a deploy dir tells a pod from a dev host
-# (both have a DOMAIN, a .env, a checkout, a release record), so the default
-# refuses. SYNAP_SKIP_GIT_SYNC / SYNAP_FORCE_GIT_SYNC keep their meaning: they
-# say how a permitted build syncs the checkout, never whether it may build.
+# built by CI (docker-publish.yml) or on a dev host. Two ways a build is allowed:
+#  - a person ASKED for it on the command line (`synap update --from-source`,
+#    `synap install --from-source`, `synap rebuild`): UE_SOURCE_EXPLICIT=1. Founder,
+#    2026-11-04: "a pod should always be able, if it wants, to build its own
+#    image". It prints one warning, then builds. Nothing unattended sets it.
+#  - the host is DECLARED a dev host: `--dev-host`, or SYNAP_ALLOW_SOURCE_BUILD=1
+#    in the environment or in deploy/.env (operator-local: env.schema gives it no
+#    `cp` flag, so a Control Plane cannot turn a pod into a build host).
+# Everything not typed by a person (the unattended `source` channel, the update
+# timer, a request) refuses without the declaration: no marker in a deploy dir
+# tells a pod from a dev host, so the default refuses. SYNAP_SKIP_GIT_SYNC /
+# SYNAP_FORCE_GIT_SYNC keep their meaning: they say how a permitted build syncs
+# the checkout, never whether it may build.
 UE_DEV_HOST="${UE_DEV_HOST:-}"
+UE_SOURCE_EXPLICIT="${UE_SOURCE_EXPLICIT:-}"
 _ue_source_build_allowed() { # cwd = deploy dir
     [ "${UE_DEV_HOST:-}" = 1 ] && return 0
     case "${SYNAP_ALLOW_SOURCE_BUILD:-$(_ue_env_get SYNAP_ALLOW_SOURCE_BUILD)}" in 1|true) return 0 ;; esac
-    _ue_err "this host is not declared a dev host, so it does not build its own images. Nothing was changed."
+    if [ "${UE_SOURCE_EXPLICIT:-}" = 1 ]; then
+        if [ "${UE_SOURCE_WARNED:-}" != 1 ]; then
+            _ue_log "warning: building from source uses a lot of memory, disk and time on this host. The published release path is: synap update --release <main-<sha7>|vX.Y.Z|fast|stable>"
+            export UE_SOURCE_WARNED=1
+        fi
+        return 0
+    fi
+    _ue_err "this host is not declared a dev host, so it does not build its own images unattended. Nothing was changed."
     _ue_err "  A pod updates from a published release, pulled by digest: synap update --release <main-<sha7>|vX.Y.Z|fast|stable>"
-    _ue_err "  A dev host builds with: synap update --from-source --dev-host (or SYNAP_ALLOW_SOURCE_BUILD=1 in deploy/.env)"
+    _ue_err "  To build here on purpose: synap update --from-source (typed by a person), or declare a dev host with --dev-host / SYNAP_ALLOW_SOURCE_BUILD=1 in deploy/.env"
     return 1
 }
 
@@ -5329,16 +5343,18 @@ cmd_update() {
                 shift ;;
             -h|--help)
                 cat <<'USAGE'
-synap update [--release <id|fast|stable>] [--from-source --dev-host] [--force]
+synap update [--release <id|fast|stable>] [--from-source] [--force]
              [--unattended] [--insecure-skip-verify]
 
   --release <ref>   apply a published release: a release id (main-<sha7>, vX.Y.Z)
                     or a channel — fast (every green main push) | stable (v* tags).
                     Default: SYNAP_UPDATE_CHANNEL from deploy/.env, else stable.
   --from-source     build THIS checkout as synap-dev/*:<sha> (release local-<sha>);
-                    same backup / canary / rollback as a release. Only on a
-                    dev host: a pod never builds its own images.
-  --dev-host        declare this host a dev host, so --from-source may build
+                    same backup / canary / rollback as a release. Heavy
+                    (~11 GB disk, 4 GB Node heap): a warning is printed.
+                    Unattended, it needs a declared dev host.
+  --dev-host        declare this host a dev host: the unattended source
+                    channel may build, and install defaults to source
                     (or SYNAP_ALLOW_SOURCE_BUILD=1 in the environment or deploy/.env).
   --force           re-apply the release the pod is already on, or apply a
                     release older than it (otherwise refused).
@@ -5371,10 +5387,14 @@ USAGE
         unset UE_REQUEST_ID   # a person's run answers no request
     fi
     [ "$ref" = latest ] && ref=""
-    # A pod never builds its own images: refused BEFORE the checkout sync (a
-    # `git reset --hard` on a pod's checkout for a build that will not run).
+    # A build a person typed is honoured; an unattended one needs a declared dev
+    # host. Decided BEFORE the checkout sync (a `git reset --hard` on a pod's
+    # checkout for a build that will not run). Exported for the re-exec below.
+    if [ "$mode" = source ] && [ "$unattended" != 1 ]; then
+        export UE_SOURCE_EXPLICIT=1
+    fi
     if [ "$mode" = source ] && ! _ue_source_build_allowed; then
-        _ue_record aborted "$(_ue_current_release_id)" local "from-source build refused: this host is not declared a dev host (--dev-host / SYNAP_ALLOW_SOURCE_BUILD=1)" false
+        _ue_record aborted "$(_ue_current_release_id)" local "unattended from-source build refused: this host is not declared a dev host (--dev-host / SYNAP_ALLOW_SOURCE_BUILD=1)" false
         exit 1
     fi
     # --from-source: sync the checkout FIRST, then run the synced installer. A
@@ -5386,8 +5406,8 @@ USAGE
         if [ "$(cksum < "$SYNAP_SELF" 2>/dev/null)" != "$SYNAP_SELF_CKSUM" ]; then
             echo -e "${BLUE}🔁 The installer changed with this checkout — continuing with the new one.${NC}"
             # Same pid, so the update lock this process holds carries over.
-            # UE_DEV_HOST: `synap rebuild --dev-host` reaches here with no --dev-host in this argv.
-            exec env SYNAP_UPDATE_SYNCED=1 SYNAP_LOCK_HELD_BY="$$" UE_DEV_HOST="${UE_DEV_HOST:-}" "$SYNAP_SELF" update "${_update_argv[@]}"
+            # UE_DEV_HOST / UE_SOURCE_EXPLICIT: `synap rebuild` reaches here with no such flag in this argv.
+            exec env SYNAP_UPDATE_SYNCED=1 SYNAP_LOCK_HELD_BY="$$" UE_DEV_HOST="${UE_DEV_HOST:-}" UE_SOURCE_EXPLICIT="${UE_SOURCE_EXPLICIT:-}" "$SYNAP_SELF" update "${_update_argv[@]}"
         fi
         export SYNAP_UPDATE_SYNCED=1
     fi
@@ -8622,7 +8642,7 @@ ${YELLOW}Management:${NC}
   synap diagnose                 Run comprehensive diagnostics
   synap update [options]         Apply a release (id | fast | stable): backup, canary, auto-rollback
   synap restart [service]        Restart services (interactive if no service)
-  synap rebuild [service] [--dev-host]  Rebuild services (a dev host only; interactive if no service)
+  synap rebuild [service] [--dev-host]  Rebuild services (builds on request; interactive if no service)
   synap tune-postgres [--dry-run]       Re-size Postgres for this host's memory (restarts it)
   synap start [service]          Start services (all or specific)
   synap stop [service]           Stop services (interactive if no service)
