@@ -27,7 +27,7 @@
  */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { ExpectedOutput } from "@synap/playbooks";
-import { ASK_LIMITS, type Ask } from "@synap-core/types/ask";
+import { ASK_LIMITS, AskSchema, type Ask } from "@synap-core/types/ask";
 import { isUuid } from "@synap-core/types/property-render";
 import { needsYouPriority } from "@synap-core/types/needs-you";
 import { refuseUndeclaredArgs } from "../undeclared-args.js";
@@ -222,9 +222,17 @@ export const askPersonHandlers: McpHandlerMap = {
           "ask is required: HOW the person answers — {mode:'confirm'} | {mode:'choose', options:[…]} | {mode:'form', form:{fields:[…]}} | {mode:'act', steps:[…]} | {mode:'provide', provide:{…}}. NOTHING WAS FILED.",
       });
     }
-    const rawAsk: Record<string, unknown> = {
-      ...(args.ask as Record<string, unknown>),
-    };
+    const askArg = AskSchema.safeParse(args.ask);
+    if (!askArg.success) {
+      return ok({
+        error: `Invalid ask — NOTHING WAS FILED: ${askArg.error.issues
+          .map((i) => `ask.${i.path.join(".")}: ${i.message}`)
+          .join("; ")}`,
+      });
+    }
+    // The top-level ticket fields ride the ask (where they are stored); the
+    // slot parse below re-checks the merged ask with the same schema.
+    const rawAsk: Record<string, unknown> = { ...askArg.data };
     for (const k of TICKET_ARGS) {
       if (args[k] !== undefined) rawAsk[k] = args[k];
     }

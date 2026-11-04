@@ -83,6 +83,10 @@ const EXEMPT: Record<string, string> = {
     "`updateFocusSession` (addOutput) or `fileRoomQuestionOnSlot` → " +
     "`blockExpectedOutput`, both of which notify (and carry the guidance net). " +
     "A second push from the close door would be two pushes for one hand-off.",
+  "routers/mcp/handlers/ask-person.ts":
+    "`synap_ask_person` builds the owed slot and writes it THROUGH " +
+    "`updateFocusSession` (`expectedOutputs`), which notifies. A second push " +
+    "here would be two pushes for one hand-off.",
   "services/agent-dispatch/poll-external-agents.ts":
     "The approval card's owed slot is announced by the QUESTION card posted " +
     "right after it as the agent (`postDispatchNotice` kind 'question' → " +
