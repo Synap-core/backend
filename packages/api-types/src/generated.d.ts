@@ -49732,10 +49732,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description: string | null;
 					documentIds: string[] | null;
 					errorMessage: string | null;
-					executionMode: "async" | "box" | "sync";
+					executionMode: "async" | "box" | "hosted" | "sync";
 					id: string;
 					inputMap: SkillInputMap | null;
 					intent: string | null;
+					intentOp: string | null;
 					kind: SkillKind;
 					metadata: Record<string, unknown>;
 					name: string;
@@ -49903,10 +49904,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description: string | null;
 					documentIds: string[] | null;
 					errorMessage: string | null;
-					executionMode: "async" | "box" | "sync";
+					executionMode: "async" | "box" | "hosted" | "sync";
 					id: string;
 					inputMap: SkillInputMap | null;
 					intent: string | null;
+					intentOp: string | null;
 					kind: SkillKind;
 					metadata: Record<string, unknown>;
 					name: string;
@@ -51832,10 +51834,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description: string | null;
 					documentIds: string[] | null;
 					errorMessage: string | null;
-					executionMode: "async" | "box" | "sync";
+					executionMode: "async" | "box" | "hosted" | "sync";
 					id: string;
 					inputMap: SkillInputMap | null;
 					intent: string | null;
+					intentOp: string | null;
 					kind: SkillKind;
 					metadata: Record<string, unknown>;
 					name: string;
