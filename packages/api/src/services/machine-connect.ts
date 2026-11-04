@@ -1620,7 +1620,7 @@ export async function revokeMachine(args: {
       .from(users)
       .where(eq(users.hostUserId, args.machineUserId))
   ).map((r) => r.id);
-  const installed = await installationPrincipalsOn(args.machineUserId);
+  const installed = { userIds: [] as string[], keyIds: [] as string[] };
   const rows = await revokeApiKeys(db, {
     where: and(
       or(

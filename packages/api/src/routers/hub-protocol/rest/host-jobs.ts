@@ -72,7 +72,7 @@ async function resolveHostRunner(c: {
   | { ok: false; status: 401 | 403; code: string; error: string }
 > {
   const scopes = (c.get("scopes") as string[] | undefined) ?? [];
-  if (!hasScope(scopes, HOST_RUNNER_SCOPE)) {
+  if (!hasScope(scopes, HOST_RUNNER_SCOPE) && !hasScope(scopes, "box.runner")) {
     return {
       ok: false,
       status: 403,

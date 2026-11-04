@@ -89,19 +89,7 @@ export type HostLeaseRefusal = {
 const onThisComputer = (runner: HostRunner) =>
   and(
     eq(hostJobs.userId, runner.ownerUserId),
-    eq(hostJobs.machineUserId, runner.machineUserId),
-    exists(
-      db
-        .select({ one: sql`1` })
-        .from(installations)
-        .where(
-          and(
-            eq(installations.id, hostJobs.installationId),
-            eq(installations.machineUserId, runner.machineUserId),
-            eq(installations.userId, runner.ownerUserId)
-          )
-        )
-    )
+    eq(hostJobs.machineUserId, runner.machineUserId)
   );
 
 const infraEvidence = (infraReason: string): HostJobEvidence => ({
