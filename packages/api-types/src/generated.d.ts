@@ -19288,7 +19288,13 @@ export interface HealthSection {
 	 * newer-vs-previous regressions. Present only when computed (see
 	 * `GlobalSignals.qualityByPromptVersion`); an unreadable signal says so.
 	 */
-	 | "quality_by_prompt_version";
+	 | "quality_by_prompt_version"
+	/**
+	 * The pod's host and database resources against their alert thresholds
+	 * (plan P3, G10; `./resources.ts`). Present only for a pod admin (see
+	 * `GlobalSignals.resources`); an unreadable read says so.
+	 */
+	 | "resources";
 	status: HealthStatus;
 	/** Plain-language one-liner — honest-empty aware ("no stuck runs"). */
 	headline: string;
@@ -21674,6 +21680,92 @@ export interface LibraryKeepAliveSettings {
 	enabled: boolean;
 	/** Days unseen before an ungrouped, unbuilt item is archived. 0 = never. */
 	archiveAfterDays: number;
+}
+declare const THRESHOLD_METRICS: readonly [
+	"memory",
+	"swap",
+	"memoryPressure",
+	"disk",
+	"postgresConnections"
+];
+export type ThresholdMetric = (typeof THRESHOLD_METRICS)[number];
+export interface MetricThreshold {
+	warn: number;
+	critical: number;
+}
+export type ResourceAlertThresholds = Record<ThresholdMetric, MetricThreshold>;
+export type AlertLevel = "critical" | "ok" | "warning";
+/** A reading's mark: an alert level, `unavailable`, or `neutral` (shown, not judged). */
+export type ReadingMark = AlertLevel | "neutral" | "unavailable";
+/** Whether the host readings can be believed right now. */
+export type HostReadingsState = "absent" | "fresh" | "stale" | "unreadable";
+export type ReadingKind = "backup" | "cpuPressure" | "databaseSize" | "disk" | "eventLoop" | "ioPressure" | "load" | "memory" | "memoryPressure" | "postgresConnections" | "readings" | "swap";
+export type ReadingUnit = "bytes" | "ms" | "none" | "percent" | "ratio";
+export interface ResourceReading {
+	/** Stable key: the alert metric key (`disk:data`) or the reading kind. */
+	key: string;
+	kind: ReadingKind;
+	/** The disk's label (`data`, `docker`); absent elsewhere. */
+	label?: string;
+	value: number | null;
+	unit: ReadingUnit;
+	mark: ReadingMark;
+	/** When an alert on it began (null when not alerting). */
+	since: string | null;
+	/** Whether a threshold judges it (and so whether it can raise an alert). */
+	alerting: boolean;
+	/** Reading-specific facts (bytes free, cores, backup status…). */
+	detail: Record<string, unknown>;
+}
+declare const HOST_ACTIONS: readonly [
+	"prune-build-cache",
+	"prune-old-images",
+	"restart-service"
+];
+export type HostAction = (typeof HOST_ACTIONS)[number];
+declare const RESTARTABLE_SERVICES: readonly [
+	"backend",
+	"realtime",
+	"pod-admin",
+	"typesense"
+];
+export type RestartableService = (typeof RESTARTABLE_SERVICES)[number];
+export interface CleanRequest {
+	id: string;
+	action: HostAction;
+	service?: RestartableService;
+	requestedBy: string;
+	requestedAt: string;
+}
+export interface CleanResult {
+	id: string;
+	action: HostAction;
+	status: "done" | "failed" | "refused";
+	detail: string | null;
+	freedBytes: number | null;
+	finishedAt: string | null;
+}
+/** What the page shows about host actions: one waiting, and the last answer. */
+export interface HostActionsStatus {
+	/** The request the host has not taken yet; null when none waits. */
+	pending: Pick<CleanRequest, "action" | "id" | "requestedAt" | "service"> | null;
+	/** The host's last answer: `absent` = none yet, `unreadable` ≠ none. */
+	last: {
+		read: "ok";
+		result: CleanResult;
+	} | {
+		read: "absent";
+	} | {
+		read: "unreadable";
+	}
+	/**
+	 * The dir is not the backend's yet (EACCES/EPERM): right after a deploy
+	 * it can be root-owned for up to ~2 min, until the heal tick re-owns it
+	 * (backend#746). "Not ready", never "no answer".
+	 */
+	 | {
+		read: "not_ready";
+	};
 }
 /**
  * Broker trust diagnostics — WHY a Control-Plane-brokered pod can or cannot
@@ -44444,6 +44536,106 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				proposalId: string | null;
 				status: "updated";
+			};
+		}>;
+	}>>;
+	podHealth: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				causeUrl?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
+				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				actions: HostActionsStatus;
+				alerts: {
+					level: Exclude<AlertLevel, "ok">;
+					metric: string;
+					since: string | null;
+					value: number | null;
+				}[];
+				customized: ("disk" | "memory" | "memoryPressure" | "postgresConnections" | "swap")[];
+				evaluatedAt: string | null;
+				hostSampledAt: string | null;
+				hostState: HostReadingsState;
+				level: AlertLevel;
+				readings: ResourceReading[];
+				reclaimable: {
+					buildCacheBytes: number | null;
+					imagesReclaimableBytes: number | null;
+					sampledAt: string | null;
+				} | null;
+				restartableServices: ("backend" | "pod-admin" | "realtime" | "typesense")[];
+				thresholds: {
+					disk: MetricThreshold;
+					memory: MetricThreshold;
+					memoryPressure: MetricThreshold;
+					postgresConnections: MetricThreshold;
+					swap: MetricThreshold;
+				};
+			};
+		}>;
+		requestAction: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				action: "prune-build-cache" | "prune-old-images" | "restart-service";
+				service?: string | undefined;
+			};
+			meta: object;
+			output: {
+				request: CleanRequest;
+			};
+		}>;
+		setThresholds: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				disk?: {
+					critical: number;
+					warn: number;
+				} | undefined;
+				memory?: {
+					critical: number;
+					warn: number;
+				} | undefined;
+				memoryPressure?: {
+					critical: number;
+					warn: number;
+				} | undefined;
+				postgresConnections?: {
+					critical: number;
+					warn: number;
+				} | undefined;
+				swap?: {
+					critical: number;
+					warn: number;
+				} | undefined;
+			};
+			meta: object;
+			output: {
+				thresholds: ResourceAlertThresholds;
 			};
 		}>;
 	}>>;
