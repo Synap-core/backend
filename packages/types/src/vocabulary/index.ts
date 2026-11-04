@@ -55,6 +55,7 @@ import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
 import type { WaitKind } from "../units/wait-kind.js";
+import type { SessionVerdict } from "../focus-sessions/verdict.js";
 import type { RunnerState } from "../units/runner-state.js";
 import type {
   PackageFieldState,
@@ -1549,6 +1550,8 @@ export function resolveProposalKindLabel(
  *     DIFFERENT domain with its own vocabulary — a section that never ran is
  *     not a run that errored. Flattening those into "Failed" would destroy a
  *     real distinction, the same way collapsing the two verb moods would.
+ *     Those words live in {@link REPORT_SECTION_STATUS_LABELS} and
+ *     {@link REPORT_STATUS_LABELS}.
  * Adopt this table only where the value really is an object lifecycle state.
  */
 const STATUS_LABEL_ROWS = {
@@ -1764,6 +1767,14 @@ const STATUS_LABEL_ROWS = {
   // A session the person silenced (per-session mute, backend#637): its pushes
   // stop, its rows stay. The mark on its page and its Mute control.
   muted: "Muted",
+  // A write receipt's `no_effect` (`hub-protocol/write-receipt.ts`): the
+  // operation COMPLETED and deliberately changed nothing (an acknowledged
+  // no-op door, an idempotent re-apply that matched 0 rows). Not a failure.
+  no_effect: "No change",
+  // A run or step whose effect a GOVERNANCE verdict refused
+  // (`automation_runs.status`, `automation_step_runs.status`): a calm outcome,
+  // not a failure; its unit state is `blocked` on a rule (`units/state.ts`).
+  blocked_by_policy: "Blocked by policy",
 } satisfies Readonly<Record<string, string>>;
 
 export const STATUS_LABELS: Readonly<Record<string, string>> =
@@ -1787,6 +1798,94 @@ export function resolveStatusLabel(
     translatedWord(`status.${key}`, catalogLocaleOf(locale)) ??
     STATUS_LABELS[key]!
   );
+}
+
+/**
+ * A report SECTION's `status` attribute (`::::synap-section{status=…}`), the
+ * words under a section in the scroll reading and on its slide. Its own
+ * domain (see {@link STATUS_LABELS}): the producer contract
+ * (`api/src/services/session-document/closing-report.ts`) says a section with
+ * `status="failed"` is a round that DID NOT RUN, never an error, and the
+ * closing report writes the session verdict's state (`passing` / `failing` /
+ * `incomplete`), which reads the verdict words. `generating` is a section
+ * still being written; `skipped`, `complete` and `ok` are what generators
+ * write besides.
+ */
+export const REPORT_SECTION_STATUSES = [
+  "failed",
+  "generating",
+  "skipped",
+  "complete",
+  "ok",
+  "passing",
+  "failing",
+  "incomplete",
+] as const satisfies readonly (
+  | "failed"
+  | "generating"
+  | "skipped"
+  | "complete"
+  | "ok"
+  | Exclude<SessionVerdict["state"], "none">
+)[];
+export type ReportSectionStatus = (typeof REPORT_SECTION_STATUSES)[number];
+// Every verdict state the closing report can write has a row: a new state
+// does not build until it is named here.
+const _verdictStatesCovered: Exclude<
+  SessionVerdict["state"],
+  "none"
+> extends ReportSectionStatus
+  ? true
+  : never = true;
+void _verdictStatesCovered;
+
+/** Founder, 2026-11-03 (F2): a failed section reads "Did not run", `generating` reads "Writing". */
+export const REPORT_SECTION_STATUS_LABELS = {
+  failed: "Did not run",
+  generating: "Writing",
+  skipped: STATUS_LABEL_ROWS.skipped,
+  complete: "Complete",
+  ok: "Complete",
+  passing: STATUS_LABEL_ROWS.passing,
+  failing: STATUS_LABEL_ROWS.failing,
+  incomplete: STATUS_LABEL_ROWS.incomplete,
+} as const satisfies Readonly<Record<ReportSectionStatus, string>>;
+
+/** A report section's status in words; an unknown token humanizes, never leaks. */
+export function resolveReportSectionStatus(
+  status: string | null | undefined
+): string {
+  if (!status) return "";
+  const key = status.trim().toLowerCase();
+  return Object.hasOwn(REPORT_SECTION_STATUS_LABELS, key)
+    ? REPORT_SECTION_STATUS_LABELS[key as ReportSectionStatus]
+    : humanizeToken(key);
+}
+
+/**
+ * A REPORT's own status (the `report` kind's `reportStatus` property, enum
+ * `generating | ready | failed` in the system profiles,
+ * `database/src/utils/ensure-system-profiles.ts`; pinned by
+ * `report-status-labels.test.ts`). A failed REPORT stopped part-way: its
+ * sections that ran are still there, so it reads "Stopped early".
+ */
+export const REPORT_STATUSES = ["generating", "ready", "failed"] as const;
+export type ReportStatus = (typeof REPORT_STATUSES)[number];
+
+/** Founder, 2026-11-03 (F2): a failed report reads "Stopped early", `generating` reads "Writing". */
+export const REPORT_STATUS_LABELS = {
+  generating: "Writing",
+  ready: STATUS_LABEL_ROWS.ready,
+  failed: "Stopped early",
+} as const satisfies Readonly<Record<ReportStatus, string>>;
+
+/** A report's status in words; an unknown token humanizes, never leaks. */
+export function resolveReportStatus(status: string | null | undefined): string {
+  if (!status) return "";
+  const key = status.trim().toLowerCase();
+  return Object.hasOwn(REPORT_STATUS_LABELS, key)
+    ? REPORT_STATUS_LABELS[key as ReportStatus]
+    : humanizeToken(key);
 }
 
 /**

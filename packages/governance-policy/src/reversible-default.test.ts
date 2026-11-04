@@ -3,6 +3,7 @@ import {
   ADMIN_ACTIONS,
   DESTRUCTIVE_ACTIONS,
   GATE_WRITE_DOORS,
+  OWN_ORGANISE_CLASS_PATTERN,
   REVERSIBILITY_DOOR_CLASS,
   REVERSIBLE_CLASS_PATTERN,
   REVERSIBLE_EVENT_KEYS,
@@ -12,6 +13,14 @@ import {
   matchesActionPattern,
   nonWidenableFloorFor,
 } from "./index.js";
+// Cross-package SOURCE import, test-only: `@synap-core/types` cannot import the
+// engine, so the rule words hold their own copy of the two class patterns and
+// this file is their tripwire.
+import {
+  OWN_ORGANISE_CLASS_PATTERN as WORDS_OWN_ORGANISE_CLASS_PATTERN,
+  POD_DEFAULT_WORDS,
+  REVERSIBLE_CLASS_PATTERN as WORDS_REVERSIBLE_CLASS_PATTERN,
+} from "../../types/src/governance-rules/index.js";
 
 /**
  * "Reversible writes act" (founder, 2026-09-28): the pod default is ONE
@@ -59,6 +68,16 @@ describe("reversibility class — coverage", () => {
     expect(isReversibleWrite("secret.create")).toBe(false);
     expect(isReversibleWrite("*")).toBe(false);
     expect(isReversibleWrite(REVERSIBLE_CLASS_PATTERN)).toBe(false);
+  });
+});
+
+describe("the class patterns the rule words name", () => {
+  it("are the engine's patterns, and each pod default has its words", () => {
+    expect(WORDS_REVERSIBLE_CLASS_PATTERN).toBe(REVERSIBLE_CLASS_PATTERN);
+    expect(WORDS_OWN_ORGANISE_CLASS_PATTERN).toBe(OWN_ORGANISE_CLASS_PATTERN);
+    expect(Object.keys(POD_DEFAULT_WORDS).sort()).toEqual(
+      [REVERSIBLE_CLASS_PATTERN, OWN_ORGANISE_CLASS_PATTERN].sort()
+    );
   });
 });
 

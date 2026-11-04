@@ -413,6 +413,10 @@
       "types": "./dist/trust-ladder/index.d.ts",
       "import": "./dist/trust-ladder/index.js"
     },
+    "./governance-rules": {
+      "types": "./dist/governance-rules/index.d.ts",
+      "import": "./dist/governance-rules/index.js"
+    },
     "./agent-matrix": {
       "types": "./dist/agent-matrix/index.d.ts",
       "import": "./dist/agent-matrix/index.js"

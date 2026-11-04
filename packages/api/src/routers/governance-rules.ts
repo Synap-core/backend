@@ -52,12 +52,17 @@ import {
 } from "@synap/database";
 import {
   GOVERNANCE_PRINCIPAL_CLASSES,
+  type GovernancePrincipal,
   governanceRules,
   workspaces,
   users,
   proposals,
   secrets,
 } from "@synap/database/schema";
+import {
+  GOVERNANCE_PRINCIPAL_KINDS,
+  type GovernancePrincipalKind,
+} from "@synap-core/types/governance-rules";
 import {
   mayCarryHostSeed,
   revokeHostSeeds,
@@ -229,9 +234,20 @@ async function assertNotAgentOnAppAgent(
   if (denial) throw new TRPCError({ code: "FORBIDDEN", message: denial });
 }
 
+// The stored principal enum and the kinds the rule words are keyed by
+// (`@synap-core/types/governance-rules`) are ONE set: a new kind is a build
+// error here until the words name it.
+const _principalKindsAreStored: [
+  GovernancePrincipal,
+  GovernancePrincipalKind,
+] extends [GovernancePrincipalKind, GovernancePrincipal]
+  ? true
+  : never = true;
+void _principalKindsAreStored;
+
 const CreateInputSchema = z
   .object({
-    principalKind: z.enum(["agent", "any", "class"]),
+    principalKind: z.enum(GOVERNANCE_PRINCIPAL_KINDS),
     agentUserId: z.string().min(1).optional(),
     /** `class` only: which class — "machine" = "for all computers". */
     principalClass: z.enum(GOVERNANCE_PRINCIPAL_CLASSES).optional(),
