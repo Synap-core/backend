@@ -1495,8 +1495,11 @@ export async function reconcileWorkspaceFromDefinition(
         if (item.profileSlug) return `profile:${item.profileSlug}`;
         if (item.viewId) return `view:${item.viewId}`;
         if (item.viewName) return `viewName:${item.viewName}`;
-        if (item.documentId) return `document:${item.documentId}`;
+        // A template document by its SLUG first, its identity in the space:
+        // keyed by id, the item stored when the document was live no longer
+        // matched once the person deleted it, and every update appended it again.
         if (item.documentSlug) return `documentSlug:${item.documentSlug}`;
+        if (item.documentId) return `document:${item.documentId}`;
         if (item.appId) return `app:${item.appId}`;
         if (item.url) return `url:${item.url}`;
         if (item.cellKey) return `cell:${item.cellKey}`;
@@ -1529,6 +1532,19 @@ export async function reconcileWorkspaceFromDefinition(
               "reconcile: sidebar item names several views — left unresolved, never guessing"
             );
         }
+        // A document item that resolved to no live document (the person
+        // deleted it) is never appended: it would pin nothing. A dry run
+        // still reports the item of a document it WOULD create.
+        if (
+          item.kind === "document" &&
+          !item.documentId &&
+          !(
+            dryRun &&
+            item.documentSlug &&
+            templateDocuments.added.includes(item.documentSlug)
+          )
+        )
+          continue;
         const k = keyOf(item);
         if (baseKeys.has(k)) continue;
         baseKeys.add(k);
