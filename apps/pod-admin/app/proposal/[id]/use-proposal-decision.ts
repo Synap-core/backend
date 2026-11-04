@@ -12,6 +12,7 @@
 import type { DuplicateResolution } from "@synap-core/types/proposals";
 import { trpc } from "../../../lib/trpc";
 import { showApprovalProgressToast } from "../../_lib/approval-progress/approval-progress-toast";
+import { useApproveProposal } from "../../_lib/presence/use-approve";
 import {
   decisionFailure,
   decisionReceipt,
@@ -83,7 +84,8 @@ export function useProposalDecision(
   // The receipt says what the pod ANSWERED (`decision-receipt.ts`), with Undo
   // for `UNDO_WINDOW_MS` when the pod can take the decision back. An Undo refreshes the
   // proposal reads, so the page and the list draw the request pending again.
-  const approveMutation = trpc.proposals.approve.useMutation({
+  // With the proof of presence when the pod asks for one (W3).
+  const approveMutation = useApproveProposal({
     onSuccess: (result) => {
       void utils.proposals.approvalProgress.invalidate({ proposalId });
       // A LARGE graph is applied in the background: the request returned as

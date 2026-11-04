@@ -9,6 +9,8 @@ export {
   PACKAGE_FIELD_STATES,
   PACKAGE_UPDATE_NEEDS,
   type ApplyPackageUpdateInput,
+  type DataChangePreview,
+  type DataChangeSide,
   type PackageDataChange,
   type PackageFieldCounts,
   type PackageFieldState,

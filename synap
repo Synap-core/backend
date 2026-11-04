@@ -2260,6 +2260,54 @@ _reg_register_pod() {
     _reg_ok "registered as pod $(jq -r .podId state/registration.json)"
 }
 
+# Certificates once the pod's DNS is live (CP ticket aa67a2d6). On the Synap
+# zone the Control Plane creates this pod's A records DURING registration
+# (register_host), but Caddy started with the stack, before them: its first ACME
+# orders resolved the names through the proxied *.pod.synap.live wildcard, whose
+# edge holds no certificate for a two-level name, failed, and its fallback issuer
+# stalled for 20+ minutes. So once registered: wait until a public resolver
+# returns this server's IP for the pod's names, then restart Caddy so it orders
+# now. Bounded; on a timeout the install still succeeds and says how to finish.
+# Only for the caddy edge on the Synap zone (a custom domain's owner points its
+# own DNS before installing, §6.2).
+SYNAP_DNS_QUERY_URL_DEFAULT="https://cloudflare-dns.com/dns-query"
+_reg_dns_a() { # <name> — the A records a public DNS-over-HTTPS resolver returns, one per line
+    curl -fsS --max-time 5 -H 'accept: application/dns-json' \
+        "${SYNAP_DNS_QUERY_URL:-$SYNAP_DNS_QUERY_URL_DEFAULT}?name=$1&type=A" 2>/dev/null \
+        | jq -r '.Answer[]? | select(.type == 1) | .data' 2>/dev/null || true
+}
+_reg_await_dns_then_caddy() { # <edge>
+    local edge="$1" domain admin ip tries wait n name pending=""
+    [ "$edge" = caddy ] || return 0
+    domain="$(_ue_env_get DOMAIN)"
+    case "$domain" in *".${SYNAP_POD_ZONE}") ;; *) return 0 ;; esac
+    admin="$(_ue_env_get POD_ADMIN_DOMAIN)"
+    ip="$(_reg_server_ip)"
+    if [ -z "$ip" ]; then
+        _reg_warn "this server's public IP is unknown, so its DNS cannot be checked: once ${domain} resolves to it, run 'docker compose restart caddy' in $(pwd)"
+        return 0
+    fi
+    tries="${SYNAP_DNS_WAIT_TRIES:-60}"; wait="${SYNAP_DNS_WAIT_SECONDS:-10}"
+    _reg_log "waiting for ${domain}${admin:+ and ${admin}} to resolve to ${ip} before Caddy orders certificates"
+    for n in $(seq 1 "$tries"); do
+        pending=""
+        for name in "$domain" ${admin:+"$admin"}; do
+            _reg_dns_a "$name" | grep -qxF "$ip" || pending="${pending} ${name}"
+        done
+        if [ -z "$pending" ]; then
+            if docker compose restart caddy >/dev/null 2>&1; then
+                _reg_ok "DNS points at ${ip}; Caddy restarted to order its certificates now"
+            else
+                _reg_warn "DNS points at ${ip}, but Caddy could not be restarted: run 'docker compose restart caddy' in $(pwd)"
+            fi
+            return 0
+        fi
+        [ "$n" -lt "$tries" ] && sleep "$wait"
+    done
+    _reg_warn "after $((tries * wait))s,${pending} still does not resolve to ${ip}. Caddy keeps retrying on its own; once it resolves, run 'docker compose restart caddy' in $(pwd)"
+    return 0
+}
+
 # ============================================================================
 # POD IDENTITY KEY — the pod's OWN ES256 keypair (SECURITY-PLAN-R1 §1, D1/D8;
 # PODPROV-CONTRACT §8)
@@ -3482,6 +3530,7 @@ EOF
     if [ -n "$REGISTER_TOKEN" ]; then
         REG_NAME="$POD_NAME"
         _reg_register_pod "$REGISTER_TOKEN" "$CONTROL_PLANE" || exit 1
+        _reg_await_dns_then_caddy "$install_edge"
     fi
     _units_install_best_effort
     echo -e "${GREEN}✅ Installation complete!${NC}"
@@ -3948,17 +3997,29 @@ _ue_cosign_via() {
 # root-owned, so keeping one would mean running cosign as root for no gain.
 # A docker exit of 125/126/127 means docker could not run cosign at all
 # (daemon down, pull failed) — the caller reports that, never "does not verify".
+# The image runs as that nonroot user (uid 65532), which owns nothing on the
+# host, so the two files are copied into a world-readable directory of their own
+# (beside the manifest) and only that is mounted: mounting the manifest's own
+# directory depends on its mode and the host's umask, and install.sh's root-only
+# mktemp dir refused every fresh-host install (CP ticket 2e10228f).
 _ue_cosign_verify() {
     local args=(verify-blob --certificate-identity-regexp "$SYNAP_RELEASE_SIGNER_RE"
                 --certificate-oidc-issuer "$SYNAP_RELEASE_OIDC_ISSUER")
     case "$1" in
         cosign) cosign "${args[@]}" --bundle "$3" "$2" ;;
         docker)
-            local dir; dir="$(cd "$(dirname "$2")" && pwd)" || return 1
+            local dir stage="" rc=0
+            dir="$(cd "$(dirname "$2")" && pwd)" || return 1
+            stage="$(mktemp -d "${dir}/.cosign.XXXXXX")" \
+                && cp "$2" "$3" "$stage/" && chmod 0755 "$stage" \
+                && chmod 0644 "$stage/$(basename "$2")" "$stage/$(basename "$3")" \
+                || { echo "could not stage the manifest for the cosign container in ${dir}" >&2; [ -n "$stage" ] && rm -rf "$stage"; return 125; }
             docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
                 --tmpfs /home/nonroot:uid=65532,gid=65532 \
-                --mount "type=bind,src=${dir},dst=/release,readonly" "$SYNAP_COSIGN_IMAGE" \
-                "${args[@]}" --bundle "/release/$(basename "$3")" "/release/$(basename "$2")" ;;
+                --mount "type=bind,src=${stage},dst=/release,readonly" "$SYNAP_COSIGN_IMAGE" \
+                "${args[@]}" --bundle "/release/$(basename "$3")" "/release/$(basename "$2")" || rc=$?
+            rm -rf "$stage"
+            return "$rc" ;;
         *) return 1 ;;
     esac
 }
@@ -4439,7 +4500,12 @@ _ue_build_cache_reset() { docker builder prune -af >/dev/null 2>&1 || true; }
 # SYNAP_FORCE_GIT_SYNC keep their meaning: they say how a permitted build syncs
 # the checkout, never whether it may build.
 UE_DEV_HOST="${UE_DEV_HOST:-}"
-UE_SOURCE_EXPLICIT="${UE_SOURCE_EXPLICIT:-}"
+# UE_SOURCE_EXPLICIT says a person typed the build into THIS run, so it is never
+# taken from the environment: an unattended run that inherited it (a timer, a
+# request, a shell where it was exported) would pass the refusal below. It
+# survives only this installer's own re-exec (same pid, the lock marked held by
+# it: `exec env … SYNAP_LOCK_HELD_BY="$$"`). Review bf96d410, #782 follow-up.
+if [ "${SYNAP_LOCK_HELD_BY:-}" != "$$" ]; then UE_SOURCE_EXPLICIT=""; fi
 _ue_source_build_allowed() { # cwd = deploy dir
     [ "${UE_DEV_HOST:-}" = 1 ] && return 0
     case "${SYNAP_ALLOW_SOURCE_BUILD:-$(_ue_env_get SYNAP_ALLOW_SOURCE_BUILD)}" in 1|true) return 0 ;; esac

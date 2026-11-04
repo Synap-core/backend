@@ -381,7 +381,7 @@ app.get("/health", async (c) => {
     //
     // DO NOT gate a deploy check on this field: it is not derived from the
     // running build, so it looks identical whether or not a deploy landed.
-    apiTypesVersion: "1.34.0",
+    apiTypesVersion: "1.34.1",
     mode: "multi-user",
     auth: "ory-stack",
     // Feature marks a client reads before it uses a newer door (0395:

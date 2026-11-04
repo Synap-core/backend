@@ -14,6 +14,12 @@
 import { splitMarkdownBlocks } from "@synap-core/markdown-core/diff";
 import { isMarkerHref } from "@synap-core/markdown-core/markers";
 import {
+  OBJECT_REF_SCHEME,
+  referenceRead,
+  referenceView,
+  type ReferenceRead,
+} from "@synap-core/markdown-core/object-ids";
+import {
   CELL_FRAME_MAX_BYTES,
   htmlByteLength,
 } from "@synap-core/types/cell-bridge";
@@ -22,6 +28,10 @@ import {
   type MediaRef,
 } from "@synap-core/types/presentation";
 import { isHtmlPageSource } from "@synap-core/types/renderables";
+import {
+  resolveObjectNoun,
+  type ProfileIdentityInput,
+} from "@synap-core/types/vocabulary";
 import { openIn } from "../../../../lib/open-in";
 import { parseOpenParams } from "../../../open/open-params";
 
@@ -359,5 +369,121 @@ export function cellEmbedRead(query: {
     bytes,
     tooLarge: bytes > CELL_FRAME_MAX_BYTES,
     workspaceId: typeof def.workspaceId === "string" ? def.workspaceId : null,
+  };
+}
+
+// ─── Object references (a marker, or a bare id in prose) ────────────────────
+
+/**
+ * A reference in content: the kind its marker names (`null` when the author
+ * wrote only the id: `object://<id>`, from markdown-core `linkObjectIds`) and
+ * the id. Commands (`run://`, `open://`) are not references.
+ */
+export interface ObjectRef {
+  markerKind: string | null;
+  id: string;
+}
+
+export function objectRefOf(url: string | null | undefined): ObjectRef | null {
+  const raw = url?.trim() ?? "";
+  // The same order as `contentHref`: a web address is a web link first, even
+  // one with no path (`https://example.com` has the shape of a marker).
+  if (!isMarkerHref(raw)) return null;
+  const m = /^([a-z][a-z0-9_-]*):\/\/([^/?#\s]+)$/i.exec(raw);
+  if (!m) return null;
+  const scheme = m[1]!.toLowerCase();
+  if (COMMAND_SCHEMES.has(scheme) || EXTERNAL_PROTOCOLS.has(`${scheme}:`))
+    return null;
+  let id: string;
+  try {
+    id = decodeURIComponent(m[2]!);
+  } catch {
+    return null;
+  }
+  return { markerKind: scheme === OBJECT_REF_SCHEME ? null : scheme, id };
+}
+
+/**
+ * What the reader's own lookup says about a reference: markdown-core's
+ * `ReferenceRead` (the one rule), plus what only this console holds — the
+ * kind's profile for the icon and colour, and the retry of a broken lookup.
+ */
+export type ObjectRefRead =
+  | Exclude<ReferenceRead, { state: "ready" } | { state: "failed" }>
+  | (Extract<ReferenceRead, { state: "ready" }> & {
+      profile?: ProfileIdentityInput;
+    })
+  | { state: "failed"; retry?: () => void };
+
+export function objectRefRead(
+  query: Parameters<typeof referenceRead>[0] & {
+    profile?: ProfileIdentityInput | null;
+    retry?: () => void;
+  }
+): ObjectRefRead {
+  const read = referenceRead(query);
+  if (read.state === "failed")
+    return { state: "failed", ...(query.retry ? { retry: query.retry } : {}) };
+  if (read.state === "ready" && query.profile)
+    return { ...read, profile: query.profile };
+  return read;
+}
+
+/** How a reference is drawn: plain words, or a chip with its kind's identity. */
+export type ObjectRefView =
+  | {
+      kind: "text";
+      text: string;
+      /** The lookup broke: the words stay, with a mark to ask again. */
+      failed?: { retry?: () => void };
+    }
+  | {
+      kind: "chip";
+      text: string;
+      /** The kind the icon and colour come from (the entity's kind first). */
+      identityKind: string;
+      profile?: ProfileIdentityInput;
+      href: string | null;
+      /** The name is still being looked up. */
+      pending: boolean;
+      failed?: { retry?: () => void };
+    };
+
+/**
+ * A reference drawn in the console: markdown-core's `referenceView` (the one
+ * rule every surface draws by) with this console's page for what it opens,
+ * the kind's profile, and the retry of a broken lookup.
+ */
+export function objectRefView(
+  ref: ObjectRef,
+  label: string,
+  read: ObjectRefRead
+): ObjectRefView {
+  const view = referenceView(
+    {
+      markerKind:
+        ref.markerKind === null ? null : objectKindForMarker(ref.markerKind),
+      id: ref.id,
+    },
+    label,
+    read.state === "failed" ? { state: "failed" } : read,
+    resolveObjectNoun
+  );
+  const failed = view.failed
+    ? {
+        failed:
+          read.state === "failed" && read.retry ? { retry: read.retry } : {},
+      }
+    : {};
+  if (view.kind === "text") return { kind: "text", text: view.text, ...failed };
+  const profile = read.state === "ready" ? read.profile : undefined;
+  return {
+    kind: "chip",
+    text: view.text,
+    identityKind: view.identityKind,
+    ...(profile ? { profile } : {}),
+    href: view.opens ? objectPage(view.opens.kind, view.opens.id) : null,
+    pending: view.pending,
+    ...failed,
   };
 }

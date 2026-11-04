@@ -7,15 +7,19 @@
  */
 
 import { z } from "zod";
+import {
+  PROPERTY_KEY_PATTERN,
+  PROPERTY_KEY_SOURCE,
+} from "@synap/database/property-key";
 
 // ── SiteConfigV1 ─────────────────────────────────────────────────────────────
 
 /** A collection key: a profile slug (kind or role). It appears in public URLs. */
 export const SiteCollectionKey = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/);
-/** A snapshot field key (the exposure policy's `PublishedFieldKey` grammar). */
-const FieldKey = z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/);
+/** A snapshot field key: THE property key, as the exposure policy's `fields`. */
+const FieldKey = z.string().regex(PROPERTY_KEY_PATTERN);
 /** A sort key: a field key or `publishedAt`, `-` prefix = descending. */
-const SortKey = z.string().regex(/^-?[A-Za-z][A-Za-z0-9_]{0,63}$/);
+const SortKey = z.string().regex(new RegExp(`^-?${PROPERTY_KEY_SOURCE}$`));
 
 /** The sort key every collection may use whatever the policy allowlists. */
 export const SITE_PUBLISHED_AT_SORT = "publishedAt";

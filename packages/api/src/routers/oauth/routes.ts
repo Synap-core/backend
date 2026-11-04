@@ -82,6 +82,7 @@ import {
   FIRST_PARTY_CLIENT_IDS,
   OAUTH_DEFAULT_SCOPES,
   OAUTH_REVOCABLE_AGENT_TYPES,
+  OAUTH_APP_PERMISSIONS,
   OAUTH_SUPPORTED_SCOPES,
   mapCpScopesToPodScopes,
   oauthKeyInstanceId,
@@ -225,6 +226,10 @@ function authorizationServerMetadata(issuer: string) {
   return {
     ...buildAuthorizationServerMetadata(issuer, OAUTH_SUPPORTED_SCOPES),
     synap_first_party_clients: [...FIRST_PARTY_CLIENT_IDS],
+    // A Synap extension: what a pod app (website client) may ask for in its
+    // `synap_requests`. `scopes_supported` stays the `scope` values an MCP or
+    // app client may send; the two are different grammars (config.ts).
+    synap_app_permissions: [...OAUTH_APP_PERMISSIONS],
   };
 }
 

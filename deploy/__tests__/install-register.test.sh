@@ -31,6 +31,11 @@
 #   policy    D3: registration writes state/pod-agent-policy.json once, from the
 #             response's deploymentMode (managed / self-hosted, 0644); an existing
 #             owner file is never touched; a CP that predates the field → no file
+#   dns       aa67a2d6: on the Synap zone, Caddy is restarted only once a public
+#             resolver (fake DNS-over-HTTPS) returns the server's IP for the pod
+#             AND admin names (after the CP created them in registration); a
+#             late record waits, a record that never comes warns and the install
+#             still succeeds; a custom domain is never waited on
 #   bootstrap install.sh: retired flags refused with the new spelling; bundle
 #             sha mismatch refused; happy path unpacks, links the CLI, execs
 #             `synap install --non-interactive --release <id> …`
@@ -66,6 +71,17 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
     def do_GET(self):
         if self.path == "/meta/ip": return self.send(200, "203.0.113.7", "text/plain")
+        if self.path.startswith("/dns?"):
+            # DNS-over-HTTPS (application/dns-json). dns-mode: right | never | late:<n>
+            # (the proxied wildcard's edge IP for the first n queries of each name).
+            from urllib.parse import urlparse, parse_qs
+            name = parse_qs(urlparse(self.path).query).get("name", [""])[0]
+            with open(os.path.join(D, "dns.log"), "a") as f: f.write(name + "\n")
+            seen = open(os.path.join(D, "dns.log")).read().split().count(name)
+            mode = rd("dns-mode", "right")
+            right = mode == "right" or (mode.startswith("late:") and seen > int(mode[5:]))
+            ip = "203.0.113.7" if right else "104.21.0.1"
+            return self.send(200, json.dumps({"Status": 0, "Answer": [{"name": name + ".", "type": 1, "TTL": 300, "data": ip}]}))
         p = os.path.join(D, "srv", self.path.lstrip("/"))
         if os.path.isfile(p): return self.send(200, open(p, "rb").read(), "application/octet-stream")
         self.send(404, "{}")
@@ -166,8 +182,8 @@ setup() {
   cp "$HERE/synap" "$ROOT/synap"
   cp "$HERE/deploy/"*.sh "$HERE/deploy/env.schema" "$HERE/deploy/docker-compose.yml" "$HERE/deploy/Caddyfile" "$DEPLOY/"
   cp -R "$HERE/kratos" "$ROOT/kratos"
-  rm -f "$TMP"/req-*.json "$TMP/calls.log" "$TMP/nonce-seen" "$TMP/pod-fail" "$TMP/pod-fail-body"
-  echo 200 > "$TMP/cp-mode"
+  rm -f "$TMP"/req-*.json "$TMP/calls.log" "$TMP/nonce-seen" "$TMP/pod-fail" "$TMP/pod-fail-body" "$TMP/dns.log"
+  echo 200 > "$TMP/cp-mode"; echo right > "$TMP/dns-mode"
   echo "$DEPLOY/state/registration-nonce/nonce.json" > "$TMP/nonce-path"
   export FAKE
 }
@@ -176,6 +192,7 @@ setup() {
 run_install() { # <args...>
   ( cd "$ROOT" || exit; PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" SYNAP_RELEASE_BASE_URL="$BASE/rel" \
     SYNAP_LOCAL_POD_URL="$BASE" SYNAP_METADATA_IP_URL="$BASE/meta/ip" \
+    SYNAP_DNS_QUERY_URL="$BASE/dns" SYNAP_DNS_WAIT_SECONDS=0 SYNAP_DNS_WAIT_TRIES=3 \
     SYNAP_HEALTH_INTERVAL=0 SYNAP_REGISTER_RETRY_SECONDS=0 SYNAP_REGISTER_HEALTH_TRIES=2 \
     SYNAP_RELEASE_VERIFY="${SYNAP_RELEASE_VERIFY-warn}" bash "$ROOT/synap" install "$@" ) >"$S/out" 2>&1 </dev/null
 }
@@ -214,6 +231,8 @@ run_install --non-interactive --release "$REL" --domain pod.example.org --email 
 [ "$(env_of POD_ADMIN_DOMAIN)" = "pod-admin.example.org" ] && [ -n "$(env_of VAULT_SERVER_KEY)" ] \
   && ok "plain: derived admin host + compose-required VAULT_SERVER_KEY" || bad "plain: POD_ADMIN_DOMAIN=$(env_of POD_ADMIN_DOMAIN)"
 [ ! -s "$TMP/calls.log" ] && [ -z "$(env_of CONTROL_PLANE_URL)" ] && ok "plain: no Control Plane contacted, no trust written" || bad "plain: CP contacted"
+[ ! -s "$TMP/dns.log" ] && ! grep -q 'compose restart caddy' "$FAKE/docker.log" \
+  && ok "plain: a custom domain is never waited on in DNS, Caddy is not restarted" || bad "plain: DNS queried ($(tr '\n' ' ' < "$TMP/dns.log" 2>/dev/null)) or Caddy restarted"
 [ -n "$(env_of PROVISIONING_TOKEN)" ] && [ ! -e "$DEPLOY/state/bootstrap-token.retired" ] \
   && ok "plain: no owner yet → PROVISIONING_TOKEN stays (the magic-link door needs it)" || bad "plain: token retired before any owner exists"
 [ -s "$DEPLOY/state/pod-identity/pod-key.pem" ] && [ "$(jq -r .crv "$DEPLOY/state/pod-identity.pub.json")" = P-256 ] \
@@ -295,6 +314,13 @@ ENR="$DEPLOY/state/pod-identity-enrollment.json"
   && ok "happy: state/pod-identity-enrollment.json records pod_123 + the CP issuer + the key's kid" || bad "happy: no enrollment record: $(cat "$ENR" 2>/dev/null)"
 if grep -rqE 'shub_secret_key|eyJowner|eyJprovision|eyJoidc|spr_' "$DEPLOY/state" 2>/dev/null; then bad "happy: a secret was left in state/"; else ok "happy: no secret left in state/"; fi
 grep -q "$TOKEN" "$S/out" && bad "happy: the code was printed to the log" || ok "happy: the code never reaches the log"
+# aa67a2d6: the CP created the A records during registration; Caddy, started before them, orders again once they resolve.
+grep -qx lab1.pod.synap.live "$TMP/dns.log" 2>/dev/null && grep -qx admin.lab1.pod.synap.live "$TMP/dns.log" \
+  && ok "happy: both pod names are checked in public DNS after registration" || bad "happy: DNS queries: $(tr '\n' ' ' < "$TMP/dns.log" 2>/dev/null)"
+dl_agent="$(grep -n 'compose --profile pod-agent up -d pod-agent' "$FAKE/docker.log" | head -1 | cut -d: -f1)"
+dl_caddy="$(grep -n 'compose restart caddy' "$FAKE/docker.log" | head -1 | cut -d: -f1)"
+[ -n "$dl_caddy" ] && [ -n "$dl_agent" ] && [ "$dl_caddy" -gt "$dl_agent" ] && grep -q 'Caddy restarted to order its certificates now' "$S/out" \
+  && ok "happy: once DNS points at the server, Caddy is restarted (after registration applied)" || { bad "happy: no Caddy restart after DNS (agent line ${dl_agent:-none}, caddy line ${dl_caddy:-none})"; show; }
 
 # ── rerun: the code is never spent twice ──────────────────────────────────────
 rm -f "$TMP/calls.log"
@@ -404,6 +430,17 @@ run_install "${REG[@]}"; rc=$?
 setup polbad; cp_response "$OIDC" "$INTEL" mangaged
 run_install "${REG[@]}"; rc=$?
 [ "$rc" = 0 ] && [ ! -e "$DEPLOY/$POLF" ] && ok "policy: an unknown deploymentMode value writes nothing" || { bad "policy: bad mode rc=$rc"; show; }
+
+# ── dns: a late record is waited for; one that never comes warns, never fails ─
+setup dnslate; cp_response null null; echo late:2 > "$TMP/dns-mode"
+run_install "${REG[@]}"; rc=$?
+[ "$rc" = 0 ] && [ "$(grep -cx lab1.pod.synap.live "$TMP/dns.log")" = 3 ] && [ "$(grep -c 'compose restart caddy' "$FAKE/docker.log")" = 1 ] \
+  && ok "dns: the wildcard's edge IP twice, then the server's → waited, Caddy restarted once" || { bad "dns/late: rc=$rc queries=$(grep -cx lab1.pod.synap.live "$TMP/dns.log" 2>/dev/null) restarts=$(grep -c 'compose restart caddy' "$FAKE/docker.log")"; show; }
+setup dnsnever; cp_response null null; echo never > "$TMP/dns-mode"
+run_install "${REG[@]}"; rc=$?
+[ "$rc" = 0 ] && ! grep -q 'compose restart caddy' "$FAKE/docker.log" && grep -q 'still does not resolve to 203.0.113.7' "$S/out" \
+  && grep -q 'docker compose restart caddy' "$S/out" && [ "$(jq -r .podId "$DEPLOY/state/registration.json" 2>/dev/null)" = pod_123 ] \
+  && ok "dns: a record that never resolves → bounded wait, says how to finish, the install still succeeds" || { bad "dns/never: rc=$rc"; show; }
 
 # ── install.sh: the bootstrapper ──────────────────────────────────────────────
 B="$TMP/boot"; mkdir -p "$B/bundle/deploy" "$B/bin" "$B/fake"

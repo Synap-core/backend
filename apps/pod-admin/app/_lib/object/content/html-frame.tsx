@@ -19,6 +19,7 @@
  */
 
 import { Button, Tab, Tabs } from "@heroui/react";
+import { Maximize2 } from "lucide-react";
 import {
   CELL_FRAME_MAX_BYTES,
   CELL_FRAME_SANDBOX,
@@ -26,12 +27,14 @@ import {
   wrapHtmlForFrame,
 } from "@synap-core/types/cell-bridge";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
   type Ref,
+  type RefObject,
 } from "react";
 import { trpc } from "../../../../lib/trpc";
 import { humanizeBytes } from "../../../../lib/format";
@@ -85,11 +88,14 @@ export function SandboxedFrame({
   title,
   frameRef,
   onLoad,
+  fill = false,
 }: {
   srcDoc: string;
   title: string;
   frameRef?: Ref<HTMLIFrameElement>;
   onLoad?: () => void;
+  /** Fill its box (the page shown full size) instead of the inline height. */
+  fill?: boolean;
 }) {
   return (
     <iframe
@@ -100,7 +106,11 @@ export function SandboxedFrame({
       allow=""
       referrerPolicy="no-referrer"
       onLoad={onLoad}
-      className="block h-[min(80vh,900px)] min-h-[420px] w-full rounded-lg bg-white ring-1 ring-inset ring-foreground/10"
+      className={
+        fill
+          ? "block h-full w-full bg-white"
+          : "block h-[min(80vh,900px)] min-h-[420px] w-full rounded-lg bg-white ring-1 ring-inset ring-foreground/10"
+      }
     />
   );
 }
@@ -118,6 +128,7 @@ export function HtmlFrame({
   workspaceId,
   title,
   refusedAction,
+  fullSize,
 }: {
   html: string;
   /** The page's space: the lens every read is stamped with. */
@@ -125,6 +136,8 @@ export function HtmlFrame({
   title: string;
   /** The door shown beside the reason when the page is not run. */
   refusedAction?: ReactNode;
+  /** The box the section's Full size button shows full screen. */
+  fullSize?: FullSize;
 }) {
   const client = trpc.useUtils().client;
   const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -168,20 +181,62 @@ export function HtmlFrame({
       />
     );
   }
+  // The frame sits in a box the section's Full size button shows full
+  // screen. The box, not the frame, goes full screen: the frame is neither
+  // moved nor remounted, so the page keeps its state and its bridge, and the
+  // frame's own `allow=""` stays as it is.
   return (
-    <SandboxedFrame
-      key={run}
-      frameRef={frameRef}
-      title={title}
-      srcDoc={srcDoc}
-      onLoad={() => {
-        // The srcdoc's own load is the first; any later one is the frame
-        // leaving for another address.
-        loads.current += 1;
-        if (loads.current > 1) setLeft(true);
-      }}
-    />
+    <div
+      ref={fullSize?.boxRef}
+      className={fullSize?.isFull ? "h-full w-full bg-white" : undefined}
+    >
+      <SandboxedFrame
+        key={run}
+        frameRef={frameRef}
+        title={title}
+        srcDoc={srcDoc}
+        fill={fullSize?.isFull}
+        onLoad={() => {
+          // The srcdoc's own load is the first; any later one is the frame
+          // leaving for another address.
+          loads.current += 1;
+          if (loads.current > 1) setLeft(true);
+        }}
+      />
+    </div>
   );
+}
+
+/** The frame's box and whether it is the screen's full-screen element now. */
+export type FullSize = {
+  boxRef: RefObject<HTMLDivElement | null>;
+  isFull: boolean;
+};
+
+/**
+ * Full size for a running page: the browser's own full screen (Esc leaves
+ * it), on the box around the frame. `isFull` follows the browser, so leaving
+ * by Esc or by the browser's own control puts the frame back inline.
+ */
+export function useFullSize(): FullSize & { enter: () => void } {
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const [isFull, setIsFull] = useState(false);
+  useEffect(() => {
+    const onChange = () =>
+      setIsFull(
+        boxRef.current !== null && document.fullscreenElement === boxRef.current
+      );
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+  const enter = useCallback(() => {
+    const box = boxRef.current;
+    if (!box || typeof box.requestFullscreen !== "function") return;
+    void box.requestFullscreen().catch(() => {
+      // Refused (no full screen in this browser or frame): the page stays inline.
+    });
+  }, []);
+  return { boxRef, isFull, enter };
 }
 
 export type HtmlPageView = "page" | "source";
@@ -197,6 +252,7 @@ export function HtmlPageBody({
   title,
   sourceBody,
   onShowSource,
+  fullSize,
 }: {
   view: HtmlPageView;
   html: string;
@@ -208,6 +264,7 @@ export function HtmlPageBody({
   /** How the console draws escaped source (`ContentBody`). */
   sourceBody: (prepared: PreparedContent) => ReactNode;
   onShowSource?: () => void;
+  fullSize?: FullSize;
 }) {
   if (view === "source") return <>{sourceBody(source)}</>;
   const t = frameT();
@@ -234,6 +291,7 @@ export function HtmlPageBody({
       workspaceId={workspaceId}
       title={title}
       refusedAction={viewSource}
+      fullSize={fullSize}
     />
   );
 }
@@ -263,24 +321,47 @@ export function HtmlPageSection({
 }) {
   const [view, setView] = useState<HtmlPageView>(initialView);
   const t = frameT();
+  const fullSize = useFullSize();
+  // Full size is offered only where a page runs: not for its source, a page
+  // too large to run, or one that loads code from the network.
+  const runs = useMemo(
+    () => !tooLarge && !frameNetworkCodeRefusal(html),
+    [html, tooLarge]
+  );
+  const tabs = (
+    <Tabs
+      size="sm"
+      aria-label={t("toggle.aria")}
+      selectedKey={view}
+      onSelectionChange={(key) => setView(key as HtmlPageView)}
+      classNames={{
+        tabList: "bg-foreground/[0.04] rounded-lg",
+        tab: "text-[12px]",
+      }}
+    >
+      <Tab key="page" title={t("toggle.page")} />
+      <Tab key="source" title={t("toggle.source")} />
+    </Tabs>
+  );
   return (
     <SectionCard
       variant="flat"
       title={title}
       actions={
-        <Tabs
-          size="sm"
-          aria-label={t("toggle.aria")}
-          selectedKey={view}
-          onSelectionChange={(key) => setView(key as HtmlPageView)}
-          classNames={{
-            tabList: "bg-foreground/[0.04] rounded-lg",
-            tab: "text-[12px]",
-          }}
-        >
-          <Tab key="page" title={t("toggle.page")} />
-          <Tab key="source" title={t("toggle.source")} />
-        </Tabs>
+        <div className="flex items-center gap-2">
+          {view === "page" && runs && (
+            <Button
+              size="sm"
+              variant="light"
+              radius="md"
+              startContent={<Maximize2 aria-hidden size={14} />}
+              onPress={fullSize.enter}
+            >
+              {t("fullSize")}
+            </Button>
+          )}
+          {tabs}
+        </div>
       }
     >
       <HtmlPageBody
@@ -293,6 +374,7 @@ export function HtmlPageSection({
         title={title}
         sourceBody={sourceBody}
         onShowSource={() => setView("source")}
+        fullSize={fullSize}
       />
       {footer?.(view)}
     </SectionCard>
