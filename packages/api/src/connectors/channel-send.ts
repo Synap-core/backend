@@ -227,25 +227,15 @@ async function sendGrantCheck(
 }
 
 /**
- * null when the calling key may send on this channel; the refusal otherwise.
- * No grant (a signed-in person, a job) → null.
+ * The key's grant on a send to a channel: null when it may send (or there is
+ * no grant: a signed-in person, a job); otherwise the refusal, and whether
+ * the send is still FILED for the person's approval (`proposeOnly`).
  *
  * Passes when the key holds `messaging.send` in the channel's space (the
  * check this door always made), OR — for a channel bound to a person — when
  * the key may read that person and holds `capability.send_message.run` or
  * `messaging.send` in the space it acts in. A pod-wide channel no longer fails
  * closed for an app that reads the person (the CRM).
- */
-export async function messagingSendGrantDenial(
-  args: SendGrantArgs
-): Promise<string | null> {
-  return (await sendGrantCheck(args)).denial;
-}
-
-/**
- * The key's grant on a send to a channel: null when it may send (or there is
- * no grant: a signed-in person, a job); otherwise the refusal, and whether
- * the send is still FILED for the person's approval (`proposeOnly`).
  *
  * An AGENT asks (founder, 2026-11-03: "normally, like we do all, it should
  * still be possible, but it creates a proposal"): an agent's key whose grant

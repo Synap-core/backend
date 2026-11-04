@@ -153,6 +153,8 @@ export type ConsoleAppVia = (typeof CONSOLE_APP_VIAS)[number];
 /** One object's own console page, keyed like a page id. */
 export const CONSOLE_OBJECT_PAGES = {
   computer: { audience: "admin" },
+  /** An agent's own page (`/agents/<id>`, its agent USER id). */
+  agent: { audience: "admin" },
   /** A space's own page (`/workspaces/<id>`). */
   space: { audience: "admin" },
   application: { audience: "admin" },
@@ -167,6 +169,7 @@ export type ConsoleTarget =
   | { page: Exclude<FocusPageId, "review">; focus?: string }
   | { page: "review"; type?: ConsoleReviewType; focus?: string }
   | { page: "computer"; id: string }
+  | { page: "agent"; id: string }
   | { page: "space"; id: string }
   | { page: "application"; via: ConsoleAppVia; id: string }
   | { page: "connectionRequest"; id: string }
@@ -224,6 +227,10 @@ export function consolePath(target: ConsoleTarget): string | null {
     case "computer": {
       const id = nonEmpty(t.id);
       return id ? `/computers/${encodeURIComponent(id)}` : null;
+    }
+    case "agent": {
+      const id = nonEmpty(t.id);
+      return id ? `/agents/${encodeURIComponent(id)}` : null;
     }
     case "space": {
       const id = nonEmpty(t.id);

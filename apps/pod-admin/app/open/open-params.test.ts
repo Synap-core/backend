@@ -111,8 +111,22 @@ describe("openRedirect", () => {
     );
   });
 
+  it("sends a pod admin from an agent link to the agent's console page", () => {
+    expect(openRedirect(parseOpenParams("agent", UUID), true)).toBe(
+      `/agents/${UUID}`
+    );
+  });
+
+  it("leaves a member on the agent's receiver page (the console page is pod-admin only)", () => {
+    expect(openRedirect(parseOpenParams("agent", UUID), false)).toBeNull();
+    // A malformed agent id is drawn as such, never redirected.
+    expect(
+      openRedirect(parseOpenParams("agent", "not-a-uuid"), true)
+    ).toBeNull();
+  });
+
   it("draws every other kind", () => {
-    for (const type of ["entity", "agent", "project", "cell", "widget"]) {
+    for (const type of ["entity", "project", "cell", "widget", "session"]) {
       expect(openRedirect(parseOpenParams(type, UUID), true)).toBeNull();
     }
   });

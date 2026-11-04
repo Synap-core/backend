@@ -425,6 +425,17 @@ export function computerHref(id: string): string {
 }
 
 /**
+ * One agent's page in the console — the ONE spelling of "open this agent",
+ * for every console surface that names one (Agents, Agents & work, a
+ * computer's agents, search). Keyed by the agent's USER id, the id
+ * `/open/agent/:id` takes; that receiver sends a pod admin here
+ * (`openRedirect`), so a link from outside the console lands here too.
+ */
+export function agentHref(id: string): string {
+  return `${navHref("agents")}/${encodeURIComponent(id)}`;
+}
+
+/**
  * One server error's page — the ONE spelling of "open this errorId" in the
  * console. The pod builds the same path in a 5xx body's `causeUrl`
  * (@synap/api `faultCauseUrl`, services/server-faults/record.ts): keep them equal.
@@ -571,12 +582,13 @@ export const SEARCH_DESTINATION: Readonly<
     label: "Members",
     href: (id) => navHref("members", { focus: id }),
   },
+  // An agent and a computer are objects with their own page, so a result
+  // opens it.
   agent: {
     nav: "agents",
     label: "Agents",
-    href: (id) => navHref("agents", { focus: id }),
+    href: agentHref,
   },
-  // A computer is an object with its own page, so a result opens it.
   computer: {
     nav: "computers",
     label: "Computers",

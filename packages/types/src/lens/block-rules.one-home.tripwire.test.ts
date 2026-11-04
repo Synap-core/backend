@@ -118,78 +118,17 @@ const DEFINITION = new RegExp(
 type Repo = "synap-app" | "relay-app" | "browser";
 
 /**
- * Today's copies, read at each repo's main (3 Nov 2026: synap-app 8e7a2a7b,
- * relay-app a62ea3fc, browser none). Only shrinks: a lane deletes its rows
- * once its adoption is on its main.
+ * The copies that still wait for their adoption lane. None since 4 Nov 2026:
+ * synap-app adopted at ac8bdfed (lane 2) and relay-app at 29cc3a13 (lane 4);
+ * browser never had one. Every repo is now fully strict. Only shrinks: never
+ * add a row (a new copy imports the rule from `@synap-core/types/lens`).
  */
 const PENDING_ADOPTION: Record<
   Repo,
   ReadonlyArray<{ file: string; name: string; lane: string }>
 > = {
-  "synap-app": [
-    {
-      file: "packages/hooks/src/cell-runtime/cell-lens-scope.ts",
-      name: "cellLensScope",
-      lane: "2",
-    },
-    {
-      file: "packages/hooks/src/markdown-engine/renderer/embed-frame/document-embed-context.tsx",
-      name: "documentLensScope",
-      lane: "2",
-    },
-    {
-      file: "packages/web/src/lens-page/copy.ts",
-      name: "LENS_EMPTY_TITLES",
-      lane: "2",
-    },
-    {
-      file: "packages/web/src/lens-page/copy.ts",
-      name: "LENS_EMPTY_WHY",
-      lane: "2",
-    },
-    {
-      file: "packages/web/src/work-cells/PageSectionCell.tsx",
-      name: "pageSectionConfig",
-      lane: "2",
-    },
-    {
-      file: "packages/web/src/work-cells/StatusOfCell.tsx",
-      name: "statusMarkId",
-      lane: "2",
-    },
-    {
-      file: "packages/web/src/work-cells/StatusOfCell.tsx",
-      name: "STATUS_OF_ROUTE_KIND",
-      lane: "2",
-    },
-  ],
-  "relay-app": [
-    {
-      file: "src/features/work-cells/WorkCells.tsx",
-      name: "ROUTE_KIND",
-      lane: "4",
-    },
-    {
-      file: "src/features/work-cells/embed-host.tsx",
-      name: "documentCellScope",
-      lane: "4",
-    },
-    {
-      file: "src/features/work-cells/work-cell-model.ts",
-      name: "LENS_CELL_LIMIT_MIN",
-      lane: "4",
-    },
-    {
-      file: "src/features/work-cells/work-cell-model.ts",
-      name: "LENS_CELL_LIMIT_MAX",
-      lane: "4",
-    },
-    {
-      file: "src/features/work-cells/work-cell-model.ts",
-      name: "lensCellLimit",
-      lane: "4",
-    },
-  ],
+  "synap-app": [],
+  "relay-app": [],
   browser: [],
 };
 

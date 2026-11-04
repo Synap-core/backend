@@ -3287,6 +3287,7 @@ const messagingSendHandler: BuiltinVerbHandler = async (params, ctx) => {
         id: channels.id,
         workspaceId: channels.workspaceId,
         channelType: channels.channelType,
+        contextObjectType: channels.contextObjectType,
         externalSource: channels.externalSource,
         metadata: channels.metadata,
       })
@@ -3299,7 +3300,15 @@ const messagingSendHandler: BuiltinVerbHandler = async (params, ctx) => {
     if (!channel || !(await canUserSeeChannel(db, channel.id, ctx.userId))) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Channel not found." });
     }
+    // A person's conversation follows its person, not the space it was
+    // stamped with (decisions d3/d7): the send door's grant verdict
+    // (`messagingSendGrantVerdict`) decides by the person. Any other channel
+    // stays in the acting workspace.
+    const personBound =
+      channel.channelType === "external" &&
+      channel.contextObjectType === "entity";
     if (
+      !personBound &&
       channel.workspaceId &&
       ctx.workspaceId &&
       channel.workspaceId !== ctx.workspaceId

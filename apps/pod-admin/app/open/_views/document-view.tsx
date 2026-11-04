@@ -104,11 +104,12 @@ export function DocumentView({ id }: { id: string }) {
       header={{
         kind: "document",
         title: doc.title?.trim() || "Untitled document",
+        status: living
+          ? { kind: "healthy", label: t("document.mark.live") }
+          : null,
         summary: living
           ? t(query.data?.canEdit ? "document.liveEditable" : "document.live")
-          : query.data?.canEdit
-            ? "You can read it here. Edit it in the Synap app."
-            : "You can read it here.",
+          : t(query.data?.canEdit ? "document.readEditable" : "document.read"),
         primaryAction: openInApp,
       }}
       facts={[

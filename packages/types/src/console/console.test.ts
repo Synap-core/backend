@@ -86,6 +86,9 @@ describe("consoleHref", () => {
     expect(consoleHref(ORIGIN, { page: "computer", id: "m/1" })).toBe(
       `${ORIGIN}/computers/m%2F1`
     );
+    expect(consoleHref(ORIGIN, { page: "agent", id: "a/1" })).toBe(
+      `${ORIGIN}/agents/a%2F1`
+    );
     expect(consoleHref(ORIGIN, { page: "space", id: "w/1" })).toBe(
       `${ORIGIN}/workspaces/w%2F1`
     );
@@ -132,6 +135,7 @@ describe("consoleHref", () => {
       { page: "trust-keys" },
       { page: "toString" },
       { page: "computer", id: "  " },
+      { page: "agent", id: "" },
       { page: "space" },
       { page: "application", via: "oauth", id: "x" },
       { page: "connectionRequest" },
@@ -191,6 +195,7 @@ describe("audience (admin links for admins only)", () => {
       { page: "keys", focus: "k" },
       { page: "review", type: "access", focus: "i" },
       { page: "computer", id: "m" },
+      { page: "agent", id: "a" },
       { page: "space", id: "w" },
       { page: "application", via: "key", id: "a" },
       { page: "connectionRequest", id: "r" },
