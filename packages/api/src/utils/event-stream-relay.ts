@@ -98,9 +98,12 @@ export async function startEventStreamRelayListener(
       pingOutstanding = false;
       return;
     }
+    // isUuid is a `v is string` guard, so its false branch narrows a string
+    // to never: take the logged head before the check.
+    const head = payload.slice(0, 64);
     if (!isUuid(payload)) {
       logger.warn(
-        { payload: payload.slice(0, 64) },
+        { payload: head },
         "event stream relay: ignored non-uuid payload"
       );
       return;
