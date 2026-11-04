@@ -49,7 +49,7 @@ cd backend
 The API answers on <http://localhost:4000> and Pod Admin on
 <http://localhost:4040>. Details: [Install from a clone](deploy/README.md#install-from-a-clone).
 
-- Self-hosting guide: <https://docs.synap.live/docs/run>
+- Self-hosting guide: <https://doc.synap.live/docs/run>
 - The same guide in this repository, with every operator command:
   [deploy/README.md](deploy/README.md)
 - Or let Synap host the pod for you: <https://www.synap.live/hosted>
