@@ -12,6 +12,7 @@ import {
 } from "@synap-core/types/console";
 
 import {
+  agentHref,
   computerHref,
   consoleRedirects,
   DIAGNOSE_DESTINATION,
@@ -252,6 +253,8 @@ describe("the client link contract (@synap-core/types/console)", () => {
     expect(consolePath({ page: "computer", id: "m 1" })).toBe(
       computerHref("m 1")
     );
+    expect(consolePath({ page: "agent", id: "a 1" })).toBe(agentHref("a 1"));
+    expect(existsSync(join(appDir, "(admin)/agents/[id]/page.tsx"))).toBe(true);
     expect(consolePath({ page: "space", id: "w 1" })).toBe(
       `${navHref("spaces")}/w%201`
     );

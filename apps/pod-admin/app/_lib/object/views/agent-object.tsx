@@ -1,10 +1,12 @@
 "use client";
 
 /**
- * One agent, the one body — drawn by `/open/agent/:id` as an object page in
- * the receiver card (`AgentObject`), which a row on Agents opens (it was a
- * drawer until 2026-10-30; the drawer drew these same sections). Where it
- * stands, its scorecard, how its writes land, and what the viewer may do to it.
+ * One agent, the one body (`AgentObject`), drawn in two frames: its console
+ * page `/agents/:id` (`agentHref`), which a row on Agents opens and where
+ * `/open/agent/:id` sends a pod admin, and the `/open/agent/:id` receiver card
+ * a member lands on from a link (it was a drawer until 2026-10-30; the drawer
+ * drew these same sections). Where it stands, its scorecard, how its writes
+ * land, and what the viewer may do to it.
  *
  *   • Facts — the roster row (`agentUsers.list`, floored to the viewer: an
  *     agent in a space the viewer cannot see is not on it).
@@ -109,11 +111,16 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 // ─── Facts ──────────────────────────────────────────────────────────
 
+const FACT_LINK =
+  "rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
+
 export function agentFacts(
   view: AgentRowView,
   ownerName: OwnerName,
   /** The Keys list narrowed to this agent, for a viewer who may open Keys. */
-  keysHref: string | null = null
+  keysHref: string | null = null,
+  /** Where its owner opens, for a frame that has a page for people. */
+  ownerHref?: (userId: string) => string
 ): Fact[] {
   const row = view.row;
   const reach = resolveAgentReachMark(row);
@@ -121,7 +128,24 @@ export function agentFacts(
   const owner = ownerName(row.createdByUserId);
   const computerHref = hostComputerHref(row);
   return [
-    ...(owner ? [{ label: "Answers to", value: owner }] : []),
+    ...(owner
+      ? [
+          {
+            label: "Answers to",
+            value:
+              ownerHref && row.createdByUserId ? (
+                <Link
+                  href={ownerHref(row.createdByUserId)}
+                  className={FACT_LINK}
+                >
+                  {owner}
+                </Link>
+              ) : (
+                owner
+              ),
+          },
+        ]
+      : []),
     ...(origin ? [{ label: "Came from", value: origin }] : []),
     // The computer it runs on is the object; the key's host label is only
     // the fallback for an agent that is not on one.
@@ -130,10 +154,7 @@ export function agentFacts(
           {
             label: "Runs on",
             value: (
-              <Link
-                href={computerHref}
-                className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-              >
+              <Link href={computerHref} className={FACT_LINK}>
                 {row.hostComputer.name}
               </Link>
             ),
@@ -145,10 +166,7 @@ export function agentFacts(
     {
       label: "Keys",
       value: keysHref ? (
-        <Link
-          href={keysHref}
-          className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-        >
+        <Link href={keysHref} className={FACT_LINK}>
           {keyCountsLine(row)}
         </Link>
       ) : (
@@ -655,18 +673,24 @@ export function AgentActions({
 
 // ─── The object page ────────────────────────────────────────────────
 
-/** The agent as an object page (the web `/open/agent/:id`). */
+/**
+ * The agent as an object page: its console page `/agents/:id` and the
+ * `/open/agent/:id` receiver card draw this same body.
+ */
 export function AgentObject({
   id,
   frame,
   viewerIsPodAdmin,
   onRemoved,
+  ownerHref,
 }: {
   id: string;
   frame: ObjectFrame;
   viewerIsPodAdmin: boolean;
   /** After its creator's agents were removed (the page no longer applies). */
   onRemoved: () => void;
+  /** Where its owner opens; the console passes its Members row. */
+  ownerHref?: (userId: string) => string;
 }) {
   const list = trpc.agentUsers.list.useQuery({}, { staleTime: 30_000 });
   const { viewerId, ownerName } = useAgentPeople();
@@ -762,7 +786,8 @@ export function AgentObject({
     facts: agentFacts(
       view,
       ownerName,
-      viewerIsPodAdmin && row.name ? keysOfHolderHref(row.name) : null
+      viewerIsPodAdmin && row.name ? keysOfHolderHref(row.name) : null,
+      ownerHref
     ),
     children: (
       <div className="flex flex-col gap-5">

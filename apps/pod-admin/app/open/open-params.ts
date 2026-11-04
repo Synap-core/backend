@@ -20,6 +20,7 @@
 
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { isUuid } from "../../lib/format";
+import { agentHref } from "../../lib/console-nav";
 
 export const HOST_TYPES = [
   "entity",
@@ -115,13 +116,19 @@ export function parseOpenParams(type: string, id: string): ParsedOpen {
 
 /**
  * Where `/open/:type/:id` goes instead of drawing a card, or `null` to draw
- * it. A proposal has its review page; a space has its console page, which only
- * a pod admin may open (a member keeps the bounce card).
+ * it. A proposal has its review page; a space and an agent have their console
+ * page, which only a pod admin may open (a member keeps the card `/open`
+ * draws: the bounce card for a space, the agent's receiver page).
  */
 export function openRedirect(
   parsed: ParsedOpen,
   viewerIsPodAdmin: boolean
 ): string | null {
+  if (parsed.status === "host") {
+    return parsed.type === "agent" && viewerIsPodAdmin
+      ? agentHref(parsed.id)
+      : null;
+  }
   if (parsed.status !== "bounce") return null;
   if (parsed.type === "proposal") return `/proposal/${parsed.id}`;
   if (parsed.type === "workspace" && viewerIsPodAdmin) {

@@ -1,8 +1,10 @@
 "use client";
 
 /**
- * `/open/agent/:id` — one agent in the receiver card. The body is
- * `AgentObject`; the console draws the same sections in its agent drawer.
+ * `/open/agent/:id` — one agent in the receiver card, for a member. A pod
+ * admin is sent to the agent's console page instead (`openRedirect` →
+ * `agentHref`), which draws the same body, `AgentObject`, in the console
+ * frame.
  */
 
 import { useRouter } from "next/navigation";
