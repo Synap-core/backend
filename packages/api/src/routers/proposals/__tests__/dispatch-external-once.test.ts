@@ -30,6 +30,18 @@ function makeExecutor(claimWon: boolean) {
         },
       };
     },
+    // A lost claim reads the row to say why: an approval holding the claim
+    // right now (pending, claimed a moment ago).
+    select() {
+      const row = {
+        status: "pending",
+        externalDispatchedAt: new Date(),
+        reviewedAt: null,
+      };
+      return {
+        from: () => ({ where: () => ({ limit: async () => [row] }) }),
+      };
+    },
   };
   return {
     executor: executor as unknown as Parameters<typeof dispatchExternalOnce>[2],

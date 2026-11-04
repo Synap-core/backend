@@ -858,7 +858,7 @@ describe("security review (lane D)", () => {
       expect(row.status).toBe("pending");
       expect(row.external_dispatched_at).not.toBeNull();
       await expect(approve(out.proposalId as string)).rejects.toThrow(
-        /already being dispatched/
+        /Nothing was sent again/
       );
       expect(startChat).toHaveBeenCalledTimes(1);
       await q(`delete from proposals where id=$1`, [out.proposalId]);
