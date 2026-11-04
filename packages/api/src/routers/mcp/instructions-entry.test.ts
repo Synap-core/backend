@@ -24,6 +24,7 @@ import {
   SYNAP_INSTRUCTIONS,
 } from "./index.js";
 import { ENTRY_REFLEX_PROSE } from "./entry-instructions.js";
+import { DOOR_TOOL_NAMES } from "./door-tool-names.generated.js";
 import { formatGrounding } from "./http-handler.js";
 import { tools } from "./tools/index.js";
 import {
@@ -155,4 +156,26 @@ describe("entry-key MCP instructions", () => {
     expect(live).toContain(pod[0]!.id);
     expect(composeInstructions(fitted, "entry")).toBe(live);
   });
+
+  // 4 Nov 2026: Grok called `pod__ask` / `pod__orient` and got "Unknown tool".
+  // The example read `pod__ask`: the Synap account name, while this text is
+  // served verbatim by the pod's own doors, where the tool is `synap_ask`. (The
+  // Control Plane rewrites this sentence and every `synap_<x>` to `pod__<x>` for
+  // its own copy: synap-control-plane-api scripts/gen-pod-tools.ts.) Names come
+  // from the generated door table, never hand-typed.
+  it.each(["entry", "full"] as const)(
+    "%s: the prefix example names the tool as this door calls it",
+    (profile) => {
+      const example = liveInstructions(profile).match(
+        /your door may prefix them \(([^)]*)\)\./
+      )?.[1];
+      expect(example).toBeDefined();
+      const podNames = new Set(
+        Object.values(DOOR_TOOL_NAMES).map((r) => r["pod-mcp"])
+      );
+      const named = [...example!.matchAll(/`([^`]+)`/g)].map((m) => m[1]!);
+      expect(named).toContain(DOOR_TOOL_NAMES.synap_ask!["pod-mcp"]);
+      expect(named.filter((n) => !podNames.has(n))).toEqual([]);
+    }
+  );
 });
