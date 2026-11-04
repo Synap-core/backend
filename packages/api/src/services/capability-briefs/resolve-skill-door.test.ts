@@ -13,24 +13,26 @@ const h = vi.hoisted(() => ({
   reads: [] as string[],
 }));
 
-vi.mock("@synap/database", () => {
-  const apiKeys = { __table: "api_keys", id: "id", instanceId: "instance_id" };
-  const users = { __table: "users", id: "id", agentType: "agent_type" };
+// Partial: only `db` is stubbed, at the database boundary; every other name is
+// the real module's (the total-mock ratchets).
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synap/database")>();
   return {
-    apiKeys,
-    users,
-    eq: () => ({}),
+    ...actual,
     db: {
       select: () => ({
-        from: (table: { __table: string }) => ({
+        from: (table: unknown) => ({
           where: () => ({
             limit: async () => {
-              h.reads.push(table.__table);
-              if (table.__table === "api_keys") {
+              if (table === actual.apiKeys) {
+                h.reads.push("api_keys");
                 return h.keyInstanceId === undefined
                   ? []
                   : [{ instanceId: h.keyInstanceId }];
               }
+              if (table !== actual.users)
+                throw new Error("unexpected table read");
+              h.reads.push("users");
               return h.agentType === null ? [] : [{ agentType: h.agentType }];
             },
           }),
