@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   createNotification: vi.fn(
     async (_input: Record<string, unknown>) => "notif-1"
   ),
+  insertChannelMessage: vi.fn(async (_input: { content: string }) => ({})),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -25,6 +26,8 @@ vi.mock("@synap/database", async (importOriginal) => {
       }),
     },
     eventRepository: { ...actual.eventRepository, append: async () => {} },
+    ensureExternalChannel: async () => ({ channelId: "ch-1", created: false }),
+    insertChannelMessage: h.insertChannelMessage,
   };
 });
 vi.mock("../../notifications/NotificationService.js", () => ({
@@ -54,6 +57,8 @@ describe("notifyConnectorUnhealthy — names its connection", () => {
       kind: "account",
       id: "google",
     });
+    // …and is ABOUT that account: the object its action and push tap open.
+    expect(h.createNotification.mock.calls[0]![0].sourceId).toBe("google");
   });
 
   it("an intelligence service's notice names none (never gated)", async () => {
@@ -64,5 +69,19 @@ describe("notifyConnectorUnhealthy — names its connection", () => {
       notificationType: "system.intelligence_degraded",
     });
     expect(h.createNotification.mock.calls[0]![0].connection).toBeUndefined();
+    expect(h.createNotification.mock.calls[0]![0].sourceId).toBeUndefined();
+  });
+});
+
+describe("notifyConnectorUnhealthy — the team-channel notice", () => {
+  it("says what stopped and what to do, with no alarm glyph or bold", async () => {
+    await notifyConnectorUnhealthy({
+      ...baseOpts,
+      discordTeamChannelId: "discord-ch",
+    });
+    const content = h.insertChannelMessage.mock.calls[0]![0].content;
+    expect(content).toBe(
+      "Google Workspace stopped syncing. Sign in again to resume.\nReconnect via Settings"
+    );
   });
 });
