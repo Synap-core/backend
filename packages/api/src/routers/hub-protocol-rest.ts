@@ -19,6 +19,7 @@ import { hubAuthMiddleware } from "./hub-protocol/_middleware/auth.js";
 import { grantDenialCodeMiddleware } from "./hub-protocol/_middleware/grant-denial-code.js";
 import { idempotencyMiddleware } from "./hub-protocol/_middleware/idempotency.js";
 import { sessionMiddleware } from "./hub-protocol/_middleware/session.js";
+import { hubRequestGuardMiddleware } from "../middleware/hub-request-guard.js";
 import { AuthErrorEnvelopeSchema } from "./hub-protocol/rest/_codecs/auth.js";
 import { registerOpenApiStubs } from "./hub-protocol/rest/_openapi-stubs.js";
 import { hubValidationHook } from "./hub-protocol/rest/_validation-hook.js";
@@ -197,6 +198,16 @@ registerHealthRoutes(app);
 // (`./hub-protocol/_middleware/grant-denial-code.ts`).
 app.use("/*", grantDenialCodeMiddleware);
 app.use("/*", hubAuthMiddleware);
+
+// ── Request guard: timeout + per-key in-flight limit ───────────────────────
+//
+// A request still running after 30 s answers 503 REQUEST_TIMEOUT (its work
+// may finish); a key already running 32 requests gets 429 TOO_MANY_IN_FLIGHT.
+// Streams, long polls, uploads and model calls are exempt from the timeout
+// (`../middleware/hub-request-guard.ts`). AFTER auth (it counts per key) and
+// BEFORE session + idempotency, so those run inside the guarded time and a
+// timed-out write with an Idempotency-Key replays its finished answer.
+app.use("/*", hubRequestGuardMiddleware);
 
 // ── Focus-session middleware ───────────────────────────────────────────────
 //

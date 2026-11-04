@@ -232,11 +232,16 @@ describe("key namespaces", () => {
  * Files outside this folder the leaf may read: each holds pure tables and
  * imports nothing but another file on this list (checked below), so the leaf
  * stays dependency-free transitively. The lens tables are here so the
- * work-state widgets DERIVE their section enum, caps and empty answers.
+ * work-state widgets DERIVE their section enum, caps and empty answers; the
+ * frame's scanner and host rule so the cell check refuses what the frame blocks.
  */
 const LEAF_OUTSIDE_FILES: Readonly<Record<string, string>> = {
   "../lens/sections.js": "../lens/sections.ts",
   "../vocabulary/goal-fields.js": "../vocabulary/goal-fields.ts",
+  // The one scanner and the one host rule of the frame, which the cell
+  // define-time check reads instead of its own regexes (cell-source-checks).
+  "../cell-bridge/network-loads.js": "../cell-bridge/network-loads.ts",
+  "../cell-bridge/external-origins.js": "../cell-bridge/external-origins.ts",
 };
 const IMPORT_FROM = /^\s*(?:import|export)[^;]*?from\s+"([^"]+)"/gm;
 
