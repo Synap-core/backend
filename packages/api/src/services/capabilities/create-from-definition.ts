@@ -600,6 +600,16 @@ function assertNoHostedSkills(skills: readonly CapabilitySkillDef[]): void {
   }
 }
 
+/** The execution modes the skill create door takes (no `hosted` until U8). */
+function podExecutionMode(
+  mode: CapabilitySkillDef["executionMode"]
+): "sync" | "async" | "box" {
+  if (mode === "hosted") {
+    throw new Error("A hosted verb reached the skill create door.");
+  }
+  return mode ?? "sync";
+}
+
 /**
  * Apply a `CapabilityDefinition` (or a templateKey-loaded one), instantiating
  * its {vault · tools · skills} for the acting user/workspace in `ctx`.
@@ -1306,7 +1316,9 @@ export async function createCapabilityFromDefinition(
       providerSpec: s.providerSpec as Record<string, unknown> | undefined,
       parameters: s.parameters,
       category: s.category,
-      executionMode: s.executionMode ?? "sync",
+      // `hosted` never reaches here: `assertNoHostedSkills` refused it before
+      // any write, and the create door does not take it yet (plan U8).
+      executionMode: podExecutionMode(s.executionMode),
       timeoutSeconds: s.timeoutSeconds ?? 30,
       // THE SINGLE WRITER of the routing intent — same call and same validation
       // as the update branch above. This is the branch that finally lets a skill
