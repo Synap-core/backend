@@ -12936,6 +12936,20 @@ export interface SubmitCaptureGraphResult {
 	 * can have failed. Omitted when nothing failed.
 	 */
 	relationsFailed?: MaterializeRelationFailure[];
+	/**
+	 * The agent is not a member of a space this graph lands in, so NOTHING was
+	 * written: the whole graph is kept on that space's workspace-JOIN request
+	 * (`proposalId` names the join) and replayed, all of it, as the agent once a
+	 * person approves the join (finding 590ca76a). `deferred: false` when the
+	 * join could not keep it (the agent retries after approval). Omitted
+	 * otherwise.
+	 */
+	joinGate?: {
+		deferred: boolean;
+		message: string;
+		proposalId: string;
+		ref?: string;
+	};
 	writeReceipt: {
 		/** applied path only: fresh-created vs linked-existing counts + ids. */
 		created?: number;
