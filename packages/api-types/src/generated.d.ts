@@ -8591,6 +8591,33 @@ export type ObjectRoomType = (typeof OBJECT_ROOM_CONTEXT_TYPES)[number];
  *   - `ended`     — it had grants and none is live: it may touch NOTHING.
  */
 export type KeyAccess = "ended" | "granted" | "ungranted";
+declare const COMPUTER_BELONGS_TO: readonly [
+	"person",
+	"agent",
+	"shared"
+];
+export type ComputerBelongsTo = (typeof COMPUTER_BELONGS_TO)[number];
+/**
+ * Where a run ran, DERIVED at read time from what already exists (a box run's
+ * lease, a session's runner row, an agent's computer, an agent's reach), never
+ * stored beside `executor`. Where CODE runs stays `skills.execution_mode`.
+ *   - `pod`: the pod itself ran it (automations, captures, chat, a sync skill,
+ *     an agent the pod runs);
+ *   - `computer`: a computer ran it — `computer` names it;
+ *   - `outside`: an agent outside the pod with no computer of record.
+ * `null` on the run = nothing records where (a box run still queued, a session
+ * nobody worked yet): unknown, never "the pod".
+ */
+export type RunWhereKind = "computer" | "outside" | "pod";
+export interface RunWhere {
+	kind: RunWhereKind;
+	/** Set when `kind` is `computer`. */
+	computer: {
+		belongsTo: ComputerBelongsTo | null;
+		id: string;
+		name: string;
+	} | null;
+}
 declare const CONNECTION_NOTIFY_LEVELS: readonly [
 	"everything",
 	"problems",
@@ -14391,33 +14418,6 @@ export interface SessionActivityWire {
 	live: SessionActivityLive;
 	/** Sub-reads that FAILED. Non-empty ⇒ the list is partial, never "complete". */
 	unreadable: SessionActivitySource[];
-}
-declare const COMPUTER_BELONGS_TO: readonly [
-	"person",
-	"agent",
-	"shared"
-];
-export type ComputerBelongsTo = (typeof COMPUTER_BELONGS_TO)[number];
-/**
- * Where a run ran, DERIVED at read time from what already exists (a box run's
- * lease, a session's runner row, an agent's computer, an agent's reach), never
- * stored beside `executor`. Where CODE runs stays `skills.execution_mode`.
- *   - `pod`: the pod itself ran it (automations, captures, chat, a sync skill,
- *     an agent the pod runs);
- *   - `computer`: a computer ran it — `computer` names it;
- *   - `outside`: an agent outside the pod with no computer of record.
- * `null` on the run = nothing records where (a box run still queued, a session
- * nobody worked yet): unknown, never "the pod".
- */
-export type RunWhereKind = "computer" | "outside" | "pod";
-export interface RunWhere {
-	kind: RunWhereKind;
-	/** Set when `kind` is `computer`. */
-	computer: {
-		belongsTo: ComputerBelongsTo | null;
-		id: string;
-		name: string;
-	} | null;
 }
 /**
  * Which ledger a run came from.
@@ -32851,7 +32851,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		set: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
-				kind: "account" | "agent" | "app" | "channel" | "model" | "tool" | "webhook";
+				kind: "account" | "agent" | "app" | "channel" | "machine" | "model" | "tool" | "webhook";
 				notify?: "everything" | "nothing" | "problems" | undefined;
 				pinned?: boolean | undefined;
 			};
