@@ -190,6 +190,88 @@ describe("hub updateEntity — the applied answer names what landed", () => {
   });
 });
 
+/**
+ * A kind that models `priority`, and an entity of it already holding a key an
+ * EARLIER write invented (`legacyKey`). The repository validates the merged
+ * bag, so it reports `legacyKey` too: the receipt must answer only for the
+ * keys THIS call sent.
+ */
+async function insertModeledEntity(): Promise<string> {
+  const profileId = randomUUID();
+  const defId = randomUUID();
+  await client.query(
+    `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, is_active)
+     values ($1, $2, 'Ticket', 'kind', 'system', 'pod', true)`,
+    [profileId, `ticket-${profileId.slice(0, 8)}`]
+  );
+  await client.query(
+    `insert into property_defs (id, slug, value_type, profile_id)
+     values ($1, 'priority', 'string', $2)`,
+    [defId, profileId]
+  );
+  await client.query(
+    `insert into profile_properties (profile_id, property_def_id, required, display_order, is_lifecycle)
+     values ($1, $2, false, 0, false)`,
+    [profileId, defId]
+  );
+  const id = randomUUID();
+  await client.query(
+    `insert into entities (id, user_id, workspace_id, profile_id, type, title, properties)
+     values ($1,$2,null,$3,'ticket','Ticket',$4::jsonb)`,
+    [id, USER, profileId, JSON.stringify({ legacyKey: "old" })]
+  );
+  return id;
+}
+
+describe("hub updateEntity — an invented key is reported, never 'landed' (c161fd43)", () => {
+  it("lists the unmodelled key under properties.unmodeled with didYouMean, and keeps it out of landed", async () => {
+    const entityId = await insertModeledEntity();
+
+    const out = (await (
+      await hub()
+    ).entities.updateEntity({
+      entityId,
+      userId: USER,
+      metadata: { priority: "high", priorty: "low" },
+    })) as Record<string, any>;
+
+    expect(out.status).toBe("updated");
+    expect(out.writeReceipt).toEqual({
+      state: "applied",
+      entityId,
+      landed: ["properties.priority"],
+      properties: { unmodeled: [{ key: "priorty", didYouMean: "priority" }] },
+    });
+    // The write itself is unchanged: the invented key is stored verbatim.
+    const { rows } = await client.query<{
+      properties: Record<string, unknown>;
+    }>(`select properties from entities where id = $1`, [entityId]);
+    expect(rows[0]!.properties).toMatchObject({
+      priority: "high",
+      priorty: "low",
+      legacyKey: "old",
+    });
+  });
+
+  it("a patch of modelled keys only carries no unmodeled block, though the row holds an old invented key", async () => {
+    const entityId = await insertModeledEntity();
+
+    const out = (await (
+      await hub()
+    ).entities.updateEntity({
+      entityId,
+      userId: USER,
+      metadata: { priority: "high" },
+    })) as Record<string, any>;
+
+    expect(out.writeReceipt).toEqual({
+      state: "applied",
+      entityId,
+      landed: ["properties.priority"],
+    });
+  });
+});
+
 describe("buildUpdateWriteReceipt — a proposed status move is not 'landed'", () => {
   it("names the status key under `proposed` and calls the write partial", () => {
     expect(
