@@ -201,7 +201,9 @@ interface KratosPasskeyCredential {
 /** The person's passkeys, read from Kratos (the one place they are registered). */
 export async function readPasskeys(
   userId: string
-): Promise<Array<{ id: string; publicKey: Uint8Array; counter: number }>> {
+): Promise<
+  Array<{ id: string; publicKey: Uint8Array<ArrayBuffer>; counter: number }>
+> {
   const { data } = await kratosAdmin.getIdentity({
     id: userId,
     includeCredential: ["passkey" as never],
