@@ -36,10 +36,48 @@ import {
 import { trpc } from "../../../../lib/trpc";
 import { humanizeBytes } from "../../../../lib/format";
 import { SectionCard } from "../../../(admin)/components/section-card";
+import { StatusPill } from "../../../(admin)/components/status-pill";
 import { ResourceRowError } from "../../../(admin)/components/resource-row";
 import { createHtmlBridgeHost } from "./html-bridge-host";
 import { readForPage } from "./html-bridge-reads";
+import { frameT } from "./frame-copy";
 import type { PreparedContent } from "./markdown-model";
+
+/**
+ * A page that is not run, said as a state: a mark, one short line, the host's
+ * door, and (for the author) the technical reason behind "Why". Never a
+ * sentence of hostnames in the reader's line.
+ */
+function NotRun({
+  mark,
+  line,
+  why,
+  action,
+}: {
+  mark: string;
+  line: string;
+  why?: string | null;
+  action?: ReactNode;
+}) {
+  const t = frameT();
+  return (
+    <div className="flex flex-col items-start gap-2 rounded-lg bg-content2 px-3 py-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <StatusPill kind="unknown" label={mark} />
+        <p className="text-small text-foreground/85">{line}</p>
+      </div>
+      {action}
+      {why && (
+        <details className="text-tiny text-foreground/65">
+          <summary className="cursor-pointer rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
+            {t("refused.why")}
+          </summary>
+          <p className="mt-1 max-w-prose">{why}</p>
+        </details>
+      )}
+    </div>
+  );
+}
 
 /** The sandboxed element itself. Presentational: no bridge, no data. */
 export function SandboxedFrame({
@@ -108,17 +146,20 @@ export function HtmlFrame({
   }, [client, workspaceId, left, refusal, run]);
 
   if (refusal) {
+    const t = frameT();
     return (
-      <div className="flex flex-col items-start gap-2 rounded-lg bg-foreground/[0.04] px-3 py-3">
-        <p className="text-[13px] text-foreground/85">{refusal}</p>
-        {refusedAction}
-      </div>
+      <NotRun
+        mark={t("refused.mark")}
+        line={t("refused.line")}
+        why={refusal}
+        action={refusedAction}
+      />
     );
   }
   if (left) {
     return (
       <ResourceRowError
-        message="This page tried to open another address, so it was stopped."
+        message={frameT()("left.line")}
         onRetry={() => {
           loads.current = 0;
           setRun((n) => n + 1);
@@ -169,19 +210,22 @@ export function HtmlPageBody({
   onShowSource?: () => void;
 }) {
   if (view === "source") return <>{sourceBody(source)}</>;
+  const t = frameT();
+  const viewSource = onShowSource && (
+    <Button size="sm" variant="flat" radius="md" onPress={onShowSource}>
+      {t("viewSource")}
+    </Button>
+  );
   if (tooLarge) {
     return (
-      <div className="flex flex-col items-start gap-2 rounded-lg bg-foreground/[0.04] px-3 py-3">
-        <p className="text-[13px] text-foreground/85">
-          This page is {humanizeBytes(bytes)}. The console runs pages up to{" "}
-          {humanizeBytes(CELL_FRAME_MAX_BYTES)}.
-        </p>
-        {onShowSource && (
-          <Button size="sm" variant="flat" radius="md" onPress={onShowSource}>
-            Show source
-          </Button>
-        )}
-      </div>
+      <NotRun
+        mark={t("tooLarge.mark")}
+        line={t("tooLarge.line", {
+          size: humanizeBytes(bytes),
+          max: humanizeBytes(CELL_FRAME_MAX_BYTES),
+        })}
+        action={viewSource}
+      />
     );
   }
   return (
@@ -189,13 +233,7 @@ export function HtmlPageBody({
       html={html}
       workspaceId={workspaceId}
       title={title}
-      refusedAction={
-        onShowSource && (
-          <Button size="sm" variant="flat" radius="md" onPress={onShowSource}>
-            Show source
-          </Button>
-        )
-      }
+      refusedAction={viewSource}
     />
   );
 }
@@ -224,6 +262,7 @@ export function HtmlPageSection({
   initialView?: HtmlPageView;
 }) {
   const [view, setView] = useState<HtmlPageView>(initialView);
+  const t = frameT();
   return (
     <SectionCard
       variant="flat"
@@ -231,7 +270,7 @@ export function HtmlPageSection({
       actions={
         <Tabs
           size="sm"
-          aria-label="Show this page as"
+          aria-label={t("toggle.aria")}
           selectedKey={view}
           onSelectionChange={(key) => setView(key as HtmlPageView)}
           classNames={{
@@ -239,8 +278,8 @@ export function HtmlPageSection({
             tab: "text-[12px]",
           }}
         >
-          <Tab key="page" title="Page" />
-          <Tab key="source" title="Source" />
+          <Tab key="page" title={t("toggle.page")} />
+          <Tab key="source" title={t("toggle.source")} />
         </Tabs>
       }
     >
