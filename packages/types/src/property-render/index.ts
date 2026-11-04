@@ -16,6 +16,8 @@
  * moved; its web-token wrappers (`ENUM_TONE_TOKEN`, `getEnumColor`, the web
  * `STATUS_PILL_MAP`) stay in app-bases.
  *   hooks/src/profile-renderer/classify-property.ts      → ./classify-property
+ *   headless/src/property-renderer/utils/propertyClassifier.ts → ./property-classifier
+ *   headless/src/property-renderer/types.ts              → ./types (PropertyDef & co)
  *   hooks/src/profile-renderer/entity-field-plan.ts      → ./entity-field-plan
  *   hooks/src/profile-renderer/classify/index.ts         → this entry point
  *   hooks/src/profile-renderer/entity-types.ts           → ./types (the two pure types)
@@ -25,7 +27,36 @@
  *   headless/src/property-renderer/utils/statusSemantics.ts   → ./enum-tone (pure half)
  */
 
-export type { EffectivePropertyDef, PropertyRenderKind } from "./types.js";
+export type {
+  EffectivePropertyDef,
+  PropertyRenderKind,
+  PropertyDef,
+  PropertyUIHints,
+  PropertyConstraints,
+  PropertyValueTypeName,
+  ResolvedEntity,
+} from "./types.js";
+export {
+  classifyBuiltinProperty,
+  isLocationSlug,
+  isLongTextValue,
+  COLOR_SLUG_RE,
+  RATING_SLUG_RE,
+  CURRENCY_SLUG_RE,
+  STATUS_SLUG_RE,
+  PRIORITY_SLUG_RE,
+  PROGRESS_SLUG_RE,
+  PERSON_SLUG_RE,
+  PERSON_ARRAY_SLUG_RE,
+  EMAIL_SLUG_RE,
+  URL_SLUG_RE,
+  PHONE_SLUG_RE,
+  RICHTEXT_SLUG_RE,
+  REFERENCE_ID_SLUG_RE,
+  LONG_TEXT_MAX_LENGTH,
+  LONG_TEXT_VALUE_LENGTH,
+  type PropertyKind,
+} from "./property-classifier.js";
 export {
   classifyPropertyKind,
   type ClassifyArgs,

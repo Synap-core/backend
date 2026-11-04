@@ -20,9 +20,14 @@ describe("status pill from a stored status word", () => {
   it.each([
     ["active", "healthy"],
     ["completed", "healthy"],
-    ["draft", "stale"],
+    ["pending", "stale"],
     ["failed", "down"],
-    ["paused", "unknown"],
+    ["paused", "stale"],
+    // The status tone table (`resolveStatusTone`) reads these calm: a person's
+    // decision, an end without failure, a quiet draft — never red or amber.
+    ["rejected", "unknown"],
+    ["cancelled", "unknown"],
+    ["draft", "unknown"],
   ] as const)("%s → %s", (value, kind) => {
     expect(statusPillFor(value)?.kind).toBe(kind);
   });
@@ -52,6 +57,7 @@ describe("fieldRows — the shared plan drawn as rows", () => {
     def("title", "string", { displayOrder: 0 }),
     def("status", "string", {
       displayOrder: 1,
+      constraints: { enum: ["todo", "done"] },
       uiHints: { inputType: "select", label: "Status" },
     }),
     def("apiKey", "secret", { displayOrder: 2 }),
@@ -118,6 +124,53 @@ describe("fieldRows — the shared plan drawn as rows", () => {
     const { shown, more } = fieldRows(sparse);
     expect(shown).toHaveLength(FIELD_LIST_MIN_SHOWN);
     expect(more).toEqual([]);
+  });
+});
+
+describe("fieldRows — what a person reads as a fact", () => {
+  const rowsOf = (
+    definitions: EffectivePropertyDef[],
+    values: Record<string, unknown>
+  ) => {
+    const { shown, more } = fieldRows(
+      planEntityFields({ definitions, values, header: { title: "Clip" } })
+    );
+    return [...shown, ...more];
+  };
+
+  it("never lists a capture's media-urls (the copy job's input) as a fact", () => {
+    const rows = rowsOf(
+      [
+        def("title", "string", { displayOrder: 0 }),
+        def("media-urls", "array", { displayOrder: 1 }),
+        def("source", "string", { displayOrder: 2 }),
+      ],
+      {
+        title: "Clip",
+        "media-urls": ["https://cdn.example.com/a.jpg"],
+        source: "Instagram",
+      }
+    );
+    expect(rows.map((r) => r.key)).toEqual(["source"]);
+    expect(JSON.stringify(rows)).not.toContain("cdn.example.com");
+  });
+
+  it("reads a status-named string with no options as text, with no pill", () => {
+    const rows = rowsOf(
+      [
+        def("status", "string", {
+          displayOrder: 0,
+          uiHints: { inputType: "select", label: "Status" },
+        }),
+      ],
+      { status: "imported from the old CRM" }
+    );
+    expect(rows.map((r) => r.key)).toEqual(["status"]);
+    expect(rows[0]).toMatchObject({
+      label: "Status",
+      value: "imported from the old CRM",
+    });
+    expect(rows[0]!.pill).toBeUndefined();
   });
 });
 

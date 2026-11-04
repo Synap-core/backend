@@ -3,62 +3,35 @@
  * tone name, never a colour.
  *
  * `getEnumTone` buckets a raw value ("won", "rejected", "in_progress") into a
- * small fixed tonal set so a family always reads the same: same-family values
- * resolve to the same tone, no per-string hashing, no hex palette. A surface
+ * small fixed tonal set. The word's tone is THE status tone table's
+ * (`resolveStatusTone`, `@synap-core/types/units`), never a table of this
+ * file's own: there used to be one here (`ENUM_TONE_MAP`) that painted
+ * `rejected` / `cancelled` red and `draft` pending where every other surface
+ * read them calm, so one status wore two colours across surfaces. A surface
  * maps the tone onto its own marks — app-bases onto `--synap-tone-*` tokens
  * (via `getEnumUnitTone`), pod-admin onto its `StatusPill` kinds — so the CSS
  * variables stay with the web skin and this module stays pure.
+ *
+ * Moved down from app-bases `headless/src/property-renderer/utils/
+ * statusSemantics.ts` (its pure half; Wave 1 fork 1.1).
  */
 
-import type { UnitTone } from "../units/state.js";
+import { resolveStatusTone, type UnitTone } from "../units/state.js";
 
 /** The semantic tone of a status / enum value. */
 export type EnumTone =
   "positive" | "negative" | "active" | "pending" | "neutral";
 
-/** Maps a raw enum/status string to a semantic tone bucket. */
-const ENUM_TONE_MAP: Record<string, EnumTone> = {
-  // positive / success
-  completed: "positive",
-  done: "positive",
-  won: "positive",
-  approved: "positive",
-  accepted: "positive",
-  published: "positive",
+/** The enum bucket of each unit tone. */
+const UNIT_TONE_ENUM: Readonly<Record<UnitTone, EnumTone>> = {
   success: "positive",
-  enabled: "positive",
-  // negative / error
-  blocked: "negative",
-  rejected: "negative",
-  failed: "negative",
   error: "negative",
-  lost: "negative",
-  cancelled: "negative",
-  canceled: "negative",
-  unqualified: "negative",
-  // active / in motion
-  active: "active",
-  open: "active",
-  "in-progress": "active",
-  "in progress": "active",
-  in_progress: "active",
-  contacted: "active",
-  qualified: "active",
-  negotiation: "active",
-  running: "active",
-  // pending / waiting
-  pending: "pending",
-  draft: "pending",
-  "in-review": "pending",
-  "in review": "pending",
-  review: "pending",
-  todo: "pending",
-  proposed: "pending",
-  new: "pending",
-  lead: "pending",
-  scheduled: "pending",
-  forming: "pending",
-  stale: "pending",
+  primary: "active",
+  info: "pending",
+  warning: "pending",
+  ai: "neutral",
+  textSecondary: "neutral",
+  textMuted: "neutral",
 };
 
 /** Which `UnitTone` (the cross-surface palette NAME) paints each enum tone. */
@@ -72,10 +45,7 @@ const ENUM_UNIT_TONE = {
 } as const satisfies Record<EnumTone, UnitTone>;
 
 export function getEnumTone(value: string): EnumTone {
-  const normalized = value.toLowerCase().replace(/\s+/g, "-");
-  return (
-    ENUM_TONE_MAP[normalized] ?? ENUM_TONE_MAP[value.toLowerCase()] ?? "neutral"
-  );
+  return UNIT_TONE_ENUM[resolveStatusTone(value)];
 }
 
 /**
@@ -104,6 +74,10 @@ export const PRIORITY_MAP: Record<string, PriorityLevel> = {
   no: "none",
 };
 
-export function getPriorityLevel(value: string): PriorityLevel {
-  return PRIORITY_MAP[value.toLowerCase()] ?? "medium";
+/**
+ * A stored priority is whatever the pod holds, typed or not: a number or a
+ * boolean reaches this at runtime even though callers type it as a string.
+ */
+export function getPriorityLevel(value: unknown): PriorityLevel {
+  return PRIORITY_MAP[String(value).trim().toLowerCase()] ?? "medium";
 }

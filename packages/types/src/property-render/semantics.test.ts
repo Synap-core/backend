@@ -6,6 +6,11 @@
  */
 
 import { describe, expect, it } from "vitest";
+import {
+  resolveStatusTone,
+  STATUS_TONE,
+  type UnitTone,
+} from "../units/state.js";
 import { humanizeToken } from "../vocabulary/index.js";
 import {
   detectFieldType,
@@ -90,13 +95,50 @@ describe("enum tone", () => {
 
   it("names a cross-surface palette tone, never a colour", () => {
     expect(getEnumUnitTone("done")).toBe("success");
-    expect(getEnumUnitTone("rejected")).toBe("error");
+    expect(getEnumUnitTone("failed")).toBe("error");
     expect(getEnumUnitTone("whatever")).toBe("textMuted");
+  });
+
+  /**
+   * The tone comes from THE status tone table (`resolveStatusTone`,
+   * `../units`), never a table of this module's own. The five unit tones an
+   * enum bucket names pass through unchanged; the three it has no bucket for
+   * fold onto the nearest one.
+   */
+  const FOLD: Record<UnitTone, UnitTone> = {
+    success: "success",
+    error: "error",
+    primary: "primary",
+    info: "info",
+    textMuted: "textMuted",
+    warning: "info",
+    ai: "textMuted",
+    textSecondary: "textMuted",
+  };
+
+  it("every word of the status tone table paints the tone resolveStatusTone gives it", () => {
+    const words = Object.keys(STATUS_TONE);
+    expect(words.length).toBeGreaterThan(40);
+    for (const word of words) {
+      expect(getEnumUnitTone(word), word).toBe(FOLD[resolveStatusTone(word)]);
+    }
+  });
+
+  it("reads the words the old private table painted red or pending as calm", () => {
+    // `ENUM_TONE_MAP` (removed) said negative / pending; the units table says muted.
+    for (const word of ["rejected", "cancelled", "canceled", "draft"]) {
+      expect(resolveStatusTone(word)).toBe("textMuted");
+      expect(getEnumTone(word), word).toBe("neutral");
+      expect(getEnumUnitTone(word), word).toBe("textMuted");
+    }
   });
 
   it("priority defaults to medium", () => {
     expect(getPriorityLevel("Critical")).toBe("urgent");
+    expect(getPriorityLevel(" High ")).toBe("high");
     expect(getPriorityLevel("nope")).toBe("medium");
+    // A stored priority may not be a string at runtime.
+    expect(getPriorityLevel(3)).toBe("medium");
   });
 });
 

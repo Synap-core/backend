@@ -69,6 +69,10 @@ const SYSTEM_FIELDS = new Set([
   "raw",
   "payload",
   "metadata",
+  // `media-urls`: the external image URLs a capture (web clip, Apify) found,
+  // kept only as the pod's copy job's INPUT — the copies are the entity's
+  // media. A list of CDN URLs is never a fact a person reads.
+  "mediaurls",
 ]);
 const REFERENCE_FIELDS = new Set([
   "channelid",

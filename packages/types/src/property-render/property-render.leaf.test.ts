@@ -4,8 +4,9 @@
  * Relay (Hermes) and pod-admin's server components read these rules; the
  * app-bases copies they replace were each guarded by a DOM-free import-graph
  * test (`classify/dom-free.test.ts`, `semantics.leaf.test.ts`). The guard moves
- * with the code: every import here is a sibling file or one of the two pure
- * `@synap-core/types` modules the rules need. No zod, drizzle, React, DOM.
+ * with the code: every import here is a sibling file or one of the three pure
+ * `@synap-core/types` modules the rules need (`property-hints` for the hint
+ * unions, type-only). No zod, drizzle, React, DOM.
  */
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -15,6 +16,7 @@ import { describe, expect, it } from "vitest";
 const ALLOWED_OUTSIDE = new Set([
   "../vocabulary/index.js",
   "../units/state.js",
+  "../property-hints/index.js",
 ]);
 
 describe("property-render leaf subpath", () => {
@@ -28,6 +30,7 @@ describe("property-render leaf subpath", () => {
       expect.arrayContaining([
         "index.ts",
         "classify-property.ts",
+        "property-classifier.ts",
         "entity-field-plan.ts",
         "structured-value.ts",
         "enum-tone.ts",
