@@ -106,10 +106,40 @@ describe("documentCellScope: the scope every cell of a document reads", () => {
     ).toEqual({ kind: "workspace", workspaceId: "w2" });
   });
 
-  it("a pod-scoped document with no host space stays the pod, never its own space", () => {
-    // The narrowing is to the HOST's space: a pod scope a person stored on a
-    // space's document still means the pod when nothing pins a space around it.
-    expect(documentCellScope({ scope: POD, workspaceId: "w1" })).toEqual(POD);
+  it("a pod-scoped document with no host floor reads its own space (the phone reads what the web reads inside it)", () => {
+    // Review A6 (4 Nov 2026): a host that pins no space (the phone) defaults
+    // the floor to the document's space, so a pod scope stored on a space's
+    // document reads that space, as the web reads it inside the space.
+    expect(documentCellScope({ scope: POD, workspaceId: "w1" })).toEqual({
+      kind: "workspace",
+      workspaceId: "w1",
+    });
+    expect(documentCellScope({ scope: POD, workspaceId: "w1" }, {})).toEqual({
+      kind: "workspace",
+      workspaceId: "w1",
+    });
+    expect(
+      documentCellScope(
+        { scope: POD, workspaceId: "w1" },
+        { workspaceScope: { type: "active" } }
+      )
+    ).toEqual({ kind: "workspace", workspaceId: "w1" });
+  });
+
+  it("a host floor still wins: its pinned space, or the pod on purpose", () => {
+    expect(
+      documentCellScope({ scope: POD, workspaceId: "w1" }, HOST_W2)
+    ).toEqual({ kind: "workspace", workspaceId: "w2" });
+    expect(
+      documentCellScope(
+        { scope: POD, workspaceId: "w1" },
+        { workspaceScope: { type: "pod" } }
+      )
+    ).toEqual(POD);
+  });
+
+  it("a pod-wide document (no space) with no host floor stays the pod", () => {
+    expect(documentCellScope({ scope: POD, workspaceId: null })).toEqual(POD);
   });
 
   it("a document with no stored scope reads its own space, not the host's", () => {

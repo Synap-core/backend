@@ -82,16 +82,31 @@ export function cellLensScope(ctx: CellScopeContext): LensScope {
 
 /**
  * The scope EVERY cell of a document reads: its stored scope (narrowed under
- * `host`, {@link documentLensScope}), else the document's space, else the pod.
- * The composition both clients draw a document's cells by; a host that pinned
- * no space (the phone's document page today) passes none.
+ * the host's floor, {@link documentLensScope}), else the document's space,
+ * else the pod. The composition both clients draw a document's cells by.
+ *
+ * The floor is the host's when it pins a space or says pod on purpose; a host
+ * that pins none (the phone's document page, an "active" or "multi" floor)
+ * reads the document where it lives, its own space
+ * (review A6, 4 Nov 2026: one rule, the web's reading inside that space). So
+ * a pod scope stored on a space's document reads that space on every client;
+ * only a pod-wide document (no space) reads the pod.
  */
 export function documentCellScope(
   doc: { scope?: LensScope | null; workspaceId?: string | null },
   host: { workspaceScope?: CellWorkspaceFloor | null } = {}
 ): LensScope {
+  const hostFloor = host.workspaceScope;
+  const floor =
+    pinnedSpace(hostFloor) || hostFloor?.type === "pod"
+      ? hostFloor
+      : doc.workspaceId
+        ? { type: "workspace", workspaceId: doc.workspaceId }
+        : null;
   return cellLensScope({
-    lensScope: doc.scope ? documentLensScope(doc.scope, host) : null,
+    lensScope: doc.scope
+      ? documentLensScope(doc.scope, { workspaceScope: floor })
+      : null,
     workspaceId: doc.workspaceId ?? null,
     workspaceScope: doc.workspaceId
       ? { type: "workspace", workspaceId: doc.workspaceId }
