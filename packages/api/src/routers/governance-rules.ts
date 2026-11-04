@@ -243,6 +243,7 @@ const _principalKindsAreStored: [
 ] extends [GovernancePrincipalKind, GovernancePrincipal]
   ? true
   : never = true;
+void _principalKindsAreStored;
 
 const CreateInputSchema = z
   .object({

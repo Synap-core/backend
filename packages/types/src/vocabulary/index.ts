@@ -1837,6 +1837,7 @@ const _verdictStatesCovered: Exclude<
 > extends ReportSectionStatus
   ? true
   : never = true;
+void _verdictStatesCovered;
 
 /** Founder, 2026-11-03 (F2): a failed section reads "Did not run", `generating` reads "Writing". */
 export const REPORT_SECTION_STATUS_LABELS = {
