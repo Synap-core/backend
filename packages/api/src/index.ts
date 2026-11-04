@@ -462,6 +462,12 @@ export {
   podResourcesStatus,
   registerEventLoopP99Reader,
 } from "./services/pod-health/index.js";
+// Plan "Pod resilience" G7b: apps/api reads deploy/state/events.jsonl and
+// hands the host heal's events here (the same mount and audience as U4).
+export {
+  notifyPodHealEvents,
+  type PodHealEvent,
+} from "./notifications/pod-heal-notice.js";
 // Boot-time IoC: api registers the pod-wide proposal notification reactor onto
 // the @synap/events reactor registry, so a proposal filed from @synap/jobs (the
 // widen-lane scanner) still reaches the pod owner + admins without jobs ever

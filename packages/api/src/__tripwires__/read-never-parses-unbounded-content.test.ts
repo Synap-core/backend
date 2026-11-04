@@ -117,6 +117,12 @@ const BOUNDED: Record<string, string> = {
     "segmentPassages / markdownToPlainText on loadDocumentBodyTexts text: at most 64,000 bytes (TEXT_PREVIEW_LIMIT)",
   "packages/api/src/services/knowledge/synthesize.ts#buildSynthesisContext":
     "bodyExcerpt segments rec.content, retrieve.ts's loadDocumentBodyTexts text: at most 64,000 bytes (TEXT_PREVIEW_LIMIT)",
+  // The CPU pool's worker thread: reached by `new Worker(url)`, an edge this
+  // scan cannot follow, so its entry is a door. It is OFF the pod's event
+  // loop by construction, and bounded there: every task runs under a
+  // deadline that terminates the thread and a heap cap (cpu-pool.ts).
+  "packages/jobs/src/utils/cpu-worker.ts#<module>":
+    "the CPU pool's worker thread, never the event loop: each task under SYNAP_CPU_TASK_DEADLINE_MS (default 10 s; PageRank 60 s) that terminates the thread, heap capped at 256 MB (cpu-pool.ts)",
 };
 
 /**

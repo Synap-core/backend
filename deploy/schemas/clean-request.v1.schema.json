@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synap.live/schemas/clean-request.v1.schema.json",
+  "title": "deploy/state/clean/request.json (version 1)",
+  "description": "A clean-up the backend asks the host for. Written by the backend atomically (a temp file in the same dir, then rename) at /opt/synap/deploy/state/clean/request.json; run by the host door `synap clean-request` (synap-clean.path). One request at a time: the host takes it (renames it request.taken.json) before acting. Anything outside this schema is refused and runs nothing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "action", "requestedBy", "requestedAt"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "action": {
+      "enum": ["prune-build-cache", "prune-old-images", "restart-service"]
+    },
+    "service": {
+      "description": "restart-service only. postgres and postgres-backup are never restarted.",
+      "enum": [
+        "backend",
+        "pod-admin",
+        "realtime",
+        "typesense",
+        "minio",
+        "redis",
+        "kratos"
+      ]
+    },
+    "requestedBy": { "type": "string" },
+    "requestedAt": { "type": "string" }
+  }
+}

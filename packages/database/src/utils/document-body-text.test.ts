@@ -24,6 +24,7 @@ vi.mock("@synap/storage", () => ({
   },
 }));
 
+import { storage } from "@synap/storage";
 import { loadDocumentBodyTexts } from "./document-body-text.js";
 
 type Row = {
@@ -117,6 +118,29 @@ describe("loadDocumentBodyTexts", () => {
     );
     // Read → its text. Not read yet → no text (title-only), and not a failure.
     expect(Object.fromEntries(texts)).toEqual({ read: "What the page says." });
+    expect(failed.size).toBe(0);
+  });
+
+  it("a body that is not text is never downloaded (3 Nov 2026: a 126 MB video)", async () => {
+    blobs.set("k/video", Buffer.from("\u0000\u0000ftypmp42", "utf-8"));
+    blobs.set("k/audio", Buffer.from("RIFF....WAVE", "utf-8"));
+    blobs.set("k/nomime", Buffer.from("bytes of no stated type", "utf-8"));
+    blobs.set("k/note", Buffer.from("# Kept", "utf-8"));
+    const download = vi.mocked(storage.downloadBuffer);
+    download.mockClear();
+    const { texts, failed } = await loadDocumentBodyTexts(
+      fakeDb([
+        { id: "video", storageKey: "k/video", mimeType: "video/mp4" },
+        { id: "audio", storageKey: "k/audio", mimeType: "audio/wav" },
+        { id: "nomime", storageKey: "k/nomime", mimeType: null },
+        { id: "note", storageKey: "k/note", mimeType: "text/markdown" },
+      ]),
+      ["video", "audio", "nomime", "note"],
+      OPTS
+    );
+    expect(download.mock.calls.map(([key]) => key)).toEqual(["k/note"]);
+    // Not text: no text, and not a failure either.
+    expect(Object.fromEntries(texts)).toEqual({ note: "plain(# Kept)" });
     expect(failed.size).toBe(0);
   });
 });

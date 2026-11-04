@@ -116,6 +116,30 @@ export async function loadSignableDocument(
 }
 
 /**
+ * The file entity `userId` may read that holds this document as its own file
+ * (`entities.document_id`, owned by the document's owner) — the id the Hub
+ * file door `GET /api/hub/files/:entityId/url` signs (`signFileEntityUrl`
+ * applies this same owner rule). `null` when the caller can read none. A
+ * document read hands it out when it leaves a binary body in storage.
+ */
+export async function readableFileEntityIdForDocument(
+  userId: string,
+  doc: { id: string; userId: string }
+): Promise<string | null> {
+  const holder = await scopedDb(AccessContext.operator({ userId })).findFirst<{
+    id: string;
+  }>(entities, {
+    columns: { id: true },
+    where: and(
+      isNull(entities.deletedAt),
+      eq(entities.userId, doc.userId),
+      eq(entities.documentId, doc.id)
+    ),
+  });
+  return holder?.id ?? null;
+}
+
+/**
  * The hinted entity is readable to `userId`, owned by the document's owner,
  * and holds the document: as its own file, as a pod-held media copy, or in a
  * media property its kind declares.

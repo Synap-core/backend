@@ -17,7 +17,14 @@ import { supersededByOf } from "./superseded.js";
 import { createLogger } from "@synap-core/core";
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 import { isCallBudgetMs } from "@synap/intelligence-client";
-import { segmentPassages } from "@synap-core/markdown-core/sections";
+import {
+  segmentPassages,
+  type Passage,
+} from "@synap-core/markdown-core/sections";
+import {
+  CpuTaskError,
+  segmentPassagesInWorker,
+} from "@synap/jobs/utils/cpu-pool.js";
 import { excerptByQuery } from "../../utils/section-excerpt.js";
 import {
   classifyAiFailure,
@@ -458,15 +465,59 @@ export function describeItemProvenance(
   return bits.length > 0 ? bits.join(", ") : null;
 }
 
+/** A long body's passages, cut ahead (`cutLongBodies`), or why the cut failed. */
+type BodyCut = Passage[] | CpuTaskError;
+
+/**
+ * Cut every body too long to send whole, OFF the event loop (the CPU pool,
+ * `@synap/jobs/utils/cpu-pool.js`): `segmentPassages` costs ~1-2 s per MB of
+ * markdown and a context holds many 64 KB bodies, on the request thread of an
+ * ask. Keyed by the body itself. A failed cut is kept as its error, so the
+ * excerpt says what it left out.
+ */
+async function cutLongBodies(
+  answers: AskAnswer[]
+): Promise<Map<string, BodyCut>> {
+  const bodies = new Set<string>();
+  for (const block of answers) {
+    if (block.status !== "ok") continue;
+    for (const item of block.items) {
+      const content = (item as Record<string, unknown>).content;
+      if (
+        typeof content === "string" &&
+        content.length > MAX_BODY_EXCERPT_CHARS
+      )
+        bodies.add(content);
+    }
+  }
+  const cuts = new Map<string, BodyCut>();
+  await Promise.all(
+    [...bodies].map(async (body) => {
+      try {
+        cuts.set(body, await segmentPassagesInWorker(body));
+      } catch (err) {
+        if (!(err instanceof CpuTaskError)) throw err;
+        cuts.set(body, err);
+      }
+    })
+  );
+  return cuts;
+}
+
 /**
  * A document body for the context: whole when it fits, else the passages the
  * question ranks highest under an outline (see `MAX_BODY_EXCERPT_CHARS`).
  * Each section runs to the next passage's start, so concatenated they ARE the
  * body and every gap mark counts what it hides.
  */
-function bodyExcerpt(body: string, question: string): string {
+function bodyExcerpt(body: string, question: string, cut?: BodyCut): string {
   if (body.length <= MAX_BODY_EXCERPT_CHARS) return body;
-  const passages = segmentPassages(body);
+  if (cut instanceof Error) {
+    // The cut did not finish: the opening, and the reason the rest is not
+    // here — never the opening passed off as the whole body.
+    return `${body.slice(0, MAX_BODY_EXCERPT_CHARS)}\n[the remaining ${body.length - MAX_BODY_EXCERPT_CHARS} characters of this body were left out: ${cut.message}]`;
+  }
+  const passages = cut ?? segmentPassages(body);
   const sections = passages.map((p, i) => ({
     label: p.heading,
     text: body.slice(
@@ -535,7 +586,12 @@ function splitSuperseded(answers: AskAnswer[]): {
 export function buildSynthesisContext(
   answers: AskAnswer[],
   /** The question asked: what a long body's passages are chosen by. */
-  question = ""
+  question = "",
+  /**
+   * Long bodies already cut off the event loop (`cutLongBodies`). A body
+   * missing from it is cut inline (a direct caller, a test).
+   */
+  cuts?: ReadonlyMap<string, BodyCut>
 ): {
   sources: SynthesisSource[];
   context: string;
@@ -658,7 +714,9 @@ export function buildSynthesisContext(
       //    metadata field. A body that could not be read says so: the model
       //    must not read "no content" as "this note says nothing".
       if (typeof rec.content === "string" && rec.content.trim()) {
-        snippetBits.push(`content: ${bodyExcerpt(rec.content, question)}`);
+        snippetBits.push(
+          `content: ${bodyExcerpt(rec.content, question, cuts?.get(rec.content))}`
+        );
       } else if (typeof rec.contentReadError === "string") {
         snippetBits.push(
           `content: [the document body could not be read: ${rec.contentReadError.slice(0, MAX_OTHER_PROPERTY_CHARS)}]`
@@ -887,7 +945,8 @@ export async function synthesizeAnswer(
 ): Promise<SynthesisResult> {
   const { sources, context, truncated, superseded } = buildSynthesisContext(
     answers,
-    question
+    question,
+    await cutLongBodies(answers)
   );
 
   // `sources`: the caller asked for the matches, not prose — no IS call. Every

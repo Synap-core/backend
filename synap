@@ -4303,8 +4303,11 @@ _synap_event() { # <json-object> <notify 0|1, unused> [latest-file]
 # place, and PathExists= restarted the service until systemd's start limit
 # failed the .path unit for good. Measured on systemd 252: 4 runs
 # in one second, 'unit-start-limit-hit', and no later request picked up.
-_synap_take_request() { # <update|compose> → the taken file's path; empty when there is none
+_synap_take_request() { # <update|compose|archive|clean> → the taken file's path; empty when there is none
     local f="state/requests/$1.json" t="state/requests/$1.taken.json"
+    # clean requests come from the backend, which may write state/clean/ only
+    # (CLEAN REQUEST CONTRACT above cmd_clean_request).
+    if [ "$1" = clean ]; then f=state/clean/request.json; t=state/clean/request.taken.json; fi
     if [ "${SYNAP_REQUEST_PRETAKEN:-}" = 1 ]; then
         # The unit took THIS run's request (and removed an older taken file);
         # a <name>.json present now arrived after it and starts the next run.
@@ -4403,8 +4406,7 @@ _ue_build_from_source() { # <out-manifest>
     # the next from-source build ENOSPC, which is in turn what poisons the
     # BuildKit cache (see _ue_build_cache_reset). Cap first so the check below
     # measures the space the build will actually have.
-    docker builder prune -f --max-used-space 2gb >/dev/null 2>&1 \
-        || docker builder prune -f --keep-storage 2gb >/dev/null 2>&1 || true
+    _ue_cap_build_cache || true
     # A from-source build is the single largest disk consumer this pod runs
     # (~11 GB peak, perso 2026-10-05). Refuse below the floor rather than ENOSPC
     # mid-layer.
@@ -4710,6 +4712,15 @@ _ue_services_healthy() {
 # another stack's image, never a volume.
 _SYNAP_FIRST_PARTY_IMAGE_RE='^(ghcr\.io/synap-core/(backend|pod-admin|pod-agent)|synap-dev/|synap-local/|synap-adopted/)'
 _ue_prune_images() {
+    _ue_prune_release_images
+    _ue_cap_build_cache || true
+    SYNAP_DEPLOY_DIR="$(pwd)" _bk_prune_label pre-update 2
+    return 0
+}
+
+# The image half of _ue_prune_images, alone: what the clean door's
+# prune-old-images runs (no dump is touched there).
+_ue_prune_release_images() {
     local keep used ids id repo tag dg ref
     if [ -s state/current-release.json ]; then
         keep="$(jq -r '.images[]?' state/current-release.json state/previous-release.json 2>/dev/null \
@@ -4728,13 +4739,16 @@ _ue_prune_images() {
             grep -qxF "$id" <<<"$used" || docker rmi "$id" >/dev/null 2>&1 </dev/null || true
         done
     fi
-    # A --from-source build leaves its BuildKit cache behind (10.8 GB on perso,
-    # 2026-10-04: free space 16 GB → 4.6 GB after one update). Cap it; the
-    # cache holds no data. --max-used-space is Docker 28+, --keep-storage older.
-    docker builder prune -f --max-used-space 2gb >/dev/null 2>&1 \
-        || docker builder prune -f --keep-storage 2gb >/dev/null 2>&1 || true
-    SYNAP_DEPLOY_DIR="$(pwd)" _bk_prune_label pre-update 2
     return 0
+}
+
+# A --from-source build leaves its BuildKit cache behind (10.8 GB on perso,
+# 2026-10-04: free space 16 GB → 4.6 GB after one update). Cap it at 2 GB; the
+# cache holds no data. --max-used-space is Docker 28+, --keep-storage older.
+# Non-zero when neither form ran (the clean door reports it).
+_ue_cap_build_cache() {
+    docker builder prune -f --max-used-space 2gb >/dev/null 2>&1 \
+        || docker builder prune -f --keep-storage 2gb >/dev/null 2>&1
 }
 
 # ── the edge's Caddyfile ──────────────────────────────────────────────────────
@@ -6306,6 +6320,9 @@ cmd_doctor() {
     if [ -f state/requests/compose.json ] && [ -n "$(find state/requests/compose.json -mmin +10 2>/dev/null)" ]; then
         _dr units warn "a pod-agent compose request has waited over 10 min in state/requests/compose.json — is synap-compose.path active? (synap units status)"
     fi
+    if [ -f state/clean/request.json ] && [ -n "$(find state/clean/request.json -mmin +10 2>/dev/null)" ]; then
+        _dr units warn "a clean request from the pod has waited over 10 min in state/clean/request.json — is synap-clean.path active? (synap units status)"
+    fi
 
     # ── url ──
     local pu
@@ -6667,9 +6684,112 @@ _heal_count() { # <service> — heal's restarts of it inside the window
     awk -v s="$1" -v t="$since" '$2 == s && $1 >= t' state/heal/restarts.log 2>/dev/null | grep -c . || true
 }
 
-_heal_event() { # <status> <service> <reason> [notify 0|1]
-    _synap_event "$(jq -cn --arg st "$1" --arg svc "$2" --arg r "$3" --argjson n "$(_heal_count "$2")" \
-        '{kind:"pod.heal", status:$st, service:$svc, reason:$r, restartsInWindow:$n}')" "${4:-0}"
+_heal_event() { # <status> <service> <reason> [notify 0|1] [why-json]
+    _synap_event "$(jq -cn --arg st "$1" --arg svc "$2" --arg r "$3" --argjson n "$(_heal_count "$2")" --argjson why "${5:-null}" \
+        '{kind:"pod.heal", status:$st, service:$svc, reason:$r, restartsInWindow:$n} + (if $why == null then {} else {why:$why} end)')" "${4:-0}"
+}
+
+# ── why heal acts (plan "Pod resilience" G7a) ─────────────────────────────────
+# Before it restarts a service, heal records WHY, in the pod.heal event the
+# backend reads (state/events.jsonl): Docker's last 3 health results, and for a
+# probed service (SYNAP_HEAL_PROBE_SERVICES, default backend) what the service
+# says about itself: a /health request from INSIDE its container (a fresh node
+# process, so it answers even when the server's own event loop is blocked:
+# answered with eventLoop / timeout / refused), and the last `event loop
+# blocked` line of its log (the request that held the loop: method, path,
+# running time; never a body, a header, a query string or a key id).
+#
+# It then classes the service:
+#   stuck     — its process is alive and the server does not answer in time
+#               (the probe or Docker's last check timed out, or the loop's p99
+#               delay ≥ SYNAP_HEAL_STUCK_LAG_MS, default 1000). A blocked loop
+#               often frees itself: heal waits SYNAP_HEAL_STUCK_GRACE_TICKS
+#               (default 2) more ticks before it restarts it.
+#   dead      — no process, or nothing listening (connection refused): restarted
+#               at once, as before.
+#   unhealthy — anything else: restarted at once, as before.
+# The healthcheck command, the restart budget and SYNAP_HEAL_NEVER are untouched.
+
+# A probe of a frozen container must never hold the heal tick (the unit's
+# TimeoutStartSec is 10 min, and no other tick runs meanwhile): each docker
+# call heal makes to read WHY is capped (SYNAP_HEAL_PROBE_TIMEOUT_S, default 20).
+_heal_capped() { # <command…>
+    local t="${SYNAP_HEAL_PROBE_TIMEOUT_S:-20}"
+    case "$t" in ''|*[!0-9]*) t=20 ;; esac
+    if command -v timeout >/dev/null 2>&1; then timeout "$t" "$@"; else "$@"; fi
+}
+
+_heal_json() { # <text> → the text when it is one JSON value, else null
+    if [ -n "$1" ] && jq -e . >/dev/null 2>&1 <<<"$1"; then jq -c . <<<"$1"; else echo null; fi
+}
+
+# What a probed service says about itself, as one JSON object {probe, …}.
+_heal_probe() { # <service>
+    case " ${SYNAP_HEAL_PROBE_SERVICES:-backend} " in *" $1 "*) ;; *) echo '{"probe":"skipped"}'; return 0 ;; esac
+    local out
+    # shellcheck disable=SC2016 # node source, not shell
+    out="$(_heal_capped docker compose exec -T "$1" node -e '
+const r = require("http").get("http://localhost:4000/health", { timeout: 5000 }, (res) => {
+  let b = ""; res.on("data", (d) => { if (b.length < 262144) b += d; });
+  res.on("end", () => { let e = null; try { e = JSON.parse(b).eventLoop || null; } catch {}
+    console.log(JSON.stringify({ probe: "answered", httpStatus: res.statusCode, eventLoop: e })); process.exit(0); });
+});
+r.on("timeout", () => { console.log(JSON.stringify({ probe: "timeout" })); process.exit(0); });
+r.on("error", (e) => { console.log(JSON.stringify({ probe: e.code === "ECONNREFUSED" ? "refused" : "error", code: String(e.code || "") })); process.exit(0); });
+' 2>/dev/null </dev/null | tail -1)" || true
+    out="$(_heal_json "$out")"
+    if jq -e 'type == "object" and (.probe | type) == "string"' >/dev/null 2>&1 <<<"$out"; then echo "$out"; else echo '{"probe":"unavailable"}'; fi
+}
+
+# The last `event loop blocked` line the container logged (event-loop-watch.ts),
+# projected to what may leave the host: when, how long, and each named
+# request's method, path (already redacted by the backend), running time.
+_heal_last_stall() { # <container id> → JSON object or null
+    local line
+    line="$(_heal_capped docker logs --since "${SYNAP_HEAL_STALL_LOG_SINCE:-30m}" --tail 5000 "$1" 2>&1 </dev/null \
+        | grep -F '"msg":"event loop blocked"' | tail -1)" || true
+    _heal_json "$(jq -c '{at: .time, blockedMs, inFlight,
+        requests: [(.requests // [])[] | {method, path, runningMs, ended}][0:5]}' 2>/dev/null <<<"$line")"
+}
+
+_heal_why() { # <service> → {class, pidAlive, health, probe, eventLoop, lastStall}
+    local cid raw pid="" health=null probe stall=null
+    cid="$(docker compose ps -q "$1" 2>/dev/null | head -1)" || cid=""
+    if [ -n "$cid" ]; then
+        raw="$(_heal_capped docker inspect -f '{{.State.Pid}}|{{json .State.Health}}' "$cid" 2>/dev/null)" || raw=""
+        if [ -n "$raw" ]; then pid="${raw%%|*}"; health="$(_heal_json "${raw#*|}")"; fi
+    fi
+    probe="$(_heal_probe "$1")"
+    if [ -n "$cid" ] && [ "$(jq -r .probe <<<"$probe")" != skipped ]; then stall="$(_heal_last_stall "$cid")"; fi
+    local lag="${SYNAP_HEAL_STUCK_LAG_MS:-1000}"
+    case "$lag" in ''|*[!0-9]*) lag=1000 ;; esac
+    jq -cn --arg pid "$pid" --argjson h "$health" --argjson p "$probe" --argjson s "$stall" --argjson lag "$lag" '
+        def clean: (. // "") | tostring | gsub("\\s+"; " ")
+            | gsub("(?<k>password|passwd|secret|token|bearer|authorization|api[_-]?key)[=: ]+[^ ,;\"]+"; "\(.k)=[redacted]"; "i")
+            | .[0:200];
+        (if ($h | type) == "object" then [(($h.Log // [])[-3:])[] | {at: .End, exitCode: .ExitCode, output: (.Output | clean)}] else [] end) as $log
+        | (($log | last) // {}) as $last
+        | (if $pid == "" then null else (($pid | tonumber? // 0) > 0) end) as $alive
+        | (if ($p.eventLoop | type) == "object" then $p.eventLoop else null end) as $el
+        | {
+            class: (
+              if $alive == false or $p.probe == "refused" then "dead"
+              elif $alive == true and ($p.probe == "timeout"
+                    or (($last.output // "") | test("exceeded timeout"; "i"))
+                    or ((($el.delay.p99Ms // 0) | tonumber? // 0) >= $lag)) then "stuck"
+              elif (($last.output // "") | test("ECONNREFUSED")) then "dead"
+              else "unhealthy" end),
+            pidAlive: $alive,
+            health: $log,
+            probe: $p.probe,
+            eventLoop: (if $el == null then null else {
+              delayP99Ms: $el.delay.p99Ms, delayMaxMs: $el.delay.maxMs,
+              utilization: $el.utilization.ratio, stalls: $el.stalls.count,
+              lastStall: (if ($el.stalls.last | type) == "object"
+                then {at: $el.stalls.last.at, blockedMs: $el.stalls.last.blockedMs, inFlight: $el.stalls.last.inFlight}
+                else null end) } end),
+            lastStall: $s
+          }' 2>/dev/null || echo '{"class":"unhealthy","health":[],"probe":"unavailable"}'
 }
 
 # <state> <restarts-in-window> — 0 when the last verified kratos.yml was restored.
@@ -6724,7 +6844,13 @@ cmd_heal() {
     command -v jq >/dev/null 2>&1 || { echo -e "${RED}synap heal needs jq${NC}" >&2; exit 2; }
     mkdir -p state/heal
     _heal_units_converge
-    local max="${SYNAP_HEAL_MAX_RESTARTS:-3}" never=" ${SYNAP_HEAL_NEVER:-postgres postgres-backup} " rows svc st h m n todo=""
+    # The host's resources for the pod's alerts (plan P3): read-only, and a
+    # failure never stops the tick.
+    ( _res_sample ) || echo "synap heal: could not write state/resources.json" >&2
+    _clean_dir_layout
+    local max="${SYNAP_HEAL_MAX_RESTARTS:-3}" never=" ${SYNAP_HEAL_NEVER:-postgres postgres-backup} " rows svc st h m n w why cls todo=""
+    local grace="${SYNAP_HEAL_STUCK_GRACE_TICKS:-2}"
+    case "$grace" in ''|*[!0-9]*) grace=2 ;; esac
     rows="$(_heal_rows)"
     while IFS='|' read -r svc st h; do
         [ -n "$svc" ] || continue
@@ -6734,6 +6860,10 @@ cmd_heal() {
                 rm -f "state/heal/${m}-${svc}"
                 _heal_event recovered "$svc" "${svc} is healthy again — heal re-armed" 1
             done
+            if [ -e "state/heal/stuck-${svc}" ]; then
+                w="$(cat "state/heal/stuck-${svc}" 2>/dev/null)" || w=""; rm -f "state/heal/stuck-${svc}"
+                _heal_event recovered "$svc" "${svc} answers again after ${w:-?} tick(s) stuck — no restart was needed" 0
+            fi
         elif { [ "$st" = running ] && [ "$h" = unhealthy ]; } || { [ "$svc" = kratos ] && [ "$st" = restarting ]; }; then
             grep -qx "${svc}|.*" <<<"$todo" || todo="${todo}${svc}|${st}|${h}"$'\n'
         fi
@@ -6763,16 +6893,34 @@ cmd_heal() {
         if [ "$svc" = kratos ] && _heal_kratos_restore "$st" "$n"; then continue; fi
         # A crash loop is Docker's to back off; heal acts on `unhealthy` only.
         [ "$st" = running ] || continue
+        why="$(_heal_why "$svc")"
+        cls="$(jq -r '.class // "unhealthy"' <<<"$why" 2>/dev/null)" || cls=unhealthy
         if [ "$n" -ge "$max" ]; then
-            date +%s > "state/heal/exhausted-${svc}"
-            _heal_event budget_exhausted "$svc" "${svc} was restarted ${n} times in ${SYNAP_HEAL_WINDOW_MIN:-30} min and is still unhealthy — heal stopped restarting it: docker compose logs --tail 100 ${svc}; synap doctor" 1
+            date +%s > "state/heal/exhausted-${svc}"; rm -f "state/heal/stuck-${svc}"
+            _heal_event budget_exhausted "$svc" "${svc} was restarted ${n} times in ${SYNAP_HEAL_WINDOW_MIN:-30} min and is still unhealthy — heal stopped restarting it: docker compose logs --tail 100 ${svc}; synap doctor" 1 "$why"
             continue
         fi
+        w=0
+        if [ "$cls" = stuck ]; then
+            w="$(cat "state/heal/stuck-${svc}" 2>/dev/null)" || w=0; case "$w" in ''|*[!0-9]*) w=0 ;; esac
+            if [ "$w" -lt "$grace" ]; then
+                w=$(( w + 1 )); echo "$w" > "state/heal/stuck-${svc}"
+                _heal_event stuck_waiting "$svc" "${svc} is stuck (running, not answering its health check in time) — heal gives it more time (${w} of ${grace} tick(s)) before restarting it" 0 \
+                    "$(jq -c --argjson w "$w" '. + {waitedTicks: $w}' <<<"$why")"
+                continue
+            fi
+            why="$(jq -c --argjson w "$w" '. + {waitedTicks: $w}' <<<"$why")"
+        fi
+        rm -f "state/heal/stuck-${svc}"
         echo "$(date +%s) ${svc}" >> state/heal/restarts.log
         if docker compose restart "$svc" >/dev/null 2>&1 </dev/null; then
-            _heal_event restarted "$svc" "${svc} was unhealthy" 0
+            case "$cls" in
+                stuck) _heal_event restarted "$svc" "${svc} was stuck (running, not answering its health check in time) — restarted after ${w} more tick(s)" 0 "$why" ;;
+                dead) _heal_event restarted "$svc" "${svc} was not answering (its server was down)" 0 "$why" ;;
+                *) _heal_event restarted "$svc" "${svc} was unhealthy" 0 "$why" ;;
+            esac
         else
-            _heal_event restart_failed "$svc" "docker compose restart ${svc} failed" 1
+            _heal_event restart_failed "$svc" "docker compose restart ${svc} failed" 1 "$why"
         fi
     done <<<"$todo"
     return 0
@@ -6955,6 +7103,306 @@ cmd_archive_request() {
     exit 1
 }
 
+# ── host resources (plan P3, G10 resource alerts) ─────────────────────────────
+# Every heal tick (synap-heal.timer, 2 min) writes state/resources.json: what
+# the HOST has left (memory, swap, pressure stall, load, the disks of this
+# deploy dir and of Docker's data root, Docker's reclaimable space). The
+# backend reads it through its read-only deploy mount
+# (/opt/synap/deploy/state/resources.json) to raise the pod's resource alerts.
+# READ-ONLY: it reads /proc, df and the Docker API, never acts, and never fails
+# heal (it runs in a subshell; a failure is one stderr line). Never a `du` on a
+# tick: Docker's disk usage is asked at most once per
+# SYNAP_RESOURCES_DOCKER_EVERY_MIN (60), for images and build cache only (the
+# API's type filter: no walk over the volumes); between two asks the last
+# answer is kept with the time it was taken (docker.sampledAt).
+# A value that cannot be read is null (or a disk left out), never 0: a host
+# whose kernel has no PSI reads `pressure.memory: null`, not "no pressure".
+# RESOURCES CONTRACT (version 1): deploy/schemas/host-resources.v1.schema.json
+# (deploy/__tests__/host-resources.test.sh validates this writer against it).
+# SYNAP_PROC_ROOT (tests) replaces /proc.
+_res_proc() { printf '%s' "${SYNAP_PROC_ROOT:-/proc}"; }
+_res_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+_res_timeout() { # <seconds> <cmd…> — bounded when coreutils timeout exists
+    local s="$1"; shift
+    if command -v timeout >/dev/null 2>&1; then timeout "$s" "$@"; else "$@"; fi
+}
+
+# lxc | vm | baremetal | unknown
+_res_host_kind() {
+    local c v p; p="$(_res_proc)"
+    if command -v systemd-detect-virt >/dev/null 2>&1; then
+        c="$(systemd-detect-virt --container 2>/dev/null || true)"
+        case "$c" in
+            lxc|lxc-libvirt) echo lxc; return 0 ;;
+            ""|none) ;;
+            *) echo unknown; return 0 ;;   # docker, openvz, nspawn…: not a kind the alerts name
+        esac
+        v="$(systemd-detect-virt --vm 2>/dev/null || true)"
+        case "$v" in ""|none) echo baremetal ;; *) echo vm ;; esac
+        return 0
+    fi
+    if (tr '\0' '\n' < "$p/1/environ") 2>/dev/null | grep -qx 'container=lxc'; then echo lxc
+    elif grep -qw hypervisor "$p/cpuinfo" 2>/dev/null; then echo vm
+    else echo unknown; fi
+}
+
+# /proc/meminfo → {"memory":…|null, "swap":…|null}
+_res_memory() {
+    local raw
+    raw="$(awk '$1 ~ /^(MemTotal|MemAvailable|SwapTotal|SwapFree):$/ && $3 == "kB" && $2 ~ /^[0-9]+$/ { sub(":", "", $1); print $1, $2 }' "$(_res_proc)/meminfo" 2>/dev/null)" || raw=""
+    jq -cRn '
+      ([inputs | split(" ") | select(length == 2) | {key: .[0], value: (.[1] | tonumber * 1024)}] | from_entries) as $m
+      | def pct($used; $total): ($used * 1000 / $total | round) / 10;
+      {memory: (if ($m.MemTotal // 0) > 0 and $m.MemAvailable != null
+                then {totalBytes: $m.MemTotal, availableBytes: $m.MemAvailable,
+                      usedPct: pct($m.MemTotal - $m.MemAvailable; $m.MemTotal)}
+                else null end),
+       swap: (if ($m.SwapTotal // 0) > 0 and $m.SwapFree != null
+              then {totalBytes: $m.SwapTotal, usedBytes: ($m.SwapTotal - $m.SwapFree),
+                    usedPct: pct($m.SwapTotal - $m.SwapFree; $m.SwapTotal)}
+              else null end)}' <<<"$raw"
+}
+
+# /proc/pressure/<memory|cpu|io> → {someAvg10, someAvg60[, fullAvg10, fullAvg60]} | null
+# A file that is missing or unreadable (a kernel without PSI, or psi=0: the
+# read fails with EOPNOTSUPP) is null. cpu reports `some` only (the contract).
+_res_pressure() {
+    local raw full=1
+    [ "$1" = cpu ] && full=0
+    raw="$(awk '($1 == "some" || $1 == "full") { a10 = ""; a60 = ""
+                  for (i = 2; i <= NF; i++) { split($i, kv, "="); if (kv[1] == "avg10") a10 = kv[2]; if (kv[1] == "avg60") a60 = kv[2] }
+                  if (a10 != "" && a60 != "") print $1, a10, a60 }' "$(_res_proc)/pressure/$1" 2>/dev/null)" || raw=""
+    jq -cRn --arg full "$full" '
+      def num: try (tonumber + 0) catch null;
+      def ok($x): ($x.a10 | type) == "number" and ($x.a60 | type) == "number";
+      ([inputs | split(" ") | select(length == 3) | {key: .[0], value: {a10: (.[1] | num), a60: (.[2] | num)}}] | from_entries) as $m
+      | if ok($m.some) and ($full == "0" or ok($m.full)) then
+          {someAvg10: $m.some.a10, someAvg60: $m.some.a60}
+          + (if $full == "1" then {fullAvg10: $m.full.a10, fullAvg60: $m.full.a60} else {} end)
+        else null end' <<<"$raw"
+}
+
+# /proc/loadavg + the core count → {avg1, avg5, cores} | null
+_res_load() {
+    local p la cores
+    p="$(_res_proc)"
+    la="$(awk 'NR == 1 { print $1, $2 }' "$p/loadavg" 2>/dev/null)" || la=""
+    cores="$(grep -c '^processor[[:space:]]*:' "$p/cpuinfo" 2>/dev/null || true)"
+    if ! [ "${cores:-0}" -gt 0 ] 2>/dev/null; then
+        cores="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || true)"
+    fi
+    jq -cn --arg la "$la" --arg cores "${cores:-}" '
+      def num: try (tonumber + 0) catch null;
+      ($la | split(" ") | map(num)) as $l
+      | ($cores | num) as $c
+      | if ($l | length) == 2 and ($l[0] | type) == "number" and ($l[1] | type) == "number" and ($c | type) == "number" and $c > 0
+        then {avg1: $l[0], avg5: $l[1], cores: $c} else null end'
+}
+
+# One disk: {label, path, totalBytes, usedBytes, availBytes, usedPct}, or
+# nothing when df cannot read it. usedPct is df's own Use%: used / (used +
+# avail), so the root-reserved blocks count as unavailable, as `df -h` shows.
+_res_disk() { # <data|docker> <path>
+    local line
+    [ -n "$2" ] && [ -e "$2" ] || return 0
+    line="$(_res_timeout 10 df -B1 -P "$2" 2>/dev/null | awk 'NR == 2 { print $2, $3, $4 }')" || line=""
+    [ -n "$line" ] || return 0
+    jq -cn --arg l "$1" --arg p "$2" --arg v "$line" '
+      def num: try (tonumber + 0) catch null;
+      ($v | split(" ") | map(num)) as $n
+      | if ($n | length) == 3 and all($n[]; type == "number") and ($n[1] + $n[2]) > 0 then
+          {label: $l, path: $p, totalBytes: $n[0], usedBytes: $n[1], availBytes: $n[2],
+           usedPct: (($n[1] * 1000 / ($n[1] + $n[2]) | round) / 10)}
+        else empty end'
+}
+
+# Docker's own disk usage (what `docker system df` shows for images and build
+# cache, from the same API) → the contract's docker block, or nothing. Images:
+# reclaimable = LayersSize minus what the images that containers use hold
+# alone (the CLI's formula). Build cache: every non-shared record.
+_res_docker_df() {
+    local sock raw
+    command -v curl >/dev/null 2>&1 || return 0
+    case "${DOCKER_HOST:-}" in
+        "") sock=/var/run/docker.sock ;;
+        unix://*) sock="${DOCKER_HOST#unix://}" ;;
+        *) return 0 ;;
+    esac
+    raw="$(curl -fsS --max-time "${SYNAP_RESOURCES_DOCKER_TIMEOUT:-120}" --unix-socket "$sock" \
+        'http://localhost/system/df?type=image&type=build-cache' 2>/dev/null)" || return 0
+    jq -c --arg at "$(_res_now)" '
+      select(type == "object" and (.LayersSize | type) == "number")
+      | ([.Images[]? | select((.Containers // 0) > 0 and (.Size // -1) >= 0 and (.SharedSize // -1) >= 0) | .Size - .SharedSize] | add // 0) as $used
+      | {sampledAt: $at,
+         buildCacheBytes: ([.BuildCache[]? | select(.Shared != true) | .Size // 0] | add // 0),
+         imagesReclaimableBytes: ([.LayersSize - $used, 0] | max)}' <<<"$raw" 2>/dev/null || true
+}
+
+# The docker block of this tick: asked again once the last ask is older than
+# the interval (an ask that failed counts: a daemon that does not answer is
+# not asked every 2 min), else the last answer, else null.
+_res_docker_block() {
+    local every last now block
+    every="${SYNAP_RESOURCES_DOCKER_EVERY_MIN:-60}"; [[ "$every" =~ ^[0-9]+$ ]] || every=60
+    now="$(date +%s)"
+    last="$(cat state/heal/docker-df.at 2>/dev/null || true)"; [[ "$last" =~ ^[0-9]+$ ]] || last=0
+    if [ $(( now - last )) -ge $(( every * 60 )) ]; then
+        echo "$now" > state/heal/docker-df.at
+        block="$(_res_docker_df)"
+        if [ -n "$block" ]; then
+            printf '%s\n' "$block" > state/heal/docker-df.json.tmp && mv -f state/heal/docker-df.json.tmp state/heal/docker-df.json
+        fi
+    fi
+    block="$(jq -c 'select(type == "object" and (.sampledAt | type) == "string")' state/heal/docker-df.json 2>/dev/null || true)"
+    printf '%s\n' "${block:-null}"
+}
+
+# Write state/resources.json (cwd = deploy dir). Called by cmd_heal.
+_res_sample() {
+    local mem disks root d json
+    mkdir -p state/heal
+    mem="$(_res_memory)"; [ -n "$mem" ] || mem='{"memory":null,"swap":null}'
+    disks="$(_res_disk data "$(pwd -P)")"
+    root="$(_res_timeout 10 docker info --format '{{.DockerRootDir}}' 2>/dev/null </dev/null || true)"
+    if [ -n "$root" ] && [ "${root#/}" != "$root" ]; then
+        d="$(_res_disk docker "$root")"; [ -z "$d" ] || disks="${disks:+${disks}$'\n'}${d}"
+    fi
+    json="$(jq -n --arg at "$(_res_now)" --arg kind "$(_res_host_kind)" --argjson mem "$mem" \
+        --argjson pm "$(_res_pressure memory)" --argjson pc "$(_res_pressure cpu)" --argjson pi "$(_res_pressure io)" \
+        --argjson load "$(_res_load)" --argjson docker "$(_res_docker_block)" --arg disks "$disks" '
+        {version: 1, sampledAt: $at, hostKind: $kind, memory: $mem.memory, swap: $mem.swap,
+         pressure: {memory: $pm, cpu: $pc, io: $pi}, load: $load,
+         disks: ($disks | split("\n") | map(select(length > 0) | fromjson)), docker: $docker}')" || return 1
+    (umask 022 && printf '%s\n' "$json" > state/resources.json.tmp && mv -f state/resources.json.tmp state/resources.json)
+}
+
+# ── CLEAN REQUEST (host door, plan P3) ────────────────────────────────────────
+# When the host runs short, pod admin offers a few clean-ups. The backend cannot
+# run them (no Docker socket, a read-only deploy mount): it writes a REQUEST in
+# state/clean/, and this host door runs it. state/clean/ is the backend's one
+# writable dir beside state/kit (compose mounts it read-write at
+# /opt/synap/deploy/state/clean; heal keeps it owned by the backend's uid). It
+# is NOT state/requests/: a backend that could write there could ask for an
+# update, a compose run, or an archive of the whole pod to an upload URL of its
+# choosing. Started by synap-clean.path.
+#
+# CLEAN REQUEST CONTRACT (version 1, deploy/schemas/clean-request.v1.schema.json),
+# written atomically (tmp + rename inside state/clean/) to state/clean/request.json:
+#   {"id":"<uuid>", "action":"prune-build-cache"|"prune-old-images"|"restart-service",
+#    "service":"<name>" (restart-service only), "requestedBy":"<user id>", "requestedAt":"<ISO>"}
+# Taken (renamed request.taken.json) before anything else, then run under the
+# update lock (waited for up to SYNAP_CLEAN_LOCK_WAIT seconds, 120). The result
+# (deploy/schemas/clean-result.v1.schema.json) is state/clean/result.json:
+#   {"id", "action", "status":"done"|"refused"|"failed", "detail", "freedBytes"?, "finishedAt"}
+# plus a `pod.clean` event in state/events.jsonl. Only what is regenerable goes:
+#   prune-build-cache  the BuildKit cache down to 2 GB (_ue_cap_build_cache; it
+#                      holds no data, only rebuild time)
+#   prune-old-images   this pod's old release images (_ue_prune_release_images):
+#                      the current AND previous release (a rollback stays
+#                      possible) and every image a container uses are kept
+#   restart-service    `docker compose restart <service>` for a service of
+#                      _CLEAN_RESTARTABLE only. Never postgres (a restart
+#                      mid-write risks the data) nor postgres-backup.
+# Anything else is refused and runs nothing. Never a volume, a backup or a dump.
+# freedBytes: the free space gained on Docker's data root (df), when measured.
+_CLEAN_RESTARTABLE=" backend pod-admin realtime typesense minio redis kratos "
+_CLEAN_ID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+
+# state/clean: created, and given to the backend's uid (deploy/Dockerfile:
+# nodejs -u 10001), by `synap units install` and every heal tick (a compose up
+# that found it missing made it root's). As root only.
+_clean_dir_layout() {
+    mkdir -p state/clean 2>/dev/null || return 0
+    chmod 755 state/clean 2>/dev/null || true
+    if [ "$(id -u)" = 0 ]; then chown "$_BK_BACKEND_UID" state/clean 2>/dev/null || true; fi
+    return 0
+}
+
+_clean_avail() { # <path> → free bytes, or nothing
+    [ -n "$1" ] && [ -e "$1" ] || return 0
+    _res_timeout 10 df -B1 -P "$1" 2>/dev/null | awk 'NR == 2 && $4 ~ /^[0-9]+$/ { print $4 }'
+}
+
+_clean_record() { # <id> <action> <status> <detail> [freedBytes] [service] [requestedBy]
+    local r
+    r="$(jq -cn --arg id "$1" --arg a "$2" --arg s "$3" --arg d "$4" --arg f "${5:-}" --arg at "$(_res_now)" \
+        '{id: $id, action: $a, status: $s, detail: $d}
+         + (if $f == "" then {} else {freedBytes: ($f | tonumber)} end) + {finishedAt: $at}')"
+    mkdir -p state/clean
+    (umask 022 && printf '%s\n' "$r" > state/clean/result.json.tmp && mv -f state/clean/result.json.tmp state/clean/result.json)
+    _synap_event "$(jq -c --arg svc "${6:-}" --arg by "${7:-}" \
+        '{kind: "pod.clean", status, request: .id, action, detail}
+         + (if .freedBytes == null then {} else {freedBytes} end)
+         + (if $svc == "" then {} else {service: $svc} end)
+         + (if $by == "" then {} else {requestedBy: $by} end)' <<<"$r")" 0 >/dev/null
+}
+
+cmd_clean_request() {
+    local deploy_dir req id action svc by wait root before after freed="" out rc=0
+    deploy_dir="$(get_deploy_dir)"
+    [ -n "$deploy_dir" ] || { echo -e "${RED}Error: Not in Synap installation directory${NC}"; exit 1; }
+    cd "$deploy_dir"
+    command -v jq >/dev/null 2>&1 || { echo -e "${RED}jq is required${NC}"; exit 1; }
+    req="$(_synap_take_request clean)"
+    [ -n "$req" ] || { echo "no clean request waiting"; return 0; }
+    id="$(jq -r '.id // empty | strings' "$req" 2>/dev/null || true)"
+    [[ "$id" =~ $_CLEAN_ID_RE ]] || id=""
+    action="$(jq -r '.action // empty | strings' "$req" 2>/dev/null || true)"
+    svc="$(jq -r '.service // empty | strings' "$req" 2>/dev/null || true)"
+    by="$(jq -r '.requestedBy // empty | strings' "$req" 2>/dev/null | cut -c1-128 || true)"
+    if [ -z "$id" ]; then
+        _clean_record "" "${action:0:64}" refused "invalid clean request: it must carry a uuid \"id\" — nothing was run" "" "" "$by"
+        echo -e "${RED}❌ invalid clean request — nothing was run${NC}" >&2; exit 1
+    fi
+    case "$action" in
+        prune-build-cache|prune-old-images) svc="" ;;
+        restart-service)
+            case "$svc" in postgres|postgres-backup)
+                _clean_record "$id" "$action" refused "${svc} is never restarted from a request: a restart mid-write risks the data" "" "$svc" "$by"
+                echo -e "${RED}❌ clean request ${id}: ${svc} is never restarted — nothing was run${NC}" >&2; exit 1 ;;
+            esac
+            if [ -z "$svc" ] || [[ "$_CLEAN_RESTARTABLE" != *" ${svc} "* ]]; then
+                _clean_record "$id" "$action" refused "restart-service takes one of:${_CLEAN_RESTARTABLE% } (got '${svc:0:64}') — nothing was run" "" "${svc:0:64}" "$by"
+                echo -e "${RED}❌ clean request ${id}: '${svc}' is not a service a request may restart — nothing was run${NC}" >&2; exit 1
+            fi ;;
+        *)
+            _clean_record "$id" "${action:0:64}" refused "unknown action '${action:0:64}': a clean request is prune-build-cache, prune-old-images or restart-service — nothing was run" "" "" "$by"
+            echo -e "${RED}❌ clean request ${id}: unknown action '${action}' — nothing was run${NC}" >&2; exit 1 ;;
+    esac
+    wait="${SYNAP_CLEAN_LOCK_WAIT:-120}"; [[ "$wait" =~ ^[0-9]+$ ]] || wait=120
+    if ! synap_update_lock "$deploy_dir" "synap clean-request" "$wait"; then
+        _clean_record "$id" "$action" failed "another pod operation (an update?) held the update lock for ${wait}s — nothing was run; ask again" "" "$svc" "$by"
+        exit 1
+    fi
+    root="$(_res_timeout 10 docker info --format '{{.DockerRootDir}}' 2>/dev/null </dev/null || true)"
+    before="$(_clean_avail "$root")"
+    echo -e "${BLUE}🧹 clean request ${id}: ${action}${svc:+ ${svc}}${NC}"
+    case "$action" in
+        prune-build-cache)
+            if _ue_cap_build_cache; then out="the build cache was capped at 2 GB"; else rc=1; out="docker builder prune failed"; fi ;;
+        prune-old-images)
+            if [ -s state/current-release.json ]; then
+                _ue_prune_release_images; out="old release images removed; the current and previous release images are kept"
+            else
+                out="no release record yet: no image was removed"
+            fi ;;
+        restart-service)
+            out="$(docker compose restart "$svc" 2>&1 </dev/null)" || rc=$?
+            if [ "$rc" = 0 ]; then out="${svc} was restarted"; else out="docker compose restart ${svc} failed: $(printf '%s' "$out" | tail -1 | cut -c1-300)"; fi ;;
+    esac
+    if [ "$action" != restart-service ]; then
+        after="$(_clean_avail "$root")"
+        if [ -n "$before" ] && [ -n "$after" ]; then freed=$(( after > before ? after - before : 0 )); fi
+    fi
+    if [ "$rc" = 0 ]; then
+        _clean_record "$id" "$action" "done" "$out" "$freed" "$svc" "$by"
+        echo -e "${GREEN}✓ ${out}${NC}"
+    else
+        _clean_record "$id" "$action" failed "$out" "" "$svc" "$by"
+        echo -e "${RED}❌ ${out}${NC}" >&2; exit 1
+    fi
+}
+
 # ── units (systemd) ───────────────────────────────────────────────────────────
 # deploy/systemd/ holds the unit TEMPLATES (@SYNAP@ = this CLI, @DEPLOY_DIR@ =
 # this deploy dir); the set is whatever is in that directory. Installed:
@@ -7003,6 +7451,7 @@ cmd_units() {
         install)
             [ -n "$names" ] || { echo -e "${RED}No unit templates in ${src}${NC}"; exit 1; }
             mkdir -p state/requests state/heal
+            _clean_dir_layout
             if ! _units_have_systemd; then
                 echo -e "${YELLOW}No systemd on this host — add this line to /etc/cron.d/synap (as root) instead:${NC}"
                 echo "*/2 * * * * root SYNAP_DEPLOY_DIR=${deploy_dir} $(_units_self) heal >/dev/null 2>&1"
@@ -8080,7 +8529,7 @@ ${YELLOW}Management:${NC}
   synap pod-key <action>         This pod's own identity key: ensure | show | enroll --pod-id <id> --code <spr_…>
   synap policy <action>          What the Control Plane may order on this pod: show | set-mode <managed|self-hosted> | add-recipient <age1…> | remove-recipient <age1…> | refuse <command> | allow <command>
   synap clean [type]             Clean this pod's Docker leftovers (interactive if no type; never volumes or other stacks')
-  synap heal                     Restart this pod's unhealthy containers (budget 3 / 30 min; never postgres)
+  synap heal                     Restart this pod's unhealthy containers (budget 3 / 30 min; never postgres); write state/resources.json
   synap units <install|status|remove>  systemd timers: heal (2 min), update requests; auto-update opt-in
   synap shell [service] [shell]   Open shell in container (default: backend, sh)
   synap exec <service> <cmd>     Execute command in container
@@ -8282,6 +8731,10 @@ case "${1:-help}" in
     archive-request)
         shift
         cmd_archive_request "$@"
+        ;;
+    clean-request)
+        shift
+        cmd_clean_request "$@"
         ;;
     shell)
         shift

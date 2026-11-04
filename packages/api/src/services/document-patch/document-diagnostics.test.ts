@@ -57,6 +57,7 @@ import {
   type EmbedResolver,
   type ReferentStatus,
 } from "./document-diagnostics.js";
+import { CPU_INLINE_MAX_CHARS } from "@synap/jobs/utils/cpu-pool.js";
 
 const E_VISIBLE = "11111111-1111-4111-8111-111111111111";
 const E_PRIVATE = "22222222-2222-4222-8222-222222222222";
@@ -349,5 +350,42 @@ describe("diagnoseHtmlPage — what the one frame policy refuses, said to the au
         "<!doctype html><html><body><div>chart</div><script>draw()</script></body></html>"
       )
     ).toEqual([]);
+  });
+});
+
+describe("diagnoseDocument — off the event loop past a tiny document", () => {
+  // A small document is parsed inline; the same document followed by plain
+  // prose (no diagnostic of its own, nothing moves a line) is over the inline
+  // size, so its parse runs in the CPU pool's worker. Same verdicts.
+  const issues = [
+    `:::synap-entity{id="${E_PRIVATE}"}`,
+    ":::",
+    "",
+    `:::synap-cell{cellKey="chart-bar" cellProps='{"profileSlug":"task"}'}`,
+    ":::",
+    "",
+    ':::synap-cell{cellKey="nope"}',
+    ":::",
+    "",
+    ':::synap-view{viewId="not-a-uuid"}',
+    ":::",
+    "",
+  ].join("\n");
+  const padding =
+    "Plain prose for the reader, nothing to flag here.\n\n".repeat(60);
+
+  it("gives the same diagnostics in the worker as inline", async () => {
+    const big = issues + padding;
+    expect(issues.length).toBeLessThanOrEqual(CPU_INLINE_MAX_CHARS);
+    expect(big.length).toBeGreaterThan(CPU_INLINE_MAX_CHARS);
+    const resolver = fakeResolver({ [E_PRIVATE]: "not_visible" });
+    const inline = await diagnoseDocument(issues, resolver);
+    expect(codes(inline)).toEqual([
+      "not_visible",
+      "legacy_props",
+      "unknown_key",
+      "not_found",
+    ]);
+    expect(await diagnoseDocument(big, resolver)).toStrictEqual(inline);
   });
 });

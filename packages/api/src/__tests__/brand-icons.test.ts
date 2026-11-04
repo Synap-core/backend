@@ -13,16 +13,6 @@ function makeApp() {
   return app;
 }
 
-/** The six stops of the mark's radial gradient, dark pinch to bright tips. */
-const GRADIENT = [
-  "#c35100",
-  "#db6500",
-  "#eb8105",
-  "#fa9d09",
-  "#fcbd16",
-  "#ffdb23",
-];
-
 describe("brand icons on the pod host", () => {
   it("/favicon.ico is an ICO file", async () => {
     const res = await makeApp().request("/favicon.ico");
@@ -43,26 +33,16 @@ describe("brand icons on the pod host", () => {
       expect(res.headers.get("content-security-policy")).toContain(
         "default-src 'none'"
       );
-      const svg = await res.text();
-      expect(svg).toBe(SYNAP_MARK_SVG);
-      expect(svg).toContain('viewBox="0 0 724 1584"');
-      for (const stop of GRADIENT)
-        expect(svg).toContain(`stop-color="${stop}"`);
-      expect(svg).not.toMatch(/<script/i);
+      expect(await res.text()).toBe(SYNAP_MARK_SVG);
     }
   );
 
-  it("raster sizes redirect to the website's copies", async () => {
+  it("sends nothing off the pod: no redirect to another host", async () => {
     const app = makeApp();
-    const icon = await app.request("/icon.png");
-    expect(icon.status).toBe(301);
-    expect(icon.headers.get("location")).toBe(
-      "https://www.synap.live/icon.png"
-    );
-    const apple = await app.request("/apple-touch-icon.png");
-    expect(apple.status).toBe(301);
-    expect(apple.headers.get("location")).toBe(
-      "https://www.synap.live/apple-icon.png"
-    );
+    for (const path of ["/icon.png", "/apple-touch-icon.png"]) {
+      const res = await app.request(path);
+      expect(res.status).toBe(404);
+      expect(res.headers.get("location")).toBeNull();
+    }
   });
 });

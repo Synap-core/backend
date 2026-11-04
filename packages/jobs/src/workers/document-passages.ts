@@ -44,8 +44,7 @@ import {
 } from "@synap/database";
 import { getBoss, enqueueDocumentPassages } from "@synap/events";
 import { createLogger } from "@synap-core/core";
-import { segmentPassages } from "@synap-core/markdown-core/sections";
-import { markdownToPlainText } from "@synap-core/markdown-core/plain-text";
+import { CpuTaskError, passagesOffLoop } from "../utils/cpu-pool.js";
 import { generateEmbeddings } from "./is-embeddings.js";
 
 const logger = createLogger({ module: "document-passages-worker" });
@@ -118,7 +117,24 @@ export async function handleDocumentPassages(
   const bodies = await loadDocumentBodyTexts(db, [documentId], {
     markdownText: (markdown) => markdown,
   });
-  const failure = bodies.failed.get(documentId);
+  const unreadable = bodies.failed.get(documentId);
+  // No text (an empty body, legacy editor state) = no passages: a fact.
+  const markdown = bodies.texts.get(documentId) ?? "";
+
+  // The cut (segmentPassages + plain text) runs in the CPU pool, off the
+  // event loop, under its deadline (utils/cpu-pool.ts). A cut that ran past
+  // it or out of memory is this body's fact: recorded like an unreadable body,
+  // old passages kept. A busy or crashed pool is not: throw, pg-boss retries.
+  let cut: Awaited<ReturnType<typeof passagesOffLoop>> = [];
+  let failure = unreadable;
+  if (failure === undefined) {
+    try {
+      cut = await passagesOffLoop(markdown);
+    } catch (err) {
+      if (!(err instanceof CpuTaskError) || err.transient) throw err;
+      failure = err.message;
+    }
+  }
   if (failure !== undefined) {
     await db
       .insert(documentPassageState)
@@ -129,15 +145,14 @@ export async function handleDocumentPassages(
       });
     logger.warn(
       { documentId, failure },
-      "document-passages: body unreadable, previous passages kept"
+      unreadable !== undefined
+        ? "document-passages: body unreadable, previous passages kept"
+        : "document-passages: body could not be cut, previous passages kept"
     );
     return { status: "failed", failure };
   }
-  // No text (an empty body, legacy editor state) = no passages: a fact.
-  const markdown = bodies.texts.get(documentId) ?? "";
 
-  const next = segmentPassages(markdown)
-    .map((p) => ({ passage: p, prose: markdownToPlainText(p.text).trim() }))
+  const next = cut
     .filter(({ prose }) => prose.length > 0)
     .map(({ passage, prose }, ordinal) => {
       const input = embedInput(doc.title, passage.heading, prose);
