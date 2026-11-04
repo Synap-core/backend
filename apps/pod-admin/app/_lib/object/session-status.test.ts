@@ -33,8 +33,10 @@ describe("sessionStatusMark — a draft is its own mark", () => {
   it("marks a draft Drafted, dashed, whatever its stored status", () => {
     for (const status of ["active", "forming", "paused", "scheduled"]) {
       const mark = sessionStatusMark({ status, triage: draft });
+      // The tone of a `draft` comes from the one status-tone door (units):
+      // muted, so the pill reads neutral ("unknown" kind), never amber.
       expect(mark).toEqual({
-        kind: "stale",
+        kind: "unknown",
         label: "Drafted",
         glyph: "draft",
         draft: true,
