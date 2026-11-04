@@ -114,6 +114,12 @@ export interface AgentMetadata {
    * here so a re-enrolment (device flow) mints the new key with the same scope.
    */
   runsScripts?: boolean;
+  /**
+   * COMPUTER principals only (0399): the person turned on "Hosts services" —
+   * the computer's key carries `host.runner` and leases the host jobs of the
+   * installations on itself. Kept here for the same reason as `runsScripts`.
+   */
+  hostsServices?: boolean;
 }
 
 export const users = pgTable("users", {

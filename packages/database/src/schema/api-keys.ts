@@ -284,6 +284,12 @@ export const API_KEY_SCOPES = [
   // turns it on for one computer (`machines.setRunsScripts`), and only a
   // computer's own key is accepted by those routes.
   "box.runner",
+  // Host runner (installations, 0399): a COMPUTER that leases the host jobs
+  // of the installations on itself (`/host-jobs/*`): install, remove and
+  // update them, run their provider ops and hosted verbs. Never in a default
+  // bundle: the person turns it on for one computer
+  // (`machines.setHostsServices`), and only a computer's own key is accepted.
+  "host.runner",
   // Probe key (D8). Writes made with it are marked as dogfood probes, hidden
   // from listings and swept. Declared explicitly at mint — never inferred from
   // the key prefix or hubId. A child key can only inherit it (scope subset).
@@ -297,6 +303,10 @@ export const PROBE_KEY_SCOPE =
 /** The scope a computer's key needs to lease its person's box runs. */
 export const BOX_RUNNER_SCOPE =
   "box.runner" as const satisfies (typeof API_KEY_SCOPES)[number];
+
+/** The scope a computer's key needs to lease its installations' host jobs. */
+export const HOST_RUNNER_SCOPE =
+  "host.runner" as const satisfies (typeof API_KEY_SCOPES)[number];
 
 export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];
 
@@ -331,6 +341,8 @@ export const PRIVILEGED_MINT_SCOPES = [
   "hub-protocol.admin",
   // Leases a person's scripts and their parameters (the box runner).
   "box.runner",
+  // Installs, updates and removes software on a computer (the host runner).
+  "host.runner",
 ] as const satisfies ReadonlyArray<ApiKeyScope>;
 
 export function isPrivilegedMintScope(scope: string): boolean {
