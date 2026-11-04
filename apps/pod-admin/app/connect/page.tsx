@@ -22,6 +22,10 @@
  *                       consent-code path instead of minting a plaintext key:
  *                       it records consent as a one-time code and top-level
  *                       navigates to the CP callback with `?code=<code>`.
+ *   client_name       — with agent_type=claude-web: the AI client the Synap
+ *                       account connects (Grok, ChatGPT…), named on the page.
+ *                       Display only: the agent the pod mints follows the
+ *                       client the Control Plane names at redeem.
  *   redirect_uri      — deeplink the page will send credentials to on
  *                       success. Must pass isAllowedConnectRedirectUri
  *                       (@synap-core/types/external-connect, a parsed-URL
@@ -48,6 +52,7 @@ interface ConnectPageProps {
   searchParams: Promise<{
     integration?: string;
     agent_type?: string;
+    client_name?: string;
     redirect_uri?: string;
     issuer_assertion?: string;
   }>;
@@ -86,6 +91,7 @@ export default async function ConnectPage({ searchParams }: ConnectPageProps) {
   const sp = await searchParams;
   const integration = normalizeIntegration(sp.integration);
   const agentType = sp.agent_type ?? null;
+  const clientName = displayClientName(sp.client_name);
   const redirectUri = sp.redirect_uri ?? "";
   const issuerAssertion = sp.issuer_assertion ?? "";
   const h = await headers();
@@ -111,12 +117,22 @@ export default async function ConnectPage({ searchParams }: ConnectPageProps) {
     <ConnectForm
       integration={integration}
       agentType={agentType}
+      clientName={clientName}
       redirectUri={redirectUri}
       extraRedirectPrefixes={extraRedirectPrefixes}
       podHost={h.get("host") ?? undefined}
       identity={h.get("x-pod-admin-email") ?? undefined}
     />
   );
+}
+
+/** A client name fit to show: printable, trimmed, at most 60 characters. */
+function displayClientName(raw: string | undefined): string | null {
+  const name = [...(raw ?? "")]
+    .filter((ch) => ch.charCodeAt(0) > 0x1f && ch.charCodeAt(0) !== 0x7f)
+    .join("")
+    .trim();
+  return name ? name.slice(0, 60) : null;
 }
 
 function normalizeIntegration(

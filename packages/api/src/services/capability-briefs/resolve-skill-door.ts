@@ -1,20 +1,37 @@
 /**
- * Resolve the `/mcp` door serving a skill/brief from the acting agent's identity —
- * the `agentType` the pod already stamped when it minted the key (`claude-web`
- * for the CP connector). No door header: the siblings need no change for the pod
- * to know who is reading.
+ * Resolve the `/mcp` door serving a skill/brief from the acting key and agent —
+ * what the pod already stamped when it minted the key. No door header: the
+ * siblings need no change for the pod to know who is reading.
  *
- * A missing agent row is an EMPTY fact (pod names); a failed read throws — it is
- * never folded into "pod MCP".
+ * The Synap account connector (the Control Plane, `pod__*` names) is told by
+ * its KEY since W5: every key it holds carries the CP's `mcp:` instanceId,
+ * whichever client's agent it belongs to (`grok`, `chatgpt`…:
+ * services/synap-account-client.ts). Without a key, the agent decides, as
+ * before (`claude-web` = the connector).
+ *
+ * A missing agent or key row is an EMPTY fact (pod names); a failed read
+ * throws — it is never folded into "pod MCP".
  */
 
-import { db, eq, users } from "@synap/database";
+import { apiKeys, db, eq, users } from "@synap/database";
 
+import { isSynapAccountKey } from "../synap-account-client.js";
 import { skillDoorFor, type SkillDoor } from "./door-tool-render.js";
 
 export async function resolveSkillDoor(
-  agentUserId: string | null | undefined
+  agentUserId: string | null | undefined,
+  keyId?: string | null
 ): Promise<SkillDoor> {
+  if (keyId) {
+    const [key] = await db
+      .select({ instanceId: apiKeys.instanceId })
+      .from(apiKeys)
+      .where(eq(apiKeys.id, keyId))
+      .limit(1);
+    if (isSynapAccountKey({ instanceId: key?.instanceId ?? null })) {
+      return "cp-connector";
+    }
+  }
   if (!agentUserId) return skillDoorFor(null);
   const [row] = await db
     .select({ agentType: users.agentType })

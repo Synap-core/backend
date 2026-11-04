@@ -246,6 +246,8 @@ describe("POST /mcp/redeem — success", () => {
       podUserId: "user-123",
       scopes: expect.arrayContaining(["mcp.read", "mcp.write"]),
       agentUserId: "agent-web-1",
+      // No client named (a Control Plane before W5): claude.ai's agent.
+      agentType: "claude-web",
     });
 
     // The atomic claim marked the row consumed.
@@ -266,6 +268,67 @@ describe("POST /mcp/redeem — success", () => {
     expect(opts.scopes).toEqual(
       expect.arrayContaining(["mcp.read", "mcp.write"])
     );
+  });
+
+  // ── one agent per client (W5, services/synap-account-client.ts) ──────────
+
+  function mintOk() {
+    claim.rows = [
+      { podUserId: "user-123", scopes: ["mcp:read"], agentType: "claude-web" },
+    ];
+    provisionSpy.mockResolvedValue({
+      agentUserId: "agent-x",
+      registration: { outcome: "CONNECTED_VERIFIED" },
+      apiKey: { id: "key-x" },
+      plainKey: "synap_hub_live_x",
+      keyId: "key-x",
+    });
+  }
+
+  it("a client the registry knows gets ITS OWN host-less agent, and the answer names it", async () => {
+    mintOk();
+    const res = await postRedeem(buildApp(), {
+      code: "c",
+      instanceId: "mcp:cp-user:pod-1:grok",
+      client: { harness: "grok", name: "Grok" },
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { agentType: string }).agentType).toBe(
+      "grok"
+    );
+    expect(provisionSpy.mock.calls[0][0]).toMatchObject({
+      agentType: "grok",
+      agentLabel: "Grok via Synap account",
+      keyName: "Grok via Synap account",
+      hostUserId: null,
+      instanceId: "mcp:cp-user:pod-1:grok",
+    });
+  });
+
+  it("claude.ai keeps the claude-web agent; an unknown client gets the named fallback, never claude-web", async () => {
+    mintOk();
+    await postRedeem(buildApp(), {
+      code: "c",
+      client: { harness: "claude-ai", name: "Claude" },
+    });
+    expect(provisionSpy.mock.calls[0][0]).toMatchObject({
+      agentType: "claude-web",
+      agentLabel: "Claude (Web)",
+    });
+
+    provisionSpy.mockClear();
+    mintOk();
+    const res = await postRedeem(buildApp(), {
+      code: "c",
+      client: { harness: "my-cool-app", name: "My Cool App" },
+    });
+    expect(((await res.json()) as { agentType: string }).agentType).toBe(
+      "generic"
+    );
+    expect(provisionSpy.mock.calls[0][0]).toMatchObject({
+      agentType: "generic",
+      keyName: "My Cool App via Synap account",
+    });
   });
 
   it("500 when the minted key fails verification", async () => {
@@ -363,6 +426,25 @@ describe("POST /mcp/revoke — idempotent / security floor", () => {
     revokeDb.userRow = { userType: "agent", agentType: "some-other-agent" };
     const res = await postRevoke(buildApp(), { keyId: "podkey-1" });
     expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ revoked: false });
+    expect(apiKeyRepoRevokeSpy).not.toHaveBeenCalled();
+  });
+
+  it("200 { revoked: true } — a client's own agent key (W5) is revoked by its Synap account instanceId", async () => {
+    revokeDb.apiKeyRow = {
+      ...CLAUDE_WEB_KEY_ROW,
+      instanceId: "mcp:cp-user:pod-1:grok",
+    };
+    revokeDb.userRow = { userType: "agent", agentType: "grok" };
+    const res = await postRevoke(buildApp(), { keyId: "podkey-1" });
+    expect(await res.json()).toEqual({ revoked: true });
+    expect(apiKeyRepoRevokeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("200 { revoked: false } — SECURITY FLOOR: the same client's key from another door (no Synap account instanceId) is refused", async () => {
+    revokeDb.apiKeyRow = { ...CLAUDE_WEB_KEY_ROW, instanceId: "machine-abc" };
+    revokeDb.userRow = { userType: "agent", agentType: "grok" };
+    const res = await postRevoke(buildApp(), { keyId: "podkey-1" });
     expect(await res.json()).toEqual({ revoked: false });
     expect(apiKeyRepoRevokeSpy).not.toHaveBeenCalled();
   });

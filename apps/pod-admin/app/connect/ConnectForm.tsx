@@ -58,6 +58,8 @@ interface ConnectFormProps {
   redirectUri: string;
   /** Agent signal. "claude-web" → CP-MCP consent-code path (no plaintext key). */
   agentType?: string | null;
+  /** On that path: the AI client the Synap account connects (display only). */
+  clientName?: string | null;
   /** Extra https redirect prefixes the pod owner allowlisted (CP origin, etc.). */
   extraRedirectPrefixes?: string[];
 }
@@ -66,6 +68,7 @@ export function ConnectForm({
   integration,
   redirectUri,
   agentType = null,
+  clientName = null,
   extraRedirectPrefixes = [],
   podHost,
   identity,
@@ -76,9 +79,14 @@ export function ConnectForm({
   const isMcpConnect = agentType === "claude-web";
 
   const info = INTEGRATION_INFO[integration];
-  const connectLabel = isMcpConnect ? "Claude" : info.label;
+  // The Synap account names the client it connects (W5: each client gets its
+  // own agent on this pod); a Control Plane before W5 names none, and that
+  // connection was always claude.ai.
+  const connectLabel = isMcpConnect ? (clientName ?? "Claude") : info.label;
   const connectDescription = isMcpConnect
-    ? "Let Claude (claude.ai) reach this pod's tools over MCP"
+    ? clientName
+      ? `Let ${clientName} reach this pod's tools through your Synap account. It gets its own agent on this pod, which you can revoke on its own.`
+      : "Let Claude (claude.ai) reach this pod's tools over MCP"
     : info.description;
 
   const hasRedirect = redirectUri.length > 0;
