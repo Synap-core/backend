@@ -36,7 +36,10 @@ import {
  *
  * WHAT IT DOES NOT COVER: a code the engine emits at TWO rungs (`CHANNEL_PROPOSE`
  * at 2.7x and 7) is classified `ambiguous` and never offered; only one of its
- * sites is driven here. `AGENT_OWNED_DESTRUCTIVE` is only reachable with the
+ * sites is driven here. `HOST_ASKS_FIRST` is `ambiguous` too: the engine flips
+ * it under an `auto` rule for the principal it judges (the computer), but the
+ * ladder offers the AGENT's rule, which reaches the computer's pass only
+ * through a host seed (`host-seed.ts`), so it is never offered. `AGENT_OWNED_DESTRUCTIVE` is only reachable with the
  * raw `allowDestructiveAutoApprove` opt-in (2.5 returns first otherwise); a
  * rule WOULD flip it, so it is classified `floor` as "never offered" — and its
  * action is destructive, which the reversibility input excludes as well.
@@ -132,6 +135,13 @@ const FIXTURES: Record<keyof typeof PROPOSE_REASON, AgentPolicyInput> = {
     subjectType: "entity",
     action: "transition",
     lifecycleMove: { intoTerminal: true, humanOnly: false },
+  },
+  // The host step's second pass: the agent's COMPUTER asks.
+  HOST_ASKS_FIRST: {
+    subjectType: "entity",
+    action: "update",
+    writesRequireProposal: true,
+    hostPass: true,
   },
 };
 

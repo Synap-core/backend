@@ -108,7 +108,7 @@ describe("placeSignal — the approved Proposed definition", () => {
         id: "c",
         kind: "notification",
         category: "system",
-        notificationType: "pod.storage_warning",
+        notificationType: "pod.resource_warning",
       }),
       sig({
         id: "e",
@@ -130,7 +130,7 @@ describe("placeSignal — the approved Proposed definition", () => {
     expect(
       STATUS_BANNER_NOTIFICATION_TYPES.has("system.intelligence_degraded")
     ).toBe(false);
-    expect(STATUS_BANNER_NOTIFICATION_TYPES.has("pod.storage_warning")).toBe(
+    expect(STATUS_BANNER_NOTIFICATION_TYPES.has("pod.resource_warning")).toBe(
       true
     );
   });

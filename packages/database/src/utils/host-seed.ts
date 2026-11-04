@@ -107,13 +107,31 @@ export async function seedHostFor(
     .where(inArray(users.id, [agentUserId, hostUserId]));
   const owner = rows.find((r) => r.id === agentUserId)?.createdByUserId;
   const host = rows.find((r) => r.id === hostUserId);
-  return host &&
-    owner &&
+  return host && seedsOntoHost(host, owner) ? host.id : null;
+}
+
+/**
+ * THE rule of whether an agent's `auto` rules are copied onto its host: the
+ * host is a computer that belongs to an agent and has the agent's owner. A
+ * person's own or a shared computer is not (its agents are guests): there, a
+ * rule widened for the agent alone stays under the computer's own answer.
+ * Pure, so a reader that already holds the rows (the agent matrix) asks the
+ * same question without a second read.
+ */
+export function seedsOntoHost(
+  host: {
+    agentType: string | null;
+    computerBelongsTo: string | null;
+    createdByUserId: string | null;
+  },
+  agentOwnerId: string | null | undefined
+): boolean {
+  return (
+    !!agentOwnerId &&
     host.agentType === MACHINE_AGENT_TYPE &&
     host.computerBelongsTo === "agent" &&
-    host.createdByUserId === owner
-    ? host.id
-    : null;
+    host.createdByUserId === agentOwnerId
+  );
 }
 
 /**

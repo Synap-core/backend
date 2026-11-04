@@ -153,20 +153,30 @@ describe("decisions", () => {
     });
   });
 
-  it("sends how the kept agents' writes land only when chosen and an agent is kept", () => {
+  it("sends the write-mode pick when an agent is kept or the computer is new (D1b)", () => {
     expect(
       approveDecision(REQUEST, "ABCD-EFGH", {
         agents: ["codex"],
-        reuseComputerId: null,
+        reuseComputerId: "m-1",
         computerName: "devbox",
         agentWriteMode: "pod-default",
       }).agentWriteMode
     ).toBe("pod-default");
+    // A new computer with no agent yet: the pick is its own.
+    expect(
+      approveDecision(REQUEST, "ABCD-EFGH", {
+        agents: [],
+        reuseComputerId: null,
+        computerName: "devbox",
+        agentWriteMode: "create-with-undo",
+      }).agentWriteMode
+    ).toBe("create-with-undo");
+    // A reused computer, nothing added: nothing to apply it to.
     expect(
       "agentWriteMode" in
         approveDecision(REQUEST, "ABCD-EFGH", {
           agents: [],
-          reuseComputerId: null,
+          reuseComputerId: "m-1",
           computerName: "devbox",
           agentWriteMode: "pod-default",
         })

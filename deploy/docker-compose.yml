@@ -260,6 +260,11 @@ services:
       # through /api/backup/recovery-kit. Nested rw over the ro deploy mount, so it is
       # ONE path in the container. pgdata-safety.sh owns the dir (uid 10001, 0700).
       - ./state/kit:/opt/synap/deploy/state/kit:rw
+      # Clean requests (plan P3): the backend writes state/clean/request.json and
+      # the host door `synap clean-request` (synap-clean.path) runs it. Its own
+      # dir, never state/requests/ (update, compose and archive requests stay
+      # pod-agent's and the host's). Heal keeps it owned by uid 10001.
+      - ./state/clean:/opt/synap/deploy/state/clean:rw
     depends_on:
       postgres:
         condition: service_healthy

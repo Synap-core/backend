@@ -20,6 +20,10 @@
 #      update refuses an invalid one and records its id. One run each.
 #   C. a start with no request (the update timer): a taken file left by an
 #      older run is dropped, never run again.
+#   synap-clean.path watches state/clean/request.json (the backend's one
+#   request dir, never state/requests/) and is answered in the clean result's
+#   shape (state/clean/result.json: id, detail); the same A/C/ExecStopPost
+#   checks run on it, and B runs the real engine on a clean request.
 #   ExecStopPost=: a request the engine never answered (A) gets a terminal
 #      "failed" outcome the waiting side reads; one the engine answered (B)
 #      is left exactly as the engine wrote it.
@@ -47,7 +51,7 @@ chmod +x "$TMP/bin/docker" "$TMP/bin/systemctl"
 
 setup() {
   S="$TMP/$1"; REPO="$S/repo"; DEPLOY="$REPO/deploy"; UNITS="$S/units"
-  mkdir -p "$DEPLOY/state/requests" "$REPO/kratos" "$S/run" "$UNITS"
+  mkdir -p "$DEPLOY/state/requests" "$DEPLOY/state/clean" "$REPO/kratos" "$S/run" "$UNITS"
   cp "$HERE/synap" "$REPO/synap"; chmod +x "$REPO/synap"
   cp "$HERE/deploy/"*.sh "$HERE/deploy/docker-compose.yml" "$HERE/deploy/env.schema" "$DEPLOY/"
   cp -R "$HERE/deploy/systemd" "$DEPLOY/systemd"
@@ -55,8 +59,11 @@ setup() {
   echo '{"auto":false}' > "$DEPLOY/state/update-policy.json"
   ( cd "$S" && PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" SYNAP_SYSTEMD_RUN_DIR="$S/run" SYNAP_SYSTEMD_DIR="$UNITS" bash "$REPO/synap" units install ) >"$S/units.out" 2>&1 </dev/null \
     || bad "$1: synap units install failed: $(tail -2 "$S/units.out")"
-  REQ="$(cd "$DEPLOY" && pwd -P)/state/requests"
+  REQ="$(cd "$DEPLOY" && pwd -P)/state/requests"; CLEAN="$(cd "$DEPLOY" && pwd -P)/state/clean"
 }
+# <name> → the file the engine (or the unit) answers in, and the key that names the request there
+latest_of() { case "$1" in update) echo "$DEPLOY/state/last-update.json" ;; clean) echo "$DEPLOY/state/clean/result.json" ;; *) echo "$DEPLOY/state/last-$1-request.json" ;; esac; }
+idkey_of() { [ "$1" = clean ] && echo id || echo request; }
 field() { sed -n "s/^$2=//p" "$1"; }          # <unit file> <key> → every value, one per line
 activate() { # <service file> — what systemd does for one start
   ( cd /
@@ -84,45 +91,47 @@ n="$(printf '%s\n' "$paths" | grep -c .)"
 [ "$n" -ge 2 ] && ok "derived $n .path units from the rendered templates: $(echo $paths)" || bad "only $n .path units rendered — the scan is blind"
 for p in $paths; do
   w="$(field "$UNITS/$p" PathExists)"; svc="$(field "$UNITS/$p" Unit)"
-  [[ "$w" == "$REQ/"*.json ]] && [ -f "$UNITS/$svc" ] && grep -q '^ExecStart=' "$UNITS/$svc" \
-    && ok "$p: watches ${w#"$REQ/"}, starts $svc" || bad "$p: PathExists=$w Unit=$svc (rendered: $(ls "$UNITS"))"
+  { [[ "$w" == "$REQ/"*.json ]] || [ "$w" = "$CLEAN/request.json" ]; } && [ -f "$UNITS/$svc" ] && grep -q '^ExecStart=' "$UNITS/$svc" \
+    && ok "$p: watches ${w#"$(dirname "$REQ")/"}, starts $svc" || bad "$p: PathExists=$w Unit=$svc (rendered: $(ls "$UNITS"))"
 done
 
 for p in $paths; do
-  name="$(basename "$(field "$UNITS/$p" PathExists)" .json)"
+  name="${p#synap-}"; name="${name%.path}"
+  k="$(idkey_of "$name")"
+  wt() { W="$(field "$UNITS/$p" PathExists)"; T="${W%.json}.taken.json"; }   # this setup's watched + taken files
 
   # A. the engine dies before it can take anything (a broken bundle swap)
-  setup "die-$name"
-  echo "{\"schema\":1,\"id\":\"a1\",\"release\":\"stable\",\"services\":[]}" > "$REQ/$name.json"
+  setup "die-$name"; wt
+  echo "{\"schema\":1,\"id\":\"a1\",\"release\":\"stable\",\"services\":[]}" > "$W"
   printf '#!/usr/bin/env bash\nexit 1\n' > "$REPO/synap"
   watch "$p"
-  [ "$RUNS" = 1 ] && [ ! -e "$REQ/$name.json" ] && [ "$(jq -r .id "$REQ/$name.taken.json" 2>/dev/null)" = a1 ] \
+  [ "$RUNS" = 1 ] && [ ! -e "$W" ] && [ "$(jq -r .id "$T" 2>/dev/null)" = a1 ] \
     && ok "die[$name]: the engine exits 1 at once → ONE run, the request was taken (no restart loop)" \
-    || bad "die[$name]: $RUNS runs (6 = the loop), request left=$([ -e "$REQ/$name.json" ] && echo yes || echo no)"
-  case "$name" in update) latest="$DEPLOY/state/last-update.json" ;; *) latest="$DEPLOY/state/last-$name-request.json" ;; esac
-  jq -e '.status == "failed" and .by == "unit" and .request == "a1" and (.reason | test("stopped before recording an outcome.*exit-code exited 1.*may have changed — run synap doctor"))' "$latest" >/dev/null 2>&1 \
+    || bad "die[$name]: $RUNS runs (6 = the loop), request left=$([ -e "$W" ] && echo yes || echo no)"
+  latest="$(latest_of "$name")"
+  jq -e --arg k "$k" '.status == "failed" and .by == "unit" and .[$k] == "a1" and ((.reason // .detail) | test("stopped before recording an outcome.*exit-code exited 1.*may have changed — run synap doctor"))' "$latest" >/dev/null 2>&1 \
     && grep -q '"request":"a1"' "$DEPLOY/state/events.jsonl" \
     && ok "die[$name]: the waiting side still gets a terminal outcome for a1 (failed, naming how the engine ended)" \
     || bad "die[$name]: no terminal outcome for the taken request: $(cat "$latest" 2>/dev/null)"
 
   # … an id is matched as a FIXED string: an earlier outcome for "aZ1" is not
   # the answer to request "a.1" (a regex match would think it was).
-  setup "dotid-$name"
-  case "$name" in update) latest="$DEPLOY/state/last-update.json" ;; *) latest="$DEPLOY/state/last-$name-request.json" ;; esac
-  echo '{"kind":"x","status":"succeeded","request":"aZ1"}' > "$latest"
-  echo "{\"schema\":1,\"id\":\"a.1\",\"release\":\"stable\",\"services\":[]}" > "$REQ/$name.json"
+  setup "dotid-$name"; wt
+  latest="$(latest_of "$name")"
+  jq -cn --arg k "$k" '{kind: "x", status: "succeeded"} + {($k): "aZ1"}' > "$latest"
+  echo "{\"schema\":1,\"id\":\"a.1\",\"release\":\"stable\",\"services\":[]}" > "$W"
   printf '#!/usr/bin/env bash\nexit 1\n' > "$REPO/synap"
   watch "$p"
-  jq -e '.request == "a.1" and .by == "unit"' "$latest" >/dev/null 2>&1 \
+  jq -e --arg k "$k" '.[$k] == "a.1" and .by == "unit"' "$latest" >/dev/null 2>&1 \
     && ok "dotid[$name]: request a.1 gets its own outcome (an outcome for aZ1 is not a match)" || bad "dotid[$name]: $(cat "$latest")"
 
   # C. no request (a timer start): an older run's taken file is never run again
-  setup "none-$name"
-  echo "{\"schema\":1,\"id\":\"stale\",\"release\":\"latest\",\"services\":[\"nosuch\"]}" > "$REQ/$name.taken.json"
+  setup "none-$name"; wt
+  echo "{\"schema\":1,\"id\":\"stale\",\"release\":\"latest\",\"services\":[\"nosuch\"]}" > "$T"
   RUNS=0; activate "$UNITS/$(field "$UNITS/$p" Unit)"
-  [ ! -e "$REQ/$name.taken.json" ] && ! grep -q '"stale"' "$DEPLOY/state/events.jsonl" 2>/dev/null \
+  [ ! -e "$T" ] && ! grep -q '"stale"' "$DEPLOY/state/events.jsonl" 2>/dev/null \
     && ok "none[$name]: a start with no request drops the stale taken file and runs nothing from it" \
-    || bad "none[$name]: taken left=$([ -e "$REQ/$name.taken.json" ] && echo yes || echo no) events=$(cat "$DEPLOY/state/events.jsonl" 2>/dev/null)"
+    || bad "none[$name]: taken left=$([ -e "$T" ] && echo yes || echo no) events=$(cat "$DEPLOY/state/events.jsonl" 2>/dev/null)"
 done
 
 # B. the real engine reads the request the unit took
@@ -140,5 +149,13 @@ watch synap-update.path
   && [ "$(grep -c '"request":"u1"' "$DEPLOY/state/events.jsonl")" = 1 ] \
   && ok "real[update]: the engine reads the pre-taken request u1 and refuses it (release 'latest'), recorded once, one run" \
   || { bad "real[update]: runs=$RUNS record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; tail -5 "$S/runs.out"; }
+
+setup real-clean
+echo '{"id":"0b5e7c1a-3f2d-4a8e-9c61-2d4f8a7b9e10","action":"prune-build-cache","requestedBy":"u","requestedAt":"2026-11-04T10:00:00Z"}' > "$CLEAN/request.json"
+watch synap-clean.path
+[ "$RUNS" = 1 ] && [ "$(jq -r '.status + "|" + .id' "$CLEAN/result.json" 2>/dev/null)" = "done|0b5e7c1a-3f2d-4a8e-9c61-2d4f8a7b9e10" ] \
+  && ! jq -e 'has("by")' "$CLEAN/result.json" >/dev/null 2>&1 \
+  && ok "real[clean]: the engine runs the pre-taken clean request to 'done' in one run (its own answer kept)" \
+  || { bad "real[clean]: runs=$RUNS result=$(cat "$CLEAN/result.json" 2>/dev/null)"; tail -5 "$S/runs.out"; }
 
 exit $fail

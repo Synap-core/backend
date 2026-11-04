@@ -59,7 +59,10 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
-vi.mock("@synap/database/agent-governance", () => ({
+vi.mock("@synap/database/agent-governance", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@synap/database/agent-governance")
+  >()),
   applyAgentPosture: async (input: {
     agentUserId: string;
     posture: string | null;
@@ -68,6 +71,9 @@ vi.mock("@synap/database/agent-governance", () => ({
     return { posture: input.posture, writesRequireProposal: true };
   },
   readAgentGovernance: async () => h.governance,
+  // The effective read (agent + its computer) has its own PGlite suite
+  // (`effective-agent-permission.pglite.test.ts`); this file pins the own mode.
+  readEffectiveAgentWriteMode: async () => null,
 }));
 
 vi.mock("../middleware/read-only-guard.js", async () => {

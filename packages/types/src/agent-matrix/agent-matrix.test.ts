@@ -113,6 +113,21 @@ describe("which answers a rule can widen", () => {
     );
   });
 
+  it("never offers Widen when the agent's person-owned computer asks too (a rule for the agent would change nothing)", () => {
+    expect(
+      canWidenAnswer(
+        { ...ask("default"), computerAsks: true },
+        probe("entity.create")
+      )
+    ).toBe(false);
+    expect(
+      canWidenAnswer(
+        { ...ask("default"), computerAsks: false },
+        probe("entity.create")
+      )
+    ).toBe(true);
+  });
+
   it("every widenable rung is a rung the contract lists", () => {
     for (const r of RULE_WIDENABLE_RUNGS) expect(GOVERNANCE_RUNGS).toContain(r);
   });

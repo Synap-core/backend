@@ -35,6 +35,20 @@ import type { TrackHistoryEvent } from "./track-history.js";
 import type { WaitEpisode } from "./wait-episode.js";
 import type { WaitKind } from "./wait-kind.js";
 
+/**
+ * What a `statusOf` answer is ABOUT (`StatusOf.type`, api
+ * `services/status/status-read.ts`, which types its field by this list). An
+ * id the reader cannot see answers `type: "unknown"`, which is not one of
+ * these: it names nothing to open.
+ */
+export const STATUS_OF_ANSWER_TYPES = [
+  "entity",
+  "goal",
+  "session",
+  "run",
+] as const;
+export type StatusOfAnswerType = (typeof STATUS_OF_ANSWER_TYPES)[number];
+
 /** What an answer may carry beyond its status, on request. */
 export const STATUS_OF_INCLUDES = [
   "moves",

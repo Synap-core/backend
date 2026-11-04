@@ -50,3 +50,21 @@ export function proposalWhy({
     proposer: text && !legacyPolicy ? text : undefined,
   };
 }
+
+/**
+ * The computer that made this write ask, when the pod says its COMPUTER's
+ * pass decided (`askedBy`, the host step: the agent's own setting would have
+ * let it act). The reason line names it as a door to its page; the mark
+ * beside it (`HOST_ASKS_FIRST`) says why. Null for every other proposal, and
+ * when the computer could not be named.
+ */
+export function askingComputer(p: {
+  askedBy?: {
+    principal: "agent" | "computer";
+    computer?: { id: string; name: string };
+  };
+}): { id: string; name: string } | null {
+  const by = p.askedBy;
+  if (by?.principal !== "computer" || !by.computer?.name) return null;
+  return by.computer;
+}

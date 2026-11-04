@@ -765,6 +765,31 @@ export type AgentDirection = "external" | "house";
  * Deletions and structural changes ask in every mode (engine floors).
  */
 export type AgentWriteMode = "ask-first" | "create-with-undo" | "pod-default";
+/**
+ * Which side set the mode an agent's writes actually follow:
+ *  - `agent`       — the agent's own named override;
+ *  - `computer`    — the computer it runs on, whose mode is stricter (the
+ *                    host step: an agent on a computer is judged as itself AND
+ *                    as its computer, and the stricter answer wins);
+ *  - `pod-default` — neither has an override: the pod default decides.
+ */
+export type AgentWriteModeDecidedBy = "agent" | "computer" | "pod-default";
+/**
+ * The effective write mode as the pod serves it (`agentUsers.governance`
+ * `effective`, Hub `GET /agent-users/:id/governance` `effective`). `line` is
+ * `AGENT_WRITE_MODE_LINE[writeMode]`; `computer` is the computer the agent
+ * runs on (null when it runs on none), named so a surface can link to it when
+ * `decidedBy` is `computer`.
+ */
+export interface AgentEffectiveWriteMode {
+	writeMode: AgentWriteMode;
+	line: string;
+	decidedBy: AgentWriteModeDecidedBy;
+	computer: {
+		id: string;
+		name: string | null;
+	} | null;
+}
 declare const AGENT_REACHES: readonly [
 	"pod",
 	"dispatch",
@@ -1966,6 +1991,13 @@ export interface SessionInput {
 	/** The stored slot's label — what the label-matching answer doors address. */
 	slotLabel: string;
 }
+declare const STATUS_OF_ANSWER_TYPES: readonly [
+	"entity",
+	"goal",
+	"session",
+	"run"
+];
+export type StatusOfAnswerType = (typeof STATUS_OF_ANSWER_TYPES)[number];
 /**
  * A stage a SESSION entered, read from its stage ledger
  * (`focus_sessions.stage_history`, 0382; the shape of a goal's `step_moved`).
@@ -10303,6 +10335,14 @@ export interface MatrixProbeAnswer {
 	reason: string;
 	/** The rule that decided, when one did. */
 	ruleId: string | null;
+	/**
+	 * The agent runs on a person's own or a shared computer (no rule widened
+	 * for the agent is copied onto it, `seedsOntoHost`) and that computer asks
+	 * for this write itself. The stricter of the two always wins, so widening
+	 * the agent changes nothing here; what agents on that computer may do is
+	 * changed on its page. Absent = no such computer, or it allows the write.
+	 */
+	computerAsks?: boolean;
 }
 export interface MatrixSplit {
 	auto: number;
@@ -14801,6 +14841,21 @@ export interface ProposalSessionBefore {
 	expectedOutputs: unknown[];
 }
 /**
+ * Why an agent's write asked, as the review row serves it (`askedBy`): which
+ * pass decided, the computer NAMED (so a card can link to it), and the rule
+ * only when the viewer may read it. Names only, never a bare id.
+ */
+export interface AskedBy<Rule> {
+	principal: "agent" | "computer";
+	/** The computer that asked, when `principal` is `computer` and it still exists. */
+	computer?: {
+		id: string;
+		name: string;
+	};
+	/** The `propose` rule that made it ask, when the viewer may read it. */
+	governanceRule?: Rule;
+}
+/**
  * The three states of "is a human's identity behind this agent's act?", read
  * off `proposals.subjectUserId` (RFC 8693 delegation).
  *
@@ -14852,6 +14907,8 @@ export type ProposalPrincipal = {
  * named by what it matches (`targetPattern`, worded client-side by the shared
  * `describeWritePattern`) and, for an agent-principal rule, whose it is.
  */
+/** See `askedBy` on the display row (`proposal-governance-decision.ts`). */
+export type ProposalAskedBy = AskedBy<ProposalGovernanceRule>;
 export interface ProposalGovernanceRule {
 	id: string;
 	targetPattern: string;
@@ -18241,7 +18298,7 @@ type Unavailable$1 = {
 };
 export interface StatusOf {
 	id: string;
-	type: "entity" | "goal" | "run" | "session";
+	type: StatusOfAnswerType;
 	name: string | null;
 	status: string | null;
 	label: string | null;
@@ -19288,7 +19345,13 @@ export interface HealthSection {
 	 * newer-vs-previous regressions. Present only when computed (see
 	 * `GlobalSignals.qualityByPromptVersion`); an unreadable signal says so.
 	 */
-	 | "quality_by_prompt_version";
+	 | "quality_by_prompt_version"
+	/**
+	 * The pod's host and database resources against their alert thresholds
+	 * (plan P3, G10; `./resources.ts`). Present only for a pod admin (see
+	 * `GlobalSignals.resources`); an unreadable read says so.
+	 */
+	 | "resources";
 	status: HealthStatus;
 	/** Plain-language one-liner — honest-empty aware ("no stuck runs"). */
 	headline: string;
@@ -21703,6 +21766,92 @@ export interface LibraryKeepAliveSettings {
 	enabled: boolean;
 	/** Days unseen before an ungrouped, unbuilt item is archived. 0 = never. */
 	archiveAfterDays: number;
+}
+declare const THRESHOLD_METRICS: readonly [
+	"memory",
+	"swap",
+	"memoryPressure",
+	"disk",
+	"postgresConnections"
+];
+export type ThresholdMetric = (typeof THRESHOLD_METRICS)[number];
+export interface MetricThreshold {
+	warn: number;
+	critical: number;
+}
+export type ResourceAlertThresholds = Record<ThresholdMetric, MetricThreshold>;
+export type AlertLevel = "critical" | "ok" | "warning";
+/** A reading's mark: an alert level, `unavailable`, or `neutral` (shown, not judged). */
+export type ReadingMark = AlertLevel | "neutral" | "unavailable";
+/** Whether the host readings can be believed right now. */
+export type HostReadingsState = "absent" | "fresh" | "stale" | "unreadable";
+export type ReadingKind = "backup" | "cpuPressure" | "databaseSize" | "disk" | "eventLoop" | "ioPressure" | "load" | "memory" | "memoryPressure" | "postgresConnections" | "readings" | "swap";
+export type ReadingUnit = "bytes" | "ms" | "none" | "percent" | "ratio";
+export interface ResourceReading {
+	/** Stable key: the alert metric key (`disk:data`) or the reading kind. */
+	key: string;
+	kind: ReadingKind;
+	/** The disk's label (`data`, `docker`); absent elsewhere. */
+	label?: string;
+	value: number | null;
+	unit: ReadingUnit;
+	mark: ReadingMark;
+	/** When an alert on it began (null when not alerting). */
+	since: string | null;
+	/** Whether a threshold judges it (and so whether it can raise an alert). */
+	alerting: boolean;
+	/** Reading-specific facts (bytes free, cores, backup status…). */
+	detail: Record<string, unknown>;
+}
+declare const HOST_ACTIONS: readonly [
+	"prune-build-cache",
+	"prune-old-images",
+	"restart-service"
+];
+export type HostAction = (typeof HOST_ACTIONS)[number];
+declare const RESTARTABLE_SERVICES: readonly [
+	"backend",
+	"realtime",
+	"pod-admin",
+	"typesense"
+];
+export type RestartableService = (typeof RESTARTABLE_SERVICES)[number];
+export interface CleanRequest {
+	id: string;
+	action: HostAction;
+	service?: RestartableService;
+	requestedBy: string;
+	requestedAt: string;
+}
+export interface CleanResult {
+	id: string;
+	action: HostAction;
+	status: "done" | "failed" | "refused";
+	detail: string | null;
+	freedBytes: number | null;
+	finishedAt: string | null;
+}
+/** What the page shows about host actions: one waiting, and the last answer. */
+export interface HostActionsStatus {
+	/** The request the host has not taken yet; null when none waits. */
+	pending: Pick<CleanRequest, "action" | "id" | "requestedAt" | "service"> | null;
+	/** The host's last answer: `absent` = none yet, `unreadable` ≠ none. */
+	last: {
+		read: "ok";
+		result: CleanResult;
+	} | {
+		read: "absent";
+	} | {
+		read: "unreadable";
+	}
+	/**
+	 * The dir is not the backend's yet (EACCES/EPERM): right after a deploy
+	 * it can be root-owned for up to ~2 min, until the heal tick re-owns it
+	 * (backend#746). "Not ready", never "no answer".
+	 */
+	 | {
+		read: "not_ready";
+	};
 }
 /**
  * Broker trust diagnostics — WHY a Control-Plane-brokered pod can or cannot
@@ -25420,6 +25569,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				askFirst: boolean;
+				effective: AgentEffectiveWriteMode | null;
 				line: string;
 				podDefaultEnabled: boolean;
 				postures: {
@@ -44478,6 +44628,106 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 		}>;
 	}>>;
+	podHealth: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				causeUrl?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
+				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				actions: HostActionsStatus;
+				alerts: {
+					level: Exclude<AlertLevel, "ok">;
+					metric: string;
+					since: string | null;
+					value: number | null;
+				}[];
+				customized: ("disk" | "memory" | "memoryPressure" | "postgresConnections" | "swap")[];
+				evaluatedAt: string | null;
+				hostSampledAt: string | null;
+				hostState: HostReadingsState;
+				level: AlertLevel;
+				readings: ResourceReading[];
+				reclaimable: {
+					buildCacheBytes: number | null;
+					imagesReclaimableBytes: number | null;
+					sampledAt: string | null;
+				} | null;
+				restartableServices: ("backend" | "pod-admin" | "realtime" | "typesense")[];
+				thresholds: {
+					disk: MetricThreshold;
+					memory: MetricThreshold;
+					memoryPressure: MetricThreshold;
+					postgresConnections: MetricThreshold;
+					swap: MetricThreshold;
+				};
+			};
+		}>;
+		requestAction: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				action: "prune-build-cache" | "prune-old-images" | "restart-service";
+				service?: string | undefined;
+			};
+			meta: object;
+			output: {
+				request: CleanRequest;
+			};
+		}>;
+		setThresholds: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				disk?: {
+					critical: number;
+					warn: number;
+				} | undefined;
+				memory?: {
+					critical: number;
+					warn: number;
+				} | undefined;
+				memoryPressure?: {
+					critical: number;
+					warn: number;
+				} | undefined;
+				postgresConnections?: {
+					critical: number;
+					warn: number;
+				} | undefined;
+				swap?: {
+					critical: number;
+					warn: number;
+				} | undefined;
+			};
+			meta: object;
+			output: {
+				thresholds: ResourceAlertThresholds;
+			};
+		}>;
+	}>>;
 	preferences: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		errorShape: {
@@ -46724,6 +46974,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				appId: string | null;
 				appName?: string;
 				approverName?: string;
+				askedBy?: ProposalAskedBy;
 				authorName?: string;
 				automationId?: string;
 				automationName?: string;
@@ -46876,6 +47127,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					appId: string | null;
 					appName?: string;
 					approverName?: string;
+					askedBy?: ProposalAskedBy;
 					authorName?: string;
 					automationId?: string;
 					automationName?: string;
@@ -46967,6 +47219,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					appId: string | null;
 					appName?: string;
 					approverName?: string;
+					askedBy?: ProposalAskedBy;
 					authorName?: string;
 					automationId?: string;
 					automationName?: string;

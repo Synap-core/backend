@@ -1190,6 +1190,7 @@ app.route("/api/webhooks/intelligence", intelligenceWebhookRouter);
 
 // Pod-to-Pod Sync receive endpoint (Bearer token auth from registered peers)
 import { syncReceiveApp } from "@synap/api";
+import { registerEventLoopP99Reader } from "@synap/api";
 import { brandIconsApp } from "@synap/api";
 app.route("/api/sync", syncReceiveApp);
 
@@ -1746,6 +1747,11 @@ import { serverBindHostname } from "./server-bind.js";
 // The event-loop watch runs from here on: a stall logs the requests that ran
 // across it (status/event-loop-watch.ts). Its timer is unref'd.
 eventLoopWatch.start();
+// Pod health (plan P3 G10) reads the same event-loop delay /health serves.
+registerEventLoopP99Reader(() => {
+  const delay = eventLoopWatch.snapshot().delay;
+  return delay.state === "measured" ? delay.p99Ms : null;
+});
 try {
   const httpServer = serve(
     {
@@ -1949,6 +1955,17 @@ try {
             const { runMorningBriefs } = await import("@synap/api");
             registerMorningBriefHandler(() => runMorningBriefs());
             apiLogger.info("Registered morning brief handler (IoC)");
+          }
+
+          // IoC: the pod health check (every 2 min, plan P3 G10). jobs owns
+          // the queue and its cron; the check reads pod settings and writes
+          // through NotificationService, both in api.
+          {
+            const { registerPodHealthHandler } =
+              await import("@synap/jobs/workers/pod-health-worker.js");
+            const { runPodHealthCheck } = await import("@synap/api");
+            registerPodHealthHandler(() => runPodHealthCheck());
+            apiLogger.info("Registered pod health handler (IoC)");
           }
 
           // IoC: fill the capability / signal / feed-runner slots owned by

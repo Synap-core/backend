@@ -447,12 +447,67 @@ export const AGENT_WRITE_MODE_LINE: Record<AgentWriteMode, string> = {
   "ask-first": "Every change asks you first.",
 };
 
-/** Every write mode, in the order a person is offered them. */
+/**
+ * Every write mode, in the order a person is offered them — which is also
+ * looser → stricter: each mode asks for everything the one before it asks for.
+ */
 export const AGENT_WRITE_MODES = [
   "pod-default",
   "create-with-undo",
   "ask-first",
 ] as const satisfies readonly AgentWriteMode[];
+
+/**
+ * Which side set the mode an agent's writes actually follow:
+ *  - `agent`       — the agent's own named override;
+ *  - `computer`    — the computer it runs on, whose mode is stricter (the
+ *                    host step: an agent on a computer is judged as itself AND
+ *                    as its computer, and the stricter answer wins);
+ *  - `pod-default` — neither has an override: the pod default decides.
+ */
+export type AgentWriteModeDecidedBy = "agent" | "computer" | "pod-default";
+
+/** One side of {@link effectiveAgentWriteMode}: its mode, and whether it named one. */
+export interface AgentWriteModeSide {
+  mode: AgentWriteMode;
+  /** Its stored override (`governancePosture`), null = follows the pod default. */
+  posture: string | null | undefined;
+}
+
+/**
+ * How an agent's writes REALLY land: the stricter of its own mode and its
+ * computer's (`AGENT_WRITE_MODES` order), the same "stricter wins" the
+ * resolver's host step applies to each write (`resolveAgentGovernanceDecision`,
+ * founder decision b955033e "never looser"). On a tie the agent's own side is
+ * named: the computer changed nothing.
+ */
+export function effectiveAgentWriteMode(
+  own: AgentWriteModeSide,
+  computer?: AgentWriteModeSide | null
+): { mode: AgentWriteMode; decidedBy: AgentWriteModeDecidedBy } {
+  const rank = (m: AgentWriteMode) => AGENT_WRITE_MODES.indexOf(m);
+  if (computer && rank(computer.mode) > rank(own.mode)) {
+    return { mode: computer.mode, decidedBy: "computer" };
+  }
+  return {
+    mode: own.mode,
+    decidedBy: isAgentWriteMode(own.posture) ? "agent" : "pod-default",
+  };
+}
+
+/**
+ * The effective write mode as the pod serves it (`agentUsers.governance`
+ * `effective`, Hub `GET /agent-users/:id/governance` `effective`). `line` is
+ * `AGENT_WRITE_MODE_LINE[writeMode]`; `computer` is the computer the agent
+ * runs on (null when it runs on none), named so a surface can link to it when
+ * `decidedBy` is `computer`.
+ */
+export interface AgentEffectiveWriteMode {
+  writeMode: AgentWriteMode;
+  line: string;
+  decidedBy: AgentWriteModeDecidedBy;
+  computer: { id: string; name: string | null } | null;
+}
 
 export function isAgentWriteMode(v: unknown): v is AgentWriteMode {
   return (

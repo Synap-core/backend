@@ -5,6 +5,7 @@ import {
 } from "@synap-core/types/agents";
 import {
   currentWriteMode,
+  decidingComputer,
   mayChangeWrites,
   writeModeLabel,
   writeModeLines,
@@ -88,7 +89,51 @@ describe("a row's summary", () => {
       label: AGENT_WRITE_MODE_CHOICES.find((c) => c.mode === "ask-first")!
         .label,
       line: AGENT_WRITE_MODE_LINE["ask-first"],
+      computer: null,
     });
+  });
+
+  // Finding 168956d8: Claude Code set to Normal on an ask-first Mac. Its own
+  // choice is Normal; every create asks, because the Mac does.
+  const onAskFirstComputer = read({
+    writeMode: "pod-default",
+    line: AGENT_WRITE_MODE_LINE["pod-default"],
+    postures: { pod: null },
+    effective: {
+      writeMode: "ask-first",
+      line: AGENT_WRITE_MODE_LINE["ask-first"],
+      decidedBy: "computer",
+      computer: { id: "c-1", name: "MacBook" },
+    },
+  });
+
+  it("says what REALLY applies: the computer's mode when it is stricter", () => {
+    expect(writesSummary(onAskFirstComputer)).toEqual({
+      label: AGENT_WRITE_MODE_CHOICES.find((c) => c.mode === "ask-first")!
+        .label,
+      line: AGENT_WRITE_MODE_LINE["ask-first"],
+      computer: { id: "c-1", name: "MacBook" },
+    });
+    // The choice control still shows the agent's OWN choice.
+    expect(currentWriteMode(onAskFirstComputer)).toBe("pod-default");
+    expect(decidingComputer(onAskFirstComputer)).toEqual({
+      id: "c-1",
+      name: "MacBook",
+      mode: "ask-first",
+    });
+  });
+
+  it("names no computer when the agent's own side decides", () => {
+    const own = read({
+      effective: {
+        writeMode: "pod-default",
+        line: AGENT_WRITE_MODE_LINE["pod-default"],
+        decidedBy: "pod-default",
+        computer: { id: "c-1", name: "MacBook" },
+      },
+    });
+    expect(decidingComputer(own)).toBeNull();
+    expect(writesSummary(own).computer).toBeNull();
   });
 });
 

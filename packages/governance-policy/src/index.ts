@@ -1542,6 +1542,17 @@ export interface AgentPolicyInput {
    * Absent/false → no effect.
    */
   bodyOfHumanOwnedEntity?: boolean;
+  /**
+   * The HOST STEP's second pass: this input judges the COMPUTER an agent runs
+   * on, for that agent's write (`resolveAgentGovernanceDecision`). Only the
+   * words change: a propose that comes from the computer's own setting (a
+   * `propose` rule at 2.8, its rung-5 switch, or the plain default) is said
+   * as {@link PROPOSE_REASON}`.HOST_ASKS_FIRST`, since the person set the
+   * agent one way and its computer another. Every floor keeps its own code
+   * (both passes run the floors, so a floor never wins on the host side
+   * alone). Never read to decide.
+   */
+  hostPass?: boolean;
 }
 
 /**
@@ -1595,7 +1606,17 @@ export type AgentPolicyVerdict =
    * passed the rule's id — the attribution a receipt stamps.
    */
   | { verdict: "execute"; governanceRuleId?: string }
-  | { verdict: "propose"; reason?: string; reasonCode?: string }
+  /**
+   * `governanceRuleId` is present only when a `propose` rule at rung 2.8
+   * decided and the caller passed its id — so the card can name the rule
+   * that made it ask, as a receipt names the rule that let it act.
+   */
+  | {
+      verdict: "propose";
+      reason?: string;
+      reasonCode?: string;
+      governanceRuleId?: string;
+    }
   /**
    * `reasonCode` is set when the refusal is a TYPED one an agent can branch
    * on — today {@link DENIED_BY_RULE}. The CBAC and channel/capability blocks
@@ -1650,6 +1671,33 @@ const CAPABILITY_BLOCKED_REASON =
  * passed and the actor is confirmed to be an agent user.
  */
 export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
+  const decided = decideForPrincipal(input);
+  return input.hostPass === true ? asHostVerdict(decided) : decided;
+}
+
+/** The propose codes that come from the judged principal's OWN setting. */
+const OWN_SETTING_PROPOSE_CODES: ReadonlySet<string | undefined> = new Set([
+  "GOVERNANCE_RULE",
+  "WRITES_REQUIRE_PROPOSAL",
+  undefined,
+]);
+
+/** The host pass's words: see {@link AgentPolicyInput.hostPass}. */
+function asHostVerdict(decided: AgentPolicyVerdict): AgentPolicyVerdict {
+  if (
+    decided.verdict !== "propose" ||
+    !OWN_SETTING_PROPOSE_CODES.has(decided.reasonCode)
+  ) {
+    return decided;
+  }
+  return {
+    ...decided,
+    reason: PROPOSE_REASON.HOST_ASKS_FIRST,
+    reasonCode: "HOST_ASKS_FIRST",
+  };
+}
+
+function decideForPrincipal(input: AgentPolicyInput): AgentPolicyVerdict {
   const { subjectType, action } = input;
   const eventKey = `${subjectType}.${action}`;
   // The LANE key (rungs 4 and 8 only). Equal to `eventKey` unless the subject
@@ -2037,6 +2085,9 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
           verdict: "propose",
           reason: PROPOSE_REASON.GOVERNANCE_RULE,
           reasonCode: "GOVERNANCE_RULE",
+          ...(input.governanceRuleId
+            ? { governanceRuleId: input.governanceRuleId }
+            : {}),
         };
   }
 

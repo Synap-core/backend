@@ -138,7 +138,7 @@ describe("lensBannerOfStatus — ONE banner", () => {
         },
         issue,
         {
-          type: "pod.storage_warning",
+          type: "pod.resource_warning",
           title: "Storage almost full",
           occurredAt: "2026-10-04T08:00:00.000Z",
           target: null,

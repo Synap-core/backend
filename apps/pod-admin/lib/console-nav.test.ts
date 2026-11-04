@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   activeNavId,
+  agentHref,
   CLIENT_GROUP_ID,
   CLIENT_NAV,
   computerHref,
@@ -48,6 +49,13 @@ describe("navHref", () => {
   it("opens a computer on its own page, from every surface alike", () => {
     expect(computerHref("c 1")).toBe("/computers/c%201");
     expect(SEARCH_DESTINATION.computer.href("c 1")).toBe(computerHref("c 1"));
+  });
+
+  it("opens an agent on its own page, from every surface alike", () => {
+    expect(agentHref("a 1")).toBe("/agents/a%201");
+    expect(SEARCH_DESTINATION.agent.href("a 1")).toBe(agentHref("a 1"));
+    // Its page sits under Agents in the nav.
+    expect(activeNavId(agentHref("a1"))).toBe("agents");
   });
 
   it("routes pending issuers into Review's Access filter", () => {
@@ -134,7 +142,6 @@ describe("consoleRedirects", () => {
 describe("SEARCH_DESTINATION", () => {
   it("builds focus receivers on the new routes", () => {
     expect(SEARCH_DESTINATION.person.href("u1")).toBe("/members?focus=u1");
-    expect(SEARCH_DESTINATION.agent.href("a1")).toBe("/agents?focus=a1");
     expect(SEARCH_DESTINATION.issuer.href("i1")).toBe("/security?focus=i1");
     expect(SEARCH_DESTINATION["api-key"].href("k1")).toBe("/keys?focus=k1");
     expect(SEARCH_DESTINATION.proposal.href("p1")).toBe("/review?focus=p1");
@@ -152,9 +159,10 @@ describe("SEARCH_DESTINATION", () => {
 });
 
 describe("Pod group", () => {
-  it("lists Pod security, Backups, Updates, Audit log, Server errors, admin-only", () => {
+  it("lists Pod health, Pod security, Backups, Updates, Audit log, Server errors, admin-only", () => {
     const pod = navFor("admin", { allTools: true }).find((g) => g.id === "pod");
     expect(pod?.items.map((i) => [i.id, i.audience])).toEqual([
+      ["health", "admin"],
       ["security", "admin"],
       ["backups", "admin"],
       ["updates", "admin"],
@@ -163,6 +171,8 @@ describe("Pod group", () => {
     ]);
     expect(navLabel("updates")).toBe("Pod updates");
     expect(activeNavId("/updates")).toBe("updates");
+    expect(navLabel("health")).toBe("Pod health");
+    expect(activeNavId("/health")).toBe("health");
   });
 
   it("opens a server error on its own page, the path a 5xx body links to", () => {

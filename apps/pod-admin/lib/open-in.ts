@@ -287,7 +287,7 @@ function objectCover(objectKind: string, id: string): ConsoleCover | undefined {
       return { target: { page: "space", id }, label: "See this space here" };
     case "agent":
       return {
-        target: { page: "agents", focus: id },
+        target: { page: "agent", id },
         label: "See this agent here",
       };
     default:

@@ -152,7 +152,7 @@ const TABLE: Array<[Row, NeedsYouBucket, string]> = [
       id: "health",
       kind: "notification",
       count: 1,
-      notificationType: "pod.storage_warning",
+      notificationType: "pod.resource_warning",
     },
     "question",
     "broken = any system notification (health is the banner)",

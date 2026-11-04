@@ -182,6 +182,39 @@ describe("buildNeedsYou unknown and malformed sections", () => {
   });
 });
 
+describe("the pod's resources (plan P3, G10)", () => {
+  // Catches: a host running out ranked under routine findings, or its row
+  // leading nowhere (the alert names a page that does not own it).
+  it("ranks first in its severity and opens Pod health", () => {
+    const rows = buildNeedsYou({
+      sections: [
+        section("failed_flows", "degraded", { count: 2, flows: [] }),
+        section(
+          "resources",
+          "degraded",
+          { available: true, level: "critical", alerts: [] },
+          "Your pod’s disk is nearly full"
+        ),
+      ],
+    }).rows;
+    expect(rows[0].key).toBe("resources");
+    expect(rows[0].headline).toBe("Your pod’s disk is nearly full");
+    expect(rows[0].action).toEqual({
+      kind: "link",
+      label: "Open pod health",
+      exit: { href: "/health", isDesktopLink: false },
+    });
+  });
+
+  it("never reaches a member, who cannot open Pod health", () => {
+    const rows = buildNeedsYou({
+      sections: [section("resources", "attention")],
+      audience: "member",
+    }).rows;
+    expect(rows).toEqual([]);
+  });
+});
+
 describe("buildNeedsYou link building", () => {
   it("sends the review backlog to Review with a plain headline", () => {
     const [row] = buildNeedsYou({ sections: [backlog] }).rows;

@@ -93,6 +93,8 @@ export const NEEDS_YOU_CAP = 7;
  * than faults. Schema hygiene/contract last: real, but never urgent.
  */
 const IMPORTANCE: readonly string[] = [
+  // A pod running out of memory or disk stops everything else on this list.
+  "resources",
   "review_backlog",
   "capabilities",
   "failed_flows",

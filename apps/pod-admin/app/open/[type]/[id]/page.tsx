@@ -70,14 +70,15 @@ export default async function OpenPage({
   if (update) redirect(update);
   const parsed = parseOpenParams(type, id);
   const h = await headers();
-  // A role question only a space's page needs: it is pod-admin only, so a
-  // member keeps the bounce card (`openRedirect`).
+  // A role question only the role-aware kinds need: a space's and an agent's
+  // console pages are pod-admin only, so a member keeps the card `/open`
+  // draws (`openRedirect`).
   const viewerIsPodAdmin =
     parsed.status !== "not-found" &&
     ROLE_AWARE_KINDS.has(parsed.type) &&
     (await podAdminRole(h)) === "admin";
   // The review surface lives at /proposal/:id, a space's page at
-  // /workspaces/:id: don't show a bounce card to the desktop app for either.
+  // /workspaces/:id, an agent's at /agents/:id: don't draw a card for any.
   const to = openRedirect(parsed, viewerIsPodAdmin);
   if (to) redirect(to);
   // Same identity plumbing as /proposal: an object link arriving from an

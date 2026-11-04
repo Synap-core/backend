@@ -13,8 +13,9 @@
  * one action; detail opens the agent's page.
  *
  * Pending keys and connect requests are NOT approved here — the row's one
- * action goes to Review, the one attention door. `?focus=<agentUserId>` (⌘K)
- * is received by the `data-row-id` wrappers.
+ * action goes to Review, the one attention door. `?focus=<agentUserId>` (a
+ * link from before agents had a page; ⌘K now opens `agentHref`) is received
+ * by the `data-row-id` wrappers.
  */
 
 import { Button } from "@heroui/react";
@@ -22,8 +23,7 @@ import { ArrowRight, Bot } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Suspense, useEffect, useMemo } from "react";
-import { openIn } from "../../../lib/open-in";
-import { navHref } from "../../../lib/console-nav";
+import { agentHref, navHref } from "../../../lib/console-nav";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { formatRelative } from "../../../lib/format";
@@ -95,11 +95,11 @@ function AgentsInner() {
     [list.data, standings.data, viewerId]
   );
 
-  // A row opens the agent's page (`/open/agent/:id`): the same sections the
-  // drawer drew, with the same acts, at an address that can be shared.
+  // A row opens the agent's page in the console (`agentHref`): the same body
+  // `/open/agent/:id` draws, with the same acts, at an address that can be
+  // shared.
   const router = useRouter();
-  const openAgent = (id: string) =>
-    router.push(openIn({ kind: "object", objectKind: "agent", id }).href);
+  const openAgent = (id: string) => router.push(agentHref(id));
 
   const found = useMemo(
     () =>

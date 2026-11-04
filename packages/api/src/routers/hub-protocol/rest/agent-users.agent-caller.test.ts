@@ -61,10 +61,14 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
-vi.mock("@synap/database/agent-governance", () => ({
+vi.mock("@synap/database/agent-governance", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@synap/database/agent-governance")
+  >()),
   syncAutoApproveRules: vi.fn(async () => undefined),
   applyAgentPosture: vi.fn(async () => ({ posture: "create-with-undo" })),
   readAgentGovernance: vi.fn(async () => null),
+  readEffectiveAgentWriteMode: vi.fn(async () => null),
 }));
 
 vi.mock(
@@ -105,6 +109,7 @@ import { createNamedAgent } from "../../../services/agent-identity-service.js";
 import {
   applyAgentPosture,
   readAgentGovernance,
+  readEffectiveAgentWriteMode,
   syncAutoApproveRules,
 } from "@synap/database/agent-governance";
 import { AGENT_WRITE_MODE_CHOICES } from "@synap-core/types/agents";
@@ -267,5 +272,27 @@ describe("GET /agent-users/:id/governance", () => {
       ["create-with-undo", "create-with-undo", false],
       ["ask-first", "ask-first", false],
     ]);
+  });
+
+  it("says how its writes REALLY land: the computer's mode when it is stricter", async () => {
+    vi.mocked(readAgentGovernance).mockResolvedValueOnce({
+      posture: null,
+      configured: false,
+    } as never);
+    vi.mocked(readEffectiveAgentWriteMode).mockResolvedValueOnce({
+      writeMode: "ask-first",
+      line: "Every change asks you first.",
+      decidedBy: "computer",
+      computerUserId: null,
+    });
+    const res = await buildApp(false).request(
+      `/agent-users/${AGENT}/governance`
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { effective: unknown };
+    expect(body.effective).toMatchObject({
+      writeMode: "ask-first",
+      decidedBy: "computer",
+    });
   });
 });

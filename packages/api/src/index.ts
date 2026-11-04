@@ -452,6 +452,16 @@ export {
   POD_UPDATE_FAILED_NOTIFICATION_TYPE,
   type PodUpdateOutcomeInput,
 } from "./notifications/pod-update-outcome.js";
+// Pod health (plan P3, G10): the 2-min resource check (@synap/jobs'
+// `registerPodHealthHandler` IoC slot), the event-loop reader apps/api fills,
+// and the read the provision status reports.
+export {
+  runPodHealthCheck,
+  readPodHealth,
+  openResourceAlerts,
+  podResourcesStatus,
+  registerEventLoopP99Reader,
+} from "./services/pod-health/index.js";
 // Plan "Pod resilience" G7b: apps/api reads deploy/state/events.jsonl and
 // hands the host heal's events here (the same mount and audience as U4).
 export {

@@ -57,6 +57,11 @@ import {
   isOwnSessionBookkeeping,
 } from "@synap/database/agent-governance";
 import {
+  GOVERNANCE_DECISION_KEY,
+  storedGovernanceDecisionOf,
+  type StoredGovernanceDecision,
+} from "./proposal-governance-decision.js";
+import {
   isSessionUpdateReceipt,
   recordSessionBookkeepingReceipt,
 } from "./session-bookkeeping-receipt.js";
@@ -1458,6 +1463,9 @@ function anonymousPolicyInput(facts: AnonymousPolicyFacts): AgentPolicyInput {
     // B6: only an attributed agent's run is held as the person's draft
     // (`runPlaybook` holds on `agentUserId`); an unattributed write never is.
     heldAsDraft: undefined,
+    // The host step's second pass judges an agent AS its computer; an
+    // unattributed key has no agent and runs on no computer.
+    hostPass: undefined,
   };
   return input;
 }
@@ -2330,6 +2338,9 @@ async function evaluatePermission(
           // own verdict always wins when it fired a named rung.
           governanceReason:
             gov.reasonCode ?? opts.governanceReason ?? undefined,
+          // WHICH rule, and which side of the host step, made it ask — so the
+          // card can name the computer instead of "one of your rules".
+          governanceDecision: storedGovernanceDecisionOf(gov),
           stepRunId,
           nodeId,
         });
@@ -4428,6 +4439,8 @@ async function createProposal(args: {
    * RBAC-role-exceed propose paths (those carry no governance-engine verdict).
    */
   governanceReason?: string;
+  /** Which rule and which pass made an agent's write ask (`proposal-governance-decision.ts`). */
+  governanceDecision?: StoredGovernanceDecision;
   /** Workflow attribution forwarded to the row: automation step run + flow node. */
   stepRunId?: string | null;
   nodeId?: string | null;
@@ -4453,6 +4466,7 @@ async function createProposal(args: {
     expectedLabel,
     expectedKey,
     governanceReason,
+    governanceDecision,
     stepRunId,
     nodeId,
     sessionSource,
@@ -4676,6 +4690,10 @@ async function createProposal(args: {
     ...(duplicateCheck ? { duplicateCheck } : {}),
     // The required-link check — `readRequiredLinkCheck` is the one reader.
     ...(requiredLinks ? { requiredLinks } : {}),
+    // Why it asked — `readStoredGovernanceDecision` is the one reader.
+    ...(governanceDecision
+      ? { [GOVERNANCE_DECISION_KEY]: governanceDecision }
+      : {}),
   };
 
   // G1 PEEK-BEFORE-EVENT: for an agent-authored write that exactly matches an

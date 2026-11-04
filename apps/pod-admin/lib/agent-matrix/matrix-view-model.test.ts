@@ -25,6 +25,7 @@ import {
   probeViews,
   toggleExpanded,
   visibleRows,
+  heldByComputer,
   widenPlan,
 } from "./matrix-view-model";
 
@@ -356,6 +357,27 @@ describe("WHY: widen and revoke", () => {
         probeViews(DEALS, ALLOWED.cells["process:pb"]!)
       )
     ).toBeNull();
+  });
+
+  it("a write its person-owned computer asks for is never widened; the drawer points at the computer", () => {
+    const held = cellOfAnswers([
+      {
+        ...ans("entity.create:deal", "ask", "default"),
+        computerAsks: true,
+      },
+      ans("entity.update:deal", "auto", "governance-rule", "r1"),
+    ]);
+    const probes = probeViews(DEALS, held);
+    expect(widenPlan({ ownedByViewer: true }, probes)).toBeNull();
+    expect(heldByComputer({ hostUserId: "pc-1" }, probes)).toBe("pc-1");
+    // The same ask with the computer allowing it: Widen, no computer door.
+    const free = probeViews(
+      DEALS,
+      cellOfAnswers([ans("entity.create:deal", "ask", "default")])
+    );
+    expect(widenPlan({ ownedByViewer: true }, free)?.route).toBe("rule");
+    expect(heldByComputer({ hostUserId: "pc-1" }, free)).toBeNull();
+    expect(heldByComputer({ hostUserId: null }, probes)).toBeNull();
   });
 
   it("names each rule that decided, once", () => {

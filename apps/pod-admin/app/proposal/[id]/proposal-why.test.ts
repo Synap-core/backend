@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GOVERNANCE_POLICY_SENTENCES } from "@synap-core/types/proposals";
-import { proposalWhy } from "./proposal-why";
+import { askingComputer, proposalWhy } from "./proposal-why";
 
 const WRITES = GOVERNANCE_POLICY_SENTENCES.WRITES_REQUIRE_PROPOSAL;
 
@@ -41,5 +41,24 @@ describe("proposalWhy", () => {
       policy: undefined,
       proposer: undefined,
     });
+  });
+});
+
+describe("askingComputer — the reason line names the computer that asked", () => {
+  it("names it when the computer's pass decided", () => {
+    expect(
+      askingComputer({
+        askedBy: {
+          principal: "computer",
+          computer: { id: "c-1", name: "MacBook" },
+        },
+      })
+    ).toEqual({ id: "c-1", name: "MacBook" });
+  });
+
+  it("names nothing for the agent's own rule, an unnamed computer, or no marker", () => {
+    expect(askingComputer({ askedBy: { principal: "agent" } })).toBeNull();
+    expect(askingComputer({ askedBy: { principal: "computer" } })).toBeNull();
+    expect(askingComputer({})).toBeNull();
   });
 });

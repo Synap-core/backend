@@ -255,6 +255,11 @@ doctor healthy --json
 jq -e '[.checks[] | select(.check == "disk" and .severity == "ok" and (.message | test("update headroom")))] | length == 1' "$TMP/out" >/dev/null \
   && ok "disk: headroom vs the update floor reported ok on a roomy disk" || bad "disk headroom ok missing: $(jq -c .checks "$TMP/out")"
 jq -e '[.checks[] | select(.check == "units")] | length >= 1' "$TMP/out" >/dev/null && ok "units: reported (no systemd here: info)" || bad "units check missing"
+mkdir -p "$DEPLOY/state/clean"; echo '{}' > "$DEPLOY/state/clean/request.json"; touch -t 202601010000 "$DEPLOY/state/clean/request.json"
+doctor healthy --json; rc=$?
+[ "$rc" != 0 ] && finding units "clean request .* waited over 10 min in state/clean/request.json" \
+  && ok "units: a clean request the host never took (10+ min) is a finding" || bad "units clean request: rc=$rc $(jq -c .findings "$TMP/out")"
+rm -rf "$DEPLOY/state/clean"
 grep -E "compose (.* )?(up|run|create|down|rm|stop|start|restart|pull|build)( |$)|^(rm|stop|kill|pull|tag|rmi|run|volume|system|image prune|network rm)" "$FAKE_LOG" \
   && bad "the self-heal checks ran a mutating docker command" || ok "the self-heal checks ran no mutating docker command"
 

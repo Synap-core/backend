@@ -41,6 +41,7 @@ export type NavIconName =
   | "Boxes"
   | "ShieldCheck"
   | "HardDrive"
+  | "Gauge"
   | "RefreshCw"
   | "ScrollText"
   | "Bug"
@@ -320,6 +321,16 @@ export const CONSOLE_NAV = [
     label: "Pod",
     items: [
       {
+        // The pod's machine: memory, disks, database connections against
+        // their alert thresholds, and the safe actions that free room
+        // (plan P3, G10). Home's "resources" row opens here.
+        id: "health",
+        href: "/health",
+        label: "Pod health",
+        icon: "Gauge",
+        audience: "admin",
+      },
+      {
         id: "security",
         href: "/security",
         label: "Pod security",
@@ -411,6 +422,17 @@ export function navHref(
  */
 export function computerHref(id: string): string {
   return `${navHref("computers")}/${encodeURIComponent(id)}`;
+}
+
+/**
+ * One agent's page in the console — the ONE spelling of "open this agent",
+ * for every console surface that names one (Agents, Agents & work, a
+ * computer's agents, search). Keyed by the agent's USER id, the id
+ * `/open/agent/:id` takes; that receiver sends a pod admin here
+ * (`openRedirect`), so a link from outside the console lands here too.
+ */
+export function agentHref(id: string): string {
+  return `${navHref("agents")}/${encodeURIComponent(id)}`;
 }
 
 /**
@@ -560,12 +582,13 @@ export const SEARCH_DESTINATION: Readonly<
     label: "Members",
     href: (id) => navHref("members", { focus: id }),
   },
+  // An agent and a computer are objects with their own page, so a result
+  // opens it.
   agent: {
     nav: "agents",
     label: "Agents",
-    href: (id) => navHref("agents", { focus: id }),
+    href: agentHref,
   },
-  // A computer is an object with its own page, so a result opens it.
   computer: {
     nav: "computers",
     label: "Computers",
@@ -620,6 +643,8 @@ export const DIAGNOSE_DESTINATION: Readonly<Record<string, NavId>> = {
   quality_by_prompt_version: "intelligence",
   schema_hygiene: "kinds",
   schema_contract: "kinds",
+  // Memory, disks, database connections against their alert thresholds.
+  resources: "health",
 };
 
 // ─── next.config.ts ──────────────────────────────────────────────────────────

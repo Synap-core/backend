@@ -34,6 +34,8 @@ import type { AgentWriteMode } from "@synap-core/types/agents";
 import { GRANT_PRESETS } from "@synap-core/types/grants";
 import { Outcome } from "../approve-agent/[keyId]/ApproveForm";
 import { WriteModeChoice } from "../_lib/write-mode-choice";
+import { useT } from "../../lib/i18n/locale-provider";
+import { en, fr } from "./copy";
 import {
   AGENT_WRITE_MODE_CHOICES,
   agentRoleSlug,
@@ -43,6 +45,7 @@ import {
   DEVICE_RUN_AGAIN_COMMAND,
   accessLine,
   askerLine,
+  asksWriteMode,
   canApprove,
   computerHasSeats,
   computerLine,
@@ -179,7 +182,10 @@ const NEW = "__new__";
 /** The agents section's question: how their changes land. */
 export const WRITE_MODE_QUESTION = "How its agents' changes land";
 
+const CATALOGS = { en, fr };
+
 export function PendingView(p: PendingViewProps) {
+  const t = useT(CATALOGS);
   const r = p.request;
   const name = p.computerName.trim() || r.hostname;
   const preset = GRANT_PRESETS.find((g) => g.name === r.accessName);
@@ -318,18 +324,33 @@ export function PendingView(p: PendingViewProps) {
           </section>
         )}
 
-        {/* OMIT when no agent is kept (or added): the choice is about them. */}
-        {(perRow ? adds.length > 0 : p.agents.length > 0) && (
+        {/* OMIT when the pick applies to nothing: no agent added and the
+            computer reused (it keeps its own). A new computer takes it (D1b). */}
+        {asksWriteMode({
+          addsAgents: perRow ? adds.length > 0 : p.agents.length > 0,
+          reuseComputerId: p.reuseId,
+        }) && (
           <section className="flex flex-col gap-2">
             <p className="text-tiny font-medium uppercase tracking-wide text-foreground/65">
-              {perRow ? ADDED_WRITE_MODE_QUESTION : WRITE_MODE_QUESTION}
+              {perRow && p.reuseId
+                ? ADDED_WRITE_MODE_QUESTION
+                : WRITE_MODE_QUESTION}
             </p>
             <WriteModeChoice
-              label={perRow ? ADDED_WRITE_MODE_QUESTION : WRITE_MODE_QUESTION}
+              label={
+                perRow && p.reuseId
+                  ? ADDED_WRITE_MODE_QUESTION
+                  : WRITE_MODE_QUESTION
+              }
               value={p.agentWriteMode}
               onChange={p.onAgentWriteMode}
               isDisabled={p.busy !== null}
             />
+            {p.reuseId === null && (
+              <p className="text-small text-foreground/65">
+                {t("writeMode.newComputer", { computer: name })}
+              </p>
+            )}
           </section>
         )}
 

@@ -17,7 +17,10 @@
 import { TRPCError } from "@trpc/server";
 import { db, and, eq } from "@synap/database";
 import { users } from "@synap/database/schema";
-import { dryRunAgentGovernanceDecision } from "@synap/database/agent-governance";
+import {
+  dryRunAgentGovernanceDecision,
+  seedHostFor,
+} from "@synap/database/agent-governance";
 import {
   isReversibleWrite,
   nonWidenableFloorFor,
@@ -83,6 +86,11 @@ export async function draftMatrixWiden(
       "nothing to widen here (it already acts, is off, or a rule cannot reach what decides it)."
     );
   }
+  if (await computerAsksFor(probe)) {
+    throw noNextRung(
+      "its computer asks first for this write, and a rule for the agent does not reach it; change what agents on that computer may do on the computer's page."
+    );
+  }
   const { sourceProposalId: _lineage, ...rule } = nextRungRuleDraft({
     proposalId: "",
     agentUserId: probe.agentUserId,
@@ -91,4 +99,42 @@ export async function draftMatrixWiden(
     profileSlug: probe.profileSlug,
   });
   return rule;
+}
+
+/**
+ * Does the agent's computer ask for this write, where a rule widened for the
+ * agent alone cannot reach it? The host step keeps the stricter of the agent
+ * and its computer, and a rule for the agent is copied onto its computer only
+ * when the computer belongs to the agent (`seedHostFor`). On a person's own or
+ * a shared computer, the computer's OWN answer (the one resolver, asked as the
+ * computer) is then the ceiling: when it is not `auto`, widening the agent
+ * changes nothing (plan 07ecf0be item 3).
+ */
+export async function computerAsksFor(
+  probe: MatrixCellProbe
+): Promise<boolean> {
+  const [agent] = await db
+    .select({ hostUserId: users.hostUserId })
+    .from(users)
+    .where(eq(users.id, probe.agentUserId))
+    .limit(1);
+  const hostUserId = agent?.hostUserId;
+  if (!hostUserId || hostUserId === probe.agentUserId) return false;
+  if (await seedHostFor(db, probe.agentUserId)) return false;
+  const [host] = await db
+    .select({ createdByUserId: users.createdByUserId })
+    .from(users)
+    .where(eq(users.id, hostUserId))
+    .limit(1);
+  if (!host) return false;
+  const asComputer = await dryRunAgentGovernanceDecision({
+    db,
+    userId: host.createdByUserId ?? hostUserId,
+    agentUserId: hostUserId,
+    workspaceId: probe.workspaceId,
+    action: probe.action,
+    profileSlug: probe.profileSlug,
+    door: "chat",
+  });
+  return asComputer.outcome !== "auto";
 }

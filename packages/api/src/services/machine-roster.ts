@@ -41,7 +41,12 @@ import {
   users,
   type AgentMetadata,
 } from "@synap/database/schema";
-import { MACHINE_AGENT_TYPE, agentDisplayName } from "@synap-core/types/agents";
+import {
+  MACHINE_AGENT_TYPE,
+  agentDisplayName,
+  type AgentEffectiveWriteMode,
+} from "@synap-core/types/agents";
+import { readEffectiveAgentWriteMode } from "@synap/database/agent-governance";
 import type { ComputerBelongsTo } from "@synap-core/types/computers";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import {
@@ -505,4 +510,28 @@ export async function setMachineRunsScripts(
     .where(and(eq(apiKeys.userId, machineUserId), isNull(apiKeys.revokedAt)))
     .returning({ id: apiKeys.id });
   return { keysUpdated: updated.length };
+}
+
+/**
+ * How an agent's writes REALLY land (`readEffectiveAgentWriteMode`: the
+ * stricter of the agent and its computer), with the computer named by
+ * {@link machineName}. The ONE reader behind `agentUsers.governance` and the
+ * Hub `GET /agent-users/:id/governance` `effective` field. Null when the id is
+ * not an agent.
+ */
+export async function readEffectiveWriteMode(
+  agentUserId: string
+): Promise<AgentEffectiveWriteMode | null> {
+  const read = await readEffectiveAgentWriteMode({ db, agentUserId });
+  if (!read) return null;
+  const { computerUserId, ...mode } = read;
+  const named = computerUserId
+    ? (await loadMachineNames([computerUserId])).get(computerUserId)
+    : undefined;
+  return {
+    ...mode,
+    computer: computerUserId
+      ? { id: computerUserId, name: named?.name ?? null }
+      : null,
+  };
 }

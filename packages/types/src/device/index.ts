@@ -706,17 +706,30 @@ export interface ApproveChoice {
   reuseComputerId: string | null;
   computerName: string;
   /**
-   * How the kept agents' writes land, from `AGENT_WRITE_MODE_CHOICES`.
-   * Omitted (a surface that does not offer the choice yet): the pod starts a
-   * new agent ask-first.
+   * How the kept agents' writes land, from `AGENT_WRITE_MODE_CHOICES`; a new
+   * computer takes it too (plan 07ecf0be D1b: it is the ceiling of every
+   * agent on it). Omitted (a surface that does not offer the choice yet): the
+   * pod starts a new agent and a new computer ask-first.
    */
   agentWriteMode?: AgentWriteMode;
 }
 
 /**
+ * Whether the page's ONE write-mode pick applies to anything: an agent is
+ * added, or the computer is new (it takes the pick as its own). A reused
+ * computer with nothing added keeps everything it has, so nothing is asked.
+ */
+export function asksWriteMode(input: {
+  addsAgents: boolean;
+  reuseComputerId: string | null;
+}): boolean {
+  return input.addsAgents || input.reuseComputerId === null;
+}
+
+/**
  * "Approve": the computer, the agents kept, reuse-or-new, the name, and how
  * the kept agents' writes land (sent only when the surface offered it and an
- * agent is kept).
+ * agent is added or the computer is new, {@link asksWriteMode}).
  */
 export function approveDecision(
   req: DeviceRequest,
@@ -734,7 +747,11 @@ export function approveDecision(
       agents: [...new Set(kept.map((a) => a.agentType))],
       reuseComputerId: choice.reuseComputerId,
       computerName: name || null,
-      ...(choice.agentWriteMode && adds
+      ...(choice.agentWriteMode &&
+      asksWriteMode({
+        addsAgents: adds,
+        reuseComputerId: choice.reuseComputerId,
+      })
         ? { agentWriteMode: choice.agentWriteMode }
         : {}),
       agentActions: choice.actions.map((a) => ({
@@ -763,7 +780,11 @@ export function approveDecision(
     agents,
     reuseComputerId: choice.reuseComputerId,
     computerName: name || null,
-    ...(choice.agentWriteMode && agents.length > 0
+    ...(choice.agentWriteMode &&
+    asksWriteMode({
+      addsAgents: agents.length > 0,
+      reuseComputerId: choice.reuseComputerId,
+    })
       ? { agentWriteMode: choice.agentWriteMode }
       : {}),
   };

@@ -123,7 +123,7 @@ export interface PlaceableSignal {
  * an `access-request` row instead and keeps that notification in the bell.)
  */
 export const STATUS_BANNER_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
-  "pod.storage_warning",
+  "pod.resource_warning",
   // NOT `system.intelligence_degraded` (P4, 2026-10-06): that is an operator
   // notice now (registry role `informational`, owner + Discord only). What a
   // user sees about AI is `@synap-core/types/ai-availability`'s banner.
