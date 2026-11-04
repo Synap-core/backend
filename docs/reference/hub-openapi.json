@@ -26404,7 +26404,7 @@
             }
           },
           "403": {
-            "description": "Forbidden",
+            "description": "Refused by the key's grant or the review rules",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -26641,7 +26641,7 @@
             }
           },
           "403": {
-            "description": "Forbidden",
+            "description": "Refused by the key's grant or the review rules",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }

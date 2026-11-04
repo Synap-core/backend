@@ -858,6 +858,10 @@ export function registerMessagingRoutes(app: HubHono): void {
             "application/json": { schema: GovernedProposedSchema },
           },
         },
+        403: {
+          description: "Refused by the key's grant or the review rules",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
         500: {
           description: "Internal error",
           content: { "application/json": { schema: ErrorSchema } },
@@ -1330,6 +1334,10 @@ export function registerMessagingRoutes(app: HubHono): void {
           content: {
             "application/json": { schema: GovernedProposedSchema },
           },
+        },
+        403: {
+          description: "Refused by the key's grant or the review rules",
+          content: { "application/json": { schema: ErrorSchema } },
         },
         404: {
           description: "Channel not found",
