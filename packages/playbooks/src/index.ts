@@ -2148,7 +2148,7 @@ export interface CapabilitySkillDef {
    * `kind: "code"` and `metadata.box` (language, exact package pins, hosts,
    * limits), which the applier parses with the same rule as the skill doors.
    */
-  executionMode?: "sync" | "async" | "box";
+  executionMode?: "sync" | "async" | "box" | "hosted";
   timeoutSeconds?: number;
   /**
    * Names of `tools[]` in THIS definition the skill requires. The applier maps
@@ -2184,6 +2184,14 @@ export interface CapabilitySkillDef {
    * validated on install; a RE_APPROVAL field. Absent = not offered to apps.
    */
   inputMap?: Record<string, unknown>;
+  /**
+   * Which op of its intent's CONTRACT this verb implements (`create`,
+   * `status`, `renew`, `revoke`; `capability_intents.contract`, 0398).
+   * Projected onto `skills.intent_op`; absent = the intent's single default op.
+   * The applier refuses an op the contract does not declare
+   * (`@synap-core/types/capability-manifest`).
+   */
+  intentOp?: string;
 }
 
 /**
@@ -2236,6 +2244,30 @@ export interface CapabilityDefinition {
    * list-by-producer index ("which capabilities emit event X").
    */
   emits?: string[];
+  /**
+   * THE MANIFEST (plan U3, addendum 000e75ff §3). Four optional fields, one
+   * rule: `@synap-core/types/capability-manifest` (`parseCapabilityManifest`),
+   * which the applier runs before any write and every other door shares.
+   * Structural here, like the other mirrors of this package: it does not
+   * depend on `@synap-core/types`.
+   *
+   * - `needs`    what it needs, BY INTENT: `{ key, intent, for?, constraints?,
+   *              optional? }` ("a URL for the studio", never a vendor).
+   * - `offers`   for each intent it provides, the terms it serves it on
+   *              (`{ auth, source, hostname, runsOn, public }` for expose_http).
+   * - `compose`  a COMPOSITE's plan: per provided intent, per op, steps over its
+   *              own needs in the input_map path grammar, plus `output`.
+   * - `services` the containers it runs on a computer (image by digest, ports
+   *              on 127.0.0.1, health, limits).
+   *
+   * Persisted to the installed capability's `metadata.{needs,offers,compose,
+   * services}` as the rule normalises them; a re-apply that omits one leaves
+   * the stored value untouched, as with `emits`.
+   */
+  needs?: Array<Record<string, unknown>>;
+  offers?: Record<string, Record<string, unknown>>;
+  compose?: Record<string, Record<string, unknown>>;
+  services?: Array<Record<string, unknown>>;
 }
 
 // ── LoopDefinition — a config descriptor that INSTANTIATES an autonomy loop ────

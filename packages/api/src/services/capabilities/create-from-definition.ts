@@ -104,8 +104,13 @@ import {
   projectSkillMetadata,
   projectUrlPatterns,
   projectInputMap,
+  projectIntentOp,
   mergePreservingExisting,
 } from "./capability-drift.js";
+import {
+  manifestMetadata,
+  readDeclaredManifest,
+} from "./capability-manifest.js";
 import { definitionInputMapProblems } from "./intent-input.js";
 import { loadIntentInput } from "./intent-registry.js";
 import { capabilityContainersRouter } from "../../routers/capability-containers.js";
@@ -581,6 +586,21 @@ async function assertInputMaps(
 }
 
 /**
+ * Refuse a `hosted` verb (0398): it runs on an INSTALLATION, pulled by its
+ * computer as a host job, and this pod has no host-job queue to run it from
+ * yet (plan U8 adds it and lifts this). Refused here, before any write, rather
+ * than installed as a verb that cannot run.
+ */
+function assertNoHostedSkills(skills: readonly CapabilitySkillDef[]): void {
+  const hosted = skills.filter((s) => s.executionMode === "hosted");
+  if (hosted.length > 0) {
+    throw new Error(
+      `Capability skill${hosted.length > 1 ? "s" : ""} ${hosted.map((s) => `"${s.name}"`).join(", ")} ${hosted.length > 1 ? "run" : "runs"} hosted (on an installation), which this pod cannot run yet.`
+    );
+  }
+}
+
+/**
  * Apply a `CapabilityDefinition` (or a templateKey-loaded one), instantiating
  * its {vault · tools · skills} for the acting user/workspace in `ctx`.
  */
@@ -776,6 +796,19 @@ export async function createCapabilityFromDefinition(
   // `{{vault:<ref>}}` names one of THIS template's own `vault[]` entries —
   // checked BEFORE anything is written (see `assertVaultPlaceholdersDeclared`).
   assertVaultPlaceholdersDeclared(def);
+
+  // THE MANIFEST (plan U3): needs, offers, compose and host services, and the
+  // op each verb implements, checked by the one rule against the pod's intent
+  // contracts BEFORE any write (the vault
+  // step below is the first). Persisted on the container below.
+  const declaredManifest = await readDeclaredManifest(def);
+  if (!declaredManifest.ok) {
+    throw new Error(
+      `Capability "${def.key}" declares an invalid manifest: ${declaredManifest.problems.join("; ")}.`
+    );
+  }
+  const manifest = declaredManifest.manifest;
+  assertNoHostedSkills(def.skills);
 
   // An MCP server row is a COMMAND the Intelligence Service may spawn, so
   // writing one needs the same role as the settings door
@@ -1237,6 +1270,9 @@ export async function createCapabilityFromDefinition(
           // Always written — `null` = not offered to apps — so a template that
           // drops its map stops the verb being offered.
           inputMap: projectInputMap(s, readerTrust),
+          // Which contract op the verb implements (0398). Always written —
+          // `null` = the intent's single default op — so a dropped op clears.
+          intentOp: projectIntentOp(s),
           // The ONLY definition-owned keys of this DB-owned bag. `undefined`
           // when the definition declares none, which Drizzle SKIPS — the
           // live bag (marketSource, rule, counters) is then untouched.
@@ -1283,6 +1319,8 @@ export async function createCapabilityFromDefinition(
       urlPatterns: projectUrlPatterns(s, readerTrust) ?? undefined,
       // The intent input map (0368), same projection as the update.
       inputMap: projectInputMap(s, readerTrust) ?? undefined,
+      // The contract op (0398), same projection as the update.
+      intentOp: projectIntentOp(s) ?? undefined,
       // Persist the definition-owned keys of the `metadata` bag — the declared
       // sandbox egress allowlist. Without it a published package could never
       // grant its own skill egress: the sandbox is default-deny, so the skill
@@ -1599,6 +1637,9 @@ export async function createCapabilityFromDefinition(
           templateKey: def.key,
           ...(rawDef.contentHash ? { contentHash: rawDef.contentHash } : {}),
           ...(declaredEmits !== undefined ? { emits: declaredEmits } : {}),
+          // The manifest's declared fields, as the rule normalised them; a
+          // field the definition omits is left as stored (the `emits` rule).
+          ...manifestMetadata(manifest),
         },
         updatedAt: new Date(),
       })
