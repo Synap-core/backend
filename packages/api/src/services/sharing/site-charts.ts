@@ -120,7 +120,7 @@ export function holdsUuid(value: unknown): boolean {
 
 /** The props that may leave: no snapshot keys, no prop holding an id. */
 export function publicChartProps(
-  config: Record<string, unknown>,
+  config: Record<string, unknown>
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(chartPropsMadeLive(config))) {
@@ -135,7 +135,7 @@ export async function readLiveChartData(
   ctx: { userId: string; workspaceId: string },
   cellKey: string,
   props: Record<string, unknown>,
-  now: Date,
+  now: Date
 ): Promise<unknown> {
   if (!isChartCellKey(cellKey)) {
     throw new Error(`"${cellKey}" has no query the pod can run`);
@@ -190,7 +190,7 @@ export interface ChartPublishPlan {
 function payloadOf(
   m: ChartMemberPlan,
   data: unknown,
-  capturedAt: string | undefined,
+  capturedAt: string | undefined
 ): ChartPayload {
   return {
     v: 1,
@@ -205,13 +205,13 @@ function payloadOf(
 function assertPayloadFits(payload: ChartPayload): void {
   if (holdsUuid(payload.data)) {
     throw badRequest(
-      "This chart's data holds internal ids (a UUID), so it cannot be published. Label it with names instead.",
+      "This chart's data holds internal ids (a UUID), so it cannot be published. Label it with names instead."
     );
   }
   const bytes = Buffer.byteLength(JSON.stringify(payload), "utf8");
   if (bytes > CHART_PAYLOAD_MAX_BYTES) {
     throw badRequest(
-      `This chart is ${Math.ceil(bytes / 1024)} KB; a published chart holds at most ${CHART_PAYLOAD_MAX_BYTES / 1024} KB. Aggregate its data first.`,
+      `This chart is ${Math.ceil(bytes / 1024)} KB; a published chart holds at most ${CHART_PAYLOAD_MAX_BYTES / 1024} KB. Aggregate its data first.`
     );
   }
 }
@@ -221,7 +221,7 @@ async function planChartMember(
   userId: string,
   homeWorkspaceId: string,
   item: ChartPublishItem,
-  settings: unknown,
+  settings: unknown
 ): Promise<ChartMemberPlan> {
   if (!(CHART_MODES as readonly string[]).includes(item.mode)) {
     throw badRequest(`mode must be "snapshot" or "live".`);
@@ -245,7 +245,7 @@ async function planChartMember(
   }
   if (cell.workspaceId !== homeWorkspaceId) {
     throw badRequest(
-      "A chart is published into the site of its own space: this cell lives in another space than the site's home.",
+      "A chart is published into the site of its own space: this cell lives in another space than the site's home."
     );
   }
   await assertWorkspaceWrite(database, userId, {
@@ -273,7 +273,7 @@ async function planChartMember(
       item.slug.length > SLUG_MAX_LENGTH
     ) {
       throw badRequest(
-        "A slug is lowercase words joined by single hyphens (a-z, 0-9), at most 96 characters.",
+        "A slug is lowercase words joined by single hyphens (a-z, 0-9), at most 96 characters."
       );
     }
     slug = item.slug;
@@ -294,7 +294,7 @@ async function planChartMember(
   if (item.mode === "live") {
     if (!chartHasQuery(cellKey)) {
       throw badRequest(
-        `Only a pod chart with a query (chart-bar, chart-line, …) can be live; "${cellKey}" can be published as a snapshot.`,
+        `Only a pod chart with a query (chart-bar, chart-line, …) can be live; "${cellKey}" can be published as a snapshot.`
       );
     }
     return { ...base, freeze: false };
@@ -305,14 +305,14 @@ async function planChartMember(
     if (isChartCellKey(cellKey)) {
       const parsed = parseChartSnapshot(
         CHART_DATA_SHAPE_BY_KEY[cellKey],
-        config,
+        config
       );
       if (!parsed.ok) throw badRequest(`This chart's data: ${parsed.message}`);
       capturedAt = parsed.capturedAt;
     } else if (config.capturedAt !== undefined) {
       if (!isDate(config.capturedAt)) {
         throw badRequest(
-          "capturedAt must be an ISO date (when the numbers were taken).",
+          "capturedAt must be an ISO date (when the numbers were taken)."
         );
       }
       capturedAt = config.capturedAt;
@@ -328,7 +328,7 @@ async function planChartMember(
   }
   if (chartHasQuery(cellKey)) return { ...base, freeze: true };
   throw badRequest(
-    `This cell has no data to publish: no inline \`data\` in its config, and "${cellKey}" has no query the pod can run.`,
+    `This cell has no data to publish: no inline \`data\` in its config, and "${cellKey}" has no query the pod can run.`
   );
 }
 
@@ -341,7 +341,7 @@ export async function planChartsPublish(
   database: Db,
   userId: string,
   req: { siteId: string; charts: readonly ChartPublishItem[] },
-  opts: { strict?: boolean } = {},
+  opts: { strict?: boolean } = {}
 ): Promise<ChartPublishPlan> {
   const seen = new Set<string>();
   const items = req.charts.filter((c) => {
@@ -351,13 +351,13 @@ export async function planChartsPublish(
   });
   if (items.length === 0 || items.length > SITE_PUBLISH_MAX_CHARTS) {
     throw badRequest(
-      `Publish between 1 and ${SITE_PUBLISH_MAX_CHARTS} charts at a time.`,
+      `Publish between 1 and ${SITE_PUBLISH_MAX_CHARTS} charts at a time.`
     );
   }
   const { site, project, home } = await loadSiteToWiden(
     database,
     userId,
-    req.siteId,
+    req.siteId
   );
   const settings = await loadSettings(database, home);
   assertSitePolicy(settings);
@@ -371,7 +371,7 @@ export async function planChartsPublish(
         userId,
         home,
         item,
-        settings,
+        settings
       );
       if (member.slug) {
         if (slugsInBatch.has(member.slug)) {
@@ -425,7 +425,7 @@ export async function applyChartsPublish(
     userId: string;
     agentUserId?: string | null;
     sourceProposalId?: string;
-  },
+  }
 ): Promise<{
   published: PublishedChart[];
   skipped: ChartSkip[];
@@ -449,7 +449,7 @@ export async function applyChartsPublish(
           { userId: opts.userId, workspaceId: m.workspaceId },
           m.cellKey,
           m.props,
-          now,
+          now
         );
         payload =
           m.mode === "snapshot"
@@ -458,7 +458,7 @@ export async function applyChartsPublish(
         // A live chart is checked on its trial read too.
         if (m.mode === "live" && holdsUuid(data)) {
           throw badRequest(
-            "This chart's live data holds internal ids (a UUID), so it cannot be published. Group it by a named field instead.",
+            "This chart's live data holds internal ids (a UUID), so it cannot be published. Group it by a named field instead."
           );
         }
       }
@@ -469,7 +469,7 @@ export async function applyChartsPublish(
         skip(
           m,
           "READ_FAILED",
-          `This chart's data could not be read now: ${err instanceof Error ? err.message : String(err)}`,
+          `This chart's data could not be read now: ${err instanceof Error ? err.message : String(err)}`
         );
       continue;
     }
@@ -490,8 +490,8 @@ export async function applyChartsPublish(
         and(
           eq(resourceShares.siteShareId, plan.siteId),
           eq(resourceShares.resourceId, m.cellInstanceId),
-          isNull(resourceShares.revokedAt),
-        ),
+          isNull(resourceShares.revokedAt)
+        )
       )
       .limit(1);
     let row: { id: string; publicId: string | null } | undefined;
@@ -510,8 +510,8 @@ export async function applyChartsPublish(
           .where(
             and(
               eq(resourceShares.id, live.id),
-              isNull(resourceShares.revokedAt),
-            ),
+              isNull(resourceShares.revokedAt)
+            )
           )
           .returning({
             id: resourceShares.id,
@@ -554,7 +554,7 @@ export async function applyChartsPublish(
         slugLost ? "SITE_SLUG_TAKEN" : "CONFLICT",
         slugLost
           ? `SITE_SLUG_TAKEN: the slug "${m.slug}" is already used by another chart of this site.`
-          : "This chart was published into the site concurrently; publish it again.",
+          : "This chart was published into the site concurrently; publish it again."
       );
       continue;
     }
@@ -562,7 +562,7 @@ export async function applyChartsPublish(
       skip(
         m,
         "CONFLICT",
-        "This chart's publication was revoked meanwhile; publish again.",
+        "This chart's publication was revoked meanwhile; publish again."
       );
       continue;
     }
@@ -632,7 +632,7 @@ export type PublishChartsResult =
  */
 export async function publishChartsToSite(
   actor: ShareActor,
-  req: { siteId: string; charts: ChartPublishItem[]; reasoning?: string },
+  req: { siteId: string; charts: ChartPublishItem[]; reasoning?: string }
 ): Promise<PublishChartsResult> {
   const agentUserId = agentOf(actor);
   if (actor.keyType && !agentUserId) {
@@ -718,14 +718,14 @@ export async function publishChartsToSite(
  */
 export async function unpublishChartsFromSite(
   actor: ShareActor,
-  req: { siteId: string; cellInstanceIds: string[] },
+  req: { siteId: string; cellInstanceIds: string[] }
 ): Promise<{ status: "unpublished" | "none"; count: number }> {
   if (
     req.cellInstanceIds.length === 0 ||
     req.cellInstanceIds.length > SITE_PUBLISH_MAX_CHARTS
   ) {
     throw badRequest(
-      `Unpublish between 1 and ${SITE_PUBLISH_MAX_CHARTS} charts at a time.`,
+      `Unpublish between 1 and ${SITE_PUBLISH_MAX_CHARTS} charts at a time.`
     );
   }
   const database = await getDb();
@@ -751,8 +751,8 @@ export async function unpublishChartsFromSite(
         eq(resourceShares.resourceType, "cell"),
         inArray(resourceShares.resourceId, [...new Set(req.cellInstanceIds)]),
         eq(resourceShares.state, "published"),
-        isNull(resourceShares.revokedAt),
-      ),
+        isNull(resourceShares.revokedAt)
+      )
     )
     .returning({ id: resourceShares.id });
   if (updated.length > 0) {

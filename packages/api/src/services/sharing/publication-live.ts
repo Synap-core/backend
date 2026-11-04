@@ -53,7 +53,7 @@ function servedNow(row: PublicationLiveInput, now: number): boolean {
 
 export function isPublicationLive(
   row: PublicationLiveInput,
-  { via = "token", now = Date.now() }: PublicationLiveOptions = {},
+  { via = "token", now = Date.now() }: PublicationLiveOptions = {}
 ): boolean {
   // Both doors serve entities only, so a SITE row is never live here.
   if (row.resourceType !== "entity") return false;
@@ -70,7 +70,7 @@ export function isPublicationLive(
  */
 export function isSiteLive(
   row: PublicationLiveInput & { siteShareId: string | null },
-  now: number = Date.now(),
+  now: number = Date.now()
 ): boolean {
   return (
     row.resourceType === "project" &&
@@ -87,7 +87,7 @@ export function isSiteLive(
  */
 export function isSiteChartLive(
   row: PublicationLiveInput,
-  now: number = Date.now(),
+  now: number = Date.now()
 ): boolean {
   return (
     row.resourceType === "cell" && !!row.siteShareId && publishedNow(row, now)
