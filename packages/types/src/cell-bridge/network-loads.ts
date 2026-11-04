@@ -462,20 +462,27 @@ function hostList(hosts: readonly string[]): string {
 /**
  * Why this page cannot run, when it loads code from the network: the one
  * sentence the author's diagnostics and the reader's host both say. Null when
- * every line of its code is in the page.
+ * every line of its code is in the page. `page` is the page, or its loads
+ * already read (`frameNetworkLoads`), so a caller saying both sentences scans
+ * the page once.
  */
-export function frameNetworkCodeRefusal(html: string): string | null {
-  const { code } = frameNetworkLoads(html);
+export function frameNetworkCodeRefusal(
+  page: string | FrameNetworkLoads
+): string | null {
+  const { code } = typeof page === "string" ? frameNetworkLoads(page) : page;
   if (code.length === 0) return null;
   return `This page loads code from ${hostList(code)}. Pages run with no network, so that code never loads and the page does not run.`;
 }
 
 /**
  * What this page draws without, when it loads styles, fonts or images from the
- * network. Advisory: the page still runs. Null when it loads none.
+ * network. Advisory: the page still runs. Null when it loads none. `page` as
+ * in {@link frameNetworkCodeRefusal}.
  */
-export function frameNetworkAssetsNotice(html: string): string | null {
-  const { assets } = frameNetworkLoads(html);
+export function frameNetworkAssetsNotice(
+  page: string | FrameNetworkLoads
+): string | null {
+  const { assets } = typeof page === "string" ? frameNetworkLoads(page) : page;
   if (assets.length === 0) return null;
   return `This page loads styles, fonts or images from ${hostList(assets)}. Pages run with no network, so it draws without them.`;
 }
