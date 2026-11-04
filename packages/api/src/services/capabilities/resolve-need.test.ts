@@ -76,7 +76,7 @@ const CONTRACTS: Record<string, IntentContract | null> = {
     "public",
     "port",
   ]),
-  tunnel: lifecycle(["runsOn", "source"]),
+  open_tunnel: lifecycle(["runsOn", "source"]),
   dns_record: lifecycle(["zone", "type"]),
 };
 const ALL_OPS = { create: 1, status: 1, revoke: 1 };
@@ -121,8 +121,8 @@ const NO_REVOKE: InstalledProvider = {
 const TUNNEL: InstalledProvider = {
   capabilityId: "cap-tunnel",
   name: "Some Tunnel",
-  offers: { tunnel: { runsOn: "computer", source: ["local_port"] } },
-  ops: ops("tunnel"),
+  offers: { open_tunnel: { runsOn: "computer", source: ["local_port"] } },
+  ops: ops("open_tunnel"),
 };
 const DNS: InstalledProvider = {
   capabilityId: "cap-dns",
@@ -143,7 +143,11 @@ const COMPOSITE: InstalledProvider = {
     },
   },
   needs: [
-    { key: "tunnel", intent: "tunnel", constraints: { runsOn: "computer" } },
+    {
+      key: "tunnel",
+      intent: "open_tunnel",
+      constraints: { runsOn: "computer" },
+    },
     { key: "dns", intent: "dns_record" },
   ],
   compose: {
@@ -273,10 +277,10 @@ describe("resolveNeedCore — installed providers", () => {
     const LOOPY: InstalledProvider = {
       capabilityId: "cap-loopy",
       name: "Loopy Tunnel",
-      offers: { tunnel: { runsOn: "computer" } },
+      offers: { open_tunnel: { runsOn: "computer" } },
       needs: [{ key: "url", intent: "expose_http" }],
       compose: {
-        tunnel: {
+        open_tunnel: {
           create: [{ need: "url", op: "create", input: {} }],
           output: {},
         },
@@ -286,7 +290,7 @@ describe("resolveNeedCore — installed providers", () => {
     const r = resolveNeedCore(STUDIO, world([COMPOSITE, LOOPY, DNS]));
     expect(r.status).toBe("none");
     const sub = resolveNeedCore(
-      { intent: "tunnel", constraints: { runsOn: "computer" } },
+      { intent: "open_tunnel", constraints: { runsOn: "computer" } },
       world([COMPOSITE, LOOPY, DNS])
     );
     // Through the loop, the tunnel provider meets itself and stops.
