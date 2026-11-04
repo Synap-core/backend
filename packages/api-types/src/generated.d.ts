@@ -10618,6 +10618,79 @@ export interface PackageDataChange {
 	affected: number | null;
 	/** Never run by an update: an operator step. */
 	destructive: boolean;
+	/**
+	 * What changes, drawn as before → after (finding 4e4b2858). Absent when the
+	 * op has no from → to shape, or its dry run failed: `sentence` then says it.
+	 */
+	preview?: DataChangePreview;
+}
+/**
+ * A name the pod shows for a kind slug, a field key or a stored value: its
+ * label (the profile's display name, the property def's label, the option's
+ * label), else the raw token. `key` is always the raw token.
+ */
+export interface DataChangeLabel {
+	key: string;
+	label: string;
+}
+/** A kind's name, with its plural for counts ("31 posts"). */
+export interface DataChangeKindLabel extends DataChangeLabel {
+	plural: string;
+}
+/** A capped list of record titles (the pod sends at most 25), and how many more. */
+export interface DataChangeSamples {
+	titles: string[];
+	more: number;
+}
+/** One side of a change: the kind, what on it is selected, how many. */
+export interface DataChangeSide {
+	kind: DataChangeKindLabel;
+	/** The status the records sit at, or the field the change reads or writes. */
+	detail: {
+		as: "field" | "status";
+		label: DataChangeLabel;
+	} | null;
+	count: number;
+}
+/**
+ * Records the change looks at and leaves as they are, grouped by why.
+ * `fieldsSet`: they already hold a value under each of `fields` (a post
+ * already dated, in a series and a campaign stays a post).
+ */
+export interface DataChangeKeptGroup {
+	reason: "fieldsSet";
+	fields: DataChangeLabel[];
+	count: number;
+	samples: DataChangeSamples;
+}
+declare const DATA_CHANGE_PREVIEW_KINDS: readonly [
+	"rekind",
+	"renameField",
+	"renameKind",
+	"translateValues"
+];
+export type DataChangePreviewKind = (typeof DATA_CHANGE_PREVIEW_KINDS)[number];
+/**
+ * One data change as before → after. `from.count` records change (the
+ * engine's own dry-run count); `kept.count` more are looked at and left as
+ * they are, so `from.count + kept.count` is everything the change looked at.
+ */
+export interface DataChangePreview {
+	change: DataChangePreviewKind;
+	from: DataChangeSide;
+	to: DataChangeSide;
+	/** Titles of the records that change. */
+	samples: DataChangeSamples;
+	/** translateValues only: each old value, the new one, and how many hold it. */
+	values?: Array<{
+		count: number;
+		from: DataChangeLabel;
+		to: DataChangeLabel;
+	}>;
+	kept: {
+		count: number;
+		groups: DataChangeKeptGroup[];
+	} | null;
 }
 /** One compared field of one installed row. */
 export interface PackageUpdateField {

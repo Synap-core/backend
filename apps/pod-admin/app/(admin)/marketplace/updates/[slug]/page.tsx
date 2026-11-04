@@ -46,6 +46,7 @@ import {
   type PackageUpdateSummary,
 } from "../_lib/contract";
 import { en, fr } from "../_lib/copy";
+import { DataChangePreviewBlock } from "../_lib/data-change-preview";
 import { FieldCard } from "../_lib/field-card";
 import { UpdateMark } from "../_lib/update-mark";
 import { packageUpdateHref } from "../_lib/updates-tab";
@@ -366,7 +367,40 @@ function ReviewUpdate({
             <ul className="flex flex-col gap-2.5">
               {plan.dataChanges.items.map((change) => (
                 <li key={change.id} className="text-[13px] text-foreground">
-                  {change.destructive ? (
+                  {change.preview ? (
+                    // Before → after, drawn (finding 4e4b2858).
+                    <DataChangePreviewBlock
+                      preview={change.preview}
+                      control={
+                        change.destructive
+                          ? undefined
+                          : (titleId) => (
+                              <input
+                                type="checkbox"
+                                className="mt-1"
+                                aria-labelledby={titleId}
+                                checked={accepted.has(change.id)}
+                                disabled={busy}
+                                onChange={(e) =>
+                                  setAccepted((prev) => {
+                                    const next = new Set(prev);
+                                    if (e.target.checked) next.add(change.id);
+                                    else next.delete(change.id);
+                                    return next;
+                                  })
+                                }
+                              />
+                            )
+                      }
+                      footer={
+                        change.destructive ? (
+                          <span className="text-[12px] text-status-stale">
+                            {t("records.destructive")}
+                          </span>
+                        ) : undefined
+                      }
+                    />
+                  ) : change.destructive ? (
                     // Never run by an update: shown, with no box.
                     <span className="flex flex-col">
                       <span>{change.sentence}</span>
@@ -391,7 +425,9 @@ function ReviewUpdate({
                         }
                       />
                       <span className="flex flex-col">
-                        <span>{change.sentence}</span>
+                        <span className="whitespace-pre-line">
+                          {change.sentence}
+                        </span>
                         {change.affected !== null && (
                           <span className="text-[12px] text-foreground/65">
                             {t("records.affected", { n: change.affected })}

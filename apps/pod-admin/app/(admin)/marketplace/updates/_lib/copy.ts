@@ -120,6 +120,27 @@ export const en = {
   "records.affected": "{n, plural, one {# record} other {# records}}",
   "records.note":
     "Nothing is deleted; the old values stay in each record’s history.",
+  "preview.title.rekind": "{from} at {status} become {to}",
+  "preview.title.renameField": "A field is renamed on {kinds}",
+  "preview.title.renameKind": "The kind {from} is renamed {to}",
+  "preview.title.translateValues":
+    "The values of {field} on {kinds} are translated",
+  "preview.scope":
+    "{n, plural, one {# {kind} looked at} other {# {kinds} looked at}}",
+  "preview.field": "field “{field}”",
+  "preview.before": "Before",
+  "preview.after": "After",
+  "preview.note.sameRecords":
+    "Same records: content, links and history are kept.",
+  "preview.note.valuesMove": "Every value moves as it is.",
+  "preview.note.value": "{from} becomes {to} ({n})",
+  "preview.see":
+    "{n, plural, one {See the # {kind}} other {See the # {kinds}}}",
+  "preview.hide": "Hide the list",
+  "preview.more": "and {n} more",
+  "preview.kept.title": "Stay as {kinds}",
+  "preview.kept.fieldsSet": "{fields} already set",
+  "preview.kept.see": "{n, plural, one {See it} other {See the #}}",
   "why.title": "What the catalog changed",
   "why.version": "Installed {from} · catalog now {to}",
   "after.title": "What applying does",
@@ -306,6 +327,26 @@ export const fr: Catalog<typeof en> = {
   "records.affected": "{n, plural, one {# fiche} other {# fiches}}",
   "records.note":
     "Rien n’est supprimé ; les anciennes valeurs restent dans l’historique de chaque fiche.",
+  "preview.title.rekind": "{from} à {status} deviennent {to}",
+  "preview.title.renameField": "Un champ change de nom sur {kinds}",
+  "preview.title.renameKind": "Le type {from} s’appelle désormais {to}",
+  "preview.title.translateValues":
+    "Les valeurs de {field} sur {kinds} sont traduites",
+  "preview.scope":
+    "{n, plural, one {# fiche examinée} other {# fiches examinées}}",
+  "preview.field": "champ « {field} »",
+  "preview.before": "Avant",
+  "preview.after": "Après",
+  "preview.note.sameRecords":
+    "Mêmes fiches : contenu, liens et historique sont conservés.",
+  "preview.note.valuesMove": "Chaque valeur est déplacée telle quelle.",
+  "preview.note.value": "{from} devient {to} ({n})",
+  "preview.see": "{n, plural, one {Voir la fiche} other {Voir les # fiches}}",
+  "preview.hide": "Masquer la liste",
+  "preview.more": "et {n} de plus",
+  "preview.kept.title": "Restent des {kinds}",
+  "preview.kept.fieldsSet": "Déjà renseigné : {fields}",
+  "preview.kept.see": "{n, plural, one {La voir} other {Voir les #}}",
   "why.title": "Ce que le catalogue a changé",
   "why.version": "Installé {from} · catalogue actuel {to}",
   "after.title": "Ce que fait l’application",
