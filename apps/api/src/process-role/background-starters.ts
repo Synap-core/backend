@@ -529,6 +529,17 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         log.info("Registered import-corpus handler (IoC)");
       }
 
+      // IoC: the store-first bulk import (`POST /import/enqueue-units`). jobs
+      // owns the `import-units` queue; the unit door (the governed create,
+      // then the attach gate) lives in api, so the handler is filled here.
+      {
+        const { registerImportUnitsHandler } =
+          await import("@synap/jobs/workers/import-units-worker.js");
+        const { runImportUnitsJob } = await import("@synap/api");
+        registerImportUnitsHandler((p) => runImportUnitsJob(p));
+        log.info("Registered import-units handler (IoC)");
+      }
+
       // IoC: a LARGE approval, applied in the background. jobs owns the
       // `proposal-approve` queue; the approval door lives in api, so the
       // handler is filled here. Every gate already ran in the approve

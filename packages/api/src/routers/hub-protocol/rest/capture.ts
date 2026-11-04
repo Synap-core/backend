@@ -16,12 +16,8 @@ import {
 } from "../../capture-follow-up.js";
 import { captureRouter } from "../../capture.js";
 import { getDefaultActiveService } from "../../../utils/intelligence-routing.js";
-import {
-  storeEntitySourceBlob,
-  SourceBlobTooLargeError,
-  SourceBlobEmptyError,
-  SOURCE_BLOB_MAX_BYTES,
-} from "../../../utils/store-entity-source-blob.js";
+import { SOURCE_BLOB_MAX_BYTES } from "../../../utils/store-entity-source-blob.js";
+import { storeImportUnit } from "../../../services/import/store-unit.js";
 import { db } from "@synap/database";
 import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { createHubProtocolCallerContext } from "../utils.js";
@@ -1303,7 +1299,7 @@ export function registerCaptureRoutes(app: HubHono): void {
    *
    * Multipart fields:
    *   title (required), content?, profileSlug? (default note), properties? (JSON),
-   *   source? (cli|…), file? (optional binary provenance)
+   *   source? (cli|…), idempotencyKey? (stable unit id), file? (optional binary provenance)
    * Omit workspaceId for pod-wide kinds (note) — entityScope decides placement.
    */
   app.post("/import/store-unit", async (c) => {
@@ -1340,6 +1336,12 @@ export function registerCaptureRoutes(app: HubHono): void {
     const content = typeof body.content === "string" ? body.content : undefined;
     const description =
       typeof body.description === "string" ? body.description : undefined;
+    // The caller's stable id for this unit (e.g. `superwhisper:<recordingId>`):
+    // the create door's idempotency key, so a re-sent unit lands on ONE entity.
+    const idempotencyKey =
+      typeof body.idempotencyKey === "string" && body.idempotencyKey.trim()
+        ? body.idempotencyKey.trim()
+        : undefined;
     // `source` arrives as a raw multipart field and is validated downstream by
     // `entities.createEntity`'s zod enum. Casting it through as "cli" turned a
     // CLIENT input fault into a 500 (the zod throw surfaces in the generic catch
@@ -1368,7 +1370,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         : undefined;
     // Item 3 Part 3: confine a bound service key to its workspace — clamp the
     // resolved workspace before it flows to the acting ctx, the createEntity
-    // input, and the DIRECT storeEntitySourceBlob write below.
+    // input, and the source-file stage below.
     const workspaceId = getConfinedWorkspace(c, workspaceIdField);
 
     const acting = await resolveActingContext(c, {
@@ -1402,100 +1404,48 @@ export function registerCaptureRoutes(app: HubHono): void {
         workspaceId: workspaceId ?? null,
         userId,
       });
-      const created = await caller.entities.createEntity({
+      // The ONE unit implementation, shared with the background import job
+      // (`POST /import/enqueue-units`): the governed create, then the file
+      // through the attach gate. A parked create returns the proposal receipt
+      // and stores no file (there is no entity to anchor it to).
+      const result = await storeImportUnit({
+        createEntity: (input) => caller.entities.createEntity(input),
         userId,
-        profileSlug,
-        title,
-        ...(description ? { description } : {}),
-        ...(content ? { content } : {}),
-        properties,
-        ...(workspaceId ? { workspaceId } : {}),
-        source,
+        agentUserId: (c.get("agentUserId") as string | undefined) ?? null,
+        unit: {
+          title,
+          profileSlug,
+          ...(content ? { content } : {}),
+          ...(description ? { description } : {}),
+          properties,
+          source,
+          workspaceId: workspaceId ?? null,
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+        },
+        ...(fileBuffer && fileMime
+          ? {
+              file: {
+                kind: "bytes" as const,
+                buffer: fileBuffer,
+                mimeType: fileMime,
+                filename: fileName ?? "source.bin",
+              },
+            }
+          : {}),
       });
 
-      // The create door is GOVERNED: when the ladder parks the write it returns
-      // `{ status: "proposed", entity: null }` and NO `id`. Reading `created.id`
-      // blindly produced `undefined`, which was then handed to
-      // `storeEntitySourceBlob` as the entityId — uploading the bytes and
-      // creating a `documents` row bound to nothing, immediately orphaned, while
-      // the response still reported an `id` of `undefined`. Branch on the status
-      // and return the proposal receipt instead.
-      const createdStatus = (created as { status?: string }).status;
-      if (createdStatus === "proposed" || typeof created.id !== "string") {
-        return jsonGoverned(c, {
-          status: "proposed",
-          message:
-            (created as { message?: string }).message ??
-            "Entity creation proposed for review",
-          proposalId: (created as { proposalId?: string }).proposalId,
-          proposalType: (created as { proposalType?: string }).proposalType,
-          reviewUrl: (created as { reviewUrl?: string }).reviewUrl,
-          profileSlug,
-          title,
-          // The blob is NOT stored: there is no entity to anchor it to, and
-          // staging it here would leak on rejection. Say so rather than
-          // reporting a silent success.
-          audio: null,
-          audioSkippedReason: fileBuffer?.length ? "entity_proposed" : null,
-        });
-      }
-
-      const entityId = created.id as string;
-      let audio: {
-        documentId: string;
-        storageKey: string;
-        size: number;
-        mimeType: string;
-      } | null = null;
-      let audioSkippedReason: string | undefined;
-
-      if (fileBuffer && fileBuffer.length > 0 && fileMime) {
-        try {
-          const stored = await storeEntitySourceBlob({
-            database: db,
-            userId,
-            entityId,
-            buffer: fileBuffer,
-            mimeType: fileMime,
-            filename: fileName,
-            workspaceId: workspaceId ?? null,
-          });
-          if (stored.status === "proposed") {
-            // Governance parked the attach. The bytes ARE staged and ride the
-            // proposal, so approval attaches them — report it honestly instead
-            // of claiming the file landed.
-            audioSkippedReason = "proposed";
-          } else {
-            audio = {
-              documentId: stored.documentId,
-              storageKey: stored.storageKey,
-              size: stored.size,
-              mimeType: stored.mimeType,
-            };
-          }
-        } catch (err) {
-          if (err instanceof SourceBlobTooLargeError) {
-            audioSkippedReason = "over_limit";
-          } else if (err instanceof SourceBlobEmptyError) {
-            audioSkippedReason = "empty";
-          } else {
-            // Entity already created — report partial success (same as keepRaw best-effort).
-            logger.warn(
-              { err, entityId, userId },
-              "store-unit: source blob failed (entity kept)"
-            );
-            audioSkippedReason = "storage_error";
-          }
-        }
+      if (result.status === "proposed") {
+        const { status: _status, ...receipt } = result;
+        return jsonGoverned(c, { status: "proposed", ...receipt });
       }
 
       return c.json({
-        id: entityId,
-        entityId,
-        profileSlug,
-        title,
-        audio,
-        audioSkippedReason: audioSkippedReason ?? null,
+        id: result.entityId,
+        entityId: result.entityId,
+        profileSlug: result.profileSlug,
+        title: result.title,
+        audio: result.audio,
+        audioSkippedReason: result.audioSkippedReason,
       });
     } catch (err) {
       logger.error({ err, userId }, "POST /import/store-unit failed");
