@@ -1,7 +1,7 @@
 /**
  * At the APPLIER: a definition's manifest (plan U3). Driven through
  * `createCapabilityFromDefinition` against PGlite (every schema table), with the
- * `expose_http` and `tunnel` rows and contracts read out of migration 0398, so
+ * `expose_http` and `open_tunnel` rows and contracts read out of migration 0398, so
  * the contracts are the ones a pod is seeded with. Each case rules out one
  * wrong applier:
  *  - `needs` / `offers` / `compose` / `services` not reaching
@@ -107,7 +107,7 @@ const OFFERS = {
   },
 };
 const NEEDS = [
-  { key: "tunnel", intent: "tunnel", constraints: { runsOn: "computer" } },
+  { key: "tunnel", intent: "open_tunnel", constraints: { runsOn: "computer" } },
 ];
 const DIGEST = "b".repeat(64);
 const SERVICES = [
@@ -227,7 +227,7 @@ describe("the applier refuses a manifest the rule refuses, before any write", ()
         {
           ...verb("create"),
           name: "x_publish",
-          intent: "tunnel",
+          intent: "open_tunnel",
           intentOp: "publish",
         },
       ])

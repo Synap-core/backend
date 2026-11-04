@@ -43,7 +43,7 @@ const CONTRACTS: Record<string, IntentContract | null> = {
     ["auth", "source", "hostname", "runsOn", "public", "port"],
     ["status", "renew", "revoke"]
   ),
-  tunnel: lifecycle(["runsOn", "source"], ["status", "renew", "revoke"]),
+  open_tunnel: lifecycle(["runsOn", "source"], ["status", "renew", "revoke"]),
   dns_record: lifecycle(["zone", "type"]),
   render_video: {
     version: 1,
@@ -132,7 +132,11 @@ const COMPOSITE = {
     },
   },
   needs: [
-    { key: "tunnel", intent: "tunnel", constraints: { runsOn: "computer" } },
+    {
+      key: "tunnel",
+      intent: "open_tunnel",
+      constraints: { runsOn: "computer" },
+    },
     { key: "dns", intent: "dns_record" },
   ],
   compose: {
@@ -196,7 +200,7 @@ describe("the manifest rule accepts what Stage 1 ships", () => {
     expect(manifestIntents(COMPOSITE).sort()).toEqual([
       "dns_record",
       "expose_http",
-      "tunnel",
+      "open_tunnel",
     ]);
     expect(manifestIntents(HYPERFRAMES).sort()).toEqual([
       "expose_http",
@@ -310,13 +314,13 @@ describe("the manifest rule refuses", () => {
         needs: [
           { key: "dns", intent: "dns_record", constraints: { proxied: true } },
         ],
-        offers: { tunnel: { runsOn: "computer", vendor: "acme" } },
+        offers: { open_tunnel: { runsOn: "computer", vendor: "acme" } },
       },
       CTX
     );
     expect(problems).toEqual([
       'needs.0: "proxied" is not a constraint of dns_record (it has zone, type).',
-      'offers.tunnel: "vendor" is not a constraint of tunnel (it has runsOn, source).',
+      'offers.open_tunnel: "vendor" is not a constraint of open_tunnel (it has runsOn, source).',
     ]);
   });
 
