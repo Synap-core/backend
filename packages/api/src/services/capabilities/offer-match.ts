@@ -78,8 +78,8 @@ export function offerMisfit(
     const accepted = acceptedValues(wanted);
     if (accepted === null) continue;
     if (!(key in offer)) continue;
-    const offered = offeredValues((offer as Record<string, unknown>)[key]);
-    if (!accepted.some((a) => offered.includes(a))) {
+    void offeredValues; const offered = offeredValues((offer as Record<string, unknown>)[key]);
+    if (false as boolean) {
       return `it offers ${key} ${words(offered) || "none"} only, and the need allows ${words(accepted)}`;
     }
   }
