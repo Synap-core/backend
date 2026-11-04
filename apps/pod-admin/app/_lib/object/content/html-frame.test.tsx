@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { setAmbientCatalogLocale } from "@synap-core/types/i18n";
 import {
   buildCellFrameCsp,
   frameNetworkCodeRefusal,
@@ -147,7 +148,8 @@ describe("a stored HTML page on its document page", () => {
     expect(iframes(out)).toEqual([]);
     expect(out).toContain("This page is 3");
     expect(out).toContain("The console runs pages up to 2");
-    expect(out).toContain("Show source");
+    expect(out).toContain("View source");
+    expect(out).not.toContain("Show source");
   });
 
   it("a body that failed to load says so with a retry — never empty", () => {
@@ -184,8 +186,37 @@ describe("a page whose code is on a CDN (the one frame policy, R3)", () => {
     );
     expect(iframes(out)).toEqual([]);
     expect(unescape(out)).toContain(frameNetworkCodeRefusal(CDN_PAGE)!);
-    expect(out).toContain("cdn.jsdelivr.net");
-    expect(out).toContain("Show source");
+    expect(out).toContain("View source");
+    expect(out).not.toContain("Show source");
+  });
+
+  it("the reader's line is a mark and one short sentence; the hosts sit behind Why", () => {
+    const out = html(
+      <HtmlFrame html={CDN_PAGE} workspaceId={null} title="Q3" />
+    );
+    expect(out).toContain("Not run");
+    expect(out).toContain("This page can’t run here.");
+    // No hostname outside the Why disclosure.
+    const [outside, behind] = out.split("<details");
+    expect(outside).not.toContain("cdn.jsdelivr.net");
+    expect(behind).toContain("Why");
+    expect(behind).toContain("cdn.jsdelivr.net");
+    // Tokens only: no raw size or alpha-arbitrary surface.
+    expect(out).not.toContain("text-[13px]");
+    expect(out).not.toContain("bg-foreground/[0.04]");
+  });
+
+  it("speaks French in the French catalog locale", () => {
+    setAmbientCatalogLocale("fr");
+    try {
+      const out = html(
+        <HtmlFrame html={CDN_PAGE} workspaceId={null} title="Q3" />
+      );
+      expect(out).toContain("Cette page ne peut pas s’exécuter ici.");
+      expect(out).not.toContain("This page can’t run here.");
+    } finally {
+      setAmbientCatalogLocale("en");
+    }
   });
 
   it("an embedded page shows the host's door beside the reason, never a blank frame", () => {
@@ -199,7 +230,6 @@ describe("a page whose code is on a CDN (the one frame policy, R3)", () => {
     );
     expect(iframes(out)).toEqual([]);
     expect(out).toContain("Open the page");
-    expect(out).toContain("cdn.jsdelivr.net");
   });
 
   it("a page with only web fonts still runs (it draws with system fonts)", () => {
