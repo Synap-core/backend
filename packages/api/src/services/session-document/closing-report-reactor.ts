@@ -13,10 +13,28 @@
  * `{ status: "written", documentId, at }` or `{ status: "failed", reason, at }`
  * — and logs the failure at error level. A skipped session (a receipt, an
  * automation run, nothing to report) is not stamped: nothing was attempted.
+ *
+ * THE POD WRITES IT, NOT THE CLOSER. Reactors run inline, inside the request
+ * that closed the session, so the closing AGENT's request scope is still open
+ * here (`runWithActingAgent`). The write gate reads that ambient agent first
+ * (`getActingAgentUserId() ?? supplied`, `utils/permission-check.ts`), so a
+ * report written in that scope was governed AS the closing agent: each section
+ * became a proposal against its pending cap, and the report failed
+ * "(proposed)" (finding 39fee1e4, 3 Nov). The report is a deterministic
+ * projection of stored facts on the owner's behalf, so it runs OUTSIDE the
+ * request (`runOutsideRequestContext`): no acting agent, no calling key's
+ * grant. An agent calling the section door itself is still in its own scope
+ * and still governed.
  */
 
 import { createLogger } from "@synap-core/core";
-import { db, eq, drizzleSql, focusSessions } from "@synap/database";
+import {
+  db,
+  eq,
+  drizzleSql,
+  focusSessions,
+  runOutsideRequestContext,
+} from "@synap/database";
 import { registerReactor, type Reactor } from "@synap/events";
 import {
   FOCUS_SESSION_SUBJECT_TYPE,
@@ -51,7 +69,9 @@ export const closingReportReactor: Reactor = {
       (payload.data?.sessionId as string | undefined) ?? payload.subjectId;
     if (!sessionId) return;
     try {
-      const result = await writeClosingReport(sessionId);
+      const result = await runOutsideRequestContext(() =>
+        writeClosingReport(sessionId)
+      );
       if (result.status === "skipped") return;
       await stampOutcome(sessionId, {
         status: "written",
