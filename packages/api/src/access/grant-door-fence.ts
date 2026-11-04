@@ -929,8 +929,10 @@ export const GRANT_OWNER_WIDE_REST_DOORS: readonly RegExp[] = [
  *    PERSON, usable in every space; `onBehalfOfUserId` binds it to another
  *    member.
  *  - `DELETE /messaging/accounts/:id` (disconnects the person's messaging
- *    account at the provider), `POST /messaging/accounts/sync` (rewrites the
- *    person's account mirror, registers provider webhooks). The send through
+ *    account at the provider; since 2026-11-04 it also passes the gate,
+ *    `messaging/delete_account`, so an unbounded agent key's call is a
+ *    proposal), `POST /messaging/accounts/sync` (rewrites the person's
+ *    account mirror, registers provider webhooks). The send through
  *    an account is NOT here: it checks `messaging.send` in the conversation's
  *    space (`sendExternalMessage`). Neither is `POST
  *    /messaging/accounts/:id/import-history` (founder, 2026-11-03): its

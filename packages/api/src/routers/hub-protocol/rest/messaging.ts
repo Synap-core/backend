@@ -56,7 +56,16 @@ import {
   proposedMessageFor,
 } from "../../../utils/permission-check.js";
 import type { Context } from "hono";
-import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
+import {
+  canUserSeeChannel,
+  channelVisibilityWhere,
+} from "../../../utils/channel-visibility.js";
+import {
+  deleteLinkedExternalChannel,
+  disconnectOwnMessagingAccount,
+  findVisibleLinkedExternalChannel,
+} from "../../../services/connectors/owner-messaging-writes.js";
+import { isUuid } from "@synap-core/types/property-render";
 import { jsonGoverned } from "../proposal-response.js";
 
 /**
@@ -141,6 +150,16 @@ const MessageSchema = z
       .optional(),
   })
   .openapi("MessagingMessage");
+
+/** A governed messaging write an agent asked for: proposed, not done. */
+const GovernedProposedSchema = z
+  .object({
+    status: z.literal("proposed"),
+    proposalId: z.string(),
+    reviewUrl: z.string().optional(),
+    message: z.string(),
+  })
+  .openapi("MessagingWriteProposed");
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -382,6 +401,7 @@ export function registerMessagingRoutes(app: HubHono): void {
         // yet, or only rows of accounts the provider no longer has, e.g. a
         // retired v1 Unipile account), claim the live accounts no one else
         // holds.
+        // write-gate: ungated by design — mirrors the provider's live account list into the caller's own rows (only accounts no one holds); no content, nothing a proposal could ask the person about.
         if (
           liveAccounts.length > 0 &&
           !dbAccounts.some((row) => liveByExternalId.has(row.externalId))
@@ -536,7 +556,26 @@ export function registerMessagingRoutes(app: HubHono): void {
         const liveAccounts = await connector.getAccounts(userId);
         if (liveAccounts.length === 0) return c.json({ synced: 0 }, 200);
 
-        for (const account of liveAccounts) {
+        // The provider lists every account of the pod's key, whoever connected
+        // it (`getAccounts` ignores the user). An account another member holds
+        // stays theirs: claiming it gave the caller a row to send and import
+        // as that member (the same rule as the auto-seed in GET
+        // /messaging/accounts).
+        const heldByOthers = new Set(
+          (
+            await db.query.messagingAccounts.findMany({
+              columns: { externalId: true, userId: true },
+            })
+          )
+            .filter((row) => row.userId !== userId)
+            .map((row) => row.externalId)
+        );
+        const mine = liveAccounts.filter(
+          (account) => !heldByOthers.has(account.externalId)
+        );
+
+        // write-gate: ungated by design — mirrors the provider's status and name of the caller's own accounts into their rows and claims only accounts no one holds; no content, the GET above does the same on every read.
+        for (const account of mine) {
           await db
             .insert(messagingAccounts)
             .values({
@@ -572,7 +611,7 @@ export function registerMessagingRoutes(app: HubHono): void {
           });
         }
 
-        return c.json({ synced: liveAccounts.length }, 200);
+        return c.json({ synced: mine.length }, 200);
       } catch (err) {
         logger.error({ err, userId }, "POST /messaging/accounts/sync failed");
         return c.json(
@@ -784,12 +823,19 @@ export function registerMessagingRoutes(app: HubHono): void {
   );
 
   // ── DELETE /messaging/accounts/:accountId ─────────────────────────────────
+  // Disconnects the person's account at the provider: reconnecting needs their
+  // own login, so an agent ASKS (2026-11-04, finding 6a6bcb5f): its call passes
+  // the gate (`messaging/delete_account`, a destructive verb) and becomes a
+  // proposal the person approves (`proposals/executors/messaging.ts`). A
+  // person disconnects directly, as before. The fence keeps the route
+  // owner-wide (an unbounded key only).
   app.openapi(
     createRoute({
       method: "delete",
       path: "/messaging/accounts/{accountId}",
       tags: ["Messaging"],
-      summary: "Disconnect a messaging account",
+      summary:
+        "Disconnect a messaging account (an agent's call becomes a proposal)",
       request: {
         params: z.object({ accountId: z.string() }),
       },
@@ -804,6 +850,17 @@ export function registerMessagingRoutes(app: HubHono): void {
                 .openapi("MessagingDeleteResult"),
             },
           },
+        },
+        202: {
+          description:
+            "An agent's call, proposed for the person's review (`{ status: 'proposed', proposalId, reviewUrl }`)",
+          content: {
+            "application/json": { schema: GovernedProposedSchema },
+          },
+        },
+        403: {
+          description: "Refused by the key's grant or the review rules",
+          content: { "application/json": { schema: ErrorSchema } },
         },
         500: {
           description: "Internal error",
@@ -835,20 +892,39 @@ export function registerMessagingRoutes(app: HubHono): void {
 
         if (!row) return c.json({ success: true }, 200);
 
-        // Mark as disconnected in DB first so it's hidden immediately
-        await db
-          .update(messagingAccounts)
-          .set({ status: "disconnected", updatedAt: new Date() })
-          .where(eq(messagingAccounts.id, accountId));
-
-        // Actually remove from Unipile so sync doesn't revive it. Non-fatal.
-        connector.deleteAccount(row.externalId).catch((err) => {
-          logger.warn(
-            { err, externalId: row.externalId },
-            "DELETE /messaging/accounts: Unipile delete failed (non-fatal)"
-          );
+        // The gate decides for every caller: a person disconnects directly;
+        // an agent's ask is always a proposal (`delete` is a destructive verb).
+        const perm = await checkPermissionOrPropose({
+          userId,
+          agentUserId: c.get("agentUserId") as string | undefined,
+          workspaceId: null,
+          subjectType: "messaging",
+          action: "delete_account",
+          reasoning:
+            "Disconnect this messaging account: it is removed at the provider, and reconnecting it needs the owner's own login.",
+          data: {
+            id: row.id,
+            accountId: row.id,
+            provider: row.provider,
+            name: row.displayName || row.provider,
+          },
         });
+        if ("denied" in perm && perm.denied) {
+          return c.json({ error: perm.reason ?? "Not permitted" }, 403);
+        }
+        if ("proposalId" in perm && perm.proposalId) {
+          return jsonGoverned(c, {
+            status: "proposed" as const,
+            proposalId: perm.proposalId,
+            reviewUrl: perm.reviewUrl,
+            message: proposedMessageFor(
+              perm.proposalType,
+              "Disconnecting this account was proposed: it happens once its owner approves it."
+            ),
+          }) as never;
+        }
 
+        await disconnectOwnMessagingAccount(connector, row);
         return c.json({ success: true }, 200);
       } catch (err) {
         logger.error(
@@ -1224,13 +1300,19 @@ export function registerMessagingRoutes(app: HubHono): void {
   );
 
   // ── DELETE /messaging/channels/:channelId ─────────────────────────────────
-  // Unlinks an external channel from an entity (deletes the channel row).
+  // Unlinks an external channel from an entity: deletes the channel row and,
+  // by cascade, every mirrored message. Only a channel the caller can see (the
+  // channel floor every channel write door uses; it reached any member's
+  // channel by id before). An agent ASKS (2026-11-04, finding 6a6bcb5f): its
+  // call passes the gate (`channel/delete_external`, a destructive verb) and
+  // becomes a proposal the person approves; a person unlinks directly.
   app.openapi(
     createRoute({
       method: "delete",
       path: "/messaging/channels/{channelId}",
       tags: ["Messaging"],
-      summary: "Unlink an external conversation from a CRM entity",
+      summary:
+        "Unlink an external conversation from a CRM entity (an agent's call becomes a proposal)",
       request: {
         params: z.object({ channelId: z.string() }),
       },
@@ -1245,6 +1327,17 @@ export function registerMessagingRoutes(app: HubHono): void {
                 .openapi("UnlinkChannelResult"),
             },
           },
+        },
+        202: {
+          description:
+            "An agent's call, proposed for the person's review (`{ status: 'proposed', proposalId, reviewUrl }`)",
+          content: {
+            "application/json": { schema: GovernedProposedSchema },
+          },
+        },
+        403: {
+          description: "Refused by the key's grant or the review rules",
+          content: { "application/json": { schema: ErrorSchema } },
         },
         404: {
           description: "Channel not found",
@@ -1261,18 +1354,46 @@ export function registerMessagingRoutes(app: HubHono): void {
       if (denied) return denied as never;
       const userId = c.get("userId") as string;
       const { channelId } = c.req.valid("param");
+      if (!isUuid(channelId))
+        return c.json({ error: "Channel not found" }, 404) as never;
       try {
-        const [deleted] = await db
-          .delete(channels)
-          .where(
-            and(
-              eq(channels.id as any, channelId),
-              eq(channels.channelType, ChannelType.EXTERNAL),
-              eq(channels.contextObjectType, "entity")
-            )
-          )
-          .returning({ id: channels.id });
+        // 404 for a channel the caller cannot see: no existence oracle.
+        const channel = await findVisibleLinkedExternalChannel(
+          userId,
+          channelId
+        );
+        if (!channel) return c.json({ error: "Channel not found" }, 404);
 
+        const agentUserId = c.get("agentUserId") as string | undefined;
+        const perm = await checkPermissionOrPropose({
+          userId,
+          agentUserId,
+          workspaceId: channel.workspaceId,
+          subjectType: "channel",
+          action: "delete_external",
+          // An agent's ask its key's grant does not name is still filed for
+          // the person (as the history import's, founder 2026-11-03).
+          proposeBeyondGrant: true,
+          reasoning:
+            "Unlink this external conversation from its record: the channel and the messages mirrored into it are deleted from the pod (the conversation stays at the provider).",
+          data: { id: channel.id, channelId: channel.id },
+        });
+        if ("denied" in perm && perm.denied) {
+          return c.json({ error: perm.reason ?? "Not permitted" }, 403);
+        }
+        if ("proposalId" in perm && perm.proposalId) {
+          return jsonGoverned(c, {
+            status: "proposed" as const,
+            proposalId: perm.proposalId,
+            reviewUrl: perm.reviewUrl,
+            message: proposedMessageFor(
+              perm.proposalType,
+              "Unlinking this conversation was proposed: it happens once the person approves it."
+            ),
+          }) as never;
+        }
+
+        const deleted = await deleteLinkedExternalChannel(channel.id);
         if (!deleted) return c.json({ error: "Channel not found" }, 404);
         return c.json({ success: true }, 200);
       } catch (err) {
@@ -1323,8 +1444,16 @@ export function registerMessagingRoutes(app: HubHono): void {
     async (c) => {
       const denied = writeScopeDenied(c);
       if (denied) return denied as never;
+      const userId = c.get("userId") as string;
       const { channelId } = c.req.valid("param");
+      if (!isUuid(channelId))
+        return c.json({ error: "Channel not found" }, 404) as never;
       try {
+        // Only a channel the caller can see (it flipped any member's channel
+        // by id before); 404, no existence oracle.
+        if (!(await canUserSeeChannel(db, channelId, userId)))
+          return c.json({ error: "Channel not found" }, 404);
+        // write-gate: ungated by design — the caller's own read state of a conversation they can see (one flag, set again by the next inbound message); a proposal to mark a message read would ask the person nothing.
         const [updated] = await db
           .update(channels)
           .set({

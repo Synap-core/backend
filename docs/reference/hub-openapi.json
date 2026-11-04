@@ -4681,6 +4681,16 @@
         "properties": { "success": { "type": "boolean" } },
         "required": ["success"]
       },
+      "MessagingWriteProposed": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "enum": ["proposed"] },
+          "proposalId": { "type": "string" },
+          "reviewUrl": { "type": "string" },
+          "message": { "type": "string" }
+        },
+        "required": ["status", "proposalId", "message"]
+      },
       "ConversationsResult": {
         "type": "object",
         "properties": {
@@ -26774,7 +26784,7 @@
     "/messaging/accounts/{accountId}": {
       "delete": {
         "tags": ["Messaging"],
-        "summary": "Disconnect a messaging account",
+        "summary": "Disconnect a messaging account (an agent's call becomes a proposal)",
         "parameters": [
           {
             "schema": { "type": "string" },
@@ -26794,6 +26804,16 @@
               }
             }
           },
+          "202": {
+            "description": "An agent's call, proposed for the person's review (`{ status: 'proposed', proposalId, reviewUrl }`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingWriteProposed"
+                }
+              }
+            }
+          },
           "400": {
             "description": "Bad request — the wrapped door refused the input",
             "content": {
@@ -26803,7 +26823,7 @@
             }
           },
           "403": {
-            "description": "Forbidden",
+            "description": "Refused by the key's grant or the review rules",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -27003,7 +27023,7 @@
     "/messaging/channels/{channelId}": {
       "delete": {
         "tags": ["Messaging"],
-        "summary": "Unlink an external conversation from a CRM entity",
+        "summary": "Unlink an external conversation from a CRM entity (an agent's call becomes a proposal)",
         "parameters": [
           {
             "schema": { "type": "string" },
@@ -27021,6 +27041,16 @@
               }
             }
           },
+          "202": {
+            "description": "An agent's call, proposed for the person's review (`{ status: 'proposed', proposalId, reviewUrl }`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingWriteProposed"
+                }
+              }
+            }
+          },
           "400": {
             "description": "Bad request — the wrapped door refused the input",
             "content": {
@@ -27030,7 +27060,7 @@
             }
           },
           "403": {
-            "description": "Forbidden",
+            "description": "Refused by the key's grant or the review rules",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
