@@ -27,6 +27,7 @@ import {
   PRESENCE_INVALID,
   PRESENCE_REQUIRED,
   PRESENCE_USED,
+  sensitiveApprovalReason,
   type PresenceProof,
   type PresenceRefusalCode,
 } from "@synap-core/types/presence";
@@ -45,11 +46,47 @@ export interface PresenceProgress {
  * refused the last try (the dialog says why it asks again). Rejects with
  * {@link PresenceDeclined} when the person does not confirm.
  */
+/**
+ * `upFront`: asked BEFORE the first try, because the request is sensitive
+ * (`needsPresence`). The person is asked only when they can prove (a passkey
+ * this browser can use); otherwise, or when the challenge cannot be read, it
+ * resolves null and the approval goes without a proof: the pod then decides
+ * (`report` lets it through; `enforce` refuses it and the reactive ask, with
+ * its failed-read and no-passkey states, follows). Never null without it.
+ */
+export interface ProveOptions {
+  upFront?: boolean;
+}
+
 export type ProvePresence = (
   subject: PresenceSubject,
   refusal: PresenceRefusalCode,
-  progress?: PresenceProgress
-) => Promise<PresenceProof>;
+  progress?: PresenceProgress,
+  options?: ProveOptions
+) => Promise<PresenceProof | null>;
+
+/**
+ * Does approving this request need a proof of presence? The pod's own test
+ * (`services/presence/gate.ts` `presenceReasonFor`): a sensitive approval
+ * (`sensitiveApprovalReason`, the ONE list) or a request filed AS the person.
+ * Clients prove such a request UP FRONT, so `report` mode already runs the
+ * proof path that `enforce` will require (review bf96d410, lane A).
+ */
+export function needsPresence(proposal: {
+  targetType?: string | null;
+  proposalType?: string | null;
+  data?: unknown;
+}): boolean {
+  const data = proposal.data as { asPerson?: unknown } | null | undefined;
+  if (data?.asPerson === true) return true;
+  if (!proposal.targetType || !proposal.proposalType) return false;
+  return (
+    sensitiveApprovalReason({
+      targetType: proposal.targetType,
+      proposalType: proposal.proposalType,
+    }) !== null
+  );
+}
 
 const PRESENCE_CODES: ReadonlySet<string> = new Set([
   PRESENCE_REQUIRED,
@@ -114,17 +151,51 @@ export async function approveWithPresence<T>(args: {
   prove: ProvePresence;
   attempt: (presence?: PresenceProof) => Promise<T>;
   progress?: PresenceProgress;
+  /** The request is sensitive: ask before the first try (`needsPresence`). */
+  upFront?: boolean;
 }): Promise<T> {
   let presence: PresenceProof | undefined;
+  if (args.upFront) {
+    presence =
+      (await args.prove(args.subject, PRESENCE_REQUIRED, args.progress, {
+        upFront: true,
+      })) ?? undefined;
+  }
   for (let proofs = 0; ; proofs++) {
     try {
       return await args.attempt(presence);
     } catch (err) {
       const code = presenceRefusal(err);
       if (!code || proofs >= MAX_PROOFS) throw err;
-      presence = await args.prove(args.subject, code, args.progress);
+      const proof = await args.prove(args.subject, code, args.progress);
+      if (!proof) throw err;
+      presence = proof;
     }
   }
+}
+
+/**
+ * A batch's sensitive items, proved UP FRONT one by one before the batch is
+ * sent ("1 of 3"). Declining one stops the whole batch before anything is
+ * sent (`PresenceDeclined` is thrown). An item the person cannot prove here
+ * is sent without a proof, and the pod decides.
+ */
+export async function proveEachUpFront(args: {
+  ids: readonly string[];
+  subjectOf: (id: string) => PresenceSubject;
+  prove: ProvePresence;
+}): Promise<Record<string, PresenceProof>> {
+  const proofs: Record<string, PresenceProof> = {};
+  for (const [n, id] of args.ids.entries()) {
+    const proof = await args.prove(
+      args.subjectOf(id),
+      PRESENCE_REQUIRED,
+      { index: n + 1, total: args.ids.length },
+      { upFront: true }
+    );
+    if (proof) proofs[id] = proof;
+  }
+  return proofs;
 }
 
 /**
@@ -154,7 +225,7 @@ export async function approveEachWithPresence<R>(args: {
     for (let proofs = 0; proofs < MAX_PROOFS; proofs++) {
       const refusal = args.refusalOf(out[i]!);
       if (!refusal) break;
-      let presence: PresenceProof;
+      let presence: PresenceProof | null;
       try {
         presence = await args.prove(
           args.subjectOf(refusal.id),
@@ -165,6 +236,7 @@ export async function approveEachWithPresence<R>(args: {
         if (err instanceof PresenceDeclined) return out;
         throw err;
       }
+      if (!presence) return out;
       out[i] = await args.retryOne(refusal.id, presence);
     }
   }
