@@ -348,9 +348,10 @@ describe("live charts", () => {
     // After it (the cache forgotten): the new data.
     clearLiveChartCache();
     const later = await chart("marches-par-statut");
+    // A tie keeps first-seen order (the shaper's stable sort): open, closed.
     expect(later.json.data).toEqual([
-      { label: "closed", value: 2 },
       { label: "open", value: 2 },
+      { label: "closed", value: 2 },
     ]);
     expect(h.reads).toBe(3);
     expect(later.etag).not.toBe(first.etag);
