@@ -826,8 +826,8 @@
                   },
                   "urgency": {
                     "type": "string",
-                    "enum": ["now", "today", "whenever"],
-                    "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                    "enum": ["today", "whenever"],
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                   },
                   "answerBy": {
                     "type": "string",
@@ -962,8 +962,8 @@
                   },
                   "urgency": {
                     "type": "string",
-                    "enum": ["now", "today", "whenever"],
-                    "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                    "enum": ["today", "whenever"],
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                   },
                   "answerBy": {
                     "type": "string",
@@ -1068,8 +1068,8 @@
                   },
                   "urgency": {
                     "type": "string",
-                    "enum": ["now", "today", "whenever"],
-                    "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                    "enum": ["today", "whenever"],
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                   },
                   "answerBy": {
                     "type": "string",
@@ -1145,8 +1145,8 @@
                   },
                   "urgency": {
                     "type": "string",
-                    "enum": ["now", "today", "whenever"],
-                    "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                    "enum": ["today", "whenever"],
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                   },
                   "answerBy": {
                     "type": "string",
@@ -1256,8 +1256,8 @@
                   },
                   "urgency": {
                     "type": "string",
-                    "enum": ["now", "today", "whenever"],
-                    "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                    "enum": ["today", "whenever"],
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                   },
                   "answerBy": {
                     "type": "string",
@@ -14755,12 +14755,8 @@
                                           },
                                           "urgency": {
                                             "type": "string",
-                                            "enum": [
-                                              "now",
-                                              "today",
-                                              "whenever"
-                                            ],
-                                            "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                            "enum": ["today", "whenever"],
+                                            "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                           },
                                           "answerBy": {
                                             "type": "string",
@@ -14917,12 +14913,8 @@
                                           },
                                           "urgency": {
                                             "type": "string",
-                                            "enum": [
-                                              "now",
-                                              "today",
-                                              "whenever"
-                                            ],
-                                            "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                            "enum": ["today", "whenever"],
+                                            "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                           },
                                           "answerBy": {
                                             "type": "string",
@@ -15050,12 +15042,8 @@
                                           },
                                           "urgency": {
                                             "type": "string",
-                                            "enum": [
-                                              "now",
-                                              "today",
-                                              "whenever"
-                                            ],
-                                            "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                            "enum": ["today", "whenever"],
+                                            "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                           },
                                           "answerBy": {
                                             "type": "string",
@@ -15137,12 +15125,8 @@
                                           },
                                           "urgency": {
                                             "type": "string",
-                                            "enum": [
-                                              "now",
-                                              "today",
-                                              "whenever"
-                                            ],
-                                            "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                            "enum": ["today", "whenever"],
+                                            "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                           },
                                           "answerBy": {
                                             "type": "string",
@@ -15264,12 +15248,8 @@
                                           },
                                           "urgency": {
                                             "type": "string",
-                                            "enum": [
-                                              "now",
-                                              "today",
-                                              "whenever"
-                                            ],
-                                            "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                            "enum": ["today", "whenever"],
+                                            "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                           },
                                           "answerBy": {
                                             "type": "string",
@@ -15465,12 +15445,8 @@
                                                 },
                                                 "urgency": {
                                                   "type": "string",
-                                                  "enum": [
-                                                    "now",
-                                                    "today",
-                                                    "whenever"
-                                                  ],
-                                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                                  "enum": ["today", "whenever"],
+                                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                                 },
                                                 "answerBy": {
                                                   "type": "string",
@@ -15638,12 +15614,8 @@
                                                 },
                                                 "urgency": {
                                                   "type": "string",
-                                                  "enum": [
-                                                    "now",
-                                                    "today",
-                                                    "whenever"
-                                                  ],
-                                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                                  "enum": ["today", "whenever"],
+                                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                                 },
                                                 "answerBy": {
                                                   "type": "string",
@@ -15784,12 +15756,8 @@
                                                 },
                                                 "urgency": {
                                                   "type": "string",
-                                                  "enum": [
-                                                    "now",
-                                                    "today",
-                                                    "whenever"
-                                                  ],
-                                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                                  "enum": ["today", "whenever"],
+                                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                                 },
                                                 "answerBy": {
                                                   "type": "string",
@@ -15878,12 +15846,8 @@
                                                 },
                                                 "urgency": {
                                                   "type": "string",
-                                                  "enum": [
-                                                    "now",
-                                                    "today",
-                                                    "whenever"
-                                                  ],
-                                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                                  "enum": ["today", "whenever"],
+                                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                                 },
                                                 "answerBy": {
                                                   "type": "string",
@@ -16018,12 +15982,8 @@
                                                 },
                                                 "urgency": {
                                                   "type": "string",
-                                                  "enum": [
-                                                    "now",
-                                                    "today",
-                                                    "whenever"
-                                                  ],
-                                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                                  "enum": ["today", "whenever"],
+                                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                                 },
                                                 "answerBy": {
                                                   "type": "string",
@@ -18224,12 +18184,8 @@
                                           },
                                           "urgency": {
                                             "type": "string",
-                                            "enum": [
-                                              "now",
-                                              "today",
-                                              "whenever"
-                                            ],
-                                            "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                            "enum": ["today", "whenever"],
+                                            "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                           },
                                           "answerBy": {
                                             "type": "string",
@@ -18386,12 +18342,8 @@
                                           },
                                           "urgency": {
                                             "type": "string",
-                                            "enum": [
-                                              "now",
-                                              "today",
-                                              "whenever"
-                                            ],
-                                            "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                            "enum": ["today", "whenever"],
+                                            "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                           },
                                           "answerBy": {
                                             "type": "string",
@@ -18519,12 +18471,8 @@
                                           },
                                           "urgency": {
                                             "type": "string",
-                                            "enum": [
-                                              "now",
-                                              "today",
-                                              "whenever"
-                                            ],
-                                            "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                            "enum": ["today", "whenever"],
+                                            "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                           },
                                           "answerBy": {
                                             "type": "string",
@@ -18606,12 +18554,8 @@
                                           },
                                           "urgency": {
                                             "type": "string",
-                                            "enum": [
-                                              "now",
-                                              "today",
-                                              "whenever"
-                                            ],
-                                            "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                            "enum": ["today", "whenever"],
+                                            "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                           },
                                           "answerBy": {
                                             "type": "string",
@@ -18733,12 +18677,8 @@
                                           },
                                           "urgency": {
                                             "type": "string",
-                                            "enum": [
-                                              "now",
-                                              "today",
-                                              "whenever"
-                                            ],
-                                            "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                            "enum": ["today", "whenever"],
+                                            "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                           },
                                           "answerBy": {
                                             "type": "string",
@@ -18934,12 +18874,8 @@
                                                 },
                                                 "urgency": {
                                                   "type": "string",
-                                                  "enum": [
-                                                    "now",
-                                                    "today",
-                                                    "whenever"
-                                                  ],
-                                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                                  "enum": ["today", "whenever"],
+                                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                                 },
                                                 "answerBy": {
                                                   "type": "string",
@@ -19107,12 +19043,8 @@
                                                 },
                                                 "urgency": {
                                                   "type": "string",
-                                                  "enum": [
-                                                    "now",
-                                                    "today",
-                                                    "whenever"
-                                                  ],
-                                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                                  "enum": ["today", "whenever"],
+                                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                                 },
                                                 "answerBy": {
                                                   "type": "string",
@@ -19253,12 +19185,8 @@
                                                 },
                                                 "urgency": {
                                                   "type": "string",
-                                                  "enum": [
-                                                    "now",
-                                                    "today",
-                                                    "whenever"
-                                                  ],
-                                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                                  "enum": ["today", "whenever"],
+                                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                                 },
                                                 "answerBy": {
                                                   "type": "string",
@@ -19347,12 +19275,8 @@
                                                 },
                                                 "urgency": {
                                                   "type": "string",
-                                                  "enum": [
-                                                    "now",
-                                                    "today",
-                                                    "whenever"
-                                                  ],
-                                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                                  "enum": ["today", "whenever"],
+                                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                                 },
                                                 "answerBy": {
                                                   "type": "string",
@@ -19487,12 +19411,8 @@
                                                 },
                                                 "urgency": {
                                                   "type": "string",
-                                                  "enum": [
-                                                    "now",
-                                                    "today",
-                                                    "whenever"
-                                                  ],
-                                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                                  "enum": ["today", "whenever"],
+                                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                                 },
                                                 "answerBy": {
                                                   "type": "string",
@@ -24471,8 +24391,8 @@
                                       },
                                       "urgency": {
                                         "type": "string",
-                                        "enum": ["now", "today", "whenever"],
-                                        "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                        "enum": ["today", "whenever"],
+                                        "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                       },
                                       "answerBy": {
                                         "type": "string",
@@ -24626,8 +24546,8 @@
                                       },
                                       "urgency": {
                                         "type": "string",
-                                        "enum": ["now", "today", "whenever"],
-                                        "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                        "enum": ["today", "whenever"],
+                                        "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                       },
                                       "answerBy": {
                                         "type": "string",
@@ -24751,8 +24671,8 @@
                                       },
                                       "urgency": {
                                         "type": "string",
-                                        "enum": ["now", "today", "whenever"],
-                                        "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                        "enum": ["today", "whenever"],
+                                        "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                       },
                                       "answerBy": {
                                         "type": "string",
@@ -24834,8 +24754,8 @@
                                       },
                                       "urgency": {
                                         "type": "string",
-                                        "enum": ["now", "today", "whenever"],
-                                        "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                        "enum": ["today", "whenever"],
+                                        "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                       },
                                       "answerBy": {
                                         "type": "string",
@@ -24957,8 +24877,8 @@
                                       },
                                       "urgency": {
                                         "type": "string",
-                                        "enum": ["now", "today", "whenever"],
-                                        "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                        "enum": ["today", "whenever"],
+                                        "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                       },
                                       "answerBy": {
                                         "type": "string",
@@ -30890,8 +30810,8 @@
                                 },
                                 "urgency": {
                                   "type": "string",
-                                  "enum": ["now", "today", "whenever"],
-                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                  "enum": ["today", "whenever"],
+                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                 },
                                 "answerBy": {
                                   "type": "string",
@@ -31043,8 +30963,8 @@
                                 },
                                 "urgency": {
                                   "type": "string",
-                                  "enum": ["now", "today", "whenever"],
-                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                  "enum": ["today", "whenever"],
+                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                 },
                                 "answerBy": {
                                   "type": "string",
@@ -31155,8 +31075,8 @@
                                 },
                                 "urgency": {
                                   "type": "string",
-                                  "enum": ["now", "today", "whenever"],
-                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                  "enum": ["today", "whenever"],
+                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                 },
                                 "answerBy": {
                                   "type": "string",
@@ -31232,8 +31152,8 @@
                                 },
                                 "urgency": {
                                   "type": "string",
-                                  "enum": ["now", "today", "whenever"],
-                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                  "enum": ["today", "whenever"],
+                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                 },
                                 "answerBy": {
                                   "type": "string",
@@ -31355,8 +31275,8 @@
                                 },
                                 "urgency": {
                                   "type": "string",
-                                  "enum": ["now", "today", "whenever"],
-                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                  "enum": ["today", "whenever"],
+                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                 },
                                 "answerBy": {
                                   "type": "string",
@@ -32406,8 +32326,8 @@
                                 },
                                 "urgency": {
                                   "type": "string",
-                                  "enum": ["now", "today", "whenever"],
-                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                  "enum": ["today", "whenever"],
+                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                 },
                                 "answerBy": {
                                   "type": "string",
@@ -32559,8 +32479,8 @@
                                 },
                                 "urgency": {
                                   "type": "string",
-                                  "enum": ["now", "today", "whenever"],
-                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                  "enum": ["today", "whenever"],
+                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                 },
                                 "answerBy": {
                                   "type": "string",
@@ -32671,8 +32591,8 @@
                                 },
                                 "urgency": {
                                   "type": "string",
-                                  "enum": ["now", "today", "whenever"],
-                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                  "enum": ["today", "whenever"],
+                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                 },
                                 "answerBy": {
                                   "type": "string",
@@ -32748,8 +32668,8 @@
                                 },
                                 "urgency": {
                                   "type": "string",
-                                  "enum": ["now", "today", "whenever"],
-                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                  "enum": ["today", "whenever"],
+                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                 },
                                 "answerBy": {
                                   "type": "string",
@@ -32871,8 +32791,8 @@
                                 },
                                 "urgency": {
                                   "type": "string",
-                                  "enum": ["now", "today", "whenever"],
-                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                  "enum": ["today", "whenever"],
+                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                 },
                                 "answerBy": {
                                   "type": "string",
@@ -33942,8 +33862,8 @@
                                 },
                                 "urgency": {
                                   "type": "string",
-                                  "enum": ["now", "today", "whenever"],
-                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                  "enum": ["today", "whenever"],
+                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                 },
                                 "answerBy": {
                                   "type": "string",
@@ -34095,8 +34015,8 @@
                                 },
                                 "urgency": {
                                   "type": "string",
-                                  "enum": ["now", "today", "whenever"],
-                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                  "enum": ["today", "whenever"],
+                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                 },
                                 "answerBy": {
                                   "type": "string",
@@ -34207,8 +34127,8 @@
                                 },
                                 "urgency": {
                                   "type": "string",
-                                  "enum": ["now", "today", "whenever"],
-                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                  "enum": ["today", "whenever"],
+                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                 },
                                 "answerBy": {
                                   "type": "string",
@@ -34284,8 +34204,8 @@
                                 },
                                 "urgency": {
                                   "type": "string",
-                                  "enum": ["now", "today", "whenever"],
-                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                  "enum": ["today", "whenever"],
+                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                 },
                                 "answerBy": {
                                   "type": "string",
@@ -34407,8 +34327,8 @@
                                 },
                                 "urgency": {
                                   "type": "string",
-                                  "enum": ["now", "today", "whenever"],
-                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                  "enum": ["today", "whenever"],
+                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                 },
                                 "answerBy": {
                                   "type": "string",
@@ -35458,8 +35378,8 @@
                                 },
                                 "urgency": {
                                   "type": "string",
-                                  "enum": ["now", "today", "whenever"],
-                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                  "enum": ["today", "whenever"],
+                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                 },
                                 "answerBy": {
                                   "type": "string",
@@ -35611,8 +35531,8 @@
                                 },
                                 "urgency": {
                                   "type": "string",
-                                  "enum": ["now", "today", "whenever"],
-                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                  "enum": ["today", "whenever"],
+                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                 },
                                 "answerBy": {
                                   "type": "string",
@@ -35723,8 +35643,8 @@
                                 },
                                 "urgency": {
                                   "type": "string",
-                                  "enum": ["now", "today", "whenever"],
-                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                  "enum": ["today", "whenever"],
+                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                 },
                                 "answerBy": {
                                   "type": "string",
@@ -35800,8 +35720,8 @@
                                 },
                                 "urgency": {
                                   "type": "string",
-                                  "enum": ["now", "today", "whenever"],
-                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                  "enum": ["today", "whenever"],
+                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                 },
                                 "answerBy": {
                                   "type": "string",
@@ -35923,8 +35843,8 @@
                                 },
                                 "urgency": {
                                   "type": "string",
-                                  "enum": ["now", "today", "whenever"],
-                                  "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                                  "enum": ["today", "whenever"],
+                                  "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                                 },
                                 "answerBy": {
                                   "type": "string",
@@ -36680,8 +36600,8 @@
                           },
                           "urgency": {
                             "type": "string",
-                            "enum": ["now", "today", "whenever"],
-                            "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                            "enum": ["today", "whenever"],
+                            "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                           },
                           "answerBy": {
                             "type": "string",
@@ -36822,8 +36742,8 @@
                           },
                           "urgency": {
                             "type": "string",
-                            "enum": ["now", "today", "whenever"],
-                            "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                            "enum": ["today", "whenever"],
+                            "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                           },
                           "answerBy": {
                             "type": "string",
@@ -36934,8 +36854,8 @@
                           },
                           "urgency": {
                             "type": "string",
-                            "enum": ["now", "today", "whenever"],
-                            "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                            "enum": ["today", "whenever"],
+                            "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                           },
                           "answerBy": {
                             "type": "string",
@@ -37011,8 +36931,8 @@
                           },
                           "urgency": {
                             "type": "string",
-                            "enum": ["now", "today", "whenever"],
-                            "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                            "enum": ["today", "whenever"],
+                            "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                           },
                           "answerBy": {
                             "type": "string",
@@ -37131,8 +37051,8 @@
                           },
                           "urgency": {
                             "type": "string",
-                            "enum": ["now", "today", "whenever"],
-                            "description": "How soon, as a hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; whenever never pushes."
+                            "enum": ["today", "whenever"],
+                            "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
                           },
                           "answerBy": {
                             "type": "string",

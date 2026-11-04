@@ -13817,7 +13817,7 @@ export type SlotAsk = ({
 	urgency?: SlotAskUrgency;
 };
 /** Mirrors `ASK_URGENCIES` (@synap-core/types/ask). */
-export type SlotAskUrgency = "now" | "today" | "whenever";
+export type SlotAskUrgency = "today" | "whenever";
 /** Mirrors `ASK_STAKES` (@synap-core/types/ask). */
 export type SlotAskStakes = "commitment" | "routine";
 /** One object an ask cites as read. Mirrors `AskLookedAtRef` (@synap-core/types/ask). */
@@ -35830,7 +35830,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					reversible?: boolean | undefined;
 					risk?: "high" | "low" | "medium" | undefined;
 					stakes?: "commitment" | "routine" | undefined;
-					urgency?: "now" | "today" | "whenever" | undefined;
+					urgency?: "today" | "whenever" | undefined;
 					yes?: {
 						description?: string | undefined;
 						label?: string | undefined;
@@ -35868,7 +35868,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					reversible?: boolean | undefined;
 					risk?: "high" | "low" | "medium" | undefined;
 					stakes?: "commitment" | "routine" | undefined;
-					urgency?: "now" | "today" | "whenever" | undefined;
+					urgency?: "today" | "whenever" | undefined;
 				} | {
 					answerBy?: string | undefined;
 					consequence?: string | undefined;
@@ -35898,7 +35898,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					reversible?: boolean | undefined;
 					risk?: "high" | "low" | "medium" | undefined;
 					stakes?: "commitment" | "routine" | undefined;
-					urgency?: "now" | "today" | "whenever" | undefined;
+					urgency?: "today" | "whenever" | undefined;
 				} | {
 					answerBy?: string | undefined;
 					consequence?: string | undefined;
@@ -35912,7 +35912,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					risk?: "high" | "low" | "medium" | undefined;
 					stakes?: "commitment" | "routine" | undefined;
 					steps?: string[] | undefined;
-					urgency?: "now" | "today" | "whenever" | undefined;
+					urgency?: "today" | "whenever" | undefined;
 					url?: string | undefined;
 				} | {
 					answerBy?: string | undefined;
@@ -35936,7 +35936,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					reversible?: boolean | undefined;
 					risk?: "high" | "low" | "medium" | undefined;
 					stakes?: "commitment" | "routine" | undefined;
-					urgency?: "now" | "today" | "whenever" | undefined;
+					urgency?: "today" | "whenever" | undefined;
 				} | null | undefined;
 				blockedReason: "capability" | "credential" | "decision" | "permission" | "physical" | "policy";
 				expectedLabel: string;
@@ -36315,7 +36315,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
-						urgency?: "now" | "today" | "whenever" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						yes?: {
 							description?: string | undefined;
 							label?: string | undefined;
@@ -36353,7 +36353,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
-						urgency?: "now" | "today" | "whenever" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
 						answerBy?: string | undefined;
 						consequence?: string | undefined;
@@ -36383,7 +36383,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
-						urgency?: "now" | "today" | "whenever" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
 						answerBy?: string | undefined;
 						consequence?: string | undefined;
@@ -36397,7 +36397,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
 						steps?: string[] | undefined;
-						urgency?: "now" | "today" | "whenever" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						url?: string | undefined;
 					} | {
 						answerBy?: string | undefined;
@@ -36421,7 +36421,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
-						urgency?: "now" | "today" | "whenever" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | null | undefined;
 					askCause?: {
 						at?: string | undefined;
@@ -37474,7 +37474,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
-						urgency?: "now" | "today" | "whenever" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						yes?: {
 							description?: string | undefined;
 							label?: string | undefined;
@@ -37512,7 +37512,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
-						urgency?: "now" | "today" | "whenever" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
 						answerBy?: string | undefined;
 						consequence?: string | undefined;
@@ -37542,7 +37542,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
-						urgency?: "now" | "today" | "whenever" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
 						answerBy?: string | undefined;
 						consequence?: string | undefined;
@@ -37556,7 +37556,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
 						steps?: string[] | undefined;
-						urgency?: "now" | "today" | "whenever" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						url?: string | undefined;
 					} | {
 						answerBy?: string | undefined;
@@ -37580,7 +37580,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
-						urgency?: "now" | "today" | "whenever" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | null | undefined;
 					askCause?: {
 						at?: string | undefined;
@@ -37740,7 +37740,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
-							urgency?: "now" | "today" | "whenever" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 							yes?: {
 								description?: string | undefined;
 								label?: string | undefined;
@@ -37778,7 +37778,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
-							urgency?: "now" | "today" | "whenever" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | {
 							answerBy?: string | undefined;
 							consequence?: string | undefined;
@@ -37808,7 +37808,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
-							urgency?: "now" | "today" | "whenever" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | {
 							answerBy?: string | undefined;
 							consequence?: string | undefined;
@@ -37822,7 +37822,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
 							steps?: string[] | undefined;
-							urgency?: "now" | "today" | "whenever" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 							url?: string | undefined;
 						} | {
 							answerBy?: string | undefined;
@@ -37846,7 +37846,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
-							urgency?: "now" | "today" | "whenever" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | null | undefined;
 						relationToSubject?: string | undefined;
 						optional?: boolean | undefined;
@@ -43865,7 +43865,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
-						urgency?: "now" | "today" | "whenever" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						yes?: {
 							description?: string | undefined;
 							label?: string | undefined;
@@ -43903,7 +43903,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
-						urgency?: "now" | "today" | "whenever" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
 						answerBy?: string | undefined;
 						consequence?: string | undefined;
@@ -43933,7 +43933,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
-						urgency?: "now" | "today" | "whenever" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
 						answerBy?: string | undefined;
 						consequence?: string | undefined;
@@ -43947,7 +43947,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
 						steps?: string[] | undefined;
-						urgency?: "now" | "today" | "whenever" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						url?: string | undefined;
 					} | {
 						answerBy?: string | undefined;
@@ -43971,7 +43971,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
-						urgency?: "now" | "today" | "whenever" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					optional?: boolean | undefined;
@@ -44031,7 +44031,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
-							urgency?: "now" | "today" | "whenever" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 							yes?: {
 								description?: string | undefined;
 								label?: string | undefined;
@@ -44069,7 +44069,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
-							urgency?: "now" | "today" | "whenever" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | {
 							answerBy?: string | undefined;
 							consequence?: string | undefined;
@@ -44099,7 +44099,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
-							urgency?: "now" | "today" | "whenever" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | {
 							answerBy?: string | undefined;
 							consequence?: string | undefined;
@@ -44113,7 +44113,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
 							steps?: string[] | undefined;
-							urgency?: "now" | "today" | "whenever" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 							url?: string | undefined;
 						} | {
 							answerBy?: string | undefined;
@@ -44137,7 +44137,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
-							urgency?: "now" | "today" | "whenever" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | null | undefined;
 						relationToSubject?: string | undefined;
 						optional?: boolean | undefined;
@@ -44846,7 +44846,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
-						urgency?: "now" | "today" | "whenever" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						yes?: {
 							description?: string | undefined;
 							label?: string | undefined;
@@ -44884,7 +44884,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
-						urgency?: "now" | "today" | "whenever" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
 						answerBy?: string | undefined;
 						consequence?: string | undefined;
@@ -44914,7 +44914,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
-						urgency?: "now" | "today" | "whenever" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
 						answerBy?: string | undefined;
 						consequence?: string | undefined;
@@ -44928,7 +44928,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
 						steps?: string[] | undefined;
-						urgency?: "now" | "today" | "whenever" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						url?: string | undefined;
 					} | {
 						answerBy?: string | undefined;
@@ -44952,7 +44952,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
-						urgency?: "now" | "today" | "whenever" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					optional?: boolean | undefined;
@@ -45004,7 +45004,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
-							urgency?: "now" | "today" | "whenever" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 							yes?: {
 								description?: string | undefined;
 								label?: string | undefined;
@@ -45042,7 +45042,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
-							urgency?: "now" | "today" | "whenever" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | {
 							answerBy?: string | undefined;
 							consequence?: string | undefined;
@@ -45072,7 +45072,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
-							urgency?: "now" | "today" | "whenever" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | {
 							answerBy?: string | undefined;
 							consequence?: string | undefined;
@@ -45086,7 +45086,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
 							steps?: string[] | undefined;
-							urgency?: "now" | "today" | "whenever" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 							url?: string | undefined;
 						} | {
 							answerBy?: string | undefined;
@@ -45110,7 +45110,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
-							urgency?: "now" | "today" | "whenever" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | null | undefined;
 						relationToSubject?: string | undefined;
 						optional?: boolean | undefined;
@@ -55077,7 +55077,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								reversible?: boolean | undefined;
 								risk?: "high" | "low" | "medium" | undefined;
 								stakes?: "commitment" | "routine" | undefined;
-								urgency?: "now" | "today" | "whenever" | undefined;
+								urgency?: "today" | "whenever" | undefined;
 								yes?: {
 									description?: string | undefined;
 									label?: string | undefined;
@@ -55115,7 +55115,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								reversible?: boolean | undefined;
 								risk?: "high" | "low" | "medium" | undefined;
 								stakes?: "commitment" | "routine" | undefined;
-								urgency?: "now" | "today" | "whenever" | undefined;
+								urgency?: "today" | "whenever" | undefined;
 							} | {
 								answerBy?: string | undefined;
 								consequence?: string | undefined;
@@ -55145,7 +55145,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								reversible?: boolean | undefined;
 								risk?: "high" | "low" | "medium" | undefined;
 								stakes?: "commitment" | "routine" | undefined;
-								urgency?: "now" | "today" | "whenever" | undefined;
+								urgency?: "today" | "whenever" | undefined;
 							} | {
 								answerBy?: string | undefined;
 								consequence?: string | undefined;
@@ -55159,7 +55159,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								risk?: "high" | "low" | "medium" | undefined;
 								stakes?: "commitment" | "routine" | undefined;
 								steps?: string[] | undefined;
-								urgency?: "now" | "today" | "whenever" | undefined;
+								urgency?: "today" | "whenever" | undefined;
 								url?: string | undefined;
 							} | {
 								answerBy?: string | undefined;
@@ -55183,7 +55183,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								reversible?: boolean | undefined;
 								risk?: "high" | "low" | "medium" | undefined;
 								stakes?: "commitment" | "routine" | undefined;
-								urgency?: "now" | "today" | "whenever" | undefined;
+								urgency?: "today" | "whenever" | undefined;
 							} | null | undefined;
 							relationToSubject?: string | undefined;
 							optional?: boolean | undefined;
@@ -55244,7 +55244,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									reversible?: boolean | undefined;
 									risk?: "high" | "low" | "medium" | undefined;
 									stakes?: "commitment" | "routine" | undefined;
-									urgency?: "now" | "today" | "whenever" | undefined;
+									urgency?: "today" | "whenever" | undefined;
 									yes?: {
 										description?: string | undefined;
 										label?: string | undefined;
@@ -55282,7 +55282,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									reversible?: boolean | undefined;
 									risk?: "high" | "low" | "medium" | undefined;
 									stakes?: "commitment" | "routine" | undefined;
-									urgency?: "now" | "today" | "whenever" | undefined;
+									urgency?: "today" | "whenever" | undefined;
 								} | {
 									answerBy?: string | undefined;
 									consequence?: string | undefined;
@@ -55312,7 +55312,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									reversible?: boolean | undefined;
 									risk?: "high" | "low" | "medium" | undefined;
 									stakes?: "commitment" | "routine" | undefined;
-									urgency?: "now" | "today" | "whenever" | undefined;
+									urgency?: "today" | "whenever" | undefined;
 								} | {
 									answerBy?: string | undefined;
 									consequence?: string | undefined;
@@ -55326,7 +55326,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									risk?: "high" | "low" | "medium" | undefined;
 									stakes?: "commitment" | "routine" | undefined;
 									steps?: string[] | undefined;
-									urgency?: "now" | "today" | "whenever" | undefined;
+									urgency?: "today" | "whenever" | undefined;
 									url?: string | undefined;
 								} | {
 									answerBy?: string | undefined;
@@ -55350,7 +55350,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									reversible?: boolean | undefined;
 									risk?: "high" | "low" | "medium" | undefined;
 									stakes?: "commitment" | "routine" | undefined;
-									urgency?: "now" | "today" | "whenever" | undefined;
+									urgency?: "today" | "whenever" | undefined;
 								} | null | undefined;
 								relationToSubject?: string | undefined;
 								optional?: boolean | undefined;
