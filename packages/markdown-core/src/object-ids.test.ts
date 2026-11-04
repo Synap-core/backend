@@ -4,7 +4,10 @@ import {
   linkObjectIds,
   markdownToPlainText,
   parseMarkdown,
+  referenceRead,
+  referenceView,
   resolvePatternMarkers,
+  type ReferenceRead,
 } from "./index.js";
 
 const ID = "3f2a91c4-7b10-4e55-9c02-8ad1f6e4b2d7";
@@ -148,5 +151,124 @@ describe("findObjectIds — the one rule", () => {
     expect(findObjectIds(text)).toEqual([
       { id: ID2, index: text.indexOf(ID2) },
     ]);
+  });
+});
+
+describe("referenceRead — four different facts", () => {
+  const base = { isLoading: false, error: null };
+  it("loading, named, nobody's, broken", () => {
+    expect(
+      referenceRead({ ...base, isLoading: true, data: undefined })
+    ).toEqual({
+      state: "loading",
+    });
+    expect(
+      referenceRead({
+        ...base,
+        data: {
+          type: "entity",
+          displayName: " Ana ",
+          openable: true,
+          profileSlug: "person",
+        },
+      })
+    ).toEqual({
+      state: "ready",
+      type: "entity",
+      name: "Ana",
+      openable: true,
+      profileSlug: "person",
+    });
+    expect(referenceRead({ ...base, data: { type: "unknown" } })).toEqual({
+      state: "unknown",
+    });
+    expect(
+      referenceRead({ ...base, error: new Error("500"), data: undefined })
+    ).toEqual({ state: "failed" });
+  });
+
+  it("an answer with no type is broken, never 'nothing here'", () => {
+    expect(referenceRead({ ...base, data: {} })).toEqual({ state: "failed" });
+    expect(referenceRead({ ...base, data: null })).toEqual({ state: "failed" });
+  });
+});
+
+describe("referenceView — the one rule for drawing a reference", () => {
+  const noun = (k: string) => `<${k}>`;
+  const bare = { markerKind: null, id: ID };
+  const doc = { markerKind: "document", id: ID };
+  const ready: ReferenceRead = {
+    state: "ready",
+    type: "entity",
+    name: "Migrate the billing worker",
+    openable: true,
+    profileSlug: "task",
+  };
+
+  it("a bare id is its text until the lookup names it", () => {
+    for (const read of [
+      { state: "unresolved" },
+      { state: "loading" },
+      { state: "unknown" },
+    ] as ReferenceRead[]) {
+      expect(referenceView(bare, "", read, noun)).toEqual({
+        kind: "text",
+        text: ID,
+        failed: false,
+      });
+    }
+    expect(referenceView(bare, "", { state: "failed" }, noun)).toEqual({
+      kind: "text",
+      text: ID,
+      failed: true,
+    });
+  });
+
+  it("a named bare id: its name, the entity's kind for identity, its page", () => {
+    expect(referenceView(bare, "", ready, noun)).toEqual({
+      kind: "chip",
+      text: "Migrate the billing worker",
+      identityKind: "task",
+      opens: { kind: "entity", id: ID },
+      pending: false,
+      failed: false,
+    });
+    expect(
+      referenceView(bare, "", { ...ready, name: null, openable: false }, noun)
+    ).toMatchObject({ text: "<task>", opens: null });
+  });
+
+  it("a marker: label, else the name, else its kind's noun, always on its kind's page", () => {
+    expect(referenceView(doc, "the plan", ready, noun)).toMatchObject({
+      text: "the plan",
+      identityKind: "task",
+      opens: { kind: "document", id: ID },
+    });
+    expect(referenceView(doc, "", ready, noun)).toMatchObject({
+      text: "Migrate the billing worker",
+    });
+    expect(referenceView(doc, "", { state: "unresolved" }, noun)).toEqual({
+      kind: "chip",
+      text: "<document>",
+      identityKind: "document",
+      opens: { kind: "document", id: ID },
+      pending: false,
+      failed: false,
+    });
+  });
+
+  it("an unlabelled marker is pending while looked up, and marked when the lookup broke", () => {
+    expect(referenceView(doc, "", { state: "loading" }, noun)).toMatchObject({
+      pending: true,
+      failed: false,
+    });
+    expect(referenceView(doc, "", { state: "failed" }, noun)).toMatchObject({
+      text: "<document>",
+      failed: true,
+    });
+    // The author's own words read right without the lookup: no mark.
+    expect(
+      referenceView(doc, "the plan", { state: "failed" }, noun)
+    ).toMatchObject({ text: "the plan", failed: false, pending: false });
   });
 });

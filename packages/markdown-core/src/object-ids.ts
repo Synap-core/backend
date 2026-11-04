@@ -134,3 +134,131 @@ export function remarkObjectIds() {
     linkObjectIds(tree);
   };
 }
+
+// ─── How a reference reads (one rule for every surface) ──────────────────────
+
+/**
+ * A reference in prose: the kind its marker names, already mapped to an open
+ * kind by the surface (`doc` → `document`), or `null` when the author wrote
+ * only the id (`object://<id>`).
+ */
+export interface ReferenceTarget {
+  markerKind: string | null;
+  id: string;
+}
+
+/**
+ * What the reader's own lookup says about a reference — `diagnose.resolveOpen`
+ * (`GET /api/hub/resolve/:id`), the one user-floored "what is this id".
+ * `unknown`: the lookup ran and nothing this reader can see has the id.
+ * `failed`: the lookup broke; never folded into `unknown`. `unresolved`: this
+ * surface looks nothing up.
+ */
+export type ReferenceRead =
+  | { state: "unresolved" }
+  | { state: "loading" }
+  | {
+      state: "ready";
+      /** The open route label (`entity`, `document`, `session`…). */
+      type: string;
+      name: string | null;
+      openable: boolean;
+      /** The entity's kind, when it is one (`task`, `person`…). */
+      profileSlug?: string;
+    }
+  | { state: "unknown" }
+  | { state: "failed" };
+
+/** The resolver's answer (`OpenTarget`) and the query around it → a read. */
+export function referenceRead(query: {
+  isLoading: boolean;
+  error: unknown;
+  data:
+    | {
+        type?: string | null;
+        displayName?: string | null;
+        openable?: boolean | null;
+        profileSlug?: string | null;
+      }
+    | null
+    | undefined;
+}): ReferenceRead {
+  if (query.error) return { state: "failed" };
+  if (query.isLoading) return { state: "loading" };
+  const type = query.data?.type?.trim();
+  // An answer with no type is a broken answer, not "nothing here".
+  if (!type) return { state: "failed" };
+  if (type === "unknown") return { state: "unknown" };
+  const profileSlug = query.data?.profileSlug?.trim() || undefined;
+  return {
+    state: "ready",
+    type,
+    name: query.data?.displayName?.trim() || null,
+    openable: query.data?.openable === true,
+    ...(profileSlug ? { profileSlug } : {}),
+  };
+}
+
+/** How a reference is drawn; the surface adds the link, the icon and the retry. */
+export type ReferenceView =
+  | {
+      kind: "text";
+      text: string;
+      /** The lookup broke: the words stay, with a mark to ask again. */
+      failed: boolean;
+    }
+  | {
+      kind: "chip";
+      text: string;
+      /** The kind the icon and colour come from (the entity's kind first). */
+      identityKind: string;
+      /** The kind and id the chip opens; null when it opens nothing. */
+      opens: { kind: string; id: string } | null;
+      /** The name is still being looked up. */
+      pending: boolean;
+      failed: boolean;
+    };
+
+/**
+ * THE rule for drawing a reference, on every surface.
+ *
+ * A BARE id is a chip only once the lookup names it: until then, and when
+ * nobody this reader can see has it, it stays the text the author wrote (it
+ * may not be an object at all); a broken lookup keeps the text and marks it.
+ * A MARKER is always a chip on its own kind's page: its label wins, else the
+ * looked-up name, else its kind's noun (never empty, never the id). A
+ * labelled marker reads right without the lookup, so it carries no mark.
+ */
+export function referenceView(
+  target: ReferenceTarget,
+  label: string,
+  read: ReferenceRead,
+  nounFor: (kind: string) => string
+): ReferenceView {
+  const ready = read.state === "ready" ? read : null;
+  const failed = read.state === "failed";
+  if (target.markerKind === null) {
+    if (!ready) return { kind: "text", text: target.id, failed };
+    const identityKind = ready.profileSlug ?? ready.type;
+    return {
+      kind: "chip",
+      text: ready.name ?? nounFor(identityKind),
+      identityKind,
+      opens: ready.openable ? { kind: ready.type, id: target.id } : null,
+      pending: false,
+      failed: false,
+    };
+  }
+  const identityKind = ready
+    ? (ready.profileSlug ?? ready.type)
+    : target.markerKind;
+  const own = label.trim();
+  return {
+    kind: "chip",
+    text: own || ready?.name || nounFor(identityKind),
+    identityKind,
+    opens: { kind: target.markerKind, id: target.id },
+    pending: !own && read.state === "loading",
+    failed: !own && failed,
+  };
+}
