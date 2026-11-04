@@ -126,43 +126,8 @@ const PENDING_ADOPTION: Record<
   Repo,
   ReadonlyArray<{ file: string; name: string; lane: string }>
 > = {
-  "synap-app": [
-    {
-      file: "packages/hooks/src/cell-runtime/cell-lens-scope.ts",
-      name: "cellLensScope",
-      lane: "2",
-    },
-    {
-      file: "packages/hooks/src/markdown-engine/renderer/embed-frame/document-embed-context.tsx",
-      name: "documentLensScope",
-      lane: "2",
-    },
-    {
-      file: "packages/web/src/lens-page/copy.ts",
-      name: "LENS_EMPTY_TITLES",
-      lane: "2",
-    },
-    {
-      file: "packages/web/src/lens-page/copy.ts",
-      name: "LENS_EMPTY_WHY",
-      lane: "2",
-    },
-    {
-      file: "packages/web/src/work-cells/PageSectionCell.tsx",
-      name: "pageSectionConfig",
-      lane: "2",
-    },
-    {
-      file: "packages/web/src/work-cells/StatusOfCell.tsx",
-      name: "statusMarkId",
-      lane: "2",
-    },
-    {
-      file: "packages/web/src/work-cells/StatusOfCell.tsx",
-      name: "STATUS_OF_ROUTE_KIND",
-      lane: "2",
-    },
-  ],
+  // synap-app adopted (lane 2, app-bases ac8bdfed): no row left, fully strict.
+  "synap-app": [],
   "relay-app": [
     {
       file: "src/features/work-cells/WorkCells.tsx",
