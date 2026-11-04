@@ -157,6 +157,8 @@ const NOT_READERS: Record<string, string> = {
   isMarkerHref: "predicate (a URL, no parse)",
   OBJECT_REF_SCHEME: "data",
   findObjectIds: "inline grammar (ids in one string)",
+  referenceRead: "display rule over a lookup, no parse",
+  referenceView: "display rule over a reference, no parse",
   readAlertMarker: "reads one text line (the alert-marker rule), no parse",
   // embeds + frames
   EMBED_DIRECTIVES: "data",

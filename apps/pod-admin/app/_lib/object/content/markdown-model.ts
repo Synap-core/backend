@@ -13,7 +13,12 @@
 // the lazily-loaded view may pay for.
 import { splitMarkdownBlocks } from "@synap-core/markdown-core/diff";
 import { isMarkerHref } from "@synap-core/markdown-core/markers";
-import { OBJECT_REF_SCHEME } from "@synap-core/markdown-core/object-ids";
+import {
+  OBJECT_REF_SCHEME,
+  referenceRead,
+  referenceView,
+  type ReferenceRead,
+} from "@synap-core/markdown-core/object-ids";
 import {
   CELL_FRAME_MAX_BYTES,
   htmlByteLength,
@@ -399,60 +404,29 @@ export function objectRefOf(url: string | null | undefined): ObjectRef | null {
 }
 
 /**
- * What the reader's own lookup says about a reference (`diagnose.resolveOpen`,
- * the one user-floored "what is this id"). `unknown` = the lookup ran and
- * nothing this reader can see has the id; `failed` = the lookup broke
- * (retryable) — never folded into `unknown`. `unresolved` = this surface
- * looks nothing up (no host).
+ * What the reader's own lookup says about a reference: markdown-core's
+ * `ReferenceRead` (the one rule), plus what only this console holds — the
+ * kind's profile for the icon and colour, and the retry of a broken lookup.
  */
 export type ObjectRefRead =
-  | { state: "unresolved" }
-  | { state: "loading" }
-  | {
-      state: "ready";
-      /** The open route label (`entity`, `document`, `session`…). */
-      type: string;
-      name: string | null;
-      openable: boolean;
-      /** The entity's kind, when it is one (`task`, `person`…). */
-      profileSlug?: string;
+  | Exclude<ReferenceRead, { state: "ready" } | { state: "failed" }>
+  | (Extract<ReferenceRead, { state: "ready" }> & {
       profile?: ProfileIdentityInput;
-    }
-  | { state: "unknown" }
+    })
   | { state: "failed"; retry?: () => void };
 
-export function objectRefRead(query: {
-  isLoading: boolean;
-  error: unknown;
-  data:
-    | {
-        type?: string | null;
-        displayName?: string | null;
-        openable?: boolean | null;
-        profileSlug?: string | null;
-      }
-    | null
-    | undefined;
-  profile?: ProfileIdentityInput | null;
-  retry?: () => void;
-}): ObjectRefRead {
-  if (query.error)
+export function objectRefRead(
+  query: Parameters<typeof referenceRead>[0] & {
+    profile?: ProfileIdentityInput | null;
+    retry?: () => void;
+  }
+): ObjectRefRead {
+  const read = referenceRead(query);
+  if (read.state === "failed")
     return { state: "failed", ...(query.retry ? { retry: query.retry } : {}) };
-  if (query.isLoading) return { state: "loading" };
-  const type = query.data?.type?.trim();
-  if (!type)
-    return { state: "failed", ...(query.retry ? { retry: query.retry } : {}) };
-  if (type === "unknown") return { state: "unknown" };
-  const name = query.data?.displayName?.trim() || null;
-  const profileSlug = query.data?.profileSlug?.trim() || undefined;
-  return {
-    state: "ready",
-    type,
-    name,
-    openable: query.data?.openable === true,
-    ...(profileSlug ? { profileSlug } : {}),
-    ...(query.profile ? { profile: query.profile } : {}),
-  };
+  if (read.state === "ready" && query.profile)
+    return { ...read, profile: query.profile };
+  return read;
 }
 
 /** How a reference is drawn: plain words, or a chip with its kind's identity. */
@@ -476,48 +450,40 @@ export type ObjectRefView =
     };
 
 /**
- * The one rule for drawing a reference.
- *
- * A BARE id (no marker kind) is a chip only once the lookup names it: until
- * then, and when nobody this reader can see has it, it stays the text the
- * author wrote (it may not be an object at all); a broken lookup keeps the
- * text and marks it. A MARKER is always a chip on its own console page; its
- * label wins, else the looked-up name, else its kind's noun (never empty,
- * never the id).
+ * A reference drawn in the console: markdown-core's `referenceView` (the one
+ * rule every surface draws by) with this console's page for what it opens,
+ * the kind's profile, and the retry of a broken lookup.
  */
 export function objectRefView(
   ref: ObjectRef,
   label: string,
   read: ObjectRefRead
 ): ObjectRefView {
-  const ready = read.state === "ready" ? read : null;
-  const failed =
-    read.state === "failed"
-      ? { failed: read.retry ? { retry: read.retry } : {} }
-      : {};
-  if (ref.markerKind === null) {
-    if (!ready) return { kind: "text", text: ref.id, ...failed };
-    const identityKind = ready.profileSlug ?? ready.type;
-    return {
-      kind: "chip",
-      text: ready.name ?? resolveObjectNoun(identityKind),
-      identityKind,
-      ...(ready.profile ? { profile: ready.profile } : {}),
-      href: ready.openable ? objectPage(ready.type, ref.id) : null,
-      pending: false,
-    };
-  }
-  const kind = objectKindForMarker(ref.markerKind);
-  const identityKind = ready ? (ready.profileSlug ?? ready.type) : kind;
-  const own = label.trim();
+  const view = referenceView(
+    {
+      markerKind:
+        ref.markerKind === null ? null : objectKindForMarker(ref.markerKind),
+      id: ref.id,
+    },
+    label,
+    read.state === "failed" ? { state: "failed" } : read,
+    resolveObjectNoun
+  );
+  const failed = view.failed
+    ? {
+        failed:
+          read.state === "failed" && read.retry ? { retry: read.retry } : {},
+      }
+    : {};
+  if (view.kind === "text") return { kind: "text", text: view.text, ...failed };
+  const profile = read.state === "ready" ? read.profile : undefined;
   return {
     kind: "chip",
-    text: own || ready?.name || resolveObjectNoun(identityKind),
-    identityKind,
-    ...(ready?.profile ? { profile: ready.profile } : {}),
-    href: objectPage(kind, ref.id),
-    pending: !own && read.state === "loading",
-    // A labelled marker reads right without the lookup: no mark.
-    ...(own ? {} : failed),
+    text: view.text,
+    identityKind: view.identityKind,
+    ...(profile ? { profile } : {}),
+    href: view.opens ? objectPage(view.opens.kind, view.opens.id) : null,
+    pending: view.pending,
+    ...failed,
   };
 }
