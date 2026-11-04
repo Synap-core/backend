@@ -10,15 +10,16 @@
  * merged-away workspace seat before the backfill could protect it.
  *
  * Asserted:
- *  1. index.ts calls `runConversions(` exactly once and `runStartupHooks(`
- *     exactly once (both anchors, non-vacuity), and the conversions call comes
+ *  1. boot (index.ts, with the starters table spliced in at its first
+ *     `startBackground(` call) calls `runConversions(` exactly once and
+ *     `runStartupHooks(` exactly once (both anchors, non-vacuity), and the conversions call comes
  *     first in source order;
  *  2. the conversions call sits in an AWAITED top-level IIFE
  *     (`await (async () => {`), so source order is execution order — the module
  *     does not evaluate past it until conversions settle;
  *  3. `reconcileWorkspacesToTemplates(` is CALLED only from
  *     apps/api/src/startup-hooks.ts, and `runStartupHooks(` only from
- *     apps/api/src/index.ts (derived by scanning every non-test .ts under
+ *     apps/api/src/process-role/background-starters.ts (derived by scanning every non-test .ts under
  *     apps/api/src and packages/{api,jobs,database}/src).
  *
  * WHAT IT CANNOT SEE:
@@ -45,6 +46,22 @@ const BACKEND = join(__dirname, "..", "..", "..", "..");
 const INDEX =
   process.env.TRIPWIRE_BOOT_INDEX_PATH ??
   join(BACKEND, "apps", "api", "src", "index.ts");
+const STARTERS =
+  process.env.TRIPWIRE_BOOT_STARTERS_PATH ??
+  join(BACKEND, "apps", "api", "src", "process-role", "background-starters.ts");
+
+/**
+ * Boot as it executes: the starters table (where `runStartupHooks(` lives since
+ * #753) runs where index.ts first calls `startBackground(`, so it is spliced in
+ * there and source order still proves execution order. No such call: index.ts
+ * alone (the check then fails if the hooks are missing from it).
+ */
+export function bootSource(index: string, starters: string): string {
+  const code = stripComments(index, "ts");
+  const at = code.search(/\bstartBackground\s*\(/);
+  if (at === -1) return code;
+  return `${code.slice(0, at)}\n${stripComments(starters, "ts")}\n${code.slice(at)}`;
+}
 
 const SCAN_ROOTS = [
   "apps/api/src",
@@ -119,13 +136,23 @@ describe("boot: conversions run before the template reconcile", () => {
     expect(bootOrderViolation("")).toMatch(/exactly one runConversions/);
   });
 
-  it("apps/api/src/index.ts awaits runConversions( before runStartupHooks(", () => {
-    const src = readFileSync(INDEX, "utf8");
-    expect(src.length, `could not read ${INDEX}`).toBeGreaterThan(1000);
-    expect(bootOrderViolation(src)).toBeNull();
+  it("self-check: the starters are spliced at the first startBackground( call", () => {
+    const index = `await (async () => {\n  await runConversions(sql, m, o);\n})();\nvoid startBackground(ctx, "boot");\n`;
+    const starters = `async start() { await runStartupHooks(); }\n`;
+    expect(bootOrderViolation(bootSource(index, starters))).toBeNull();
+    const early = `void startBackground(ctx, "boot");\nawait (async () => {\n  await runConversions(sql, m, o);\n})();\n`;
+    expect(bootOrderViolation(bootSource(early, starters))).toMatch(/AFTER/);
   });
 
-  it("the template reconcile is reachable only through runStartupHooks, and that only from index.ts", () => {
+  it("boot awaits runConversions( before the starters run runStartupHooks(", () => {
+    const src = readFileSync(INDEX, "utf8");
+    expect(src.length, `could not read ${INDEX}`).toBeGreaterThan(1000);
+    expect(
+      bootOrderViolation(bootSource(src, readFileSync(STARTERS, "utf8")))
+    ).toBeNull();
+  });
+
+  it("the template reconcile is reachable only through runStartupHooks, and that only from the starters table", () => {
     const files = SCAN_ROOTS.flatMap((r) => tsFiles(r));
     // Non-vacuity: the scan sees the tree, and the definitions exist.
     expect(files.length).toBeGreaterThan(200);
@@ -142,7 +169,7 @@ describe("boot: conversions run before the template reconcile", () => {
       "apps/api/src/startup-hooks.ts",
     ]);
     expect(callers(files, "runStartupHooks")).toEqual([
-      "apps/api/src/index.ts",
+      "apps/api/src/process-role/background-starters.ts",
     ]);
   });
 });

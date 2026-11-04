@@ -20,8 +20,10 @@ describe("system profile reconciliation at worker boot", () => {
     expect(registration).toMatch(
       /await ensureSystemProfiles\(\)[\s\S]*?System profiles reconciled at worker boot/
     );
-    expect(registration.indexOf("ensureSystemProfiles()")).toBeLessThan(
-      registration.indexOf("Created all pg-boss queues")
-    );
+    // Queue creation lives in createAllQueues() (a split pod's API calls it
+    // too); registerAllWorkers awaits it after the reconcile.
+    const queues = registration.indexOf("await createAllQueues()");
+    expect(queues).toBeGreaterThan(-1);
+    expect(registration.indexOf("ensureSystemProfiles()")).toBeLessThan(queues);
   });
 });
