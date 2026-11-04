@@ -10,7 +10,7 @@
 #   2. same pid, and the lock it holds is recognised (no "already running")
 #   3. the re-exec happens once (the probe sees SYNAP_UPDATE_SYNCED=1)
 #   4. installer unchanged by the sync → no re-exec (the probe never fires)
-#   5. without --dev-host the build is refused before the checkout is synced
+#   5. without --dev-host a typed --from-source is honoured (warning, then sync + build)
 # Does NOT cover the rest of the update (update-engine.test.sh does).
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -57,12 +57,11 @@ out=$(cd "$TMP/pod" && ./synap update --from-source --dev-host 2>&1)
 # that follows a no-change sync, never through a re-exec message.
 printf '%s\n' "$out" | grep -q 'continuing with the new one' && bad "no-change: re-exec'd although the installer did not change" || ok "no-change: no re-exec when the installer is unchanged"
 
-# ── 5: no --dev-host → refused BEFORE the sync (a pod never builds, plan P5) ──
+# ── 5: no --dev-host: a typed --from-source is honoured (founder, 2026-11-04) ──
 ( cd "$TMP/origin" && echo "# v3" >> synap && git commit -qam v3 )
-before=$(git -C "$TMP/pod" rev-parse HEAD)
 out=$(cd "$TMP/pod" && ./synap update --from-source 2>&1); rc=$?
-[ "$rc" != 0 ] && printf '%s\n' "$out" | grep -q 'not declared a dev host' && ok "pod: --from-source without --dev-host is refused" || { bad "pod: not refused (rc=$rc)"; printf '%s\n' "$out" | tail -5; }
-[ "$(git -C "$TMP/pod" rev-parse HEAD)" = "$before" ] && ! printf '%s\n' "$out" | grep -q 'Syncing checkout' \
-  && ok "pod: the refusal comes before the sync (no fetch + reset --hard of the pod's checkout)" || bad "pod: the checkout was synced before the refusal"
+printf '%s\n' "$out" | grep -q 'not declared a dev host' && bad "pod: refused although a person typed --from-source" || ok "pod: --from-source without --dev-host is not refused"
+printf '%s\n' "$out" | grep -q 'building from source uses a lot of memory' && ok "pod: one warning before the build" || { bad "pod: no warning"; printf '%s\n' "$out" | tail -5; }
+printf '%s\n' "$out" | grep -q 'Syncing checkout' && ok "pod: the checkout is synced, then built" || bad "pod: no sync (rc=$rc)"
 
 [ "$fail" -eq 0 ] && echo "PASS" || { echo "FAILED"; exit 1; }
