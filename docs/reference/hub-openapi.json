@@ -10793,6 +10793,404 @@
         }
       }
     },
+    "/import/unit-uploads": {
+      "post": {
+        "tags": ["Import"],
+        "summary": "Mint presigned upload URLs for a batch of import files",
+        "description": "Returns one presigned PUT URL per file (1..100 per call, all or nothing). PUT each file's bytes to its uploadUrl with exactly the returned headers, then name its uploadToken on a unit of POST /import/enqueue-units. Per-mime caps as POST /files/uploads. 501 when this pod's storage cannot presign: use POST /import/store-unit.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "filename": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 255
+                        },
+                        "mimeType": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "size": { "type": "integer", "exclusiveMinimum": 0 }
+                      },
+                      "required": ["filename", "mimeType", "size"]
+                    },
+                    "minItems": 1,
+                    "maxItems": 100
+                  }
+                },
+                "required": ["files"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Upload tickets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "uploads": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "uploadUrl": { "type": "string" },
+                          "method": { "type": "string", "enum": ["PUT"] },
+                          "headers": {
+                            "type": "object",
+                            "properties": {
+                              "Content-Type": { "type": "string" }
+                            },
+                            "required": ["Content-Type"]
+                          },
+                          "uploadToken": { "type": "string" },
+                          "expiresAt": { "type": "string" },
+                          "maxBytes": { "type": "number" }
+                        },
+                        "required": [
+                          "uploadUrl",
+                          "method",
+                          "headers",
+                          "uploadToken",
+                          "expiresAt",
+                          "maxBytes"
+                        ]
+                      }
+                    }
+                  },
+                  "required": ["uploads"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "413": {
+            "description": "A file is too large",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "415": {
+            "description": "A file type is not allowed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "501": {
+            "description": "Storage cannot presign",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/import/enqueue-units": {
+      "post": {
+        "tags": ["Import"],
+        "summary": "Enqueue a store-first import of many units as one background job",
+        "description": "One manifest (1..2000 units: key, title, body, properties, optional uploadToken from POST /import/unit-uploads) becomes ONE job on the import-units queue. The job stores each unit through the same door as POST /import/store-unit: the governed entity create, then the source file through the attach gate. Governance is per unit: a parked create is reported proposed with its proposalId, not failed. A unit key is the create door's idempotency key, so a unit sent again lands on its first entity. Poll GET /import/units-job/{jobId}.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "workspaceId": { "type": "string", "format": "uuid" },
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "intelligence",
+                      "agent",
+                      "openwebui-pipeline",
+                      "extension",
+                      "cli",
+                      "n8n",
+                      "raycast"
+                    ]
+                  },
+                  "units": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "title": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 500
+                        },
+                        "profileSlug": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 100
+                        },
+                        "content": { "type": "string", "maxLength": 200000 },
+                        "description": { "type": "string", "maxLength": 5000 },
+                        "properties": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "uploadToken": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1024
+                        }
+                      },
+                      "required": ["key", "title"]
+                    },
+                    "minItems": 1,
+                    "maxItems": 2000
+                  }
+                },
+                "required": ["units"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Units queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "queued": { "type": "boolean", "enum": [true] },
+                    "jobId": { "type": ["string", "null"] },
+                    "unitCount": { "type": "number" }
+                  },
+                  "required": ["queued", "jobId", "unitCount"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/import/units-job/{jobId}": {
+      "get": {
+        "tags": ["Import"],
+        "summary": "Poll a store-first import job",
+        "description": "The pg-boss state of a job from POST /import/enqueue-units. Only its submitter may read it. `output` (null until the job completes) maps each unit key to stored {entityId, audio}, proposed {proposalId} or failed {error}, with the counts. A null output is UNKNOWN, never success.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "jobId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jobId": { "type": "string" },
+                    "state": { "type": "string" },
+                    "createdOn": {
+                      "anyOf": [
+                        { "type": "string" },
+                        { "type": "string", "format": "date-time" },
+                        { "type": "null" }
+                      ]
+                    },
+                    "completedOn": {
+                      "anyOf": [
+                        { "type": "string" },
+                        { "type": "string", "format": "date-time" },
+                        { "type": "null" }
+                      ]
+                    },
+                    "output": {
+                      "type": ["object", "null"],
+                      "properties": {
+                        "total": { "type": "number" },
+                        "stored": { "type": "number" },
+                        "proposed": { "type": "number" },
+                        "failed": { "type": "number" },
+                        "results": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["stored"]
+                                  },
+                                  "entityId": { "type": "string" },
+                                  "audio": { "type": "boolean" },
+                                  "audioSkippedReason": {
+                                    "type": ["string", "null"]
+                                  }
+                                },
+                                "required": [
+                                  "status",
+                                  "entityId",
+                                  "audio",
+                                  "audioSkippedReason"
+                                ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["proposed"]
+                                  },
+                                  "proposalId": { "type": ["string", "null"] },
+                                  "audioSkippedReason": {
+                                    "type": ["string", "null"]
+                                  }
+                                },
+                                "required": [
+                                  "status",
+                                  "proposalId",
+                                  "audioSkippedReason"
+                                ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["failed"]
+                                  },
+                                  "error": { "type": "string" }
+                                },
+                                "required": ["status", "error"]
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "stored",
+                        "proposed",
+                        "failed",
+                        "results"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "jobId",
+                    "state",
+                    "createdOn",
+                    "completedOn",
+                    "output"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed jobId",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such job for this caller",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/search/collection": {
       "get": {
         "tags": ["Search"],

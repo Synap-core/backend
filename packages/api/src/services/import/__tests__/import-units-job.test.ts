@@ -68,6 +68,7 @@ vi.mock("../../../routers/hub-protocol/utils.js", () => ({
 
 import { getActingAgentUserId, getRequestGrant } from "@synap/database";
 import { runImportUnitsJob } from "../import-units-job.js";
+import type { ImportUnitCreateInput } from "../store-unit.js";
 import type { ImportUnitsPayload } from "@synap/jobs/workers/import-units-worker.js";
 
 const GRANT = {
@@ -108,8 +109,8 @@ beforeEach(() => {
 
 describe("runImportUnitsJob — one run, every unit through the store-unit door", () => {
   it("reports stored, proposed and failed apart, by unit key", async () => {
-    const seen: Array<Record<string, unknown>> = [];
-    const createDoor = vi.fn(async (input: Record<string, unknown>) => {
+    const seen: ImportUnitCreateInput[] = [];
+    const createDoor = vi.fn(async (input: ImportUnitCreateInput) => {
       seen.push(input);
       if (input.idempotencyKey === "superwhisper:2") {
         return {
