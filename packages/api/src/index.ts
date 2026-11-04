@@ -18,6 +18,8 @@ export { apiKeyService } from "./services/api-keys.js";
 export { ImportOrchestrator } from "./services/import-orchestrator.js";
 // The background approval job (handler slot of @synap/jobs proposal-approve).
 export { runApprovalJob } from "./services/proposals/approval-runs.js";
+// The store-first bulk import job (handler slot of @synap/jobs import-units).
+export { runImportUnitsJob } from "./services/import/import-units-job.js";
 // The Library light read: the job handler + hourly sweep the app registers in
 // the @synap/jobs slots at boot.
 export {
