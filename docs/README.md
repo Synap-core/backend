@@ -1,7 +1,7 @@
 # Documentation in this repository
 
 User, self-hosting and API documentation is published at
-<https://docs.synap.live>. The files here are the ones that sit next to the
+<https://doc.synap.live>. The files here are the ones that sit next to the
 code they describe.
 
 ## Start here

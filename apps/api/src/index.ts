@@ -431,7 +431,7 @@ app.get("/", (c) => {
     service: "Synap Data Pod API",
     adminConsole: "/admin/",
     health: "/health",
-    docs: "https://docs.synap.live",
+    docs: "https://doc.synap.live",
   });
 });
 

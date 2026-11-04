@@ -45,8 +45,30 @@ import {
   type UiRendererLookup,
 } from "./ui-tools.js";
 import { SYNAP_MCP_ICONS, SYNAP_WEBSITE_URL } from "../../brand-icons.js";
+import { parseTenantPodHost } from "@synap-core/types/tenancy";
 
 const logger: any = createLogger({ module: "mcp-server" });
+
+/**
+ * The title an MCP client shows for this pod's connector (founder, 2026-11-04):
+ * "Synap · <pod name>", so two pods connected to one client read apart. The pod
+ * name is the one the Control Plane gave it, read from its public host
+ * (PUBLIC_URL) by the one naming rule (`parseTenantPodHost`,
+ * `@synap-core/types/tenancy`): `<name>.pod.synap.live` and the legacy
+ * `pod.<name>.synap.live` both name `<name>`. The pod stores no other name. A
+ * pod whose host carries no Synap Cloud name (self-hosted, local, no or a
+ * malformed PUBLIC_URL) is plain "Synap".
+ */
+export function mcpServerTitle(
+  publicUrl: string | undefined = process.env.PUBLIC_URL
+): string {
+  const url = publicUrl?.trim();
+  const name =
+    url && URL.canParse(url)
+      ? parseTenantPodHost(new URL(url).hostname)?.name
+      : undefined;
+  return name ? `Synap · ${name}` : "Synap";
+}
 
 /**
  * Create and configure MCP server.
@@ -214,7 +236,7 @@ export function createMCPServer(
   const server = new Server(
     {
       name: "synap-mcp-server",
-      title: "Synap",
+      title: mcpServerTitle(),
       version: "1.0.0",
       websiteUrl: SYNAP_WEBSITE_URL,
       icons: SYNAP_MCP_ICONS,

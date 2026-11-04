@@ -6,7 +6,7 @@ and the scripts the `synap` operator CLI calls. The CLI itself is the
 [`synap`](../synap) script at the repository root.
 
 The same guide is published in the Run section of the documentation:
-<https://docs.synap.live/docs/run>.
+<https://doc.synap.live/docs/run>.
 
 Two tools are both called `synap`. Do not mix them up:
 
@@ -497,6 +497,6 @@ docker compose ps         # from the deploy directory
 
 ## Support
 
-- Documentation: <https://docs.synap.live>
+- Documentation: <https://doc.synap.live>
 - Issues: <https://github.com/Synap-core/backend/issues>
 - Discord: <https://discord.gg/xhRdQ7hG5h>
