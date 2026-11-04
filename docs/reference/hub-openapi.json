@@ -15501,6 +15501,23 @@
                                         "type": "integer",
                                         "minimum": 1,
                                         "maximum": 200
+                                      },
+                                      "unless": {
+                                        "type": "object",
+                                        "properties": {
+                                          "property": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 120,
+                                            "pattern": "^[A-Za-z0-9_-]+$"
+                                          },
+                                          "present": {
+                                            "type": "boolean",
+                                            "enum": [true]
+                                          }
+                                        },
+                                        "required": ["property", "present"],
+                                        "additionalProperties": false
                                       }
                                     },
                                     "required": ["on"],
@@ -15563,6 +15580,23 @@
                                     "type": "integer",
                                     "minimum": 1,
                                     "maximum": 200
+                                  },
+                                  "unless": {
+                                    "type": "object",
+                                    "properties": {
+                                      "property": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 120,
+                                        "pattern": "^[A-Za-z0-9_-]+$"
+                                      },
+                                      "present": {
+                                        "type": "boolean",
+                                        "enum": [true]
+                                      }
+                                    },
+                                    "required": ["property", "present"],
+                                    "additionalProperties": false
                                   }
                                 },
                                 "required": ["on"],
@@ -18636,6 +18670,23 @@
                                         "type": "integer",
                                         "minimum": 1,
                                         "maximum": 200
+                                      },
+                                      "unless": {
+                                        "type": "object",
+                                        "properties": {
+                                          "property": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 120,
+                                            "pattern": "^[A-Za-z0-9_-]+$"
+                                          },
+                                          "present": {
+                                            "type": "boolean",
+                                            "enum": [true]
+                                          }
+                                        },
+                                        "required": ["property", "present"],
+                                        "additionalProperties": false
                                       }
                                     },
                                     "required": ["on"],
@@ -18698,6 +18749,23 @@
                                     "type": "integer",
                                     "minimum": 1,
                                     "maximum": 200
+                                  },
+                                  "unless": {
+                                    "type": "object",
+                                    "properties": {
+                                      "property": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 120,
+                                        "pattern": "^[A-Za-z0-9_-]+$"
+                                      },
+                                      "present": {
+                                        "type": "boolean",
+                                        "enum": [true]
+                                      }
+                                    },
+                                    "required": ["property", "present"],
+                                    "additionalProperties": false
                                   }
                                 },
                                 "required": ["on"],
@@ -23862,6 +23930,20 @@
                               "type": "integer",
                               "minimum": 1,
                               "maximum": 200
+                            },
+                            "unless": {
+                              "type": "object",
+                              "properties": {
+                                "property": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 120,
+                                  "pattern": "^[A-Za-z0-9_-]+$"
+                                },
+                                "present": { "type": "boolean", "enum": [true] }
+                              },
+                              "required": ["property", "present"],
+                              "additionalProperties": false
                             }
                           },
                           "required": ["on"],

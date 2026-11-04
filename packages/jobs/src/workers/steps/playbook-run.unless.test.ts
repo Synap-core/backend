@@ -22,7 +22,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const h = vi.hoisted(() => ({
   runs: [] as Array<Record<string, unknown>>,
   proposals: 0,
-  subject: null as null | { id: string; workspaceId: string | null; properties: Record<string, unknown> | null },
+  subject: null as null | {
+    id: string;
+    workspaceId: string | null;
+    properties: Record<string, unknown> | null;
+  },
 }));
 
 vi.mock("@synap/database", () => ({
@@ -38,7 +42,10 @@ vi.mock("@synap/database", () => ({
 vi.mock("../capability-dispatch.js", () => ({
   getPlaybookRunner: () => async (input: Record<string, unknown>) => {
     h.runs.push(input);
-    return { run: { id: "r-1", status: "running" }, session: { id: "s-1", channelId: null } };
+    return {
+      run: { id: "r-1", status: "running" },
+      session: { id: "s-1", channelId: null },
+    };
   },
   getSessionScheduler: () => null,
   getPlaybookReadinessGate: () => async () => ({ ready: true }),
@@ -71,7 +78,11 @@ const step = (data: Record<string, unknown>) =>
     { automationId: "auto-1", automationRunId: "run-1" } as never
   );
 
-const post = (properties: Record<string, unknown>) => ({ id: "post-1", workspaceId: "ws-1", properties });
+const post = (properties: Record<string, unknown>) => ({
+  id: "post-1",
+  workspaceId: "ws-1",
+  properties,
+});
 
 beforeEach(() => {
   h.runs.length = 0;
@@ -83,7 +94,11 @@ describe("an activator's unless leaves the thing out", () => {
   it("a copy (it carries post-copy-of) files NO proposal: the step is skipped by name", async () => {
     h.subject = post({ "post-status": "Published", "post-copy-of": "post-0" });
     const out = await step({ mode: "propose", worker: REPURPOSE_WORKER });
-    expect(out).toEqual({ status: "skipped", reason: "unless_property", property: "post-copy-of" });
+    expect(out).toEqual({
+      status: "skipped",
+      reason: "unless_property",
+      property: "post-copy-of",
+    });
     expect(h.proposals).toBe(0);
     expect(h.runs).toHaveLength(0);
   });

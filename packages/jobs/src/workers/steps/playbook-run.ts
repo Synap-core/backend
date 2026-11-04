@@ -256,7 +256,8 @@ export async function executePlaybookRun(
       (subj.workspaceId === workspaceId || subj.workspaceId === null)
     ) {
       resolvedSubjectId = subj.id;
-      subjectProperties = (subj.properties as Record<string, unknown> | null) ?? null;
+      subjectProperties =
+        (subj.properties as Record<string, unknown> | null) ?? null;
     } else {
       logger.warn(
         { candidateSubjectId, workspaceId },
@@ -268,7 +269,10 @@ export async function executePlaybookRun(
   // ── UNLESS: the worker leaves this thing out (its activator's `unless`). ────
   // Before the proposal and before the run, so a left-out thing files nothing
   // and starts nothing (Content OS's Repurpose: a post sent for another one).
-  if (data.worker?.unless && skippedByUnless(data.worker.unless, subjectProperties)) {
+  if (
+    data.worker?.unless &&
+    skippedByUnless(data.worker.unless, subjectProperties)
+  ) {
     return {
       status: "skipped",
       reason: WORKER_SKIP_REASONS.unlessProperty,

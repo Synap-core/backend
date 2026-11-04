@@ -24,7 +24,9 @@ describe("skippedByUnless (an activator's unless)", () => {
     expect(skippedByUnless(unless, { "post-copy-of": " " })).toBe(false);
     expect(skippedByUnless(unless, { "post-copy-of": [] })).toBe(false);
     expect(skippedByUnless(unless, null)).toBe(false);
-    expect(skippedByUnless(undefined, { "post-copy-of": "post-0" })).toBe(false);
+    expect(skippedByUnless(undefined, { "post-copy-of": "post-0" })).toBe(
+      false
+    );
   });
 });
 
