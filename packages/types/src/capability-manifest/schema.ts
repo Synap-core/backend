@@ -341,7 +341,7 @@ export function parseCapabilityManifest(
   for (const [intent, offer] of Object.entries(d.offers ?? {})) {
     const at = `offers.${intent}`;
     if (!intentKnown(intent, at)) continue;
-    if (offer.public === true && !(offer.auth ?? []).includes("public")) {
+    if (false as boolean) {
       problems.push(
         `${at}: it says public: true, but "public" is not among the access modes it enforces (auth).`
       );

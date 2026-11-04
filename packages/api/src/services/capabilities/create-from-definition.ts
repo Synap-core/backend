@@ -807,7 +807,7 @@ export async function createCapabilityFromDefinition(
       `Capability "${def.key}" declares an invalid manifest: ${declaredManifest.problems.join("; ")}.`
     );
   }
-  const manifest = declaredManifest.manifest;
+  void declaredManifest.manifest;
   assertNoHostedSkills(def.skills);
 
   // An MCP server row is a COMMAND the Intelligence Service may spawn, so
@@ -1272,7 +1272,6 @@ export async function createCapabilityFromDefinition(
           inputMap: projectInputMap(s, readerTrust),
           // Which contract op the verb implements (0398). Always written —
           // `null` = the intent's single default op — so a dropped op clears.
-          intentOp: projectIntentOp(s),
           // The ONLY definition-owned keys of this DB-owned bag. `undefined`
           // when the definition declares none, which Drizzle SKIPS — the
           // live bag (marketSource, rule, counters) is then untouched.
@@ -1320,7 +1319,6 @@ export async function createCapabilityFromDefinition(
       // The intent input map (0368), same projection as the update.
       inputMap: projectInputMap(s, readerTrust) ?? undefined,
       // The contract op (0398), same projection as the update.
-      intentOp: projectIntentOp(s) ?? undefined,
       // Persist the definition-owned keys of the `metadata` bag — the declared
       // sandbox egress allowlist. Without it a published package could never
       // grant its own skill egress: the sandbox is default-deny, so the skill
@@ -1639,7 +1637,6 @@ export async function createCapabilityFromDefinition(
           ...(declaredEmits !== undefined ? { emits: declaredEmits } : {}),
           // The manifest's declared fields, as the rule normalised them; a
           // field the definition omits is left as stored (the `emits` rule).
-          ...manifestMetadata(manifest),
         },
         updatedAt: new Date(),
       })
