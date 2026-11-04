@@ -7,7 +7,7 @@
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@synap-core/api-types";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
-import { computerHref, navHref } from "../../../../lib/console-nav";
+import { agentHref, computerHref, navHref } from "../../../../lib/console-nav";
 import { DAY_MS } from "../../../../lib/format";
 import type { StatusKind } from "../../components/status-pill";
 import { appHref } from "../../applications/_lib/app-inventory";
@@ -133,11 +133,13 @@ export function holderName(k: UnifiedKey): string | null {
 
 /**
  * Where the key's holder has its own page: a computer's key opens its
- * computer (the key's `userId` IS the computer); an app's key opens its app on
+ * computer (the key's `userId` IS the computer), an agent's key its agent
+ * (the key's `userId` IS the agent user); an app's key opens its app on
  * Apps. null = the holder has no page to open from here — the row stays a row.
  */
 export function holderHref(k: UnifiedKey): string | null {
   if (k.holder?.kind === "computer" && k.userId) return computerHref(k.userId);
+  if (k.holder?.kind === "agent" && k.userId) return agentHref(k.userId);
   if (k.holder?.kind === "app" && k.holder.appId) {
     return appHref("key", k.holder.appId);
   }

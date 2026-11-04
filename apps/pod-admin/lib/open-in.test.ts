@@ -226,7 +226,7 @@ describe("placeExit — the device decides what a hand-off shows", () => {
       expect(placed.href).toBe(`synap://open/agent/${ID}`);
       expect(placed.fallback).toEqual(MOBILE_FALLBACK);
       expect(placed.web).toEqual({
-        href: `/agents?focus=${ID}`,
+        href: `/agents/${ID}`,
         label: "See this agent here",
       });
       expect(placed.unavailable).toBeUndefined();
@@ -405,7 +405,7 @@ describe("objectWebAlternative — an object's console page, for this viewer", (
       `/workspaces/${ID}`
     );
     expect(objectWebAlternative("agent", ID, "admin")?.href).toBe(
-      `/agents?focus=${ID}`
+      `/agents/${ID}`
     );
   });
 

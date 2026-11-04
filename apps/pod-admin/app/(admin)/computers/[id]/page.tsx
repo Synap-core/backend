@@ -10,7 +10,7 @@
 
 import { useParams } from "next/navigation";
 import { trpc } from "../../../../lib/trpc";
-import { navHref, navLabel } from "../../../../lib/console-nav";
+import { agentHref, navHref, navLabel } from "../../../../lib/console-nav";
 import { useReauthOnUnauthorized } from "../../../_lib/object/use-reauth";
 import { consoleFrame } from "../../../_lib/object/views/object-frame";
 import { ComputerObject, type ComputerLinks } from "../_lib/computer-object";
@@ -22,7 +22,7 @@ const FRAME = consoleFrame({
 });
 
 const LINKS: ComputerLinks = {
-  agentHref: (agentId) => navHref("agents", { focus: agentId }),
+  agentHref,
   keyHref: (keyId) => navHref("keys", { focus: keyId }),
   ownerHref: (userId) => navHref("members", { focus: userId }),
 };
