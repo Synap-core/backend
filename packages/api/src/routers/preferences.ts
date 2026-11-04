@@ -21,6 +21,13 @@ import {
   writeRailPins,
   type RailPinsOp,
 } from "../services/preferences/rail-pins.js";
+import { yourApps } from "../services/preferences/your-apps.js";
+import type { Context } from "../context.js";
+import { workspacesRouter } from "./workspaces.js";
+import { entitiesRouter } from "./entities.js";
+
+/** How many saved links the websites arm reads (the Tools page's own window). */
+const YOUR_APPS_LINKS_WINDOW = 500;
 
 /**
  * One write door for the rail pins; a full rail — or a week already holding
@@ -98,6 +105,37 @@ export const preferencesRouter = router({
     .query(async ({ ctx, input }) => ({
       pins: pinsFor(await readRailPins(ctx.userId), input),
     })),
+
+  /**
+   * YOUR APPS: what the person opens and uses, in one list (founder D-B,
+   * plan c727854c W5; rule `services/preferences/your-apps.ts`): their
+   * pinned surfaces and documents (this router's own pins, goals left out),
+   * the spaces they can open and the websites they keep as tools. Each arm is
+   * read through the door that owns it, under the caller's own context, so
+   * its floor is that door's: `readRailPins`, `workspaces.list`,
+   * `entities.list` (pod-wide bookmarks, the Tools page's own read). A failed
+   * arm fails the read: a partial list would read as "these are all".
+   */
+  yourApps: protectedProcedure.query(async ({ ctx }) => {
+    const caller = ctx as unknown as Context;
+    const [pins, spaces, links] = await Promise.all([
+      readRailPins(ctx.userId),
+      workspacesRouter.createCaller(caller).list(),
+      entitiesRouter.createCaller(caller).list({
+        profileSlug: "bookmark",
+        includeDescendants: true,
+        workspaceId: null,
+        limit: YOUR_APPS_LINKS_WINDOW,
+      }),
+    ]);
+    return {
+      apps: yourApps({
+        pins,
+        spaces,
+        links: links.entities,
+      }),
+    };
+  }),
 
   /**
    * Pin a surface: a kind/role (`profileSlug`), a saved pipeline view of it
