@@ -1478,6 +1478,8 @@ export {
   followUpChips,
   askRiskView,
   askIsSwipeSafe,
+  askSwipeAnswer,
+  type AskSwipeInput,
   actView,
   askRecommendationOutcome,
   answerProvenanceMark,

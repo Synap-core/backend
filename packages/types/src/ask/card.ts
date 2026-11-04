@@ -39,6 +39,7 @@ import {
   ASK_CONFIRM_KEYS,
   effectiveSlotAsk,
   effectiveAskStakes,
+  confirmRecommendedKey,
   type AskCause,
   type AskCauseKind,
   type AskAnswerValue,
@@ -47,6 +48,7 @@ import type { RoomPostMeta } from "./room-post.js";
 import {
   FATE_COPY,
   FATE_TONE,
+  JOB_NOUN,
   REVIEW_LATER_AFTER_MS,
 } from "../proposals/fate.js";
 import { ageSpan, ageSpanSpoken, shortDate } from "../lens/age.js";
@@ -63,11 +65,10 @@ export { ASK_MODES_ENDING_WITH_SESSION, askEndsWithSession };
 
 /**
  * The person's words for the engine's units, through the vocabulary door
- * (founder G1, 2026-10-30): a session is a "job", a stage a "step". The card
- * face never says "session" (plan c727854c W1b): the engine word belongs on
- * rung 3 only, and even there through the vocabulary.
+ * (founder G1, 2026-10-30): a session is a "job" (`JOB_NOUN`, defined once in
+ * `../proposals/fate.ts`), a stage a "step". The card face never says
+ * "session" (plan c727854c W1b): the engine word belongs on rung 3 only.
  */
-const JOB = nounInSentence(resolveObjectNoun("session"));
 const STEP = nounInSentence(resolveObjectNoun("stage"));
 
 /**
@@ -153,7 +154,7 @@ export const ASK_COPY = {
     "New secrets are added in the Synap app, never typed here.",
   /** Provide, secret: what handing it over lets the asking agent do. */
   provideGrantNote: (agent: string, minutes: number): string =>
-    `${agent} will be able to read it for ${minutes} minutes, in this ${JOB} only.`,
+    `${agent} will be able to read it for ${minutes} minutes, in this ${JOB_NOUN} only.`,
   /** Provide, secret: the pod could not tell which agent asked. */
   provideNoGrantNote:
     "No agent will be able to read it yet. The agent has to ask for access.",
@@ -218,7 +219,7 @@ export const ASK_COPY = {
   /** `note` is the agent's one-line reason, when it gave one. */
   withdrawn: (note: string | null | undefined): string =>
     note?.trim() ? `Withdrawn · ${note.trim()}` : "Withdrawn",
-  closedSessionEnded: `Closed · the ${JOB} ended`,
+  closedSessionEnded: `Closed · the ${JOB_NOUN} ended`,
   /**
    * A relayed answer's words on its receipt (a relay waiting for the tap, or
    * one recorded): the person's own QUOTE when the agent carried it, else the
@@ -246,7 +247,7 @@ export const ASK_COPY = {
    */
   askCause: (kind: AskCauseKind, at: string | null): string => {
     // A kind a newer pod sends: the ask still lives in a session.
-    const head = ASK_CAUSE_WORDS[kind] ?? `From the ${JOB}`;
+    const head = ASK_CAUSE_WORDS[kind] ?? `From the ${JOB_NOUN}`;
     return at ? `${head} · ${at}` : head;
   },
 } as const;
@@ -258,11 +259,11 @@ export const ASK_COPY = {
  */
 const ASK_CAUSE_UNBLOCKS: Record<AskCauseKind, string> = {
   decision: "The decision is recorded",
-  gate: `The ${JOB}'s next ${STEP} starts`,
+  gate: `The ${JOB_NOUN}'s next ${STEP} starts`,
   run: "The run goes on",
   external_approval: "The external agent's run goes on",
   param: "The run starts with your answer",
-  criterion: `The ${JOB}'s check is graded`,
+  criterion: `The ${JOB_NOUN}'s check is graded`,
 };
 
 /**
@@ -290,11 +291,11 @@ const ASK_CAUSE_WORDS: Record<AskCauseKind, string> = {
   // Only a decision an AGENT wrote asks (founder, 2026-10-26), so never "your
   // note". Its title is already the card's heading: the door names the kind.
   decision: "From a proposed decision",
-  gate: `Before the ${JOB}'s next ${STEP}`,
+  gate: `Before the ${JOB_NOUN}'s next ${STEP}`,
   run: "From the run",
   external_approval: "From the external agent's run",
   param: "From the playbook's inputs",
-  criterion: `From the ${JOB}'s checks`,
+  criterion: `From the ${JOB_NOUN}'s checks`,
 };
 
 // ─── Where the slot stands ──────────────────────────────────────────────────
@@ -485,36 +486,58 @@ export function askRiskView(
 }
 
 /**
- * Can this ask be answered with a swipe? The ask twin of `isSwipeSafe`
- * (`../proposals/intent.ts`, requests), and like it FAILS CLOSED on every
- * absence (founder, 2026-11-04: a swipe answers only routine, reversible,
- * low-risk items):
+ * The pod's stamp a swipe needs: was the answer FORCED to be a commitment
+ * (a gate, a pending relay, a human-only move, a spend: `podForcesCommitment`,
+ * `@synap/api` `session-answer.ts`)? Only the pod computes it, so the caller
+ * passes what the pod said, and REQUIRED: `null` / `undefined` (not stamped,
+ * an older pod) is never read as "not forced".
+ */
+export interface AskSwipeInput {
+  ask: Ask | null | undefined;
+  forced: boolean | null | undefined;
+}
+
+/**
+ * The answer a swipe on this ask GIVES, or `null` when it may not be swiped.
+ * The ask twin of `isSwipeSafe` (`../proposals/intent.ts`, requests), and like
+ * it FAILS CLOSED on every absence (founder, 2026-11-04: a swipe answers only
+ * routine, reversible, low-risk items):
  *
- *   - only a `confirm`, or a `choose` with ONE recommended option that opens
- *     no follow-up (the swipe takes it). `act`, `provide` and `form` never:
- *     each needs the person to do or type something;
- *   - routine: never a commitment (`effectiveAskStakes`: a declared, a forced
- *     and a secret commitment alike);
+ *   - the swipe gives the agent's RECOMMENDED answer, never a guess: a
+ *     `confirm` with a recommended yes or no, or a `choose` with ONE
+ *     recommended option that opens no follow-up. No recommendation, no swipe,
+ *     so a client can never swipe "no" by accident. `act`, `provide` and
+ *     `form` never: each needs the person to do or type something;
+ *   - routine: the pod stamped it not forced (`forced === false`) and the ask
+ *     raises no commitment itself (`effectiveAskStakes`: declared, a secret);
  *   - reversible: the asker said `reversible: true`; unsaid is not swipeable;
  *   - no risk mark: not high, not medium, not irreversible ({@link needsYouRisk}).
  */
-export function askIsSwipeSafe(
-  ask: Ask | null | undefined,
-  opts: { forced?: boolean } = {}
-): boolean {
-  if (!ask) return false;
-  if (ask.mode === "choose") {
+export function askSwipeAnswer(input: AskSwipeInput): AskAnswerValue | null {
+  const { ask, forced } = input;
+  if (!ask || forced !== false) return null;
+  let answer: AskAnswerValue;
+  if (ask.mode === "confirm") {
+    const key = confirmRecommendedKey(ask);
+    if (key === null) return null;
+    answer = { type: "confirm", confirmed: key === ASK_CONFIRM_KEYS.yes };
+  } else if (ask.mode === "choose") {
     const recommended = ask.options.filter((o) => o.recommended);
-    if (recommended.length !== 1 || recommended[0]!.followUp) return false;
-  } else if (ask.mode !== "confirm") {
-    return false;
+    if (recommended.length !== 1 || recommended[0]!.followUp) return null;
+    answer = { type: "chip", chip: recommended[0]! };
+  } else {
+    return null;
   }
-  if (effectiveAskStakes({ ask, forced: opts.forced }) !== "routine")
-    return false;
+  if (effectiveAskStakes({ ask, forced: false }) !== "routine") return null;
   // Read structurally: `reversible` is the ticket field (L3), absent before it.
   const facts = ask as { risk?: unknown; reversible?: unknown };
-  if (facts.reversible !== true) return false;
-  return needsYouRisk({ kind: "ask", ask: facts }) === null;
+  if (facts.reversible !== true) return null;
+  return needsYouRisk({ kind: "ask", ask: facts }) === null ? answer : null;
+}
+
+/** Can this ask be swiped at all? {@link askSwipeAnswer} gives an answer. */
+export function askIsSwipeSafe(input: AskSwipeInput): boolean {
+  return askSwipeAnswer(input) !== null;
 }
 
 /** The OFFERED option a chip stands for, or `null` when it is not one. */

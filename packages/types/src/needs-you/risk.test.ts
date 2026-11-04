@@ -7,7 +7,7 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { Ask } from "../ask/index.js";
-import { askIsSwipeSafe, askRiskView } from "../ask/card.js";
+import { askIsSwipeSafe, askRiskView, askSwipeAnswer } from "../ask/card.js";
 import { IRREVERSIBLE_MARK_LABEL } from "../proposals/intent.js";
 import { isUnitTone } from "../units/state.js";
 import {
@@ -118,62 +118,83 @@ describe("needsYouRisk — one mark for asks and requests", () => {
   });
 });
 
-describe("askIsSwipeSafe — fails closed on every absence", () => {
+describe("askSwipeAnswer — fails closed on every absence", () => {
+  const YES = { recommended: true };
   const confirm = (extra: Record<string, unknown> = {}): Ask =>
-    ({ mode: "confirm", reversible: true, ...extra }) as unknown as Ask;
+    ({
+      mode: "confirm",
+      yes: YES,
+      reversible: true,
+      ...extra,
+    }) as unknown as Ask;
   const choose = (
     options: unknown[],
     extra: Record<string, unknown> = {}
   ): Ask =>
     ({ mode: "choose", options, reversible: true, ...extra }) as unknown as Ask;
+  /** The pod stamped it: not forced. */
+  const swipe = (ask: Ask | null) => askSwipeAnswer({ ask, forced: false });
 
-  it("a routine, reversible, unmarked confirm swipes", () => {
-    expect(askIsSwipeSafe(confirm())).toBe(true);
+  it("a routine, reversible, unmarked confirm swipes to its recommended yes", () => {
+    expect(swipe(confirm())).toEqual({ type: "confirm", confirmed: true });
+    expect(askIsSwipeSafe({ ask: confirm(), forced: false })).toBe(true);
+  });
+
+  it("the swipe gives the RECOMMENDED answer: a recommended no swipes to no", () => {
+    expect(
+      swipe(confirm({ yes: undefined, no: { recommended: true } }))
+    ).toEqual({ type: "confirm", confirmed: false });
+  });
+
+  it("a confirm with no recommendation never swipes (no guessed yes or no)", () => {
+    expect(swipe(confirm({ yes: undefined }))).toBeNull();
+  });
+
+  it("a missing pod stamp never swipes: forced absent, null or true", () => {
+    expect(askSwipeAnswer({ ask: confirm(), forced: undefined })).toBeNull();
+    expect(askSwipeAnswer({ ask: confirm(), forced: null })).toBeNull();
+    expect(askSwipeAnswer({ ask: confirm(), forced: true })).toBeNull();
   });
 
   it("reversibility unsaid or false never swipes", () => {
-    expect(askIsSwipeSafe(confirm({ reversible: undefined }))).toBe(false);
-    expect(askIsSwipeSafe(confirm({ reversible: false }))).toBe(false);
+    expect(swipe(confirm({ reversible: undefined }))).toBeNull();
+    expect(swipe(confirm({ reversible: false }))).toBeNull();
   });
 
   it("a high or medium risk never swipes", () => {
-    expect(askIsSwipeSafe(confirm({ risk: "high" }))).toBe(false);
-    expect(askIsSwipeSafe(confirm({ risk: "medium" }))).toBe(false);
-    expect(askIsSwipeSafe(confirm({ risk: "low" }))).toBe(true);
+    expect(swipe(confirm({ risk: "high" }))).toBeNull();
+    expect(swipe(confirm({ risk: "medium" }))).toBeNull();
+    expect(swipe(confirm({ risk: "low" }))).not.toBeNull();
   });
 
-  it("a commitment never swipes: declared, or forced by the pod", () => {
-    expect(askIsSwipeSafe(confirm({ stakes: "commitment" }))).toBe(false);
-    expect(askIsSwipeSafe(confirm(), { forced: true })).toBe(false);
+  it("a declared commitment never swipes, even stamped not forced", () => {
+    expect(swipe(confirm({ stakes: "commitment" }))).toBeNull();
   });
 
   it("act, provide and form never swipe, whatever their risk", () => {
     for (const mode of ["act", "provide", "form"])
       expect(
-        askIsSwipeSafe({
+        swipe({
           mode,
           reversible: true,
           provide: { kind: "file" },
           form: { fields: [] },
         } as unknown as Ask)
-      ).toBe(false);
+      ).toBeNull();
   });
 
   it("a choose swipes only to its ONE recommended option, with no follow-up", () => {
+    const a = { label: "A", recommended: true };
+    expect(swipe(choose([a, { label: "B" }]))).toEqual({
+      type: "chip",
+      chip: a,
+    });
+    expect(swipe(choose([{ label: "A" }, { label: "B" }]))).toBeNull();
     expect(
-      askIsSwipeSafe(
-        choose([{ label: "A", recommended: true }, { label: "B" }])
-      )
-    ).toBe(true);
-    expect(askIsSwipeSafe(choose([{ label: "A" }, { label: "B" }]))).toBe(
-      false
-    );
-    expect(
-      askIsSwipeSafe(
+      swipe(
         choose([
           {
-            label: "A",
-            recommended: true,
+            ...a,
             followUp: {
               prompt: "Which?",
               options: [{ label: "x" }, { label: "y" }],
@@ -181,11 +202,11 @@ describe("askIsSwipeSafe — fails closed on every absence", () => {
           },
         ])
       )
-    ).toBe(false);
+    ).toBeNull();
   });
 
   it("no ask never swipes", () => {
-    expect(askIsSwipeSafe(null)).toBe(false);
+    expect(swipe(null)).toBeNull();
   });
 });
 

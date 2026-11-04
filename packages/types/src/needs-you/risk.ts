@@ -4,7 +4,7 @@
  * by. Pure, and a leaf: it imports nothing from `../ask` (the ask card reads
  * it at load, `ASK_COPY`, so an import back would be an ESM cycle). Returns
  * tone and glyph TOKEN NAMES (`UnitTone`, `UnitGlyph`), never a colour. The
- * ask's swipe gate built on it is `askIsSwipeSafe` (`../ask/card.ts`).
+ * ask's swipe gate built on it is `askSwipeAnswer` (`../ask/card.ts`).
  *
  * {@link needsYouRisk} replaced two derivations that answered the same
  * question two ways: `askRiskView` (asks; it painted `danger`, a tone no
