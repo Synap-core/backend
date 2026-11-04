@@ -16,6 +16,14 @@
  *     team visibility (it is not a person's conversation);
  *   - the realtime audience disagreeing with the read rule.
  *
+ * And the same for a conversation STAMPED WITH A SPACE (every creator stamps
+ * one: `accountHomeWorkspace`): the space's membership is not the rule, the
+ * person is. Rows rule out:
+ *   - a member of the channel's space who cannot read the person reading it;
+ *   - a member who CAN read the person (from another space) being refused;
+ *   - a bridge channel in a space (no person) losing its team visibility;
+ *   - the realtime audience following the space instead of the person.
+ *
  * Cannot see: production Postgres.
  */
 import { randomUUID } from "node:crypto";
@@ -76,7 +84,9 @@ function ddlFor(table: PgTable): string {
 const OWNER = randomUUID(); // connected the account; owns every channel below
 const MATE = randomUUID(); // a member of CRM
 const OUTSIDER = randomUUID(); // a pod member in no space
+const PEER = randomUUID(); // a member of HOME only
 const CRM = randomUUID();
+const HOME = randomUUID(); // the account's home space (OWNER, PEER)
 const PERSON_KIND = randomUUID();
 const ROLE_LEAD = randomUUID();
 
@@ -88,6 +98,9 @@ const CH_PRIVATE = randomUUID(); // PRIVATE's conversation (no space)
 const CH_UNBOUND = randomUUID(); // a DM whose sender was never identified
 const CH_BRIDGE = randomUUID(); // a Discord bridge: no person, no account
 const CH_ADDED = randomUUID(); // PRIVATE's, with OUTSIDER added as a member
+const CH_HOME_LEAD = randomUUID(); // LEAD's conversation, stamped HOME
+const CH_HOME_PRIVATE = randomUUID(); // PRIVATE's conversation, stamped HOME
+const CH_HOME_BRIDGE = randomUUID(); // a Discord bridge in HOME (no person)
 
 const q = <T = Record<string, unknown>>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
@@ -120,6 +133,7 @@ beforeAll(async () => {
     [OWNER, "owner"],
     [MATE, "member"],
     [OUTSIDER, "member"],
+    [PEER, "member"],
   ] as const) {
     await q(`insert into users (id, email, user_type) values ($1,$2,'human')`, [
       id,
@@ -134,13 +148,19 @@ beforeAll(async () => {
     `insert into workspaces (id, name, owner_id, settings) values ($1,'CRM',$2,'{}'::jsonb)`,
     [CRM, OWNER]
   );
-  for (const [user, role] of [
-    [OWNER, "owner"],
-    [MATE, "editor"],
+  await q(
+    `insert into workspaces (id, name, owner_id, settings) values ($1,'Home',$2,'{}'::jsonb)`,
+    [HOME, OWNER]
+  );
+  for (const [ws, user, role] of [
+    [CRM, OWNER, "owner"],
+    [CRM, MATE, "editor"],
+    [HOME, OWNER, "owner"],
+    [HOME, PEER, "editor"],
   ] as const) {
     await q(
       `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,$4)`,
-      [randomUUID(), CRM, user, role]
+      [randomUUID(), ws, user, role]
     );
   }
   await q(
@@ -169,19 +189,39 @@ beforeAll(async () => {
     id: string,
     person: string | null,
     metadata: string,
-    source: string
+    source: string,
+    workspace: string | null = null
   ) =>
     q(
       `insert into channels (id, user_id, workspace_id, title, channel_type, scope, status,
          context_object_type, context_object_id, external_source, external_id, metadata)
-       values ($1,$2,null,'c','external','pod','active',$3,$4,$5,$6,$7::jsonb)`,
-      [id, OWNER, person ? "entity" : null, person, source, `x-${id}`, metadata]
+       values ($1,$2,$8,'c','external',$9,'active',$3,$4,$5,$6,$7::jsonb)`,
+      [
+        id,
+        OWNER,
+        person ? "entity" : null,
+        person,
+        source,
+        `x-${id}`,
+        metadata,
+        workspace,
+        workspace ? "workspace" : "pod",
+      ]
     );
   await channel(CH_LEAD, LEAD, '{"accountId":"acc-1"}', "linkedin");
   await channel(CH_PRIVATE, PRIVATE, '{"accountId":"acc-1"}', "linkedin");
   await channel(CH_UNBOUND, null, '{"accountId":"acc-1"}', "linkedin");
   await channel(CH_BRIDGE, null, "{}", "discord");
   await channel(CH_ADDED, PRIVATE, '{"accountId":"acc-1"}', "linkedin");
+  await channel(CH_HOME_LEAD, LEAD, '{"accountId":"acc-1"}', "linkedin", HOME);
+  await channel(
+    CH_HOME_PRIVATE,
+    PRIVATE,
+    '{"accountId":"acc-1"}',
+    "linkedin",
+    HOME
+  );
+  await channel(CH_HOME_BRIDGE, null, "{}", "discord", HOME);
   await q(
     `insert into channel_members (id, channel_id, member_id, member_kind, role) values ($1,$2,$3,'user','member')`,
     [randomUUID(), CH_ADDED, OUTSIDER]
@@ -230,6 +270,50 @@ describe("a space-less person's conversation follows its person (decision d7)", 
     const unbound = await listChannelAudienceUserIds(h.db as never, CH_UNBOUND);
     expect(unbound).toEqual([OWNER]);
     const bridge = await listChannelAudienceUserIds(h.db as never, CH_BRIDGE);
-    expect(new Set(bridge)).toEqual(new Set([OWNER, MATE, OUTSIDER]));
+    expect(new Set(bridge)).toEqual(new Set([OWNER, MATE, OUTSIDER, PEER]));
+  });
+});
+
+describe("a person's conversation stamped with a space still follows its person", () => {
+  it("a member of its space who cannot read the person does not see it", async () => {
+    expect((await visibleTo(PEER)).has(CH_HOME_PRIVATE)).toBe(false);
+    expect((await visibleTo(PEER)).has(CH_HOME_LEAD)).toBe(false);
+    expect(await canUserSeeChannel(h.db as never, CH_HOME_PRIVATE, PEER)).toBe(
+      false
+    );
+  });
+
+  it("a member who reads the person sees it, from another space", async () => {
+    expect((await visibleTo(MATE)).has(CH_HOME_LEAD)).toBe(true);
+    expect(await canUserSeeChannel(h.db as never, CH_HOME_LEAD, MATE)).toBe(
+      true
+    );
+    expect((await visibleTo(MATE)).has(CH_HOME_PRIVATE)).toBe(false);
+  });
+
+  it("its owner still reads every one of them", async () => {
+    const mine = await visibleTo(OWNER);
+    for (const id of [CH_HOME_LEAD, CH_HOME_PRIVATE, CH_HOME_BRIDGE])
+      expect(mine.has(id)).toBe(true);
+  });
+
+  it("a bridge channel in a space (no person) stays visible to that space", async () => {
+    expect((await visibleTo(PEER)).has(CH_HOME_BRIDGE)).toBe(true);
+    expect((await visibleTo(MATE)).has(CH_HOME_BRIDGE)).toBe(false);
+  });
+
+  it("the realtime audience is the person's readers, not the space's members", async () => {
+    const lead = await listChannelAudienceUserIds(h.db as never, CH_HOME_LEAD);
+    expect(new Set(lead)).toEqual(new Set([OWNER, MATE]));
+    const priv = await listChannelAudienceUserIds(
+      h.db as never,
+      CH_HOME_PRIVATE
+    );
+    expect(priv).toEqual([OWNER]);
+    const bridge = await listChannelAudienceUserIds(
+      h.db as never,
+      CH_HOME_BRIDGE
+    );
+    expect(new Set(bridge)).toEqual(new Set([OWNER, PEER]));
   });
 });
