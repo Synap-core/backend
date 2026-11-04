@@ -15547,11 +15547,13 @@ export interface ProposalExecutorResult {
 	joined?: boolean;
 	approvalRun?: ApprovalRunView;
 }
-declare const PRESENCE_REQUIRED: "PRESENCE_REQUIRED";
-declare const PRESENCE_INVALID: "PRESENCE_INVALID";
-declare const PRESENCE_EXPIRED: "PRESENCE_EXPIRED";
-declare const PRESENCE_USED: "PRESENCE_USED";
-export type PresenceRefusalCode = typeof PRESENCE_REQUIRED | typeof PRESENCE_INVALID | typeof PRESENCE_EXPIRED | typeof PRESENCE_USED;
+declare const PRESENCE_REFUSAL_CODES: readonly [
+	"PRESENCE_REQUIRED",
+	"PRESENCE_INVALID",
+	"PRESENCE_EXPIRED",
+	"PRESENCE_USED"
+];
+export type PresenceRefusalCode = (typeof PRESENCE_REFUSAL_CODES)[number];
 /** One attempt, as every reader sees it. */
 export interface ApprovalRunView {
 	runId: string;
@@ -26803,6 +26805,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				belongsTo?: "agent" | "person" | "shared" | null | undefined;
 				computerName?: string | null | undefined;
 				decision: "approve" | "deny";
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				requestId: string;
 				reuseComputerId?: string | null | undefined;
 				userCode: string;
@@ -26828,6 +26852,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					templateId?: string | null | undefined;
 					uses: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[];
 				} | undefined;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				requestId: string;
 			};
 			meta: object;
@@ -26848,6 +26894,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				codeChallenge?: string | undefined;
 				codeChallengeMethod?: string | undefined;
 				maxAge?: string | number | undefined;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				prompt?: string | undefined;
 				redirectUri: string;
 				resource?: string | undefined;
@@ -27164,6 +27232,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		approveRequest: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				requestId: string;
 			};
 			meta: object;
@@ -29479,6 +29569,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		setToolEnabled: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				enabled: boolean;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				skillId: string;
 			};
 			meta: object;
@@ -40666,6 +40778,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		approveMcp: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				serviceId: string;
 			};
 			meta: object;
@@ -41688,6 +41822,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				input: {
 					id: string;
 					keyFingerprint: string;
+					presence?: {
+						challengeId: string;
+						keyId: string;
+						kind: "device_key";
+						signature: string;
+					} | {
+						challengeId: string;
+						credential: {
+							authenticatorAttachment?: string | null | undefined;
+							clientExtensionResults?: Record<string, unknown> | undefined;
+							id: string;
+							rawId: string;
+							response: {
+								authenticatorData: string;
+								clientDataJSON: string;
+								signature: string;
+								userHandle?: string | null | undefined;
+							};
+							type: "public-key";
+						};
+						kind: "passkey";
+					} | undefined;
 				};
 				meta: object;
 				output: {
@@ -41902,6 +42058,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				approved: boolean;
 				id: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -45583,6 +45761,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalId: string;
 			} | {
 				pendingKeyId: string;
+			} | {
+				request: {
+					id: string;
+					kind: "app_connection_request" | "device_request" | "intelligence_mcp" | "key_request" | "marketplace_key" | "mcp_server" | "oauth_consent" | "skill" | "tool" | "trusted_issuer";
+				};
+			} | {
+				oauthConsent: {
+					clientId: string;
+					codeChallenge?: string | null | undefined;
+					redirectUri: string;
+					state?: string | null | undefined;
+				};
 			};
 			meta: object;
 			output: {
@@ -45605,6 +45795,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userVerification: "required";
 				} | null;
 				proposalId: string;
+				subject: string;
 			};
 		}>;
 		devices: import("@trpc/server").TRPCBuiltRouter<{
@@ -50498,6 +50689,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				approved: boolean;
 				id: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -52542,6 +52755,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				approved: boolean;
 				id: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -52979,6 +53214,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				allowedScopes: ("ai:analyze" | "auth:exchange-user" | "box.runner" | "chat.stream" | "data.read" | "data.write" | "hub-protocol.admin" | "hub-protocol.read" | "hub-protocol.write" | "identity:link-user" | "mcp.read" | "mcp.write" | "membership:activate" | "membership:grant" | "probe" | "providers.write" | "provision" | "read:entities" | "realtime:observe" | "setup.agent" | "skills.invoke" | "source-config:write" | "sync" | "tier_update" | "write:entities")[];
 				expectedStatus?: "approved" | "pending" | "rejected" | "revoked" | undefined;
 				id: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {

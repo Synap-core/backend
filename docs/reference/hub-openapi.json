@@ -13021,7 +13021,102 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "approved": { "type": "boolean", "default": true }
+                  "approved": { "type": "boolean", "default": true },
+                  "presence": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": { "type": "string", "enum": ["device_key"] },
+                          "challengeId": { "type": "string", "format": "uuid" },
+                          "keyId": { "type": "string", "format": "uuid" },
+                          "signature": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 8192,
+                            "pattern": "^[A-Za-z0-9_-]+$"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "challengeId",
+                          "keyId",
+                          "signature"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": { "type": "string", "enum": ["passkey"] },
+                          "challengeId": { "type": "string", "format": "uuid" },
+                          "credential": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 8192,
+                                "pattern": "^[A-Za-z0-9_-]+$"
+                              },
+                              "rawId": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 8192,
+                                "pattern": "^[A-Za-z0-9_-]+$"
+                              },
+                              "type": {
+                                "type": "string",
+                                "enum": ["public-key"]
+                              },
+                              "response": {
+                                "type": "object",
+                                "properties": {
+                                  "clientDataJSON": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 8192,
+                                    "pattern": "^[A-Za-z0-9_-]+$"
+                                  },
+                                  "authenticatorData": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 8192,
+                                    "pattern": "^[A-Za-z0-9_-]+$"
+                                  },
+                                  "signature": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 8192,
+                                    "pattern": "^[A-Za-z0-9_-]+$"
+                                  },
+                                  "userHandle": {
+                                    "type": ["string", "null"],
+                                    "minLength": 1,
+                                    "maxLength": 8192,
+                                    "pattern": "^[A-Za-z0-9_-]+$"
+                                  }
+                                },
+                                "required": [
+                                  "clientDataJSON",
+                                  "authenticatorData",
+                                  "signature"
+                                ]
+                              },
+                              "clientExtensionResults": {
+                                "type": "object",
+                                "additionalProperties": {}
+                              },
+                              "authenticatorAttachment": {
+                                "type": ["string", "null"]
+                              }
+                            },
+                            "required": ["id", "rawId", "type", "response"]
+                          }
+                        },
+                        "required": ["kind", "challengeId", "credential"]
+                      }
+                    ]
+                  }
                 }
               }
             }
@@ -13747,7 +13842,102 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "approved": { "type": "boolean", "default": true }
+                  "approved": { "type": "boolean", "default": true },
+                  "presence": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": { "type": "string", "enum": ["device_key"] },
+                          "challengeId": { "type": "string", "format": "uuid" },
+                          "keyId": { "type": "string", "format": "uuid" },
+                          "signature": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 8192,
+                            "pattern": "^[A-Za-z0-9_-]+$"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "challengeId",
+                          "keyId",
+                          "signature"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": { "type": "string", "enum": ["passkey"] },
+                          "challengeId": { "type": "string", "format": "uuid" },
+                          "credential": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 8192,
+                                "pattern": "^[A-Za-z0-9_-]+$"
+                              },
+                              "rawId": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 8192,
+                                "pattern": "^[A-Za-z0-9_-]+$"
+                              },
+                              "type": {
+                                "type": "string",
+                                "enum": ["public-key"]
+                              },
+                              "response": {
+                                "type": "object",
+                                "properties": {
+                                  "clientDataJSON": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 8192,
+                                    "pattern": "^[A-Za-z0-9_-]+$"
+                                  },
+                                  "authenticatorData": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 8192,
+                                    "pattern": "^[A-Za-z0-9_-]+$"
+                                  },
+                                  "signature": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 8192,
+                                    "pattern": "^[A-Za-z0-9_-]+$"
+                                  },
+                                  "userHandle": {
+                                    "type": ["string", "null"],
+                                    "minLength": 1,
+                                    "maxLength": 8192,
+                                    "pattern": "^[A-Za-z0-9_-]+$"
+                                  }
+                                },
+                                "required": [
+                                  "clientDataJSON",
+                                  "authenticatorData",
+                                  "signature"
+                                ]
+                              },
+                              "clientExtensionResults": {
+                                "type": "object",
+                                "additionalProperties": {}
+                              },
+                              "authenticatorAttachment": {
+                                "type": ["string", "null"]
+                              }
+                            },
+                            "required": ["id", "rawId", "type", "response"]
+                          }
+                        },
+                        "required": ["kind", "challengeId", "credential"]
+                      }
+                    ]
+                  }
                 }
               }
             }
