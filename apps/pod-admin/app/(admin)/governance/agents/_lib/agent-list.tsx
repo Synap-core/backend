@@ -174,6 +174,11 @@ function AgentRow({
             <span className="text-[12px] text-foreground/65">
               {summary.line}
             </span>
+            {summary.computer && (
+              <span className="text-[12px] text-foreground/65">
+                {t("row.computerDecides", { computer: summary.computer.name })}
+              </span>
+            )}
           </>
         )}
       </div>

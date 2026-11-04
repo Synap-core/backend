@@ -42,10 +42,18 @@ import {
 } from "@synap/governance-policy";
 import {
   AGENT_POSTURE_NAMES,
+  isAgentPostureName,
   resolveAgentPosture,
   type AgentPostureName,
 } from "@synap/governance-policy/postures";
 import { filterUncoveredActions } from "./floor-covered-actions.js";
+import { readReversibleDefault } from "./reversible-default.js";
+import {
+  AGENT_WRITE_MODE_LINE,
+  effectiveAgentWriteMode,
+  resolveAgentWriteMode,
+  type AgentEffectiveWriteMode,
+} from "@synap-core/types/agents";
 import {
   SETTINGS_MIRROR_CREATED_BY_PREFIX,
   settingsMirrorCreatedBy,
@@ -240,14 +248,36 @@ export async function resolveGovernanceLane(input: {
 export type AgentGovernanceResolution =
   | { decision: "not-agent" }
   /** `reasonCode` = the engine's typed refusal (`DENIED_BY_RULE`), when set. */
-  | { decision: "deny"; reason: string; reasonCode?: string }
-  | { decision: "propose"; reason?: string; reasonCode?: string }
+  | {
+      decision: "deny";
+      reason: string;
+      reasonCode?: string;
+      decidedBy?: GovernanceDecidedBy;
+    }
+  | {
+      decision: "propose";
+      reason?: string;
+      reasonCode?: string;
+      /** The `propose` rule that made it ask (rung 2.8), when one did. */
+      governanceRuleId?: string;
+      decidedBy?: GovernanceDecidedBy;
+    }
   | {
       decision: "execute";
       explicitAutoApproveFor?: readonly string[];
       /** The `governance_rules` row that decided (rung 2.8), when one did. */
       governanceRuleId?: string;
+      decidedBy?: GovernanceDecidedBy;
     };
+
+/**
+ * WHICH PASS of the host step decided ({@link resolveAgentGovernanceDecision}):
+ * the agent as itself, or the computer it runs on (`users.host_user_id`).
+ * Present only for an agent that runs on a computer — an agent with no host
+ * has one pass, and its verdict is its own.
+ */
+export type GovernanceDecidedBy =
+  { principal: "agent" } | { principal: "computer"; computerUserId: string };
 
 /** A candidate row's specificity-scoring columns (subset of `governanceRules`). */
 interface GovernanceRuleCandidate {
@@ -895,6 +925,27 @@ export async function syncAutoApproveRules(
 export type AgentPostureScope =
   { kind: "pod" } | { kind: "workspace"; workspaceId: string };
 
+/**
+ * THE rows a named posture is stored as — the projection every posture writer
+ * inserts ({@link applyAgentPosture}, its space half) and every reader compares
+ * against (`matchPostureName`, {@link reconcileAgentPostures}). One function,
+ * so a reader can never compare a set the writer does not write.
+ */
+export function postureRuleSet(
+  name: AgentPostureName
+): Array<{ targetPattern: string; verdict: "auto" | "propose" }> {
+  const posture = resolveAgentPosture(name);
+  return [
+    ...Array.from(new Set(filterUncoveredActions(posture.autoApproveFor))).map(
+      (p) => ({ targetPattern: p, verdict: "auto" as const })
+    ),
+    ...Array.from(new Set(posture.proposeFor)).map((p) => ({
+      targetPattern: p,
+      verdict: "propose" as const,
+    })),
+  ];
+}
+
 export async function applyAgentPosture(input: {
   db: DbHandle;
   agentUserId: string;
@@ -923,10 +974,7 @@ export async function applyAgentPosture(input: {
     });
   }
   const posture = input.posture ? resolveAgentPosture(input.posture) : null;
-  const autos = posture
-    ? Array.from(new Set(filterUncoveredActions(posture.autoApproveFor)))
-    : [];
-  const proposes = posture ? Array.from(new Set(posture.proposeFor)) : [];
+  const rows = posture ? postureRuleSet(posture.name) : [];
   // Clearing never loosens rung 5 either: the flag stays strict, and the pod
   // default (rung 2.8) is what lets the agent act on reversible writes.
   const marker = JSON.stringify({
@@ -938,34 +986,12 @@ export async function applyAgentPosture(input: {
     const replaced = await tx
       .update(governanceRules)
       .set({ revokedAt: new Date() })
-      .where(
-        and(
-          isNull(governanceRules.revokedAt),
-          isNull(governanceRules.sourceProposalId),
-          eq(governanceRules.targetKind, "action"),
-          eq(governanceRules.principalKind, "agent"),
-          eq(governanceRules.agentUserId, agentUserId),
-          eq(governanceRules.scopeKind, "pod"),
-          // A posture never writes a "Never" (0381), so it never takes one
-          // back: a person's deny outlives every posture change.
-          ne(governanceRules.verdict, "deny"),
-          // A computer's posture never takes back an agent's approval seeded
-          // on it (host-seed.ts).
-          notLike(governanceRules.createdBy, `${HOST_SEED_CREATED_BY_PREFIX}%`)
-        )
-      )
+      .where(podPostureRowsWhere(agentUserId))
       .returning({ id: governanceRules.id });
     await revokeHostSeeds(
       tx,
       replaced.map((r) => r.id)
     );
-    const rows = [
-      ...autos.map((p) => ({ targetPattern: p, verdict: "auto" as const })),
-      ...proposes.map((p) => ({
-        targetPattern: p,
-        verdict: "propose" as const,
-      })),
-    ];
     if (rows.length > 0) {
       const written = await tx
         .insert(governanceRules)
@@ -996,6 +1022,107 @@ export async function applyAgentPosture(input: {
   };
 }
 
+/**
+ * Rows a POD posture REPLACES: this agent's own active pod-scope action rules,
+ * except an earned widening (`source_proposal_id`), a person's "Never" (a
+ * posture never writes one, 0381, so it never takes one back) and an approval
+ * seeded from one of its agents (host-seed.ts).
+ */
+function podPostureRowsWhere(agentUserId: string) {
+  return and(
+    isNull(governanceRules.revokedAt),
+    isNull(governanceRules.sourceProposalId),
+    eq(governanceRules.targetKind, "action"),
+    eq(governanceRules.principalKind, "agent"),
+    eq(governanceRules.agentUserId, agentUserId),
+    eq(governanceRules.scopeKind, "pod"),
+    ne(governanceRules.verdict, "deny"),
+    notLike(governanceRules.createdBy, `${HOST_SEED_CREATED_BY_PREFIX}%`)
+  );
+}
+
+/**
+ * POSTURE ROWS FOLLOW THE CLASS. A pod posture is stored as rows that are a
+ * SNAPSHOT of its class (`REVERSIBLE_EVENT_KEYS`, through
+ * {@link postureRuleSet}) at apply time, while the agent's marker
+ * (`governancePosture`) names the posture. When the class grows, the marker
+ * still says "Ask first" and the new keys act (live: the devbox agents lacked
+ * `knowledgeKey.create`, synap.live also `entity.transition`). This
+ * re-applies the named posture through THE writer, {@link applyAgentPosture},
+ * wherever the stored rows are not exactly the posture's rows today.
+ *
+ * Template→installed convergence (backend-rules): it stamps NOTHING. The
+ * comparator is the rows themselves, read with the writer's own REPLACE
+ * predicate ({@link podPostureRowsWhere}) and compared with the writer's own
+ * projection ({@link postureRuleSet}), on every run; a pass that finds them
+ * equal writes nothing.
+ *
+ * LEFT ALONE (honest under-convergence, counted in `leftAlone`): an agent
+ * whose replaceable rows include one not written by a posture or the settings
+ * mirror (a person's rule from the Rules editor). The REPLACE would revoke it,
+ * and a boot pass never takes back what a person wrote. Space postures are not
+ * covered: they have no marker naming the posture they meant.
+ */
+export async function reconcileAgentPostures(input: { db: DbHandle }): Promise<{
+  checked: number;
+  reapplied: string[];
+  leftAlone: string[];
+}> {
+  const { db } = input;
+  const agents = await db
+    .select({ id: users.id, agentMetadata: users.agentMetadata })
+    .from(users)
+    .where(
+      and(
+        eq(users.userType, "agent"),
+        inArray(sql<string>`${users.agentMetadata}->>'governancePosture'`, [
+          ...AGENT_POSTURE_NAMES,
+        ])
+      )
+    );
+  const reapplied: string[] = [];
+  const leftAlone: string[] = [];
+  for (const agent of agents) {
+    const { posture } = writePostureOf(agent.agentMetadata);
+    if (!posture || !isAgentPostureName(posture)) continue;
+    const rows = await db
+      .select({
+        pattern: governanceRules.targetPattern,
+        verdict: governanceRules.verdict,
+        createdBy: governanceRules.createdBy,
+      })
+      .from(governanceRules)
+      .where(podPostureRowsWhere(agent.id));
+    const key = (v: string, p: string) => `${v} ${p}`;
+    const have = rows.map((r) => key(r.verdict, r.pattern));
+    const want = new Set(
+      postureRuleSet(posture).map((r) => key(r.verdict, r.targetPattern))
+    );
+    if (have.length === want.size && have.every((k) => want.has(k))) {
+      continue;
+    }
+    if (
+      rows.some(
+        (r) => !r.createdBy.startsWith(SETTINGS_MIRROR_CREATED_BY_PREFIX)
+      )
+    ) {
+      leftAlone.push(agent.id);
+      continue;
+    }
+    await applyAgentPosture({
+      db,
+      agentUserId: agent.id,
+      posture,
+      // The person who last applied it stays its author; an agent whose rows
+      // are all gone is re-applied in the mirror's own name.
+      createdBy:
+        rows[0]?.createdBy ?? `${SETTINGS_MIRROR_CREATED_BY_PREFIX}system`,
+    });
+    reapplied.push(agent.id);
+  }
+  return { checked: agents.length, reapplied, leftAlone };
+}
+
 /** Rows a SPACE posture owns: this agent's settings-mirror action rules there. */
 function spacePostureRowsWhere(agentUserId: string, workspaceId?: string) {
   return and(
@@ -1023,17 +1150,7 @@ async function applyAgentSpacePosture(input: {
 }> {
   const { db, agentUserId, workspaceId, createdBy } = input;
   const posture = input.posture ? resolveAgentPosture(input.posture) : null;
-  const rows = posture
-    ? [
-        ...Array.from(
-          new Set(filterUncoveredActions(posture.autoApproveFor))
-        ).map((p) => ({ targetPattern: p, verdict: "auto" as const })),
-        ...Array.from(new Set(posture.proposeFor)).map((p) => ({
-          targetPattern: p,
-          verdict: "propose" as const,
-        })),
-      ]
-    : [];
+  const rows = posture ? postureRuleSet(posture.name) : [];
   await db.transaction(async (tx) => {
     const replaced = await tx
       .update(governanceRules)
@@ -1080,11 +1197,9 @@ function matchPostureName(
   const key = (v: string, p: string) => `${v} ${p}`;
   const have = new Set(rows.map((r) => key(r.verdict, r.pattern)));
   for (const name of AGENT_POSTURE_NAMES) {
-    const p = resolveAgentPosture(name);
-    const want = new Set([
-      ...filterUncoveredActions(p.autoApproveFor).map((x) => key("auto", x)),
-      ...p.proposeFor.map((x) => key("propose", x)),
-    ]);
+    const want = new Set(
+      postureRuleSet(name).map((r) => key(r.verdict, r.targetPattern))
+    );
     if (want.size === have.size && [...want].every((k) => have.has(k)))
       return name;
   }
@@ -1144,6 +1259,76 @@ export async function readAgentWritePostures(input: {
     .from(users)
     .where(and(inArray(users.id, ids), eq(users.userType, "agent")));
   return new Map(rows.map((r) => [r.id, writePostureOf(r.agentMetadata)]));
+}
+
+/**
+ * How an agent's writes REALLY land, pod-wide: the stricter of its own write
+ * mode and the mode of the computer it runs on — the host step
+ * ({@link resolveAgentGovernanceDecision}) said as a mode. Each side's mode is
+ * the ONE derivation (`resolveAgentWriteMode`) of its own posture; the host is
+ * the same `users.host_user_id` the resolver follows; "stricter wins" is
+ * `effectiveAgentWriteMode`. Without this, an agent set to Normal on an
+ * ask-first computer read "Normal" while every create proposed (finding
+ * 168956d8). Null when the id is not an agent.
+ *
+ * What it does NOT see: a computer's hand-written rules that match no posture
+ * (they decide writes but name no mode), and per-space postures. Its parity
+ * with the write path is pinned for every pair of postures by
+ * `effective-agent-permission.pglite.test.ts`.
+ */
+export async function readEffectiveAgentWriteMode(input: {
+  db: DbHandle;
+  agentUserId: string;
+}): Promise<
+  | (Omit<AgentEffectiveWriteMode, "computer"> & {
+      /** The computer it runs on (named by the caller: `loadMachineNames`). */
+      computerUserId: string | null;
+    })
+  | null
+> {
+  const { db, agentUserId } = input;
+  const [agent] = await db
+    .select({
+      agentMetadata: users.agentMetadata,
+      hostUserId: users.hostUserId,
+    })
+    .from(users)
+    .where(and(eq(users.id, agentUserId), eq(users.userType, "agent")))
+    .limit(1);
+  if (!agent) return null;
+  const hostUserId =
+    agent.hostUserId && agent.hostUserId !== agentUserId
+      ? agent.hostUserId
+      : null;
+  const [host] = hostUserId
+    ? await db
+        .select({ agentMetadata: users.agentMetadata })
+        .from(users)
+        .where(and(eq(users.id, hostUserId), eq(users.userType, "agent")))
+        .limit(1)
+    : [];
+  const podDefault = await readReversibleDefault(db);
+  const sideOf = (agentMetadata: unknown) => {
+    const { posture, writesRequireProposal } = writePostureOf(agentMetadata);
+    return {
+      posture,
+      mode: resolveAgentWriteMode({
+        posture,
+        podDefaultEnabled: podDefault.enabled,
+        writesRequireProposal,
+      }),
+    };
+  };
+  const { mode, decidedBy } = effectiveAgentWriteMode(
+    sideOf(agent.agentMetadata),
+    host ? sideOf(host.agentMetadata) : null
+  );
+  return {
+    writeMode: mode,
+    line: AGENT_WRITE_MODE_LINE[mode],
+    decidedBy,
+    computerUserId: host ? hostUserId : null,
+  };
 }
 
 /** The read half of {@link applyAgentPosture}. */
@@ -1723,16 +1908,24 @@ export async function resolveAgentGovernanceDecision(
   const host = await resolveForPrincipal({
     ...principalInput,
     agentUserId: own.hostUserId,
+    hostPass: true,
   });
   if (host.resolution.decision === "not-agent") return own.resolution;
+  // Which pass won rides on the resolution, so the proposal it files (and the
+  // dry run) can name the computer instead of reading as the agent's own rule.
   return strictness(host.resolution) > strictness(own.resolution)
-    ? host.resolution
-    : own.resolution;
+    ? {
+        ...host.resolution,
+        decidedBy: { principal: "computer", computerUserId: own.hostUserId },
+      }
+    : { ...own.resolution, decidedBy: { principal: "agent" } };
 }
 
 /** The resolver's per-principal input: the proven F2 answer rides along. */
 type PrincipalInput = ResolveAgentGovernanceInput & {
   ownSessionBookkeeping?: () => Promise<boolean>;
+  /** This pass judges the agent's computer (the engine's `hostPass`). */
+  hostPass?: boolean;
 };
 
 async function resolveForPrincipal(input: PrincipalInput): Promise<{
@@ -1868,6 +2061,7 @@ async function resolveForPrincipal(input: PrincipalInput): Promise<{
     heldAsDraft: input.heldAsDraft,
     originTrust,
     bodyOfHumanOwnedEntity: lane.bodyOfHumanOwnedEntity,
+    hostPass: input.hostPass,
   };
 
   let decision = decideAgentPolicy(basePolicyInput);
@@ -1926,6 +2120,10 @@ async function resolveForPrincipal(input: PrincipalInput): Promise<{
         decision: "propose",
         reason: decision.reason,
         reasonCode: decision.reasonCode,
+        // Set by the engine only when a `propose` rule at 2.8 decided.
+        ...(decision.governanceRuleId
+          ? { governanceRuleId: decision.governanceRuleId }
+          : {}),
       },
       hostUserId,
     };
@@ -2030,6 +2228,12 @@ export async function dryRunAgentGovernanceDecision(
     verdict: GovernanceRuleVerdict;
     matchedPattern: string;
   } | null;
+  /**
+   * Which pass of the host step decided (an agent on a computer is judged as
+   * itself and as its computer; the stricter wins). `winningRule` is the rule
+   * of THAT pass. Absent for an agent that runs on no computer.
+   */
+  decidedBy?: GovernanceDecidedBy;
 }> {
   // ONE key: a bare event key (no subjectType) is split back into the pair
   // the real gates pass. Before this, a preview sent `action:"entity.create"`
@@ -2059,10 +2263,17 @@ export async function dryRunAgentGovernanceDecision(
   // Side-effect-free re-read of ONLY rung 2.8 (the same store enforcement uses,
   // same principal eligibility as the resolution above) to name the winning
   // rule for the editor. Not consulted for the outcome — that stays the full
-  // ladder's verdict from `resolveAgentGovernanceDecision`.
+  // ladder's verdict from `resolveAgentGovernanceDecision`. Read for the pass
+  // that DECIDED: when the agent's computer was stricter, its rule is the one
+  // that made the write ask, never the agent's own `auto`.
+  const decidedBy =
+    resolution.decision === "not-agent" ? undefined : resolution.decidedBy;
   const ruleMatch = await resolveGovernanceRule({
     db: input.db,
-    agentUserId: input.agentUserId,
+    agentUserId:
+      decidedBy?.principal === "computer"
+        ? decidedBy.computerUserId
+        : input.agentUserId,
     workspaceId: input.workspaceId,
     subjectType: input.subjectType,
     action: input.action,
@@ -2089,6 +2300,7 @@ export async function dryRunAgentGovernanceDecision(
         reason:
           "The acting user is not an agent — the agent governance ladder does not apply.",
         winningRule,
+        ...(decidedBy ? { decidedBy } : {}),
       };
     case "deny":
       return {
@@ -2100,6 +2312,7 @@ export async function dryRunAgentGovernanceDecision(
             : "cbac-capability-allowlist",
         reason: resolution.reason,
         winningRule,
+        ...(decidedBy ? { decidedBy } : {}),
       };
     case "propose":
       return {
@@ -2107,6 +2320,7 @@ export async function dryRunAgentGovernanceDecision(
         rung: resolution.reason ? reasonToRung(resolution.reason) : "default",
         reason: resolution.reason ?? "No auto-approve rule matched.",
         winningRule,
+        ...(decidedBy ? { decidedBy } : {}),
       };
     case "execute":
       // Rung 2.8 decided: name the rule, not the retired JSONB list (the
@@ -2118,6 +2332,7 @@ export async function dryRunAgentGovernanceDecision(
           rung: "governance-rule",
           reason: `Matched governance rule "${resolution.explicitAutoApproveFor?.[0] ?? winningRule?.matchedPattern ?? ""}".`,
           winningRule,
+          ...(decidedBy ? { decidedBy } : {}),
         };
       }
       return {
@@ -2129,6 +2344,7 @@ export async function dryRunAgentGovernanceDecision(
           ? `Matched the workspace's explicit autoApproveFor list.`
           : "Matched the default auto-approve whitelist (or agent/workspace ownership).",
         winningRule,
+        ...(decidedBy ? { decidedBy } : {}),
       };
   }
 }
@@ -2209,6 +2425,8 @@ export function reasonToRung(reason: string): string {
       return "daily-write-ceiling";
     case PROPOSE_REASON.GOVERNANCE_RULE:
       return "governance-rule";
+    case PROPOSE_REASON.HOST_ASKS_FIRST:
+      return "host-asks-first";
     default:
       return "default";
   }

@@ -22,6 +22,7 @@ export const en = {
   "row.paused": "Paused",
   "row.writesFailed": "Couldn’t read how its writes land.",
   "row.writesHidden": "Only its owner or a pod admin can see this.",
+  "row.computerDecides": "Set by its computer, {computer}",
   "row.change": "Change",
   "row.change.aria": "Change how {name}’s writes land",
   "row.why": "Why, per space",
@@ -56,6 +57,7 @@ export const fr: Catalog<typeof en> = {
   "row.writesFailed": "Impossible de lire comment s’appliquent ses écritures.",
   "row.writesHidden":
     "Seul son propriétaire ou un administrateur du pod peut voir ceci.",
+  "row.computerDecides": "Réglé par son ordinateur, {computer}",
   "row.change": "Changer",
   "row.change.aria": "Changer comment s’appliquent les écritures de {name}",
   "row.why": "Pourquoi, par espace",

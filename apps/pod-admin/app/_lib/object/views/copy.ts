@@ -20,6 +20,8 @@ export const en = {
   "agent.writes.space": "In {space}: {mode}",
   "agent.writes.spacesNote": "A space’s own setting wins inside that space.",
   "agent.writes.podDefault": "Change the pod default in Settings",
+  "agent.writes.computerDecides":
+    "The computer it runs on is set to “{mode}”, which is stricter, so its writes follow the computer.",
   "session.lineage.partOf": "Part of",
   "session.lineage.parentFailed": "Couldn’t read what it is part of",
   "session.subSessions.title": "Sub-sessions",
@@ -43,6 +45,8 @@ export const fr: Catalog<typeof en> = {
     "Le réglage propre à un espace l’emporte dans cet espace.",
   "agent.writes.podDefault":
     "Changer le réglage par défaut du pod dans Réglages",
+  "agent.writes.computerDecides":
+    "L’ordinateur sur lequel il tourne est réglé sur «\u00a0{mode}\u00a0», plus strict\u00a0: ses écritures suivent l’ordinateur.",
   "session.lineage.partOf": "Fait partie de",
   "session.lineage.parentFailed": "Impossible de lire ce dont elle fait partie",
   "session.subSessions.title": "Sous-sessions",

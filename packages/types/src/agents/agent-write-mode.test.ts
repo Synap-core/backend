@@ -3,6 +3,7 @@ import {
   AGENT_WRITE_MODE_CHOICES,
   AGENT_WRITE_MODE_LINE,
   agentPostureOfWriteMode,
+  effectiveAgentWriteMode,
   isAgentWriteMode,
   resolveAgentWriteMode,
 } from "./index.js";
@@ -88,5 +89,48 @@ describe("AGENT_WRITE_MODE_CHOICES — the one list every surface offers", () =>
     expect(isAgentWriteMode("ask-first")).toBe(true);
     expect(isAgentWriteMode("normal")).toBe(false);
     expect(isAgentWriteMode(null)).toBe(false);
+  });
+});
+
+describe("effectiveAgentWriteMode — the host step, said as a mode", () => {
+  const side = (
+    mode: "pod-default" | "create-with-undo" | "ask-first",
+    posture: string | null = mode === "pod-default" ? null : mode
+  ) => ({ mode, posture });
+
+  it("an agent set to Normal on an ask-first computer asks first, and the computer decided (finding 168956d8)", () => {
+    expect(
+      effectiveAgentWriteMode(side("pod-default"), side("ask-first"))
+    ).toEqual({ mode: "ask-first", decidedBy: "computer" });
+  });
+
+  it("the stricter side wins in both directions; a tie is the agent's own", () => {
+    expect(
+      effectiveAgentWriteMode(side("ask-first"), side("create-with-undo"))
+    ).toEqual({ mode: "ask-first", decidedBy: "agent" });
+    expect(
+      effectiveAgentWriteMode(side("create-with-undo"), side("ask-first"))
+    ).toEqual({ mode: "ask-first", decidedBy: "computer" });
+    expect(
+      effectiveAgentWriteMode(side("ask-first"), side("ask-first"))
+    ).toEqual({ mode: "ask-first", decidedBy: "agent" });
+  });
+
+  it("no override on either side: the pod default decides", () => {
+    expect(
+      effectiveAgentWriteMode(side("pod-default"), side("pod-default"))
+    ).toEqual({ mode: "pod-default", decidedBy: "pod-default" });
+    // The pod default switched off makes a strict agent ask first — still the pod's doing.
+    expect(effectiveAgentWriteMode(side("ask-first", null), null)).toEqual({
+      mode: "ask-first",
+      decidedBy: "pod-default",
+    });
+  });
+
+  it("an agent on no computer is its own mode", () => {
+    expect(effectiveAgentWriteMode(side("create-with-undo"))).toEqual({
+      mode: "create-with-undo",
+      decidedBy: "agent",
+    });
   });
 });

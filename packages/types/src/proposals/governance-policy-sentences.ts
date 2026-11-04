@@ -34,6 +34,8 @@ export const GOVERNANCE_POLICY_SENTENCES = {
   DESTRUCTIVE_HARD_FLOOR:
     "This deletes, archives, purges or merges something, so it always waits for you.",
   GOVERNANCE_RULE: "One of your rules says to ask you first.",
+  HOST_ASKS_FIRST:
+    "The computer this agent runs on asks you first, so its changes wait for you.",
   UNTRUSTED_ORIGIN:
     "This came from outside, such as an external app or a bridge, so nothing is applied until you approve it.",
   DAILY_WRITE_CEILING:
@@ -86,6 +88,9 @@ export const GOVERNANCE_REASON_SHORT_LABELS: Readonly<
   POSSIBLE_DUPLICATE: "Possible duplicate",
   DESTRUCTIVE_HARD_FLOOR: "Removes something",
   GOVERNANCE_RULE: null,
+  // Particular to THIS write: the agent's own setting would have let it act;
+  // its computer's did not. The card names the computer beside the mark.
+  HOST_ASKS_FIRST: "Its computer asks first",
   UNTRUSTED_ORIGIN: "From outside",
   DAILY_WRITE_CEILING: "Daily limit reached",
   HUMAN_GATE: null,

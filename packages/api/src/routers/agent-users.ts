@@ -67,7 +67,10 @@ import {
 } from "@synap-core/types/grants";
 import { reapplyAgentKeyGrants } from "../services/agent-identity-service.js";
 import { appAgentGovernanceDenial } from "../services/app-agent-floor.js";
-import { loadMachineNames } from "../services/machine-roster.js";
+import {
+  loadMachineNames,
+  readEffectiveWriteMode,
+} from "../services/machine-roster.js";
 import {
   canDecidePendingConnection,
   pendingAgentConnectProposals,
@@ -685,7 +688,7 @@ export const agentUsersRouter = router({
     }),
 
   /**
-   * How this agent's writes land, from the EFFECTIVE decision inputs — its own
+   * How this agent's writes land, from the decision inputs — its own
    * override (`readAgentGovernance`, the same reader as the Hub
    * `GET /agent-users/:id/governance`) and the pod default — never the raw
    * `writesRequireProposal` flag. `line` is the one sentence every surface shows.
@@ -750,9 +753,20 @@ export const agentUsersRouter = router({
                 )
               );
       const nameOf = new Map(visible.map((w) => [w.id, w.name]));
+      // How its writes REALLY land: the stricter of this agent and the
+      // computer it runs on — what every write is judged by (the host step).
+      const effective = await readEffectiveWriteMode(input.agentUserId);
       return {
         writeMode,
         line: AGENT_WRITE_MODE_LINE[writeMode],
+        /**
+         * The mode its writes follow once its computer is counted, and which
+         * side set it (`decidedBy`). `writeMode` / `line` above stay the
+         * agent's OWN setting (what its choice control shows); a surface that
+         * says how its writes land reads this. Null only if the agent vanished
+         * between the two reads.
+         */
+        effective,
         /** The pod-wide switch: ON iff this agent has the pod ask-first override. */
         askFirst: state.posture === "ask-first",
         /**
