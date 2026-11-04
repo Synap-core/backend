@@ -39,6 +39,13 @@ describe("the harness registry", () => {
       "discord",
       "proton",
       "generic",
+      "chatgpt",
+      "opencode",
+      "windsurf",
+      "goose",
+      "zed",
+      "vscode",
+      "grok",
     ]);
   });
 

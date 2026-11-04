@@ -237,6 +237,41 @@ export const SERVICE_MARKS = {
     inkMark: true,
     path: null,
   },
+  chatgpt: {
+    name: "ChatGPT",
+    inkMark: true,
+    path: null,
+  },
+  opencode: {
+    name: "OpenCode",
+    inkMark: true,
+    path: null,
+  },
+  windsurf: {
+    name: "Windsurf",
+    inkMark: true,
+    path: null,
+  },
+  goose: {
+    name: "Goose",
+    inkMark: true,
+    path: null,
+  },
+  zed: {
+    name: "Zed",
+    inkMark: true,
+    path: null,
+  },
+  vscode: {
+    name: "VS Code",
+    inkMark: true,
+    path: null,
+  },
+  grok: {
+    name: "Grok",
+    inkMark: true,
+    path: null,
+  },
   codex: {
     name: "Codex",
     inkMark: true,
