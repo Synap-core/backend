@@ -132,13 +132,13 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
     expect(
       Object.keys(PROJECTED_SKILL_FIELDS).length,
       "the projected-field set changed. " + WHY_IT_MATTERS
-    ).toBe(14);
+    ).toBe(15);
     expect(
       DRIFT_COMPARATOR_VERSION,
       "DRIFT_COMPARATOR_VERSION must be bumped (and this pin updated) whenever " +
         "the comparator's coverage changes — otherwise every container already " +
         "stamped by the OLD comparator keeps its stamp and is never re-diffed."
-    ).toBe(14);
+    ).toBe(15);
   });
 
   /** A value pair per field: what the template declares vs what the live row has. */
@@ -224,6 +224,9 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
       def: { inputMap: { params: { text: "$.text" } } },
       live: { inputMap: null },
     },
+    // A contract op (0398): always written, so a declared op against a live
+    // null is drift (the BASE declares an intent, the projection's gate).
+    intentOp: { def: { intentOp: "revoke" }, live: { intentOp: null } },
   };
 
   const BASE = {

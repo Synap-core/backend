@@ -41,6 +41,10 @@ import {
   isBroadUrlPattern,
   isValidUrlPattern,
 } from "@synap-core/types/url-read";
+import {
+  isIntentOp,
+  type IntentOp,
+} from "@synap-core/types/capability-intents";
 
 /** Canonical (key-sorted) JSON — jsonb does not preserve key insertion order, so a
  * plain JSON.stringify would report false drift on key order alone. Normalizes
@@ -76,6 +80,13 @@ export function canonicalJson(value: unknown): string {
  * teaching the comparator a new field invalidates every stamp it ever wrote and
  * every pod re-diffs exactly once. Absent (legacy) = pre-versioned = re-diff.
  *
+ * v15 = v14 + the skill-row `intent_op` COLUMN (migration 0398, plan U3): which
+ *      op of its intent's contract a verb implements (`projectIntentOp`). A
+ *      v14 stamp says "clean under a comparator that never read this column",
+ *      so a provider's declared ops would never reach a pod that converged
+ *      before it. The bump also re-diffs every container once, and the no-drift
+ *      stamp then writes the template's manifest fields (`needs`, `offers`,
+ *      `compose`, `services`) onto `capabilities.metadata`.
  * v14 = v13 + `metadata.box` (a box skill's DECLARED language, packages, hosts
  *      and limits, normalised — see `declaredBox`). Before it the applier
  *      dropped the key, so a catalog box skill could be installed with no
@@ -146,7 +157,7 @@ export function canonicalJson(value: unknown): string {
  * v2 = the ten `PROJECTED_SKILL_FIELDS` + the projected verb catalog (intent).
  * v1 (never written) = the original providerSpec/parameters/code/description.
  */
-export const DRIFT_COMPARATOR_VERSION = 14;
+export const DRIFT_COMPARATOR_VERSION = 15;
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return (
@@ -208,6 +219,9 @@ export interface InstalledSkillRow {
   /** The live row's `skills.input_map` column (0368) — see the entry in
    *  `PROJECTED_SKILL_FIELDS`. */
   inputMap?: unknown;
+  /** The live row's `skills.intent_op` column (0398) — see the entry in
+   *  `PROJECTED_SKILL_FIELDS`. */
+  intentOp?: string | null;
   /** The live row's `skills.metadata` bag. Only its `allowedHosts` and `readOnly`
    *  keys are definition-owned; every other key is DB state (see
    *  the `SKILL_METADATA_*` constants). */
@@ -250,6 +264,26 @@ export interface DefinitionSkillRow {
    * onto `skills.input_map` by {@link projectInputMap}.
    */
   inputMap?: unknown;
+  /**
+   * Which op of its intent's contract the verb implements, projected onto
+   * `skills.intent_op` by {@link projectIntentOp}.
+   */
+  intentOp?: unknown;
+}
+
+/**
+ * THE applier's `skills.intent_op` projection (0398, plan U3) — and the
+ * comparator's `expected`. One of the four contract ops, else `null` (the
+ * intent's single default op). Always a value, never `undefined`: a template
+ * that drops `intentOp` clears the column. Whether the intent's contract
+ * declares the op is the manifest rule's call, made before any write
+ * (`parseCapabilityManifest`), so this only shapes the value.
+ */
+export function projectIntentOp(
+  skill: Pick<DefinitionSkillRow, "intentOp" | "intent">
+): IntentOp | null {
+  if (typeof skill.intent !== "string" || !skill.intent) return null;
+  return isIntentOp(skill.intentOp) ? skill.intentOp : null;
 }
 
 /**
@@ -706,6 +740,14 @@ export const PROJECTED_SKILL_FIELDS: Record<
   inputMap: {
     expected: (d) => projectInputMap(d, { officialSource: true }),
     actual: (i) => i.inputMap ?? null,
+  },
+  /**
+   * Which contract op the verb implements (0398). Always written (`null` = the
+   * intent's single default op), so it never skips.
+   */
+  intentOp: {
+    expected: (d) => projectIntentOp(d),
+    actual: (i) => i.intentOp ?? null,
   },
   // NARROWED ON PURPOSE. The applier's `.set({ metadata })` writes exactly the
   // definition-owned keys of this bag (`projectSkillMetadata` above); every

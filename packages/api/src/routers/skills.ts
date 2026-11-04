@@ -77,6 +77,7 @@ import { parseSkillMd } from "../skills/skill-md-parser.js";
 import { parseSkillToml } from "../skills/skill-toml-parser.js";
 import { runSkill } from "../services/skills/run-skill.js";
 import { checkSkillCode } from "@synap-core/types/skill-code";
+import { INTENT_OPS } from "@synap-core/types/capability-intents";
 import {
   SKILL_SLUG_PATTERN,
   SKILL_SLUG_PATTERN_MESSAGE,
@@ -1224,6 +1225,13 @@ export const skillsRouter = router({
          * an app's input becomes (a RE_APPROVAL field).
          */
         inputMap: z.record(z.string(), z.unknown()).optional(),
+        /**
+         * Which op of its intent's contract the verb implements
+         * (`skills.intent_op`, 0398), already checked against the contract by
+         * the applier (`readDeclaredManifest`). Applier-only, like `intent`,
+         * and not on `update`.
+         */
+        intentOp: z.enum(INTENT_OPS).optional(),
         /** The acting AGENT identity, when this create is agent-initiated
          *  (e.g. via an MCP tool) — mirrors entities.ts's createEntity input.
          *  Threaded into checkPermissionOrPropose below so an agent-created
@@ -1246,13 +1254,14 @@ export const skillsRouter = router({
       if (
         (input.intent !== undefined ||
           input.urlPatterns !== undefined ||
-          input.inputMap !== undefined) &&
+          input.inputMap !== undefined ||
+          input.intentOp !== undefined) &&
         !isDefinitionApplier(ctx)
       ) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message:
-            "intent, urlPatterns and inputMap come only from a capability definition; install or update its package instead.",
+            "intent, intentOp, urlPatterns and inputMap come only from a capability definition; install or update its package instead.",
         });
       }
 
@@ -1388,6 +1397,7 @@ export const skillsRouter = router({
           ...(input.inputMap
             ? { inputMap: input.inputMap as SkillInputMap }
             : {}),
+          ...(input.intentOp ? { intentOp: input.intentOp } : {}),
           // Replayed by the `skill/create` executor through the same
           // `replaceSkillRequiredTools` once the skill row exists.
           ...(requiredToolIds.length
@@ -1459,6 +1469,7 @@ export const skillsRouter = router({
           ...(input.inputMap
             ? { inputMap: input.inputMap as SkillInputMap }
             : {}),
+          ...(input.intentOp ? { intentOp: input.intentOp } : {}),
           // Persist the caller-supplied metadata bag (e.g. the marketplace
           // source-link); omitted → the column default `{}` applies.
           ...(metadata ? { metadata } : {}),
