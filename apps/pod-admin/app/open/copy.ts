@@ -20,6 +20,8 @@ export const en = {
   "document.read": "You can read it here.",
   "document.readEditable": "You can read it here. Edit it in the Synap app.",
   "document.copy": "A copy to read",
+  "channel.belongsTo": "Belongs to",
+  "channel.belongsToLabel": "What this conversation belongs to",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -35,6 +37,8 @@ export const fr: Catalog<typeof en> = {
   "document.readEditable":
     "Vous pouvez le lire ici. Modifiez-le dans l’application Synap.",
   "document.copy": "Une copie à lire",
+  "channel.belongsTo": "Rattachée à",
+  "channel.belongsToLabel": "Ce à quoi cette conversation est rattachée",
 };
 
 /** `/open`'s translator, in the ambient catalog locale. */

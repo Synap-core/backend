@@ -15,6 +15,8 @@ import { AccessContext } from "../../access/index.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
+import { resolveChannelLinkedObject } from "./linked-object.js";
+import { rosterReadFor } from "../../access/session-visibility.js";
 
 import { TRPCError } from "@trpc/server";
 import {
@@ -1155,8 +1157,17 @@ export const crudProcedures = {
         branchTree = buildBranchTree(allBranches, input.channelId);
       }
 
+      // What this conversation belongs to (its session, entity, parent…),
+      // read through each object's own visibility door.
+      const linkedObject = await resolveChannelLinkedObject(channel, {
+        userId: ctx.userId,
+        access: AccessContext.from(ctx),
+        roster: rosterReadFor(ctx),
+      });
+
       return {
         channel,
+        linkedObject,
         contextItems: input.includeContext ? contextItems : undefined,
         branchTree: input.includeBranches ? branchTree : undefined,
       };
