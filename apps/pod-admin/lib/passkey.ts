@@ -161,3 +161,121 @@ export async function createPasskey(
   if (!credential) throw new PasskeyCancelled();
   return encodeAttestation(credential as PublicKeyCredential);
 }
+
+// ─── Proof of presence: the ASSERTION ceremony (W3) ──────────────────────
+//
+// A sensitive approval asks for a fresh passkey signature over a pod
+// challenge that names ONE proposal (`presence.challenge`, contract: pod
+// document "W3 pod-first: proof of presence on the pod"). The pod verifies
+// it against the passkeys Kratos holds, so this is the plain WebAuthn `get`
+// with user verification REQUIRED: Touch ID, Windows Hello or the security
+// key's PIN, never a bare tap.
+
+/** `presence.challenge`'s `passkey` block: what `navigator.credentials.get` needs. */
+export interface PresencePasskeyRequest {
+  /** base64url: SHA-256 of the signed presence message. */
+  challenge: string;
+  /** The rp id this pod's passkeys are registered under (Kratos `rp.id`). */
+  rpId: string;
+  allowCredentials: Array<{ id: string; type: "public-key" }>;
+  userVerification: "required";
+}
+
+/** The assertion as the approve doors read it (every byte field base64url). */
+export interface PasskeyAssertion {
+  id: string;
+  rawId: string;
+  type: "public-key";
+  response: {
+    clientDataJSON: string;
+    authenticatorData: string;
+    signature: string;
+    userHandle: string | null;
+  };
+  clientExtensionResults: Record<string, unknown>;
+}
+
+/** How long the browser's prompt waits: the challenge's own lifetime. */
+export const PRESENCE_PROMPT_TIMEOUT_MS = 120_000;
+
+/** This browser can sign with a passkey (`navigator.credentials.get`). */
+export function isPasskeyAssertionSupported(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.PublicKeyCredential !== "undefined" &&
+    typeof navigator !== "undefined" &&
+    typeof navigator.credentials?.get === "function"
+  );
+}
+
+/** The pod's challenge → WebAuthn request options, user verification required. */
+export function passkeyRequestOptions(
+  request: PresencePasskeyRequest
+): PublicKeyCredentialRequestOptions {
+  return {
+    challenge: base64UrlToBuffer(request.challenge),
+    rpId: request.rpId,
+    allowCredentials: request.allowCredentials.map((c) => ({
+      type: "public-key",
+      id: base64UrlToBuffer(c.id),
+    })),
+    // Always "required", whatever the pod sent: the pod refuses an assertion
+    // without the UV flag, so asking for less only fails later.
+    userVerification: "required",
+    timeout: PRESENCE_PROMPT_TIMEOUT_MS,
+  };
+}
+
+/** A signed assertion → the `credential` of a `{kind: "passkey"}` proof. */
+export function encodeAssertion(
+  credential: PublicKeyCredential
+): PasskeyAssertion {
+  const response = credential.response as AuthenticatorAssertionResponse;
+  return {
+    id: credential.id,
+    rawId: bufferToBase64Url(credential.rawId),
+    type: "public-key",
+    response: {
+      clientDataJSON: bufferToBase64Url(response.clientDataJSON),
+      authenticatorData: bufferToBase64Url(response.authenticatorData),
+      signature: bufferToBase64Url(response.signature),
+      userHandle: response.userHandle
+        ? bufferToBase64Url(response.userHandle)
+        : null,
+    },
+    clientExtensionResults:
+      typeof credential.getClientExtensionResults === "function"
+        ? (credential.getClientExtensionResults() as Record<string, unknown>)
+        : {},
+  };
+}
+
+/**
+ * Run the assertion: the browser asks for Touch ID, Windows Hello or the
+ * security key, and the passkey signs the pod's challenge. Throws
+ * {@link PasskeyCancelled} when the person closes the prompt, or when no
+ * passkey of this pod is on this device (WebAuthn reports both as
+ * `NotAllowedError`); an Error otherwise.
+ */
+export async function getPasskeyAssertion(
+  request: PresencePasskeyRequest
+): Promise<PasskeyAssertion> {
+  if (!isPasskeyAssertionSupported()) {
+    throw new Error("This browser can't use a passkey.");
+  }
+  let credential: Credential | null;
+  try {
+    credential = await navigator.credentials.get({
+      publicKey: passkeyRequestOptions(request),
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "NotAllowedError") {
+      throw new PasskeyCancelled();
+    }
+    throw err instanceof Error
+      ? err
+      : new Error("This device could not use the passkey.");
+  }
+  if (!credential) throw new PasskeyCancelled();
+  return encodeAssertion(credential as PublicKeyCredential);
+}

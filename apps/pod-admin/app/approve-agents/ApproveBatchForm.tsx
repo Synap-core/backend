@@ -16,6 +16,8 @@ import {
 } from "../approve-agent/[keyId]/pending-access";
 import { PendingAccessBlock } from "../approve-agent/[keyId]/PendingAccessBlock";
 import { UNLABELLED_COMPUTER } from "../approve-agent/[keyId]/other-connections";
+import { usePresence } from "../_lib/presence/presence-provider";
+import { approvePendingKeys } from "../_lib/presence/pending-key-approval";
 
 /** `superseded`: a newer request from the same computer is waiting — never offered. */
 type KeyStatus =
@@ -40,7 +42,9 @@ type BatchOutcome =
   | "rejected"
   | "superseded"
   | "not_found"
-  | "forbidden";
+  | "forbidden"
+  // W3: still waiting for its proof of presence (the person did not confirm).
+  | "refused";
 
 interface KeyResult {
   key: PendingKey;
@@ -107,6 +111,8 @@ function outcomeToken(outcome: BatchOutcome | undefined): string {
   if (!outcome) return "failed";
   if (outcome === "already_active") return "connected";
   if (outcome === "forbidden") return "unavailable";
+  // Refused for its proof of presence: nothing changed, it still waits.
+  if (outcome === "refused") return "pending";
   return outcome;
 }
 
@@ -124,6 +130,7 @@ export function ApproveBatchForm({
   const [busy, setBusy] = useState<Busy>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const podUrl = useMemo(() => publicPodUrl(), []);
+  const { prove } = usePresence();
 
   const load = useCallback(async () => {
     if (keyIds.length === 0) {
@@ -163,14 +170,15 @@ export function ApproveBatchForm({
     setBusy("approve");
     setActionError(null);
     try {
-      const data = (await postJson(
-        `${podUrl}/api/hub/setup/agent/pending/approve-batch`,
-        { keyIds: targets.map((k) => k.keyId) }
-      )) as {
-        approved: number;
-        results: Array<{ keyId: string; outcome: BatchOutcome }>;
-      };
-      const byId = new Map(data.results.map((r) => [r.keyId, r.outcome]));
+      // With the proof of presence for each key the pod asks it for (W3).
+      const data = await approvePendingKeys({
+        podUrl,
+        keyIds: targets.map((k) => k.keyId),
+        prove,
+      });
+      const byId = new Map(
+        data.results.map((r) => [r.keyId, r.outcome as BatchOutcome])
+      );
       setStep({
         kind: "done",
         action: "approve",
@@ -188,7 +196,7 @@ export function ApproveBatchForm({
     } finally {
       setBusy(null);
     }
-  }, [keys, podUrl]);
+  }, [keys, podUrl, prove]);
 
   const rejectOne = useCallback(
     async (key: PendingKey): Promise<boolean> => {
