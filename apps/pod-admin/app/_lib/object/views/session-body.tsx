@@ -493,7 +493,7 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
           <SectionCard
             variant="flat"
             title="What it made"
-            hint={String(outputs.data!.outputs.length)}
+            count={outputs.data!.outputs.length}
           >
             <CappedList
               items={outputs.data!.outputs.map((output) => ({
@@ -1004,7 +1004,7 @@ function SubSessionsSection({
         )
       : view.rows;
   return (
-    <SectionCard variant="flat" title={title} hint={String(view.total)}>
+    <SectionCard variant="flat" title={title} count={view.total}>
       <ul className="flex flex-col">
         {rows.map((row) => {
           const href = hrefFor(row.id);
