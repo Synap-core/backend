@@ -232,6 +232,7 @@ export async function spaceDataChanges(
     sentence: c.description,
     affected: c.affected,
     destructive: c.destructive,
+    ...(c.preview ? { preview: c.preview } : {}),
   }));
 }
 
