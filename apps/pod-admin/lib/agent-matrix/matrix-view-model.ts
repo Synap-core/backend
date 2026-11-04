@@ -403,6 +403,23 @@ export function widenPlan(
     : { route: "owner", label: "Ask the owner to widen", probes: targets };
 }
 
+/**
+ * The computer that holds this cell back: the agent's own computer when it
+ * asks for one of the cell's writes itself and no rule for the agent reaches
+ * it (`computerAsks`, a person's own or shared computer). Widen is withheld
+ * there; the drawer's door is that computer's page, where what agents on it
+ * may do is changed. `null` = nothing in the cell waits on its computer.
+ */
+export function heldByComputer(
+  agent: Pick<MatrixAgentRow, "hostUserId">,
+  probes: readonly ProbeView[]
+): string | null {
+  if (!agent.hostUserId) return null;
+  return probes.some((p) => p.answer.verdict === "ask" && p.answer.computerAsks)
+    ? agent.hostUserId
+    : null;
+}
+
 /** The rules that decided this cell's probes — each one may be revoked. */
 export function decidingRuleIds(probes: readonly ProbeView[]): string[] {
   return [

@@ -32,9 +32,11 @@ import {
   resolveMatrixMarkLabel,
 } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../../lib/trpc";
+import { computerHref } from "../../../../../lib/console-nav";
 import {
   columnTitle,
   combineWidenOutcomes,
+  heldByComputer,
   markView,
   probeViews,
   ruleHref,
@@ -116,6 +118,7 @@ function AgentWhy({
     [column, cell]
   );
   const plan = widenPlan(agent, probes);
+  const heldBy = heldByComputer(agent, probes);
   const [result, setResult] = useState<NextRungOutcome | "failed" | null>(null);
   const [widening, setWidening] = useState(false);
   const [revokeId, setRevokeId] = useState<string | null>(null);
@@ -208,6 +211,15 @@ function AgentWhy({
               <p className="pl-6 text-[11.5px] text-foreground/65">
                 {p.answer.reason}
               </p>
+              {/* The tie: the agent's own pass decided, its computer asks
+                  too. When the computer decided, the rung already says so. */}
+              {p.answer.verdict === "ask" &&
+                p.answer.computerAsks &&
+                p.answer.rung !== "host-asks-first" && (
+                  <p className="pl-6 text-[11.5px] text-foreground/65">
+                    Its computer asks first here too.
+                  </p>
+                )}
               {p.answer.ruleId && (
                 <div className="flex items-center gap-2 pl-6 pt-1">
                   {ruleLink && (
@@ -236,6 +248,24 @@ function AgentWhy({
           );
         })}
       </ul>
+
+      {heldBy && (
+        <div className="flex flex-wrap items-center gap-3 border-t border-foreground/[0.06] pt-4">
+          <p className="min-w-0 flex-1 text-[12.5px] text-foreground/70">
+            An agent never does more than the computer it runs on, so a rule for
+            this agent alone would change nothing here.
+          </p>
+          <Button
+            as={Link}
+            href={computerHref(heldBy)}
+            size="sm"
+            variant="flat"
+            radius="md"
+          >
+            Open its computer
+          </Button>
+        </div>
+      )}
 
       {(plan || outcome) && (
         <div className="flex flex-wrap items-center gap-3 border-t border-foreground/[0.06] pt-4">

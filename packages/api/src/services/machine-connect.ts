@@ -651,8 +651,10 @@ export interface DecideDeviceRequestInput {
   belongsTo?: ComputerBelongsTo | null;
   /**
    * Approve: how the ADDED agents' writes land (0394), one of
-   * `AGENT_WRITE_MODE_CHOICES`. Omitted: a new agent starts ask-first. A
-   * reconnected agent keeps its own (D6, amends 0394) unless its row says.
+   * `AGENT_WRITE_MODE_CHOICES`; a NEW computer takes it too (D1b, the
+   * ceiling of its agents). Omitted: a new agent and a new computer start
+   * ask-first. A reconnected agent keeps its own (D6, amends 0394) unless its
+   * row says; a reused computer keeps its own.
    */
   agentWriteMode?: AgentWriteMode | null;
   /**
@@ -1196,6 +1198,13 @@ async function postureFirst(agentUserId: string, by: string): Promise<void> {
  * (0388): what the approver chose, else `person` for a new one; a reused one
  * keeps its own unless the approver chose (`setMachineBelongsTo`, the one
  * writer, which also takes back an agent's seeds when it stops being theirs).
+ *
+ * What agents on it may do (plan 07ecf0be D1b): a NEW computer takes the one
+ * mode the approver picked for its first agents (`writeMode`; none picked =
+ * ask-first, as before). A computer is the ceiling of every agent on it, so a
+ * computer left ask-first would make that pick say nothing. A REUSED computer
+ * keeps what the person set on its page, like a reconnected agent (D6): a
+ * reconnect never resets it.
  */
 export async function ensureMachineAgent(args: {
   approverId: string;
@@ -1204,6 +1213,7 @@ export async function ensureMachineAgent(args: {
   hostname: string;
   platform: string | null;
   belongsTo?: ComputerBelongsTo | null;
+  writeMode?: AgentWriteMode | null;
 }): Promise<string> {
   let machineId = args.reuseId;
   if (machineId) {
@@ -1238,7 +1248,12 @@ export async function ensureMachineAgent(args: {
   }
   const belongsTo = args.belongsTo ?? (args.reuseId ? null : "person");
   if (belongsTo) await setMachineBelongsTo(machineId, belongsTo);
-  await postureFirst(machineId, args.approverId);
+  if (!args.reuseId)
+    await agentPostureAtConnect(
+      machineId,
+      args.approverId,
+      args.writeMode ?? null
+    );
   return machineId;
 }
 
@@ -1254,6 +1269,7 @@ async function mintForApprovedRequest(
     hostname: row.hostname,
     platform: row.platform,
     belongsTo: row.computerBelongsTo,
+    writeMode: row.agentWriteMode,
   });
   const [machine] = await db
     .select({ name: users.name })

@@ -169,9 +169,26 @@ describe("pending", () => {
     expect(t).toContain("Every change asks you first.");
   });
 
-  it("omits the changes question when no agent is kept", () => {
-    expect(text(pending({ agents: [] }))).not.toContain(
+  it("a new computer takes the pick too, and the page says so (D1b)", () => {
+    const t = text(pending());
+    expect(t).toContain(
+      "devbox starts with this too: no agent on it ever does more."
+    );
+    // Even with no agent kept: the pick is the new computer's own.
+    expect(text(pending({ agents: [] }))).toContain(
       "How its agents' changes land"
+    );
+  });
+
+  it("omits the changes question when no agent is kept and the computer is reused", () => {
+    const t = text(pending({ agents: [], reuseId: "m-1" }));
+    expect(t).not.toContain("How its agents' changes land");
+    expect(t).not.toContain("starts with this too");
+  });
+
+  it("a reused computer keeps its own: no 'starts with this too' line", () => {
+    expect(text(pending({ reuseId: "m-1" }))).not.toContain(
+      "starts with this too"
     );
   });
 

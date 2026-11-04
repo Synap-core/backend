@@ -144,10 +144,13 @@ export const RULE_WIDENABLE_RUNGS = [
  * (`governanceRules.widenCell`); this only decides whether to offer.
  */
 export function canWidenAnswer(
-  answer: Pick<MatrixProbeAnswer, "verdict" | "rung">,
+  answer: Pick<MatrixProbeAnswer, "verdict" | "rung" | "computerAsks">,
   probe: Pick<MatrixProbe, "action" | "profileSlug">
 ): boolean {
   if (answer.verdict !== "ask") return false;
+  // Its computer asks too, and no rule for the agent reaches it: widening
+  // the agent would change nothing. The computer's page is the door.
+  if (answer.computerAsks) return false;
   if (!(RULE_WIDENABLE_RUNGS as readonly string[]).includes(answer.rung))
     return false;
   const subject = probe.action.slice(0, probe.action.indexOf("."));
@@ -163,6 +166,14 @@ export interface MatrixProbeAnswer {
   reason: string;
   /** The rule that decided, when one did. */
   ruleId: string | null;
+  /**
+   * The agent runs on a person's own or a shared computer (no rule widened
+   * for the agent is copied onto it, `seedsOntoHost`) and that computer asks
+   * for this write itself. The stricter of the two always wins, so widening
+   * the agent changes nothing here; what agents on that computer may do is
+   * changed on its page. Absent = no such computer, or it allows the write.
+   */
+  computerAsks?: boolean;
 }
 
 export interface MatrixSplit {

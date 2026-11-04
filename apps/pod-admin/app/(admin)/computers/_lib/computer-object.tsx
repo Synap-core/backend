@@ -32,6 +32,8 @@ import {
   shortId,
 } from "../../../../lib/format";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
+import { writeModeLabel } from "../../../../lib/agent-writes/agent-writes";
+import { useT } from "../../../../lib/i18n/locale-provider";
 import { navHref } from "../../../../lib/console-nav";
 import { CommandLine } from "../../../_lib/command-line";
 import type { DangerAction } from "../../../_lib/object/danger-zone";
@@ -48,6 +50,9 @@ import {
   ComputerKeyLifetimeModal,
   RenameComputerModal,
 } from "./computer-modals";
+import { ComputerWrites, useAgentsOnComputer } from "./computer-writes-section";
+import { agentModeOnComputer } from "./computer-writes";
+import { en, fr } from "./copy";
 import {
   RECONNECT_COMMAND,
   activityLine,
@@ -63,6 +68,8 @@ import {
   scriptsOwnerWords,
   type ComputerLike,
 } from "./computer-model";
+
+const CATALOGS = { en, fr };
 
 /** Agents the Overview previews before "Show all N agents". */
 const AGENTS_PREVIEW = 3;
@@ -325,6 +332,7 @@ export function ComputerObject({
                     agentHref={links.agentHref}
                   />
                 </SectionCard>
+                {!revoked && <ComputerWrites computer={c} />}
                 {!revoked && (
                   <SectionCard title="Runs scripts">
                     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -461,6 +469,22 @@ function AgentRows({
   agentHref?: (agentId: string) => string;
 }) {
   const router = useRouter();
+  const t = useT(CATALOGS);
+  // What each agent's writes really follow (the stricter of it and this
+  // computer), as a mark on its row; nothing while it is unread.
+  const writes = useAgentsOnComputer(computer);
+  const modeMark = (agentId: string): string | null => {
+    const read = writes.byId.get(agentId);
+    if (!read)
+      return writes.failedIds.has(agentId) ? t("agent.mode.failed") : null;
+    const { mode, source } = agentModeOnComputer(read);
+    const label = writeModeLabel(mode);
+    return source === "computer"
+      ? t("agent.mode.computer", { mode: label })
+      : source === "agent"
+        ? t("agent.mode.agent", { mode: label })
+        : t("agent.mode.podDefault", { mode: label });
+  };
   if (computer.agents.length === 0)
     return (
       <ResourceRowEmpty message="No agent runs on it. Agents set up with this computer appear here." />
@@ -477,6 +501,7 @@ function AgentRows({
           secondary={[
             serviceOf(a),
             seenLine(a.lastSeenAt, (d) => formatRelative(d)),
+            modeMark(a.id),
           ]
             .filter(Boolean)
             .join(" · ")}

@@ -10335,6 +10335,14 @@ export interface MatrixProbeAnswer {
 	reason: string;
 	/** The rule that decided, when one did. */
 	ruleId: string | null;
+	/**
+	 * The agent runs on a person's own or a shared computer (no rule widened
+	 * for the agent is copied onto it, `seedsOntoHost`) and that computer asks
+	 * for this write itself. The stricter of the two always wins, so widening
+	 * the agent changes nothing here; what agents on that computer may do is
+	 * changed on its page. Absent = no such computer, or it allows the write.
+	 */
+	computerAsks?: boolean;
 }
 export interface MatrixSplit {
 	auto: number;
