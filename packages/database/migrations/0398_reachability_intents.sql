@@ -55,9 +55,7 @@ VALUES
   ('dns_record', 'act', 'Create, update or remove one DNS record in a zone the person controls.',
    ARRAY['dns record', 'add a cname', 'point a domain', 'dns entry', 'subdomain record']),
   ('tls_cert', 'act', 'Obtain and renew a TLS certificate for a hostname.',
-   ARRAY['tls certificate', 'ssl certificate', 'https certificate', 'issue a certificate', 'renew a certificate']),
-  ('render_video', 'write', 'Render a composition (a pod file) to a video or stills, filed back to the pod.',
-   ARRAY['render video', 'render a composition', 'export video', 'make an mp4', 'render stills', 'html to video'])
+   ARRAY['tls certificate', 'ssl certificate', 'https certificate', 'issue a certificate', 'renew a certificate'])
 ON CONFLICT ("slug") DO NOTHING;
 
 -- expose_http
@@ -217,19 +215,6 @@ SET "contract" = '{
     "renew": {
       "required": false,
       "requiredWhen": "expiresAt",
-      "input": {
-        "type": "object",
-        "properties": {
-          "installationId": {"type":"string","format":"uuid"},
-          "needKey": {"type":"string","pattern":"^[a-z][a-z0-9_]{0,63}$"},
-          "handle": {"description":"What create returned."}
-        },
-        "required": ["installationId","needKey","handle"],
-        "additionalProperties": false
-      }
-    },
-    "revoke": {
-      "required": true,
       "input": {
         "type": "object",
         "properties": {
