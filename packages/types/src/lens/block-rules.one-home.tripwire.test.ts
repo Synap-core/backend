@@ -118,43 +118,17 @@ const DEFINITION = new RegExp(
 type Repo = "synap-app" | "relay-app" | "browser";
 
 /**
- * Today's copies, read at each repo's main (3 Nov 2026: synap-app 8e7a2a7b,
- * relay-app a62ea3fc, browser none). Only shrinks: a lane deletes its rows
- * once its adoption is on its main.
+ * The copies that still wait for their adoption lane. None since 4 Nov 2026:
+ * synap-app adopted at ac8bdfed (lane 2) and relay-app at 29cc3a13 (lane 4);
+ * browser never had one. Every repo is now fully strict. Only shrinks: never
+ * add a row (a new copy imports the rule from `@synap-core/types/lens`).
  */
 const PENDING_ADOPTION: Record<
   Repo,
   ReadonlyArray<{ file: string; name: string; lane: string }>
 > = {
-  // synap-app adopted (lane 2, app-bases ac8bdfed): no row left, fully strict.
   "synap-app": [],
-  "relay-app": [
-    {
-      file: "src/features/work-cells/WorkCells.tsx",
-      name: "ROUTE_KIND",
-      lane: "4",
-    },
-    {
-      file: "src/features/work-cells/embed-host.tsx",
-      name: "documentCellScope",
-      lane: "4",
-    },
-    {
-      file: "src/features/work-cells/work-cell-model.ts",
-      name: "LENS_CELL_LIMIT_MIN",
-      lane: "4",
-    },
-    {
-      file: "src/features/work-cells/work-cell-model.ts",
-      name: "LENS_CELL_LIMIT_MAX",
-      lane: "4",
-    },
-    {
-      file: "src/features/work-cells/work-cell-model.ts",
-      name: "lensCellLimit",
-      lane: "4",
-    },
-  ],
+  "relay-app": [],
   browser: [],
 };
 
