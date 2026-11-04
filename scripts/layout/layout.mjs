@@ -191,6 +191,7 @@ export function parseDependsOn(
       dir: repo.dir,
       repo: repo.fullName,
       public: Boolean(repo.public),
+      ...(repo.defaultBranch ? { defaultBranch: repo.defaultBranch } : {}),
       ...dep,
     };
     const key = `${full.repo}${dep.kind === "pr" ? `#${dep.number}` : `@${dep.ref}`}`;
@@ -263,8 +264,10 @@ export function defaultToken() {
 export async function evaluateDependency(
   dep,
   gh,
-  { defaultBranch = "main" } = {}
+  { defaultBranch: layoutBranch = "main" } = {}
 ) {
+  // a repo that lands on another branch (synap-bridge: master) names it in layout.json
+  const defaultBranch = dep.defaultBranch ?? layoutBranch;
   try {
     if (dep.kind === "pr") {
       const pr = await gh.pull(dep.repo, dep.number);
@@ -496,7 +499,8 @@ export function materialize({
       lines.push(`${dir}: kept (already at ${dest})`);
       continue;
     }
-    const ref = refs.get(dir) ?? layout.defaultBranch ?? "main";
+    const ref =
+      refs.get(dir) ?? repo.defaultBranch ?? layout.defaultBranch ?? "main";
     mkdirSync(dest, { recursive: true });
     git(["init", "-q", dest]);
     git([
@@ -647,7 +651,12 @@ async function main(argv) {
         const { repo, ref } = splitRepoRef(opts.compare, need);
         try {
           texts.push(
-            await commitMessages(gh, repo.fullName, ref, layout.defaultBranch)
+            await commitMessages(
+              gh,
+              repo.fullName,
+              ref,
+              repo.defaultBranch ?? layout.defaultBranch
+            )
           );
         } catch (e) {
           failures.push(`commits of ${repo.slug}@${ref}: ${e.message}`);
