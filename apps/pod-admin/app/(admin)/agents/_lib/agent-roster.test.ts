@@ -9,6 +9,7 @@ import {
   originLine,
   reachErrorSentence,
   standingLine,
+  viaSynapAccount,
   type AgentRosterRowLike,
 } from "./agent-roster";
 
@@ -183,6 +184,20 @@ describe("lines", () => {
     expect(originLine("cli")).toMatch(/synap init/);
     expect(originLine(null)).toBeNull();
     expect(originLine("martian")).toBeNull();
+  });
+
+  it("a Synap account agent says so, whatever created_via the pod recorded (review bf96d410, lane B)", () => {
+    expect(originLine("cli", "synap:account")).toMatch(/Synap account/);
+    expect(originLine("cli", "antoine")).toMatch(/synap init/);
+    expect(viaSynapAccount(row({ hostSeat: "synap:account" }))).toBe(true);
+    expect(viaSynapAccount(row({ hostSeat: null }))).toBe(false);
+    const [view] = buildAgentRoster(
+      [row({ hostSeat: "synap:account" })],
+      [],
+      null,
+      () => "now"
+    );
+    expect(view!.sentence).toMatch(/Through your Synap account\.$/);
   });
 
   it("agentsByCreator lists what removeByUserId would take", () => {

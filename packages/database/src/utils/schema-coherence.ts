@@ -563,6 +563,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "worker_served_version",
     addedBy: "0385_api_keys_worker_served.sql",
   },
+  // The door that minted the key (0400): /mcp/redeem's 'synap-account' is
+  // how the connector's keys are told apart (isSynapAccountKey).
+  {
+    table: "api_keys",
+    column: "origin",
+    addedBy: "0400_synap_account_key_origin.sql",
+  },
 
   // api_key_external_users — sub-token mappings (0018)
   {

@@ -150,6 +150,11 @@ export const apiKeys = pgTable(
     // NULL = an older CLI that sent no label.
     instanceLabel: text("instance_label"),
 
+    // The door that minted the key (0400), written by that door only:
+    // 'synap-account' = /mcp/redeem, the Synap account's MCP connector (read
+    // by `isSynapAccountKey`). NULL = any other door. A rotation carries it.
+    origin: text("origin"),
+
     // MCP tool profile — the tool surface this key's MCP client LISTS (V1 D4).
     // NULL = legacy: every tool (keys minted before 0280 keep what they had).
     // 'entry' = the small entry surface new agent keys get; 'builder' = every

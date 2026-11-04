@@ -181,6 +181,7 @@ export function registerKeysRoutes(app: HubHono): void {
               linkedUserId: keyRecord.linkedUserId,
               instanceId: keyRecord.instanceId,
               description: keyRecord.description,
+              origin: keyRecord.origin,
             }
           );
 

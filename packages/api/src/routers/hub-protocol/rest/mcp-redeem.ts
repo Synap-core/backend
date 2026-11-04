@@ -45,8 +45,11 @@ import {
 } from "@synap/database";
 import { apiKeys } from "@synap/database/schema";
 
+import { SYNAP_ACCOUNT_SEAT } from "@synap-core/types/agents";
+
 import { provisionSurfaceAgentKey } from "../../../services/agent-identity-service.js";
 import {
+  SYNAP_ACCOUNT_KEY_ORIGIN,
   isSynapAccountKey,
   resolveSynapAccountMint,
   type SynapAccountClient,
@@ -195,7 +198,8 @@ export function registerMcpRedeemRoutes(app: HubHono): void {
 
     try {
       // Mint the client's agent key NOW via the ONE door. Agent USER is
-      // singleton per (createdByUserId, agentType, no computer); each human
+      // singleton per (createdByUserId, agentType, no computer, the Synap
+      // account seat): never the agent `/setup/agent` makes; each human
       // also gets a DISTINCT KEY via linkedUserId + instanceId (the CP's
       // instanceId names the client too, so each client is its own key).
       // NOT idempotent — every redeem is a fresh consent and mints a fresh key.
@@ -203,9 +207,13 @@ export function registerMcpRedeemRoutes(app: HubHono): void {
         agentType: mint.agentType,
         createdByUserId: row.podUserId,
         linkedUserId: row.podUserId, // the key acts for THIS human
-        // A client behind the Synap account runs on no computer of this person's.
+        // A client behind the Synap account runs on no computer of this
+        // person's, and has its own identity axis (review bf96d410, lane B).
         hostUserId: null,
+        hostSeat: SYNAP_ACCOUNT_SEAT,
         instanceId,
+        // The one door that stamps it: how the connector's keys are told.
+        keyOrigin: SYNAP_ACCOUNT_KEY_ORIGIN,
         scopes,
         ensureRegistryRow: true,
         agentLabel: mint.agentLabel,
@@ -311,7 +319,7 @@ export function registerMcpRedeemRoutes(app: HubHono): void {
 
     const keyRow = await db.query.apiKeys.findFirst({
       where: eq(apiKeys.id, keyId),
-      columns: { id: true, userId: true, revokedAt: true, instanceId: true },
+      columns: { id: true, userId: true, revokedAt: true, origin: true },
     });
     if (!keyRow) {
       // Unknown keyId — never leak existence, just report not-revoked.
@@ -322,10 +330,9 @@ export function registerMcpRedeemRoutes(app: HubHono): void {
       return c.json({ revoked: false });
     }
 
-    // SECURITY FLOOR: only revoke a key that is plausibly a Synap account
-    // connector key minted by /mcp/redeem above: an AGENT's key, and either
-    // the CP's `mcp:` instanceId (every key it redeems, one agent per client
-    // since W5) or the pre-W5 `claude-web` agent. This stops a CP assertion
+    // SECURITY FLOOR: only revoke a key /mcp/redeem above minted: an AGENT's
+    // key whose origin is the Synap account (0400; an instanceId is no
+    // evidence, `/setup/agent` takes any). This stops a CP assertion
     // (scoped only to `mcp_revoke`, not to a specific pod user) from being
     // used to kill an arbitrary pod key by guessing/leaking a keyId — the floor
     // this schema CAN express. It does NOT confine to the specific
@@ -333,15 +340,9 @@ export function registerMcpRedeemRoutes(app: HubHono): void {
     // carries no direct link back to a `pod_mcp_grants` row on the CP side.
     const owner = await db.query.users.findFirst({
       where: eq(users.id, keyRow.userId),
-      columns: { userType: true, agentType: true },
+      columns: { userType: true },
     });
-    if (
-      owner?.userType !== "agent" ||
-      !isSynapAccountKey({
-        agentType: owner.agentType,
-        instanceId: keyRow.instanceId,
-      })
-    ) {
+    if (owner?.userType !== "agent" || !isSynapAccountKey(keyRow)) {
       logger.warn(
         { keyId },
         "mcp/revoke: keyId is not a Synap account connector key — refusing to revoke"
