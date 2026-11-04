@@ -4,6 +4,8 @@
  *   GET /public/sites/:siteToken                                    manifest (C1a)
  *   GET /public/sites/:siteToken/collections/:key                   a page (C1b)
  *   GET /public/sites/:siteToken/collections/:key/:slugOrPublicId   a record (C1b)
+ *   GET /public/sites/:siteToken/charts                             its charts
+ *   GET /public/sites/:siteToken/charts/:slugOrPublicId             one chart
  *
  * Credentialless, cross-origin readable. They live under the `/public/`
  * namespace, so the ONE predicate (`public-doors.ts`) skips hub auth +
@@ -24,6 +26,9 @@ import type { Context } from "hono";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
+  PublicChartListSchema,
+  PublicChartSchema,
+  PublicSiteChartParamsSchema,
   PublicCollectionPageSchema,
   PublicRecordSchema,
   PublicSiteCollectionParamsSchema,
@@ -45,6 +50,10 @@ import {
   type PublicSiteInvalidQuery,
   type PublicSiteRead,
 } from "../../../services/sharing/public-site-read.js";
+import {
+  readSiteChart,
+  readSiteCharts,
+} from "../../../services/sharing/public-site-charts.js";
 import {
   PUBLIC_DOORS_DISABLED_BODY,
   PUBLIC_DOORS_DISABLED_STATUS,
@@ -165,6 +174,54 @@ export function registerPublicSitesRoutes(app: HubHono): void {
           c.req.queries()
         )
       )
+  );
+  registerOpenApi(app, {
+    method: "get",
+    path: "/public/sites/{siteToken}/charts",
+    tags: ["Public"],
+    summary: "List a published site's charts (credentialless)",
+    description:
+      "The charts the owner published into the site, newest first (no data). " +
+      "No auth; cross-origin readable; no credentials honoured. Every miss " +
+      "returns the same 404.",
+    security: [],
+    request: { params: PublicSiteParamsSchema },
+    responses: {
+      200: { description: "The site's charts", schema: PublicChartListSchema },
+      ...COMMON,
+    },
+  });
+
+  app.get("/public/sites/:siteToken/charts", async (c) =>
+    answer(c, () => readSiteCharts(c.req.param("siteToken") ?? ""))
+  );
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/public/sites/{siteToken}/charts/{slugOrPublicId}",
+    tags: ["Public"],
+    summary: "Read one published chart of a site (credentialless)",
+    description:
+      "A chart's cellKey, props, data and capturedAt, the same shape whether " +
+      "the owner published it as a snapshot (data frozen at publish) or live " +
+      "(data re-read from the pod, cached up to a minute). No auth; " +
+      "cross-origin readable; no credentials honoured. Every miss returns the " +
+      "same 404; a live read that fails is a 5xx, never empty data.",
+    security: [],
+    request: { params: PublicSiteChartParamsSchema },
+    responses: {
+      200: { description: "The chart", schema: PublicChartSchema },
+      ...COMMON,
+    },
+  });
+
+  app.get("/public/sites/:siteToken/charts/:slugOrPublicId", async (c) =>
+    answer(c, () =>
+      readSiteChart(
+        c.req.param("siteToken") ?? "",
+        c.req.param("slugOrPublicId") ?? ""
+      )
+    )
   );
 }
 

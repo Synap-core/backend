@@ -125,7 +125,7 @@ const badRequest = (message: string) =>
 
 // ── Loading ──────────────────────────────────────────────────────────────────
 
-interface ProjectRow {
+export interface ProjectRow {
   id: string;
   workspaceId: string | null;
   userId: string;
@@ -133,7 +133,7 @@ interface ProjectRow {
   description: string | null;
 }
 
-async function loadProject(
+export async function loadProject(
   database: Db,
   projectId: string
 ): Promise<ProjectRow | null> {
@@ -151,7 +151,7 @@ async function loadProject(
   return row ?? null;
 }
 
-async function loadSettings(database: Db, workspaceId: string) {
+export async function loadSettings(database: Db, workspaceId: string) {
   const [ws] = await database
     .select({ settings: workspaces.settings })
     .from(workspaces)
@@ -187,10 +187,10 @@ const siteRowWhere = () =>
     isNull(resourceShares.siteShareId)
   );
 
-type SiteRow = Awaited<ReturnType<typeof loadSiteById>>;
+export type SiteRow = Awaited<ReturnType<typeof loadSiteById>>;
 
 /** A site row by id (revoked included), or NOT_FOUND. */
-async function loadSiteById(database: Db, siteId: string) {
+export async function loadSiteById(database: Db, siteId: string) {
   const [row] = await database
     .select(SITE_COLUMNS)
     .from(resourceShares)
@@ -235,7 +235,7 @@ async function assertCanWidenSite(
 }
 
 /** Narrowing: administer the project OR write the home space. */
-async function assertCanNarrowSite(
+export async function assertCanNarrowSite(
   database: Db,
   userId: string,
   site: SiteRow,
@@ -258,7 +258,7 @@ async function assertCanNarrowSite(
 }
 
 /** The home space's policy must allow publishing a project (the site). */
-function assertSitePolicy(settings: unknown): void {
+export function assertSitePolicy(settings: unknown): void {
   if (resolveExposurePolicy(settings).project.public.read !== "direct") {
     throw new TRPCError({
       code: "FORBIDDEN",
@@ -590,7 +590,7 @@ export interface PublishSiteResult {
 }
 
 /** Load a site for a widening act: unrevoked, its project alive, the caller allowed. */
-async function loadSiteToWiden(
+export async function loadSiteToWiden(
   database: Db,
   userId: string,
   siteId: string
@@ -1100,7 +1100,7 @@ export async function planSitePublish(
 }
 
 /** The 0336 unique index a racing publish of the same slug hits. */
-const SLUG_INDEX = "resource_shares_site_slug_uidx";
+export const SLUG_INDEX = "resource_shares_site_slug_uidx";
 
 export interface PublishedMember {
   entityId: string;
@@ -1525,8 +1525,11 @@ async function statusMembers(
 }> {
   const limit = clampSiteLimit(page.limit ?? SITE_MAX_LIMIT);
   const after = page.cursor ? decodeInstantCursor(page.cursor) : null;
+  // Records only: a chart member (`resource_type = 'cell'`, site-charts.ts)
+  // is not a record and is listed by its own door.
   const ofSite = and(
     eq(resourceShares.siteShareId, site.id),
+    eq(resourceShares.resourceType, "entity"),
     isNull(resourceShares.revokedAt)
   );
   const rows = await database

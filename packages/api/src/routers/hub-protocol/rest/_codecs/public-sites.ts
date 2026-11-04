@@ -142,3 +142,62 @@ export const PublicRecordSchema = PublicRecordSummarySchema.extend({
     .nullable()
     .describe("The pinned published revision's text, or null."),
 }).openapi("PublicRecord");
+
+// ── Charts published into a site (services/sharing/public-site-charts.ts) ────
+
+/** GET /public/sites/{siteToken}/charts/{slugOrPublicId} path params. */
+export const PublicSiteChartParamsSchema = z
+  .object({
+    siteToken: z.string().describe("The site token (the capability)."),
+    slugOrPublicId: z
+      .string()
+      .describe(
+        "A chart's public id (`p_` + 16 base62 chars) or its slug (lowercase words joined by `-`)."
+      ),
+  })
+  .openapi("PublicSiteChartParams");
+
+const PublicChartModeSchema = z
+  .enum(["snapshot", "live"])
+  .describe(
+    "snapshot: the data was frozen when the owner published it; live: the data is re-read from the pod (cached up to a minute)."
+  );
+
+/** One chart in a site's chart list (no props, no data). */
+export const PublicChartSummarySchema = z
+  .object({
+    publicId: z.string().describe("The chart's public id (`p_…`)."),
+    slug: z.string().nullable(),
+    title: z.string().optional(),
+    cellKey: z
+      .string()
+      .describe(
+        "Which renderer draws it: a pod chart key (chart-bar, chart-line, …) or a custom cell key."
+      ),
+    mode: PublicChartModeSchema,
+    publishedOn: z.string().describe("Publication day, YYYY-MM-DD."),
+  })
+  .openapi("PublicChartSummary");
+
+/** A site's live published charts. */
+export const PublicChartListSchema = z
+  .object({
+    items: z.array(PublicChartSummarySchema),
+    total: z.number().int().describe("Live published charts in the site."),
+  })
+  .openapi("PublicChartList");
+
+/** One published chart: everything a site needs to draw it. */
+export const PublicChartSchema = PublicChartSummarySchema.extend({
+  props: z
+    .record(z.string(), z.unknown())
+    .describe("The chart's options as published (never an internal id)."),
+  data: z
+    .unknown()
+    .describe(
+      "The rows, in the shape the cellKey draws (e.g. [{x, y}] for chart-line)."
+    ),
+  capturedAt: z
+    .string()
+    .describe("When the numbers were taken (ISO date-time)."),
+}).openapi("PublicChart");

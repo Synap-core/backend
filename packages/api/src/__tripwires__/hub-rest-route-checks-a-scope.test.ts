@@ -54,6 +54,10 @@ const NO_HUB_KEY: Record<string, string> = {
     "Credentialless public door: the path token.",
   "GET /public/sites/:siteToken/collections/:key/:slugOrPublicId":
     "Credentialless public door: the path token.",
+  "GET /public/sites/:siteToken/charts":
+    "Credentialless public door: the path token.",
+  "GET /public/sites/:siteToken/charts/:slugOrPublicId":
+    "Credentialless public door: the path token.",
   "POST /setup/agent":
     "Setup door: setup.agent key, PROVISIONING_TOKEN or trusted-issuer JWT, checked in the handler.",
   "POST /setup/service":

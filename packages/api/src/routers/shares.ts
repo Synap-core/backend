@@ -87,6 +87,12 @@ import {
   unpublishSite,
 } from "../services/sharing/site-service.js";
 import {
+  CHART_MODES,
+  publishChartsToSite,
+  SITE_PUBLISH_MAX_CHARTS,
+  unpublishChartsFromSite,
+} from "../services/sharing/site-charts.js";
+import {
   publishResource,
   revokePublication,
   unpublishResource,
@@ -277,6 +283,41 @@ export const sharesRouter = router({
     .input(z.object({ siteId: Uuid, entityIds: SiteRecordIds.optional() }))
     .mutation(({ input, ctx }) =>
       unpublishFromSite(shareActorFromCtx(ctx), input)
+    ),
+
+  publishChartsToSite: credentialProcedure
+    .input(
+      z.object({
+        siteId: Uuid,
+        charts: z
+          .array(
+            z.object({
+              cellInstanceId: Uuid,
+              mode: z.enum(CHART_MODES),
+              slug: z.string().max(96).nullable().optional(),
+            })
+          )
+          .min(1)
+          .max(SITE_PUBLISH_MAX_CHARTS),
+        reasoning: z.string().max(2000).optional(),
+      })
+    )
+    .mutation(({ input, ctx }) =>
+      publishChartsToSite(
+        { ...shareActorFromCtx(ctx), reasoning: input.reasoning },
+        input
+      )
+    ),
+
+  unpublishChartsFromSite: protectedProcedure
+    .input(
+      z.object({
+        siteId: Uuid,
+        cellInstanceIds: z.array(Uuid).min(1).max(SITE_PUBLISH_MAX_CHARTS),
+      })
+    )
+    .mutation(({ input, ctx }) =>
+      unpublishChartsFromSite(shareActorFromCtx(ctx), input)
     ),
 
   revokeSite: protectedProcedure

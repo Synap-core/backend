@@ -38,6 +38,13 @@
  *   POST /shares/sites/:id/unpublish           { entityIds? } — those records
  *                                              off this site, or (no body) the
  *                                              site back to draft — direct
+ *   POST /shares/sites/:id/charts/publish      { charts: [{ cellInstanceId,
+ *                                              mode: snapshot|live, slug? }]
+ *                                              (≤ 200), reasoning? } — publish
+ *                                              charts INTO the site; an agent
+ *                                              key gets ONE 202 proposal
+ *   POST /shares/sites/:id/charts/unpublish    { cellInstanceIds } — those
+ *                                              charts off this site — direct
  *   POST /shares/sites/:id/revoke              the site (and every member row)
  *                                              revoked for good — direct
  *
@@ -82,6 +89,19 @@ import {
   SITE_PUBLISH_MAX_RECORDS,
   unpublishFromSite,
 } from "../../../services/sharing/site-service.js";
+import {
+  publishChartsToSite,
+  unpublishChartsFromSite,
+} from "../../../services/sharing/site-charts.js";
+import { ErrorSchema } from "./_codecs/_openapi.js";
+import { registerOpenApi } from "./_codecs/_register.js";
+import {
+  PublishChartsBodySchema,
+  PublishChartsResultSchema,
+  SiteIdParamsSchema,
+  UnpublishChartsBodySchema,
+  UnpublishChartsResultSchema,
+} from "./_codecs/site-charts.js";
 import {
   publishResource,
   revokePublication,
@@ -300,6 +320,109 @@ export function registerSharesRoutes(app: HubHono): void {
       );
     } catch (err) {
       return fail(c, err, "POST /shares/sites/:id/unpublish");
+    }
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/shares/sites/{id}/charts/publish",
+    tags: ["Shares"],
+    summary: "Publish charts into a site, as snapshots or live",
+    description:
+      "A person's publish applies at once; an agent key's batch is ONE proposal (202). " +
+      "The site's token then serves each chart at /public/sites/{siteToken}/charts/{slug}.",
+    request: { params: SiteIdParamsSchema, body: PublishChartsBodySchema },
+    responses: {
+      200: {
+        description: "Published (or none, with the refusals)",
+        schema: PublishChartsResultSchema,
+      },
+      202: {
+        description: "Proposed: the person approves the batch",
+        schema: PublishChartsResultSchema,
+      },
+      400: { description: "Invalid body or chart", schema: ErrorSchema },
+      403: {
+        description:
+          "Missing scope, or refused by the policy or the key's grant",
+        schema: ErrorSchema,
+      },
+      404: { description: "Site or chart not found", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/shares/sites/{id}/charts/unpublish",
+    tags: ["Shares"],
+    summary: "Take charts off a site",
+    description:
+      "Back to draft (the public door answers 404; publishing again restores the same URL). Direct: it only narrows.",
+    request: { params: SiteIdParamsSchema, body: UnpublishChartsBodySchema },
+    responses: {
+      200: { description: "Taken off", schema: UnpublishChartsResultSchema },
+      400: { description: "Invalid body", schema: ErrorSchema },
+      403: {
+        description: "Missing scope, or outside the key's grant",
+        schema: ErrorSchema,
+      },
+      404: { description: "Site not found", schema: ErrorSchema },
+    },
+  });
+
+  app.post("/shares/sites/:id/charts/publish", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = Uuid.safeParse(c.req.param("id"));
+    if (!id.success) return c.json({ error: "Invalid site id" }, 400);
+    const body = PublishChartsBodySchema.safeParse(
+      await c.req.json().catch(() => null)
+    );
+    if (!body.success) {
+      return c.json(
+        { error: "Validation failed", details: body.error.issues },
+        400
+      );
+    }
+    try {
+      const { reasoning, charts } = body.data;
+      return jsonGoverned(
+        c,
+        await publishChartsToSite(actorOf(c, reasoning), {
+          siteId: id.data,
+          charts,
+        })
+      );
+    } catch (err) {
+      return fail(c, err, "POST /shares/sites/:id/charts/publish");
+    }
+  });
+
+  app.post("/shares/sites/:id/charts/unpublish", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = Uuid.safeParse(c.req.param("id"));
+    if (!id.success) return c.json({ error: "Invalid site id" }, 400);
+    const body = UnpublishChartsBodySchema.safeParse(
+      await c.req.json().catch(() => null)
+    );
+    if (!body.success) {
+      return c.json(
+        { error: "Validation failed", details: body.error.issues },
+        400
+      );
+    }
+    try {
+      return c.json(
+        await unpublishChartsFromSite(actorOf(c), {
+          siteId: id.data,
+          cellInstanceIds: body.data.cellInstanceIds,
+        })
+      );
+    } catch (err) {
+      return fail(c, err, "POST /shares/sites/:id/charts/unpublish");
     }
   });
 

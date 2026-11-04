@@ -359,6 +359,16 @@ const GATED_ELSEWHERE: Readonly<
     load: () => import("../services/sharing/share-service.js"),
     why: "a share is a governed write",
   },
+  "POST /shares/sites/:id/charts/publish": {
+    via: "publishChartsToSite",
+    load: () => import("../services/sharing/site-charts.js"),
+    why: "share.create through checkPermissionOrPropose (an agent's batch is one proposal)",
+  },
+  "POST /shares/sites/:id/charts/unpublish": {
+    via: "unpublishChartsFromSite",
+    load: () => import("../services/sharing/site-charts.js"),
+    why: "narrowing only, still within the key's grant (grantWriteDenial)",
+  },
   "POST /channels/:channelId/bind": {
     via: "proposeChannelBind",
     load: () => import("../utils/propose-channel-bind.js"),

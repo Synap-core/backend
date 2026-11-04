@@ -78,3 +78,18 @@ export function isSiteLive(
     servedNow(row, now)
   );
 }
+
+/**
+ * IS THIS SITE CHART LIVE? — a CHART member row of a site (0397,
+ * `site-charts.ts`): a public `cell` row addressed through its site, published,
+ * not revoked, not expired. The site's own liveness, the cell instance still
+ * existing and the space's public-doors switch are decided by the read.
+ */
+export function isSiteChartLive(
+  row: PublicationLiveInput,
+  now: number = Date.now()
+): boolean {
+  return (
+    row.resourceType === "cell" && !!row.siteShareId && publishedNow(row, now)
+  );
+}
