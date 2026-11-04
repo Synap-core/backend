@@ -71,9 +71,11 @@ describe("checkCellSource: a frame cell that mounts is not refused", () => {
     }
   });
 
-  it("a host the frame drops opens nothing: no scheme, a path, a wildcard", () => {
-    // ViewFrame `buildFrameCsp` keeps an http(s)/ws(s) origin only, so a
-    // request to any of these is blocked at run time and refused here.
+  it("a host the frame drops is refused, and opens nothing: no scheme, a path, a wildcard", () => {
+    // One host rule (`frameExternalOrigins`, the parse of ViewFrame
+    // `buildFrameCsp`): an http(s)/ws(s) origin only. The host itself is
+    // refused (`external_host`), and a request to it too: it is blocked at
+    // run time.
     const source =
       'export default () => { fetch("https://api.vendor.com/v1/x"); return null; };';
     for (const host of [
@@ -87,8 +89,32 @@ describe("checkCellSource: a frame cell that mounts is not refused", () => {
           checkCellSource({ source, mechanism: "frame", externalHosts: [host] })
             .refusals
         )
-      ).toEqual(["network_request"]);
+      ).toEqual(["external_host", "network_request"]);
     }
+  });
+
+  it("a blank host entry declares nothing, and a padded origin is that origin", () => {
+    const source =
+      'export default () => { fetch("https://api.vendor.com/v1/x"); return null; };';
+    expect(
+      checkCellSource({
+        source,
+        mechanism: "frame",
+        externalHosts: [" https://api.vendor.com ", "", "  "],
+      }).refusals
+    ).toEqual([]);
+  });
+
+  it("the host refusal names the host and the fix", () => {
+    const r = checkCellSource({
+      source: "export default () => null;",
+      mechanism: "frame",
+      externalHosts: ["api.vendor.com"],
+    }).refusals;
+    expect(codes(r)).toEqual(["external_host"]);
+    expect(r[0]!.line).toBeNull();
+    expect(r[0]!.message).toContain("api.vendor.com");
+    expect(r[0]!.fix).toContain("https://api.vendor.com");
   });
 
   it("an import in a comment that opens its line is not an import", () => {
