@@ -1966,6 +1966,13 @@ export interface SessionInput {
 	/** The stored slot's label — what the label-matching answer doors address. */
 	slotLabel: string;
 }
+declare const STATUS_OF_ANSWER_TYPES: readonly [
+	"entity",
+	"goal",
+	"session",
+	"run"
+];
+export type StatusOfAnswerType = (typeof STATUS_OF_ANSWER_TYPES)[number];
 /**
  * A stage a SESSION entered, read from its stage ledger
  * (`focus_sessions.stage_history`, 0382; the shape of a goal's `step_moved`).
@@ -18241,7 +18248,7 @@ type Unavailable$1 = {
 };
 export interface StatusOf {
 	id: string;
-	type: "entity" | "goal" | "run" | "session";
+	type: StatusOfAnswerType;
 	name: string | null;
 	status: string | null;
 	label: string | null;

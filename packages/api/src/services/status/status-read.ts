@@ -75,6 +75,7 @@ import {
   resolveStatusTone,
   trackStatusCategory,
   type StatusOfAccount,
+  type StatusOfAnswerType,
   type StatusOfHistory,
   type StatusOfHistoryEvent,
   type StatusOfStageEntered,
@@ -170,7 +171,7 @@ const UNAVAILABLE: Unavailable = { status: "unavailable" };
 
 export interface StatusOf {
   id: string;
-  type: "entity" | "goal" | "session" | "run";
+  type: StatusOfAnswerType;
   name: string | null;
   status: string | null;
   label: string | null;
