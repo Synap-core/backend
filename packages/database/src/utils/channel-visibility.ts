@@ -15,7 +15,9 @@
  *      in a workspace the caller BELONGS to (member of, or owner of) — so a
  *      client channel mirrored into a workspace is visible to everyone who
  *      actually belongs to that workspace, WITHOUT exposing other users'
- *      private threads / personal channels, OR
+ *      private threads / personal channels. A conversation BOUND TO A PERSON
+ *      is not a team channel even when it carries a workspace (every creator
+ *      stamps one): branch 6 decides it, whatever its workspace, OR
  *   4. it is a SHARED-type channel with a NULL workspace — a "pod-wide-shared"
  *      channel (e.g. a Discord bridge inbound not pinned to any single
  *      workspace). A NULL-workspace SHARED channel is a genuine pod-wide global
@@ -23,15 +25,18 @@
  *      purely by channelType — personal channels stay branch-1 owner-only.
  *      A PERSON'S CONVERSATION is not pod-wide (founder decision d7,
  *      2026-11-03, channels wave d00cd2ac): see branch 6.
- *   6. it is a space-less PERSON'S CONVERSATION (an EXTERNAL channel bound to a
- *      person, `contextObjectType = 'entity'`, or born of a connected account,
- *      `metadata.accountId`) whose person the caller may READ — the channel
- *      follows its person, as for an app key (decision d3, `grant-read.ts`
- *      `channelFollowsEntityWhere`) and as an object room follows its object.
- *      It uses the SAME registered entity floor as branch 5. A conversation
- *      bound to no person (a DM whose sender was not identified yet) is its
- *      owner's and its members' only. A space-less EXTERNAL channel that is
- *      neither (a Discord bridge, a team feed) stays branch 4.
+ *   6. it is a PERSON'S CONVERSATION bound to its person (an EXTERNAL channel,
+ *      `contextObjectType = 'entity'`), in a workspace or not, whose person the
+ *      caller may READ — the channel follows its person, as for an app key
+ *      (decision d3, `grant-read.ts` `channelFollowsEntityWhere`) and as an
+ *      object room follows its object. It uses the SAME registered entity
+ *      floor as branch 5, and it is carved OUT of branches 3 and 4: a member
+ *      of the channel's workspace who cannot read the person does not see it.
+ *      A space-less conversation bound to no person (a DM whose sender was not
+ *      identified yet, `metadata.accountId`) is its owner's and its members'
+ *      only. An EXTERNAL channel bound to no person keeps branch 3 (in a
+ *      workspace) or 4 (space-less, neither person nor account: a Discord
+ *      bridge, a team feed).
  *
  * Branch 3 deliberately does NOT use `userVisibleWhere` — that helper also
  * matches pod-visible workspaces, which would leak shared channels to pod-wide
@@ -245,29 +250,28 @@ function personConversationWhere(): SQL {
   )!;
 }
 
-/** A space-less person's conversation bound to its person (branch 6's rows). */
-function spacelessPersonChannelWhere(): SQL {
+/**
+ * A person's conversation BOUND to its person (branch 6's rows), whatever its
+ * workspace. Never NULL (coalesced), so `not()` of it is safe in branch 3.
+ */
+function personChannelWhere(): SQL {
   return and(
-    isNull(channels.workspaceId),
-    personConversationWhere(),
-    eq(channels.contextObjectType, "entity")
+    eq(channels.channelType, ChannelType.EXTERNAL),
+    drizzleSql`coalesce(${channels.contextObjectType} = 'entity', false)`
   )!;
 }
 
 /**
- * Branch 6: a space-less person's conversation whose PERSON the caller may
- * read, through the registered entity floor (branch 5's). Literal ids only,
- * like branch 5 (the audience is completed per user); no floor registered →
- * nothing (fail closed: owner and roster only).
+ * Branch 6: a person's conversation whose PERSON the caller may read, through
+ * the registered entity floor (branch 5's). Literal ids only, like branch 5
+ * (the audience is completed per user); no floor registered → nothing (fail
+ * closed: owner and roster only).
  */
 function personConversationBranch(userId: string | AnyColumn): SQL | undefined {
   if (typeof userId !== "string") return;
   const floor = objectRoomFloors.get("entity");
   if (!floor) return;
-  return and(
-    spacelessPersonChannelWhere(),
-    floor(userId, channels.contextObjectId)
-  );
+  return and(personChannelWhere(), floor(userId, channels.contextObjectId));
 }
 
 /**
@@ -324,6 +328,8 @@ export function channelVisibilityWhere(userId: string | AnyColumn): SQL {
       isNotNull(channels.workspaceId),
       notSessionRoom(),
       notObjectRoom(),
+      // A person's conversation follows its person, not its space: branch 6.
+      not(personChannelWhere()),
       or(exists(memberOfWs), exists(ownerOfWs))
     ),
     // 4. Pod-wide-shared: a SHARED-type channel with a NULL workspace. Wave-3
@@ -343,7 +349,7 @@ export function channelVisibilityWhere(userId: string | AnyColumn): SQL {
     ),
     // 5. An object room whose OBJECT the caller may read (see the docblock).
     objectRoomBranch(userId),
-    // 6. A space-less person's conversation whose PERSON the caller may read.
+    // 6. A person's conversation whose PERSON the caller may read.
     personConversationBranch(userId)
   );
   // A GUEST (`podGuestWhere`: a guest project role, no pod participation) reads
@@ -391,7 +397,7 @@ export async function listChannelAudienceUserIds(
     .where(
       and(
         eq(channels.id, channelId),
-        or(objectRoomWhere(), spacelessPersonChannelWhere())
+        or(objectRoomWhere(), personChannelWhere())
       )
     )
     .limit(1);

@@ -1112,6 +1112,15 @@ export async function sendExternalMessage(
 }
 
 /**
+ * The HTTP status a messaging connector's error carries ("<what> failed:
+ * 429 — …", `UnipileConnector` `failure`, `StalwartConnector`), 0 when the
+ * provider never answered (a timeout, a network error) or the error says
+ * nothing of a status.
+ */
+const providerStatusOf = (message: string): number =>
+  Number(/failed: (\d{3})\b/.exec(message)?.[1] ?? 0);
+
+/**
  * Deliver a send that names the person's channel (channels wave, lane D):
  * the account the channel's owner holds, the plan (attendee,
  * 1st-degree check, start or continue the chat, the outbound row, events),
@@ -1158,7 +1167,7 @@ async function sendOnChannel(args: {
     plan = await planChannelSend({ channel, connector, accountId });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const status = Number(/failed: (\d{3})\b/.exec(message)?.[1] ?? 0);
+    const status = providerStatusOf(message);
     logger.warn(
       { err, channelId: channel.id, provider },
       "channel send: a read before the send failed; nothing was sent"
@@ -1180,22 +1189,42 @@ async function sendOnChannel(args: {
       providerRef: plan.providerRef ?? provider,
     };
   }
-  // THE provider call (a throw past here is ambiguous: it propagates, and the
-  // approval executor keeps its at-most-once claim).
+  // THE provider call. The provider REFUSING it (an HTTP 4xx answer: a rate
+  // limit, a bad request, a lost connection) is a DEFINITE not-sent: it is
+  // returned, so the approval executor releases its at-most-once claim and a
+  // retry can run. Any other throw (a timeout, a network error, a 5xx that
+  // may come after the provider acted, a 2xx it could not read) is AMBIGUOUS:
+  // it propagates, and the executor keeps its claim.
   let chatId: string;
   let externalMessageId: string | null;
-  if (plan.kind === "continue") {
-    chatId = plan.chatId;
-    const sent = await connector.sendMessage(accountId, chatId, input.body);
-    externalMessageId = (sent && sent.messageId) || null;
-  } else {
-    const started = await connector.startChat!(
-      accountId,
-      plan.attendee,
-      input.body
+  try {
+    if (plan.kind === "continue") {
+      chatId = plan.chatId;
+      const sent = await connector.sendMessage(accountId, chatId, input.body);
+      externalMessageId = (sent && sent.messageId) || null;
+    } else {
+      const started = await connector.startChat!(
+        accountId,
+        plan.attendee,
+        input.body
+      );
+      chatId = started.chatId;
+      externalMessageId = started.messageId;
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const status = providerStatusOf(message);
+    if (status < 400 || status >= 500) throw err;
+    logger.warn(
+      { err, channelId: channel.id, provider, status },
+      "channel send: the provider refused the message; nothing was sent"
     );
-    chatId = started.chatId;
-    externalMessageId = started.messageId;
+    return {
+      success: false,
+      error: `Nothing was sent: ${humanizeToken(provider)} refused the message (${redactForStorage(message, 160)}).`,
+      errorClass: classifyDispatchFailure({ status, message }),
+      providerRef: provider,
+    };
   }
   // The message went out: from here a failure to RECORD it is logged, never
   // reported as "not sent" (that would invite a second send).

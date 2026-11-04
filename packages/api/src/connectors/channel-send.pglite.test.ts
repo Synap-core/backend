@@ -812,6 +812,53 @@ describe("security review (lane D)", () => {
     expect((await statusOf(out.proposalId as string)).status).toBe("approved");
   });
 
+  it("the provider refusing the send (a 429) releases the claim; the retry sends once", async () => {
+    startChat
+      .mockRejectedValueOnce(
+        new Error("Unipile startChat failed: 429 — too many requests")
+      )
+      .mockResolvedValue({ chatId: "chat-429", messageId: "m-429" });
+    const out = await appSendsTo(PERSON);
+    let caught: unknown;
+    try {
+      await approve(out.proposalId as string);
+    } catch (err) {
+      caught = err;
+    }
+    expect(readAttachedFailureMeta(caught)?.errorClass).toBe("transient");
+    expect(await statusOf(out.proposalId as string)).toMatchObject({
+      status: "pending",
+      external_dispatched_at: null,
+    });
+    await approve(out.proposalId as string);
+    expect(startChat).toHaveBeenCalledTimes(2);
+    expect((await statusOf(out.proposalId as string)).status).toBe("approved");
+  });
+
+  it("a send that may have gone out (a timeout, a 502) keeps the claim: never sent twice", async () => {
+    for (const failure of [
+      new Error("The operation was aborted due to timeout"),
+      new Error("Unipile startChat failed: 502 — bad gateway"),
+    ]) {
+      startChat.mockReset();
+      startChat
+        .mockRejectedValueOnce(failure)
+        .mockResolvedValue({ chatId: "chat-amb", messageId: "m-amb" });
+      const out = await appSendsTo(PERSON);
+      await expect(approve(out.proposalId as string)).rejects.toThrow(
+        failure.message
+      );
+      const row = await statusOf(out.proposalId as string);
+      expect(row.status).toBe("pending");
+      expect(row.external_dispatched_at).not.toBeNull();
+      await expect(approve(out.proposalId as string)).rejects.toThrow(
+        /already being dispatched/
+      );
+      expect(startChat).toHaveBeenCalledTimes(1);
+      await q(`delete from proposals where id=$1`, [out.proposalId]);
+    }
+  });
+
   it("a send that went out but could not be recorded is reported sent, never failed", async () => {
     startChat.mockResolvedValue({ chatId: "chat-norec", messageId: "m-norec" });
     const out = await appSendsTo(PERSON);

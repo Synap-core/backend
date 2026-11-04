@@ -1,7 +1,7 @@
 /**
  * A space-limited key sends only to people of its space (channels wave,
  * lane D, security review): the REAL `messaging.send` builtin, the REAL send
- * door and its grant check (`messagingSendGrantDenial`), and the REAL
+ * door and its grant check (`messagingSendGrantVerdict`), and the REAL
  * person-readable read (`readableRecipient`: the entity floor plus the key's
  * grant clause, `access/grant-read.ts`), all on PGlite. Nothing about who may
  * read whom is stubbed. Stubbed: the provider connector (never reached), the
@@ -15,7 +15,11 @@
  * Rows rule out:
  *   - the CRM key writing to someone it cannot read (a person of OTHER);
  *   - the CRM key sending on another space's person channel by its id;
- *   - the CRM key refused for its own space's person (pod-wide channel).
+ *   - the CRM key refused for its own space's person (pod-wide channel);
+ *   - the CRM key refused, by channel id, on its own person's channel stamped
+ *     with another space ("Channel is not in the acting workspace": a
+ *     person's channel follows the person, decisions d3/d7);
+ *   - a channel bound to no person losing that acting-space check.
  */
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -153,6 +157,9 @@ const LEA = randomUUID();
 const ELI = randomUUID();
 const CH_LEA = randomUUID();
 const CH_ELI = randomUUID();
+const MIA = randomUUID(); // a lead of CRM whose channel is stamped OTHER
+const CH_MIA = randomUUID();
+const CH_TEAM = randomUUID(); // an external channel of OTHER, no person
 
 /** The CRM app's key: reads people and sends in CRM only. */
 const CRM_KEY = {
@@ -210,9 +217,10 @@ beforeAll(async () => {
        ($2,'lead','Lead','role','workspace','workspace',true,'{}'::jsonb,null)`,
     [PERSON_KIND, ROLE_LEAD]
   );
-  for (const [id, title, ws, ch, chat] of [
-    [LEA, "Lea Lead", CRM, CH_LEA, "chat-lea"],
-    [ELI, "Eli Elsewhere", OTHER, CH_ELI, "chat-eli"],
+  for (const [id, title, ws, ch, chat, chWs] of [
+    [LEA, "Lea Lead", CRM, CH_LEA, "chat-lea", null],
+    [ELI, "Eli Elsewhere", OTHER, CH_ELI, "chat-eli", null],
+    [MIA, "Mia Mixed", CRM, CH_MIA, "chat-mia", OTHER],
   ] as const) {
     await q(
       `insert into entities (id, user_id, workspace_id, profile_id, type, title, properties, system_data)
@@ -227,11 +235,18 @@ beforeAll(async () => {
     await q(
       `insert into channels (id, user_id, workspace_id, title, channel_type, scope, status,
          context_object_type, context_object_id, external_source, external_channel_id, external_id, metadata, ai_reaction_mode)
-       values ($1,$2,null,$3,'external','pod','active','entity',$4,'linkedin',$5,$5,
+       values ($1,$2,$6,$3,'external','pod','active','entity',$4,'linkedin',$5,$5,
          '{"accountId":"acc-1","participantExternalId":"ACoAAA"}'::jsonb,'when_confident')`,
-      [ch, OWNER, title, id, chat]
+      [ch, OWNER, title, id, chat, chWs]
     );
   }
+  await q(
+    `insert into channels (id, user_id, workspace_id, title, channel_type, scope, status,
+       external_source, external_channel_id, external_id, metadata, ai_reaction_mode)
+     values ($1,$2,$3,'Team','external','workspace','active','linkedin','chat-team','chat-team',
+       '{"accountId":"acc-1"}'::jsonb,'when_confident')`,
+    [CH_TEAM, OWNER, OTHER]
+  );
   await q(
     `insert into messaging_accounts (id, user_id, provider, external_id, display_name, status)
      values ($1,$2,'linkedin','acc-1','Owner on LinkedIn','connected')`,
@@ -288,6 +303,33 @@ describe("a space-limited key sends only to the people of its space", () => {
     expect(out.success).toBe(false);
     expect(String(out.error)).toMatch(/grant does not allow/);
     expect(await proposalsOn(CH_ELI)).toBe(0);
+  });
+
+  it("the CRM key sends on its person's channel by id, though the channel is stamped with another space", async () => {
+    const out = (await runWithGrant(CRM_KEY, () =>
+      handler()(
+        { channelId: CH_MIA, text: "Hello" },
+        {
+          userId: OWNER,
+          workspaceId: CRM,
+          mustPropose: true,
+          governanceReason: "APP_OUTWARD_INTENT",
+        }
+      )
+    )) as Record<string, unknown>;
+    expect(out).toMatchObject({ proposed: true, channelId: CH_MIA });
+    expect(await proposalsOn(CH_MIA)).toBe(1);
+    expect(h.sent).toBe(0);
+  });
+
+  it("a channel bound to no person stays in the acting space", async () => {
+    await expect(
+      handler()(
+        { channelId: CH_TEAM, text: "Hello" },
+        { userId: OWNER, workspaceId: CRM }
+      )
+    ).rejects.toThrow(/not in the acting workspace/);
+    expect(await proposalsOn(CH_TEAM)).toBe(0);
   });
 
   it("a pod-wide key reaches the same person (the refusal is the space, not the person)", async () => {
