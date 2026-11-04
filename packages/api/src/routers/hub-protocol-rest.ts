@@ -38,6 +38,7 @@ import {
   registerCapabilityConnectionsRoutes,
   registerLoopsRoutes,
   registerCaptureRoutes,
+  registerImportUnitsRoutes,
   registerChannelsRoutes,
   registerEntityChannelsRoutes,
   registerChannelEgressRoutes,
@@ -313,6 +314,7 @@ registerEntitiesRoutes(app); // /users/:id/entities + /entities*
 registerEntityChannelsRoutes(app); // GET /entities/:id/channels — a person's channels
 registerIdentityRoutes(app); // /identity/resolve — read-only identity pre-check
 registerCaptureRoutes(app); // /capture/*
+registerImportUnitsRoutes(app); // /import/unit-uploads, /import/enqueue-units, /import/units-job/:jobId
 registerSearchRoutes(app); // /search*, /vector-search
 registerDocumentsRoutes(app); // /documents*
 registerProposalsRoutes(app); // /proposals*

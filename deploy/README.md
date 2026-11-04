@@ -70,17 +70,18 @@ common ones:
 ### Install from a clone
 
 From a checkout of this repository, the same engine installs the pod, from
-published images by default. A pod never builds its own images: a build takes
-~11 GB of disk and a 4 GB Node heap on the machine that serves your data. Only
-a host declared a dev host builds (`--dev-host`, or `SYNAP_ALLOW_SOURCE_BUILD=1`
-in the environment or in `deploy/.env`); on such a host a checkout builds from
-source by default.
+published images by default. A build takes ~11 GB of disk and a 4 GB Node heap
+on the machine that serves your data, so it is never done for you: a build you
+type (`--from-source`) is honoured, with one warning; a host declared a dev host
+(`--dev-host`, or `SYNAP_ALLOW_SOURCE_BUILD=1` in the environment or in
+`deploy/.env`) also builds from source by default and on the unattended
+`source` channel.
 
 ```bash
 git clone https://github.com/synap-core/backend.git
 cd backend
 ./synap install --domain pod.example.com --email you@example.com   # published images
-./synap install --dev-host --domain localhost                      # dev host: build from source
+./synap install --from-source --domain localhost                    # build from source, on request
 ```
 
 With `--domain localhost` the pod answers on `http://localhost:4000` (API) and
@@ -96,19 +97,22 @@ variables override that:
 | `SYNAP_SKIP_GIT_SYNC=1`  | Build the checkout as-is, unsynced. For local work; not for a deploy pod |
 | `SYNAP_FORCE_GIT_SYNC=1` | Reset anyway, after printing the work it discards                        |
 
-`synap update --from-source --dev-host` applies the same guard.
+`synap update --from-source` applies the same guard.
 
 ### Dev hosts and pods: where images are built
 
-A pod updates from a published release, pulled by digest. `synap update
---from-source` on a host that is not declared a dev host is refused before
-anything runs (the checkout is not even synced), and the refusal is recorded in
-`deploy/state/last-update.json`; so is the unattended `source` channel.
+A pod updates from a published release, pulled by digest. A pod may also build
+its own image when a person asks: `synap update --from-source` (also `synap
+install --from-source` and `synap rebuild`) prints one warning (memory, disk and
+time on this host), then builds; the update is recorded as a source build in
+`deploy/state/last-update.json`. What no person typed is refused on a host not
+declared a dev host: the unattended `source` channel and the update timer are
+refused before anything runs, and the refusal is recorded.
 
 | Host     | Gets its images from                                                                      |
 | -------- | ----------------------------------------------------------------------------------------- |
 | pod      | `synap update --release <main-<sha7>\|vX.Y.Z\|fast\|stable>`: CI-built, signed, by digest |
-| dev host | `synap update --from-source --dev-host`: tagged `synap-dev/*:<sha>`, never pushed         |
+| dev host | `synap update --from-source`: tagged `synap-dev/*:<sha>`, never pushed                    |
 
 To get a change onto a pod, land it on `main`. The nightly publishes the newest
 all-green main commit as `main-<sha7>` (channel fast); "Run workflow" on
@@ -208,7 +212,7 @@ puts it back.
 synap update                     # SYNAP_UPDATE_CHANNEL from deploy/.env, else stable
 synap update --release fast      # the latest green main build
 synap update --release v1.1.3    # one specific release
-synap update --from-source --dev-host  # a dev host only: build this checkout, apply it as a release
+synap update --from-source       # build this checkout, apply it as a release (heavy; warns)
 ```
 
 Every update takes a lock, reads the release manifest, runs preflight checks,

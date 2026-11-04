@@ -10,6 +10,7 @@
  */
 
 import { z } from "zod";
+import { withoutServerOwnedMessageMeta } from "@synap-core/types/agents";
 import { protectedProcedure } from "../../trpc.js";
 import { AccessContext } from "../../access/index.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
@@ -522,7 +523,12 @@ export const messagingProcedures = {
       for (const k of Object.keys(existing)) {
         merged[k] = existing[k];
       }
-      for (const [k, v] of Object.entries(input.metadata)) {
+      // `roomPost`, `sessionPost`, `routeChoice` are server-owned: a patch
+      // never adds or overwrites one (a forged answer, sender or chip); the
+      // row's own copy is kept as it was.
+      for (const [k, v] of Object.entries(
+        withoutServerOwnedMessageMeta(input.metadata)
+      )) {
         merged[k] = v;
       }
 

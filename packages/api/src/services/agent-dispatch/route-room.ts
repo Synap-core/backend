@@ -32,7 +32,11 @@ import {
   messages,
   users,
 } from "@synap/database";
-import { AiReactionMode, ChannelMemberKind } from "@synap/database/schema";
+import {
+  AiReactionMode,
+  ChannelMemberKind,
+  MessageRole,
+} from "@synap/database/schema";
 import { resolveMentionedMember } from "../../utils/agent-handles.js";
 import { resolveAgentReachMany } from "./agent-binding.js";
 import { route } from "./route.js";
@@ -163,6 +167,13 @@ export async function routeRoomMessage(p: {
  * Called by `channels.answerRouteChoice`, which has already checked the caller
  * can see the channel. A double tap starts one turn: the auto-respond door
  * keys its job on the trigger message.
+ *
+ * Only the pod's chip counts: the choice row must be a SYSTEM message (the
+ * pod posts it, `offerRoomChoice`) and the message it names a USER message
+ * (a person's, the one the room left unanswered). Every door that takes
+ * client metadata drops `routeChoice` (`withoutServerOwnedMessageMeta`); this
+ * is the second floor, so a chip forged on any other row, or pointing at an
+ * agent's reply, never starts a turn.
  */
 export async function answerRoomChoice(p: {
   channelId: string;
@@ -182,7 +193,7 @@ export async function answerRoomChoice(p: {
     }
 > {
   const [choiceRow] = await db
-    .select({ metadata: messages.metadata })
+    .select({ metadata: messages.metadata, role: messages.role })
     .from(messages)
     .where(
       and(
@@ -191,7 +202,8 @@ export async function answerRoomChoice(p: {
       )
     )
     .limit(1);
-  const choice = readRouteChoice(choiceRow?.metadata);
+  if (choiceRow?.role !== MessageRole.SYSTEM) return { status: "not_found" };
+  const choice = readRouteChoice(choiceRow.metadata);
   if (!choice) return { status: "not_found" };
   if (choice.answeredAgentUserId) {
     return { status: "refused", reason: "already_answered" };
@@ -200,7 +212,7 @@ export async function answerRoomChoice(p: {
     return { status: "refused", reason: "not_a_candidate" };
   }
   const [trigger] = await db
-    .select({ content: messages.content })
+    .select({ content: messages.content, role: messages.role })
     .from(messages)
     .where(
       and(
@@ -209,7 +221,7 @@ export async function answerRoomChoice(p: {
       )
     )
     .limit(1);
-  if (!trigger) return { status: "not_found" };
+  if (trigger?.role !== MessageRole.USER) return { status: "not_found" };
 
   const roster = await db
     .select({ id: channelMembers.memberId })

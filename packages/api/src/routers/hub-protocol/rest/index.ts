@@ -32,6 +32,7 @@ export { registerEntitiesRoutes } from "./entities.js";
 export { registerEntityChannelsRoutes } from "./entity-channels.js";
 export { registerIdentityRoutes } from "./identity.js";
 export { registerCaptureRoutes } from "./capture.js";
+export { registerImportUnitsRoutes } from "./import-units.js";
 export { registerSearchRoutes } from "./search.js";
 export { registerDocumentsRoutes } from "./documents.js";
 export { registerProposalsRoutes } from "./proposals.js";

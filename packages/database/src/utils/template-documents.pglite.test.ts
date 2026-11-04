@@ -14,6 +14,9 @@
  *      to it (appended once, deduped on a second run);
  *  (4) a document the person deleted is never recreated;
  *  (5) a dry run reports what it would create and writes nothing;
+ *  (4b) a sidebar item keys a document by its slug: one whose document the
+ *      person deleted is never appended again, and an item that resolves to
+ *      no live document is never appended;
  *  (6) the create door refuses, before any write, a sidebar item naming an
  *      undeclared document and a slug declared twice.
  */
@@ -305,6 +308,33 @@ describe("template documents install like views", () => {
     expect(report.documents.added).toEqual([]);
     expect(report.documents.skipped).toContain("plain");
     expect(await docsOf(workspaceId)).toHaveLength(count);
+  });
+
+  it("(4b) a sidebar item whose document is gone is never appended again, nor one that resolves to nothing", async () => {
+    // The person deletes the document the sidebar already pins …
+    await q(
+      `update documents set deleted_at = now()
+         where workspace_id = $1 and metadata -> 'templateDocument' ->> 'slug' = 'space-home'`,
+      [workspaceId]
+    );
+    const before = await sidebarOf(workspaceId);
+    // … and the template's next update names it again, plus the deleted
+    // `plain` (never in the sidebar).
+    const report = await reconcileWorkspaceFromDefinition({
+      workspaceId,
+      userId: USER,
+      definition: {
+        ...DEFINITION,
+        layoutConfig: {
+          sidebarItems: [
+            ...DEFINITION.layoutConfig.sidebarItems,
+            { kind: "document" as const, documentSlug: "plain" },
+          ],
+        },
+      },
+    });
+    expect(report.layout.sidebarItemsAdded).toEqual([]);
+    expect(await sidebarOf(workspaceId)).toEqual(before);
   });
 
   it("(5) a dry run reports what it would create and writes nothing", async () => {

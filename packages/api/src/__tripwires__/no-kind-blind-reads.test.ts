@@ -76,6 +76,13 @@ const FROZEN: Record<string, number> = {
   // tell a sanctioned literal-kind read from row-blind role-slug debt, so this
   // is a false positive, not code to fix.
   "packages/api/src/services/team-roster-context.ts": 1,
+  // CRM wave 2 S4a: the LinkedIn reach writer (`recordLinkedinReach`) and the
+  // daily sweep's provider-id lookup filter eq(entities.type, "person"):
+  // `linkedinConnection` / `linkedinInvitedAt` are properties of the system
+  // `person` kind, a pure PRIMARY kind (the same sanctioned literal-kind case
+  // as team-roster-context above), never a role slug.
+  "packages/api/src/services/connectors/linkedin-reach.ts": 1,
+  "packages/api/src/services/connectors/linkedin-reach-sync.ts": 1,
   // find-duplicate-candidates.ts `sameStartEvents` (#422) filters
   // eq(entities.type, EVENT_KIND): `event` is a pure PRIMARY kind with no
   // role/facet wearers — the sanctioned literal-kind case, same shape as

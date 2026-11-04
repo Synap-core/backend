@@ -72,6 +72,8 @@ import {
   failureRecord,
 } from "./failure-classification.js";
 import { assertFreshAuthentication } from "../../utils/device-session.js";
+import { assertPresenceForApproval } from "../../services/presence/gate.js";
+import type { PresenceProof } from "@synap-core/types/presence";
 import {
   redactDeepForStorage,
   redactForStorage,
@@ -609,6 +611,14 @@ export async function applyProposalApproval(args: {
    * import.apply, app-connect) keeps the synchronous apply it was written for.
    */
   background?: boolean;
+  /**
+   * Proof of presence (W3): the person's fresh signature over a challenge that
+   * names THIS proposal. Required for a sensitive approval
+   * (`services/presence/gate.ts`); ignored for an everyday one.
+   */
+  presence?: PresenceProof | null;
+  /** Which door approves, for the presence audit. */
+  door?: string;
 }): Promise<ProposalExecutorResult> {
   // Approval is the human step — an agent caller (agent key, the IS internal
   // key, or an acting agent in the ALS) never applies one, whichever door.
@@ -626,6 +636,15 @@ export async function applyProposalApproval(args: {
   // Before it, approving a rejected, withdrawn, expired or reverted proposal
   // re-ran its executor and flipped it to approved.
   assertProposalMayBeApproved(args.proposal);
+  // Proof of presence (W3): a sensitive approval needs the person's fresh
+  // signature over a challenge naming THIS proposal — before anything applies,
+  // and before a large graph is handed to the background job.
+  await assertPresenceForApproval({
+    userId: args.userId,
+    proposal: args.proposal,
+    proof: args.presence,
+    door: args.door ?? "applyProposalApproval",
+  });
 
   // A LARGE graph is applied by the background job — every gate above has
   // already run, here, in the request. A graph that is being applied right

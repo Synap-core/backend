@@ -44,12 +44,22 @@ import { AccessContext, scopedDb } from "../../access/index.js";
 import { RAIL_GOAL_PINS_MAX, goalRailPinKey } from "@synap-core/types/units";
 import { documentRailPinKey } from "@synap-core/types/documents";
 import { assertKnownProfileSlug } from "../../utils/assert-known-profile-slug.js";
-import { loadReadableDocument } from "../../utils/document-edit-access.js";
+import {
+  loadReadableDocument,
+  loadReadableDocumentTitles,
+} from "../../utils/document-edit-access.js";
 import { viewReadableWhere } from "../../utils/view-visibility.js";
 import { getTrack } from "../tracks/tracks-service.js";
 
 export const RAIL_PINS_KEY = "railPins";
-/** The most pins a rail holds — a rail, not a second sidebar. */
+/**
+ * The most pins a rail holds — a rail, not a second sidebar. It counts EVERY
+ * pin of the person's one list, including the goal and document pins a client
+ * that does not ask for them never sees (review A11): the list is the same on
+ * every client, so one client can never fill another's rail past its cap. A
+ * full rail says how many of its pins the asking client hides
+ * ({@link RailPinsFullError}).
+ */
 export const RAIL_PINS_MAX = 30;
 
 export interface RailPin {
@@ -67,6 +77,12 @@ export interface RailPin {
   label: string | null;
   /** `template` = suggested by a space's sidebar; `user` = pinned by hand. */
   source: "user" | "template";
+  /**
+   * A document pin only: the document's own title, read with the pin (the
+   * same read that drops a document the person can no longer open), so a
+   * client draws the pin without a read per document. Never stored.
+   */
+  title?: string;
 }
 
 interface StoredRailPins {
@@ -245,41 +261,63 @@ async function unreadableGoalIds(
 }
 
 /**
- * The documents among `pins` the person can no longer read (deleted, or no
- * longer shared with them) — the documents read floor every document read
- * goes through (`loadReadableDocument`). Only its NOT_FOUND verdict means
- * "unreadable": any other failure fails the read, never a silently shorter
- * rail. Read OUTSIDE the write's transaction, like the goals'.
+ * The documents among `pins` the person can still read, with their titles:
+ * ONE batched read through the documents read floor
+ * (`loadReadableDocumentTitles`, the rule of `loadReadableDocument`), never a
+ * document load per pin. A pinned document absent from the answer is
+ * unreadable (deleted, or no longer shared); a failed read fails the call,
+ * never a silently shorter rail. `extra` names a document about to be pinned,
+ * so its title comes back with the write. Read OUTSIDE the write's
+ * transaction, like the goals'.
  */
-async function unreadableDocumentIds(
+async function readableDocumentTitles(
   userId: string,
-  pins: readonly RailPin[]
-): Promise<Set<string>> {
-  const ids = pins.flatMap((p) => (p.documentId ? [p.documentId] : []));
-  const dead = await Promise.all(
-    ids.map(async (id) => {
-      try {
-        await loadReadableDocument(userId, id);
-        return null;
-      } catch (err) {
-        if (err instanceof TRPCError && err.code === "NOT_FOUND") return id;
-        throw err;
-      }
-    })
-  );
-  return new Set(dead.filter((id): id is string => id !== null));
+  pins: readonly RailPin[],
+  extra: readonly string[] = []
+): Promise<Map<string, string>> {
+  const ids = [
+    ...pins.flatMap((p) => (p.documentId ? [p.documentId] : [])),
+    ...extra,
+  ];
+  return loadReadableDocumentTitles(userId, ids);
 }
 
-/** The goals and the documents among `pins` the person can no longer read — they leave the rail. */
-async function unreadablePins(
+/** What a read or a write learns about the goals and the documents among the pins. */
+interface PinReadability {
+  /** Goals the person can no longer read: they leave the rail. */
+  goals: Set<string>;
+  /** Documents the person can no longer read: they leave the rail. */
+  documents: Set<string>;
+  /** The title of each document the person can read. */
+  titles: Map<string, string>;
+}
+
+async function readPinReadability(
   userId: string,
-  pins: readonly RailPin[]
-): Promise<{ goals: Set<string>; documents: Set<string> }> {
-  const [goals, documents] = await Promise.all([
+  pins: readonly RailPin[],
+  extraDocuments: readonly string[] = []
+): Promise<PinReadability> {
+  const [goals, titles] = await Promise.all([
     unreadableGoalIds(userId, pins),
-    unreadableDocumentIds(userId, pins),
+    readableDocumentTitles(userId, pins, extraDocuments),
   ]);
-  return { goals, documents };
+  const documents = new Set(
+    pins.flatMap((p) =>
+      p.documentId && !titles.has(p.documentId) ? [p.documentId] : []
+    )
+  );
+  return { goals, documents, titles };
+}
+
+/** The pins as the wire carries them: each document pin with its title. */
+function withTitles(
+  pins: readonly RailPin[],
+  titles: ReadonlyMap<string, string>
+): RailPin[] {
+  return pins.map((p) => {
+    const title = p.documentId ? titles.get(p.documentId) : undefined;
+    return title === undefined ? p : { ...p, title };
+  });
 }
 
 function withoutUnreadable(
@@ -330,9 +368,13 @@ function effective(
 /** THE read: the person's rail pins, template suggestions folded in. Pure. */
 export async function readRailPins(userId: string): Promise<RailPin[]> {
   const stored = await readStoredRow(userId);
-  return effective(
-    withoutUnreadable(stored, await unreadablePins(userId, stored.pins)),
-    await suggestionsBySpace(userId)
+  const seen = await readPinReadability(userId, stored.pins);
+  return withTitles(
+    effective(
+      withoutUnreadable(stored, seen),
+      await suggestionsBySpace(userId)
+    ),
+    seen.titles
   );
 }
 
@@ -421,7 +463,11 @@ export async function writeRailPins(
   op: RailPinsOp
 ): Promise<RailPin[]> {
   const suggested = await suggestionsBySpace(userId);
-  const dead = await unreadablePins(userId, (await readStoredRow(userId)).pins);
+  const dead = await readPinReadability(
+    userId,
+    (await readStoredRow(userId)).pins,
+    op.op === "pin" && "documentId" in op ? [op.documentId] : []
+  );
   return db.transaction(async (tx) => {
     await tx
       .insert(userPreferences)
@@ -466,7 +512,7 @@ export async function writeRailPins(
               };
       if (!pins.some((p) => p.key === pin.key)) {
         if (pins.length >= RAIL_PINS_MAX) {
-          throw new RailPinsFullError();
+          throw new RailPinsFullError(pins);
         }
         if (
           pin.trackId &&
@@ -504,15 +550,31 @@ export async function writeRailPins(
         updatedAt: new Date(),
       })
       .where(eq(userPreferences.userId, userId));
-    return pins;
+    return withTitles(pins, dead.titles);
   });
 }
 
+/**
+ * The rail is full. It carries the full list ({@link RAIL_PINS_MAX} counts
+ * every pin), so the door that answers a client can say how many of them that
+ * client does not show ({@link railPinsFullMessage}).
+ */
 export class RailPinsFullError extends Error {
-  constructor() {
-    super(`A rail holds at most ${RAIL_PINS_MAX} pins — unpin one first.`);
+  constructor(readonly pins: readonly RailPin[] = []) {
+    super(railPinsFullMessage(0));
     this.name = "RailPinsFullError";
   }
+}
+
+/** The full rail's sentence, naming the pins the asking client does not show. */
+export function railPinsFullMessage(hidden: number): string {
+  const base = `A rail holds at most ${RAIL_PINS_MAX} pins`;
+  if (hidden <= 0) return `${base} — unpin one first.`;
+  const these =
+    hidden === 1
+      ? "1 of them is a goal or a document"
+      : `${hidden} of them are goals or documents`;
+  return `${base}; ${these} this app does not show. Unpin one first, here or in an app that shows them.`;
 }
 
 /** "This week" holds at most {@link RAIL_GOAL_PINS_MAX} goals (D4). */

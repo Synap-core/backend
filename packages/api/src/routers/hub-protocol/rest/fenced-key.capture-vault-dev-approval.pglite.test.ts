@@ -28,7 +28,15 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { Hono } from "hono";
 import { randomUUID } from "node:crypto";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 interface Filed {
   terminal: "pending" | "auto";
@@ -451,6 +459,22 @@ const ada = { ref: "ada", profileSlug: "person", title: "Ada Lovelace" };
 const acme = { ref: "acme", profileSlug: "company", title: "Acme" };
 
 describe("POST /capture/graph — a key limited to CRM captures inside CRM only", () => {
+  // The app's agent is a member of both spaces here: this block is about the
+  // key's GRANT. A non-member's graph is kept whole on a workspace join before
+  // anything is filed (finding 590ca76a, `submit-capture-graph.join-gate`),
+  // which would hide what the fence did.
+  beforeAll(async () => {
+    for (const ws of [CRM, BRAND]) {
+      await q(
+        `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'editor')`,
+        [randomUUID(), ws, AGENT]
+      );
+    }
+  });
+  afterAll(async () => {
+    await q(`delete from workspace_members where user_id = $1`, [AGENT]);
+  });
+
   it("records in Brand: 403, nothing filed, nothing staged", async () => {
     for (const key of ["crm", "crmStar"] as const) {
       const res = await post(key, "/capture/graph", {

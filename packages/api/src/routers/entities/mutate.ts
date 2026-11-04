@@ -43,6 +43,7 @@ import { documentOwnedByAnotherObject } from "../../services/entity-body/documen
 import { isAiWriteRequest } from "../../utils/ai-write.js";
 import { resolveViewTrust } from "../../services/view-trust-service.js";
 import { auditLog } from "../../utils/audit-log.js";
+import { unmodeledOfPatch } from "../hub-protocol/update-write-receipt.js";
 import { assertKeyMayWrite } from "../../utils/assert-key-may-write.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import {
@@ -592,6 +593,8 @@ export const mutateProcs = {
         ctx.userId
       );
 
+      const unmodeled = unmodeledOfPatch(written.unmodeled, input.properties);
+
       if (receiptId && undoBefore) {
         // Best-effort: the write is committed; a failed stamp leaves the
         // receipt unstamped (revert then fails loud), never fails the write.
@@ -807,6 +810,9 @@ export const mutateProcs = {
           properties: written.properties,
           documentId: written.documentId ?? null,
         },
+        // Keys of THIS patch the kind does not model (finding c161fd43):
+        // stored verbatim, never reported as landed. Only when there are some.
+        ...(unmodeled.length ? { unmodeled } : {}),
       };
     }),
   /**

@@ -23,11 +23,10 @@ import { sessionContextStampRefusal } from "../../../services/focus-sessions/ses
 import {
   ROOM_POST_META_KEY,
   roomPostMeta,
-  withoutRoomPostMeta,
 } from "../../../services/messaging/room-post-kind.js";
 import {
   SESSION_POST_META_KEY,
-  withoutSessionPostMeta,
+  withoutServerOwnedMessageMeta,
 } from "@synap-core/types/agents";
 import {
   resolveSessionPost,
@@ -1089,10 +1088,12 @@ export function registerThreadsRoutes(app: HubHono): void {
         if (!anchorGate.ok) {
           return c.json({ error: anchorGate.error }, anchorGate.status);
         }
-        // `roomPost` and `sessionPost` are server-owned — never accepted
-        // from a batch caller (a batch carries no coordination post).
+        // `roomPost`, `sessionPost` and `routeChoice` are server-owned —
+        // never accepted from a batch caller (a batch carries no coordination
+        // post, and a forged `routeChoice` would draw a chip that starts a
+        // turn on a message the caller picked).
         metadataByIndex.push(
-          withoutSessionPostMeta(withoutRoomPostMeta(anchorGate.metadata))
+          withoutServerOwnedMessageMeta(anchorGate.metadata)
         );
       }
 
@@ -1375,14 +1376,13 @@ export function registerThreadsRoutes(app: HubHono): void {
         });
       }
 
-      // `metadata.roomPost` and `metadata.sessionPost` are SERVER-OWNED
-      // (`room-post-kind.ts`, `@synap-core/types/agents` session-post): a
-      // caller's copy is dropped, and an AGENT's post gets its kind (+ the
-      // slot a question is about) persisted, so the owner's reply can answer
-      // it — and, for a coordination post, the stamp the codec built.
-      const clientMetadata = withoutSessionPostMeta(
-        withoutRoomPostMeta(anchorGate.metadata)
-      );
+      // `metadata.roomPost`, `metadata.sessionPost` and `metadata.routeChoice`
+      // are SERVER-OWNED (`@synap-core/types/agents`
+      // server-owned-message-meta): a caller's copy is dropped, and an AGENT's
+      // post gets its kind (+ the slot a question is about) persisted, so the
+      // owner's reply can answer it — and, for a coordination post, the stamp
+      // the codec built.
+      const clientMetadata = withoutServerOwnedMessageMeta(anchorGate.metadata);
       const postMetadata = ctxAgentUserId
         ? {
             ...(clientMetadata ?? {}),

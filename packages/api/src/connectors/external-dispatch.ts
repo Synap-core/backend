@@ -90,6 +90,7 @@ import {
   messagingSendGrantVerdict,
   successorChannel,
   planChannelSend,
+  refuseUnreachableAtFiling,
   recordChannelSend,
   resolveSendAccount,
   type DraftedBy,
@@ -983,6 +984,27 @@ export async function sendExternalMessage(
   const appSend = !!getRequestGrant()?.clientId;
   const mustPropose = !!input.mustPropose || beyondGrant;
   if ((input.agentUserId || appSend || mustPropose) && !input.alreadyApproved) {
+    // The reach check at FILING (CRM wave 2, S4a): a LinkedIn first message
+    // to someone who is not a connection is refused now, with the next step
+    // named, never filed as a draft that fails after approval. Same rule as
+    // at dispatch (`readChannelReach`); a failed read files as before. An
+    // ungated send skips it: the dispatch check runs straight after.
+    if (sendChannel) {
+      const unreachable = await refuseUnreachableAtFiling({
+        channel: sendChannel,
+        connector,
+        namedAccountId: input.accountId,
+      });
+      if (unreachable) {
+        return {
+          success: false,
+          error: unreachable.error,
+          errorClass: unreachable.errorClass,
+          providerRef: unreachable.providerRef ?? provider,
+          channelId: sendChannel.id,
+        };
+      }
+    }
     const gateResult = await gateMessagingSend({
       ...input,
       mustPropose,

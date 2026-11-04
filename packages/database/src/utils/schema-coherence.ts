@@ -1351,6 +1351,18 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "poll_interval_seconds",
     addedBy: "0321_device_auth_requests.sql",
   },
+  // Proof of presence (0398): every sensitive approval reads and consumes a
+  // challenge; absence means each one would 42P01.
+  {
+    table: "presence_challenges",
+    column: "consumed_at",
+    addedBy: "0398_presence.sql",
+  },
+  {
+    table: "presence_device_keys",
+    column: "public_key",
+    addedBy: "0398_presence.sql",
+  },
   // key_requests — the CLI's door to a key (0363). Absence means
   // `synap keys create` and the pod-admin review page would 42P01.
   {

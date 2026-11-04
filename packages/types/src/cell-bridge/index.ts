@@ -77,12 +77,9 @@ export {
   frameUrlHost,
   frameUrlIsInline,
   frameUrlIsNetwork,
-  markupComments,
-  markupTags,
   type FrameLoad,
   type FrameLoadKind,
   type FrameNetworkLoads,
-  type MarkupTag,
 } from "./network-loads.js";
 export { CELL_BRIDGE_SDK } from "./sdk.js";
 export { narrowHomeToSpace } from "./home-lens.js";

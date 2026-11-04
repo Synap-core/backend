@@ -1,0 +1,93 @@
+import { describe, expect, it } from "vitest";
+import {
+  enrollmentSubject,
+  presenceActorLabel,
+  presenceMessage,
+  presenceProofSchema,
+  sensitiveApprovalReason,
+} from "./index.js";
+
+describe("proof of presence vocabulary", () => {
+  it("the sensitive set: setup, governance, deploys, deletions; everyday approvals are not in it", () => {
+    expect(
+      sensitiveApprovalReason({ targetType: "agent", proposalType: "connect" })
+    ).toBe("setup");
+    expect(
+      sensitiveApprovalReason({
+        targetType: "governance_rule",
+        proposalType: "governance.rule_create",
+      })
+    ).toBe("governance");
+    expect(
+      sensitiveApprovalReason({
+        targetType: "config",
+        proposalType: "settings.update",
+      })
+    ).toBe("governance");
+    expect(
+      sensitiveApprovalReason({
+        targetType: "focus_session",
+        proposalType: "dev.deploy_approval",
+      })
+    ).toBe("deploy");
+    expect(
+      sensitiveApprovalReason({ targetType: "entity", proposalType: "delete" })
+    ).toBe("deletion");
+    for (const [targetType, proposalType] of [
+      ["entity", "create"],
+      ["entity", "update"],
+      ["document", "create"],
+      ["focus_session", "dev.plan_approval"],
+      ["relation", "update"],
+    ]) {
+      expect(
+        sensitiveApprovalReason({
+          targetType: targetType!,
+          proposalType: proposalType!,
+        }),
+        `${targetType}/${proposalType}`
+      ).toBeNull();
+    }
+  });
+
+  it("the signed message names the pod, the challenge and the subject, in order", () => {
+    expect(
+      presenceMessage({
+        podOrigin: "https://p.test",
+        challengeId: "c1",
+        subject: "prop-1",
+        nonce: "n",
+      })
+    ).toBe("synap-presence-v1\nhttps://p.test\nc1\nprop-1\nn");
+    expect(enrollmentSubject("c1")).toBe("enroll:c1");
+  });
+
+  it("the audit names how the person approved and where it was asked", () => {
+    expect(
+      presenceActorLabel({
+        person: "Antoine",
+        method: "passkey",
+        requestedFrom: "MacBook-Pro",
+      })
+    ).toBe("Antoine (approved with a passkey, requested from MacBook-Pro)");
+  });
+
+  it("the wire shape refuses a proof that is not base64url or names no challenge", () => {
+    expect(
+      presenceProofSchema.safeParse({
+        kind: "device_key",
+        challengeId: "x",
+        keyId: "y",
+        signature: "a",
+      }).success
+    ).toBe(false);
+    expect(
+      presenceProofSchema.safeParse({
+        kind: "device_key",
+        challengeId: "0aaaaaaa-0000-4000-8000-000000000001",
+        keyId: "0aaaaaaa-0000-4000-8000-000000000002",
+        signature: "not base64url!",
+      }).success
+    ).toBe(false);
+  });
+});

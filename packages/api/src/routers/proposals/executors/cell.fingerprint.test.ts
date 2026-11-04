@@ -15,6 +15,12 @@ const h = vi.hoisted(() => ({
   defineCalls: [] as Array<Record<string, unknown>>,
   transitions: 0,
   registered: new Map<string, { execute: (a: unknown) => Promise<unknown> }>(),
+  /** The row the approval writes, as `storedCellContentForPayload` reads it. */
+  stored: null as null | {
+    rendererType: string | null;
+    externalHosts: string[] | null;
+  },
+  storedReads: [] as Array<string | null>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => ({
@@ -36,6 +42,13 @@ vi.mock("../../../services/cells/define-cell.js", async (importOriginal) => ({
   defineCell: async (input: Record<string, unknown>) => {
     h.defineCalls.push(input);
     return { typeKey: "generated:my-cell", changeType: "created" };
+  },
+  storedCellContentForPayload: async (
+    _payload: Record<string, unknown>,
+    workspaceId: string | null
+  ) => {
+    h.storedReads.push(workspaceId);
+    return h.stored;
   },
 }));
 
@@ -70,6 +83,8 @@ const FILED = {
 beforeEach(() => {
   h.defineCalls.length = 0;
   h.transitions = 0;
+  h.stored = null;
+  h.storedReads.length = 0;
 });
 
 describe("cell/define executor — approval per fingerprint", () => {
@@ -105,5 +120,30 @@ describe("cell/define executor — approval per fingerprint", () => {
   it("applies an unstamped payload (filed before fingerprints) as before", async () => {
     await approve(FILED);
     expect(h.defineCalls).toHaveLength(1);
+  });
+
+  it("applies a proposal over a row that keeps a builtin mechanism and an egress grant, stamped against that row", async () => {
+    h.stored = {
+      rendererType: "builtin",
+      externalHosts: ["https://api.vendor.com"],
+    };
+    await expect(
+      approve(withCellContentFingerprint(FILED, h.stored))
+    ).resolves.toEqual({ success: true });
+    expect(h.defineCalls).toHaveLength(1);
+    // Read at the scope the proposal was reviewed at, where it writes.
+    expect(h.storedReads).toEqual([WS]);
+  });
+
+  it("REFUSES a proposal whose row changed since it was stamped (an egress grant added), and writes nothing", async () => {
+    const stamped = withCellContentFingerprint(FILED, null);
+    h.stored = {
+      rendererType: "frame",
+      externalHosts: ["https://api.vendor.com"],
+    };
+    await expect(approve(stamped)).rejects.toThrow(
+      /the proposal or the stored cell changed since/
+    );
+    expect(h.defineCalls).toHaveLength(0);
   });
 });

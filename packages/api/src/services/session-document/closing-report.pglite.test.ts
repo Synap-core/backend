@@ -9,8 +9,14 @@
  * write) — then the outcome stamp on `focus_sessions.metadata`.
  *
  * Stubbed, and why (same harness as `upsert-section.pglite.test.ts`):
- *  - `checkPermissionOrPropose` — records the principal and grants; the system
- *    writer runs on the OWNER's principal (no agent id), and that is asserted.
+ *  - `checkPermissionOrPropose` — records the principal it governs and keeps
+ *    the real gate's ATTRIBUTION FLOOR: the request's ambient acting agent
+ *    (the REAL `getActingAgentUserId`) wins over the supplied one
+ *    (`utils/permission-check.ts`, pinned by
+ *    `permission-check.attribution-floor.test.ts`). Every agent here is
+ *    ask-first, so an agent's write is filed as a proposal and a person's (or
+ *    the pod's, on the owner's principal) is granted. The system writer runs
+ *    on the OWNER's principal (no agent id), and that is asserted.
  *  - `@synap/storage` + `uploadDocumentVersionSnapshot` — an in-memory blob
  *    map (a switch makes uploads throw for the failure case).
  *  - `DocumentRepository` — writes the document + v1 rows straight to PGlite.
@@ -26,6 +32,7 @@ const h = vi.hoisted(() => ({
   },
   blobs: new Map<string, string>(),
   gateCalls: [] as Array<{ agentUserId?: string; userId: string }>,
+  proposed: [] as string[],
   failUploads: false,
 }));
 
@@ -105,17 +112,32 @@ vi.mock("@synap/storage", () => ({
   },
 }));
 
-vi.mock("../../utils/permission-check.js", () => ({
-  checkPermissionOrPropose: async (opts: {
-    agentUserId?: string;
-    userId: string;
-  }) => {
-    h.gateCalls.push({ agentUserId: opts.agentUserId, userId: opts.userId });
-    return { granted: true };
-  },
-}));
+vi.mock("../../utils/permission-check.js", async () => {
+  const { getActingAgentUserId } = await import("@synap/database");
+  return {
+    checkPermissionOrPropose: async (opts: {
+      agentUserId?: string;
+      userId: string;
+    }) => {
+      // The real gate: `getActingAgentUserId() ?? suppliedAgentUserId`.
+      const agentUserId = getActingAgentUserId() ?? opts.agentUserId;
+      h.gateCalls.push({ agentUserId, userId: opts.userId });
+      if (!agentUserId) return { granted: true };
+      const proposalId = `proposal-${h.proposed.length + 1}`;
+      h.proposed.push(proposalId);
+      return {
+        proposalId,
+        proposalType: "update",
+        summary: "Update a section",
+        reviewPath: `/proposals/${proposalId}`,
+        reviewUrl: `https://pod.test/proposals/${proposalId}`,
+      };
+    },
+  };
+});
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
+import { runWithActingAgent } from "@synap/database";
 import {
   documents,
   documentVersions,
@@ -145,6 +167,7 @@ import {
 } from "./closing-report.js";
 
 const USER = "user-1";
+const AGENT = "agent-7";
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
 
@@ -295,6 +318,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   h.gateCalls.length = 0;
+  h.proposed.length = 0;
   h.failUploads = false;
 });
 
@@ -439,5 +463,55 @@ describe("closing report — close event → session document", () => {
     const m = await metadata(id);
     expect(m.closingReport.status).toBe("failed");
     expect(m.closingReport.reason).toMatch(/storage is down/);
+  });
+});
+
+describe("closing report — the pod writes it, never the closing agent (finding 39fee1e4)", () => {
+  it("an ask-first agent closes a session: the report applies and no proposal is filed", async () => {
+    const id = await newSession({ criteria: CRITERIA });
+    await evaluate(id, "tsc", "pass", "evidence", AGENT);
+
+    // The close reactor runs inline in the closing agent's request scope.
+    await runWithActingAgent(AGENT, () => close(id));
+
+    const m = await metadata(id);
+    expect(m.closingReport).toMatchObject({ status: "written" });
+    expect(h.proposed).toEqual([]);
+    // Non-vacuity: the gate WAS asked, once per section, and never as the agent.
+    expect(h.gateCalls).toHaveLength(4);
+    for (const c of h.gateCalls)
+      expect(c).toEqual({ agentUserId: undefined, userId: USER });
+    const sections = parseSections((await doc(id)).content!).sections;
+    expect(sections.map((s) => s.id)).toEqual(
+      Object.values(CLOSING_REPORT_SECTION_IDS)
+    );
+    for (const s of sections)
+      expect(s.attributes.author).toBe(CLOSING_REPORT_AUTHOR);
+  });
+
+  it("CONTROL: the agent writing a closing section itself is still governed, even naming the system author", async () => {
+    const id = await newSession({ criteria: CRITERIA });
+    await close(id);
+    const before = await doc(id);
+    h.gateCalls.length = 0;
+
+    const res = await runWithActingAgent(AGENT, () =>
+      upsertSessionDocumentSection({
+        userId: USER,
+        systemAuthor: CLOSING_REPORT_AUTHOR,
+        sessionId: id,
+        sectionId: CLOSING_REPORT_SECTION_IDS.outcome,
+        title: "Outcome",
+        body: "All done, trust me.",
+        baseVersion: before.version,
+      })
+    );
+
+    expect(res.status).toBe("proposed");
+    expect(h.gateCalls).toEqual([{ agentUserId: AGENT, userId: USER }]);
+    expect(h.proposed).toHaveLength(1);
+    const after = await doc(id);
+    expect(after.version).toBe(before.version);
+    expect(after.content).not.toContain("All done, trust me.");
   });
 });

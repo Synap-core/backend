@@ -669,7 +669,88 @@ describe("profiles and chats — GET /{account}/users/{id}, GET /{account}/chats
       publicIdentifier: "ada-lovelace",
       name: "Ada Lovelace",
       networkDistance: "FIRST_DEGREE",
+      connection: "connected",
+      relationRequest: null,
     });
+  });
+
+  it("reads the connection request: connected / pending / not connected, wherever the shape puts it", async () => {
+    route("GET", at("/accounts/acc_li"), () =>
+      json(account("acc_li", "linkedin"))
+    );
+    let body: unknown;
+    route("GET", at("/acc_li/users/ACoAda?variant=linkedin_classic"), () =>
+      json(body)
+    );
+    const c = connector();
+    const read = async () => (await c.getProfile("acc_li", "ACoAda"))!;
+
+    // v2: specifics.relation_request + specifics.relation_request_status.
+    body = profile({
+      specifics: {
+        network_distance: "SECOND_DEGREE",
+        relation_request: {
+          object: "RelationRequest",
+          type: "sent",
+          id: "inv-1",
+          created_at: "2026-11-01T08:00:00.000Z",
+        },
+        relation_request_status: "PENDING",
+      },
+    });
+    expect(await read()).toMatchObject({
+      networkDistance: "SECOND_DEGREE",
+      connection: "pending",
+      relationRequest: {
+        direction: "sent",
+        status: "pending",
+        sentAt: "2026-11-01T08:00:00.000Z",
+      },
+    });
+
+    // No request, a known distance that is not 1st degree: not connected.
+    body = profile({ specifics: { network_distance: "THIRD_DEGREE" } });
+    expect(await read()).toMatchObject({
+      connection: "not_connected",
+      relationRequest: null,
+    });
+
+    // A request THEY sent is not the owner's pending request.
+    body = profile({
+      specifics: {
+        network_distance: "SECOND_DEGREE",
+        relation_request: { type: "received", id: "inv-2" },
+        relation_request_status: "PENDING",
+      },
+    });
+    expect((await read()).connection).toBe("not_connected");
+
+    // LinkedIn says the owner's request was ignored, or withdrawn.
+    body = profile({
+      specifics: {
+        network_distance: "SECOND_DEGREE",
+        relation_request: { type: "sent", id: "inv-3" },
+        relation_request_status: "IGNORED",
+      },
+    });
+    expect(await read()).toMatchObject({
+      connection: "not_connected",
+      relationRequest: { status: "ignored", direction: "sent" },
+    });
+
+    // v1's `invitation` (the catalog's linkedin_send_invite reads it too).
+    body = profile({
+      specifics: { linkedin: { network_distance: "DISTANCE_2" } },
+      invitation: { type: "SENT", status: "PENDING" },
+    });
+    expect(await read()).toMatchObject({
+      connection: "pending",
+      relationRequest: { direction: "sent", status: "pending", sentAt: null },
+    });
+
+    // No distance and no request: not measured, never "not connected".
+    body = profile({ specifics: {} });
+    expect((await read()).connection).toBeNull();
   });
 
   it("reads the distance wherever the shape puts it (specifics.linkedin, top level, v1 DISTANCE_n); unknown → null", async () => {
@@ -700,6 +781,8 @@ describe("profiles and chats — GET /{account}/users/{id}, GET /{account}/chats
       publicIdentifier: null,
       name: "Ada Lovelace",
       networkDistance: null,
+      connection: null,
+      relationRequest: null,
     });
   });
 
@@ -729,6 +812,88 @@ describe("profiles and chats — GET /{account}/users/{id}, GET /{account}/chats
     const c = connector();
     expect(await c.getProfile("acc_li", "nobody")).toBeNull();
     await expect(c.getProfile("acc_li", "limited")).rejects.toThrow(/429/);
+  });
+
+  it("listSentInvitations: GET users/me/relation-requests?type=sent, cursor in, next_cursor out; a failure throws", async () => {
+    route(
+      "GET",
+      at("/acc_li/users/me/relation-requests?type=sent&limit=100"),
+      () =>
+        json({
+          object: "RelationRequestList",
+          data: [
+            {
+              object: "RelationRequest",
+              type: "sent",
+              id: "inv-1",
+              created_at: "2026-10-20T08:00:00.000Z",
+              user: {
+                object: "User",
+                id: "ACoAda",
+                type: "individual",
+                display_name: "Ada Lovelace",
+                public_identifier: "ada-lovelace",
+              },
+            },
+            // No user: nobody to match, skipped.
+            { object: "RelationRequest", type: "sent", id: "inv-x" },
+          ],
+          next_cursor: "page-2",
+        })
+    );
+    route(
+      "GET",
+      at(
+        "/acc_li/users/me/relation-requests?type=sent&limit=100&cursor=page-2"
+      ),
+      () =>
+        json({
+          data: [
+            {
+              object: "RelationRequest",
+              type: "sent",
+              id: "inv-2",
+              user: {
+                object: "User",
+                id: "ACoBob",
+                type: "individual",
+                display_name: "Bob",
+              },
+            },
+          ],
+        })
+    );
+    const c = connector();
+    expect(await c.listSentInvitations("acc_li")).toEqual({
+      invitations: [
+        {
+          id: "inv-1",
+          providerId: "ACoAda",
+          publicIdentifier: "ada-lovelace",
+          name: "Ada Lovelace",
+          sentAt: "2026-10-20T08:00:00.000Z",
+        },
+      ],
+      nextCursor: "page-2",
+    });
+    expect(await c.listSentInvitations("acc_li", "page-2")).toEqual({
+      invitations: [
+        {
+          id: "inv-2",
+          providerId: "ACoBob",
+          publicIdentifier: null,
+          name: "Bob",
+          sentAt: null,
+        },
+      ],
+    });
+    routes = [];
+    route(
+      "GET",
+      at("/acc_li/users/me/relation-requests?type=sent&limit=100"),
+      () => json({ type: "errors/too_many_requests" }, 429)
+    );
+    await expect(c.listSentInvitations("acc_li")).rejects.toThrow(/429/);
   });
 
   it("a 1to1 chat names its counterpart; a group has none; 404 → null", async () => {
@@ -979,6 +1144,66 @@ describe("webhook payloads the channel reads, and the endpoint's health", () => 
     ).toBeNull();
   });
 
+  it("relation.new becomes relation.created with the person's member id and handle (v2 User Relation)", async () => {
+    expect(UNIPILE_WEBHOOK_EVENTS).toContain("relation.new");
+    expect(
+      await deliver({
+        id: "evt_9",
+        type: "relation.new",
+        account_id: "acc_li",
+        account_provider: "LINKEDIN",
+        payload: {
+          id: "rel-1",
+          object: "UserRelation",
+          created_at: "2026-11-04T07:00:00.000Z",
+          user: {
+            object: "User",
+            id: "ACoAda",
+            type: "individual",
+            display_name: "Ada Lovelace",
+            public_identifier: "ada-lovelace",
+          },
+        },
+      })
+    ).toEqual({
+      type: "relation.created",
+      accountExternalId: "acc_li",
+      provider: "linkedin",
+      providerId: "ACoAda",
+      publicIdentifier: "ada-lovelace",
+      name: "Ada Lovelace",
+      at: "2026-11-04T07:00:00.000Z",
+    });
+  });
+
+  it("relation.new is read defensively: v1's flat fields; no person id is not an event", async () => {
+    expect(
+      await deliver({
+        type: "relation.new",
+        account_id: "acc_li",
+        account_provider: "LINKEDIN",
+        payload: {
+          user_provider_id: "ACoBob",
+          user_public_identifier: "bob-b",
+          user_full_name: "Bob B",
+        },
+      })
+    ).toMatchObject({
+      type: "relation.created",
+      providerId: "ACoBob",
+      publicIdentifier: "bob-b",
+      name: "Bob B",
+    });
+    expect(
+      await deliver({
+        type: "relation.new",
+        account_id: "acc_li",
+        account_provider: "LINKEDIN",
+        payload: { id: "rel-2", user: { display_name: "No id" } },
+      })
+    ).toBeNull();
+  });
+
   it("an unsigned receipt is dropped like any unsigned delivery", async () => {
     const body = JSON.stringify({
       type: "message.receipt.read",
@@ -1053,6 +1278,7 @@ describe("webhook payloads the channel reads, and the endpoint's health", () => 
       expect.arrayContaining([
         "message.receipt.read",
         "message.receipt.delivery",
+        "relation.new",
       ])
     );
   });

@@ -145,6 +145,47 @@ export async function loadReadableDocument(
   return owned;
 }
 
+/**
+ * Gate 1 for MANY documents in one go: the title of each of `documentIds` the
+ * caller may see, by id (an id it cannot see, or that does not exist, is
+ * absent). The same rule as {@link loadReadableDocument}, read in at most
+ * three queries whatever the count: the scoped documents read, then the
+ * view-owned documents among the rest (readable when their view is).
+ */
+export async function loadReadableDocumentTitles(
+  userId: string,
+  documentIds: readonly string[]
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const ids = [...new Set(documentIds)];
+  if (ids.length === 0) return out;
+  const access = scopedDb(AccessContext.operator({ userId }));
+  const direct = await access.findMany<{ id: string; title: string }>(
+    documents,
+    {
+      where: inArray(documents.id, ids),
+      columns: { id: true, title: true },
+    }
+  );
+  for (const d of direct) out.set(d.id, d.title);
+  const rest = ids.filter((id) => !out.has(id));
+  if (rest.length === 0) return out;
+  const owning = await access.findMany<{ documentId: string | null }>(views, {
+    where: inArray(views.documentId, rest),
+    columns: { documentId: true },
+  });
+  const viaView = [
+    ...new Set(owning.flatMap((v) => (v.documentId ? [v.documentId] : []))),
+  ];
+  if (viaView.length === 0) return out;
+  const owned = await db
+    .select({ id: documents.id, title: documents.title })
+    .from(documents)
+    .where(inArray(documents.id, viaView));
+  for (const d of owned) out.set(d.id, d.title);
+  return out;
+}
+
 /** The view that owns this document (a canvas), if any — unscoped. */
 async function owningView(documentId: string): Promise<ViewRow | undefined> {
   return db.query.views.findFirst({ where: eq(views.documentId, documentId) });
