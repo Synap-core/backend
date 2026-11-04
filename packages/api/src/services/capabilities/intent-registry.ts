@@ -5,8 +5,12 @@
  *
  * Routing only. This module does not decide propose vs auto.
  */
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { db, capabilityIntents } from "@synap/database";
+import {
+  isIntentContract,
+  type IntentContract,
+} from "@synap-core/types/capability-intents";
 import {
   ABSTRACT_VERBS,
   isAbstractVerb,
@@ -85,4 +89,29 @@ export async function loadIntentInput(
         ? schema
         : null,
   };
+}
+
+/**
+ * The registry rows of these intents, as the manifest rule reads them
+ * (0398): a slug the table holds maps to its contract, or to `null` when the
+ * row has none (a one-shot intent) or holds a value that is not a contract
+ * (read as none, never trusted). A slug the table does not hold is absent.
+ */
+export async function loadIntentContracts(
+  slugs: readonly string[]
+): Promise<Map<string, IntentContract | null>> {
+  const out = new Map<string, IntentContract | null>();
+  const wanted = [...new Set(slugs)];
+  if (wanted.length === 0) return out;
+  const rows = await db
+    .select({
+      slug: capabilityIntents.slug,
+      contract: capabilityIntents.contract,
+    })
+    .from(capabilityIntents)
+    .where(inArray(capabilityIntents.slug, wanted));
+  for (const row of rows) {
+    out.set(row.slug, isIntentContract(row.contract) ? row.contract : null);
+  }
+  return out;
 }

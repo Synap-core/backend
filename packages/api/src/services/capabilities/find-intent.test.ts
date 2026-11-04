@@ -336,35 +336,25 @@ describe("findByIntent — limit reaches the playbooks arm (ticket a9d88abf)", (
 });
 
 describe("findByIntent — an unserved intent offers marketplace packages", () => {
-  it("an intent match with no verbs attaches up to 3 marketplace packages", async () => {
+  it("an intent match with no verbs attaches up to 3 packages that DECLARE it", async () => {
+    const pack = (slug: string, provides: string[] | null) => ({
+      slug,
+      kind: "capability",
+      name: slug,
+      description: `${slug} description`,
+      version: "1.0.0",
+      tier: "free",
+      vendor: "synap",
+      listing: null,
+      definition: provides === null ? {} : { provides },
+    });
     queryCatalogCache.mockResolvedValue([
-      {
-        slug: "web-read",
-        kind: "capability",
-        name: "Web read",
-        description: "Read a public page for capture into pod",
-        version: "1.2.0",
-        tier: "free",
-        vendor: "synap",
-      },
-      {
-        slug: "postiz_capture_into_pod",
-        kind: "capability",
-        name: "Postiz",
-        description: null,
-      },
-      {
-        slug: "buffer",
-        kind: "capability",
-        name: "Buffer",
-        description: "Queue a capture into pod",
-      },
-      {
-        slug: "fourth",
-        kind: "capability",
-        name: "Fourth",
-        description: "must be dropped capture into pod",
-      },
+      pack("web-read", ["capture_into_pod", "read_webpage"]),
+      pack("postiz", ["publish_post"]),
+      pack("buffer", ["capture_into_pod"]),
+      pack("no-declaration", null),
+      pack("third", ["capture_into_pod"]),
+      pack("fourth", ["capture_into_pod"]),
     ]);
 
     const r = await findByIntent({ intent: "capture into pod", ...lens });
@@ -375,123 +365,57 @@ describe("findByIntent — an unserved intent offers marketplace packages", () =
     expect(capture).toBeDefined();
     expect(capture.verbs).toEqual([]);
     expect(queryCatalogCache).toHaveBeenCalledTimes(1);
-    expect(queryCatalogCache).toHaveBeenCalledWith({
-      query: "capture into pod capture_into_pod",
-      kind: "capability",
-      limit: 3,
-    });
-    // The VALUE arrives, and only the install fields — version/tier/vendor
-    // are catalog noise, and the fourth row is past the cap.
+    // The whole official capability catalog: the declared rule decides, not
+    // the catalog's word search.
+    expect(queryCatalogCache).toHaveBeenCalledWith({ kind: "capability" });
+    // Only the install fields, in catalog order, the fourth past the cap; a
+    // pack that does not declare the intent is never offered.
     expect(r.marketplace).toEqual({
-      matches: [
-        {
-          slug: "web-read",
-          name: "Web read",
-          description: "Read a public page for capture into pod",
-          kind: "capability",
-        },
-        {
-          slug: "postiz_capture_into_pod",
-          name: "Postiz",
-          description: null,
-          kind: "capability",
-        },
-        {
-          slug: "buffer",
-          name: "Buffer",
-          description: "Queue a capture into pod",
-          kind: "capability",
-        },
-      ],
+      matches: ["web-read", "buffer", "third"].map((slug) => ({
+        slug,
+        name: slug,
+        description: `${slug} description`,
+        kind: "capability",
+      })),
     });
   });
 
-  it("drops loose single-word catalog hits and keeps a description that contains the phrase", async () => {
+  it("a pack whose name or description says the intent, but never declares it, is not offered (one rule with the gap proposer)", async () => {
     listIntentSlugs.mockImplementation(async () => [
       ...INTENT_SLUGS,
       "publish_post",
     ]);
     queryCatalogCache.mockResolvedValue([
       {
-        slug: "client-comms-report",
+        slug: "publish-post-helper",
         kind: "capability",
-        name: "Client Comms Report",
-        description: "A weekly post for clients",
-      },
-      {
-        slug: "discord-bot",
-        kind: "capability",
-        name: "Discord Bot",
-        description: "Post messages into Discord",
-      },
-      {
-        slug: "arch-client-intelligence",
-        kind: "capability",
-        name: "Arch Client Intelligence",
-        description: "Client intelligence post",
-      },
-      {
-        slug: "publish",
-        kind: "capability",
-        name: "Publisher",
-        description: "post",
+        name: "Publish post helper",
+        description: "Schedule and publish post to social networks",
+        listing: null,
+        definition: { provides: ["send_message"] },
       },
       {
         slug: "postiz",
         kind: "capability",
         name: "Postiz",
-        description: "Schedule and publish post to social networks",
-      },
-      {
-        slug: "web-read",
-        kind: "capability",
-        name: "Web read",
-        description: "Read a public page",
+        description: "Social scheduling",
+        listing: null,
+        definition: { provides: ["publish_post"] },
       },
     ]);
 
     const r = await findByIntent({ intent: "publish post", ...lens });
 
-    expect(queryCatalogCache).toHaveBeenCalledWith({
-      query: "publish post publish_post",
-      kind: "capability",
-      limit: 3,
-    });
-    // "post" or "publish" alone is not the intent. Split across fields
-    // ("publish" slug + "post" description) is not either. The phrase is.
     expect(r.marketplace).toEqual({
       matches: [
         {
           slug: "postiz",
           name: "Postiz",
-          description: "Schedule and publish post to social networks",
+          description: "Social scheduling",
           kind: "capability",
         },
       ],
     });
-
-    queryCatalogCache.mockResolvedValue([
-      {
-        slug: "client-comms-report",
-        kind: "capability",
-        name: "Client Comms Report",
-        description: "A weekly post for clients",
-      },
-      {
-        slug: "discord-bot",
-        kind: "capability",
-        name: "Discord Bot",
-        description: "Post messages into Discord",
-      },
-      {
-        slug: "arch-client-intelligence",
-        kind: "capability",
-        name: "Arch Client Intelligence",
-        description: "Client intelligence post",
-      },
-    ]);
-    const none = await findByIntent({ intent: "publish post", ...lens });
-    expect(none.marketplace).toEqual({ matches: [] });
   });
 
   it("a thrown catalog read sets marketplace.error and still returns the intent", async () => {

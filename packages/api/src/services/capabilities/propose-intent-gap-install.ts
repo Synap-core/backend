@@ -59,6 +59,12 @@ import { OFFICIAL_SOURCE_ID } from "@synap-core/types/marketplace-source";
 import { createPendingProposal } from "../../utils/permission-check.js";
 import { openLink } from "../../utils/deep-links.js";
 import type { CatalogCacheEntry } from "./catalog-cache-query.js";
+import type { IntentContract } from "@synap-core/types/capability-intents";
+import type {
+  ManifestNeed,
+  ManifestOffer,
+} from "@synap-core/types/capability-manifest";
+import { offerMisfit, opsMisfit } from "./offer-match.js";
 
 /** One marketplace pack that declares `intent` in its `provides`. */
 export interface IntentProviderCandidate {
@@ -114,9 +120,24 @@ export function selectIntentProviders(input: {
   intent: string;
   /** Slugs already installed under the caller's lens. */
   alreadyInstalled?: ReadonlySet<string>;
-}): { candidates: IntentProviderCandidate[]; unreadable: string[] } {
+  /**
+   * A NEED's constraints (plan U5). Given, a pack must also MEET them: its
+   * definition's `offers[intent]` is matched by the one rule
+   * (`offerMisfit`), and its verbs must cover the contract's required ops
+   * (`opsMisfit`) unless it serves the intent as a composite. A pack that
+   * declares the intent but does not fit is a `misfit`, with the reason.
+   * Absent: the declared `provides` alone decides, as before.
+   */
+  constraints?: ManifestNeed["constraints"];
+  contract?: IntentContract | null;
+}): {
+  candidates: IntentProviderCandidate[];
+  unreadable: string[];
+  misfits: Array<{ slug: string; name: string; reason: string }>;
+} {
   const candidates: IntentProviderCandidate[] = [];
   const unreadable: string[] = [];
+  const misfits: Array<{ slug: string; name: string; reason: string }> = [];
   for (const entry of input.entries) {
     if (entry.kind !== "capability") continue;
     if (input.alreadyInstalled?.has(entry.slug)) continue;
@@ -128,6 +149,13 @@ export function selectIntentProviders(input: {
       continue;
     }
     if (!provides.includes(input.intent)) continue;
+    if (input.constraints !== undefined) {
+      const reason = catalogEntryMisfit(entry, input);
+      if (reason) {
+        misfits.push({ slug: entry.slug, name: entry.name, reason });
+        continue;
+      }
+    }
     candidates.push({
       slug: entry.slug,
       name: entry.name,
@@ -136,7 +164,34 @@ export function selectIntentProviders(input: {
       listingSha256: entry.listing?.sha256 ?? null,
     });
   }
-  return { candidates, unreadable };
+  return { candidates, unreadable, misfits };
+}
+
+/** Why a catalog pack that declares the intent does not fit the need. */
+function catalogEntryMisfit(
+  entry: Pick<CatalogCacheEntry, "definition">,
+  input: {
+    intent: string;
+    constraints?: ManifestNeed["constraints"];
+    contract?: IntentContract | null;
+  }
+): string | null {
+  const def = entry.definition ?? {};
+  const offers = def.offers as Record<string, ManifestOffer> | undefined;
+  const offered = offerMisfit(
+    { intent: input.intent, constraints: input.constraints },
+    offers?.[input.intent]
+  );
+  if (offered) return offered;
+  const compose = def.compose as Record<string, unknown> | undefined;
+  if (compose?.[input.intent]) return null;
+  const skills = Array.isArray(def.skills)
+    ? (def.skills as Array<{ intent?: unknown; intentOp?: unknown }>)
+    : [];
+  const ops = skills
+    .filter((s) => s.intent === input.intent && typeof s.intentOp === "string")
+    .map((s) => s.intentOp as string);
+  return opsMisfit(input.contract, ops);
 }
 
 /** What a caller's gap-resolution attempt produced. Exactly one arm fires. */
@@ -288,6 +343,9 @@ export async function resolveIntentGap(input: {
   sessionId?: string | null;
   /** Slugs already installed under the caller's lens. */
   alreadyInstalled?: ReadonlySet<string>;
+  /** The need's constraints and the intent's contract (`selectIntentProviders`). */
+  constraints?: ManifestNeed["constraints"];
+  contract?: IntentContract | null;
 }): Promise<IntentInstallOffer> {
   let entries: CatalogCacheEntry[];
   try {
@@ -310,6 +368,9 @@ export async function resolveIntentGap(input: {
     intent: input.intent,
     ...(input.alreadyInstalled
       ? { alreadyInstalled: input.alreadyInstalled }
+      : {}),
+    ...(input.constraints !== undefined
+      ? { constraints: input.constraints, contract: input.contract ?? null }
       : {}),
   });
   return proposeIntentGapInstall({

@@ -9,6 +9,7 @@
  * Routing only. Governance still decides on the concrete verb id.
  */
 import { jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import type { IntentContract } from "@synap-core/types/capability-intents";
 
 export const CAPABILITY_INTENT_EFFECTS = ["read", "write", "act"] as const;
 export type CapabilityIntentEffect = (typeof CAPABILITY_INTENT_EFFECTS)[number];
@@ -28,6 +29,16 @@ export const capabilityIntents = pgTable("capability_intents", {
    * NULL = apps cannot ask for this intent yet.
    */
   inputSchema: jsonb("input_schema").$type<Record<string, unknown> | null>(),
+  /**
+   * The intent's CONTRACT (0398, plan U1): the ops a provider implements
+   * (`create` · `status` · `renew` · `revoke`, each `required` or not), the
+   * ONE output shape every op returns, and the constraint keys a need may set
+   * and a provider's `offers` declare. `create`'s input is `input_schema`
+   * above, never a second copy. NULL = a one-shot intent with no lifecycle.
+   * Shape and checker: `IntentContract` / `intentContractProblems` in
+   * `@synap-core/types/capability-intents`.
+   */
+  contract: jsonb("contract").$type<IntentContract | null>(),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
     .defaultNow()
     .notNull(),

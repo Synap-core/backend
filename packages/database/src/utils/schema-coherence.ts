@@ -2731,6 +2731,18 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "skills",
     column: "input_map",
     addedBy: "0368_intent_input_schema.sql",
+  }, // Intent contracts (0398): the resolver reads an intent's ops and output
+  // shape, and each verb's op, on every install plan; without them every plan
+  // fails with a SQL error instead of naming the gap.
+  {
+    table: "capability_intents",
+    column: "contract",
+    addedBy: "0398_reachability_intents.sql",
+  },
+  {
+    table: "skills",
+    column: "intent_op",
+    addedBy: "0398_reachability_intents.sql",
   }, // "Later" on a request (0381): the needs-you read joins it on every
   // Review page and count, so a missing table fails every needs-you read.
   {

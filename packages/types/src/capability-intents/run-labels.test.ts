@@ -23,6 +23,20 @@ describe("intentRunLabel", () => {
     expect(intentRunLabel("edit_video")).toBe("Edit videos with your tools");
   });
 
+  it.each([
+    ["expose_http", "Make your services reachable at a web address"],
+    [
+      "open_tunnel",
+      "Connect your computers to the internet edge, outbound only",
+    ],
+    ["dns_record", "Change DNS records in your domains"],
+    ["host_service", "Run services on your computers"],
+    ["render_video", "Render videos with your tools"],
+  ])("%s (0398) has its own sentence, not the fallback", (slug, label) => {
+    expect(intentRunLabel(slug)).toBe(label);
+    expect(intentRunLabel(slug)).not.toMatch(/^Run your tools to /);
+  });
+
   it("an unknown slug still reads as a sentence, never a bare slug", () => {
     expect(intentRunLabel("make_coffee")).toBe("Run your tools to make coffee");
   });

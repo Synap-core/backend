@@ -50,6 +50,10 @@ import {
 } from "./create-from-definition.js";
 import { knownIntentSetFor } from "./intent-registry.js";
 import {
+  manifestMetadata,
+  readDeclaredManifest,
+} from "./capability-manifest.js";
+import {
   capabilityDefinitionDrift,
   capabilityVerbCatalogDrift,
   capabilityToolMergeDrift,
@@ -457,6 +461,9 @@ export async function reconcileCapabilitiesToTemplates(
                 // PROJECTED_SKILL_FIELDS.inputMap (0368) — omitted, a template's
                 // new intent input map would diff clean and never land.
                 inputMap: skills.inputMap,
+                // PROJECTED_SKILL_FIELDS.intentOp (0398) — omitted, a provider's
+                // declared contract ops would diff clean and never land.
+                intentOp: skills.intentOp,
                 // PROJECTED_SKILL_FIELDS.metadata reads `allowedHosts` out of this
                 // bag. Omit the column and it is `undefined` on every row — a
                 // declared egress allowlist would then never be seen as drift.
@@ -568,12 +575,32 @@ export async function reconcileCapabilitiesToTemplates(
             (!!cachedDef.contentHash &&
               storedComparatorVersion !== DRIFT_COMPARATOR_VERSION))
         ) {
+          // The manifest's declared fields (needs, offers, compose,
+          // services, plan U3) ride on the stamp: they live on the container,
+          // not on a skill, so the skill diff above cannot see them, and a
+          // template that changed only its offers would otherwise be stamped
+          // converged with the old offers. A manifest the rule refuses is not
+          // written (the applier would refuse it too).
+          const declared = await readDeclaredManifest(cachedDef);
+          if (!declared.ok) {
+            logger.warn(
+              {
+                containerId: container.id,
+                templateKey,
+                problems: declared.problems,
+              },
+              "reconcile: template manifest refused; its fields are not stamped"
+            );
+          }
           await stampContainerMetadata(
             container.id,
             metadata,
             templateKey,
             cachedDef.contentHash,
-            cachedDef.metadata
+            {
+              ...(cachedDef.metadata ?? {}),
+              ...(declared.ok ? manifestMetadata(declared.manifest) : {}),
+            }
           );
         }
         report.skipped.push({
