@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { LOOPBACK_HOSTS } from "../tenancy/index.js";
+
 export const registrationOutcomeSchema = z.enum([
   "CONNECTED_VERIFIED",
   "KEY_MINTED_BUT_VERIFICATION_FAILED",
@@ -106,8 +108,6 @@ export const DEFAULT_CONNECT_REDIRECT_PREFIXES = [
   "http://localhost:",
 ] as const;
 
-const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]"]);
-
 function parseUrl(raw: string): URL | null {
   try {
     return new URL(raw);
@@ -125,8 +125,8 @@ function matchesAllowedPrefix(target: URL, prefix: string): boolean {
   if (allowed.protocol === "http:") {
     // Plain http only ever means the loopback callback, on any port.
     return (
-      LOOPBACK_HOSTNAMES.has(allowed.hostname) &&
-      LOOPBACK_HOSTNAMES.has(target.hostname)
+      LOOPBACK_HOSTS.has(allowed.hostname) &&
+      LOOPBACK_HOSTS.has(target.hostname)
     );
   }
   // Same host (an empty allowed host, `synap://`, admits any host of the
