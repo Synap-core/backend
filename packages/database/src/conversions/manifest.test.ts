@@ -855,3 +855,50 @@ describe("CONVERSION_MANIFEST — H0 dev lifecycles (stray `status` folds)", () 
     }
   );
 });
+
+describe("validateManifest — rekindByStatus", () => {
+  const rekind = (over: Record<string, unknown> = {}) =>
+    ({
+      version: 1,
+      ops: [
+        {
+          op: "rekindByStatus",
+          opKey: "t.rekind",
+          slug: "post",
+          toSlug: "idea",
+          status: { key: "post-status", value: "Idea" },
+          targetStatus: { key: "idea-status", value: "New" },
+          propertyMapping: { content: "content" },
+          skipWhenSet: ["publish-date"],
+          ...over,
+        },
+      ],
+    }) as ConversionManifest;
+
+  it("accepts a well-formed op", () => {
+    expect(() => validateManifest(rekind())).not.toThrow();
+  });
+
+  it("rejects moving a kind onto itself", () => {
+    expect(() => validateManifest(rekind({ toSlug: "post" }))).toThrow(
+      /cannot move 'post' onto itself/
+    );
+  });
+
+  it("rejects a mapping onto the targetStatus key (it would be overwritten)", () => {
+    expect(() =>
+      validateManifest(
+        rekind({ propertyMapping: { "post-status": "idea-status" } })
+      )
+    ).toThrow(/onto its targetStatus key 'idea-status'/);
+  });
+
+  it("rejects a missing status value and an empty skip key", () => {
+    expect(() =>
+      validateManifest(rekind({ status: { key: "post-status", value: "" } }))
+    ).toThrow(/status\.value/);
+    expect(() => validateManifest(rekind({ skipWhenSet: [""] }))).toThrow(
+      /skipWhenSet/
+    );
+  });
+});
