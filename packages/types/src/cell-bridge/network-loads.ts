@@ -109,10 +109,14 @@ export function frameEsmShAt(text: string): number {
   return m ? m.index : -1;
 }
 
-/** `name = "v"`, `name = 'v'` or `name = v`: three alternatives, three first characters. */
+/**
+ * `name = "v"`, `name = 'v'` or `name = v`: three alternatives, three first
+ * characters. The name opens the attribute list or follows a space or `/`, so
+ * `data-src` / `data-href` (a word boundary after `-`) are not `src` / `href`.
+ */
 function attrRe(names: string): RegExp {
   return new RegExp(
-    String.raw`\b(?:${names})\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))`,
+    String.raw`(?:^|[\s/])(?:${names})\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))`,
     "gi"
   );
 }
@@ -160,27 +164,79 @@ const isWordChar = (c: string | undefined) =>
   c !== undefined && /[\w$.]/.test(c);
 
 /**
- * Whether the string opening at `quote` follows `import`, `import(` or
- * `from`: `import x from "…"`, `import "…"`, `import("…")`,
- * `export … from "…"`. Looks back over spaces and one `(` only.
+ * May this character sit between `import` / `export` and the `from` of the
+ * same statement? Names, spaces, `,` `{` `}` `*` and the `/` of a comment:
+ * `import a, { b as c } from`, `export * as ns from`, `import type { T } from`.
  */
-function isModuleSpecifier(code: string, quote: number): boolean {
-  let j = quote;
-  while (j > 0 && isSpace(code[j - 1])) j--;
-  if (code[j - 1] === "(") {
-    j--;
+function inImportClause(c: number): boolean {
+  return (
+    (c >= 48 && c <= 57) || // 0-9
+    (c >= 65 && c <= 90) || // A-Z
+    (c >= 97 && c <= 122) || // a-z
+    c === 95 || // _
+    c === 36 || // $
+    c === 32 || // space
+    c === 9 || // tab
+    c === 10 || // \n
+    c === 13 || // \r
+    c === 12 || // \f
+    c === 44 || // ,
+    c === 123 || // {
+    c === 125 || // }
+    c === 42 || // *
+    c === 47 // /
+  );
+}
+
+const atWord = (code: string, word: string, end: number): boolean => {
+  const start = end - word.length;
+  return (
+    start >= 0 && code.startsWith(word, start) && !isWordChar(code[start - 1])
+  );
+};
+
+/**
+ * A test of whether the string opening at `quote` is a module specifier: it
+ * follows `import` or `import(` (`import "…"`, `import("…")`), or the `from`
+ * of an import or export clause (`import x from "…"`, `export … from "…"`).
+ * A `from` counts only when an `import` / `export` opens its statement with
+ * nothing but a clause between them, so JSX prose (`Synced from "Google
+ * Sheets"`) is not an import. Called with ascending offsets: one forward pass
+ * tracks the last opener and the last character no clause holds, so the scan
+ * stays linear in the code.
+ */
+function moduleSpecifierTest(code: string): (quote: number) => boolean {
+  let scanned = 0;
+  let opener = -1;
+  let broken = -1;
+  const scanTo = (end: number) => {
+    for (; scanned < end; scanned++) {
+      const ch = code[scanned];
+      if (
+        (ch === "i" || ch === "e") &&
+        (code.startsWith("import", scanned) ||
+          code.startsWith("export", scanned)) &&
+        !isWordChar(code[scanned - 1]) &&
+        !isWordChar(code[scanned + 6])
+      ) {
+        opener = scanned;
+      } else if (!inImportClause(code.charCodeAt(scanned))) {
+        broken = scanned;
+      }
+    }
+  };
+  return (quote) => {
+    let j = quote;
     while (j > 0 && isSpace(code[j - 1])) j--;
-  }
-  for (const word of ["import", "from"]) {
-    const start = j - word.length;
-    if (
-      start >= 0 &&
-      code.startsWith(word, start) &&
-      !isWordChar(code[start - 1])
-    )
-      return true;
-  }
-  return false;
+    if (code[j - 1] === "(") {
+      j--;
+      while (j > 0 && isSpace(code[j - 1])) j--;
+    }
+    if (atWord(code, "import", j)) return true;
+    if (!atWord(code, "from", j)) return false;
+    scanTo(j - 4);
+    return opener !== -1 && broken < opener;
+  };
 }
 
 /**
@@ -225,9 +281,10 @@ function codeLoads(code: string, base: number, out: FrameLoad[]): void {
   const comments = leadingCommentRanges(code);
   const keep = outside(comments);
   const imports: FrameLoad[] = [];
+  const isModuleSpecifier = moduleSpecifierTest(code);
   QUOTED.lastIndex = 0;
   for (const m of code.matchAll(QUOTED)) {
-    if (!isModuleSpecifier(code, m.index!) || !keep(m.index!)) continue;
+    if (!isModuleSpecifier(m.index!) || !keep(m.index!)) continue;
     imports.push({ kind: "import", value: m[2]!, index: base + m.index! + 1 });
   }
   const keepRq = outside(comments);
