@@ -84,7 +84,9 @@ function ddlFor(table: PgTable): string {
     const type = BASIC.test(t) ? t.replace(/\(.*\)/, "") : "text";
     const pk = c.primary ? " primary key" : "";
     const defaults =
-      type === "uuid" && c.primary ? " DEFAULT gen_random_uuid()" : defaultOf(c);
+      type === "uuid" && c.primary
+        ? " DEFAULT gen_random_uuid()"
+        : defaultOf(c);
     const notNull = c.notNull && !c.primary ? " NOT NULL" : "";
     return `"${c.name}" ${type}${pk}${notNull}${defaults}`;
   });

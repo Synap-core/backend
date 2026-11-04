@@ -495,9 +495,9 @@ describe("document pins — a living document on the rail (P4)", () => {
       "Quarterly review"
     );
     // Only a document pin carries one.
-    expect(read.filter((p) => !p.documentId).every((p) => !("title" in p))).toBe(
-      true
-    );
+    expect(
+      read.filter((p) => !p.documentId).every((p) => !("title" in p))
+    ).toBe(true);
     // Never stored: the row holds the pin, not its title.
     const { rows } = await q<{ pins: string }>(
       `select (ui_preferences #> '{railPins,pins}')::text as pins from user_preferences where user_id = $1`,

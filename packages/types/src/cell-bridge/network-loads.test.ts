@@ -85,7 +85,7 @@ describe("what counts as an import, and as a src or href", () => {
       "import type {\n  Row, // one row\n  Col\n} from '@synap/kit';\n" +
       "export * as kit from '@synap/kit/charts';\n" +
       "export default function Cell() {\n" +
-      '  return <p>Synced from "Google Sheets" at {time}, copied from \'Notion\'.</p>;\n' +
+      "  return <p>Synced from \"Google Sheets\" at {time}, copied from 'Notion'.</p>;\n" +
       "}\n";
     expect(
       frameModuleLoads(code)

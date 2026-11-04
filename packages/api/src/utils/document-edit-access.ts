@@ -175,9 +175,7 @@ export async function loadReadableDocumentTitles(
     columns: { documentId: true },
   });
   const viaView = [
-    ...new Set(
-      owning.flatMap((v) => (v.documentId ? [v.documentId] : []))
-    ),
+    ...new Set(owning.flatMap((v) => (v.documentId ? [v.documentId] : []))),
   ];
   if (viaView.length === 0) return out;
   const owned = await db

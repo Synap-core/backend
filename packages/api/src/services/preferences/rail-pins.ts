@@ -570,7 +570,10 @@ export class RailPinsFullError extends Error {
 export function railPinsFullMessage(hidden: number): string {
   const base = `A rail holds at most ${RAIL_PINS_MAX} pins`;
   if (hidden <= 0) return `${base} — unpin one first.`;
-  const these = hidden === 1 ? "1 of them is a goal or a document" : `${hidden} of them are goals or documents`;
+  const these =
+    hidden === 1
+      ? "1 of them is a goal or a document"
+      : `${hidden} of them are goals or documents`;
   return `${base}; ${these} this app does not show. Unpin one first, here or in an app that shows them.`;
 }
 
