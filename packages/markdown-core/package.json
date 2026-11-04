@@ -70,6 +70,10 @@
     "./columns": {
       "types": "./dist/columns.d.ts",
       "import": "./dist/columns.js"
+    },
+    "./object-ids": {
+      "types": "./dist/object-ids.d.ts",
+      "import": "./dist/object-ids.js"
     }
   },
   "scripts": {

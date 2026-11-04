@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import MarkdownView from "./markdown-view";
 import { EmbedHostContext } from "./embed-context";
-import type { EmbedEntityRead } from "./markdown-model";
+import type { EmbedEntityRead, ObjectRefRead } from "./markdown-model";
 
 const UUID = "11111111-1111-4111-8111-111111111111";
 const html = (source: string) =>
@@ -344,5 +344,98 @@ describe("MarkdownView — a ```mermaid fence", () => {
     const out = html(["```ts", "const a = 1;", "```"].join("\n"));
     expect(out).toContain("<pre");
     expect(out).toContain("const a = 1;");
+  });
+});
+
+describe("a reference names its object (founder, 2026-11-04)", () => {
+  const withRef = (source: string, read: ObjectRefRead) =>
+    renderToStaticMarkup(
+      <EmbedHostContext.Provider
+        value={{
+          useEntity: () => ({ state: "unresolved" }),
+          useObjectRef: () => read,
+        }}
+      >
+        <MarkdownView source={source} />
+      </EmbedHostContext.Provider>
+    );
+  const named: ObjectRefRead = {
+    state: "ready",
+    type: "entity",
+    name: "Migrate the billing worker",
+    openable: true,
+    profileSlug: "task",
+  };
+
+  it("with no lookup, a bare id stays the text the author wrote", () => {
+    const out = html(`Blocked by ${UUID} since Monday.`);
+    expect(out).toContain(`Blocked by ${UUID} since Monday.`);
+    expect(out).not.toContain("href");
+  });
+
+  it("with no lookup, an unlabelled marker reads as its kind, never an empty link", () => {
+    const out = html(`See [[doc:${UUID}]].`);
+    expect(out).toContain(`href="/open/document/${UUID}"`);
+    expect(out).toMatch(/>Document</);
+  });
+
+  it("a bare id the reader's lookup names: its name, its kind's colour, its page", () => {
+    const out = withRef(`Blocked by ${UUID}.`, named);
+    expect(out).toContain("Migrate the billing worker");
+    expect(out).toContain(`href="/open/entity/${UUID}"`);
+    expect(out).toMatch(/<svg[^>]*style="color:[^"]+"/);
+    expect(out).not.toContain(`>${UUID}<`);
+  });
+
+  it("an id nobody this reader can see stays text, with no link", () => {
+    const out = withRef(`Blocked by ${UUID}.`, { state: "unknown" });
+    expect(out).toContain(`Blocked by ${UUID}.`);
+    expect(out).not.toContain("href");
+  });
+
+  it("a broken lookup keeps the words and offers to ask again, never a guess", () => {
+    const out = withRef(`Blocked by ${UUID}.`, {
+      state: "failed",
+      retry: () => {},
+    });
+    expect(out).toContain(UUID);
+    expect(out).toContain("Couldn’t look this up. Try again");
+    expect(out).not.toContain("href");
+  });
+
+  it("an unlabelled marker shows the looked-up name, and its profile's own colour", () => {
+    const out = withRef(`Owner: [[entity:${UUID}]].`, {
+      state: "ready",
+      type: "entity",
+      name: "Ana Lopez",
+      openable: true,
+      profileSlug: "person",
+      profile: { slug: "person", uiHints: { color: "#ff0000" } },
+    });
+    expect(out).toContain("Ana Lopez");
+    expect(out).toContain(`href="/open/entity/${UUID}"`);
+    expect(out).toContain("color:#ff0000");
+  });
+
+  it("a labelled marker keeps the author's words", () => {
+    const out = withRef(`Owner: [[entity:${UUID}|Ana]].`, {
+      ...named,
+      name: "Ana Lopez",
+    });
+    expect(out).toContain(">Ana<");
+    expect(out).not.toContain("Ana Lopez");
+  });
+
+  it("a web link with no path is a web link, never a chip", () => {
+    const out = withRef("[home](https://example.com)", named);
+    expect(out).toContain('href="https://example.com/"');
+    expect(out).toContain('target="_blank"');
+    expect(out).not.toContain("Migrate the billing worker");
+  });
+
+  it("an id in code is code, even with a lookup", () => {
+    const out = withRef("Run `get " + UUID + "`.", named);
+    expect(out).toContain(`get ${UUID}`);
+    expect(out).not.toContain("href");
   });
 });

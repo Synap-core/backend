@@ -15,6 +15,7 @@ import { EmbedHostContext, type EmbedHost } from "./embed-context";
 import { HtmlPageSection } from "./html-frame";
 import { useEmbedCell } from "./use-embed-cell";
 import { useEmbedEntity } from "./use-embed-entity";
+import { useObjectRef } from "./use-object-ref";
 import {
   EXTERNAL_REL,
   contentMeasureClass,
@@ -103,10 +104,16 @@ export function ContentBlock({
   openInApp?: ReactNode;
   measure?: ContentMeasure;
 }) {
-  // Embeds read a record or a cell on the viewer's own floor and offer the
-  // object's own "Open in app" (`embed-view`).
+  // Embeds read a record or a cell, and references look up what an id
+  // names, on the viewer's own floor; embeds offer the object's own "Open in
+  // app" (`embed-view`).
   const host = useMemo<EmbedHost>(
-    () => ({ useEntity: useEmbedEntity, useCell: useEmbedCell, openInApp }),
+    () => ({
+      useEntity: useEmbedEntity,
+      useCell: useEmbedCell,
+      useObjectRef,
+      openInApp,
+    }),
     [openInApp]
   );
   return (
