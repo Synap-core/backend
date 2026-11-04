@@ -38,6 +38,7 @@ import { Check, ChevronRight, SlidersHorizontal, X } from "lucide-react";
 import { navHref } from "../../../../lib/console-nav";
 import { FATE_COPY } from "@synap-core/types/proposals/fate";
 import { trpc } from "../../../../lib/trpc";
+import { useBatchApproveProposals } from "../../../_lib/presence/use-approve";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { isUuid } from "../../../../lib/format";
 import { useReplaceParams } from "../../../../lib/use-replace-params";
@@ -261,7 +262,8 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
     void utils.proposals.invalidate();
   }
 
-  const batchApprove = trpc.proposals.batchApprove.useMutation({
+  // With the proof of presence for each item the pod asks it for (W3).
+  const batchApprove = useBatchApproveProposals({
     onError: (err) => {
       if (redirectToLoginIfUnauthorized(err)) return;
       showReceipt(batchFailureReceipt("approve", err));

@@ -32,6 +32,7 @@ import {
   readApproveAnswer,
 } from "../receipt/decision-receipt";
 import { showReceipt } from "../receipt/decision-receipt-toast";
+import { useApproveProposal } from "../presence/use-approve";
 import { approvalProgressT } from "./copy";
 import {
   approvalProgressCopy,
@@ -212,7 +213,8 @@ function ResumeButton({
   onStarted: () => void;
 }) {
   const utils = trpc.useUtils();
-  const approve = trpc.proposals.approve.useMutation({
+  // With the proof of presence when the pod asks for one (W3).
+  const approve = useApproveProposal({
     onSuccess: (result) => {
       onStarted();
       void utils.proposals.get.invalidate({ proposalId });

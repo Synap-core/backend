@@ -25,6 +25,7 @@
 import { addToast, Button } from "@heroui/react";
 import { TriangleAlert } from "lucide-react";
 import { trpc } from "../../../lib/trpc";
+import { useApproveProposal } from "../../_lib/presence/use-approve";
 import { openIn } from "../../../lib/open-in";
 import { proposalPageT } from "./copy";
 import {
@@ -234,7 +235,8 @@ export function FailedApproval({
       timeout: Infinity,
     });
   };
-  const approve = trpc.proposals.approve.useMutation({
+  // With the proof of presence when the pod asks for one (W3).
+  const approve = useApproveProposal({
     onSuccess: () => {
       void utils.proposals.invalidate();
       addToast({ title: t("repair.approved"), color: "success" });

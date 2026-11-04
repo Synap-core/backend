@@ -53,6 +53,7 @@ import {
 } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../lib/trpc";
 import { showApprovalProgressToast } from "../../_lib/approval-progress/approval-progress-toast";
+import { useApproveProposal } from "../../_lib/presence/use-approve";
 import {
   decisionFailure,
   decisionReceipt,
@@ -226,7 +227,8 @@ export function AlwaysApproveMenu({
     setRunningState(value);
     onRunningChange?.(value);
   };
-  const approve = trpc.proposals.approve.useMutation();
+  // With the proof of presence when the pod asks for one (W3).
+  const approve = useApproveProposal();
   const createRule = trpc.governanceRules.create.useMutation();
 
   const t = alwaysApproveT();
