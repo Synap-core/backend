@@ -22,6 +22,7 @@ export const en = {
   "toggle.aria": "Show this page as",
   "toggle.page": "Page",
   "toggle.source": "Source",
+  fullSize: "Full size",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -37,6 +38,7 @@ export const fr: Catalog<typeof en> = {
   "toggle.aria": "Afficher cette page en tant que",
   "toggle.page": "Page",
   "toggle.source": "Source",
+  fullSize: "Plein écran",
 };
 
 /** The frame's translator, in the ambient catalog locale. */
