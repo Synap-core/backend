@@ -128,3 +128,47 @@ the new object.
 - **Floating menus** take a min and a max width, never a fixed width, and use the menu or anchored
   popover primitives, which portal and own focus, dismiss and keyboard.
 - **Targets** are at least 24px (WCAG 2.2).
+
+## 12. One filter row: one chip per filter
+
+Founder, 2026-11-05 (decision afab5911): "we stop creating filters as rows of chips, but always just one
+chip that show the state ... with only one row we should be able to handle the filters, possible tabs, &
+search bar".
+
+- A filter is ONE chip, never a row of chips (one per value). The chip shows the current state: "All"
+  when unset, else the value chosen, with its count when the page shows counts. It opens a floating menu
+  (a sheet on the phone) with the current value checked; a set chip has a clear (×) back to "All".
+- One row holds the page's whole control set: search, one chip per filter, then the tabs or view switch
+  when the page has them, then the primary. Never a second row of chips.
+- Values come from the data (the kind's lifecycle options, the platforms, the spaces), never a
+  hand-written list.
+- On the phone the chips scroll in that one row, or fold into one "Filters" chip that opens a sheet.
+
+## 13. Disclose step by step: the current choice and one door
+
+Founder, 2026-11-05: "we don't showcase everything ... we should just be able to click on a button to
+select from a list ... then after selecting that, we have another text with a button to say post on
+another place".
+
+- Show the current choice and ONE door to change it (a button that opens a list), never every option at
+  once. A panel listing every account or platform, each with its own buttons, is a defect.
+- A further choice appears only once the previous one is made; a step done folds to its answer, which
+  stays a door to change it.
+- A list offers only what is valid for this object and the choices already made: only the platforms that
+  take this format, only the post types that platform supports. An option that cannot apply is absent.
+- A default is pre-selected only when it is declared and known (a declared default, the person's saved
+  choice, the only valid option). Otherwise the step asks. Never pre-select the first item of a list.
+
+## 14. Everything on an object follows its status
+
+Founder, 2026-11-05: "we always propose and render specific user action, specific text, specific details,
+components, etc. always based on the status of the object we render here".
+
+- Every action, label, sentence, detail and section drawn for an object comes from its status (the
+  lifecycle its kind declares) and from what it already has (outputs, files, links).
+- A thing already made never offers to make it: a made carousel shows the carousel and its next move,
+  never "Not made yet: Make a carousel". A step done shows its result, not its invitation.
+- The primary action is the next move for the current status, and it comes first. An action that cannot
+  apply now is absent, not disabled.
+- A section about a later step is omitted until the object reaches it. When the status moves, the screen
+  re-derives at once.
