@@ -237,10 +237,11 @@ async function seedSession(opts: {
   const id = randomUUID();
   await q(
     `insert into focus_sessions (id, user_id, goal, title, status, expected_outputs, criteria, agent_ids, metadata, origin, created_at, updated_at, started_at)
-     values ($1, $2, $3, $3, $4, '[]'::jsonb, '[]'::jsonb, $5, $6::jsonb, 'agent', now(), now(), now())`,
+     values ($1, $2, $3, $4, $5, '[]'::jsonb, '[]'::jsonb, $6, $7::jsonb, 'agent', now(), now(), now())`,
     [
       id,
       USER,
+      opts.title,
       opts.title,
       opts.status ?? "active",
       `{${AGENT}}`,
